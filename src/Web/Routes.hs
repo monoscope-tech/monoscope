@@ -10,6 +10,7 @@ import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as Wreq
 import Data.IP qualified as IP
+import Data.Effectful.CodeReview qualified as Agent
 import Data.List qualified as L
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (OpenApi)
@@ -31,6 +32,7 @@ import Log (Logger)
 import Lucid
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types qualified as H
 import Network.Wai (Request)
@@ -198,6 +200,7 @@ data Routes mode = Routes
           :> Post '[JSON] AE.Value
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> RawM
   , widgetPngGet :: mode :- WidgetPngGet
+  , proofMediaGet :: mode :- ProofMediaGet
   , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[HTML] (RespHeaders Onboarding.ProxiedPage)
   , deviceCode :: mode :- "api" :> "device" :> "code" :> Post '[JSON] Auth.DeviceCodeResponse
   , deviceToken :: mode :- "api" :> "device" :> "token" :> QPT "device_code" :> Post '[JSON] Auth.DeviceTokenResponse
@@ -251,6 +254,7 @@ server otlpTraces otlpLogs =
                 }
         , avatarGet = avatarGetH
         , widgetPngGet = widgetPngGetH
+        , proofMediaGet = proofMediaGetH
         , proxyLanding = \path ->
             Onboarding.proxyLandingH path
               & State.evalState @TriggerEvents mempty
@@ -798,6 +802,19 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
 
 
 -- | Public endpoint for rendering widgets to PNG (for bot embeds). Requires valid HMAC signature.
+-- | @proof-N-base.gif@ and its @.mp4@ / @.cast@ siblings; immutable once recorded, so caches may keep them.
+proofMediaGetH :: Projects.ProjectId -> UUIDId "pr_review" -> Text -> Maybe Text -> Request -> (Wai.Response -> IO Wai.ResponseReceived) -> ATBaseCtx Wai.ResponseReceived
+proofMediaGetH pid rid file sigM _ send = do
+  ctx <- ask @AuthContext
+  whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid (rid.toText <> "/" <> file) sigM) \err -> Error.throwError err403{errBody = err}
+  let (stem, extension) = first (T.dropEnd 1) $ T.breakOnEnd "." file
+      (key, sideName) = first (T.dropEnd 1) $ T.breakOnEnd "-" stem
+  side <- maybe (Error.throwError err404) pure $ L.lookup sideName [("base", Agent.Base), ("head", Agent.Head)]
+  (format, mime) <- maybe (Error.throwError err404) pure $ L.lookup extension [("gif", (ImpactReviews.Gif, "image/gif")), ("mp4", (ImpactReviews.Video, "video/mp4")), ("cast", (ImpactReviews.Cast, "application/x-asciicast"))]
+  bytes <- maybe (Error.throwError err404) pure =<< ImpactReviews.proofFile pid rid key side format
+  liftIO $ send $ Wai.responseLBS H.status200 [(H.hContentType, mime), (H.hCacheControl, "public, max-age=31536000, immutable")] (toLazy bytes)
+
+
 widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx (Headers '[Header "Cache-Control" Text] LBS.ByteString)
 widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM sigM allParams = do
   ctx <- ask @AuthContext

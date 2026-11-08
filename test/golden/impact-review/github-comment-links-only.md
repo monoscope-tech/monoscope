@@ -10,6 +10,27 @@ Adds retries to payment capture. A second timeout can charge a customer twice, a
 | **Rollback cost** | ✅ low | — |
 | **Error detection** | ⚠️ poor | The new retry path logs nothing when it gives up |
 
+#### Proof · 1 holds · 1 differs · 1 not verified
+
+**✅ Retries a timed-out capture once**
+
+The capture command now retries after the first timeout and succeeds.
+
+<table><tr><td><sub>Before · ddddddd · exit 1</sub><br><a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-base.mp4?sig=s"><img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-base.gif?sig=s" alt="Before · ddddddd · exit 1: Retries a timed-out capture once" width="440"></a></td><td><sub>This PR · aaaaaaa · exit 0</sub><br><a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s"><img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.gif?sig=s" alt="This PR · aaaaaaa · exit 0: Retries a timed-out capture once" width="440"></a></td></tr></table>
+<sub>Select a recording to watch the video. Asciinema casts: <a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-base.cast?sig=s">Before</a> · <a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.cast?sig=s">This PR</a></sub>
+
+> [!WARNING]
+> **Doesn't do what the PR says: Reuses the idempotency key on every retry**
+>
+> The second retry sent a new key, so the provider saw two charges.
+
+<table><tr><td><sub>Before · ddddddd · exit 1</sub><br><a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base.mp4?sig=s"><img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base.gif?sig=s" alt="Before · ddddddd · exit 1: Reuses the idempotency key on every retry" width="440"></a></td><td><sub>This PR · aaaaaaa · exit 0</sub><br><a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s"><img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.gif?sig=s" alt="This PR · aaaaaaa · exit 0: Reuses the idempotency key on every retry" width="440"></a></td></tr></table>
+<sub>Select a recording to watch the video. Asciinema casts: <a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base.cast?sig=s">Before</a> · <a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.cast?sig=s">This PR</a></sub>
+
+**👀 Not verified: Shows the retry count in the receipt**
+
+The receipt page needs a browser, which this review cannot record.
+
 #### Worth checking in production (2)
 
 > [!WARNING]

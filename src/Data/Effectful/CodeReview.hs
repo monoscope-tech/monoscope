@@ -32,7 +32,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import System.Directory (listDirectory, removeFile, removePathForcibly)
 import System.Environment (getEnvironment)
-import System.FilePath (takeDirectory, (</>))
+import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.IO (hClose)
 import System.IO.Error (isDoesNotExistError, tryIOError)
 import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
@@ -200,7 +200,7 @@ data CodeReview :: Effect where
   ReviewVerifiedFix :: SessionIdentity m (UUIDId "agent_attempt") -> FixReviewRequest -> VerifiedFix -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> CodeReview m (Either Text FixReviewOutcome)
   ReviewSource :: ReviewMode -> Request "pr_review" -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (DraftSubmission -> m (Either Text ())) -> CodeReview m (Either Text Text)
   ReviewPatch :: Request "pr_review" -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (Text -> m (Either Text ())) -> CodeReview m (Either Text Text)
-  ReviewRepository :: SessionIdentity m ReviewContext -> Request "pr_review" -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (AE.Value -> m (Either Text ())) -> CodeReview m (Either Text Text)
+  ReviewRepository :: SessionIdentity m ReviewContext -> Request "pr_review" -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (ProofMedia -> m (Either Text ())) -> (AE.Value -> m (Either Text ())) -> CodeReview m (Either Text Text)
   AdmitRegression :: SessionIdentity m (UUIDId "agent_attempt") -> AdmissionRequest -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> CodeReview m (Either Text AdmissionDecision)
   FixRepository :: SessionIdentity m FixContext -> FixRequest -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (TestArtifact -> m (Either Text Text)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (PhaseReceipt -> m (Either Text ())) -> (FixResult -> m (Either Text ReviewedFix)) -> CodeReview m (Either Text ReviewedFix)
 
@@ -237,6 +237,7 @@ data Callbacks format result = Callbacks
   , usage :: ModelUsage -> IO ()
   , allocations :: Maybe (AllocationReceipt -> IO ())
   , checks :: Maybe (CheckReceipt -> IO ())
+  , proofs :: Maybe (ProofMedia -> IO (Either Text ()))
   , phase :: PhaseReceipt -> IO (Either Text ())
   , validate :: DraftValidator format result
   }
@@ -262,7 +263,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
       FixSubject fid -> load (Outbox.IssueFix fid) []
       AdmissionSubject fid artifact -> load (Outbox.Admission fid) [nativeKey artifact]
       PeerSubject fid artifacts -> load (Outbox.PeerReview fid) [nativeKey artifacts]
-  ReviewRepository sessionScope request respond knowledge recordCall recordUsage recordAllocation recordCheck check -> localSeqUnliftIO env \unlift ->
+  ReviewRepository sessionScope request respond knowledge recordCall recordUsage recordAllocation recordCheck recordProof check -> localSeqUnliftIO env \unlift ->
     liftIO
       $ launch
         (AdvisoryTask (mapSession unlift sessionScope) request)
@@ -274,6 +275,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
           , usage = unlift . recordUsage
           , allocations = Just $ unlift . recordAllocation
           , checks = Just $ unlift . recordCheck
+          , proofs = Just $ unlift . recordProof
           , phase = const $ pure $ Left "Fix phases require an issue-fix task"
           , validate = StructuredDraft $ \value -> (decodeUtf8 (AE.encode value) <$) <$> unlift (check value)
           }
@@ -288,6 +290,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
             , usage = unlift . recordUsage
             , allocations
             , checks
+            , proofs = Nothing
             , phase = const $ pure $ Left "Source review cannot advance fix phases"
             , validate = validator
             }
@@ -308,6 +311,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
           , usage = unlift . recordUsage
           , allocations = Nothing
           , checks = Nothing
+          , proofs = Nothing
           , phase = const $ pure $ Left "Patch comparison cannot advance fix phases"
           , validate = DraftText $ \raw -> (raw <$) <$> unlift (check raw)
           }
@@ -323,6 +327,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
           , usage = unlift . recordUsage
           , allocations = Just $ unlift . recordAllocation
           , checks = Just $ unlift . recordCheck
+          , proofs = Nothing
           , phase = unlift . recordPhase
           , validate = StructuredDraft $ \value -> case AE.fromJSON @FixResult value of
               AE.Error _ -> pure $ Left "Fix result does not match the required schema"
@@ -340,6 +345,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
           , usage = unlift . recordUsage
           , allocations = Just $ unlift . recordAllocation
           , checks = Nothing
+          , proofs = Nothing
           , phase = const $ pure $ Left "Admission cannot advance a fix phase"
           , validate = StructuredDraft $ \value -> pure $ case AE.fromJSON @AdmissionResult value of
               AE.Success result | result.artifact == request.artifact -> Right result.decision
@@ -360,6 +366,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
               , usage = unlift . recordUsage
               , allocations = Just $ unlift . recordAllocation
               , checks = Nothing
+              , proofs = Nothing
               , phase = const $ pure $ Left "Peer review cannot advance fix phases"
               , validate = StructuredDraft $ \value -> pure $ case AE.fromJSON @FixReviewResult value of
                   AE.Success response | response.result == request.artifacts.result -> reviewOutcome request verified response.decision
@@ -378,6 +385,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
       (_, Nothing) -> pure $ Left "Checkout-backed review agent is not configured"
       (Right host, Just command) -> do
         verifierSession <- UUID4.nextRandom
+        proofCount <- newIORef (0 :: Int)
         let tagged :: AE.ToJSON value => Text -> value -> AE.Value
             tagged tag contents = AE.object ["tag" AE..= tag, "contents" AE..= contents]
             (scope, source, payload, role) = case task of
@@ -472,7 +480,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                         (Workspace.Exited 0, _, True) -> Left "Regression patch file exceeds its 256 KiB limit"
                         ((Workspace.Exited{}, _, _); (Workspace.LogLimit, _, _)) -> Left "Regression patch file could not be read"
                     protectWorkspace = for_ (["/usr/bin/git" :| ["config", "--system", "--add", "safe.directory", path] | path <- ["/workspace", "/workspace/.git"]] <> ["/bin/chown" :| ["-hR", "0:0", "/workspace"], "/bin/chmod" :| ["-R", "u+rwX,go+rX,go-w", "/workspace"], "/usr/bin/git" :| ["update-index", "--refresh"]] :: [NonEmpty Text]) $ void . ExceptT . execute Supervisor
-                    regression :: Request run -> Workspace.Baseline -> UUID.UUID -> AE.Value -> [(Text, Text)] -> Outbox.Outbox -> IO (Either Text RegressionWire)
+                    regression :: Request run -> Workspace.Baseline -> UUID.UUID -> AE.Value -> [(Text, Text)] -> Outbox.Outbox -> IO (Either Text (RegressionWire, [(FilePath, Text)]))
                     regression pinned baseline sessionId artifact revisions outbox = active $ \session -> do
                       let options = session.verifier (Outbox.checksPath outbox)
                       case Workspace.mkRegressionRequest pinned.projectId pinned.runId pinned.attemptId sessionId pinned.base session.imageBuildId baseline artifact revisions of
@@ -482,8 +490,9 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                           case checked of
                             Left failure -> pure $ Left $ maybe "Local check could not run" Workspace.regressionErrorText $ fromException failure
                             Right result -> do
-                              traverse_ (uncurry session.copyIn) $ Workspace.regressionLogs options result
-                              pure $ first toText $ AET.parseEither AE.parseJSON $ AE.toJSON result
+                              let logs = Workspace.regressionLogs options result
+                              traverse_ (uncurry session.copyIn) logs
+                              pure $ bimap toText (,logs) $ AET.parseEither AE.parseJSON $ AE.toJSON result
                     capturePatch base = runExceptT do
                       void $ ExceptT $ execute Agent $ "/usr/bin/git" :| ["add", "-A"]
                       ExceptT $ execute Agent $ "/usr/bin/git" :| ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", "--no-color", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", base, "--"]
@@ -513,7 +522,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             unless (Native.candidateMatchesPatch captured (Native.candidateIdentity captured) patch) $ reject "Workspace changed; propose and verify a new candidate"
                           comparison artifact revisions = do
                             requireBudget $ length revisions
-                            result <- io $ regression request.request session.baseline session.id.unUUIDId (AE.toJSON artifact) [(case side of { Base -> "base"; Head -> "head" }, revisionText revision) | (side, revision) <- toList revisions] outbox
+                            (result, _) <- io $ regression request.request session.baseline session.id.unUUIDId (AE.toJSON artifact) [(case side of { Base -> "base"; Head -> "head" }, revisionText revision) | (side, revision) <- toList revisions] outbox
                             for_ result.receipts \receipt -> do
                               liftIO (Outbox.deliver outbox (Outbox.Check receipt) record) >>= either fatal pure
                               phase $ Observe receipt
@@ -589,7 +598,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                   _ -> reject $ "Candidate verification did not establish a failing base and passing retained test.\n" <> decodeUtf8 (AE.encode result.report)
                                 advance $ Checked artifact captured baseline receipt
                                 pure $ describe "Frozen regression fails on base and passes on the candidate with its test retained." result
-                              (Policy.RunRegression; Policy.QueryTelemetry; Policy.SubmitFix; Policy.SubmitAdmission; Policy.SubmitFixReview; Policy.RecallKnowledge; Policy.RememberKnowledge; Policy.ListProjectMemory; Policy.ReadProjectMemory; Policy.WriteProjectMemory; Policy.SubmitReview) -> reject "This tool is not a fix workflow operation"
+                              (Policy.RunRegression; Policy.RecordProof; Policy.QueryTelemetry; Policy.SubmitFix; Policy.SubmitAdmission; Policy.SubmitFixReview; Policy.RecallKnowledge; Policy.RememberKnowledge; Policy.ListProjectMemory; Policy.ReadProjectMemory; Policy.WriteProjectMemory; Policy.SubmitReview) -> reject "This tool is not a fix workflow operation"
                           finish summary = do
                             (captured, receipt) <-
                               progress >>= \case
@@ -602,9 +611,33 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                       verified <- regression request session.baseline identifier invocation.arguments [("base", request.base), ("head", request.head)] outbox
                       case verified of
                         Left failure -> pure $ Left failure
-                        Right result -> do
+                        Right (result, _) -> do
                           saved <- runExceptT $ for_ result.receipts $ \receipt -> ExceptT $ Outbox.deliver outbox (Outbox.Check receipt) record
                           pure $ saved >> if result.isError then Left (decodeUtf8 $ AE.encode result.report) else Right result.report
+
+                    -- The model's command is never trusted to report its own result: the host
+                    -- replays it on both revisions and keeps only what asciinema recorded.
+                    recordProof request outbox identifier invocation save = case AET.parseEither (AE.withObject "Proof" \o -> (,) <$> o AE..: "claim" <*> o AE..: "command") invocation.arguments of
+                      Left _ -> pure $ Left "Tool arguments do not match the host contract"
+                      Right (claim, shown) -> do
+                        taken <- atomicModifyIORef' proofCount \n -> (n + 1, n)
+                        if taken >= 3
+                          then pure $ Left "Proof budget exhausted; cite the proofs already recorded"
+                          else active \session -> do
+                            let key = "proof-" <> show (taken + 1)
+                            verified <- regression request session.baseline identifier (AE.object ["script" AE..= Media.proofScript shown, "failureMessage" AE..= ("monoscope-proof-failed" :: Text)]) [("base", request.base), ("head", request.head)] outbox
+                            case verified of
+                              Left failure -> pure $ Left failure
+                              Right (result, logs) -> runExceptT do
+                                for_ result.receipts \receipt -> ExceptT $ Outbox.deliver outbox (Outbox.Check receipt) record
+                                sides <- forM result.receipts \receipt -> do
+                                  let logName = case receipt.side of Base -> "base.log"; Head -> "head.log"
+                                  logFile <- maybe (throwE "The proof log was not retained") pure $ listToMaybe [path | (path, _) <- logs, takeFileName path == logName]
+                                  (cast, output) <- ExceptT $ Media.proofCast <$> readFileBS logFile
+                                  (gif, mp4) <- ExceptT $ Media.renderProof cast
+                                  ExceptT $ save ProofMedia{key, claim, side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4}
+                                  pure $ AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "output" AE..= T.takeEnd 3000 output]
+                                pure $ AE.object ["key" AE..= key, "claim" AE..= (claim :: Text), "sides" AE..= sides, "note" AE..= ("Cite this key in a claim. The PR author sees both recordings." :: Text)]
 
                     receive :: Maybe Checkout.Prepared -> Maybe GuestSession -> Int -> Int -> Maybe (Accepted result) -> IO (Either Text result)
                     receive supplied guestSession remaining submissions accepted = do
@@ -690,6 +723,13 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                 ((FixTask{}, _); (AdmissionTask{}, _); (PeerTask{}, _)) -> pure $ Left "Regression requires an authorized source review"
                               writeMessage response
                               receive supplied guestSession remaining submissions Nothing
+                          | invocation.name == Policy.RecordProof && validTool invocation -> do
+                              response <- case (task, journal, callbacks.proofs) of
+                                (AdvisoryTask _ request, Just outbox, Just save) -> recordProof request outbox verifierSession invocation save
+                                ((AdvisoryTask{}, _, _); (SourceTask{}, _, _); (FixTask{}, _, _); (AdmissionTask{}, _, _); (PeerTask{}, _, _)) -> pure $ Left "Proof requires an authorized pull request review"
+                                ((PatchTask{}, _, _); (SourcePatchTask{}, _, _)) -> pure $ Left "Proof requires an authorized pull request review"
+                              writeMessage response
+                              receive supplied guestSession remaining submissions Nothing
                           | invocation.name `elem` [Policy.ReproduceIssue, Policy.ProposeFix, Policy.VerifyFix] && validTool invocation -> case (task, supplied, journal, guestSession) of
                               (FixTask _ request, Just checkout, Just outbox, Just (FixReady session)) -> do
                                 (outcome, current) <- State.runStateT (runExceptT $ (workflow request checkout outbox session).invoke invocation) (FlowState session.progress remaining)
@@ -717,7 +757,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                     Policy.ListProjectMemory -> parsed Memory.parsePageQuery $ callbacks.knowledge . ProjectMemory . maybe Memory.List Memory.Search
                                     Policy.ReadProjectMemory -> property "pageId" $ callbacks.knowledge . ProjectMemory . Memory.Read
                                     Policy.WriteProjectMemory -> parsed AE.parseJSON $ callbacks.knowledge . ProjectMemory . Memory.Write
-                                    (Policy.RunRegression; Policy.SubmitFix; Policy.ReproduceIssue; Policy.ProposeFix; Policy.VerifyFix; Policy.SubmitAdmission; Policy.SubmitFixReview; Policy.SubmitReview) -> pure $ Left "This tool requires a native workflow handler"
+                                    (Policy.RunRegression; Policy.RecordProof; Policy.SubmitFix; Policy.ReproduceIssue; Policy.ProposeFix; Policy.VerifyFix; Policy.SubmitAdmission; Policy.SubmitFixReview; Policy.SubmitReview) -> pure $ Left "This tool requires a native workflow handler"
                               response <- pause remaining submissions guestSession $ if validTool invocation then request else pure $ Left "Tool is unavailable or its arguments violate the host contract"
                               writeMessage response
                               receive supplied guestSession (remaining - 1) submissions Nothing
@@ -873,7 +913,7 @@ readNativeCheckpoint directory = do
 runCodeReviewTest :: IOE :> es => (Request "pr_review" -> Either Text Text) -> (FixRequest -> Either Text FixResult) -> (AdmissionRequest -> Either Text AdmissionDecision) -> (ArtifactRequest -> Either Text ()) -> (ArtifactRequest -> Either Text Explanation) -> (FixReviewRequest -> Either Text FixReviewDecision) -> Eff (CodeReview ': es) a -> Eff es a
 runCodeReviewTest respond respondFix respondAdmission respondArtifacts respondExplanation respondReview = interpret \env -> \case
   ReadSessionContext _ _ -> pure $ Right Nothing
-  ReviewRepository _ request _ _ _ _ _ _ check -> localSeqUnliftIO env $ \unlift -> checked (respond request) (first (const "Review agent returned invalid review JSON") . AE.eitherDecodeStrict . encodeUtf8) (unlift . check)
+  ReviewRepository _ request _ _ _ _ _ _ _ check -> localSeqUnliftIO env $ \unlift -> checked (respond request) (first (const "Review agent returned invalid review JSON") . AE.eitherDecodeStrict . encodeUtf8) (unlift . check)
   ReviewSource mode request _ _ _ _ check -> localSeqUnliftIO env $ \unlift ->
     checked (respond request) (case mode of BoundedPatch -> Right . ProviderText; CheckoutHarness -> fmap Structured . first (const "Source review returned invalid JSON") . AE.eitherDecodeStrict . encodeUtf8) (unlift . check)
   ReviewPatch request _ _ check -> localSeqUnliftIO env $ \unlift -> checked (respond request) Right (unlift . check)

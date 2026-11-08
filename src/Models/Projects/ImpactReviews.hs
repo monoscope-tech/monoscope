@@ -41,12 +41,19 @@ module Models.Projects.ImpactReviews (
   priorKnowledge,
   priorRepositoryKnowledge,
   KnowledgeSource (..),
+  ProofSide (..),
+  ProofFormat (..),
+  saveProof,
+  clearProofs,
+  proofSides,
+  proofFile,
 ) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
 import Data.Char (isHexDigit)
 import Data.Effectful.CodeReview qualified as Agent
+import Data.Effectful.CodeReview.Types qualified as Agent (ProofMedia (..))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -509,3 +516,46 @@ priorRepositoryKnowledge pid ref service =
   WHERE project_id = #{pid} AND owner = #{ref.owner} AND repo = #{ref.repo} AND service = #{service}
   ORDER BY created_at DESC, id LIMIT 20
 |]
+
+
+-- | Metadata of one recorded side; the media stays in the database until a viewer asks.
+data ProofSide = ProofSide {key :: Text, side :: Agent.RevisionSide, revision :: Text, exitCode :: Maybe Int32, claim :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
+
+
+data ProofFormat = Gif | Video | Cast
+  deriving stock (Bounded, Enum, Eq, Show)
+
+
+-- | Only the run holding the review lease can record, so a superseded attempt cannot add media.
+saveProof :: DB es => ReviewRun -> Agent.ProofMedia -> Eff es Bool
+saveProof run proof =
+  fromMaybe False
+    <$> Hasql.interpOne
+      [HI.sql|INSERT INTO projects.pr_review_proofs (run_id, key, side, claim, revision, exit_code, cast_bytes, gif, mp4)
+    SELECT r.id, #{proof.key}, #{proof.side}, #{proof.claim}, #{proof.revision}, #{fromIntegral @Int @Int32 <$> proof.exitCode}, #{proof.cast}, #{proof.gif}, #{proof.mp4}
+    FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
+    WHERE r.id = #{run.id} AND r.state = #{Reviewing} AND t.lease_owner = r.id AND t.lease_until > now()
+    ON CONFLICT (run_id, key, side) DO UPDATE SET claim = EXCLUDED.claim, revision = EXCLUDED.revision, exit_code = EXCLUDED.exit_code,
+      cast_bytes = EXCLUDED.cast_bytes, gif = EXCLUDED.gif, mp4 = EXCLUDED.mp4, created_at = now()
+    RETURNING true|]
+
+
+clearProofs :: DB es => ReviewRun -> Eff es ()
+clearProofs run = Hasql.interpExecute_ [HI.sql|DELETE FROM projects.pr_review_proofs WHERE run_id = #{run.id}|]
+
+
+proofSides :: DB es => ReviewRun -> Eff es [ProofSide]
+proofSides run = Hasql.interp [HI.sql|SELECT key, side, revision, exit_code, claim FROM projects.pr_review_proofs WHERE run_id = #{run.id} ORDER BY key, side DESC|]
+
+
+proofFile :: DB es => ProjectId -> ReviewId -> Text -> Agent.RevisionSide -> ProofFormat -> Eff es (Maybe ByteString)
+proofFile pid rid key side format =
+  fmap HI.getOneColumn
+    <$> Hasql.interpOne
+    [HI.sql|SELECT CASE #{formatColumn} WHEN 'gif' THEN p.gif WHEN 'mp4' THEN p.mp4 ELSE p.cast_bytes END
+    FROM projects.pr_review_proofs p JOIN projects.pr_review_runs r ON r.id = p.run_id JOIN projects.pr_review_threads t ON t.id = r.thread_id
+    WHERE t.project_id = #{pid} AND p.run_id = #{rid} AND p.key = #{key} AND p.side = #{side}|]
+  where
+    formatColumn = case format of Gif -> "gif" :: Text; Video -> "mp4"; Cast -> "cast"

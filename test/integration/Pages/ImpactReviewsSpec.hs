@@ -28,6 +28,7 @@ import Data.Effectful.CodeReview.Checkout qualified as Checkout
 import Data.Effectful.CodeReview.Explanation qualified as Media
 import Data.Effectful.CodeReview.Outbox qualified as Outbox
 import Data.Effectful.CodeReview.Policy qualified as Policy
+import Data.Effectful.CodeReview.Types qualified as Proof (ProofMedia (..))
 import Data.Effectful.GitPublication qualified as Publication
 import Data.Effectful.LLM qualified as LLM
 import Data.Effectful.ReviewEvaluation qualified as Evaluation
@@ -105,7 +106,7 @@ import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 -- | A complete merge-risk grading, which every accepted review draft carries.
 graded :: [(AE.Key, AE.Value)]
-graded = ["summary" AE..= ("Changes retry handling." :: Text), "assessments" AE..= [AE.object ["dimension" AE..= d, "grade" AE..= ("good" :: Text), "gaps" AE..= ([] :: [Text])] | d <- ["alignment", "impact", "verification", "rollback", "error_detection" :: Text]]]
+graded = ["claims" AE..= ([] :: [AE.Value]), "summary" AE..= ("Changes retry handling." :: Text), "assessments" AE..= [AE.object ["dimension" AE..= d, "grade" AE..= ("good" :: Text), "gaps" AE..= ([] :: [Text])] | d <- ["alignment", "impact", "verification", "rollback", "error_detection" :: Text]]]
 
 
 revision :: Text
@@ -223,7 +224,7 @@ refuse = \case
 -- | A review agent that only answers repository reviews.
 repositoryReview :: (forall m. Agent.Request "pr_review" -> (Agent.TelemetryQuery -> m (Either Text AE.Value)) -> (Agent.KnowledgeRequest -> m (Either Text AE.Value)) -> (forall r. m r -> IO r) -> IO (Either Text Text)) -> ATBackgroundCtx a -> ATBackgroundCtx a
 repositoryReview answer = interpose @Agent.CodeReview \env -> \case
-  Agent.ReviewRepository _ request respond knowledge _ _ _ _ _ -> localSeqUnliftIO env \unlift -> liftIO $ answer request respond knowledge unlift
+  Agent.ReviewRepository _ request respond knowledge _ _ _ _ _ _ -> localSeqUnliftIO env \unlift -> liftIO $ answer request respond knowledge unlift
   operation -> pure $ refuse operation
 
 
@@ -1170,6 +1171,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     void $ commit repository [("src/helper.txt", "unreviewed-later-change\n")]
     plan <- newIORef ([] :: [[AE.Value] -> IO SdkReply])
     replies <- newIORef ([] :: [AE.Value])
+    proofs <- newIORef ([] :: [Proof.ProofMedia])
     ready <- MVar.newEmptyMVar
     blocked <- MVar.newEmptyMVar :: IO (MVar.MVar ())
     let prefix = [readPath "/skills/0/SKILL.md", readPath "/skills/1/systematic-debugging/SKILL.md", readPath "/skills/1/systematic-debugging/root-cause-tracing.md", readPath "/workspace/.agents/skills/repo-review/SKILL.md", shell $ "set -eu; test \"$(id -u)\" = 1000; test ! -w /usr/bin/git; echo supervisor-tools-protected; pwd; uname -s; git rev-parse HEAD; git show " <> base <> ":src/handler.txt; rg preserve-retry-metadata src; git diff " <> base <> "..." <> headRevision <> "; test -z \"$(printenv IMPACT_REVIEW_FIXTURE_SECRET || true)\"; echo host-credentials-absent; test \"$(cat src/handler.txt)\" = 'calls helper without retry metadata'; echo repository-check-passed; if (printf changed > /skills/0/SKILL.md) 2>/dev/null; then exit 1; fi; if (printf changed > /checkout/AGENTS.md) 2>/dev/null; then exit 1; fi; echo readonly-mounts-enforced; test -z \"$(git config --get-regexp extraheader || true)\"", shell "printf 'first-output-line\\n'; seq 1 2505", fmap (\path -> SdkTool "read" $ AE.object ["path" AE..= path, "limit" AE..= (2 :: Int)]) . fullOutput, fmap (\path -> SdkTool "bash" $ AE.object ["command" AE..= ("head -n 1 '" <> path <> "'")]) . fullOutput]
@@ -1211,6 +1213,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   (const pass)
                   (\receipt -> liftIO $ modifyIORef' allocations (<> [receipt]))
                   (\receipt -> liftIO $ modifyIORef' checks (<> [receipt]))
+                  (\proof -> liftIO $ modifyIORef' proofs (<> [proof]) $> Right ())
                   ( \draftValue -> liftIO do
                       modifyIORef' submissions (<> [draftValue])
                       pure $ if draftValue == accepted then Right () else Left "Finding does not reference a changed line"
@@ -1274,6 +1277,17 @@ spec = around withTestResources $ describe "Production impact reviews" do
       toolReply "tool-3" timeoutReplies >>= (`shouldSatisfy` T.isInfixOf "Command exited with code 137")
       toolReply "tool-3" timeoutReplies >>= (`shouldNotSatisfy` T.isInfixOf "timeout: sending signal")
       doesFileExist (repository </> "timeout-retained.txt") `shouldReturn` False
+      -- A proof replays the claim's command under asciinema on base and head, and the host
+      -- renders each recording; the model only sees the recorded output.
+      (proofResult, _, _, _, _, proofReplies) <- run 11 [tool "record_proof" $ AE.object ["claim" AE..= ("Keeps the retry token" :: Text), "command" AE..= ("set -eu\n. ./src/runtime.sh\necho \"== retry token: $(retry_token original)\"\ntest \"$(retry_token original)\" = original" :: Text)], tool "submit_review" accepted]
+      isRight proofResult `shouldBe` True
+      toolReply "tool-0" proofReplies >>= (`shouldContainAll` ["proof-1", "== retry token: original", "== retry token: dropped"])
+      recorded <- readIORef proofs
+      map (\proof -> (proof.key, proof.side, proof.exitCode)) recorded `shouldBe` [("proof-1", Agent.Base, Just 0), ("proof-1", Agent.Head, Just 1)]
+      for_ recorded \proof -> do
+        BS.take 6 proof.gif `shouldBe` "GIF89a"
+        BS.length proof.mp4 `shouldSatisfy` (> 0)
+        decodeUtf8 proof.cast `shouldSatisfy` T.isInfixOf "== retry token"
       beforeImage <- length <$> requests
       (imageResult, _, _, _, _, _) <- run 9 [readPath "/workspace/review image.txt", tool "submit_review" accepted]
       isRight imageResult `shouldBe` True
@@ -1289,7 +1303,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         jsonText body `shouldContainAll` ["never remove retry metadata", "retry-review", "repo-review", "pi-review", "systematic-debugging", "test-driven-development", "verification-before-completion"]
         messages <- parse (field "messages") body :: IO [AE.Value]
         let systemMessages = filter (\message -> AET.parseMaybe (field "role") message == Just ("system" :: Text)) messages
-        jsonText systemMessages `shouldContainAll` ["Use read to examine files", "Use edit for precise changes", "Use write only for new files or complete rewrites."]
+        jsonText systemMessages `shouldContainAll` ["Use read to examine files", "Use edit for targeted changes", "Use write only for new files or complete rewrites."]
         for_ ["host-only-skill", "private-host-skill-body", "fixture-git-token"] \text -> jsonText body `shouldNotSatisfy` T.isInfixOf text
       let cancelPlan = prefix <> [tool "query_telemetry" $ AE.object ["service" AE..= ("test-service" :: Text), "query" AE..= ("| summarize count()" :: Text)]]
       baselineSessions <- map (.id) <$> sandboxSessions
@@ -1469,6 +1483,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   (\receipt -> liftIO $ retained receipt.id.toText (AE.toJSON receipt) >> modifyIORef' usage (<> [receipt]))
                   (\receipt -> liftIO $ retained (Agent.allocationId receipt).toText (AE.object ["tag" AE..= ("Allocation" :: Text), "contents" AE..= receipt]) >> modifyIORef' allocations (<> [receipt]))
                   (\receipt -> liftIO $ retained receipt.id.toText (AE.object ["tag" AE..= ("Check" :: Text), "contents" AE..= receipt]) >> modifyIORef' checks (<> [receipt]))
+                  (const $ pure $ Left "Unexpected proof")
                   (\draftValue -> liftIO $ modifyIORef' submissions (<> [draftValue]) $> Right ())
             listDirectory sdkTemp `shouldReturn` []
             queued <- filter (T.isSuffixOf ".json" . toText) <$> listDirectory journal
@@ -1517,7 +1532,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
               Just mode -> Agent.reviewSource mode request (const pass) (const pass) (const pass) (const pass) (\case Agent.ProviderText raw -> check raw; Agent.Structured value -> check $ jsonText value)
               Nothing ->
                 if structured
-                  then Agent.reviewRepository Agent.Isolated request (pure . unused) (pure . unused) (const pass) (const pass) (const pass) (const pass) (check . jsonText)
+                  then Agent.reviewRepository Agent.Isolated request (pure . unused) (pure . unused) (const pass) (const pass) (const pass) (const pass) (const $ pure $ Left "Unexpected proof") (check . jsonText)
                   else Agent.reviewPatch request (const pass) (const pass) check
       run (Right rejected) (Left "Review rejected") `shouldReturn` Left "Review rejected"
       run (Right accepted) (Right ()) `shouldReturn` Right accepted
@@ -1530,7 +1545,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           script = directory </> "review.sh"
           drained = directory </> "drained"
       writeFileBS script "read request\nprintf '%s\\n' '{\"tag\":\"Knowledge\",\"contents\":{\"tag\":\"Recall\",\"contents\":\"test-service\"}}'\nread reply\nsleep 0.25\nprintf drained > \"$1\"\n"
-      outcome <- tryAny $ runEff $ scripted Nothing "sh" [script, drained] $ Agent.reviewRepository Agent.Isolated request (const $ pure $ Left "Unexpected telemetry") (const $ throwIO $ AI.AgentAwaitingReview (uid 3) frozenTime) (const pass) (const pass) (const pass) (const pass) (const $ pure $ Left "Unexpected result")
+      outcome <- tryAny $ runEff $ scripted Nothing "sh" [script, drained] $ Agent.reviewRepository Agent.Isolated request (const $ pure $ Left "Unexpected telemetry") (const $ throwIO $ AI.AgentAwaitingReview (uid 3) frozenTime) (const pass) (const pass) (const pass) (const pass) (const $ pure $ Left "Unexpected proof") (const $ pure $ Left "Unexpected result")
       case outcome of
         Left err -> case fromException err of
           Just (AI.AgentAwaitingReview identifier deadline) -> (identifier, deadline) `shouldBe` (uid 3, frozenTime)
@@ -1703,7 +1718,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             result <-
               runEff
                 $ sdkAgent store [models, profile, diagnostic, "--prepare", trustedScript, "--dependencies", archive, "--cli", cli]
-                $ Agent.reviewRepository Agent.Isolated request{Agent.runId = uid n} (const $ pure $ Left "Unexpected query") (const $ pure $ Left "Unexpected knowledge") (const pass) (const pass) (const pass) (\receipt -> liftIO $ modifyIORef' checks (<> [receipt])) (const $ pure $ Right ())
+                $ Agent.reviewRepository Agent.Isolated request{Agent.runId = uid n} (const $ pure $ Left "Unexpected query") (const $ pure $ Left "Unexpected knowledge") (const pass) (const pass) (const pass) (\receipt -> liftIO $ modifyIORef' checks (<> [receipt])) (const $ pure $ Left "Unexpected proof") (const $ pure $ Right ())
             (result,) <$> readIORef checks
       writeFileBS archive $ bytes <> "changed"
       (unseeded, _) <- run 1 script
@@ -2248,7 +2263,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         decode = either (fail . toString) pure . AE.eitherDecodeStrict @AE.Value . encodeUtf8
         at key = AET.parseEither (field key)
         cleaned value = for_ ["directory", "repositorySkills"] $ \key -> parse (field key) value >>= doesDirectoryExist >>= (`shouldBe` False)
-        run input flags validate = runEff $ scripted (Just store) "test/fixtures/native-checkout-agent.mjs" (launched : flags) $ Agent.reviewRepository Agent.Isolated input (const $ pure $ Left "Unexpected query") (const $ pure $ Left "Unexpected knowledge") (const $ liftIO $ if "--replay-call" `elem` flags then modifyIORef' recoveredCalls (+ 1) else fail "Unexpected model call") (const $ liftIO $ fail "Unexpected model usage") (const $ liftIO $ fail "Unexpected allocation") (const $ liftIO $ fail "Unexpected check") validate
+        run input flags validate = runEff $ scripted (Just store) "test/fixtures/native-checkout-agent.mjs" (launched : flags) $ Agent.reviewRepository Agent.Isolated input (const $ pure $ Left "Unexpected query") (const $ pure $ Left "Unexpected knowledge") (const $ liftIO $ if "--replay-call" `elem` flags then modifyIORef' recoveredCalls (+ 1) else fail "Unexpected model call") (const $ liftIO $ fail "Unexpected model usage") (const $ liftIO $ fail "Unexpected allocation") (const $ liftIO $ fail "Unexpected check") (const $ pure $ Left "Unexpected proof") validate
         check input flags = run input flags (const $ pure $ Right ()) >>= either (fail . toString) decode
         withRun n input = input{Agent.runId = UUIDId $ UUID.fromWords 42 0 0 n} :: Agent.Request "pr_review"
     preparedFirst <- check request []
@@ -2272,6 +2287,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 (const $ liftIO $ fail "Unexpected usage")
                 (const $ liftIO $ fail "Unexpected allocation")
                 (const $ liftIO $ fail "Unexpected check")
+                (const $ pure $ Left "Unexpected proof")
                 (const $ liftIO $ writeIORef validated True >> throwIO (userError "Fixture validation failed"))
       if mode == "cancel"
         then withAsync runLifetime \worker -> do
@@ -2837,6 +2853,13 @@ spec = around withTestResources $ describe "Production impact reviews" do
             Nothing
             (Just "Adds retries to payment capture. A second timeout can charge a customer twice, and the give-up path is silent in production.")
             (Just [Impact.Assessment d g gaps | (d, g, gaps) <- grades])
+            ( Just
+                [ Impact.Claim "Retries a timed-out capture once" Impact.Matches "The capture command now retries after the first timeout and succeeds." ["proof-1"]
+                , Impact.Claim "Reuses the idempotency key on every retry" Impact.Differs "The second retry sent a new key, so the provider saw two charges." ["proof-2"]
+                , Impact.Claim "Shows the retry count in the receipt" Impact.Unverified "The receipt page needs a browser, which this review cannot record." []
+                ]
+            )
+            (Just [Impact.ProofLink key side (T.replicate 40 (if side == Agent.Base then "d" else "a")) (Just $ if side == Agent.Base then 1 else 0) (media "gif") (media "mp4") (media "cast") | key <- ["proof-1", "proof-2"], side <- [Agent.Base, Agent.Head], let media ext = "https://app.monoscope.tech/p/x/reviews/r/proofs/" <> key <> "-" <> T.toLower (show side) <> "." <> ext <> "?sig=s"])
         render audience = Impact.renderReview "https://app.monoscope.tech" run audience result
     goldenText "impact-review/github-comment.md" $ render $ Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y"
     goldenText "impact-review/github-comment-links-only.md" $ render $ Impact.GitHubComment False "https://app.monoscope.tech/p/x/ai/runs/y"
@@ -2963,8 +2986,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
       flip finally cleanup $ withSdkProvider directory "context-fixture" provider \models observed -> do
         let backend :: ATBackgroundCtx a -> ATBackgroundCtx a
             backend = impose (sdkAgent store $ [models, image, directory </> "worker.log"] <> [arg | recovery == RuntimeWake, arg <- ["--bridge", bridge]]) \env -> \case
-              Agent.ReviewRepository selected request respond knowledge calls usage allocations checks validate ->
-                passthrough env $ Agent.ReviewRepository selected request{Agent.repository = toText repository} respond knowledge calls usage allocations checks validate
+              Agent.ReviewRepository selected request respond knowledge calls usage allocations checks proofs validate ->
+                passthrough env $ Agent.ReviewRepository selected request{Agent.repository = toText repository} respond knowledge calls usage allocations checks proofs validate
               operation -> passthrough env operation
             worker at = runTestBgRecordingHTTP at tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport $ backend $ BackgroundJobs.processBackgroundJob tr.trATCtx $ Jobs.ReviewPullRequest review.id
         initial <- tryAny $ worker frozenTime
@@ -3064,6 +3087,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   (const pass)
                   (const pass)
                   (const pass)
+                  (const $ pure $ Left "Unexpected proof")
                   (const $ pure $ Right ())
             run = invoke (uid 4) request
         suspended <- tryAny run
@@ -3134,7 +3158,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       [review] <- runQueryEffect tr $ Reviews.latestRuns testPid
       Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventPullRequest
       runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ExternalPosts) Catalog.ReviewEditors
-      let result = Impact.ReviewResult Impact.NoFinding [] [] [] frozenTime frozenTime Nothing Nothing Nothing
+      let result = Impact.ReviewResult Impact.NoFinding [] [] [] frozenTime frozenTime Nothing Nothing Nothing Nothing Nothing
       runQueryEffect tr $ Reviews.saveResult review result
       dbExec tr "DELETE FROM background_jobs WHERE payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest review.id)
       cfg <- githubApp tr
@@ -3198,7 +3222,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         appComment (n :: Int) (app :: Int) body = AE.object ["id" AE..= n, "body" AE..= (body :: Text), "performed_via_github_app" AE..= AE.object ["id" AE..= app]]
         transport :: Bool -> ATBackgroundCtx a -> ATBackgroundCtx a
         transport hasComment = pullRequestApi files [appComment n app marker | hasComment, (n, app) <- [(88, 456), (99, 123)]] pass (prAt revision)
-        result = Impact.ReviewResult Impact.WorthChecking [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "The changed operation may stop emitting the signal used by the monitor. *check* @impact-review-test [outside](https://untrusted.invalid)\r#heading" "Check the monitor query before deploying." ["telemetry-1"]] [] [] frozenTime frozenTime Nothing (Just "Moves retry handling into the checkout operation. @impact-review-test | the monitor may lose its signal.") (Just [Impact.Assessment d (if d == Impact.ErrorDetection then Impact.Poor else Impact.Good) ["New path emits no span | table-breaking gap" | d == Impact.ErrorDetection] | d <- universe])
+        result = Impact.ReviewResult Impact.WorthChecking [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "The changed operation may stop emitting the signal used by the monitor. *check* @impact-review-test [outside](https://untrusted.invalid)\r#heading" "Check the monitor query before deploying." ["telemetry-1"]] [] [] frozenTime frozenTime Nothing (Just "Moves retry handling into the checkout operation. @impact-review-test | the monitor may lose its signal.") (Just [Impact.Assessment d (if d == Impact.ErrorDetection then Impact.Poor else Impact.Good) ["New path emits no span | table-breaking gap" | d == Impact.ErrorDetection] | d <- universe]) (Just []) Nothing
         resultText = pure . Right . jsonText
         fakeAgent :: ATBackgroundCtx a -> ATBackgroundCtx a
         fakeAgent = fakeAgentWith []
@@ -3206,7 +3230,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         fakeAgentWith arguments =
           interpose @LLM.LLM (\_ _ -> liftIO $ fail "Legacy LLM loop called instead of checkout harness")
             . interpose @Agent.CodeReview \env -> \case
-              Agent.ReviewRepository _ request respond knowledge recordCall recordUsage recordAllocation recordCheck check -> localSeqUnliftIO env \unlift ->
+              Agent.ReviewRepository _ request respond knowledge recordCall recordUsage recordAllocation recordCheck recordProof check -> localSeqUnliftIO env \unlift ->
                 liftIO $ withSystemTempDirectory "impact-review-response" \directory -> do
                   request.prompt `shouldNotSatisfy` T.isInfixOf "private-log-body-must-not-leave-monoscope"
                   dbOne tr "SELECT count(*)::int FROM projects.pr_review_attempts WHERE id = ? AND run_id = ? AND project_id = ? AND provider = ?" (request.attemptId, request.runId, request.projectId, request.provider) `shouldReturn` (1 :: Int)
@@ -3233,7 +3257,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                     unlift (knowledge $ Agent.ProjectMemory $ Memory.Read page) `shouldReturn` saved
                   let response = directory </> "result.json"
                   writeFileLBS response $ AE.encode result{Impact.coverage = ["Related test toolchain unavailable"]}
-                  reply <- runEff $ scripted Nothing "test/fixtures/impact-review-agent.mjs" ([response, toString reviewPid.toText] <> arguments) $ Agent.reviewRepository Agent.Isolated request (liftIO . unlift . respond) (liftIO . unlift . knowledge) (liftIO . unlift . recordCall) (liftIO . unlift . recordUsage) (liftIO . unlift . recordAllocation) (liftIO . unlift . recordCheck) (liftIO . unlift . check)
+                  reply <- runEff $ scripted Nothing "test/fixtures/impact-review-agent.mjs" ([response, toString reviewPid.toText] <> arguments) $ Agent.reviewRepository Agent.Isolated request (liftIO . unlift . respond) (liftIO . unlift . knowledge) (liftIO . unlift . recordCall) (liftIO . unlift . recordUsage) (liftIO . unlift . recordAllocation) (liftIO . unlift . recordCheck) (liftIO . unlift . recordProof) (liftIO . unlift . check)
                   diagnostic <- tryAny $ decodeUtf8 <$> readFileBS (response <> ".failure")
                   pure $ first (<> either (const "") ("\n" <>) diagnostic) reply
               operation -> pure $ refuse operation

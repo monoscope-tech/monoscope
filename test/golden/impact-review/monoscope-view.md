@@ -10,6 +10,28 @@ Adds retries to payment capture. A second timeout can charge a customer twice, a
 | **Rollback cost** | ✅ low | — |
 | **Error detection** | ⚠️ poor | The new retry path logs nothing when it gives up |
 
+#### Proof · 1 holds · 1 differs · 1 not verified
+
+**✅ Retries a timed-out capture once**
+
+The capture command now retries after the first timeout and succeeds.
+
+![Before · ddddddd · exit 1](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-base.gif?sig=s) ![This PR · aaaaaaa · exit 0](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.gif?sig=s)
+
+[Watch Before](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-base.mp4?sig=s) · [Watch This PR](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s)
+
+**⚠️ Differs from the PR: Reuses the idempotency key on every retry**
+
+The second retry sent a new key, so the provider saw two charges.
+
+![Before · ddddddd · exit 1](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base.gif?sig=s) ![This PR · aaaaaaa · exit 0](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.gif?sig=s)
+
+[Watch Before](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base.mp4?sig=s) · [Watch This PR](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
+
+**👀 Not verified: Shows the retry count in the receipt**
+
+The receipt page needs a browser, which this review cannot record.
+
 #### Worth checking in production (2)
 
 > **[`src/payments/capture.ts:88`](https://github.com/acme/checkout/pull/42/files#diff-5badcd3e5097afa5539d90a33dfe2c3d239f41513fa07ece41696a1a74ab438bR88)**

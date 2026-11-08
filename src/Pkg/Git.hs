@@ -658,6 +658,8 @@ data PullRequest = PullRequest
   , draft :: Bool
   , changedFiles :: Int
   , updatedAt :: UTCTime
+  , title :: Maybe Text
+  , body :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON) via DAE.Snake PullRequest
