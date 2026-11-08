@@ -904,9 +904,9 @@ placeRecords geoM recs = place <$> adopted
 -- iso_code); IPinfo's are flat (@country_code@, @region@ as a name, @city@).
 --
 -- >>> import Data.GeoIP2 qualified as GeoIP2
--- >>> import Data.Map qualified as Map
+-- >>> import Data.Map qualified as GeoMap
 -- >>> import "monoscope" Opentelemetry.OtlpServer qualified as OS
--- >>> let m = GeoIP2.DataMap . Map.fromList . map (\(k, v) -> (GeoIP2.DataString k, v)); s = GeoIP2.DataString
+-- >>> let m = GeoIP2.DataMap . GeoMap.fromList . map (\(k, v) -> (GeoIP2.DataString k, v)); s = GeoIP2.DataString
 -- >>> OS.geoFields (m [("country", m [("iso_code", s "US")]), ("city", m [("names", m [("en", s "Santa Clara")])]), ("subdivisions", GeoIP2.DataArray [m [("iso_code", s "CA")]])])
 -- [("country.iso_code","US"),("region.iso_code","CA"),("locality.name","Santa Clara")]
 -- >>> OS.geoFields (m [("country", m [("iso_code", s "US")]), ("subdivisions", GeoIP2.DataArray [m [("names", m [("en", s "California")])]])])
