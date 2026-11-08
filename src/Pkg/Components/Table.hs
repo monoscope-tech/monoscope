@@ -974,7 +974,7 @@ sidebar_ cfg = case cfg.layout of
   where
     rail extra = div_ [class_ $ "facet-rail group/rail flex w-68 shrink-0 flex-col gap-2 text-sm text-textWeak max-md:w-full " <> cfg.extraClass <> extra, data_ "component" "facet-rail", id_ cfg.elemId] do
       searchInput_
-        "sticky top-0 z-10 h-9 w-[calc(100%-1rem)] mx-2 border-strokeStrong bg-bgBase"
+        "sticky top-0 z-10 h-9 w-[calc(100%-1rem)] mx-2 bg-fillWeaker"
         "Search filters"
         [name_ "facet-search", filterInputAttr_ $ "#" <> cfg.elemId <> " :is(.facet-item,.facet-section)"]
       forM_ cfg.clear $ \attrs -> button_ ([type_ "button", class_ "hidden items-center justify-between rounded px-2 py-1.5 text-xs text-textBrand hover:bg-fillWeak group-has-[.facet-item_input:checked]/rail:flex"] <> attrs) $ "Clear all" >> faSprite_ "xmark" "regular" "h-3 w-3"

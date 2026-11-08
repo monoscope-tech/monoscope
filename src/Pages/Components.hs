@@ -73,9 +73,9 @@ emptyState_ cfg title subTxt =
 -- | The search box: magnifying glass + @type=search@ input labelled @ph@. @extra@ sizes
 -- the wrapper; @attrs@ carry the behavior (a 'filterInputAttr_', a form name, htmx).
 searchInput_ :: Text -> Text -> [Attribute] -> Html ()
-searchInput_ extra ph attrs = label_ [class_ $ "input input-sm flex items-center gap-2 " <> extra] do
+searchInput_ extra ph attrs = label_ [class_ $ "input input-sm flex shrink-0 items-center gap-2 " <> extra] do
   faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 shrink-0 text-iconNeutral"
-  input_ $ [type_ "search", class_ "min-w-0 grow bg-transparent max-md:text-base", placeholder_ ph, Aria.label_ (T.dropWhileEnd (== '…') ph)] <> attrs
+  input_ $ [type_ "search", class_ "min-w-0 grow bg-transparent text-sm max-md:text-base", placeholder_ ph, Aria.label_ (T.dropWhileEnd (== '…') ph)] <> attrs
 
 
 -- | Header of an entity detail drawer: icon and title with inline @badges@, then the
