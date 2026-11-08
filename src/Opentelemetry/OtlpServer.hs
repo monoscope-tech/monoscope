@@ -891,10 +891,11 @@ placeRecords geoM recs = place <$> adopted
       fields <- geoFields <$> rightToMaybe (GeoIP2.rawGeoData db addr)
       nestedJsonFromDotNotation (second AE.String <$> fields) <$ L.lookup "country.iso_code" fields
     adoptSender r = case unAesonTextMaybe r.resource of
-      Just res | Just ip <- Telemetry.atMapText "monoscope.sender_ip" (Just res) ->
-        let browser = Telemetry.atMapText "telemetry.sdk.language" (Just res) `elem` map Just ["webjs", "javascript", "js"] || isJust (Telemetry.atMapText "user_agent.original" (Just res))
-            dropSender = \case AE.Object (KEM.delete "sender_ip" -> o) -> AE.Object o <$ guard (not $ KEM.null o); v -> Just v
-         in (if browser then merge "client" (AE.object ["address" AE..= ip]) else Relude.id) r{resource = Just $ AesonText $ Map.update dropSender "monoscope" res}
+      Just res
+        | Just ip <- Telemetry.atMapText "monoscope.sender_ip" (Just res) ->
+            let browser = Telemetry.atMapText "telemetry.sdk.language" (Just res) `elem` map Just ["webjs", "javascript", "js"] || isJust (Telemetry.atMapText "user_agent.original" (Just res))
+                dropSender = \case AE.Object (KEM.delete "sender_ip" -> o) -> AE.Object o <$ guard (not $ KEM.null o); v -> Just v
+             in (if browser then merge "client" (AE.object ["address" AE..= ip]) else Relude.id) r{resource = Just $ AesonText $ Map.update dropSender "monoscope" res}
       _ -> r
 
 
