@@ -106,10 +106,20 @@ spec = describe "Monitoring" do
         logPattern = ET.NewLogPattern{issueUrl = issue, patternText = "payment provider timeout after <*> ms", sampleMessage = Just "payment provider timeout after 30000 ms (provider=adyen, attempt=3)", logLevel = Just "error", serviceName = Just "payments", sourceField = "body", occurrenceCount = 214, isError = True}
         endpoints = V.fromList [ET.EndpointAlertRow "POST /api/v1/refunds" (Just "api.acme.io") (Just "payments") (Just "production"), ET.EndpointAlertRow "GET /api/v1/refunds/:id" (Just "api.acme.io") (Just "payments") (Just "production")]
         spike = Mail.cardMessages $ Mail.rateChangeCard (Mail.RateChange issue "connection reset by peer <*>" (Just "warn") (Just "gateway") Issues.Spike 1920 140 1271 False) "Acme API"
+        note event meta = Issues.ActivityNote{Issues.event, Issues.actor = Just "Ada Lovelace", Issues.assignee = Just "Grace Hopper", Issues.metadata = Just $ AE.object meta, Issues.at = frozenTime}
+        activity =
+          [ note Issues.IEAcknowledged ["until" AE..= addUTCTime 3600 frozenTime]
+          , note Issues.IEAssigned []
+          , note Issues.IECommented ["body" AE..= ("Rolling back the orders deploy; the null check was dropped in #4821" :: Text)]
+          , note Issues.IELinked ["url" AE..= ("https://github.com/acme/orders/issues/4821" :: Text), "title" AE..= ("acme/orders#4821" :: Text)]
+          , note Issues.IEAckExpired []
+          , note Issues.IEResolved []
+          ]
         entry :: Text -> I.SlackPayload -> [I.SlackPayload] -> AE.Value
         entry label root thread = AE.object ["label" AE..= label, "payload" AE..= root, "thread" AE..= thread]
         gallery =
           [ entry "new error" (fst $ errorMessages Mail.NewRuntimeError Nothing) [snd $ errorMessages Mail.EscalatingErrors Nothing, snd $ errorMessages Mail.NewRuntimeError (Just "3 hours"), resolvedReply]
+          , entry "issue lifecycle in the thread" (fst $ errorMessages Mail.NewRuntimeError Nothing) (Mail.activityReply <$> activity)
           , entry "error root after resolve" (Mail.retainSlackSnapshot (fst $ errorMessages Mail.NewRuntimeError Nothing) resolvedRoot) []
           , entry "regressed error" (fst $ errorMessages Mail.RegressedErrors Nothing) []
           , entry "monitor alerting" (fst $ monitorMessages 1840 Monitors.MSAlerting) [snd $ monitorMessages 1050 Monitors.MSWarning, snd $ Mail.monitorDataUnavailableMessage monitor Monitors.NoMeasurements frozenTime (Just (frozenTime, 1840)) issue "", snd $ monitorMessages 640 Monitors.MSNormal]
@@ -678,7 +688,7 @@ spec = describe "Monitoring" do
         [slackText sd | sd <- lifecycle, sd.channelId == "C1"]
           `shouldSatisfy` \case
             [acked, took, commented] ->
-              all (uncurry T.isInfixOf) [(":eyes: " <> who <> " acknowledged this  ·  alerts paused until ", acked), (who <> " took this", took), ("&gt; rolling back &lt;the&gt; deploy", commented)]
+              all (uncurry T.isInfixOf) [(":eyes: " <> who <> " acknowledged this  ·  alerts paused until ", acked), (who <> " took this", took), ("> rolling back &lt;the&gt; deploy", commented)]
             _ -> False
         concatMap (slackPayloadViolations . (.payload)) lifecycle `shouldBe` []
         stranded `shouldReturn` []

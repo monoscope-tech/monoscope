@@ -498,12 +498,12 @@ activityReply note = incidentMessage line [slackSection line]
       Issues.IEAckExpired -> ":bell: Acknowledgement expired  ·  alerts resumed"
       Issues.IEArchived -> ":file_cabinet: " <> who <> " archived this"
       Issues.IEUnarchived -> ":inbox_tray: " <> who <> " moved this back to the inbox"
-      Issues.IEResolved -> ":white_check_mark: *Resolved* by " <> who
-      Issues.IEAutoResolved -> ":white_check_mark: *Resolved* automatically"
+      Issues.IEResolved -> statusText sResolved{label = "Resolved by " <> maybe "someone" slackEscape note.actor}
+      Issues.IEAutoResolved -> statusText sResolved <> " automatically"
       Issues.IEReopened -> ":leftwards_arrow_with_hook: *Reopened*" <> foldMap (const $ " by " <> who) note.actor
       Issues.IEAssigned -> ":bust_in_silhouette: " <> who <> bool (" assigned this to " <> maybe "a teammate" (\n -> "*" <> slackEscape n <> "*") note.assignee) " took this" (isJust note.actor && note.assignee == note.actor)
       Issues.IEUnassigned -> ":bust_in_silhouette: " <> who <> " unassigned this"
-      Issues.IECommented -> ":speech_balloon: " <> who <> "\n" <> foldMap (T.unlines . map ("&gt; " <>) . lines . slackEscape . T.take 1500) (meta "body")
+      Issues.IECommented -> ":speech_balloon: " <> who <> "\n" <> foldMap (T.intercalate "\n" . map ("> " <>) . lines . slackEscape . T.take 1500) (meta "body")
       Issues.IELinked -> ":link: " <> who <> " linked " <> maybe "an external issue" (\u -> "<" <> u <> "|" <> slackEscape (fromMaybe u $ meta "title") <> ">") (meta "url")
       Issues.IEMerged -> ":twisted_rightwards_arrows: " <> who <> " merged this into another issue"
       Issues.IESpam -> ":no_entry_sign: " <> who <> " marked this as spam"
@@ -889,8 +889,8 @@ sampleAlert = \case
         (Just "just now")
         Nothing
   QueryAlert -> testMonitor "High Error Rate"
-  LogPattern -> testMonitor "New Log Pattern"
-  LogPatternRateChange -> testMonitor "Log Pattern Rate Change"
+  LogPattern -> const $ LogPatternAlert NewLogPattern{issueUrl = "https://example.com/test", patternText = "🧪 TEST: payment provider timeout after <*> ms", sampleMessage = Just "payment provider timeout after 30000 ms (provider=adyen)", logLevel = Just "error", serviceName = Just "payments", sourceField = "body", occurrenceCount = 214, isError = True}
+  LogPatternRateChange -> const $ LogPatternRateChangeAlert RateChange{issueUrl = "https://example.com/test", patternText = "🧪 TEST: connection reset by peer <*>", logLevel = Just "warn", serviceName = Just "gateway", direction = Spike, currentRate = 1920, baselineMean = 140, changePercent = 1271, isError = False}
   Performance -> testMonitor "N+1 Query"
   Frontend -> testMonitor "Rage Click"
   Uptime -> testMonitor "Downtime detected"
