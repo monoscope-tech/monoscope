@@ -16,7 +16,7 @@ import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.ProtoLens (defMessage)
 import Data.Text qualified as T
-import Data.Time (addUTCTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
@@ -58,6 +58,7 @@ import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
+import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Servant qualified
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Config qualified as Config
@@ -73,7 +74,7 @@ import Web.ApiHandlers qualified as Api
 import Web.ApiTypes qualified as ApiTypes
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
-import Web.FormUrlEncoded (urlDecodeAsForm)
+import Web.FormUrlEncoded (fromForm, urlDecodeAsForm)
 import Web.Routes qualified as Routes
 import "cryptonite" Crypto.Hash qualified as Crypto
 
@@ -161,7 +162,7 @@ newDashboard :: TestResources -> Text -> Text -> IO DashboardModel.DashboardId
 newDashboard tr file title = do
   let ids = dashboardList tr Nothing <&> \case Dashboards.DashboardsGetSlim d -> V.toList d.dashboards; Dashboards.DashboardsGet (PageCtx _ d) -> V.toList d.dashboards
   ids >>= traverse_ \d -> testServant tr $ Dashboards.dashboardDeleteH testPid d.id
-  _ <- testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = title, Dashboards.file = file, Dashboards.teams = [], Dashboards.fileDir = Nothing}
+  _ <- testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = title, Dashboards.file = file, Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}
   ids >>= \case
     [d] -> pure d.id
     ds -> fail $ "expected one dashboard, got " <> show (length ds)
@@ -302,6 +303,24 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     -- Picker rows PUT to the widget upsert: a mutation is never a GET.
     renderT picker `shouldSatisfy` T.isInfixOf "hx-put=\"/p/"
     goldenHtml "dashboard-list" do toHtml list; toHtml picker
+
+  it "add-to-dashboard picker: a searchable list that copies from the source; a new dashboard starts with the picked widget" \tr -> do
+    dashId <- newDashboard tr "" "Picker Source"
+    addWidgets tr dashId [(widgetOf Widget.WTStat "Source Stat"){Widget.id = Just "src-stat"}]
+    picker <- renderT <$> call tr (Dashboards.dashboardsGetH testPid Nothing (Just "true") Nothing (Just "src-stat") (Just dashId) Nothing (Dashboards.DashboardFilters []))
+    picker `shouldContainAll` ["id=\"dashboard-picker\"", "hx-live:hidden", "This dashboard", "1 widget", "/widgets/src-stat/duplicate?source_dashboard_id=" <> dashId.toText]
+    -- The picker always posts every hidden field; the empty ones read as absent rather than as malformed ids.
+    ((\f -> (f.sourceDashboardId, f.widgetJson)) <$> (fromForm @Dashboards.DashboardForm =<< urlDecodeAsForm "file=&title=Fresh&teams=&copyWidgetId=w1&sourceDashboardId=&widgetJson=")) `shouldBe` Right (Nothing, Nothing)
+    -- The explorer's chart exists only as JSON; "New dashboard with this widget" posts it with the form.
+    void $ testServant tr $ Dashboards.dashboardDeleteH testPid dashId
+    let chart = widgetOf Widget.WTTimeseries "From Explorer"
+    void $ testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Fresh", Dashboards.file = "", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Just "visualization-widget", Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Just (decodeUtf8 $ AE.encode chart)}
+    fresh <- dashboardList tr Nothing <&> \case Dashboards.DashboardsGetSlim d -> V.toList d.dashboards; Dashboards.DashboardsGet (PageCtx _ d) -> V.toList d.dashboards
+    map (.title) fresh `shouldBe` ["Fresh"]
+    map (.title) . concat <$> traverse (storedWidgets tr . (.id)) fresh `shouldReturn` [Just "From Explorer"]
+    -- A widget that will not decode is refused before anything is written, not dropped from a new, empty dashboard.
+    void $ testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Broken", Dashboards.file = "", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Just "{not json"}
+    (dashboardList tr Nothing <&> \case Dashboards.DashboardsGetSlim d -> map (.title) (V.toList d.dashboards); Dashboards.DashboardsGet (PageCtx _ d) -> map (.title) (V.toList d.dashboards)) `shouldReturn` ["Fresh"]
 
   it "rendering: every widget type is a canvas grid item; tables, fetch URLs, PNGs and wire tags hold" \tr -> do
     -- The canvas serializer (widgets.ts buildWidgetOrder) selects `.grid-stack-item`, keys on
@@ -778,34 +797,37 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     let row label lo hi = V.fromList [AE.String label, AE.toJSON (lo :: Double), AE.toJSON (hi :: Double)]
     onBoth grouped (Just "metrics | where metric_name == \"grouped.metric\" | summarize min(value), max(value) by resource.container.name") Nothing (V.fromList [row "null" 9 11, row "beta" 7 7, row "alpha" 2 4])
 
-    -- Overview resource samples: paired and unpaired cpu/memory each count, expired ones do not.
-    samples <- createTestProject tr' "Resource sample counts"
-    samplesKey <- createTestAPIKey tr' samples "resource-samples"
+    -- Infra containers: CPU averages, memory against its limit, restarts as the window's increase;
+    -- a container without a limit has no headroom, and expired samples do not count.
+    samples <- createTestProject tr' "Container resource usage"
+    samplesKey <- createTestAPIKey tr' samples "container-resources"
+    let container name = [mkAttr "service.name" name, mkAttr "k8s.container.name" name, mkAttr "k8s.pod.name" (name <> "-0")]
     for_
-      [ (service, metric, value, stamp)
-      | (service, cpu, memory, stamp) <- [("paired", Just 0.25, Just 0.4, now), ("cpu-only", Just 0.75, Nothing, now), ("memory-only", Nothing, Just 0.6, now), ("expired", Just 0.9, Just 0.9, addUTCTime (-48 * 3600) now)]
-      , (metric, value) <- catMaybes [("container.cpu.utilization",) <$> cpu, ("container.memory.percent",) <$> memory]
-      ]
-      \(service, metric, value, stamp) -> ingestMetric tr' samplesKey [mkAttr "service.name" service] [] metric value stamp
+      ( [ ("web", "container.cpu.usage", 0.25, now), ("web", "container.cpu.usage", 0.75, now), ("web", "container.memory.working_set", 300, now)
+      , ("web", "k8s.container.memory_limit", 400, now), ("web", "k8s.container.restarts", 2, addUTCTime (-60) now), ("web", "k8s.container.restarts", 5, now)
+      , ("worker", "container.cpu.usage", 0.1, now), ("worker", "container.memory.working_set", 100, now)
+      , ("expired", "container.cpu.usage", 0.9, addUTCTime (-48 * 3600) now)
+      ] :: [(Text, Text, Double, UTCTime)] )
+      \(name, metric, value, stamp) -> ingestMetric tr' samplesKey (container name) [] metric value stamp
     overview <- DashboardModel.readDashboardFile "static/public/dashboards" "_overview.yaml"
-    resource <- widgetTitled "Service Resource Usage" $ foldMap DashboardModel.allWidgets overview
-    let sample service cpu memory points = V.fromList [AE.String service, AE.toJSON (cpu :: Maybe Double), AE.toJSON cpu, AE.toJSON (memory :: Maybe Double), AE.toJSON memory, AE.toJSON (points :: Int)]
-    onBoth samples Nothing (snd $ Widget.tableQuery resource Nothing) (V.fromList [sample "cpu-only" (Just 75) Nothing 1, sample "paired" (Just 25) (Just 0.4) 2, sample "memory-only" Nothing (Just 0.6) 1])
+    containers <- widgetTitled "Containers" $ foldMap DashboardModel.allWidgets overview
+    let usage name cpu peak mem pct restarts = V.fromList [AE.String name, AE.String name, AE.toJSON (1 :: Double), AE.toJSON (cpu :: Double), AE.toJSON (peak :: Double), AE.toJSON (mem :: Double), AE.toJSON (pct :: Maybe Double), AE.toJSON (restarts :: Double)]
+    onBoth samples Nothing (snd $ Widget.tableQuery containers Nothing) (V.fromList [usage "web" 0.5 0.75 300 (Just 75) 3, usage "worker" 0.1 0.1 100 Nothing 0])
 
     -- Through the dashboard JSON API, with a client sort that cannot inject SQL.
-    dashId <- newDashboard tr' "" "Resource table API"
-    void $ toBaseServantResponse tr' $ Api.apiDashboardWidgetUpsert testPid dashId resource{Widget.id = Just "resources", Widget.dbSource = Just Hasql.SqlPostgres}
+    dashId <- newDashboard tr' "" "Container table API"
+    void $ toBaseServantResponse tr' $ Api.apiDashboardWidgetUpsert testPid dashId containers{Widget.id = Just "containers", Widget.dbSource = Just Hasql.SqlPostgres}
     for_
-      [ (testPid, stamp, service, metric, value, service)
-      | (service, cpu, memory, stamp) <- [("backend" :: Text, 0.25, 0.4, now), ("frontend", 0.5, 0.8, now), ("expired", 0.9, 0.9, addUTCTime (-48 * 3600) now)]
-      , (metric, value) <- [("container.cpu.utilization" :: Text, cpu), ("container.memory.percent", memory :: Double)]
+      [ (testPid, stamp, name, metric, value, name, name, name <> "-0")
+      | (name, cpu, memory, stamp) <- [("backend" :: Text, 0.25, 400, now), ("frontend", 0.5, 800, now), ("expired", 0.9, 900, addUTCTime (-48 * 3600) now)]
+      , (metric, value) <- [("container.cpu.usage" :: Text, cpu), ("container.memory.working_set", memory :: Double)]
       ]
-      $ dbExec tr' [sql| INSERT INTO otel_metrics (project_id, timestamp, id, series_id, metric_name, metric_type, value, resource___service___name) VALUES (?, ?, gen_random_uuid(), ?, ?, 'GAUGE', ?, ?) |]
-    let backend = ["backend", "25.0", "25.0", "0.4", "0.4", "2"]
-        frontend = ["frontend", "50.0", "50.0", "0.8", "0.8", "2"]
-    for_ [(Nothing :: Maybe Text, [frontend, backend]), (Just "+service", [backend, frontend]), (Just "-service", [frontend, backend]), (Just "-service; SELECT 1", [frontend, backend])] \(sortParam, expected) -> do
-      result <- toBaseServantResponse tr' $ Dashboards.apiDashboardData testPid dashId Nothing (Just "resources") (Just "24h") Nothing Nothing [("table-sort", sortParam)]
-      [(w.error, w.textRows, w.columns) | w <- result.widgets :: [ApiTypes.RenderedWidget]] `shouldBe` [(Nothing, expected, ["Service/Container", "CPU Avg", "CPU Max", "Mem Avg", "Mem Max", "Samples"])]
+      $ dbExec tr' [sql| INSERT INTO otel_metrics (project_id, timestamp, id, series_id, metric_name, metric_type, value, resource___service___name, resource___k8s___container___name, resource___k8s___pod___name) VALUES (?, ?, gen_random_uuid(), ?, ?, 'GAUGE', ?, ?, ?, ?) |]
+    let backend = ["backend", "backend", "1", "0.250", "0.250", "400", "", "0"]
+        frontend = ["frontend", "frontend", "1", "0.500", "0.500", "800", "", "0"]
+    for_ [(Nothing :: Maybe Text, [frontend, backend]), (Just "+container", [backend, frontend]), (Just "-container", [frontend, backend]), (Just "-container; SELECT 1", [frontend, backend])] \(sortParam, expected) -> do
+      result <- toBaseServantResponse tr' $ Dashboards.apiDashboardData testPid dashId Nothing (Just "containers") (Just "24h") Nothing Nothing [("table-sort", sortParam)]
+      [(w.error, w.textRows, w.columns) | w <- result.widgets :: [ApiTypes.RenderedWidget]] `shouldBe` [(Nothing, expected, ["Container", "Service", "Pods", "CPU", "CPU peak", "Memory", "% of limit", "Restarts"])]
 
     -- The sort reaches rows outside the original top twenty, keeps numbers numeric, and rejects injection.
     let fetch widget sortParam = fmap (.dataText) $ runQueryEffect tr' do
@@ -913,6 +935,14 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     let browserSpan n name attrs ua = ingestSpanReq tr $ mkSpanRequest ("e" <> T.justifyRight 31 '0' (show @Text n)) ("e" <> T.justifyRight 15 '0' (show @Text n)) Nothing name [] Nothing (mkAttr "session.id" ("dash-session-" <> show n) : attrs) (mkResource apiKey [mkAttr "service.name" "storefront", mkAttr "user_agent.original" ua]) frozenTime
     browserSpan (1 :: Int) "documentLoad" [mkAttr "url.full" "https://shop.example/cart"] "Mozilla/5.0 (X11; Linux x86_64) Chrome/151"
     browserSpan 2 "Pageview · /orders/123" [mkAttr "url.path" "/orders/123", mkAttr "exception.type" "TypeError"] "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148 Safari/604.1"
+    -- Fetch calls from the page: two to the app's API, one the OTLP exporter makes about itself.
+    let fetchSpan n method path status = ingestSpanReq tr $ withSpanKind PT.Span'SPAN_KIND_CLIENT $ mkSpanRequest ("f" <> T.justifyRight 31 '0' (show @Text n)) ("f" <> T.justifyRight 15 '0' (show @Text n)) Nothing method [] Nothing [mkAttr "http.request.method" method, mkAttr "url.path" path, mkAttr "server.address" "api.shop.example", mkAttr "http.response.status_code" status] (mkResource apiKey [mkAttr "service.name" "storefront", mkAttr "user_agent.original" "Mozilla/5.0 Chrome/151"]) frozenTime
+    fetchSpan (1 :: Int) "GET" "/api/orders/123" "200"
+    fetchSpan 2 "POST" "/api/cart" "500"
+    fetchSpan 3 "POST" "/v1/traces" "200"
+    -- Resource timing records API calls too; only files are static assets.
+    browserSpan 4 "resourceFetch" [mkAttr "url.full" "https://cdn.shop.example/app.js?v=3"] "Mozilla/5.0 (X11; Linux x86_64) Chrome/151"
+    browserSpan 5 "resourceFetch" [mkAttr "url.full" "https://shop.example/api/cart"] "Mozilla/5.0 (X11; Linux x86_64) Chrome/151"
     -- Three DELTA exports merge to [3,9,3,1,0] over 16 observations; the 12th lands on the
     -- 2500 edge of (1000, 2500], so P75 is exactly 2500 and rated Good from its bucket alone.
     let at = (`addUTCTime` frozenTime)
@@ -950,6 +980,9 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     vitalRow mixed "LCP" `shouldBe` Just ["LCP", "2344 ms", "rating;success-strong⇒Good", "0 – 2500", "20"]
     sort [name | row <- V.toList $ table results "Devices", Just name <- [row V.!? 0]] `shouldBe` ["Desktop", "Mobile"]
     sort (V.toList $ V.mapMaybe (V.!? 0) $ table results "Top pages") `shouldBe` ["/cart", "/orders/:id"]
+    V.toList (V.mapMaybe (V.!? 0) $ table results "Slowest static assets") `shouldBe` ["cdn.shop.example/app.js"]
+    -- Network: ids masked, failures counted, the exporter's own uploads left out.
+    sort [V.toList $ V.take 6 row | row <- V.toList $ table results "Endpoints"] `shouldBe` [["GET /api/orders/:id", "api.shop.example", "1", "100.0", "100.0", "0.0"], ["POST /api/cart", "api.shop.example", "1", "100.0", "100.0", "100.0"]]
     -- Each page row's hidden Explorer query finds the events it counted, and its link carries it with the dashboard's window.
     forM_ (table results "Top pages") \row -> do
       events <- call tr $ Log.logExplorerDataH projectId def{Log.query = row V.!? 3, Log.from = Just from, Log.to = Just to}
@@ -964,7 +997,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     ingestTrace tr apiKey "GET /backend-only" frozenTime
     sessions <- call tr $ Log.logExplorerDataH projectId def{Log.query = Just browserKql, Log.from = Just from, Log.to = Just to}
     viaSql <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTFloat) (Just projectId) Nothing (Just "SELECT count(*)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}}") Nothing (Just from) (Just to) Nothing Nothing []
-    (sessions.error, sessions.queryResultCount, viaSql.dataFloat) `shouldBe` (Nothing, 2, Just 2)
+    (sessions.error, sessions.queryResultCount, viaSql.dataFloat) `shouldBe` (Nothing, 7, Just 7)
 
     -- Audience: each session counts once, unknown agents are kept, cohorts filter.
     pid <- createTestProject tr "RUM audience"
@@ -1015,7 +1048,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         listed = page tr Nothing filters <&> \(PageCtx _ d) -> V.toList d.dashboards
         titled t = listed >>= maybe (fail $ "no dashboard titled " <> toString t) pure . find ((== t) . (.title))
         -- In one request, as the page does; the test UUID supply would otherwise repeat ids.
-        create ts = map (show @Text . Servant.getResponse) <$> call tr (traverse (\t -> Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = t, Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}) ts >>= addRespHeaders)
+        create ts = map (show @Text . Servant.getResponse) <$> call tr (traverse (\t -> Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = t, Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}) ts >>= addRespHeaders)
     -- The empty state opens the new-dashboard modal (a <label for>), not a dead href="newDashboardMdl".
     zero <- renderT <$> fetch tr Nothing filters{Dashboards.tag = ["no-such-tag-so-the-list-is-empty"]}
     zero `shouldContainAll` ["No dashboards yet", "for=\"newDashboardMdl\""]
@@ -1038,6 +1071,8 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     (_, (_, _, shell)) <- testServant tr $ BodyWrapper.mkPageCtx testPid >>= addRespHeaders
     shell.envOptions `shouldBe` V.singleton "production"
     PageCtx bw _ <- page tr Nothing filters
+    -- Overscroll paints <html>'s background, so the theme must reach it, not only <body>.
+    renderT (PageCtx bw ("" :: Text)) `shouldSatisfy` T.isInfixOf "<html lang=\"en\" data-theme=\"light\""
     (bw.envOptions, bw.serviceOptions, map (.conversationId) bw.conversations, isJust bw.activationProgressM) `shouldBe` (V.empty, V.empty, map (.conversationId) shell.conversations, isJust shell.activationProgressM)
 
     create ["Dashboard 1", "Dashboard 2", "Test Dashboard"] `shouldReturn` replicate 3 "DashboardNoContent"
@@ -1085,7 +1120,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
 
   it "dashboard switcher: the title lists the project's dashboards, starred first, linking each and marking the current one" \tr -> do
     alpha <- newDashboard tr "" "Alpha"
-    _ <- testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Beta", Dashboards.file = "", Dashboards.teams = [], Dashboards.fileDir = Nothing}
+    _ <- testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Beta", Dashboards.file = "", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}
     dbExec tr "UPDATE projects.dashboards SET starred_since = now() WHERE project_id = ? AND title = 'Beta'" (Only testPid)
     switcher <- renderT <$> call tr (Dashboards.dashboardSwitcherGetH testPid alpha)
     let at t = T.length . fst $ T.breakOn t switcher
@@ -1184,7 +1219,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     let sample n = AE.eitherDecode @Dashboards.DashboardSettleSample $ "{\"duration_ms\":1,\"response_bytes\":2,\"navigation\":\"" <> n <> "\"}"
     (sample "initial", sample "tab", isLeft (sample "typo")) `shouldBe` (Right (Dashboards.DashboardSettleSample 1 2 Dashboards.DashboardInitial), Right (Dashboards.DashboardSettleSample 1 2 Dashboards.DashboardTab), True)
     victim <- createTestProject tr "victim"
-    _ <- testServant tr $ Dashboards.dashboardsPostH victim Dashboards.DashboardForm{Dashboards.title = "Victim", Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
+    _ <- testServant tr $ Dashboards.dashboardsPostH victim Dashboards.DashboardForm{Dashboards.title = "Victim", Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}
     victimDash <- runTestBg frozenTime tr (DashboardModel.selectDashboardsSortedBy victim DashboardModel.Asc DashboardModel.DSTitle) >>= maybe (fail "no victim dashboard") pure . viaNonEmpty head
     assertNonMemberDenied tr victim $ Dashboards.dashboardSettledPostH victim victimDash.id (Dashboards.DashboardSettleSample 1 2 Dashboards.DashboardInitial)
     -- URL values beat declared defaults, so a shared link carries its selections; a cleared value stays cleared.
@@ -1226,6 +1261,12 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     series <- run [] Widget.WTTimeseries "name != null"
     map (.error) [logs, table, series] `shouldBe` [Nothing, Nothing, Nothing :: Maybe Text]
     (V.length logs.dataText, V.null table.dataText, V.null series.dataset) `shouldBe` (1, False, False)
+    -- A heatmap's default query buckets durations on log_bin's quarter-decade ladder, split by status.
+    heat <- run [] Widget.WTHeatmap "name != null"
+    let ladder h = case T.splitOn " / " h of
+          [v, status] | Just x <- readMaybe @Double (toString v) -> status `elem` ["ok", "error"] && abs (logBase 10 x * 4 - fromInteger (round (logBase 10 x * 4))) < 1e-6
+          _ -> False
+    (heat.error :: Maybe Text, V.length heat.headers > 1, all ladder (V.drop 1 heat.headers)) `shouldBe` (Nothing, True, True)
     for_ ["name != null | summarize dcount(name)", "name != null"] \q -> do
       md <- run [] Widget.WTStat q
       (md.error :: Maybe Text, (> 0) <$> (md.dataFloat :: Maybe Double)) `shouldBe` (Nothing, Just True)

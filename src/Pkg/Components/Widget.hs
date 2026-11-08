@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), VizType (..), vizWidget, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
+module Pkg.Components.Widget (Widget (..), VizType (..), vizWidget, widgetWith_, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -142,10 +142,10 @@ data WidgetType
 --
 -- >>> import Data.Text.Display (display)
 -- >>> map display [minBound .. maxBound :: VizType]
--- ["logs","timeseries","timeseries_line","top_list","patterns","sessions"]
--- >>> [display w | Just w <- map vizWidget [minBound ..]] == map display [VizLogs .. VizTopList]
+-- ["logs","timeseries","timeseries_line","top_list","heatmap","patterns","sessions"]
+-- >>> [display w | Just w <- map vizWidget [minBound ..]] == map display [VizLogs .. VizHeatmap]
 -- True
-data VizType = VizLogs | VizTimeseries | VizTimeseriesLine | VizTopList | VizPatterns | VizSessions
+data VizType = VizLogs | VizTimeseries | VizTimeseriesLine | VizTopList | VizHeatmap | VizPatterns | VizSessions
   deriving stock (Bounded, Enum, Eq, Read, Show)
   deriving (AE.ToJSON, Display, FromHttpApiData, ToSchema) via WrappedEnumSC 'Nothing "Viz" VizType
 
@@ -157,6 +157,7 @@ vizWidget = \case
   VizTimeseries -> Just WTTimeseries
   VizTimeseriesLine -> Just WTTimeseriesLine
   VizTopList -> Just WTTopList
+  VizHeatmap -> Just WTHeatmap
   VizPatterns -> Nothing
   VizSessions -> Nothing
 
@@ -175,6 +176,7 @@ vizDraws = \case
   VizTimeseries -> (/= Categories)
   VizTimeseriesLine -> (/= Categories)
   VizTopList -> (== Categories)
+  VizHeatmap -> (/= Categories)
   VizLogs -> (== Events)
   VizPatterns -> (== Events)
   VizSessions -> (== Events)
@@ -498,6 +500,8 @@ data WidgetDataset = WidgetDataset
 -- (Just "name == \"GET\" | summarize count() by bin_auto(timestamp), name",DTMetric)
 -- >>> chartQuery (def & #wType .~ WTTopList & #query ?~ "name == \"GET\" | summarize count() by name")
 -- (Just "name == \"GET\" | summarize count() by name",DTText)
+-- >>> chartQuery (def & #wType .~ WTHeatmap & #query ?~ "kind == \"server\"")
+-- (Just "kind == \"server\" | where duration > 0 | summarize count(*) by bin_auto(timestamp), log_bin(duration), iff(status_code == \"ERROR\", \"error\", \"ok\")",DTMetric)
 -- >>> chartQuery (def & #wType .~ WTDistribution & #query ?~ "summarize count() by resource.service.name")
 -- (Just "summarize count() by resource.service.name",DTText)
 chartQuery :: Widget -> (Maybe Text, Charts.DataType)
@@ -508,13 +512,17 @@ chartQuery w
   | otherwise = (shape <$> w.query, dataType)
   where
     isStat = w.wType == WTStat
-    (suffix, dataType) = if isStat then ("", Charts.DTFloat) else (" by bin_auto(timestamp)", Charts.DTMetric)
+    (summary, dataType)
+      | isStat = ("summarize count(*)", Charts.DTFloat)
+      -- Latency over time on log buckets, Datadog's default for span durations.
+      | w.wType == WTHeatmap = ("where duration > 0 | summarize count(*) by bin_auto(timestamp), log_bin(duration), iff(status_code == \"ERROR\", \"error\", \"ok\")", Charts.DTMetric)
+      | otherwise = ("summarize count(*) by bin_auto(timestamp)", Charts.DTMetric)
     shape q = case parseQueryToAST q of
       -- Let the query handler report errors in the original malformed query.
       Left _ -> q
       Right ast ->
         let (summarized, binned) = mapAccumR addBin False ast
-         in if not summarized then foldMap (<> " | ") (nonEmptyT (Just (T.strip q))) <> "summarize count(*)" <> suffix else if binned == ast then q else toQText binned
+         in if not summarized then foldMap (<> " | ") (nonEmptyT (Just (T.strip q))) <> summary else if binned == ast then q else toQText binned
     addBin False section@(SummarizeCommand aggs by)
       | isStat || resultShape [section] == TimeSeries = (True, section)
       | otherwise = (True, SummarizeCommand aggs $ Just $ SummarizeByClause $ ByBinFunc (BinAuto $ Subject "timestamp" "timestamp" []) : foldMap coerce by)
@@ -720,7 +728,14 @@ infraTimeseries pid wid title unit query =
 
 -- use either index or the xxhash as id
 widget_ :: Widget -> Html ()
-widget_ w' = case w.wType of
+widget_ = widgetWith_ mempty
+
+
+-- | A widget with controls of the page's own in its header, just before the menu: the Explorer's
+-- latency card carries its Percentiles/Heatmap switch there. Not stored on the widget, so a
+-- chart copied to a dashboard does not take the page's controls with it.
+widgetWith_ :: Html () -> Widget -> Html ()
+widgetWith_ actions w' = case w.wType of
   WTAnomalies ->
     wgtCard_ $ withCardFrame False w (w._projectId <&> \pid -> ("View all", (urls.issues pid).listGet Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] [])) $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
   -- rounded-3xl: its cards are rounded-2xl inside the grid's ~8px margin, so corners stay concentric.
@@ -744,7 +759,7 @@ widget_ w' = case w.wType of
   WTLogs -> wgtCard_ $ renderLogsWidget w
   WTServiceMap -> wgtCard_ $ withCardFrame True w (ctaAction w) $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
   WTFlamegraph -> gridItem_ $ div_ [class_ "h-full "] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
-  _ -> gridItem_ $ div_ [class_ " w-full h-full group/wgt "] $ renderChart w
+  _ -> gridItem_ $ div_ [class_ " w-full h-full group/wgt "] $ renderChart actions w
   where
     normalizedChildren = fold $ listToMaybe (normalizeWidgetLayouts [w']) >>= (.children)
     w = (w' & #children .~ (normalizedChildren <$ w'.children)) & #id %~ (<|> (slugify <$> w'.title))
@@ -1060,8 +1075,8 @@ valueSlot_ :: Text -> Text -> Maybe Text -> Html ()
 valueSlot_ cls wid valueM = span_ [class_ $ cls <> bool " hidden" "" (isJust valueM), id_ $ wid <> "Value"] $ whenJust valueM toHtml
 
 
-renderWidgetHeader :: Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Html ()
-renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "min-h-8 px-1 leading-none flex justify-between items-center " <> bool "grid-stack-handle" "" (or widget.standalone), id_ $ wId <> "_header"] do
+renderWidgetHeader :: Html () -> Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Html ()
+renderWidgetHeader actions widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "min-h-8 px-1 leading-none flex justify-between items-center " <> bool "grid-stack-handle" "" (or widget.standalone), id_ $ wId <> "_header"] do
   when (or widget._centerTitle) $ div_ ""
   div_ [class_ "inline-flex gap-3 items-center group/h min-w-0"] do
     span_ [class_ "text-sm text-textStrong font-semibold flex items-center gap-1 min-w-0"] do
@@ -1147,6 +1162,7 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
             <> Utils.drawerLoadAttrs_ (urls.dashboardWidgetExpandGet p d wId Nothing)
         )
         $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
+    actions
     let widgetMenuPop = wId <> "-widget-menu"
     div_ [class_ "inline-block"] do
       button_ ([type_ "button", class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Widget menu", data_ "tippy-content" "Widget Menu"] <> Utils.popoverTrigger_ widgetMenuPop)
@@ -1159,23 +1175,28 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
             dashId = maybeToMonoid widget._dashboardId
             pid = projectIdText widget
             dashboardScope = foldMap ("&dashboard_id=" <>) widget._dashboardId
+            modalTitle = bool @Text "Add to dashboard" "Copy to dashboard" onDashboard
         menuItem_
           (bool "Add this widget to a dashboard" "Copy this widget to another dashboard" onDashboard)
           [ id_ $ wId <> "_copy_link"
+          , data_ "widget-title" $ maybeToMonoid widget.title
           , term
               "_"
               [text|
               on click
               set widgetEl to the closest <[data-widget]/>
+              then set #dashboards-modal-title.textContent to "${modalTitle}"
+              then set #dashboards-modal-widget-title.textContent to my.dataset.widgetTitle
+              then set #dashboards-modal-search.value to ''
               then set #dashboards-modal-widget-id.value to "${wId}"
               then set #dashboards-modal-source-dashboard-id.value to "${dashId}"
               then set #dashboards-modal-widget-json.value to (widgetEl.dataset.widget or '')
-              then set #dashboards-modal.checked to true
+              then set #dashboards-modal.checked to true then send change to #dashboards-modal
               then trigger loadDashboards on #dashboards-modal-content
               then call (the closest <[popover]/>).hidePopover()
             |]
           ]
-          (bool "Add to dashboard" "Copy to dashboard" onDashboard)
+          (toHtml modalTitle)
         menuItem_
           "Copy generated SQL to clipboard"
           [ term
@@ -1257,7 +1278,7 @@ withCardFrame :: Bool -> Widget -> Maybe (Text, Text) -> Html () -> Html ()
 withCardFrame flexCol widget extraAction body = do
   let naked = or widget.naked
   div_ [class_ "gap-0.5 flex flex-col h-full"] do
-    unless naked $ renderWidgetHeader widget Nothing Nothing Nothing extraAction
+    unless naked $ renderWidgetHeader mempty widget Nothing Nothing Nothing extraAction
     div_ [class_ "flex-1 flex min-h-0"]
       $ div_
         [ class_ $ "h-full w-full " <> bool "" "flex flex-col " flexCol <> bool "surface-raised rounded-2xl" "" naked
@@ -1418,9 +1439,10 @@ renderStatContent widget valueM = do
         descIcon_ widget.description " text-iconNeutral"
 
 
-renderChart :: Widget -> Html ()
-renderChart widget = do
-  let unit = fromMaybe "" widget.unit
+renderChart :: Html () -> Widget -> Html ()
+renderChart actions widget = do
+  -- A heatmap's unit labels its buckets; its cells, and so its headline, are counts.
+  let unit = bool (fromMaybe "" widget.unit) "" (widget.wType == WTHeatmap)
       -- Summing latencies or percentages ("5.3s" of p99s) means nothing; unless asked, those headline their peak.
       summarize = fromMaybe (bool SBSum SBMax (isJust (unitNanos unit) || unit == "%")) widget.summarizeBy
       summed = summarize == SBSum
@@ -1473,7 +1495,7 @@ renderChart widget = do
       isStat = isStatWidget widget
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
     unless (or widget.naked || isStat)
-      $ renderWidgetHeader widget valueM rateM widget.expandBtnFn Nothing
+      $ renderWidgetHeader actions widget valueM rateM widget.expandBtnFn Nothing
     div_ [class_ $ "flex-1 flex min-h-0 " <> bool "" (gridStackHandleClassFor widget) isStat] do
       div_
         [ class_
@@ -1526,6 +1548,16 @@ renderChart widget = do
           when isStat $ renderStatContent widget valueM
           unless (widget.wType == WTStat) $ div_ [data_ "chart-config" $ encodeText chartConfig, class_ $ "relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> if isStat then "" else " p-3"] do
             div_ [class_ "chart-render-slot h-full min-h-full w-full", id_ chartId, data_ "chart-widget" "", term "hx-morph-skip" ""] ""
+            -- A heatmap cell holding errors asks which of its events to open; widgets.ts places it at
+            -- the click and fills the counts. Plain cells open their events directly.
+            when (widget.wType == WTHeatmap) $ div_ [id_ $ chartId <> "_cell_menu", term "popover" "auto", role_ "menu", Aria.label_ "Open events", class_ "m-0 w-48 origin-top-left rounded-lg border border-strokeWeak bg-bgRaised p-1 text-xs text-textStrong shadow-lg transition-[opacity,scale,display,overlay] transition-discrete duration-150 ease-(--ease-out-quint) starting:open:scale-95 starting:open:opacity-0"] do
+              let item :: Text -> Text -> Text -> Text -> Html ()
+                  item cellView label countAttr extra =
+                    button_ [type_ "button", role_ "menuitem", data_ "cell-view" cellView, class_ $ "flex w-full cursor-pointer items-center justify-between gap-3 rounded px-2 py-1.5 text-left hover:bg-fillWeak active:bg-fillHover focus-visible:bg-fillWeak " <> extra] do
+                      span_ $ toHtml label
+                      span_ [data_ countAttr "", class_ "tabular-nums text-textWeak"] ""
+              item "all" "All requests" "cell-count" ""
+              item "errors" "Errors only" "cell-errors" "text-textError"
             -- A stat tile's value already says "0"; the two-line overlay only clips inside it.
             unless isStat
               $ div_
@@ -1679,7 +1711,12 @@ widgetToECharts widget =
                 , "boundaryGap" AE..= if isCategorical then AE.Bool True else AE.Array (V.fromList [AE.Number 0, AE.Number 0.01])
                 , "splitLine" AE..= AE.object ["show" AE..= False]
                 , "axisLine" AE..= AE.object ["show" AE..= axisVisibility, "lineStyle" AE..= AE.object ["color" AE..= "#000833A6", "type" AE..= "solid", "opacity" AE..= 0.1]]
-                , "axisLabel" AE..= AE.object ["show" AE..= (axisVisibility && fromMaybe True (widget.xAxis >>= (.showAxisLabel))), "margin" AE..= (8 :: Int), "hideOverlap" AE..= True]
+                , "axisLabel"
+                    AE..= AE.object
+                      ( ["show" AE..= (axisVisibility && fromMaybe True (widget.xAxis >>= (.showAxisLabel))), "margin" AE..= (8 :: Int), "hideOverlap" AE..= True]
+                          -- ECharts labels a day tick with the bare day ("8"); a week-wide axis read as "2 3 4".
+                          <> ["formatter" AE..= AE.object ["day" AE..= ("{MMM} {d}" :: Text)] | not isCategorical]
+                      )
                 , "show" AE..= (axisVisibility || or (widget.xAxis >>= (.showAxisLabel)))
                 ]
                   <> if isCategorical
@@ -1949,9 +1986,13 @@ alignsRight :: TableColumn -> Bool
 alignsRight col = isNumericCol col || isJust col.progress || any ("text-right" `T.isInfixOf`) col.align
 
 
+-- | A byte column reads in binary units, as the chart axes do, not as a raw count with "By" after it.
+--
+-- >>> formatColumnValue (def{columnType = Just CTNumber, unit = Just "By"}) "415100518"
+-- "395.9 MiB"
 formatColumnValue :: TableColumn -> Text -> Text
 formatColumnValue col value = case fromMaybe CTText col.columnType of
-  CTNumber -> maybe value fmtNumber (readMaybe (toString value) :: Maybe Double) <> unitSuffix
+  CTNumber -> maybe (value <> unitSuffix) (bool ((<> unitSuffix) . fmtNumber) formatBytes (any isByteUnit col.unit)) (readMaybe (toString value))
   CTDuration -> maybe (value <> unitSuffix) (\ns -> bool (T.replace ".0 " " " $ getDurationNSMS ns) "0" (ns == 0)) (readMaybe (toString value) >>= \n -> round . (n *) <$> maybe (Just 1) unitNanos col.unit)
   CTText -> maybe value (toText . formatTime defaultTimeLocale "%b %-d %H:%M:%S") (parseTimestamp value) <> unitSuffix
   where

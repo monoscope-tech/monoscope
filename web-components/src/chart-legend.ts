@@ -13,8 +13,9 @@ export const legendLayout = (options: any, width: number, height: number, format
   const names: string[] = (legend?.data ?? (options.series ?? []).map((s: any) => s?.name) ?? []).filter(Boolean);
   if (!legend || legend.show === false || !names.length || !width) return options;
   const fontSize = legend.textStyle?.fontSize ?? 12, charPx = fontSize * 0.62;
-  if (ctx) ctx.font = `${fontSize}px ${legend.textStyle?.fontFamily ?? options.textStyle?.fontFamily ?? 'sans-serif'}`;
-  const textPx = (t: string) => (ctx ? ctx.measureText(t).width : t.length * charPx);
+  const font = `${fontSize}px ${legend.textStyle?.fontFamily ?? options.textStyle?.fontFamily ?? 'sans-serif'}`;
+  // The canvas is shared and the formatter measures at draw time, after other charts set their own font.
+  const textPx = (t: string) => (ctx ? ((ctx.font = font), ctx.measureText(t).width) : t.length * charPx);
   const icon = (legend.itemWidth ?? 25) + 5, gap = legend.itemGap ?? 10;
   const [pt, pr, pb, pl] = sides(legend.padding);
   const pitch = Math.max(fontSize + 2, legend.itemHeight ?? 14) + gap;
@@ -62,7 +63,8 @@ export const legendLayout = (options: any, width: number, height: number, format
   while (textW > 8 * charPx && rowsAt(textW) > maxRows) textW -= charPx;
   // Columns widen to share the row, but never past the longest name.
   const cols = colsAt(textW);
-  textW = Math.min(widest, Math.floor((usable + gap) / cols) - gap - icon);
+  // Unfloored: a floored share fell a fraction short of the widest name and cut "ERROR" to "ERR…".
+  textW = Math.min(widest, (usable + gap) / cols - gap - icon);
   const fit = (n: string) => {
     let t = short(n);
     if (textPx(t) > textW) { while (t.length > 1 && textPx(t + '…') > textW) t = t.slice(0, -1); t += '…'; }
@@ -75,7 +77,7 @@ export const legendLayout = (options: any, width: number, height: number, format
     legend: {
       ...base, orient: 'horizontal', [side]: offset, left: 4, ...(legend.orient === 'vertical' && { top: undefined, right: undefined }),
       formatter: (n: string) => `{n|${fit(n)}}`,
-      textStyle: { ...legend.textStyle, rich: { n: { width: Math.max(1, Math.round(textW)), fontSize } } },
+      textStyle: { ...legend.textStyle, rich: { n: { width: Math.max(1, Math.ceil(textW)), fontSize } } },
       tooltip: { show: true, formatter: (p: any) => escape(p.name) },
     },
   };

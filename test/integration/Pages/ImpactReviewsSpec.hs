@@ -3217,7 +3217,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     sum . map (.usage.calls) <$> runQueryEffect tr (Reviews.usageTotals emptyPid) `shouldReturn` 0
     (_, history) <- testServant tr $ CodeContextPage.repositoriesGetH reviewPid (Just CodeContextPage.PullRequests) Nothing
     let historyText = renderT history
-    historyText `shouldContainAll` ["$0.001234 estimated", "1 unpriced", "not customer charges", "Base: assertion failed", "Head: passed", "1250 ms", "Compute cost is unpriced", "Service knowledge from this review", "Review temperature gauge"]
+    historyText `shouldContainAll` ["$0.001234 estimated", "1 unpriced", "not customer charges", "Base: assertion failed", "Head: passed", "1250 ms", "Compute cost is unpriced", "Service knowledge from this review", "Review temperature gauge", "1 finding to check", "Model and sandbox usage for this project"]
     T.count ("Check " <> T.take 8 execution.checkId.toText) historyText `shouldBe` 1
     dbOne tr "SELECT count(*)::bigint FROM projects.ai_usage WHERE project_id = ?" (Only reviewPid) `shouldReturn` (0 :: Int64)
     dbOne tr "SELECT count(*)::bigint FROM projects.pr_review_usage u JOIN projects.projects p ON p.id = u.project_id WHERE u.project_id = ? AND u.customer_id = 'cus_impact_usage' AND u.customer_id = p.customer_id AND u.billing_provider = p.billing_provider AND (u.receipt->>'inputTokens')::bigint = 12 AND (u.receipt->>'cacheReadTokens')::bigint = 13" (Only reviewPid) `shouldReturn` (2 :: Int64)

@@ -9,7 +9,7 @@
 -- happen here in Haskell over that result. That keeps the store doing exactly one short-window
 -- read per page view, which matters because wide aggregates over @otel_metrics@ are the query
 -- shape that has repeatedly OOM-killed TimeFusion.
-module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, matchesAny, matchesFilter, mkWindow, windowed, infraSnapshot, infrastructureBW, pctText, runtimeLabel, formatBytes, coresText, freshnessLabel, emDash_, readyBadge_, kqlFilter, nodeField, clusterField) where
+module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, matchesAny, matchesFilter, mkWindow, windowed, infraSnapshot, infrastructureBW, pctText, runtimeLabel, formatBytes, coresText, utilizationClass, freshnessLabel, emDash_, readyBadge_, kqlFilter, nodeField, clusterField) where
 
 import Data.Default (def)
 import Data.Text qualified as T
@@ -171,14 +171,14 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
   where
     containerColumns :: [Column ContainerVM]
     containerColumns =
-      [ col "Container" renderNameCol & withAttrs [class_ "w-80 max-w-80 overflow-hidden max-md:w-auto max-md:max-w-none"]
+      [ col "Container" renderNameCol & withAttrs [class_ "w-72 max-w-72 overflow-hidden max-md:w-auto max-md:max-w-none"]
       , col "Pod" (textCell (.podName)) & withAttrs [class_ "w-72 max-w-72 overflow-hidden max-2xl:hidden"]
       , col "Namespace" (textCell (.namespace)) & withAttrs [class_ "w-32 max-2xl:hidden"]
       , col "Node" (textCell (.nodeName)) & withAttrs [class_ "w-36 max-md:hidden"]
       , col "CPU (cores)" (numCell (showFFloat' 3) (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
-      , col "CPU limit used" (pctCell "CPU limit used" cpuPctOfLimit) & withAttrs [class_ "w-36 max-md:hidden"]
+      , col "CPU limit used" (pctCell "CPU limit used" cpuPctOfLimit) & withAttrs [class_ "w-32 whitespace-normal max-md:hidden"]
       , col "Memory" (numCell formatBytes (.memBytes)) & withAttrs [class_ "w-28 text-right max-md:hidden"]
-      , col "Memory limit used" (pctCell "Memory limit used" memPctOfLimit) & withAttrs [class_ "w-40 max-md:hidden"]
+      , col "Memory limit used" (pctCell "Memory limit used" memPctOfLimit) & withAttrs [class_ "w-32 whitespace-normal max-md:hidden"]
       , col "Restarts" (numCell (showFFloat' 0) (.restarts))
           & withColHeaderExtra
             ( let explanation = "Latest cumulative restart count reported within the selected time range. This is not the number of restarts during the range."
@@ -214,7 +214,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
             span_ [class_ "tabular-nums text-textStrong w-10 text-right shrink-0"] $ toHtml value
             div_ [class_ "h-1.5 grow rounded-full bg-fillWeak overflow-hidden"]
               -- Length is the non-colour cue. Hue adds the operational threshold.
-              $ div_ [class_ $ "h-full rounded-full " <> if | frac >= 0.9 -> "bg-fillError-strong" | frac >= 0.75 -> "bg-fillWarning-strong" | otherwise -> "bg-fillBrand-strong", style_ $ "width:" <> pctText (min 1 frac)] mempty
+              $ div_ [class_ $ "h-full rounded-full " <> utilizationClass (Just frac), style_ $ "width:" <> pctText (min 1 frac)] mempty
 
     renderNameCol :: ContainerVM -> Html ()
     renderNameCol vm = div_ [class_ "flex flex-col gap-0.5 min-w-0 overflow-hidden"] do
@@ -252,6 +252,15 @@ readyCell row = maybe emDash_ (readyBadge_ . (> 0)) row.ready
 readyBadge_ :: Bool -> Html ()
 readyBadge_ True = span_ [class_ "inline-flex items-center gap-1.5 whitespace-nowrap text-textStrong", data_ "tippy-content" "Latest reported readiness: Ready"] $ span_ [class_ "h-1.5 w-1.5 rounded-full bg-fillSuccess-strong", term "aria-hidden" "true"] mempty >> "Ready"
 readyBadge_ False = span_ [class_ "badge badge-sm badge-error whitespace-nowrap", data_ "tippy-content" "Latest reported readiness: Not ready"] "Not ready"
+
+
+-- | One utilization scale for every infrastructure bar and the host map legend.
+utilizationClass :: Maybe Double -> Text
+utilizationClass = \case
+  Nothing -> "bg-fillNeutral-strong"
+  Just value | value < 0.6 -> "bg-fillSuccess-strong"
+  Just value | value < 0.85 -> "bg-fillWarning-strong"
+  Just _ -> "bg-fillError-strong"
 
 
 coresText :: Double -> Text
@@ -360,7 +369,7 @@ clusterField = "coalesce(resource.k8s.cluster.name, resource.k8s.cluster.uid)"
 -- >>> :set -XOverloadedStrings -XOverloadedRecordDot
 -- >>> import Data.Vector qualified as V
 -- >>> import Models.Telemetry.Containers (ContainerRow (..), Scope (..))
--- >>> let emptyRow n = ContainerRow n ScopeContainer Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+-- >>> let emptyRow n = ContainerRow n ScopeContainer Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing False
 -- >>> let noFilters = ContainerFilters Nothing Nothing Nothing Nothing Nothing
 -- >>> let nsFilter ns = ContainerFilters Nothing ns Nothing Nothing Nothing
 

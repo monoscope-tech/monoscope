@@ -352,12 +352,13 @@ addTriggerEvent key value = State.modify $ \events ->
    in Map.insert key updatedList events
 
 
-addToast :: State.State TriggerEvents :> es => Text -> Text -> Maybe Text -> Eff es ()
-addToast toastType title descM = addTriggerEvent "triggerToast" $ AE.toJSON $ [toastType, title] ++ catMaybes [descM]
+-- | The wire shape the toast listener reads: @[type, title, detail, href]@, trailing fields optional.
+addToast :: State.State TriggerEvents :> es => Text -> Text -> Maybe Text -> Maybe Text -> Eff es ()
+addToast toastType title descM hrefM = addTriggerEvent "triggerToast" $ AE.toJSON $ [toastType, title] <> maybe (toList descM) (\h -> [fold descM, h]) hrefM
 
 
 addSuccessToast :: State.State TriggerEvents :> es => Text -> Maybe Text -> Eff es ()
-addSuccessToast = addToast "success"
+addSuccessToast t d = addToast "success" t d Nothing
 
 
 addReswap :: State.State HXReswap :> es => Text -> Eff es ()
@@ -367,7 +368,7 @@ addReswap x = State.put $ HXReswap $ Just x
 addErrorToast :: (IOE :> es, Log :> es, State.State TriggerEvents :> es) => Text -> Maybe Text -> Eff es ()
 addErrorToast msg msg2 = do
   Logging.logAttention_ $ "ERROR: " <> msg <> " => " <> maybeToMonoid msg2
-  addToast "error" msg msg2
+  addToast "error" msg msg2 Nothing
 
 
 -- | Toast an error and short-circuit with the given response payload.
@@ -426,7 +427,8 @@ data ToastLevel = SuccessToast | ErrorToast
   deriving stock (Eq, Show)
 
 
-data Toast = Toast ToastLevel Text (Maybe Text)
+-- | Level, title, detail line, and a page to open from the toast.
+data Toast = Toast ToastLevel Text (Maybe Text) (Maybe Text)
   deriving stock (Eq, Show)
 
 
@@ -435,7 +437,7 @@ instance IsString Toast where fromString = successToast . toText
 
 
 successToast :: Text -> Toast
-successToast t = Toast SuccessToast t Nothing
+successToast t = Toast SuccessToast t Nothing Nothing
 
 
 -- | How a successful outcome is presented: its body, where the browser goes next, and what it is told.
@@ -495,7 +497,7 @@ type AnswerState es = (State.State HXRedirectDest :> es, State.State HXReswap :>
 done :: (AnswerState es, Outcome a) => a -> Eff es (RespHeaders (Done a))
 done a = do
   traverse_ redirectCS (outcomeRedirect a)
-  for_ (outcomeToast a) \(Toast level title detail) -> addToast (case level of SuccessToast -> "success"; ErrorToast -> "error") title detail
+  for_ (outcomeToast a) \(Toast level title detail href) -> addToast (case level of SuccessToast -> "success"; ErrorToast -> "error") title detail href
   addRespHeaders (Done a)
 
 
@@ -503,5 +505,5 @@ done a = do
 act :: (AnswerState es, Outcome a, Refusal e) => Eff es (Either e a) -> Eff es (ActionResult e a)
 act run =
   run >>= \case
-    Left e -> addToast "error" (refusalMessage e) (refusalDetail e) >> addReswap "none" >> (respond =<< addRespHeaders (Refused e))
+    Left e -> addToast "error" (refusalMessage e) (refusalDetail e) Nothing >> addReswap "none" >> (respond =<< addRespHeaders (Refused e))
     Right a -> respond =<< done a

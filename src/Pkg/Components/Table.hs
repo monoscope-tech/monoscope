@@ -114,6 +114,7 @@ data TableRows a = TableRows
   , rowId :: Maybe (a -> Text)
   , rowGroup :: Maybe (a -> Maybe Text)
   , rowAttrs :: Maybe (a -> [Attribute])
+  , rowLink :: Maybe (a -> Text)
   , pagination :: Maybe Pagination
   }
 
@@ -389,7 +390,7 @@ renderTableRows tr = do
       { config = (def :: Config){renderAsTable = tr.renderAsTable}
       , columns = tr.columns
       , rows = tr.rows
-      , features = (def :: Features a){rowId = tr.rowId, rowAttrs = tr.rowAttrs, rowGroup = tr.rowGroup}
+      , features = (def :: Features a){rowId = tr.rowId, rowAttrs = tr.rowAttrs, rowLink = tr.rowLink, rowGroup = tr.rowGroup}
       }
   whenJust tr.pagination renderPaginationFooter
 
@@ -429,7 +430,7 @@ swapTarget_ tid url = [hxGet_ url, hxTarget_ $ "#" <> tid, hxSelect_ $ "#" <> ti
 
 
 selectAllCheckbox_ :: Html ()
-selectAllCheckbox_ = input_ [term "aria-label" "Select All", type_ "checkbox", class_ "checkbox h-6 w-6 checked:checkbox-primary", [__| on click set .bulkactionItemCheckbox.checked to my.checked |]]
+selectAllCheckbox_ = input_ [term "aria-label" "Select All", type_ "checkbox", class_ "checkbox checkbox-sm checked:checkbox-primary", [__| on click set .bulkactionItemCheckbox.checked to my.checked |]]
 
 
 -- | One row of a sort dropdown; @linkAttrs@ carries either an href or the htmx swap attrs.
@@ -570,7 +571,7 @@ renderBody extra tbl
           collapsible = isNothing tbl.features.grouping && isJust labelM && not (null siblings)
           groupLabel label suffix = toHtml label >> span_ [class_ "ms-2 text-xs font-normal text-textWeak tabular-nums"] (toHtml $ show (1 + length siblings) <> suffix)
        in tbody_
-            ([class_ $ if collapsible then "stagger-fade bg-fillWeaker/30 not-has-[.itemsListItem:not(.hidden)]:hidden not-has-[>tr:first-child_.row-group-toggle[open]]:[&>tr:not(:first-child)]:hidden" else if isJust tbl.features.grouping then "stagger-fade not-has-[.itemsListItem:not(.hidden)]:hidden" <> bool "" " bg-fillWeaker/30" (isJust labelM) else "stagger-fade"] <> if idx == 0 then extra else [])
+            ([class_ $ if collapsible then "bg-fillWeaker/30 not-has-[.itemsListItem:not(.hidden)]:hidden not-has-[>tr:first-child_.row-group-toggle[open]]:[&>tr:not(:first-child)]:hidden" else if isJust tbl.features.grouping then "not-has-[.itemsListItem:not(.hidden)]:hidden" <> bool "" " bg-fillWeaker/30" (isJust labelM) else ""] <> if idx == 0 then extra else [])
             do
               forM_ labelM $ \label ->
                 if isJust tbl.features.grouping
@@ -626,7 +627,7 @@ renderTableRow tbl row =
     whenJust tbl.features.rowId \getId ->
       td_ [class_ "w-8 align-top pt-4 max-md:hidden"]
         $ input_
-        $ [term "aria-label" $ "Select " <> maybe "Item" ($ row) tbl.features.rowLabel, class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "itemId", value_ $ getId row]
+        $ [term "aria-label" $ "Select " <> maybe "Item" ($ row) tbl.features.rowLabel, class_ "bulkactionItemCheckbox checkbox checkbox-sm checked:checkbox-primary", type_ "checkbox", name_ "itemId", value_ $ getId row]
         <> [checked_ | maybe False ($ row) tbl.features.selectRow]
     forM_ tbl.columns $ \c -> td_ (c.attrs <> (class_ <$> maybeToList c.align) <> [data_ "column-key" c.name]) $ c.render row
   where
@@ -634,7 +635,9 @@ renderTableRow tbl row =
     treeAttrs = maybe [] (treeRowAttrs row) tbl.features.treeConfig
     isTreeGroup = maybe False (\tc -> tc.isGroupRow row) tbl.features.treeConfig
     -- Lucid joins duplicate class_ attributes with no separator, so the row class is space-padded for rowAttrs classes.
-    linkHandler = maybe [] (\getLink -> [hxGet_ (getLink row), hxPushUrl_ "true"] <> navTabAttrs) tbl.features.rowLink
+    -- Controls inside the row, and a drag that selects text, keep their own click. No @[@ in
+    -- the selector: htmx ends the trigger filter at the first @]@ and the click never fires.
+    linkHandler = maybe [] (\getLink -> [hxGet_ (getLink row), hxPushUrl_ "true", hxTrigger_ "click[!target.closest('a,button,input,label,td:has(>.bulkactionItemCheckbox)') && window.getSelection().isCollapsed]"] <> navTabAttrs) tbl.features.rowLink
 
 
 -- | Bulk action button: enabled (via CSS) only while some row checkbox is checked.
@@ -974,7 +977,7 @@ sidebar_ cfg = case cfg.layout of
   where
     rail extra = div_ [class_ $ "facet-rail group/rail flex w-68 shrink-0 flex-col gap-2 text-sm text-textWeak max-md:w-full " <> cfg.extraClass <> extra, data_ "component" "facet-rail", id_ cfg.elemId] do
       searchInput_
-        "sticky top-0 z-10 h-9 w-[calc(100%-1rem)] mx-2 border-strokeStrong bg-bgBase"
+        "sticky top-0 z-10 h-9 w-[calc(100%-1rem)] mx-2 bg-fillWeaker"
         "Search filters"
         [name_ "facet-search", filterInputAttr_ $ "#" <> cfg.elemId <> " :is(.facet-item,.facet-section)"]
       forM_ cfg.clear $ \attrs -> button_ ([type_ "button", class_ "hidden items-center justify-between rounded px-2 py-1.5 text-xs text-textBrand hover:bg-fillWeak group-has-[.facet-item_input:checked]/rail:flex"] <> attrs) $ "Clear all" >> faSprite_ "xmark" "regular" "h-3 w-3"

@@ -281,7 +281,8 @@ bodyWrapper bcfg child = do
       themeColor = bool "#fbfcfd" "#060708" (initialTheme == "dark")
       projectTimeZone = mfilter (not . T.null) $ (.timeZone) <$> bcfg.currProject
   doctype_
-  html_ ([lang_ "en"] <> [data_ "timezone" tz | tz <- maybeToList projectTimeZone]) do
+  -- The theme is on <html> too: overscroll reveals html's background, which sits outside body's tokens.
+  html_ ([lang_ "en", term "data-theme" initialTheme] <> [data_ "timezone" tz | tz <- maybeToList projectTimeZone]) do
     head_ do
       title_ $ toHtml bcfg.pageTitle
       meta_ [charset_ "UTF-8"]
@@ -516,26 +517,48 @@ bodyWrapper bcfg child = do
                     LogItem.detailsPanel_ p.id Nothing LogItem.DrawerPanel
                 div_ [class_ "h-0 shrink"] do
                   Components.drawer_ "global-data-drawer" (isJust bcfg.globalDrawerContent) Nothing bcfg.globalDrawerContent ""
-                  -- Modal for copying widgets to other dashboards
-                  Components.modalWith_ "dashboards-modal" def Nothing do
-                    input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
-                    input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
-                    -- Only set for a widget that lives on no dashboard, whose definition
-                    -- exists solely on the client; the picker rows PUT it as the new widget.
-                    input_ [type_ "hidden", id_ "dashboards-modal-widget-json", name_ "widget_json"]
-                    div_
-                      [ id_ "dashboards-modal-content"
-                      , class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
-                      , hxGet_ (foldMap (\p -> urls.dashboardsGetList p.id Nothing (Just "true") Nothing Nothing Nothing Nothing def) bcfg.currProject)
-                      , hxTrigger_ "loadDashboards"
-                      , hxSelect_ "#itemsListPage"
-                      , hxSwap_ "innerHTML"
-                      , -- The source id is spread in only when set: a widget that lives on no
-                        -- dashboard would otherwise send `source_dashboard_id=`, which is not
-                        -- a UUID, and the whole request 400s.
-                        hxVals_ "js:{copy_widget_id: document.getElementById('dashboards-modal-widget-id').value, ...(document.getElementById('dashboards-modal-source-dashboard-id').value ? {source_dashboard_id: document.getElementById('dashboards-modal-source-dashboard-id').value} : {})}"
-                      ]
-                      $ replicateM_ 3 (div_ [class_ "skeleton h-16 w-full"] "")
+                  -- Picks the dashboard a widget is added (from the explorer) or copied (from a dashboard) to.
+                  Components.modalWith_ "dashboards-modal" def{Components.boxClass = "max-w-none p-0 gap-0", Components.boxStyle = "width:min(92vw,30rem)"} Nothing do
+                    div_ [Components.listboxNavAttr_] do
+                      div_ [class_ "space-y-3 px-5 pt-5 pb-3"] do
+                        div_ [class_ "pe-8"] do
+                          h2_ [id_ "dashboards-modal-title", class_ "text-base font-semibold text-textStrong"] "Add to dashboard"
+                          p_ [id_ "dashboards-modal-widget-title", class_ "truncate text-sm text-textWeak empty:hidden"] ""
+                        Components.searchInput_
+                          "w-full"
+                          "Search dashboards…"
+                          [ id_ "dashboards-modal-search"
+                          , autofocus_
+                          , autocomplete_ "off"
+                          ]
+                      div_
+                        [ id_ "dashboards-modal-content"
+                        , class_ "border-t border-strokeWeak"
+                        , hxGet_ (foldMap (\p -> urls.dashboardsGetList p.id Nothing (Just "true") Nothing Nothing Nothing Nothing def) bcfg.currProject)
+                        , hxTrigger_ "loadDashboards"
+                        , hxSelect_ "#dashboard-picker"
+                        , hxSwap_ "innerHTML"
+                        , -- The source id is spread in only when set: a widget that lives on no
+                          -- dashboard would otherwise send `source_dashboard_id=`, which is not
+                          -- a UUID, and the whole request 400s.
+                          hxVals_ "js:{copy_widget_id: document.getElementById('dashboards-modal-widget-id').value, ...(document.getElementById('dashboards-modal-source-dashboard-id').value ? {source_dashboard_id: document.getElementById('dashboards-modal-source-dashboard-id').value} : {})}"
+                        ]
+                        $ div_ [class_ "space-y-1 p-2", Aria.label_ "Loading dashboards", role_ "status"]
+                        $ replicateM_ 4 (div_ [class_ "skeleton h-12 w-full rounded-lg"] "")
+                    forM_ bcfg.currProject \p -> details_ [class_ "group/new border-t border-strokeWeak", [__|on toggle if my.open call #dashboards-modal-new-title.focus() end|]] do
+                      summary_ [class_ "flex cursor-pointer list-none items-center gap-3 px-4 py-3 text-sm font-medium text-textStrong hover:bg-fillWeak focus-visible:bg-fillWeak focus-visible:outline-none [&::-webkit-details-marker]:hidden"] do
+                        span_ [class_ "grid size-8 shrink-0 place-items-center rounded-md border border-dashed border-strokeStrong text-iconNeutral"] $ faSprite_ "plus" "regular" "size-3.5"
+                        "New dashboard with this widget"
+                        faSprite_ "chevron-down" "regular" "ms-auto size-3 text-iconNeutral transition-transform duration-150 group-open/new:rotate-180"
+                      form_ [hxPost_ (urls.dashboardsPost p.id), class_ "flex gap-2 px-4 pb-4"] do
+                        input_ [type_ "hidden", name_ "file", value_ ""]
+                        input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "copyWidgetId"]
+                        input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "sourceDashboardId"]
+                        -- Only set for a widget that lives on no dashboard, whose definition
+                        -- exists solely on the client; the picker rows PUT it as the new widget.
+                        input_ [type_ "hidden", id_ "dashboards-modal-widget-json", name_ "widgetJson"]
+                        input_ [type_ "text", id_ "dashboards-modal-new-title", name_ "title", required_ "", autocomplete_ "off", placeholder_ "Dashboard name", Aria.label_ "New dashboard name", class_ "input input-sm min-w-0 grow max-md:text-base"]
+                        button_ [type_ "submit", class_ "btn btn-sm btn-primary shrink-0", term "hx-disable" "this"] "Create"
 
       when isProd $ externalHeadScripts_ bcfg.config
       globalTemplates_
@@ -575,7 +598,7 @@ bodyWrapper bcfg child = do
           }
 
           function applyTheme(theme) {
-            document.body.setAttribute('data-theme', theme);
+            [document.documentElement, document.body].forEach(el => el.setAttribute('data-theme', theme));
             document.getElementById('theme-color-meta').content = theme === 'dark' ? '#060708' : '#fbfcfd';
           }
 
@@ -1162,7 +1185,10 @@ globalTemplates_ = do
         template_ [id_ tmplId]
           $ div_ ([class_ "toast-animate flex items-center gap-3 p-2 ps-4 rounded-box bg-bgRaised text-textStrong shadow-toast max-md:w-full md:w-96"] <> if isError then [role_ "alert"] else [[__|init wait 8s then remove me|]]) do
             span_ [Aria.hidden_ "true", class_ $ "grid size-8 shrink-0 place-items-center rounded-full " <> bool "bg-fillSuccess-weak text-textSuccess" "bg-fillError-weak text-textError" isError] $ faSprite_ icon "regular" "size-4"
-            span_ [class_ "title min-w-0 flex-1 break-words text-pretty text-sm leading-normal"] fallback
+            span_ [class_ "min-w-0 flex-1 text-sm leading-normal"] do
+              span_ [class_ "title block break-words text-pretty"] fallback
+              span_ [class_ "detail block break-words text-pretty text-xs text-textWeak empty:hidden"] ""
+            a_ [class_ "link hidden shrink-0 rounded-lg px-2 py-1.5 text-sm font-medium text-textBrand no-underline hover:bg-fillHover focus-visible:outline-2 focus-visible:outline-textBrand [&[href]]:inline-flex"] "Open"
             button_ [type_ "button", Aria.label_ "Dismiss notification", class_ "grid size-10 max-md:size-11 shrink-0 place-items-center rounded-lg text-iconNeutral hover:bg-fillHover hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-textBrand transition-colors", [__|on click remove closest .toast-animate|]] $ faSprite_ "xmark" "regular" "size-3"
   toastTmpl "successToastTmpl" False "circle-check" "Something succeeded"
   toastTmpl "errorToastTmpl" True "circle-exclamation" "Something failed"
@@ -1178,6 +1204,10 @@ globalTemplates_ = do
             const template = document.getElementById(toastEvent[0].toLowerCase()+'ToastTmpl');
             const clone = document.importNode(template.content, true);
             clone.querySelector('.title').textContent = toastEvent[1];
+            clone.querySelector('.detail').textContent = toastEvent[2] || '';
+            // No link to the page the reader is already on.
+            const href = toastEvent[3];
+            if (href && new URL(href, location.href).pathname !== location.pathname) clone.querySelector('.link').href = href;
             document.getElementById("toastsParent").appendChild(clone);
             _hyperscript.processNode(document.querySelector("#toastsParent"));
           })

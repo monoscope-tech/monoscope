@@ -23,6 +23,7 @@ module Pages.Infrastructure (
 
 import Data.Default (def)
 import Data.List.Extra (firstJust)
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
@@ -35,7 +36,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), cpuPctOfLimit, memPctOfLimit, ratio, runtimeOf)
 import Pages.BodyWrapper (PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), RefreshingDeferred (..), callout_, detailSection_, emptyState_, entityHeader_, factGrid_, metaChip_, pivotLinks_, tableSkeleton_, timeRefreshListener_, tonePill_, withDeferredBody)
-import Pages.Containers (infraSnapshot, infrastructureBW, matchesAny, matchesFilter, mkWindow, pctText, windowed)
+import Pages.Containers (infraSnapshot, infrastructureBW, matchesAny, matchesFilter, mkWindow, pctText, utilizationClass, windowed)
 import Pages.Containers qualified as Containers
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Table (Features (..), SelectControl (..), Table (..), TableTabs (..), ZeroState (..), col, countedFilter, facetActions, facetsConfig, inventoryTable, selectControl_, sidebar_, withAttrs)
@@ -77,6 +78,8 @@ data HostRow = HostRow
   , osType :: Maybe Text
   , architecture :: Maybe Text
   , cpuPct :: Maybe Double
+  , cpuCores :: Maybe Double
+  -- ^ Only from kubelet node stats; hostmetrics without an idle series has no trustworthy count.
   , memoryPct :: Maybe Double
   , storagePct :: Maybe Double
   , load1 :: Maybe Double
@@ -98,6 +101,7 @@ hostsFromRows = V.fromList . map build . groupRows (.nodeName)
         , osType = firstJust (.osType) rows
         , architecture = firstJust (.architecture) rows
         , cpuPct = hostValue cpuPctOfLimit rows
+        , cpuCores = guard (any (.nodeStats) rows) *> hostValue (.cpuCores) rows
         , memoryPct = hostValue memPctOfLimit rows
         , storagePct = hostValue (.storagePct) rows
         , load1 = hostValue (.load1) rows
@@ -210,13 +214,13 @@ hostsTable pid window url filters grouping hosts allHosts =
       [col "Host" nameCell & withAttrs [class_ "min-w-52"]]
         <> [col "Configuration" configCell & withAttrs [class_ "w-44 max-lg:hidden"] | any (\h -> isJust h.provider || isJust h.region) allHosts]
         <> [ col "System" systemCell & withAttrs [class_ "w-32 max-xl:hidden"]
-           , col "CPU" (metricCell (.cpuPct)) & withAttrs [class_ "w-32"]
+           , col "CPU" cpuCell & withAttrs [class_ "w-32"]
            , col "Memory" (metricCell (.memoryPct)) & withAttrs [class_ "w-32"]
            , col "Storage" (metricCell (.storagePct)) & withAttrs [class_ "host-col-storage w-32 max-lg:hidden"]
            , col "Load (1m)" (plainCell . fmap (showFFloat' 2) . (.load1)) & withAttrs [class_ "host-col-load w-24 text-right max-xl:hidden"]
            , col "Uptime" uptimeCell & withAttrs [class_ "w-24 max-xl:hidden"]
            , col "Containers" containersCell & withAttrs [class_ "w-24 text-right"]
-           , col "Integrations" integrationsCell & withAttrs [class_ "w-56 max-md:hidden"]
+           , col "Integrations" integrationsCell & withAttrs [class_ "w-28 max-md:hidden"]
            ]
       where
         -- The row itself opens the drawer; a button in the name would be a second tab stop for the same action.
@@ -228,11 +232,14 @@ hostsTable pid window url filters grouping hosts allHosts =
           whenJust host.region $ metadataChip "location-dot"
         systemCell host = span_ [class_ "text-xs text-textWeak"] $ toHtml $ T.intercalate " · " $ catMaybes [host.osType, host.architecture]
         metricCell getter = utilizationCell . getter
+        -- The kubelet reports cores in use but not the node's core count, so there is no percentage to draw.
+        cpuCell host = maybe (plainCell $ Containers.coresText <$> host.cpuCores) (utilizationCell . Just) host.cpuPct
         uptimeCell = plainCell . fmap formatUptime . (.uptime)
         containersCell = span_ [class_ "tabular-nums text-textStrong"] . toHtml . show . (.containers)
-        integrationsCell host = div_ [class_ "flex flex-nowrap gap-1"] $ forM_ host.integrations \integration -> span_ [class_ "inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-strokeWeak bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] do
+        -- Icons with their names as tooltip and accessible label: the words outgrew the column and were clipped.
+        integrationsCell host = div_ [class_ "flex flex-nowrap gap-1"] $ forM_ host.integrations \integration -> span_ [class_ "inline-grid size-6 place-items-center rounded-md border border-strokeWeak bg-fillWeak text-iconNeutral", term "data-tippy-content" $ integrationLabel integration] do
           faSprite_ (case integration of OpenTelemetryIntegration -> "arrows-turn-right"; KubernetesIntegration -> "cube"; DockerIntegration -> "layer-group") "regular" "h-3 w-3"
-          toHtml $ integrationLabel integration
+          span_ [class_ "sr-only"] $ toHtml $ integrationLabel integration
         metadataChip icon value = span_ [class_ "inline-flex items-center gap-1 rounded bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] $ faSprite_ icon "regular" "h-3 w-3" >> toHtml value
 
 
@@ -285,7 +292,7 @@ hostDetail_ pid window host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
         a_ [href_ "https://monoscopehq.com/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "font-medium text-textBrand hover:underline"] "Set up host metrics"
     detailSection_ [id_ "host-logs"] "Recent logs" (a_ ([href_ logsHref, class_ "btn btn-xs max-sm:hidden"] <> navTabAttrs) "View logs in Explorer") do
       p_ [class_ "text-xs text-textWeak"] "Latest events reported by this host."
-      div_ [class_ "flex flex-col max-h-64 overflow-auto rounded-lg border border-strokeWeak bg-bgBase max-sm:hidden"] $ Log.virtualTable pid (Just logRowsHref) Nothing
+      div_ [class_ "flex flex-col max-h-64 overflow-auto rounded-lg border border-strokeWeak bg-bgBase max-sm:hidden"] $ Log.virtualTable pid [term "initialFetchUrl" logRowsHref, term "emptyMessage" "No logs from this host in this window."]
       div_ [class_ "hidden flex-col items-start gap-3 rounded-lg border border-strokeWeak bg-bgBase p-4 max-sm:flex"] do
         p_ [class_ "text-sm text-textWeak"] "Open this host in Explorer to search, filter, and inspect its logs."
         a_ ([href_ logsHref, class_ "btn btn-sm btn-outline max-sm:h-11"] <> navTabAttrs) "Open logs in Explorer"
@@ -304,11 +311,12 @@ hostDetail_ pid window host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
         else div_ [class_ "grid grid-cols-2 gap-3 max-xl:grid-cols-1"] $ forM_ hostWidgets $ div_ [class_ "min-h-56"] . Widget.widget_
   where
     metadata = [(label, value) | (label, Just value) <- [("Provider", host.provider), ("Region", host.region), ("OS", host.osType), ("Architecture", host.architecture)]]
-    availableSignals = length $ catMaybes [host.cpuPct, host.memoryPct, host.storagePct, host.load1]
+    availableSignals = length $ catMaybes [host.cpuPct <|> host.cpuCores, host.memoryPct, host.storagePct, host.load1]
+    hostmetrics = isNothing host.cpuCores || isJust host.cpuPct
     summaryFacts
       | availableSignals == 0 = [("Containers", show host.containers)]
       | otherwise =
-          [ ("CPU usage", pct host.cpuPct)
+          [ ("CPU usage", maybe (maybe "—" Containers.coresText host.cpuCores) pctText host.cpuPct)
           , ("Memory usage", pct host.memoryPct)
           , ("Storage usage", pct host.storagePct)
           , ("Load (1m)", maybe "—" (showFFloat' 2) host.load1)
@@ -319,17 +327,24 @@ hostDetail_ pid window host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
     query = Containers.kqlFilter [(Containers.nodeField, Just host.name)]
     logsHref = (urls.logExplorer pid).logExplorerGet (Just query) Nothing window.sinceQuery window.fromQuery window.toQuery (Just "logs") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
     logRowsHref = explorerUrl pid LogQueries.Data LogQueries.ExplorerUrl{query = Just query, cols = Nothing, cursor = Nothing, since = window.sinceQuery, from = window.fromQuery, to = window.toQuery, layout = Nothing, source = Just "logs", environment = Nothing, serviceScope = Nothing, recent = False}
-    metricsHref = (urls.traces pid).metricsOVGetH Nothing window.fromQuery window.toQuery window.sinceQuery Nothing (Just "system.") Nothing Nothing Nothing Nothing Nothing
+    metricsHref = (urls.traces pid).metricsOVGetH Nothing window.fromQuery window.toQuery window.sinceQuery Nothing (Just $ bool "k8s.node." "system." hostmetrics) Nothing Nothing Nothing Nothing Nothing
     containersHref = windowed window ((urls.traces pid).infrastructureContainersGetH Nothing Nothing (Just host.name) Nothing Nothing) Nothing
     sectionLink anchor icon label = a_ [href_ $ "#" <> anchor, class_ "flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm text-textWeak hover:bg-fillBrand-weak hover:text-textBrand max-sm:min-h-11"] $ faSprite_ icon "regular" "h-3.5 w-3.5" >> toHtml label
     hostWidgets =
       catMaybes
-        [ widget host.cpuPct "host-cpu" "CPU usage" "%" $ "metrics | where metric_name == \"system.cpu.utilization\" and " <> query <> " and attributes.cpu.mode == \"idle\" | summarize 100 - avg(value) * 100 by bin_auto(timestamp)"
-        , widget host.memoryPct "host-memory" "Memory usage" "bytes" $ "metrics | where metric_name == \"system.memory.usage\" and " <> query <> " and attributes.system.memory.state == \"used\" | summarize max(value) by bin_auto(timestamp)"
-        , widget host.storagePct "host-storage" "Max storage usage" "%" $ "metrics | where metric_name == \"system.filesystem.utilization\" and " <> query <> " | summarize max(value) * 100 by bin_auto(timestamp)"
+        [ if hostmetrics
+            then widget host.cpuPct "host-cpu" "CPU usage" "%" $ "metrics | where metric_name == \"system.cpu.utilization\" and " <> query <> " and attributes.cpu.mode == \"idle\" | summarize 100 - avg(value) * 100 by bin_auto(timestamp)"
+            else widget host.cpuCores "host-cpu" "CPU usage (cores)" "" $ "metrics | where metric_name == \"k8s.node.cpu.usage\" and " <> query <> " | summarize max(value) by bin_auto(timestamp)"
+        , widget host.memoryPct "host-memory" "Memory usage" "bytes"
+            $ bool "metrics | where metric_name == \"k8s.node.memory.working_set\" and " "metrics | where metric_name == \"system.memory.usage\" and attributes.system.memory.state == \"used\" and " hostmetrics
+            <> query
+            <> " | summarize max(value) by bin_auto(timestamp)"
+        , if hostmetrics
+            then widget host.storagePct "host-storage" "Max storage usage" "%" $ "metrics | where metric_name == \"system.filesystem.utilization\" and " <> query <> " | summarize max(value) * 100 by bin_auto(timestamp)"
+            else widget host.storagePct "host-storage" "Filesystem used" "bytes" $ "metrics | where metric_name == \"k8s.node.filesystem.usage\" and " <> query <> " | summarize max(value) by bin_auto(timestamp)"
         , widget host.load1 "host-load" "Load average (1m)" "" $ "metrics | where metric_name == \"system.cpu.load_average.1m\" and " <> query <> " | summarize max(value) by bin_auto(timestamp)"
         ]
-    widget signal ident title unit q = signal $> Widget.infraTimeseries pid ident title unit q
+    widget signal ident title unit q = signal $> (Widget.infraTimeseries pid ident title unit q){Widget.hideLegend = Just True}
 
 
 data ImageRow = ImageRow
@@ -383,14 +398,14 @@ imagesTable :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> Maybe Text
 imagesTable pid window url runtimeM registryM images allImages =
   table
     { columns =
-        [ col "Image" (\image -> div_ [class_ "flex items-center gap-2 min-w-0"] $ faSprite_ "layer-group" "solid" "h-3.5 w-3.5 shrink-0 text-iconNeutral" >> span_ [class_ "truncate font-medium text-textStrong"] (toHtml image.image)) & withAttrs [class_ "min-w-72 w-full"]
+        [ col "Image" (\image -> div_ [class_ "flex items-center gap-2 min-w-0"] $ faSprite_ "layer-group" "solid" "h-3.5 w-3.5 shrink-0 text-iconNeutral" >> span_ [class_ "truncate font-medium text-textStrong"] (toHtml image.image)) & withAttrs [class_ "min-w-72 w-full max-w-0"]
         , col "Running" (\image -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ show image.running) & withAttrs [class_ "w-24 text-right"]
         , col "Source" (\image -> span_ [class_ "whitespace-nowrap text-textWeak"] $ toHtml image.registry) & withAttrs [class_ "w-36"]
-        , col "Tags" renderTags & withAttrs [class_ "w-64 max-lg:hidden"]
+        , col "Tags" renderTags & withAttrs [class_ "w-56 max-lg:hidden"]
         , col "Runtime" (\image -> span_ [class_ "text-textWeak"] $ toHtml $ T.intercalate ", " $ map Containers.runtimeLabel image.runtimes) & withAttrs [class_ "w-28 max-xl:hidden"]
         , col "CPU (cores)" (plainCell . fmap (showFFloat' 3) . (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
         , col "Memory" (plainCell . fmap formatBytes . (.memoryBytes)) & withAttrs [class_ "w-24 text-right"]
-        , col "Security" (const $ span_ [class_ "inline-flex whitespace-nowrap rounded-md border border-strokeWeak bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak", term "data-tippy-content" "Connect an SBOM and vulnerability scanner to populate security findings"] "SBOM unavailable") & withAttrs [class_ "w-36 max-md:hidden"]
+        , col "Security" (const $ span_ [class_ "inline-flex whitespace-nowrap rounded-md border border-strokeWeak bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak", term "data-tippy-content" "Connect an SBOM and vulnerability scanner to populate security findings"] "SBOM unavailable") & withAttrs [class_ "w-36 max-2xl:hidden"]
         ]
     , rows = images
     , features =
@@ -550,16 +565,16 @@ kubernetesTable :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> KubeRe
 kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows =
   table
     { columns =
-        [ col (resourceLabel resource) (\row -> div_ [class_ "flex min-w-0 items-center gap-2"] $ faSprite_ (kubeIcon resource) "solid" "h-3.5 w-3.5 shrink-0 text-iconNeutral" >> span_ [class_ "min-w-0 truncate font-medium text-textStrong", term "data-tippy-content" row.name] (toHtml $ bool id clusterLabel (resource == KubeClusters) row.name)) & withAttrs [class_ "min-w-56 w-full"]
+        [ col (resourceLabel resource) (\row -> div_ [class_ "flex min-w-0 items-center gap-2"] $ faSprite_ (kubeIcon resource) "solid" "h-3.5 w-3.5 shrink-0 text-iconNeutral" >> span_ [class_ "min-w-0 truncate font-medium text-textStrong", term "data-tippy-content" row.name] (toHtml $ bool id clusterLabel (resource == KubeClusters) row.name)) & withAttrs [class_ "min-w-56 w-full max-w-0"]
         , col "Status" (statusBadge . (.status)) & withAttrs [class_ "w-28"]
-        , col "Cluster" (\row -> maybe Containers.emDash_ (\value -> span_ [class_ "block truncate whitespace-nowrap text-textStrong", term "data-tippy-content" value] $ toHtml $ clusterLabel value) row.cluster) & withAttrs [class_ "w-36 max-lg:hidden"]
+        , col "Cluster" (\row -> maybe Containers.emDash_ (\value -> span_ [class_ "block truncate whitespace-nowrap text-textStrong", term "data-tippy-content" value] $ toHtml $ clusterLabel value) row.cluster) & withAttrs [class_ "w-36 max-2xl:hidden"]
         , col "Namespace" (plainCell . (.namespace)) & withAttrs [class_ "w-32 max-lg:hidden"]
-        , col "Node" (plainCell . (.node)) & withAttrs [class_ "w-36 max-xl:hidden"]
-        , col "Containers" (\row -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ show row.containers) & withAttrs [class_ "w-24 text-right"]
+        , col "Node" (plainCell . (.node)) & withAttrs [class_ "w-36 max-2xl:hidden"]
+        , col "Containers" (\row -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ show row.containers) & withAttrs [class_ "w-24 text-right max-2xl:hidden"]
         , col "CPU (cores)" (plainCell . fmap (showFFloat' 3) . (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
-        , col "CPU limit used" (utilizationCell . (.cpuPct)) & withAttrs [class_ "w-36 max-md:hidden"]
+        , col "CPU limit used" (utilizationCell . (.cpuPct)) & withAttrs [class_ "w-32 whitespace-normal max-md:hidden"]
         , col "Memory" (plainCell . fmap formatBytes . (.memoryBytes)) & withAttrs [class_ "w-24 text-right"]
-        , col "Memory limit used" (utilizationCell . (.memoryPct)) & withAttrs [class_ "w-40 max-md:hidden"]
+        , col "Memory limit used" (utilizationCell . (.memoryPct)) & withAttrs [class_ "w-32 whitespace-normal max-md:hidden"]
         , col "Restarts" (plainCell . fmap (showFFloat' 0) . (.restarts)) & withAttrs [class_ "w-20 text-right max-md:hidden"]
         ]
     , rows
@@ -639,6 +654,13 @@ data HostMapFill = FillCPU | FillMemory | FillStorage
   deriving (Display) via WrappedEnumSC 'Nothing "Fill" HostMapFill
 
 
+fillValue :: HostMapFill -> HostRow -> Maybe Double
+fillValue = \case
+  FillCPU -> (.cpuPct)
+  FillMemory -> (.memoryPct)
+  FillStorage -> (.storagePct)
+
+
 data HostMapData = HostMapData
   { pid :: Projects.ProjectId
   , window :: TimePicker.TimeWindow
@@ -669,7 +691,10 @@ hostMapGetH pid fillM groupM providerM regionM osM fromParam toParam sinceParam 
   body <- withDeferredBody deferredM "hostMapContainer" url hostMapSkeleton_ do
     allHosts <- hostsFromRows <$> infraSnapshot pid window
     let groups = groupRows (Just . hostGroupLabel grouping) $ applyHostFilters filters allHosts
-    pure HostMapData{pid, window, fill = parseParam FillCPU display fillM, grouping, filters, allHosts, groups}
+        -- Unpicked, the map colours by whichever signal the most hosts report: kubelet-only nodes have no CPU percentage.
+        coverage f = V.length $ V.filter (isJust . fillValue f) allHosts
+        bestFill = head $ NE.sortWith (Down . coverage) (FillCPU :| [FillMemory, FillStorage])
+    pure HostMapData{pid, window, fill = parseParam bestFill display fillM, grouping, filters, allHosts, groups}
   addRespHeaders $ HostMapPage $ PageCtx (infrastructureBW pid "Host Map" window bw) body
   where
     hostMapSkeleton_ = div_ [class_ "flex min-h-full flex-col bg-bgBase", role_ "status", Aria.label_ "Loading host map"] do
@@ -715,7 +740,7 @@ hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col b
     mapUrl = windowed page.window ((urls.traces page.pid).hostMapGetH (Just $ display page.fill) (nonEmptyT $ Just $ hostGroupParam page.grouping) page.filters.provider page.filters.region page.filters.osType) Nothing
     legend colour label = span_ [class_ "inline-flex items-center gap-1.5"] $ span_ [class_ $ "h-3 w-3 " <> colour, style_ hexClipPath] mempty >> toHtml label
     hostHex enlarged host = div_ [class_ $ "flex flex-col items-center gap-1 " <> bool "" "w-24" enlarged] do
-      let value = case page.fill of FillCPU -> host.cpuPct; FillMemory -> host.memoryPct; FillStorage -> host.storagePct
+      let value = fillValue page.fill host
       button_
         ( [ class_ $ "inline-flex items-center justify-center text-textInverse-strong transition-transform hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong motion-reduce:transform-none " <> utilizationClass value
           , type_ "button"
@@ -733,14 +758,6 @@ hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col b
 -- | The hexagon cutout shared by the host-map legend, skeleton, and cells.
 hexClipPath :: Text
 hexClipPath = "clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%)"
-
-
-utilizationClass :: Maybe Double -> Text
-utilizationClass = \case
-  Nothing -> "bg-fillNeutral-strong"
-  Just value | value < 0.6 -> "bg-fillSuccess-strong"
-  Just value | value < 0.85 -> "bg-fillWarning-strong"
-  Just _ -> "bg-fillError-strong"
 
 
 sumPresent :: (a -> Maybe Double) -> [a] -> Maybe Double

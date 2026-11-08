@@ -40,7 +40,13 @@ export const chartLayoutForSize = (options: any, width: number, height: number, 
     legend: options.legend?.bottom !== undefined ? { ...options.legend, bottom: 0, padding: [0, 4, 0, 4] } : options.legend,
     xAxis: { ...options.xAxis, axisLabel: { ...options.xAxis.axisLabel, margin: 4 } },
   };
-  return legendLayout(sized, width, height, format);
+  const laid = legendLayout(sized, width, height, format);
+  // A heatmap's 1px cell gap separates cells only while they are big enough to read; on a short
+  // panel 35 rows of 3px cells became stripes, so small cells butt together.
+  const rows = laid.yAxis?.data?.length, cols = laid.xAxis?.data?.length;
+  if (laid.series?.[0]?.type !== 'heatmap' || !rows || !cols || !height) return laid;
+  const gap = Math.min(height / rows, width / cols) >= 6 ? 1 : 0;
+  return { ...laid, series: laid.series.map((s: any) => ({ ...s, itemStyle: { ...s.itemStyle, borderWidth: gap } })) };
 };
 
 /** A query failure already sanitized by the chart endpoint. */
@@ -374,6 +380,97 @@ const chartRows = (data: ChartDataResponse): ChartRow[] =>
 
 const MAX_VISIBLE_SERIES = 8;
 
+// A heatmap reads `summarize count() by bin_auto(timestamp), log_bin(x)[, iff(status_code == "ERROR", "error", "ok")]`:
+// time across, buckets up the side in value order, the count as shade. Cells holding errors are drawn
+// in the error colour, as Dash0 does, so "are the slow requests the failing ones?" is one glance.
+export const heatmapOptions = (opt: any, source: ChartRow[], unit: string, styles: { brandColor: string; textColor: string; errorColor: string; tooltipBg: string }) => {
+  const [header = [], ...rows] = source;
+  const cols = header.slice(1).map((h, i) => { const [v, status] = String(h).split(' / '); return { v: Number(v), err: status === 'error', col: i + 1 }; }).filter((c) => Number.isFinite(c.v));
+  const present = [...new Set(cols.map((c) => c.v))].sort((x, y) => x - y);
+  // log_bin's quarter-decade ladder keeps its empty steps, so equal heights mean equal ratios.
+  const step = (v: number) => Math.round(Math.log10(v) * 4);
+  const onLadder = present.length > 1 && present.every((v) => v > 0 && Math.abs(Math.log10(v) * 4 - step(v)) < 1e-6);
+  const buckets = onLadder ? Array.from({ length: step(present.at(-1)!) - step(present[0]) + 1 }, (_, i) => 10 ** ((step(present[0]) + i) / 4)) : present;
+  const colsOf = (v: number) => cols.filter((c) => (onLadder ? step(c.v) === step(v) : c.v === v));
+  const label = (v: number) => (DURATION_UNITS.has(unit) ? formatDuration(convertToNanoseconds(v, unit)).replace('.0', '') : formatNumber(v));
+  const sorted = [...rows].sort((r1, r2) => Number(r1[0]) - Number(r2[0]));
+  const times = sorted.map((r) => Number(r[0]));
+  // [x, y, count, errors, shade, from, to, low, high]: shaded by log count so one slow request stays visible
+  // beside a thousand fast ones; the cell's own time and value bounds ride along for a click to filter by.
+  const binMs = times.length > 1 ? Math.min(...times.slice(1).map((t, i) => t - times[i])) : 0;
+  const cells = sorted.flatMap((r, x) => buckets.flatMap((v, y) => {
+    const sum = (cs: typeof cols) => cs.reduce((acc, c) => acc + (Number(r[c.col]) || 0), 0);
+    const n = sum(colsOf(v)), e = sum(colsOf(v).filter((c) => c.err));
+    const high = buckets[y + 1] ?? (onLadder ? v * 10 ** 0.25 : Infinity);
+    return n > 0 ? [[x, y, n, e, Math.log10((e || n) + 1), times[x], times[x] + binMs, v, high]] : [];
+  }));
+  const multiDay = times.length > 1 && times.at(-1)! - times[0] > 86_400_000;
+  const time = (t: number, full = false) => window.echarts.time.format(t, full || multiDay ? '{MM}-{dd} {HH}:{mm}' : '{HH}:{mm}', false);
+  const axis = { axisTick: { show: false }, axisLine: { show: false }, splitLine: { show: false } };
+  // Errors in red over the brand-blue mass, as Dash0 separates them; a 1px gap keeps each cell legible.
+  // Ramps are solid mixes into the card surface (bgRaised, which the tooltip shares), not alpha:
+  // the count scale, drawn off the plot, then shows the same faint end the cells do.
+  const layer = (name: string, data: number[][], seriesIndex: number, color: string, floor: number) => {
+    const max = Math.max(1, ...data.map((d) => d[4]));
+    return {
+      visual: { show: false, seriesIndex, dimension: 4, min: Math.log10(2), max, inRange: { color: [window.echarts.color.lerp(floor, [styles.tooltipBg, color]), color] } },
+      series: { name, type: 'heatmap', data, cursor: 'pointer', itemStyle: { color, borderColor: styles.tooltipBg, borderWidth: 1 }, emphasis: { itemStyle: { borderColor: styles.textColor, borderWidth: 1 } } },
+    };
+  };
+  const errorCells = cells.filter((c) => c[3]), okCells = cells.filter((c) => !c[3]);
+  // A lone error is still the signal: the error ramp starts nearly saturated.
+  const layers = [layer('OK', okCells, 0, styles.brandColor, 0.3), layer('Errors', errorCells, 1, styles.errorColor, 0.75)];
+  const maxCount = Math.max(1, ...cells.map((c) => c[2]));
+  // The count scale reads in counts though the shade is log-scaled, as Dash0's "# of spans 0 ▭ max".
+  const scale = { ...layers[0].visual, show: true, orient: 'horizontal', top: 0, right: 0, itemWidth: 8, itemHeight: 64, calculable: false, text: [`${formatNumber(maxCount)} (max)`, 'count: 1'], textGap: 6, textStyle: { color: styles.textColor, fontSize: 10 } };
+  return {
+    ...opt,
+    dataset: undefined,
+    // Click "OK" to hide it and leave only the failing cells.
+    legend: { ...opt.legend, show: true, top: 0, data: errorCells.length ? ['Errors', 'OK'] : ['OK'], icon: 'rect', itemWidth: 8, itemHeight: 8, textStyle: { ...opt.legend?.textStyle, color: styles.textColor } },
+    xAxis: { ...axis, type: 'category', data: times, axisLabel: { color: styles.textColor, hideOverlap: true, formatter: (t: string) => time(Number(t)) } },
+    yAxis: { ...axis, type: 'category', data: buckets.map(label), axisLabel: { color: styles.textColor, hideOverlap: true } },
+    visualMap: [scale, layers[1].visual],
+    tooltip: {
+      ...opt.tooltip,
+      trigger: 'item',
+      formatter: ({ value: [x, y, n, e] }: { value: number[] }) =>
+        `${time(times[x], true)}<br/>${label(buckets[y])}${buckets[y + 1] ? ` – ${label(buckets[y + 1])}` : '+'}: <b>${formatNumber(n)}</b>${e ? `, <b>${formatNumber(e)} error${e === 1 ? '' : 's'}</b>` : ''}<br/><span style="opacity:.7">Click to see ${e ? 'all or only the errors' : 'these requests'}</span>`,
+    },
+    series: layers.map((l) => l.series),
+  };
+};
+
+// A clicked heatmap cell as the events behind it: its time bin and value bucket, and only the errors when
+// the cell is red. The Explorer narrows its own query and range; elsewhere the Explorer opens on them.
+export const heatmapCellQuery = (query: string, errors: boolean, [, , , , , from, to, low, high]: number[]) => {
+  const field = query.match(/log_bin\(\s*([\w.]+)\s*\)/)?.[1] ?? 'duration';
+  const filter = [`${field} >= ${Math.ceil(low)}`, Number.isFinite(high) && `${field} < ${Math.ceil(high)}`, errors && 'status_code == "ERROR"'].filter(Boolean).join(' and ');
+  return { filter, from: new Date(from).toISOString(), to: new Date(to > from ? to : from + 1).toISOString() };
+};
+
+// The y ceiling of the series still shown: hiding p95 in the legend rescales to what is left
+// instead of leaving the rest pressed against the floor. Lines peak per point, stacked bars per row.
+export const visibleMax = (source: ChartRow[], line: boolean, selected?: Record<string, boolean>) => {
+  const [header = [], ...rows] = source;
+  const cols = header.slice(1).flatMap((h, i) => (selected?.[String(h)] === false ? [] : [i + 1]));
+  const peaks = rows.map((r) => { const vs = cols.map((c) => Number(r[c])).filter(Number.isFinite); return line ? Math.max(...vs) : vs.reduce((a, b) => a + b, 0); });
+  const max = Math.max(...peaks.filter(Number.isFinite));
+  return Number.isFinite(max) && max > 0 ? max : undefined;
+};
+
+// Sets the ceiling, and a duration axis's labels in the one unit that ceiling reads in.
+const fitYAxis = (opt: any, unit: string, max: number | undefined) => {
+  opt.yAxis = { ...opt.yAxis, max };
+  if (DURATION_UNITS.has(unit) && max) {
+    // The server's formatter still decides which ticks are labelled (max-only axes blank the rest).
+    const base = baseYFormatters.get(opt) ?? opt.yAxis.axisLabel?.formatter;
+    baseYFormatters.set(opt, base);
+    const fmt = durationAxisFormatter(convertToNanoseconds(max, unit));
+    opt.yAxis.axisLabel = { ...opt.yAxis.axisLabel, formatter: (v: number, i: number) => (typeof base === 'function' && base(v, i) === '' ? '' : fmt(convertToNanoseconds(v, unit))) };
+  }
+};
+
 // Keep dense charts legible without changing their totals: rank series by peak value,
 // retain the leaders, and fold the rest into one explicitly labelled series.
 // `combine` folds the tail: a sum for counts, the max for latencies (a sum of p95s means nothing).
@@ -469,13 +566,14 @@ export const createSeriesConfig = (widgetData: WidGetData, name: string, i: numb
   return seriesOpt;
 };
 
-const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) => {
+export const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) => {
   if (!data) return opt;
 
+  if (widgetData.chartType === 'heatmap') return heatmapOptions(opt, data, widgetData.unit || 'ns', getChartStyles());
   const source = collapseLongTail(data, widgetData.summarizeBy && widgetData.summarizeBy !== 'sum' ? (vs) => Math.max(...vs) : undefined);
   opt.dataset = { ...opt.dataset, source };
   // Counts must not get fractional ticks (0.2, 0.6) when the peak is small.
-  if (opt.yAxis && !Array.isArray(opt.yAxis))
+  if (opt.yAxis && !Array.isArray(opt.yAxis) && opt.yAxis.type !== 'log')
     opt.yAxis.minInterval = source.slice(1).every((r: ChartCell[]) => r.slice(1).every((v) => v == null || Number.isInteger(v))) ? 1 : undefined;
 
   // Avoid unnecessary updates if data structure hasn't changed
@@ -490,8 +588,12 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
 
   opt.series?.forEach((series: any, i: number) => {
     if (series.type === 'line') {
-      const first = source.findIndex((row: ChartRow, index: number) => index > 0 && Number.isFinite(row[i + 1]));
-      series.showSymbol = first !== -1 && !source.some((row: ChartRow, index: number) => index > first && Number.isFinite(row[i + 1]));
+      const points = source.flatMap((row: ChartRow, index: number) => (index > 0 && Number.isFinite(row[i + 1]) ? [index] : []));
+      const gaps = points.slice(1).map((p, k) => p - points[k]).sort((a, b) => a - b);
+      series.showSymbol = points.length === 1;
+      // A metric scraped every 60s into 30s bins is null every other bin, and a line with no two
+      // adjacent points draws nothing. Bridge the nulls when that is the series' own cadence.
+      series.connectNulls = gaps.length > 0 && gaps[gaps.length >> 1] > 1;
     }
   });
 
@@ -514,7 +616,7 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
       const padding = (high - low || 1) * 0.05;
       return { min: low < 0 ? low - padding : 0, max: high + padding };
     };
-    if (widgetData.widgetType !== 'timeseries_stat') {
+    if (widgetData.widgetType !== 'timeseries_stat' && opt.yAxis.type !== 'log') {
       opt.yAxis.min = (data: { min: number; max: number }) => bounds(data).min;
       opt.yAxis.max = (data: { min: number; max: number }) => bounds(data).max;
     }
@@ -552,7 +654,8 @@ const setStatValue = (widgetData: WidGetData, stats: ChartDataResponse['stats'],
   }
   // textContent (not innerHTML): values are plain text, and the max/min prefix is a literal "<"/">".
   if ((stats.count ?? 0) > 0) {
-    const formatted = formatStatValue(statScalar(stats, widgetData.summarizeBy, from, to), widgetData.unit || '', widgetData.decimals);
+    // A heatmap's unit labels its buckets; its cells, and so its headline, are counts.
+    const formatted = widgetData.chartType === 'heatmap' ? formatNumber(Number(stats.sum)) : formatStatValue(statScalar(stats, widgetData.summarizeBy, from, to), widgetData.unit || '', widgetData.decimals);
     value.textContent = widgetData.summarizeByPrefix ? `${widgetData.summarizeByPrefix} ${formatted}` : formatted;
   } else {
     // No error rows is zero errors, not missing data.
@@ -733,16 +836,8 @@ const applyChartResponse = (chart: any, opt: any, widgetData: WidGetData, data: 
     ? h : h.substring(0, 75) + (h.length > 75 ? '...' : ''));
   if (opt.xAxis?.type !== 'category') opt.xAxis = { ...opt.xAxis, min: data.from, max: data.to };
   opt.dataset.source = [headers || [], ...rows];
-  const maximum = widgetData.chartType === 'line' ? data.stats?.max : data.stats?.max_group_sum;
-  opt.yAxis = { ...opt.yAxis, max: maximum != null && Number.isFinite(maximum) && maximum > 0 ? maximum : undefined };
-  const unit = widgetData.unit ?? '';
-  if (DURATION_UNITS.has(unit) && opt.yAxis.max) {
-    // The server's formatter still decides which ticks are labelled (max-only axes blank the rest).
-    const base = baseYFormatters.get(opt) ?? opt.yAxis.axisLabel?.formatter;
-    baseYFormatters.set(opt, base);
-    const fmt = durationAxisFormatter(convertToNanoseconds(opt.yAxis.max, unit));
-    opt.yAxis.axisLabel = { ...opt.yAxis.axisLabel, formatter: (v: number, i: number) => (typeof base === 'function' && base(v, i) === '' ? '' : fmt(convertToNanoseconds(v, unit))) };
-  }
+  // A partial frame carries no stats yet; its axis stays automatic until the complete one lands.
+  fitYAxis(opt, widgetData.unit ?? '', data.stats == null ? undefined : visibleMax(opt.dataset.source, widgetData.chartType === 'line', legendSelections.get(chart)));
   drawSized(chart, el, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, true);
 };
 
@@ -1145,10 +1240,54 @@ export const chartWidget = (widgetData: WidGetData) => {
   const theme = isDarkMode ? 'dark' : widgetData.theme || 'default';
   const chart = window.echarts.init(chartEl, theme);
   chart.group = 'default';
-  chartLayoutUpdaters.set(chartId, () => drawSized(chart, chartEl, opt, widgetData.unit, false, true));
+  // A heatmap's drawn option is built from the data, not the server shell: a resize rebuilds it whole.
+  chartLayoutUpdaters.set(chartId, () =>
+    widgetData.chartType === 'heatmap'
+      ? drawSized(chart, chartEl, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, true)
+      : drawSized(chart, chartEl, opt, widgetData.unit, false, true));
   // Shift-click isolates a series; shift-clicking the isolated one brings every series back.
   let shiftClick = false;
   chartEl?.addEventListener('pointerdown', (e) => (shiftClick = e.shiftKey), { capture: true, signal: controller.signal });
+  if (widgetData.chartType === 'heatmap')
+    chart.on('click', ({ seriesName, value, event }: { seriesName: string; value: number[]; event?: { event?: MouseEvent } }) => {
+      // A cell opens its events; one holding errors first asks whether to open all of them or only the errors.
+      const menu = document.getElementById(`${widgetData.chartId}_cell_menu`);
+      const click = event?.event;
+      if (seriesName !== 'Errors' || !menu || !click) return openCell(false);
+      menu.querySelector('[data-cell-count]')!.textContent = formatNumber(value[2]);
+      menu.querySelector('[data-cell-errors]')!.textContent = formatNumber(value[3]);
+      menu.style.cssText = `position:fixed;inset:auto;left:${Math.min(click.clientX, window.innerWidth - 208)}px;top:${click.clientY + 8}px`;
+      menu.onclick = (e) => {
+        const view = (e.target as Element).closest<HTMLElement>('[data-cell-view]')?.dataset.cellView;
+        if (!view) return;
+        menu.hidePopover();
+        openCell(view === 'errors');
+      };
+      chart.dispatchAction({ type: 'hideTip' });
+      menu.showPopover();
+      menu.querySelector<HTMLElement>('[data-cell-view]')?.focus();
+
+      function openCell(errors: boolean) {
+        const { filter, from, to } = heatmapCellQuery(widgetData.query ?? '', errors, value);
+        const editor = document.getElementById('filterElement') as any;
+        if (!editor?.handleAddQuery) {
+          // A dashboard query still carries its variables; the page URL holds their values.
+          const vars = new URLSearchParams(window.location.search);
+          const events = (widgetData.query ?? '').split('|')[0].trim().replace(/\{\{var-([\w-]+)\}\}/g, (_, k) => vars.get(`var-${k}`) ?? '');
+          window.location.href = `/p/${widgetData.pid}/log_explorer?${new URLSearchParams({ query: [events, filter].filter(Boolean).join(' and '), from, to })}`;
+          return;
+      }
+      const url = new URL(window.location.href);
+      url.searchParams.set('from', from);
+      url.searchParams.set('to', to);
+      url.searchParams.delete('since');
+      window.history.replaceState({}, '', url);
+      window.updateTimePicker?.({ from, to }, { skipSetParams: true });
+      // The heatmap view hides the list it is filtering, so the click lands on the events themselves.
+      if ((document.getElementById('viz-heatmap') as HTMLInputElement | null)?.checked) document.getElementById('viz-logs')?.click();
+      editor.handleAddQuery(filter);
+      }
+    });
   chart.on('legendselectchanged', ({ name, selected }: { name: string; selected: Record<string, boolean> }) => {
     if (shiftClick) {
       const names = Object.keys(selected), prev = legendSelections.get(chart);
@@ -1157,6 +1296,9 @@ export const chartWidget = (widgetData: WidGetData) => {
       chart.setOption({ legend: { selected } });
     }
     legendSelections.set(chart, selected);
+    if (typeof opt.yAxis?.max === 'function' || !['line', 'bar'].includes(widgetData.chartType)) return;
+    fitYAxis(opt, widgetData.unit ?? '', visibleMax(opt.dataset.source, widgetData.chartType === 'line', selected));
+    chart.setOption({ yAxis: { max: opt.yAxis.max, axisLabel: opt.yAxis.axisLabel } });
   });
 
   (window as any)[`${chartType}Chart`] = chart;
@@ -1166,7 +1308,8 @@ export const chartWidget = (widgetData: WidGetData) => {
     if (opt.series?.[0]?.backgroundStyle) {
       opt.series[0].backgroundStyle = { color: styles.chartBg };
     }
-    drawSized(chart, chartEl, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, notMerge);
+    // A heatmap replaces both axes, which a merge would keep from the server's time-series shell.
+    drawSized(chart, chartEl, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, notMerge || widgetData.chartType === 'heatmap');
     drawnResponse.delete(chart);
     chartRefreshState.set(chart, { url: chartDataUrl(widgetData), hasData: (opt.dataset.source?.length ?? 0) > 1, failures: 0, retryAt: 0 });
     applyHighlightBand(chart, widgetData);
@@ -1242,7 +1385,8 @@ export const chartWidget = (widgetData: WidGetData) => {
         if (s.type === 'line') s.lineStyle = { ...s.lineStyle, color };
       }
     });
-    drawSized(chart, chartEl, opt, widgetData.unit);
+    if (widgetData.chartType === 'heatmap') drawSized(chart, chartEl, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, true);
+    else drawSized(chart, chartEl, opt, widgetData.unit);
   };
   themeCallbacks.add(onThemeChange);
 

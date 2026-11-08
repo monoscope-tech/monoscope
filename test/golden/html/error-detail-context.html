@@ -611,10 +611,6 @@
 </div>
 </div>
 </div>
-<p class="flex flex-wrap items-center gap-x-2 text-xs text-textWeak">
-<span>Selected event</span>
-<time datetime="2024-12-31T23:59:45Z">2024-12-31 23:59:45 UTC</time>
-</p>
 <div class="flex flex-col lg:flex-row gap-4 lg:items-start">
 <div class="min-w-0 flex-1">
 <div class="surface-raised rounded-2xl overflow-hidden">
@@ -638,7 +634,7 @@
 <button type="button" id="<uuid>-pattern-volume_retry" hidden class="shrink-0 underline px-2 disabled:opacity-50">Retry</button>
 </div>
 </div>
-<div data-chart-config="{&quot;alertThreshold&quot;:null,&quot;chartId&quot;:&quot;<uuid>-pattern-volume&quot;,&quot;chartType&quot;:&quot;bar&quot;,&quot;dashboardId&quot;:null,&quot;dbSource&quot;:null,&quot;decimals&quot;:null,&quot;echartOpt&quot;:&quot;{\&quot;animation\&quot;:false,\&quot;dataset\&quot;:{\&quot;source\&quot;:null},\&quot;grid\&quot;:{\&quot;bottom\&quot;:0,\&quot;containLabel\&quot;:true,\&quot;left\&quot;:\&quot;0%\&quot;,\&quot;right\&quot;:16,\&quot;show\&quot;:false,\&quot;top\&quot;:16},\&quot;legend\&quot;:{\&quot;bottom\&quot;:2,\&quot;data\&quot;:[],\&quot;itemGap\&quot;:9,\&quot;itemHeight\&quot;:9,\&quot;itemWidth\&quot;:9,\&quot;padding\&quot;:[3,6,3,6],\&quot;show\&quot;:false,\&quot;textStyle\&quot;:{\&quot;fontSize\&quot;:12,\&quot;padding\&quot;:[0,0,0,-2]},\&quot;tooltip\&quot;:{\&quot;show\&quot;:true}},\&quot;series\&quot;:[],\&quot;toolbox\&quot;:{},\&quot;tooltip\&quot;:{\&quot;axisPointer\&quot;:{\&quot;type\&quot;:\&quot;shadow\&quot;},\&quot;show\&quot;:true,\&quot;trigger\&quot;:\&quot;axis\&quot;,\&quot;valueFormatter\&quot;:\&quot;function(value) { return formatNumber(value); }\&quot;},\&quot;xAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;hideOverlap\&quot;:true,\&quot;margin\&quot;:8,\&quot;show\&quot;:true},\&quot;axisLine\&quot;:{\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#000833A6\&quot;,\&quot;opacity\&quot;:0.1,\&quot;type\&quot;:\&quot;solid\&quot;},\&quot;show\&quot;:true},\&quot;boundaryGap\&quot;:[0,1.0e-2],\&quot;max\&quot;:null,\&quot;min\&quot;:null,\&quot;scale\&quot;:true,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;show\&quot;:false},\&quot;type\&quot;:\&quot;time\&quot;},\&quot;yAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:\&quot;function(value, index) { return formatNumber(value); }\&quot;,\&quot;hideOverlap\&quot;:true,\&quot;inside\&quot;:false,\&quot;margin\&quot;:8,\&quot;show\&quot;:true,\&quot;showMaxLabel\&quot;:false},\&quot;axisLine\&quot;:{\&quot;show\&quot;:false},\&quot;axisTick\&quot;:{\&quot;show\&quot;:false},\&quot;max\&quot;:null,\&quot;min\&quot;:0,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;interval\&quot;:null,\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#0011661A\&quot;,\&quot;type\&quot;:\&quot;dotted\&quot;},\&quot;show\&quot;:true},\&quot;type\&quot;:\&quot;value\&quot;}}&quot;,&quot;hideValue&quot;:false,&quot;highlightFrom&quot;:null,&quot;highlightTo&quot;:null,&quot;legendPosition&quot;:&quot;bottom&quot;,&quot;markers&quot;:[{&quot;at&quot;:&quot;2024-12-31T23:59:45Z&quot;,&quot;label&quot;:&quot;26.3.1&quot;},{&quot;at&quot;:&quot;2024-12-31T23:59:46Z&quot;,&quot;label&quot;:&quot;26.3.2&quot;}],&quot;pid&quot;:&quot;<uuid>&quot;,&quot;query&quot;:&quot;hashes[*]==\&quot;err:0b80c6a4\&quot; | summarize count(*) by bin_auto(timestamp)&quot;,&quot;querySQL&quot;:&quot;&quot;,&quot;rollupFrom&quot;:&quot;1970-01-01T00:00:00Z&quot;,&quot;rollupSQL&quot;:&quot;SELECT * FROM (SELECT hour_bucket AS timestamp, &#39;value&#39;, event_count::float FROM apis.error_hourly_stats WHERE project_id = &#39;{{project_id}}&#39; AND error_id = &#39;<uuid>&#39;) s WHERE TRUE{{rollup_time_filter}} ORDER BY 1&quot;,&quot;seriesIntent&quot;:&quot;error&quot;,&quot;sqlSig&quot;:&quot;<hex>&quot;,&quot;summarizeBy&quot;:&quot;sum&quot;,&quot;summarizeByPrefix&quot;:&quot;&quot;,&quot;theme&quot;:&quot;default&quot;,&quot;timeFrom&quot;:null,&quot;timeTo&quot;:null,&quot;unit&quot;:&quot;&quot;,&quot;warningThreshold&quot;:null,&quot;widgetType&quot;:&quot;timeseries&quot;,&quot;yAxisLabel&quot;:&quot;&quot;}" class="relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-3">
+<div data-chart-config="{&quot;alertThreshold&quot;:null,&quot;chartId&quot;:&quot;<uuid>-pattern-volume&quot;,&quot;chartType&quot;:&quot;bar&quot;,&quot;dashboardId&quot;:null,&quot;dbSource&quot;:null,&quot;decimals&quot;:null,&quot;echartOpt&quot;:&quot;{\&quot;animation\&quot;:false,\&quot;dataset\&quot;:{\&quot;source\&quot;:null},\&quot;grid\&quot;:{\&quot;bottom\&quot;:0,\&quot;containLabel\&quot;:true,\&quot;left\&quot;:\&quot;0%\&quot;,\&quot;right\&quot;:16,\&quot;show\&quot;:false,\&quot;top\&quot;:16},\&quot;legend\&quot;:{\&quot;bottom\&quot;:2,\&quot;data\&quot;:[],\&quot;itemGap\&quot;:9,\&quot;itemHeight\&quot;:9,\&quot;itemWidth\&quot;:9,\&quot;padding\&quot;:[3,6,3,6],\&quot;show\&quot;:false,\&quot;textStyle\&quot;:{\&quot;fontSize\&quot;:12,\&quot;padding\&quot;:[0,0,0,-2]},\&quot;tooltip\&quot;:{\&quot;show\&quot;:true}},\&quot;series\&quot;:[],\&quot;toolbox\&quot;:{},\&quot;tooltip\&quot;:{\&quot;axisPointer\&quot;:{\&quot;type\&quot;:\&quot;shadow\&quot;},\&quot;show\&quot;:true,\&quot;trigger\&quot;:\&quot;axis\&quot;,\&quot;valueFormatter\&quot;:\&quot;function(value) { return formatNumber(value); }\&quot;},\&quot;xAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:{\&quot;day\&quot;:\&quot;{MMM} {d}\&quot;},\&quot;hideOverlap\&quot;:true,\&quot;margin\&quot;:8,\&quot;show\&quot;:true},\&quot;axisLine\&quot;:{\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#000833A6\&quot;,\&quot;opacity\&quot;:0.1,\&quot;type\&quot;:\&quot;solid\&quot;},\&quot;show\&quot;:true},\&quot;boundaryGap\&quot;:[0,1.0e-2],\&quot;max\&quot;:null,\&quot;min\&quot;:null,\&quot;scale\&quot;:true,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;show\&quot;:false},\&quot;type\&quot;:\&quot;time\&quot;},\&quot;yAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:\&quot;function(value, index) { return formatNumber(value); }\&quot;,\&quot;hideOverlap\&quot;:true,\&quot;inside\&quot;:false,\&quot;margin\&quot;:8,\&quot;show\&quot;:true,\&quot;showMaxLabel\&quot;:false},\&quot;axisLine\&quot;:{\&quot;show\&quot;:false},\&quot;axisTick\&quot;:{\&quot;show\&quot;:false},\&quot;max\&quot;:null,\&quot;min\&quot;:0,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;interval\&quot;:null,\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#0011661A\&quot;,\&quot;type\&quot;:\&quot;dotted\&quot;},\&quot;show\&quot;:true},\&quot;type\&quot;:\&quot;value\&quot;}}&quot;,&quot;hideValue&quot;:false,&quot;highlightFrom&quot;:null,&quot;highlightTo&quot;:null,&quot;legendPosition&quot;:&quot;bottom&quot;,&quot;markers&quot;:[{&quot;at&quot;:&quot;2024-12-31T23:59:45Z&quot;,&quot;label&quot;:&quot;26.3.1&quot;},{&quot;at&quot;:&quot;2024-12-31T23:59:46Z&quot;,&quot;label&quot;:&quot;26.3.2&quot;}],&quot;pid&quot;:&quot;<uuid>&quot;,&quot;query&quot;:&quot;hashes[*]==\&quot;err:0b80c6a4\&quot; | summarize count(*) by bin_auto(timestamp)&quot;,&quot;querySQL&quot;:&quot;&quot;,&quot;rollupFrom&quot;:&quot;1970-01-01T00:00:00Z&quot;,&quot;rollupSQL&quot;:&quot;SELECT * FROM (SELECT hour_bucket AS timestamp, &#39;value&#39;, event_count::float FROM apis.error_hourly_stats WHERE project_id = &#39;{{project_id}}&#39; AND error_id = &#39;<uuid>&#39;) s WHERE TRUE{{rollup_time_filter}} ORDER BY 1&quot;,&quot;seriesIntent&quot;:&quot;error&quot;,&quot;sqlSig&quot;:&quot;<hex>&quot;,&quot;summarizeBy&quot;:&quot;sum&quot;,&quot;summarizeByPrefix&quot;:&quot;&quot;,&quot;theme&quot;:&quot;default&quot;,&quot;timeFrom&quot;:null,&quot;timeTo&quot;:null,&quot;unit&quot;:&quot;&quot;,&quot;warningThreshold&quot;:null,&quot;widgetType&quot;:&quot;timeseries&quot;,&quot;yAxisLabel&quot;:&quot;&quot;}" class="relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-3">
 <div class="chart-render-slot h-full min-h-full w-full" id="<uuid>-pattern-volume" data-chart-widget hx-morph-skip>
 </div>
 <div id="<uuid>-pattern-volume_empty" class="chart-no-data hidden absolute inset-3 z-10 flex items-center justify-center bg-bgRaised px-4 text-center" role="status" aria-live="polite" aria-atomic="true">
@@ -660,6 +656,9 @@
 <nav id="issue-event-nav" class="sticky top-0 z-20 bg-bgRaised border-b border-strokeWeak" aria-label="Issue evidence">
 <div class="max-md:px-3 px-4 h-10 flex items-center gap-3 overflow-x-auto whitespace-nowrap">
 <span class="text-sm font-semibold text-textStrong">Event</span>
+<span class="text-xs text-textWeak tabular-nums" data-tippy-content="2024-12-31 23:59:45 UTC">
+<local-time datetime="2024-12-31T23:59:45Z" format="MMM d, HH:mm:ss">Dec 31, 23:59:45 UTC</local-time>
+</span>
 <div class="ml-auto flex items-center gap-1 text-xs">
 <span class="text-textWeak mr-1 max-md:hidden">Occurrence</span>
 <a href="/p/<uuid>/issues/<uuid>/step?dir=older&amp;event=<hex>%402024-12-31T23%3A59%3A45Z" class="px-1.5 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker" aria-label="Earlier event" data-tippy-content="Earlier event">
@@ -734,11 +733,11 @@ ContextError: context probe
 <div class="max-md:px-3 px-4 h-9 flex items-center gap-1 overflow-x-auto whitespace-nowrap border-t border-strokeWeak text-xs">
 <span class="text-textWeak mr-1">Jump to:</span>
 <a href="#issue-highlights" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Highlights</a>
-<a href="#issue-contexts" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Contexts</a>
 <a href="#issue-stack" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Stack trace</a>
-<a href="#issue-tags" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Tags</a>
-<a href="#issue-grouping" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Event grouping</a>
 <a href="#issue-http" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">HTTP request</a>
+<a href="#issue-tags" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Tags</a>
+<a href="#issue-contexts" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Contexts</a>
+<a href="#issue-grouping" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Event grouping</a>
 <a href="#issue-attachments" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Attachments</a>
 <a href="#issue-trace" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Trace</a>
 <a href="#issue-logs" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Logs</a>
@@ -782,95 +781,6 @@ ContextError: context probe
 <dd class="min-w-0 break-all text-textStrong"><hex></dd>
 </div>
 </dl>
-</div>
-</details>
-<details id="issue-contexts" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open>
-<summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
-<svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
-<g>
-<path d="M305 239c9.4 9.4 9.4 24.6 0 33.9L113 465c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l175-175L79 81c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L305 239z" stroke="currentColor" />
-</g>
-</svg>
-<svg class="icon w-3.5 h-3.5 text-textWeak" width="1em" height="1em" viewBox="0 0 640 640">
-<g>
-<path fill="currentColor" d="M240 192C240 147.8 275.8 112 320 112C364.2 112 400 147.8 400 192C400 236.2 364.2 272 320 272C275.8 272 240 236.2 240 192zM448 192C448 121.3 390.7 64 320 64C249.3 64 192 121.3 192 192C192 262.7 249.3 320 320 320C390.7 320 448 262.7 448 192zM144 544C144 473.3 201.3 416 272 416L368 416C438.7 416 496 473.3 496 544L496 552C496 565.3 506.7 576 520 576C533.3 576 544 565.3 544 552L544 544C544 446.8 465.2 368 368 368L272 368C174.8 368 96 446.8 96 544L96 552C96 565.3 106.7 576 120 576C133.3 576 144 565.3 144 552L144 544z" />
-</g>
-</svg>
-<h3 class="text-xs font-semibold text-textWeak uppercase tracking-wider">Contexts</h3>
-</summary>
-<div class="pb-3">
-<div class="max-md:px-3 px-4 grid md:grid-cols-2 gap-3 items-start">
-<div class="rounded-lg border border-strokeWeak p-2">
-<h4 class="px-2 pb-1 text-xs font-semibold text-textStrong">User</h4>
-<dl class="grid gap-y-0.5 font-mono text-xs ">
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">location</dt>
-<dd class="min-w-0 break-all text-textStrong">Santa Clara, US</dd>
-</div>
-</dl>
-</div>
-<div class="rounded-lg border border-strokeWeak p-2">
-<h4 class="px-2 pb-1 text-xs font-semibold text-textStrong">Client</h4>
-<dl class="grid gap-y-0.5 font-mono text-xs ">
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">browser</dt>
-<dd class="min-w-0 break-all text-textStrong">Chrome</dd>
-</div>
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">os</dt>
-<dd class="min-w-0 break-all text-textStrong">Windows</dd>
-</div>
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">device</dt>
-<dd class="min-w-0 break-all text-textStrong">Desktop</dd>
-</div>
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">user_agent</dt>
-<dd class="min-w-0 break-all text-textStrong">Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36</dd>
-</div>
-</dl>
-</div>
-<div class="rounded-lg border border-strokeWeak p-2">
-<h4 class="px-2 pb-1 text-xs font-semibold text-textStrong">Runtime</h4>
-<dl class="grid gap-y-0.5 font-mono text-xs ">
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">runtime</dt>
-<dd class="min-w-0 break-all text-textStrong">nodejs</dd>
-</div>
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">service</dt>
-<dd class="min-w-0 break-all text-textStrong">test-service</dd>
-</div>
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">release</dt>
-<dd class="min-w-0 break-all text-textStrong">26.3.1</dd>
-</div>
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">thread</dt>
-<dd class="min-w-0 break-all text-textStrong">main</dd>
-</div>
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">mechanism</dt>
-<dd class="min-w-0 break-all text-textStrong">exception_event</dd>
-</div>
-</dl>
-</div>
-<div class="rounded-lg border border-strokeWeak p-2">
-<h4 class="px-2 pb-1 text-xs font-semibold text-textStrong">Trace</h4>
-<dl class="grid gap-y-0.5 font-mono text-xs ">
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">trace.id</dt>
-<dd class="min-w-0 break-all text-textStrong"><hex></dd>
-</div>
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">span.id</dt>
-<dd class="min-w-0 break-all text-textStrong">
-<span-id>
-</dd>
-</div>
-</dl>
-</div>
-</div>
 </div>
 </details>
 <details id="issue-stack" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open hx-live="if (!this.dataset.seeded) { this.dataset.seeded = &#39;1&#39;; if (window.innerWidth &lt; 768) this.open = false }">
@@ -924,6 +834,69 @@ ContextError: context probe
     at probe (/app/src/probe.js:1:1)</pre>
 </details>
 </div>
+</div>
+</div>
+</details>
+<details id="issue-http" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open>
+<summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
+<svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
+<g>
+<path d="M305 239c9.4 9.4 9.4 24.6 0 33.9L113 465c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l175-175L79 81c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L305 239z" stroke="currentColor" />
+</g>
+</svg>
+<svg class="icon w-3.5 h-3.5 text-textWeak" width="1em" height="1em" viewBox="0 0 512 512">
+<g>
+<path d="M352 256c0 22.2-1.2 43.6-3.3 64l-185.3 0c-2.2-20.4-3.3-41.8-3.3-64s1.2-43.6 3.3-64l185.3 0c2.2 20.4 3.3 41.8 3.3 64zm28.8-64l123.1 0c5.3 20.5 8.1 41.9 8.1 64s-2.8 43.5-8.1 64l-123.1 0c2.1-20.6 3.2-42 3.2-64s-1.1-43.4-3.2-64zm112.6-32l-116.7 0c-10-63.9-29.8-117.4-55.3-151.6c78.3 20.7 142 77.5 171.9 151.6zm-149.1 0l-176.6 0c6.1-36.4 15.5-68.6 27-94.7c10.5-23.6 22.2-40.7 33.5-51.5C239.4 3.2 248.7 0 256 0s16.6 3.2 27.8 13.8c11.3 10.8 23 27.9 33.5 51.5c11.6 26 20.9 58.2 27 94.7zm-209 0L18.6 160C48.6 85.9 112.2 29.1 190.6 8.4C165.1 42.6 145.3 96.1 135.3 160zM8.1 192l123.1 0c-2.1 20.6-3.2 42-3.2 64s1.1 43.4 3.2 64L8.1 320C2.8 299.5 0 278.1 0 256s2.8-43.5 8.1-64zM194.7 446.6c-11.6-26-20.9-58.2-27-94.6l176.6 0c-6.1 36.4-15.5 68.6-27 94.6c-10.5 23.6-22.2 40.7-33.5 51.5C272.6 508.8 263.3 512 256 512s-16.6-3.2-27.8-13.8c-11.3-10.8-23-27.9-33.5-51.5zM135.3 352c10 63.9 29.8 117.4 55.3 151.6C112.2 482.9 48.6 426.1 18.6 352l116.7 0zm358.1 0c-30 74.1-93.6 130.9-171.9 151.6c25.5-34.2 45.2-87.7 55.3-151.6l116.7 0z" fill="currentColor"/>
+</g>
+</svg>
+<h3 class="text-xs font-semibold text-textWeak uppercase tracking-wider">HTTP request</h3>
+</summary>
+<div class="pb-3">
+<div class="max-md:px-3 px-4 space-y-3">
+<div class="flex items-center gap-2 min-w-0">
+<span class="cbadge-sm badge-GET">GET</span>
+<span class="font-mono text-sm text-textStrong break-all">https://shop.example.com/api/context?cart=7&amp;coupon=x</span>
+</div>
+<span class="block text-2xs font-semibold text-textWeak uppercase tracking-wide mb-1">Query string</span>
+<dl class="grid gap-y-0.5 font-mono text-xs ">
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">cart</dt>
+<dd class="min-w-0 break-all text-textStrong">7</dd>
+</div>
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">coupon</dt>
+<dd class="min-w-0 break-all text-textStrong">x</dd>
+</div>
+</dl>
+<span class="block text-2xs font-semibold text-textWeak uppercase tracking-wide mb-1">Headers</span>
+<dl class="grid gap-y-0.5 font-mono text-xs ">
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">x-request-id</dt>
+<dd class="min-w-0 break-all text-textStrong">req-42</dd>
+</div>
+</dl>
+<details>
+<summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden text-xs text-textBrand">
+<svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
+<g>
+<path d="M305 239c9.4 9.4 9.4 24.6 0 33.9L113 465c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l175-175L79 81c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L305 239z" stroke="currentColor" />
+</g>
+</svg>Show as curl</summary>
+<div class="mt-2 flex items-start gap-2">
+<pre id="issue-curl" class="flex-1 min-w-0 text-xs font-mono bg-fillWeaker rounded px-2 py-1.5 whitespace-pre-wrap break-all">curl -X GET &#39;https://shop.example.com/api/context?cart=7&amp;coupon=x&#39; \
+  -H &#39;x-request-id: req-42&#39;</pre>
+<button type="button" class="btn btn-xs btn-ghost" _="on click call navigator.clipboard.writeText(#issue-curl&#39;s innerText) then add .copied to me then put &#39;Copied!&#39; into the last &lt;span/&gt; in me then wait 2s then remove .copied from me then put &#39;Copy&#39; into the last &lt;span/&gt; in me">
+<span class="copy-icon">
+<svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 448 512">
+<g fill="currentColor">
+<path d="M384 336H192c-8.8 0-16-7.2-16-16V64c0-8.8 7.2-16 16-16l140.1 0L400 115.9V320c0 8.8-7.2 16-16 16zM192 384H384c35.3 0 64-28.7 64-64V115.9c0-12.7-5.1-24.9-14.1-33.9L366.1 14.1c-9-9-21.2-14.1-33.9-14.1H192c-35.3 0-64 28.7-64 64V320c0 35.3 28.7 64 64 64zM64 128c-35.3 0-64 28.7-64 64V448c0 35.3 28.7 64 64 64H256c35.3 0 64-28.7 64-64V416H272v32c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V192c0-8.8 7.2-16 16-16H96V128H64z" />
+</g>
+</svg>
+</span>
+<span>Copy</span>
+</button>
+</div>
+</details>
 </div>
 </div>
 </details>
@@ -1042,6 +1015,95 @@ ContextError: context probe
 </div>
 </div>
 </details>
+<details id="issue-contexts" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open>
+<summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
+<svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
+<g>
+<path d="M305 239c9.4 9.4 9.4 24.6 0 33.9L113 465c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l175-175L79 81c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L305 239z" stroke="currentColor" />
+</g>
+</svg>
+<svg class="icon w-3.5 h-3.5 text-textWeak" width="1em" height="1em" viewBox="0 0 640 640">
+<g>
+<path fill="currentColor" d="M240 192C240 147.8 275.8 112 320 112C364.2 112 400 147.8 400 192C400 236.2 364.2 272 320 272C275.8 272 240 236.2 240 192zM448 192C448 121.3 390.7 64 320 64C249.3 64 192 121.3 192 192C192 262.7 249.3 320 320 320C390.7 320 448 262.7 448 192zM144 544C144 473.3 201.3 416 272 416L368 416C438.7 416 496 473.3 496 544L496 552C496 565.3 506.7 576 520 576C533.3 576 544 565.3 544 552L544 544C544 446.8 465.2 368 368 368L272 368C174.8 368 96 446.8 96 544L96 552C96 565.3 106.7 576 120 576C133.3 576 144 565.3 144 552L144 544z" />
+</g>
+</svg>
+<h3 class="text-xs font-semibold text-textWeak uppercase tracking-wider">Contexts</h3>
+</summary>
+<div class="pb-3">
+<div class="max-md:px-3 px-4 grid md:grid-cols-2 gap-3 items-start">
+<div class="rounded-lg border border-strokeWeak p-2">
+<h4 class="px-2 pb-1 text-xs font-semibold text-textStrong">User</h4>
+<dl class="grid gap-y-0.5 font-mono text-xs ">
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">location</dt>
+<dd class="min-w-0 break-all text-textStrong">Santa Clara, US</dd>
+</div>
+</dl>
+</div>
+<div class="rounded-lg border border-strokeWeak p-2">
+<h4 class="px-2 pb-1 text-xs font-semibold text-textStrong">Client</h4>
+<dl class="grid gap-y-0.5 font-mono text-xs ">
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">browser</dt>
+<dd class="min-w-0 break-all text-textStrong">Chrome</dd>
+</div>
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">os</dt>
+<dd class="min-w-0 break-all text-textStrong">Windows</dd>
+</div>
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">device</dt>
+<dd class="min-w-0 break-all text-textStrong">Desktop</dd>
+</div>
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">user_agent</dt>
+<dd class="min-w-0 break-all text-textStrong">Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36</dd>
+</div>
+</dl>
+</div>
+<div class="rounded-lg border border-strokeWeak p-2">
+<h4 class="px-2 pb-1 text-xs font-semibold text-textStrong">Runtime</h4>
+<dl class="grid gap-y-0.5 font-mono text-xs ">
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">runtime</dt>
+<dd class="min-w-0 break-all text-textStrong">nodejs</dd>
+</div>
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">service</dt>
+<dd class="min-w-0 break-all text-textStrong">test-service</dd>
+</div>
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">release</dt>
+<dd class="min-w-0 break-all text-textStrong">26.3.1</dd>
+</div>
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">thread</dt>
+<dd class="min-w-0 break-all text-textStrong">main</dd>
+</div>
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">mechanism</dt>
+<dd class="min-w-0 break-all text-textStrong">exception_event</dd>
+</div>
+</dl>
+</div>
+<div class="rounded-lg border border-strokeWeak p-2">
+<h4 class="px-2 pb-1 text-xs font-semibold text-textStrong">Trace</h4>
+<dl class="grid gap-y-0.5 font-mono text-xs ">
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">trace.id</dt>
+<dd class="min-w-0 break-all text-textStrong"><hex></dd>
+</div>
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">span.id</dt>
+<dd class="min-w-0 break-all text-textStrong">
+<span-id>
+</dd>
+</div>
+</dl>
+</div>
+</div>
+</div>
+</details>
 <details id="issue-grouping" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open>
 <summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
 <svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
@@ -1077,69 +1139,6 @@ ContextError: context probe
 <dd class="min-w-0 break-all text-textStrong">ebfdb254</dd>
 </div>
 </dl>
-</div>
-</div>
-</details>
-<details id="issue-http" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open>
-<summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
-<svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
-<g>
-<path d="M305 239c9.4 9.4 9.4 24.6 0 33.9L113 465c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l175-175L79 81c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L305 239z" stroke="currentColor" />
-</g>
-</svg>
-<svg class="icon w-3.5 h-3.5 text-textWeak" width="1em" height="1em" viewBox="0 0 512 512">
-<g>
-<path d="M352 256c0 22.2-1.2 43.6-3.3 64l-185.3 0c-2.2-20.4-3.3-41.8-3.3-64s1.2-43.6 3.3-64l185.3 0c2.2 20.4 3.3 41.8 3.3 64zm28.8-64l123.1 0c5.3 20.5 8.1 41.9 8.1 64s-2.8 43.5-8.1 64l-123.1 0c2.1-20.6 3.2-42 3.2-64s-1.1-43.4-3.2-64zm112.6-32l-116.7 0c-10-63.9-29.8-117.4-55.3-151.6c78.3 20.7 142 77.5 171.9 151.6zm-149.1 0l-176.6 0c6.1-36.4 15.5-68.6 27-94.7c10.5-23.6 22.2-40.7 33.5-51.5C239.4 3.2 248.7 0 256 0s16.6 3.2 27.8 13.8c11.3 10.8 23 27.9 33.5 51.5c11.6 26 20.9 58.2 27 94.7zm-209 0L18.6 160C48.6 85.9 112.2 29.1 190.6 8.4C165.1 42.6 145.3 96.1 135.3 160zM8.1 192l123.1 0c-2.1 20.6-3.2 42-3.2 64s1.1 43.4 3.2 64L8.1 320C2.8 299.5 0 278.1 0 256s2.8-43.5 8.1-64zM194.7 446.6c-11.6-26-20.9-58.2-27-94.6l176.6 0c-6.1 36.4-15.5 68.6-27 94.6c-10.5 23.6-22.2 40.7-33.5 51.5C272.6 508.8 263.3 512 256 512s-16.6-3.2-27.8-13.8c-11.3-10.8-23-27.9-33.5-51.5zM135.3 352c10 63.9 29.8 117.4 55.3 151.6C112.2 482.9 48.6 426.1 18.6 352l116.7 0zm358.1 0c-30 74.1-93.6 130.9-171.9 151.6c25.5-34.2 45.2-87.7 55.3-151.6l116.7 0z" fill="currentColor"/>
-</g>
-</svg>
-<h3 class="text-xs font-semibold text-textWeak uppercase tracking-wider">HTTP request</h3>
-</summary>
-<div class="pb-3">
-<div class="max-md:px-3 px-4 space-y-3">
-<div class="flex items-center gap-2 min-w-0">
-<span class="cbadge-sm badge-GET">GET</span>
-<span class="font-mono text-sm text-textStrong break-all">https://shop.example.com/api/context?cart=7&amp;coupon=x</span>
-</div>
-<span class="block text-2xs font-semibold text-textWeak uppercase tracking-wide mb-1">Query string</span>
-<dl class="grid gap-y-0.5 font-mono text-xs ">
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">cart</dt>
-<dd class="min-w-0 break-all text-textStrong">7</dd>
-</div>
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">coupon</dt>
-<dd class="min-w-0 break-all text-textStrong">x</dd>
-</div>
-</dl>
-<span class="block text-2xs font-semibold text-textWeak uppercase tracking-wide mb-1">Headers</span>
-<dl class="grid gap-y-0.5 font-mono text-xs ">
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">x-request-id</dt>
-<dd class="min-w-0 break-all text-textStrong">req-42</dd>
-</div>
-</dl>
-<details>
-<summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden text-xs text-textBrand">
-<svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
-<g>
-<path d="M305 239c9.4 9.4 9.4 24.6 0 33.9L113 465c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l175-175L79 81c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L305 239z" stroke="currentColor" />
-</g>
-</svg>Show as curl</summary>
-<div class="mt-2 flex items-start gap-2">
-<pre id="issue-curl" class="flex-1 min-w-0 text-xs font-mono bg-fillWeaker rounded px-2 py-1.5 whitespace-pre-wrap break-all">curl -X GET &#39;https://shop.example.com/api/context?cart=7&amp;coupon=x&#39; \
-  -H &#39;x-request-id: req-42&#39;</pre>
-<button type="button" class="btn btn-xs btn-ghost" _="on click call navigator.clipboard.writeText(#issue-curl&#39;s innerText) then add .copied to me then put &#39;Copied!&#39; into the last &lt;span/&gt; in me then wait 2s then remove .copied from me then put &#39;Copy&#39; into the last &lt;span/&gt; in me">
-<span class="copy-icon">
-<svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 448 512">
-<g fill="currentColor">
-<path d="M384 336H192c-8.8 0-16-7.2-16-16V64c0-8.8 7.2-16 16-16l140.1 0L400 115.9V320c0 8.8-7.2 16-16 16zM192 384H384c35.3 0 64-28.7 64-64V115.9c0-12.7-5.1-24.9-14.1-33.9L366.1 14.1c-9-9-21.2-14.1-33.9-14.1H192c-35.3 0-64 28.7-64 64V320c0 35.3 28.7 64 64 64zM64 128c-35.3 0-64 28.7-64 64V448c0 35.3 28.7 64 64 64H256c35.3 0 64-28.7 64-64V416H272v32c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V192c0-8.8 7.2-16 16-16H96V128H64z" />
-</g>
-</svg>
-</span>
-<span>Copy</span>
-</button>
-</div>
-</details>
 </div>
 </div>
 </details>
@@ -1239,7 +1238,7 @@ ContextError: context probe
 <div class="pb-3">
 <div id="log-content" class="max-md:px-1 px-2 flex flex-col lg:flex-row w-full lg:max-h-[70vh]">
 <div class="grow min-w-0 min-h-0 flex flex-col">
-<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=kind%3D%3D%22log%22%20AND%20context___trace_id%3D%3D%<hex>%22%20AND%20service%3D%3D%22test-service%22&amp;from=2024-12-31T23%3A54%3A45Z&amp;to=2025-01-01T00%3A04%3A45Z">
+<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=kind%3D%3D%22log%22%20AND%20context___trace_id%3D%3D%<hex>%22%20AND%20service%3D%3D%22test-service%22&amp;from=2024-12-31T23%3A54%3A45Z&amp;to=2025-01-01T00%3A04%3A45Z" emptyMessage="No logs share this event’s trace.">
 </log-list>
 </div>
 </div>
@@ -1261,7 +1260,7 @@ ContextError: context probe
 </summary>
 <div class="pb-3">
 <div class="max-md:px-1 px-2 flex flex-col max-h-[50vh]">
-<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=hashes%5B%2A%5D%3D%3D%22err%3A0b80c6a4%22&amp;since=1H">
+<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=hashes%5B%2A%5D%3D%3D%22err%3A0b80c6a4%22&amp;since=1H" emptyMessage="No events in this range.">
 </log-list>
 </div>
 </div>
@@ -1358,7 +1357,7 @@ ContextError: context probe
             call localStorage.setItem(&#39;ai-panel-open&#39;, my.checked)
             if my.checked trigger &#39;load-chat&#39; on #ai-response-container end
           end">
-<button id="issue-ai-launcher" class="absolute right-0 top-3 z-10 flex items-center gap-1.5 bg-fillBrand-strong text-white px-2 py-2.5 rounded-l-lg cursor-pointer shadow-md hover:opacity-90 transition-opacity group-has-[#ai-panel-toggle:checked]/ai:hidden" aria-label="Open AI Assistant" type="button" aria-controls="ai_chat_container" aria-expanded="false" hx-live:aria-expanded="q(&#39;#ai-panel-toggle&#39;).checked ? &#39;true&#39; : &#39;false&#39;" _="on click set #ai-panel-toggle&#39;s opener to me then set #ai-panel-toggle&#39;s checked to true then send change to #ai-panel-toggle then call (#ai-chat-input).focus({preventScroll: true})">
+<button id="issue-ai-launcher" class="absolute right-0 top-3 z-10 flex items-center gap-1.5 bg-fillBrand-strong text-white px-2 py-2.5 rounded-l-lg cursor-pointer shadow-md hover:opacity-90 active:scale-[0.96] transition-[opacity,scale] duration-150 group-has-[#ai-panel-toggle:checked]/ai:hidden" aria-label="Open AI Assistant" type="button" aria-controls="ai_chat_container" aria-expanded="false" hx-live:aria-expanded="q(&#39;#ai-panel-toggle&#39;).checked ? &#39;true&#39; : &#39;false&#39;" _="on click set #ai-panel-toggle&#39;s opener to me then set #ai-panel-toggle&#39;s checked to true then send change to #ai-panel-toggle then call (#ai-chat-input).focus({preventScroll: true})">
 <svg class="icon w-3.5 h-3.5" width="1em" height="1em" viewBox="0 0 512 512">
 <g>
 <path d="M327.5 85.2c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L384 128l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L448 128l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L448 64 426.8 7.5C425.1 3 420.8 0 416 0s-9.1 3-10.8 7.5L384 64 327.5 85.2zM9.3 240C3.6 242.6 0 248.3 0 254.6s3.6 11.9 9.3 14.5L26.3 277l8.1 3.7 .6 .3 88.3 40.8L164.1 410l.3 .6 3.7 8.1 7.9 17.1c2.6 5.7 8.3 9.3 14.5 9.3s11.9-3.6 14.5-9.3l7.9-17.1 3.7-8.1 .3-.6 40.8-88.3L346 281l.6-.3 8.1-3.7 17.1-7.9c5.7-2.6 9.3-8.3 9.3-14.5s-3.6-11.9-9.3-14.5l-17.1-7.9-8.1-3.7-.6-.3-88.3-40.8L217 99.1l-.3-.6L213 90.3l-7.9-17.1c-2.6-5.7-8.3-9.3-14.5-9.3s-11.9 3.6-14.5 9.3l-7.9 17.1-3.7 8.1-.3 .6-40.8 88.3L35.1 228.1l-.6 .3-8.1 3.7L9.3 240zm83 14.5l51.2-23.6c10.4-4.8 18.7-13.1 23.5-23.5l23.6-51.2 23.6 51.2c4.8 10.4 13.1 18.7 23.5 23.5l51.2 23.6-51.2 23.6c-10.4 4.8-18.7 13.1-23.5 23.5l-23.6 51.2-23.6-51.2c-4.8-10.4-13.1-18.7-23.5-23.5L92.3 254.6zM384 384l-56.5 21.2c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L384 448l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L448 448l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L448 384l-21.2-56.5c-1.7-4.5-6-7.5-10.8-7.5s-9.1 3-10.8 7.5L384 384z" />
@@ -1410,7 +1409,7 @@ ContextError: context probe
 </g>
 </svg>
 </span>
-<button type="submit" class="p-1.5 rounded-lg bg-fillBrand-strong text-white hover:opacity-90 transition-opacity tap-target cursor-pointer" aria-label="Send message">
+<button type="submit" class="p-1.5 rounded-lg bg-fillBrand-strong text-white hover:opacity-90 active:scale-[0.96] transition-[opacity,scale] duration-150 tap-target cursor-pointer" aria-label="Send message">
 <svg class="icon w-3.5 h-3.5" width="1em" height="1em" viewBox="0 0 448 512">
 <g>
 <path d="M440.6 273.4c4.7-4.5 7.4-10.8 7.4-17.4s-2.7-12.8-7.4-17.4l-176-168c-9.6-9.2-24.8-8.8-33.9 .8s-8.8 24.8 .8 33.9L364.1 232 24 232c-13.3 0-24 10.7-24 24s10.7 24 24 24l340.1 0L231.4 406.6c-9.6 9.2-9.9 24.3-.8 33.9s24.3 9.9 33.9 .8l176-168z" />

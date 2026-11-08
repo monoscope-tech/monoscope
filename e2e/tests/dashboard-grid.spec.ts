@@ -112,8 +112,8 @@ async function openFirstDashboard(page: Page) {
     await page.getByText("Apache HTTP Server").first().click();
     // `title` is required; without it HTML validation blocks the submit and HTMX never
     // fires, so the click looks like it worked and nothing is created.
-    await page.locator('input[name="title"]').fill(FIXTURE);
-    await page.getByRole("button", { name: "Create" }).click();
+    await page.locator('input[name="title"]').first().fill(FIXTURE);
+    await page.getByRole("button", { name: "Create" }).first().click();
     // The handler redirects to the new dashboard. Wait for that rather than polling the
     // list — navigating while the redirect is in flight aborts it (net::ERR_ABORTED).
     await page.waitForURL(/\/dashboards\/[0-9a-f-]{36}/i, { timeout: 60000 });

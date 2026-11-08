@@ -61,7 +61,7 @@ import Network.Wai qualified as Wai
 import Numeric (showFFloat)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx)
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), callout_, colorChip_, disclosure_, filterInputAttr_, formField_, formSelectField_, installationSettingsLink_, localTimeFmt_, options_, panel_, settingsH2_)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), callout_, colorChip_, disclosure_, emptyState_, filterInputAttr_, formField_, formSelectField_, installationSettingsLink_, localTimeFmt_, options_, panel_, settingsH2_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
@@ -74,10 +74,10 @@ import System.Types (ATAuthCtx, ActionResult, DB, Done, Outcome (..), Refusal (.
 import Text.HTML.SanitizeXSS (sanitizeBalance)
 import Text.Parsec qualified as Parsec
 import Text.Slugify (slugify)
-import Utils (LoadingSize (..), TabStrip (..), faSprite_, htmxIndicator_, navTabStrip_, nonEmptyT, renderMarkdown)
+import Utils (LoadingSize (..), TabStrip (..), countNoun, faSprite_, htmxIndicator_, navTabStrip_, nonEmptyT, renderMarkdown)
 import Web.Auth (demoGuestSessionId)
 import Web.FormUrlEncoded (FromForm)
-import Web.Links (CookieProtectedRoutes (..), RepositoryTab (..), urls)
+import Web.Links (CookieProtectedRoutes (..), IssuesRoutes' (..), RepositoryTab (..), urls)
 
 
 issueFixForViewer :: (DB es, Error ServerError :> es) => Projects.ProjectId -> IssueFixes.FixId -> Projects.Session -> Eff es (Agent.FixResult, Agent.Explanation)
@@ -647,10 +647,11 @@ repositoriesPageH pid selection = do
       checks <- ImpactReviews.latestChecks pid
       pure $ div_ [class_ "space-y-4"] do
         p_ [class_ "text-sm text-textWeak max-w-2xl"] "Pull request reviews connect code changes to production telemetry. Configure reviews and evidence sharing in each repository."
-        for_ (find (isNothing . (.runId)) usage) \total -> do
-          p_ [class_ "text-sm text-textWeak"] $ toHtml $ "All-time project model usage: " <> usageText total.usage
-          p_ [class_ "text-sm text-textWeak"] $ toHtml $ resourceText total.resources
-        p_ [class_ "text-xs text-textWeak"] "Model estimates are not customer charges. Compute, storage and video costs are not included. Refresh to see new usage."
+        -- Accounting, not review state: kept one click away so the list leads.
+        for_ (find (isNothing . (.runId)) usage) \total -> disclosure_ [] "text-xs text-textWeak hover:text-textStrong" "Model and sandbox usage for this project" $ div_ [class_ "mt-2 space-y-1 ps-5 text-xs text-textWeak"] do
+          p_ $ toHtml $ "All time: " <> usageText total.usage
+          p_ $ toHtml $ resourceText total.resources
+          p_ "Model estimates are not customer charges. Compute, storage and video costs are not included. Refresh to see new usage."
         toHtml
           $ Table.Table
             { Table.config = def{Table.elemID = "pullRequestsTable", Table.renderAsTable = True}
@@ -670,6 +671,19 @@ repositoriesPageH pid selection = do
                         ImpactReviews.Incomplete -> colorChip_ WarningBadge "circle-exclamation" "Incomplete"
                         ImpactReviews.Queued -> colorChip_ NeutralBadge "clock" "Queued"
                         ImpactReviews.Reviewing -> colorChip_ BrandBadge "arrows-rotate" "Reviewing"
+                    )
+                , Table.col
+                    "Result"
+                    ( \run -> case AE.fromJSON <$> run.result of
+                        Just (AE.Success (result :: ImpactReview.ReviewResult)) ->
+                          let (toneM, icon, label) = case result.verdict of
+                                ImpactReview.WorthChecking -> (Just WarningBadge, "triangle-exclamation", countNoun (length result.findings) "finding" <> " to check")
+                                ImpactReview.CoverageUnknown -> (Just NeutralBadge, "circle-question", "Coverage unknown")
+                                ImpactReview.NoFinding -> (Nothing, "circle-check", "No finding")
+                              plain = span_ [class_ "inline-flex items-center gap-1.5 text-xs text-textWeak"] $ faSprite_ icon "regular" "h-3 w-3" >> toHtml label
+                           in -- Only a current review's open question earns a chip; a superseded one's verdict is history.
+                              maybe plain (\tone -> colorChip_ tone icon label) (toneM <* guard (run.state /= ImpactReviews.Superseded))
+                        _ -> span_ [class_ "text-xs text-textWeak"] "\x2014"
                     )
                 , Table.col "Revision" (\run -> code_ [class_ "text-xs text-textWeak", title_ run.revision] $ toHtml $ T.take 8 run.revision)
                 , Table.col "Reviewed" (\run -> span_ [class_ "whitespace-nowrap text-xs text-textWeak tabular-nums"] $ localTimeFmt_ "MMM d, HH:mm" run.createdAt)
@@ -748,7 +762,7 @@ repositoriesPageH pid selection = do
       pure $ section_ [class_ "space-y-4"] do
         h2_ [class_ "text-base font-semibold text-textStrong"] "Issue fixes"
         p_ [class_ "text-sm text-textWeak"] "Completed fixes and their verification evidence. Available to project administrators."
-        when (null runs) $ p_ [class_ "text-sm text-textWeak"] "No completed issue fixes available."
+        when (null runs) $ emptyState_ def{icon = Just "code", action = ESLink ((urls.issues pid).listGet Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] []) "Open issues"} "No verified fixes yet" "A fix lands here once Monoscope has checked it against production. Start one with Plan a fix on an issue."
         ul_ [class_ "divide-y divide-strokeWeak"] $ for_ runs \run -> li_ [class_ "py-3"] $ a_ [href_ (urls.issueFixGet pid run.runId), class_ "text-sm text-textBrand hover:underline"] $ toHtml run.summary
     UsagePage -> usage_ <$> ImpactReviews.customerUsage session.user.id
   addRespHeaders $ PageCtx (repositoryBWConfig bw pid tab serviceM canEdit canReadWiki) $ RepositoryContent serviceM content
@@ -758,7 +772,7 @@ repositoriesPageH pid selection = do
       h2_ [class_ "text-base font-semibold text-textStrong"] "Agent usage by customer and project"
       p_ [class_ "text-sm text-textWeak"] "All-time review and issue-fix subtotals include only projects where you are an active administrator. Customer references use recorded billing snapshots. Older model receipts are marked when attributed on receipt."
       p_ [class_ "text-xs text-textWeak"] "Model estimates are not customer charges. Resource measurements have no prices. Only regression executions and retained explanations are measured; other resource usage is not yet metered."
-      when (null rows) $ p_ [class_ "text-sm text-textWeak"] "No agent usage recorded for projects you administer."
+      when (null rows) $ emptyState_ def{icon = Just "gauge"} "No agent usage yet" "Pull request reviews and issue fixes in projects you administer are metered here as they run."
       for_ (NE.groupBy ((==) `on` (\row -> maybeToRight row.projectId ((row.billingProvider,) <$> row.customerId))) rows) \projects@(row :| _) ->
         section_ [class_ "rounded-lg border border-strokeWeak p-4 space-y-3"] do
           h3_ [class_ "text-sm font-medium text-textStrong break-all"] $ case row.customerId of
@@ -989,7 +1003,7 @@ instance Outcome RepositoryRemoval where
     RepositoryRemoved pid -> Just $ urls.repositoriesGet pid Nothing Nothing
     (RemovalBlockedBySync; PullRequestNotClosed _) -> Nothing
   outcomeToast = \case
-    RepositoryRemoved _ -> Just $ Toast SuccessToast "Repository removed" (Just "Dashboards, monitors, and review history are retained.")
+    RepositoryRemoved _ -> Just $ Toast SuccessToast "Repository removed" (Just "Dashboards, monitors, and review history are retained.") Nothing
     (RemovalBlockedBySync; PullRequestNotClosed _) -> Nothing
 
 
@@ -1046,7 +1060,6 @@ instance ToHtml RepositoryGet where
                 ReviewNeedsServer -> setupRequired "An administrator must configure the GitHub App and webhook before automatic reviews can run."
                 ReviewUnsupportedHost -> (callout_ NeutralBadge (Just "Unavailable") "Automatic pull request reviews currently support GitHub.com. Source context and configuration sync remain available for this host.", True)
           readiness
-          a_ [href_ (urls.aiRoutinesGet pid <> "#routine-production-impact-review"), class_ "text-sm text-textBrand hover:underline"] "Manage review routine and runs"
           when (canEdit && repository.host == Git.GitHub && isNothing repository.apiBase) $ post (urls.repositoryReviewsPost pid rid) [class_ "grid items-end gap-3 sm:grid-cols-2"] do
             input_ [type_ "hidden", name_ "owner", value_ repository.owner]
             input_ [type_ "hidden", name_ "repo", value_ repository.repo]
@@ -1056,7 +1069,9 @@ instance ToHtml RepositoryGet where
               $ options_ (Just $ bool "false" "true" $ maybe False (.includeEvidence) page.reviewSettings) [("false", "Links only"), ("true", "Aggregates and links")]
             button_ [type_ "submit", class_ $ "btn btn-sm mb-1 justify-self-start sm:col-span-2 " <> bool "btn-primary" "btn-outline" blocked] "Save review settings"
             when blocked $ p_ [class_ "text-xs text-textWeak sm:col-span-2"] "Saved settings take effect once setup is complete."
-          a_ [href_ (urls.repositoriesGet pid (Just PullRequests) Nothing), class_ "btn btn-sm btn-outline"] "Review history"
+          div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-2"] do
+            a_ [href_ (urls.repositoriesGet pid (Just PullRequests) Nothing), class_ "btn btn-sm btn-outline"] "Review history"
+            a_ [href_ (urls.aiRoutinesGet pid <> "#routine-production-impact-review"), class_ "text-sm text-textBrand hover:underline"] "Manage review routine and runs"
       section_ [class_ "min-w-0 @min-[64rem]/repository:col-start-1 @min-[64rem]/repository:row-start-2", Aria.label_ "Dashboards and monitors"]
         $ panel_ Raised def{icon = Just "dashboard"} "Dashboards and monitors"
         $ div_ [class_ "space-y-4"] do
@@ -1065,7 +1080,7 @@ instance ToHtml RepositoryGet where
               p_ [class_ "text-sm text-textWeak"] "Keep dashboards and monitors as files in this repository. Monoscope proposes changes as pull requests, and merged changes apply automatically."
               syncLink
             Just sync -> do
-              whenJust sync.lastError $ p_ [role_ "status", class_ "text-sm text-textError break-words"] . toHtml . (.message)
+              whenJust sync.lastError \err -> div_ [role_ "status"] $ callout_ ErrorBadge (Just $ case err.operation of GitSync.ImportDashboards -> "Import from the repository failed"; GitSync.ExportDashboard _ -> "Export to the repository failed"; GitSync.ExportDashboards -> "Export to the repository failed") $ span_ [class_ "break-words"] $ toHtml err.message
               p_ [class_ "text-sm text-textWeak break-all"] $ toHtml $ sync.branch <> " · " <> GitSync.getDashboardsPath sync
               colorChip_ NeutralBadge "code-branch" $ if not sync.syncEnabled then "Disabled" else if sync.exportPaused then "Export paused" else if any (.conflicted) page.resources then "Conflicts need input" else if isJust sync.lastExportHash then "Changes proposed" else if isJust sync.lastRevision then "Synced" else "Preparing folder"
               whenJust sync.pullRequestNumber $ \number -> a_ [href_ ("https://github.com/" <> sync.owner <> "/" <> sync.repo <> "/pull/" <> show number), target_ "_blank", rel_ "noopener noreferrer", class_ "text-sm text-textBrand hover:underline"] $ toHtml $ "Configuration PR #" <> show @Text number

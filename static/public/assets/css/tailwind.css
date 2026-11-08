@@ -1038,13 +1038,21 @@ body, :host {
   font-family: 'Inter', 'Inter Metric Fallback', ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
   font-feature-settings: 'liga' 1, 'calt' 1, 'ss01' 1, 'ss02' 1, 'cv01' 1, 'cv02' 1;
   line-height: 1.45;
-  @apply overscroll-none bg-bgBase;
+  /* No overscroll-behavior here: on the root it disables swipe back/forward and pull-to-refresh
+     for the whole app. Sideways scrollers contain their own overscroll instead (below). */
+  @apply bg-bgBase;
   --brand-color: var(--color-fillBrand-strong);
   --brand-color-light: var(--color-fillBrand-strong);
   --tags-border-color: var(--color-strokeStrong);
   --tags-hover-border-color: var(--color-strokeStrong);
   --chkbg: var(--brand-color);
   --root-bg: var(--color-bgBase);
+}
+
+/* A table or waterfall scrolled sideways to its edge must not navigate back. */
+.overflow-x-auto,
+.overflow-x-scroll {
+  overscroll-behavior-x: contain;
 }
 
 @layer custom {

@@ -124,12 +124,22 @@ tabs:
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
-            title: 'DB Systems'
-            icon: database
-            query: |
-              attributes.db.system.name != null
-              | summarize dcount(attributes.db.system.name)
-            unit: systems
+            title: 'Near memory limit'
+            description: 'Containers whose working set reached 90% of their memory limit in this window — next in line for an OOM kill. See the Infra tab.'
+            icon: triangle-exclamation
+            unit: containers
+            warning_threshold: 1
+            alert_threshold: 3
+            sql: &near_memory_limit |
+              SELECT COUNT(*)::float8 FROM (
+                SELECT resource___k8s___pod___name, resource___k8s___container___name,
+                  MAX(value) FILTER (WHERE metric_name = 'container.memory.working_set')
+                    / NULLIF(MAX(value) FILTER (WHERE metric_name = 'k8s.container.memory_limit'), 0) AS ratio
+                FROM otel_metrics
+                WHERE project_id='{{project_id}}'
+                  AND metric_name IN ('container.memory.working_set', 'k8s.container.memory_limit') {{time_filter}}
+                GROUP BY 1, 2
+              ) c WHERE ratio >= 0.9
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
@@ -303,6 +313,50 @@ tabs:
           ORDER BY {{table_sort}}
         default_sort: "COUNT(*) DESC"
 
+      - type: table
+        title: Slowest endpoints
+        description: 'Inbound endpoints by p95 latency (at least 10 requests). Long-lived streams sit at the top by nature. Click one to open its service.'
+        layout: { w: 6, h: 4 }
+        on_row_click:
+          set_variable: service
+          value: '{{row.service}}'
+          navigate_to_tab: 'Service'
+        columns:
+          - field: endpoint
+            sortable: true
+            title: Endpoint
+          - field: service
+            sortable: true
+            title: Service
+          - field: p95_ms
+            sortable: true
+            title: P95
+            column_type: duration
+            unit: ms
+            progress: column_percent
+          - field: requests
+            sortable: true
+            title: Requests
+            column_type: number
+          - field: errors
+            sortable: true
+            title: Errors
+            column_type: number
+            progress: column_percent
+            progress_variant: error
+        sql: |
+          SELECT name AS endpoint, MIN(resource___service___name) AS service,
+            ROUND((approx_percentile(0.95, percentile_agg(duration))::numeric / 1e6), 2) AS p95_ms,
+            COUNT(*) AS requests,
+            COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 500) AS errors
+          FROM otel_logs_and_spans
+          WHERE project_id='{{project_id}}' AND kind = 'server' AND duration IS NOT NULL AND name IS NOT NULL {{time_filter}}
+          GROUP BY name
+          HAVING COUNT(*) >= 10
+          ORDER BY {{table_sort}}
+          LIMIT 50
+        default_sort: 'p95_ms DESC'
+
       # Requests by Endpoint
       - type: 'timeseries'
         title: 'Requests by Endpoint'
@@ -437,6 +491,15 @@ tabs:
         unit: ns
         layout: { w: 6, h: 4 }
 
+      - type: heatmap
+        title: 'Latency distribution'
+        description: 'Every request in a log-scaled latency bucket over time, shaded by count, errors in red. Bands a percentile line averages away (a fast cache hit beside a slow miss) show as separate stripes.'
+        query: |
+          resource.service.name == "{{var-service}}" and kind == "server" and duration > 0
+          | summarize count() by bin_auto(timestamp), log_bin(duration), iff(status_code == "ERROR", "error", "ok")
+        unit: ns
+        layout: { w: 12, h: 4 }
+
       - type: 'timeseries'
         title: 'Errors'
         theme: 'roma'
@@ -486,6 +549,42 @@ tabs:
           LIMIT 10000
         unit: ns
         layout: { w: 6, h: 4 }
+
+      # The service's own containers beside its latency: a p99 spike that lines up with CPU
+      # pinned at its limit or memory at its ceiling is a capacity problem, not a code one.
+      - type: group
+        title: '{{var-service}} infrastructure'
+        description: 'Resource use of the containers running this service (needs the kubeletstats or docker_stats receiver).'
+        layout: { w: 12, h: 5 }
+        children:
+          - type: 'timeseries_line'
+            title: 'CPU by pod'
+            hide_value: true
+            unit: cores
+            query: metrics | where metric_name == "container.cpu.usage" and resource.service.name == "{{var-service}}" | summarize avg(value) by bin_auto(timestamp), resource.k8s.pod.name
+            layout: { w: 4, h: 4 }
+
+          - type: 'timeseries_line'
+            title: 'Memory vs limit'
+            hide_value: true
+            description: 'Peak working set against the container memory limit. Where the lines meet, the container is OOM-killed.'
+            unit: By
+            query: |
+              metrics | where metric_name in ("container.memory.working_set", "k8s.container.memory_limit") and resource.service.name == "{{var-service}}"
+              | extend series = case(metric_name == "k8s.container.memory_limit", "limit", "working set")
+              | summarize max(value) by bin_auto(timestamp), series
+            layout: { w: 4, h: 4 }
+
+          - type: 'timeseries'
+            title: 'Network traffic'
+            description: 'Bytes per second received and sent by this service''s pods.'
+            unit: By
+            hide_value: true
+            query: |
+              metrics | where metric_name in ("k8s.pod.network.io", "container.network.io") and resource.service.name == "{{var-service}}"
+              | extend series = case(attributes.direction == "transmit", "sent", "received")
+              | summarize rate(value) by bin_auto(timestamp), series
+            layout: { w: 4, h: 4 }
 
       # 4. Resources table
       - type: table
@@ -582,47 +681,11 @@ tabs:
         unit: ns
         layout: { w: 12, h: 4 }
 
+      # Its own inbound requests, not root spans: a service behind a proxy or gateway is never a trace root.
       - type: logs
-        title: 'Recent Traces'
-        query: '(parent_id=="" or parent_id==null) and resource.service.name=="{{var-service}}" and duration != null'
+        title: 'Recent requests'
+        query: 'kind == "server" and resource.service.name == "{{var-service}}"'
         layout: { w: 12, h: 5 }
-
-      - type: table
-        title: 'Root Operation Summary'
-        layout: { w: 12, h: 5 }
-        columns:
-          - field: resource_name
-            sortable: true
-            title: Resource
-          - field: span_name
-            sortable: true
-            title: Span
-          - field: avg_duration
-            sortable: true
-            title: Avg Duration
-            column_type: duration
-            unit: ms
-          - field: span_count
-            sortable: true
-            title: Trace Count
-            column_type: number
-        sql: |
-          SELECT
-            COALESCE(resource___service___name,'Unknown') AS resource_name,
-            name AS span_name,
-            ROUND(AVG(duration / 1000000.0), 2) AS avg_duration,
-            COUNT(*) AS span_count
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND (parent_id = '' OR parent_id IS NULL)
-            AND name IS NOT NULL
-            AND duration IS NOT NULL
-            AND resource___service___name = '{{var-service}}'
-            {{time_filter}}
-          GROUP BY resource___service___name, name
-          ORDER BY {{table_sort}}
-          LIMIT 20
-        default_sort: "avg_duration DESC"
 
       # 6. Operations breakdown
       - type: table
@@ -675,101 +738,166 @@ tabs:
           LIMIT 100
         default_sort: "COUNT(*) DESC"
 
+  # Severity comes from the OTel severity number first: most SDKs send it without the text
+  # level, and filtering on `level` alone read those logs as levelless.
   - name: Logs
     variables: [service]
     icon: file-text
     widgets:
-      # 1. Situation at a glance
       - type: group
-        title: Log Metrics
-        layout: { w: 12, h: 4 }
+        title: Log health
+        layout: { w: 12, h: 3 }
         children:
           - type: 'timeseries_stat'
-            title: 'Total Logs'
+            title: 'Logs'
             icon: file-text
             query: |
-              body != null and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+              kind == "log" and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
               | summarize count() by bin_auto(timestamp)
             unit: logs
             layout: { w: 3, h: 2 }
 
           - type: 'timeseries_stat'
-            title: 'Error Logs'
+            title: 'Errors'
             icon: alert-triangle
             query: |
-              level in ("ERROR", "FATAL") and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+              kind == "log" and (severity.severity_number >= 17 or level in ("ERROR", "FATAL")) and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
               | summarize count() by bin_auto(timestamp)
             unit: errors
-            alert_threshold: 100
-            warning_threshold: 50
+            series_intent: error
             layout: { w: 3, h: 2 }
 
           - type: 'timeseries_stat'
-            title: 'Warning Logs'
+            title: 'Warnings'
             icon: alert-circle
             query: |
-              level == "WARN" and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+              kind == "log" and ((severity.severity_number >= 13 and severity.severity_number < 17) or level == "WARN") and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
               | summarize count() by bin_auto(timestamp)
-            unit: warns
+            unit: warnings
             layout: { w: 3, h: 2 }
 
-          - type: 'stat'
-            title: 'Log Sources'
-            icon: server
+          - type: 'timeseries_stat'
+            title: 'Error share'
+            description: 'Errors as a share of all logs. A rising share with flat volume is a real regression; a rising count with a flat share is just more traffic.'
+            icon: percent
             query: |
-              body != null and resource.service.name != null
-              | summarize dcount(resource.service.name)
-            unit: services
+              kind == "log" and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+              | summarize countif(severity.severity_number >= 17 or level in ("ERROR", "FATAL")) * 100.0 / count() by bin_auto(timestamp)
+            unit: '%'
+            summarize_by: mean
+            warning_threshold: 1
+            alert_threshold: 5
             layout: { w: 3, h: 2 }
 
-      # 2. Trends — side by side
       - type: 'timeseries'
-        title: 'Log Volume by Level'
+        title: 'Log volume by severity'
         query: |
-          level != null and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
-          | summarize count() by bin_auto(timestamp), level
-          | order by timestamp desc
-          | limit 10000
+          kind == "log" and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          | extend severity = case(severity.severity_number >= 21, "FATAL", severity.severity_number >= 17, "ERROR", severity.severity_number >= 13, "WARN", severity.severity_number >= 9, "INFO", severity.severity_number >= 5, "DEBUG", severity.severity_number >= 1, "TRACE", coalesce(level, "UNSET"))
+          | summarize count() by bin_auto(timestamp), severity
+        unit: logs
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Error Logs by Service'
+        title: 'Errors and warnings by service'
+        description: 'Which service is complaining. Click a series in the legend to isolate it.'
         theme: 'roma'
+        query: |
+          kind == "log" and (severity.severity_number >= 13 or level in ("ERROR", "FATAL", "WARN")) and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          | summarize count() by bin_auto(timestamp), resource.service.name
+        unit: logs
+        layout: { w: 6, h: 4 }
+
+      - type: table
+        title: 'Top error and warning messages'
+        description: 'The loudest problems in this window, grouped by message. Click one to read those logs in the Explorer.'
+        layout: { w: 8, h: 6 }
+        columns:
+          - field: message
+            sortable: true
+            title: Message
+            link: '/p/{{project_id}}/log_explorer?query=kind%20%3D%3D%20%22log%22%20and%20body%20contains%20%22{{row.message_kql}}%22{{time_range}}'
+          - field: severity
+            sortable: true
+            title: Severity
+          - field: service
+            sortable: true
+            title: Service
+          - field: count
+            sortable: true
+            title: Count
+            column_type: number
+            progress: column_percent
+            progress_variant: error
+          - field: last_seen
+            sortable: true
+            title: Last seen
+          - field: message_kql
+            title: Explorer pattern
+            hidden: true
         sql: |
-          WITH service_stats AS (
-            SELECT resource___service___name, COUNT(*) as error_count
+          SELECT message,
+            CASE WHEN MAX(sev) >= 17 THEN 'ERROR' ELSE 'WARN' END AS severity,
+            MIN(service) AS service, COUNT(*) AS count, MAX(timestamp)::text AS last_seen,
+            -- The message head as a KQL string body: cut at the first quote, backslashes escaped.
+            replace(LEFT(SPLIT_PART(message, '"', 1), 120), '\', '\\') AS message_kql
+          FROM (
+            SELECT LEFT(TRIM(BOTH '"' FROM body::text), 200) AS message, resource___service___name AS service, timestamp,
+              CASE WHEN level IN ('ERROR', 'FATAL') THEN 17 ELSE COALESCE(severity___severity_number, 13) END AS sev
             FROM otel_logs_and_spans
-            WHERE project_id='{{project_id}}' AND level IN ('ERROR', 'FATAL')
+            WHERE project_id='{{project_id}}' AND kind = 'log'
+              AND (severity___severity_number >= 13 OR level IN ('ERROR', 'FATAL', 'WARN'))
               AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
               {{time_filter}}
-            GROUP BY resource___service___name
-            ORDER BY error_count DESC
-            LIMIT 10
-          )
-          SELECT
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            o.resource___service___name as service_name,
-            COUNT(*)::float as count
-          FROM otel_logs_and_spans o
-          INNER JOIN service_stats s ON o.resource___service___name = s.resource___service___name
-          WHERE o.project_id='{{project_id}}' AND o.level IN ('ERROR', 'FATAL')
-            AND ('{{var-service}}' = '' OR o.resource___service___name = '{{var-service}}')
-            {{time_filter}}
-          GROUP BY time, service_name
-          ORDER BY time DESC
-        layout: { w: 6, h: 4 }
+          ) l
+          GROUP BY message
+          ORDER BY {{table_sort}}
+          LIMIT 50
+        default_sort: 'COUNT(*) DESC'
 
-      # 3. Error issues — drill-down context above the log stream
+      - type: table
+        title: 'Log volume by service'
+        description: 'Who writes the most logs, and how much of it is trouble. Click a service to scope this tab to it.'
+        layout: { w: 4, h: 6 }
+        on_row_click:
+          set_variable: service
+          value: '{{row.service}}'
+        columns:
+          - field: service
+            sortable: true
+            title: Service
+          - field: logs
+            sortable: true
+            title: Logs
+            column_type: number
+            progress: column_percent
+          - field: error_pct
+            sortable: true
+            title: Errors
+            column_type: number
+            unit: '%'
+            decimals: 1
+            progress: value_percent
+            progress_variant: error
+        sql: |
+          SELECT resource___service___name AS service, COUNT(*) AS logs,
+            COUNT(*) FILTER (WHERE severity___severity_number >= 17 OR level IN ('ERROR', 'FATAL')) * 100.0 / COUNT(*) AS error_pct
+          FROM otel_logs_and_spans
+          WHERE project_id='{{project_id}}' AND kind = 'log' AND resource___service___name IS NOT NULL {{time_filter}}
+          GROUP BY 1
+          ORDER BY {{table_sort}}
+          LIMIT 50
+        default_sort: 'COUNT(*) DESC'
+
       - type: anomalies
-        title: 'Error Patterns'
+        title: 'Error patterns'
         layout: { w: 12, h: 5 }
 
-      # 4. Log Stream at the bottom
       - type: logs
-        title: 'Log Stream'
+        title: 'Log stream'
         layout: { w: 12, h: 10 }
         query: |
-          body != null
+          kind == "log" and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
 
   - name: Databases
     variables: [database]
@@ -824,6 +952,50 @@ tabs:
                 {{time_filter}}
             unit: queries
             layout: { w: 3, h: 2 }
+
+      # Receiver metric prefixes are the db.system.name values, so the selected database picks its own metrics.
+      - type: group
+        title: '{{var-database}} server'
+        description: 'Server health from the database''s own receiver (postgresql, redis, mysql or mongodb).'
+        layout: { w: 12, h: 5 }
+        children:
+          - type: 'timeseries_line'
+            title: 'Connections'
+            hide_subtitle: true
+            hide_value: true
+            description: 'Open connections against the server''s limit. Running out of connections stalls every client at once.'
+            unit: connections
+            sql: |
+              SELECT time, series, SUM(v) AS value FROM (
+                SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
+                  CASE WHEN metric_name LIKE '%.max' THEN 'limit' ELSE 'open' END AS series, AVG(value) AS v
+                FROM otel_metrics
+                WHERE project_id='{{project_id}}'
+                  AND metric_name IN ('postgresql.backends', 'postgresql.connection.max', 'redis.clients.connected', 'mysql.threads', 'mongodb.connection.count')
+                  AND metric_name LIKE '{{var-database}}.%' {{time_filter}}
+                GROUP BY 1, 2, series_id
+              ) c GROUP BY 1, 2 ORDER BY 1 DESC
+            layout: { w: 4, h: 4 }
+
+          - type: 'timeseries_line'
+            title: 'Cache hit ratio'
+            summarize_by: mean
+            description: 'Reads served from memory (Postgres buffer cache, Redis keyspace). Below ~95% on Postgres the working set no longer fits in shared buffers.'
+            unit: '%'
+            query: |
+              metrics | where metric_name in ("postgresql.blks_hit", "postgresql.blks_read", "redis.keyspace.hits", "redis.keyspace.misses") and metric_name startswith "{{var-database}}."
+              | summarize rateif(value, metric_name in ("postgresql.blks_hit", "redis.keyspace.hits")) * 100.0 / rate(value) by bin_auto(timestamp)
+            layout: { w: 4, h: 4 }
+
+          - type: 'timeseries'
+            title: 'Server throughput'
+            description: 'Operations per second as the server counts them — transactions committed and rolled back, or commands processed.'
+            unit: ops/s
+            hide_value: true
+            query: |
+              metrics | where metric_name in ("postgresql.commits", "postgresql.rollbacks", "redis.commands.processed", "mysql.operations", "mongodb.operation.count") and metric_name startswith "{{var-database}}."
+              | summarize rate(value) by bin_auto(timestamp), metric_name
+            layout: { w: 4, h: 4 }
 
       # TOP: Query Optimization Targets - Sorted by TOTAL TIME spent
       - type: table
@@ -978,6 +1150,15 @@ tabs:
           LIMIT 10
         default_sort: "COUNT(*) DESC"
 
+      - type: heatmap
+        title: 'Query latency distribution'
+        description: 'Every query in a log-scaled latency bucket over time, shaded by count, errors in red. A second band above the main one is usually one slow query pattern.'
+        query: |
+          attributes.db.system.name == "{{var-database}}" and duration > 0
+          | summarize count() by bin_auto(timestamp), log_bin(duration), iff(status_code == "ERROR", "error", "ok")
+        unit: ns
+        layout: { w: 12, h: 4 }
+
       # Query Latency Over Time
       - type: 'timeseries_line'
         title: 'Query Latency Percentiles'
@@ -1128,245 +1309,376 @@ tabs:
         unit: queries
         layout: { w: 6, h: 4 }
 
+  # USE method per resource: what is hot, what is about to run out, what is failing.
   - name: Infra
     variables: []
     icon: server
     widgets:
-      # Infrastructure Overview Stats
       - type: group
-        title: Resource Utilization
-        layout: { w: 12, h: 4 }
+        title: Cluster at a glance
+        layout: { w: 12, h: 3 }
         children:
-          - type: 'stat'
-            title: 'Avg CPU Utilization'
+          - type: 'timeseries_stat'
+            title: 'CPU in use'
+            description: 'Cores busy across every container, averaged per container then summed.'
             icon: microchip
-            unit: '%'
+            unit: cores
+            summarize_by: mean
+            decimals: 2
             sql: |
-              SELECT ROUND(AVG(value::numeric * 100), 1)::float8
-              FROM otel_metrics
-              WHERE project_id='{{project_id}}'
-                AND metric_name IN ('container.cpu.utilization', 'process.cpu.utilization', 'jvm.cpu.recent_utilization')
-                {{time_filter}}
+              SELECT time, 'total' AS series, SUM(v) AS value FROM (
+                SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time, AVG(value) AS v
+                FROM otel_metrics
+                WHERE project_id='{{project_id}}' AND metric_name = 'container.cpu.usage' {{time_filter}}
+                GROUP BY 1, series_id
+              ) c GROUP BY time ORDER BY time DESC
             layout: { w: 3, h: 2 }
 
-          - type: 'stat'
-            title: 'Avg Memory Usage'
+          - type: 'timeseries_stat'
+            title: 'Memory in use'
+            description: 'Working set across every container — the figure the kernel OOM-kills on.'
             icon: hard-drive
-            unit: '%'
+            unit: By
+            summarize_by: mean
             sql: |
-              SELECT ROUND(AVG(value::numeric), 1)::float8
-              FROM otel_metrics
-              WHERE project_id='{{project_id}}'
-                AND metric_name = 'container.memory.percent'
-                {{time_filter}}
+              SELECT time, 'total' AS series, SUM(v) AS value FROM (
+                SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time, AVG(value) AS v
+                FROM otel_metrics
+                WHERE project_id='{{project_id}}' AND metric_name = 'container.memory.working_set' {{time_filter}}
+                GROUP BY 1, series_id
+              ) c GROUP BY time ORDER BY time DESC
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
-            title: 'Container Count'
-            icon: box
-            sql: |
-              SELECT COUNT(DISTINCT resource___container___name)::float8
-              FROM otel_metrics
-              WHERE project_id='{{project_id}}'
-                AND resource___container___name IS NOT NULL
-                {{time_filter}}
+            title: 'Near memory limit'
+            description: 'Containers whose working set reached 90% of their memory limit in this window. They are next in line for an OOM kill.'
+            icon: triangle-exclamation
+            unit: containers
+            warning_threshold: 1
+            alert_threshold: 3
+            sql: *near_memory_limit
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
-            title: 'Services with Metrics'
-            icon: layer-group
+            title: 'Container restarts'
+            description: 'Restarts in this window. Any restart is a crash, an OOM kill or a failed probe.'
+            icon: rotate-left
+            unit: restarts
+            warning_threshold: 1
+            alert_threshold: 5
+            # Per pod and container, not series_id: a restart changes the series, so a per-series increase reads 0.
             sql: |
-              SELECT COUNT(DISTINCT resource___service___name)::float8
-              FROM otel_metrics
-              WHERE project_id='{{project_id}}'
-                AND resource___service___name IS NOT NULL
-                {{time_filter}}
+              SELECT COALESCE(SUM(r), 0)::float8 FROM (
+                SELECT MAX(value) - MIN(value) AS r
+                FROM otel_metrics
+                WHERE project_id='{{project_id}}' AND metric_name = 'k8s.container.restarts' {{time_filter}}
+                GROUP BY resource___k8s___pod___name, resource___k8s___container___name
+              ) c
             layout: { w: 3, h: 2 }
 
-      # CPU Utilization Over Time
       - type: 'timeseries'
-        title: 'CPU Utilization by Service'
-        layout: { w: 6, h: 5 }
+        title: 'CPU by container'
+        hide_value: true
+        hide_subtitle: true
+        description: 'Cores each container burns. A band that widens with traffic is load; one that widens without it is a leak or a hot loop.'
+        unit: cores
         sql: |
-          SELECT
-            time_bucket('{{rollup_interval}}', timestamp) as timestamp,
-            COALESCE(resource___service___name, resource___container___name, 'unknown') as series,
-            ROUND(AVG(value::numeric * 100), 2) as value
+          SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
+            COALESCE(resource___k8s___container___name, resource___container___name, resource___service___name, 'unknown') AS series,
+            AVG(value) AS value
           FROM otel_metrics
-          WHERE project_id='{{project_id}}'
-            AND metric_name IN ('container.cpu.utilization', 'jvm.cpu.recent_utilization', 'process.cpu.utilization')
-            {{time_filter}}
-          GROUP BY time_bucket('{{rollup_interval}}', timestamp), series
-          ORDER BY timestamp DESC
-          LIMIT 20000
-        unit: '%'
+          WHERE project_id='{{project_id}}' AND metric_name = 'container.cpu.usage' {{time_filter}}
+          GROUP BY 1, 2 ORDER BY 1 DESC
+        layout: { w: 6, h: 4 }
 
-      # Memory Usage Over Time
-      - type: 'timeseries'
-        title: 'Memory Usage by Service'
-        layout: { w: 6, h: 5 }
+      - type: 'timeseries_line'
+        title: 'Memory headroom'
+        description: 'Working set as a share of each container''s memory limit, for the five closest to it. At 100% the container is OOM-killed.'
+        unit: '%'
+        warning_threshold: 80
+        alert_threshold: 95
+        show_threshold_lines: always
         sql: |
-          SELECT
-            time_bucket('{{rollup_interval}}', timestamp) as timestamp,
-            COALESCE(resource___service___name, resource___container___name, 'unknown') as series,
-            ROUND(AVG(value::numeric), 2) as value
-          FROM otel_metrics
-          WHERE project_id='{{project_id}}'
-            AND metric_name = 'container.memory.percent'
-            {{time_filter}}
-          GROUP BY time_bucket('{{rollup_interval}}', timestamp), series
-          ORDER BY timestamp DESC
-          LIMIT 20000
-        unit: '%'
+          WITH lim AS (
+            SELECT resource___k8s___pod___name AS pod, resource___k8s___container___name AS c, MAX(value) AS l
+            FROM otel_metrics
+            WHERE project_id='{{project_id}}' AND metric_name = 'k8s.container.memory_limit' {{time_filter}}
+            GROUP BY 1, 2
+          ), ws AS (
+            SELECT time_bucket('{{rollup_interval}}', timestamp) AS t, resource___k8s___pod___name AS pod, resource___k8s___container___name AS c, AVG(value) AS v
+            FROM otel_metrics
+            WHERE project_id='{{project_id}}' AND metric_name = 'container.memory.working_set' {{time_filter}}
+            GROUP BY 1, 2, 3
+          ), pct AS (
+            SELECT ws.t, ws.c, MAX(ws.v / lim.l * 100) AS p FROM ws JOIN lim ON ws.pod = lim.pod AND ws.c = lim.c WHERE lim.l > 0 GROUP BY 1, 2
+          ), top AS (SELECT c FROM pct GROUP BY c ORDER BY MAX(p) DESC LIMIT 5)
+          SELECT extract(epoch from pct.t)::integer AS time, pct.c AS series, pct.p AS value
+          FROM pct JOIN top ON pct.c = top.c ORDER BY 1 DESC
+        layout: { w: 6, h: 4 }
 
-      # Container/Service Resource Table
       - type: table
-        title: 'Service Resource Usage'
-        layout: { w: 12, h: 6 }
+        title: 'Containers'
+        description: 'Utilization and saturation per container. Click a row to open its service.'
+        layout: { w: 12, h: 7 }
+        on_row_click:
+          set_variable: service
+          value: '{{row.service}}'
+          navigate_to_tab: 'Service'
         columns:
+          - field: container
+            sortable: true
+            title: Container
           - field: service
             sortable: true
-            title: Service/Container
-          - field: cpu_avg
+            title: Service
+          - field: pods
             sortable: true
-            title: CPU Avg
-            unit: '%'
-            progress: value_percent
-          - field: cpu_max
-            sortable: true
-            title: CPU Max
-            unit: '%'
-            progress: value_percent
-            progress_variant: warning
-          - field: mem_avg
-            sortable: true
-            title: Mem Avg
-            unit: '%'
-            progress: value_percent
-          - field: mem_max
-            sortable: true
-            title: Mem Max
-            unit: '%'
-            progress: value_percent
-            progress_variant: warning
-          - field: data_points
-            sortable: true
-            title: Samples
+            title: Pods
             column_type: number
-        sql: |
-          WITH cpu_metrics AS (
-            SELECT
-              COALESCE(resource___service___name, resource___container___name, 'unknown') as service,
-              value::numeric * 100 as value
-            FROM otel_metrics
-            WHERE project_id='{{project_id}}'
-              AND metric_name IN ('container.cpu.utilization', 'jvm.cpu.recent_utilization', 'process.cpu.utilization')
-              {{time_filter}}
-          ),
-          mem_metrics AS (
-            SELECT
-              COALESCE(resource___service___name, resource___container___name, 'unknown') as service,
-              value::numeric as value
-            FROM otel_metrics
-            WHERE project_id='{{project_id}}'
-              AND metric_name = 'container.memory.percent'
-              {{time_filter}}
-          )
-          SELECT
-            COALESCE(c.service, m.service) as service,
-            ROUND(AVG(c.value)::numeric, 1) as cpu_avg,
-            ROUND(MAX(c.value)::numeric, 1) as cpu_max,
-            ROUND(AVG(m.value)::numeric, 1) as mem_avg,
-            ROUND(MAX(m.value)::numeric, 1) as mem_max,
-            (COUNT(c.service) + COUNT(m.service)) as data_points
-          FROM cpu_metrics c
-          FULL OUTER JOIN mem_metrics m ON c.service = m.service
-          GROUP BY COALESCE(c.service, m.service)
-          ORDER BY {{table_sort}}
-          LIMIT 20
-        default_sort: "AVG(c.value) DESC NULLS LAST"
-
-      # Kafka Consumer Metrics (if available)
-      - type: 'timeseries'
-        title: 'Kafka Consumer Lag'
-        layout: { w: 6, h: 4 }
-        sql: |
-          SELECT
-            time_bucket('{{rollup_interval}}', timestamp) as timestamp,
-            COALESCE(resource___service___name, 'kafka') as series,
-            AVG(value) as value
-          FROM otel_metrics
-          WHERE project_id='{{project_id}}'
-            AND metric_name = 'kafka.consumer.assigned_partitions'
-            {{time_filter}}
-          GROUP BY time_bucket('{{rollup_interval}}', timestamp), series
-          ORDER BY timestamp DESC
-          LIMIT 10000
-        unit: partitions
-
-      # System Load Average
-      - type: 'timeseries'
-        title: 'System Load Average'
-        layout: { w: 6, h: 4 }
-        sql: |
-          SELECT
-            time_bucket('{{rollup_interval}}', timestamp) as timestamp,
-            CASE
-              WHEN metric_name = 'system.cpu.load_average.1m' THEN '1 min'
-              WHEN metric_name = 'system.cpu.load_average.5m' THEN '5 min'
-              WHEN metric_name = 'system.cpu.load_average.15m' THEN '15 min'
-            END as series,
-            AVG(value) as value
-          FROM otel_metrics
-          WHERE project_id='{{project_id}}'
-            AND metric_name IN ('system.cpu.load_average.1m', 'system.cpu.load_average.5m', 'system.cpu.load_average.15m')
-            {{time_filter}}
-          GROUP BY time_bucket('{{rollup_interval}}', timestamp), metric_name
-          ORDER BY timestamp DESC
-          LIMIT 30000
-
-      # Redis Memory (if available)
-      - type: 'timeseries'
-        title: 'Redis Memory Usage'
-        layout: { w: 6, h: 4 }
-        sql: |
-          SELECT
-            time_bucket('{{rollup_interval}}', timestamp) as timestamp,
-            metric_name as series,
-            AVG(value) / 1048576 as value
-          FROM otel_metrics
-          WHERE project_id='{{project_id}}'
-            AND metric_name IN ('redis.memory.used', 'redis.memory.rss', 'redis.memory.peak')
-            {{time_filter}}
-          GROUP BY time_bucket('{{rollup_interval}}', timestamp), metric_name
-          ORDER BY timestamp DESC
-          LIMIT 30000
-        unit: MB
-
-      # All Available Metrics List
-      - type: table
-        title: 'Available Metrics'
-        layout: { w: 6, h: 4 }
-        columns:
-          - field: metric_name
-            title: Metric
-          - field: data_points
+          - field: cpu
             sortable: true
-            title: Data Points
+            title: CPU
+            description: 'Average cores in use'
+            column_type: number
+            unit: cores
+            decimals: 3
+            progress: column_percent
+          - field: cpu_peak
+            sortable: true
+            title: CPU peak
+            column_type: number
+            unit: cores
+            decimals: 3
+          - field: mem
+            sortable: true
+            title: Memory
+            description: 'Average working set'
+            column_type: number
+            unit: By
+            progress: column_percent
+          - field: mem_pct
+            sortable: true
+            title: '% of limit'
+            description: 'Peak working set as a share of the memory limit. Blank when the container has no limit.'
+            column_type: number
+            unit: '%'
+            progress: value_percent
+            progress_variant: warning
+          - field: restarts
+            sortable: true
+            title: Restarts
             column_type: number
             progress: column_percent
-          - field: unit
-            sortable: true
-            title: Unit
+            progress_variant: error
         sql: |
-          SELECT
-            metric_name,
-            COUNT(*) as data_points,
-            COALESCE(MAX(metric_unit), '-') as unit
-          FROM otel_metrics
-          WHERE project_id='{{project_id}}'
-            {{time_filter}}
-          GROUP BY metric_name
+          WITH per AS (
+            SELECT
+              COALESCE(resource___k8s___container___name, resource___container___name) AS container,
+              resource___k8s___pod___name AS pod,
+              MAX(resource___service___name) AS service,
+              AVG(value) FILTER (WHERE metric_name = 'container.cpu.usage') AS cpu,
+              MAX(value) FILTER (WHERE metric_name = 'container.cpu.usage') AS cpu_peak,
+              AVG(value) FILTER (WHERE metric_name = 'container.memory.working_set') AS mem,
+              MAX(value) FILTER (WHERE metric_name = 'container.memory.working_set')
+                / NULLIF(MAX(value) FILTER (WHERE metric_name = 'k8s.container.memory_limit'), 0) AS mem_ratio,
+              MAX(value) FILTER (WHERE metric_name = 'k8s.container.restarts') - MIN(value) FILTER (WHERE metric_name = 'k8s.container.restarts') AS restarts
+            FROM otel_metrics
+            WHERE project_id='{{project_id}}'
+              AND metric_name IN ('container.cpu.usage', 'container.memory.working_set', 'k8s.container.memory_limit', 'k8s.container.restarts')
+              {{time_filter}}
+            GROUP BY 1, 2
+          )
+          SELECT container, MAX(service) AS service, COUNT(DISTINCT pod) AS pods,
+            ROUND(SUM(cpu)::numeric, 3) AS cpu, ROUND(SUM(cpu_peak)::numeric, 3) AS cpu_peak,
+            ROUND(SUM(mem)::numeric) AS mem, ROUND((MAX(mem_ratio) * 100)::numeric, 1) AS mem_pct,
+            COALESCE(SUM(restarts), 0) AS restarts
+          FROM per
+          WHERE container IS NOT NULL AND (cpu IS NOT NULL OR mem IS NOT NULL)
+          GROUP BY container
           ORDER BY {{table_sort}}
-          LIMIT 20
-        default_sort: "COUNT(*) DESC"
+          LIMIT 100
+        default_sort: 'MAX(mem_ratio) DESC NULLS LAST, SUM(cpu) DESC'
+
+      - type: 'timeseries'
+        title: 'Memory by container'
+        hide_value: true
+        hide_subtitle: true
+        description: 'Working set per container. A sawtooth is a garbage collector; a staircase that never comes down is a leak.'
+        unit: By
+        sql: |
+          SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
+            COALESCE(resource___k8s___container___name, resource___container___name, resource___service___name, 'unknown') AS series,
+            AVG(value) AS value
+          FROM otel_metrics
+          WHERE project_id='{{project_id}}' AND metric_name = 'container.memory.working_set' {{time_filter}}
+          GROUP BY 1, 2 ORDER BY 1 DESC
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Network traffic by service'
+        hide_value: true
+        hide_subtitle: true
+        description: 'Bytes per second received and sent by each service''s pods.'
+        unit: By
+        query: |
+          metrics | where metric_name in ("k8s.pod.network.io", "container.network.io")
+          | summarize rate(value) by bin_auto(timestamp), resource.service.name, attributes.direction
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries_line'
+        title: 'Node CPU'
+        hide_value: true
+        hide_subtitle: true
+        description: 'Cores in use per node.'
+        unit: cores
+        query: metrics | where metric_name == "k8s.node.cpu.usage" | summarize avg(value) by bin_auto(timestamp), resource.k8s.node.name
+        layout: { w: 4, h: 4 }
+
+      - type: 'timeseries_line'
+        title: 'Node memory'
+        hide_value: true
+        hide_subtitle: true
+        description: 'Working set per node.'
+        unit: By
+        query: metrics | where metric_name == "k8s.node.memory.working_set" | summarize avg(value) by bin_auto(timestamp), resource.k8s.node.name
+        layout: { w: 4, h: 4 }
+
+      - type: 'timeseries_line'
+        title: 'Node disk used'
+        description: 'Filesystem used as a share of capacity, per node. Past 85% the kubelet starts evicting pods.'
+        unit: '%'
+        warning_threshold: 75
+        alert_threshold: 85
+        show_threshold_lines: always
+        sql: |
+          SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
+            COALESCE(resource->'k8s'->'node'->>'name', resource___host___name, 'unknown') AS series,
+            AVG(value) FILTER (WHERE metric_name = 'k8s.node.filesystem.usage')
+              / NULLIF(AVG(value) FILTER (WHERE metric_name = 'k8s.node.filesystem.capacity'), 0) * 100 AS value
+          FROM otel_metrics
+          WHERE project_id='{{project_id}}' AND metric_name IN ('k8s.node.filesystem.usage', 'k8s.node.filesystem.capacity') {{time_filter}}
+          GROUP BY 1, 2 ORDER BY 1 DESC
+        layout: { w: 4, h: 4 }
+
+      - type: table
+        title: 'Workload availability'
+        description: 'Deployments and stateful sets with fewer ready replicas than desired at any point in this window come first.'
+        layout: { w: 6, h: 5 }
+        columns:
+          - field: workload
+            sortable: true
+            title: Workload
+          - field: kind
+            sortable: true
+            title: Kind
+          - field: desired
+            sortable: true
+            title: Desired
+            column_type: number
+          - field: available
+            sortable: true
+            title: Available
+            description: 'Fewest replicas available at any point in this window'
+            column_type: number
+          - field: missing
+            sortable: true
+            title: Missing
+            description: 'Desired minus the fewest available'
+            column_type: number
+            progress: column_percent
+            progress_variant: error
+        sql: |
+          -- Two scans, not one IN-list over all four metrics: TimeFusion fails that plan with
+          -- "variant_get_step needs a scalar key" for some time windows.
+          SELECT workload, kind, MAX(desired) AS desired, MIN(available) AS available, MAX(desired) - MIN(available) AS missing
+          FROM (
+            SELECT resource->'k8s'->'deployment'->>'name' AS workload, 'Deployment' AS kind,
+              CASE WHEN metric_name = 'k8s.deployment.desired' THEN value END AS desired,
+              CASE WHEN metric_name = 'k8s.deployment.available' THEN value END AS available
+            FROM otel_metrics
+            WHERE project_id='{{project_id}}' AND metric_name IN ('k8s.deployment.desired', 'k8s.deployment.available') {{time_filter}}
+            UNION ALL
+            SELECT resource->'k8s'->'statefulset'->>'name', 'StatefulSet',
+              CASE WHEN metric_name = 'k8s.statefulset.pod.desired' THEN value END,
+              CASE WHEN metric_name = 'k8s.statefulset.pod.ready' THEN value END
+            FROM otel_metrics
+            WHERE project_id='{{project_id}}' AND metric_name IN ('k8s.statefulset.pod.desired', 'k8s.statefulset.pod.ready') {{time_filter}}
+          ) w
+          WHERE workload IS NOT NULL
+          GROUP BY workload, kind
+          ORDER BY {{table_sort}}
+          LIMIT 100
+        default_sort: 'MAX(desired) - MIN(available) DESC, workload'
+
+      - type: 'timeseries_line'
+        title: 'Kafka consumer lag'
+        summarize_by: max
+        description: 'Messages each consumer group is behind. A line that only climbs is a consumer that has stopped keeping up.'
+        unit: messages
+        query: metrics | where metric_name == "kafka.consumer_group.lag_sum" | summarize max(value) by bin_auto(timestamp), attributes.group
+        layout: { w: 6, h: 5 }
+
+      - type: group
+        title: Runtimes
+        description: 'Saturation inside the process: heap, goroutines, event-loop delay and thread-pool backlog, per service.'
+        layout: { w: 12, h: 5 }
+        children:
+          - type: 'timeseries_line'
+            title: 'JVM heap used'
+            summarize_by: max
+            unit: By
+            sql: |
+              SELECT time, service AS series, SUM(v) AS value FROM (
+                SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time, resource___service___name AS service, AVG(value) AS v
+                FROM otel_metrics
+                WHERE project_id='{{project_id}}' AND metric_name = 'jvm.memory.used' AND attributes->'jvm'->'memory'->>'type' = 'heap' {{time_filter}}
+                GROUP BY 1, 2, series_id
+              ) h GROUP BY 1, 2 ORDER BY 1 DESC
+            layout: { w: 3, h: 4 }
+
+          - type: 'timeseries_line'
+            title: 'Go goroutines'
+            summarize_by: max
+            unit: goroutines
+            query: metrics | where metric_name == "go.goroutine.count" | summarize max(value) by bin_auto(timestamp), resource.service.name
+            layout: { w: 3, h: 4 }
+
+          - type: 'timeseries_line'
+            title: 'Node.js event loop delay (p99)'
+            summarize_by: max
+            unit: s
+            query: metrics | where metric_name == "nodejs.eventloop.delay.p99" | summarize max(value) by bin_auto(timestamp), resource.service.name
+            layout: { w: 3, h: 4 }
+
+          - type: 'timeseries_line'
+            title: '.NET thread pool queue'
+            summarize_by: max
+            unit: items
+            query: metrics | where metric_name == "dotnet.thread_pool.queue.length" | summarize max(value) by bin_auto(timestamp), resource.service.name
+            layout: { w: 3, h: 4 }
+
+      - type: group
+        title: Hosts
+        description: 'Machines reporting through the hostmetrics receiver.'
+        layout: { w: 12, h: 5 }
+        children:
+          - type: 'timeseries_line'
+            title: 'CPU utilization'
+            summarize_by: max
+            unit: '%'
+            query: metrics | where metric_name == "system.cpu.utilization" and attributes.cpu.mode == "idle" | summarize 100 - avg(value) * 100 by bin_auto(timestamp), resource.host.name
+            layout: { w: 4, h: 4 }
+
+          - type: 'timeseries_line'
+            title: 'Memory utilization'
+            summarize_by: max
+            unit: '%'
+            query: metrics | where metric_name == "system.memory.utilization" and attributes.system.memory.state == "used" | summarize avg(value) * 100 by bin_auto(timestamp), resource.host.name
+            layout: { w: 4, h: 4 }
+
+          - type: 'timeseries_line'
+            title: 'Load average (1m)'
+            summarize_by: max
+            unit: load
+            query: metrics | where metric_name == "system.cpu.load_average.1m" | summarize avg(value) by bin_auto(timestamp), resource.host.name
+            layout: { w: 4, h: 4 }

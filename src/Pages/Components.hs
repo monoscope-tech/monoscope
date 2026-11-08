@@ -73,9 +73,9 @@ emptyState_ cfg title subTxt =
 -- | The search box: magnifying glass + @type=search@ input labelled @ph@. @extra@ sizes
 -- the wrapper; @attrs@ carry the behavior (a 'filterInputAttr_', a form name, htmx).
 searchInput_ :: Text -> Text -> [Attribute] -> Html ()
-searchInput_ extra ph attrs = label_ [class_ $ "input input-sm flex items-center gap-2 " <> extra] do
+searchInput_ extra ph attrs = label_ [class_ $ "input input-sm flex shrink-0 items-center gap-2 " <> extra] do
   faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 shrink-0 text-iconNeutral"
-  input_ $ [type_ "search", class_ "min-w-0 grow bg-transparent max-md:text-base", placeholder_ ph, Aria.label_ (T.dropWhileEnd (== '…') ph)] <> attrs
+  input_ $ [type_ "search", class_ "min-w-0 grow bg-transparent text-sm max-md:text-base", placeholder_ ph, Aria.label_ (T.dropWhileEnd (== '…') ph)] <> attrs
 
 
 -- | Header of an entity detail drawer: icon and title with inline @badges@, then the
@@ -1077,13 +1077,14 @@ emDash_ :: Html ()
 emDash_ = span_ [class_ "text-textWeak"] $ span_ [Aria.hidden_ "true"] "—" >> span_ [class_ "sr-only"] "No value"
 
 
--- | Table cell for an event count, coloured by volume; zero reads as a dash.
-eventsCountCell_ :: Int -> Html ()
-eventsCountCell_ n = span_ [class_ $ "tabular-nums font-medium text-sm " <> color] $ toHtml $ bool (formatWithCommas (fromIntegral n)) "\x2014" (n == 0)
+-- | Table cell for an event count; zero reads as a dash. @windowed@: only a count over the
+-- current period is coloured by volume — an all-time total says nothing about heat.
+eventsCountCell_ :: Bool -> Int -> Html ()
+eventsCountCell_ windowed n = span_ [class_ $ "tabular-nums font-medium text-sm " <> color] $ toHtml $ bool (formatWithCommas (fromIntegral n)) "\x2014" (n == 0)
   where
     color
-      | n >= 100 = "text-fillError-strong"
-      | n >= 10 = "text-fillWarning-strong"
+      | windowed && n >= 100 = "text-fillError-strong"
+      | windowed && n >= 10 = "text-fillWarning-strong"
       | n > 0 = "text-textStrong"
       | otherwise = "text-textWeak font-normal"
 
@@ -1374,7 +1375,8 @@ sparkline_ buckets
           h = 40 :: Int
           barZone = 32 :: Int
           peakLabel = formatCompact peakVal
-          labelW = T.length peakLabel * 9 + 4
+          -- sized for the widest compact label ("12.3K") so every row draws at one scale
+          labelW = 5 * 9 + 4
           gap = 2 :: Int
           barW = max 2 (120 `div` n - gap)
           barsEnd = n * (barW + gap)
@@ -1392,7 +1394,9 @@ sparkline_ buckets
         , makeAttribute "preserveAspectRatio" "xMinYMid meet"
         ]
         $ do
-          forM_ (zip [0 ..] buckets) \(i, v) -> do
+          -- a hairline baseline, so an empty bucket reads as zero rather than as a short bar
+          el_ "line" [makeAttribute "x1" "0", makeAttribute "y1" $ show h, makeAttribute "x2" $ show barsEnd, makeAttribute "y2" $ show h, makeAttribute "stroke" "var(--color-strokeWeak)", makeAttribute "stroke-width" "1"] ""
+          forM_ (filter ((> 0) . snd) $ zip [0 ..] buckets) \(i, v) -> do
             let barH = max 2 (round @Double @Int $ (fromIntegral v / peak) * fromIntegral barZone)
             el_
               "rect"
@@ -1401,8 +1405,8 @@ sparkline_ buckets
               , makeAttribute "width" $ show barW
               , makeAttribute "height" $ show barH
               , makeAttribute "rx" "1.5"
-              , makeAttribute "fill" "var(--color-chart-default)"
-              , makeAttribute "opacity" "0.7"
+              , makeAttribute "fill" "var(--color-textWeak)"
+              , makeAttribute "opacity" "0.6"
               ]
               ""
           el_
@@ -1468,7 +1472,15 @@ stackFrames_ snippetUrl raw frames
     frame_ open f = div_ [class_ $ "border-b border-strokeWeak last:border-0 " <> bool "" "hidden group-has-[.sys-frames:checked]/frames:block bg-fillWeaker" (folds f)] do
       case guarded (not . T.null) f.filePath of
         -- An unplaced line keeps its text and gets no disclosure: there is nothing behind it.
-        Nothing -> div_ [class_ "px-3 py-1 font-mono text-2xs text-textWeak whitespace-pre-wrap break-words"] $ toHtml f.raw
+        -- The method is what a reader scans for; namespace and arguments recede around it.
+        Nothing -> div_ [class_ "px-3 py-1 font-mono text-xs text-textWeak whitespace-pre-wrap break-words"] case T.breakOn (f.functionName <> "(") f.raw of
+          (pre, rest)
+            | not (T.null f.functionName)
+            , not (T.null rest) -> do
+                toHtml pre
+                span_ [class_ $ bool "text-textStrong" "text-textStrong font-semibold" f.isInApp] $ toHtml f.functionName
+                toHtml $ T.drop (T.length f.functionName) rest
+          _ -> toHtml f.raw
         Just path -> disclosure_ [open_ "" | open] "px-3 py-1.5 hover:bg-fillWeaker text-xs" (summary path) case f.lineNumber of
           Nothing -> div_ [class_ "px-3 pb-2 pl-8 text-2xs text-textWeak italic"] "No source linked for this file."
           Just n -> div_ [class_ "px-3 pb-2", hxGet_ (snippetUrl path n), hxTrigger_ "intersect once", hxTarget_ "this", hxSwap_ "innerHTML"] $ div_ [class_ "pl-5 py-1 text-2xs text-textWeak"] "Loading source…"

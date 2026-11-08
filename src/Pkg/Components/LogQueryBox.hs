@@ -344,6 +344,7 @@ logQueryBox_ config = do
                 VizTimeseries -> ("Bar", "📊")
                 VizTimeseriesLine -> ("Line", "📈")
                 VizTopList -> ("Top", "🏆")
+                VizHeatmap -> ("Heatmap", "🟧")
                 VizPatterns -> ("Patterns", "🔍")
                 VizSessions -> ("Sessions", "👥")
           label_ [data_ "value" vizType, class_ "tab !shadow-none !border-strokeWeak has-[:checked]:bg-fillBrand-weak! has-[:checked]:border-strokeBrand-strong! has-[:checked]:text-textBrand! flex gap-1 whitespace-nowrap"] do

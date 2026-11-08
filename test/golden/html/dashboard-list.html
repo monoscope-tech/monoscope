@@ -42,13 +42,13 @@
 <span class="text-textDisabled">-</span>
 </div>
 <div class="w-24 max-md:hidden">
-<span class="flex items-center gap-1.5 text-textWeak" data-tippy-content="66 widgets">
+<span class="flex items-center gap-1.5 text-textWeak" data-tippy-content="86 widgets">
 <svg class="icon w-3.5 h-3.5 text-iconNeutral" width="1em" height="1em" viewBox="0 0 448 512">
 <g>
 <path d="M384 96l0 128-128 0 0-128 128 0zm0 192l0 128-128 0 0-128 128 0zM192 224L64 224 64 96l128 0 0 128zM64 288l128 0 0 128L64 416l0-128zM64 32C28.7 32 0 60.7 0 96L0 416c0 35.3 28.7 64 64 64l320 0c35.3 0 64-28.7 64-64l0-320c0-35.3-28.7-64-64-64L64 32z"/>
 </g>
 </svg>
-<span class="leading-none tabular-nums">66</span>
+<span class="leading-none tabular-nums">86</span>
 </span>
 </div>
 </div>
@@ -60,85 +60,38 @@
 </div>
 </div>
 </div>
-<div id="itemsListPage" class="mx-auto gap-8 w-full flex flex-col group/pg">
-<div class="w-full [&amp;_th:first-child]:table-cell! [&amp;_td:first-child]:table-cell! [&amp;_th&gt;span]:flex-wrap" id="dashboardsTableContainer">
-<div class="mb-4 p-3 bg-fillWeak rounded-lg text-sm text-textStrong">
-<svg class="icon w-4 h-4 inline mr-2" width="1em" height="1em" viewBox="0 0 20 20">
-<g>
-<path d="M10.0001 13.3334V10.0001M10.0001 6.66675H10.0084M18.3334 10.0001C18.3334 14.6025 14.6025 18.3334 10.0001 18.3334C5.39771 18.3334 1.66675 14.6025 1.66675 10.0001C1.66675 5.39771 5.39771 1.66675 10.0001 1.66675C14.6025 1.66675 18.3334 5.39771 18.3334 10.0001Z" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-</g>
-</svg>Select a dashboard to add this widget to</div>
-<div class="w-full mx-auto space-y-2 pb-24" id="dashboardsTable_page">
-<div class="grid overflow-x-auto overflow-y-hidden my-0 group/grid" id="dashboardsTable_grid">
-<form class="flex flex-col w-full divide-y" id="dashboardsTable" onkeydown="return event.key != &#39;Enter&#39; || event.target.tagName != &#39;INPUT&#39;;">
-<div class="w-full flex-col">
-<div id="rowsContainer" class=" divide-y">
-<table class="table table-sm w-full relative">
-<thead>
-<tr>
-<th class=" text-left bg-bgAlternate sticky top-0 overflow-hidden min-w-0" data-column-key="Name">
-<span class="flex items-center gap-2 min-w-0">
-<span class="max-md:hidden">Name</span>
-</span>
-</th>
-<th class=" text-left bg-bgAlternate sticky top-0 overflow-hidden w-48 max-md:hidden" data-column-key="Teams">
-<span class="flex items-center gap-2 min-w-0">
-<span class>Teams</span>
-</span>
-</th>
-<th class=" text-left bg-bgAlternate sticky top-0 overflow-hidden w-48 max-md:hidden" data-column-key="Tags">
-<span class="flex items-center gap-2 min-w-0">
-<span class>Tags</span>
-</span>
-</th>
-<th class=" text-left bg-bgAlternate sticky top-0 overflow-hidden w-24 max-md:hidden" data-column-key="Widgets">
-<span class="flex items-center gap-2 min-w-0">
-<span class>Widgets</span>
-</span>
-</th>
-</tr>
-</thead>
-<tbody id="dashboardsTable_tbody" class="stagger-fade">
-<tr class="cursor-pointer hover:bg-fillWeak tap-target hover:bg-fillWeak transition-colors duration-75 itemsListItem " data-hx-swap="none" hx-on:htmx:after:request="const s = event.detail.ctx.response.status; if (s &gt;= 200 &amp;&amp; s &lt; 300) document.getElementById(&#39;dashboards-modal&#39;).checked = false" hx-put="/p/<uuid>/dashboards/<uuid>" data-hx-ext="json-enc" data-hx-vals="js:{...JSON.parse(document.getElementById(&#39;dashboards-modal-widget-json&#39;).value || &#39;{}&#39;)}">
-<td class="min-w-0" data-column-key="Name">
-<span class="flex items-center gap-2">
-<span class="p-1 px-2 bg-fillWeak rounded-md" data-tippy-content="Dashboard icon">
-<svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 448 512">
+<div id="dashboard-picker" role="listbox" aria-label="Dashboards" class="max-h-[min(24rem,55vh)] overflow-y-auto overscroll-contain p-2 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&amp;_[data-dash]:not(.htmx-request)]:opacity-40">
+<button type="button" role="option" data-dash hx-live:hidden="!this.textContent.toLowerCase().includes(q(&#39;#dashboards-modal-search&#39;).value.trim().toLowerCase())" class="group/pick flex w-full cursor-pointer items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-fillWeak active:bg-fillHover focus-visible:bg-fillWeak focus-visible:outline-none [&amp;.active]:bg-fillWeak [&amp;[hidden]]:hidden" data-hx-swap="none" hx-on:htmx:after:request="const s = event.detail.ctx.response.status; if (s &gt;= 200 &amp;&amp; s &lt; 300) document.getElementById(&#39;dashboards-modal&#39;).checked = false" hx-put="/p/<uuid>/dashboards/<uuid>" data-hx-ext="json-enc" data-hx-vals="js:{...JSON.parse(document.getElementById(&#39;dashboards-modal-widget-json&#39;).value || &#39;{}&#39;)}">
+<span class="grid size-8 shrink-0 place-items-center rounded-md bg-fillWeak text-iconNeutral">
+<svg class="icon size-4" width="1em" height="1em" viewBox="0 0 448 512">
 <g>
 <path d="M144 80v96H48V80h96zM48 32C21.5 32 0 53.5 0 80v96c0 26.5 21.5 48 48 48h96c26.5 0 48-21.5 48-48V80c0-26.5-21.5-48-48-48H48zm96 304v96H48V336h96zM48 288c-26.5 0-48 21.5-48 48v96c0 26.5 21.5 48 48 48h96c26.5 0 48-21.5 48-48V336c0-26.5-21.5-48-48-48H48zM304 80h96v96H304V80zm-48 0v96c0 26.5 21.5 48 48 48h96c26.5 0 48-21.5 48-48V80c0-26.5-21.5-48-48-48H304c-26.5 0-48 21.5-48 48zM72 120v16c0 8.8 7.2 16 16 16h16c8.8 0 16-7.2 16-16V120c0-8.8-7.2-16-16-16H88c-8.8 0-16 7.2-16 16zM88 360c-8.8 0-16 7.2-16 16v16c0 8.8 7.2 16 16 16h16c8.8 0 16-7.2 16-16V376c0-8.8-7.2-16-16-16H88zM328 120v16c0 8.8 7.2 16 16 16h16c8.8 0 16-7.2 16-16V120c0-8.8-7.2-16-16-16H344c-8.8 0-16 7.2-16 16zM256 304V464c0 8.8 7.2 16 16 16h32c8.8 0 16-7.2 16-16V400c0-8.8 7.2-16 16-16s16 7.2 16 16s7.2 16 16 16h64c8.8 0 16-7.2 16-16V304c0-8.8-7.2-16-16-16s-16 7.2-16 16s-7.2 16-16 16H368c-8.8 0-16-7.2-16-16s-7.2-16-16-16H272c-8.8 0-16 7.2-16 16zM368 448a16 16 0 1 0 0 32 16 16 0 1 0 0-32zm64 0a16 16 0 1 0 0 32 16 16 0 1 0 0-32z" />
 </g>
 </svg>
 </span>
-<span class="font-medium text-textStrong">Tabbed Count</span>
+<span class="min-w-0 grow">
+<span class="flex items-center gap-1.5">
+<span class="truncate text-sm font-medium text-textStrong">Tabbed Count</span>
 </span>
-<div class="hidden max-md:flex items-center gap-2 mt-1 text-xs text-textWeak flex-wrap">
-<span class="tabular-nums">Jan 1</span>
-<span class="badge badge-sm badge-neutral">@everyone</span>
-</div>
-</td>
-<td class="w-48 max-md:hidden" data-column-key="Teams">
-<span class="badge badge-sm badge-neutral mr-1">@everyone</span>
-</td>
-<td class="w-48 max-md:hidden" data-column-key="Tags">
-<span class="text-textDisabled">-</span>
-</td>
-<td class="w-24 max-md:hidden" data-column-key="Widgets">
-<span class="flex items-center gap-1.5 text-textWeak" data-tippy-content="66 widgets">
-<svg class="icon w-3.5 h-3.5 text-iconNeutral" width="1em" height="1em" viewBox="0 0 448 512">
+<span class="block truncate text-xs text-textWeak tabular-nums">86 widgets</span>
+</span>
+<span class="shrink-0 text-xs font-medium text-textBrand opacity-0 transition-opacity duration-100 group-hover/pick:opacity-100 group-[.active]/pick:opacity-100 group-focus-visible/pick:opacity-100 group-[.htmx-request]/pick:hidden">Add</span>
+<span class="loading loading-spinner loading-xs hidden shrink-0 text-iconNeutral group-[.htmx-request]/pick:inline-block" aria-label="Adding">
+</span>
+</button>
+<div class="[&amp;[hidden]]:hidden" hx-live:hidden="q(&#39;#dashboard-picker [data-dash]:not([hidden])&#39;).count &gt; 0">
+<section class="max-w-sm my-2 p-4 mx-auto text-center flex flex-col gap-3 empty-state">
+<div>
+<svg class="icon h-6 w-6 text-iconNeutral" width="1em" height="1em" viewBox="0 0 51 51">
 <g>
-<path d="M384 96l0 128-128 0 0-128 128 0zm0 192l0 128-128 0 0-128 128 0zM192 224L64 224 64 96l128 0 0 128zM64 288l128 0 0 128L64 416l0-128zM64 32C28.7 32 0 60.7 0 96L0 416c0 35.3 28.7 64 64 64l320 0c35.3 0 64-28.7 64-64l0-320c0-35.3-28.7-64-64-64L64 32z"/>
+<path d="M16.6751 5.57549C17.0798 5.68188 17.5047 5.68499 17.911 5.58453C18.3172 5.48407 18.6917 5.28325 19.0001 5.00049H31.7501L28.5751 16.8505C28.474 17.2213 28.4597 17.6104 28.5335 17.9877C28.6072 18.3649 28.7669 18.72 29.0001 19.0255C29.233 19.328 29.5321 19.5732 29.8745 19.7422C30.2168 19.9112 30.5933 19.9996 30.9751 20.0005H40.0001L37.1751 23.1005C36.732 23.5917 36.5016 24.2384 36.5344 24.8991C36.5672 25.5599 36.8605 26.1806 37.3501 26.6255C37.8086 27.0422 38.4055 27.2739 39.0251 27.2755C39.374 27.2747 39.7188 27.2008 40.0374 27.0588C40.356 26.9167 40.6414 26.7095 40.8751 26.4505L47.5001 19.1755C47.8284 18.8122 48.0427 18.3605 48.1165 17.8765C48.1903 17.3924 48.1204 16.8974 47.9154 16.4527C47.7104 16.0081 47.3793 15.6334 46.9633 15.3753C46.5472 15.1171 46.0646 14.9868 45.5751 15.0005H34.2251L37.5001 3.15049C37.5978 2.77779 37.608 2.38756 37.5299 2.01027C37.4519 1.63298 37.2877 1.27884 37.0501 0.97549C36.8096 0.662739 36.4985 0.411357 36.1422 0.241897C35.7859 0.0724382 35.3945 -0.010286 35.0001 0.000489639H17.5001C16.9357 -0.0188435 16.3814 0.153489 15.9274 0.489419C15.4735 0.82535 15.1466 1.30509 15.0001 1.85049V2.50049C14.821 3.13029 14.8961 3.80522 15.2094 4.38022C15.5226 4.95522 16.0489 5.38439 16.6751 5.57549ZM49.1751 45.7255L4.17512 0.72549C3.68859 0.370801 3.09039 0.203616 2.49046 0.254658C1.89053 0.305699 1.32918 0.571539 0.909558 1.00332C0.489936 1.43511 0.24024 2.00383 0.206357 2.60497C0.172473 3.20611 0.356678 3.79929 0.725121 4.27549L11.5251 15.0005L8.37512 26.8505C8.27746 27.2232 8.26726 27.6134 8.34532 27.9907C8.42338 28.368 8.58759 28.7221 8.82512 29.0255C9.05802 29.328 9.35711 29.5732 9.69946 29.7422C10.0418 29.9112 10.4183 29.9996 10.8001 30.0005H20.4001L15.8751 46.8505C15.7286 47.3941 15.7698 47.9712 15.9921 48.4885C16.2144 49.0057 16.6049 49.4328 17.1001 49.7005C17.4687 49.8994 17.8813 50.0026 18.3001 50.0005C18.649 49.9997 18.9938 49.9258 19.3124 49.7838C19.631 49.6417 19.9164 49.4345 20.1501 49.1755L32.2751 35.8255L45.7251 49.2755C45.9575 49.5098 46.234 49.6958 46.5387 49.8227C46.8433 49.9496 47.1701 50.015 47.5001 50.015C47.8302 50.015 48.1569 49.9496 48.4616 49.8227C48.7662 49.6958 49.0427 49.5098 49.2751 49.2755C49.5094 49.0431 49.6954 48.7666 49.8223 48.4619C49.9493 48.1573 50.0146 47.8305 50.0146 47.5005C50.0146 47.1705 49.9493 46.8437 49.8223 46.539C49.6954 46.2344 49.5094 45.9579 49.2751 45.7255H49.1751ZM14.0501 25.0005L15.6251 19.1505L21.4751 25.0005H14.0501ZM23.3751 38.2005L25.8751 29.3005L28.8751 32.2755L23.3751 38.2005Z" />
 </g>
 </svg>
-<span class="leading-none tabular-nums">66</span>
-</span>
-</td>
-</tr>
-</tbody>
-</table>
 </div>
+<div class="flex flex-col gap-1.5">
+<p class="text-sm text-textWeak">No dashboards match</p>
+<p class="text-sm text-textWeak max-w-md mx-auto">Try another name, or create a dashboard below.</p>
 </div>
-</form>
-</div>
-</div>
+</section>
 </div>
 </div>
