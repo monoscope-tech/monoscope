@@ -61,7 +61,7 @@ import Network.Wai qualified as Wai
 import Numeric (showFFloat)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx)
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), callout_, colorChip_, disclosure_, filterInputAttr_, formField_, formSelectField_, installationSettingsLink_, localTimeFmt_, options_, panel_, settingsH2_)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), callout_, colorChip_, disclosure_, emptyState_, filterInputAttr_, formField_, formSelectField_, installationSettingsLink_, localTimeFmt_, options_, panel_, settingsH2_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
@@ -74,10 +74,10 @@ import System.Types (ATAuthCtx, ActionResult, DB, Done, Outcome (..), Refusal (.
 import Text.HTML.SanitizeXSS (sanitizeBalance)
 import Text.Parsec qualified as Parsec
 import Text.Slugify (slugify)
-import Utils (LoadingSize (..), TabStrip (..), faSprite_, htmxIndicator_, navTabStrip_, nonEmptyT, renderMarkdown)
+import Utils (LoadingSize (..), TabStrip (..), countNoun, faSprite_, htmxIndicator_, navTabStrip_, nonEmptyT, renderMarkdown)
 import Web.Auth (demoGuestSessionId)
 import Web.FormUrlEncoded (FromForm)
-import Web.Links (CookieProtectedRoutes (..), RepositoryTab (..), urls)
+import Web.Links (CookieProtectedRoutes (..), IssuesRoutes' (..), RepositoryTab (..), urls)
 
 
 issueFixForViewer :: (DB es, Error ServerError :> es) => Projects.ProjectId -> IssueFixes.FixId -> Projects.Session -> Eff es (Agent.FixResult, Agent.Explanation)
@@ -647,10 +647,11 @@ repositoriesPageH pid selection = do
       checks <- ImpactReviews.latestChecks pid
       pure $ div_ [class_ "space-y-4"] do
         p_ [class_ "text-sm text-textWeak max-w-2xl"] "Pull request reviews connect code changes to production telemetry. Configure reviews and evidence sharing in each repository."
-        for_ (find (isNothing . (.runId)) usage) \total -> do
-          p_ [class_ "text-sm text-textWeak"] $ toHtml $ "All-time project model usage: " <> usageText total.usage
-          p_ [class_ "text-sm text-textWeak"] $ toHtml $ resourceText total.resources
-        p_ [class_ "text-xs text-textWeak"] "Model estimates are not customer charges. Compute, storage and video costs are not included. Refresh to see new usage."
+        -- Accounting, not review state: kept one click away so the list leads.
+        for_ (find (isNothing . (.runId)) usage) \total -> disclosure_ [] "text-xs text-textWeak hover:text-textStrong" "Model and sandbox usage for this project" $ div_ [class_ "mt-2 space-y-1 ps-5 text-xs text-textWeak"] do
+          p_ $ toHtml $ "All time: " <> usageText total.usage
+          p_ $ toHtml $ resourceText total.resources
+          p_ "Model estimates are not customer charges. Compute, storage and video costs are not included. Refresh to see new usage."
         toHtml
           $ Table.Table
             { Table.config = def{Table.elemID = "pullRequestsTable", Table.renderAsTable = True}
@@ -670,6 +671,15 @@ repositoriesPageH pid selection = do
                         ImpactReviews.Incomplete -> colorChip_ WarningBadge "circle-exclamation" "Incomplete"
                         ImpactReviews.Queued -> colorChip_ NeutralBadge "clock" "Queued"
                         ImpactReviews.Reviewing -> colorChip_ BrandBadge "arrows-rotate" "Reviewing"
+                    )
+                , Table.col
+                    "Result"
+                    ( \run -> case AE.fromJSON <$> run.result of
+                        Just (AE.Success (result :: ImpactReview.ReviewResult)) -> case result.verdict of
+                          ImpactReview.WorthChecking -> colorChip_ WarningBadge "triangle-exclamation" $ countNoun (length result.findings) "finding" <> " to check"
+                          ImpactReview.CoverageUnknown -> colorChip_ NeutralBadge "circle-question" "Coverage unknown"
+                          ImpactReview.NoFinding -> span_ [class_ "inline-flex items-center gap-1.5 text-xs text-textWeak"] $ faSprite_ "circle-check" "regular" "h-3 w-3" >> "No finding"
+                        _ -> span_ [class_ "text-xs text-textWeak"] "\x2014"
                     )
                 , Table.col "Revision" (\run -> code_ [class_ "text-xs text-textWeak", title_ run.revision] $ toHtml $ T.take 8 run.revision)
                 , Table.col "Reviewed" (\run -> span_ [class_ "whitespace-nowrap text-xs text-textWeak tabular-nums"] $ localTimeFmt_ "MMM d, HH:mm" run.createdAt)
@@ -748,7 +758,7 @@ repositoriesPageH pid selection = do
       pure $ section_ [class_ "space-y-4"] do
         h2_ [class_ "text-base font-semibold text-textStrong"] "Issue fixes"
         p_ [class_ "text-sm text-textWeak"] "Completed fixes and their verification evidence. Available to project administrators."
-        when (null runs) $ p_ [class_ "text-sm text-textWeak"] "No completed issue fixes available."
+        when (null runs) $ emptyState_ def{icon = Just "code", action = ESLink ((urls.issues pid).listGet Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] []) "Open issues"} "No verified fixes yet" "A fix lands here once Monoscope has checked it against production. Start one with Plan a fix on an issue."
         ul_ [class_ "divide-y divide-strokeWeak"] $ for_ runs \run -> li_ [class_ "py-3"] $ a_ [href_ (urls.issueFixGet pid run.runId), class_ "text-sm text-textBrand hover:underline"] $ toHtml run.summary
     UsagePage -> usage_ <$> ImpactReviews.customerUsage session.user.id
   addRespHeaders $ PageCtx (repositoryBWConfig bw pid tab serviceM canEdit canReadWiki) $ RepositoryContent serviceM content
@@ -758,7 +768,7 @@ repositoriesPageH pid selection = do
       h2_ [class_ "text-base font-semibold text-textStrong"] "Agent usage by customer and project"
       p_ [class_ "text-sm text-textWeak"] "All-time review and issue-fix subtotals include only projects where you are an active administrator. Customer references use recorded billing snapshots. Older model receipts are marked when attributed on receipt."
       p_ [class_ "text-xs text-textWeak"] "Model estimates are not customer charges. Resource measurements have no prices. Only regression executions and retained explanations are measured; other resource usage is not yet metered."
-      when (null rows) $ p_ [class_ "text-sm text-textWeak"] "No agent usage recorded for projects you administer."
+      when (null rows) $ emptyState_ def{icon = Just "gauge"} "No agent usage yet" "Pull request reviews and issue fixes in projects you administer are metered here as they run."
       for_ (NE.groupBy ((==) `on` (\row -> maybeToRight row.projectId ((row.billingProvider,) <$> row.customerId))) rows) \projects@(row :| _) ->
         section_ [class_ "rounded-lg border border-strokeWeak p-4 space-y-3"] do
           h3_ [class_ "text-sm font-medium text-textStrong break-all"] $ case row.customerId of
