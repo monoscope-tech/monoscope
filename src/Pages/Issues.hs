@@ -152,7 +152,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, done, successToast, useTfReads)
-import Utils (LoadingSize (..), LoadingType (..), countNoun, faSprite_, fmtDate, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, kqlQuoted, loadingIndicator_, lookupValueText, nonEmptyT, popoverPanel_, popoverTrigger_, renderMarkdown, summaryWords)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, faSprite_, fmtDate, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, kqlQuoted, loadingIndicator_, lookupValueText, navTabStrip_, nonEmptyT, popoverPanel_, popoverTrigger_, renderMarkdown, summaryWords)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseQueryParamMaybe)
 import Web.Links (CookieProtectedRoutes (..), IssuesRoutes' (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), TelemetryRoutes' (..), explorerUrl, urls)
@@ -2367,6 +2367,7 @@ issueListGetH pid filterTM sortM _since pageM perPageM loadM periodM serviceFilt
               def
                 { rowId = Just issueRowId
                 , rowAttrs = Just issueRowAttrs
+                , rowLink = Just $ issueRowLink pid
                 , rowGroup = Just apiChangeGroup
                 , bulkActions = issueBulkActions pid tab members
                 , search = Just ClientSide
@@ -2395,8 +2396,7 @@ issueListGetH pid filterTM sortM _since pageM perPageM loadM periodM serviceFilt
                 $ faSprite_ "circle-info" "regular" "h-4 w-4 text-iconNeutral"
               -- Category views are presets of the type filter; saved views are stored query strings.
               span_ [class_ "w-px h-4 bg-strokeWeak mx-1"] ""
-              forM_ ([("All", []), ("Errors", ["runtime_exception"]), ("Alerts", ["query_alert"]), ("Log patterns", ["log_pattern", "log_pattern_rate_change"]), ("API changes", ["api_change"]), ("Feedback", ["feedback"])] :: [(Text, [Text])]) \(lbl, types) ->
-                a_ [href_ $ listUrl types, class_ $ "px-2 py-1 rounded text-xs whitespace-nowrap " <> bool "text-textWeak hover:text-textStrong hover:bg-fillWeaker" "bg-fillBrand-weak text-textBrand font-medium" (sortNub typeFilters == sortNub types)] $ toHtml lbl
+              navTabStrip_ ViewTabs "Issue type" "tabs-xs md:tabs-sm" [(toHtml lbl, listUrl types, sortNub typeFilters == sortNub types) | (lbl, types) <- [("All", []), ("Errors", ["runtime_exception"]), ("Alerts", ["query_alert"]), ("Log patterns", ["log_pattern", "log_pattern_rate_change"]), ("API changes", ["api_change"]), ("Feedback", ["feedback"])] :: [(Text, [Text])]]
               savedViewsMenu_
                 SavedViewsMenu
                   { menuId = "issue-views-menu"
@@ -2410,7 +2410,7 @@ issueListGetH pid filterTM sortM _since pageM perPageM loadM periodM serviceFilt
           }
   addRespHeaders
     $ if loadM == Just "true"
-      then TableRowsOnly $ TableRows{columns = issueColumns pid period names Nothing, rows = issuesVM, renderAsTable = True, rowId = Just issueRowId, rowAttrs = Just issueRowAttrs, rowGroup = Just apiChangeGroup, pagination = if totalCount > 0 then Just paginationConfig else Nothing}
+      then TableRowsOnly $ TableRows{columns = issueColumns pid period names Nothing, rows = issuesVM, renderAsTable = True, rowId = Just issueRowId, rowAttrs = Just issueRowAttrs, rowLink = Just $ issueRowLink pid, rowGroup = Just apiChangeGroup, pagination = if totalCount > 0 then Just paginationConfig else Nothing}
       else TablePage $ PageCtx bwconf issuesTable
   where
     apiChangeGroup :: IssueVM -> Maybe Text
@@ -2513,16 +2513,14 @@ issueZeroState pid = \case
 
 
 issueRowAttrs :: IssueVM -> [Attribute]
-issueRowAttrs (IssueVM _ issue) = class_ ("group/row hover:bg-fillWeaker " <> bg) : sty
+issueRowAttrs (IssueVM _ issue) = class_ "group/row hover:bg-fillWeaker" : sty
   where
-    -- Matched on the constructor, not on @display@: severity is typed everywhere
-    -- else on this page, and a Text round-trip would drop both tints silently if a
-    -- constructor were ever renamed.
-    (bg, sty) = case issue.base.severity of
-      Issues.Critical -> ("bg-fillError-weak", [style_ "box-shadow: inset 3px 0 0 var(--color-fillError-strong)"])
-      Issues.Warning -> ("bg-fillWarning-weak", [style_ "box-shadow: inset 3px 0 0 var(--color-fillWarning-strong)"])
-      Issues.Info -> ("", [])
-      Issues.Low -> ("", [])
+    -- The edge bar and the severity pill already say it; a row tint read as zebra striping.
+    sty = case issue.base.severity of
+      Issues.Critical -> [style_ "box-shadow: inset 3px 0 0 var(--color-fillError-strong)"]
+      Issues.Warning -> [style_ "box-shadow: inset 3px 0 0 var(--color-fillWarning-strong)"]
+      Issues.Info -> []
+      Issues.Low -> []
 
 
 apiChangeData :: Issues.Issue -> Maybe Issues.APIChangeData
@@ -2546,26 +2544,32 @@ slashBreaks_ :: Text -> Html ()
 slashBreaks_ = sequence_ . intersperse (toHtml @Text "/" >> wbr_ []) . map toHtml . T.splitOn "/"
 
 
+issueRowLink :: Projects.ProjectId -> IssueVM -> Text
+issueRowLink pid (IssueVM _ issue) = issueDetailUrl pid issue.base.id
+
+
 issueRowId :: IssueVM -> Text
 issueRowId (IssueVM _ issue) = issue.base.id.toText
 
 
 -- | (icon, colorClass, tooltip) — uses shape+color so status isn't color-only.
 -- Archived and acknowledged outrank severity; below them, Critical and Warning get
--- their own icon and everything else reads as plain Active. Severity was 'Text' here for
--- the same reason it was in 'severityBadge_' — callers 'display'ed a typed value to have
--- it re-matched.
-anomalyStatusIndicator :: Issues.Issue -> (Text, Text, Text)
+-- their own icon. A plain active issue gets none: a neutral icon on most rows hid the ones that mattered.
+anomalyStatusIndicator :: Issues.Issue -> Maybe (Text, Text, Text)
 anomalyStatusIndicator issue
-  | isJust issue.archivedAt = ("archive", "text-fillStrong", "Archived \x2014 hidden, no notifications")
-  | isJust issue.acknowledgedAt = ("bell-slash", "text-fillSuccess-strong", "Acknowledged \x2014 notifications paused")
+  | isJust issue.archivedAt = Just ("archive", "text-fillStrong", "Archived \x2014 hidden, no notifications")
+  | isJust issue.acknowledgedAt = Just ("bell-slash", "text-fillSuccess-strong", "Acknowledged \x2014 notifications paused")
   | otherwise = case issue.severity of
-      Issues.Critical -> ("octagon-exclamation", "text-fillError-strong", "Critical")
-      Issues.Warning -> ("triangle-alert", "text-fillWarning-strong", "Warning")
-      Issues.Info -> active
-      Issues.Low -> active
-  where
-    active = ("circle-exclamation", "text-iconNeutral", "Active")
+      Issues.Critical -> Just ("octagon-exclamation", "text-fillError-strong", "Critical")
+      Issues.Warning -> Just ("triangle-alert", "text-fillWarning-strong", "Warning")
+      Issues.Info -> Nothing
+      Issues.Low -> Nothing
+
+
+statusIcon_ :: Text -> Issues.Issue -> Html ()
+statusIcon_ cls b = case anomalyStatusIndicator b of
+  Just (icon, iconColor, tooltip) -> span_ [class_ $ cls <> " w-3.5 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon "regular" "w-3.5 h-3.5"
+  Nothing -> span_ [class_ $ cls <> " w-3.5", Aria.hidden_ "true"] mempty
 
 
 data IssueVM = IssueVM UTCTime Issues.IssueL
@@ -2578,7 +2582,6 @@ issueColumns pid period names toggleM =
   , col "Last seen" (\(IssueVM now issue) -> lastSeenCell_ now (Just issue.lastSeen)) & withAttrs [class_ "w-24 max-md:hidden"]
   , col "Activity" activityCol & withAttrs [class_ "w-40 max-md:hidden"] & maybe identity withColHeaderExtra toggleM
   , col "Count" countCol & withAttrs [class_ "w-36 min-w-36 max-md:hidden"]
-  , col "Users" usersCol & withAttrs [class_ "w-16 max-md:hidden"]
   ]
   where
     countContext issue =
@@ -2587,20 +2590,18 @@ issueColumns pid period names toggleM =
       )
     countCol (IssueVM _ issue) = do
       let (noun, scope) = countContext issue
-      eventsCountCell_ issue.eventCount
-      span_ [class_ "block text-2xs text-textWeak whitespace-nowrap"] $ toHtml $ noun <> (if issue.eventCount == 1 then "" else "s") <> " · " <> scope
-    usersCol (IssueVM _ issue) = span_ [class_ $ "tabular-nums text-sm " <> bool "text-textStrong" "text-textWeak" (issue.usersCount == 0)] $ toHtml $ bool (formatWithCommas (fromIntegral issue.usersCount :: Double)) "\x2014" (issue.usersCount == 0)
+      eventsCountCell_ (scope /= "all time") issue.eventCount
+      span_ [class_ "block text-2xs text-textWeak whitespace-nowrap"] $ toHtml $ noun <> (if issue.eventCount == 1 then "" else "s") <> " · " <> scope <> bool (" · " <> countNoun issue.usersCount "user") "" (issue.usersCount == 0)
     activityCol (IssueVM _ issue) = sparkline_ $ V.toList issue.activityBuckets
     renderIssueMainCol (IssueVM currTime issue) = do
       let b = issue.base
           isAcknowledged = isJust b.acknowledgedAt
           isArchived = isJust b.archivedAt
-          (icon, iconColor, tooltip) = anomalyStatusIndicator b
           issueUrl = issueDetailUrl pid b.id
           ackUrl = if isAcknowledged then (urls.issues pid).unAcknowledgeGet b.id else (urls.issues pid).acknowledgeGet b.id Nothing
           archiveUrl = if isArchived then (urls.issues pid).unarchiveGet b.id else (urls.issues pid).archiveGet b.id Nothing
           stateBadges = do
-            issuePriorityBadge_ b
+            severityBadge_ b.severity
             issueStateBadge_ issue.latestStateEvent
             -- Silence has an end, and the list is where you need to see it without opening anything.
             whenJust (zonedTimeToUTC <$> b.acknowledgedUntil <* b.acknowledgedAt) $ silenceBadge_ "Ack'd" "Acknowledged" currTime
@@ -2609,11 +2610,11 @@ issueColumns pid period names toggleM =
       div_ [class_ "flex flex-col gap-1 py-0.5 min-w-0"] do
         div_ [class_ "flex items-center gap-2 min-w-0"] do
           div_ [class_ "text-sm truncate min-w-0"] do
-            span_ [class_ $ "inline-flex align-middle mr-1 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon "regular" "w-3.5 h-3.5"
+            statusIcon_ "inline-flex align-middle mr-1" b
             span_ [class_ "text-xs tabular-nums mr-1 text-textWeak max-md:text-textStrong max-md:font-medium"] $ toHtml $ "#" <> show b.seqNum <> " "
             a_ ([href_ issueUrl, class_ "font-medium text-textStrong hover:text-textBrand transition-colors"] <> navTabAttrs) $ renderIssueTitle_ issue
           span_ [class_ "shrink-0 flex items-center gap-1.5 max-md:hidden"] stateBadges
-          div_ [class_ "shrink-0 flex gap-1 items-center opacity-0 pointer-events-none group-hover/row:opacity-100 group-hover/row:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity max-md:hidden"] do
+          div_ [class_ "ml-auto shrink-0 flex gap-1 items-center opacity-0 pointer-events-none group-hover/row:opacity-100 group-hover/row:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity max-md:hidden"] do
             inlineIconBtn_ (bool "Acknowledge \x2014 pause notifications" "Unacknowledge \x2014 resume notifications" isAcknowledged) (bool "check" "arrow-rotate-left" isAcknowledged) [hxPost_ ackUrl]
             unless isAcknowledged
               $ durationMenu_ ("ack-pop-" <> b.id.toText) "Acknowledge for\x2026" [] (\q -> [hxPost_ $ (urls.issues pid).acknowledgeGet b.id (readMaybe $ toString q), hxSwap_ "none"]) (inlineIconBtn_ "Acknowledge for a set time" "clock" . popoverTrigger_)
@@ -2678,7 +2679,7 @@ renderIssueTitle_ Issues.IssueL{base}
             Just (ApiChanges.SpanSchema scope) -> fromMaybe "Span schema observation" scope.spanName
             _ | Just method <- Issues.knownMethod d -> method <> " " <> d.endpointPath
             _ -> "Schema observation"
-       in span_ [class_ "font-mono", term "data-tippy-content" sourceTitle] $ toHtml sourceTitle
+       in span_ [term "data-tippy-content" sourceTitle] $ toHtml sourceTitle
   | T.null title = "(Untitled)"
   | "⇒" `T.isInfixOf` title = renderSummaryText_ title
   | looksLikeRawPattern title = span_ [class_ "font-mono text-xs break-all"] $ renderWithPlaceholders_ title
@@ -2700,23 +2701,15 @@ renderWithPlaceholders_ = mconcat . intersperse (span_ [class_ "text-textWeak op
 issueCardCompact_ :: Projects.ProjectId -> UTCTime -> Issues.IssueL -> Html ()
 issueCardCompact_ pid now issue = do
   let b = issue.base
-      (icon, iconColor, tooltip) = anomalyStatusIndicator b
       issueUrl = issueDetailUrl pid b.id
   a_ ([href_ issueUrl, class_ "block border border-strokeWeak rounded-xl p-3 hover:bg-bgRaised transition-colors"] <> navTabAttrs) do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
-      span_ [class_ $ "shrink-0 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon "regular" "w-3.5 h-3.5"
+      statusIcon_ "shrink-0" b
       span_ [class_ "text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ "#" <> show b.seqNum
       span_ [class_ "text-sm font-medium text-textStrong truncate min-w-0"] $ renderIssueTitle_ issue
-      issuePriorityBadge_ b
+      severityBadge_ b.severity
       span_ [class_ "text-xs text-textWeak shrink-0 ml-auto"] $ toHtml $ agoText now $ zonedTimeToUTC b.createdAt
     issuePreview_ Nothing issue
-
-
-issuePriorityBadge_ :: Issues.Issue -> Html ()
-issuePriorityBadge_ issue
-  | issue.issueType == Issues.ApiChange =
-      tonePill_ (case issue.severity of Issues.Critical -> ErrorBadge; Issues.Warning -> WarningBadge; Issues.Info -> NeutralBadge; Issues.Low -> NeutralBadge) $ "Priority: " <> T.toTitle (display issue.severity)
-  | otherwise = severityBadge_ issue.severity
 
 
 -- | Only Critical and Warning carry a badge; Info and Low are deliberately unbadged.

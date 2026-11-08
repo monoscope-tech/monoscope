@@ -127,7 +127,7 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
                   }
           }
   addRespHeaders case skipM of
-    Just _ -> TableRowsOnly TableRows{columns = cols, rows = hostsVM, renderAsTable = True, rowId = hostRowId, rowAttrs = hostRowAttrs, rowGroup = Nothing, pagination = Nothing}
+    Just _ -> TableRowsOnly TableRows{columns = cols, rows = hostsVM, renderAsTable = True, rowId = hostRowId, rowAttrs = hostRowAttrs, rowLink = Nothing, rowGroup = Nothing, pagination = Nothing}
     Nothing -> TablePage $ PageCtx bwconf catalogTable
 
 
@@ -143,7 +143,7 @@ data HostEventsVM = HostEventsVM
 catalogColumns :: Projects.ProjectId -> Text -> Text -> [Column HostEventsVM]
 catalogColumns pid baseUrl period =
   [ col "Dependency" (renderCatalogMainCol pid) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
-  , col ("Events (" <> period <> ")") (\vm -> statCell_ vm.statsMode $ eventsCountCell_ (fromIntegral vm.events.eventCount)) & withAttrs [class_ "w-24 max-md:hidden"]
+  , col ("Events (" <> period <> ")") (\vm -> statCell_ vm.statsMode $ eventsCountCell_ True (fromIntegral vm.events.eventCount)) & withAttrs [class_ "w-24 max-md:hidden"]
   , col "Last Seen" (\vm -> statCell_ vm.statsMode $ lastSeenCell_ vm.currTime (zonedTimeToUTC <$> vm.events.last_seen)) & withAttrs [class_ "w-28 max-md:hidden"]
   , col "Activity" (\vm -> statCell_ vm.statsMode $ sparkline_ (V.toList vm.events.activityBuckets)) & withAttrs [class_ "w-40 max-md:hidden"] & withColHeaderExtra (periodToggle_ baseUrl "apiCatalogContainer" period)
   ]
@@ -366,7 +366,7 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
           }
   addRespHeaders
     $ if isJust loadMoreM || isJust searchM
-      then TableRowsOnly TableRows{columns = cols, rows = endpReqVM, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, rowGroup = Nothing, pagination = pagination'}
+      then TableRowsOnly TableRows{columns = cols, rows = endpReqVM, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, rowLink = Nothing, rowGroup = Nothing, pagination = pagination'}
       else TablePage $ PageCtx bwconf endpointsTable
 
 
@@ -377,7 +377,7 @@ data EnpReqStatsVM = EnpReqStatsVM UTCTime Endpoints.StatsMode Endpoints.Endpoin
 endpointColumns :: Projects.ProjectId -> Text -> Text -> CatalogTab -> [Column EnpReqStatsVM]
 endpointColumns pid baseUrl period currentTab =
   [ col "Endpoint" (renderEndpointMainCol pid currentTab) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
-  , col ("Events (" <> period <> ")") (\(EnpReqStatsVM _ sm enp) -> statCell_ sm $ eventsCountCell_ enp.totalRequests) & withAttrs [class_ "w-24 max-md:hidden"]
+  , col ("Events (" <> period <> ")") (\(EnpReqStatsVM _ sm enp) -> statCell_ sm $ eventsCountCell_ True enp.totalRequests) & withAttrs [class_ "w-24 max-md:hidden"]
   , col "Last Seen" (\(EnpReqStatsVM currTime sm enp) -> statCell_ sm $ lastSeenCell_ currTime (zonedTimeToUTC <$> enp.lastSeen)) & withAttrs [class_ "w-28 max-md:hidden"]
   , col "Activity" (\(EnpReqStatsVM _ sm enp) -> statCell_ sm $ sparkline_ (V.toList enp.activityBuckets)) & withAttrs [class_ "w-40 max-md:hidden"] & withColHeaderExtra (periodToggle_ baseUrl "endpointsListContainer" period)
   ]

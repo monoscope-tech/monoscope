@@ -1077,13 +1077,14 @@ emDash_ :: Html ()
 emDash_ = span_ [class_ "text-textWeak"] $ span_ [Aria.hidden_ "true"] "—" >> span_ [class_ "sr-only"] "No value"
 
 
--- | Table cell for an event count, coloured by volume; zero reads as a dash.
-eventsCountCell_ :: Int -> Html ()
-eventsCountCell_ n = span_ [class_ $ "tabular-nums font-medium text-sm " <> color] $ toHtml $ bool (formatWithCommas (fromIntegral n)) "\x2014" (n == 0)
+-- | Table cell for an event count; zero reads as a dash. @windowed@: only a count over the
+-- current period is coloured by volume — an all-time total says nothing about heat.
+eventsCountCell_ :: Bool -> Int -> Html ()
+eventsCountCell_ windowed n = span_ [class_ $ "tabular-nums font-medium text-sm " <> color] $ toHtml $ bool (formatWithCommas (fromIntegral n)) "\x2014" (n == 0)
   where
     color
-      | n >= 100 = "text-fillError-strong"
-      | n >= 10 = "text-fillWarning-strong"
+      | windowed && n >= 100 = "text-fillError-strong"
+      | windowed && n >= 10 = "text-fillWarning-strong"
       | n > 0 = "text-textStrong"
       | otherwise = "text-textWeak font-normal"
 
@@ -1374,7 +1375,8 @@ sparkline_ buckets
           h = 40 :: Int
           barZone = 32 :: Int
           peakLabel = formatCompact peakVal
-          labelW = T.length peakLabel * 9 + 4
+          -- sized for the widest compact label ("12.3K") so every row draws at one scale
+          labelW = 5 * 9 + 4
           gap = 2 :: Int
           barW = max 2 (120 `div` n - gap)
           barsEnd = n * (barW + gap)
@@ -1392,7 +1394,9 @@ sparkline_ buckets
         , makeAttribute "preserveAspectRatio" "xMinYMid meet"
         ]
         $ do
-          forM_ (zip [0 ..] buckets) \(i, v) -> do
+          -- a hairline baseline, so an empty bucket reads as zero rather than as a short bar
+          el_ "line" [makeAttribute "x1" "0", makeAttribute "y1" $ show h, makeAttribute "x2" $ show barsEnd, makeAttribute "y2" $ show h, makeAttribute "stroke" "var(--color-strokeWeak)", makeAttribute "stroke-width" "1"] ""
+          forM_ (filter ((> 0) . snd) $ zip [0 ..] buckets) \(i, v) -> do
             let barH = max 2 (round @Double @Int $ (fromIntegral v / peak) * fromIntegral barZone)
             el_
               "rect"
@@ -1401,8 +1405,8 @@ sparkline_ buckets
               , makeAttribute "width" $ show barW
               , makeAttribute "height" $ show barH
               , makeAttribute "rx" "1.5"
-              , makeAttribute "fill" "var(--color-chart-default)"
-              , makeAttribute "opacity" "0.7"
+              , makeAttribute "fill" "var(--color-textWeak)"
+              , makeAttribute "opacity" "0.6"
               ]
               ""
           el_
