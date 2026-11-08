@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, personName, activityReply, withOwner, Card, card, logPatternCard, rateChangeCard, cardMessages, uptimeMessages, cronMessages, recoveredMessages, RateChange (..), slackNewEndpointsAlert, slackReportAlert, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization, arr, mrkdwn, plainTxt, slackEscape, slackSection, slackHeader, slackContext, slackImage, dcGallery, slackActions) where
+module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, activityReply, withOwner, Card, card, logPatternCard, rateChangeCard, cardMessages, uptimeMessages, cronMessages, recoveredMessages, uptimeName, cronName, RateChange (..), slackNewEndpointsAlert, slackReportAlert, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization, arr, mrkdwn, plainTxt, slackEscape, slackSection, slackHeader, slackContext, slackImage, dcGallery, slackActions) where
 
 import Control.Lens (Traversal', ix, (%~), (.~), (^..), (^?))
 import Data.Aeson qualified as AE
@@ -478,11 +478,6 @@ resolvedErrorMessage err actor now projectUrl issueUrl =
   (card (errorCard sResolved err projectUrl (fromMaybe (projectUrl <> "/issues") issueUrl) Nothing Nothing []){note = ["by " <> bold actor, hhmm now], body = [], chart = Nothing}, reply sResolved{label = "Resolved by " <> slackEscape actor} (errorAlertTitle err) [])
 
 
--- | How a member is named in Slack: their name, or their id when they have none.
-personName :: Projects.User -> Text
-personName u = fromMaybe u.id.toText $ Projects.userDisplayName u
-
-
 -- | A lifecycle note in an issue's thread: who did what, in one line. A person
 -- is the subject; the system speaks only when nobody acted.
 activityReply :: Issues.ActivityNote -> Incidents.SlackPayload
@@ -538,7 +533,7 @@ blockId = (^? key "block_id" . _String)
 uptimeMessages :: Issues.UptimeData -> Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
 uptimeMessages d issueUrl =
   cardMessages
-    (statusCard (Status ":red_circle:" "Down" Critical) (if T.null d.name then d.url else d.name) issueUrl)
+    (statusCard (Status ":red_circle:" "Down" Critical) (uptimeName d) issueUrl)
       { facts = [bold $ maybe "No response" (("HTTP " <>) . show) d.statusCode, "expected " <> show d.expectedStatus, show d.durationMs <> " ms"]
       , -- A status code is already in the facts; only a failed request needs its reason.
         body = [tagged "evidence" $ slackSection $ "`" <> slackEscape d.url <> "`" <> foldMap (const $ "\n" <> slackEscape d.reason) (guard (isNothing d.statusCode))]
@@ -551,10 +546,19 @@ uptimeMessages d issueUrl =
 cronMessages :: Issues.CronData -> Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
 cronMessages d issueUrl =
   cardMessages
-    (statusCard (Status ":red_circle:" (case d.failure of Issues.CFMissed -> "Missed run"; Issues.CFFailed -> "Run failed") Critical) (if T.null d.name then d.slug else d.name) issueUrl)
+    (statusCard (Status ":red_circle:" (case d.failure of Issues.CFMissed -> "Missed run"; Issues.CFFailed -> "Run failed") Critical) (cronName d) issueUrl)
       { facts = ["`" <> slackEscape d.slug <> "`", "expected by " <> atUtc d.expectedBy, maybe "no check-in yet" (("last check-in " <>) . atUtc) d.lastCheckinAt]
       , actions = [("Open issue", issueUrl)]
       }
+
+
+-- | What a check is called: its name, or what it watches when it has none.
+uptimeName :: Issues.UptimeData -> Text
+uptimeName d = if T.null d.name then d.url else d.name
+
+
+cronName :: Issues.CronData -> Text
+cronName d = if T.null d.name then d.slug else d.name
 
 
 -- | A failing check that passed again: the root turns green, and its facts say

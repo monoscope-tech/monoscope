@@ -33,6 +33,7 @@ module Models.Apis.Incidents (
   RelatedIncidents (..),
   slackRelatedIncidents,
   latestEpisodeTx,
+  openEpisodeTx,
   ErrorResolution (..),
   resolveErrorIncident,
   SlackTimestamp,
@@ -404,6 +405,11 @@ slackRelatedIncidents pid teamId channelId threadTs =
             event.id DESC LIMIT 1) latest ON TRUE
         ORDER BY (previous.match->>'tag' = 'RelatedSameSource') DESC, previous.started_at DESC, previous.id LIMIT 10|]
     pure RelatedIncidents{episodeId = origin.episodeId, matches, limitReached = length matches == 10}
+
+
+-- | The source's episode if it is still open.
+openEpisodeTx :: Projects.ProjectId -> IncidentSource -> Tx.Transaction (Maybe Episode)
+openEpisodeTx pid source = mfilter ((== EpisodeActive) . (.phase)) <$> latestEpisodeTx pid source
 
 
 latestEpisodeTx :: Projects.ProjectId -> IncidentSource -> Tx.Transaction (Maybe Episode)

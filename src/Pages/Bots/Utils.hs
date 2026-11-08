@@ -136,6 +136,15 @@ linkButton :: Text -> Text -> Text -> AE.Value
 linkButton actionId label url = AE.object ["type" AE..= ("button" :: Text), "action_id" AE..= actionId, "text" AE..= plainTxt label, "url" AE..= url]
 
 
+-- | A markdown block turns @<!channel>@, @<!here>@ and @<\@U…>@ into real pings;
+-- model output (which may quote telemetry) must never notify anyone.
+--
+-- >>> quietMentions "ping <!channel> and <@U123>, keep <https://x|links>"
+-- "ping <\8203!channel> and <\8203@U123>, keep <https://x|links>"
+quietMentions :: Text -> Text
+quietMentions = T.replace "<@" "<\x200B@" . T.replace "<!" "<\x200B!"
+
+
 -- | Model or user text as inline code: no backticks or newlines to break out of it.
 codeSpan :: Text -> Text
 codeSpan t = "`" <> T.take 300 (unwords $ words $ T.replace "`" "'" t) <> "`"
@@ -562,7 +571,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
     textReply txt = case target of
       Discord -> AE.object ["content" AE..= txt]
       WhatsApp -> AE.object ["body" AE..= txt]
-      Slack -> slackResponse [AE.object ["type" AE..= ("markdown" :: Text), "text" AE..= txt]]
+      Slack -> slackResponse [AE.object ["type" AE..= ("markdown" :: Text), "text" AE..= quietMentions txt]]
 
     sendText txt = traverse_ (send . ReplyText . textReply) $ case target of
       Slack -> textChunks txt

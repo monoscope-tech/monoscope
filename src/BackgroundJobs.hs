@@ -1,7 +1,7 @@
 {-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsWorkerInitWithTools, jobsWorkerConfig, jobsRunner, runWorkspaceMaintenanceTimer, ensureDailyJobScheduled, processBackgroundJob, processBackgroundJobWithTools, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsWorkerInitWithTools, jobsWorkerConfig, jobsRunner, runWorkspaceMaintenanceTimer, ensureDailyJobScheduled, processBackgroundJob, processBackgroundJobWithTools, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl, sendAlertToChannels) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -307,6 +307,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
     RunConversation pid runId -> runConversation pid runId
     AIRoutineRun routineId scheduledAt -> runAIRoutine authCtx projectTools routineId scheduledAt
     InvestigateIncident pid eventId rootId -> investigateIncident pid eventId rootId
+    DeliverSlackIncidents -> runSlackIncidentDeliveries
     ResetSlackSession pid uid receiptId -> Slack.resetSlackSession pid uid receiptId
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> unlessStale scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
@@ -1632,7 +1633,7 @@ sendAlertToChannels alert (rootPayload, replyPayload) issue project users alertU
       installation <- Integrations.getProjectSlackData project.id
       let source = Incidents.IssueIncident issue.id
       result <- Hasql.transaction TxS.ReadCommitted TxS.Write do
-        open <- mfilter ((== Incidents.EpisodeActive) . (.phase)) <$> Incidents.latestEpisodeTx project.id source
+        open <- Incidents.openEpisodeTx project.id source
         Incidents.recordIncidentEventTx
           Incidents.IncidentUpdate
             { projectId = project.id
@@ -1645,12 +1646,18 @@ sendAlertToChannels alert (rootPayload, replyPayload) issue project users alertU
             , replyPayload
             , destinations = slackDestinations installation [team]
             }
-      case result of
-        Incidents.Recorded{} -> tryStep "slack-incident-delivery" runSlackIncidentDeliveries
-        Incidents.AlreadyRecorded{} -> pass
-        (Incidents.NoOpenEpisode; Incidents.Rejected _) -> Log.logAttention "Issue alert was not recorded for Slack" (project.id, issue.id, show @Text result)
-      let fan = Fanout{slack = QueuedSlack, threads = Nothing, email = Just FanoutEmail{recipients = map (CI.original . (.email)) users, subject = subj, body = ET.renderEmail subj html}}
-      True <$ fanOutToTeam team fan alert project.id project.title alertUrl
+      -- Slack failing to record must not keep the other channels from alerting,
+      -- but the result says it, so a dropped Slack alert is never reported as sent.
+      slackRecorded <- case result of
+        Incidents.Recorded{} -> True <$ tryStep "slack-incident-delivery" runSlackIncidentDeliveries
+        Incidents.AlreadyRecorded{} -> pure True
+        (Incidents.NoOpenEpisode; Incidents.Rejected _) -> False <$ Log.logAttention "Issue alert was not recorded for Slack" (project.id, issue.id, show @Text result)
+      slackRecorded <$ fanOutToTeam team (emailFanout users subj html) alert project.id project.title alertUrl
+
+
+-- | A fan-out whose email goes to these members; Slack goes through the incident outbox.
+emailFanout :: [Projects.User] -> Text -> Html () -> Fanout
+emailFanout users subj html = Fanout{slack = QueuedSlack, threads = Nothing, email = Just FanoutEmail{recipients = map (CI.original . (.email)) users, subject = subj, body = ET.renderEmail subj html}}
 
 
 -- | Fan an alert out to every enabled non-email channel of the @everyone team.
@@ -1831,17 +1838,35 @@ monitorTrendChartUrl ctx pid monitor from to currentValue = do
   trendChartUrl ctx pid widget (formatUTC from) (formatUTC to)
 
 
+-- | Growth from a baseline as a whole percentage with grouped thousands.
+--
+-- >>> percentChange 4 38
+-- "850"
+percentChange :: Double -> Double -> Text
+percentChange baseline current = formatWithCommas $ fromIntegral (round ((current - baseline) / baseline * 100) :: Int)
+
+
+-- | The last day of hourly volume for each fired pattern, in one query, keyed by
+-- (source field, pattern hash).
+patternVolumes :: DB es => Projects.ProjectId -> [LogPatterns.LogPatternWithRate] -> UTCTime -> Eff es (Map.Map (Text, Text) [(UTCTime, Int64)])
+patternVolumes pid fired now
+  | null fired = pure mempty
+  | otherwise =
+      Map.fromListWith (flip (<>)) . map (\(field, hash, at, n) -> ((field, hash), [(at, n)]))
+        <$> Hasql.interp @[(Text, Text, UTCTime, Int64)]
+          [HI.sql|SELECT s.source_field, s.pattern_hash, s.hour_bucket, s.event_count FROM apis.log_pattern_hourly_stats s
+            JOIN unnest(#{V.fromList $ map (.sourceField) fired}::text[], #{V.fromList $ map (.patternHash) fired}::text[]) AS p(field, hash)
+              ON s.source_field = p.field AND s.pattern_hash = p.hash
+            WHERE s.project_id = #{pid} AND s.hour_bucket >= #{addUTCTime (-86400) now}
+            ORDER BY s.hour_bucket|]
+
+
 -- | A log pattern's last day of hourly volume, against the baseline it broke from.
-patternVolumeChartUrl :: (DB es, Log :> es) => Config.AuthContext -> Projects.ProjectId -> LogPatterns.LogPatternWithRate -> Double -> UTCTime -> Eff es (Maybe Text)
-patternVolumeChartUrl ctx pid lp baselineMean now = do
+patternVolumeChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> [(UTCTime, Int64)] -> Double -> UTCTime -> Eff es (Maybe Text)
+patternVolumeChartUrl ctx pid hours baselineMean now = do
   let from = addUTCTime (-86400) now
-  hours <-
-    Hasql.interp @[(UTCTime, Int64)]
-      [HI.sql|SELECT hour_bucket, event_count FROM apis.log_pattern_hourly_stats
-        WHERE project_id = #{pid} AND source_field = #{lp.sourceField} AND pattern_hash = #{lp.patternHash} AND hour_bucket >= #{from}
-        ORDER BY hour_bucket|]
-  let millis = floor . (* 1000) . utcTimeToPOSIXSeconds :: UTCTime -> Int
-      rows = AE.toJSON (["timestamp", "Events"] :: [Text]) : [AE.toJSON ([AE.toJSON (millis at), AE.toJSON n] :: [AE.Value]) | (at, n) <- hours]
+      millis = floor . (* 1000) . utcTimeToPOSIXSeconds :: UTCTime -> Int
+      rows = AE.toJSON (["timestamp", "Events"] :: [Text]) : [AE.toJSON (millis at, n) | (at, n) <- hours]
       dataset = def{Widget.source = AE.toJSON rows, Widget.from = Just $ millis from, Widget.to = Just $ millis now}
   trendChartUrl ctx pid def{Widget.wType = Widget.WTTimeseries, Widget.unit = Just "events", Widget.dataset = Just dataset, Widget.hideLegend = Just True, Widget.baseline = Just baselineMean} (formatUTC from) (formatUTC now)
 
@@ -2119,12 +2144,11 @@ dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors)
                             , Mail.userEmail = sub.errorData.userEmail <* guard project.includeUserIdentityInAlerts
                             }
                         -- An escalation says what it escalated from.
-                        escalation =
-                          [ x
-                          | alertType `elem` [EscalatingErrors, ErrorSpike]
-                          , Just b <- [mfilter (> 0) sub.baselinePerHour]
-                          , x <- ["was " <> prettyPrintCount (round b) <> "/hr", "*+" <> formatWithCommas (fromIntegral (round ((fromIntegral sub.occurrences1h - b) / b * 100) :: Int)) <> "%*"]
-                          ]
+                        escalation = fold do
+                          guard $ alertType `elem` [EscalatingErrors, ErrorSpike]
+                          b <- sub.baselinePerHour
+                          guard (b > 0)
+                          pure ["was " <> prettyPrintCount (round b) <> "/hr", "*+" <> percentChange b (fromIntegral sub.occurrences1h) <> "%*"]
                         (rootPayload, replyPayload) = Mail.errorIncidentMessages alertType sub.errorData now active ongoingFor baseUrl incidentUrl chart occText escalation impact
                         change
                           | isNothing active = Incidents.IncidentAlert
@@ -4993,9 +5017,9 @@ evaluateCronMonitor now m = do
       expectedBy = addUTCTime (fromIntegral $ m.intervalSecs + m.graceSecs) (fromMaybe m.createdAt lastSeen)
       open failure = do
         let d = Issues.CronData{monitorId = UUID.toText m.id, slug = m.slug, name = m.name, failure, expectedBy, lastCheckinAt = lastSeen}
-            headline = (if T.null m.name then m.slug else m.name) <> bool " failed" " missed its run" (failure == Issues.CFMissed)
+            headline = Mail.cronName d <> bool " failed" " missed its run" (failure == Issues.CFMissed)
         issue <- Issues.createCronIssue m.projectId d
-        alertCheckIssue issue "cron" (Mail.cronMessages d) headline ["Expected by " <> formatUTC expectedBy, maybe "No check-in yet" (("Last check-in " <>) . formatUTC) lastSeen]
+        alertCheckIssue issue CheckAlert{digestReason = "cron", headline, facts = ["Expected by " <> formatUTC expectedBy, maybe "No check-in yet" (("Last check-in " <>) . formatUTC) lastSeen], slack = Mail.cronMessages d}
   whenJust latest \(at, status) -> void $ Monitors.recordCronCheckin m.id at status
   case latest of
     Just (_, Monitors.CSOk) -> resolveOpenIssue m.projectId (Issues.cronTargetHash (UUID.toText m.id)) Issues.Cron now []
@@ -5025,14 +5049,22 @@ applyUptimeResult cfg now ms res = do
             , downSince = addUTCTime (negate $ fromIntegral cfg.scrapeIntervalSeconds) now
             }
     issue <- Issues.createUptimeIssue cfg.projectId d
-    alertCheckIssue issue "uptime" (Mail.uptimeMessages d) ((if T.null cfg.name then cfg.url else cfg.name) <> " is down") [cfg.url, reason]
+    alertCheckIssue issue CheckAlert{digestReason = "uptime", headline = Mail.uptimeName d <> " is down", facts = [cfg.url, reason], slack = Mail.uptimeMessages d}
   when (ok && before >= 2) $ resolveOpenIssue cfg.projectId (Issues.uptimeTargetHash cfg.id.toText) Issues.Uptime now ["after_failures" AE..= before]
 
 
 -- | Open (or reopen) a failing check's one long-lived issue and alert on it, so a
 -- recurring outage replies in the check's thread instead of starting a new one.
-alertCheckIssue :: Issues.Issue -> Text -> (Text -> (Incidents.SlackPayload, Incidents.SlackPayload)) -> Text -> [Text] -> ATBackgroundCtx ()
-alertCheckIssue fresh reason messages headline facts = do
+data CheckAlert = CheckAlert
+  { digestReason :: Text
+  , headline :: Text
+  , facts :: [Text]
+  , slack :: Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
+  }
+
+
+alertCheckIssue :: Issues.Issue -> CheckAlert -> ATBackgroundCtx ()
+alertCheckIssue fresh check = do
   ctx <- ask @Config.AuthContext
   now <- Time.currentTime
   persisted <- Hasql.transaction TxS.ReadCommitted TxS.Write $ Issues.reopenOrInsertIssueTx now fresh
@@ -5040,13 +5072,13 @@ alertCheckIssue fresh reason messages headline facts = do
     users <- Projects.usersByProjectId fresh.projectId
     let issue = (fresh :: Issues.Issue){Issues.id = persisted}
         url = issuePageUrl ctx fresh.projectId persisted
-        (subj, html) = ET.checkAlertEmail project.title headline facts url
-    void $ notifyIssue issue project users Issues.issueNotifyDedupHours reason (MonitorsAlert headline url Nothing) (messages url) url subj html
+        (subj, html) = ET.checkAlertEmail project.title check.headline check.facts url
+    void $ notifyIssue issue project users Issues.issueNotifyDedupHours check.digestReason (MonitorsAlert check.headline url Nothing) (check.slack url) url subj html
 
 
 -- | Archive a recovered signal's open issue and log it as resolved. A check that
--- alerted says so in its thread and on every channel it alerted, before the
--- resolution is logged, so the thread hears it once.
+-- alerted records its recovery in the same transaction, before the resolution is
+-- logged, so the thread hears it once and a crash cannot split the two.
 resolveOpenIssue :: Projects.ProjectId -> Text -> Issues.IssueType -> UTCTime -> [(AE.Key, AE.Value)] -> ATBackgroundCtx ()
 resolveOpenIssue pid hash ty now extra =
   Issues.selectIssueByHash pid hash (Issues.OpenOfType ty) >>= traverse_ \i -> do
@@ -5054,18 +5086,18 @@ resolveOpenIssue pid hash ty now extra =
     let source = Incidents.IssueIncident i.id
         url = issuePageUrl ctx pid i.id
     recovered <- Hasql.transaction TxS.ReadCommitted TxS.Write do
-      open <- mfilter ((== Incidents.EpisodeActive) . (.phase)) <$> Incidents.latestEpisodeTx pid source
-      forM open \episode -> do
+      open <- Incidents.openEpisodeTx pid source
+      recorded <- forM open \episode -> do
         let (rootPayload, replyPayload) = Mail.recoveredMessages i.title url (diffUTCTime now episode.startedAt)
         Incidents.recordIncidentEventTx Incidents.IncidentUpdate{projectId = pid, source, observedAt = now, change = Incidents.IncidentRecovered, delivery = Incidents.PublishIncident, issueId = Just i.id, rootPayload, replyPayload, destinations = []}
+      recorded <$ Issues.resolveIssueTx now pid i.id (Just $ AE.object (("recovered_at" AE..= now) : extra))
     whenJust recovered \_ -> do
       tryStep "slack-incident-delivery" runSlackIncidentDeliveries
       Projects.projectById pid >>= traverse_ \project -> do
         teamM <- ProjectMembers.getEveryoneTeam pid
         let (subj, html) = ET.monitorRecoveryEmail project.title i.title url
         users <- Projects.usersByProjectId pid
-        whenJust teamM \team -> void $ fanOutToTeam team Fanout{slack = QueuedSlack, threads = Nothing, email = Just FanoutEmail{recipients = map (CI.original . (.email)) users, subject = subj, body = ET.renderEmail subj html}} (MonitorsRecoveryAlert i.title url) pid project.title url
-    Issues.resolveIssues pid [i.id] Nothing (Just $ AE.object (("recovered_at" AE..= now) : extra))
+        whenJust teamM \team -> void $ fanOutToTeam team (emailFanout users subj html) (MonitorsRecoveryAlert i.title url) pid project.title url
 
 
 -- | A read against TimeFusion when the project's reads are switched to it.
@@ -5112,10 +5144,13 @@ checkTriggeredQueryMonitors = do
 runSlackIncidentDeliveries :: ATBackgroundCtx ()
 runSlackIncidentDeliveries = do
   ctx <- ask @Config.AuthContext
-  unless ctx.config.pauseNotifications do
+  -- A thread sends its deliveries strictly in order, one per claim, so keep
+  -- claiming until nothing is due: a burst of lifecycle replies drains in one run.
+  -- Bounded, since a delivery retried for immediate resend is claimable again.
+  unless ctx.config.pauseNotifications $ void $ iterateWhileM 10 do
     now <- Time.currentTime
     deliveries <- Incidents.claimSlackDeliveries now
-    void $ forConcurrently deliveries \delivery -> do
+    not (null deliveries) <$ forConcurrently deliveries \delivery -> do
       activeProject <- Projects.activeProjectById delivery.projectId
       installation <- if isJust activeProject then Integrations.getProjectSlackData delivery.projectId else pure Nothing
       outcome <- case installation of
@@ -5160,8 +5195,12 @@ runSlackIncidentDeliveries = do
       finishedAt <- Time.currentTime
       saved <- Incidents.finishSlackDelivery finishedAt delivery outcome
       unless saved $ Log.logAttention "Slack delivery completion did not match its lease or root" (delivery.id, delivery.rootId)
+  unless ctx.config.pauseNotifications do
     Slack.reconcileIncidentDeliveries
     Incidents.enqueueIncidentInvestigations
+  where
+    iterateWhileM :: Monad m => Int -> m Bool -> m Int
+    iterateWhileM limit step = go 0 where go n = if n >= limit then pure n else step >>= bool (pure n) (go (n + 1))
 
 
 -- | An unavailable evaluation changes evidence availability, not the alert state.
@@ -5183,8 +5222,8 @@ recordMonitorDataGap monitor at reason = do
           AND m.notification_count = #{monitor.notificationCount}
           AND m.deleted_at IS NULL AND m.deactivated_at IS NULL
           AND EXISTS (SELECT 1 FROM projects.projects p WHERE p.id = m.project_id AND p.active AND p.deleted_at IS NULL)|]
-    previous <- if changed == 1 then Incidents.latestEpisodeTx monitor.projectId source else pure Nothing
-    case mfilter ((== Incidents.EpisodeActive) . (.phase)) previous of
+    open <- if changed == 1 then Incidents.openEpisodeTx monitor.projectId source else pure Nothing
+    case open of
       Nothing -> pure $ Right ()
       Just episode -> do
         readings <-
@@ -5582,6 +5621,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
 
   projectM <- Projects.projectById pid
   users <- Projects.usersByProjectId pid
+  volumes <- patternVolumes pid (map fst firesAllowed) scheduledTime
   issueIds <- forM firesAllowed \(lpRate, sr) -> do
     let dir = display sr.direction
     Log.logInfo ("Log pattern " <> dir <> " confirmed") (lpRate.patternId, lpRate.logPattern, sr.currentRate, sr.mean)
@@ -5590,7 +5630,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
     persisted <- Hasql.transaction TxS.ReadCommitted TxS.Write $ Issues.reopenOrInsertIssueTx scheduledTime fresh
     let issue = (fresh :: Issues.Issue){Issues.id = persisted}
     whenJust projectM \project -> do
-      chartUrl <- patternVolumeChartUrl authCtx pid lpRate sr.mean scheduledTime
+      chartUrl <- patternVolumeChartUrl authCtx pid (Map.findWithDefault [] (lpRate.sourceField, lpRate.patternHash) volumes) sr.mean scheduledTime
       let issueUrl = hostPath authCtx.env.hostUrl $ (urls.issues pid).detailGet issue.id Nothing Nothing Nothing Nothing Nothing
           changePct = if sr.mean > 0 then (sr.currentRate - sr.mean) / sr.mean * 100 else 0
           rateChange = Mail.RateChange{issueUrl, patternText = lpRate.logPattern, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = sr.direction, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct, isError = lpRate.isError, chartUrl}
