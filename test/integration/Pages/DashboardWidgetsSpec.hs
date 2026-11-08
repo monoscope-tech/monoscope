@@ -58,6 +58,7 @@ import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
+import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Servant qualified
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Config qualified as Config
@@ -929,6 +930,14 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     let browserSpan n name attrs ua = ingestSpanReq tr $ mkSpanRequest ("e" <> T.justifyRight 31 '0' (show @Text n)) ("e" <> T.justifyRight 15 '0' (show @Text n)) Nothing name [] Nothing (mkAttr "session.id" ("dash-session-" <> show n) : attrs) (mkResource apiKey [mkAttr "service.name" "storefront", mkAttr "user_agent.original" ua]) frozenTime
     browserSpan (1 :: Int) "documentLoad" [mkAttr "url.full" "https://shop.example/cart"] "Mozilla/5.0 (X11; Linux x86_64) Chrome/151"
     browserSpan 2 "Pageview · /orders/123" [mkAttr "url.path" "/orders/123", mkAttr "exception.type" "TypeError"] "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148 Safari/604.1"
+    -- Fetch calls from the page: two to the app's API, one the OTLP exporter makes about itself.
+    let fetchSpan n method path status = ingestSpanReq tr $ withSpanKind PT.Span'SPAN_KIND_CLIENT $ mkSpanRequest ("f" <> T.justifyRight 31 '0' (show @Text n)) ("f" <> T.justifyRight 15 '0' (show @Text n)) Nothing method [] Nothing [mkAttr "http.request.method" method, mkAttr "url.path" path, mkAttr "server.address" "api.shop.example", mkAttr "http.response.status_code" status] (mkResource apiKey [mkAttr "service.name" "storefront", mkAttr "user_agent.original" "Mozilla/5.0 Chrome/151"]) frozenTime
+    fetchSpan (1 :: Int) "GET" "/api/orders/123" "200"
+    fetchSpan 2 "POST" "/api/cart" "500"
+    fetchSpan 3 "POST" "/v1/traces" "200"
+    -- Resource timing records API calls too; only files are static assets.
+    browserSpan 4 "resourceFetch" [mkAttr "url.full" "https://cdn.shop.example/app.js?v=3"] "Mozilla/5.0 (X11; Linux x86_64) Chrome/151"
+    browserSpan 5 "resourceFetch" [mkAttr "url.full" "https://shop.example/api/cart"] "Mozilla/5.0 (X11; Linux x86_64) Chrome/151"
     -- Three DELTA exports merge to [3,9,3,1,0] over 16 observations; the 12th lands on the
     -- 2500 edge of (1000, 2500], so P75 is exactly 2500 and rated Good from its bucket alone.
     let at = (`addUTCTime` frozenTime)
@@ -966,6 +975,9 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     vitalRow mixed "LCP" `shouldBe` Just ["LCP", "2344 ms", "rating;success-strong⇒Good", "0 – 2500", "20"]
     sort [name | row <- V.toList $ table results "Devices", Just name <- [row V.!? 0]] `shouldBe` ["Desktop", "Mobile"]
     sort (V.toList $ V.mapMaybe (V.!? 0) $ table results "Top pages") `shouldBe` ["/cart", "/orders/:id"]
+    V.toList (V.mapMaybe (V.!? 0) $ table results "Slowest static assets") `shouldBe` ["cdn.shop.example/app.js"]
+    -- Network: ids masked, failures counted, the exporter's own uploads left out.
+    sort [V.toList $ V.take 6 row | row <- V.toList $ table results "Endpoints"] `shouldBe` [["GET /api/orders/:id", "api.shop.example", "1", "100.0", "100.0", "0.0"], ["POST /api/cart", "api.shop.example", "1", "100.0", "100.0", "100.0"]]
     -- Each page row's hidden Explorer query finds the events it counted, and its link carries it with the dashboard's window.
     forM_ (table results "Top pages") \row -> do
       events <- call tr $ Log.logExplorerDataH projectId def{Log.query = row V.!? 3, Log.from = Just from, Log.to = Just to}
@@ -980,7 +992,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     ingestTrace tr apiKey "GET /backend-only" frozenTime
     sessions <- call tr $ Log.logExplorerDataH projectId def{Log.query = Just browserKql, Log.from = Just from, Log.to = Just to}
     viaSql <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTFloat) (Just projectId) Nothing (Just "SELECT count(*)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}}") Nothing (Just from) (Just to) Nothing Nothing []
-    (sessions.error, sessions.queryResultCount, viaSql.dataFloat) `shouldBe` (Nothing, 2, Just 2)
+    (sessions.error, sessions.queryResultCount, viaSql.dataFloat) `shouldBe` (Nothing, 7, Just 7)
 
     -- Audience: each session counts once, unknown agents are kept, cohorts filter.
     pid <- createTestProject tr "RUM audience"
