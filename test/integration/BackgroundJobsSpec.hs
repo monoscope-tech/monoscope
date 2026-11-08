@@ -13,7 +13,7 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64.URL qualified as B64URL
-import Data.Effectful.Notify (EmailData (..), Notification (..))
+import Data.Effectful.Notify (EmailData (..), Notification (..), SlackData (..))
 import Data.List (lookup)
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -292,15 +292,17 @@ spec = around withTestResources do
     let clearNotified = dbExec tr [sql|UPDATE apis.error_patterns SET last_notified_at = NULL WHERE project_id = ?|] (Only testPid)
         sweep = clearNotified >> fst <$> captureNotifs tr (BackgroundJobs.sweepErrorSubscriptions testPid)
         delivered = sort . map (\case EmailNotification e -> e.receiver; SlackNotification{} -> "slack"; n -> show n) <$> sweep
-        alerted = delivered `shouldReturn` ["hello@monoscope.tech", "slack", "test@monoscope.tech"]
+        -- The incident is already open, so Slack gets a thread reply and its root edit, in one run.
+        alerted = delivered `shouldReturn` ["hello@monoscope.tech", "slack", "slack", "test@monoscope.tech"]
     -- The orphan state seen in prod (last_notified_at NULL) is swept, and stamped so the next tick doesn't double-fire.
     alerted
     dbOne @_ @Int tr [sql|SELECT COUNT(*)::INT FROM apis.error_patterns WHERE project_id = ? AND last_notified_at IS NOT NULL|] (Only testPid) `shouldReturn` 1
     saveAlertToggle tr (\form v -> form{ProjectPages.errorAlerts = v}) False
     sweep `shouldReturn` []
     saveAlertToggle tr (\form v -> form{ProjectPages.errorAlerts = v}) True
-    -- Inside the incident that alert opened, a re-sweep is a reminder: Slack only, no new emails.
-    delivered `shouldReturn` ["slack"]
+    -- A re-sweep at the same instant is the same incident event, so nothing new is sent.
+    -- (A one-delivery-per-tick worker used to leak the first alert's root edit into this sweep.)
+    delivered `shouldReturn` []
 
     -- An acknowledgement silences the issue for exactly its window, then hands it back with a trail.
     issueId <- dbOne @_ @Issues.IssueId tr [sql|SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'runtime_exception'|] (Only testPid)
@@ -318,7 +320,8 @@ spec = around withTestResources do
     let later = addUTCTime 3660 frozenTime
     dbExec tr [sql|UPDATE apis.error_patterns SET created_at = now() - interval '3 days', subscribed = TRUE, notify_every_minutes = 30, last_notified_at = ? WHERE project_id = ?|] (addUTCTime (-3600) later, testPid)
     (subscribed, _) <- runTestBackgroundWithNotifications later tr.trLogger tr.trATCtx $ BackgroundJobs.runNotificationSweep later
-    length subscribed `shouldBe` 1
+    -- The reminder's thread reply and its root edit.
+    [sd.threadTs | SlackNotification sd <- subscribed] `shouldSatisfy` \ts -> length ts == 2 && length (filter isJust ts) == 1
 
     -- Unsubscribed reminders for a recurring error decay: daily in its first week, weekly after, never past 30 days.
     hash <- dbOne @_ @Text tr [sql|SELECT target_hash FROM apis.issues WHERE id = ?|] (Only issueId)

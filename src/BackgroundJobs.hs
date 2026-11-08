@@ -1852,7 +1852,8 @@ patternVolumes :: DB es => Projects.ProjectId -> [LogPatterns.LogPatternWithRate
 patternVolumes pid fired now
   | null fired = pure mempty
   | otherwise =
-      Map.fromListWith (flip (<>)) . map (\(field, hash, at, n) -> ((field, hash), [(at, n)]))
+      Map.fromListWith (flip (<>))
+        . map (\(field, hash, at, n) -> ((field, hash), [(at, n)]))
         <$> Hasql.interp @[(Text, Text, UTCTime, Int64)]
           [HI.sql|SELECT s.source_field, s.pattern_hash, s.hour_bucket, s.event_count FROM apis.log_pattern_hourly_stats s
             JOIN unnest(#{V.fromList $ map (.sourceField) fired}::text[], #{V.fromList $ map (.patternHash) fired}::text[]) AS p(field, hash)
