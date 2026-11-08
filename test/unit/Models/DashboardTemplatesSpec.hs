@@ -7,7 +7,7 @@ import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Pkg.Components.Widget qualified as Widget
-import Pkg.Parser (BinDensity (BarDensity), TemplateLang (..), browserKql, fillQueryTemplate, fixedUTCTime, parseQueryToAST, variablePresets)
+import Pkg.Parser (BinDensity (BarDensity), TemplateLang (..), browserKql, fillQueryTemplate, requestKql, fixedUTCTime, parseQueryToAST, variablePresets)
 import Relude
 import System.Directory (listDirectory)
 import Test.Hspec (Spec, describe, expectationFailure, it, runIO, shouldBe, shouldSatisfy)
@@ -19,7 +19,7 @@ templatesDir = "static/public/dashboards"
 
 -- | Replace {{placeholder}} spans with a literal so template queries parse standalone.
 stripPlaceholders :: Text -> Text
-stripPlaceholders t = case T.splitOn "{{" $ T.replace "{{browser_kql}}" browserKql $ T.replace "{{const-endpointFilter}}" "hashes[*] == \"x\"" t of
+stripPlaceholders t = case T.splitOn "{{" $ T.replace "{{browser_kql}}" browserKql $ T.replace "{{request_kql}}" requestKql $ T.replace "{{const-endpointFilter}}" "hashes[*] == \"x\"" t of
   (prefix : rest) -> prefix <> mconcat [(\(_, after) -> "x" <> T.drop 2 after) (T.breakOn "}}" seg) | seg <- rest]
   [] -> t
 
