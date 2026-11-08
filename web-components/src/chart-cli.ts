@@ -6,6 +6,8 @@
 import { createCanvas } from "@napi-rs/canvas";
 import * as echarts from "echarts";
 import { preparePngOptions, type PngProfile, type PngMode } from "./chart-png-options";
+import { geomapOptions, registerWorld } from "./geomap";
+import world from "../../static/public/assets/deps/world-110m.json";
 
 interface RenderInput {
   echarts: any;
@@ -75,9 +77,17 @@ async function main() {
   const canvas = createCanvas(Math.min(Math.max(width, 100), 2000), Math.min(Math.max(height, 100), 2000));
   const chart = echarts.init(canvas as any, darkMode ? "dark" : theme);
 
-  const finalOptions = mode === "table" ? options : convertFunctionStrings(options);
+  let finalOptions = mode === "table" ? options : convertFunctionStrings(options);
   finalOptions.animation = false;
   preparePngOptions(finalOptions, canvas.width, canvas.height, darkMode, profile, mode);
+  // The page's theme tokens, as hex: there is no stylesheet to read them from here.
+  if (finalOptions.series?.[0]?.type === "map") {
+    registerWorld(echarts, world);
+    const styles = darkMode
+      ? { brandColor: "#4f86f7", textColor: "#cbd5e1", tooltipBg: "#111827", tooltipBorderColor: "#2a2f3a" }
+      : { brandColor: "#0d64ff", textColor: "#334155", tooltipBg: "#ffffff", tooltipBorderColor: "#d3d6e4" };
+    finalOptions = { ...geomapOptions(echarts, finalOptions, finalOptions.dataset?.source ?? [], "", styles), tooltip: { show: false } };
+  }
 
   if (process.env.DEBUG_CHART) console.error("FINAL OPTIONS:", JSON.stringify(finalOptions, (_, value) => typeof value === "function" ? value.toString() : value, 2));
 

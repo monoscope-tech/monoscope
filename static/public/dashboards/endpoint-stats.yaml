@@ -185,6 +185,21 @@ tabs:
           ORDER BY SUM(req_count) DESC
           LIMIT 20
 
+      # Placed at ingest from each request's client address; requests behind a private proxy stay unplaced.
+      - type: geomap
+        title: 'Requests by country'
+        description: 'Where this endpoint is called from, located from the client IP address. Shades are log-scaled.'
+        query: &by_country |
+          {{const-endpointFilter}} AND attributes.geo.country.iso_code != null
+          | summarize count() by attributes.geo.country.iso_code
+        unit: reqs
+        layout: { w: 8, h: 5 }
+
+      - type: top_list
+        title: 'Top countries'
+        query: *by_country
+        layout: { w: 4, h: 5 }
+
       # Traces — the log explorer's own list, so rows expand into their span tree
       # and click through to the full detail panel.
       - type: logs

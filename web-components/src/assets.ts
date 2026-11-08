@@ -3,13 +3,14 @@ import { html, TemplateResult } from 'lit';
 // Content-hashed URLs for the static assets this bundle references, injected by
 // BodyWrapper (see `hashAssetFile`). Without them the browser would keep a
 // year-long cached copy of a sprite sheet that has since gained new symbols.
-type AssetUrls = { echarts: string; echartsTheme: string; spriteSolid: string; spriteRegular: string };
+type AssetUrls = { echarts: string; echartsTheme: string; spriteSolid: string; spriteRegular: string; worldMap: string };
 
 const urls = (): Partial<AssetUrls> => (window as any).assetUrls ?? {};
 
 export const echartsUrls = () => ({
   echarts: urls().echarts ?? '/public/assets/deps/echarts/echarts.min.js',
   theme: urls().echartsTheme ?? '/public/assets/roma-echarts.js',
+  worldMap: urls().worldMap ?? '/public/assets/deps/world-110m.json',
 });
 
 export const spriteUrl = (kind: string) =>

@@ -151,6 +151,15 @@ tabs:
             unit: endpoints
             layout: { w: 3, h: 2 }
 
+      - type: heatmap
+        title: 'Request latency distribution'
+        description: 'Every request in a log-scaled latency bucket over time, shaded by count, errors in red. Click a cell to open its requests in the Explorer.'
+        query: |
+          (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http") and duration > 0
+          | summarize count() by bin_auto(timestamp), log_bin(duration), iff(status_code == "ERROR", "error", "ok")
+        unit: ns
+        layout: { w: 12, h: 4 }
+
       # Services Table and Issues side by side
       - type: table
         title: Services Health
@@ -268,6 +277,21 @@ tabs:
           | order by timestamp desc
         unit: ns
         layout: { w: 6, h: 4 }
+
+      # Placed at ingest from each request's client address; requests behind a private proxy stay unplaced.
+      - type: geomap
+        title: 'Requests by country'
+        description: 'Where incoming requests come from, located from the client IP address. Shades are log-scaled.'
+        query: &by_country |
+          (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http") and attributes.geo.country.iso_code != null
+          | summarize count() by attributes.geo.country.iso_code
+        unit: reqs
+        layout: { w: 8, h: 5 }
+
+      - type: top_list
+        title: 'Top countries'
+        query: *by_country
+        layout: { w: 4, h: 5 }
 
       # Database Health - Click to navigate to Databases tab
       - type: table

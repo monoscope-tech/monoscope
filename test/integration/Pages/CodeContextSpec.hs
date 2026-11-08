@@ -226,7 +226,7 @@ wikiApp :: TestResources -> Wai.Application
 wikiApp tr =
   genericServeTWithContext
     (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-    (Routes.server (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
+    (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused"))
     (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
 
 

@@ -218,7 +218,7 @@ spec = do
       key <- createTestAPIKey tr pid "resource-key"
       otherKey <- createTestAPIKey tr other "header-key"
       let sendBoth header logs traces =
-            for_ [OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider header (encodeMessage logs), OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider header (encodeMessage traces)] \export ->
+            for_ [OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider header Nothing (encodeMessage logs), OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider header Nothing (encodeMessage traces)] \export ->
               export `shouldReturn` (Right "" :: Either Text ByteString)
           assertRows project service expected = do
             result <- queryLogs tr project (Just $ "resource.service.name == \"" <> service <> "\"")
@@ -245,7 +245,7 @@ spec = do
       assertRows other siblingService 0
       let dualService = "dual-auth-log"
           dualRequest = createOtelLogAtTime key ["Dual auth log"] frozenTime & LSF.resourceLogs . traverse . PLF.resource .~ mkResource key [mkAttr "service.name" dualService]
-      OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider (Just otherKey) (encodeMessage dualRequest) `shouldReturn` (Right "" :: Either Text ByteString)
+      OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider (Just otherKey) Nothing (encodeMessage dualRequest) `shouldReturn` (Right "" :: Either Text ByteString)
       assertRows pid dualService 1
       assertRows other dualService 0
 
@@ -457,6 +457,31 @@ spec = do
       find (\(n, _, _) -> n == "early-span") <$> sessionAndUser "cafebabe11223344cafebabe11223344" `shouldReturn` Just ("early-span", Nothing, Nothing)
       runTestBg base tr (BackgroundJobs.backfillSessionAttributes tr.trATCtx) `shouldReturn` 1
       find (\(n, _, _) -> n == "early-span") <$> sessionAndUser "cafebabe11223344cafebabe11223344" `shouldReturn` Just ("early-span", Just "sess-backfill", Just "usr-backfill")
+
+    it "geoIngest_placesEveryRecordNotOnlyErrors: client.address, a browser's sender via collector or /v1/traces, SDK geo kept, a server's sender ignored" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "geo"
+      let export name attrs resource = do
+            trId <- show <$> UUIDV4.nextRandom
+            spanId' <- show <$> UUIDV4.nextRandom
+            ingestSpanReq tr $ mkSpanRequest trId spanId' Nothing name [] Nothing attrs (mkResource apiKey resource) frozenTime
+          sender = mkAttr "monoscope.sender_ip" "89.160.20.112"
+      export "geo-server" [mkAttr "client.address" "81.2.69.142:4711"] []
+      export "geo-browser" [] [mkAttr "telemetry.sdk.language" "webjs", sender]
+      export "geo-sdk" [mkAttr "client.address" "81.2.69.142", mkAttr "geo.country.iso_code" "NG"] []
+      export "geo-proxied" [] [mkAttr "telemetry.sdk.language" "nodejs", sender]
+      -- A browser exporting straight to /v1/traces is placed by the address it connected from.
+      let direct = mkSpanRequest "c0ffee00c0ffee00c0ffee00c0ffee00" "c0ffee00c0ffee01" Nothing "geo-direct" [] Nothing [] (mkResource apiKey [mkAttr "user_agent.original" "Mozilla/5.0"]) frozenTime
+      OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider Nothing (Just "81.2.69.142") (encodeMessage direct) `shouldReturn` (Right "" :: Either Text ByteString)
+      dbQuery tr [sql| SELECT name, attributes #>> '{client,address}', attributes #>> '{geo,country,iso_code}', attributes #>> '{geo,locality,name}', resource -> 'monoscope' IS NOT NULL
+                       FROM otel_logs_and_spans WHERE project_id = ? AND name LIKE 'geo-%' ORDER BY name |] (Only testPid)
+        `shouldReturn` ( [ ("geo-browser", Just "89.160.20.112", Just "SE", Just "Linköping", False)
+                         , ("geo-direct", Just "81.2.69.142", Just "GB", Just "London", False)
+                         , ("geo-proxied", Nothing, Nothing, Nothing, False)
+                         , ("geo-sdk", Just "81.2.69.142", Just "NG", Nothing, False)
+                         , ("geo-server", Just "81.2.69.142:4711", Just "GB", Just "London", False)
+                         ]
+                           :: [(Text, Maybe Text, Maybe Text, Maybe Text, Bool)]
+                       )
 
     it "standard OTel spans: SDK conventions normalised, methods recovered, endpoints keyed without hosts, routes shared across a batch, one row per export" \tr -> do
       apiKey <- createTestAPIKey tr testPid "std-otel"

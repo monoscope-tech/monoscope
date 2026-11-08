@@ -1493,6 +1493,7 @@ renderChart actions widget = do
           , "dashboardId" AE..= widget._dashboardId
           ]
       isStat = isStatWidget widget
+      isMap = widget.wType == WTGeomap
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
     unless (or widget.naked || isStat)
       $ renderWidgetHeader actions widget valueM rateM widget.expandBtnFn Nothing
@@ -1562,14 +1563,18 @@ renderChart actions widget = do
             unless isStat
               $ div_
                 [ id_ $ chartId <> "_empty"
-                , class_ "chart-no-data hidden absolute inset-3 z-10 flex items-center justify-center bg-bgRaised px-4 text-center"
+                , -- An empty geomap is still a map: say so beneath it rather than covering it.
+                  class_ $ bool "chart-no-data hidden absolute inset-3 z-10 flex items-center justify-center bg-bgRaised px-4 text-center" "chart-no-data hidden absolute inset-x-3 bottom-3 z-10 flex justify-center px-4 text-center pointer-events-none" isMap
                 , role_ "status"
                 , Aria.live_ "polite"
                 , Aria.atomic_ "true"
                 ]
               $ div_ [class_ "max-w-sm"] do
                 -- An error chart with no rows is good news, not missing data.
-                let (headline, hint) = bool ("No data in this time range", "Try a wider time range or adjust the filters.") ("No errors in this time range", "Nothing failed in this window.") (widget.seriesIntent == Just "error")
+                let (headline, hint)
+                      | isMap = ("Nothing located in this time range", "Locations come from client IP addresses; traffic behind a private proxy can't be placed.")
+                      | widget.seriesIntent == Just "error" = ("No errors in this time range", "Nothing failed in this window.")
+                      | otherwise = ("No data in this time range", "Try a wider time range or adjust the filters.")
                 strong_ [class_ "text-sm font-semibold text-textStrong"] headline
                 p_ [class_ "mt-1 text-xs leading-5 text-textWeak"] hint
 
@@ -1618,7 +1623,7 @@ unitValueExprJS unitWord unitM
 
 -- | Widgets that plot groups against each other rather than against time.
 categoricalWidget :: WidgetType -> Bool
-categoricalWidget = (`elem` [WTDistribution, WTPieChart, WTTopList, WTTreeMap, WTFunnel])
+categoricalWidget = (`elem` [WTDistribution, WTPieChart, WTTopList, WTTreeMap, WTFunnel, WTGeomap])
 
 
 -- Function to convert Widget to ECharts options
@@ -1841,11 +1846,14 @@ createSeries widgetType colIdx name =
 -- "heatmap"
 -- >>> mapWidgetTypeToChartType WTServiceMap
 -- "graph"
+-- >>> mapWidgetTypeToChartType WTGeomap
+-- "map"
 mapWidgetTypeToChartType :: WidgetType -> Text
 mapWidgetTypeToChartType WTTimeseriesLine = "line"
 mapWidgetTypeToChartType WTTimeseriesStat = "line"
 mapWidgetTypeToChartType WTServiceMap = "graph" -- ECharts force-directed graph
 mapWidgetTypeToChartType WTHeatmap = "heatmap" -- ECharts heatmap
+mapWidgetTypeToChartType WTGeomap = "map" -- ECharts choropleth over static/public/assets/deps/world-110m.json
 mapWidgetTypeToChartType _ = "bar"
 
 

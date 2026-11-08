@@ -504,7 +504,7 @@ spec = around withTestResources do
           [("capped-ack", encodeMessage $ logs key), ("unknown-ack", encodeMessage $ logs "no-such-key"), ("mixed-ack", encodeMessage mixed), ("empty-ack", encodeMessage $ createOtelLogAtTime uncappedKey [] frozenTime)]
           (HM.singleton "ce-type" "org.opentelemetry.otlp.logs.v1")
     (acks, map (^. _1) poison) `shouldBe` (["capped-ack"], ["unknown-ack", "mixed-ack", "empty-ack"])
-    Right body <- OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider (Just key) (encodeMessage $ createOtelLogAtTime key ["rejected"] frozenTime)
+    Right body <- OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider (Just key) Nothing (encodeMessage $ createOtelLogAtTime key ["rejected"] frozenTime)
     Right (res :: LS.ExportLogsServiceResponse) <- pure $ decodeMessage body
     (res ^. LSF.partialSuccess . LSF.rejectedLogRecords, "00:00 UTC" `T.isInfixOf` (res ^. LSF.partialSuccess . LSF.errorMessage)) `shouldBe` (1, True)
     logCount tr pid `shouldReturn` 5

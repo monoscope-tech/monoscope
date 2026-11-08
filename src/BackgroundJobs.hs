@@ -2256,10 +2256,8 @@ notifyIssue issue project users cooldownHours digestReason alert alertUrl subj h
 -- | Process and insert errors for a specific project (single batched round-trip via unnest).
 -- Creates issues synchronously for new/regressed errors. Reopens existing issues on regression.
 processProjectErrors :: Projects.ProjectId -> V.Vector ErrorPatterns.ATError -> UTCTime -> ATBackgroundCtx ()
-processProjectErrors pid rawErrors now = do
+processProjectErrors pid errors now = do
   authCtx <- ask @Config.AuthContext
-  -- GeoIP only fills errors the SDK did not already place with geo.*.
-  let errors = maybe id (V.map . ErrorPatterns.enrichGeo) authCtx.geoDb rawErrors
   tryAny (ErrorPatterns.batchUpsertErrorPatterns pid errors now) >>= \case
     Left e ->
       Log.logAttention "ERR_BATCH_UPSERT_FAILED"

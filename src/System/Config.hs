@@ -189,8 +189,8 @@ data EnvConfig = EnvConfig
   -- OOM-killed it before, so it gets a staged rollout rather than shipping on.
   , enableTimefusionWrites :: Bool
   , geoipDbPath :: Text
-  -- ^ A MaxMind-format @.mmdb@ (DB-IP City Lite in prod, IPinfo, MaxMind GeoLite2) used to place errors'
-  -- @client.address@ when the SDK sent no @geo.*@. Empty disables the lookup.
+  -- ^ A MaxMind-format @.mmdb@ (DB-IP City Lite in prod, IPinfo, MaxMind GeoLite2) used to place every
+  -- ingested span and log by its @client.address@ when the SDK sent no @geo.*@. Empty disables the lookup.
   , enablePostgresTelemetryWrites :: Bool
   -- ^ Dual-write to the legacy Postgres @otel_logs_and_spans@ store. Defaults
   -- to True; set ENABLE_POSTGRES_TELEMETRY_WRITES=False once TimeFusion is the source of

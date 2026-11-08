@@ -164,6 +164,7 @@ import Data.Effectful.UUID (UUIDEff, runStaticUUID, runStaticUUIDRef, runUUID)
 import Data.Effectful.Wreq (HTTP (..), runHTTPGolden, runHTTPRecord, runHTTPWreq)
 import Data.Either.Extra
 import Data.Generics.Product.Fields (field)
+import Data.GeoIP2 qualified as GeoIP2
 import Data.HashMap.Strict qualified as HM
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, setNumStripes, withResource)
 import Data.ProtoLens (defMessage)
@@ -973,6 +974,8 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   let liveTail = LiveTail.Runtime{transport = LiveTail.PostgresRelay, cache = liveTailCache, hub = liveTailHub, relayBuffer = liveTailBuffer, emit = LiveTail.deliver liveTailHub}
 
   s3HttpManager <- HC.newManager HCTLS.tlsManagerSettings
+  -- MaxMind's published test database: 81.2.69.142 is London, 89.160.20.112 Linköping.
+  geoDb <- GeoIP2.openGeoDB "test/fixtures/GeoIP2-City-Test.mmdb"
   let atAuthCtx =
         AuthContext
           envConfig
@@ -1038,7 +1041,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
               }
           )
           Nothing -- backgroundScope: no app-lifetime ki scope in tests; forkBackground falls back to an untracked fork
-          Nothing -- geoDb: no GeoIP database in tests; geo comes from geo.* attributes only
+          (Just geoDb)
   uuidRef <- newIORef (map (UUID.fromWords 0 0 0) [1 .. 100000])
   testClock <- newTestClock frozenTime
   -- Release the three hasql pools when the example finishes. Under `around`

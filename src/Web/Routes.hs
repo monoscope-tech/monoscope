@@ -9,6 +9,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as Wreq
+import Data.IP qualified as IP
 import Data.List qualified as L
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (OpenApi)
@@ -134,13 +135,14 @@ instance MimeRender OTLPProto BS.ByteString where
 -- | OTLP/HTTP export action, injected from System.Server. Kept abstract here:
 -- importing Opentelemetry.OtlpServer would drag proto-lens's orphan IsLabel
 -- instances into scope and break the generic-lens #labels used by widget code.
-type OtlpHttpHandler = Maybe Text -> BS.ByteString -> IO (Either Text BS.ByteString)
+-- Its second argument is the sender's address: a browser exporting directly is the visitor.
+type OtlpHttpHandler = Maybe Text -> Maybe Text -> BS.ByteString -> IO (Either Text BS.ByteString)
 
 
 -- | Run an OTLP/HTTP export handler; protobuf decode failures surface as 400.
-otlpHttpH :: OtlpHttpHandler -> Maybe Text -> BS.ByteString -> ATBaseCtx BS.ByteString
-otlpHttpH export keyM body =
-  liftIO (export keyM body) >>= either (\e -> Error.throwError err400{errBody = fromStrict (encodeUtf8 e)}) pure
+otlpHttpH :: OtlpHttpHandler -> Maybe Text -> Maybe Text -> BS.ByteString -> ATBaseCtx BS.ByteString
+otlpHttpH export keyM sender body =
+  liftIO (export keyM sender body) >>= either (\e -> Error.throwError err400{errBody = fromStrict (encodeUtf8 e)}) pure
 
 
 instance Servant.MimeRender JSON ByteString where
@@ -159,8 +161,8 @@ data Routes mode = Routes
   , setLanguage :: mode :- "set_language" :> Capture "lang" Text :> QPT "redirect_to" :> SessionRedirect NoContent
   , authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> QPT "redirect_to" :> Header "Cookie" ByteString :> Header "User-Agent" ByteString :> Header "CF-IPCountry" ByteString :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] (Html ()))
   , -- OTLP/HTTP ingestion (protobuf) — collector-less SDK exporters
-    otlpTracesPost :: mode :- "v1" :> "traces" :> Header "x-api-key" Text :> ReqBody '[OTLPProto] BS.ByteString :> Post '[OTLPProto] BS.ByteString
-  , otlpLogsPost :: mode :- "v1" :> "logs" :> Header "x-api-key" Text :> ReqBody '[OTLPProto] BS.ByteString :> Post '[OTLPProto] BS.ByteString
+    otlpTracesPost :: mode :- "v1" :> "traces" :> Header "x-api-key" Text :> Header "X-Real-IP" Text :> RemoteHost :> ReqBody '[OTLPProto] BS.ByteString :> Post '[OTLPProto] BS.ByteString
+  , otlpLogsPost :: mode :- "v1" :> "logs" :> Header "x-api-key" Text :> Header "X-Real-IP" Text :> RemoteHost :> ReqBody '[OTLPProto] BS.ByteString :> Post '[OTLPProto] BS.ByteString
   , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] Share.ShareLinkGet
   , shareReplaySessionGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] Replay.ReplaySessionResp
   , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> LocationRedirect BotUtils.BotResponse
@@ -210,6 +212,8 @@ data Routes mode = Routes
 server :: OtlpHttpHandler -> OtlpHttpHandler -> Routes (AsServerT ATBaseCtx)
 server otlpTraces otlpLogs =
   let projectTools = Just mcpProjectTools
+      -- The proxy's X-Real-IP (nginx overwrites whatever a client sent), else the connecting socket.
+      sender realIp peer = realIp <|> show . fst <$> IP.fromSockAddr peer
    in Routes
         { public = Servant.serveDirectoryWebApp "./static/public"
         , ping = pure "pong"
@@ -219,8 +223,8 @@ server otlpTraces otlpLogs =
         , logout = Auth.logoutH
         , setLanguage = Auth.setLanguageH
         , authCallback = Auth.authCallbackH
-        , otlpTracesPost = otlpHttpH otlpTraces
-        , otlpLogsPost = otlpHttpH otlpLogs
+        , otlpTracesPost = \key realIp -> otlpHttpH otlpTraces key . sender realIp
+        , otlpLogsPost = \key realIp -> otlpHttpH otlpLogs key . sender realIp
         , shareLinkGet = Share.shareLinkGetH
         , shareReplaySessionGet = Share.shareReplaySessionGetH
         , discordLinkProjectGet = Discord.linkDiscordGetH

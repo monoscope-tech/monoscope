@@ -166,6 +166,21 @@ tabs:
         unit: ns
         layout: { w: 12, h: 4 }
 
+      # Ingest places a browser by the address it sent from (OtlpServer.placeRecords); unplaced views are left out.
+      - type: geomap
+        title: Page views by country
+        description: Where real users load pages from, located from their IP address. Shades are log-scaled.
+        query: &by_country |
+          {{browser_kql}} and (name == "documentLoad" or name startswith "Pageview ") and attributes.geo.country.iso_code != null and ("{{var-app}}" == "" or resource.service.name == "{{var-app}}")
+          | summarize count() by attributes.geo.country.iso_code
+        unit: views
+        layout: { w: 8, h: 5 }
+
+      - type: top_list
+        title: Top countries
+        query: *by_country
+        layout: { w: 4, h: 5 }
+
       - type: table
         title: Recent sessions
         description: Open a session to see its events and, when recorded, its replay.

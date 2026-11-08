@@ -51,6 +51,20 @@ processors:
       - key: x-api-key
         from_attribute: x-api-key
         action: upsert
+  # The sender's address. A browser SDK's sender is the visitor, so ingest adopts it as client.address
+  # for browser resources and drops it from every other (OtlpServer.placeRecords). Only X-Real-IP:
+  # CapRover's nginx overwrites it with the connecting address, while X-Forwarded-For and
+  # CF-Connecting-IP (no Cloudflare in front) pass through whatever a browser sends.
+  # Logs and traces only: on a metric resource it would split every series by sender.
+  resource/sender:
+    attributes:
+      - key: monoscope.sender_ip
+        from_context: metadata.x-real-ip
+        action: insert
+      # No proxy in front (self-hosted): the connecting peer is the sender.
+      - key: monoscope.sender_ip
+        from_context: client.address
+        action: insert
   # Translate every incoming signal to the latest OTel semantic conventions
   # schema, regardless of the version the customer SDK emitted. This keeps
   # downstream queries / dashboards stable as the spec evolves.
@@ -200,7 +214,7 @@ service:
   pipelines:
     logs:
       receivers: [otlp]
-      processors: [attributes, resource, schema, transform/tier1, memory_limiter, batch]
+      processors: [attributes, resource, resource/sender, schema, transform/tier1, memory_limiter, batch]
       exporters: [kafka]
     metrics:
       receivers: [otlp]
@@ -208,5 +222,5 @@ service:
       exporters: [kafka]
     traces:
       receivers: [otlp]
-      processors: [attributes, resource, schema, memory_limiter, batch]
+      processors: [attributes, resource, resource/sender, schema, memory_limiter, batch]
       exporters: [kafka]

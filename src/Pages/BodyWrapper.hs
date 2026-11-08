@@ -395,10 +395,11 @@ bodyWrapper bcfg child = do
           echartsThemeURL = assetUrl "/public/assets/roma-echarts.js" :: Text
           spriteSolidURL = assetUrl "/public/assets/svgs/fa-sprites/solid.svg" :: Text
           spriteRegularURL = assetUrl "/public/assets/svgs/fa-sprites/regular.svg" :: Text
+          worldMapURL = assetUrl "/public/assets/deps/world-110m.json" :: Text
       script_
         [text|window.assetUrls = {
           echarts: "${echartsURL}", echartsTheme: "${echartsThemeURL}",
-          spriteSolid: "${spriteSolidURL}", spriteRegular: "${spriteRegularURL}"
+          spriteSolid: "${spriteSolidURL}", spriteRegular: "${spriteRegularURL}", worldMap: "${worldMapURL}"
         };|]
 
       script_ [type_ "module", src_ $(viteAssetFile "index.html")] ("" :: Text)

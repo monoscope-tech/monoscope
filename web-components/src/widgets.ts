@@ -6,6 +6,7 @@ import { echartsUrls } from './assets';
 import { copyParams } from './time-range-utils';
 import debounce from 'lodash/debounce';
 import { legendLayout } from './chart-legend';
+import { geomapOptions, registerWorld } from './geomap';
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
 
@@ -441,6 +442,15 @@ export const heatmapOptions = (opt: any, source: ChartRow[], unit: string, style
   };
 };
 
+// Country shapes, fetched only once a geomap is on the page. A failed fetch is forgotten so the next
+// render retries it.
+let worldMapLoad: Promise<void> | null = null;
+const ensureWorldMap = () =>
+  (worldMapLoad ??= fetch(echartsUrls().worldMap)
+    .then((r) => r.json())
+    .then((geo) => registerWorld(window.echarts, geo))
+    .catch((e) => { worldMapLoad = null; throw e; }));
+
 // A clicked heatmap cell as the events behind it: its time bin and value bucket, and only the errors when
 // the cell is red. The Explorer narrows its own query and range; elsewhere the Explorer opens on them.
 export const heatmapCellQuery = (query: string, errors: boolean, [, , , , , from, to, low, high]: number[]) => {
@@ -570,6 +580,7 @@ export const updateChartConfiguration = (widgetData: WidGetData, opt: any, data:
   if (!data) return opt;
 
   if (widgetData.chartType === 'heatmap') return heatmapOptions(opt, data, widgetData.unit || 'ns', getChartStyles());
+  if (widgetData.chartType === 'map') return geomapOptions(window.echarts, opt, data, widgetData.unit ?? '', getChartStyles());
   const source = collapseLongTail(data, widgetData.summarizeBy && widgetData.summarizeBy !== 'sum' ? (vs) => Math.max(...vs) : undefined);
   opt.dataset = { ...opt.dataset, source };
   // Counts must not get fractional ticks (0.2, 0.6) when the peak is small.
@@ -1225,6 +1236,7 @@ export const chartWidget = (widgetData: WidGetData) => {
   }
   // A re-rendered widget whose chart element survived (morph swap) keeps its instance,
   // listeners and observers; only the option changes. A replaced element has no instance.
+  if (chartType === 'map' && !window.echarts.getMap('world')) return void ensureWorldMap().then(() => chartWidget(widgetData), (e) => console.error('world map failed to load', e));
   const existingChart = window.echarts.getInstanceByDom(chartEl);
   const update = chartUpdaters.get(chartId);
   if (existingChart && !existingChart.isDisposed() && update) return update(widgetData);
@@ -1240,9 +1252,10 @@ export const chartWidget = (widgetData: WidGetData) => {
   const theme = isDarkMode ? 'dark' : widgetData.theme || 'default';
   const chart = window.echarts.init(chartEl, theme);
   chart.group = 'default';
-  // A heatmap's drawn option is built from the data, not the server shell: a resize rebuilds it whole.
+  // A heatmap's or map's drawn option is built from the data, not the server shell: a resize rebuilds it whole.
+  const builtFromData = ['heatmap', 'map'].includes(chartType);
   chartLayoutUpdaters.set(chartId, () =>
-    widgetData.chartType === 'heatmap'
+    builtFromData
       ? drawSized(chart, chartEl, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, true)
       : drawSized(chart, chartEl, opt, widgetData.unit, false, true));
   // Shift-click isolates a series; shift-clicking the isolated one brings every series back.
@@ -1308,8 +1321,8 @@ export const chartWidget = (widgetData: WidGetData) => {
     if (opt.series?.[0]?.backgroundStyle) {
       opt.series[0].backgroundStyle = { color: styles.chartBg };
     }
-    // A heatmap replaces both axes, which a merge would keep from the server's time-series shell.
-    drawSized(chart, chartEl, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, notMerge || widgetData.chartType === 'heatmap');
+    // A heatmap or map replaces both axes, which a merge would keep from the server's time-series shell.
+    drawSized(chart, chartEl, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, notMerge || builtFromData);
     drawnResponse.delete(chart);
     chartRefreshState.set(chart, { url: chartDataUrl(widgetData), hasData: (opt.dataset.source?.length ?? 0) > 1, failures: 0, retryAt: 0 });
     applyHighlightBand(chart, widgetData);
@@ -1385,7 +1398,7 @@ export const chartWidget = (widgetData: WidGetData) => {
         if (s.type === 'line') s.lineStyle = { ...s.lineStyle, color };
       }
     });
-    if (widgetData.chartType === 'heatmap') drawSized(chart, chartEl, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, true);
+    if (builtFromData) drawSized(chart, chartEl, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, true);
     else drawSized(chart, chartEl, opt, widgetData.unit);
   };
   themeCallbacks.add(onThemeChange);

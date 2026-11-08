@@ -19,6 +19,8 @@ module Opentelemetry.OtlpServer (
   parseConnectionString,
   migrateElasticsearchPathParts,
   deriveClientAddress,
+  placeRecords,
+  geoFields,
   nanosecondsToUTC,
 ) where
 
@@ -26,6 +28,7 @@ import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens (ASetter', lengthOf)
 import Data.Aeson qualified as AE
+import Data.Aeson.Extra (lodashMerge)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Annotation (toAnnotation)
@@ -37,8 +40,10 @@ import Data.Char (isDigit)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Sleep (Sleep)
 import Data.Fixed (Fixed (MkFixed))
+import Data.GeoIP2 qualified as GeoIP2
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
+import Data.IP (IP)
 import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.ProtoLens.Encoding (decodeMessage, encodeMessage)
@@ -74,7 +79,7 @@ import Network.GRPC.Server.Run hiding (runServer)
 import Network.GRPC.Server.StreamType (Methods (..), fromMethods)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
-import Pkg.DeriveUtils (AesonText (..), unUUIDId)
+import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe, unUUIDId)
 import Pkg.LiveTail qualified as LiveTail
 import Pkg.Metrics (wireTypeErrorsRef)
 import Pkg.Metrics qualified as Metrics
@@ -269,7 +274,8 @@ ingestOtelRecords appCtx target caches records = do
   -- Mint before route normalization: records without a span ID hash their raw attributes,
   -- so retry IDs stay independent of the current endpoint-template cache.
   -- Sample before hashing: hashes for rows sampling drops are wasted work.
-  minted <- stampHashesAtIngest caches <$> sampleSpans caches (Telemetry.mintOtelLogIds stamped)
+  -- Placed after minting: a refreshed GeoIP database must not change a replayed record's id.
+  minted <- placeRecords appCtx.geoDb . stampHashesAtIngest caches <$> sampleSpans caches (Telemetry.mintOtelLogIds stamped)
   -- Live Tail, before the durable write: the whole point is that a browser sees the log
   -- sooner than a query could return it. Runs after minting so the streamed row carries the
   -- same id the stored row will, and so "open the full record" resolves once the write lands.
@@ -862,6 +868,63 @@ deriveClientAddress kvMap
                 | otherwise = unquoted
            in T.strip stripped
         [] -> ""
+
+
+-- | Place each record by its client's address (OTel @geo.*@) unless its SDK already did. A browser's
+-- client is the sender itself, which the collector (@static/public/otelcol.yaml@) and the OTLP/HTTP
+-- routes record on the resource as @monoscope.sender_ip@; it becomes the browser's @client.address@.
+-- Any other sender is a server, so for it the attribute is only dropped. One lookup per distinct address.
+placeRecords :: Maybe GeoIP2.GeoDB -> V.Vector OtelLogsAndSpans -> V.Vector OtelLogsAndSpans
+placeRecords geoM recs = place <$> adopted
+  where
+    adopted = adoptSender <$> recs
+    attrsOf r = unAesonTextMaybe r.attributes
+    merge k v r = r{attributes = Just $ AesonText $ Map.insertWith lodashMerge k v $ maybeToMonoid (attrsOf r)}
+    clientIp r = Telemetry.atMapText "client.address" (attrsOf r)
+    places = HM.fromList [(ip, g) | db <- toList geoM, ip <- ordNub (mapMaybe clientIp (V.toList adopted)), Just g <- [lookupGeo db ip]]
+    place r = case (`HM.lookup` places) =<< clientIp r of
+      Just g | isNothing (Telemetry.atMapText "geo.country.iso_code" (attrsOf r)) -> merge "geo" g r
+      _ -> r
+    lookupGeo db ip = do
+      -- "203.0.113.9:4711" is an address too; IPv6 parses on the first attempt.
+      addr <- readMaybe @IP (toString ip) <|> readMaybe (toString $ fst $ T.breakOn ":" ip)
+      fields <- geoFields <$> rightToMaybe (GeoIP2.rawGeoData db addr)
+      nestedJsonFromDotNotation (second AE.String <$> fields) <$ L.lookup "country.iso_code" fields
+    adoptSender r = case unAesonTextMaybe r.resource of
+      Just res | Just ip <- Telemetry.atMapText "monoscope.sender_ip" (Just res) ->
+        let browser = Telemetry.atMapText "telemetry.sdk.language" (Just res) `elem` map Just ["webjs", "javascript", "js"] || isJust (Telemetry.atMapText "user_agent.original" (Just res))
+            dropSender = \case AE.Object (KEM.delete "sender_ip" -> o) -> AE.Object o <$ guard (not $ KEM.null o); v -> Just v
+         in (if browser then merge "client" (AE.object ["address" AE..= ip]) else Relude.id) r{resource = Just $ AesonText $ Map.update dropSender "monoscope" res}
+      _ -> r
+
+
+-- | The @geo.*@ fields (without the @geo.@ prefix) one MaxMind-format record holds. MaxMind databases nest
+-- (@country.iso_code@, @subdivisions[0].iso_code@, @city.names.en@; DB-IP names the subdivision without an
+-- iso_code); IPinfo's are flat (@country_code@, @region@ as a name, @city@).
+--
+-- >>> import Data.GeoIP2 qualified as GeoIP2
+-- >>> import Data.Map qualified as Map
+-- >>> import "monoscope" Opentelemetry.OtlpServer qualified as OS
+-- >>> let m = GeoIP2.DataMap . Map.fromList . map (\(k, v) -> (GeoIP2.DataString k, v)); s = GeoIP2.DataString
+-- >>> OS.geoFields (m [("country", m [("iso_code", s "US")]), ("city", m [("names", m [("en", s "Santa Clara")])]), ("subdivisions", GeoIP2.DataArray [m [("iso_code", s "CA")]])])
+-- [("country.iso_code","US"),("region.iso_code","CA"),("locality.name","Santa Clara")]
+-- >>> OS.geoFields (m [("country", m [("iso_code", s "US")]), ("subdivisions", GeoIP2.DataArray [m [("names", m [("en", s "California")])]])])
+-- [("country.iso_code","US"),("region.name","California")]
+-- >>> OS.geoFields (m [("country_code", s "NG"), ("region", s "Lagos"), ("city", s "Ikeja")])
+-- [("country.iso_code","NG"),("region.name","Lagos"),("locality.name","Ikeja")]
+-- >>> OS.geoFields (m [("asn", s "AS1")])
+-- []
+geoFields :: GeoIP2.GeoField -> [(Text, Text)]
+geoFields f =
+  [ (k, v)
+  | (k, paths) <- [("country.iso_code", [["country", "iso_code"], ["country_code"]]), ("region.iso_code", [["subdivisions", "iso_code"]]), ("region.name", [["subdivisions", "names", "en"], ["region"]]), ("locality.name", [["city", "names", "en"], ["city"]])]
+  , Just v <- [asum (map (`walk` f) paths)]
+  ]
+  where
+    walk [] (GeoIP2.DataString t) = Just t
+    walk (k : ks) (GeoIP2.DataMap m) = walk ks =<< Map.lookup (GeoIP2.DataString k) m
+    walk ks (GeoIP2.DataArray (x : _)) = walk ks x
+    walk _ _ = Nothing
 
 
 -- | Record a protobuf decode error, categorizing wire type, UTF-8, and EOF errors
@@ -1478,15 +1541,18 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
 -- as the gRPC handlers, for SDK exporters that speak http/protobuf
 -- (hs-opentelemetry's does) and self-hosted setups without a collector in
 -- front. The x-api-key HTTP header plays the role of gRPC metadata auth.
-httpTracesExport, httpLogsExport :: Logger -> AuthContext -> TracerProvider -> Maybe Text -> BS.ByteString -> IO (Either Text BS.ByteString)
-httpTracesExport = httpExport "ExportTraceServiceRequest" rejectTraces processTraceRequest
-httpLogsExport = httpExport "ExportLogsServiceRequest" rejectLogs processLogsRequest
+httpTracesExport, httpLogsExport :: Logger -> AuthContext -> TracerProvider -> Maybe Text -> Maybe Text -> BS.ByteString -> IO (Either Text BS.ByteString)
+httpTracesExport = httpExport "ExportTraceServiceRequest" rejectTraces processTraceRequest (TSF.resourceSpans . traverse . PTF.resource . PRF.attributes)
+httpLogsExport = httpExport "ExportLogsServiceRequest" rejectLogs processLogsRequest (LSF.resourceLogs . traverse . PLF.resource . PRF.attributes)
 
 
-httpExport :: (Message req, Message res) => Text -> (req -> res) -> (Maybe Text -> req -> ATBackgroundCtx ()) -> Logger -> AuthContext -> TracerProvider -> Maybe Text -> BS.ByteString -> IO (Either Text BS.ByteString)
-httpExport reqName reject process appLogger appCtx tp keyM body = case decodeMessage body of
+-- | The sender is recorded on every resource as the collector records it ('placeRecords').
+httpExport :: (Message req, Message res) => Text -> (req -> res) -> (Maybe Text -> req -> ATBackgroundCtx ()) -> ASetter' req [PC.KeyValue] -> Logger -> AuthContext -> TracerProvider -> Maybe Text -> Maybe Text -> BS.ByteString -> IO (Either Text BS.ByteString)
+httpExport reqName reject process resourceAttrs appLogger appCtx tp keyM sender body = case decodeMessage body of
   Left err -> pure $ Left ("invalid " <> reqName <> " protobuf: " <> toText err)
-  Right req -> Right . encodeMessage <$> withFreeTierGate appCtx keyM reject req (defMessage <$ runBackground appLogger appCtx tp (process keyM req))
+  Right req' ->
+    let req = req' & resourceAttrs %~ (<> [defMessage & PCF.key .~ "monoscope.sender_ip" & PCF.value . PCF.stringValue .~ ip | Just ip <- [sender]])
+     in Right . encodeMessage <$> withFreeTierGate appCtx keyM reject req (defMessage <$ runBackground appLogger appCtx tp (process keyM req))
 
 
 -- | Shared body of the metadata-less Export handlers below: dispatch the signal's
