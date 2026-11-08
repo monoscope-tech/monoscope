@@ -435,7 +435,7 @@ export const heatmapOptions = (opt: any, source: ChartRow[], unit: string, style
       ...opt.tooltip,
       trigger: 'item',
       formatter: ({ value: [x, y, n, e] }: { value: number[] }) =>
-        `${time(times[x], true)}<br/>${label(buckets[y])}${buckets[y + 1] ? ` – ${label(buckets[y + 1])}` : '+'}: <b>${formatNumber(n)}</b>${e ? `, <b>${formatNumber(e)} errors</b>` : ''}<br/><span style="opacity:.7">Click to see these ${e ? 'errors' : 'requests'}</span>`,
+        `${time(times[x], true)}<br/>${label(buckets[y])}${buckets[y + 1] ? ` – ${label(buckets[y + 1])}` : '+'}: <b>${formatNumber(n)}</b>${e ? `, <b>${formatNumber(e)} error${e === 1 ? '' : 's'}</b>` : ''}<br/><span style="opacity:.7">Click to see ${e ? 'all or only the errors' : 'these requests'}</span>`,
     },
     series: layers.map((l) => l.series),
   };
@@ -1249,15 +1249,33 @@ export const chartWidget = (widgetData: WidGetData) => {
   let shiftClick = false;
   chartEl?.addEventListener('pointerdown', (e) => (shiftClick = e.shiftKey), { capture: true, signal: controller.signal });
   if (widgetData.chartType === 'heatmap')
-    chart.on('click', ({ seriesName, value }: { seriesName: string; value: number[] }) => {
-      const { filter, from, to } = heatmapCellQuery(widgetData.query ?? '', seriesName === 'Errors', value);
-      const editor = document.getElementById('filterElement') as any;
-      if (!editor?.handleAddQuery) {
-        // A dashboard query still carries its variables; the page URL holds their values.
-        const vars = new URLSearchParams(window.location.search);
-        const events = (widgetData.query ?? '').split('|')[0].trim().replace(/\{\{var-([\w-]+)\}\}/g, (_, k) => vars.get(`var-${k}`) ?? '');
-        window.location.href = `/p/${widgetData.pid}/log_explorer?${new URLSearchParams({ query: [events, filter].filter(Boolean).join(' and '), from, to })}`;
-        return;
+    chart.on('click', ({ seriesName, value, event }: { seriesName: string; value: number[]; event?: { event?: MouseEvent } }) => {
+      // A cell opens its events; one holding errors first asks whether to open all of them or only the errors.
+      const menu = document.getElementById(`${widgetData.chartId}_cell_menu`);
+      const click = event?.event;
+      if (seriesName !== 'Errors' || !menu || !click) return openCell(false);
+      menu.querySelector('[data-cell-count]')!.textContent = formatNumber(value[2]);
+      menu.querySelector('[data-cell-errors]')!.textContent = formatNumber(value[3]);
+      menu.style.cssText = `position:fixed;inset:auto;left:${Math.min(click.clientX, window.innerWidth - 208)}px;top:${click.clientY + 8}px`;
+      menu.onclick = (e) => {
+        const view = (e.target as Element).closest<HTMLElement>('[data-cell-view]')?.dataset.cellView;
+        if (!view) return;
+        menu.hidePopover();
+        openCell(view === 'errors');
+      };
+      chart.dispatchAction({ type: 'hideTip' });
+      menu.showPopover();
+      menu.querySelector<HTMLElement>('[data-cell-view]')?.focus();
+
+      function openCell(errors: boolean) {
+        const { filter, from, to } = heatmapCellQuery(widgetData.query ?? '', errors, value);
+        const editor = document.getElementById('filterElement') as any;
+        if (!editor?.handleAddQuery) {
+          // A dashboard query still carries its variables; the page URL holds their values.
+          const vars = new URLSearchParams(window.location.search);
+          const events = (widgetData.query ?? '').split('|')[0].trim().replace(/\{\{var-([\w-]+)\}\}/g, (_, k) => vars.get(`var-${k}`) ?? '');
+          window.location.href = `/p/${widgetData.pid}/log_explorer?${new URLSearchParams({ query: [events, filter].filter(Boolean).join(' and '), from, to })}`;
+          return;
       }
       const url = new URL(window.location.href);
       url.searchParams.set('from', from);
@@ -1268,6 +1286,7 @@ export const chartWidget = (widgetData: WidGetData) => {
       // The heatmap view hides the list it is filtering, so the click lands on the events themselves.
       if ((document.getElementById('viz-heatmap') as HTMLInputElement | null)?.checked) document.getElementById('viz-logs')?.click();
       editor.handleAddQuery(filter);
+      }
     });
   chart.on('legendselectchanged', ({ name, selected }: { name: string; selected: Record<string, boolean> }) => {
     if (shiftClick) {
