@@ -76,6 +76,7 @@ module Pkg.Git (
   listPullRequestComments,
   publishPullRequestComment,
   reactToComment,
+  canWrite,
   ConfigurationPullRequest (..),
   getConfigurationPullRequest,
   publishConfiguration,
@@ -115,6 +116,7 @@ import Network.HTTP.Types.URI (urlEncode)
 import Network.URI (URI (..), URIAuth (..), parseURI)
 import Network.Wreq (FormParam (..))
 import Pkg.DeriveUtils (WrappedEnumSC (..), enumFromField, refineText)
+import Data.Char (isAlphaNum)
 import Relude
 import Relude.Extra.Bifunctor (firstF)
 import "base16-bytestring" Data.ByteString.Base16 qualified as B16
@@ -754,6 +756,18 @@ publishPullRequestComment conn repo number commentId body
         Nothing -> W.postWith (gitOpts conn) (toString $ repoUrl conn repo ("/issues/" <> show number <> "/comments")) payload
         Just cid -> W.patchWith (gitOpts conn) (toString $ repoUrl conn repo ("/issues/comments/" <> show cid)) payload
       pure $ result >>= fmap (.id) . first (const "GitHub did not return a comment ID") . AE.eitherDecode @GitHubObjectId . (^. W.responseBody)
+
+
+newtype CollaboratorPermission = CollaboratorPermission {permission :: Text}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON)
+
+
+-- | Whether a GitHub login can push to the repository. Org membership alone does not imply it.
+canWrite :: W.HTTP :> es => GitConn -> RepoRef -> Text -> Eff es (Either Text Bool)
+canWrite conn repo login
+  | T.null login || T.any (\c -> not (isAlphaNum c || c == '-')) login = pure $ Right False
+  | otherwise = fmap ((`elem` ["admin", "maintain", "write"]) . (.permission)) <$> githubJson @CollaboratorPermission conn repo ("/collaborators/" <> login <> "/permission")
 
 
 -- | Acknowledge a comment with a reaction, e.g. @eyes@ when an ask is queued.

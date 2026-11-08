@@ -61,6 +61,7 @@ import System.Tracing (Tracing)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB)
 import UnliftIO.Exception (bracket, throwIO, tryAny)
 import Utils (hostPath, prettyPrintCount)
+import Web.HttpApiData (toUrlPiece)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), proofMediaPath, urls)
 
 
@@ -196,6 +197,10 @@ data ReviewResult = ReviewResult
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
+emptyResult :: Verdict -> [Finding] -> UTCTime -> UTCTime -> ReviewResult
+emptyResult verdict findings windowStart windowEnd = ReviewResult{verdict, findings, coverage = [], evidence = [], windowStart, windowEnd, knowledge = Nothing, summary = Nothing, assessments = Nothing, claims = Nothing, proofs = Nothing}
+
+
 data ReviewFailure = ReviewFailure Text | ReviewPublicationRefused Text | NativeSessionLost
   deriving stock (Generic, Show)
   deriving anyclass (Exception)
@@ -250,20 +255,20 @@ patchLines path = go Nothing . lines
 -- >>> let file = Git.PullRequestFile "a.hs" "modified" (Just "@@ -1 +1 @@\n-old\n+new")
 -- >>> let measured = Evidence "t1" Telemetry Nothing Nothing "/evidence" Nothing (Just (Observation 10 1)) Nothing Nothing
 -- >>> let finding = Finding (ChangedLine "a.hs" 1 Head) "Risk" "Check" ["t1"]
--- >>> let result = ReviewResult NoFinding [finding] [] [] now now Nothing Nothing Nothing Nothing Nothing
+-- >>> let result = emptyResult NoFinding [finding] now now
 -- >>> fmap (.verdict) (validateResult [file] [measured] [] result)
 -- Right WorthChecking
--- >>> validateResult [file] [measured] [] (ReviewResult NoFinding [finding{evidenceKeys = ["invented"]}] [] [] now now Nothing Nothing Nothing Nothing Nothing) & either id (const "accepted")
+-- >>> validateResult [file] [measured] [] (emptyResult NoFinding [finding{evidenceKeys = ["invented"]}] now now) & either id (const "accepted")
 -- "Finding cites unavailable evidence"
--- >>> validateResult [file] [measured] [] (ReviewResult NoFinding [finding{location = ChangedLine "a.hs" 2 Head}] [] [] now now Nothing Nothing Nothing Nothing Nothing) & either id (const "accepted")
+-- >>> validateResult [file] [measured] [] (emptyResult NoFinding [finding{location = ChangedLine "a.hs" 2 Head}] now now) & either id (const "accepted")
 -- "Finding does not reference a changed line"
 -- >>> let malformed = Git.PullRequestFile "a.hs" "modified" (Just "@@ -0 +0 @@\n-old\n+new")
--- >>> validateResult [malformed] [measured] [] (ReviewResult NoFinding [finding{location = ChangedLine "a.hs" 0 Head}] [] [] now now Nothing Nothing Nothing Nothing Nothing) & either id (const "accepted")
+-- >>> validateResult [malformed] [measured] [] (emptyResult NoFinding [finding{location = ChangedLine "a.hs" 0 Head}] now now) & either id (const "accepted")
 -- "Finding does not reference a changed line"
 validateResult :: [Git.PullRequestFile] -> [Evidence] -> [Text] -> ReviewResult -> Either Text ReviewResult
 validateResult files evidence gaps result = do
   validateFindings (concatMap changedLines files) (map (\item -> (item.key, item.kind)) evidence) result.findings
-  validateClaims (map (.key) $ fold result.proofs) (fold result.claims)
+  validateClaims (fold result.proofs) (fold result.claims)
   -- V1 is advisory: mechanism plausibility does not establish a production break.
   pure
     result
@@ -273,7 +278,7 @@ validateResult files evidence gaps result = do
       }
 
 
-validateDraft :: [ChangedLine] -> [(Text, EvidenceKind)] -> [Text] -> AE.Value -> Either Text ReviewDraft
+validateDraft :: [ChangedLine] -> [(Text, EvidenceKind)] -> [ProofLink] -> AE.Value -> Either Text ReviewDraft
 validateDraft changed evidence recorded value = do
   candidate <- case AE.fromJSON value of AE.Error _ -> Left "Review draft does not match the required schema"; AE.Success draft -> Right draft
   unless (null $ Schema.validateJSON mempty (Policy.toolSchema Policy.SubmitReview) (AE.toJSON candidate)) $ Left "Review draft violates its schema"
@@ -283,24 +288,29 @@ validateDraft changed evidence recorded value = do
   pure candidate
 
 
--- | A claim can only say what a recording showed: matches and differs cite recorded proofs.
+-- | A claim can only say what a recording showed: it cites proofs recorded on both sides,
+-- and a matching claim's head recording succeeded.
 --
+-- >>> let recorded key code = [ProofLink key side "r" (Just $ if side == Agent.Head then code else 1) "" "" "" | side <- [Agent.Base, Agent.Head]]
 -- >>> let claim status keys = Claim "Prints the version" status "Shown by the CLI." keys
--- >>> map (either id (const "accepted") . validateClaims ["proof-1"]) [[claim Matches ["proof-1"]], [claim Unverified []], [claim Differs []], [claim Matches ["proof-2"]]]
--- ["accepted","accepted","A matching or differing claim must cite a recorded proof","Claim cites a proof that was not recorded"]
-validateClaims :: [Text] -> [Claim] -> Either Text ()
+-- >>> let check = either id (const "accepted") . validateClaims (recorded "proof-1" 0 <> recorded "proof-2" 1 <> take 1 (recorded "proof-3" 0))
+-- >>> map check [[claim Matches ["proof-1"]], [claim Unverified []], [claim Differs ["proof-2"]], [claim Differs []], [claim Matches ["proof-9"]], [claim Matches ["proof-2"]], [claim Differs ["proof-3"]]]
+-- ["accepted","accepted","accepted","A matching or differing claim must cite a recorded proof","Claim cites a proof that was not recorded on base and head","A matching claim needs a head recording that succeeded","Claim cites a proof that was not recorded on base and head"]
+validateClaims :: [ProofLink] -> [Claim] -> Either Text ()
 validateClaims recorded claims = do
   unless (length claims <= 5) $ Left "Review returned more than five claims"
   for_ claims \claim -> do
-    unless (all (`elem` recorded) claim.proofKeys) $ Left "Claim cites a proof that was not recorded"
+    let cited key = filter ((== key) . (.key)) recorded
     unless (claim.status == Unverified || not (null claim.proofKeys)) $ Left "A matching or differing claim must cite a recorded proof"
+    unless (all (\key -> sort (map (toUrlPiece . (.side)) $ cited key) == ["base", "head"]) claim.proofKeys) $ Left "Claim cites a proof that was not recorded on base and head"
+    unless (claim.status /= Matches || all (\key -> any (\p -> p.side == Agent.Head && p.exitCode == Just 0) (cited key)) claim.proofKeys) $ Left "A matching claim needs a head recording that succeeded"
     unless (not (T.null $ T.strip claim.title) && not (T.null $ T.strip claim.summary)) $ Left "Each claim needs a title and a summary"
 
 
 -- | One grade per dimension; only error detection can be not applicable.
 --
 -- >>> let graded g = [Assessment d g ["gap"] | d <- universe]
--- >>> let check = either id (const "accepted") . validateAssessments . ReviewDraft [] [] "Adds retries."
+-- >>> let check as = either id (const "accepted") $ validateAssessments $ ReviewDraft [] [] "Adds retries." as []
 -- >>> map check [graded Good, take 4 (graded Good), graded NotApplicable, [a{gaps = replicate 4 "gap"} | a <- graded Fair]]
 -- ["accepted","Grade each merge-risk dimension exactly once","Only error detection can be not applicable","Each dimension lists at most three gaps of up to 300 characters"]
 validateAssessments :: ReviewDraft -> Either Text ()
@@ -337,11 +347,15 @@ requestReview request = runErrorNoCallStack @Text do
   token <- either throwError pure =<< GitSync.githubToken cfg.githubAppId cfg.githubAppPrivateKey (GitSync.AppInstallation request.installationId)
   conn <- either (throwError . Git.gitConnErrorMessage) pure $ Git.mkGitConn Git.GitHub Nothing token
   let ref = Git.RepoRef request.owner request.repo ""
-  pr <- either throwError pure =<< Git.getPullRequest conn ref request.number
-  queued <- Reviews.receiveEvent (Just request.ask) Reviews.PullRequestEvent{owner = request.owner, repo = request.repo, installationId = request.installationId, number = request.number, revision = T.toLower pr.head.revision, updatedAt = pr.updatedAt, state = Reviews.pullRequestState pr.state pr.draft}
-  -- A review already running for this head answers the ask; it records no new proof.
-  when (queued == 0) $ Log.logAttention "PR review ask joined a review already in progress" (request.owner, request.repo, request.number, request.ask.command)
-  either throwError pure =<< Git.reactToComment conn ref request.ask.commentId "eyes"
+  writer <- either throwError pure =<< Git.canWrite conn ref request.ask.login
+  if not writer
+    then Log.logInfo "Ignoring a PR review ask from someone without write access" (request.owner, request.repo, request.number)
+    else do
+      pr <- either throwError pure =<< Git.getPullRequest conn ref request.number
+      queued <- Reviews.receiveEvent (Just request.ask) $ Reviews.pullRequestEvent request.owner request.repo request.installationId request.number pr
+      -- A review already running for this head answers the ask; it records no new proof.
+      when (queued == 0) $ Log.logInfo "PR review ask joined a review already in progress" (request.owner, request.repo, request.number, request.ask.command)
+      either throwError pure =<< Git.reactToComment conn ref request.ask.commentId "eyes"
 
 
 reviewPullRequest :: Reviews.ReviewId -> ATBackgroundCtx ()
@@ -406,7 +420,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                   (Nothing; Just Issues.Autonomous; Just Issues.ReviewSelected{}) -> ""
               findings = if maybe True ((== NoFinding) . (.verdict)) result then Issues.ResultNoFindings else Issues.ResultSucceeded
               -- Cited evidence first; the run page draws these widgets live over the review window.
-              widgets = [w{Widget.pngProfile = Nothing} | r <- toList result, e <- sortOn (\e -> not $ any (elem e.key . (.evidenceKeys)) r.findings) r.evidence, Just w <- [evidenceWidget r.windowStart r.windowEnd e]]
+              widgets = [w | r <- toList result, e <- sortOn (\e -> not $ any (elem e.key . (.evidenceKeys)) r.findings) r.evidence, Just w <- [evidenceWidget r.windowStart r.windowEnd e]]
           pure $ Issues.CompletedResult findings Issues.PublishAnswer $ (Issues.reportAnswer body completed.result){Issues.widgets = AE.toJSON <$> nonEmpty (take 4 widgets)}
       void $ Issues.completeRun context completion
 
@@ -424,19 +438,19 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
       conn <- require $ first Git.gitConnErrorMessage $ GitSync.credentialConn credential token
       pr <- require =<< Git.getPullRequest conn ref run.number
       trigger <- maybe Reviews.ReadyPullRequests (.trigger) . find (\s -> s.owner == run.owner && s.repo == run.repo) <$> Reviews.repositorySettings run.projectId
-      let prState = Reviews.pullRequestState pr.state pr.draft
-          eligible = prState == Reviews.Open || prState == Reviews.Draft && (isJust run.request || trigger == Reviews.AllPullRequests)
-      if pr.head.revision /= run.revision || not eligible
+      let event = Reviews.pullRequestEvent run.owner run.repo installationId run.number pr
+          eligible = event.state == Reviews.Open || event.state == Reviews.Draft && (isJust run.request || trigger == Reviews.AllPullRequests)
+      if event.revision /= run.revision || not eligible
         then do
-          void $ Reviews.receiveEvent Nothing Reviews.PullRequestEvent{owner = run.owner, repo = run.repo, installationId, number = run.number, revision = pr.head.revision, updatedAt = pr.updatedAt, state = prState}
+          void $ Reviews.receiveEvent Nothing event
           Reviews.supersedeRun run
         else do
           files <- require =<< Git.getPullRequestFiles conn ref run.number
           -- GitHub's files endpoint follows the live PR head, so verify it again.
           pinned <- require =<< Git.getPullRequest conn ref run.number
           unless (sameRevision pr pinned) $ throwError $ ReviewFailure "PR changed while reading its diff"
-          -- Automatic runs skip changes that cannot alter production; an ask always reviews.
-          let inert name = any (`T.isSuffixOf` name) [".md", ".rst", "_test.go", ".test.ts", ".test.js", ".spec.ts", ".spec.js", "spec.hs", "_test.py"] || any (`T.isPrefixOf` name) ["docs/", "test/", "tests/", "spec/", ".github/", "ci/"] || any (`T.isInfixOf` name) ["/test/", "/tests/", "/__tests__/", "/test_"]
+          -- Automatic runs skip docs- and tests-only changes; CI and config can change production, and an ask always reviews.
+          let inert name = any (`T.isSuffixOf` name) [".md", ".rst", "_test.go", ".test.ts", ".test.js", ".spec.ts", ".spec.js", "spec.hs", "_test.py"] || any (`T.isPrefixOf` name) ["docs/", "test/", "tests/", "spec/"] || any (`T.isInfixOf` name) ["/test/", "/tests/", "/__tests__/", "/test_"]
               documentationOnly = isNothing run.request && pr.changedFiles == length files && not (null files) && all (inert . T.toLower . (.filename)) files
           if documentationOnly
             then Reviews.finishRun run Nothing
@@ -467,13 +481,14 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           thinkingLevel = agentThinking effort
           from = initial.windowStart
           until = initial.windowEnd
-      (draft, queried, notes) <-
+      ctx <- ask @AuthContext
+      (draft, queried, notes, links) <-
         if mapped
           then do
             requireActive run execution
             attemptId <- maybe (throwError $ ReviewFailure "Review is no longer authorized to start an attempt") pure =<< Reviews.startAttempt run initial.provider initial.model
-            -- Proof keys restart with each fresh agent session, so stale recordings cannot be cited.
-            when (isNothing saved) $ Reviews.clearProofs run
+            let recordedProofs :: DB es' => Eff es' [ProofLink]
+                recordedProofs = map (proofLink ctx run) <$> Reviews.proofSides run attemptId
             (answer, memory) <-
               State.runState (maybe (ReviewMemory mempty []) (.memory) saved)
                 $ Agent.reviewRepository
@@ -514,28 +529,22 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                       unless (receipt.revision == case receipt.side of Agent.Base -> pr.base.revision; Agent.Head -> pr.head.revision) $ throwError $ ReviewFailure "Check receipt references another revision"
                       unlessM (Reviews.recordCheck run receipt) $ throwError $ ReviewFailure "Check receipt conflicts with recorded execution"
                   )
-                  ( \proof -> do
-                      requireActive run execution
-                      stored <- Reviews.saveProof run proof
-                      pure $ if stored then Right () else Left "Review authorization is no longer available"
-                  )
+                  (\sides -> requireActive run execution >> Reviews.saveProofs run attemptId sides)
                   ( \value -> do
                       queried <- State.gets @ReviewMemory (Map.elems . (.evidence))
-                      recorded <- map (.key) <$> Reviews.proofSides run
+                      recorded <- recordedProofs
                       pure $ void $ validateDraft (concatMap changedLines initial.files) (map (\item -> (item.key, item.kind)) $ evidence <> queried) recorded value
                   )
             output <- require answer
             parsed <- require $ first (const "Review agent returned invalid review JSON") $ AE.eitherDecodeStrict @ReviewDraft $ encodeUtf8 output
-            pure (parsed, Map.elems memory.evidence, memory.notes)
-          else pure (ReviewDraft [] ["No mapped service is available for production investigation."] "" [] [], [], [])
-      ctx <- ask @AuthContext
-      links <- map (proofLink ctx run) <$> Reviews.proofSides run
+            (parsed,Map.elems memory.evidence,memory.notes,) <$> recordedProofs
+          else pure (ReviewDraft [] ["No mapped service is available for production investigation."] "" [] [], [], [], [])
       let allEvidence = evidence <> queried
           queryGaps =
             ["A production query reached its result limit." | any (maybe False (.limitReached) . (.queryResult)) queried]
               <> ["A production query truncated oversized fields." | any (maybe False (.fieldsTruncated) . (.queryResult)) queried]
-          validated = validateResult initial.files allEvidence (initial.coverage <> queryGaps) (ReviewResult NoFinding draft.findings draft.coverage allEvidence from until (Just notes) (guarded (not . T.null) draft.summary) (guarded (not . null) draft.assessments) (guarded (not . null) draft.claims) (guarded (not . null) links))
-          reviewed = fromRight (ReviewResult CoverageUnknown [] (initial.coverage <> queryGaps <> ["The model review did not produce verifiable findings; rerun the review."]) allEvidence from until Nothing Nothing Nothing Nothing Nothing) validated
+          validated = validateResult initial.files allEvidence (initial.coverage <> queryGaps) (emptyResult NoFinding draft.findings from until){coverage = draft.coverage, evidence = allEvidence, knowledge = Just notes, summary = guarded (not . T.null) draft.summary, assessments = guarded (not . null) draft.assessments, claims = guarded (not . null) draft.claims, proofs = guarded (not . null) links}
+          reviewed = fromRight (emptyResult CoverageUnknown [] from until){coverage = initial.coverage <> queryGaps <> ["The model review did not produce verifiable findings; rerun the review."], evidence = allEvidence} validated
       whenLeft_ validated $ \err -> Log.logAttention "Production impact model validation failed" (run.id, err)
       requireActive run execution
       Reviews.saveResult run reviewed
@@ -690,11 +699,11 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
 evidenceWidget :: UTCTime -> UTCTime -> Evidence -> Maybe Widget.Widget
 evidenceWidget from until item = case item.queryResult of
   Just QueryObservation{kind = Aggregated, headers, dataset} | all (all (\case AE.Number{} -> True; AE.Null -> True; _ -> False)) dataset ->
-    Just (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.title = Just "Review query", Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.source = AE.toJSON $ V.cons (AE.toJSON <$> headers) dataset}, Widget.pngProfile = Just Widget.PngSlack}
+    Just (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.title = Just "Review query", Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.source = AE.toJSON $ V.cons (AE.toJSON <$> headers) dataset}}
   Just _ -> Nothing
   Nothing -> case (item.kind, item.service) of
     (Telemetry, Just _) ->
-      Just (def :: Widget.Widget){Widget.wType = Widget.WTTimeseries, Widget.title = Just "Observed service events", Widget.query = Just (serviceSelector item <> " and " <> toQText (evidenceWindow from until) <> " | summarize events = count() by bin_auto(timestamp)"), Widget.pngProfile = Just Widget.PngSlack}
+      Just (def :: Widget.Widget){Widget.wType = Widget.WTTimeseries, Widget.title = Just "Observed service events", Widget.query = Just (serviceSelector item <> " and " <> toQText (evidenceWindow from until) <> " | summarize events = count() by bin_auto(timestamp)")}
     _ -> Nothing
 
 
@@ -705,15 +714,15 @@ serviceSelector item = T.intercalate " and " $ ["resource.service.name == " <> d
 evidencePng :: (ELog.Log :> es, Reader AuthContext :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Evidence -> Eff es (Maybe Text)
 evidencePng pid from until item = do
   ctx <- ask @AuthContext
-  fmap join $ forM (evidenceWidget from until item) \widget -> Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.config.hostUrl pid widget Nothing (Just $ toText $ iso8601Show from) (Just $ toText $ iso8601Show until)
+  join <$> forM (evidenceWidget from until item) \widget -> Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.config.hostUrl pid widget{Widget.pngProfile = Just Widget.PngSlack} Nothing (Just $ toText $ iso8601Show from) (Just $ toText $ iso8601Show until)
 
 
 proofLink :: AuthContext -> Reviews.ReviewRun -> Reviews.ProofSide -> ProofLink
-proofLink ctx run proof = ProofLink{key = proof.key, side = proof.side, revision = proof.revision, exitCode = proof.exitCode, preview = url "gif", video = url "mp4", recording = url "cast"}
+proofLink ctx run proof = ProofLink{key = proof.key, side = proof.side, revision = proof.revision, exitCode = proof.exitCode, preview = url Reviews.Gif, video = url Reviews.Mp4, recording = url Reviews.Cast}
   where
-    url extension =
-      let file = proof.key <> "-" <> T.toLower (show proof.side) <> "." <> extension
-       in hostPath ctx.config.hostUrl $ proofMediaPath run.projectId run.id file $ Widget.signWidgetUrl ctx.env.apiKeyEncryptionSecretKey run.projectId (run.id.toText <> "/" <> file)
+    url format =
+      let file = Reviews.ProofFile proof.key proof.side format
+       in hostPath ctx.config.hostUrl $ proofMediaPath run.projectId run.id file $ Widget.signWidgetUrl ctx.env.apiKeyEncryptionSecretKey run.projectId (Reviews.proofSignedPath run.id file)
 
 
 -- | Where a review is read. GitHub shows production detail only when the repository opts in.
@@ -752,7 +761,7 @@ renderReview host run audience result =
     claimText claim =
       T.intercalate "\n\n"
         $ ( case (claim.status, github) of
-              (Differs, True) -> ["> [!WARNING]\n> **Doesn't do what the PR says: " <> plain claim.title <> "**\n>\n> " <> plain claim.summary]
+              (Differs, True) -> ["> [!CAUTION]\n> **Doesn't do what the PR says: " <> plain claim.title <> "**\n>\n> " <> plain claim.summary]
               (Differs, False) -> ["**⚠️ Differs from the PR: " <> plain claim.title <> "**", plain claim.summary]
               (Matches, _) -> ["**✅ " <> plain claim.title <> "**", plain claim.summary]
               (Unverified, _) -> ["**👀 Not verified: " <> plain claim.title <> "**", plain claim.summary]
@@ -761,10 +770,8 @@ renderReview host run audience result =
     recordings title sides
       | github =
           "<table><tr>"
-            <> foldMap (\p -> "<td><sub>" <> sideLabel p <> "</sub><br><a href=\"" <> p.video <> "\"><img src=\"" <> p.preview <> "\" alt=\"" <> attr (sideLabel p <> ": " <> title) <> "\" width=\"440\"></a></td>") sides
-            <> "</tr></table>\n<sub>Select a recording to watch the video. Asciinema casts: "
-            <> T.intercalate " · " ["<a href=\"" <> p.recording <> "\">" <> sideName p.side <> "</a>" | p <- sides]
-            <> "</sub>"
+            <> foldMap (\p -> "<td><sub>" <> sideLabel p <> " · <a href=\"" <> p.video <> "\">video</a> · <a href=\"" <> p.recording <> "\">cast</a></sub><br><a href=\"" <> p.video <> "\"><img src=\"" <> p.preview <> "\" alt=\"" <> attr (sideLabel p <> ": " <> title) <> "\" width=\"440\"></a></td>") sides
+            <> "</tr></table>"
       | otherwise = T.intercalate " " ["![" <> sideLabel p <> "](" <> p.preview <> ")" | p <- sides] <> "\n\n" <> T.intercalate " · " ["[Watch " <> sideName p.side <> "](" <> p.video <> ")" | p <- sides]
     sideName = \case Agent.Base -> "Before"; Agent.Head -> "This PR"
     sideLabel p = sideName p.side <> " · " <> T.take 7 p.revision <> foldMap ((" · exit " <>) . show) p.exitCode
@@ -805,7 +812,7 @@ renderReview host run audience result =
       | github = ["<details><summary>What this review could not verify (" <> show (length result.coverage) <> ")</summary>\n\n" <> gaps <> "\n</details>"]
       | otherwise = ["**What this review could not verify**", gaps]
       where
-        gaps = T.unlines $ map (("- " <>) . plain) result.coverage
+        gaps = unlines $ map (("- " <>) . plain) result.coverage
     window = toText (formatTime defaultTimeLocale "%b %-e" result.windowStart) <> " to " <> toText (formatTime defaultTimeLocale "%b %-e, %Y" result.windowEnd)
     fullReview = case audience of GitHubComment{runUrl} -> "[full review](" <> runUrl <> ")"; MonoscopeView -> "full review"
     settings = hostPath host (urls.codeMappingsSettings run.projectId Nothing)

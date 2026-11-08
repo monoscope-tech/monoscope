@@ -599,10 +599,10 @@ type WidgetPngGet = "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT 
 
 
 -- | Recorded proof media, signed per file so GitHub's image proxy can fetch it without a session.
-type ProofMediaGet = "p" :> ProjectId :> "reviews" :> Capture "review_id" (UUIDId "pr_review") :> "proofs" :> Capture "file" Text :> QPT "sig" :> RawM
+type ProofMediaGet = "p" :> ProjectId :> "reviews" :> Capture "review_id" (UUIDId "pr_review") :> "proofs" :> Capture "file" ImpactReviews.ProofFile :> QPT "sig" :> RawM
 
 
-proofMediaPath :: Projects.ProjectId -> UUIDId "pr_review" -> Text -> Text -> Text
+proofMediaPath :: Projects.ProjectId -> UUIDId "pr_review" -> ImpactReviews.ProofFile -> Text -> Text
 proofMediaPath pid rid file sig = safeLink' (("/" <>) . toUrlPiece) (Proxy @ProofMediaGet) (Proxy @ProofMediaGet) pid rid file (Just sig)
 
 

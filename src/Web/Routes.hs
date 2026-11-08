@@ -10,7 +10,6 @@ import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as Wreq
 import Data.IP qualified as IP
-import Data.Effectful.CodeReview qualified as Agent
 import Data.List qualified as L
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (OpenApi)
@@ -801,20 +800,19 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
   addRespHeaders processedWidget
 
 
--- | Public endpoint for rendering widgets to PNG (for bot embeds). Requires valid HMAC signature.
--- | @proof-N-base.gif@ and its @.mp4@ / @.cast@ siblings; immutable once recorded, so caches may keep them.
-proofMediaGetH :: Projects.ProjectId -> UUIDId "pr_review" -> Text -> Maybe Text -> Request -> (Wai.Response -> IO Wai.ResponseReceived) -> ATBaseCtx Wai.ResponseReceived
+
+
+-- | Proof media never changes under a signed name: keys are not reused within a run.
+proofMediaGetH :: Projects.ProjectId -> UUIDId "pr_review" -> ImpactReviews.ProofFile -> Maybe Text -> Request -> (Wai.Response -> IO Wai.ResponseReceived) -> ATBaseCtx Wai.ResponseReceived
 proofMediaGetH pid rid file sigM _ send = do
   ctx <- ask @AuthContext
-  whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid (rid.toText <> "/" <> file) sigM) \err -> Error.throwError err403{errBody = err}
-  let (stem, extension) = first (T.dropEnd 1) $ T.breakOnEnd "." file
-      (key, sideName) = first (T.dropEnd 1) $ T.breakOnEnd "-" stem
-  side <- maybe (Error.throwError err404) pure $ L.lookup sideName [("base", Agent.Base), ("head", Agent.Head)]
-  (format, mime) <- maybe (Error.throwError err404) pure $ L.lookup extension [("gif", (ImpactReviews.Gif, "image/gif")), ("mp4", (ImpactReviews.Video, "video/mp4")), ("cast", (ImpactReviews.Cast, "application/x-asciicast"))]
-  bytes <- maybe (Error.throwError err404) pure =<< ImpactReviews.proofFile pid rid key side format
+  whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid (ImpactReviews.proofSignedPath rid file) sigM) \err -> Error.throwError err403{errBody = err}
+  bytes <- maybe (Error.throwError err404) pure =<< ImpactReviews.proofFile pid rid file
+  let mime = case file.format of ImpactReviews.Gif -> "image/gif"; ImpactReviews.Mp4 -> "video/mp4"; ImpactReviews.Cast -> "application/x-asciicast"
   liftIO $ send $ Wai.responseLBS H.status200 [(H.hContentType, mime), (H.hCacheControl, "public, max-age=31536000, immutable")] (toLazy bytes)
 
 
+-- | Public endpoint for rendering widgets to PNG (for bot embeds). Requires valid HMAC signature.
 widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx (Headers '[Header "Cache-Control" Text] LBS.ByteString)
 widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM sigM allParams = do
   ctx <- ask @AuthContext

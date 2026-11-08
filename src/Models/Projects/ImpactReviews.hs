@@ -5,7 +5,7 @@ module Models.Projects.ImpactReviews (
   ReviewSettings (..),
   ReviewTrigger (..),
   PullRequestState (..),
-  pullRequestState,
+  pullRequestEvent,
   PullRequestEvent (..),
   Ask (..),
   Command (..),
@@ -43,8 +43,9 @@ module Models.Projects.ImpactReviews (
   KnowledgeSource (..),
   ProofSide (..),
   ProofFormat (..),
-  saveProof,
-  clearProofs,
+  ProofFile (..),
+  proofSignedPath,
+  saveProofs,
   proofSides,
   proofFile,
 ) where
@@ -73,7 +74,7 @@ import Pkg.Git qualified as Git
 import Relude
 import System.Types (DB)
 import Web.FormUrlEncoded (FromForm)
-import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
+import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 
 
 -- $setup
@@ -205,8 +206,16 @@ decodeEvent body = do
   pure PullRequestEvent{owner, repo, installationId = event.installation.id, number = event.number, revision = T.toLower revision, updatedAt = pr.updatedAt, state = pullRequestState pr.state pr.draft}
 
 
+-- | The event a fetched pull request implies, as if GitHub had just delivered it.
+pullRequestEvent :: Text -> Text -> Int64 -> Int -> Git.PullRequest -> PullRequestEvent
+pullRequestEvent owner repo installationId number pr = PullRequestEvent{owner, repo, installationId, number, revision = T.toLower pr.head.revision, updatedAt = pr.updatedAt, state = pullRequestState pr.state pr.draft}
+
+
 pullRequestState :: Text -> Bool -> PullRequestState
-pullRequestState status draft = if status /= "open" then Closed else if draft then Draft else Open
+pullRequestState status draft
+  | status /= "open" = Closed
+  | draft = Draft
+  | otherwise = Open
 
 
 repositoryName :: Repository -> Either EventDecodeError (Text, Text)
@@ -235,7 +244,7 @@ data CommentEvent = CommentEvent {action :: Text, repository :: Repository, inst
   deriving (AE.FromJSON) via DAE.Snake CommentEvent
 
 
--- | Only a person with write-level standing on the repository can spend a review.
+-- | Owners, members and collaborators pass here; `requestReview` then requires write access.
 -- Bots are ignored, so a review that quotes the command cannot trigger itself.
 --
 -- >>> let body = "{\"action\":\"created\",\"installation\":{\"id\":7},\"repository\":{\"full_name\":\"Acme/Service\"},\"issue\":{\"number\":4,\"pull_request\":{}},\"comment\":{\"id\":9,\"body\":\"@monoscope prove it\",\"author_association\":\"MEMBER\",\"user\":{\"login\":\"ada\",\"type\":\"User\"}}}" :: Text
@@ -262,16 +271,19 @@ decodeComment body = do
 -- >>> map parseAsk ["@monoscope review", "@Monoscope TEST", "Thanks! @monoscope prove it, and check the empty state on mobile", "@monoscope prove", "email me@monoscope.dev", "@monoscope reviewer"]
 -- [Just (Review,Nothing),Just (Prove,Nothing),Just (Prove,Just "and check the empty state on mobile"),Nothing,Nothing,Nothing]
 parseAsk :: Text -> Maybe (Command, Maybe Text)
-parseAsk body = listToMaybe $ mapMaybe command $ T.breakOnAll "@monoscope " lowered
+parseAsk body = listToMaybe $ mapMaybe command $ T.breakOnAll "@" body
   where
-    lowered = T.toLower body
-    command (before, after)
-      | not (T.null before || T.last before `elem` [' ', '\n', '\t', '(']) = Nothing
-      | otherwise =
-          let rest = T.drop (T.length "@monoscope ") after
-              original = T.takeEnd (T.length rest) body
-              focusAfter n = guarded (not . T.null) $ T.take 500 $ T.strip $ T.dropWhile (`elem` [',', ':', '-', '.', ' ']) $ T.takeWhile (/= '\n') $ T.drop n original
-           in asum [(c, focusAfter (T.length word)) <$ guard (word `T.isPrefixOf` rest && maybe True ((`elem` [' ', ',', '.', ':', '!', '\n']) . fst) (T.uncons $ T.drop (T.length word) rest)) | (word, c) <- [("review", Review), ("test", Prove), ("prove it", Prove)]]
+    prefixCI word text = T.toLower (T.take (T.length word) text) == word
+    command (before, after) = do
+      guard $ T.null before || T.last before `elem` [' ', '\n', '\t', '(']
+      guard $ prefixCI "@monoscope " after
+      let rest = T.drop (T.length "@monoscope ") after
+      asum
+        [ (c, focus) <$ guard (prefixCI word rest && maybe True ((`elem` [' ', ',', '.', ':', '!', '\n']) . fst) (T.uncons remainder))
+        | (word, c) <- [("review", Review), ("test", Prove), ("prove it", Prove)]
+        , let remainder = T.drop (T.length word) rest
+              focus = guarded (not . T.null) $ T.take 500 $ T.strip $ T.dropWhile (`elem` [',', ':', '-', '.', ' ']) $ T.takeWhile (/= '\n') remainder
+        ]
 
 
 -- | Grant resolution, receipt, and odd-job insertion are one statement. An
@@ -524,38 +536,67 @@ data ProofSide = ProofSide {key :: Text, side :: Agent.RevisionSide, revision ::
   deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
 
 
-data ProofFormat = Gif | Video | Cast
-  deriving stock (Bounded, Enum, Eq, Show)
+data ProofFormat = Gif | Mp4 | Cast
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (FromHttpApiData, HI.EncodeValue, ToHttpApiData) via WrappedEnumSC 'Nothing "" ProofFormat
 
 
--- | Only the run holding the review lease can record, so a superseded attempt cannot add media.
-saveProof :: DB es => ReviewRun -> Agent.ProofMedia -> Eff es Bool
-saveProof run proof =
-  fromMaybe False
-    <$> Hasql.interpOne
-      [HI.sql|INSERT INTO projects.pr_review_proofs (run_id, key, side, claim, revision, exit_code, cast_bytes, gif, mp4)
-    SELECT r.id, #{proof.key}, #{proof.side}, #{proof.claim}, #{proof.revision}, #{fromIntegral @Int @Int32 <$> proof.exitCode}, #{proof.cast}, #{proof.gif}, #{proof.mp4}
-    FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
-    WHERE r.id = #{run.id} AND r.state = #{Reviewing} AND t.lease_owner = r.id AND t.lease_until > now()
-    ON CONFLICT (run_id, key, side) DO UPDATE SET claim = EXCLUDED.claim, revision = EXCLUDED.revision, exit_code = EXCLUDED.exit_code,
-      cast_bytes = EXCLUDED.cast_bytes, gif = EXCLUDED.gif, mp4 = EXCLUDED.mp4, created_at = now()
-    RETURNING true|]
+-- | One recorded side of a proof in one format, named like @proof-2-head.mp4@.
+--
+-- >>> parseUrlPiece @ProofFile "proof-2-head.mp4" == Right (ProofFile "proof-2" Agent.Head Mp4)
+-- True
+-- >>> toUrlPiece (ProofFile "proof-1" Agent.Base Gif)
+-- "proof-1-base.gif"
+-- >>> map (isLeft . parseUrlPiece @ProofFile) ["proof-1-side.gif", "proof-1-head.png", "proof-1"]
+-- [True,True,True]
+data ProofFile = ProofFile {key :: Text, side :: Agent.RevisionSide, format :: ProofFormat}
+  deriving stock (Eq, Show)
 
 
-clearProofs :: DB es => ReviewRun -> Eff es ()
-clearProofs run = Hasql.interpExecute_ [HI.sql|DELETE FROM projects.pr_review_proofs WHERE run_id = #{run.id}|]
+instance ToHttpApiData ProofFile where
+  toUrlPiece file = file.key <> "-" <> toUrlPiece file.side <> "." <> toUrlPiece file.format
 
 
-proofSides :: DB es => ReviewRun -> Eff es [ProofSide]
-proofSides run = Hasql.interp [HI.sql|SELECT key, side, revision, exit_code, claim FROM projects.pr_review_proofs WHERE run_id = #{run.id} ORDER BY key, side DESC|]
+instance FromHttpApiData ProofFile where
+  parseUrlPiece piece =
+    let (stem, extension) = first (T.dropEnd 1) $ T.breakOnEnd "." piece
+        (key, side) = first (T.dropEnd 1) $ T.breakOnEnd "-" stem
+     in ProofFile key <$> parseUrlPiece side <*> parseUrlPiece extension
 
 
-proofFile :: DB es => ProjectId -> ReviewId -> Text -> Agent.RevisionSide -> ProofFormat -> Eff es (Maybe ByteString)
-proofFile pid rid key side format =
+-- | Stores one proof's recordings under the run's next unused key, at most three per attempt.
+-- Only the run holding the review lease can record, so a superseded attempt cannot add media.
+saveProofs :: DB es => ReviewRun -> UUIDId "agent_attempt" -> NonEmpty Agent.ProofMedia -> Eff es (Either Text Text)
+saveProofs run attempt sides = do
+  (taken, used) <- fromMaybe (0, 0) <$> Hasql.interpOne [HI.sql|SELECT count(DISTINCT key) FILTER (WHERE attempt_id = #{attempt}), count(DISTINCT key) FROM projects.pr_review_proofs WHERE run_id = #{run.id}|]
+  let key = "proof-" <> show (used + 1 :: Int64)
+  if (taken :: Int64) >= 3
+    then pure $ Left "Proof budget exhausted; cite the proofs already recorded"
+    else do
+      stored <- forM sides \proof ->
+        fromMaybe False
+          <$> Hasql.interpOne
+            [HI.sql|INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, claim, revision, exit_code, cast_bytes, gif, mp4)
+          SELECT r.id, #{attempt}, #{key}, #{proof.side}, #{proof.claim}, #{proof.revision}, #{fromIntegral @Int @Int32 <$> proof.exitCode}, #{proof.cast}, #{proof.gif}, #{proof.mp4}
+          FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
+          WHERE r.id = #{run.id} AND r.state = #{Reviewing} AND t.lease_owner = r.id AND t.lease_until > now()
+          ON CONFLICT (run_id, key, side) DO NOTHING RETURNING true|]
+      pure $ if and stored then Right key else Left "Review authorization is no longer available"
+
+
+proofSides :: DB es => ReviewRun -> UUIDId "agent_attempt" -> Eff es [ProofSide]
+proofSides run attempt = Hasql.interp [HI.sql|SELECT key, side, revision, exit_code, claim FROM projects.pr_review_proofs WHERE run_id = #{run.id} AND attempt_id = #{attempt} ORDER BY key, side|]
+
+
+-- | What a proof media link signs; the prefix keeps it apart from widget signatures under the same key.
+proofSignedPath :: ReviewId -> ProofFile -> Text
+proofSignedPath rid file = "proof:" <> rid.toText <> "/" <> toUrlPiece file
+
+
+proofFile :: DB es => ProjectId -> ReviewId -> ProofFile -> Eff es (Maybe ByteString)
+proofFile pid rid file =
   fmap HI.getOneColumn
     <$> Hasql.interpOne
-    [HI.sql|SELECT CASE #{formatColumn} WHEN 'gif' THEN p.gif WHEN 'mp4' THEN p.mp4 ELSE p.cast_bytes END
+      [HI.sql|SELECT CASE #{file.format} WHEN 'gif' THEN p.gif WHEN 'mp4' THEN p.mp4 ELSE p.cast_bytes END
     FROM projects.pr_review_proofs p JOIN projects.pr_review_runs r ON r.id = p.run_id JOIN projects.pr_review_threads t ON t.id = r.thread_id
-    WHERE t.project_id = #{pid} AND p.run_id = #{rid} AND p.key = #{key} AND p.side = #{side}|]
-  where
-    formatColumn = case format of Gif -> "gif" :: Text; Video -> "mp4"; Cast -> "cast"
+    WHERE t.project_id = #{pid} AND p.run_id = #{rid} AND p.key = #{file.key} AND p.side = #{file.side}|]

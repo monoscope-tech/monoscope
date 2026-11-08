@@ -606,7 +606,7 @@ repositoriesPageH pid selection = do
                     "Production impact reviews"
                     ( \repository -> case find (\s -> repository.host == Git.GitHub && isNothing repository.apiBase && s.owner == T.toLower repository.owner && s.repo == T.toLower repository.repo) settings of
                         Just _ | null (servicesFor repository) -> colorChip_ WarningBadge "circle-info" "Link a service"
-                        Just s -> colorChip_ (if s.trigger == ImpactReviews.WhenAsked then NeutralBadge else SuccessBadge) "circle-check" $ triggerLabel s.trigger
+                        Just s -> colorChip_ (triggerBadge s.trigger) "circle-check" $ triggerLabel s.trigger
                         Nothing -> colorChip_ NeutralBadge "circle-info" "Not configured"
                     )
                 , Table.col
@@ -838,6 +838,15 @@ triggerOptions_ :: Monad m => ImpactReviews.ReviewTrigger -> HtmlT m ()
 triggerOptions_ current = options_ (Just $ toUrlPiece current) [(toUrlPiece t, triggerLabel t) | t <- universe]
 
 
+evidenceOptions_ :: Monad m => Bool -> HtmlT m ()
+evidenceOptions_ current = options_ (Just $ bool "false" "true" current) [("false", "Links only"), ("true", "Aggregates and links")]
+
+
+-- | Asks-only reviews are quiet until someone comments, so they read as neutral, not active.
+triggerBadge :: ImpactReviews.ReviewTrigger -> BadgeColor
+triggerBadge = \case ImpactReviews.WhenAsked -> NeutralBadge; (ImpactReviews.ReadyPullRequests; ImpactReviews.AllPullRequests) -> SuccessBadge
+
+
 askHint :: Text
 askHint = "Comment @monoscope review on any pull request to ask for a review, or @monoscope prove it to also record proof."
 
@@ -1064,7 +1073,7 @@ instance ToHtml RepositoryGet where
           let setupRequired = (,True) . callout_ WarningBadge (Just "Setup required")
               (readiness, blocked) = case page.reviewReadiness of
                 ReviewReady settings -> (,False) do
-                  colorChip_ SuccessBadge "circle-check" $ triggerLabel settings.trigger
+                  colorChip_ (triggerBadge settings.trigger) "circle-check" $ triggerLabel settings.trigger
                   p_ [class_ "text-sm text-textWeak"] $ toHtml askHint
                 ReviewNeedsAgent -> setupRequired "Automatic reviews are unavailable. Ask your Monoscope administrator to finish review setup."
                 ReviewNeedsRoutine -> setupRequired "Activate or resume the Production impact review routine. Repository settings choose which pull requests it reviews."
@@ -1079,7 +1088,7 @@ instance ToHtml RepositoryGet where
             formSelectField_ FieldSm "Review pull requests" "trigger" False
               $ triggerOptions_ (maybe ImpactReviews.ReadyPullRequests (.trigger) page.reviewSettings)
             formSelectField_ FieldSm "Production evidence in GitHub" "includeEvidence" False
-              $ options_ (Just $ bool "false" "true" $ maybe False (.includeEvidence) page.reviewSettings) [("false", "Links only"), ("true", "Aggregates and links")]
+              $ evidenceOptions_ (maybe False (.includeEvidence) page.reviewSettings)
             button_ [type_ "submit", class_ $ "btn btn-sm mb-1 justify-self-start sm:col-span-2 " <> bool "btn-primary" "btn-outline" blocked] "Save review settings"
             when blocked $ p_ [class_ "text-xs text-textWeak sm:col-span-2"] "Saved settings take effect once setup is complete."
           div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-2"] do
@@ -1305,12 +1314,8 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
             input_ [type_ "hidden", name_ "owner", value_ settings.owner]
             input_ [type_ "hidden", name_ "repo", value_ settings.repo]
             span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml (settings.owner <> "/" <> settings.repo)
-            label_ [class_ "text-xs text-textWeak space-y-1"] do
-              span_ [class_ "block"] "Review pull requests"
-              select_ [name_ "trigger", class_ "select select-sm"] $ triggerOptions_ settings.trigger
-            label_ [class_ "text-xs text-textWeak space-y-1"] do
-              span_ [class_ "block"] "Production evidence in GitHub"
-              select_ [name_ "includeEvidence", class_ "select select-sm"] $ options_ (Just $ bool "false" "true" settings.includeEvidence) [("true", "Aggregates and links"), ("false", "Links only")]
+            formSelectField_ FieldSm "Review pull requests" "trigger" False $ triggerOptions_ settings.trigger
+            formSelectField_ FieldSm "Production evidence in GitHub" "includeEvidence" False $ evidenceOptions_ settings.includeEvidence
             button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save review settings"
           else div_ [class_ "space-y-1 rounded-lg border border-strokeWeak p-3"] do
             p_ [class_ "text-sm font-medium text-textStrong break-all"] $ toHtml $ settings.owner <> "/" <> settings.repo

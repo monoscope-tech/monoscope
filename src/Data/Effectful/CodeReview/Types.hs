@@ -14,6 +14,7 @@ import OpenAI.V1.Models (Model)
 import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..))
 import Pkg.Git qualified as Git
 import Relude
+import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
 
 
 data ThinkingLevel = Off | Minimal | Low | Medium | High
@@ -112,12 +113,12 @@ data ModelUsage = ModelUsage
 
 data RevisionSide = Base | Head
   deriving stock (Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "" RevisionSide
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToHttpApiData) via WrappedEnumSC 'Nothing "" RevisionSide
 
 
 -- | One side of a recorded proof: the claim's command replayed under asciinema in a fresh VM,
 -- rendered on the host as an animated preview and a video.
-data ProofMedia = ProofMedia {key :: Text, claim :: Text, side :: RevisionSide, revision :: Text, exitCode :: Maybe Int, cast :: ByteString, gif :: ByteString, mp4 :: ByteString}
+data ProofMedia = ProofMedia {claim :: Text, side :: RevisionSide, revision :: Text, exitCode :: Maybe Int, cast :: ByteString, gif :: ByteString, mp4 :: ByteString}
 
 
 data CheckStatus = Passed | Failed | Blocked | Invalidated | TimedOut | OutputLimit | Cancelled | CleanupFailed

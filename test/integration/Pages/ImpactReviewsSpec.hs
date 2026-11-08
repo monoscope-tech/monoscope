@@ -106,7 +106,7 @@ import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 -- | A complete merge-risk grading, which every accepted review draft carries.
 graded :: [(AE.Key, AE.Value)]
-graded = ["claims" AE..= ([] :: [AE.Value]), "summary" AE..= ("Changes retry handling." :: Text), "assessments" AE..= [AE.object ["dimension" AE..= d, "grade" AE..= ("good" :: Text), "gaps" AE..= ([] :: [Text])] | d <- ["alignment", "impact", "verification", "rollback", "error_detection" :: Text]]]
+graded = ["claims" AE..= ([] :: [AE.Value]), "summary" AE..= ("Changes retry handling." :: Text), "assessments" AE..= [Impact.Assessment d Impact.Good [] | d <- universe]]
 
 
 revision :: Text
@@ -1213,7 +1213,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   (const pass)
                   (\receipt -> liftIO $ modifyIORef' allocations (<> [receipt]))
                   (\receipt -> liftIO $ modifyIORef' checks (<> [receipt]))
-                  (\proof -> liftIO $ modifyIORef' proofs (<> [proof]) $> Right ())
+                  (\sides -> liftIO $ modifyIORef' proofs (<> toList sides) $> Right "proof-1")
                   ( \draftValue -> liftIO do
                       modifyIORef' submissions (<> [draftValue])
                       pure $ if draftValue == accepted then Right () else Left "Finding does not reference a changed line"
@@ -1283,7 +1283,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       isRight proofResult `shouldBe` True
       toolReply "tool-0" proofReplies >>= (`shouldContainAll` ["proof-1", "== retry token: original", "== retry token: dropped"])
       recorded <- readIORef proofs
-      map (\proof -> (proof.key, proof.side, proof.exitCode)) recorded `shouldBe` [("proof-1", Agent.Base, Just 0), ("proof-1", Agent.Head, Just 1)]
+      map (\proof -> (proof.side, proof.exitCode)) recorded `shouldBe` [(Agent.Base, Just 0), (Agent.Head, Just 1)]
       for_ recorded \proof -> do
         BS.take 6 proof.gif `shouldBe` "GIF89a"
         BS.length proof.mp4 `shouldSatisfy` (> 0)
@@ -2813,7 +2813,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         mode trigger = runQueryEffect tr $ Reviews.updateSettings testPid (Reviews.ReviewSettings "impact-org" "checkout" trigger False)
         sha = T.replicate 40
         draftHead = AE.object ["head" AE..= AE.object ["sha" AE..= sha "c"], "base" AE..= AE.object ["sha" AE..= sha "0"], "state" AE..= ("open" :: Text), "draft" AE..= True, "changed_files" AE..= (1 :: Int), "updated_at" AE..= ("2025-01-01T00:05:00Z" :: Text)]
-        api url = pure $ if "/pulls/7" `T.isSuffixOf` url then Just draftHead else if "/reactions" `T.isSuffixOf` url then Just (AE.object []) else Nothing
+        api permission url = pure $ if "/pulls/7" `T.isSuffixOf` url then Just draftHead else if "/reactions" `T.isSuffixOf` url then Just (AE.object []) else if "/collaborators/ada/permission" `T.isSuffixOf` url then Just (AE.object ["permission" AE..= (permission :: Text)]) else Nothing
     void $ deliver tr $ payload "converted_to_draft" (sha "a") "2025-01-01T00:00:00Z"
     queued `shouldReturn` 0
     mode Reviews.AllPullRequests
@@ -2825,9 +2825,13 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Reviews.latestRuns testPid) >>= (`shouldSatisfy` all ((== sha "c") . (.latestRevision)))
     -- Contributors and ordinary comments queue nothing and call no GitHub API.
     for_ @[] [("CONTRIBUTOR", "@monoscope prove it"), ("MEMBER", "looks good to me" :: Text)] \(association :: Text, body) ->
-      deliverEvent tr "issue_comment" api (commentPayload association body) `shouldReturn` ([], AE.object ["status" AE..= ("ignored" :: Text)])
+      deliverEvent tr "issue_comment" (api "write") (commentPayload association body) `shouldReturn` ([], AE.object ["status" AE..= ("ignored" :: Text)])
+    -- Org membership is not write access: a read-only member's ask queues nothing and gets no reaction.
+    (readOnly, _) <- deliverEvent tr "issue_comment" (api "read") $ commentPayload "MEMBER" "@monoscope review"
+    map fst readOnly `shouldNotSatisfy` any ("/reactions" `T.isSuffixOf`)
+    queued `shouldReturn` 1
     -- A member's ask reviews the draft head even though this mode never runs on its own.
-    (calls, response) <- deliverEvent tr "issue_comment" api $ commentPayload "MEMBER" "@monoscope prove it, and check the empty state"
+    (calls, response) <- deliverEvent tr "issue_comment" (api "write") $ commentPayload "MEMBER" "@monoscope prove it, and check the empty state"
     response `shouldBe` AE.object ["status" AE..= ("ok" :: Text)]
     map fst calls `shouldSatisfy` any ("/issues/comments/55/reactions" `T.isSuffixOf`)
     queued `shouldReturn` 2
@@ -2838,8 +2842,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
     setup tr
     void $ deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
     [run] <- runQueryEffect tr $ Reviews.latestRuns testPid
-    dbExec tr "INSERT INTO projects.pr_review_proofs (run_id, key, side, claim, revision, exit_code, cast_bytes, gif, mp4) VALUES (?, 'proof-1', 'head', 'Prints the version', ?, 0, convert_to('cast', 'UTF8'), convert_to('GIF89a fixture', 'UTF8'), convert_to('mp4 fixture', 'UTF8'))" (run.id, revision)
-    [link] <- map (Impact.proofLink tr.trATCtx run) <$> runQueryEffect tr (Reviews.proofSides run)
+    let attempt = UUIDId UUID.nil
+    dbExec tr "INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, claim, revision, exit_code, cast_bytes, gif, mp4) VALUES (?, ?, 'proof-1', 'head', 'Prints the version', ?, 0, convert_to('cast', 'UTF8'), convert_to('GIF89a fixture', 'UTF8'), convert_to('mp4 fixture', 'UTF8'))" (run.id, attempt, revision)
+    [link] <- map (Impact.proofLink tr.trATCtx run) <$> runQueryEffect tr (Reviews.proofSides run attempt)
     let app = genericServeTWithContext (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider) (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused")) (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
         fetch url = WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ fromMaybe url $ T.stripPrefix tr.trATCtx.config.hostUrl url) app
     preview <- fetch link.preview

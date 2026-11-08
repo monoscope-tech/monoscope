@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Explanation (renderExplanation, readExplanationMedia, proofScript, proofCast, renderProof) where
+module Data.Effectful.CodeReview.Explanation (renderExplanation, readExplanationMedia, proofScript, proofCast, proofFailure, renderProof) where
 
 import Conduit (runConduit, (.|))
 import Data.Aeson qualified as AE
@@ -161,7 +161,7 @@ renderExplanation store request = withinBudget $ do
 -- False
 proofScript :: Text -> Text
 proofScript command =
-  T.unlines
+  unlines
     [ "set -u"
     , "export HOME=\"${HOME:-/tmp}\" TERM=xterm-256color LANG=C.UTF-8 LC_ALL=C.UTF-8"
     , "command -v asciinema >/dev/null || exit 127"

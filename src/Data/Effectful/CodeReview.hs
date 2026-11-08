@@ -33,6 +33,7 @@ import Relude
 import System.Directory (listDirectory, removeFile, removePathForcibly)
 import System.Environment (getEnvironment)
 import System.FilePath (takeDirectory, takeFileName, (</>))
+import Web.HttpApiData (toUrlPiece)
 import System.IO (hClose)
 import System.IO.Error (isDoesNotExistError, tryIOError)
 import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
@@ -50,6 +51,11 @@ data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Kno
 
 
 -- The report is opaque presentation data; decisions use the typed receipts.
+data ProofArgs = ProofArgs {claim :: Text, command :: Text}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON)
+
+
 data RegressionWire = RegressionWire {report :: AE.Value, receipts :: [CheckReceipt], isError :: Bool}
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
@@ -200,7 +206,7 @@ data CodeReview :: Effect where
   ReviewVerifiedFix :: SessionIdentity m (UUIDId "agent_attempt") -> FixReviewRequest -> VerifiedFix -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> CodeReview m (Either Text FixReviewOutcome)
   ReviewSource :: ReviewMode -> Request "pr_review" -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (DraftSubmission -> m (Either Text ())) -> CodeReview m (Either Text Text)
   ReviewPatch :: Request "pr_review" -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (Text -> m (Either Text ())) -> CodeReview m (Either Text Text)
-  ReviewRepository :: SessionIdentity m ReviewContext -> Request "pr_review" -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (ProofMedia -> m (Either Text ())) -> (AE.Value -> m (Either Text ())) -> CodeReview m (Either Text Text)
+  ReviewRepository :: SessionIdentity m ReviewContext -> Request "pr_review" -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (NonEmpty ProofMedia -> m (Either Text Text)) -> (AE.Value -> m (Either Text ())) -> CodeReview m (Either Text Text)
   AdmitRegression :: SessionIdentity m (UUIDId "agent_attempt") -> AdmissionRequest -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> CodeReview m (Either Text AdmissionDecision)
   FixRepository :: SessionIdentity m FixContext -> FixRequest -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (TestArtifact -> m (Either Text Text)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (PhaseReceipt -> m (Either Text ())) -> (FixResult -> m (Either Text ReviewedFix)) -> CodeReview m (Either Text ReviewedFix)
 
@@ -237,14 +243,14 @@ data Callbacks format result = Callbacks
   , usage :: ModelUsage -> IO ()
   , allocations :: Maybe (AllocationReceipt -> IO ())
   , checks :: Maybe (CheckReceipt -> IO ())
-  , proofs :: Maybe (ProofMedia -> IO (Either Text ()))
+  , proofs :: Maybe (NonEmpty ProofMedia -> IO (Either Text Text))
   , phase :: PhaseReceipt -> IO (Either Text ())
   , validate :: DraftValidator format result
   }
 
 
 runCodeReviewReal :: IOE :> es => Maybe ArtifactStore -> Either Text (Maybe Guest.Host) -> Maybe FilePath -> [FilePath] -> Eff (CodeReview ': es) a -> Eff es a
-runCodeReviewReal artifactStore host executable skills = runCodeReviewWith artifactStore host ((\command environment -> setEnv environment $ setStderr nullStream $ proc command skills) <$> executable)
+runCodeReviewReal artifactStore host executable skills = runCodeReviewWith artifactStore host ((\program environment -> setEnv environment $ setStderr nullStream $ proc program skills) <$> executable)
 
 
 runCodeReviewWith :: IOE :> es => Maybe ArtifactStore -> Either Text (Maybe Guest.Host) -> Maybe ([(String, String)] -> ProcessConfig () () ()) -> Eff (CodeReview ': es) a -> Eff es a
@@ -383,7 +389,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
     launch task callbacks = case (hostConfig, executable) of
       (Left failure, _) -> pure $ Left failure
       (_, Nothing) -> pure $ Left "Checkout-backed review agent is not configured"
-      (Right host, Just command) -> do
+      (Right host, Just program) -> do
         verifierSession <- UUID4.nextRandom
         proofCount <- newIORef (0 :: Int)
         let tagged :: AE.ToJSON value => Text -> value -> AE.Value
@@ -430,7 +436,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
               environment <- getEnvironment
               let selected = maybe [] (\outbox -> [("IMPACT_REVIEW_OUTBOX_DIR", Outbox.outboxPath outbox)]) journal <> maybe [] (\directory -> [("IMPACT_REVIEW_SESSION_FILE", directory </> "active.jsonl")]) sessionDirectory
                   childEnvironment = selected <> filter (\(name, _) -> name `notElem` ["IMPACT_REVIEW_OUTBOX_DIR", "IMPACT_REVIEW_SESSION_FILE"]) environment
-              withProcessTerm (setStdin createPipe $ setStdout createPipe $ command childEnvironment) \process -> do
+              withProcessTerm (setStdin createPipe $ setStdout createPipe $ program childEnvironment) \process -> do
                 guest <- newIORef Nothing
                 let stop =
                       ( do
@@ -617,27 +623,26 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
 
                     -- The model's command is never trusted to report its own result: the host
                     -- replays it on both revisions and keeps only what asciinema recorded.
-                    recordProof request outbox identifier invocation save = case AET.parseEither (AE.withObject "Proof" \o -> (,) <$> o AE..: "claim" <*> o AE..: "command") invocation.arguments of
+                    recordProof request outbox identifier invocation save = case AET.parseEither (AE.parseJSON @ProofArgs) invocation.arguments of
                       Left _ -> pure $ Left "Tool arguments do not match the host contract"
-                      Right (claim, shown) -> do
+                      Right proof -> do
                         taken <- atomicModifyIORef' proofCount \n -> (n + 1, n)
                         if taken >= 3
                           then pure $ Left "Proof budget exhausted; cite the proofs already recorded"
                           else active \session -> do
-                            let key = "proof-" <> show (taken + 1)
-                            verified <- regression request session.baseline identifier (AE.object ["script" AE..= Media.proofScript shown, "failureMessage" AE..= ("monoscope-proof-failed" :: Text)]) [("base", request.base), ("head", request.head)] outbox
+                            verified <- regression request session.baseline identifier (AE.object ["script" AE..= Media.proofScript proof.command, "failureMessage" AE..= Media.proofFailure]) [("base", request.base), ("head", request.head)] outbox
                             case verified of
                               Left failure -> pure $ Left failure
                               Right (result, logs) -> runExceptT do
                                 for_ result.receipts \receipt -> ExceptT $ Outbox.deliver outbox (Outbox.Check receipt) record
-                                sides <- forM result.receipts \receipt -> do
-                                  let logName = case receipt.side of Base -> "base.log"; Head -> "head.log"
-                                  logFile <- maybe (throwE "The proof log was not retained") pure $ listToMaybe [path | (path, _) <- logs, takeFileName path == logName]
+                                recorded <- forM result.receipts \receipt -> do
+                                  logFile <- maybe (throwE "The proof log was not retained") pure $ listToMaybe [path | (path, _) <- logs, takeFileName path == toString (toUrlPiece receipt.side) <> ".log"]
                                   (cast, output) <- ExceptT $ Media.proofCast <$> readFileBS logFile
                                   (gif, mp4) <- ExceptT $ Media.renderProof cast
-                                  ExceptT $ save ProofMedia{key, claim, side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4}
-                                  pure $ AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "output" AE..= T.takeEnd 3000 output]
-                                pure $ AE.object ["key" AE..= key, "claim" AE..= (claim :: Text), "sides" AE..= sides, "note" AE..= ("Cite this key in a claim. The PR author sees both recordings." :: Text)]
+                                  pure (ProofMedia{claim = proof.claim, side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4}, AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "output" AE..= T.takeEnd 3000 output])
+                                sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty $ map fst recorded
+                                key <- ExceptT $ save sides
+                                pure $ AE.object ["key" AE..= key, "claim" AE..= proof.claim, "sides" AE..= map snd recorded, "note" AE..= ("Cite this key in a claim. The PR author sees both recordings." :: Text)]
 
                     receive :: Maybe Checkout.Prepared -> Maybe GuestSession -> Int -> Int -> Maybe (Accepted result) -> IO (Either Text result)
                     receive supplied guestSession remaining submissions accepted = do
