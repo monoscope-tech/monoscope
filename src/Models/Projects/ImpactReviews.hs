@@ -244,7 +244,7 @@ decodeComment body = do
   let comment = event.comment
   unless (event.issue.number > 0) $ Left InvalidPayload
   (command, focus) <- maybeToRight UnsupportedAction do
-    guard $ event.action == "created" && isJust event.issue.pullRequest && event.issue.pullRequest /= Just AE.Null
+    guard $ event.action == "created" && isJust event.issue.pullRequest
     guard $ comment.user.type_ /= "Bot" && comment.authorAssociation `elem` ["OWNER", "MEMBER", "COLLABORATOR"]
     parseAsk comment.body
   pure CommentRequest{owner, repo, installationId = event.installation.id, number = event.issue.number, ask = Ask{login = comment.user.login, commentId = comment.id, command, focus}}
@@ -271,9 +271,11 @@ parseAsk body = listToMaybe $ mapMaybe command $ T.breakOnAll "@monoscope " lowe
 -- out-of-order delivery cannot replace a newer head, and duplicates queue once.
 -- A closure, or a draft in a mode that skips drafts, supersedes the revision's run;
 -- an ask queues in every mode and replaces a finished run of the same revision.
-receiveEvent :: DB es => Maybe Ask -> PullRequestEvent -> Eff es ()
+-- Returns how many runs were queued; an ask for a revision already under review queues none.
+receiveEvent :: DB es => Maybe Ask -> PullRequestEvent -> Eff es Int
 receiveEvent request event =
-  Hasql.interpExecute_
+  fromMaybe 0
+    <$> Hasql.interpOne
     [HI.sql|WITH eligible AS (
     SELECT DISTINCT m.project_id, coalesce(s.trigger, #{ReadyPullRequests}) AS trigger FROM projects.code_mappings m
     JOIN projects.git_credentials c ON c.id = m.credential_id AND c.project_id = m.project_id
@@ -300,9 +302,11 @@ receiveEvent request event =
     WHERE EXCLUDED.state = #{Superseded} OR projects.pr_review_runs.state = #{Superseded}
       OR (EXCLUDED.request IS NOT NULL AND projects.pr_review_runs.state IN (#{Completed}, #{Incomplete}))
     RETURNING id, state
-  ) INSERT INTO background_jobs (run_at, status, payload)
+  ), jobs AS (
+    INSERT INTO background_jobs (run_at, status, payload)
     SELECT now(), 'queued', jsonb_build_object('tag', 'ReviewPullRequest', 'contents', id)
-    FROM runs WHERE state = #{Queued}|]
+    FROM runs WHERE state = #{Queued} RETURNING 1
+  ) SELECT count(*) FROM jobs|]
 
 
 getRun :: DB es => ReviewId -> Eff es (Maybe ReviewRun)

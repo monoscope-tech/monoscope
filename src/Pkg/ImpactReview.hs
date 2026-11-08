@@ -60,7 +60,7 @@ import System.Logging qualified as Log
 import System.Tracing (Tracing)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB)
 import UnliftIO.Exception (bracket, throwIO, tryAny)
-import Utils (hostPath)
+import Utils (hostPath, prettyPrintCount)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), urls)
 
 
@@ -112,8 +112,8 @@ data Risk = LowRisk | MediumRisk | HighRisk
 -- >>> let uniform g = [Assessment d g [] | d <- universe]
 -- >>> map (mergeRisk . uniform) [Good, Fair, Poor]
 -- [LowRisk,MediumRisk,HighRisk]
--- >>> mergeRisk [Assessment d (if d == Impact then Poor else Good) [] | d <- universe]
--- LowRisk
+-- >>> map (\worst -> mergeRisk [Assessment d (if d == worst then Poor else Good) [] | d <- universe]) [Rollback, Impact]
+-- [LowRisk,MediumRisk]
 -- >>> mergeRisk [Assessment d (if d `elem` [Impact, Verification] then Poor else Good) [] | d <- universe]
 -- MediumRisk
 -- >>> mergeRisk [Assessment d (if d == Alignment then Good else Poor) [] | d <- universe]
@@ -296,14 +296,16 @@ evidenceWindow begin end = And (Cmp GTEq timestamp (TimestampLit $ toText $ iso8
 
 -- | A comment delivery carries no PR head, so read it with the installation token
 -- before recording the ask; the 👀 reaction tells the asker it was queued.
-requestReview :: (DB es, HTTP.HTTP :> es, IOE :> es, Reader AuthContext :> es) => Reviews.CommentRequest -> Eff es (Either Text ())
+requestReview :: (DB es, ELog.Log :> es, HTTP.HTTP :> es, IOE :> es, Reader AuthContext :> es) => Reviews.CommentRequest -> Eff es (Either Text ())
 requestReview request = runErrorNoCallStack @Text do
   cfg <- (.config) <$> ask @AuthContext
   token <- either throwError pure =<< GitSync.githubToken cfg.githubAppId cfg.githubAppPrivateKey (GitSync.AppInstallation request.installationId)
   conn <- either (throwError . Git.gitConnErrorMessage) pure $ Git.mkGitConn Git.GitHub Nothing token
   let ref = Git.RepoRef request.owner request.repo ""
   pr <- either throwError pure =<< Git.getPullRequest conn ref request.number
-  Reviews.receiveEvent (Just request.ask) Reviews.PullRequestEvent{owner = request.owner, repo = request.repo, installationId = request.installationId, number = request.number, revision = T.toLower pr.head.revision, updatedAt = pr.updatedAt, state = Reviews.pullRequestState pr.state pr.draft}
+  queued <- Reviews.receiveEvent (Just request.ask) Reviews.PullRequestEvent{owner = request.owner, repo = request.repo, installationId = request.installationId, number = request.number, revision = T.toLower pr.head.revision, updatedAt = pr.updatedAt, state = Reviews.pullRequestState pr.state pr.draft}
+  -- A review already running for this head answers the ask; it records no new proof.
+  when (queued == 0) $ Log.logAttention "PR review ask joined a review already in progress" (request.owner, request.repo, request.number, request.ask.command)
   either throwError pure =<< Git.reactToComment conn ref request.ask.commentId "eyes"
 
 
@@ -364,7 +366,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
         Right result -> do
           ctx <- ask @AuthContext
           let body =
-                maybe "Documentation-only change. No production impact review was needed." (renderReview ctx.config.hostUrl completed MonoscopeView) result <> case fmap (.policy) authority of
+                maybe "This change only touches documentation, tests or CI, so it needs no production impact review." (renderReview ctx.config.hostUrl completed MonoscopeView) result <> case fmap (.policy) authority of
                   Just Issues.Observe -> "\n\nObserve policy: the GitHub comment was not updated."
                   (Nothing; Just Issues.Autonomous; Just Issues.ReviewSelected{}) -> ""
               findings = if maybe True ((== NoFinding) . (.verdict)) result then Issues.ResultNoFindings else Issues.ResultSucceeded
@@ -391,14 +393,16 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           eligible = prState == Reviews.Open || prState == Reviews.Draft && (isJust run.request || trigger == Reviews.AllPullRequests)
       if pr.head.revision /= run.revision || not eligible
         then do
-          Reviews.receiveEvent Nothing Reviews.PullRequestEvent{owner = run.owner, repo = run.repo, installationId, number = run.number, revision = pr.head.revision, updatedAt = pr.updatedAt, state = prState}
+          void $ Reviews.receiveEvent Nothing Reviews.PullRequestEvent{owner = run.owner, repo = run.repo, installationId, number = run.number, revision = pr.head.revision, updatedAt = pr.updatedAt, state = prState}
           Reviews.supersedeRun run
         else do
           files <- require =<< Git.getPullRequestFiles conn ref run.number
           -- GitHub's files endpoint follows the live PR head, so verify it again.
           pinned <- require =<< Git.getPullRequest conn ref run.number
           unless (sameRevision pr pinned) $ throwError $ ReviewFailure "PR changed while reading its diff"
-          let documentationOnly = pr.changedFiles == length files && not (null files) && all (\f -> let name = T.toLower f.filename in any (`T.isSuffixOf` name) [".md", ".rst"] || "docs/" `T.isPrefixOf` name) files
+          -- Automatic runs skip changes that cannot alter production; an ask always reviews.
+          let inert name = any (`T.isSuffixOf` name) [".md", ".rst", "_test.go", ".test.ts", ".test.js", ".spec.ts", ".spec.js", "spec.hs", "_test.py"] || any (`T.isPrefixOf` name) ["docs/", "test/", "tests/", "spec/", ".github/", "ci/"] || any (`T.isInfixOf` name) ["/test/", "/tests/", "/__tests__/", "/test_"]
+              documentationOnly = isNothing run.request && pr.changedFiles == length files && not (null files) && all (inert . T.toLower . (.filename)) files
           if documentationOnly
             then Reviews.finishRun run Nothing
             else do
@@ -679,8 +683,8 @@ renderReview host run audience result =
       MediumRisk -> "🟡 Merge risk: medium"
       HighRisk -> "🔴 Merge risk: high"
     riskTable assessments =
-      T.unlines
-        $ ["| | Verdict | What raises the risk |", "| :-- | :-- | :-- |"]
+      T.intercalate "\n"
+        $ ["| Check | Verdict | What raises the risk |", "| :-- | :-- | :-- |"]
         <> ["| **" <> dimensionName a.dimension <> "** | " <> gradeText a.dimension a.grade <> " | " <> (if null a.gaps then "—" else T.intercalate (if github then "<br>" else "; ") (map plain a.gaps)) <> " |" | a <- sortOn (.dimension) assessments]
     dimensionName = \case Alignment -> "Alignment"; Impact -> "Impact"; Verification -> "Verification"; Rollback -> "Rollback cost"; ErrorDetection -> "Error detection"
     gradeText dimension grade =
@@ -698,31 +702,34 @@ renderReview host run audience result =
     findingText finding =
       T.intercalate "\n" . map (\line -> if T.null line then ">" else "> " <> line)
         $ ["[!WARNING]" | github]
-        <> ["**[`" <> clean finding.location.path <> ":" <> show finding.location.line <> "`](" <> diffLink finding.location <> ")** (" <> T.toLower (show finding.location.side) <> ")"]
-        <> (if shown then [plain finding.mechanism, "", "**Next check:** " <> plain finding.nextStep] else ["Production details are available in Monoscope."])
-        <> ["" | shown]
-        <> map evidenceText (filter (\e -> e.key `elem` finding.evidenceKeys) result.evidence)
+        <> ["**[`" <> clean finding.location.path <> ":" <> show finding.location.line <> "`](" <> diffLink finding.location <> ")**" <> case finding.location.side of Base -> " (removed line)"; Head -> ""]
+        <> if shown
+          then [plain finding.mechanism, "", "**Next check:** " <> plain finding.nextStep, ""] <> map evidenceText (filter (\e -> e.key `elem` finding.evidenceKeys) result.evidence)
+          else ["The reasoning and production evidence are in the " <> fullReview <> "."]
     diffLink location = "https://github.com/" <> run.owner <> "/" <> run.repo <> "/pull/" <> show run.number <> "/files#diff-" <> sha256 (encodeUtf8 location.path) <> (case location.side of Base -> "L"; Head -> "R") <> show location.line
     evidenceText item =
       "["
-        <> T.toLower (show item.kind)
-        <> " evidence]("
+        <> maybe (T.toLower (show item.kind) <> " evidence") (\service -> plain service <> foldMap ((" in " <>) . plain) item.environment) item.service
+        <> "]("
         <> item.url
         <> ")"
-        <> if shown then foldMap (\observed -> " · **Observed:** " <> show observed.events <> " events · " <> show observed.errors <> " errors") item.observed <> foldMap (const " · **Observed:** query results") item.queryResult <> foldMap ((" · service: " <>) . plain) item.service <> foldMap ((" · environment: " <>) . plain) item.environment else ""
+        <> foldMap (\observed -> ": " <> count observed.events "event" <> " and " <> count observed.errors "error" <> ", " <> window) item.observed
+        <> foldMap (const ": query results") item.queryResult
+    count n noun = prettyPrintCount (fromIntegral n) <> " " <> noun <> bool "s" "" (n == 1)
     coverage
       | null result.coverage = []
-      | not shown = ["**Coverage:** Open Monoscope for evidence and coverage details."]
-      | github = ["<details><summary>Coverage gaps (" <> show (length result.coverage) <> ")</summary>\n\n" <> gaps <> "\n</details>"]
-      | otherwise = ["**Coverage gaps**", gaps]
+      | not shown = []
+      | github = ["<details><summary>What this review could not verify (" <> show (length result.coverage) <> ")</summary>\n\n" <> gaps <> "\n</details>"]
+      | otherwise = ["**What this review could not verify**", gaps]
       where
         gaps = T.unlines $ map (("- " <>) . plain) result.coverage
-    window = toText (formatTime defaultTimeLocale "%b %-e" result.windowStart) <> " to " <> toText (formatTime defaultTimeLocale "%b %-e, %Y" result.windowEnd) <> " (UTC)"
+    window = toText (formatTime defaultTimeLocale "%b %-e" result.windowStart) <> " to " <> toText (formatTime defaultTimeLocale "%b %-e, %Y" result.windowEnd)
+    fullReview = case audience of GitHubComment{runUrl} -> "[full review](" <> runUrl <> ")"; MonoscopeView -> "full review"
     settings = hostPath host (urls.codeMappingsSettings run.projectId Nothing)
     footer = case audience of
       GitHubComment{runUrl} ->
-        "<sub>Reviewed <a href=\"https://github.com/" <> run.owner <> "/" <> run.repo <> "/commit/" <> run.revision <> "\"><code>" <> T.take 7 run.revision <> "</code></a> against production telemetry from " <> window <> " · <a href=\"" <> runUrl <> "\">Run and evidence</a> · <a href=\"" <> settings <> "\">Review settings</a><br>Comment <code>@monoscope review</code> to review again, or <code>@monoscope prove it</code> to record proof.</sub>"
-      MonoscopeView -> "Reviewed `" <> T.take 7 run.revision <> "` against production telemetry from " <> window <> " · [Review settings](" <> settings <> ")"
+        "<sub>Reviewed <a href=\"https://github.com/" <> run.owner <> "/" <> run.repo <> "/commit/" <> run.revision <> "\"><code>" <> T.take 7 run.revision <> "</code></a> against production telemetry from " <> window <> " (UTC) · <a href=\"" <> runUrl <> "\">Open the full review</a> · <a href=\"" <> settings <> "\">Review settings</a><br>Comment <code>@monoscope review</code> to review again, or <code>@monoscope prove it</code> to record proof.</sub>"
+      MonoscopeView -> "Reviewed `" <> T.take 7 run.revision <> "` against production telemetry from " <> window <> " (UTC) · [Review settings](" <> settings <> ")"
     plain = T.concatMap (\c -> (if c `elem` ("\\*_|#!" :: String) then "\\" else "") <> one c) . clean
     clean = T.replace "://" ":／／" . T.map (\c -> fromMaybe c $ lookup c ([('[', '［'), (']', '］'), ('@', '＠'), ('<', '‹'), ('>', '›'), ('`', '\''), ('\n', ' '), ('\r', ' ')] :: [(Char, Char)]))
 

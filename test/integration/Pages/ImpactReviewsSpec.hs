@@ -2818,6 +2818,30 @@ spec = around withTestResources $ describe "Production impact reviews" do
     asked <- maybe (fail "asked run missing") pure . find ((== sha "c") . (.revision)) =<< runQueryEffect tr (Reviews.latestRuns testPid)
     asked.request `shouldBe` Just Reviews.Ask{login = "ada", commentId = 55, command = Reviews.Prove, focus = Just "and check the empty state"}
 
+  it "reviewComment_leadsWithMergeRiskAndShowsProductionDetailOnlyWhereAllowed" \_ -> do
+    let pid = UUIDId UUID.nil
+        run = Reviews.ReviewRun{id = UUIDId UUID.nil, threadId = UUIDId UUID.nil, projectId = pid, owner = "acme", repo = "checkout", number = 42, revision = T.replicate 40 "a", state = Reviews.Completed, result = Nothing, error = Nothing, commentId = Nothing, latestRevision = T.replicate 40 "a", createdAt = frozenTime, request = Nothing}
+        telemetry = Impact.Evidence "telemetry-1" Impact.Telemetry (Just "checkout-api") (Just "production") "https://app.monoscope.tech/p/x/log_explorer" Nothing (Just $ Impact.Observation 120340 312) (Just "https://app.monoscope.tech/p/x/widget.png?widgetZ=fixture") Nothing
+        finding path line mechanism next = Impact.Finding (Impact.ChangedLine path line Impact.Head) mechanism next ["telemetry-1"]
+        grades = [(Impact.Alignment, Impact.Good, []), (Impact.Impact, Impact.Poor, ["Changes how payment captures are retried", "checkout-api serves every order"]), (Impact.Verification, Impact.Fair, ["No test covers a capture that times out twice"]), (Impact.Rollback, Impact.Good, []), (Impact.ErrorDetection, Impact.Poor, ["The new retry path logs nothing when it gives up"])]
+        result =
+          Impact.ReviewResult
+            Impact.WorthChecking
+            [ finding "src/payments/capture.ts" 88 "A retried capture reuses the same idempotency key only on the first retry; a second timeout sends a fresh key, so a slow provider can charge twice." "Count captures with two or more retries in the last week, then add a test for a double timeout."
+            , finding "src/payments/capture.ts" 120 "The give-up branch swallows the provider error, so a failed capture leaves no log or span error." "Log the provider error and mark the span as an error before returning."
+            ]
+            ["No load test covers the retry backoff.", "Provider-side duplicates are not visible in this project's telemetry."]
+            [telemetry]
+            frozenTime
+            (addUTCTime (7 * 86400) frozenTime)
+            Nothing
+            (Just "Adds retries to payment capture. A second timeout can charge a customer twice, and the give-up path is silent in production.")
+            (Just [Impact.Assessment d g gaps | (d, g, gaps) <- grades])
+        render audience = Impact.renderReview "https://app.monoscope.tech" run audience result
+    goldenText "impact-review/github-comment.md" $ render $ Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y"
+    goldenText "impact-review/github-comment-links-only.md" $ render $ Impact.GitHubComment False "https://app.monoscope.tech/p/x/ai/runs/y"
+    goldenText "impact-review/monoscope-view.md" $ render Impact.MonoscopeView
+
   it "keeps started calls attributable until matching usage arrives, including after billing changes" \tr -> do
     setup tr
     void $ deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
@@ -3236,10 +3260,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
       runQueryEffect tr (Memory.latestPages reviewPid) >>= (\pages -> map (.author) pages `shouldBe` [Memory.Run visible.id])
       runQueryEffect tr (Issues.listArtifacts reviewPid visible.conversationId Nothing) >>= (`shouldSatisfy` (not . null))
       (_, detail) <- testServant tr $ AIThreads.routineRunGetH reviewPid visible.id Nothing
-      renderT detail `shouldContainAll` ["write project memory", "publish pull request comment"]
+      -- The run page draws the review's evidence as live widgets, not only prose.
+      renderT detail `shouldContainAll` ["write project memory", "publish pull request comment", "Merge risk: low", "Observed service events"]
     length (filter (T.isInfixOf "/issues/comments/99" . fst) requests) `shouldBe` 1
     let published = sentTo "/issues/comments/99" requests
-    published `shouldContainAll` ["Worth checking", "Related test toolchain unavailable", "production query reached its result limit", "Observed", "/widget.png?widgetZ=", "![Review query results]", "\\\\*check", revision]
+    published `shouldContainAll` ["Merge risk: low", "Worth checking", "Related test toolchain unavailable", "production query reached its result limit", "test-service](", "/widget.png?widgetZ=", "![Review query results]", "\\\\*check", revision]
     for_ @[] ["@impact-review-test", "https://untrusted.invalid", "long-review-log-body", "another-in-scope-event", "checkout-review-span", "Review temperature gauge"] \hidden -> published `shouldNotSatisfy` T.isInfixOf hidden
     completed <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
     (completed.state, completed.commentId) `shouldBe` (Reviews.Completed, Just 99)
@@ -3370,8 +3395,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     (linksRequests, ()) <- within (transport True . fakeAgentWith ["--expect-knowledge"]) $ Impact.reviewPullRequest run.id
     runQueryEffect tr (Reviews.priorKnowledge run "test-service") >>= (\notes -> length notes `shouldBe` 1)
     let linksPublished = sentTo "/issues/comments/99" linksRequests
-    linksPublished `shouldSatisfy` T.isInfixOf "telemetry evidence"
-    for_ @[] ["Observed", "/widget.png", "The changed operation"] \hidden -> linksPublished `shouldNotSatisfy` T.isInfixOf hidden
+    linksPublished `shouldSatisfy` T.isInfixOf "production evidence are in the [full review]("
+    for_ @[] [": query results", "/widget.png", "The changed operation", "Related test toolchain unavailable"] \hidden -> linksPublished `shouldNotSatisfy` T.isInfixOf hidden
     -- Final publication validation also rejects fabricated locations if the effect is bypassed.
     retry
     let invalid = result{Impact.findings = [Impact.Finding (Impact.ChangedLine "unrelated.hs" 1 Impact.Head) "Invented mechanism" "Invented next step" ["telemetry-1"]]}
@@ -3502,7 +3527,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     dbExec tr "UPDATE projects.code_mappings SET service = NULL WHERE project_id = ?" (Only reviewPid)
     unmapped <- sentTo "/issues/comments/99" <$> review (interpose @Agent.CodeReview \_ _ -> liftIO $ fail "Review agent called without measured evidence")
     unmapped `shouldSatisfy` T.isInfixOf "Coverage unknown"
-    unmapped `shouldNotSatisfy` T.isInfixOf "telemetry evidence"
+    unmapped `shouldNotSatisfy` T.isInfixOf "test-service]("
     void $ testServant tr $ CodeContextPage.impactReviewSettingsPostH reviewPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.WhenAsked False)
     void $ deliver tr $ payload "synchronize" (T.replicate 40 "b") "2025-01-01T00:01:00Z"
     -- Asks-only mode queues nothing, but the push still supersedes the older head.
