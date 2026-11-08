@@ -2255,7 +2255,7 @@ otelColumns =
         -- migration 0141 is the Postgres half, since one statement serves both legs.
         attrText "attributes___http___route" "http.route"
       , -- Stamped at ingest by OtlpServer.placeRecords; geomap widgets group on it. TF storage was
-        -- widened first (2026-11-08) and TF #450 declares it; 0267 is the Postgres half.
+        -- widened first (2026-11-08) and TF #450 declares it; 0268 is the Postgres half.
         attrText "attributes___geo___country___iso_code" "geo.country.iso_code"
       , attrInt "attributes___http___response___status_code" "http.response.status_code"
       , attrInt "attributes___http___request___resend_count" "http.request.resend_count"
