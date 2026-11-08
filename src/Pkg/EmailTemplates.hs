@@ -29,6 +29,7 @@ module Pkg.EmailTemplates (
   ReportEvidence (..),
   HistoricalReportEvidence (..),
   monitorAlertEmail,
+  checkAlertEmail,
   monitorRecoveryEmail,
   freeTierUsageEmail,
   planUpgradedEmail,
@@ -64,7 +65,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ContainerTypes (Scope (..))
 import Models.Telemetry.Report qualified as Report
 import Relude
-import Utils (fmtDate, formatWithCommas, isoT, kqlQuoted, nonEmptyT, showFFloat', toUriStr)
+import Utils (fmtDate, formatWithCommas, isoT, kqlQuoted, nonEmptyT, showFFloat', toUriStr, truncateText)
 import Web.Links (LogExplorerRoutes' (..), logExplorerLinks)
 
 
@@ -565,10 +566,6 @@ errorCard projectUrl errorsUrl chartUrlM e =
   where
     hasDistinctRootCause = e.rootErrorType /= e.errorType || e.rootErrorMessage /= e.message
     linkStyle = "color: #377cfb; text-decoration: none;"
-
-
-truncateText :: Int -> Text -> Text
-truncateText n t = if T.length t > n then T.take n t <> "…" else t
 
 
 -- =============================================================================
@@ -1150,6 +1147,19 @@ monitorAlertEmail projectName monitorTitle monitorUrl currentValue threshold dir
     )
     "View Monitor"
     monitorUrl
+
+
+-- | An uptime check or cron monitor failing: what failed, and the facts that say how.
+checkAlertEmail :: Text -> Text -> [Text] -> Text -> (Text, Html ())
+checkAlertEmail projectName headline facts =
+  ctaEmail
+    ("[···] " <> headline <> " - " <> projectName)
+    True
+    ( do
+        h1_ $ toHtml headline
+        forM_ facts $ p_ . toHtml
+    )
+    "View Issue"
 
 
 monitorRecoveryEmail :: Text -> Text -> Text -> (Text, Html ())

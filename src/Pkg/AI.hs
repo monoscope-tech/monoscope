@@ -1086,6 +1086,20 @@ buildSystemPrompt config now =
         "\nSLACK REQUEST CONTEXT\n"
           <> encodeText (AE.object ["team_id" AE..= team, "channel_id" AE..= channel, "thread_ts" AE..= thread])
           <> "\nUse this channel_id for current-channel Slack reads. In a channel conversation, read only this channel; workspace-wide search requires the requester's own DM or a personal web conversation.\n"
+      slackFormat = case config.access of
+        (SlackInvestigationAccess{}; SlackCommandAccess{}; SlackAccess{}) ->
+          unlines
+            [ "\nSLACK RESPONSE FORMAT (overrides any other response-format guidance)"
+            , "Your explanation is posted to Slack as markdown. Engineers read it mid-incident, often on a phone."
+            , "- First line: the answer in one sentence, with the number that matters."
+            , "- Then at most 5 short bullets of evidence: exact figures, UTC times, services."
+            , "- Comparing 3 or more items: a markdown table with a header row and at most 8 rows; Slack renders it as a native table."
+            , "- Put queries, services, fields, endpoints and IDs in `code`."
+            , "- No heading on the first line, no preamble, no restating the question, no closing offers."
+            , "- Under 120 words unless asked for detail. Charts and tables returned as widgets appear below your text: refer to them, do not narrate them."
+            , "- End with one line starting \"Next:\" only when there is a concrete next check."
+            ]
+        (MemberAccess{}; ServiceAccess) -> ""
       projectSection = maybe "" (const "\nPROJECT OPERATIONS\nUse list_metrics to discover metric names before querying an unknown metric. The default active page covers the last seven days; active=false lists older metrics. Report the selected scope and whether more pages exist. For other project operations, search_project_tools by task, then get_project_tool_schema for the selected operation before calling it. Their project scope is fixed by authorization; never infer that data absent from a tool result does not exist in another project.\n") config.projectTools
       localNow fmt = toText $ formatTime defaultTimeLocale fmt $ utcToLocalTimeTZ (fromMaybe utcTZ $ TZ.tzByName . encodeUtf8 =<< config.timezone) now
       documentsSection = bool "" documentsGuide $ isJust $ documentConversation config
@@ -1108,7 +1122,7 @@ buildSystemPrompt config now =
             InteractiveReadOnly -> []
             DurableRun{} -> []
       actionsSection = bool "" "\nEXTERNAL ACTIONS\nUse action tools only when the user or the routine's defining conversation explicitly requests that action. Report the tool result accurately.\n" $ Issues.permitsActions (invocationPolicy config.invocationMode)
-   in basePrompt <> timezoneSection <> facetSection <> customSection <> slackSection <> projectSection <> investigationSection <> documentsSection <> actionsSection
+   in basePrompt <> timezoneSection <> facetSection <> customSection <> slackSection <> projectSection <> investigationSection <> documentsSection <> actionsSection <> slackFormat
 
 
 runAgenticQuery :: ProjectToolCtx es => AgenticConfig -> Text -> Text -> Text -> Eff es (Either Text LLMResponse)

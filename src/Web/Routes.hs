@@ -830,7 +830,8 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
   let darkMode = case L.lookup "appearance" allParams of
         Just (Just "dark") -> True
         Just (Just "light") -> False
-        _ -> widget.theme == Just "dark"
+        -- Slack cannot tell us the reader's theme; a dark card reads in both.
+        _ -> widget.theme == Just "dark" || widget.pngProfile == Just Widget.PngSlack
       input =
         AE.encode
           $ AE.object

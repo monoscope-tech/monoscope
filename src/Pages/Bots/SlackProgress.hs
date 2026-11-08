@@ -3,6 +3,7 @@
 module Pages.Bots.SlackProgress (Snapshot (..), Task (..), TaskStatus (..), ReviewNotice (..), snapshot, endReview, payload, streamFrame, streamChunks, reviewDecision) where
 
 import Data.Aeson qualified as AE
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
@@ -12,7 +13,7 @@ import Models.Apis.Investigations qualified as Investigations
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId, encodeEnumSC)
 import Relude
-import Utils (hostPath)
+import Utils (fmtDate, hostPath, truncateText)
 import Web.HttpApiData (parseUrlPiece)
 import Web.Links (CookieProtectedRoutes (..), urls)
 
@@ -79,8 +80,10 @@ snapshot messageTs history = do
           stop status = map (\(taskKey@(runId, _, _), task) -> (taskKey, if runId == entry.runId && task.status == InProgress then task{status = status} else task)) tasks
        in case entry.event of
             Investigations.InvestigationStarted{} -> tasks
-            Investigations.ModelStarted iteration -> upsertTask (key iteration Decision) "Assess the evidence" InProgress
-            Investigations.ModelReturned iteration outcome -> upsertTask (key iteration Decision) "Assess the evidence" $ case outcome of
+            -- One reasoning step per run that turns busy on each model turn, rather
+            -- than a fresh "assess" line for every turn burying the evidence steps.
+            Investigations.ModelStarted _ -> upsertTask (key 0 Decision) "Analyze the evidence" InProgress
+            Investigations.ModelReturned _ outcome -> upsertTask (key 0 Decision) "Analyze the evidence" $ case outcome of
               Investigations.ModelAnswered{} -> Complete
               Investigations.ModelRequestFailed -> Error
             Investigations.ToolStarted iteration tool -> upsertTask (key iteration $ toolKind tool) (toolTitle tool) InProgress
@@ -90,21 +93,32 @@ snapshot messageTs history = do
             Investigations.InvestigationAwaitingReview{} -> stop Pending
             Investigations.InvestigationFinished -> tasks
             (Investigations.InvestigationFailed; Investigations.InvestigationInterrupted) -> stop Error
-    toolTitle tool = case LLM.toolFunctionName $ LLM.toolCallFunction tool of
-      "get_incident_context" -> "Read the incident record"
-      "get_investigation_history" -> "Read prior investigation activity"
-      "get_linked_repositories" -> "Find linked repositories"
-      "get_deployments" -> "Check deployment history"
-      "get_code_context" -> "Inspect source at the requested revision"
-      "get_services" -> "Find services in telemetry"
-      "get_schema" -> "Check available telemetry fields"
-      "get_field_values" -> "Read telemetry field values"
-      "get_facets" -> "Read telemetry summaries"
-      "count_query" -> "Count matching telemetry"
-      "sample_logs" -> "Inspect a sample of logs"
-      "run_query" -> "Query telemetry"
-      "run_sql_query" -> "Query telemetry"
-      _ -> "Check an evidence request"
+    -- A step names its subject (the query, field or file) so a reader can follow
+    -- what was checked. Plain text, one line, bounded.
+    toolTitle tool =
+      let call = LLM.toolCallFunction tool
+          subject k = clip <$> (Map.lookup k (LLM.toolFunctionArguments call) >>= \case AE.String t | not (T.null (T.strip t)) -> Just t; _ -> Nothing)
+          about k generic specific = maybe generic specific (subject k)
+       in case LLM.toolFunctionName call of
+            "get_incident_context" -> "Read the incident record"
+            "get_investigation_history" -> "Read prior investigation activity"
+            "get_related_incidents" -> "Look for related incidents"
+            "get_linked_repositories" -> about "service" "Find linked repositories" ("Find repositories for " <>)
+            "get_deployments" -> "Check recent deployments"
+            "get_code_context" -> about "path" "Inspect source at the reported revision" ("Read " <>)
+            "list_runbooks" -> "Look for runbooks"
+            "read_runbook" -> about "path" "Read a runbook" ("Read runbook " <>)
+            "get_services" -> "List services in telemetry"
+            "get_schema" -> "Check available telemetry fields"
+            "get_field_values" -> about "field" "Read telemetry field values" ("Read values of " <>)
+            "get_facets" -> "Read telemetry summaries"
+            "count_query" -> about "query" "Count matching telemetry" ("Count " <>)
+            "sample_logs" -> about "query" "Sample matching logs" ("Sample logs: " <>)
+            "run_query" -> about "query" "Query telemetry" ("Query " <>)
+            "run_sql_query" -> "Query telemetry with SQL"
+            "list_metrics" -> "List available metrics"
+            _ -> "Check an evidence request"
+    clip = truncateText 89 . unwords . words
 
 
 -- | Retain the history link after stopping; a claimed action may have taken effect.
@@ -144,7 +158,7 @@ reviewDecision identifier = T.stripPrefix "monoscope_review_" identifier >>= rig
 payload :: Text -> Projects.ProjectId -> Snapshot -> AE.Value
 payload hostUrl project progress =
   AE.object
-    [ "text" AE..= (unlines (progress.title : map taskText progress.tasks) <> "Updated " <> show progress.observedAt <> ". Completed steps mean a response was recorded; check the findings for results.")
+    [ "text" AE..= (unlines (progress.title : map taskText progress.tasks) <> caption)
     , "blocks"
         AE..= AE.Array
           ( [ AE.object ["type" AE..= ("plan" :: Text), "title" AE..= progress.title, "tasks" AE..= progress.tasks]
@@ -152,7 +166,7 @@ payload hostUrl project progress =
                 [ "type" AE..= ("context" :: Text)
                 , "elements"
                     AE..= AE.Array
-                      [ AE.object ["type" AE..= ("plain_text" :: Text), "text" AE..= ("Updated " <> show progress.observedAt <> ". Completed steps record responses, not confirmed causes." <> if progress.limited then " Showing recent activity only." else "")]
+                      [ AE.object ["type" AE..= ("plain_text" :: Text), "text" AE..= caption]
                       ]
                 ]
             ]
@@ -172,6 +186,8 @@ payload hostUrl project progress =
           )
     ]
   where
+    -- A finished step means it ran, not that it proved anything.
+    caption = "Updated " <> fmtDate "%H:%M:%S UTC" progress.observedAt <> " · steps show what was checked, not what was proven" <> bool "" " · recent activity only" progress.limited
     button decision label identifier =
       AE.object
         [ "type" AE..= ("button" :: Text)

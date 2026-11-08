@@ -1,6 +1,10 @@
 module Pages.LogPatternsSpec (spec) where
 
 import BackgroundJobs qualified
+import Control.Lens (has, (^?))
+import Data.Aeson qualified as AE
+import Data.Aeson.Lens (key)
+import Data.Effectful.Notify (Notification (..), SlackData (..))
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, zonedTimeToUTC)
@@ -56,12 +60,14 @@ spec = around withTestResources $ describe "Log patterns" do
       (testPid, testPid)
       >>= (`shouldSatisfy` all (\(pats, stats) -> pats > 0 && stats > 0))
 
-  it "rate change: only alertable levels fire, after two windows, projected per partial hour, silenced for exactly the ack window" \tr -> do
+  it "rate change: only alertable levels fire, after two windows, projected per partial hour, silenced for exactly the ack window, and recur in their Slack thread" \tr -> do
     runTestBg frozenTime tr pass
+    seedSlackChannel tr
     let uid = (Servant.getResponse tr.trSessAndHeader).user.id
         levels :: [(Text, Maybe Text)]
         levels = [("gate-info-lc", Just "info"), ("gate-debug", Just "DEBUG"), ("gate-null", Nothing), ("gate-error", Just "ERROR")]
-        detect = do t <- now tr; replicateM_ 2 (job tr $ BackgroundJobs.detectLogPatternSpikes testPid t tr.trATCtx)
+        detect = do t <- now tr; concat <$> replicateM 2 (slack . fst <$> captureNotifs tr (BackgroundJobs.detectLogPatternSpikes testPid t tr.trATCtx))
+        slack ns = [sd | SlackNotification sd <- ns]
         spike h = now tr >>= \t -> stat tr "summary" h t 600
         open = dbQuery @_ @(Issues.IssueId, Text, Text) tr [sql| SELECT id, target_hash, title FROM apis.issues WHERE project_id = ? AND issue_type = 'log_pattern_rate_change' AND acknowledged_at IS NULL ORDER BY 2 |] (Only testPid)
         silenced = runHasqlEffect tr (Issues.isSilenced testPid "gate-error" Issues.LogPatternRateChange =<< Time.currentTime)
@@ -72,7 +78,9 @@ spec = around withTestResources $ describe "Log patterns" do
     mapM_ (spike . fst) levels
     job tr $ BackgroundJobs.detectLogPatternSpikes testPid frozenTime tr.trATCtx
     countIssues tr Issues.LogPatternRateChange `shouldReturn` 0
-    job tr $ BackgroundJobs.detectLogPatternSpikes testPid frozenTime tr.trATCtx
+    firstAlert <- slack . fst <$> captureNotifs tr (BackgroundJobs.detectLogPatternSpikes testPid frozenTime tr.trATCtx)
+    map (.threadTs) firstAlert `shouldBe` [Nothing]
+    rootTs <- dbOne @_ @Text tr [sql| SELECT message_ts FROM apis.slack_incident_roots WHERE channel_id = 'C_TEST' |] ()
     -- Lowercase levels are matched case-insensitively; DEBUG and a missing level never alert. showRate already appends "/hr".
     fired <- open
     map (\(_, h, t) -> (h, t)) fired `shouldBe` [("gate-error", "test-svc · Gate test gate-error <*> · spike 300% (2400/hr vs 600/hr)")]
@@ -81,14 +89,17 @@ spec = around withTestResources $ describe "Log patterns" do
     ackAs (Issues.AckFor $ 24 * 60) iid
     dbOne @_ @(Maybe UTCTime) tr [sql| SELECT acknowledged_until FROM apis.issues WHERE id = ? |] (Only iid) `shouldReturn` Just (addUTCTime (24 * 3600) frozenTime)
     advanceHours tr 12
-    spike "gate-error" >> detect
+    (spike "gate-error" >> detect) `shouldReturn` []
     open `shouldReturn` []
     silenced `shouldReturn` True
     -- +25h45m: the window lapsed, and at :45 raw 600 projects to 800/hr — a spike only because of the partial-hour scale.
     advanceHours tr 13 >> advanceMinutes tr 45
-    spike "gate-error" >> detect
+    recurrence <- spike "gate-error" >> detect
     refired <- open
-    map (\(_, h, t) -> (h, t)) refired `shouldBe` [("gate-error", "test-svc · Gate test gate-error <*> · spike 33% (800/hr vs 600/hr)")]
+    map (\(i, h, t) -> (i, h, t)) refired `shouldBe` [(iid, "gate-error", "test-svc · Gate test gate-error <*> · spike 33% (800/hr vs 600/hr)")]
+    -- The same issue replies in its thread, and on a new day also shows in the channel.
+    [(sd.threadTs, sd.payload ^? key "reply_broadcast") | sd <- recurrence, isJust sd.threadTs] `shouldBe` [(Just rootTs, Just (AE.Bool True))]
+    [sd | sd <- recurrence, isNothing sd.threadTs, not (has (key "ts") sd.payload)] `shouldBe` []
     -- An indefinite ack outlives what a 24h one would have covered.
     mapM_ (\(i, _, _) -> ackAs Issues.AckIndefinite i) refired
     advanceHours tr 25

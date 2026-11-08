@@ -23,7 +23,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
-import Effectful.Error.Static (Error, throwError)
+import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
@@ -48,7 +48,7 @@ import Pkg.CLIFormat qualified as CLIFormat
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
-import Pkg.Mail (arr, dcGallery, plainTxt, slackActions, slackContext, slackHeader, slackImage, slackSection)
+import Pkg.Mail (arr, dcGallery, plainTxt, slackActions, slackContext, slackEscape, slackHeader, slackImage, slackSection)
 import Pkg.Parser (parseQueryToAST)
 import Pkg.SchemaLearning (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude hiding (Reader, ask)
@@ -60,7 +60,7 @@ import System.Logging qualified as Log
 import System.Tracing (Tracing)
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (onException, throwIO)
-import Utils (faSprite_, formatUTC, hostPath, toUriStr)
+import Utils (faSprite_, formatUTC, hostPath, prettyPrintCount, toUriStr)
 import Web.HttpApiData (parseUrlPiece)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), ProjectsRoutes' (..), logExplorerLinks, urls)
 
@@ -134,6 +134,11 @@ contentTypeHeader contentType = header "Content-Type" .~ [encodeUtf8 contentType
 
 linkButton :: Text -> Text -> Text -> AE.Value
 linkButton actionId label url = AE.object ["type" AE..= ("button" :: Text), "action_id" AE..= actionId, "text" AE..= plainTxt label, "url" AE..= url]
+
+
+-- | Model or user text as inline code: no backticks or newlines to break out of it.
+codeSpan :: Text -> Text
+codeSpan t = "`" <> T.take 300 (unwords $ words $ T.replace "`" "'" t) <> "`"
 
 
 -- | Slack in-channel response replacing the ephemeral loading message.
@@ -516,9 +521,6 @@ botReplyPayload :: BotReply -> AE.Value
 botReplyPayload r = r.payload
 
 
-data SlackTextLimit = SectionText | MessageText
-
-
 -- | The shared bot ask pipeline: intent detection → report or agentic query →
 -- per-platform rendering → the supplied reply sink. Slack collects replies for
 -- durable publication; other adapters can send them directly.
@@ -555,19 +557,21 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
     send reply = AI.requireAgentAccess access pid >> deliver reply
     explore links viz q = links.logExplorerGet (Just q) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing viz Nothing Nothing Nothing
 
+    -- Slack's markdown block renders the model's markdown natively, pipe tables
+    -- included, so the answer needs no conversion to mrkdwn.
     textReply txt = case target of
       Discord -> AE.object ["content" AE..= txt]
       WhatsApp -> AE.object ["body" AE..= txt]
-      Slack -> slackResponse $ map slackSection $ textChunks SectionText txt
+      Slack -> slackResponse [AE.object ["type" AE..= ("markdown" :: Text), "text" AE..= txt]]
 
     sendText txt = traverse_ (send . ReplyText . textReply) $ case target of
-      Slack -> textChunks MessageText txt
+      Slack -> textChunks txt
       (Discord; WhatsApp) -> [txt]
 
-    textChunks part = unfoldr $ \txt -> do
+    -- A message's markdown blocks share a 12,000-character budget.
+    textChunks = unfoldr $ \txt -> do
       guard $ not $ T.null txt
-      let limit = case part of SectionText -> 3000; MessageText -> 24000
-          (prefix, remainder) = T.splitAt limit txt
+      let (prefix, remainder) = T.splitAt 12000 txt
           (whole, suffix) = runIdentity $ T.spanEndM (pure . not . isSpace) prefix
       pure $ if T.null remainder || T.null whole then (prefix, remainder) else (whole, suffix <> remainder)
 
@@ -623,17 +627,27 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
                     queryUrl = hostPath envCfg.hostUrl $ maybe (explore (urls.logExplorer pid) (Just chartType) query) (\identifier -> urls.aiThreadGet pid identifier Nothing) conversation
                     viewLabel = bool "View in Log Explorer" "View in Monoscope" (isJust conversation)
                     title = fromMaybe userQuery widget.title
-                imageUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid widget Nothing (iso fromTimeM) (iso toTimeM)
+                -- A single number reads best as the number itself, not a picture of it.
+                stat <-
+                  if target == Slack && widget.wType == Widget.WTStat
+                    then do
+                      let (shaped, dataType) = Widget.chartQuery widget
+                      measured <- runErrorNoCallStack @ServerError $ Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) shaped widget.sql Nothing (iso fromTimeM) (iso toTimeM) Nothing Nothing []
+                      pure $ rightToMaybe measured >>= (.dataFloat) <&> \v -> Widget.formatStatValue widget.decimals v (fromMaybe "" widget.unit)
+                    else pure Nothing
+                imageUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid (widget :: Widget.Widget){Widget.pngProfile = widget.pngProfile <|> (Widget.PngSlack <$ guard (target == Slack))} Nothing (iso fromTimeM) (iso toTimeM)
                 send $ ReplyChart $ case target of
                   Slack ->
                     AE.object
                       [ "blocks"
                           AE..= arr
-                            ( [slackHeader (T.take 150 $ botEmoji EmojiChart <> " " <> title)]
-                                <> maybeToList (slackImage (T.take 2000 $ "Chart: " <> title) Nothing <$> mfilter ((<= 3000) . T.length) imageUrl)
-                                <> [ slackContext ["*Query:* `" <> query <> "`"]
-                                   , slackActions [linkButton "view-log-explorer" (botEmoji EmojiSearch <> " " <> viewLabel) queryUrl]
-                                   ]
+                            ( case stat of
+                                Just value -> [slackHeader (T.take 150 value), slackContext ["*" <> slackEscape (T.take 150 title) <> "*  ·  " <> codeSpan query]]
+                                Nothing ->
+                                  [slackSection $ "*" <> slackEscape (T.take 150 title) <> "*"]
+                                    <> maybeToList (slackImage (T.take 2000 $ "Chart: " <> title) Nothing <$> mfilter ((<= 3000) . T.length) imageUrl)
+                                    <> [slackContext [codeSpan query]]
+                                <> [slackActions [linkButton "view-log-explorer" viewLabel queryUrl]]
                             )
                       , "response_type" AE..= ("in_channel" :: Text)
                       , "replace_original" AE..= True
@@ -656,11 +670,12 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
                       , "4" AE..= (pid.toText <> explore logExplorerLinks (Just chartType) query)
                       ]
       let explanation = mfilter (not . T.null . T.strip) resp.explanation
+      -- The answer leads; its charts and tables follow as evidence.
       case AI.responseWidgets resp of
         [] -> sendText $ fromMaybe "No response available" explanation
         widgets -> do
-          traverse_ renderWidget $ take 10 widgets
           whenJust explanation sendText
+          traverse_ renderWidget $ take 10 widgets
 
     tableReply query = \case
       Left _ -> formatBotError target (QueryParseError query)
@@ -678,12 +693,9 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
               WhatsApp -> AE.object ["body" AE..= (content <> "\n" <> url')]
               Slack ->
                 slackResponse
-                  [ slackHeader $ botEmoji EmojiTable <> " Query Results"
-                  , slackContext ["Showing *" <> show shownCount <> "* of *" <> show resultCount <> "* rows"]
-                  , slackSection $ "`" <> query <> "`"
-                  , AE.object ["type" AE..= ("divider" :: Text)]
-                  , slackSection tableData
-                  , slackActions [linkButton "view-log-explorer" (botEmoji EmojiSearch <> " View in Log Explorer") url']
+                  [ slackContext ["*" <> prettyPrintCount shownCount <> "* of *" <> prettyPrintCount resultCount <> "* rows  ·  " <> codeSpan query]
+                  , AE.object ["type" AE..= ("table" :: Text), "rows" AE..= map (map (\cell -> AE.object ["type" AE..= ("raw_text" :: Text), "text" AE..= bool cell "—" (T.null cell)]) . take 10) cells]
+                  , slackActions [linkButton "view-log-explorer" "Open in Log Explorer" url']
                   ]
 
 

@@ -1921,9 +1921,9 @@ routeWriteRequest tr verb path params body
 routeApiV1Write :: TestResources -> Text -> Text -> [(Text, Text)] -> LBS.ByteString -> IO (Response LBS.ByteString)
 routeApiV1Write tr verb rest params body = case (verb, T.splitOn "/" rest) of
   ("POST", ["issues", iid, "ack"]) -> jsonRoute tr (ApiH.apiIssueAck ApiKeyPrincipal testPid (parseUUIDId iid) (pInt "duration_minutes" params))
-  ("POST", ["issues", iid, "unack"]) -> jsonRoute tr (ApiH.apiIssueUnack testPid (parseUUIDId iid))
-  ("POST", ["issues", iid, "archive"]) -> jsonRoute tr (ApiH.apiIssueArchive testPid (parseUUIDId iid))
-  ("POST", ["issues", iid, "unarchive"]) -> jsonRoute tr (ApiH.apiIssueUnarchive testPid (parseUUIDId iid))
+  ("POST", ["issues", iid, "unack"]) -> jsonRoute tr (ApiH.apiIssueUnack ApiKeyPrincipal testPid (parseUUIDId iid))
+  ("POST", ["issues", iid, "archive"]) -> jsonRoute tr (ApiH.apiIssueArchive ApiKeyPrincipal testPid (parseUUIDId iid))
+  ("POST", ["issues", iid, "unarchive"]) -> jsonRoute tr (ApiH.apiIssueUnarchive ApiKeyPrincipal testPid (parseUUIDId iid))
   ("POST", ["issues", "bulk"]) -> jsonRoute tr (ApiH.apiIssuesBulk ApiKeyPrincipal testPid (decodeBody "BulkAction IssueId"))
   ("POST", ["log_patterns", lpid, "ack"]) -> jsonRoute tr (ApiH.apiLogPatternAck ApiKeyPrincipal testPid (parseIntId lpid))
   ("POST", ["log_patterns", "bulk"]) -> jsonRoute tr (ApiH.apiLogPatternsBulk ApiKeyPrincipal testPid (decodeBody "BulkAction Int64"))

@@ -141,7 +141,7 @@ import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
 import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny, withException)
-import Utils (FreeTierStatus (..), calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierUsageStatus, hostPath, nonEmptyT, toXXHash, truncateHour, usageWindowStart)
+import Utils (FreeTierStatus (..), calculateCycleStartDate, formatUTC, formatUTCMicros, formatWithCommas, freeTierUsageStatus, hostPath, nonEmptyT, prettyPrintCount, toXXHash, truncateHour, usageWindowStart)
 import Web.Links
 
 
@@ -1596,13 +1596,15 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
   , occurrences1h :: Int
   , createdAt :: UTCTime
   , lastNotifiedAt :: Maybe UTCTime
+  , baselinePerHour :: Maybe Double
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
 
 
 -- | Dispatch an alert to the project's @everyone team (see 'fanOutToTeam' for the
--- per-channel enablement rules), threading slack/discord replies under 'ThreadRefs'.
+-- per-channel enablement rules). Slack goes through the incident outbox, so the
+-- issue keeps one thread per channel and a recurrence replies in it.
 -- Email routes to project members, not the team's notify_emails.
 --
 -- The returned Bool reports whether the @everyone team existed. Callers use it to
@@ -1611,22 +1613,43 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
 -- last_notified_at or the pattern gets silenced for the whole cooldown window.
 sendAlertToChannels
   :: NotificationAlerts
-  -> Projects.ProjectId
+  -> (Incidents.SlackPayload, Incidents.SlackPayload)
+  -> Issues.Issue
   -> Projects.Project
   -> [Projects.User]
   -> Text
   -> Text
   -> Html ()
-  -> ThreadRefs
-  -> ATBackgroundCtx (ThreadRefs, Bool)
-sendAlertToChannels alert pid project users alertUrl subj html refs =
-  ProjectMembers.getEveryoneTeam pid >>= \case
+  -> ATBackgroundCtx Bool
+sendAlertToChannels alert (rootPayload, replyPayload) issue project users alertUrl subj html =
+  ProjectMembers.getEveryoneTeam project.id >>= \case
     Nothing -> do
-      Log.logAttention "sendAlertToChannels: no @everyone team for project; no dispatch" (AE.object ["project_id" AE..= pid])
-      pure (refs, False)
+      Log.logAttention "sendAlertToChannels: no @everyone team for project; no dispatch" (AE.object ["project_id" AE..= project.id])
+      pure False
     Just team -> do
-      let fan = Fanout{slack = InlineSlack, threads = Just refs, email = Just FanoutEmail{recipients = map (CI.original . (.email)) users, subject = subj, body = ET.renderEmail subj html}}
-      (,True) <$> fanOutToTeam team fan alert pid project.title alertUrl
+      now <- Time.currentTime
+      installation <- Integrations.getProjectSlackData project.id
+      let source = Incidents.IssueIncident issue.id
+      result <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+        open <- mfilter ((== Incidents.EpisodeActive) . (.phase)) <$> Incidents.latestEpisodeTx project.id source
+        Incidents.recordIncidentEventTx
+          Incidents.IncidentUpdate
+            { projectId = project.id
+            , source
+            , observedAt = now
+            , change = if isJust open then Incidents.IncidentReminder else Incidents.IncidentAlert
+            , delivery = Incidents.PublishIncident
+            , issueId = Just issue.id
+            , rootPayload
+            , replyPayload
+            , destinations = slackDestinations installation [team]
+            }
+      case result of
+        Incidents.Recorded{} -> tryStep "slack-incident-delivery" runSlackIncidentDeliveries
+        Incidents.AlreadyRecorded{} -> pass
+        (Incidents.NoOpenEpisode; Incidents.Rejected _) -> Log.logAttention "Issue alert was not recorded for Slack" (project.id, issue.id, show @Text result)
+      let fan = Fanout{slack = QueuedSlack, threads = Nothing, email = Just FanoutEmail{recipients = map (CI.original . (.email)) users, subject = subj, body = ET.renderEmail subj html}}
+      True <$ fanOutToTeam team fan alert project.id project.title alertUrl
 
 
 -- | Fan an alert out to every enabled non-email channel of the @everyone team.
@@ -1807,6 +1830,21 @@ monitorTrendChartUrl ctx pid monitor from to currentValue = do
   trendChartUrl ctx pid widget (formatUTC from) (formatUTC to)
 
 
+-- | A log pattern's last day of hourly volume, against the baseline it broke from.
+patternVolumeChartUrl :: (DB es, Log :> es) => Config.AuthContext -> Projects.ProjectId -> LogPatterns.LogPatternWithRate -> Double -> UTCTime -> Eff es (Maybe Text)
+patternVolumeChartUrl ctx pid lp baselineMean now = do
+  let from = addUTCTime (-86400) now
+  hours <-
+    Hasql.interp @[(UTCTime, Int64)]
+      [HI.sql|SELECT hour_bucket, event_count FROM apis.log_pattern_hourly_stats
+        WHERE project_id = #{pid} AND source_field = #{lp.sourceField} AND pattern_hash = #{lp.patternHash} AND hour_bucket >= #{from}
+        ORDER BY hour_bucket|]
+  let millis = floor . (* 1000) . utcTimeToPOSIXSeconds :: UTCTime -> Int
+      rows = AE.toJSON (["timestamp", "Events"] :: [Text]) : [AE.toJSON ([AE.toJSON (millis at), AE.toJSON n] :: [AE.Value]) | (at, n) <- hours]
+      dataset = def{Widget.source = AE.toJSON rows, Widget.from = Just $ millis from, Widget.to = Just $ millis now}
+  trendChartUrl ctx pid def{Widget.wType = Widget.WTTimeseries, Widget.unit = Just "events", Widget.dataset = Just dataset, Widget.hideLegend = Just True, Widget.baseline = Just baselineMean} (formatUTC from) (formatUTC now)
+
+
 -- | Fast inline path after ingestion: dispatch due notifications only for the
 -- given error-pattern hashes. Empty vector is a no-op.
 notifyErrorSubscriptions :: Projects.ProjectId -> V.Vector Text -> ATBackgroundCtx ()
@@ -1960,7 +1998,7 @@ selectDueErrorNotifications pid mHashes now =
           WITH candidates AS (
             SELECT e.id, e.error_data, e.state, i.id AS issue_id, i.title,
                    e.discord_message_id, e.occurrences_1h,
-                   e.created_at, e.last_notified_at,
+                   e.created_at, e.last_notified_at, e.baseline_error_rate_mean,
                    i.acknowledged_until, i.archived_at
             FROM apis.error_patterns e
             JOIN LATERAL (
@@ -2009,7 +2047,7 @@ selectDueErrorNotifications pid mHashes now =
           )
           SELECT c.id, c.error_data, c.state, c.issue_id, c.title,
                  c.discord_message_id, c.occurrences_1h,
-                 c.created_at, c.last_notified_at
+                 c.created_at, c.last_notified_at, c.baseline_error_rate_mean
           FROM candidates c
           WHERE c.archived_at IS NULL
             AND (c.acknowledged_until IS NULL OR c.acknowledged_until <= #{now}::timestamptz)
@@ -2079,7 +2117,14 @@ dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors)
                             , Mail.userName = sub.errorData.userName <* guard project.includeUserIdentityInAlerts
                             , Mail.userEmail = sub.errorData.userEmail <* guard project.includeUserIdentityInAlerts
                             }
-                        (rootPayload, replyPayload) = Mail.errorIncidentMessages alertType sub.errorData now active baseUrl incidentUrl chart occText impact
+                        -- An escalation says what it escalated from.
+                        escalation =
+                          [ x
+                          | alertType `elem` [EscalatingErrors, ErrorSpike]
+                          , Just b <- [mfilter (> 0) sub.baselinePerHour]
+                          , x <- ["was " <> prettyPrintCount (round b) <> "/hr", "*+" <> formatWithCommas (fromIntegral (round ((fromIntegral sub.occurrences1h - b) / b * 100) :: Int)) <> "%*"]
+                          ]
+                        (rootPayload, replyPayload) = Mail.errorIncidentMessages alertType sub.errorData now active ongoingFor baseUrl incidentUrl chart occText escalation impact
                         change
                           | isNothing active = Incidents.IncidentAlert
                           | sub.errorState == AESEscalating = Incidents.IncidentObservation
@@ -2220,10 +2265,8 @@ claimIssueNotification iid now cooldownHours =
 -- into one batched message by 'NotificationDigestJob'.
 -- Gated by 'project.errorAlerts' so customers can opt out without code changes.
 --
--- Returns (threadRefs, dispatched). Callers that track
--- per-resource thread IDs (e.g. error_patterns) persist them so later
--- re-notifications thread under the original alert. Returns (mempty, False)
--- when suppressed by cooldown, errorAlerts=false, or rate-limit overflow.
+-- Returns whether the alert was dispatched; False when suppressed by cooldown,
+-- errorAlerts=false, or rate-limit overflow.
 notifyIssue
   :: Issues.Issue
   -> Projects.Project
@@ -2231,26 +2274,27 @@ notifyIssue
   -> Int -- cooldown hours (dedup window)
   -> Text -- digest reason (matches apis.notification_digest_queue.reason values)
   -> NotificationAlerts
+  -> (Incidents.SlackPayload, Incidents.SlackPayload)
   -> Text -- alert url
   -> Text -- email subject
   -> Html () -- email body
-  -> ATBackgroundCtx (ThreadRefs, Bool)
-notifyIssue issue project users cooldownHours digestReason alert alertUrl subj html
-  | not project.errorAlerts = pure (def, False)
+  -> ATBackgroundCtx Bool
+notifyIssue issue project users cooldownHours digestReason alert slackMessages alertUrl subj html
+  | not project.errorAlerts = pure False
   | otherwise = do
       now <- Time.currentTime
       claimed <- claimIssueNotification issue.id now cooldownHours
       allowed <- if claimed then consumeNotificationToken project.id now else pure False
       if
-        | not claimed -> pure (def, False)
+        | not claimed -> pure False
         | allowed -> do
-            (refs, dispatched) <- sendAlertToChannels alert project.id project users alertUrl subj html def
+            dispatched <- sendAlertToChannels alert slackMessages issue project users alertUrl subj html
             Log.logInfo "issue_notification_sent" (AE.object ["project_id" AE..= project.id.toText, "issue_id" AE..= issue.id.toText, "reason" AE..= digestReason, "dispatched" AE..= dispatched])
-            pure (refs, dispatched)
+            pure dispatched
         | otherwise -> do
             enqueueDigest project.id Nothing (Just issue.id) digestReason issue.title
             Log.logInfo "issue_notification_digested" (AE.object ["project_id" AE..= project.id.toText, "issue_id" AE..= issue.id.toText, "reason" AE..= ("rate_limit" :: Text)])
-            pure (def, False)
+            pure False
 
 
 -- | Process and insert errors for a specific project (single batched round-trip via unnest).
@@ -3187,7 +3231,7 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
             let issueId = persistedId <|> (active >>= (.issueId))
                 issueUrl = maybe monitorUrl (issuePageUrl appCtx monitor.projectId) issueId
                 alertUrl = fromMaybe issueUrl widgetUrlM
-                (rootPayload, replyPayload) = Mail.monitorIncidentMessages monitor value status observedAt active issueUrl monitorUrl chartUrlM
+                (rootPayload, replyPayload) = Mail.monitorIncidentMessages p.title monitor value status observedAt active issueUrl monitorUrl chartUrlM
                 change
                   | isRecovery = Incidents.IncidentRecovered
                   | status /= monitor.currentStatus = Incidents.IncidentAlert
@@ -4942,9 +4986,11 @@ evaluateCronMonitor now m = do
       latest = viaNonEmpty last $ sortWith fst [(c.timestamp, st) | c <- spans, attr "monitor.slug" c == Just m.slug, maybe True (c.timestamp >) m.lastCheckinAt, Just st <- [completion c]]
       lastSeen = (fst <$> latest) <|> m.lastCheckinAt
       expectedBy = addUTCTime (fromIntegral $ m.intervalSecs + m.graceSecs) (fromMaybe m.createdAt lastSeen)
-      open failure =
-        Issues.insertIssue
-          =<< Issues.createCronIssue m.projectId Issues.CronData{monitorId = UUID.toText m.id, slug = m.slug, name = m.name, failure, expectedBy, lastCheckinAt = lastSeen}
+      open failure = do
+        let d = Issues.CronData{monitorId = UUID.toText m.id, slug = m.slug, name = m.name, failure, expectedBy, lastCheckinAt = lastSeen}
+            headline = (if T.null m.name then m.slug else m.name) <> bool " failed" " missed its run" (failure == Issues.CFMissed)
+        issue <- Issues.createCronIssue m.projectId d
+        alertCheckIssue issue "cron" (Mail.cronMessages d) headline ["Expected by " <> formatUTC expectedBy, maybe "No check-in yet" (("Last check-in " <>) . formatUTC) lastSeen]
   whenJust latest \(at, status) -> void $ Monitors.recordCronCheckin m.id at status
   case latest of
     Just (_, Monitors.CSOk) -> resolveOpenIssue m.projectId (Issues.cronTargetHash (UUID.toText m.id)) Issues.Cron now []
@@ -4961,27 +5007,60 @@ applyUptimeResult cfg now ms res = do
       ok = res == Right expected
       reason = either ("request failed: " <>) (\c -> bool ("status " <> show c <> ", expected " <> show expected) "ok" ok) res
   (before, after) <- PromCfg.recordUptime cfg.id ok (reason <> " · " <> show ms <> "ms")
-  when (not ok && after == 2)
-    $ Issues.insertIssue
-    =<< Issues.createUptimeIssue
-      cfg.projectId
-      Issues.UptimeData
-        { checkId = cfg.id.toText
-        , name = cfg.name
-        , url = cfg.url
-        , expectedStatus = expected
-        , statusCode = rightToMaybe res
-        , reason
-        , durationMs = ms
-        , downSince = addUTCTime (negate $ fromIntegral cfg.scrapeIntervalSeconds) now
-        }
+  when (not ok && after == 2) do
+    let d =
+          Issues.UptimeData
+            { checkId = cfg.id.toText
+            , name = cfg.name
+            , url = cfg.url
+            , expectedStatus = expected
+            , statusCode = rightToMaybe res
+            , reason
+            , durationMs = ms
+            , downSince = addUTCTime (negate $ fromIntegral cfg.scrapeIntervalSeconds) now
+            }
+    issue <- Issues.createUptimeIssue cfg.projectId d
+    alertCheckIssue issue "uptime" (Mail.uptimeMessages d) ((if T.null cfg.name then cfg.url else cfg.name) <> " is down") [cfg.url, reason]
   when (ok && before >= 2) $ resolveOpenIssue cfg.projectId (Issues.uptimeTargetHash cfg.id.toText) Issues.Uptime now ["after_failures" AE..= before]
 
 
--- | Archive a recovered signal's open issue and log it as resolved.
+-- | Open (or reopen) a failing check's one long-lived issue and alert on it, so a
+-- recurring outage replies in the check's thread instead of starting a new one.
+alertCheckIssue :: Issues.Issue -> Text -> (Text -> (Incidents.SlackPayload, Incidents.SlackPayload)) -> Text -> [Text] -> ATBackgroundCtx ()
+alertCheckIssue fresh reason messages headline facts = do
+  ctx <- ask @Config.AuthContext
+  now <- Time.currentTime
+  persisted <- Hasql.transaction TxS.ReadCommitted TxS.Write $ Issues.reopenOrInsertIssueTx now fresh
+  Projects.projectById fresh.projectId >>= traverse_ \project -> do
+    users <- Projects.usersByProjectId fresh.projectId
+    let issue = (fresh :: Issues.Issue){Issues.id = persisted}
+        url = issuePageUrl ctx fresh.projectId persisted
+        (subj, html) = ET.checkAlertEmail project.title headline facts url
+    void $ notifyIssue issue project users Issues.issueNotifyDedupHours reason (MonitorsAlert headline url Nothing) (messages url) url subj html
+
+
+-- | Archive a recovered signal's open issue and log it as resolved. A check that
+-- alerted says so in its thread and on every channel it alerted, before the
+-- resolution is logged, so the thread hears it once.
 resolveOpenIssue :: Projects.ProjectId -> Text -> Issues.IssueType -> UTCTime -> [(AE.Key, AE.Value)] -> ATBackgroundCtx ()
 resolveOpenIssue pid hash ty now extra =
-  Issues.selectIssueByHash pid hash (Issues.OpenOfType ty) >>= traverse_ \i -> Issues.resolveIssues pid [i.id] Nothing (Just $ AE.object (("recovered_at" AE..= now) : extra))
+  Issues.selectIssueByHash pid hash (Issues.OpenOfType ty) >>= traverse_ \i -> do
+    ctx <- ask @Config.AuthContext
+    let source = Incidents.IssueIncident i.id
+        url = issuePageUrl ctx pid i.id
+    recovered <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+      open <- mfilter ((== Incidents.EpisodeActive) . (.phase)) <$> Incidents.latestEpisodeTx pid source
+      forM open \episode -> do
+        let (rootPayload, replyPayload) = Mail.recoveredMessages i.title url (diffUTCTime now episode.startedAt)
+        Incidents.recordIncidentEventTx Incidents.IncidentUpdate{projectId = pid, source, observedAt = now, change = Incidents.IncidentRecovered, delivery = Incidents.PublishIncident, issueId = Just i.id, rootPayload, replyPayload, destinations = []}
+    whenJust recovered \_ -> do
+      tryStep "slack-incident-delivery" runSlackIncidentDeliveries
+      Projects.projectById pid >>= traverse_ \project -> do
+        teamM <- ProjectMembers.getEveryoneTeam pid
+        let (subj, html) = ET.monitorRecoveryEmail project.title i.title url
+        users <- Projects.usersByProjectId pid
+        whenJust teamM \team -> void $ fanOutToTeam team Fanout{slack = QueuedSlack, threads = Nothing, email = Just FanoutEmail{recipients = map (CI.original . (.email)) users, subject = subj, body = ET.renderEmail subj html}} (MonitorsRecoveryAlert i.title url) pid project.title url
+    Issues.resolveIssues pid [i.id] Nothing (Just $ AE.object (("recovered_at" AE..= now) : extra))
 
 
 -- | A read against TimeFusion when the project's reads are switched to it.
@@ -5042,15 +5121,17 @@ runSlackIncidentDeliveries = do
                 Incidents.PostReply ts -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
                 Incidents.PostAnalysis ts _ -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
                 Incidents.UpdateRoot ts -> (Notify.SlackUpdate $ Incidents.slackTimestampText ts, Nothing)
-              message =
+                Incidents.PostActivity ts _ -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
+              payload = case delivery.operation of
+                (Incidents.PostReply _; Incidents.PostAnalysis _ _) -> delivery.payload
+                Incidents.PostActivity _ note -> Mail.activityReply note
+                -- Every root render states who holds the issue now.
+                (Incidents.PostRoot; Incidents.PostStandalone; Incidents.UpdateRoot _) -> Mail.withOwner delivery.owner $ Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
+              message payload' =
                 Notify.SlackData
                   { Notify.channelId = delivery.channelId
                   , Notify.botToken = sd.botToken
-                  , Notify.payload = AE.toJSON $ Incidents.correlateSlackDelivery delivery $ case delivery.operation of
-                      (Incidents.PostReply _; Incidents.PostAnalysis _ _) -> delivery.payload
-                      Incidents.PostRoot -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
-                      Incidents.PostStandalone -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
-                      Incidents.UpdateRoot _ -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
+                  , Notify.payload = AE.toJSON $ Incidents.correlateSlackDelivery delivery payload'
                   , Notify.threadTs = parent
                   , Notify.webhookUrl = if delivery.channelId == sd.channelId then sd.webhookUrl else Nothing
                   , Notify.projectIdCtx = delivery.projectId.toText
@@ -5058,11 +5139,11 @@ runSlackIncidentDeliveries = do
                   }
           allowed <- case delivery.operation of
             Incidents.PostAnalysis _ runId -> Issues.incidentReportAllowed delivery.projectId runId
-            (Incidents.PostRoot; Incidents.PostStandalone; Incidents.PostReply{}; Incidents.UpdateRoot{}) -> pure True
+            (Incidents.PostRoot; Incidents.PostStandalone; Incidents.PostReply{}; Incidents.UpdateRoot{}; Incidents.PostActivity{}) -> pure True
           if not allowed
             then pure $ Incidents.DeliveryRejected "incident_routine_authority_withdrawn"
             else
-              Notify.deliverSlack operation message <&> \case
+              Notify.deliverSlack operation (message payload) <&> \case
                 Notify.SlackSent ts -> maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
                 -- Without a bot token nothing can ever recover the timestamp.
                 Notify.SlackAccepted ->
@@ -5109,7 +5190,7 @@ recordMonitorDataGap monitor at reason = do
             [HI.sql|SELECT NOT EXISTS (SELECT 1 FROM apis.incident_events WHERE episode_id = #{episode.id} AND observed_at = #{episode.lastEventAt} AND event_kind = 'data_unavailable')|]
         let publish = firstGap && not suppressed
             incidentUrl = maybe monitorUrl (issuePageUrl ctx monitor.projectId) episode.issueId
-            payload = Mail.monitorDataUnavailableMessage monitor reason at (listToMaybe readings) incidentUrl monitorUrl
+            (rootPayload, replyPayload) = Mail.monitorDataUnavailableMessage monitor reason at (listToMaybe readings) incidentUrl monitorUrl
         result <-
           Incidents.recordIncidentEventTx
             Incidents.IncidentUpdate
@@ -5119,8 +5200,8 @@ recordMonitorDataGap monitor at reason = do
               , change = Incidents.IncidentDataUnavailable
               , delivery = if publish then Incidents.PublishIncident else Incidents.RefreshIncident
               , issueId = episode.issueId
-              , rootPayload = payload
-              , replyPayload = payload
+              , rootPayload
+              , replyPayload
               , destinations = []
               }
         case result of
@@ -5499,14 +5580,18 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
   issueIds <- forM firesAllowed \(lpRate, sr) -> do
     let dir = display sr.direction
     Log.logInfo ("Log pattern " <> dir <> " confirmed") (lpRate.patternId, lpRate.logPattern, sr.currentRate, sr.mean)
-    issue <- Issues.createLogPatternRateChangeIssue pid lpRate sr
-    Issues.insertIssue issue
+    fresh <- Issues.createLogPatternRateChangeIssue pid lpRate sr
+    -- One long-lived issue per pattern, so a recurring spike replies in its thread.
+    persisted <- Hasql.transaction TxS.ReadCommitted TxS.Write $ Issues.reopenOrInsertIssueTx scheduledTime fresh
+    let issue = (fresh :: Issues.Issue){Issues.id = persisted}
     whenJust projectM \project -> do
+      chartUrl <- patternVolumeChartUrl authCtx pid lpRate sr.mean scheduledTime
       let issueUrl = hostPath authCtx.env.hostUrl $ (urls.issues pid).detailGet issue.id Nothing Nothing Nothing Nothing Nothing
           changePct = if sr.mean > 0 then (sr.currentRate - sr.mean) / sr.mean * 100 else 0
-          alert = LogPatternRateChangeAlert{issueUrl, patternText = lpRate.logPattern, sampleMessage = Nothing, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = sr.direction, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct, isError = lpRate.isError}
+          rateChange = Mail.RateChange{issueUrl, patternText = lpRate.logPattern, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = sr.direction, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct, isError = lpRate.isError, chartUrl}
+          alert = LogPatternRateChangeAlert rateChange
           (subj, html) = ET.logPatternRateChangeEmail project.title issueUrl lpRate.logPattern lpRate.logLevel lpRate.serviceName dir sr.currentRate sr.mean changePct
-      void $ notifyIssue issue project users Issues.issueNotifyDedupHours "log_pattern_rate_change" alert issueUrl subj html
+      void $ notifyIssue issue project users Issues.issueNotifyDedupHours "log_pattern_rate_change" alert (Mail.cardMessages $ Mail.rateChangeCard rateChange project.title) issueUrl subj html
     pure issue.id
 
   -- Clear the pending markers for anything we just fired; a new detection
@@ -5552,7 +5637,7 @@ processNewLogPatterns pid authCtx = do
             let issueUrl = hostPath authCtx.env.hostUrl $ (urls.issues pid).detailGet issue.id Nothing Nothing Nothing Nothing Nothing
                 alert = ET.NewLogPattern{issueUrl, patternText = lp.logPattern, sampleMessage = lp.sampleMessage, logLevel = lp.logLevel, serviceName = lp.serviceName, sourceField = lp.sourceField, occurrenceCount = fromIntegral lp.occurrenceCount, isError = lp.isError}
                 (subj, html) = ET.logPatternEmail project.title alert
-            void $ notifyIssue issue project users newPatternCooldownHours "log_pattern" (LogPatternAlert alert) issueUrl subj html
+            void $ notifyIssue issue project users newPatternCooldownHours "log_pattern" (LogPatternAlert alert) (Mail.cardMessages $ Mail.logPatternCard alert project.title) issueUrl subj html
           pure issue.id
         unless (V.null results) $ enqueueJobs authCtx [EnhanceIssuesWithLLM pid results]
 

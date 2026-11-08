@@ -374,9 +374,9 @@ spec = around withTestResources $ describe "Error patterns" do
     (null slack1, null [() | DiscordNotification _ <- notifs1]) `shouldBe` (False, False)
     -- The "View trace" link filters on the trace_id KQL alias; a style:"default" button once got every
     -- trace-bearing alert rejected with invalid_attachments.
-    forM_ slack1 \sd -> do
-      show @Text sd.payload `shouldContainAll` [pat.errorType, "log_explorer?query=trace_id"]
-      slackPayloadViolations sd.payload `shouldBe` []
+    -- The reminder replies in one line; the root edit keeps the full card.
+    [show @Text sd.payload | sd <- slack1, isNothing sd.threadTs] `shouldSatisfy` \ps -> not (null ps) && all (\p -> all (`T.isInfixOf` p) [pat.errorType, "log_explorer?query=trace_id"]) ps
+    concatMap (slackPayloadViolations . (.payload)) slack1 `shouldBe` []
     roots1 <- roots
     (map fst roots1, all (isJust . snd) roots1) `shouldBe` (["C_TEST"], True)
     discord1 <- discordId

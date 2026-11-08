@@ -7,6 +7,7 @@ module Utils (
   onpointerdown_,
   jsonValueToHtmlTree,
   truncateMiddle,
+  truncateText,
   JSONHttpApiData (..),
   parseTime,
   copyToClipboardAttr_,
@@ -288,6 +289,14 @@ fieldContextMenuItems_ ctx = traverse_ \case
       li_ $ button_ ([type_ "button", class_ "flex gap-2 items-center flex-nowrap w-full", action] <> [term "title" tip | not (T.null tip)]) do
         faSprite_ icon "regular" "w-4 h-4 text-iconNeutral shrink-0"
         span_ [class_ "truncate min-w-0"] labelHtml
+
+
+-- | Cut to @n@ characters, marking the cut.
+--
+-- >>> map (`truncateText` "abcdef") [3, 6]
+-- ["abc\8230","abcdef"]
+truncateText :: Int -> Text -> Text
+truncateText n t = if T.length t > n then T.take n t <> "…" else t
 
 
 -- | Middle-truncate a display string to at most @n@ chars (keeps head + tail),

@@ -41,6 +41,7 @@ import Pages.Monitors qualified as Alerts
 import Pages.Projects qualified as ProjectPages
 import Pages.Settings qualified as Settings
 import Pkg.Components.Widget qualified as Widget
+import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail qualified as Mail
 import BackgroundJobs qualified as Jobs
 import Control.Exception (ErrorCall (..), bracket_)
@@ -71,13 +72,70 @@ spec = describe "Monitoring" do
   it "Slack error fallbacks stay concise and keep metadata subordinate to the exception" do
     let err = def{Errors.errorType = "HttpException", Errors.message = T.replicate 50 "HttpExceptionRequest Request { host = \"api.example.com\" path = \"/oauth/token\" } ", Errors.serviceName = Just "monoscope-dev"}
         impact = Mail.AlertImpact "Monoscope" (Just "Acme Corp") (Just "Ada Lovelace") (Just "ada@example.com")
-        messages trend = Mail.errorIncidentMessages Mail.NewRuntimeError err frozenTime Nothing "https://example.com" "https://example.com/issues/1" trend (Just "1/hr") impact
+        messages trend = Mail.errorIncidentMessages Mail.NewRuntimeError err frozenTime Nothing Nothing "https://example.com" "https://example.com/issues/1" trend (Just "1/hr") [] impact
         (root, reply) = messages (Just "https://example.com/error-trend.png")
         withoutTrend = jsonText $ fst $ messages Nothing
-    jsonText root `shouldContainAll` ["```HttpExceptionRequest", "HTTP request failed · api.example.com/oauth/token", "Project Monoscope · Tenant Acme Corp · monoscope-dev · 1/hr · Observed", "Ada Lovelace &lt;ada@example.com&gt;", "https://example.com/error-trend.png"]
+    jsonText root `shouldContainAll` ["```HttpExceptionRequest", ":red_circle: *New error*  <https://example.com/issues/1|HTTP request failed · api.example.com/oauth/token>", "*monoscope-dev*  ·  *1/hr*", "Started Jan 1, 00:00 UTC  ·  User Ada Lovelace  ·  Tenant Acme Corp  ·  Project Monoscope", "https://example.com/error-trend.png", "#E5484D"]
     jsonText root `shouldNotSatisfy` T.isInfixOf err.message
-    (withoutTrend, jsonText reply) `shouldSatisfy` \(w, r) -> "Trend unavailable yet" `T.isInfixOf` w && not ("image_url" `T.isInfixOf` w) && "Open issue" `T.isInfixOf` r
+    (withoutTrend, jsonText reply) `shouldSatisfy` \(w, r) -> "Chart unavailable" `T.isInfixOf` w && not ("image_url" `T.isInfixOf` w) && ":red_circle: *New error*  ·  *1/hr*" `T.isInfixOf` r
     slackPayloadViolations (AE.toJSON root) <> slackPayloadViolations (AE.toJSON reply) `shouldBe` []
+
+  -- One snapshot of every Slack alert shape: a reviewer reads (or renders) the
+  -- whole notification vocabulary in one file and sees any drift in the diff.
+  it "Slack alert gallery: every alert type shares one card anatomy and one-line replies" do
+    let chart = Just "https://example.com/chart.png"
+        issue = "https://example.com/issues/1"
+        err =
+          def
+            { Errors.errorType = "TypeError"
+            , Errors.message = "Cannot read properties of undefined (reading 'id')"
+            , Errors.stackTrace = "TypeError: Cannot read properties of undefined (reading 'id')\n    at getOrderItems (/app/src/routes/orders.ts:87:24)"
+            , Errors.serviceName = Just "orders-api"
+            , Errors.environment = Just "production"
+            , Errors.requestMethod = Just "GET"
+            , Errors.requestPath = Just "/api/v1/orders/:orderId/items"
+            , Errors.traceId = Just "296e419eef5ed7da296e419eef5ed7da"
+            , Errors.when = frozenTime
+            }
+        impact = Mail.AlertImpact "Acme API" Nothing (Just "Ada Lovelace") (Just "ada@example.com")
+        episode = Just I.Episode{I.id = UUIDId UUID.nil, I.projectId = testPid, I.issueId = Nothing, I.phase = I.EpisodeActive, I.startedAt = addUTCTime (-9000) frozenTime, I.lastEventAt = frozenTime, I.closedAt = Nothing}
+        errorMessages t ongoing = Mail.errorIncidentMessages t err frozenTime episode ongoing "https://example.com" issue chart (Just "38/hr") ["was 4/hr" | t == Mail.EscalatingErrors] impact
+        monitor = (def :: Monitors.QueryMonitor){Monitors.alertThreshold = 1200, Monitors.warningThreshold = Just 1000, Monitors.checkIntervalMins = 1, Monitors.alertConfig = def{Monitors.title = "Checkout p95 latency", Monitors.unit = Just "ms"}}
+        monitorMessages v st = Mail.monitorIncidentMessages "Acme API" monitor{Monitors.currentStatus = Monitors.MSAlerting} v st (addUTCTime 1380 frozenTime) episode issue "https://example.com/monitors/1" chart
+        (resolvedRoot, resolvedReply) = Mail.resolvedErrorMessage err "Ada Lovelace" frozenTime "https://example.com" (Just issue)
+        logPattern = ET.NewLogPattern{issueUrl = issue, patternText = "payment provider timeout after <*> ms", sampleMessage = Just "payment provider timeout after 30000 ms (provider=adyen, attempt=3)", logLevel = Just "error", serviceName = Just "payments", sourceField = "body", occurrenceCount = 214, isError = True}
+        endpoints = V.fromList [ET.EndpointAlertRow "POST /api/v1/refunds" (Just "api.acme.io") (Just "payments") (Just "production"), ET.EndpointAlertRow "GET /api/v1/refunds/:id" (Just "api.acme.io") (Just "payments") (Just "production")]
+        spike = Mail.cardMessages $ Mail.rateChangeCard (Mail.RateChange issue "connection reset by peer <*>" (Just "warn") (Just "gateway") Issues.Spike 1920 140 1271 False chart) "Acme API"
+        note event meta = Issues.ActivityNote{Issues.event, Issues.issue = Just "TypeError: Cannot read properties of undefined", Issues.actor = Just "Ada Lovelace", Issues.assignee = Just "Grace Hopper", Issues.metadata = Just $ AE.object meta, Issues.at = frozenTime}
+        activity =
+          [ note Issues.IEAcknowledged ["until" AE..= addUTCTime 3600 frozenTime]
+          , note Issues.IEAssigned []
+          , note Issues.IECommented ["body" AE..= ("Rolling back the orders deploy; the null check was dropped in #4821" :: Text)]
+          , note Issues.IELinked ["url" AE..= ("https://github.com/acme/orders/issues/4821" :: Text), "title" AE..= ("acme/orders#4821" :: Text)]
+          , note Issues.IEAckExpired []
+          , note Issues.IEResolved []
+          ]
+        uptime = Mail.uptimeMessages (Issues.UptimeData "1" "Shop health" "https://shop.acme.io/health" 200 (Just 503) "status 503, expected 200" 120 frozenTime) issue
+        entry :: Text -> I.SlackPayload -> [I.SlackPayload] -> AE.Value
+        entry label root thread = AE.object ["label" AE..= label, "payload" AE..= root, "thread" AE..= thread]
+        gallery =
+          [ entry "new error" (fst $ errorMessages Mail.NewRuntimeError Nothing) [snd $ errorMessages Mail.EscalatingErrors Nothing, snd $ errorMessages Mail.NewRuntimeError (Just "3 hours"), resolvedReply]
+          , entry "issue lifecycle in the thread" (fst $ errorMessages Mail.NewRuntimeError Nothing) (Mail.activityReply <$> activity)
+          , entry "root while someone holds it" (Mail.withOwner (Just $ Issues.Ownership (Just "Ada Lovelace") (Just $ addUTCTime 3600 frozenTime) (Just "Grace Hopper")) $ fst $ errorMessages Mail.NewRuntimeError Nothing) []
+          , entry "error root after resolve" (Mail.retainSlackSnapshot (fst $ errorMessages Mail.NewRuntimeError Nothing) resolvedRoot) []
+          , entry "regressed error" (fst $ errorMessages Mail.RegressedErrors Nothing) []
+          , entry "monitor alerting" (fst $ monitorMessages 1840 Monitors.MSAlerting) [snd $ monitorMessages 1050 Monitors.MSWarning, snd $ Mail.monitorDataUnavailableMessage monitor Monitors.NoMeasurements frozenTime (Just (frozenTime, 1840)) issue "", snd $ monitorMessages 640 Monitors.MSNormal]
+          , entry "monitor root after recovery" (Mail.retainSlackSnapshot (fst $ monitorMessages 1840 Monitors.MSAlerting) (fst $ monitorMessages 640 Monitors.MSNormal)) []
+          , entry "uptime check down" (fst uptime) [snd uptime, snd $ Mail.recoveredMessages "Shop health" issue 720]
+          , entry "uptime root after recovery" (Mail.retainSlackSnapshot (fst uptime) (fst $ Mail.recoveredMessages "Shop health" issue 720)) []
+          , entry "cron missed its run" (fst $ Mail.cronMessages (Issues.CronData "1" "nightly-billing" "Nightly billing" Issues.CFMissed (addUTCTime 300 frozenTime) (Just $ addUTCTime (-86100) frozenTime)) issue) []
+          , entry "new log pattern" (Mail.card $ Mail.logPatternCard logPattern "Acme API") []
+          , entry "log spike" (fst spike) [snd spike]
+          , entry "new endpoints" (Mail.slackNewEndpointsAlert "Acme API" endpoints issue "https://example.com") []
+          , entry "weekly report" (Mail.slackReportAlert Projects.RTWeekly "2025-01-01T00:00:00Z" "2025-01-08T00:00:00Z" 42 125000 (V.fromList [("orders-api", 30, 90000), ("payments", 12, 35000)]) "Acme API" "https://example.com/reports/1" chart chart) []
+          ]
+    goldenText "slack/alert-gallery.json" $ decodeUtf8 $ AE.encode gallery
+    concatMap slackPayloadViolations gallery `shouldBe` []
 
   around withTestResources do
     it "web monitor lifecycle: form save, scoped compiled SQL, list/single/overview, invalid KQL refused, edits keep deactivation" \tr -> do
@@ -148,7 +206,10 @@ spec = describe "Monitoring" do
       widgetId <- maybe (fail "the saved widget has no id") pure savedWidget.id
       let widgetMonitor pid = runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId pid (Just dashboardId) widgetId
           widgetUrl = "/p/" <> testPid.toText <> "/dashboards/" <> dashboardId.toText <> "?expand=" <> widgetId
-          linksTo url notification = unless (url `T.isInfixOf` jsonText notification) $ expectationFailure $ "Missing widget link in " <> show (deliverySummary [notification])
+          -- A one-line thread reply links nothing; its root carries the links.
+          linksTo url = \case
+            SlackNotification sd | isJust sd.threadTs -> pass
+            notification -> unless (url `T.isInfixOf` jsonText notification) $ expectationFailure $ "Missing widget link in " <> show (deliverySummary [notification])
           putWidget w = (void <$> call tr (Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing w)) `shouldReturn` Right ()
           upsertAlert = call tr . Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId)
           check = advanceMinutes tr 1 >> deliverySummary . fst <$> captureNotifs tr checkTriggeredQueryMonitors
@@ -384,6 +445,9 @@ spec = describe "Monitoring" do
       cronAdded <- fromRightShow <$> call tr (Alerts.cronMonitorPostH pid (Alerts.CronForm "nightly-billing" "Nightly billing" 3600 300))
       goldenParts "uptime-cron-forms" . ordNub $ tagsWith ["value name=\"url\"", "hx-target:inherited=\"this\""] (renderT added) <> tagsWith ["value name=\"slug\"", "hx-target:inherited=\"this\""] (renderT cronAdded)
 
+      void $ runQueryEffect tr $ ProjectMembers.createEveryoneTeam pid (Servant.getResponse tr.trSessAndHeader).user.id
+      setupSlackData tr pid "T_UPTIME"
+      dbExec tr [sql|UPDATE projects.projects SET error_alerts = TRUE WHERE id = ?|] (Only pid)
       -- One failure is a blip; two open a downtime issue; a success resolves it.
       let uptimeNamed n = maybe (fail $ "no uptime check " <> toString n) pure . find ((== n) . (.name)) =<< runQueryEffect tr (PromCfg.configsByProjectId pid PromCfg.CKUptime)
       shop <- uptimeNamed "Shop"
@@ -398,6 +462,9 @@ spec = describe "Monitoring" do
       resolved <- downtime >>= maybe (fail "issue vanished") pure
       isJust resolved.archivedAt `shouldBe` True
       runTestBg frozenTime tr (Issues.selectLatestStateEvent resolved.id) `shouldReturn` Just Issues.IEResolved
+      -- Downtime posts one Slack card; recovery replies in its thread and edits the card, once.
+      dbQuery @_ @(Only Text) tr [sql|SELECT d.operation FROM apis.slack_incident_deliveries d JOIN apis.incident_episodes e ON e.id = d.episode_id WHERE e.issue_id = ? ORDER BY d.sequence|] (Only opened.id)
+        `shouldReturn` map Only ["post_root", "post_reply", "update_root"]
       -- Through the worker, a refused connection is recorded as a failure.
       void $ runQueryEffect tr $ PromCfg.insertConfig pid PromCfg.CKUptime "refused" "http://127.0.0.1:1/health" 60 Nothing (AE.object []) (Just 200)
       refused <- uptimeNamed "refused"
@@ -464,14 +531,14 @@ spec = describe "Monitoring" do
       compressed <- either (fail . toString) pure $ B64URL.decodeBase64Untyped $ urlDecode True $ encodeUtf8 $ T.takeWhile (/= '&') suffix
       widget <- either fail pure $ AE.eitherDecode @Widget.Widget $ GZip.decompress $ fromStrict compressed
       (widget.query, widget.unit, widget.alertThreshold, widget.pngProfile, Widget.mapWidgetTypeToChartType widget.wType) `shouldBe` (Nothing, Just "s", Just 60, Just Widget.PngSlack, "line")
-      Widget.pngExportSize widget.pngProfile `shouldBe` (960, 320)
+      Widget.pngExportSize widget.pngProfile `shouldBe` (960, 280)
       dataset <- maybe (fail "monitor snapshot had no dataset") pure widget.dataset
       (dataset.from, dataset.to) `shouldBe` (Just $ millis $ addUTCTime (-900) t0, Just $ millis t0)
       dataset.source `shouldBe` AE.toJSON @[AE.Value] [AE.toJSON (["timestamp", "Monitor value"] :: [Text]), row earlier (Just (84 :: Double)), row (addUTCTime 60 earlier) (Nothing :: Maybe Double), row t0 (Just (100 :: Double))]
       configured <- fetchMonitor tr snapshot
-      let (root, _) = Mail.monitorIncidentMessages configured 100 Monitors.MSAlerting t0 Nothing "https://example.com/incident" "https://example.com/monitor" Nothing
-      jsonText root `shouldContainAll` ["100.0 s", "60.0 s", "Chart unavailable."]
-      jsonText (Mail.monitorDataUnavailableMessage configured Monitors.NoMeasurements t0 (Just (earlier, 84)) "https://example.com/incident" "https://example.com/monitor") `shouldSatisfy` T.isInfixOf "84.0 s"
+      let (root, _) = Mail.monitorIncidentMessages "Acme API" configured 100 Monitors.MSAlerting t0 Nothing "https://example.com/incident" "https://example.com/monitor" Nothing
+      jsonText root `shouldContainAll` ["*100 s*  ·  above 60 s", "Chart unavailable"]
+      jsonText (snd $ Mail.monitorDataUnavailableMessage configured Monitors.NoMeasurements t0 (Just (earlier, 84)) "https://example.com/incident" "https://example.com/monitor") `shouldSatisfy` T.isInfixOf "last value 84 s"
 
       -- Reminders: none by default, only when the interval is due, counted up to stop-after; recovery always reports.
       insertRenotifyMonitor tr renotify 100
@@ -553,7 +620,8 @@ spec = describe "Monitoring" do
         void $ call tr $ IssuesPage.resolveErrorPostH testPid notified.id.unErrorPatternId False
         closed <- slack . fst <$> captureNotifs tr (replicateM_ 2 runSlackIncidentDeliveries)
         length closed `shouldBe` 4
-        for_ closed \sd -> slackText sd `shouldSatisfy` T.isInfixOf "RESOLVED"
+        -- The root says it is resolved; the reply says by whom.
+        for_ closed \sd -> slackText sd `shouldSatisfy` T.isInfixOf (bool "*Resolved*" "*Resolved by " (isJust sd.threadTs))
 
       it "keeps one error episode across different issue records and resolves its original incident link" \tr -> do
         update <- setupWithIssue tr
@@ -590,7 +658,8 @@ spec = describe "Monitoring" do
         fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid episode.id) `shouldReturn` Just I.EpisodeResolved
         resolution <- slack . fst <$> captureNotifs tr (replicateM_ 2 runSlackIncidentDeliveries)
         length resolution `shouldBe` 4
-        for_ resolution \sd -> (issue.id.toText `T.isInfixOf` slackText sd, nextIssue.id.toText `T.isInfixOf` slackText sd) `shouldBe` (True, False)
+        [issue.id.toText `T.isInfixOf` slackText sd | sd <- resolution, isNothing sd.threadTs] `shouldBe` [True, True]
+        for_ resolution \sd -> slackText sd `shouldNotSatisfy` T.isInfixOf nextIssue.id.toText
         dbQuery tr [sql|SELECT channel_id FROM apis.slack_incident_roots WHERE episode_id = ? ORDER BY channel_id|] (Only episode.id) `shouldReturn` [Only ("C1" :: Text), Only "C2"]
         closedAt <- getTestTime tr.trTestClock
         record initial{I.observedAt = addUTCTime 1 closedAt} `shouldReturn` I.Rejected I.InactiveIncidentSource
@@ -611,7 +680,43 @@ spec = describe "Monitoring" do
         fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid recurring.id) `shouldReturn` Just I.EpisodeResolved
         orphaned <- slack . fst <$> captureNotifs tr (replicateM_ 2 runSlackIncidentDeliveries)
         length orphaned `shouldBe` 4
-        for_ orphaned \sd -> ("Open project issues" `T.isInfixOf` slackText sd, nextIssue.id.toText `T.isInfixOf` slackText sd) `shouldBe` (True, False)
+        -- With its issue gone, the root links the project's issue list instead.
+        ["/issues|" `T.isInfixOf` slackText sd | sd <- orphaned, isNothing sd.threadTs] `shouldBe` [True, True]
+        for_ orphaned \sd -> slackText sd `shouldNotSatisfy` T.isInfixOf nextIssue.id.toText
+
+      it "relays issue lifecycle actions as replies in each channel's thread and never as channel posts" \tr -> do
+        mid <- monitorOf <$> setupWithIssue tr
+        setupSlackData tr testPid "T1"
+        slackChannels tr ["C1", "C2"]
+        map (.threadTs) . slack <$> evaluateMonitor tr mid 84 `shouldReturn` [Nothing, Nothing]
+        iid <- dbOne @_ @Issues.IssueId tr [sql|SELECT issue_id FROM apis.incident_episodes WHERE source_id = ?|] (Only mid)
+        rootTs <- dbQuery @_ @(Text, Text) tr [sql|SELECT channel_id, message_ts FROM apis.slack_incident_roots ORDER BY channel_id|] ()
+        let actor = (Servant.getResponse tr.trSessAndHeader).user
+            who = "*" <> Mail.personName actor <> "*"
+            -- A root sends one delivery per tick, in order: three replies and two root edits.
+            deliver = slack . fst <$> captureNotifs tr (replicateM_ 6 runSlackIncidentDeliveries)
+            stranded = dbQuery @_ @(Text, Text) tr [sql|SELECT operation, state FROM apis.slack_incident_deliveries WHERE state NOT IN ('delivered', 'failed')|] ()
+        void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid True iid (Just 60)
+        void $ call tr $ IssuesPage.triagePostH testPid iid (IssuesPage.TriageForm Nothing (Just actor.id.toText))
+        void $ call tr $ IssuesPage.commentPostH testPid iid (IssuesPage.CommentForm "rolling back <the> deploy")
+        delivered <- deliver
+        let lifecycle = filter (isJust . (.threadTs)) delivered
+            rootEdits = [slackText sd | sd <- delivered, sd.payload ^? key "metadata" . key "event_type" . _String == Just "monoscope_incident_root", sd.channelId == "C1"]
+        sort [(sd.channelId, sd.threadTs) | sd <- lifecycle] `shouldBe` sort [(c, Just ts) | (c, ts) <- rootTs, _ <- [1 .. 3 :: Int]]
+        -- Acknowledging and assigning also edit the root, so the channel sees who holds it.
+        rootEdits `shouldSatisfy` \case [_, assigned] -> all (`T.isInfixOf` assigned) [":eyes: Acknowledged by " <> who, ":bust_in_silhouette: Assigned to " <> who]; _ -> False
+        [slackText sd | sd <- lifecycle, sd.channelId == "C1"]
+          `shouldSatisfy` \case
+            [acked, took, commented] ->
+              all (uncurry T.isInfixOf) [(":eyes: " <> who <> " acknowledged this  ·  alerts paused until ", acked), (who <> " took this", took), ("> rolling back &lt;the&gt; deploy", commented)]
+            _ -> False
+        concatMap (slackPayloadViolations . (.payload)) lifecycle `shouldBe` []
+        stranded `shouldReturn` []
+        -- A webhook-only root has no thread; a lifecycle note there would land in the channel.
+        dbExec tr [sql|UPDATE apis.slack_incident_roots SET message_ts = NULL, threadless = TRUE WHERE channel_id = 'C2'|] ()
+        void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid False iid Nothing
+        sort . map (\sd -> (sd.channelId, isJust sd.threadTs)) <$> deliver `shouldReturn` [("C1", False), ("C1", True)]
+        stranded `shouldReturn` []
 
       it "records manual error resolution once and updates both incident threads without claiming recovery" \tr -> do
         update <- setupWithIssue tr
@@ -633,7 +738,7 @@ spec = describe "Monitoring" do
         membership ("view" :: Text, True, testPid, actor.id)
         resolvePost err.id.unErrorPatternId `shouldReturn` Left IssuesPage.ResolveDenied
         (.state) <$> (runTestBgNoReset tr (Errors.getErrorPatternById err.id) >>= maybe (fail "error missing") pure) `shouldReturn` Errors.ESNew
-        let resolve pid at = runTestBgNoReset tr $ I.resolveErrorIncident pid err.id actor.id at (const update.rootPayload)
+        let resolve pid at = runTestBgNoReset tr $ I.resolveErrorIncident pid err.id actor.id at (const (update.rootPayload, update.replyPayload))
         resolve testPid (addUTCTime 60 frozenTime) `shouldReturn` I.ErrorResolutionDenied
         resolve (UUIDId $ UUID.fromWords 0 0 0 999) (addUTCTime 60 frozenTime) `shouldReturn` I.ErrorResolutionDenied
         dbExec tr [sql|UPDATE apis.error_patterns SET assignee_id = ? WHERE id = ?|] (actor.id, err.id)
@@ -661,7 +766,9 @@ spec = describe "Monitoring" do
         let messages = slack $ replies <> edits
         length messages `shouldBe` 4
         sort [(sd.channelId, sd.threadTs) | sd <- messages, isJust sd.threadTs] `shouldBe` sort [(sd.channelId, Just ts) | sd <- messages, AE.Object obj <- [sd.payload], Just (AE.String ts) <- [KM.lookup "ts" obj]]
-        for_ messages \sd -> slackText sd `shouldContainAll` ["RESOLVED", actor.firstName, "Measured recovery has not been verified", issue.id.toText]
+        for_ messages \sd -> slackText sd `shouldContainAll` [bool "*Resolved*" "*Resolved by " (isJust sd.threadTs), actor.firstName]
+        -- A person resolved it: the root says so and does not claim a measured recovery.
+        for_ [sd | sd <- messages, isNothing sd.threadTs] \sd -> (slackText sd `shouldContainAll` [":white_check_mark: *Resolved*", issue.id.toText]) >> (slackText sd `shouldNotSatisfy` T.isInfixOf "Recovered")
         fst <$> captureNotifs tr runSlackIncidentDeliveries `shouldReturn` []
         -- Recurrence regresses the error and opens a new episode; auto-resolution is attributed to nobody, at this transition's time.
         advanceMinutes tr 1
@@ -709,7 +816,7 @@ spec = describe "Monitoring" do
         acceptDeliveries tr
         missing <- check
         (length missing, threaded missing) `shouldBe` (4, 2)
-        for_ missing \sd -> slackText sd `shouldContainAll` ["DATA UNAVAILABLE", "Recovery is unconfirmed"]
+        for_ missing \sd -> slackText sd `shouldContainAll` ["*No data*", "evaluation"]
         current <- fetchMonitor tr mid
         (current.currentStatus, current.currentValue, current.notificationCount) `shouldBe` (Monitors.MSAlerting, 84, 2)
         tick
@@ -720,7 +827,7 @@ spec = describe "Monitoring" do
         tick
         failed <- check
         length failed `shouldBe` 4
-        for_ failed \sd -> slackText sd `shouldSatisfy` T.isInfixOf "The evaluation failed"
+        for_ failed \sd -> slackText sd `shouldSatisfy` T.isInfixOf "evaluation failed"
         tick
         dbExec tr [sql|UPDATE monitors.query_monitors SET stop_after_count = 3 WHERE id = ?|] (Only mid)
         void $ evaluateMonitor tr mid 84
@@ -729,7 +836,7 @@ spec = describe "Monitoring" do
         tick
         recovered <- slack <$> evaluateMonitor tr mid 18
         length recovered `shouldBe` 4
-        for_ recovered \sd -> slackText sd `shouldSatisfy` T.isInfixOf "RECOVERED"
+        for_ recovered \sd -> slackText sd `shouldSatisfy` T.isInfixOf "*Recovered*"
         dbOne @_ @Int64 tr [sql|SELECT count(*) FROM apis.slack_incident_roots r JOIN apis.incident_episodes e ON e.id = r.episode_id WHERE e.source_kind = 'monitor' AND e.source_id = ?|] (Only mid) `shouldReturn` 2
 
       it "keeps warning, escalation, and recovery in two monitor threads and preserves the onset snapshot" \tr -> do
@@ -741,7 +848,7 @@ spec = describe "Monitoring" do
         (initialA, initialB) <- concurrently (evaluate 50) (evaluate 50)
         let initial = initialA <> initialB
         map (.threadTs) initial `shouldBe` [Nothing, Nothing]
-        for_ initial \sd -> slackText sd `shouldSatisfy` T.isInfixOf "WARNING"
+        for_ initial \sd -> slackText sd `shouldSatisfy` T.isInfixOf "*Warning*"
         advanceMinutes tr 1
         length <$> evaluate 84 `shouldReturn` 4
         advanceMinutes tr 1
@@ -749,7 +856,7 @@ spec = describe "Monitoring" do
         length recovered `shouldBe` 4
         let edits = [(sd.channelId, KM.lookup "ts" obj, sd) | sd <- recovered, AE.Object obj <- [sd.payload], KM.member "ts" obj]
         sort [(cid, ts) | (cid, ts, _) <- edits] `shouldBe` sort [(sd.channelId, AE.String <$> sd.threadTs) | sd <- recovered, isJust sd.threadTs]
-        for_ edits \(_, _, sd) -> slackText sd `shouldContainAll` ["RECOVERED", "Initial value: 50.0", "widgetZ=", "/issues/"]
+        for_ edits \(_, _, sd) -> slackText sd `shouldContainAll` [":large_green_circle: *Recovered*", "*18*  ·  below 60  ·  lasted 2 min", "Started Jan 1, 00:00 UTC", "widgetZ=", "/issues/"]
         dbQuery tr [sql|SELECT phase FROM apis.incident_episodes WHERE project_id = ? AND source_id = ?|] (testPid, mid) `shouldReturn` [Only ("recovered" :: Text)]
         -- Re-alerting continues each channel's thread instead of posting a new root;
         -- the first message of a new day in that thread is also sent to the channel.
@@ -775,7 +882,7 @@ spec = describe "Monitoring" do
         dbQuery tr [sql|SELECT phase FROM apis.incident_episodes WHERE project_id = ? AND source_id = ?|] (testPid, mid) `shouldReturn` [Only ("recovered" :: Text)]
         advanceMinutes tr 2
         resumed <- slack . fst <$> captureNotifs tr runSlackIncidentDeliveries
-        [t | AE.Object obj <- map (.payload) resumed, KM.member "ts" obj, Just (AE.String t) <- [KM.lookup "text" obj]] `shouldSatisfy` \case [t] -> "RECOVERED" `T.isInfixOf` t; _ -> False
+        [t | AE.Object obj <- map (.payload) resumed, KM.member "ts" obj, Just (AE.String t) <- [KM.lookup "text" obj]] `shouldSatisfy` \case [t] -> "Recovered" `T.isInfixOf` t; _ -> False
         advanceMinutes tr 1
         length . filter (isJust . (.threadTs)) . slack <$> evaluateMonitor tr mid 84 `shouldReturn` 1
 
@@ -1005,6 +1112,7 @@ spec = describe "Monitoring" do
               I.PostRoot -> fail "Expected a lifecycle delivery"
               I.PostStandalone -> fail "Expected a lifecycle delivery"
               I.PostAnalysis{} -> fail "Expected an incident fact delivery"
+              I.PostActivity{} -> fail "Expected an incident fact delivery"
             Just metadata <- pure $ AE.toJSON (I.correlateSlackDelivery delivery delivery.payload) ^? key "metadata"
             let message = AE.object ["ts" AE..= (expectedTs :: Text), "thread_ts" AE..= I.slackTimestampText parent, "app_id" AE..= ("A_TEST" :: Text), "bot_id" AE..= ("B_TEST" :: Text), "metadata" AE..= metadata]
                 wrong = message & key "metadata" . key "event_payload" . key "delivery_id" . _String .~ "00000000-0000-0000-0000-000000000000"
@@ -1021,6 +1129,7 @@ spec = describe "Monitoring" do
                     I.PostRoot -> fail "Unexpected root search"
                     I.PostStandalone -> fail "Unexpected root search"
                     I.PostAnalysis{} -> fail "Expected an incident fact delivery"
+                    I.PostActivity{} -> fail "Expected an incident fact delivery"
             advanceMinutes tr 3
             work `shouldReturn` [endpointUrl]
             found <- timestamp expectedTs

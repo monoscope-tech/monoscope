@@ -2,6 +2,7 @@ module Models.Projects.Projects (
   OnboardingStep (..),
   -- Users
   User (..),
+  userDisplayName,
   UserId,
   pattern UserId,
   systemUserId,
@@ -237,6 +238,11 @@ data User = User
     (Entity)
     via (GenericEntity '[Schema "users", TableName "users", PrimaryKey "id", FieldModifiers '[CamelToSnake]] User)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake User
+
+
+-- | A member's name, when they have given one.
+userDisplayName :: User -> Maybe Text
+userDisplayName u = guarded (not . T.null) $ T.strip $ u.firstName <> " " <> u.lastName
 
 
 createUser :: (Time :> es, UUIDEff :> es) => Text -> Text -> Text -> Text -> Eff es User
