@@ -302,7 +302,7 @@ validateClaims recorded claims = do
     let cited key = filter ((== key) . (.key)) recorded
     unless (claim.status == Unverified || not (null claim.proofKeys)) $ Left "A matching or differing claim must cite a recorded proof"
     unless (all (\key -> sort (map (.side) $ cited key) == universe) claim.proofKeys) $ Left "Claim cites a proof that was not recorded on base and head"
-    unless (claim.status /= Matches || all (\key -> any (\p -> p.side == Agent.Head && p.exitCode == Just 0) (cited key)) claim.proofKeys) $ Left "A matching claim needs a head recording that succeeded"
+    unless (claim.status /= Matches || all (any (\p -> p.side == Agent.Head && p.exitCode == Just 0) . cited) claim.proofKeys) $ Left "A matching claim needs a head recording that succeeded"
     unless (not (T.null $ T.strip claim.title) && not (T.null $ T.strip claim.summary)) $ Left "Each claim needs a title and a summary"
 
 
@@ -782,17 +782,8 @@ renderReview host run audience result =
     attr = T.replace "\"" "&quot;" . clean
     dimensionName = \case Alignment -> "Alignment"; Impact -> "Impact"; Verification -> "Verification"; Rollback -> "Rollback cost"; ErrorDetection -> "Error detection"
     gradeText dimension grade =
-      (case grade of Good -> "✅ "; NotApplicable -> "✅ "; Fair -> "👀 "; Poor -> "⚠️ ") <> case (dimension, grade) of
-        (_, NotApplicable) -> "n/a"
-        (Impact, Good) -> "small"
-        (Impact, Fair) -> "medium"
-        (Impact, Poor) -> "large"
-        (Rollback, Good) -> "low"
-        (Rollback, Fair) -> "medium"
-        (Rollback, Poor) -> "high"
-        ((Alignment; Verification; ErrorDetection), Good) -> "good"
-        ((Alignment; Verification; ErrorDetection), Fair) -> "decent"
-        ((Alignment; Verification; ErrorDetection), Poor) -> "poor"
+      let (good, fair, poor) = case dimension of Impact -> ("small", "medium", "large"); Rollback -> ("low", "medium", "high"); (Alignment; Verification; ErrorDetection) -> ("good", "decent", "poor")
+       in case grade of Good -> "✅ " <> good; NotApplicable -> "✅ n/a"; Fair -> "👀 " <> fair; Poor -> "⚠️ " <> poor
     findingText finding =
       T.intercalate "\n"
         . map (\line -> if T.null line then ">" else "> " <> line)
