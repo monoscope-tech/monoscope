@@ -452,9 +452,9 @@ apiV1Server actor principal queryEvents dashboardRenderer mcpHandler =
       issuesList = apiIssuesList pid
     , issueGet = apiIssueGet pid
     , issueAck = apiIssueAck actor pid
-    , issueUnack = apiIssueUnack pid
-    , issueArchive = apiIssueArchive pid
-    , issueUnarchive = apiIssueUnarchive pid
+    , issueUnack = apiIssueUnack actor pid
+    , issueArchive = apiIssueArchive actor pid
+    , issueUnarchive = apiIssueUnarchive actor pid
     , issuesBulk = apiIssuesBulk actor pid
     , incidentsList = apiIncidentsList pid
     , incidentGet = apiIncidentGet pid
@@ -1171,15 +1171,25 @@ synthStackFromSpans trId spans =
         <> ")"
 
 
-issueMutate :: Projects.ProjectId -> Issues.IssueId -> ([Issues.IssueId] -> ATBaseCtx Int64) -> ATBaseCtx IssueApiFull
-issueMutate pid iid op = fetchIssue pid iid *> op [iid] *> apiIssueGet pid iid
+-- | Apply one lifecycle change and record it, as the UI does, so its timeline
+-- and its Slack threads hear about API actions too.
+issueMutate :: ApiActor -> Projects.ProjectId -> Issues.IssueId -> Issues.IssueEvent -> Maybe AE.Value -> ([Issues.IssueId] -> ATBaseCtx Int64) -> ATBaseCtx IssueApiFull
+issueMutate principal pid iid event meta op = do
+  void $ fetchIssue pid iid
+  changed <- op [iid]
+  when (changed > 0) $ Issues.logIssueActivity iid event (principalUser principal) meta
+  apiIssueGet pid iid
 
 
 -- | Acknowledge, silencing notifications for @duration_minutes@ — or
 -- indefinitely (until the issue regresses or is un-acked) when omitted.
 apiIssueAck :: ApiActor -> Projects.ProjectId -> Issues.IssueId -> Maybe Int -> ATBaseCtx IssueApiFull
 apiIssueAck principal pid iid durationM =
-  mkAckSet principal durationM >>= \ack -> issueMutate pid iid \ids -> Issues.setAckState pid ids (Just ack)
+  mkAckSet principal durationM >>= \ack -> issueMutate principal pid iid Issues.IEAcknowledged (ackMeta ack) \ids -> Issues.setAckState pid ids (Just ack)
+
+
+ackMeta :: Issues.AckSet -> Maybe AE.Value
+ackMeta ack = Just $ AE.object ["until" AE..= Issues.ackUntil ack.at ack.window]
 
 
 -- | Build an 'Issues.AckSet' for @now@ from an optional duration in minutes.
@@ -1190,30 +1200,31 @@ mkAckSet principal durationM = do
   pure Issues.AckSet{at = now, by = principalUser principal, window = maybe Issues.AckIndefinite Issues.AckFor durationM}
 
 
-apiIssueUnack :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
-apiIssueUnack pid iid = issueMutate pid iid $ \ids -> Issues.setAckState pid ids Nothing
+apiIssueUnack :: ApiActor -> Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
+apiIssueUnack principal pid iid = issueMutate principal pid iid Issues.IEUnacknowledged Nothing \ids -> Issues.setAckState pid ids Nothing
 
 
-apiIssueArchive :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
-apiIssueArchive pid iid = do
+apiIssueArchive :: ApiActor -> Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
+apiIssueArchive principal pid iid = do
   now <- Time.currentTime
-  issueMutate pid iid $ \ids -> Issues.setArchiveState pid ids (Just (now, Issues.ArchiveIndefinite))
+  issueMutate principal pid iid Issues.IEArchived Nothing \ids -> Issues.setArchiveState pid ids (Just (now, Issues.ArchiveIndefinite))
 
 
-apiIssueUnarchive :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
-apiIssueUnarchive pid iid = issueMutate pid iid $ \ids -> Issues.setArchiveState pid ids Nothing
+apiIssueUnarchive :: ApiActor -> Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
+apiIssueUnarchive principal pid iid = issueMutate principal pid iid Issues.IEUnarchived Nothing \ids -> Issues.setArchiveState pid ids Nothing
 
 
 apiIssuesBulk :: ApiActor -> Projects.ProjectId -> BulkAction Issues.IssueId -> ATBaseCtx (BulkResult Issues.IssueId)
 apiIssuesBulk principal pid ba = do
   now <- Time.currentTime
   ackSet <- mkAckSet principal ba.durationMinutes
+  let logged event meta op = count op <* forM_ ba.ids \i -> Issues.logIssueActivity i event (principalUser principal) meta
   bulkExec
     ba
-    [ ("acknowledge", count $ Issues.setAckState pid ba.ids (Just ackSet))
-    , ("unacknowledge", count $ Issues.setAckState pid ba.ids Nothing)
-    , ("archive", count $ Issues.setArchiveState pid ba.ids (Just (now, Issues.ArchiveIndefinite)))
-    , ("unarchive", count $ Issues.setArchiveState pid ba.ids Nothing)
+    [ ("acknowledge", logged Issues.IEAcknowledged (ackMeta ackSet) $ Issues.setAckState pid ba.ids (Just ackSet))
+    , ("unacknowledge", logged Issues.IEUnacknowledged Nothing $ Issues.setAckState pid ba.ids Nothing)
+    , ("archive", logged Issues.IEArchived Nothing $ Issues.setArchiveState pid ba.ids (Just (now, Issues.ArchiveIndefinite)))
+    , ("unarchive", logged Issues.IEUnarchived Nothing $ Issues.setArchiveState pid ba.ids Nothing)
     ]
 
 
