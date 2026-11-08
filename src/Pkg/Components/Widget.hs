@@ -388,6 +388,7 @@ data Widget = Widget
   , alertId :: Maybe Text -- Linked QueryMonitor ID
   , alertThreshold :: Maybe Double -- For threshold line rendering
   , warningThreshold :: Maybe Double
+  , baseline :: Maybe Double -- A normal level drawn for comparison, e.g. a log pattern's usual hourly volume
   , showThresholdLines :: Maybe ThresholdLines
   , seriesIntent :: Maybe Text
   -- ^ What a lone aggregate series *means*, when the series name cannot say. A bare
@@ -1784,7 +1785,7 @@ addMarkLinesToFirstSeries widget series
     shouldShowLines = case fromMaybe TLAlways widget.showThresholdLines of
       TLNever -> False
       TLOnBreach -> any (/= Monitors.MSNormal) widget.alertStatus
-      TLAlways -> isJust widget.alertThreshold || isJust widget.warningThreshold
+      TLAlways -> isJust widget.alertThreshold || isJust widget.warningThreshold || isJust widget.baseline
 
     mkMarkLine color label threshold =
       AE.object
@@ -1798,6 +1799,7 @@ addMarkLinesToFirstSeries widget series
       catMaybes
         [ widget.alertThreshold <&> mkMarkLine "#dc2626" "Alert"
         , widget.warningThreshold <&> mkMarkLine "#f59e0b" "Warning"
+        , widget.baseline <&> mkMarkLine "#8b8d98" "Baseline"
         ]
 
     addMarkLine :: AE.Value -> AE.Value

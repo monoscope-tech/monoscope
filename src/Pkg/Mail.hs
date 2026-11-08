@@ -88,6 +88,7 @@ data RateChange = RateChange
   , baselineMean :: Double
   , changePercent :: Double
   , isError :: Bool
+  , chartUrl :: Maybe Text
   }
 
 
@@ -397,13 +398,13 @@ lasted d
 
 -- | A monitor episode as a root card and a one-line thread reply.
 -- The root keeps its onset chart; replies carry only the new reading.
-monitorIncidentMessages :: Monitors.QueryMonitor -> Double -> Monitors.MonitorStatus -> UTCTime -> Maybe Incidents.Episode -> Text -> Text -> Maybe Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
-monitorIncidentMessages monitor value status observedAt episode issueUrl monitorUrl chart =
+monitorIncidentMessages :: Text -> Monitors.QueryMonitor -> Double -> Monitors.MonitorStatus -> UTCTime -> Maybe Incidents.Episode -> Text -> Text -> Maybe Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
+monitorIncidentMessages project monitor value status observedAt episode issueUrl monitorUrl chart =
   ( card
       (statusCard st monitor.alertConfig.title issueUrl)
         { facts = measurement
         , chart = Just ("Recorded values for " <> incidentHeadline monitor.alertConfig.title, chart)
-        , footer = ["Started " <> atUtc started, "checked every " <> show monitor.checkIntervalMins <> " min"]
+        , footer = ["Started " <> atUtc started, "checked every " <> show monitor.checkIntervalMins <> " min", "Project " <> slackEscape project]
         , actions = [("Open issue", issueUrl), (if isJust monitor.widgetId && isJust monitor.dashboardId then "Open widget" else "Open monitor", monitorUrl)]
         }
   , reply st monitor.alertConfig.title measurement
@@ -443,10 +444,10 @@ monitorDataUnavailableMessage monitor reason now previous incidentUrl _ =
 
 -- | An error episode as a root card and a one-line reply. A reminder replies
 -- "still occurring"; anything else replies with the status that changed.
-errorIncidentMessages :: RuntimeAlertType -> ErrorPatterns.ATError -> UTCTime -> Maybe Incidents.Episode -> Maybe Text -> Text -> Text -> Maybe Text -> Maybe Text -> AlertImpact -> (Incidents.SlackPayload, Incidents.SlackPayload)
-errorIncidentMessages alertType err now episode ongoing projectUrl incidentUrl chart occurrence impact =
+errorIncidentMessages :: RuntimeAlertType -> ErrorPatterns.ATError -> UTCTime -> Maybe Incidents.Episode -> Maybe Text -> Text -> Text -> Maybe Text -> Maybe Text -> [Text] -> AlertImpact -> (Incidents.SlackPayload, Incidents.SlackPayload)
+errorIncidentMessages alertType err now episode ongoing projectUrl incidentUrl chart occurrence change impact =
   ( card $ errorCard (runtimeStatus alertType) err projectUrl incidentUrl chart occurrence footer
-  , reply (if isJust ongoing then sStillFailing else runtimeStatus alertType) (errorAlertTitle err) (foldMap (\r -> ["*" <> r <> "*"]) occurrence <> foldMap (\d -> ["ongoing " <> d]) ongoing)
+  , reply (if isJust ongoing then sStillFailing else runtimeStatus alertType) (errorAlertTitle err) (foldMap (\r -> ["*" <> r <> "*"]) occurrence <> change <> foldMap (\d -> ["ongoing " <> d]) ongoing)
   )
   where
     -- A name says whom it hit without posting an address to the channel.
@@ -619,6 +620,7 @@ rateChangeCard :: RateChange -> Text -> Card
 rateChangeCard RateChange{..} project =
   (statusCard status (stripSummaryBadges patternText) issueUrl)
     { facts = catMaybes [bold <$> serviceName, T.toUpper . slackEscape <$> logLevel] <> ["*" <> perHour currentRate <> "*", "baseline " <> perHour baselineMean, "*" <> bool "−" "+" spike <> formatWithCommas (fromIntegral (round (abs changePercent) :: Int)) <> "%*"]
+    , chart = Just ("Hourly volume against its baseline", chartUrl)
     , footer = ["Project " <> slackEscape project]
     , actions = [("Open issue", issueUrl)]
     }
@@ -889,7 +891,7 @@ sampleAlert = \case
         Nothing
   QueryAlert -> testMonitor "High Error Rate"
   LogPattern -> const $ LogPatternAlert NewLogPattern{issueUrl = "https://example.com/test", patternText = "🧪 TEST: payment provider timeout after <*> ms", sampleMessage = Just "payment provider timeout after 30000 ms (provider=adyen)", logLevel = Just "error", serviceName = Just "payments", sourceField = "body", occurrenceCount = 214, isError = True}
-  LogPatternRateChange -> const $ LogPatternRateChangeAlert RateChange{issueUrl = "https://example.com/test", patternText = "🧪 TEST: connection reset by peer <*>", logLevel = Just "warn", serviceName = Just "gateway", direction = Spike, currentRate = 1920, baselineMean = 140, changePercent = 1271, isError = False}
+  LogPatternRateChange -> const $ LogPatternRateChangeAlert RateChange{issueUrl = "https://example.com/test", patternText = "🧪 TEST: connection reset by peer <*>", logLevel = Just "warn", serviceName = Just "gateway", direction = Spike, currentRate = 1920, baselineMean = 140, changePercent = 1271, isError = False, chartUrl = Nothing}
   Performance -> testMonitor "N+1 Query"
   Frontend -> testMonitor "Rage Click"
   Uptime -> testMonitor "Downtime detected"

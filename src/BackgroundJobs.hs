@@ -141,7 +141,7 @@ import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
 import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny, withException)
-import Utils (FreeTierStatus (..), calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierUsageStatus, hostPath, nonEmptyT, toXXHash, truncateHour, usageWindowStart)
+import Utils (FreeTierStatus (..), calculateCycleStartDate, formatUTC, formatWithCommas, prettyPrintCount, formatUTCMicros, freeTierUsageStatus, hostPath, nonEmptyT, toXXHash, truncateHour, usageWindowStart)
 import Web.Links
 
 
@@ -1596,6 +1596,7 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
   , occurrences1h :: Int
   , createdAt :: UTCTime
   , lastNotifiedAt :: Maybe UTCTime
+  , baselinePerHour :: Maybe Double
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
@@ -1829,6 +1830,21 @@ monitorTrendChartUrl ctx pid monitor from to currentValue = do
   trendChartUrl ctx pid widget (formatUTC from) (formatUTC to)
 
 
+-- | A log pattern's last day of hourly volume, against the baseline it broke from.
+patternVolumeChartUrl :: (DB es, Log :> es) => Config.AuthContext -> Projects.ProjectId -> LogPatterns.LogPatternWithRate -> Double -> UTCTime -> Eff es (Maybe Text)
+patternVolumeChartUrl ctx pid lp baselineMean now = do
+  let from = addUTCTime (-86400) now
+  hours <-
+    Hasql.interp @[(UTCTime, Int64)]
+      [HI.sql|SELECT hour_bucket, event_count FROM apis.log_pattern_hourly_stats
+        WHERE project_id = #{pid} AND source_field = #{lp.sourceField} AND pattern_hash = #{lp.patternHash} AND hour_bucket >= #{from}
+        ORDER BY hour_bucket|]
+  let millis = floor . (* 1000) . utcTimeToPOSIXSeconds :: UTCTime -> Int
+      rows = AE.toJSON (["timestamp", "Events"] :: [Text]) : [AE.toJSON ([AE.toJSON (millis at), AE.toJSON n] :: [AE.Value]) | (at, n) <- hours]
+      dataset = def{Widget.source = AE.toJSON rows, Widget.from = Just $ millis from, Widget.to = Just $ millis now}
+  trendChartUrl ctx pid def{Widget.wType = Widget.WTTimeseries, Widget.unit = Just "events", Widget.dataset = Just dataset, Widget.hideLegend = Just True, Widget.baseline = Just baselineMean} (formatUTC from) (formatUTC now)
+
+
 -- | Fast inline path after ingestion: dispatch due notifications only for the
 -- given error-pattern hashes. Empty vector is a no-op.
 notifyErrorSubscriptions :: Projects.ProjectId -> V.Vector Text -> ATBackgroundCtx ()
@@ -1982,7 +1998,7 @@ selectDueErrorNotifications pid mHashes now =
           WITH candidates AS (
             SELECT e.id, e.error_data, e.state, i.id AS issue_id, i.title,
                    e.discord_message_id, e.occurrences_1h,
-                   e.created_at, e.last_notified_at,
+                   e.created_at, e.last_notified_at, e.baseline_error_rate_mean,
                    i.acknowledged_until, i.archived_at
             FROM apis.error_patterns e
             JOIN LATERAL (
@@ -2031,7 +2047,7 @@ selectDueErrorNotifications pid mHashes now =
           )
           SELECT c.id, c.error_data, c.state, c.issue_id, c.title,
                  c.discord_message_id, c.occurrences_1h,
-                 c.created_at, c.last_notified_at
+                 c.created_at, c.last_notified_at, c.baseline_error_rate_mean
           FROM candidates c
           WHERE c.archived_at IS NULL
             AND (c.acknowledged_until IS NULL OR c.acknowledged_until <= #{now}::timestamptz)
@@ -2101,7 +2117,14 @@ dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors)
                             , Mail.userName = sub.errorData.userName <* guard project.includeUserIdentityInAlerts
                             , Mail.userEmail = sub.errorData.userEmail <* guard project.includeUserIdentityInAlerts
                             }
-                        (rootPayload, replyPayload) = Mail.errorIncidentMessages alertType sub.errorData now active ongoingFor baseUrl incidentUrl chart occText impact
+                        -- An escalation says what it escalated from.
+                        escalation =
+                          [ x
+                          | alertType `elem` [EscalatingErrors, ErrorSpike]
+                          , Just b <- [mfilter (> 0) sub.baselinePerHour]
+                          , x <- ["was " <> prettyPrintCount (round b) <> "/hr", "*+" <> formatWithCommas (fromIntegral (round ((fromIntegral sub.occurrences1h - b) / b * 100) :: Int)) <> "%*"]
+                          ]
+                        (rootPayload, replyPayload) = Mail.errorIncidentMessages alertType sub.errorData now active ongoingFor baseUrl incidentUrl chart occText escalation impact
                         change
                           | isNothing active = Incidents.IncidentAlert
                           | sub.errorState == AESEscalating = Incidents.IncidentObservation
@@ -3208,7 +3231,7 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
             let issueId = persistedId <|> (active >>= (.issueId))
                 issueUrl = maybe monitorUrl (issuePageUrl appCtx monitor.projectId) issueId
                 alertUrl = fromMaybe issueUrl widgetUrlM
-                (rootPayload, replyPayload) = Mail.monitorIncidentMessages monitor value status observedAt active issueUrl monitorUrl chartUrlM
+                (rootPayload, replyPayload) = Mail.monitorIncidentMessages p.title monitor value status observedAt active issueUrl monitorUrl chartUrlM
                 change
                   | isRecovery = Incidents.IncidentRecovered
                   | status /= monitor.currentStatus = Incidents.IncidentAlert
@@ -5562,9 +5585,10 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
     persisted <- Hasql.transaction TxS.ReadCommitted TxS.Write $ Issues.reopenOrInsertIssueTx scheduledTime fresh
     let issue = (fresh :: Issues.Issue){Issues.id = persisted}
     whenJust projectM \project -> do
+      chartUrl <- patternVolumeChartUrl authCtx pid lpRate sr.mean scheduledTime
       let issueUrl = hostPath authCtx.env.hostUrl $ (urls.issues pid).detailGet issue.id Nothing Nothing Nothing Nothing Nothing
           changePct = if sr.mean > 0 then (sr.currentRate - sr.mean) / sr.mean * 100 else 0
-          rateChange = Mail.RateChange{issueUrl, patternText = lpRate.logPattern, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = sr.direction, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct, isError = lpRate.isError}
+          rateChange = Mail.RateChange{issueUrl, patternText = lpRate.logPattern, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = sr.direction, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct, isError = lpRate.isError, chartUrl}
           alert = LogPatternRateChangeAlert rateChange
           (subj, html) = ET.logPatternRateChangeEmail project.title issueUrl lpRate.logPattern lpRate.logLevel lpRate.serviceName dir sr.currentRate sr.mean changePct
       void $ notifyIssue issue project users Issues.issueNotifyDedupHours "log_pattern_rate_change" alert (Mail.cardMessages $ Mail.rateChangeCard rateChange project.title) issueUrl subj html

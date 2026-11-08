@@ -23,7 +23,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
-import Effectful.Error.Static (Error, throwError)
+import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
@@ -627,17 +627,27 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
                     queryUrl = hostPath envCfg.hostUrl $ maybe (explore (urls.logExplorer pid) (Just chartType) query) (\identifier -> urls.aiThreadGet pid identifier Nothing) conversation
                     viewLabel = bool "View in Log Explorer" "View in Monoscope" (isJust conversation)
                     title = fromMaybe userQuery widget.title
+                -- A single number reads best as the number itself, not a picture of it.
+                stat <-
+                  if target == Slack && widget.wType == Widget.WTStat
+                    then do
+                      let (shaped, dataType) = Widget.chartQuery widget
+                      measured <- runErrorNoCallStack @ServerError $ Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) shaped widget.sql Nothing (iso fromTimeM) (iso toTimeM) Nothing Nothing []
+                      pure $ rightToMaybe measured >>= (.dataFloat) <&> \v -> Widget.formatStatValue widget.decimals v (fromMaybe "" widget.unit)
+                    else pure Nothing
                 imageUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid (widget :: Widget.Widget){Widget.pngProfile = widget.pngProfile <|> (Widget.PngSlack <$ guard (target == Slack))} Nothing (iso fromTimeM) (iso toTimeM)
                 send $ ReplyChart $ case target of
                   Slack ->
                     AE.object
                       [ "blocks"
                           AE..= arr
-                            ( [slackSection $ "*" <> slackEscape (T.take 150 title) <> "*"]
-                                <> maybeToList (slackImage (T.take 2000 $ "Chart: " <> title) Nothing <$> mfilter ((<= 3000) . T.length) imageUrl)
-                                <> [ slackContext [codeSpan query]
-                                   , slackActions [linkButton "view-log-explorer" viewLabel queryUrl]
-                                   ]
+                            ( case stat of
+                                Just value -> [slackHeader (T.take 150 value), slackContext ["*" <> slackEscape (T.take 150 title) <> "*  ·  " <> codeSpan query]]
+                                Nothing ->
+                                  [slackSection $ "*" <> slackEscape (T.take 150 title) <> "*"]
+                                    <> maybeToList (slackImage (T.take 2000 $ "Chart: " <> title) Nothing <$> mfilter ((<= 3000) . T.length) imageUrl)
+                                    <> [slackContext [codeSpan query]]
+                                <> [slackActions [linkButton "view-log-explorer" viewLabel queryUrl]]
                             )
                       , "response_type" AE..= ("in_channel" :: Text)
                       , "replace_original" AE..= True

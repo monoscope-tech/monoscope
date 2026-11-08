@@ -72,7 +72,7 @@ spec = describe "Monitoring" do
   it "Slack error fallbacks stay concise and keep metadata subordinate to the exception" do
     let err = def{Errors.errorType = "HttpException", Errors.message = T.replicate 50 "HttpExceptionRequest Request { host = \"api.example.com\" path = \"/oauth/token\" } ", Errors.serviceName = Just "monoscope-dev"}
         impact = Mail.AlertImpact "Monoscope" (Just "Acme Corp") (Just "Ada Lovelace") (Just "ada@example.com")
-        messages trend = Mail.errorIncidentMessages Mail.NewRuntimeError err frozenTime Nothing Nothing "https://example.com" "https://example.com/issues/1" trend (Just "1/hr") impact
+        messages trend = Mail.errorIncidentMessages Mail.NewRuntimeError err frozenTime Nothing Nothing "https://example.com" "https://example.com/issues/1" trend (Just "1/hr") [] impact
         (root, reply) = messages (Just "https://example.com/error-trend.png")
         withoutTrend = jsonText $ fst $ messages Nothing
     jsonText root `shouldContainAll` ["```HttpExceptionRequest", ":red_circle: *New error*  <https://example.com/issues/1|HTTP request failed · api.example.com/oauth/token>", "*monoscope-dev*  ·  *1/hr*", "Started Jan 1, 00:00 UTC  ·  User Ada Lovelace  ·  Tenant Acme Corp  ·  Project Monoscope", "https://example.com/error-trend.png", "#E5484D"]
@@ -99,13 +99,13 @@ spec = describe "Monitoring" do
             }
         impact = Mail.AlertImpact "Acme API" Nothing (Just "Ada Lovelace") (Just "ada@example.com")
         episode = Just I.Episode{I.id = UUIDId UUID.nil, I.projectId = testPid, I.issueId = Nothing, I.phase = I.EpisodeActive, I.startedAt = addUTCTime (-9000) frozenTime, I.lastEventAt = frozenTime, I.closedAt = Nothing}
-        errorMessages t ongoing = Mail.errorIncidentMessages t err frozenTime episode ongoing "https://example.com" issue chart (Just "38/hr") impact
+        errorMessages t ongoing = Mail.errorIncidentMessages t err frozenTime episode ongoing "https://example.com" issue chart (Just "38/hr") ["was 4/hr" | t == Mail.EscalatingErrors] impact
         monitor = (def :: Monitors.QueryMonitor){Monitors.alertThreshold = 1200, Monitors.warningThreshold = Just 1000, Monitors.checkIntervalMins = 1, Monitors.alertConfig = def{Monitors.title = "Checkout p95 latency", Monitors.unit = Just "ms"}}
-        monitorMessages v st = Mail.monitorIncidentMessages monitor{Monitors.currentStatus = Monitors.MSAlerting} v st (addUTCTime 1380 frozenTime) episode issue "https://example.com/monitors/1" chart
+        monitorMessages v st = Mail.monitorIncidentMessages "Acme API" monitor{Monitors.currentStatus = Monitors.MSAlerting} v st (addUTCTime 1380 frozenTime) episode issue "https://example.com/monitors/1" chart
         (resolvedRoot, resolvedReply) = Mail.resolvedErrorMessage err "Ada Lovelace" frozenTime "https://example.com" (Just issue)
         logPattern = ET.NewLogPattern{issueUrl = issue, patternText = "payment provider timeout after <*> ms", sampleMessage = Just "payment provider timeout after 30000 ms (provider=adyen, attempt=3)", logLevel = Just "error", serviceName = Just "payments", sourceField = "body", occurrenceCount = 214, isError = True}
         endpoints = V.fromList [ET.EndpointAlertRow "POST /api/v1/refunds" (Just "api.acme.io") (Just "payments") (Just "production"), ET.EndpointAlertRow "GET /api/v1/refunds/:id" (Just "api.acme.io") (Just "payments") (Just "production")]
-        spike = Mail.cardMessages $ Mail.rateChangeCard (Mail.RateChange issue "connection reset by peer <*>" (Just "warn") (Just "gateway") Issues.Spike 1920 140 1271 False) "Acme API"
+        spike = Mail.cardMessages $ Mail.rateChangeCard (Mail.RateChange issue "connection reset by peer <*>" (Just "warn") (Just "gateway") Issues.Spike 1920 140 1271 False chart) "Acme API"
         note event meta = Issues.ActivityNote{Issues.event, Issues.issue = Just "TypeError: Cannot read properties of undefined", Issues.actor = Just "Ada Lovelace", Issues.assignee = Just "Grace Hopper", Issues.metadata = Just $ AE.object meta, Issues.at = frozenTime}
         activity =
           [ note Issues.IEAcknowledged ["until" AE..= addUTCTime 3600 frozenTime]
@@ -115,6 +115,7 @@ spec = describe "Monitoring" do
           , note Issues.IEAckExpired []
           , note Issues.IEResolved []
           ]
+        uptime = Mail.uptimeMessages (Issues.UptimeData "1" "Shop health" "https://shop.acme.io/health" 200 (Just 503) "status 503, expected 200" 120 frozenTime) issue
         entry :: Text -> I.SlackPayload -> [I.SlackPayload] -> AE.Value
         entry label root thread = AE.object ["label" AE..= label, "payload" AE..= root, "thread" AE..= thread]
         gallery =
@@ -125,6 +126,9 @@ spec = describe "Monitoring" do
           , entry "regressed error" (fst $ errorMessages Mail.RegressedErrors Nothing) []
           , entry "monitor alerting" (fst $ monitorMessages 1840 Monitors.MSAlerting) [snd $ monitorMessages 1050 Monitors.MSWarning, snd $ Mail.monitorDataUnavailableMessage monitor Monitors.NoMeasurements frozenTime (Just (frozenTime, 1840)) issue "", snd $ monitorMessages 640 Monitors.MSNormal]
           , entry "monitor root after recovery" (Mail.retainSlackSnapshot (fst $ monitorMessages 1840 Monitors.MSAlerting) (fst $ monitorMessages 640 Monitors.MSNormal)) []
+          , entry "uptime check down" (fst uptime) [snd uptime, snd $ Mail.recoveredMessages "Shop health" issue 720]
+          , entry "uptime root after recovery" (Mail.retainSlackSnapshot (fst uptime) (fst $ Mail.recoveredMessages "Shop health" issue 720)) []
+          , entry "cron missed its run" (fst $ Mail.cronMessages (Issues.CronData "1" "nightly-billing" "Nightly billing" Issues.CFMissed (addUTCTime 300 frozenTime) (Just $ addUTCTime (-86100) frozenTime)) issue) []
           , entry "new log pattern" (Mail.card $ Mail.logPatternCard logPattern "Acme API") []
           , entry "log spike" (fst spike) [snd spike]
           , entry "new endpoints" (Mail.slackNewEndpointsAlert "Acme API" endpoints issue "https://example.com") []
@@ -532,7 +536,7 @@ spec = describe "Monitoring" do
       (dataset.from, dataset.to) `shouldBe` (Just $ millis $ addUTCTime (-900) t0, Just $ millis t0)
       dataset.source `shouldBe` AE.toJSON @[AE.Value] [AE.toJSON (["timestamp", "Monitor value"] :: [Text]), row earlier (Just (84 :: Double)), row (addUTCTime 60 earlier) (Nothing :: Maybe Double), row t0 (Just (100 :: Double))]
       configured <- fetchMonitor tr snapshot
-      let (root, _) = Mail.monitorIncidentMessages configured 100 Monitors.MSAlerting t0 Nothing "https://example.com/incident" "https://example.com/monitor" Nothing
+      let (root, _) = Mail.monitorIncidentMessages "Acme API" configured 100 Monitors.MSAlerting t0 Nothing "https://example.com/incident" "https://example.com/monitor" Nothing
       jsonText root `shouldContainAll` ["*100 s*  ·  above 60 s", "Chart unavailable"]
       jsonText (snd $ Mail.monitorDataUnavailableMessage configured Monitors.NoMeasurements t0 (Just (earlier, 84)) "https://example.com/incident" "https://example.com/monitor") `shouldSatisfy` T.isInfixOf "last value 84 s"
 

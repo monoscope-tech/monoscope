@@ -4442,7 +4442,10 @@ spec = around withTestResources do
         (requests, ()) <- deliver admitted.id
         let payloads = posted "https://slack.com/api/chat.postMessage" requests
             images = concatMap (toListOf $ key "blocks" . _Array . traverse . key "image_url" . _String) payloads
-        (prompt, length payloads, length images) `shouldBe` (prompt, expectedCharts + expectedTextParts, expectedCharts)
+            -- A stat widget is posted as its number, in a header, rather than as a chart image.
+            numbers = [() | p <- payloads, b <- p ^.. key "blocks" . _Array . traverse, b ^? key "type" == Just "header"]
+        (prompt, length payloads, length images + length numbers) `shouldBe` (prompt, expectedCharts + expectedTextParts, expectedCharts)
+        (prompt, length numbers) `shouldBe` (prompt, bool 0 1 (expectedCharts == 2))
         -- A message's markdown blocks share Slack's 12,000-character budget.
         payloads `shouldSatisfy` all (\p -> all (not . T.null) (blockTexts p) && sum (map T.length $ blockTexts p) <= 12000 && length (p ^.. key "blocks" . _Array . traverse) <= 50)
         T.concat (mapMaybe (\p -> (p ^? key "text" . _String) <|> (p ^? key "content" . _String)) payloads <> concatMap messageTexts payloads) `shouldSatisfy` T.isInfixOf expectedReply
