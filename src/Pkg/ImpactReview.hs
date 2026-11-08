@@ -61,7 +61,6 @@ import System.Tracing (Tracing)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB)
 import UnliftIO.Exception (bracket, throwIO, tryAny)
 import Utils (hostPath, prettyPrintCount)
-import Web.HttpApiData (toUrlPiece)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), proofMediaPath, urls)
 
 

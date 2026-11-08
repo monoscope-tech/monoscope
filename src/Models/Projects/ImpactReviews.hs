@@ -584,8 +584,8 @@ saveProofs run attempt sides = Hasql.transaction TxS.ReadCommitted TxS.Write do
   let key = "proof-" <> show (used + 1 :: Int64)
   stored <- forM sides \proof ->
     Hasql.queryTx @(Maybe (HI.OneColumn Bool))
-      [HI.sql|INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, claim, revision, exit_code, cast_bytes, gif, mp4)
-    SELECT r.id, #{attempt}, #{key}, #{proof.side}, #{proof.claim}, #{proof.revision}, #{fromIntegral @Int @Int32 <$> proof.exitCode}, #{proof.cast}, #{proof.gif}, #{proof.mp4}
+      [HI.sql|INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, revision, exit_code, cast_bytes, gif, mp4)
+    SELECT r.id, #{attempt}, #{key}, #{proof.side}, #{proof.revision}, #{fromIntegral @Int @Int32 <$> proof.exitCode}, #{proof.cast}, #{proof.gif}, #{proof.mp4}
     FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
     WHERE r.id = #{run.id} AND r.state = #{Reviewing} AND t.lease_owner = r.id AND t.lease_until > now()
     ON CONFLICT (run_id, key, side) DO NOTHING RETURNING true|]

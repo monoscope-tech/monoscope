@@ -802,12 +802,12 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
 
 -- | Proof media never changes under a signed name: keys are not reused within a run.
 proofMediaGetH :: Projects.ProjectId -> UUIDId "pr_review" -> ImpactReviews.ProofFile -> Maybe Text -> Request -> (Wai.Response -> IO Wai.ResponseReceived) -> ATBaseCtx Wai.ResponseReceived
-proofMediaGetH pid rid file sigM _ send = do
+proofMediaGetH pid rid file sigM request send = do
   ctx <- ask @AuthContext
   whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid (ImpactReviews.proofSignedPath rid file) sigM) \err -> Error.throwError err403{errBody = err}
   bytes <- maybe (Error.throwError err404) pure =<< ImpactReviews.proofFile pid rid file
   let mime = case file.format of ImpactReviews.Gif -> "image/gif"; ImpactReviews.Mp4 -> "video/mp4"; ImpactReviews.Cast -> "application/x-asciicast"
-  liftIO $ send $ Wai.responseLBS H.status200 [(H.hContentType, mime), (H.hCacheControl, "public, max-age=31536000, immutable")] (toLazy bytes)
+  liftIO $ send $ PageCodeContext.rangedMedia request [(H.hContentType, mime), (H.hCacheControl, "public, max-age=31536000, immutable")] (toLazy bytes)
 
 
 -- | Public endpoint for rendering widgets to PNG (for bot embeds). Requires valid HMAC signature.

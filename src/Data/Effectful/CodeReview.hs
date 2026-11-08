@@ -36,6 +36,7 @@ import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.IO (hClose)
 import System.IO.Error (isDoesNotExistError, tryIOError)
 import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
+import UnliftIO.Async (forConcurrently)
 import UnliftIO.Exception (catch, finally, throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
 import Web.HttpApiData (toUrlPiece)
@@ -635,11 +636,12 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                               Left failure -> pure $ Left failure
                               Right (result, logs) -> runExceptT do
                                 for_ result.receipts \receipt -> ExceptT $ Outbox.deliver outbox (Outbox.Check receipt) record
-                                recorded <- forM result.receipts \receipt -> do
+                                -- Both sides render at once; each is an agg and ffmpeg pass under the review lease.
+                                recorded <- ExceptT $ fmap sequence $ forConcurrently result.receipts \receipt -> runExceptT do
                                   logFile <- maybe (throwE "The proof log was not retained") pure $ listToMaybe [path | (path, _) <- logs, takeFileName path == toString (toUrlPiece receipt.side) <> ".log"]
                                   (cast, output) <- ExceptT $ Media.proofCast <$> readFileBS logFile
                                   (gif, mp4) <- ExceptT $ Media.renderProof cast
-                                  pure (ProofMedia{claim = proof.claim, side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4}, AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "output" AE..= T.takeEnd 3000 output])
+                                  pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4}, AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "output" AE..= T.takeEnd 3000 output])
                                 sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty $ map fst recorded
                                 key <- ExceptT $ save sides
                                 pure $ AE.object ["key" AE..= key, "claim" AE..= proof.claim, "sides" AE..= map snd recorded, "note" AE..= ("Cite this key in a claim. The PR author sees both recordings." :: Text)]

@@ -6,7 +6,6 @@ CREATE TABLE projects.pr_review_proofs (
   attempt_id uuid NOT NULL,
   key text NOT NULL CHECK (key ~ '^proof-[1-9][0-9]*$'),
   side text NOT NULL CHECK (side IN ('base', 'head')),
-  claim text NOT NULL,
   revision text NOT NULL,
   exit_code integer,
   cast_bytes bytea NOT NULL,

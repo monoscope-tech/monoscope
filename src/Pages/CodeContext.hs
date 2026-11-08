@@ -7,7 +7,7 @@
 -- which reaches @Pkg.Components.Widget@, which imports @LogItem@ — a cycle. The renderer in
 -- "Pages.Components" only ever builds the URL, so nothing on the rendering side has to know
 -- this module exists.
-module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, FrameSource (..), repositoriesGetH, RepositoriesGet (..), serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, RepositoryRemoval (..), repositorySourceGetH, RepositorySourceGet, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, ReviewChange (..), repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), MappingsPanel, MappingRejection (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixEvidenceH, issueFixMediaH, issueFixPackageH) where
+module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, FrameSource (..), repositoriesGetH, RepositoriesGet (..), serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, RepositoryRemoval (..), repositorySourceGetH, RepositorySourceGet, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, ReviewChange (..), repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), MappingsPanel, MappingRejection (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixEvidenceH, issueFixMediaH, issueFixPackageH, rangedMedia) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Commonmark qualified as Markdown
@@ -160,27 +160,32 @@ issueFixMediaH pid fid asset request send = do
     else do
       bytes <- either (const $ throwError err503{errHeaders = [(Header.hCacheControl, "private, no-store")]}) (pure . Artifacts.verifiedBytes) =<< Artifacts.readFixMedia explanation asset
       void $ issueFixForViewer pid fid session
-      let size = fromIntegral $ LBS.length bytes :: Integer
-          full = Just (H.status200, (0, size - 1))
-          selected = case lookup Header.hRange $ Wai.requestHeaders request of
-            Just value
-              | Wai.requestMethod request == H.methodGet
-              , Just [range] <- Header.parseByteRanges value ->
-                  (H.status206,) <$> case range of
-                    Header.ByteRangeFrom startByte | startByte < size -> Just (startByte, size - 1)
-                    Header.ByteRangeFromTo startByte lastByte | startByte < size && startByte <= lastByte -> Just (startByte, min lastByte $ size - 1)
-                    Header.ByteRangeSuffix count | count > 0 -> Just (max 0 $ size - count, size - 1)
-                    _ -> Nothing
-            _ -> full
-          mime = case asset of Artifacts.Video -> "video/mp4"; Artifacts.Diagram -> "image/svg+xml"; Artifacts.Captions -> "text/vtt; charset=utf-8"; (Artifacts.Before; Artifacts.Cause; Artifacts.Change; Artifacts.After) -> "image/png"
-          headers = [(Header.hContentType, mime), (Header.hCacheControl, "private, no-store"), (Header.hVary, "Cookie, Authorization"), (Header.hAcceptRanges, "bytes"), ("X-Content-Type-Options", "nosniff"), ("Content-Security-Policy", "default-src 'none'; sandbox")]
-      liftIO $ send $ case selected of
-        Nothing -> Wai.responseLBS H.status416 ((Header.hContentRange, "bytes */" <> encodeUtf8 (show size)) : headers) ""
-        Just (status, (startByte, lastByte)) ->
-          let byteCount = lastByte - startByte + 1
-              responseHeaders = headers <> [(Header.hContentLength, encodeUtf8 $ show byteCount)] <> [(Header.hContentRange, encodeUtf8 $ "bytes " <> show startByte <> "-" <> show lastByte <> "/" <> show size) | status == H.status206]
-              body = if Wai.requestMethod request == H.methodHead then "" else LBS.take (fromIntegral byteCount) $ LBS.drop (fromIntegral startByte) bytes
-           in Wai.responseLBS status responseHeaders body
+      let mime = case asset of Artifacts.Video -> "video/mp4"; Artifacts.Diagram -> "image/svg+xml"; Artifacts.Captions -> "text/vtt; charset=utf-8"; (Artifacts.Before; Artifacts.Cause; Artifacts.Change; Artifacts.After) -> "image/png"
+      liftIO $ send $ rangedMedia request [(Header.hContentType, mime), (Header.hCacheControl, "private, no-store"), (Header.hVary, "Cookie, Authorization")] bytes
+
+
+-- | Media bytes with single-range support, which Safari needs to play video.
+rangedMedia :: Wai.Request -> [Header.Header] -> LBS.ByteString -> Wai.Response
+rangedMedia request extra bytes = case selected of
+  Nothing -> Wai.responseLBS H.status416 ((Header.hContentRange, "bytes */" <> encodeUtf8 (show size)) : headers) ""
+  Just (status, (startByte, lastByte)) ->
+    let byteCount = lastByte - startByte + 1
+        responseHeaders = headers <> [(Header.hContentLength, encodeUtf8 $ show byteCount)] <> [(Header.hContentRange, encodeUtf8 $ "bytes " <> show startByte <> "-" <> show lastByte <> "/" <> show size) | status == H.status206]
+        body = if Wai.requestMethod request == H.methodHead then "" else LBS.take (fromIntegral byteCount) $ LBS.drop (fromIntegral startByte) bytes
+     in Wai.responseLBS status responseHeaders body
+  where
+    size = fromIntegral $ LBS.length bytes :: Integer
+    headers = extra <> [(Header.hAcceptRanges, "bytes"), ("X-Content-Type-Options", "nosniff"), ("Content-Security-Policy", "default-src 'none'; sandbox")]
+    selected = case lookup Header.hRange $ Wai.requestHeaders request of
+      Just value
+        | Wai.requestMethod request == H.methodGet
+        , Just [range] <- Header.parseByteRanges value ->
+            (H.status206,) <$> case range of
+              Header.ByteRangeFrom startByte | startByte < size -> Just (startByte, size - 1)
+              Header.ByteRangeFromTo startByte lastByte | startByte < size && startByte <= lastByte -> Just (startByte, min lastByte $ size - 1)
+              Header.ByteRangeSuffix count | count > 0 -> Just (max 0 $ size - count, size - 1)
+              _ -> Nothing
+      _ -> Just (H.status200, (0, size - 1))
 
 
 -- | Source around one stack frame, read from the repository linked to the project.

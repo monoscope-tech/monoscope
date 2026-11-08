@@ -2851,14 +2851,18 @@ spec = around withTestResources $ describe "Production impact reviews" do
     void $ deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
     [run] <- runQueryEffect tr $ Reviews.latestRuns testPid
     let attempt = UUIDId UUID.nil
-    dbExec tr "INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, claim, revision, exit_code, cast_bytes, gif, mp4) VALUES (?, ?, 'proof-1', 'head', 'Prints the version', ?, 0, convert_to('cast', 'UTF8'), convert_to('GIF89a fixture', 'UTF8'), convert_to('mp4 fixture', 'UTF8'))" (run.id, attempt, revision)
+    dbExec tr "INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, revision, exit_code, cast_bytes, gif, mp4) VALUES (?, ?, 'proof-1', 'head', ?, 0, convert_to('cast', 'UTF8'), convert_to('GIF89a fixture', 'UTF8'), convert_to('mp4 fixture', 'UTF8'))" (run.id, attempt, revision)
     [link] <- map (Impact.proofLink tr.trATCtx run) <$> runQueryEffect tr (Reviews.proofSides run attempt)
     let app = genericServeTWithContext (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider) (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused")) (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
-        fetch url = WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ fromMaybe url $ T.stripPrefix tr.trATCtx.config.hostUrl url) app
+        fetchWith headers url = WT.runSession (WT.request $ WT.setPath Wai.defaultRequest{Wai.requestHeaders = headers} $ encodeUtf8 $ fromMaybe url $ T.stripPrefix tr.trATCtx.config.hostUrl url) app
+        fetch = fetchWith []
     preview <- fetch link.preview
     (H.statusCode preview.simpleStatus, lookup "Content-Type" preview.simpleHeaders, preview.simpleBody) `shouldBe` (200, Just "image/gif", "GIF89a fixture")
     video <- fetch link.video
     (H.statusCode video.simpleStatus, lookup "Content-Type" video.simpleHeaders) `shouldBe` (200, Just "video/mp4")
+    -- Safari plays video only through byte ranges.
+    ranged <- fetchWith [("Range", "bytes=0-2")] link.video
+    (H.statusCode ranged.simpleStatus, ranged.simpleBody) `shouldBe` (206, "mp4")
     -- A signature binds the project, review and file: none of them can be swapped.
     otherPid <- createTestProject tr "Other proof project"
     for_ [T.replace "sig=" "sig=0" link.preview, T.replace testPid.toText otherPid.toText link.preview, T.replace "proof-1-head.gif" "proof-1-base.gif" link.preview] \forged ->

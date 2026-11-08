@@ -118,7 +118,7 @@ data RevisionSide = Base | Head
 
 -- | One side of a recorded proof: the claim's command replayed under asciinema in a fresh VM,
 -- rendered on the host as an animated preview and a video.
-data ProofMedia = ProofMedia {claim :: Text, side :: RevisionSide, revision :: Text, exitCode :: Maybe Int, cast :: ByteString, gif :: ByteString, mp4 :: ByteString}
+data ProofMedia = ProofMedia {side :: RevisionSide, revision :: Text, exitCode :: Maybe Int, cast :: ByteString, gif :: ByteString, mp4 :: ByteString}
 
 
 data CheckStatus = Passed | Failed | Blocked | Invalidated | TimedOut | OutputLimit | Cancelled | CleanupFailed
