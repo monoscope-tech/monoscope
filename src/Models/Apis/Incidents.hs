@@ -221,6 +221,7 @@ deliveryOperation =
     WHEN d.operation = 'update_root' THEN jsonb_build_object('tag', 'UpdateRoot', 'contents', r.message_ts)
     WHEN d.operation = 'post_activity' THEN jsonb_build_object('tag', 'PostActivity', 'contents', jsonb_build_array(r.message_ts,
       (SELECT jsonb_build_object('event', a.event, 'at', a.created_at, 'metadata', a.metadata,
+          'issue', (SELECT title FROM apis.issues WHERE id = a.issue_id),
           'actor', NULLIF(btrim(concat_ws(' ', actor.first_name, actor.last_name)), ''),
           'assignee', NULLIF(btrim(concat_ws(' ', assignee.first_name, assignee.last_name)), ''))
         FROM apis.issue_activity_log a LEFT JOIN users.users actor ON actor.id = a.created_by
@@ -704,6 +705,7 @@ data SlackDeliveryF timestamp = SlackDelivery
   , initialPayload :: SlackPayload
   , leaseToken :: UUID.UUID
   , attempts :: Int32
+  , owner :: Maybe Issues.Ownership
   }
   deriving stock (Eq, Foldable, Functor, Generic, Show, Traversable)
   deriving anyclass (HI.DecodeRow)
@@ -804,17 +806,27 @@ claimSlackDeliveriesTx now = do
     <> deliveryOperation
     -- An inherited root's first event replies with the full root message.
     <> [HI.sql|, CASE WHEN d.operation = 'post_analysis' THEN d.agent_payload
-          -- A lifecycle reply is rendered from the note its operation carries.
-          WHEN d.operation = 'post_activity' THEN '{}'::jsonb
+          -- A lifecycle reply renders from its note; the payload is the root as it
+          -- stands, so the root can show the change in ownership.
+          WHEN d.operation = 'post_activity' THEN latest.root_payload
           WHEN d.operation = 'post_reply' THEN (CASE WHEN d.event_id = r.first_event_id THEN e.root_payload ELSE e.reply_payload END)
             || CASE WHEN d.reply_broadcast THEN '{"reply_broadcast": true}'::jsonb ELSE '{}'::jsonb END
           ELSE e.root_payload END,
         initial.root_payload,
-        d.lease_token, d.attempts
+        d.lease_token, d.attempts,
+        (SELECT jsonb_build_object('acknowledgedBy', NULLIF(btrim(concat_ws(' ', acker.first_name, acker.last_name)), ''),
+            'acknowledgedUntil', CASE WHEN i.acknowledged_until > #{now} THEN i.acknowledged_until END,
+            'assignee', NULLIF(btrim(concat_ws(' ', assignee.first_name, assignee.last_name)), ''))
+          FROM apis.incident_episodes episode JOIN apis.issues i ON i.id = episode.issue_id
+          LEFT JOIN users.users acker ON acker.id = i.acknowledged_by
+          LEFT JOIN users.users assignee ON assignee.id = i.assignee_id
+          WHERE episode.id = d.episode_id AND (i.acknowledged_until > #{now} OR i.assignee_id IS NOT NULL))
       FROM claimed d JOIN apis.incident_events e ON e.id = d.event_id
       JOIN apis.slack_incident_roots r ON r.id = d.root_id
       JOIN LATERAL (SELECT root_payload FROM apis.incident_events
         WHERE episode_id = d.episode_id ORDER BY observed_at, (event_kind = 'alert') DESC, id LIMIT 1) initial ON TRUE
+      JOIN LATERAL (SELECT root_payload FROM apis.incident_events
+        WHERE episode_id = d.episode_id ORDER BY observed_at DESC, id DESC LIMIT 1) latest ON TRUE
       ORDER BY d.sequence|]
 
 

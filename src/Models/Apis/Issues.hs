@@ -269,6 +269,7 @@ module Models.Apis.Issues (
   IssueActivity (..),
   logIssueActivity,
   ActivityNote (..),
+  Ownership (..),
   recordIssueView,
   selectLatestStateEvent,
   selectIssueActivity,
@@ -3869,9 +3870,18 @@ relayedToSlack = \case
   (IECreated; IERegressed; IEEscalated; IEViewed) -> False
 
 
+-- | Who holds an issue right now, as its Slack root shows it. Acknowledged iff
+-- 'acknowledgedUntil' is set; an API-key acknowledgement has no named member.
+data Ownership = Ownership {acknowledgedBy :: Maybe Text, acknowledgedUntil :: Maybe UTCTime, assignee :: Maybe Text}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (HI.DecodeValue) via Aeson Ownership
+
+
 -- | One relayed lifecycle event, as the Slack worker reads it back to render.
 data ActivityNote = ActivityNote
   { event :: IssueEvent
+  , issue :: Maybe Text
   , actor :: Maybe Text
   , assignee :: Maybe Text
   , metadata :: Maybe AE.Value

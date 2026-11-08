@@ -75,9 +75,9 @@ spec = describe "Monitoring" do
         messages trend = Mail.errorIncidentMessages Mail.NewRuntimeError err frozenTime Nothing Nothing "https://example.com" "https://example.com/issues/1" trend (Just "1/hr") impact
         (root, reply) = messages (Just "https://example.com/error-trend.png")
         withoutTrend = jsonText $ fst $ messages Nothing
-    jsonText root `shouldContainAll` ["```HttpExceptionRequest", ":red_circle: *New error*  <https://example.com/issues/1|HTTP request failed · api.example.com/oauth/token>", "*monoscope-dev*", "1/hr  ·  Started Jan", "User Ada Lovelace &lt;ada@example.com&gt;  ·  Tenant Acme Corp  ·  Project Monoscope", "https://example.com/error-trend.png", "#E5484D"]
+    jsonText root `shouldContainAll` ["```HttpExceptionRequest", ":red_circle: *New error*  <https://example.com/issues/1|HTTP request failed · api.example.com/oauth/token>", "*monoscope-dev*  ·  *1/hr*", "Started Jan 1, 00:00 UTC  ·  User Ada Lovelace  ·  Tenant Acme Corp  ·  Project Monoscope", "https://example.com/error-trend.png", "#E5484D"]
     jsonText root `shouldNotSatisfy` T.isInfixOf err.message
-    (withoutTrend, jsonText reply) `shouldSatisfy` \(w, r) -> "Chart unavailable" `T.isInfixOf` w && not ("image_url" `T.isInfixOf` w) && ":red_circle: *New error*  ·  1/hr" `T.isInfixOf` r
+    (withoutTrend, jsonText reply) `shouldSatisfy` \(w, r) -> "Chart unavailable" `T.isInfixOf` w && not ("image_url" `T.isInfixOf` w) && ":red_circle: *New error*  ·  *1/hr*" `T.isInfixOf` r
     slackPayloadViolations (AE.toJSON root) <> slackPayloadViolations (AE.toJSON reply) `shouldBe` []
 
   -- One snapshot of every Slack alert shape: a reviewer reads (or renders) the
@@ -102,11 +102,11 @@ spec = describe "Monitoring" do
         errorMessages t ongoing = Mail.errorIncidentMessages t err frozenTime episode ongoing "https://example.com" issue chart (Just "38/hr") impact
         monitor = (def :: Monitors.QueryMonitor){Monitors.alertThreshold = 1200, Monitors.warningThreshold = Just 1000, Monitors.checkIntervalMins = 1, Monitors.alertConfig = def{Monitors.title = "Checkout p95 latency", Monitors.unit = Just "ms"}}
         monitorMessages v st = Mail.monitorIncidentMessages monitor{Monitors.currentStatus = Monitors.MSAlerting} v st (addUTCTime 1380 frozenTime) episode issue "https://example.com/monitors/1" chart
-        (resolvedRoot, resolvedReply) = Mail.resolvedErrorMessage "TypeError" "Ada Lovelace" frozenTime "https://example.com" (Just issue)
+        (resolvedRoot, resolvedReply) = Mail.resolvedErrorMessage err "Ada Lovelace" frozenTime "https://example.com" (Just issue)
         logPattern = ET.NewLogPattern{issueUrl = issue, patternText = "payment provider timeout after <*> ms", sampleMessage = Just "payment provider timeout after 30000 ms (provider=adyen, attempt=3)", logLevel = Just "error", serviceName = Just "payments", sourceField = "body", occurrenceCount = 214, isError = True}
         endpoints = V.fromList [ET.EndpointAlertRow "POST /api/v1/refunds" (Just "api.acme.io") (Just "payments") (Just "production"), ET.EndpointAlertRow "GET /api/v1/refunds/:id" (Just "api.acme.io") (Just "payments") (Just "production")]
         spike = Mail.cardMessages $ Mail.rateChangeCard (Mail.RateChange issue "connection reset by peer <*>" (Just "warn") (Just "gateway") Issues.Spike 1920 140 1271 False) "Acme API"
-        note event meta = Issues.ActivityNote{Issues.event, Issues.actor = Just "Ada Lovelace", Issues.assignee = Just "Grace Hopper", Issues.metadata = Just $ AE.object meta, Issues.at = frozenTime}
+        note event meta = Issues.ActivityNote{Issues.event, Issues.issue = Just "TypeError: Cannot read properties of undefined", Issues.actor = Just "Ada Lovelace", Issues.assignee = Just "Grace Hopper", Issues.metadata = Just $ AE.object meta, Issues.at = frozenTime}
         activity =
           [ note Issues.IEAcknowledged ["until" AE..= addUTCTime 3600 frozenTime]
           , note Issues.IEAssigned []
@@ -120,6 +120,7 @@ spec = describe "Monitoring" do
         gallery =
           [ entry "new error" (fst $ errorMessages Mail.NewRuntimeError Nothing) [snd $ errorMessages Mail.EscalatingErrors Nothing, snd $ errorMessages Mail.NewRuntimeError (Just "3 hours"), resolvedReply]
           , entry "issue lifecycle in the thread" (fst $ errorMessages Mail.NewRuntimeError Nothing) (Mail.activityReply <$> activity)
+          , entry "root while someone holds it" (Mail.withOwner (Just $ Issues.Ownership (Just "Ada Lovelace") (Just $ addUTCTime 3600 frozenTime) (Just "Grace Hopper")) $ fst $ errorMessages Mail.NewRuntimeError Nothing) []
           , entry "error root after resolve" (Mail.retainSlackSnapshot (fst $ errorMessages Mail.NewRuntimeError Nothing) resolvedRoot) []
           , entry "regressed error" (fst $ errorMessages Mail.RegressedErrors Nothing) []
           , entry "monitor alerting" (fst $ monitorMessages 1840 Monitors.MSAlerting) [snd $ monitorMessages 1050 Monitors.MSWarning, snd $ Mail.monitorDataUnavailableMessage monitor Monitors.NoMeasurements frozenTime (Just (frozenTime, 1840)) issue "", snd $ monitorMessages 640 Monitors.MSNormal]
@@ -606,7 +607,7 @@ spec = describe "Monitoring" do
         void $ call tr $ IssuesPage.resolveErrorPostH testPid notified.id.unErrorPatternId False
         closed <- slack . fst <$> captureNotifs tr (replicateM_ 2 runSlackIncidentDeliveries)
         length closed `shouldBe` 4
-        for_ closed \sd -> slackText sd `shouldSatisfy` T.isInfixOf "*Resolved by "
+        for_ closed \sd -> slackText sd `shouldSatisfy` T.isInfixOf "*Resolved"
 
       it "keeps one error episode across different issue records and resolves its original incident link" \tr -> do
         update <- setupWithIssue tr
@@ -683,8 +684,12 @@ spec = describe "Monitoring" do
         void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid True iid (Just 60)
         void $ call tr $ IssuesPage.triagePostH testPid iid (IssuesPage.TriageForm Nothing (Just actor.id.toText))
         void $ call tr $ IssuesPage.commentPostH testPid iid (IssuesPage.CommentForm "rolling back <the> deploy")
-        lifecycle <- deliver
+        delivered <- deliver
+        let lifecycle = filter (isJust . (.threadTs)) delivered
+            rootEdits = [slackText sd | sd <- delivered, isNothing sd.threadTs, sd.channelId == "C1"]
         sort [(sd.channelId, sd.threadTs) | sd <- lifecycle] `shouldBe` sort [(c, Just ts) | (c, ts) <- rootTs, _ <- [1 .. 3 :: Int]]
+        -- Acknowledging and assigning also edit the root, so the channel sees who holds it.
+        rootEdits `shouldSatisfy` \case [_, assigned] -> all (`T.isInfixOf` assigned) [":eyes: Acknowledged by " <> who, ":bust_in_silhouette: Assigned to " <> who]; _ -> False
         [slackText sd | sd <- lifecycle, sd.channelId == "C1"]
           `shouldSatisfy` \case
             [acked, took, commented] ->
@@ -695,7 +700,7 @@ spec = describe "Monitoring" do
         -- A webhook-only root has no thread; a lifecycle note there would land in the channel.
         dbExec tr [sql|UPDATE apis.slack_incident_roots SET message_ts = NULL, threadless = TRUE WHERE channel_id = 'C2'|] ()
         void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid False iid Nothing
-        map (\sd -> (sd.channelId, isJust sd.threadTs)) <$> deliver `shouldReturn` [("C1", True)]
+        sort . map (\sd -> (sd.channelId, isJust sd.threadTs)) <$> deliver `shouldReturn` [("C1", False), ("C1", True)]
         stranded `shouldReturn` []
 
       it "records manual error resolution once and updates both incident threads without claiming recovery" \tr -> do
@@ -746,8 +751,9 @@ spec = describe "Monitoring" do
         let messages = slack $ replies <> edits
         length messages `shouldBe` 4
         sort [(sd.channelId, sd.threadTs) | sd <- messages, isJust sd.threadTs] `shouldBe` sort [(sd.channelId, Just ts) | sd <- messages, AE.Object obj <- [sd.payload], Just (AE.String ts) <- [KM.lookup "ts" obj]]
-        for_ messages \sd -> slackText sd `shouldContainAll` ["*Resolved by ", actor.firstName]
-        for_ [sd | sd <- messages, isNothing sd.threadTs] \sd -> slackText sd `shouldContainAll` ["recovery is not yet measured", issue.id.toText]
+        for_ messages \sd -> slackText sd `shouldContainAll` ["*Resolved", actor.firstName]
+        -- A person resolved it: the root says so and does not claim a measured recovery.
+        for_ [sd | sd <- messages, isNothing sd.threadTs] \sd -> (slackText sd `shouldContainAll` [":white_check_mark: *Resolved*", issue.id.toText]) >> (slackText sd `shouldNotSatisfy` T.isInfixOf "Recovered")
         fst <$> captureNotifs tr runSlackIncidentDeliveries `shouldReturn` []
         -- Recurrence regresses the error and opens a new episode; auto-resolution is attributed to nobody, at this transition's time.
         advanceMinutes tr 1
