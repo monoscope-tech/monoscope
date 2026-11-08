@@ -896,7 +896,7 @@ aggFunctionParser =
 -- @summarize count() by bin_auto(timestamp), log_bin(duration)@.
 --
 -- >>> display <$> parse pLogBin "" "log_bin(duration)"
--- Right "(power(10, floor(log10(greatest((duration)::float, 1)) * 4) / 4)::float"
+-- Right "(power(10, floor(log10(greatest((duration)::float, 1)) * 4) / 4))::float AS arith_"
 -- >>> toQText <$> parse pLogBin "" "log_bin(duration)"
 -- Right "log_bin(duration)"
 pLogBin :: Parser AggFunction

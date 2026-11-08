@@ -369,7 +369,7 @@ clusterField = "coalesce(resource.k8s.cluster.name, resource.k8s.cluster.uid)"
 -- >>> :set -XOverloadedStrings -XOverloadedRecordDot
 -- >>> import Data.Vector qualified as V
 -- >>> import Models.Telemetry.Containers (ContainerRow (..), Scope (..))
--- >>> let emptyRow n = ContainerRow n ScopeContainer Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+-- >>> let emptyRow n = ContainerRow n ScopeContainer Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing False
 -- >>> let noFilters = ContainerFilters Nothing Nothing Nothing Nothing Nothing
 -- >>> let nsFilter ns = ContainerFilters Nothing ns Nothing Nothing Nothing
 
