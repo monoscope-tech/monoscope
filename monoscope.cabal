@@ -284,6 +284,8 @@ extra-source-files:
     static/migrations/0265_dashboard_icon_names.sql
     static/migrations/0266_read_only_builtin_dashboards.sql
     static/migrations/0267_slack_issue_activity.sql
+    static/migrations/0268_pr_review_triggers.sql
+    static/migrations/0269_pr_review_proofs.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb
     test/fixtures/github-app-test.pem
