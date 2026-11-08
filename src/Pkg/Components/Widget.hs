@@ -1550,7 +1550,7 @@ renderChart actions widget = do
             div_ [class_ "chart-render-slot h-full min-h-full w-full", id_ chartId, data_ "chart-widget" "", term "hx-morph-skip" ""] ""
             -- A heatmap cell holding errors asks which of its events to open; widgets.ts places it at
             -- the click and fills the counts. Plain cells open their events directly.
-            when (widget.wType == WTHeatmap) $ div_ [id_ $ chartId <> "_cell_menu", term "popover" "auto", role_ "menu", Aria.label_ "Open events", class_ "m-0 w-48 origin-top-left rounded-lg border border-strokeWeak bg-bgRaised p-1 text-xs text-textStrong shadow-lg transition-[opacity,scale,display,overlay] transition-discrete duration-150 ease-out starting:open:scale-95 starting:open:opacity-0"] do
+            when (widget.wType == WTHeatmap) $ div_ [id_ $ chartId <> "_cell_menu", term "popover" "auto", role_ "menu", Aria.label_ "Open events", class_ "m-0 w-48 origin-top-left rounded-lg border border-strokeWeak bg-bgRaised p-1 text-xs text-textStrong shadow-lg transition-[opacity,scale,display,overlay] transition-discrete duration-150 ease-(--ease-out-quint) starting:open:scale-95 starting:open:opacity-0"] do
               let item :: Text -> Text -> Text -> Text -> Html ()
                   item cellView label countAttr extra =
                     button_ [type_ "button", role_ "menuitem", data_ "cell-view" cellView, class_ $ "flex w-full cursor-pointer items-center justify-between gap-3 rounded px-2 py-1.5 text-left hover:bg-fillWeak active:bg-fillHover focus-visible:bg-fillWeak " <> extra] do
