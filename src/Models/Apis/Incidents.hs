@@ -455,17 +455,17 @@ resolveErrorIncident pid errorId actor now message = Hasql.transaction TxS.ReadC
       results <- forM sources \(source, iid) ->
         let (rootPayload, replyPayload) = message iid
          in recordIncidentEventTx
-          IncidentUpdate
-            { projectId = pid
-            , source
-            , observedAt = now
-            , change = IncidentResolved actor
-            , delivery = PublishIncident
-            , issueId = iid
-            , rootPayload
-            , replyPayload
-            , destinations = []
-            }
+              IncidentUpdate
+                { projectId = pid
+                , source
+                , observedAt = now
+                , change = IncidentResolved actor
+                , delivery = PublishIncident
+                , issueId = iid
+                , rootPayload
+                , replyPayload
+                , destinations = []
+                }
       case [c | Rejected c <- results] of
         [] -> pure ErrorResolved
         conflict : _ -> Tx.condemn $> ErrorResolutionConflict conflict

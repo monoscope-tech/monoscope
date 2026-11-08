@@ -153,15 +153,16 @@ sendSlackAlert threadTsM alert pid pTitle channelM = do
     (Just cid, Just sd) -> do
       let projectUrl = hostPath appCtx.env.hostUrl $ urls.dashboardRedirectGet pid []
           byHash h = hostPath appCtx.env.hostUrl $ (urls.issues pid).detailHashGet h Nothing Nothing Nothing Nothing Nothing
-          mkPayload = fmap AE.toJSON . \case
-            RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData pTitle projectUrl (byHash errorData.hash) chartUrl occurrenceText firstSeenText ongoingFor
-            EndpointAlert{..} -> Just $ slackNewEndpointsAlert project endpoints (byHash endpointHash) projectUrl
-            ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
-            MonitorsAlert{..} -> Just $ slackMonitorAlert sAlerting monitorTitle monitorUrl chartUrl
-            MonitorsRecoveryAlert{..} -> Just $ slackMonitorAlert sRecovered monitorTitle monitorUrl Nothing
-            LogPatternAlert lp -> Just $ card $ logPatternCard lp pTitle
-            LogPatternRateChangeAlert rc -> Just $ card $ rateChangeCard rc pTitle
-            ShapeAlert -> Nothing
+          mkPayload =
+            fmap AE.toJSON . \case
+              RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData pTitle projectUrl (byHash errorData.hash) chartUrl occurrenceText firstSeenText ongoingFor
+              EndpointAlert{..} -> Just $ slackNewEndpointsAlert project endpoints (byHash endpointHash) projectUrl
+              ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
+              MonitorsAlert{..} -> Just $ slackMonitorAlert sAlerting monitorTitle monitorUrl chartUrl
+              MonitorsRecoveryAlert{..} -> Just $ slackMonitorAlert sRecovered monitorTitle monitorUrl Nothing
+              LogPatternAlert lp -> Just $ card $ logPatternCard lp pTitle
+              LogPatternRateChangeAlert rc -> Just $ card $ rateChangeCard rc pTitle
+              ShapeAlert -> Nothing
           isDefaultChannel = cid == sd.channelId
       join <$> forM (mkPayload alert) \payload -> do
         -- Legacy installs (apis.slack row created between migrations 0077 and 0080)

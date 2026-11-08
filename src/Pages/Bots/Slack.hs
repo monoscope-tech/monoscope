@@ -5,7 +5,6 @@ module Pages.Bots.Slack (slackFormPostH, linkIdentityGetH, linkIdentityPostH, Sl
 
 import BackgroundJobs.Types qualified as BgJobs
 import Control.Lens (failing, (%~), (.~), (^.), (^..), (^?))
-import Data.List.NonEmpty qualified as NE
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEM
 import Data.Aeson.KeyMap qualified as KM
@@ -22,6 +21,7 @@ import Data.Effectful.Wreq (
   postWith,
   responseBody,
  )
+import Data.List.NonEmpty qualified as NE
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)

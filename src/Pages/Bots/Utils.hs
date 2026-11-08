@@ -141,7 +141,6 @@ codeSpan :: Text -> Text
 codeSpan t = "`" <> T.take 300 (unwords $ words $ T.replace "`" "'" t) <> "`"
 
 
-
 -- | Slack in-channel response replacing the ephemeral loading message.
 slackResponse :: [AE.Value] -> AE.Value
 slackResponse blocks = AE.object ["blocks" AE..= blocks, "response_type" AE..= ("in_channel" :: Text), "replace_original" AE..= True, "delete_original" AE..= True]
