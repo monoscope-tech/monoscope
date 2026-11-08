@@ -74,7 +74,7 @@ import Web.ApiHandlers qualified as Api
 import Web.ApiTypes qualified as ApiTypes
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
-import Web.FormUrlEncoded (urlDecodeAsForm)
+import Web.FormUrlEncoded (fromForm, urlDecodeAsForm)
 import Web.Routes qualified as Routes
 import "cryptonite" Crypto.Hash qualified as Crypto
 
@@ -309,6 +309,8 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     addWidgets tr dashId [(widgetOf Widget.WTStat "Source Stat"){Widget.id = Just "src-stat"}]
     picker <- renderT <$> call tr (Dashboards.dashboardsGetH testPid Nothing (Just "true") Nothing (Just "src-stat") (Just dashId) Nothing (Dashboards.DashboardFilters []))
     picker `shouldContainAll` ["id=\"dashboard-picker\"", "hx-live:hidden", "This dashboard", "1 widget", "/widgets/src-stat/duplicate?source_dashboard_id=" <> dashId.toText]
+    -- The picker always posts every hidden field; the empty ones read as absent rather than as malformed ids.
+    ((\f -> (f.sourceDashboardId, f.widgetJson)) <$> (fromForm @Dashboards.DashboardForm =<< urlDecodeAsForm "file=&title=Fresh&teams=&copyWidgetId=w1&sourceDashboardId=&widgetJson=")) `shouldBe` Right (Nothing, Nothing)
     -- The explorer's chart exists only as JSON; "New dashboard with this widget" posts it with the form.
     void $ testServant tr $ Dashboards.dashboardDeleteH testPid dashId
     let chart = widgetOf Widget.WTTimeseries "From Explorer"

@@ -373,8 +373,7 @@ tabs:
             MAX(CASE WHEN vital = 'cls' THEN value END) AS cls, SUM(total)::text AS samples
           FROM shown GROUP BY page ORDER BY SUM(total) DESC LIMIT 50
 
-  # Fetch and XHR calls the browser made (client spans), timed from the user's side. The OTLP
-  # exporter's and session replay's own uploads are the SDK talking to itself, not the app.
+  # Fetch and XHR calls the browser made, timed from the user's side ({{client_request_filter}}).
   - name: Network
     variables: [app]
     icon: globe
@@ -389,7 +388,7 @@ tabs:
             icon: globe
             query: *app
             sql: |
-              SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer, 'value', count(*)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND kind = 'client' AND COALESCE(attributes___url___path, '') NOT IN ('/v1/traces', '/v1/metrics', '/v1/logs', '/api/v1/rrweb') GROUP BY time_bucket('{{rollup_interval}}', timestamp) ORDER BY time_bucket('{{rollup_interval}}', timestamp) DESC
+              SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer, 'value', count(*)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{client_request_filter}} GROUP BY time_bucket('{{rollup_interval}}', timestamp) ORDER BY time_bucket('{{rollup_interval}}', timestamp) DESC
             unit: requests
             summarize_by: sum
             layout: { w: 3, h: 2 }
@@ -400,7 +399,7 @@ tabs:
             description: Responses with a 4xx or 5xx status, or requests that never completed.
             query: *app
             sql: |
-              SELECT (100.0 * count(*) FILTER (WHERE attributes___http___response___status_code >= 400 OR status_code = 'ERROR') / NULLIF(count(*), 0))::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND kind = 'client' AND COALESCE(attributes___url___path, '') NOT IN ('/v1/traces', '/v1/metrics', '/v1/logs', '/api/v1/rrweb')
+              SELECT (100.0 * count(*) FILTER (WHERE attributes___http___response___status_code >= 400 OR status_code = 'ERROR') / NULLIF(count(*), 0))::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{client_request_filter}}
             unit: '%'
             layout: { w: 3, h: 2 }
 
@@ -409,7 +408,7 @@ tabs:
             icon: gauge
             query: *app
             sql: |
-              SELECT (approx_percentile(0.75, percentile_agg(duration)) / 1000000)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND kind = 'client' AND duration IS NOT NULL AND COALESCE(attributes___url___path, '') NOT IN ('/v1/traces', '/v1/metrics', '/v1/logs', '/api/v1/rrweb')
+              SELECT (approx_percentile(0.75, percentile_agg(duration)) / 1000000)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{client_request_filter}} AND duration IS NOT NULL
             unit: ms
             layout: { w: 3, h: 2 }
 
@@ -418,7 +417,7 @@ tabs:
             icon: gauge
             query: *app
             sql: |
-              SELECT (approx_percentile(0.95, percentile_agg(duration)) / 1000000)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND kind = 'client' AND duration IS NOT NULL AND COALESCE(attributes___url___path, '') NOT IN ('/v1/traces', '/v1/metrics', '/v1/logs', '/api/v1/rrweb')
+              SELECT (approx_percentile(0.95, percentile_agg(duration)) / 1000000)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{client_request_filter}} AND duration IS NOT NULL
             unit: ms
             layout: { w: 3, h: 2 }
 
@@ -438,7 +437,7 @@ tabs:
                 ELSE 'No response'
               END AS class
             FROM otel_logs_and_spans
-            WHERE {{query_ast_filters}} AND {{browser_filter}} AND kind = 'client' AND COALESCE(attributes___url___path, '') NOT IN ('/v1/traces', '/v1/metrics', '/v1/logs', '/api/v1/rrweb')
+            WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{client_request_filter}}
           ) r GROUP BY t, class ORDER BY t DESC
 
       - type: heatmap
@@ -491,8 +490,7 @@ tabs:
               duration,
               (attributes___http___response___status_code >= 400 OR status_code = 'ERROR') AS failed
             FROM otel_logs_and_spans
-            WHERE {{query_ast_filters}} AND {{browser_filter}} AND kind = 'client' AND duration IS NOT NULL
-              AND COALESCE(attributes___url___path, '') NOT IN ('/v1/traces', '/v1/metrics', '/v1/logs', '/api/v1/rrweb')
+            WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{client_request_filter}} AND duration IS NOT NULL
           )
           SELECT method || ' ' || path AS endpoint, host, n::text AS requests, p75_ms, p95_ms, failed,
             'kind == "client" and attributes.http.request.method == "' || method || '" and attributes.url.path matches regex "^' || rx || '$"' AS kql

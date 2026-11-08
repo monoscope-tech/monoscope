@@ -676,14 +676,13 @@ repositoriesPageH pid selection = do
                     "Result"
                     ( \run -> case AE.fromJSON <$> run.result of
                         Just (AE.Success (result :: ImpactReview.ReviewResult)) ->
-                          let (tone, icon, label) = case result.verdict of
-                                ImpactReview.WorthChecking -> (WarningBadge, "triangle-exclamation", countNoun (length result.findings) "finding" <> " to check")
-                                ImpactReview.CoverageUnknown -> (NeutralBadge, "circle-question", "Coverage unknown")
-                                ImpactReview.NoFinding -> (NeutralBadge, "circle-check", "No finding")
+                          let (toneM, icon, label) = case result.verdict of
+                                ImpactReview.WorthChecking -> (Just WarningBadge, "triangle-exclamation", countNoun (length result.findings) "finding" <> " to check")
+                                ImpactReview.CoverageUnknown -> (Just NeutralBadge, "circle-question", "Coverage unknown")
+                                ImpactReview.NoFinding -> (Nothing, "circle-check", "No finding")
+                              plain = span_ [class_ "inline-flex items-center gap-1.5 text-xs text-textWeak"] $ faSprite_ icon "regular" "h-3 w-3" >> toHtml label
                            in -- Only a current review's open question earns a chip; a superseded one's verdict is history.
-                              if run.state == ImpactReviews.Superseded || result.verdict == ImpactReview.NoFinding
-                                then span_ [class_ "inline-flex items-center gap-1.5 text-xs text-textWeak"] $ faSprite_ icon "regular" "h-3 w-3" >> toHtml label
-                                else colorChip_ tone icon label
+                              maybe plain (\tone -> colorChip_ tone icon label) (toneM <* guard (run.state /= ImpactReviews.Superseded))
                         _ -> span_ [class_ "text-xs text-textWeak"] "\x2014"
                     )
                 , Table.col "Revision" (\run -> code_ [class_ "text-xs text-textWeak", title_ run.revision] $ toHtml $ T.take 8 run.revision)

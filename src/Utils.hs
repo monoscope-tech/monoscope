@@ -1929,21 +1929,23 @@ dropEmptyFormValues :: Text -> Form -> Form
 dropEmptyFormValues key = Form . HM.adjust (filter (not . T.null)) key . unForm
 
 
--- | @deriving (FromForm) via (FormWithOptional "teams" MyForm)@ — the derived decoder,
--- with 'dropEmptyFormValues' applied to @key@ first.
+-- | @deriving (FromForm) via (FormWithOptional '["teams"] MyForm)@ — the derived decoder,
+-- with 'dropEmptyFormValues' applied to each of @keys@ first, so an empty value reads as absent.
 --
 -- Plain @deriving anyclass (FromForm)@ cannot express this: it gives exactly the class
 -- default, @genericFromForm defaultFormOptions@, which is the decoder that rejects an
 -- empty picker. Everything else stays derived — field names, @Maybe@ handling and
 -- repeated values are still whatever the generic instance does.
-newtype FormWithOptional (key :: Symbol) a = FormWithOptional a
+newtype FormWithOptional (keys :: [Symbol]) a = FormWithOptional a
 
 
-instance (GFromForm a (Rep a), Generic a, KnownSymbol key) => FromForm (FormWithOptional key a) where
-  fromForm =
-    fmap FormWithOptional
-      . genericFromForm defaultFormOptions
-      . dropEmptyFormValues (toText $ symbolVal (Proxy @key))
+class KnownSymbols (keys :: [Symbol]) where symbolVals :: Proxy keys -> [Text]
+instance KnownSymbols '[] where symbolVals _ = []
+instance (KnownSymbol k, KnownSymbols ks) => KnownSymbols (k ': ks) where symbolVals _ = toText (symbolVal (Proxy @k)) : symbolVals (Proxy @ks)
+
+
+instance (GFromForm a (Rep a), Generic a, KnownSymbols keys) => FromForm (FormWithOptional keys a) where
+  fromForm = fmap FormWithOptional . genericFromForm defaultFormOptions . flip (foldr dropEmptyFormValues) (symbolVals (Proxy @keys))
 
 
 -- | Strip NUL bytes from a 'Text'. Postgres' @jsonb@ rejects NUL in text

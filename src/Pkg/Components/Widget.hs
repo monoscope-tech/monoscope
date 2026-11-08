@@ -1190,9 +1190,7 @@ renderWidgetHeader actions widget valueM subValueM expandBtnFn ctaM = div_ [clas
               then set #dashboards-modal-search.value to ''
               then set #dashboards-modal-widget-id.value to "${wId}"
               then set #dashboards-modal-source-dashboard-id.value to "${dashId}"
-              then set #dashboards-modal-source-dashboard-id.disabled to ("${dashId}" is "")
               then set #dashboards-modal-widget-json.value to (widgetEl.dataset.widget or '')
-              then set #dashboards-modal-widget-json.disabled to (#dashboards-modal-widget-json.value is "")
               then set #dashboards-modal.checked to true then send change to #dashboards-modal
               then trigger loadDashboards on #dashboards-modal-content
               then call (the closest <[popover]/>).hidePopover()

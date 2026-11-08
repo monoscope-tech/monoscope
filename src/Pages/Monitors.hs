@@ -135,7 +135,7 @@ data AlertUpsertForm = AlertUpsertForm
   deriving stock (Generic, Show)
   -- The alert editor posts @teams@ through the same @getTagValues@ hx-vals as the
   -- dashboard forms, and an empty picker sends @teams=@.
-  deriving (FromForm) via (FormWithOptional "teams" AlertUpsertForm)
+  deriving (FromForm) via (FormWithOptional '["teams"] AlertUpsertForm)
 
 
 -- | 'Left' carries the parse error of a query the monitor could never evaluate.
@@ -226,7 +226,7 @@ alertUpsertPostH pid form = do
   existingMonitor <- maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMonitorId) alertId
 
   case convertToQueryMonitor pid now queryMonitorId form{recipientEmailAll = Just emailAll} of
-    Left err -> addToast "error" "Monitor query is invalid" (Just err) >> addRespHeaders (AlertNoContent "")
+    Left err -> addToast "error" "Monitor query is invalid" (Just err) Nothing >> addRespHeaders (AlertNoContent "")
     Right baseMonitor -> do
       let
         -- The form has no active/inactive control, and convertToQueryMonitor defaults

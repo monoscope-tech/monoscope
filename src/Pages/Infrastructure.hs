@@ -23,6 +23,7 @@ module Pages.Infrastructure (
 
 import Data.Default (def)
 import Data.List.Extra (firstJust)
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
@@ -692,7 +693,7 @@ hostMapGetH pid fillM groupM providerM regionM osM fromParam toParam sinceParam 
     let groups = groupRows (Just . hostGroupLabel grouping) $ applyHostFilters filters allHosts
         -- Unpicked, the map colours by whichever signal the most hosts report: kubelet-only nodes have no CPU percentage.
         coverage f = V.length $ V.filter (isJust . fillValue f) allHosts
-        bestFill = fromMaybe FillCPU $ viaNonEmpty head $ sortOn (Down . coverage) [minBound ..]
+        bestFill = head $ NE.sortWith (Down . coverage) (FillCPU :| [FillMemory, FillStorage])
     pure HostMapData{pid, window, fill = parseParam bestFill display fillM, grouping, filters, allHosts, groups}
   addRespHeaders $ HostMapPage $ PageCtx (infrastructureBW pid "Host Map" window bw) body
   where

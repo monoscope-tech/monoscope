@@ -1915,7 +1915,7 @@ data WidgetAlertForm = WidgetAlertForm
   deriving stock (Generic, Show)
   -- Posted by the widget alert config with the same @getTagValues@ hx-vals as
   -- 'DashboardForm', so an empty picker sends @teams=@ here too.
-  deriving (FromForm) via (FormWithOptional "teams" WidgetAlertForm)
+  deriving (FromForm) via (FormWithOptional '["teams"] WidgetAlertForm)
 
 
 -- | Refusals shared by the widget save and the widget monitor form.
@@ -2269,8 +2269,8 @@ dashboardsGet_ dg
                   body
                   span_ [class_ "shrink-0 text-xs font-medium text-textBrand opacity-0 transition-opacity duration-100 group-hover/pick:opacity-100 group-[.active]/pick:opacity-100 group-focus-visible/pick:opacity-100 group-[.htmx-request]/pick:hidden"] verb
                   span_ [class_ "loading loading-spinner loading-xs hidden shrink-0 text-iconNeutral group-[.htmx-request]/pick:inline-block", Aria.label_ "Adding"] ""
-          p_ [class_ "px-2 py-6 text-center text-sm text-textWeak [&[hidden]]:hidden", term "hx-live:hidden" "q('#dashboard-picker [data-dash]:not([hidden])').count > 0"]
-            $ if V.null dg.dashboards then "No dashboards yet. Create one below." else "No dashboards match your search."
+          div_ [class_ "[&[hidden]]:hidden", term "hx-live:hidden" "q('#dashboard-picker [data-dash]:not([hidden])').count > 0"]
+            $ if V.null dg.dashboards then emptyState_ def{size = ESCompact} "No dashboards yet" "Create one below with this widget." else emptyState_ def{size = ESCompact} "No dashboards match" "Try another name, or create a dashboard below."
   | otherwise = do
       unless dg.embedded
         $ Components.modalWith_ "newDashboardMdl" def{autoOpen = dg.showNew, boxClass = "max-w-none", boxStyle = "width:min(92vw,76rem);max-width:none;overflow:clip"} Nothing
@@ -2358,11 +2358,10 @@ dashboardsGet_ dg
             tableCols =
               [ nameCol & Table.withSort "title"
               , Table.col "Last Modified" renderModifiedCol & Table.withAttrs [class_ "w-44 max-md:hidden"] & Table.withSort "updated_at"
+              , Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48 max-md:hidden"]
+              , Table.col "Tags" renderTagsCol & Table.withAttrs [class_ "w-48 max-md:hidden"]
+              , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24 max-md:hidden"]
               ]
-                <> [ Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48 max-md:hidden"]
-                   , Table.col "Tags" renderTagsCol & Table.withAttrs [class_ "w-48 max-md:hidden"]
-                   , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24 max-md:hidden"]
-                   ]
 
         let table =
               Table
@@ -2499,7 +2498,7 @@ data DashboardForm = DashboardForm
   , title :: Text
   , fileDir :: Maybe Text
   , -- The add-to-dashboard picker's widget, which the new dashboard starts with: one already
-    -- on a dashboard by id, or the explorer's by its JSON. The picker disables whichever is empty.
+    -- on a dashboard by id, or the explorer's by its JSON. Empty values read as absent (FormWithOptional).
     copyWidgetId :: Maybe Text
   , sourceDashboardId :: Maybe Dashboards.DashboardId
   , widgetJson :: Maybe Text
@@ -2507,7 +2506,7 @@ data DashboardForm = DashboardForm
   deriving stock (Generic, Show)
   -- An empty team picker posts @teams=@, which the plain derived decoder read as a
   -- malformed UUID and rejected the whole form over. See 'FormWithOptional'.
-  deriving (FromForm) via (FormWithOptional "teams" DashboardForm)
+  deriving (FromForm) via (FormWithOptional '["teams", "copyWidgetId", "sourceDashboardId", "widgetJson"] DashboardForm)
 
 
 dashboardsPostH :: Projects.ProjectId -> DashboardForm -> ATAuthCtx (RespHeaders DashboardRes)
@@ -2796,7 +2795,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
   syncDashboardAndQueuePush pid targetDashId
 
   addWidgetJSON $ encodeText widgetCopy
-  pushToast "success" (maybe "Widget duplicated successfully" ("Copied to " <>) targetDashNameM) Nothing (dashboardUrl pid targetDashId ((.slug) <$> destinationTabM) [] <$ targetDashNameM)
+  addToast "success" (maybe "Widget duplicated successfully" ("Copied to " <>) targetDashNameM) Nothing (dashboardUrl pid targetDashId ((.slug) <$> destinationTabM) [] <$ targetDashNameM)
   addRespHeaders widgetCopy
 
 

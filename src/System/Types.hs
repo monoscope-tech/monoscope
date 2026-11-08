@@ -9,7 +9,6 @@ module System.Types (
   addRespHeaders,
   addTriggerEvent,
   addToast,
-  pushToast,
   addSuccessToast,
   addErrorToast,
   toastError,
@@ -353,17 +352,13 @@ addTriggerEvent key value = State.modify $ \events ->
    in Map.insert key updatedList events
 
 
-addToast :: State.State TriggerEvents :> es => Text -> Text -> Maybe Text -> Eff es ()
-addToast toastType title descM = pushToast toastType title descM Nothing
-
-
 -- | The wire shape the toast listener reads: @[type, title, detail, href]@, trailing fields optional.
-pushToast :: State.State TriggerEvents :> es => Text -> Text -> Maybe Text -> Maybe Text -> Eff es ()
-pushToast toastType title descM hrefM = addTriggerEvent "triggerToast" $ AE.toJSON $ [toastType, title] <> maybe (toList descM) (\h -> [fold descM, h]) hrefM
+addToast :: State.State TriggerEvents :> es => Text -> Text -> Maybe Text -> Maybe Text -> Eff es ()
+addToast toastType title descM hrefM = addTriggerEvent "triggerToast" $ AE.toJSON $ [toastType, title] <> maybe (toList descM) (\h -> [fold descM, h]) hrefM
 
 
 addSuccessToast :: State.State TriggerEvents :> es => Text -> Maybe Text -> Eff es ()
-addSuccessToast = addToast "success"
+addSuccessToast t d = addToast "success" t d Nothing
 
 
 addReswap :: State.State HXReswap :> es => Text -> Eff es ()
@@ -373,7 +368,7 @@ addReswap x = State.put $ HXReswap $ Just x
 addErrorToast :: (IOE :> es, Log :> es, State.State TriggerEvents :> es) => Text -> Maybe Text -> Eff es ()
 addErrorToast msg msg2 = do
   Logging.logAttention_ $ "ERROR: " <> msg <> " => " <> maybeToMonoid msg2
-  addToast "error" msg msg2
+  addToast "error" msg msg2 Nothing
 
 
 -- | Toast an error and short-circuit with the given response payload.
@@ -502,7 +497,7 @@ type AnswerState es = (State.State HXRedirectDest :> es, State.State HXReswap :>
 done :: (AnswerState es, Outcome a) => a -> Eff es (RespHeaders (Done a))
 done a = do
   traverse_ redirectCS (outcomeRedirect a)
-  for_ (outcomeToast a) \(Toast level title detail href) -> pushToast (case level of SuccessToast -> "success"; ErrorToast -> "error") title detail href
+  for_ (outcomeToast a) \(Toast level title detail href) -> addToast (case level of SuccessToast -> "success"; ErrorToast -> "error") title detail href
   addRespHeaders (Done a)
 
 
@@ -510,5 +505,5 @@ done a = do
 act :: (AnswerState es, Outcome a, Refusal e) => Eff es (Either e a) -> Eff es (ActionResult e a)
 act run =
   run >>= \case
-    Left e -> addToast "error" (refusalMessage e) (refusalDetail e) >> addReswap "none" >> (respond =<< addRespHeaders (Refused e))
+    Left e -> addToast "error" (refusalMessage e) (refusalDetail e) Nothing >> addReswap "none" >> (respond =<< addRespHeaders (Refused e))
     Right a -> respond =<< done a

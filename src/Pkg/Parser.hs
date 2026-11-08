@@ -995,10 +995,16 @@ fillQueryTemplate lang mappng = replacePlaceholders (Map.mapWithKey escapeVar ma
 -- unset. TimeFusion's @rum_*@ rollup measures declare these strings verbatim and serve a widget
 -- only while its filter matches exactly, so an edit here must be mirrored in TimeFusion's
 -- @schemas/otel_logs_and_spans.yaml@.
-browserSql, pageViewSql, errorSql, browserKql :: Text
+browserSql, pageViewSql, errorSql, browserKql, clientRequestSql :: Text
 browserSql = "(resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR " <> pageViewSql <> ")"
 pageViewSql = "(name LIKE 'Pageview %' OR name = 'documentLoad')"
 errorSql = "(status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)"
+
+
+-- | Fetch/XHR calls the page made; the OTLP exporter's and session replay's uploads are the SDK talking to itself.
+clientRequestSql = "(kind = 'client' AND COALESCE(attributes___url___path, '') NOT IN ('/v1/traces', '/v1/metrics', '/v1/logs', '/api/v1/rrweb'))"
+
+
 browserKql = "(resource.telemetry.sdk.language in (\"webjs\", \"javascript\", \"js\") or resource.user_agent.original != null or name in (\"documentLoad\", \"documentFetch\") or name startswith \"Pageview \")"
 
 
@@ -1026,6 +1032,7 @@ variablePresets density pid mf mt allParams currentTime =
            , ("browser_filter", browserSql)
            , ("pageview_filter", pageViewSql)
            , ("error_filter", errorSql)
+           , ("client_request_filter", clientRequestSql)
            , ("browser_kql", browserKql)
            , ("audience_sessions", audienceSessions)
            , ("audience_kql_literal", sqlStringLit $ audienceKql audience)
