@@ -1301,7 +1301,7 @@ renderSlackReplies projectTools context envCfg access resolveThread = do
         Just _ -> reply & key "blocks" . _Array %~ (<> V.singleton (slackContext [link]))
         Nothing -> reply & key "text" . _String %~ (<> "\n\n" <> link)
   -- One link under the whole answer, not one per chart.
-  pure (outcome, NE.prependList (NE.init replies) (pure $ linked $ NE.last replies))
+  pure (outcome, NE.prependList (init replies) (pure $ linked $ last replies))
 
 
 deliverReplies :: (DB es, HTTP :> es, IOE :> es, Log.Log :> es) => Text -> Issues.RunContext -> AI.AgentAccess -> SlackData -> Investigations.CheckpointTarget -> Investigations.ReplyDestination -> Eff es () -> Investigations.ReplyBatch -> Eff es ()
