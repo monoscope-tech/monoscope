@@ -2834,6 +2834,23 @@ spec = around withTestResources $ describe "Production impact reviews" do
     asked <- maybe (fail "asked run missing") pure . find ((== sha "c") . (.revision)) =<< runQueryEffect tr (Reviews.latestRuns testPid)
     asked.request `shouldBe` Just Reviews.Ask{login = "ada", commentId = 55, command = Reviews.Prove, focus = Just "and check the empty state"}
 
+  it "proofMedia_servesOnlySignedRecordingsOfTheirProject" \tr -> do
+    setup tr
+    void $ deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
+    [run] <- runQueryEffect tr $ Reviews.latestRuns testPid
+    dbExec tr "INSERT INTO projects.pr_review_proofs (run_id, key, side, claim, revision, exit_code, cast_bytes, gif, mp4) VALUES (?, 'proof-1', 'head', 'Prints the version', ?, 0, convert_to('cast', 'UTF8'), convert_to('GIF89a fixture', 'UTF8'), convert_to('mp4 fixture', 'UTF8'))" (run.id, revision)
+    [link] <- map (Impact.proofLink tr.trATCtx run) <$> runQueryEffect tr (Reviews.proofSides run)
+    let app = genericServeTWithContext (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider) (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused")) (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+        fetch url = WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ fromMaybe url $ T.stripPrefix tr.trATCtx.config.hostUrl url) app
+    preview <- fetch link.preview
+    (H.statusCode preview.simpleStatus, lookup "Content-Type" preview.simpleHeaders, preview.simpleBody) `shouldBe` (200, Just "image/gif", "GIF89a fixture")
+    video <- fetch link.video
+    (H.statusCode video.simpleStatus, lookup "Content-Type" video.simpleHeaders) `shouldBe` (200, Just "video/mp4")
+    -- A signature binds the project, review and file: none of them can be swapped.
+    otherPid <- createTestProject tr "Other proof project"
+    for_ [T.replace "sig=" "sig=0" link.preview, T.replace testPid.toText otherPid.toText link.preview, T.replace "proof-1-head.gif" "proof-1-base.gif" link.preview] \forged ->
+      (H.statusCode . (.simpleStatus) <$> fetch forged) `shouldReturn` 403
+
   it "reviewComment_leadsWithMergeRiskAndShowsProductionDetailOnlyWhereAllowed" \_ -> do
     let pid = UUIDId UUID.nil
         run = Reviews.ReviewRun{id = UUIDId UUID.nil, threadId = UUIDId UUID.nil, projectId = pid, owner = "acme", repo = "checkout", number = 42, revision = T.replicate 40 "a", state = Reviews.Completed, result = Nothing, error = Nothing, commentId = Nothing, latestRevision = T.replicate 40 "a", createdAt = frozenTime, request = Nothing}

@@ -1,6 +1,6 @@
 # Impact reviews v2: merge risk, widgets, triggers, proof
 
-Status: in progress (2026-11-08). Order: A → B → C-terminal → C-browser.
+Status (2026-11-08): A, B and C-terminal are implemented and tested. Terminal proof is verified end to end in real VMs. Browser proof (C-browser) and D's `fetch_url`, registry proxy and extra host tools are follow-ups.
 
 ## Today
 - `pull_request` webhook → `ImpactReviews.receiveEvent` → thread/run rows → job `ReviewPullRequest` → `Pkg.ImpactReview.reviewPullRequest`.

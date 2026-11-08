@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.ImpactReview (reviewPullRequest, requestReview, fixIssue, ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Claim (..), ClaimStatus (..), ProofLink (..), Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, ReviewQuery, mkReviewQuery) where
+module Pkg.ImpactReview (reviewPullRequest, requestReview, fixIssue, ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Claim (..), ClaimStatus (..), ProofLink (..), proofLink, Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, ReviewQuery, mkReviewQuery) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE

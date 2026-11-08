@@ -236,13 +236,16 @@ COPY --from=builder --chown=monoscope:monoscope /build/static ./static
 
 FROM runtime AS impact-tools
 USER root
+# agg renders proof recordings (asciinema casts) into GIF previews.
 RUN case "$(dpkg --print-architecture)" in \
-      amd64) qemu=qemu-system-x86 ;; \
-      arm64) qemu=qemu-system-arm ;; \
+      amd64) qemu=qemu-system-x86 agg=x86_64 agg_sha=f111e315cd71056b116302342553dd765b7297579ed511f111d0cedb442aeda6 ;; \
+      arm64) qemu=qemu-system-arm agg=aarch64 agg_sha=2b4be407b97e00e1c313a41d154ced8fa3d02c560c8f47a0db4950a2576444c9 ;; \
       *) exit 1 ;; \
     esac && \
     apt-get update && apt-get install -y --no-install-recommends \
-      "$qemu" qemu-utils git ffmpeg graphviz libstdc++6 && \
+      "$qemu" qemu-utils git ffmpeg graphviz libstdc++6 curl ca-certificates && \
+    curl -fsSL -o /usr/local/bin/agg "https://github.com/asciinema/agg/releases/download/v1.9.0/agg-$agg-unknown-linux-gnu" && \
+    echo "$agg_sha  /usr/local/bin/agg" | sha256sum -c - && chmod 0755 /usr/local/bin/agg && \
     rm -rf /var/lib/apt/lists/* && \
     mkdir -p /var/lib/monoscope/cache /var/lib/monoscope/usage && \
     chown -R monoscope:monoscope /var/lib/monoscope && \
