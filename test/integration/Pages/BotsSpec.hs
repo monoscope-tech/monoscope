@@ -1762,7 +1762,8 @@ spec = around withTestResources do
       answer <-
         runTestBg frozenTime tr (agent (\h _ -> pure $ case toolResults h of [] -> invoking [fn "ack_issue" [("issue_id", AE.toJSON issueId)], newDashboard "Agent attribution regression"]; [_, _] -> invoking [fn "get_issue" [("issue_id", AE.toJSON issueId)]]; _ -> said "Issue acknowledged.") $ chat (tooled $ durable tr (conversation 1) acknowledge) "Acknowledge this issue")
           >>= either (fail . toString) pure
-      [v | c <- answer.toolCalls, c.name == "get_issue", Just v <- [c.rawData]] ^.. traverse . key "structuredContent" . key "activity" . _Array . traverse . key "created_by" . _String `shouldBe` [(uid tr).toText]
+      -- The acknowledgement and the view are both attributed to the requester.
+      [v | c <- answer.toolCalls, c.name == "get_issue", Just v <- [c.rawData]] ^.. traverse . key "structuredContent" . key "activity" . _Array . traverse . key "created_by" . _String `shouldBe` replicate 2 (uid tr).toText
       dbQuery tr [sql|SELECT acknowledged_at IS NOT NULL, acknowledged_by FROM apis.issues WHERE id = ?|] (Only issueId) `shouldReturn` [(True, Just $ uid tr)]
       dbQuery tr [sql|SELECT created_by FROM projects.dashboards WHERE project_id = ? AND title = 'Agent attribution regression'|] (Only testPid) `shouldReturn` [Only $ uid tr]
       writes <- interactiveInvocation tr testPid (conversation 2) "Create a monitor" Issues.Autonomous
@@ -4418,16 +4419,18 @@ spec = around withTestResources do
             , ("Describe schema without querying", 1, "Available fields include resource.service.name.", "{\"explanation\":\"Available fields include resource.service.name.\",\"query\":\"get_schema was called once; no telemetry query was executed.\"}", 0, 1)
             , ("Keep an empty explanation visible", 1, "No response available", "{\"explanation\":\"\"}", 0, 1)
             , ("Keep charts without empty commentary", 1, "", widgetAnswer Nothing (Just ""), 2, 0)
-            , ("Keep a long plain answer", 1, longExplanation, longExplanation, 0, 3)
-            , ("Keep a long chart explanation", 1, longWords, widgetAnswer Nothing (Just longWords), 2, 3)
-            , ("Keep an unbroken answer", 1, unbroken, unbroken, 0, 3)
+            , ("Keep a long plain answer", 1, longExplanation, longExplanation, 0, 6)
+            , ("Keep a long chart explanation", 1, longWords, widgetAnswer Nothing (Just longWords), 2, 6)
+            , ("Keep an unbroken answer", 1, unbroken, unbroken, 0, 5)
             ]
               <> [ ("Show " <> shape <> bool " from a primary query: " " from a widget: " modern <> query, 1, expected, decodeUtf8 $ AE.encode $ if modern then AE.object ["widgets" .= ([AE.object ["type" .= shape, "query" .= query]] :: [AE.Value])] else AE.object ["query" .= query, "visualization" .= shape], 0, 1)
                  | shape <- ["logs", "table", "top_list"], modern <- [False, True], (query, expected) <- [("name == \"qa-missing-event\"", "No data found"), ("summarize matches=count()", "matches\n0")]
                  ]
               :: [(Text, Int, Text, Text, Int, Int)]
-          blockTexts = toListOf (key "blocks" . _Array . traverse . key "text" . key "text" . _String)
-          messageTexts = filter (not . T.isSuffixOf "|View runs and artifacts>") . blockTexts
+          blockTexts = toListOf (key "blocks" . _Array . traverse . key "text" . Lens.failing _String (key "text" . _String))
+          -- A native table reads back as one line per row.
+          tableTexts p = [T.intercalate "\n" [T.unwords (row ^.. Lens.folded . key "text" . _String) | row <- t ^.. key "rows" . _Array . Lens.folded . _Array . to toList] | t <- p ^.. key "blocks" . _Array . traverse, t ^? key "type" == Just "table"]
+          messageTexts p = blockTexts p <> tableTexts p
       for_ (zip [1 :: Int ..] cases) \(n, (prompt, expectedCalls, expectedReply, answer, expectedCharts, expectedTextParts)) -> do
         calls <- newIORef (0 :: Int)
         let interaction = (slackInteraction "/monoscope" prompt "T_WF_SLACK"){SlackPage.trigger_id = "query-" <> show n}
@@ -4440,7 +4443,8 @@ spec = around withTestResources do
         let payloads = posted "https://slack.com/api/chat.postMessage" requests
             images = concatMap (toListOf $ key "blocks" . _Array . traverse . key "image_url" . _String) payloads
         (prompt, length payloads, length images) `shouldBe` (prompt, expectedCharts + expectedTextParts, expectedCharts)
-        payloads `shouldSatisfy` all (\p -> all (\text -> not (T.null text) && T.length text <= 3000) (blockTexts p) && sum (map T.length $ blockTexts p) < 40000 && length (p ^.. key "blocks" . _Array . traverse) <= 50)
+        -- A message's markdown blocks share Slack's 12,000-character budget.
+        payloads `shouldSatisfy` all (\p -> all (not . T.null) (blockTexts p) && sum (map T.length $ blockTexts p) <= 12000 && length (p ^.. key "blocks" . _Array . traverse) <= 50)
         T.concat (mapMaybe (\p -> (p ^? key "text" . _String) <|> (p ^? key "content" . _String)) payloads <> concatMap messageTexts payloads) `shouldSatisfy` T.isInfixOf expectedReply
         images `shouldSatisfy` all (T.isInfixOf $ "p/" <> testPid.toText <> "/widget.png?widgetZ=")
         readIORef calls `shouldReturn` expectedCalls
@@ -4448,7 +4452,8 @@ spec = around withTestResources do
         completed.status `shouldBe` Issues.RunSucceeded
         history <- runQueryEffect tr $ Issues.selectChatHistory testPid completed.conversationId
         when (expectedTextParts > 1) do
-          let delivered = concatMap messageTexts $ drop expectedCharts payloads
+          -- The answer leads; charts follow it.
+          let delivered = concatMap messageTexts $ take expectedTextParts payloads
           T.concat delivered `shouldBe` expectedReply
           when (T.any (\c -> c == ' ' || c == '\n') expectedReply) $ drop 1 (reverse delivered) `shouldSatisfy` all (\text -> T.isSuffixOf "\n" text || T.isSuffixOf " " text)
           [m.content | m <- history, m.role == Issues.ChatAssistant] `shouldBe` [expectedReply]
@@ -4585,7 +4590,7 @@ spec = around withTestResources do
       (requests, result) <- processWith tr Nothing (statusUnavailable . model) receipt
       result `shouldSatisfy` isRight
       map fst requests `shouldNotContain` ["https://slack.com/api/conversations.replies"]
-      [r | r <- posted "https://slack.com/api/chat.postMessage" requests, r ^? key "blocks" . _Array . ix 0 . key "text" . key "text" . _String == Just "I can check this project's metric catalog."] `shouldSatisfy` (== 1) . length
+      [r | r <- posted "https://slack.com/api/chat.postMessage" requests, r ^? key "blocks" . _Array . ix 0 . key "text" . _String == Just "I can check this project's metric catalog."] `shouldSatisfy` (== 1) . length
       let conv = Issues.slackScopedConversationId testPid "T_FIRST_MENTION" "GPRIVATE" "1735689600.000001"
       runs <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
       map (\r -> (r.conversationId, r.status)) runs `shouldBe` [(conv, Issues.RunSucceeded)]
@@ -4910,7 +4915,7 @@ spec = around withTestResources do
         (.replies) <$> runQueryEffect tr (Investigations.saveReplyBatch checkpoint (AE.object ["text" .= ("replacement" :: Text)] :| [])) `shouldReturn` batch.replies
         (requests, delivered) <- work receipt
         delivered `shouldSatisfy` isRight
-        [v ^? key "blocks" . _Array . ix 0 . key "text" . key "text" . _String | v <- posted "https://slack.com/api/chat.postMessage" requests, v ^? key "metadata" . key "event_type" . _String == Just "monoscope_investigation_reply"] `shouldBe` [Just "Inspect the checkout latency change."]
+        [v ^? key "blocks" . _Array . ix 0 . key "text" . key "text" . _String | v <- posted "https://slack.com/api/chat.postMessage" requests, v ^? key "metadata" . key "event_type" . _String == Just "monoscope_investigation_reply"] `shouldBe` [Just "*Investigate checkout latency*"]
         (,) <$> readIORef modelCalls <*> readIORef posts `shouldReturn` (1, 3)
         fmap (.deliveredCount) <$> runQueryEffect tr (Investigations.loadReplyBatch checkpoint) `shouldReturn` Just 2
         publication <- dbOne tr [sql|SELECT publication_id FROM apis.slack_reply_publications WHERE project_id = ? AND conversation_id = ? AND part = 0|] (testPid, turn.conversationId)

@@ -606,7 +606,7 @@ spec = describe "Monitoring" do
         void $ call tr $ IssuesPage.resolveErrorPostH testPid notified.id.unErrorPatternId False
         closed <- slack . fst <$> captureNotifs tr (replicateM_ 2 runSlackIncidentDeliveries)
         length closed `shouldBe` 4
-        for_ closed \sd -> slackText sd `shouldSatisfy` T.isInfixOf "*Resolved*"
+        for_ closed \sd -> slackText sd `shouldSatisfy` T.isInfixOf "*Resolved by "
 
       it "keeps one error episode across different issue records and resolves its original incident link" \tr -> do
         update <- setupWithIssue tr
@@ -746,7 +746,7 @@ spec = describe "Monitoring" do
         let messages = slack $ replies <> edits
         length messages `shouldBe` 4
         sort [(sd.channelId, sd.threadTs) | sd <- messages, isJust sd.threadTs] `shouldBe` sort [(sd.channelId, Just ts) | sd <- messages, AE.Object obj <- [sd.payload], Just (AE.String ts) <- [KM.lookup "ts" obj]]
-        for_ messages \sd -> slackText sd `shouldContainAll` ["*Resolved*", actor.firstName]
+        for_ messages \sd -> slackText sd `shouldContainAll` ["*Resolved by ", actor.firstName]
         for_ [sd | sd <- messages, isNothing sd.threadTs] \sd -> slackText sd `shouldContainAll` ["recovery is not yet measured", issue.id.toText]
         fst <$> captureNotifs tr runSlackIncidentDeliveries `shouldReturn` []
         -- Recurrence regresses the error and opens a new episode; auto-resolution is attributed to nobody, at this transition's time.

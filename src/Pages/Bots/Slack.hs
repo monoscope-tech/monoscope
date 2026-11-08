@@ -4,7 +4,8 @@
 module Pages.Bots.Slack (slackFormPostH, linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, startEvidenceGetH, disconnectEvidencePostH, processSlackEvent, processSlackEventWithTools, runCommandWithTools, refreshSlackProgress, resetSlackSession, reconcileIncidentDeliveries, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm (..), externalOptionsH, slackInteractionsH, slackInteractionsHWithTools, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure, sendRecoveryNotice) where
 
 import BackgroundJobs.Types qualified as BgJobs
-import Control.Lens ((%~), (.~), (^.), (^..), (^?))
+import Control.Lens (failing, (%~), (.~), (^.), (^..), (^?))
+import Data.List.NonEmpty qualified as NE
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEM
 import Data.Aeson.KeyMap qualified as KM
@@ -67,7 +68,7 @@ import Pages.Bots.Utils (BotEmoji (..), BotResponse (..), BotType (..), Channel,
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
-import Pkg.Mail (arr, mrkdwn, slackHeader, slackImage, slackSection)
+import Pkg.Mail (arr, mrkdwn, slackContext, slackHeader, slackImage, slackSection)
 import Pkg.Slack qualified as Slack
 import PyF
 import Relude hiding (ask, asks)
@@ -1295,11 +1296,12 @@ renderSlackReplies projectTools context envCfg access resolveThread = do
   input <- maybe (throwIO AI.AgentStopped) pure context.input
   (outcome, rendered) <- Writer.runWriter $ runBotQueryWithTools projectTools (AI.DurableRun context) Slack (Writer.tell @[AE.Value] . pure . botReplyPayload) envCfg access context.projectId input (raise resolveThread)
   replies <- maybe (throwIO $ ErrorCall "Slack query produced no reply") pure $ nonEmpty rendered
-  let link = "<" <> hostPath envCfg.hostUrl (urls.aiThreadGet context.projectId context.conversationId Nothing) <> "|View runs and artifacts>"
+  let link = "<" <> hostPath envCfg.hostUrl (urls.aiThreadGet context.projectId context.conversationId Nothing) <> "|Queries and run details>"
       linked reply = case reply ^? key "blocks" . _Array of
-        Just _ -> reply & key "blocks" . _Array %~ (<> V.singleton (slackSection link))
+        Just _ -> reply & key "blocks" . _Array %~ (<> V.singleton (slackContext [link]))
         Nothing -> reply & key "text" . _String %~ (<> "\n\n" <> link)
-  pure (outcome, linked <$> replies)
+  -- One link under the whole answer, not one per chart.
+  pure (outcome, NE.prependList (NE.init replies) (pure $ linked $ NE.last replies))
 
 
 deliverReplies :: (DB es, HTTP :> es, IOE :> es, Log.Log :> es) => Text -> Issues.RunContext -> AI.AgentAccess -> SlackData -> Investigations.CheckpointTarget -> Investigations.ReplyDestination -> Eff es () -> Investigations.ReplyBatch -> Eff es ()
@@ -1361,7 +1363,7 @@ runCommandWithTools projectTools context = do
 
 
 slackReplyReport :: Foldable f => f AE.Value -> Text
-slackReplyReport = T.intercalate "\n\n" . concatMap (^.. key "blocks" . values . key "text" . key "text" . _String) . toList
+slackReplyReport = T.intercalate "\n\n" . concatMap (^.. key "blocks" . values . key "text" . failing _String (key "text" . _String)) . toList
 
 
 withInvestigationLock :: Text -> Text -> Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
