@@ -92,7 +92,6 @@ module Models.Apis.Issues (
   createFeedbackIssue,
   feedbackTargetHash,
   setSpamState,
-  resolveIssues,
   createFrontendIssue,
   PerformanceData (..),
   createPerformanceIssue,
@@ -1368,15 +1367,8 @@ setArchiveState pid iids archiveM
       ArchiveUntilEscalating -> (Nothing, True)
 
 
--- | Resolved issues leave the Inbox for good, and the timeline says resolved rather than archived.
-resolveIssues :: (DB es, Time :> es) => Projects.ProjectId -> [IssueId] -> Maybe Projects.UserId -> Maybe AE.Value -> Eff es ()
-resolveIssues pid iids actor meta = do
-  now <- Time.currentTime
-  void $ setArchiveState pid iids (Just (now, ArchiveIndefinite))
-  forM_ iids \i -> logIssueActivity i IEResolved actor meta
-
-
--- | 'resolveIssues' for one issue, inside a caller's transaction.
+-- | Resolve one issue inside a caller's transaction: it leaves the Inbox for good,
+-- and the timeline says resolved rather than archived.
 resolveIssueTx :: UTCTime -> Projects.ProjectId -> IssueId -> Maybe AE.Value -> Tx.Transaction ()
 resolveIssueTx now pid iid meta = do
   Hasql.executeTx [HI.sql| UPDATE apis.issues SET archived_at = #{now}, updated_at = #{now}, archived_until = NULL, archive_until_escalating = FALSE WHERE project_id = #{pid} AND id = #{iid} |]
