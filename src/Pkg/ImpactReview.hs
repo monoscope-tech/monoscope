@@ -424,7 +424,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
               findings = if maybe True ((== NoFinding) . (.verdict)) result then Issues.ResultNoFindings else Issues.ResultSucceeded
               -- Cited evidence first; the run page draws these widgets live over the review window.
               widgets = [w | r <- toList result, e <- sortOn (\e -> not $ any (elem e.key . (.evidenceKeys)) r.findings) r.evidence, Just w <- [evidenceWidget r.windowStart r.windowEnd e]]
-          pure $ Issues.CompletedResult findings Issues.PublishAnswer $ (Issues.reportAnswer body completed.result){Issues.widgets = AE.toJSON <$> nonEmpty (take 4 widgets)}
+          pure $ Issues.CompletedResult findings Issues.PublishAnswer $ (Issues.reportAnswer body completed.result){Issues.widgets = viaNonEmpty AE.toJSON (take 4 widgets)}
       void $ Issues.completeRun context completion
 
     execute :: Reviews.ReviewRun -> Issues.EventRun -> Issues.RunContext -> ReviewCtx ()
