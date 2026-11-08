@@ -81,9 +81,9 @@ import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe, unUUIDId)
 import Pkg.LiveTail qualified as LiveTail
-import Pkg.Parser qualified as Parser
 import Pkg.Metrics (wireTypeErrorsRef)
 import Pkg.Metrics qualified as Metrics
+import Pkg.Parser qualified as Parser
 import Pkg.QueryCache qualified as QueryCache
 import ProcessMessage (fetchIngestCaches, overFreeTierQuota, sampleMetrics, sampleSpans, stampHashesAtIngest, urlPathFromRawUrl)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
