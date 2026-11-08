@@ -268,6 +268,7 @@ module Models.Apis.Issues (
   parseActivityEvent,
   IssueActivity (..),
   logIssueActivity,
+  ActivityNote (..),
   recordIssueView,
   selectLatestStateEvent,
   selectIssueActivity,
@@ -3835,10 +3836,46 @@ stateEventSql = [HI.sql|a.event IN ('resolved', 'auto_resolved', 'reopened', 're
 logIssueActivity :: (DB es, Time :> es) => IssueId -> IssueEvent -> Maybe Projects.UserId -> Maybe AE.Value -> Eff es ()
 logIssueActivity issueId event createdBy metadataM = do
   now <- Time.currentTime
+  -- A person's action on an issue replies in the latest Slack thread each channel
+  -- holds for it; it never starts a thread. A closing action on an episode the
+  -- alert pipeline already closed would only repeat that pipeline's own reply.
+  let closing = event `elem` [IEResolved, IEAutoResolved]
+      logged =
+        [HI.sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, metadata, created_at)
+        SELECT #{issueId}, #{event}, #{createdBy}, #{Aeson <$> metadataM}, #{now}
+        WHERE EXISTS (SELECT 1 FROM apis.issues WHERE id = #{issueId}) |]
   Hasql.interpExecute_
-    [HI.sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, metadata, created_at)
-    SELECT #{issueId}, #{event}, #{createdBy}, #{Aeson <$> metadataM}, #{now}
-    WHERE EXISTS (SELECT 1 FROM apis.issues WHERE id = #{issueId}) |]
+    $ if event `notElem` slackRelayedEvents
+      then logged
+      else
+        [HI.sql| WITH logged AS (|]
+          <> logged
+          <> [HI.sql| RETURNING id, issue_id), latest AS (
+          SELECT DISTINCT ON (r.team_id, r.channel_id) r.id AS root_id, r.episode_id, r.first_event_id, r.threadless, e.phase, logged.id AS activity_id
+          FROM logged JOIN apis.incident_episodes e ON e.issue_id = logged.issue_id
+          JOIN apis.slack_incident_roots r ON r.episode_id = e.id
+          ORDER BY r.team_id, r.channel_id, e.started_at DESC)
+        INSERT INTO apis.slack_incident_deliveries (root_id, episode_id, event_id, operation, available_at, activity_id)
+        SELECT root_id, episode_id, first_event_id, 'post_activity', #{now}, activity_id FROM latest
+        WHERE NOT threadless AND NOT (#{closing} AND phase <> 'active') |]
+
+
+-- | The lifecycle events a Slack thread hears about. Regressions and escalations
+-- are absent: the alert pipeline posts those itself, with their evidence.
+slackRelayedEvents :: [IssueEvent]
+slackRelayedEvents = [IEAcknowledged, IEUnacknowledged, IEAckExpired, IEArchived, IEUnarchived, IEResolved, IEAutoResolved, IEReopened, IEAssigned, IEUnassigned, IECommented, IELinked, IEMerged, IESpam, IENotSpam]
+
+
+-- | One relayed lifecycle event, as the Slack worker reads it back to render.
+data ActivityNote = ActivityNote
+  { event :: IssueEvent
+  , actor :: Maybe Text
+  , assignee :: Maybe Text
+  , metadata :: Maybe AE.Value
+  , at :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 -- | An issue's whole timeline, newest first: its own lifecycle log plus every

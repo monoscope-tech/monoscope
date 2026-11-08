@@ -2079,7 +2079,7 @@ dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors)
                             , Mail.userName = sub.errorData.userName <* guard project.includeUserIdentityInAlerts
                             , Mail.userEmail = sub.errorData.userEmail <* guard project.includeUserIdentityInAlerts
                             }
-                        (rootPayload, replyPayload) = Mail.errorIncidentMessages alertType sub.errorData now active baseUrl incidentUrl chart occText impact
+                        (rootPayload, replyPayload) = Mail.errorIncidentMessages alertType sub.errorData now active ongoingFor baseUrl incidentUrl chart occText impact
                         change
                           | isNothing active = Incidents.IncidentAlert
                           | sub.errorState == AESEscalating = Incidents.IncidentObservation
@@ -5042,15 +5042,16 @@ runSlackIncidentDeliveries = do
                 Incidents.PostReply ts -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
                 Incidents.PostAnalysis ts _ -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
                 Incidents.UpdateRoot ts -> (Notify.SlackUpdate $ Incidents.slackTimestampText ts, Nothing)
-              message =
+                Incidents.PostActivity ts -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
+              rendered = case delivery.operation of
+                (Incidents.PostReply _; Incidents.PostAnalysis _ _) -> Right delivery.payload
+                Incidents.PostActivity _ -> first toText $ Mail.activityReply <$> AE.eitherDecode (AE.encode delivery.payload)
+                (Incidents.PostRoot; Incidents.PostStandalone; Incidents.UpdateRoot _) -> Right $ Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
+              message payload =
                 Notify.SlackData
                   { Notify.channelId = delivery.channelId
                   , Notify.botToken = sd.botToken
-                  , Notify.payload = AE.toJSON $ Incidents.correlateSlackDelivery delivery $ case delivery.operation of
-                      (Incidents.PostReply _; Incidents.PostAnalysis _ _) -> delivery.payload
-                      Incidents.PostRoot -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
-                      Incidents.PostStandalone -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
-                      Incidents.UpdateRoot _ -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
+                  , Notify.payload = AE.toJSON $ Incidents.correlateSlackDelivery delivery payload
                   , Notify.threadTs = parent
                   , Notify.webhookUrl = if delivery.channelId == sd.channelId then sd.webhookUrl else Nothing
                   , Notify.projectIdCtx = delivery.projectId.toText
@@ -5058,11 +5059,12 @@ runSlackIncidentDeliveries = do
                   }
           allowed <- case delivery.operation of
             Incidents.PostAnalysis _ runId -> Issues.incidentReportAllowed delivery.projectId runId
-            (Incidents.PostRoot; Incidents.PostStandalone; Incidents.PostReply{}; Incidents.UpdateRoot{}) -> pure True
-          if not allowed
-            then pure $ Incidents.DeliveryRejected "incident_routine_authority_withdrawn"
-            else
-              Notify.deliverSlack operation message <&> \case
+            (Incidents.PostRoot; Incidents.PostStandalone; Incidents.PostReply{}; Incidents.UpdateRoot{}; Incidents.PostActivity{}) -> pure True
+          case rendered of
+            _ | not allowed -> pure $ Incidents.DeliveryRejected "incident_routine_authority_withdrawn"
+            Left invalid -> pure $ Incidents.DeliveryRejected $ "invalid_activity: " <> invalid
+            Right payload ->
+              Notify.deliverSlack operation (message payload) <&> \case
                 Notify.SlackSent ts -> maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
                 -- Without a bot token nothing can ever recover the timestamp.
                 Notify.SlackAccepted ->
@@ -5109,7 +5111,7 @@ recordMonitorDataGap monitor at reason = do
             [HI.sql|SELECT NOT EXISTS (SELECT 1 FROM apis.incident_events WHERE episode_id = #{episode.id} AND observed_at = #{episode.lastEventAt} AND event_kind = 'data_unavailable')|]
         let publish = firstGap && not suppressed
             incidentUrl = maybe monitorUrl (issuePageUrl ctx monitor.projectId) episode.issueId
-            payload = Mail.monitorDataUnavailableMessage monitor reason at (listToMaybe readings) incidentUrl monitorUrl
+            (rootPayload, replyPayload) = Mail.monitorDataUnavailableMessage monitor reason at (listToMaybe readings) incidentUrl monitorUrl
         result <-
           Incidents.recordIncidentEventTx
             Incidents.IncidentUpdate
@@ -5119,8 +5121,8 @@ recordMonitorDataGap monitor at reason = do
               , change = Incidents.IncidentDataUnavailable
               , delivery = if publish then Incidents.PublishIncident else Incidents.RefreshIncident
               , issueId = episode.issueId
-              , rootPayload = payload
-              , replyPayload = payload
+              , rootPayload
+              , replyPayload
               , destinations = []
               }
         case result of

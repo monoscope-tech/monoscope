@@ -268,11 +268,11 @@ data ProgressScale = ColumnPercent | ValuePercent
 -- >>> pngExportSize Nothing
 -- (900,300)
 -- >>> pngExportSize (Just PngSlack)
--- (960,320)
+-- (960,280)
 pngExportSize :: Maybe PngProfile -> (Int, Int)
 pngExportSize profile = case fromMaybe PngStandard profile of
   PngStandard -> (900, 300)
-  PngSlack -> (960, 320)
+  PngSlack -> (960, 280)
 
 
 -- | A trusted SQL ORDER BY expression from dashboard configuration.

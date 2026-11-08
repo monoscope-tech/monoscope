@@ -80,7 +80,8 @@ export function preparePngOptions(finalOptions: any, width: number, height: numb
   }
 
   if (profile === "slack") {
-    finalOptions.backgroundColor = darkMode ? "#111827" : "#ffffff";
+    // Slack's own dark surface, so the chart sits in the message rather than on a navy slab.
+    finalOptions.backgroundColor = darkMode ? "#1a1d21" : "#ffffff";
     finalOptions.textStyle.fontSize = 14;
     finalOptions.grid.left = Math.max(finalOptions.grid.left, 24);
     finalOptions.grid.right = Math.max(finalOptions.grid.right, 24);
