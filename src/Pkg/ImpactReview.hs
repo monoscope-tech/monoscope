@@ -302,7 +302,7 @@ validateClaims recorded claims = do
   for_ claims \claim -> do
     let cited key = filter ((== key) . (.key)) recorded
     unless (claim.status == Unverified || not (null claim.proofKeys)) $ Left "A matching or differing claim must cite a recorded proof"
-    unless (all (\key -> sort (map (toUrlPiece . (.side)) $ cited key) == ["base", "head"]) claim.proofKeys) $ Left "Claim cites a proof that was not recorded on base and head"
+    unless (all (\key -> sort (map (.side) $ cited key) == universe) claim.proofKeys) $ Left "Claim cites a proof that was not recorded on base and head"
     unless (claim.status /= Matches || all (\key -> any (\p -> p.side == Agent.Head && p.exitCode == Just 0) (cited key)) claim.proofKeys) $ Left "A matching claim needs a head recording that succeeded"
     unless (not (T.null $ T.strip claim.title) && not (T.null $ T.strip claim.summary)) $ Left "Each claim needs a title and a summary"
 
@@ -353,9 +353,10 @@ requestReview request = runErrorNoCallStack @Text do
     else do
       pr <- either throwError pure =<< Git.getPullRequest conn ref request.number
       queued <- Reviews.receiveEvent (Just request.ask) $ Reviews.pullRequestEvent request.owner request.repo request.installationId request.number pr
-      -- A review already running for this head answers the ask; it records no new proof.
-      when (queued == 0) $ Log.logInfo "PR review ask joined a review already in progress" (request.owner, request.repo, request.number, request.ask.command)
-      either throwError pure =<< Git.reactToComment conn ref request.ask.commentId "eyes"
+      -- A queued review takes the ask over; one already running answers it without new proof.
+      when (queued == 0) $ Log.logInfo "PR review ask joined a queued or running review" (request.owner, request.repo, request.number, request.ask.command)
+      -- The review is queued either way, so a failed acknowledgement is not a failed request.
+      whenLeftM_ (Git.reactToComment conn ref request.ask.commentId "eyes") $ Log.logAttention "Could not acknowledge a PR review ask" . (request.owner,request.repo,request.number,)
 
 
 reviewPullRequest :: Reviews.ReviewId -> ATBackgroundCtx ()
@@ -463,7 +464,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
               publish run execution context conn ref pr result
 
     sameRevision :: Git.PullRequest -> Git.PullRequest -> Bool
-    sameRevision expected actual = expected.head == actual.head && expected.base == actual.base && actual.state == "open" && actual.draft == expected.draft
+    sameRevision expected actual = expected.head == actual.head && expected.base == actual.base && Reviews.pullRequestState actual.state actual.draft == Reviews.pullRequestState expected.state expected.draft && actual.state == "open"
 
     analyse :: Reviews.ReviewRun -> Issues.EventRun -> Issues.RunContext -> Git.GitConn -> [CodeContext.CodeMapping] -> Git.PullRequest -> [Git.PullRequestFile] -> ReviewCtx ReviewResult
     analyse run execution context conn mappings pr files = do

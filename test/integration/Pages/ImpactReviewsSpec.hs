@@ -2837,6 +2837,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     queued `shouldReturn` 2
     asked <- maybe (fail "asked run missing") pure . find ((== sha "c") . (.revision)) =<< runQueryEffect tr (Reviews.latestRuns testPid)
     asked.request `shouldBe` Just Reviews.Ask{login = "ada", commentId = 55, command = Reviews.Prove, focus = Just "and check the empty state"}
+    -- A later ask before any worker starts takes the queued run over instead of queueing twice.
+    void $ deliverEvent tr "issue_comment" (api "write") $ commentPayload "MEMBER" "@monoscope review"
+    queued `shouldReturn` 2
+    runQueryEffect tr (Reviews.getRun asked.id) >>= (`shouldSatisfy` (== Just (Just Reviews.Review)) . fmap (fmap (.command) . (.request)))
 
   it "proofMedia_servesOnlySignedRecordingsOfTheirProject" \tr -> do
     setup tr

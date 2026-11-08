@@ -204,13 +204,14 @@ renderProof cast = do
   outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-proof" \directory -> do
     environment <- filter ((== "PATH") . fst) <$> getEnvironment
     writeFileBS (directory </> "proof.cast") cast
-    let run program args = withProcessTerm (setStdin nullStream $ setStdout nullStream $ setStderr nullStream $ setEnv environment $ setWorkingDir directory $ proc program args) waitExitCode >>= ensure . (== ExitSuccess)
+    let run program args = withProcessTerm (setStdin nullStream $ setStdout nullStream $ setStderr nullStream $ setEnv environment $ setWorkingDir directory $ proc program args) waitExitCode >>= \code -> unless (code == ExitSuccess) $ throwIO $ userError $ program <> " exited with " <> show code
     run "agg" ["--idle-time-limit", "2", "--fps-cap", "12", "--font-size", "16", "--theme", "github-dark", "proof.cast", "proof.gif"]
     run "ffmpeg" ["-hide_banner", "-loglevel", "error", "-y", "-i", "proof.gif", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "26", "proof.mp4"]
     (,) <$> readPrivateArtifact directory "proof.gif" (8 * 1048576) <*> readPrivateArtifact directory "proof.mp4" (8 * 1048576)
   pure $ case outcome of
     Right (Just media) -> Right media
-    _ -> Left "The proof recording could not be rendered"
+    Right Nothing -> Left "Rendering the proof recording timed out"
+    Left failure -> Left $ "The proof recording could not be rendered: " <> toText (displayException failure)
 
 
 readExplanationMedia :: FilePath -> Explanation -> Text -> IO (Either Text ByteString)

@@ -112,7 +112,7 @@ data ModelUsage = ModelUsage
 
 
 data RevisionSide = Base | Head
-  deriving stock (Eq, Generic, Read, Show)
+  deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToHttpApiData) via WrappedEnumSC 'Nothing "" RevisionSide
 
 

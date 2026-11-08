@@ -6,6 +6,7 @@ module Models.Projects.ImpactReviews (
   ReviewTrigger (..),
   PullRequestState (..),
   pullRequestEvent,
+  pullRequestState,
   PullRequestEvent (..),
   Ask (..),
   Command (..),
@@ -66,6 +67,8 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
 import Models.Projects.AgentUsage (ProjectUsage (..), UsageCost (..), UsageTotals (..), customerUsage)
 import Models.Projects.AgentUsage qualified as Usage
 import Models.Projects.Projects (ProjectId)
@@ -289,8 +292,8 @@ parseAsk body = listToMaybe $ mapMaybe command $ T.breakOnAll "@" body
 -- | Grant resolution, receipt, and odd-job insertion are one statement. An
 -- out-of-order delivery cannot replace a newer head, and duplicates queue once.
 -- A closure, or a draft in a mode that skips drafts, supersedes the revision's run;
--- an ask queues in every mode and replaces a finished run of the same revision.
--- Returns how many runs were queued; an ask for a revision already under review queues none.
+-- an ask queues in every mode, replaces a finished run of the same revision and joins a queued one.
+-- Returns how many jobs were queued; an ask that joins a queued or running review queues none.
 receiveEvent :: DB es => Maybe Ask -> PullRequestEvent -> Eff es Int
 receiveEvent request event =
   fromMaybe 0
@@ -319,12 +322,15 @@ receiveEvent request event =
     ON CONFLICT (thread_id, revision) DO UPDATE SET state = EXCLUDED.state, request = coalesce(EXCLUDED.request, projects.pr_review_runs.request),
       result = CASE WHEN EXCLUDED.request IS NULL THEN projects.pr_review_runs.result END, error = NULL
     WHERE EXCLUDED.state = #{Superseded} OR projects.pr_review_runs.state = #{Superseded}
-      OR (EXCLUDED.request IS NOT NULL AND projects.pr_review_runs.state IN (#{Completed}, #{Incomplete}))
+      OR (EXCLUDED.request IS NOT NULL AND projects.pr_review_runs.state IN (#{Queued}, #{Completed}, #{Incomplete}))
     RETURNING id, state
+  ), prior AS (
+    SELECT r.id FROM projects.pr_review_runs r JOIN decided d ON d.id = r.thread_id
+    WHERE r.revision = #{event.revision} AND r.state = #{Queued}
   ), jobs AS (
     INSERT INTO background_jobs (run_at, status, payload)
     SELECT now(), 'queued', jsonb_build_object('tag', 'ReviewPullRequest', 'contents', id)
-    FROM runs WHERE state = #{Queued} RETURNING 1
+    FROM runs WHERE state = #{Queued} AND id NOT IN (SELECT id FROM prior) RETURNING 1
   ) SELECT count(*) FROM jobs|]
 
 
@@ -531,9 +537,9 @@ priorRepositoryKnowledge pid ref service =
 
 
 -- | Metadata of one recorded side; the media stays in the database until a viewer asks.
-data ProofSide = ProofSide {key :: Text, side :: Agent.RevisionSide, revision :: Text, exitCode :: Maybe Int32, claim :: Text}
+data ProofSide = ProofSide {key :: Text, side :: Agent.RevisionSide, revision :: Text, exitCode :: Maybe Int32}
   deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
+  deriving anyclass (HI.DecodeRow)
 
 
 data ProofFormat = Gif | Mp4 | Cast
@@ -564,28 +570,24 @@ instance FromHttpApiData ProofFile where
      in ProofFile key <$> parseUrlPiece side <*> parseUrlPiece extension
 
 
--- | Stores one proof's recordings under the run's next unused key, at most three per attempt.
+-- | Stores one proof's recordings, all sides or none, under the run's next unused key.
 -- Only the run holding the review lease can record, so a superseded attempt cannot add media.
 saveProofs :: DB es => ReviewRun -> UUIDId "agent_attempt" -> NonEmpty Agent.ProofMedia -> Eff es (Either Text Text)
-saveProofs run attempt sides = do
-  (taken, used) <- fromMaybe (0, 0) <$> Hasql.interpOne [HI.sql|SELECT count(DISTINCT key) FILTER (WHERE attempt_id = #{attempt}), count(DISTINCT key) FROM projects.pr_review_proofs WHERE run_id = #{run.id}|]
+saveProofs run attempt sides = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  HI.OneColumn used <- Hasql.oneTx [HI.sql|SELECT count(DISTINCT key) FROM projects.pr_review_proofs WHERE run_id = #{run.id}|]
   let key = "proof-" <> show (used + 1 :: Int64)
-  if (taken :: Int64) >= 3
-    then pure $ Left "Proof budget exhausted; cite the proofs already recorded"
-    else do
-      stored <- forM sides \proof ->
-        fromMaybe False
-          <$> Hasql.interpOne
-            [HI.sql|INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, claim, revision, exit_code, cast_bytes, gif, mp4)
-          SELECT r.id, #{attempt}, #{key}, #{proof.side}, #{proof.claim}, #{proof.revision}, #{fromIntegral @Int @Int32 <$> proof.exitCode}, #{proof.cast}, #{proof.gif}, #{proof.mp4}
-          FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
-          WHERE r.id = #{run.id} AND r.state = #{Reviewing} AND t.lease_owner = r.id AND t.lease_until > now()
-          ON CONFLICT (run_id, key, side) DO NOTHING RETURNING true|]
-      pure $ if and stored then Right key else Left "Review authorization is no longer available"
+  stored <- forM sides \proof ->
+    Hasql.queryTx @(Maybe (HI.OneColumn Bool))
+      [HI.sql|INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, claim, revision, exit_code, cast_bytes, gif, mp4)
+    SELECT r.id, #{attempt}, #{key}, #{proof.side}, #{proof.claim}, #{proof.revision}, #{fromIntegral @Int @Int32 <$> proof.exitCode}, #{proof.cast}, #{proof.gif}, #{proof.mp4}
+    FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
+    WHERE r.id = #{run.id} AND r.state = #{Reviewing} AND t.lease_owner = r.id AND t.lease_until > now()
+    ON CONFLICT (run_id, key, side) DO NOTHING RETURNING true|]
+  if all isJust stored then pure $ Right key else Left "Review authorization is no longer available" <$ Tx.condemn
 
 
 proofSides :: DB es => ReviewRun -> UUIDId "agent_attempt" -> Eff es [ProofSide]
-proofSides run attempt = Hasql.interp [HI.sql|SELECT key, side, revision, exit_code, claim FROM projects.pr_review_proofs WHERE run_id = #{run.id} AND attempt_id = #{attempt} ORDER BY key, side|]
+proofSides run attempt = Hasql.interp [HI.sql|SELECT key, side, revision, exit_code FROM projects.pr_review_proofs WHERE run_id = #{run.id} AND attempt_id = #{attempt} ORDER BY key, side|]
 
 
 -- | What a proof media link signs; the prefix keeps it apart from widget signatures under the same key.
