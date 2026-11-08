@@ -1711,7 +1711,12 @@ widgetToECharts widget =
                 , "boundaryGap" AE..= if isCategorical then AE.Bool True else AE.Array (V.fromList [AE.Number 0, AE.Number 0.01])
                 , "splitLine" AE..= AE.object ["show" AE..= False]
                 , "axisLine" AE..= AE.object ["show" AE..= axisVisibility, "lineStyle" AE..= AE.object ["color" AE..= "#000833A6", "type" AE..= "solid", "opacity" AE..= 0.1]]
-                , "axisLabel" AE..= AE.object ["show" AE..= (axisVisibility && fromMaybe True (widget.xAxis >>= (.showAxisLabel))), "margin" AE..= (8 :: Int), "hideOverlap" AE..= True]
+                , "axisLabel"
+                    AE..= AE.object
+                      ( ["show" AE..= (axisVisibility && fromMaybe True (widget.xAxis >>= (.showAxisLabel))), "margin" AE..= (8 :: Int), "hideOverlap" AE..= True]
+                          -- ECharts labels a day tick with the bare day ("8"); a week-wide axis read as "2 3 4".
+                          <> ["formatter" AE..= AE.object ["day" AE..= ("{MMM} {d}" :: Text)] | not isCategorical]
+                      )
                 , "show" AE..= (axisVisibility || or (widget.xAxis >>= (.showAxisLabel)))
                 ]
                   <> if isCategorical

@@ -1388,18 +1388,12 @@ data ApiLogsPageData = ApiLogsPageData
   }
 
 
-virtualTable :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Html ()
-virtualTable pid initialFetchUrl modeM = do
+-- | The log list; @attrs@ carries its scope (@initialFetchUrl@, @mode@, @emptyMessage@).
+virtualTable :: Projects.ProjectId -> [Attribute] -> Html ()
+virtualTable pid attrs =
   termRaw
     "log-list"
-    ( [ id_ "resultTable"
-      , class_ "w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block"
-      , term "windowTarget" "logList"
-      , term "projectId" pid.toText
-      ]
-        <> [term "initialFetchUrl" u | u <- maybeToList initialFetchUrl]
-        <> [term "mode" m | m <- maybeToList modeM]
-    )
+    ([id_ "resultTable", class_ "w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block", term "windowTarget" "logList", term "projectId" pid.toText] <> attrs)
     ("" :: Text)
 
 
@@ -1608,7 +1602,7 @@ apiLogsPage page = do
       traceOverlay
       div_ [class_ "flex-1 min-h-0 h-full flex flex-col"]
         $ div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block"]
-        $ virtualTable page.pid Nothing (Just $ display page.vizType)
+        $ virtualTable page.pid [term "mode" $ display page.vizType]
 
     -- Filters toggle and row count, shown above the viz widget / trace / virtual table.
     -- max-md:hidden: on phones this row moves into the toolbar via mobileExtra, and two

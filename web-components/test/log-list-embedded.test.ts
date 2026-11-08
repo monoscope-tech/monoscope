@@ -153,6 +153,15 @@ describe('embedded log widget: chrome', () => {
     expect(el.textContent).toContain('Clear query');
   });
 
+  test('a list scoped by its page says why it is empty and offers no query to clear', async () => {
+    const el = await embedded({ emptyMessage: 'No logs share this event’s trace.' });
+    el.transport = serverTransport(logPage([], { hasMore: false }));
+    await el.fetchData('first', true);
+
+    expect(el.textContent).toContain('No logs share this event’s trace.');
+    expect(el.textContent).not.toContain('Clear query');
+  });
+
   test('offers no "load newer" edge — a widget is a window, not a live tail', async () => {
     const el = await embedded();
     el.transport = serverTransport(logPage(['a', 'b']));

@@ -285,7 +285,7 @@ hostDetail_ pid window host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
         a_ [href_ "https://monoscopehq.com/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "font-medium text-textBrand hover:underline"] "Set up host metrics"
     detailSection_ [id_ "host-logs"] "Recent logs" (a_ ([href_ logsHref, class_ "btn btn-xs max-sm:hidden"] <> navTabAttrs) "View logs in Explorer") do
       p_ [class_ "text-xs text-textWeak"] "Latest events reported by this host."
-      div_ [class_ "flex flex-col max-h-64 overflow-auto rounded-lg border border-strokeWeak bg-bgBase max-sm:hidden"] $ Log.virtualTable pid (Just logRowsHref) Nothing
+      div_ [class_ "flex flex-col max-h-64 overflow-auto rounded-lg border border-strokeWeak bg-bgBase max-sm:hidden"] $ Log.virtualTable pid [term "initialFetchUrl" logRowsHref, term "emptyMessage" "No logs from this host in this window."]
       div_ [class_ "hidden flex-col items-start gap-3 rounded-lg border border-strokeWeak bg-bgBase p-4 max-sm:flex"] do
         p_ [class_ "text-sm text-textWeak"] "Open this host in Explorer to search, filter, and inspect its logs."
         a_ ([href_ logsHref, class_ "btn btn-sm btn-outline max-sm:h-11"] <> navTabAttrs) "Open logs in Explorer"

@@ -129,7 +129,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
-import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), SavedView (..), SavedViewsMenu (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, metadataChip_, options_, periodToggle_, resetFormOnRefusalAttr_, resizer_, savedViewsMenu_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), SavedView (..), SavedViewsMenu (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, localTimeFmt_, metadataChip_, options_, periodToggle_, resetFormOnRefusalAttr_, resizer_, savedViewsMenu_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Replay qualified as Replay
 import Pages.Telemetry (traceFragmentUrl)
@@ -760,7 +760,7 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
             message = nonBlank bc.message
             payload = nonBlank (bc.payload >>= breadcrumbDataSummary)
             rowHeader expandable = span_ [class_ "flex items-start gap-2 min-w-0 min-h-6"] do
-              span_ [class_ "w-7 shrink-0 font-mono text-2xs leading-5 tabular-nums text-textWeak", title_ $ fmtDate "%F %T UTC" $ POSIX.posixSecondsToUTCTime $ realToFrac (fromIntegral bc.timestamp / 1000 :: Double)] $ toHtml $ formatOffset base bc.timestamp
+              span_ [class_ "w-12 shrink-0 whitespace-nowrap font-mono text-2xs leading-5 tabular-nums text-textWeak", title_ $ fmtDate "%F %T UTC" $ POSIX.posixSecondsToUTCTime $ realToFrac (fromIntegral bc.timestamp / 1000 :: Double)] $ toHtml $ formatOffset base bc.timestamp
               span_ [class_ "min-w-0 flex-1 text-xs leading-5 text-textStrong break-normal [overflow-wrap:anywhere]"] (slashBreaks_ bc.kind)
               when expandable $ span_ [class_ "shrink-0 mt-1 text-textWeak", Aria.hidden_ "true"] $ faSprite_ "chevron-right" "regular" "w-3 h-3 group-open/crumb:rotate-90"
         div_ [class_ "crumb flex gap-2 px-4 py-0.5 hover:bg-fillWeaker"] do
@@ -771,7 +771,7 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
             then div_ [class_ "min-w-0 flex-1"] $ rowHeader False
             else details_ [class_ "group/crumb min-w-0 flex-1"] do
               summary_ [class_ "cursor-pointer list-none [&::-webkit-details-marker]:hidden rounded focus-visible:outline-2 focus-visible:outline-offset-2"] $ rowHeader True
-              div_ [class_ "pl-9 pt-1 space-y-1"] do
+              div_ [class_ "pl-14 pt-1 space-y-1"] do
                 whenJust message $ p_ [class_ "text-xs leading-relaxed text-textWeak whitespace-pre-wrap break-words"] . toHtml
                 whenJust payload $ p_ [class_ "font-mono text-2xs leading-relaxed text-textWeak whitespace-pre-wrap break-normal [overflow-wrap:anywhere]"] . toHtml
       renderCrumbs rows = div_ [class_ "py-0.5 flex flex-col group-has-[.crumb-rev:checked]/journey:flex-col-reverse"] $ traverse_ (uncurry renderCrumb) rows
@@ -1158,11 +1158,8 @@ issueAggregate_ v@IssueView{..} = do
   div_ [id_ refreshId, class_ "hidden", [__|on submit trigger 'update-query' on window|]] ""
   div_ [class_ "flex flex-wrap items-center gap-2 [&>button]:max-md:basis-full"]
     $ TimePicker.liveDataControls_ (Just refreshId) currentRange (Just $ "issue-" <> issueChartId issue) TimePicker.RefreshOnly
-  p_ [class_ "flex flex-wrap items-center gap-x-2 text-xs text-textWeak"] do
-    span_ $ if issue.issueType == Issues.ApiChange then "Change detected" else "Selected event"
-    time_ [datetime_ $ isoT selectedAt] $ toHtml $ fmtDate "%F %T UTC" selectedAt
-    when (tp.from == eventWindow.from && tp.to == eventWindow.to && isNothing tp.since)
-      $ span_ "· Around selected event · ±2 hours"
+  when (tp.from == eventWindow.from && tp.to == eventWindow.to && isNothing tp.since)
+    $ p_ [class_ "text-xs text-textWeak"] "Showing \xB12 hours around the selected event"
   when (any (> selectedAt) rangeFrom || any (< selectedAt) rangeTo)
     $ p_ [class_ "text-sm text-textWeak"] do
       "Selected event is outside this range. "
@@ -1327,6 +1324,7 @@ eventCard_ view@IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflo
   nav_ [id_ "issue-event-nav", class_ "sticky top-0 z-20 bg-bgRaised border-b border-strokeWeak", Aria.label_ "Issue evidence"] do
     div_ [class_ "max-md:px-3 px-4 h-10 flex items-center gap-3 overflow-x-auto whitespace-nowrap"] do
       span_ [class_ "text-sm font-semibold text-textStrong"] $ bool "Evidence" "Event" hasOccurrences
+      span_ [class_ "text-xs text-textWeak tabular-nums", term "data-tippy-content" $ fmtDate "%F %T UTC" selectedAt] $ localTimeFmt_ "MMM d, HH:mm:ss" selectedAt
       -- Labelled, because "First | Recent" otherwise reads as a peer of the section
       -- links: one picks which occurrence, the others where to look in it.
       div_ [class_ "ml-auto flex items-center gap-1 text-xs"] do
@@ -1392,7 +1390,7 @@ eventCard_ view@IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflo
     eventsSection =
       [ section "issue-events" "list-check" (if issue.issueType == Issues.ApiChange then "Matching events" else "All events")
           $ div_ [class_ "max-md:px-1 px-2 flex flex-col max-h-[50vh]"]
-          $ virtualTable pid (Just $ logRowsUrl query tp) Nothing
+          $ virtualTable pid [term "initialFetchUrl" $ logRowsUrl query tp, term "emptyMessage" "No events in this range."]
       | not isLogPatternIssue
       , Just query <- [issueEventsQuery view]
       ]
@@ -1438,13 +1436,6 @@ eventCard_ view@IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflo
                 ]
             place = viaNonEmpty (T.intercalate ", " . toList) (catMaybes [field (.geoCity), field (.geoRegion), field (.geoCountry)])
          in [section "issue-highlights" "list-tree" "Highlights" $ kvRows_ "max-md:px-3 px-4 md:grid-cols-2 gap-x-6" highlights | not (null highlights)]
-              <> [ section "issue-contexts" "user" "Contexts"
-                     $ div_ [class_ "max-md:px-3 px-4 grid md:grid-cols-2 gap-3 items-start"]
-                     $ forM_ contexts \(title, rows) -> div_ [class_ "rounded-lg border border-strokeWeak p-2"] do
-                       h4_ [class_ "px-2 pb-1 text-xs font-semibold text-textStrong"] $ toHtml title
-                       kvRows_ "" rows
-                 | not (null contexts)
-                 ]
               <> [ IssueSection Nothing [detailsClosedBelowAttr_ 768] "issue-stack" "code" (if hasStack then "Stack trace" else "Error details") do
                      -- The title truncates and the reader expanded to read this in full,
                      -- so it shows whether or not there is a stack trace.
@@ -1470,6 +1461,23 @@ eventCard_ view@IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflo
                            let (target, lbl) = bool ("#issue-logs", "Inspect the related logs") ("#issue-trace", "Inspect the trace and service calls") (isJust traceRef)
                            a_ [href_ target, class_ "text-textBrand underline underline-offset-2 hover:no-underline"] lbl
                  ]
+              <> [ section "issue-http" "globe" "HTTP request" do
+                     let headers = maybe [] Map.toList (field (.requestHeaders))
+                         query = [(k, T.drop 1 v) | kv <- maybe [] (T.splitOn "&") (field (.urlQuery)), let (k, v) = T.breakOn "=" kv, not (T.null k)]
+                     div_ [class_ "max-md:px-3 px-4 space-y-3"] do
+                       div_ [class_ "flex items-center gap-2 min-w-0"] do
+                         span_ [class_ $ "cbadge-sm " <> Telemetry.methodStyle method] $ toHtml method
+                         span_ [class_ "font-mono text-sm text-textStrong break-all"] $ toHtml url
+                       forM_ ([("Query string", query), ("Headers", headers)] :: [(Text, [(Text, Text)])]) \(lbl, rows) -> unless (null rows) do
+                         fieldLabel_ "mb-1" lbl
+                         kvRows_ "" rows
+                       disclosure_ [] "text-xs text-textBrand" "Show as curl" do
+                         div_ [class_ "mt-2 flex items-start gap-2"] do
+                           pre_ [id_ "issue-curl", class_ "flex-1 min-w-0 text-xs font-mono bg-fillWeaker rounded px-2 py-1.5 whitespace-pre-wrap break-all"] $ toHtml $ curlCommand method url headers Nothing
+                           copyButton_ "btn btn-xs btn-ghost" "w-3 h-3" "#issue-curl's innerText" []
+                 | Just method <- [d.requestMethod <|> field (.requestMethod)]
+                 , Just url <- [field (.urlFull) <|> d.requestPath <|> field (.requestPath)]
+                 ]
               <> [ section "issue-tags" "tags" "Tags"
                      $ div_ [class_ "max-md:px-3 px-4 grid md:grid-cols-2 gap-3"]
                      $ forM_ (NE.groupWith (\(k, _, _) -> k) tagCounts) \grp -> do
@@ -1487,6 +1495,13 @@ eventCard_ view@IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflo
                          when (rest > 0) $ row ("Other" :: Text) rest
                  | not (null tagCounts)
                  ]
+              <> [ section "issue-contexts" "user" "Contexts"
+                     $ div_ [class_ "max-md:px-3 px-4 grid md:grid-cols-2 gap-3 items-start"]
+                     $ forM_ contexts \(title, rows) -> div_ [class_ "rounded-lg border border-strokeWeak p-2"] do
+                       h4_ [class_ "px-2 pb-1 text-xs font-semibold text-textStrong"] $ toHtml title
+                       kvRows_ "" rows
+                 | not (null contexts)
+                 ]
               <> [ section "issue-grouping" "layer-group" "Event grouping"
                      $ div_ [class_ "max-md:px-3 px-4 space-y-2 text-xs text-textWeak"] do
                        p_ "Events join this issue when their fingerprint matches: the error type, the message with volatile parts (ids, numbers, hex) replaced, the service, the span name, and the in-app frames."
@@ -1498,23 +1513,6 @@ eventCard_ view@IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflo
                            , ("same shape", field (.shapeHash))
                            ]
                  | isJust errM
-                 ]
-              <> [ section "issue-http" "globe" "HTTP request" do
-                     let headers = maybe [] Map.toList (field (.requestHeaders))
-                         query = [(k, T.drop 1 v) | kv <- maybe [] (T.splitOn "&") (field (.urlQuery)), let (k, v) = T.breakOn "=" kv, not (T.null k)]
-                     div_ [class_ "max-md:px-3 px-4 space-y-3"] do
-                       div_ [class_ "flex items-center gap-2 min-w-0"] do
-                         span_ [class_ $ "cbadge-sm " <> Telemetry.methodStyle method] $ toHtml method
-                         span_ [class_ "font-mono text-sm text-textStrong break-all"] $ toHtml url
-                       forM_ ([("Query string", query), ("Headers", headers)] :: [(Text, [(Text, Text)])]) \(lbl, rows) -> unless (null rows) do
-                         fieldLabel_ "mb-1" lbl
-                         kvRows_ "" rows
-                       disclosure_ [] "text-xs text-textBrand" "Show as curl" do
-                         div_ [class_ "mt-2 flex items-start gap-2"] do
-                           pre_ [id_ "issue-curl", class_ "flex-1 min-w-0 text-xs font-mono bg-fillWeaker rounded px-2 py-1.5 whitespace-pre-wrap break-all"] $ toHtml $ curlCommand method url headers Nothing
-                           copyButton_ "btn btn-xs btn-ghost" "w-3 h-3" "#issue-curl's innerText" []
-                 | Just method <- [d.requestMethod <|> field (.requestMethod)]
-                 , Just url <- [field (.urlFull) <|> d.requestPath <|> field (.requestPath)]
                  ]
               <> [ section "issue-attachments" "paperclip" "Attachments"
                      $ div_ [class_ "max-md:px-3 px-4 flex flex-wrap gap-3"]
@@ -1755,20 +1753,20 @@ eventCard_ view@IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflo
         -- shared helper quotes telemetry values and keeps this KQL hand-off aligned
         -- with SQL-backed investigation views. `traceRef` honours First/Recent.
         scoped = applyScopedKqlContext $ ScopedQuery pid (Nothing, Nothing) issue.environment issue.service (fst <$> traceRef)
-        (logsQuery, logsRange) = case (issueHashKey issue, traceRef) of
-          (Just key, _) | isLogPatternIssue -> (scoped $ "hashes[*]==\"" <> key <> "\"", tp)
-          (_, Just (tId, tTs)) -> (scoped $ "kind==\"log\" AND context___trace_id==\"" <> tId <> "\"", around tTs)
+        (logsQuery, logsRange, logsEmpty) = case (issueHashKey issue, traceRef) of
+          (Just key, _) | isLogPatternIssue -> (scoped $ "hashes[*]==\"" <> key <> "\"", tp, "No logs match this pattern in this range.")
+          (_, Just (tId, tTs)) -> (scoped $ "kind==\"log\" AND context___trace_id==\"" <> tId <> "\"", around tTs, "No logs share this event\x2019s trace.")
           -- ~24% of error patterns never captured a trace id (log records carry no
           -- trace context; spans always do). The old empty-string fallback rendered
           -- `context___trace_id==""`, which filters nothing and dumped the project's
           -- entire retention window.
-          _ -> (scoped "kind==\"log\"", around $ zonedTimeToUTC $ maybe issue.createdAt (.base.updatedAt) errM)
+          _ -> (scoped "kind==\"log\"", around $ zonedTimeToUTC $ maybe issue.createdAt (.base.updatedAt) errM, "No logs from this service in the five minutes around this event.")
         explorerLink = externalLink_ [href_ $ (urls.logExplorer pid).logExplorerGet (Just logsQuery) Nothing (nonEmptyT logsRange.since) (nonEmptyT logsRange.from) (nonEmptyT logsRange.to) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing, term "data-tippy-content" "Open these logs in the Explorer, with this issue's filter and window applied"] "Open in Explorer"
         logs =
           IssueSection (Just explorerLink) [] "issue-logs" "list-view" "Logs" do
             div_ [id_ "log-content", class_ "max-md:px-1 px-2 flex flex-col lg:flex-row w-full lg:max-h-[70vh]"] do
               div_ [class_ "grow min-w-0 min-h-0 flex flex-col"]
-                $ virtualTable pid (Just $ logRowsUrl logsQuery logsRange) Nothing
+                $ virtualTable pid [term "initialFetchUrl" $ logRowsUrl logsQuery logsRange, term "emptyMessage" logsEmpty]
 
     replaySection =
       [ section "replay-section" "video" "Session replay"

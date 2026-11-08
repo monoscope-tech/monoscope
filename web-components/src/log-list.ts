@@ -226,6 +226,8 @@ export class LogList extends LitElement {
   @property({ type: String }) projectId: string = '';
   @property({ type: String }) initialFetchUrl: string = '';
   @property({ type: String }) mode: 'logs' | 'patterns' | 'sessions' = 'logs';
+  // A list scoped by its host page (an issue's trace, a host) says so when empty; it has no query of its own to clear.
+  @property({ type: String }) emptyMessage = '';
 
   @state() private expandedTraces: Record<string, boolean> = {};
   // Session ids whose children are currently being fetched — drives the inline
@@ -2977,7 +2979,9 @@ export class LogList extends LitElement {
                 </tbody>
               `}
         </table>
-        ${!isInitialLoading && !this.fetchError && this.spanListTree.length === 0
+        ${!isInitialLoading && !this.fetchError && this.spanListTree.length === 0 && this.emptyMessage
+          ? html`<div class="py-6 px-4 text-center text-sm text-textWeak">${this.emptyMessage}</div>`
+          : !isInitialLoading && !this.fetchError && this.spanListTree.length === 0
           ? html`<div class="flex flex-col items-center justify-center py-12 px-4 text-center gap-2">
               ${faSprite('inbox-full', 'regular', 'w-6 h-6 text-iconNeutral')}
               ${activeQuery

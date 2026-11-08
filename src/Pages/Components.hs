@@ -1472,7 +1472,15 @@ stackFrames_ snippetUrl raw frames
     frame_ open f = div_ [class_ $ "border-b border-strokeWeak last:border-0 " <> bool "" "hidden group-has-[.sys-frames:checked]/frames:block bg-fillWeaker" (folds f)] do
       case guarded (not . T.null) f.filePath of
         -- An unplaced line keeps its text and gets no disclosure: there is nothing behind it.
-        Nothing -> div_ [class_ "px-3 py-1 font-mono text-2xs text-textWeak whitespace-pre-wrap break-words"] $ toHtml f.raw
+        -- The method is what a reader scans for; namespace and arguments recede around it.
+        Nothing -> div_ [class_ "px-3 py-1 font-mono text-xs text-textWeak whitespace-pre-wrap break-words"] case T.breakOn (f.functionName <> "(") f.raw of
+          (pre, rest)
+            | not (T.null f.functionName)
+            , not (T.null rest) -> do
+                toHtml pre
+                span_ [class_ $ bool "text-textStrong" "text-textStrong font-semibold" f.isInApp] $ toHtml f.functionName
+                toHtml $ T.drop (T.length f.functionName) rest
+          _ -> toHtml f.raw
         Just path -> disclosure_ [open_ "" | open] "px-3 py-1.5 hover:bg-fillWeaker text-xs" (summary path) case f.lineNumber of
           Nothing -> div_ [class_ "px-3 pb-2 pl-8 text-2xs text-textWeak italic"] "No source linked for this file."
           Just n -> div_ [class_ "px-3 pb-2", hxGet_ (snippetUrl path n), hxTrigger_ "intersect once", hxTarget_ "this", hxSwap_ "innerHTML"] $ div_ [class_ "pl-5 py-1 text-2xs text-textWeak"] "Loading source…"

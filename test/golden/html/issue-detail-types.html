@@ -610,10 +610,6 @@
 </div>
 </div>
 </div>
-<p class="flex flex-wrap items-center gap-x-2 text-xs text-textWeak">
-<span>Selected event</span>
-<time datetime="2025-01-01T00:00:00Z">2025-01-01 00:00:00 UTC</time>
-</p>
 <div class="flex flex-col lg:flex-row gap-4 lg:items-start">
 <div class="min-w-0 flex-1">
 <div class="surface-raised rounded-2xl overflow-hidden">
@@ -637,7 +633,7 @@
 <button type="button" id="<uuid>-pattern-volume_retry" hidden class="shrink-0 underline px-2 disabled:opacity-50">Retry</button>
 </div>
 </div>
-<div data-chart-config="{&quot;alertThreshold&quot;:null,&quot;chartId&quot;:&quot;<uuid>-pattern-volume&quot;,&quot;chartType&quot;:&quot;bar&quot;,&quot;dashboardId&quot;:null,&quot;dbSource&quot;:null,&quot;decimals&quot;:null,&quot;echartOpt&quot;:&quot;{\&quot;animation\&quot;:false,\&quot;dataset\&quot;:{\&quot;source\&quot;:null},\&quot;grid\&quot;:{\&quot;bottom\&quot;:0,\&quot;containLabel\&quot;:true,\&quot;left\&quot;:\&quot;0%\&quot;,\&quot;right\&quot;:16,\&quot;show\&quot;:false,\&quot;top\&quot;:16},\&quot;legend\&quot;:{\&quot;bottom\&quot;:2,\&quot;data\&quot;:[],\&quot;itemGap\&quot;:9,\&quot;itemHeight\&quot;:9,\&quot;itemWidth\&quot;:9,\&quot;padding\&quot;:[3,6,3,6],\&quot;show\&quot;:false,\&quot;textStyle\&quot;:{\&quot;fontSize\&quot;:12,\&quot;padding\&quot;:[0,0,0,-2]},\&quot;tooltip\&quot;:{\&quot;show\&quot;:true}},\&quot;series\&quot;:[],\&quot;toolbox\&quot;:{},\&quot;tooltip\&quot;:{\&quot;axisPointer\&quot;:{\&quot;type\&quot;:\&quot;shadow\&quot;},\&quot;show\&quot;:true,\&quot;trigger\&quot;:\&quot;axis\&quot;,\&quot;valueFormatter\&quot;:\&quot;function(value) { return formatNumber(value); }\&quot;},\&quot;xAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;hideOverlap\&quot;:true,\&quot;margin\&quot;:8,\&quot;show\&quot;:true},\&quot;axisLine\&quot;:{\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#000833A6\&quot;,\&quot;opacity\&quot;:0.1,\&quot;type\&quot;:\&quot;solid\&quot;},\&quot;show\&quot;:true},\&quot;boundaryGap\&quot;:[0,1.0e-2],\&quot;max\&quot;:null,\&quot;min\&quot;:null,\&quot;scale\&quot;:true,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;show\&quot;:false},\&quot;type\&quot;:\&quot;time\&quot;},\&quot;yAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:\&quot;function(value, index) { return formatNumber(value); }\&quot;,\&quot;hideOverlap\&quot;:true,\&quot;inside\&quot;:false,\&quot;margin\&quot;:8,\&quot;show\&quot;:true,\&quot;showMaxLabel\&quot;:false},\&quot;axisLine\&quot;:{\&quot;show\&quot;:false},\&quot;axisTick\&quot;:{\&quot;show\&quot;:false},\&quot;max\&quot;:null,\&quot;min\&quot;:0,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;interval\&quot;:null,\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#0011661A\&quot;,\&quot;type\&quot;:\&quot;dotted\&quot;},\&quot;show\&quot;:true},\&quot;type\&quot;:\&quot;value\&quot;}}&quot;,&quot;hideValue&quot;:false,&quot;highlightFrom&quot;:null,&quot;highlightTo&quot;:null,&quot;legendPosition&quot;:&quot;bottom&quot;,&quot;markers&quot;:[],&quot;pid&quot;:&quot;<uuid>&quot;,&quot;query&quot;:&quot;hashes[*]==\&quot;err:err-NullPointerException\&quot; | summarize count(*) by bin_auto(timestamp)&quot;,&quot;querySQL&quot;:&quot;&quot;,&quot;rollupFrom&quot;:null,&quot;rollupSQL&quot;:null,&quot;seriesIntent&quot;:&quot;error&quot;,&quot;sqlSig&quot;:null,&quot;summarizeBy&quot;:&quot;sum&quot;,&quot;summarizeByPrefix&quot;:&quot;&quot;,&quot;theme&quot;:&quot;default&quot;,&quot;timeFrom&quot;:null,&quot;timeTo&quot;:null,&quot;unit&quot;:&quot;&quot;,&quot;warningThreshold&quot;:null,&quot;widgetType&quot;:&quot;timeseries&quot;,&quot;yAxisLabel&quot;:&quot;&quot;}" class="relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-3">
+<div data-chart-config="{&quot;alertThreshold&quot;:null,&quot;chartId&quot;:&quot;<uuid>-pattern-volume&quot;,&quot;chartType&quot;:&quot;bar&quot;,&quot;dashboardId&quot;:null,&quot;dbSource&quot;:null,&quot;decimals&quot;:null,&quot;echartOpt&quot;:&quot;{\&quot;animation\&quot;:false,\&quot;dataset\&quot;:{\&quot;source\&quot;:null},\&quot;grid\&quot;:{\&quot;bottom\&quot;:0,\&quot;containLabel\&quot;:true,\&quot;left\&quot;:\&quot;0%\&quot;,\&quot;right\&quot;:16,\&quot;show\&quot;:false,\&quot;top\&quot;:16},\&quot;legend\&quot;:{\&quot;bottom\&quot;:2,\&quot;data\&quot;:[],\&quot;itemGap\&quot;:9,\&quot;itemHeight\&quot;:9,\&quot;itemWidth\&quot;:9,\&quot;padding\&quot;:[3,6,3,6],\&quot;show\&quot;:false,\&quot;textStyle\&quot;:{\&quot;fontSize\&quot;:12,\&quot;padding\&quot;:[0,0,0,-2]},\&quot;tooltip\&quot;:{\&quot;show\&quot;:true}},\&quot;series\&quot;:[],\&quot;toolbox\&quot;:{},\&quot;tooltip\&quot;:{\&quot;axisPointer\&quot;:{\&quot;type\&quot;:\&quot;shadow\&quot;},\&quot;show\&quot;:true,\&quot;trigger\&quot;:\&quot;axis\&quot;,\&quot;valueFormatter\&quot;:\&quot;function(value) { return formatNumber(value); }\&quot;},\&quot;xAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:{\&quot;day\&quot;:\&quot;{MMM} {d}\&quot;},\&quot;hideOverlap\&quot;:true,\&quot;margin\&quot;:8,\&quot;show\&quot;:true},\&quot;axisLine\&quot;:{\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#000833A6\&quot;,\&quot;opacity\&quot;:0.1,\&quot;type\&quot;:\&quot;solid\&quot;},\&quot;show\&quot;:true},\&quot;boundaryGap\&quot;:[0,1.0e-2],\&quot;max\&quot;:null,\&quot;min\&quot;:null,\&quot;scale\&quot;:true,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;show\&quot;:false},\&quot;type\&quot;:\&quot;time\&quot;},\&quot;yAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:\&quot;function(value, index) { return formatNumber(value); }\&quot;,\&quot;hideOverlap\&quot;:true,\&quot;inside\&quot;:false,\&quot;margin\&quot;:8,\&quot;show\&quot;:true,\&quot;showMaxLabel\&quot;:false},\&quot;axisLine\&quot;:{\&quot;show\&quot;:false},\&quot;axisTick\&quot;:{\&quot;show\&quot;:false},\&quot;max\&quot;:null,\&quot;min\&quot;:0,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;interval\&quot;:null,\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#0011661A\&quot;,\&quot;type\&quot;:\&quot;dotted\&quot;},\&quot;show\&quot;:true},\&quot;type\&quot;:\&quot;value\&quot;}}&quot;,&quot;hideValue&quot;:false,&quot;highlightFrom&quot;:null,&quot;highlightTo&quot;:null,&quot;legendPosition&quot;:&quot;bottom&quot;,&quot;markers&quot;:[],&quot;pid&quot;:&quot;<uuid>&quot;,&quot;query&quot;:&quot;hashes[*]==\&quot;err:err-NullPointerException\&quot; | summarize count(*) by bin_auto(timestamp)&quot;,&quot;querySQL&quot;:&quot;&quot;,&quot;rollupFrom&quot;:null,&quot;rollupSQL&quot;:null,&quot;seriesIntent&quot;:&quot;error&quot;,&quot;sqlSig&quot;:null,&quot;summarizeBy&quot;:&quot;sum&quot;,&quot;summarizeByPrefix&quot;:&quot;&quot;,&quot;theme&quot;:&quot;default&quot;,&quot;timeFrom&quot;:null,&quot;timeTo&quot;:null,&quot;unit&quot;:&quot;&quot;,&quot;warningThreshold&quot;:null,&quot;widgetType&quot;:&quot;timeseries&quot;,&quot;yAxisLabel&quot;:&quot;&quot;}" class="relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-3">
 <div class="chart-render-slot h-full min-h-full w-full" id="<uuid>-pattern-volume" data-chart-widget hx-morph-skip>
 </div>
 <div id="<uuid>-pattern-volume_empty" class="chart-no-data hidden absolute inset-3 z-10 flex items-center justify-center bg-bgRaised px-4 text-center" role="status" aria-live="polite" aria-atomic="true">
@@ -659,6 +655,9 @@
 <nav id="issue-event-nav" class="sticky top-0 z-20 bg-bgRaised border-b border-strokeWeak" aria-label="Issue evidence">
 <div class="max-md:px-3 px-4 h-10 flex items-center gap-3 overflow-x-auto whitespace-nowrap">
 <span class="text-sm font-semibold text-textStrong">Event</span>
+<span class="text-xs text-textWeak tabular-nums" data-tippy-content="2025-01-01 00:00:00 UTC">
+<local-time datetime="2025-01-01T00:00:00Z" format="MMM d, HH:mm:ss">Jan 01, 00:00:00 UTC</local-time>
+</span>
 <div class="ml-auto flex items-center gap-1 text-xs">
 <span class="text-textWeak mr-1 max-md:hidden">Occurrence</span>
 <a href="/p/<uuid>/issues/<uuid>?first_occurrence=true&amp;since=1H" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker" data-tippy-content="Show the first occurrence">First</a>
@@ -717,45 +716,13 @@ at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServle
 </div>
 <div class="max-md:px-3 px-4 h-9 flex items-center gap-1 overflow-x-auto whitespace-nowrap border-t border-strokeWeak text-xs">
 <span class="text-textWeak mr-1">Jump to:</span>
-<a href="#issue-contexts" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Contexts</a>
 <a href="#issue-stack" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Stack trace</a>
+<a href="#issue-contexts" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Contexts</a>
 <a href="#issue-grouping" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Event grouping</a>
 <a href="#issue-logs" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Logs</a>
 <a href="#issue-events" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">All events</a>
 </div>
 </nav>
-<details id="issue-contexts" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open>
-<summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
-<svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
-<g>
-<path d="M305 239c9.4 9.4 9.4 24.6 0 33.9L113 465c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l175-175L79 81c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L305 239z" stroke="currentColor" />
-</g>
-</svg>
-<svg class="icon w-3.5 h-3.5 text-textWeak" width="1em" height="1em" viewBox="0 0 640 640">
-<g>
-<path fill="currentColor" d="M240 192C240 147.8 275.8 112 320 112C364.2 112 400 147.8 400 192C400 236.2 364.2 272 320 272C275.8 272 240 236.2 240 192zM448 192C448 121.3 390.7 64 320 64C249.3 64 192 121.3 192 192C192 262.7 249.3 320 320 320C390.7 320 448 262.7 448 192zM144 544C144 473.3 201.3 416 272 416L368 416C438.7 416 496 473.3 496 544L496 552C496 565.3 506.7 576 520 576C533.3 576 544 565.3 544 552L544 544C544 446.8 465.2 368 368 368L272 368C174.8 368 96 446.8 96 544L96 552C96 565.3 106.7 576 120 576C133.3 576 144 565.3 144 552L144 544z" />
-</g>
-</svg>
-<h3 class="text-xs font-semibold text-textWeak uppercase tracking-wider">Contexts</h3>
-</summary>
-<div class="pb-3">
-<div class="max-md:px-3 px-4 grid md:grid-cols-2 gap-3 items-start">
-<div class="rounded-lg border border-strokeWeak p-2">
-<h4 class="px-2 pb-1 text-xs font-semibold text-textStrong">Runtime</h4>
-<dl class="grid gap-y-0.5 font-mono text-xs ">
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">runtime</dt>
-<dd class="min-w-0 break-all text-textStrong">java</dd>
-</div>
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">service</dt>
-<dd class="min-w-0 break-all text-textStrong">checkout</dd>
-</div>
-</dl>
-</div>
-</div>
-</div>
-</details>
 <details id="issue-stack" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open hx-live="if (!this.dataset.seeded) { this.dataset.seeded = &#39;1&#39;; if (window.innerWidth &lt; 768) this.open = false }">
 <summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
 <svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
@@ -836,6 +803,38 @@ at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServle
 </div>
 </div>
 </details>
+<details id="issue-contexts" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open>
+<summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
+<svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
+<g>
+<path d="M305 239c9.4 9.4 9.4 24.6 0 33.9L113 465c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l175-175L79 81c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L305 239z" stroke="currentColor" />
+</g>
+</svg>
+<svg class="icon w-3.5 h-3.5 text-textWeak" width="1em" height="1em" viewBox="0 0 640 640">
+<g>
+<path fill="currentColor" d="M240 192C240 147.8 275.8 112 320 112C364.2 112 400 147.8 400 192C400 236.2 364.2 272 320 272C275.8 272 240 236.2 240 192zM448 192C448 121.3 390.7 64 320 64C249.3 64 192 121.3 192 192C192 262.7 249.3 320 320 320C390.7 320 448 262.7 448 192zM144 544C144 473.3 201.3 416 272 416L368 416C438.7 416 496 473.3 496 544L496 552C496 565.3 506.7 576 520 576C533.3 576 544 565.3 544 552L544 544C544 446.8 465.2 368 368 368L272 368C174.8 368 96 446.8 96 544L96 552C96 565.3 106.7 576 120 576C133.3 576 144 565.3 144 552L144 544z" />
+</g>
+</svg>
+<h3 class="text-xs font-semibold text-textWeak uppercase tracking-wider">Contexts</h3>
+</summary>
+<div class="pb-3">
+<div class="max-md:px-3 px-4 grid md:grid-cols-2 gap-3 items-start">
+<div class="rounded-lg border border-strokeWeak p-2">
+<h4 class="px-2 pb-1 text-xs font-semibold text-textStrong">Runtime</h4>
+<dl class="grid gap-y-0.5 font-mono text-xs ">
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">runtime</dt>
+<dd class="min-w-0 break-all text-textStrong">java</dd>
+</div>
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">service</dt>
+<dd class="min-w-0 break-all text-textStrong">checkout</dd>
+</div>
+</dl>
+</div>
+</div>
+</div>
+</details>
 <details id="issue-grouping" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open>
 <summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
 <svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
@@ -897,7 +896,7 @@ at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServle
 <div class="pb-3">
 <div id="log-content" class="max-md:px-1 px-2 flex flex-col lg:flex-row w-full lg:max-h-[70vh]">
 <div class="grow min-w-0 min-h-0 flex flex-col">
-<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=kind%3D%3D%22log%22%20AND%20service%3D%3D%22checkout%22&amp;from=2024-12-31T23%3A55%3A00Z&amp;to=2025-01-01T00%3A05%3A00Z">
+<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=kind%3D%3D%22log%22%20AND%20service%3D%3D%22checkout%22&amp;from=2024-12-31T23%3A55%3A00Z&amp;to=2025-01-01T00%3A05%3A00Z" emptyMessage="No logs from this service in the five minutes around this event.">
 </log-list>
 </div>
 </div>
@@ -919,7 +918,7 @@ at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServle
 </summary>
 <div class="pb-3">
 <div class="max-md:px-1 px-2 flex flex-col max-h-[50vh]">
-<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=hashes%5B%2A%5D%3D%3D%22err%3Aerr-NullPointerException%22&amp;since=1H">
+<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=hashes%5B%2A%5D%3D%3D%22err%3Aerr-NullPointerException%22&amp;since=1H" emptyMessage="No events in this range.">
 </log-list>
 </div>
 </div>
@@ -1674,10 +1673,6 @@ at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServle
 </div>
 </div>
 </div>
-<p class="flex flex-wrap items-center gap-x-2 text-xs text-textWeak">
-<span>Selected event</span>
-<time datetime="2025-01-01T00:00:00Z">2025-01-01 00:00:00 UTC</time>
-</p>
 <div class="flex flex-col lg:flex-row gap-4 lg:items-start">
 <div class="min-w-0 flex-1">
 <div class="surface-raised rounded-2xl overflow-hidden">
@@ -1701,7 +1696,7 @@ at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServle
 <button type="button" id="<uuid>-pattern-volume_retry" hidden class="shrink-0 underline px-2 disabled:opacity-50">Retry</button>
 </div>
 </div>
-<div data-chart-config="{&quot;alertThreshold&quot;:null,&quot;chartId&quot;:&quot;<uuid>-pattern-volume&quot;,&quot;chartType&quot;:&quot;bar&quot;,&quot;dashboardId&quot;:null,&quot;dbSource&quot;:null,&quot;decimals&quot;:null,&quot;echartOpt&quot;:&quot;{\&quot;animation\&quot;:false,\&quot;dataset\&quot;:{\&quot;source\&quot;:null},\&quot;grid\&quot;:{\&quot;bottom\&quot;:0,\&quot;containLabel\&quot;:true,\&quot;left\&quot;:\&quot;0%\&quot;,\&quot;right\&quot;:16,\&quot;show\&quot;:false,\&quot;top\&quot;:16},\&quot;legend\&quot;:{\&quot;bottom\&quot;:2,\&quot;data\&quot;:[],\&quot;itemGap\&quot;:9,\&quot;itemHeight\&quot;:9,\&quot;itemWidth\&quot;:9,\&quot;padding\&quot;:[3,6,3,6],\&quot;show\&quot;:false,\&quot;textStyle\&quot;:{\&quot;fontSize\&quot;:12,\&quot;padding\&quot;:[0,0,0,-2]},\&quot;tooltip\&quot;:{\&quot;show\&quot;:true}},\&quot;series\&quot;:[],\&quot;toolbox\&quot;:{},\&quot;tooltip\&quot;:{\&quot;axisPointer\&quot;:{\&quot;type\&quot;:\&quot;shadow\&quot;},\&quot;show\&quot;:true,\&quot;trigger\&quot;:\&quot;axis\&quot;,\&quot;valueFormatter\&quot;:\&quot;function(value) { return formatNumber(value); }\&quot;},\&quot;xAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;hideOverlap\&quot;:true,\&quot;margin\&quot;:8,\&quot;show\&quot;:true},\&quot;axisLine\&quot;:{\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#000833A6\&quot;,\&quot;opacity\&quot;:0.1,\&quot;type\&quot;:\&quot;solid\&quot;},\&quot;show\&quot;:true},\&quot;boundaryGap\&quot;:[0,1.0e-2],\&quot;max\&quot;:null,\&quot;min\&quot;:null,\&quot;scale\&quot;:true,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;show\&quot;:false},\&quot;type\&quot;:\&quot;time\&quot;},\&quot;yAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:\&quot;function(value, index) { return formatNumber(value); }\&quot;,\&quot;hideOverlap\&quot;:true,\&quot;inside\&quot;:false,\&quot;margin\&quot;:8,\&quot;show\&quot;:true,\&quot;showMaxLabel\&quot;:false},\&quot;axisLine\&quot;:{\&quot;show\&quot;:false},\&quot;axisTick\&quot;:{\&quot;show\&quot;:false},\&quot;max\&quot;:null,\&quot;min\&quot;:0,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;interval\&quot;:null,\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#0011661A\&quot;,\&quot;type\&quot;:\&quot;dotted\&quot;},\&quot;show\&quot;:true},\&quot;type\&quot;:\&quot;value\&quot;}}&quot;,&quot;hideValue&quot;:false,&quot;highlightFrom&quot;:null,&quot;highlightTo&quot;:null,&quot;legendPosition&quot;:&quot;bottom&quot;,&quot;markers&quot;:[],&quot;pid&quot;:&quot;<uuid>&quot;,&quot;query&quot;:&quot;hashes[*]==\&quot;err:err-*errors.errorString\&quot; | summarize count(*) by bin_auto(timestamp)&quot;,&quot;querySQL&quot;:&quot;&quot;,&quot;rollupFrom&quot;:null,&quot;rollupSQL&quot;:null,&quot;seriesIntent&quot;:&quot;error&quot;,&quot;sqlSig&quot;:null,&quot;summarizeBy&quot;:&quot;sum&quot;,&quot;summarizeByPrefix&quot;:&quot;&quot;,&quot;theme&quot;:&quot;default&quot;,&quot;timeFrom&quot;:null,&quot;timeTo&quot;:null,&quot;unit&quot;:&quot;&quot;,&quot;warningThreshold&quot;:null,&quot;widgetType&quot;:&quot;timeseries&quot;,&quot;yAxisLabel&quot;:&quot;&quot;}" class="relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-3">
+<div data-chart-config="{&quot;alertThreshold&quot;:null,&quot;chartId&quot;:&quot;<uuid>-pattern-volume&quot;,&quot;chartType&quot;:&quot;bar&quot;,&quot;dashboardId&quot;:null,&quot;dbSource&quot;:null,&quot;decimals&quot;:null,&quot;echartOpt&quot;:&quot;{\&quot;animation\&quot;:false,\&quot;dataset\&quot;:{\&quot;source\&quot;:null},\&quot;grid\&quot;:{\&quot;bottom\&quot;:0,\&quot;containLabel\&quot;:true,\&quot;left\&quot;:\&quot;0%\&quot;,\&quot;right\&quot;:16,\&quot;show\&quot;:false,\&quot;top\&quot;:16},\&quot;legend\&quot;:{\&quot;bottom\&quot;:2,\&quot;data\&quot;:[],\&quot;itemGap\&quot;:9,\&quot;itemHeight\&quot;:9,\&quot;itemWidth\&quot;:9,\&quot;padding\&quot;:[3,6,3,6],\&quot;show\&quot;:false,\&quot;textStyle\&quot;:{\&quot;fontSize\&quot;:12,\&quot;padding\&quot;:[0,0,0,-2]},\&quot;tooltip\&quot;:{\&quot;show\&quot;:true}},\&quot;series\&quot;:[],\&quot;toolbox\&quot;:{},\&quot;tooltip\&quot;:{\&quot;axisPointer\&quot;:{\&quot;type\&quot;:\&quot;shadow\&quot;},\&quot;show\&quot;:true,\&quot;trigger\&quot;:\&quot;axis\&quot;,\&quot;valueFormatter\&quot;:\&quot;function(value) { return formatNumber(value); }\&quot;},\&quot;xAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:{\&quot;day\&quot;:\&quot;{MMM} {d}\&quot;},\&quot;hideOverlap\&quot;:true,\&quot;margin\&quot;:8,\&quot;show\&quot;:true},\&quot;axisLine\&quot;:{\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#000833A6\&quot;,\&quot;opacity\&quot;:0.1,\&quot;type\&quot;:\&quot;solid\&quot;},\&quot;show\&quot;:true},\&quot;boundaryGap\&quot;:[0,1.0e-2],\&quot;max\&quot;:null,\&quot;min\&quot;:null,\&quot;scale\&quot;:true,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;show\&quot;:false},\&quot;type\&quot;:\&quot;time\&quot;},\&quot;yAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:\&quot;function(value, index) { return formatNumber(value); }\&quot;,\&quot;hideOverlap\&quot;:true,\&quot;inside\&quot;:false,\&quot;margin\&quot;:8,\&quot;show\&quot;:true,\&quot;showMaxLabel\&quot;:false},\&quot;axisLine\&quot;:{\&quot;show\&quot;:false},\&quot;axisTick\&quot;:{\&quot;show\&quot;:false},\&quot;max\&quot;:null,\&quot;min\&quot;:0,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;interval\&quot;:null,\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#0011661A\&quot;,\&quot;type\&quot;:\&quot;dotted\&quot;},\&quot;show\&quot;:true},\&quot;type\&quot;:\&quot;value\&quot;}}&quot;,&quot;hideValue&quot;:false,&quot;highlightFrom&quot;:null,&quot;highlightTo&quot;:null,&quot;legendPosition&quot;:&quot;bottom&quot;,&quot;markers&quot;:[],&quot;pid&quot;:&quot;<uuid>&quot;,&quot;query&quot;:&quot;hashes[*]==\&quot;err:err-*errors.errorString\&quot; | summarize count(*) by bin_auto(timestamp)&quot;,&quot;querySQL&quot;:&quot;&quot;,&quot;rollupFrom&quot;:null,&quot;rollupSQL&quot;:null,&quot;seriesIntent&quot;:&quot;error&quot;,&quot;sqlSig&quot;:null,&quot;summarizeBy&quot;:&quot;sum&quot;,&quot;summarizeByPrefix&quot;:&quot;&quot;,&quot;theme&quot;:&quot;default&quot;,&quot;timeFrom&quot;:null,&quot;timeTo&quot;:null,&quot;unit&quot;:&quot;&quot;,&quot;warningThreshold&quot;:null,&quot;widgetType&quot;:&quot;timeseries&quot;,&quot;yAxisLabel&quot;:&quot;&quot;}" class="relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-3">
 <div class="chart-render-slot h-full min-h-full w-full" id="<uuid>-pattern-volume" data-chart-widget hx-morph-skip>
 </div>
 <div id="<uuid>-pattern-volume_empty" class="chart-no-data hidden absolute inset-3 z-10 flex items-center justify-center bg-bgRaised px-4 text-center" role="status" aria-live="polite" aria-atomic="true">
@@ -1723,6 +1718,9 @@ at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServle
 <nav id="issue-event-nav" class="sticky top-0 z-20 bg-bgRaised border-b border-strokeWeak" aria-label="Issue evidence">
 <div class="max-md:px-3 px-4 h-10 flex items-center gap-3 overflow-x-auto whitespace-nowrap">
 <span class="text-sm font-semibold text-textStrong">Event</span>
+<span class="text-xs text-textWeak tabular-nums" data-tippy-content="2025-01-01 00:00:00 UTC">
+<local-time datetime="2025-01-01T00:00:00Z" format="MMM d, HH:mm:ss">Jan 01, 00:00:00 UTC</local-time>
+</span>
 <div class="ml-auto flex items-center gap-1 text-xs">
 <span class="text-textWeak mr-1 max-md:hidden">Occurrence</span>
 <a href="/p/<uuid>/issues/<uuid>?first_occurrence=true&amp;since=1H" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker" data-tippy-content="Show the first occurrence">First</a>
@@ -1780,13 +1778,38 @@ at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServle
 </div>
 <div class="max-md:px-3 px-4 h-9 flex items-center gap-1 overflow-x-auto whitespace-nowrap border-t border-strokeWeak text-xs">
 <span class="text-textWeak mr-1">Jump to:</span>
-<a href="#issue-contexts" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Contexts</a>
 <a href="#issue-stack" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Error details</a>
+<a href="#issue-contexts" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Contexts</a>
 <a href="#issue-grouping" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Event grouping</a>
 <a href="#issue-logs" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Logs</a>
 <a href="#issue-events" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">All events</a>
 </div>
 </nav>
+<details id="issue-stack" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open hx-live="if (!this.dataset.seeded) { this.dataset.seeded = &#39;1&#39;; if (window.innerWidth &lt; 768) this.open = false }">
+<summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
+<svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
+<g>
+<path d="M305 239c9.4 9.4 9.4 24.6 0 33.9L113 465c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l175-175L79 81c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L305 239z" stroke="currentColor" />
+</g>
+</svg>
+<svg class="icon w-3.5 h-3.5 text-textWeak" width="1em" height="1em" viewBox="0 175 640 330">
+<g>
+<path d="M228.9 182.6c-9.3-9.7-24.5-10-34.2-.7L41 319c-12.1 11.8-12.1 31.3 0 43L194.7 499c9.7 9.3 24.9 9 34.2-.7s9-24.9-.7-34.2L95 337l133.1-127.1c9.7-9.3 10-24.5 .7-34.2zM445.3 181.9c-9.7-9.3-24.9-9-34.2 .7s-10 24.5-.7 34.2L545 337 411.1 464.1c-9.7 9.3-10 24.5-.7 34.2s24.5 10 34.2 .7L599 362c12.1-11.8 12.1-31.3 0-43L445.3 181.9z" />
+</g>
+</svg>
+<h3 class="text-xs font-semibold text-textWeak uppercase tracking-wider">Error details</h3>
+</summary>
+<div class="pb-3">
+<div class="max-md:px-3 px-4 pb-3 border-b border-strokeWeak">
+<span class="block text-2xs font-semibold text-textWeak uppercase tracking-wide mb-1">Error message</span>
+<pre class="text-sm leading-relaxed text-fillError-strong whitespace-pre-wrap break-words font-mono">shipping quote failure</pre>
+</div>
+<div class="px-4 py-3 text-sm text-textWeak space-y-2">
+<p>No stack trace in this event. The go SDK reported this exception without frames.</p>
+<a href="#issue-logs" class="text-textBrand underline underline-offset-2 hover:no-underline">Inspect the related logs</a>
+</div>
+</div>
+</details>
 <details id="issue-contexts" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open>
 <summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
 <svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
@@ -1816,31 +1839,6 @@ at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServle
 </div>
 </dl>
 </div>
-</div>
-</div>
-</details>
-<details id="issue-stack" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open hx-live="if (!this.dataset.seeded) { this.dataset.seeded = &#39;1&#39;; if (window.innerWidth &lt; 768) this.open = false }">
-<summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
-<svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
-<g>
-<path d="M305 239c9.4 9.4 9.4 24.6 0 33.9L113 465c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l175-175L79 81c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L305 239z" stroke="currentColor" />
-</g>
-</svg>
-<svg class="icon w-3.5 h-3.5 text-textWeak" width="1em" height="1em" viewBox="0 175 640 330">
-<g>
-<path d="M228.9 182.6c-9.3-9.7-24.5-10-34.2-.7L41 319c-12.1 11.8-12.1 31.3 0 43L194.7 499c9.7 9.3 24.9 9 34.2-.7s9-24.9-.7-34.2L95 337l133.1-127.1c9.7-9.3 10-24.5 .7-34.2zM445.3 181.9c-9.7-9.3-24.9-9-34.2 .7s-10 24.5-.7 34.2L545 337 411.1 464.1c-9.7 9.3-10 24.5-.7 34.2s24.5 10 34.2 .7L599 362c12.1-11.8 12.1-31.3 0-43L445.3 181.9z" />
-</g>
-</svg>
-<h3 class="text-xs font-semibold text-textWeak uppercase tracking-wider">Error details</h3>
-</summary>
-<div class="pb-3">
-<div class="max-md:px-3 px-4 pb-3 border-b border-strokeWeak">
-<span class="block text-2xs font-semibold text-textWeak uppercase tracking-wide mb-1">Error message</span>
-<pre class="text-sm leading-relaxed text-fillError-strong whitespace-pre-wrap break-words font-mono">shipping quote failure</pre>
-</div>
-<div class="px-4 py-3 text-sm text-textWeak space-y-2">
-<p>No stack trace in this event. The go SDK reported this exception without frames.</p>
-<a href="#issue-logs" class="text-textBrand underline underline-offset-2 hover:no-underline">Inspect the related logs</a>
 </div>
 </div>
 </details>
@@ -1905,7 +1903,7 @@ at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServle
 <div class="pb-3">
 <div id="log-content" class="max-md:px-1 px-2 flex flex-col lg:flex-row w-full lg:max-h-[70vh]">
 <div class="grow min-w-0 min-h-0 flex flex-col">
-<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=kind%3D%3D%22log%22%20AND%20service%3D%3D%22checkout%22&amp;from=2024-12-31T23%3A55%3A00Z&amp;to=2025-01-01T00%3A05%3A00Z">
+<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=kind%3D%3D%22log%22%20AND%20service%3D%3D%22checkout%22&amp;from=2024-12-31T23%3A55%3A00Z&amp;to=2025-01-01T00%3A05%3A00Z" emptyMessage="No logs from this service in the five minutes around this event.">
 </log-list>
 </div>
 </div>
@@ -1927,7 +1925,7 @@ at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServle
 </summary>
 <div class="pb-3">
 <div class="max-md:px-1 px-2 flex flex-col max-h-[50vh]">
-<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=hashes%5B%2A%5D%3D%3D%22err%3Aerr-%2Aerrors.errorString%22&amp;since=1H">
+<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=hashes%5B%2A%5D%3D%3D%22err%3Aerr-%2Aerrors.errorString%22&amp;since=1H" emptyMessage="No events in this range.">
 </log-list>
 </div>
 </div>
@@ -2676,10 +2674,6 @@ at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServle
 </div>
 </div>
 </div>
-<p class="flex flex-wrap items-center gap-x-2 text-xs text-textWeak">
-<span>Selected event</span>
-<time datetime="2025-01-01T00:00:00Z">2025-01-01 00:00:00 UTC</time>
-</p>
 <div class="flex flex-col lg:flex-row gap-4 lg:items-start">
 <div class="min-w-0 flex-1">
 <div class="surface-raised rounded-2xl overflow-hidden">
@@ -2703,7 +2697,7 @@ at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServle
 <button type="button" id="<uuid>-pattern-volume_retry" hidden class="shrink-0 underline px-2 disabled:opacity-50">Retry</button>
 </div>
 </div>
-<div data-chart-config="{&quot;alertThreshold&quot;:null,&quot;chartId&quot;:&quot;<uuid>-pattern-volume&quot;,&quot;chartType&quot;:&quot;bar&quot;,&quot;dashboardId&quot;:null,&quot;dbSource&quot;:null,&quot;decimals&quot;:null,&quot;echartOpt&quot;:&quot;{\&quot;animation\&quot;:false,\&quot;dataset\&quot;:{\&quot;source\&quot;:null},\&quot;grid\&quot;:{\&quot;bottom\&quot;:0,\&quot;containLabel\&quot;:true,\&quot;left\&quot;:\&quot;0%\&quot;,\&quot;right\&quot;:16,\&quot;show\&quot;:false,\&quot;top\&quot;:16},\&quot;legend\&quot;:{\&quot;bottom\&quot;:2,\&quot;data\&quot;:[],\&quot;itemGap\&quot;:9,\&quot;itemHeight\&quot;:9,\&quot;itemWidth\&quot;:9,\&quot;padding\&quot;:[3,6,3,6],\&quot;show\&quot;:false,\&quot;textStyle\&quot;:{\&quot;fontSize\&quot;:12,\&quot;padding\&quot;:[0,0,0,-2]},\&quot;tooltip\&quot;:{\&quot;show\&quot;:true}},\&quot;series\&quot;:[],\&quot;toolbox\&quot;:{},\&quot;tooltip\&quot;:{\&quot;axisPointer\&quot;:{\&quot;type\&quot;:\&quot;shadow\&quot;},\&quot;show\&quot;:true,\&quot;trigger\&quot;:\&quot;axis\&quot;,\&quot;valueFormatter\&quot;:\&quot;function(value) { return formatNumber(value); }\&quot;},\&quot;xAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;hideOverlap\&quot;:true,\&quot;margin\&quot;:8,\&quot;show\&quot;:true},\&quot;axisLine\&quot;:{\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#000833A6\&quot;,\&quot;opacity\&quot;:0.1,\&quot;type\&quot;:\&quot;solid\&quot;},\&quot;show\&quot;:true},\&quot;boundaryGap\&quot;:[0,1.0e-2],\&quot;max\&quot;:null,\&quot;min\&quot;:null,\&quot;scale\&quot;:true,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;show\&quot;:false},\&quot;type\&quot;:\&quot;time\&quot;},\&quot;yAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:\&quot;function(value, index) { return formatNumber(value); }\&quot;,\&quot;hideOverlap\&quot;:true,\&quot;inside\&quot;:false,\&quot;margin\&quot;:8,\&quot;show\&quot;:true,\&quot;showMaxLabel\&quot;:false},\&quot;axisLine\&quot;:{\&quot;show\&quot;:false},\&quot;axisTick\&quot;:{\&quot;show\&quot;:false},\&quot;max\&quot;:null,\&quot;min\&quot;:0,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;interval\&quot;:null,\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#0011661A\&quot;,\&quot;type\&quot;:\&quot;dotted\&quot;},\&quot;show\&quot;:true},\&quot;type\&quot;:\&quot;value\&quot;}}&quot;,&quot;hideValue&quot;:false,&quot;highlightFrom&quot;:null,&quot;highlightTo&quot;:null,&quot;legendPosition&quot;:&quot;bottom&quot;,&quot;markers&quot;:[],&quot;pid&quot;:&quot;<uuid>&quot;,&quot;query&quot;:&quot;hashes[*]==\&quot;err:err-TypeError\&quot; | summarize count(*) by bin_auto(timestamp)&quot;,&quot;querySQL&quot;:&quot;&quot;,&quot;rollupFrom&quot;:null,&quot;rollupSQL&quot;:null,&quot;seriesIntent&quot;:&quot;error&quot;,&quot;sqlSig&quot;:null,&quot;summarizeBy&quot;:&quot;sum&quot;,&quot;summarizeByPrefix&quot;:&quot;&quot;,&quot;theme&quot;:&quot;default&quot;,&quot;timeFrom&quot;:null,&quot;timeTo&quot;:null,&quot;unit&quot;:&quot;&quot;,&quot;warningThreshold&quot;:null,&quot;widgetType&quot;:&quot;timeseries&quot;,&quot;yAxisLabel&quot;:&quot;&quot;}" class="relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-3">
+<div data-chart-config="{&quot;alertThreshold&quot;:null,&quot;chartId&quot;:&quot;<uuid>-pattern-volume&quot;,&quot;chartType&quot;:&quot;bar&quot;,&quot;dashboardId&quot;:null,&quot;dbSource&quot;:null,&quot;decimals&quot;:null,&quot;echartOpt&quot;:&quot;{\&quot;animation\&quot;:false,\&quot;dataset\&quot;:{\&quot;source\&quot;:null},\&quot;grid\&quot;:{\&quot;bottom\&quot;:0,\&quot;containLabel\&quot;:true,\&quot;left\&quot;:\&quot;0%\&quot;,\&quot;right\&quot;:16,\&quot;show\&quot;:false,\&quot;top\&quot;:16},\&quot;legend\&quot;:{\&quot;bottom\&quot;:2,\&quot;data\&quot;:[],\&quot;itemGap\&quot;:9,\&quot;itemHeight\&quot;:9,\&quot;itemWidth\&quot;:9,\&quot;padding\&quot;:[3,6,3,6],\&quot;show\&quot;:false,\&quot;textStyle\&quot;:{\&quot;fontSize\&quot;:12,\&quot;padding\&quot;:[0,0,0,-2]},\&quot;tooltip\&quot;:{\&quot;show\&quot;:true}},\&quot;series\&quot;:[],\&quot;toolbox\&quot;:{},\&quot;tooltip\&quot;:{\&quot;axisPointer\&quot;:{\&quot;type\&quot;:\&quot;shadow\&quot;},\&quot;show\&quot;:true,\&quot;trigger\&quot;:\&quot;axis\&quot;,\&quot;valueFormatter\&quot;:\&quot;function(value) { return formatNumber(value); }\&quot;},\&quot;xAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:{\&quot;day\&quot;:\&quot;{MMM} {d}\&quot;},\&quot;hideOverlap\&quot;:true,\&quot;margin\&quot;:8,\&quot;show\&quot;:true},\&quot;axisLine\&quot;:{\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#000833A6\&quot;,\&quot;opacity\&quot;:0.1,\&quot;type\&quot;:\&quot;solid\&quot;},\&quot;show\&quot;:true},\&quot;boundaryGap\&quot;:[0,1.0e-2],\&quot;max\&quot;:null,\&quot;min\&quot;:null,\&quot;scale\&quot;:true,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;show\&quot;:false},\&quot;type\&quot;:\&quot;time\&quot;},\&quot;yAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:\&quot;function(value, index) { return formatNumber(value); }\&quot;,\&quot;hideOverlap\&quot;:true,\&quot;inside\&quot;:false,\&quot;margin\&quot;:8,\&quot;show\&quot;:true,\&quot;showMaxLabel\&quot;:false},\&quot;axisLine\&quot;:{\&quot;show\&quot;:false},\&quot;axisTick\&quot;:{\&quot;show\&quot;:false},\&quot;max\&quot;:null,\&quot;min\&quot;:0,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;interval\&quot;:null,\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#0011661A\&quot;,\&quot;type\&quot;:\&quot;dotted\&quot;},\&quot;show\&quot;:true},\&quot;type\&quot;:\&quot;value\&quot;}}&quot;,&quot;hideValue&quot;:false,&quot;highlightFrom&quot;:null,&quot;highlightTo&quot;:null,&quot;legendPosition&quot;:&quot;bottom&quot;,&quot;markers&quot;:[],&quot;pid&quot;:&quot;<uuid>&quot;,&quot;query&quot;:&quot;hashes[*]==\&quot;err:err-TypeError\&quot; | summarize count(*) by bin_auto(timestamp)&quot;,&quot;querySQL&quot;:&quot;&quot;,&quot;rollupFrom&quot;:null,&quot;rollupSQL&quot;:null,&quot;seriesIntent&quot;:&quot;error&quot;,&quot;sqlSig&quot;:null,&quot;summarizeBy&quot;:&quot;sum&quot;,&quot;summarizeByPrefix&quot;:&quot;&quot;,&quot;theme&quot;:&quot;default&quot;,&quot;timeFrom&quot;:null,&quot;timeTo&quot;:null,&quot;unit&quot;:&quot;&quot;,&quot;warningThreshold&quot;:null,&quot;widgetType&quot;:&quot;timeseries&quot;,&quot;yAxisLabel&quot;:&quot;&quot;}" class="relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-3">
 <div class="chart-render-slot h-full min-h-full w-full" id="<uuid>-pattern-volume" data-chart-widget hx-morph-skip>
 </div>
 <div id="<uuid>-pattern-volume_empty" class="chart-no-data hidden absolute inset-3 z-10 flex items-center justify-center bg-bgRaised px-4 text-center" role="status" aria-live="polite" aria-atomic="true">
@@ -2725,6 +2719,9 @@ at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServle
 <nav id="issue-event-nav" class="sticky top-0 z-20 bg-bgRaised border-b border-strokeWeak" aria-label="Issue evidence">
 <div class="max-md:px-3 px-4 h-10 flex items-center gap-3 overflow-x-auto whitespace-nowrap">
 <span class="text-sm font-semibold text-textStrong">Event</span>
+<span class="text-xs text-textWeak tabular-nums" data-tippy-content="2025-01-01 00:00:00 UTC">
+<local-time datetime="2025-01-01T00:00:00Z" format="MMM d, HH:mm:ss">Jan 01, 00:00:00 UTC</local-time>
+</span>
 <div class="ml-auto flex items-center gap-1 text-xs">
 <span class="text-textWeak mr-1 max-md:hidden">Occurrence</span>
 <a href="/p/<uuid>/issues/<uuid>?first_occurrence=true&amp;since=1H" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker" data-tippy-content="Show the first occurrence">First</a>
@@ -2784,8 +2781,8 @@ TypeError: boom
 <div class="max-md:px-3 px-4 h-9 flex items-center gap-1 overflow-x-auto whitespace-nowrap border-t border-strokeWeak text-xs">
 <span class="text-textWeak mr-1">Jump to:</span>
 <a href="#issue-highlights" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Highlights</a>
-<a href="#issue-contexts" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Contexts</a>
 <a href="#issue-stack" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Error details</a>
+<a href="#issue-contexts" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Contexts</a>
 <a href="#issue-grouping" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Event grouping</a>
 <a href="#issue-logs" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Logs</a>
 <a href="#issue-events" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">All events</a>
@@ -2814,6 +2811,31 @@ TypeError: boom
 </dl>
 </div>
 </details>
+<details id="issue-stack" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open hx-live="if (!this.dataset.seeded) { this.dataset.seeded = &#39;1&#39;; if (window.innerWidth &lt; 768) this.open = false }">
+<summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
+<svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
+<g>
+<path d="M305 239c9.4 9.4 9.4 24.6 0 33.9L113 465c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l175-175L79 81c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L305 239z" stroke="currentColor" />
+</g>
+</svg>
+<svg class="icon w-3.5 h-3.5 text-textWeak" width="1em" height="1em" viewBox="0 175 640 330">
+<g>
+<path d="M228.9 182.6c-9.3-9.7-24.5-10-34.2-.7L41 319c-12.1 11.8-12.1 31.3 0 43L194.7 499c9.7 9.3 24.9 9 34.2-.7s9-24.9-.7-34.2L95 337l133.1-127.1c9.7-9.3 10-24.5 .7-34.2zM445.3 181.9c-9.7-9.3-24.9-9-34.2 .7s-10 24.5-.7 34.2L545 337 411.1 464.1c-9.7 9.3-10 24.5-.7 34.2s24.5 10 34.2 .7L599 362c12.1-11.8 12.1-31.3 0-43L445.3 181.9z" />
+</g>
+</svg>
+<h3 class="text-xs font-semibold text-textWeak uppercase tracking-wider">Error details</h3>
+</summary>
+<div class="pb-3">
+<div class="max-md:px-3 px-4 pb-3 border-b border-strokeWeak">
+<span class="block text-2xs font-semibold text-textWeak uppercase tracking-wide mb-1">Error message</span>
+<pre class="text-sm leading-relaxed text-fillError-strong whitespace-pre-wrap break-words font-mono">boom</pre>
+</div>
+<div class="px-4 py-3 text-sm text-textWeak space-y-2">
+<p>No stack trace in this event. The SDK reported this exception without frames.</p>
+<a href="#issue-logs" class="text-textBrand underline underline-offset-2 hover:no-underline">Inspect the related logs</a>
+</div>
+</div>
+</details>
 <details id="issue-contexts" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open>
 <summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
 <svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
@@ -2839,31 +2861,6 @@ TypeError: boom
 </div>
 </dl>
 </div>
-</div>
-</div>
-</details>
-<details id="issue-stack" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open hx-live="if (!this.dataset.seeded) { this.dataset.seeded = &#39;1&#39;; if (window.innerWidth &lt; 768) this.open = false }">
-<summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
-<svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
-<g>
-<path d="M305 239c9.4 9.4 9.4 24.6 0 33.9L113 465c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l175-175L79 81c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L305 239z" stroke="currentColor" />
-</g>
-</svg>
-<svg class="icon w-3.5 h-3.5 text-textWeak" width="1em" height="1em" viewBox="0 175 640 330">
-<g>
-<path d="M228.9 182.6c-9.3-9.7-24.5-10-34.2-.7L41 319c-12.1 11.8-12.1 31.3 0 43L194.7 499c9.7 9.3 24.9 9 34.2-.7s9-24.9-.7-34.2L95 337l133.1-127.1c9.7-9.3 10-24.5 .7-34.2zM445.3 181.9c-9.7-9.3-24.9-9-34.2 .7s-10 24.5-.7 34.2L545 337 411.1 464.1c-9.7 9.3-10 24.5-.7 34.2s24.5 10 34.2 .7L599 362c12.1-11.8 12.1-31.3 0-43L445.3 181.9z" />
-</g>
-</svg>
-<h3 class="text-xs font-semibold text-textWeak uppercase tracking-wider">Error details</h3>
-</summary>
-<div class="pb-3">
-<div class="max-md:px-3 px-4 pb-3 border-b border-strokeWeak">
-<span class="block text-2xs font-semibold text-textWeak uppercase tracking-wide mb-1">Error message</span>
-<pre class="text-sm leading-relaxed text-fillError-strong whitespace-pre-wrap break-words font-mono">boom</pre>
-</div>
-<div class="px-4 py-3 text-sm text-textWeak space-y-2">
-<p>No stack trace in this event. The SDK reported this exception without frames.</p>
-<a href="#issue-logs" class="text-textBrand underline underline-offset-2 hover:no-underline">Inspect the related logs</a>
 </div>
 </div>
 </details>
@@ -2928,7 +2925,7 @@ TypeError: boom
 <div class="pb-3">
 <div id="log-content" class="max-md:px-1 px-2 flex flex-col lg:flex-row w-full lg:max-h-[70vh]">
 <div class="grow min-w-0 min-h-0 flex flex-col">
-<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=kind%3D%3D%22log%22%20AND%20service%3D%3D%22checkout%22%20AND%20resource.deployment.environment.name%3D%3D%22production%22&amp;from=2024-12-31T23%3A55%3A00Z&amp;to=2025-01-01T00%3A05%3A00Z">
+<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=kind%3D%3D%22log%22%20AND%20service%3D%3D%22checkout%22%20AND%20resource.deployment.environment.name%3D%3D%22production%22&amp;from=2024-12-31T23%3A55%3A00Z&amp;to=2025-01-01T00%3A05%3A00Z" emptyMessage="No logs from this service in the five minutes around this event.">
 </log-list>
 </div>
 </div>
@@ -2950,7 +2947,7 @@ TypeError: boom
 </summary>
 <div class="pb-3">
 <div class="max-md:px-1 px-2 flex flex-col max-h-[50vh]">
-<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=hashes%5B%2A%5D%3D%3D%22err%3Aerr-TypeError%22&amp;since=1H">
+<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=hashes%5B%2A%5D%3D%3D%22err%3Aerr-TypeError%22&amp;since=1H" emptyMessage="No events in this range.">
 </log-list>
 </div>
 </div>
@@ -3703,10 +3700,6 @@ TypeError: boom
 </div>
 </div>
 </div>
-<p class="flex flex-wrap items-center gap-x-2 text-xs text-textWeak">
-<span>Selected event</span>
-<time datetime="2025-01-01T00:00:00Z">2025-01-01 00:00:00 UTC</time>
-</p>
 <div class="flex flex-col lg:flex-row gap-4 lg:items-start">
 <div class="min-w-0 flex-1">
 <div class="surface-raised rounded-2xl overflow-hidden">
@@ -3730,7 +3723,7 @@ TypeError: boom
 <button type="button" id="<uuid>-pattern-volume_retry" hidden class="shrink-0 underline px-2 disabled:opacity-50">Retry</button>
 </div>
 </div>
-<div data-chart-config="{&quot;alertThreshold&quot;:null,&quot;chartId&quot;:&quot;<uuid>-pattern-volume&quot;,&quot;chartType&quot;:&quot;bar&quot;,&quot;dashboardId&quot;:null,&quot;dbSource&quot;:null,&quot;decimals&quot;:null,&quot;echartOpt&quot;:&quot;{\&quot;animation\&quot;:false,\&quot;dataset\&quot;:{\&quot;source\&quot;:null},\&quot;grid\&quot;:{\&quot;bottom\&quot;:0,\&quot;containLabel\&quot;:true,\&quot;left\&quot;:\&quot;0%\&quot;,\&quot;right\&quot;:16,\&quot;show\&quot;:false,\&quot;top\&quot;:16},\&quot;legend\&quot;:{\&quot;bottom\&quot;:2,\&quot;data\&quot;:[],\&quot;itemGap\&quot;:9,\&quot;itemHeight\&quot;:9,\&quot;itemWidth\&quot;:9,\&quot;padding\&quot;:[3,6,3,6],\&quot;show\&quot;:false,\&quot;textStyle\&quot;:{\&quot;fontSize\&quot;:12,\&quot;padding\&quot;:[0,0,0,-2]},\&quot;tooltip\&quot;:{\&quot;show\&quot;:true}},\&quot;series\&quot;:[],\&quot;toolbox\&quot;:{},\&quot;tooltip\&quot;:{\&quot;axisPointer\&quot;:{\&quot;type\&quot;:\&quot;shadow\&quot;},\&quot;show\&quot;:true,\&quot;trigger\&quot;:\&quot;axis\&quot;,\&quot;valueFormatter\&quot;:\&quot;function(value) { return formatNumber(value); }\&quot;},\&quot;xAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;hideOverlap\&quot;:true,\&quot;margin\&quot;:8,\&quot;show\&quot;:true},\&quot;axisLine\&quot;:{\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#000833A6\&quot;,\&quot;opacity\&quot;:0.1,\&quot;type\&quot;:\&quot;solid\&quot;},\&quot;show\&quot;:true},\&quot;boundaryGap\&quot;:[0,1.0e-2],\&quot;max\&quot;:null,\&quot;min\&quot;:null,\&quot;scale\&quot;:true,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;show\&quot;:false},\&quot;type\&quot;:\&quot;time\&quot;},\&quot;yAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:\&quot;function(value, index) { return formatNumber(value); }\&quot;,\&quot;hideOverlap\&quot;:true,\&quot;inside\&quot;:false,\&quot;margin\&quot;:8,\&quot;show\&quot;:true,\&quot;showMaxLabel\&quot;:false},\&quot;axisLine\&quot;:{\&quot;show\&quot;:false},\&quot;axisTick\&quot;:{\&quot;show\&quot;:false},\&quot;max\&quot;:null,\&quot;min\&quot;:0,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;interval\&quot;:null,\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#0011661A\&quot;,\&quot;type\&quot;:\&quot;dotted\&quot;},\&quot;show\&quot;:true},\&quot;type\&quot;:\&quot;value\&quot;}}&quot;,&quot;hideValue&quot;:false,&quot;highlightFrom&quot;:null,&quot;highlightTo&quot;:null,&quot;legendPosition&quot;:&quot;bottom&quot;,&quot;markers&quot;:[],&quot;pid&quot;:&quot;<uuid>&quot;,&quot;query&quot;:&quot;hashes[*]==\&quot;err:err-SyntaxError\&quot; | summarize count(*) by bin_auto(timestamp)&quot;,&quot;querySQL&quot;:&quot;&quot;,&quot;rollupFrom&quot;:null,&quot;rollupSQL&quot;:null,&quot;seriesIntent&quot;:&quot;error&quot;,&quot;sqlSig&quot;:null,&quot;summarizeBy&quot;:&quot;sum&quot;,&quot;summarizeByPrefix&quot;:&quot;&quot;,&quot;theme&quot;:&quot;default&quot;,&quot;timeFrom&quot;:null,&quot;timeTo&quot;:null,&quot;unit&quot;:&quot;&quot;,&quot;warningThreshold&quot;:null,&quot;widgetType&quot;:&quot;timeseries&quot;,&quot;yAxisLabel&quot;:&quot;&quot;}" class="relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-3">
+<div data-chart-config="{&quot;alertThreshold&quot;:null,&quot;chartId&quot;:&quot;<uuid>-pattern-volume&quot;,&quot;chartType&quot;:&quot;bar&quot;,&quot;dashboardId&quot;:null,&quot;dbSource&quot;:null,&quot;decimals&quot;:null,&quot;echartOpt&quot;:&quot;{\&quot;animation\&quot;:false,\&quot;dataset\&quot;:{\&quot;source\&quot;:null},\&quot;grid\&quot;:{\&quot;bottom\&quot;:0,\&quot;containLabel\&quot;:true,\&quot;left\&quot;:\&quot;0%\&quot;,\&quot;right\&quot;:16,\&quot;show\&quot;:false,\&quot;top\&quot;:16},\&quot;legend\&quot;:{\&quot;bottom\&quot;:2,\&quot;data\&quot;:[],\&quot;itemGap\&quot;:9,\&quot;itemHeight\&quot;:9,\&quot;itemWidth\&quot;:9,\&quot;padding\&quot;:[3,6,3,6],\&quot;show\&quot;:false,\&quot;textStyle\&quot;:{\&quot;fontSize\&quot;:12,\&quot;padding\&quot;:[0,0,0,-2]},\&quot;tooltip\&quot;:{\&quot;show\&quot;:true}},\&quot;series\&quot;:[],\&quot;toolbox\&quot;:{},\&quot;tooltip\&quot;:{\&quot;axisPointer\&quot;:{\&quot;type\&quot;:\&quot;shadow\&quot;},\&quot;show\&quot;:true,\&quot;trigger\&quot;:\&quot;axis\&quot;,\&quot;valueFormatter\&quot;:\&quot;function(value) { return formatNumber(value); }\&quot;},\&quot;xAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:{\&quot;day\&quot;:\&quot;{MMM} {d}\&quot;},\&quot;hideOverlap\&quot;:true,\&quot;margin\&quot;:8,\&quot;show\&quot;:true},\&quot;axisLine\&quot;:{\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#000833A6\&quot;,\&quot;opacity\&quot;:0.1,\&quot;type\&quot;:\&quot;solid\&quot;},\&quot;show\&quot;:true},\&quot;boundaryGap\&quot;:[0,1.0e-2],\&quot;max\&quot;:null,\&quot;min\&quot;:null,\&quot;scale\&quot;:true,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;show\&quot;:false},\&quot;type\&quot;:\&quot;time\&quot;},\&quot;yAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:\&quot;function(value, index) { return formatNumber(value); }\&quot;,\&quot;hideOverlap\&quot;:true,\&quot;inside\&quot;:false,\&quot;margin\&quot;:8,\&quot;show\&quot;:true,\&quot;showMaxLabel\&quot;:false},\&quot;axisLine\&quot;:{\&quot;show\&quot;:false},\&quot;axisTick\&quot;:{\&quot;show\&quot;:false},\&quot;max\&quot;:null,\&quot;min\&quot;:0,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;interval\&quot;:null,\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#0011661A\&quot;,\&quot;type\&quot;:\&quot;dotted\&quot;},\&quot;show\&quot;:true},\&quot;type\&quot;:\&quot;value\&quot;}}&quot;,&quot;hideValue&quot;:false,&quot;highlightFrom&quot;:null,&quot;highlightTo&quot;:null,&quot;legendPosition&quot;:&quot;bottom&quot;,&quot;markers&quot;:[],&quot;pid&quot;:&quot;<uuid>&quot;,&quot;query&quot;:&quot;hashes[*]==\&quot;err:err-SyntaxError\&quot; | summarize count(*) by bin_auto(timestamp)&quot;,&quot;querySQL&quot;:&quot;&quot;,&quot;rollupFrom&quot;:null,&quot;rollupSQL&quot;:null,&quot;seriesIntent&quot;:&quot;error&quot;,&quot;sqlSig&quot;:null,&quot;summarizeBy&quot;:&quot;sum&quot;,&quot;summarizeByPrefix&quot;:&quot;&quot;,&quot;theme&quot;:&quot;default&quot;,&quot;timeFrom&quot;:null,&quot;timeTo&quot;:null,&quot;unit&quot;:&quot;&quot;,&quot;warningThreshold&quot;:null,&quot;widgetType&quot;:&quot;timeseries&quot;,&quot;yAxisLabel&quot;:&quot;&quot;}" class="relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-3">
 <div class="chart-render-slot h-full min-h-full w-full" id="<uuid>-pattern-volume" data-chart-widget hx-morph-skip>
 </div>
 <div id="<uuid>-pattern-volume_empty" class="chart-no-data hidden absolute inset-3 z-10 flex items-center justify-center bg-bgRaised px-4 text-center" role="status" aria-live="polite" aria-atomic="true">
@@ -3752,6 +3745,9 @@ TypeError: boom
 <nav id="issue-event-nav" class="sticky top-0 z-20 bg-bgRaised border-b border-strokeWeak" aria-label="Issue evidence">
 <div class="max-md:px-3 px-4 h-10 flex items-center gap-3 overflow-x-auto whitespace-nowrap">
 <span class="text-sm font-semibold text-textStrong">Event</span>
+<span class="text-xs text-textWeak tabular-nums" data-tippy-content="2025-01-01 00:00:00 UTC">
+<local-time datetime="2025-01-01T00:00:00Z" format="MMM d, HH:mm:ss">Jan 01, 00:00:00 UTC</local-time>
+</span>
 <div class="ml-auto flex items-center gap-1 text-xs">
 <span class="text-textWeak mr-1 max-md:hidden">Occurrence</span>
 <a href="/p/<uuid>/issues/<uuid>/step?dir=older&amp;event=<hex>%402025-01-01T00%3A00%3A00Z" class="px-1.5 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker" aria-label="Earlier event" data-tippy-content="Earlier event">
@@ -3824,8 +3820,8 @@ at parse (a.js:1)
 <div class="max-md:px-3 px-4 h-9 flex items-center gap-1 overflow-x-auto whitespace-nowrap border-t border-strokeWeak text-xs">
 <span class="text-textWeak mr-1">Jump to:</span>
 <a href="#issue-highlights" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Highlights</a>
-<a href="#issue-contexts" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Contexts</a>
 <a href="#issue-stack" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Stack trace</a>
+<a href="#issue-contexts" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Contexts</a>
 <a href="#issue-grouping" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Event grouping</a>
 <a href="#issue-trace" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Trace</a>
 <a href="#issue-logs" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker">Logs</a>
@@ -3853,43 +3849,6 @@ at parse (a.js:1)
 <dd class="min-w-0 break-all text-textStrong"><hex></dd>
 </div>
 </dl>
-</div>
-</details>
-<details id="issue-contexts" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open>
-<summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
-<svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
-<g>
-<path d="M305 239c9.4 9.4 9.4 24.6 0 33.9L113 465c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l175-175L79 81c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L305 239z" stroke="currentColor" />
-</g>
-</svg>
-<svg class="icon w-3.5 h-3.5 text-textWeak" width="1em" height="1em" viewBox="0 0 640 640">
-<g>
-<path fill="currentColor" d="M240 192C240 147.8 275.8 112 320 112C364.2 112 400 147.8 400 192C400 236.2 364.2 272 320 272C275.8 272 240 236.2 240 192zM448 192C448 121.3 390.7 64 320 64C249.3 64 192 121.3 192 192C192 262.7 249.3 320 320 320C390.7 320 448 262.7 448 192zM144 544C144 473.3 201.3 416 272 416L368 416C438.7 416 496 473.3 496 544L496 552C496 565.3 506.7 576 520 576C533.3 576 544 565.3 544 552L544 544C544 446.8 465.2 368 368 368L272 368C174.8 368 96 446.8 96 544L96 552C96 565.3 106.7 576 120 576C133.3 576 144 565.3 144 552L144 544z" />
-</g>
-</svg>
-<h3 class="text-xs font-semibold text-textWeak uppercase tracking-wider">Contexts</h3>
-</summary>
-<div class="pb-3">
-<div class="max-md:px-3 px-4 grid md:grid-cols-2 gap-3 items-start">
-<div class="rounded-lg border border-strokeWeak p-2">
-<h4 class="px-2 pb-1 text-xs font-semibold text-textStrong">Runtime</h4>
-<dl class="grid gap-y-0.5 font-mono text-xs ">
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">service</dt>
-<dd class="min-w-0 break-all text-textStrong">checkout</dd>
-</div>
-</dl>
-</div>
-<div class="rounded-lg border border-strokeWeak p-2">
-<h4 class="px-2 pb-1 text-xs font-semibold text-textStrong">Trace</h4>
-<dl class="grid gap-y-0.5 font-mono text-xs ">
-<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
-<dt class="w-28 shrink-0 text-textWeak">trace.id</dt>
-<dd class="min-w-0 break-all text-textStrong"><hex></dd>
-</div>
-</dl>
-</div>
-</div>
 </div>
 </details>
 <details id="issue-stack" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open hx-live="if (!this.dataset.seeded) { this.dataset.seeded = &#39;1&#39;; if (window.innerWidth &lt; 768) this.open = false }">
@@ -3938,6 +3897,43 @@ at parse (a.js:1)
 </svg>Raw</summary>
 <pre class="max-h-80 overflow-auto text-xs font-mono leading-relaxed whitespace-pre-wrap break-words px-3 py-2">at parse (a.js:1)</pre>
 </details>
+</div>
+</div>
+</div>
+</details>
+<details id="issue-contexts" class="border-t border-strokeWeak first-of-type:border-t-0 scroll-mt-(--event-nav-h)" open>
+<summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden max-md:px-3 px-4 py-2.5 hover:bg-fillWeaker">
+<svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
+<g>
+<path d="M305 239c9.4 9.4 9.4 24.6 0 33.9L113 465c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l175-175L79 81c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L305 239z" stroke="currentColor" />
+</g>
+</svg>
+<svg class="icon w-3.5 h-3.5 text-textWeak" width="1em" height="1em" viewBox="0 0 640 640">
+<g>
+<path fill="currentColor" d="M240 192C240 147.8 275.8 112 320 112C364.2 112 400 147.8 400 192C400 236.2 364.2 272 320 272C275.8 272 240 236.2 240 192zM448 192C448 121.3 390.7 64 320 64C249.3 64 192 121.3 192 192C192 262.7 249.3 320 320 320C390.7 320 448 262.7 448 192zM144 544C144 473.3 201.3 416 272 416L368 416C438.7 416 496 473.3 496 544L496 552C496 565.3 506.7 576 520 576C533.3 576 544 565.3 544 552L544 544C544 446.8 465.2 368 368 368L272 368C174.8 368 96 446.8 96 544L96 552C96 565.3 106.7 576 120 576C133.3 576 144 565.3 144 552L144 544z" />
+</g>
+</svg>
+<h3 class="text-xs font-semibold text-textWeak uppercase tracking-wider">Contexts</h3>
+</summary>
+<div class="pb-3">
+<div class="max-md:px-3 px-4 grid md:grid-cols-2 gap-3 items-start">
+<div class="rounded-lg border border-strokeWeak p-2">
+<h4 class="px-2 pb-1 text-xs font-semibold text-textStrong">Runtime</h4>
+<dl class="grid gap-y-0.5 font-mono text-xs ">
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">service</dt>
+<dd class="min-w-0 break-all text-textStrong">checkout</dd>
+</div>
+</dl>
+</div>
+<div class="rounded-lg border border-strokeWeak p-2">
+<h4 class="px-2 pb-1 text-xs font-semibold text-textStrong">Trace</h4>
+<dl class="grid gap-y-0.5 font-mono text-xs ">
+<div class="flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0">
+<dt class="w-28 shrink-0 text-textWeak">trace.id</dt>
+<dd class="min-w-0 break-all text-textStrong"><hex></dd>
+</div>
+</dl>
 </div>
 </div>
 </div>
@@ -4046,7 +4042,7 @@ at parse (a.js:1)
 <div class="pb-3">
 <div id="log-content" class="max-md:px-1 px-2 flex flex-col lg:flex-row w-full lg:max-h-[70vh]">
 <div class="grow min-w-0 min-h-0 flex flex-col">
-<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=kind%3D%3D%22log%22%20AND%20context___trace_id%3D%3D%<hex>%22%20AND%20service%3D%3D%22checkout%22&amp;from=2024-12-31T23%3A55%3A00Z&amp;to=2025-01-01T00%3A05%3A00Z">
+<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=kind%3D%3D%22log%22%20AND%20context___trace_id%3D%3D%<hex>%22%20AND%20service%3D%3D%22checkout%22&amp;from=2024-12-31T23%3A55%3A00Z&amp;to=2025-01-01T00%3A05%3A00Z" emptyMessage="No logs share this event’s trace.">
 </log-list>
 </div>
 </div>
@@ -4068,7 +4064,7 @@ at parse (a.js:1)
 </summary>
 <div class="pb-3">
 <div class="max-md:px-1 px-2 flex flex-col max-h-[50vh]">
-<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=hashes%5B%2A%5D%3D%3D%22err%3Aerr-SyntaxError%22&amp;since=1H">
+<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=hashes%5B%2A%5D%3D%3D%22err%3Aerr-SyntaxError%22&amp;since=1H" emptyMessage="No events in this range.">
 </log-list>
 </div>
 </div>
@@ -4785,11 +4781,7 @@ at parse (a.js:1)
 </div>
 </div>
 </div>
-<p class="flex flex-wrap items-center gap-x-2 text-xs text-textWeak">
-<span>Selected event</span>
-<time datetime="2025-01-01T00:00:00Z">2025-01-01 00:00:00 UTC</time>
-<span>· Around selected event · ±2 hours</span>
-</p>
+<p class="text-xs text-textWeak">Showing ଒ hours around the selected event</p>
 <div class="flex flex-col lg:flex-row gap-4 lg:items-start">
 <div class="min-w-0 flex-1">
 <div class="surface-raised rounded-2xl overflow-hidden">
@@ -4820,7 +4812,7 @@ at parse (a.js:1)
 <button type="button" id="<uuid>-pattern-volume_retry" hidden class="shrink-0 underline px-2 disabled:opacity-50">Retry</button>
 </div>
 </div>
-<div data-chart-config="{&quot;alertThreshold&quot;:5,&quot;chartId&quot;:&quot;<uuid>-pattern-volume&quot;,&quot;chartType&quot;:&quot;bar&quot;,&quot;dashboardId&quot;:null,&quot;dbSource&quot;:null,&quot;decimals&quot;:null,&quot;echartOpt&quot;:&quot;{\&quot;animation\&quot;:false,\&quot;dataset\&quot;:{\&quot;source\&quot;:null},\&quot;grid\&quot;:{\&quot;bottom\&quot;:0,\&quot;containLabel\&quot;:true,\&quot;left\&quot;:\&quot;0%\&quot;,\&quot;right\&quot;:16,\&quot;show\&quot;:false,\&quot;top\&quot;:16},\&quot;legend\&quot;:{\&quot;bottom\&quot;:2,\&quot;data\&quot;:[],\&quot;itemGap\&quot;:9,\&quot;itemHeight\&quot;:9,\&quot;itemWidth\&quot;:9,\&quot;padding\&quot;:[3,6,3,6],\&quot;show\&quot;:false,\&quot;textStyle\&quot;:{\&quot;fontSize\&quot;:12,\&quot;padding\&quot;:[0,0,0,-2]},\&quot;tooltip\&quot;:{\&quot;show\&quot;:true}},\&quot;series\&quot;:[],\&quot;toolbox\&quot;:{},\&quot;tooltip\&quot;:{\&quot;axisPointer\&quot;:{\&quot;type\&quot;:\&quot;shadow\&quot;},\&quot;show\&quot;:true,\&quot;trigger\&quot;:\&quot;axis\&quot;,\&quot;valueFormatter\&quot;:\&quot;function(value) { return formatNumber(value); }\&quot;},\&quot;xAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;hideOverlap\&quot;:true,\&quot;margin\&quot;:8,\&quot;show\&quot;:true},\&quot;axisLine\&quot;:{\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#000833A6\&quot;,\&quot;opacity\&quot;:0.1,\&quot;type\&quot;:\&quot;solid\&quot;},\&quot;show\&quot;:true},\&quot;boundaryGap\&quot;:[0,1.0e-2],\&quot;max\&quot;:null,\&quot;min\&quot;:null,\&quot;scale\&quot;:true,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;show\&quot;:false},\&quot;type\&quot;:\&quot;time\&quot;},\&quot;yAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:\&quot;function(value, index) { return formatNumber(value); }\&quot;,\&quot;hideOverlap\&quot;:true,\&quot;inside\&quot;:false,\&quot;margin\&quot;:8,\&quot;show\&quot;:true,\&quot;showMaxLabel\&quot;:false},\&quot;axisLine\&quot;:{\&quot;show\&quot;:false},\&quot;axisTick\&quot;:{\&quot;show\&quot;:false},\&quot;max\&quot;:null,\&quot;min\&quot;:0,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;interval\&quot;:null,\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#0011661A\&quot;,\&quot;type\&quot;:\&quot;dotted\&quot;},\&quot;show\&quot;:true},\&quot;type\&quot;:\&quot;value\&quot;}}&quot;,&quot;hideValue&quot;:false,&quot;highlightFrom&quot;:null,&quot;highlightTo&quot;:null,&quot;legendPosition&quot;:&quot;bottom&quot;,&quot;markers&quot;:null,&quot;pid&quot;:&quot;<uuid>&quot;,&quot;query&quot;:&quot;resource.service.name == \&quot;checkout\&quot; | summarize count(*) by bin_auto(timestamp)&quot;,&quot;querySQL&quot;:&quot;&quot;,&quot;rollupFrom&quot;:null,&quot;rollupSQL&quot;:null,&quot;seriesIntent&quot;:null,&quot;sqlSig&quot;:null,&quot;summarizeBy&quot;:&quot;sum&quot;,&quot;summarizeByPrefix&quot;:&quot;&quot;,&quot;theme&quot;:&quot;default&quot;,&quot;timeFrom&quot;:null,&quot;timeTo&quot;:null,&quot;unit&quot;:&quot;&quot;,&quot;warningThreshold&quot;:null,&quot;widgetType&quot;:&quot;timeseries&quot;,&quot;yAxisLabel&quot;:&quot;&quot;}" class="relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-3">
+<div data-chart-config="{&quot;alertThreshold&quot;:5,&quot;chartId&quot;:&quot;<uuid>-pattern-volume&quot;,&quot;chartType&quot;:&quot;bar&quot;,&quot;dashboardId&quot;:null,&quot;dbSource&quot;:null,&quot;decimals&quot;:null,&quot;echartOpt&quot;:&quot;{\&quot;animation\&quot;:false,\&quot;dataset\&quot;:{\&quot;source\&quot;:null},\&quot;grid\&quot;:{\&quot;bottom\&quot;:0,\&quot;containLabel\&quot;:true,\&quot;left\&quot;:\&quot;0%\&quot;,\&quot;right\&quot;:16,\&quot;show\&quot;:false,\&quot;top\&quot;:16},\&quot;legend\&quot;:{\&quot;bottom\&quot;:2,\&quot;data\&quot;:[],\&quot;itemGap\&quot;:9,\&quot;itemHeight\&quot;:9,\&quot;itemWidth\&quot;:9,\&quot;padding\&quot;:[3,6,3,6],\&quot;show\&quot;:false,\&quot;textStyle\&quot;:{\&quot;fontSize\&quot;:12,\&quot;padding\&quot;:[0,0,0,-2]},\&quot;tooltip\&quot;:{\&quot;show\&quot;:true}},\&quot;series\&quot;:[],\&quot;toolbox\&quot;:{},\&quot;tooltip\&quot;:{\&quot;axisPointer\&quot;:{\&quot;type\&quot;:\&quot;shadow\&quot;},\&quot;show\&quot;:true,\&quot;trigger\&quot;:\&quot;axis\&quot;,\&quot;valueFormatter\&quot;:\&quot;function(value) { return formatNumber(value); }\&quot;},\&quot;xAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:{\&quot;day\&quot;:\&quot;{MMM} {d}\&quot;},\&quot;hideOverlap\&quot;:true,\&quot;margin\&quot;:8,\&quot;show\&quot;:true},\&quot;axisLine\&quot;:{\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#000833A6\&quot;,\&quot;opacity\&quot;:0.1,\&quot;type\&quot;:\&quot;solid\&quot;},\&quot;show\&quot;:true},\&quot;boundaryGap\&quot;:[0,1.0e-2],\&quot;max\&quot;:null,\&quot;min\&quot;:null,\&quot;scale\&quot;:true,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;show\&quot;:false},\&quot;type\&quot;:\&quot;time\&quot;},\&quot;yAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:\&quot;function(value, index) { return formatNumber(value); }\&quot;,\&quot;hideOverlap\&quot;:true,\&quot;inside\&quot;:false,\&quot;margin\&quot;:8,\&quot;show\&quot;:true,\&quot;showMaxLabel\&quot;:false},\&quot;axisLine\&quot;:{\&quot;show\&quot;:false},\&quot;axisTick\&quot;:{\&quot;show\&quot;:false},\&quot;max\&quot;:null,\&quot;min\&quot;:0,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;interval\&quot;:null,\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#0011661A\&quot;,\&quot;type\&quot;:\&quot;dotted\&quot;},\&quot;show\&quot;:true},\&quot;type\&quot;:\&quot;value\&quot;}}&quot;,&quot;hideValue&quot;:false,&quot;highlightFrom&quot;:null,&quot;highlightTo&quot;:null,&quot;legendPosition&quot;:&quot;bottom&quot;,&quot;markers&quot;:null,&quot;pid&quot;:&quot;<uuid>&quot;,&quot;query&quot;:&quot;resource.service.name == \&quot;checkout\&quot; | summarize count(*) by bin_auto(timestamp)&quot;,&quot;querySQL&quot;:&quot;&quot;,&quot;rollupFrom&quot;:null,&quot;rollupSQL&quot;:null,&quot;seriesIntent&quot;:null,&quot;sqlSig&quot;:null,&quot;summarizeBy&quot;:&quot;sum&quot;,&quot;summarizeByPrefix&quot;:&quot;&quot;,&quot;theme&quot;:&quot;default&quot;,&quot;timeFrom&quot;:null,&quot;timeTo&quot;:null,&quot;unit&quot;:&quot;&quot;,&quot;warningThreshold&quot;:null,&quot;widgetType&quot;:&quot;timeseries&quot;,&quot;yAxisLabel&quot;:&quot;&quot;}" class="relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-3">
 <div class="chart-render-slot h-full min-h-full w-full" id="<uuid>-pattern-volume" data-chart-widget hx-morph-skip>
 </div>
 <div id="<uuid>-pattern-volume_empty" class="chart-no-data hidden absolute inset-3 z-10 flex items-center justify-center bg-bgRaised px-4 text-center" role="status" aria-live="polite" aria-atomic="true">
@@ -4884,6 +4876,9 @@ at parse (a.js:1)
 <nav id="issue-event-nav" class="sticky top-0 z-20 bg-bgRaised border-b border-strokeWeak" aria-label="Issue evidence">
 <div class="max-md:px-3 px-4 h-10 flex items-center gap-3 overflow-x-auto whitespace-nowrap">
 <span class="text-sm font-semibold text-textStrong">Evidence</span>
+<span class="text-xs text-textWeak tabular-nums" data-tippy-content="2025-01-01 00:00:00 UTC">
+<local-time datetime="2025-01-01T00:00:00Z" format="MMM d, HH:mm:ss">Jan 01, 00:00:00 UTC</local-time>
+</span>
 <div class="ml-auto flex items-center gap-1 text-xs">
 <button type="button" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker flex items-center gap-1" popovertarget="issue-copy-pop" style="anchor-name:--anchor-issue-copy-pop">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 448 512">
@@ -5685,10 +5680,6 @@ at parse (a.js:1)
 </div>
 </div>
 </div>
-<p class="flex flex-wrap items-center gap-x-2 text-xs text-textWeak">
-<span>Selected event</span>
-<time datetime="2024-12-31T23:58:00Z">2024-12-31 23:58:00 UTC</time>
-</p>
 <div class="surface-raised rounded-2xl overflow-hidden">
 <div class="px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-strokeWeak">
 <h3 class="text-xs font-semibold text-textWeak uppercase tracking-wider">Pattern Volume</h3>
@@ -5710,7 +5701,7 @@ at parse (a.js:1)
 <button type="button" id="<uuid>-pattern-volume_retry" hidden class="shrink-0 underline px-2 disabled:opacity-50">Retry</button>
 </div>
 </div>
-<div data-chart-config="{&quot;alertThreshold&quot;:null,&quot;chartId&quot;:&quot;<uuid>-pattern-volume&quot;,&quot;chartType&quot;:&quot;bar&quot;,&quot;dashboardId&quot;:null,&quot;dbSource&quot;:null,&quot;decimals&quot;:null,&quot;echartOpt&quot;:&quot;{\&quot;animation\&quot;:false,\&quot;dataset\&quot;:{\&quot;source\&quot;:null},\&quot;grid\&quot;:{\&quot;bottom\&quot;:0,\&quot;containLabel\&quot;:true,\&quot;left\&quot;:\&quot;0%\&quot;,\&quot;right\&quot;:16,\&quot;show\&quot;:false,\&quot;top\&quot;:16},\&quot;legend\&quot;:{\&quot;bottom\&quot;:2,\&quot;data\&quot;:[],\&quot;itemGap\&quot;:9,\&quot;itemHeight\&quot;:9,\&quot;itemWidth\&quot;:9,\&quot;padding\&quot;:[3,6,3,6],\&quot;show\&quot;:false,\&quot;textStyle\&quot;:{\&quot;fontSize\&quot;:12,\&quot;padding\&quot;:[0,0,0,-2]},\&quot;tooltip\&quot;:{\&quot;show\&quot;:true}},\&quot;series\&quot;:[],\&quot;toolbox\&quot;:{},\&quot;tooltip\&quot;:{\&quot;axisPointer\&quot;:{\&quot;type\&quot;:\&quot;shadow\&quot;},\&quot;show\&quot;:true,\&quot;trigger\&quot;:\&quot;axis\&quot;,\&quot;valueFormatter\&quot;:\&quot;function(value) { return formatNumber(value); }\&quot;},\&quot;xAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;hideOverlap\&quot;:true,\&quot;margin\&quot;:8,\&quot;show\&quot;:true},\&quot;axisLine\&quot;:{\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#000833A6\&quot;,\&quot;opacity\&quot;:0.1,\&quot;type\&quot;:\&quot;solid\&quot;},\&quot;show\&quot;:true},\&quot;boundaryGap\&quot;:[0,1.0e-2],\&quot;max\&quot;:null,\&quot;min\&quot;:null,\&quot;scale\&quot;:true,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;show\&quot;:false},\&quot;type\&quot;:\&quot;time\&quot;},\&quot;yAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:\&quot;function(value, index) { return formatNumber(value); }\&quot;,\&quot;hideOverlap\&quot;:true,\&quot;inside\&quot;:false,\&quot;margin\&quot;:8,\&quot;show\&quot;:true,\&quot;showMaxLabel\&quot;:false},\&quot;axisLine\&quot;:{\&quot;show\&quot;:false},\&quot;axisTick\&quot;:{\&quot;show\&quot;:false},\&quot;max\&quot;:null,\&quot;min\&quot;:0,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;interval\&quot;:null,\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#0011661A\&quot;,\&quot;type\&quot;:\&quot;dotted\&quot;},\&quot;show\&quot;:true},\&quot;type\&quot;:\&quot;value\&quot;}}&quot;,&quot;hideValue&quot;:false,&quot;highlightFrom&quot;:null,&quot;highlightTo&quot;:null,&quot;legendPosition&quot;:&quot;bottom&quot;,&quot;markers&quot;:null,&quot;pid&quot;:&quot;<uuid>&quot;,&quot;query&quot;:&quot;hashes[*]==\&quot;pat:live-pattern\&quot; | summarize count(*) by bin_auto(timestamp)&quot;,&quot;querySQL&quot;:&quot;&quot;,&quot;rollupFrom&quot;:&quot;1970-01-01T00:00:00Z&quot;,&quot;rollupSQL&quot;:&quot;SELECT * FROM (SELECT hour_bucket AS timestamp, &#39;value&#39;, event_count::float FROM apis.log_pattern_hourly_stats WHERE project_id = &#39;{{project_id}}&#39; AND source_field = &#39;summary&#39; AND pattern_hash = &#39;live-pattern&#39;) s WHERE TRUE{{rollup_time_filter}} ORDER BY 1&quot;,&quot;seriesIntent&quot;:&quot;error&quot;,&quot;sqlSig&quot;:&quot;<hex>&quot;,&quot;summarizeBy&quot;:&quot;sum&quot;,&quot;summarizeByPrefix&quot;:&quot;&quot;,&quot;theme&quot;:&quot;default&quot;,&quot;timeFrom&quot;:null,&quot;timeTo&quot;:null,&quot;unit&quot;:&quot;&quot;,&quot;warningThreshold&quot;:null,&quot;widgetType&quot;:&quot;timeseries&quot;,&quot;yAxisLabel&quot;:&quot;&quot;}" class="relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-3">
+<div data-chart-config="{&quot;alertThreshold&quot;:null,&quot;chartId&quot;:&quot;<uuid>-pattern-volume&quot;,&quot;chartType&quot;:&quot;bar&quot;,&quot;dashboardId&quot;:null,&quot;dbSource&quot;:null,&quot;decimals&quot;:null,&quot;echartOpt&quot;:&quot;{\&quot;animation\&quot;:false,\&quot;dataset\&quot;:{\&quot;source\&quot;:null},\&quot;grid\&quot;:{\&quot;bottom\&quot;:0,\&quot;containLabel\&quot;:true,\&quot;left\&quot;:\&quot;0%\&quot;,\&quot;right\&quot;:16,\&quot;show\&quot;:false,\&quot;top\&quot;:16},\&quot;legend\&quot;:{\&quot;bottom\&quot;:2,\&quot;data\&quot;:[],\&quot;itemGap\&quot;:9,\&quot;itemHeight\&quot;:9,\&quot;itemWidth\&quot;:9,\&quot;padding\&quot;:[3,6,3,6],\&quot;show\&quot;:false,\&quot;textStyle\&quot;:{\&quot;fontSize\&quot;:12,\&quot;padding\&quot;:[0,0,0,-2]},\&quot;tooltip\&quot;:{\&quot;show\&quot;:true}},\&quot;series\&quot;:[],\&quot;toolbox\&quot;:{},\&quot;tooltip\&quot;:{\&quot;axisPointer\&quot;:{\&quot;type\&quot;:\&quot;shadow\&quot;},\&quot;show\&quot;:true,\&quot;trigger\&quot;:\&quot;axis\&quot;,\&quot;valueFormatter\&quot;:\&quot;function(value) { return formatNumber(value); }\&quot;},\&quot;xAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:{\&quot;day\&quot;:\&quot;{MMM} {d}\&quot;},\&quot;hideOverlap\&quot;:true,\&quot;margin\&quot;:8,\&quot;show\&quot;:true},\&quot;axisLine\&quot;:{\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#000833A6\&quot;,\&quot;opacity\&quot;:0.1,\&quot;type\&quot;:\&quot;solid\&quot;},\&quot;show\&quot;:true},\&quot;boundaryGap\&quot;:[0,1.0e-2],\&quot;max\&quot;:null,\&quot;min\&quot;:null,\&quot;scale\&quot;:true,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;show\&quot;:false},\&quot;type\&quot;:\&quot;time\&quot;},\&quot;yAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:\&quot;function(value, index) { return formatNumber(value); }\&quot;,\&quot;hideOverlap\&quot;:true,\&quot;inside\&quot;:false,\&quot;margin\&quot;:8,\&quot;show\&quot;:true,\&quot;showMaxLabel\&quot;:false},\&quot;axisLine\&quot;:{\&quot;show\&quot;:false},\&quot;axisTick\&quot;:{\&quot;show\&quot;:false},\&quot;max\&quot;:null,\&quot;min\&quot;:0,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;interval\&quot;:null,\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#0011661A\&quot;,\&quot;type\&quot;:\&quot;dotted\&quot;},\&quot;show\&quot;:true},\&quot;type\&quot;:\&quot;value\&quot;}}&quot;,&quot;hideValue&quot;:false,&quot;highlightFrom&quot;:null,&quot;highlightTo&quot;:null,&quot;legendPosition&quot;:&quot;bottom&quot;,&quot;markers&quot;:null,&quot;pid&quot;:&quot;<uuid>&quot;,&quot;query&quot;:&quot;hashes[*]==\&quot;pat:live-pattern\&quot; | summarize count(*) by bin_auto(timestamp)&quot;,&quot;querySQL&quot;:&quot;&quot;,&quot;rollupFrom&quot;:&quot;1970-01-01T00:00:00Z&quot;,&quot;rollupSQL&quot;:&quot;SELECT * FROM (SELECT hour_bucket AS timestamp, &#39;value&#39;, event_count::float FROM apis.log_pattern_hourly_stats WHERE project_id = &#39;{{project_id}}&#39; AND source_field = &#39;summary&#39; AND pattern_hash = &#39;live-pattern&#39;) s WHERE TRUE{{rollup_time_filter}} ORDER BY 1&quot;,&quot;seriesIntent&quot;:&quot;error&quot;,&quot;sqlSig&quot;:&quot;<hex>&quot;,&quot;summarizeBy&quot;:&quot;sum&quot;,&quot;summarizeByPrefix&quot;:&quot;&quot;,&quot;theme&quot;:&quot;default&quot;,&quot;timeFrom&quot;:null,&quot;timeTo&quot;:null,&quot;unit&quot;:&quot;&quot;,&quot;warningThreshold&quot;:null,&quot;widgetType&quot;:&quot;timeseries&quot;,&quot;yAxisLabel&quot;:&quot;&quot;}" class="relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-3">
 <div class="chart-render-slot h-full min-h-full w-full" id="<uuid>-pattern-volume" data-chart-widget hx-morph-skip>
 </div>
 <div id="<uuid>-pattern-volume_empty" class="chart-no-data hidden absolute inset-3 z-10 flex items-center justify-center bg-bgRaised px-4 text-center" role="status" aria-live="polite" aria-atomic="true">
@@ -5730,6 +5721,9 @@ at parse (a.js:1)
 <nav id="issue-event-nav" class="sticky top-0 z-20 bg-bgRaised border-b border-strokeWeak" aria-label="Issue evidence">
 <div class="max-md:px-3 px-4 h-10 flex items-center gap-3 overflow-x-auto whitespace-nowrap">
 <span class="text-sm font-semibold text-textStrong">Evidence</span>
+<span class="text-xs text-textWeak tabular-nums" data-tippy-content="2024-12-31 23:58:00 UTC">
+<local-time datetime="2024-12-31T23:58:00Z" format="MMM d, HH:mm:ss">Dec 31, 23:58:00 UTC</local-time>
+</span>
 <div class="ml-auto flex items-center gap-1 text-xs">
 <button type="button" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker flex items-center gap-1" popovertarget="issue-copy-pop" style="anchor-name:--anchor-issue-copy-pop">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 448 512">
@@ -5856,7 +5850,7 @@ at parse (a.js:1)
 <div class="pb-3">
 <div id="log-content" class="max-md:px-1 px-2 flex flex-col lg:flex-row w-full lg:max-h-[70vh]">
 <div class="grow min-w-0 min-h-0 flex flex-col">
-<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=hashes%5B%2A%5D%3D%3D%22pat%3Alive-pattern%22%20AND%20service%3D%3D%22checkout%22&amp;since=1H">
+<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=hashes%5B%2A%5D%3D%3D%22pat%3Alive-pattern%22%20AND%20service%3D%3D%22checkout%22&amp;since=1H" emptyMessage="No logs match this pattern in this range.">
 </log-list>
 </div>
 </div>
@@ -6579,10 +6573,6 @@ at parse (a.js:1)
 </div>
 </div>
 </div>
-<p class="flex flex-wrap items-center gap-x-2 text-xs text-textWeak">
-<span>Change detected</span>
-<time datetime="2025-01-01T00:00:00Z">2025-01-01 00:00:00 UTC</time>
-</p>
 <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-textStrong">
 <span class="text-textWeak">Span schema</span>
 <span>checkout</span>
@@ -6594,6 +6584,9 @@ at parse (a.js:1)
 <nav id="issue-event-nav" class="sticky top-0 z-20 bg-bgRaised border-b border-strokeWeak" aria-label="Issue evidence">
 <div class="max-md:px-3 px-4 h-10 flex items-center gap-3 overflow-x-auto whitespace-nowrap">
 <span class="text-sm font-semibold text-textStrong">Evidence</span>
+<span class="text-xs text-textWeak tabular-nums" data-tippy-content="2025-01-01 00:00:00 UTC">
+<local-time datetime="2025-01-01T00:00:00Z" format="MMM d, HH:mm:ss">Jan 01, 00:00:00 UTC</local-time>
+</span>
 <div class="ml-auto flex items-center gap-1 text-xs">
 <button type="button" class="px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker flex items-center gap-1" popovertarget="issue-copy-pop" style="anchor-name:--anchor-issue-copy-pop">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 448 512">
@@ -6707,7 +6700,7 @@ at parse (a.js:1)
 <button type="button" id="<uuid>-schema-activity_retry" hidden class="shrink-0 underline px-2 disabled:opacity-50">Retry</button>
 </div>
 </div>
-<div data-chart-config="{&quot;alertThreshold&quot;:null,&quot;chartId&quot;:&quot;<uuid>-schema-activity&quot;,&quot;chartType&quot;:&quot;bar&quot;,&quot;dashboardId&quot;:null,&quot;dbSource&quot;:null,&quot;decimals&quot;:null,&quot;echartOpt&quot;:&quot;{\&quot;animation\&quot;:false,\&quot;dataset\&quot;:{\&quot;source\&quot;:null},\&quot;grid\&quot;:{\&quot;bottom\&quot;:0,\&quot;containLabel\&quot;:true,\&quot;left\&quot;:\&quot;0%\&quot;,\&quot;right\&quot;:16,\&quot;show\&quot;:false,\&quot;top\&quot;:16},\&quot;legend\&quot;:{\&quot;bottom\&quot;:2,\&quot;data\&quot;:[],\&quot;itemGap\&quot;:9,\&quot;itemHeight\&quot;:9,\&quot;itemWidth\&quot;:9,\&quot;padding\&quot;:[3,6,3,6],\&quot;show\&quot;:false,\&quot;textStyle\&quot;:{\&quot;fontSize\&quot;:12,\&quot;padding\&quot;:[0,0,0,-2]},\&quot;tooltip\&quot;:{\&quot;show\&quot;:true}},\&quot;series\&quot;:[],\&quot;toolbox\&quot;:{},\&quot;tooltip\&quot;:{\&quot;axisPointer\&quot;:{\&quot;type\&quot;:\&quot;shadow\&quot;},\&quot;show\&quot;:true,\&quot;trigger\&quot;:\&quot;axis\&quot;,\&quot;valueFormatter\&quot;:\&quot;function(value) { return formatNumber(value); }\&quot;},\&quot;xAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;hideOverlap\&quot;:true,\&quot;margin\&quot;:8,\&quot;show\&quot;:true},\&quot;axisLine\&quot;:{\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#000833A6\&quot;,\&quot;opacity\&quot;:0.1,\&quot;type\&quot;:\&quot;solid\&quot;},\&quot;show\&quot;:true},\&quot;boundaryGap\&quot;:[0,1.0e-2],\&quot;max\&quot;:null,\&quot;min\&quot;:null,\&quot;scale\&quot;:true,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;show\&quot;:false},\&quot;type\&quot;:\&quot;time\&quot;},\&quot;yAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:\&quot;function(value, index) { return formatNumber(value); }\&quot;,\&quot;hideOverlap\&quot;:true,\&quot;inside\&quot;:false,\&quot;margin\&quot;:8,\&quot;show\&quot;:true,\&quot;showMaxLabel\&quot;:false},\&quot;axisLine\&quot;:{\&quot;show\&quot;:false},\&quot;axisTick\&quot;:{\&quot;show\&quot;:false},\&quot;max\&quot;:null,\&quot;min\&quot;:0,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;interval\&quot;:null,\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#0011661A\&quot;,\&quot;type\&quot;:\&quot;dotted\&quot;},\&quot;show\&quot;:true},\&quot;type\&quot;:\&quot;value\&quot;}}&quot;,&quot;hideValue&quot;:false,&quot;highlightFrom&quot;:null,&quot;highlightTo&quot;:null,&quot;legendPosition&quot;:&quot;bottom&quot;,&quot;markers&quot;:null,&quot;pid&quot;:&quot;<uuid>&quot;,&quot;query&quot;:&quot;resource.service.name==\&quot;checkout\&quot; AND name==\&quot;process-order\&quot; | summarize count(*) by bin_auto(timestamp)&quot;,&quot;querySQL&quot;:&quot;&quot;,&quot;rollupFrom&quot;:null,&quot;rollupSQL&quot;:null,&quot;seriesIntent&quot;:null,&quot;sqlSig&quot;:null,&quot;summarizeBy&quot;:&quot;sum&quot;,&quot;summarizeByPrefix&quot;:&quot;&quot;,&quot;theme&quot;:&quot;default&quot;,&quot;timeFrom&quot;:null,&quot;timeTo&quot;:null,&quot;unit&quot;:&quot;&quot;,&quot;warningThreshold&quot;:null,&quot;widgetType&quot;:&quot;timeseries&quot;,&quot;yAxisLabel&quot;:&quot;&quot;}" class="relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-3">
+<div data-chart-config="{&quot;alertThreshold&quot;:null,&quot;chartId&quot;:&quot;<uuid>-schema-activity&quot;,&quot;chartType&quot;:&quot;bar&quot;,&quot;dashboardId&quot;:null,&quot;dbSource&quot;:null,&quot;decimals&quot;:null,&quot;echartOpt&quot;:&quot;{\&quot;animation\&quot;:false,\&quot;dataset\&quot;:{\&quot;source\&quot;:null},\&quot;grid\&quot;:{\&quot;bottom\&quot;:0,\&quot;containLabel\&quot;:true,\&quot;left\&quot;:\&quot;0%\&quot;,\&quot;right\&quot;:16,\&quot;show\&quot;:false,\&quot;top\&quot;:16},\&quot;legend\&quot;:{\&quot;bottom\&quot;:2,\&quot;data\&quot;:[],\&quot;itemGap\&quot;:9,\&quot;itemHeight\&quot;:9,\&quot;itemWidth\&quot;:9,\&quot;padding\&quot;:[3,6,3,6],\&quot;show\&quot;:false,\&quot;textStyle\&quot;:{\&quot;fontSize\&quot;:12,\&quot;padding\&quot;:[0,0,0,-2]},\&quot;tooltip\&quot;:{\&quot;show\&quot;:true}},\&quot;series\&quot;:[],\&quot;toolbox\&quot;:{},\&quot;tooltip\&quot;:{\&quot;axisPointer\&quot;:{\&quot;type\&quot;:\&quot;shadow\&quot;},\&quot;show\&quot;:true,\&quot;trigger\&quot;:\&quot;axis\&quot;,\&quot;valueFormatter\&quot;:\&quot;function(value) { return formatNumber(value); }\&quot;},\&quot;xAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:{\&quot;day\&quot;:\&quot;{MMM} {d}\&quot;},\&quot;hideOverlap\&quot;:true,\&quot;margin\&quot;:8,\&quot;show\&quot;:true},\&quot;axisLine\&quot;:{\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#000833A6\&quot;,\&quot;opacity\&quot;:0.1,\&quot;type\&quot;:\&quot;solid\&quot;},\&quot;show\&quot;:true},\&quot;boundaryGap\&quot;:[0,1.0e-2],\&quot;max\&quot;:null,\&quot;min\&quot;:null,\&quot;scale\&quot;:true,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;show\&quot;:false},\&quot;type\&quot;:\&quot;time\&quot;},\&quot;yAxis\&quot;:{\&quot;axisLabel\&quot;:{\&quot;formatter\&quot;:\&quot;function(value, index) { return formatNumber(value); }\&quot;,\&quot;hideOverlap\&quot;:true,\&quot;inside\&quot;:false,\&quot;margin\&quot;:8,\&quot;show\&quot;:true,\&quot;showMaxLabel\&quot;:false},\&quot;axisLine\&quot;:{\&quot;show\&quot;:false},\&quot;axisTick\&quot;:{\&quot;show\&quot;:false},\&quot;max\&quot;:null,\&quot;min\&quot;:0,\&quot;show\&quot;:true,\&quot;splitLine\&quot;:{\&quot;interval\&quot;:null,\&quot;lineStyle\&quot;:{\&quot;color\&quot;:\&quot;#0011661A\&quot;,\&quot;type\&quot;:\&quot;dotted\&quot;},\&quot;show\&quot;:true},\&quot;type\&quot;:\&quot;value\&quot;}}&quot;,&quot;hideValue&quot;:false,&quot;highlightFrom&quot;:null,&quot;highlightTo&quot;:null,&quot;legendPosition&quot;:&quot;bottom&quot;,&quot;markers&quot;:null,&quot;pid&quot;:&quot;<uuid>&quot;,&quot;query&quot;:&quot;resource.service.name==\&quot;checkout\&quot; AND name==\&quot;process-order\&quot; | summarize count(*) by bin_auto(timestamp)&quot;,&quot;querySQL&quot;:&quot;&quot;,&quot;rollupFrom&quot;:null,&quot;rollupSQL&quot;:null,&quot;seriesIntent&quot;:null,&quot;sqlSig&quot;:null,&quot;summarizeBy&quot;:&quot;sum&quot;,&quot;summarizeByPrefix&quot;:&quot;&quot;,&quot;theme&quot;:&quot;default&quot;,&quot;timeFrom&quot;:null,&quot;timeTo&quot;:null,&quot;unit&quot;:&quot;&quot;,&quot;warningThreshold&quot;:null,&quot;widgetType&quot;:&quot;timeseries&quot;,&quot;yAxisLabel&quot;:&quot;&quot;}" class="relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-3">
 <div class="chart-render-slot h-full min-h-full w-full" id="<uuid>-schema-activity" data-chart-widget hx-morph-skip>
 </div>
 <div id="<uuid>-schema-activity_empty" class="chart-no-data hidden absolute inset-3 z-10 flex items-center justify-center bg-bgRaised px-4 text-center" role="status" aria-live="polite" aria-atomic="true">
@@ -6764,7 +6757,7 @@ at parse (a.js:1)
 </summary>
 <div class="pb-3">
 <div class="max-md:px-1 px-2 flex flex-col max-h-[50vh]">
-<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=resource.service.name%3D%3D%22checkout%22%20AND%20name%3D%3D%22process-order%22&amp;since=1H">
+<log-list id="resultTable" class="w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block" windowTarget="logList" projectId="<uuid>" initialFetchUrl="/p/<uuid>/log_explorer/data?json=true&amp;query=resource.service.name%3D%3D%22checkout%22%20AND%20name%3D%3D%22process-order%22&amp;since=1H" emptyMessage="No events in this range.">
 </log-list>
 </div>
 </div>

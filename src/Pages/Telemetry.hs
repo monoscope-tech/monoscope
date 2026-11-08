@@ -1225,7 +1225,8 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
       traceGraph = ServiceGraph.buildServiceGraph 0 serviceMapNodeCap ServiceGraph.CollapseOff (Just traceDurationNs) traceHops
   div_ [class_ "@container/trace w-full h-full flex overflow-hidden", id_ "trace_span_container"] $ do
     div_ [class_ "flex flex-col grow min-w-0 gap-4 p-2 pb-4 overflow-y-auto overflow-x-hidden overscroll-y-contain c-scroll"] $ do
-      div_ [class_ "flex flex-wrap justify-between items-center gap-y-1"] do
+      -- Embedded in an issue, the event header already dates the trace and the stats row gives its duration.
+      div_ [class_ "flex flex-wrap justify-between items-center gap-y-1 [.investigation-content_&]:hidden"] do
         div_ [class_ "flex items-center gap-3"] $ do
           button_
             [ class_ "cursor-pointer hidden [#apiLogsPage_&]:flex items-center gap-1.5 text-sm font-medium text-textBrand"
@@ -1259,7 +1260,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
               ]
               $ faSprite_ "xmark" "regular" "w-3.5 h-3.5 text-iconNeutral"
 
-      div_ [class_ "flex gap-1 w-full max-md:mt-2 mt-5"] $ do
+      div_ [class_ "flex gap-1 w-full max-md:mt-2 mt-5 [.investigation-content_&]:mt-0"] $ do
         div_ [role_ "tablist", class_ "w-full flex flex-col gap-2 group/tt", id_ "trace-tabs"] $ do
           div_ [class_ "flex flex-col gap-2"] do
             div_ [class_ "flex flex-wrap justify-between gap-y-1 mb-2"] do
