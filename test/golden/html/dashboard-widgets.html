@@ -105,7 +105,9 @@ then set #dashboards-modal-widget-title.textContent to my.dataset.widgetTitle
 then set #dashboards-modal-search.value to &#39;&#39;
 then set #dashboards-modal-widget-id.value to &quot;requests-chart&quot;
 then set #dashboards-modal-source-dashboard-id.value to &quot;&quot;
+then set #dashboards-modal-source-dashboard-id.disabled to (&quot;&quot; is &quot;&quot;)
 then set #dashboards-modal-widget-json.value to (widgetEl.dataset.widget or &#39;&#39;)
+then set #dashboards-modal-widget-json.disabled to (#dashboards-modal-widget-json.value is &quot;&quot;)
 then set #dashboards-modal.checked to true then send change to #dashboards-modal
 then trigger loadDashboards on #dashboards-modal-content
 then call (the closest &lt;[popover]/&gt;).hidePopover()">Add to dashboard</a>

@@ -312,10 +312,13 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     -- The explorer's chart exists only as JSON; "New dashboard with this widget" posts it with the form.
     void $ testServant tr $ Dashboards.dashboardDeleteH testPid dashId
     let chart = widgetOf Widget.WTTimeseries "From Explorer"
-    void $ testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Fresh", Dashboards.file = "", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Just "visualization-widget", Dashboards.sourceDashboardId = Just "", Dashboards.widgetJson = Just (decodeUtf8 $ AE.encode chart)}
+    void $ testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Fresh", Dashboards.file = "", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Just "visualization-widget", Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Just (decodeUtf8 $ AE.encode chart)}
     fresh <- dashboardList tr Nothing <&> \case Dashboards.DashboardsGetSlim d -> V.toList d.dashboards; Dashboards.DashboardsGet (PageCtx _ d) -> V.toList d.dashboards
     map (.title) fresh `shouldBe` ["Fresh"]
     map (.title) . concat <$> traverse (storedWidgets tr . (.id)) fresh `shouldReturn` [Just "From Explorer"]
+    -- A widget that will not decode is refused before anything is written, not dropped from a new, empty dashboard.
+    void $ testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Broken", Dashboards.file = "", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Just "{not json"}
+    (dashboardList tr Nothing <&> \case Dashboards.DashboardsGetSlim d -> map (.title) (V.toList d.dashboards); Dashboards.DashboardsGet (PageCtx _ d) -> map (.title) (V.toList d.dashboards)) `shouldReturn` ["Fresh"]
 
   it "rendering: every widget type is a canvas grid item; tables, fetch URLs, PNGs and wire tags hold" \tr -> do
     -- The canvas serializer (widgets.ts buildWidgetOrder) selects `.grid-stack-item`, keys on

@@ -2237,11 +2237,10 @@ dashboardsGet_ dg
                       when (isJust dash.starredSince) $ faSprite_ "star" "solid" "size-3 shrink-0 text-iconWarning"
                       when (sourceDashIdM == Just dash.id) $ span_ [class_ "shrink-0 rounded bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] "This dashboard"
                     span_ [class_ "block truncate text-xs text-textWeak tabular-nums"] $ toHtml meta
-                rowCls = "group/pick flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left [&[hidden]]:hidden"
                 filterAttr = term "hx-live:hidden" "!this.textContent.toLowerCase().includes(q('#dashboards-modal-search').value.trim().toLowerCase())"
             -- Read-only rows are not options: nothing to pick, but the tooltip still says why.
             if ro
-              then div_ [data_ "dash" "", filterAttr, Aria.disabled_ "true", data_ "tippy-content" "Built-in dashboards are read-only. Duplicate one to add widgets to it.", class_ $ rowCls <> " cursor-not-allowed opacity-60"] do
+              then div_ [data_ "dash" "", filterAttr, Aria.disabled_ "true", data_ "tippy-content" "Built-in dashboards are read-only. Duplicate one to add widgets to it.", class_ "group/pick flex w-full cursor-not-allowed items-center gap-3 rounded-lg px-2 py-2 text-left opacity-60 [&[hidden]]:hidden"] do
                 body
                 faSprite_ "lock" "regular" "size-3.5 shrink-0 text-iconNeutral"
               else button_
@@ -2249,7 +2248,7 @@ dashboardsGet_ dg
                   , role_ "option"
                   , data_ "dash" ""
                   , filterAttr
-                  , class_ $ rowCls <> " cursor-pointer hover:bg-fillWeak active:bg-fillHover [&.active]:bg-fillWeak focus-visible:bg-fillWeak focus-visible:outline-none"
+                  , class_ "group/pick flex w-full cursor-pointer items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-fillWeak active:bg-fillHover focus-visible:bg-fillWeak focus-visible:outline-none [&.active]:bg-fillWeak [&[hidden]]:hidden"
                   , hxSwap_ "none"
                   , term "hx-on:htmx:after:request" "const s = event.detail.ctx.response.status; if (s >= 200 && s < 300) document.getElementById('dashboards-modal').checked = false"
                   ]
@@ -2500,9 +2499,9 @@ data DashboardForm = DashboardForm
   , title :: Text
   , fileDir :: Maybe Text
   , -- The add-to-dashboard picker's widget, which the new dashboard starts with: one already
-    -- on a dashboard by id, or the explorer's by its JSON. The picker always sends all three.
+    -- on a dashboard by id, or the explorer's by its JSON. The picker disables whichever is empty.
     copyWidgetId :: Maybe Text
-  , sourceDashboardId :: Maybe Text
+  , sourceDashboardId :: Maybe Dashboards.DashboardId
   , widgetJson :: Maybe Text
   }
   deriving stock (Generic, Show)
@@ -2518,9 +2517,11 @@ dashboardsPostH pid form = do
   now <- Time.currentTime
   did <- UUIDId <$> UUID.genUUID
   templates <- getDashboardTemplates appCtx.config
-  if form.title == ""
-    then toastError "Dashboard title is required" (DashboardPostError "Dashboard title is required")
-    else do
+  -- Checked before anything is written: a widget that will not decode must not leave an empty dashboard behind.
+  case traverse (AE.eitherDecodeStrict @Widget.Widget . encodeUtf8) form.widgetJson of
+    _ | form.title == "" -> toastError "Dashboard title is required" (DashboardPostError "Dashboard title is required")
+    Left _ -> toastError "The widget to add could not be read" (DashboardPostError "The widget to add could not be read")
+    Right widgetM -> do
       let dashM = find (\dashboard -> dashboard.file == Just form.file) templates
           redirectURI = dashboardUrl pid did Nothing []
           dir = fromMaybe "" form.fileDir
@@ -2535,8 +2536,7 @@ dashboardsPostH pid form = do
               }
       -- A read-only template is linked only by its entrypoint; created here it is the user's own copy.
       _ <- Dashboards.insert $ maybe dbd (const $ detach templates dbd) (Dashboards.readOnlyTemplate templates dbd)
-      let given = mfilter (not . T.null)
-      case (given form.copyWidgetId, given form.sourceDashboardId >>= rightToMaybe . parseUrlPiece, given form.widgetJson >>= AE.decodeStrict . encodeUtf8) of
+      case (form.copyWidgetId, form.sourceDashboardId, widgetM) of
         (Just wid, Just src, _) -> void $ dashboardDuplicateWidgetPostH pid dbd.id wid (Just src)
         (_, _, Just w) -> void $ dashboardWidgetPutH pid dbd.id Nothing Nothing w
         _ -> syncDashboardAndQueuePush pid dbd.id

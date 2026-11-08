@@ -675,15 +675,15 @@ repositoriesPageH pid selection = do
                 , Table.col
                     "Result"
                     ( \run -> case AE.fromJSON <$> run.result of
-                        -- A newer revision replaced it: its verdict is history, not something to act on.
-                        Just (AE.Success (result :: ImpactReview.ReviewResult)) | run.state == ImpactReviews.Superseded -> span_ [class_ "text-xs text-textWeak"] $ case result.verdict of
-                          ImpactReview.WorthChecking -> toHtml $ countNoun (length result.findings) "finding"
-                          ImpactReview.CoverageUnknown -> "Coverage unknown"
-                          ImpactReview.NoFinding -> "No finding"
-                        Just (AE.Success (result :: ImpactReview.ReviewResult)) -> case result.verdict of
-                          ImpactReview.WorthChecking -> colorChip_ WarningBadge "triangle-exclamation" $ countNoun (length result.findings) "finding" <> " to check"
-                          ImpactReview.CoverageUnknown -> colorChip_ NeutralBadge "circle-question" "Coverage unknown"
-                          ImpactReview.NoFinding -> span_ [class_ "inline-flex items-center gap-1.5 text-xs text-textWeak"] $ faSprite_ "circle-check" "regular" "h-3 w-3" >> "No finding"
+                        Just (AE.Success (result :: ImpactReview.ReviewResult)) ->
+                          let (tone, icon, label) = case result.verdict of
+                                ImpactReview.WorthChecking -> (WarningBadge, "triangle-exclamation", countNoun (length result.findings) "finding" <> " to check")
+                                ImpactReview.CoverageUnknown -> (NeutralBadge, "circle-question", "Coverage unknown")
+                                ImpactReview.NoFinding -> (NeutralBadge, "circle-check", "No finding")
+                           in -- Only a current review's open question earns a chip; a superseded one's verdict is history.
+                              if run.state == ImpactReviews.Superseded || result.verdict == ImpactReview.NoFinding
+                                then span_ [class_ "inline-flex items-center gap-1.5 text-xs text-textWeak"] $ faSprite_ icon "regular" "h-3 w-3" >> toHtml label
+                                else colorChip_ tone icon label
                         _ -> span_ [class_ "text-xs text-textWeak"] "\x2014"
                     )
                 , Table.col "Revision" (\run -> code_ [class_ "text-xs text-textWeak", title_ run.revision] $ toHtml $ T.take 8 run.revision)
