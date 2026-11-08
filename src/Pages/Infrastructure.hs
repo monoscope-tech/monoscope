@@ -35,7 +35,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), cpuPctOfLimit, memPctOfLimit, ratio, runtimeOf)
 import Pages.BodyWrapper (PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), RefreshingDeferred (..), callout_, detailSection_, emptyState_, entityHeader_, factGrid_, metaChip_, pivotLinks_, tableSkeleton_, timeRefreshListener_, tonePill_, withDeferredBody)
-import Pages.Containers (infraSnapshot, infrastructureBW, matchesAny, matchesFilter, mkWindow, pctText, windowed)
+import Pages.Containers (infraSnapshot, infrastructureBW, matchesAny, matchesFilter, mkWindow, pctText, utilizationClass, windowed)
 import Pages.Containers qualified as Containers
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Table (Features (..), SelectControl (..), Table (..), TableTabs (..), ZeroState (..), col, countedFilter, facetActions, facetsConfig, inventoryTable, selectControl_, sidebar_, withAttrs)
@@ -757,14 +757,6 @@ hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col b
 -- | The hexagon cutout shared by the host-map legend, skeleton, and cells.
 hexClipPath :: Text
 hexClipPath = "clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%)"
-
-
-utilizationClass :: Maybe Double -> Text
-utilizationClass = \case
-  Nothing -> "bg-fillNeutral-strong"
-  Just value | value < 0.6 -> "bg-fillSuccess-strong"
-  Just value | value < 0.85 -> "bg-fillWarning-strong"
-  Just _ -> "bg-fillError-strong"
 
 
 sumPresent :: (a -> Maybe Double) -> [a] -> Maybe Double

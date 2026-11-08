@@ -675,6 +675,11 @@ repositoriesPageH pid selection = do
                 , Table.col
                     "Result"
                     ( \run -> case AE.fromJSON <$> run.result of
+                        -- A newer revision replaced it: its verdict is history, not something to act on.
+                        Just (AE.Success (result :: ImpactReview.ReviewResult)) | run.state == ImpactReviews.Superseded -> span_ [class_ "text-xs text-textWeak"] $ case result.verdict of
+                          ImpactReview.WorthChecking -> toHtml $ countNoun (length result.findings) "finding"
+                          ImpactReview.CoverageUnknown -> "Coverage unknown"
+                          ImpactReview.NoFinding -> "No finding"
                         Just (AE.Success (result :: ImpactReview.ReviewResult)) -> case result.verdict of
                           ImpactReview.WorthChecking -> colorChip_ WarningBadge "triangle-exclamation" $ countNoun (length result.findings) "finding" <> " to check"
                           ImpactReview.CoverageUnknown -> colorChip_ NeutralBadge "circle-question" "Coverage unknown"

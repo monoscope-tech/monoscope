@@ -1801,7 +1801,7 @@ aiSidePanel_ pid issueId requestId = do
     ]
   button_
     ( [ id_ "issue-ai-launcher"
-      , class_ "absolute right-0 top-3 z-10 flex items-center gap-1.5 bg-fillBrand-strong text-white px-2 py-2.5 rounded-l-lg cursor-pointer shadow-md hover:opacity-90 transition-opacity group-has-[#ai-panel-toggle:checked]/ai:hidden"
+      , class_ "absolute right-0 top-3 z-10 flex items-center gap-1.5 bg-fillBrand-strong text-white px-2 py-2.5 rounded-l-lg cursor-pointer shadow-md hover:opacity-90 active:scale-[0.97] transition-[opacity,scale] duration-150 group-has-[#ai-panel-toggle:checked]/ai:hidden"
       , Aria.label_ "Open AI Assistant"
       ]
         <> aiPanelOpenerAttrs
@@ -1868,7 +1868,7 @@ aiChatForm_ pid issueId requestId attributes =
         , autocomplete_ "off"
         ]
       span_ [class_ "htmx-indicator", id_ "ai-chat-loader"] $ faSprite_ "spinner" "regular" "w-4 h-4 animate-spin text-iconBrand"
-      button_ [type_ "submit", class_ "p-1.5 rounded-lg bg-fillBrand-strong text-white hover:opacity-90 transition-opacity tap-target cursor-pointer", Aria.label_ "Send message"] $ faSprite_ "arrow-right" "regular" "w-3.5 h-3.5"
+      button_ [type_ "submit", class_ "p-1.5 rounded-lg bg-fillBrand-strong text-white hover:opacity-90 active:scale-[0.97] transition-[opacity,scale] duration-150 tap-target cursor-pointer", Aria.label_ "Send message"] $ faSprite_ "arrow-right" "regular" "w-3.5 h-3.5"
 
 
 -- | Resolve control; @errState@ is passed separately because the handler renders the

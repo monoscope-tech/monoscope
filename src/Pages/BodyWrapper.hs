@@ -519,37 +519,32 @@ bodyWrapper bcfg child = do
                   Components.drawer_ "global-data-drawer" (isJust bcfg.globalDrawerContent) Nothing bcfg.globalDrawerContent ""
                   -- Picks the dashboard a widget is added (from the explorer) or copied (from a dashboard) to.
                   Components.modalWith_ "dashboards-modal" def{Components.boxClass = "max-w-none p-0 gap-0", Components.boxStyle = "width:min(92vw,30rem)"} Nothing do
-                    div_ [class_ "space-y-3 px-5 pt-5 pb-3"] do
-                      div_ [class_ "pe-8"] do
-                        h2_ [id_ "dashboards-modal-title", class_ "text-base font-semibold text-textStrong"] "Add to dashboard"
-                        p_ [id_ "dashboards-modal-widget-title", class_ "truncate text-sm text-textWeak empty:hidden"] ""
-                      Components.searchInput_
-                        "w-full"
-                        "Search dashboards…"
-                        [ id_ "dashboards-modal-search"
-                        , autofocus_
-                        , autocomplete_ "off"
-                        , [__|on keydown[key is 'ArrowDown' or key is 'Enter']
-                              set target to the first <li:not([hidden]) button:not([disabled])/> in #dashboard-picker
-                              if target
-                                halt the event
-                                if event.key is 'Enter' call target.click() else call target.focus() end
-                              end|]
+                    div_ [Components.listboxNavAttr_] do
+                      div_ [class_ "space-y-3 px-5 pt-5 pb-3"] do
+                        div_ [class_ "pe-8"] do
+                          h2_ [id_ "dashboards-modal-title", class_ "text-base font-semibold text-textStrong"] "Add to dashboard"
+                          p_ [id_ "dashboards-modal-widget-title", class_ "truncate text-sm text-textWeak empty:hidden"] ""
+                        Components.searchInput_
+                          "w-full"
+                          "Search dashboards…"
+                          [ id_ "dashboards-modal-search"
+                          , autofocus_
+                          , autocomplete_ "off"
+                          ]
+                      div_
+                        [ id_ "dashboards-modal-content"
+                        , class_ "border-t border-strokeWeak"
+                        , hxGet_ (foldMap (\p -> urls.dashboardsGetList p.id Nothing (Just "true") Nothing Nothing Nothing Nothing def) bcfg.currProject)
+                        , hxTrigger_ "loadDashboards"
+                        , hxSelect_ "#dashboard-picker"
+                        , hxSwap_ "innerHTML"
+                        , -- The source id is spread in only when set: a widget that lives on no
+                          -- dashboard would otherwise send `source_dashboard_id=`, which is not
+                          -- a UUID, and the whole request 400s.
+                          hxVals_ "js:{copy_widget_id: document.getElementById('dashboards-modal-widget-id').value, ...(document.getElementById('dashboards-modal-source-dashboard-id').value ? {source_dashboard_id: document.getElementById('dashboards-modal-source-dashboard-id').value} : {})}"
                         ]
-                    div_
-                      [ id_ "dashboards-modal-content"
-                      , class_ "border-t border-strokeWeak"
-                      , hxGet_ (foldMap (\p -> urls.dashboardsGetList p.id Nothing (Just "true") Nothing Nothing Nothing Nothing def) bcfg.currProject)
-                      , hxTrigger_ "loadDashboards"
-                      , hxSelect_ "#dashboard-picker"
-                      , hxSwap_ "innerHTML"
-                      , -- The source id is spread in only when set: a widget that lives on no
-                        -- dashboard would otherwise send `source_dashboard_id=`, which is not
-                        -- a UUID, and the whole request 400s.
-                        hxVals_ "js:{copy_widget_id: document.getElementById('dashboards-modal-widget-id').value, ...(document.getElementById('dashboards-modal-source-dashboard-id').value ? {source_dashboard_id: document.getElementById('dashboards-modal-source-dashboard-id').value} : {})}"
-                      ]
-                      $ div_ [class_ "space-y-1 p-2", Aria.label_ "Loading dashboards", role_ "status"]
-                      $ replicateM_ 4 (div_ [class_ "skeleton h-12 w-full rounded-lg"] "")
+                        $ div_ [class_ "space-y-1 p-2", Aria.label_ "Loading dashboards", role_ "status"]
+                        $ replicateM_ 4 (div_ [class_ "skeleton h-12 w-full rounded-lg"] "")
                     forM_ bcfg.currProject \p -> details_ [class_ "group/new border-t border-strokeWeak", [__|on toggle if my.open call #dashboards-modal-new-title.focus() end|]] do
                       summary_ [class_ "flex cursor-pointer list-none items-center gap-3 px-4 py-3 text-sm font-medium text-textStrong hover:bg-fillWeak focus-visible:bg-fillWeak focus-visible:outline-none [&::-webkit-details-marker]:hidden"] do
                         span_ [class_ "grid size-8 shrink-0 place-items-center rounded-md border border-dashed border-strokeStrong text-iconNeutral"] $ faSprite_ "plus" "regular" "size-3.5"

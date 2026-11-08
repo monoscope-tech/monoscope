@@ -60,9 +60,8 @@
 </div>
 </div>
 </div>
-<ul id="dashboard-picker" class="max-h-[min(24rem,55vh)] overflow-y-auto overscroll-contain p-2" aria-label="Dashboards" hx-on:keydown="if (![&#39;ArrowDown&#39;, &#39;ArrowUp&#39;].includes(event.key)) return; event.preventDefault(); const b = [...this.querySelectorAll(&#39;li:not([hidden]) button:not([disabled])&#39;)]; (b[b.indexOf(document.activeElement) + (event.key === &#39;ArrowDown&#39; ? 1 : -1)] ?? document.getElementById(&#39;dashboards-modal-search&#39;)).focus()">
-<li data-dash class="[&amp;[hidden]]:hidden" hx-live:hidden="!this.textContent.toLowerCase().includes(q(&#39;#dashboards-modal-search&#39;).value.trim().toLowerCase())">
-<button type="button" class="group/pick flex w-full cursor-pointer items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-fillWeak active:bg-fillHover focus-visible:bg-fillWeak focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent" data-hx-swap="none" hx-disable="this" hx-on:htmx:after:request="const s = event.detail.ctx.response.status; if (s &gt;= 200 &amp;&amp; s &lt; 300) document.getElementById(&#39;dashboards-modal&#39;).checked = false" hx-put="/p/<uuid>/dashboards/<uuid>" data-hx-ext="json-enc" data-hx-vals="js:{...JSON.parse(document.getElementById(&#39;dashboards-modal-widget-json&#39;).value || &#39;{}&#39;)}">
+<div id="dashboard-picker" role="listbox" aria-label="Dashboards" class="max-h-[min(24rem,55vh)] overflow-y-auto overscroll-contain p-2 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&amp;_[data-dash]:not(.htmx-request)]:opacity-40">
+<button type="button" role="option" data-dash hx-live:hidden="!this.textContent.toLowerCase().includes(q(&#39;#dashboards-modal-search&#39;).value.trim().toLowerCase())" class="group/pick flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left [&amp;[hidden]]:hidden cursor-pointer hover:bg-fillWeak active:bg-fillHover [&amp;.active]:bg-fillWeak focus-visible:bg-fillWeak focus-visible:outline-none" data-hx-swap="none" hx-on:htmx:after:request="const s = event.detail.ctx.response.status; if (s &gt;= 200 &amp;&amp; s &lt; 300) document.getElementById(&#39;dashboards-modal&#39;).checked = false" hx-put="/p/<uuid>/dashboards/<uuid>" data-hx-ext="json-enc" data-hx-vals="js:{...JSON.parse(document.getElementById(&#39;dashboards-modal-widget-json&#39;).value || &#39;{}&#39;)}">
 <span class="grid size-8 shrink-0 place-items-center rounded-md bg-fillWeak text-iconNeutral">
 <svg class="icon size-4" width="1em" height="1em" viewBox="0 0 448 512">
 <g>
@@ -76,10 +75,9 @@
 </span>
 <span class="block truncate text-xs text-textWeak tabular-nums">86 widgets</span>
 </span>
-<span class="shrink-0 text-xs font-medium text-textBrand opacity-0 transition-opacity duration-100 group-hover/pick:opacity-100 group-focus-visible/pick:opacity-100 group-[.htmx-request]/pick:hidden">Add</span>
+<span class="shrink-0 text-xs font-medium text-textBrand opacity-0 transition-opacity duration-100 group-hover/pick:opacity-100 group-[.active]/pick:opacity-100 group-focus-visible/pick:opacity-100 group-[.htmx-request]/pick:hidden">Add</span>
 <span class="loading loading-spinner loading-xs hidden shrink-0 text-iconNeutral group-[.htmx-request]/pick:inline-block" aria-label="Adding">
 </span>
 </button>
-</li>
-<li class="px-2 py-6 text-center text-sm text-textWeak [&amp;[hidden]]:hidden" hx-live:hidden="q(&#39;#dashboard-picker li[data-dash]:not([hidden])&#39;).count &gt; 0">No dashboards match your search.</li>
-</ul>
+<p class="px-2 py-6 text-center text-sm text-textWeak [&amp;[hidden]]:hidden" hx-live:hidden="q(&#39;#dashboard-picker [data-dash]:not([hidden])&#39;).count &gt; 0">No dashboards match your search.</p>
+</div>

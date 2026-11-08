@@ -2217,42 +2217,19 @@ dashboardsGet_ dg
       -- and new-dashboard form; this is the list it swaps in. Favourites first, read-only last.
       let readOnly = isJust . Dashboards.readOnlyTemplate dg.dashTemplates
           verb = bool "Copy" "Add" (isNothing sourceDashIdM)
-      ul_
+      -- Keyboard nav (Components.listboxNavAttr_) sits on the shell around the search, so focus
+      -- stays in the search while arrows move .active between [role=option] rows.
+      div_
         [ id_ "dashboard-picker"
-        , class_ "max-h-[min(24rem,55vh)] overflow-y-auto overscroll-contain p-2"
+        , role_ "listbox"
         , Aria.label_ "Dashboards"
-        , term "hx-on:keydown" "if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return; event.preventDefault(); const b = [...this.querySelectorAll('li:not([hidden]) button:not([disabled])')]; (b[b.indexOf(document.activeElement) + (event.key === 'ArrowDown' ? 1 : -1)] ?? document.getElementById('dashboards-modal-search')).focus()"
+        , class_ "max-h-[min(24rem,55vh)] overflow-y-auto overscroll-contain p-2 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&_[data-dash]:not(.htmx-request)]:opacity-40"
         ]
         do
           forM_ (sortOn (\d -> (readOnly d, isNothing d.starredSince)) $ V.toList dg.dashboards) \dash -> do
             let ro = readOnly dash
                 meta = T.intercalate " · " $ countNoun (getWidgetCount dash) "widget" : ["Built-in, read-only" | ro] <> [T.intercalate ", " (V.toList dash.tags) | not (V.null dash.tags)]
-            li_ [data_ "dash" "", class_ "[&[hidden]]:hidden", term "hx-live:hidden" "!this.textContent.toLowerCase().includes(q('#dashboards-modal-search').value.trim().toLowerCase())"]
-              $ button_
-                ( [ type_ "button"
-                  , class_ "group/pick flex w-full cursor-pointer items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-fillWeak active:bg-fillHover focus-visible:bg-fillWeak focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
-                  ]
-                    <> if ro
-                      then [disabled_ "", data_ "tippy-content" "Built-in dashboards are read-only. Duplicate one to add widgets to it."]
-                      else
-                        [ hxSwap_ "none"
-                        , term "hx-disable" "this"
-                        , term "hx-on:htmx:after:request" "const s = event.detail.ctx.response.status; if (s >= 200 && s < 300) document.getElementById('dashboards-modal').checked = false"
-                        ]
-                          <> case sourceDashIdM of
-                            -- The widget already exists server-side; copy it across.
-                            Just sourceDashId -> [hxPost_ $ urls.dashboardDuplicateWidget dg.projectId dash.id widgetId (Just sourceDashId)]
-                            -- It does not: the only definition of it is the JSON the page is holding,
-                            -- so send that to the widget upsert instead. No widget_id, which is what
-                            -- makes the upsert append under a fresh id rather than overwrite the
-                            -- explorer's "visualization-widget" added last time.
-                            Nothing ->
-                              [ term "hx-put" $ urls.dashboardWidgetPut dg.projectId dash.id Nothing Nothing Nothing
-                              , hxExt_ "json-enc"
-                              , hxVals_ "js:{...JSON.parse(document.getElementById('dashboards-modal-widget-json').value || '{}')}"
-                              ]
-                )
-                do
+                body = do
                   span_ [class_ "grid size-8 shrink-0 place-items-center rounded-md bg-fillWeak text-iconNeutral"] $ faSprite_ (getDashIcon dash) "regular" "size-4"
                   span_ [class_ "min-w-0 grow"] do
                     span_ [class_ "flex items-center gap-1.5"] do
@@ -2260,12 +2237,40 @@ dashboardsGet_ dg
                       when (isJust dash.starredSince) $ faSprite_ "star" "solid" "size-3 shrink-0 text-iconWarning"
                       when (sourceDashIdM == Just dash.id) $ span_ [class_ "shrink-0 rounded bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] "This dashboard"
                     span_ [class_ "block truncate text-xs text-textWeak tabular-nums"] $ toHtml meta
-                  if ro
-                    then faSprite_ "lock" "regular" "size-3.5 shrink-0 text-iconNeutral"
-                    else do
-                      span_ [class_ "shrink-0 text-xs font-medium text-textBrand opacity-0 transition-opacity duration-100 group-hover/pick:opacity-100 group-focus-visible/pick:opacity-100 group-[.htmx-request]/pick:hidden"] verb
-                      span_ [class_ "loading loading-spinner loading-xs hidden shrink-0 text-iconNeutral group-[.htmx-request]/pick:inline-block", Aria.label_ "Adding"] ""
-          li_ [class_ "px-2 py-6 text-center text-sm text-textWeak [&[hidden]]:hidden", term "hx-live:hidden" "q('#dashboard-picker li[data-dash]:not([hidden])').count > 0"]
+                rowCls = "group/pick flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left [&[hidden]]:hidden"
+                filterAttr = term "hx-live:hidden" "!this.textContent.toLowerCase().includes(q('#dashboards-modal-search').value.trim().toLowerCase())"
+            -- Read-only rows are not options: nothing to pick, but the tooltip still says why.
+            if ro
+              then div_ [data_ "dash" "", filterAttr, Aria.disabled_ "true", data_ "tippy-content" "Built-in dashboards are read-only. Duplicate one to add widgets to it.", class_ $ rowCls <> " cursor-not-allowed opacity-60"] do
+                body
+                faSprite_ "lock" "regular" "size-3.5 shrink-0 text-iconNeutral"
+              else button_
+                ( [ type_ "button"
+                  , role_ "option"
+                  , data_ "dash" ""
+                  , filterAttr
+                  , class_ $ rowCls <> " cursor-pointer hover:bg-fillWeak active:bg-fillHover [&.active]:bg-fillWeak focus-visible:bg-fillWeak focus-visible:outline-none"
+                  , hxSwap_ "none"
+                  , term "hx-on:htmx:after:request" "const s = event.detail.ctx.response.status; if (s >= 200 && s < 300) document.getElementById('dashboards-modal').checked = false"
+                  ]
+                    <> case sourceDashIdM of
+                      -- The widget already exists server-side; copy it across.
+                      Just sourceDashId -> [hxPost_ $ urls.dashboardDuplicateWidget dg.projectId dash.id widgetId (Just sourceDashId)]
+                      -- It does not: the only definition of it is the JSON the page is holding,
+                      -- so send that to the widget upsert instead. No widget_id, which is what
+                      -- makes the upsert append under a fresh id rather than overwrite the
+                      -- explorer's "visualization-widget" added last time.
+                      Nothing ->
+                        [ term "hx-put" $ urls.dashboardWidgetPut dg.projectId dash.id Nothing Nothing Nothing
+                        , hxExt_ "json-enc"
+                        , hxVals_ "js:{...JSON.parse(document.getElementById('dashboards-modal-widget-json').value || '{}')}"
+                        ]
+                )
+                do
+                  body
+                  span_ [class_ "shrink-0 text-xs font-medium text-textBrand opacity-0 transition-opacity duration-100 group-hover/pick:opacity-100 group-[.active]/pick:opacity-100 group-focus-visible/pick:opacity-100 group-[.htmx-request]/pick:hidden"] verb
+                  span_ [class_ "loading loading-spinner loading-xs hidden shrink-0 text-iconNeutral group-[.htmx-request]/pick:inline-block", Aria.label_ "Adding"] ""
+          p_ [class_ "px-2 py-6 text-center text-sm text-textWeak [&[hidden]]:hidden", term "hx-live:hidden" "q('#dashboard-picker [data-dash]:not([hidden])').count > 0"]
             $ if V.null dg.dashboards then "No dashboards yet. Create one below." else "No dashboards match your search."
   | otherwise = do
       unless dg.embedded
