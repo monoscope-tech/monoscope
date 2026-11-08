@@ -27,6 +27,7 @@ widgets:
 
   - type: 'timeseries'
     title: 'All requests'
+    description: 'Requests your services received. The Overview''s Traffic also counts outbound calls the SDK captured.'
     query: kind == "server" AND attributes.http.response.status_code != null | summarize count(*) by bin_auto(timestamp), attributes.http.response.status_code
     unit: reqs
     layout: { w: 6, h: 4 }

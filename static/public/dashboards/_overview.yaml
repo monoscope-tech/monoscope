@@ -255,9 +255,10 @@ tabs:
       # HTTP Errors Distribution
       - type: 'timeseries'
         title: 'HTTP Errors (4xx & 5xx) - Incoming'
+        description: 'Errors your services answered with. Outbound calls the SDK captured are left out.'
         theme: 'roma'
         query: |
-          {{request_kql}} and attributes.http.response.status_code != null and attributes.http.response.status_code >= 400
+          kind == "server" and attributes.http.response.status_code != null and attributes.http.response.status_code >= 400
           | extend error_category = case(attributes.http.response.status_code >= 500, "5xx", attributes.http.response.status_code >= 400, "4xx", tostring(attributes.http.response.status_code))
           | summarize count() by bin_auto(timestamp), error_category
           | order by timestamp desc
@@ -283,7 +284,7 @@ tabs:
         title: 'Requests by country'
         description: 'Where incoming requests come from, located from the client IP address. Shades are log-scaled.'
         query: &by_country |
-          {{request_kql}} and attributes.geo.country.iso_code != null
+          kind == "server" and attributes.geo.country.iso_code != null
           | summarize count() by attributes.geo.country.iso_code
         unit: reqs
         layout: { w: 8, h: 5 }
