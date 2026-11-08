@@ -1246,7 +1246,7 @@ apiTeamGet :: Projects.ProjectId -> TeamId -> ATBaseCtx TeamFull
 apiTeamGet pid tid = do
   t <- fetchTeam pid tid
   -- One users lookup for every member ('Projects.usersByIds' short-circuits on an empty vector).
-  members <- Projects.usersByIds t.members <&> fmap \u -> UserRef{id = u.id.unwrap, email = CI.original u.email, name = guarded (not . T.null) (T.strip (u.firstName <> " " <> u.lastName))}
+  members <- Projects.usersByIds t.members <&> fmap \u -> UserRef{id = u.id.unwrap, email = CI.original u.email, name = Projects.userDisplayName u}
   pure
     TeamFull
       { summary = toTeamSummary t

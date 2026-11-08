@@ -3853,11 +3853,13 @@ logIssueActivity issueId event createdBy metadataM = do
           <> logged
           <> [HI.sql| RETURNING id, issue_id), latest AS (
           SELECT DISTINCT ON (r.team_id, r.channel_id) r.id AS root_id, r.episode_id, r.first_event_id, r.threadless, e.phase, logged.id AS activity_id
-          FROM logged JOIN apis.incident_episodes e ON e.issue_id = logged.issue_id
+          FROM logged JOIN apis.issues i ON i.id = logged.issue_id
+          JOIN apis.incident_episodes e ON e.project_id = i.project_id AND e.issue_id = logged.issue_id
           JOIN apis.slack_incident_roots r ON r.episode_id = e.id
           ORDER BY r.team_id, r.channel_id, e.started_at DESC)
         INSERT INTO apis.slack_incident_deliveries (root_id, episode_id, event_id, operation, available_at, activity_id)
-        SELECT root_id, episode_id, first_event_id, 'post_activity', #{now}, activity_id FROM latest
+        SELECT root_id, episode_id, first_event_id, operation, #{now}, activity_id FROM latest
+        CROSS JOIN unnest(CASE WHEN #{changesOwnership event} THEN ARRAY['post_activity', 'update_root'] ELSE ARRAY['post_activity'] END) operation
         WHERE NOT threadless AND NOT (#{closing} AND phase <> 'active') |]
 
 
@@ -3868,6 +3870,13 @@ relayedToSlack = \case
   (IEAcknowledged; IEUnacknowledged; IEAckExpired; IEArchived; IEUnarchived; IEResolved; IEAutoResolved; IEReopened) -> True
   (IEAssigned; IEUnassigned; IECommented; IELinked; IEMerged; IESpam; IENotSpam) -> True
   (IECreated; IERegressed; IEEscalated; IEViewed) -> False
+
+
+-- | Whether the event changes who holds the issue, which its Slack root shows.
+changesOwnership :: IssueEvent -> Bool
+changesOwnership = \case
+  (IEAcknowledged; IEUnacknowledged; IEAckExpired; IEAssigned; IEUnassigned) -> True
+  (IEArchived; IEUnarchived; IEResolved; IEAutoResolved; IEReopened; IECommented; IELinked; IEMerged; IESpam; IENotSpam; IECreated; IERegressed; IEEscalated; IEViewed) -> False
 
 
 -- | Who holds an issue right now, as its Slack root shows it. Acknowledged iff

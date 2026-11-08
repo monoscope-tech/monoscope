@@ -607,7 +607,8 @@ spec = describe "Monitoring" do
         void $ call tr $ IssuesPage.resolveErrorPostH testPid notified.id.unErrorPatternId False
         closed <- slack . fst <$> captureNotifs tr (replicateM_ 2 runSlackIncidentDeliveries)
         length closed `shouldBe` 4
-        for_ closed \sd -> slackText sd `shouldSatisfy` T.isInfixOf "*Resolved"
+        -- The root says it is resolved; the reply says by whom.
+        for_ closed \sd -> slackText sd `shouldSatisfy` T.isInfixOf (bool "*Resolved*" "*Resolved by " (isJust sd.threadTs))
 
       it "keeps one error episode across different issue records and resolves its original incident link" \tr -> do
         update <- setupWithIssue tr
@@ -679,14 +680,15 @@ spec = describe "Monitoring" do
         rootTs <- dbQuery @_ @(Text, Text) tr [sql|SELECT channel_id, message_ts FROM apis.slack_incident_roots ORDER BY channel_id|] ()
         let actor = (Servant.getResponse tr.trSessAndHeader).user
             who = "*" <> Mail.personName actor <> "*"
-            deliver = slack . fst <$> captureNotifs tr (replicateM_ 4 runSlackIncidentDeliveries)
+            -- A root sends one delivery per tick, in order: three replies and two root edits.
+            deliver = slack . fst <$> captureNotifs tr (replicateM_ 6 runSlackIncidentDeliveries)
             stranded = dbQuery @_ @(Text, Text) tr [sql|SELECT operation, state FROM apis.slack_incident_deliveries WHERE state NOT IN ('delivered', 'failed')|] ()
         void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid True iid (Just 60)
         void $ call tr $ IssuesPage.triagePostH testPid iid (IssuesPage.TriageForm Nothing (Just actor.id.toText))
         void $ call tr $ IssuesPage.commentPostH testPid iid (IssuesPage.CommentForm "rolling back <the> deploy")
         delivered <- deliver
         let lifecycle = filter (isJust . (.threadTs)) delivered
-            rootEdits = [slackText sd | sd <- delivered, isNothing sd.threadTs, sd.channelId == "C1"]
+            rootEdits = [slackText sd | sd <- delivered, sd.payload ^? key "metadata" . key "event_type" . _String == Just "monoscope_incident_root", sd.channelId == "C1"]
         sort [(sd.channelId, sd.threadTs) | sd <- lifecycle] `shouldBe` sort [(c, Just ts) | (c, ts) <- rootTs, _ <- [1 .. 3 :: Int]]
         -- Acknowledging and assigning also edit the root, so the channel sees who holds it.
         rootEdits `shouldSatisfy` \case [_, assigned] -> all (`T.isInfixOf` assigned) [":eyes: Acknowledged by " <> who, ":bust_in_silhouette: Assigned to " <> who]; _ -> False
@@ -751,7 +753,7 @@ spec = describe "Monitoring" do
         let messages = slack $ replies <> edits
         length messages `shouldBe` 4
         sort [(sd.channelId, sd.threadTs) | sd <- messages, isJust sd.threadTs] `shouldBe` sort [(sd.channelId, Just ts) | sd <- messages, AE.Object obj <- [sd.payload], Just (AE.String ts) <- [KM.lookup "ts" obj]]
-        for_ messages \sd -> slackText sd `shouldContainAll` ["*Resolved", actor.firstName]
+        for_ messages \sd -> slackText sd `shouldContainAll` [bool "*Resolved*" "*Resolved by " (isJust sd.threadTs), actor.firstName]
         -- A person resolved it: the root says so and does not claim a measured recovery.
         for_ [sd | sd <- messages, isNothing sd.threadTs] \sd -> (slackText sd `shouldContainAll` [":white_check_mark: *Resolved*", issue.id.toText]) >> (slackText sd `shouldNotSatisfy` T.isInfixOf "Recovered")
         fst <$> captureNotifs tr runSlackIncidentDeliveries `shouldReturn` []

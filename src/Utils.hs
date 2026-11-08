@@ -7,6 +7,7 @@ module Utils (
   onpointerdown_,
   jsonValueToHtmlTree,
   truncateMiddle,
+  truncateText,
   JSONHttpApiData (..),
   parseTime,
   copyToClipboardAttr_,
@@ -306,6 +307,14 @@ fieldContextMenuItems_ ctx = traverse_ \case
 -- ["","abc","abcdef","a\8230fghij"]
 -- >>> all (\n -> T.length (truncateMiddle n "abcdefghij") <= max 0 n) [0 .. 12]
 -- True
+-- | Cut to @n@ characters, marking the cut.
+--
+-- >>> map (`truncateText` "abcdef") [3, 6]
+-- ["abc\8230","abcdef"]
+truncateText :: Int -> Text -> Text
+truncateText n t = if T.length t > n then T.take n t <> "…" else t
+
+
 truncateMiddle :: Int -> Text -> Text
 truncateMiddle n t
   | T.length t <= n = t

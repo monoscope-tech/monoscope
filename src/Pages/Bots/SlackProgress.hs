@@ -13,7 +13,7 @@ import Models.Apis.Investigations qualified as Investigations
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId, encodeEnumSC)
 import Relude
-import Utils (fmtDate, hostPath)
+import Utils (fmtDate, hostPath, truncateText)
 import Web.HttpApiData (parseUrlPiece)
 import Web.Links (CookieProtectedRoutes (..), urls)
 
@@ -118,7 +118,7 @@ snapshot messageTs history = do
             "run_sql_query" -> "Query telemetry with SQL"
             "list_metrics" -> "List available metrics"
             _ -> "Check an evidence request"
-    clip t = let flat = unwords (words t) in if T.length flat > 90 then T.take 89 flat <> "…" else flat
+    clip = truncateText 89 . unwords . words
 
 
 -- | Retain the history link after stopping; a claimed action may have taken effect.

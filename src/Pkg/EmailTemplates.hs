@@ -64,7 +64,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ContainerTypes (Scope (..))
 import Models.Telemetry.Report qualified as Report
 import Relude
-import Utils (fmtDate, formatWithCommas, isoT, kqlQuoted, nonEmptyT, showFFloat', toUriStr)
+import Utils (fmtDate, formatWithCommas, isoT, kqlQuoted, nonEmptyT, showFFloat', toUriStr, truncateText)
 import Web.Links (LogExplorerRoutes' (..), logExplorerLinks)
 
 
@@ -565,10 +565,6 @@ errorCard projectUrl errorsUrl chartUrlM e =
   where
     hasDistinctRootCause = e.rootErrorType /= e.errorType || e.rootErrorMessage /= e.message
     linkStyle = "color: #377cfb; text-decoration: none;"
-
-
-truncateText :: Int -> Text -> Text
-truncateText n t = if T.length t > n then T.take n t <> "…" else t
 
 
 -- =============================================================================

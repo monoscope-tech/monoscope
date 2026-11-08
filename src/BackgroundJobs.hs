@@ -5064,12 +5064,11 @@ runSlackIncidentDeliveries = do
                 Incidents.PostAnalysis ts _ -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
                 Incidents.UpdateRoot ts -> (Notify.SlackUpdate $ Incidents.slackTimestampText ts, Nothing)
                 Incidents.PostActivity ts _ -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
-              -- Every root render states who holds the issue now.
-              root = Mail.withOwner delivery.owner $ Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
               payload = case delivery.operation of
                 (Incidents.PostReply _; Incidents.PostAnalysis _ _) -> delivery.payload
                 Incidents.PostActivity _ note -> Mail.activityReply note
-                (Incidents.PostRoot; Incidents.PostStandalone; Incidents.UpdateRoot _) -> root
+                -- Every root render states who holds the issue now.
+                (Incidents.PostRoot; Incidents.PostStandalone; Incidents.UpdateRoot _) -> Mail.withOwner delivery.owner $ Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
               message payload' =
                 Notify.SlackData
                   { Notify.channelId = delivery.channelId
@@ -5085,16 +5084,8 @@ runSlackIncidentDeliveries = do
             (Incidents.PostRoot; Incidents.PostStandalone; Incidents.PostReply{}; Incidents.UpdateRoot{}; Incidents.PostActivity{}) -> pure True
           if not allowed
             then pure $ Incidents.DeliveryRejected "incident_routine_authority_withdrawn"
-            else do
-              sent <- Notify.deliverSlack operation (message payload)
-              -- An acknowledgement or assignment also shows on the root, so the
-              -- channel sees someone is on it without opening the thread.
-              case (delivery.operation, sent) of
-                (Incidents.PostActivity rootTs note, Notify.SlackSent _)
-                  | note.event `elem` [Issues.IEAcknowledged, Issues.IEUnacknowledged, Issues.IEAckExpired, Issues.IEAssigned, Issues.IEUnassigned] ->
-                      void $ Notify.deliverSlack (Notify.SlackUpdate $ Incidents.slackTimestampText rootTs) (message root){Notify.threadTs = Nothing, Notify.webhookUrl = Nothing}
-                _ -> pass
-              pure $ case sent of
+            else
+              Notify.deliverSlack operation (message payload) <&> \case
                 Notify.SlackSent ts -> maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
                 -- Without a bot token nothing can ever recover the timestamp.
                 Notify.SlackAccepted ->

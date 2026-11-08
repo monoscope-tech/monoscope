@@ -210,6 +210,11 @@ episodeSource alias =
    in [HI.sql|jsonb_build_object('tag', CASE ^{e}.source_kind WHEN 'monitor' THEN 'MonitorIncident' WHEN 'issue' THEN 'IssueIncident' WHEN 'error' THEN 'ErrorIncident' END, 'contents', ^{e}.source_id)|]
 
 
+-- | A member's name as Slack shows it; NULL when they have none.
+displayName :: Text -> HI.Sql
+displayName alias = let u = rawSql alias in [HI.sql|NULLIF(btrim(concat_ws(' ', ^{u}.first_name, ^{u}.last_name)), '')|]
+
+
 -- | Rebuild 'DeliveryOperation' from the stored operation and its root timestamp.
 deliveryOperation :: HI.Sql
 deliveryOperation =
@@ -222,8 +227,8 @@ deliveryOperation =
     WHEN d.operation = 'post_activity' THEN jsonb_build_object('tag', 'PostActivity', 'contents', jsonb_build_array(r.message_ts,
       (SELECT jsonb_build_object('event', a.event, 'at', a.created_at, 'metadata', a.metadata,
           'issue', (SELECT title FROM apis.issues WHERE id = a.issue_id),
-          'actor', NULLIF(btrim(concat_ws(' ', actor.first_name, actor.last_name)), ''),
-          'assignee', NULLIF(btrim(concat_ws(' ', assignee.first_name, assignee.last_name)), ''))
+          'actor', ^{displayName "actor"},
+          'assignee', ^{displayName "assignee"})
         FROM apis.issue_activity_log a LEFT JOIN users.users actor ON actor.id = a.created_by
         LEFT JOIN users.users assignee ON assignee.id::text = a.metadata ->> 'assignee_id'
         WHERE a.id = d.activity_id)))
@@ -448,7 +453,8 @@ resolveErrorIncident pid errorId actor now message = Hasql.transaction TxS.ReadC
              (episode.source_kind = 'issue' AND issue.project_id = #{pid} AND issue.target_hash = #{hash} AND issue.issue_type = ^{enumLit Issues.RuntimeException}))
           ORDER BY 1, 2|]
       results <- forM sources \(source, iid) ->
-        recordIncidentEventTx
+        let (rootPayload, replyPayload) = message iid
+         in recordIncidentEventTx
           IncidentUpdate
             { projectId = pid
             , source
@@ -456,8 +462,8 @@ resolveErrorIncident pid errorId actor now message = Hasql.transaction TxS.ReadC
             , change = IncidentResolved actor
             , delivery = PublishIncident
             , issueId = iid
-            , rootPayload = fst $ message iid
-            , replyPayload = snd $ message iid
+            , rootPayload
+            , replyPayload
             , destinations = []
             }
       case [c | Rejected c <- results] of
@@ -806,27 +812,27 @@ claimSlackDeliveriesTx now = do
     <> deliveryOperation
     -- An inherited root's first event replies with the full root message.
     <> [HI.sql|, CASE WHEN d.operation = 'post_analysis' THEN d.agent_payload
-          -- A lifecycle reply renders from its note; the payload is the root as it
-          -- stands, so the root can show the change in ownership.
-          WHEN d.operation = 'post_activity' THEN latest.root_payload
+          -- A lifecycle reply renders from its note; its root edit re-renders the
+          -- root as it stands, which only ownership changes.
+          WHEN d.operation = 'post_activity' THEN '{}'::jsonb
+          WHEN d.activity_id IS NOT NULL THEN (SELECT latest.root_payload FROM apis.incident_events latest
+            WHERE latest.episode_id = d.episode_id ORDER BY latest.observed_at DESC, latest.id DESC LIMIT 1)
           WHEN d.operation = 'post_reply' THEN (CASE WHEN d.event_id = r.first_event_id THEN e.root_payload ELSE e.reply_payload END)
             || CASE WHEN d.reply_broadcast THEN '{"reply_broadcast": true}'::jsonb ELSE '{}'::jsonb END
           ELSE e.root_payload END,
         initial.root_payload,
         d.lease_token, d.attempts,
-        (SELECT jsonb_build_object('acknowledgedBy', NULLIF(btrim(concat_ws(' ', acker.first_name, acker.last_name)), ''),
+        CASE WHEN d.operation IN ('post_root', 'update_root') THEN (SELECT jsonb_build_object('acknowledgedBy', ^{displayName "acker"},
             'acknowledgedUntil', CASE WHEN i.acknowledged_until > #{now} THEN i.acknowledged_until END,
-            'assignee', NULLIF(btrim(concat_ws(' ', assignee.first_name, assignee.last_name)), ''))
+            'assignee', ^{displayName "assignee"})
           FROM apis.incident_episodes episode JOIN apis.issues i ON i.id = episode.issue_id
           LEFT JOIN users.users acker ON acker.id = i.acknowledged_by
           LEFT JOIN users.users assignee ON assignee.id = i.assignee_id
-          WHERE episode.id = d.episode_id AND (i.acknowledged_until > #{now} OR i.assignee_id IS NOT NULL))
+          WHERE episode.id = d.episode_id AND (i.acknowledged_until > #{now} OR i.assignee_id IS NOT NULL)) END
       FROM claimed d JOIN apis.incident_events e ON e.id = d.event_id
       JOIN apis.slack_incident_roots r ON r.id = d.root_id
       JOIN LATERAL (SELECT root_payload FROM apis.incident_events
         WHERE episode_id = d.episode_id ORDER BY observed_at, (event_kind = 'alert') DESC, id LIMIT 1) initial ON TRUE
-      JOIN LATERAL (SELECT root_payload FROM apis.incident_events
-        WHERE episode_id = d.episode_id ORDER BY observed_at DESC, id DESC LIMIT 1) latest ON TRUE
       ORDER BY d.sequence|]
 
 
