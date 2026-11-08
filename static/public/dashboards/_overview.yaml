@@ -491,6 +491,15 @@ tabs:
         unit: ns
         layout: { w: 6, h: 4 }
 
+      - type: heatmap
+        title: 'Latency distribution'
+        description: 'Every request in a log-scaled latency bucket over time, shaded by count, errors in red. Bands a percentile line averages away (a fast cache hit beside a slow miss) show as separate stripes.'
+        query: |
+          resource.service.name == "{{var-service}}" and kind == "server" and duration > 0
+          | summarize count() by bin_auto(timestamp), log_bin(duration), iff(status_code == "ERROR", "error", "ok")
+        unit: ns
+        layout: { w: 12, h: 4 }
+
       - type: 'timeseries'
         title: 'Errors'
         theme: 'roma'
@@ -1140,6 +1149,15 @@ tabs:
           ORDER BY {{table_sort}}
           LIMIT 10
         default_sort: "COUNT(*) DESC"
+
+      - type: heatmap
+        title: 'Query latency distribution'
+        description: 'Every query in a log-scaled latency bucket over time, shaded by count, errors in red. A second band above the main one is usually one slow query pattern.'
+        query: |
+          attributes.db.system.name == "{{var-database}}" and duration > 0
+          | summarize count() by bin_auto(timestamp), log_bin(duration), iff(status_code == "ERROR", "error", "ok")
+        unit: ns
+        layout: { w: 12, h: 4 }
 
       # Query Latency Over Time
       - type: 'timeseries_line'

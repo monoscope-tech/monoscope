@@ -34,6 +34,7 @@ This document provides a complete reference for the Kusto Query Language (KQL) i
   - [ago()](#ago)
   - [bin()](#bin)
   - [bin_auto()](#bin_auto)
+  - [log_bin()](#log_bin)
 - [Field References](#field-references)
   - [Simple Fields](#simple-fields)
   - [Nested JSON Fields](#nested-json-fields)
@@ -663,6 +664,20 @@ bin_auto(timestamp_field)
 | 2 - 7 days | 1 hour |
 | 7 - 30 days | 6 hours |
 | 30+ days | 1 day |
+
+### log_bin()
+
+Buckets a numeric value on a logarithmic ladder, four buckets per decade (1, 1.78, 3.16, 5.62 × 10ⁿ), returning each bucket's lower bound. It is what the **heatmap** visualization groups by: latency spans orders of magnitude, so equal-width buckets would put every request in the first one.
+
+```kusto
+log_bin(numeric_field)
+```
+
+```kusto
+// Latency heatmap with failing requests drawn in red (the Explorer's Heatmap tab default)
+kind == "server" | where duration > 0
+| summarize count() by bin_auto(timestamp), log_bin(duration), iff(status_code == "ERROR", "error", "ok")
+```
 
 **Examples:**
 ```kusto

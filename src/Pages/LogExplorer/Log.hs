@@ -736,6 +736,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
         Widget.VizTimeseries -> LogQueries.Data
         Widget.VizTimeseriesLine -> LogQueries.Data
         Widget.VizTopList -> LogQueries.Data
+        Widget.VizHeatmap -> LogQueries.Data
       -- Chart viz types and trace deep links don't show the log list: its rows would be a
       -- query nobody sees, contending with the one they do.
       preloadUrl = guard (not (Widget.vizIsChart effectiveVizType) && isNothing showTraceM) $> explorerUrl pid dataEndpoint def{query = queryM', cols = cols', since = sinceM, from = fromM, to = toM, source = sourceM, environment = sess.environment, serviceScope = sess.service}

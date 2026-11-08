@@ -374,7 +374,85 @@ const chartRows = (data: ChartDataResponse): ChartRow[] =>
 
 const MAX_VISIBLE_SERIES = 8;
 
-export const isLogAxis = (w: Pick<WidGetData, 'chartType' | 'widgetType' | 'unit'>) => w.chartType === 'line' && w.widgetType !== 'timeseries_stat' && DURATION_UNITS.has(w.unit ?? '');
+// A heatmap reads `summarize count() by bin_auto(timestamp), log_bin(x)[, iff(status_code == "ERROR", "error", "ok")]`:
+// time across, buckets up the side in value order, the count as shade. Cells holding errors are drawn
+// in the error colour, as Dash0 does, so "are the slow requests the failing ones?" is one glance.
+export const heatmapOptions = (opt: any, source: ChartRow[], unit: string, styles: { brandColor: string; textColor: string; errorColor: string; tooltipBg: string }) => {
+  const [header = [], ...rows] = source;
+  const cols = header.slice(1).map((h, i) => { const [v, status] = String(h).split(' / '); return { v: Number(v), err: status === 'error', col: i + 1 }; }).filter((c) => Number.isFinite(c.v));
+  const present = [...new Set(cols.map((c) => c.v))].sort((x, y) => x - y);
+  // log_bin's quarter-decade ladder keeps its empty steps, so equal heights mean equal ratios.
+  const step = (v: number) => Math.round(Math.log10(v) * 4);
+  const onLadder = present.length > 1 && present.every((v) => v > 0 && Math.abs(Math.log10(v) * 4 - step(v)) < 1e-6);
+  const buckets = onLadder ? Array.from({ length: step(present.at(-1)!) - step(present[0]) + 1 }, (_, i) => 10 ** ((step(present[0]) + i) / 4)) : present;
+  const colsOf = (v: number) => cols.filter((c) => (onLadder ? step(c.v) === step(v) : c.v === v));
+  const label = (v: number) => (DURATION_UNITS.has(unit) ? formatDuration(convertToNanoseconds(v, unit)).replace('.0', '') : formatNumber(v));
+  const sorted = [...rows].sort((r1, r2) => Number(r1[0]) - Number(r2[0]));
+  const times = sorted.map((r) => Number(r[0]));
+  // [x, y, count, errors, shade]: shaded by log count so one slow request stays visible beside a thousand fast ones.
+  const cells = sorted.flatMap((r, x) => buckets.flatMap((v, y) => {
+    const sum = (cs: typeof cols) => cs.reduce((acc, c) => acc + (Number(r[c.col]) || 0), 0);
+    const n = sum(colsOf(v)), e = sum(colsOf(v).filter((c) => c.err));
+    return n > 0 ? [[x, y, n, e, Math.log10((e || n) + 1)]] : [];
+  }));
+  const multiDay = times.length > 1 && times.at(-1)! - times[0] > 86_400_000;
+  const time = (t: number, full = false) => window.echarts.time.format(t, full || multiDay ? '{MM}-{dd} {HH}:{mm}' : '{HH}:{mm}', false);
+  const axis = { axisTick: { show: false }, axisLine: { show: false }, splitLine: { show: false } };
+  // Errors in red over the brand-blue mass, as Dash0 separates them; a 1px gap keeps each cell legible.
+  // Ramps are solid mixes into the card surface (bgRaised, which the tooltip shares), not alpha:
+  // the count scale, drawn off the plot, then shows the same faint end the cells do.
+  const layer = (name: string, data: number[][], seriesIndex: number, color: string, floor: number) => {
+    const max = Math.max(1, ...data.map((d) => d[4]));
+    return {
+      visual: { show: false, seriesIndex, dimension: 4, min: Math.log10(2), max, inRange: { color: [window.echarts.color.lerp(floor, [styles.tooltipBg, color]), color] } },
+      series: { name, type: 'heatmap', data, itemStyle: { color, borderColor: styles.tooltipBg, borderWidth: 1 }, emphasis: { itemStyle: { borderColor: styles.textColor, borderWidth: 1 } } },
+    };
+  };
+  const errorCells = cells.filter((c) => c[3]), okCells = cells.filter((c) => !c[3]);
+  // A lone error is still the signal: the error ramp starts nearly saturated.
+  const layers = [layer('OK', okCells, 0, styles.brandColor, 0.3), layer('Errors', errorCells, 1, styles.errorColor, 0.75)];
+  const maxCount = Math.max(1, ...cells.map((c) => c[2]));
+  // The count scale reads in counts though the shade is log-scaled, as Dash0's "# of spans 0 ▭ max".
+  const scale = { ...layers[0].visual, show: true, orient: 'horizontal', top: 0, right: 0, itemWidth: 8, itemHeight: 64, calculable: false, text: [`${formatNumber(maxCount)} (max)`, 'count: 1'], textGap: 6, textStyle: { color: styles.textColor, fontSize: 10 } };
+  return {
+    ...opt,
+    dataset: undefined,
+    // Click "OK" to hide it and leave only the failing cells.
+    legend: { ...opt.legend, show: true, top: 0, data: errorCells.length ? ['Errors', 'OK'] : ['OK'], icon: 'rect', itemWidth: 8, itemHeight: 8, textStyle: { ...opt.legend?.textStyle, color: styles.textColor } },
+    xAxis: { ...axis, type: 'category', data: times, axisLabel: { color: styles.textColor, hideOverlap: true, formatter: (t: string) => time(Number(t)) } },
+    yAxis: { ...axis, type: 'category', data: buckets.map(label), axisLabel: { color: styles.textColor, hideOverlap: true } },
+    visualMap: [scale, layers[1].visual],
+    tooltip: {
+      ...opt.tooltip,
+      trigger: 'item',
+      formatter: ({ value: [x, y, n, e] }: { value: number[] }) =>
+        `${time(times[x], true)}<br/>${label(buckets[y])}${buckets[y + 1] ? ` – ${label(buckets[y + 1])}` : '+'}: <b>${formatNumber(n)}</b>${e ? `, <b>${formatNumber(e)} errors</b>` : ''}`,
+    },
+    series: layers.map((l) => l.series),
+  };
+};
+
+// The y ceiling of the series still shown: hiding p95 in the legend rescales to what is left
+// instead of leaving the rest pressed against the floor. Lines peak per point, stacked bars per row.
+export const visibleMax = (source: ChartRow[], line: boolean, selected?: Record<string, boolean>) => {
+  const [header = [], ...rows] = source;
+  const cols = header.slice(1).flatMap((h, i) => (selected?.[String(h)] === false ? [] : [i + 1]));
+  const peaks = rows.map((r) => { const vs = cols.map((c) => Number(r[c])).filter(Number.isFinite); return line ? Math.max(...vs) : vs.reduce((a, b) => a + b, 0); });
+  const max = Math.max(...peaks.filter(Number.isFinite));
+  return Number.isFinite(max) && max > 0 ? max : undefined;
+};
+
+// Sets the ceiling, and a duration axis's labels in the one unit that ceiling reads in.
+const fitYAxis = (opt: any, unit: string, max: number | undefined) => {
+  opt.yAxis = { ...opt.yAxis, max };
+  if (DURATION_UNITS.has(unit) && max) {
+    // The server's formatter still decides which ticks are labelled (max-only axes blank the rest).
+    const base = baseYFormatters.get(opt) ?? opt.yAxis.axisLabel?.formatter;
+    baseYFormatters.set(opt, base);
+    const fmt = durationAxisFormatter(convertToNanoseconds(max, unit));
+    opt.yAxis.axisLabel = { ...opt.yAxis.axisLabel, formatter: (v: number, i: number) => (typeof base === 'function' && base(v, i) === '' ? '' : fmt(convertToNanoseconds(v, unit))) };
+  }
+};
 
 // Keep dense charts legible without changing their totals: rank series by peak value,
 // retain the leaders, and fold the rest into one explicitly labelled series.
@@ -474,6 +552,7 @@ export const createSeriesConfig = (widgetData: WidGetData, name: string, i: numb
 export const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) => {
   if (!data) return opt;
 
+  if (widgetData.chartType === 'heatmap') return heatmapOptions(opt, data, widgetData.unit || 'ns', getChartStyles());
   const source = collapseLongTail(data, widgetData.summarizeBy && widgetData.summarizeBy !== 'sum' ? (vs) => Math.max(...vs) : undefined);
   opt.dataset = { ...opt.dataset, source };
   // Counts must not get fractional ticks (0.2, 0.6) when the peak is small.
@@ -558,7 +637,8 @@ const setStatValue = (widgetData: WidGetData, stats: ChartDataResponse['stats'],
   }
   // textContent (not innerHTML): values are plain text, and the max/min prefix is a literal "<"/">".
   if ((stats.count ?? 0) > 0) {
-    const formatted = formatStatValue(statScalar(stats, widgetData.summarizeBy, from, to), widgetData.unit || '', widgetData.decimals);
+    // A heatmap's unit labels its buckets; its cells, and so its headline, are counts.
+    const formatted = widgetData.chartType === 'heatmap' ? formatNumber(Number(stats.sum)) : formatStatValue(statScalar(stats, widgetData.summarizeBy, from, to), widgetData.unit || '', widgetData.decimals);
     value.textContent = widgetData.summarizeByPrefix ? `${widgetData.summarizeByPrefix} ${formatted}` : formatted;
   } else {
     // No error rows is zero errors, not missing data.
@@ -739,24 +819,8 @@ const applyChartResponse = (chart: any, opt: any, widgetData: WidGetData, data: 
     ? h : h.substring(0, 75) + (h.length > 75 ? '...' : ''));
   if (opt.xAxis?.type !== 'category') opt.xAxis = { ...opt.xAxis, min: data.from, max: data.to };
   opt.dataset.source = [headers || [], ...rows];
-  const unit = widgetData.unit ?? '';
-  // Latency lines read on a log axis: one 6-minute request beside 40ms ones flattened every
-  // percentile onto zero on a linear one. Each power of ten is labelled in its own unit.
-  if (isLogAxis(widgetData)) {
-    opt.dataset.source = [headers || [], ...rows.map(([t, ...vs]) => [t, ...vs.map((v) => (typeof v === 'number' && v <= 0 ? null : v))])];
-    opt.yAxis = { ...opt.yAxis, type: 'log', logBase: 10, min: undefined, max: undefined, minInterval: undefined, axisLabel: { ...opt.yAxis.axisLabel, showMaxLabel: false, formatter: (v: number) => formatDuration(convertToNanoseconds(v, unit)).replace('.0', '') } };
-    drawSized(chart, el, updateChartConfiguration(widgetData, opt, opt.dataset.source), unit, true);
-    return;
-  }
-  const maximum = widgetData.chartType === 'line' ? data.stats?.max : data.stats?.max_group_sum;
-  opt.yAxis = { ...opt.yAxis, max: maximum != null && Number.isFinite(maximum) && maximum > 0 ? maximum : undefined };
-  if (DURATION_UNITS.has(unit) && opt.yAxis.max) {
-    // The server's formatter still decides which ticks are labelled (max-only axes blank the rest).
-    const base = baseYFormatters.get(opt) ?? opt.yAxis.axisLabel?.formatter;
-    baseYFormatters.set(opt, base);
-    const fmt = durationAxisFormatter(convertToNanoseconds(opt.yAxis.max, unit));
-    opt.yAxis.axisLabel = { ...opt.yAxis.axisLabel, formatter: (v: number, i: number) => (typeof base === 'function' && base(v, i) === '' ? '' : fmt(convertToNanoseconds(v, unit))) };
-  }
+  // A partial frame carries no stats yet; its axis stays automatic until the complete one lands.
+  fitYAxis(opt, widgetData.unit ?? '', data.stats == null ? undefined : visibleMax(opt.dataset.source, widgetData.chartType === 'line', legendSelections.get(chart)));
   drawSized(chart, el, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, true);
 };
 
@@ -1171,6 +1235,9 @@ export const chartWidget = (widgetData: WidGetData) => {
       chart.setOption({ legend: { selected } });
     }
     legendSelections.set(chart, selected);
+    if (typeof opt.yAxis?.max === 'function' || !['line', 'bar'].includes(widgetData.chartType)) return;
+    fitYAxis(opt, widgetData.unit ?? '', visibleMax(opt.dataset.source, widgetData.chartType === 'line', selected));
+    chart.setOption({ yAxis: { max: opt.yAxis.max, axisLabel: opt.yAxis.axisLabel } });
   });
 
   (window as any)[`${chartType}Chart`] = chart;
@@ -1180,7 +1247,8 @@ export const chartWidget = (widgetData: WidGetData) => {
     if (opt.series?.[0]?.backgroundStyle) {
       opt.series[0].backgroundStyle = { color: styles.chartBg };
     }
-    drawSized(chart, chartEl, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, notMerge);
+    // A heatmap replaces both axes, which a merge would keep from the server's time-series shell.
+    drawSized(chart, chartEl, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, notMerge || widgetData.chartType === 'heatmap');
     drawnResponse.delete(chart);
     chartRefreshState.set(chart, { url: chartDataUrl(widgetData), hasData: (opt.dataset.source?.length ?? 0) > 1, failures: 0, retryAt: 0 });
     applyHighlightBand(chart, widgetData);

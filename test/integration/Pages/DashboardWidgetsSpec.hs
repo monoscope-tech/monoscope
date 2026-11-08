@@ -1231,6 +1231,12 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     series <- run [] Widget.WTTimeseries "name != null"
     map (.error) [logs, table, series] `shouldBe` [Nothing, Nothing, Nothing :: Maybe Text]
     (V.length logs.dataText, V.null table.dataText, V.null series.dataset) `shouldBe` (1, False, False)
+    -- A heatmap's default query buckets durations on log_bin's quarter-decade ladder, split by status.
+    heat <- run [] Widget.WTHeatmap "name != null"
+    let ladder h = case T.splitOn " / " h of
+          [v, status] | Just x <- readMaybe @Double (toString v) -> status `elem` ["ok", "error"] && abs (logBase 10 x * 4 - fromInteger (round (logBase 10 x * 4))) < 1e-6
+          _ -> False
+    (heat.error :: Maybe Text, V.length heat.headers > 1, all ladder (V.drop 1 heat.headers)) `shouldBe` (Nothing, True, True)
     for_ ["name != null | summarize dcount(name)", "name != null"] \q -> do
       md <- run [] Widget.WTStat q
       (md.error :: Maybe Text, (> 0) <$> (md.dataFloat :: Maybe Double)) `shouldBe` (Nothing, Just True)

@@ -142,10 +142,10 @@ data WidgetType
 --
 -- >>> import Data.Text.Display (display)
 -- >>> map display [minBound .. maxBound :: VizType]
--- ["logs","timeseries","timeseries_line","top_list","patterns","sessions"]
--- >>> [display w | Just w <- map vizWidget [minBound ..]] == map display [VizLogs .. VizTopList]
+-- ["logs","timeseries","timeseries_line","top_list","heatmap","patterns","sessions"]
+-- >>> [display w | Just w <- map vizWidget [minBound ..]] == map display [VizLogs .. VizHeatmap]
 -- True
-data VizType = VizLogs | VizTimeseries | VizTimeseriesLine | VizTopList | VizPatterns | VizSessions
+data VizType = VizLogs | VizTimeseries | VizTimeseriesLine | VizTopList | VizHeatmap | VizPatterns | VizSessions
   deriving stock (Bounded, Enum, Eq, Read, Show)
   deriving (AE.ToJSON, Display, FromHttpApiData, ToSchema) via WrappedEnumSC 'Nothing "Viz" VizType
 
@@ -157,6 +157,7 @@ vizWidget = \case
   VizTimeseries -> Just WTTimeseries
   VizTimeseriesLine -> Just WTTimeseriesLine
   VizTopList -> Just WTTopList
+  VizHeatmap -> Just WTHeatmap
   VizPatterns -> Nothing
   VizSessions -> Nothing
 
@@ -175,6 +176,7 @@ vizDraws = \case
   VizTimeseries -> (/= Categories)
   VizTimeseriesLine -> (/= Categories)
   VizTopList -> (== Categories)
+  VizHeatmap -> (/= Categories)
   VizLogs -> (== Events)
   VizPatterns -> (== Events)
   VizSessions -> (== Events)
@@ -498,6 +500,8 @@ data WidgetDataset = WidgetDataset
 -- (Just "name == \"GET\" | summarize count() by bin_auto(timestamp), name",DTMetric)
 -- >>> chartQuery (def & #wType .~ WTTopList & #query ?~ "name == \"GET\" | summarize count() by name")
 -- (Just "name == \"GET\" | summarize count() by name",DTText)
+-- >>> chartQuery (def & #wType .~ WTHeatmap & #query ?~ "kind == \"server\"")
+-- (Just "kind == \"server\" | where duration > 0 | summarize count(*) by bin_auto(timestamp), log_bin(duration), iff(status_code == \"ERROR\", \"error\", \"ok\")",DTMetric)
 -- >>> chartQuery (def & #wType .~ WTDistribution & #query ?~ "summarize count() by resource.service.name")
 -- (Just "summarize count() by resource.service.name",DTText)
 chartQuery :: Widget -> (Maybe Text, Charts.DataType)
@@ -508,13 +512,17 @@ chartQuery w
   | otherwise = (shape <$> w.query, dataType)
   where
     isStat = w.wType == WTStat
-    (suffix, dataType) = if isStat then ("", Charts.DTFloat) else (" by bin_auto(timestamp)", Charts.DTMetric)
+    (summary, dataType)
+      | isStat = ("summarize count(*)", Charts.DTFloat)
+      -- Latency over time on log buckets, Datadog's default for span durations.
+      | w.wType == WTHeatmap = ("where duration > 0 | summarize count(*) by bin_auto(timestamp), log_bin(duration), iff(status_code == \"ERROR\", \"error\", \"ok\")", Charts.DTMetric)
+      | otherwise = ("summarize count(*) by bin_auto(timestamp)", Charts.DTMetric)
     shape q = case parseQueryToAST q of
       -- Let the query handler report errors in the original malformed query.
       Left _ -> q
       Right ast ->
         let (summarized, binned) = mapAccumR addBin False ast
-         in if not summarized then foldMap (<> " | ") (nonEmptyT (Just (T.strip q))) <> "summarize count(*)" <> suffix else if binned == ast then q else toQText binned
+         in if not summarized then foldMap (<> " | ") (nonEmptyT (Just (T.strip q))) <> summary else if binned == ast then q else toQText binned
     addBin False section@(SummarizeCommand aggs by)
       | isStat || resultShape [section] == TimeSeries = (True, section)
       | otherwise = (True, SummarizeCommand aggs $ Just $ SummarizeByClause $ ByBinFunc (BinAuto $ Subject "timestamp" "timestamp" []) : foldMap coerce by)
@@ -1420,7 +1428,8 @@ renderStatContent widget valueM = do
 
 renderChart :: Widget -> Html ()
 renderChart widget = do
-  let unit = fromMaybe "" widget.unit
+  -- A heatmap's unit labels its buckets; its cells, and so its headline, are counts.
+  let unit = bool (fromMaybe "" widget.unit) "" (widget.wType == WTHeatmap)
       -- Summing latencies or percentages ("5.3s" of p99s) means nothing; unless asked, those headline their peak.
       summarize = fromMaybe (bool SBSum SBMax (isJust (unitNanos unit) || unit == "%")) widget.summarizeBy
       summed = summarize == SBSum

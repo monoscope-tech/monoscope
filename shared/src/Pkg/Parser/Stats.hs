@@ -887,8 +887,20 @@ aggFunctionParser =
        , try pToFloat
        , try pToInt
        , try pToString
+       , try pLogBin
        , withoutAlias $ Plain <$> pSubject
        ]
+
+
+-- | A heatmap bucket, usable wherever a computed column is: @extend b = log_bin(duration)@ or
+-- @summarize count() by bin_auto(timestamp), log_bin(duration)@.
+--
+-- >>> display <$> parse pLogBin "" "log_bin(duration)"
+-- Right "(power(10, floor(log10(greatest((duration)::float, 1)) * 4) / 4)::float"
+-- >>> toQText <$> parse pLogBin "" "log_bin(duration)"
+-- Right "log_bin(duration)"
+pLogBin :: Parser AggFunction
+pLogBin = withoutAlias $ ArithExpr . SVal <$> (lookAhead (string "log_bin(") *> pValues)
 
 
 -- | Convert AggFunction to KQL syntax (NOT SQL - use Display for SQL)
@@ -1076,7 +1088,7 @@ pSummarizeByClause = SummarizeByClause <$> (string "by" *> space *> pByClauseIte
     -- Order matters: bin functions, then actual scalar functions (with parens), then plain subjects
     pByClauseItem = choice @[] [try (ByBinFunc <$> pBinFunction), try (ByScalarFunc <$> pScalarFuncOnly), BySubject <$> pSubject]
     -- Scalar-only parsers for by clause (not aggregations like sum/count/avg)
-    pScalarFuncOnly = choice @[] [try pCoalesce, try pStrcat, try pIff, try pCase, try pRound, try pToFloat, try pToInt, try pToString]
+    pScalarFuncOnly = choice @[] [try pCoalesce, try pStrcat, try pIff, try pCase, try pRound, try pToFloat, try pToInt, try pToString, try pLogBin]
 
 
 instance ToQueryText SummarizeByClause where

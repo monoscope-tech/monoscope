@@ -361,7 +361,7 @@ pAgoFunction = do
 
 -- | KQL scalar function names (longer names first to avoid prefix matching)
 scalarFuncNames :: [Text]
-scalarFuncNames = ["isnotnull", "isnotempty", "isnull", "isempty", "coalesce", "strcat", "iff", "iif", "todouble", "tofloat", "tolong", "toint", "tostring", "tobool"]
+scalarFuncNames = ["isnotnull", "isnotempty", "isnull", "isempty", "coalesce", "strcat", "iff", "iif", "todouble", "tofloat", "tolong", "toint", "tostring", "tobool", "log_bin"]
 
 
 -- | Boolean scalar functions that can be used as standalone expressions in filters
@@ -1329,12 +1329,16 @@ unaryFuncSQL =
     , ("isnotnull", (<> " IS NOT NULL"))
     , ("isempty", \v -> "(" <> v <> " IS NULL OR (" <> v <> ")::text = '')")
     , ("isnotempty", \v -> "(" <> v <> " IS NOT NULL AND (" <> v <> ")::text != '')")
+    , -- A heatmap's latency bucket: four per decade (1, 1.78, 3.16, 5.62 × 10ⁿ), the lower bound.
+      ("log_bin", \v -> "power(10, floor(log10(greatest((" <> v <> ")::float, 1)) * 4) / 4)")
     ]
 
 
 -- | Map scalar function to SQL (consolidates all function->SQL logic).
 -- Empty checks compare text so a numeric argument never coerces '' to Int64.
 --
+-- >>> display (ScalarFunc "log_bin" [Field (Subject "duration" "duration" [])])
+-- "power(10, floor(log10(greatest((duration)::float, 1)) * 4) / 4)"
 -- >>> display (ScalarFunc "isnotempty" [Num "42"])
 -- "(42 IS NOT NULL AND (42)::text != '')"
 -- >>> display (ScalarFunc "isempty" [Null])
