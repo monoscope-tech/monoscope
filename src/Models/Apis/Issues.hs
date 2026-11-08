@@ -801,7 +801,7 @@ ON CONFLICT (project_id, target_hash, issue_type)
   WHERE acknowledged_at IS NULL AND archived_at IS NULL
 DO UPDATE SET
   updated_at = EXCLUDED.updated_at,
-  title = CASE WHEN apis.issues.issue_type = 'query_alert' THEN EXCLUDED.title ELSE apis.issues.title END,
+  title = CASE WHEN apis.issues.issue_type IN ('query_alert', 'log_pattern_rate_change') THEN EXCLUDED.title ELSE apis.issues.title END,
   affected_requests = apis.issues.affected_requests + EXCLUDED.affected_requests,
   affected_clients = apis.issues.affected_clients + EXCLUDED.affected_clients,
   issue_data = EXCLUDED.issue_data

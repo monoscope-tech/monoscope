@@ -105,6 +105,7 @@ spec = describe "Monitoring" do
         (resolvedRoot, resolvedReply) = Mail.resolvedErrorMessage "TypeError" "Ada Lovelace" frozenTime "https://example.com" (Just issue)
         logPattern = ET.NewLogPattern{issueUrl = issue, patternText = "payment provider timeout after <*> ms", sampleMessage = Just "payment provider timeout after 30000 ms (provider=adyen, attempt=3)", logLevel = Just "error", serviceName = Just "payments", sourceField = "body", occurrenceCount = 214, isError = True}
         endpoints = V.fromList [ET.EndpointAlertRow "POST /api/v1/refunds" (Just "api.acme.io") (Just "payments") (Just "production"), ET.EndpointAlertRow "GET /api/v1/refunds/:id" (Just "api.acme.io") (Just "payments") (Just "production")]
+        spike = Mail.cardMessages $ Mail.rateChangeCard (Mail.RateChange issue "connection reset by peer <*>" (Just "warn") (Just "gateway") Issues.Spike 1920 140 1271 False) "Acme API"
         entry :: Text -> I.SlackPayload -> [I.SlackPayload] -> AE.Value
         entry label root thread = AE.object ["label" AE..= label, "payload" AE..= root, "thread" AE..= thread]
         gallery =
@@ -113,12 +114,12 @@ spec = describe "Monitoring" do
           , entry "regressed error" (fst $ errorMessages Mail.RegressedErrors Nothing) []
           , entry "monitor alerting" (fst $ monitorMessages 1840 Monitors.MSAlerting) [snd $ monitorMessages 1050 Monitors.MSWarning, snd $ Mail.monitorDataUnavailableMessage monitor Monitors.NoMeasurements frozenTime (Just (frozenTime, 1840)) issue "", snd $ monitorMessages 640 Monitors.MSNormal]
           , entry "monitor root after recovery" (Mail.retainSlackSnapshot (fst $ monitorMessages 1840 Monitors.MSAlerting) (fst $ monitorMessages 640 Monitors.MSNormal)) []
-          , entry "new log pattern" (Mail.logPatternCard logPattern "Acme API") []
-          , entry "log spike" (Mail.rateChangeCard "connection reset by peer <*>" issue (Just "warn") (Just "gateway") Issues.Spike 1920 140 1271 "Acme API" False) []
+          , entry "new log pattern" (Mail.card $ Mail.logPatternCard logPattern "Acme API") []
+          , entry "log spike" (fst spike) [snd spike]
           , entry "new endpoints" (Mail.slackNewEndpointsAlert "Acme API" endpoints issue "https://example.com") []
           , entry "weekly report" (Mail.slackReportAlert Projects.RTWeekly "2025-01-01T00:00:00Z" "2025-01-08T00:00:00Z" 42 125000 (V.fromList [("orders-api", 30, 90000), ("payments", 12, 35000)]) "Acme API" "https://example.com/reports/1" chart chart) []
           ]
-    writeFileText "test/golden/slack/alert-gallery.json" $ decodeUtf8 $ AE.encode gallery
+    goldenText "slack/alert-gallery.json" $ decodeUtf8 $ AE.encode gallery
     concatMap slackPayloadViolations gallery `shouldBe` []
 
   around withTestResources do

@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, errorTitle, personName, activityReply, Card (..), Status (..), Tone (..), card, reply, logPatternCard, rateChangeCard, slackNewEndpointsAlert, slackReportAlert, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization, arr, mrkdwn, plainTxt, slackSection, slackHeader, slackContext, slackImage, dcGallery, slackActions) where
+module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, errorTitle, personName, activityReply, Card (..), Status (..), Tone (..), card, reply, logPatternCard, rateChangeCard, cardMessages, RateChange (..), slackNewEndpointsAlert, slackReportAlert, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization, arr, mrkdwn, plainTxt, slackSection, slackHeader, slackContext, slackImage, dcGallery, slackActions) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
@@ -71,22 +71,24 @@ data NotificationAlerts
       , chartUrl :: Maybe Text
       }
   | LogPatternAlert NewLogPattern
-  | LogPatternRateChangeAlert
-      { issueUrl :: Text
-      , patternText :: Text
-      , sampleMessage :: Maybe Text
-      , logLevel :: Maybe Text
-      , serviceName :: Maybe Text
-      , direction :: RateChangeDirection
-      , currentRate :: Double
-      , baselineMean :: Double
-      , changePercent :: Double
-      , isError :: Bool
-      }
+  | LogPatternRateChangeAlert RateChange
   | MonitorsRecoveryAlert
       { monitorTitle :: Text
       , monitorUrl :: Text
       }
+
+
+data RateChange = RateChange
+  { issueUrl :: Text
+  , patternText :: Text
+  , logLevel :: Maybe Text
+  , serviceName :: Maybe Text
+  , direction :: RateChangeDirection
+  , currentRate :: Double
+  , baselineMean :: Double
+  , changePercent :: Double
+  , isError :: Bool
+  }
 
 
 data RuntimeAlertType
@@ -128,7 +130,7 @@ sendDiscordAlert replyToMsgIdM alert pid pTitle channelIdM' = do
             MonitorsAlert{..} -> Just $ discordMonitorAlert monitorTitle monitorUrl chartUrl
             MonitorsRecoveryAlert{..} -> Just $ AE.object ["text" AE..= ("✅ *Alert resolved for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")]
             LogPatternAlert lp -> Just $ mkDiscordLogPatternPayload lp pTitle
-            LogPatternRateChangeAlert{..} -> Just $ mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle isError
+            LogPatternRateChangeAlert RateChange{..} -> Just $ mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle isError
             ShapeAlert -> Nothing
       join <$> forM (mkPayload alert) \payload -> Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid payload replyToMsgIdM
 
@@ -157,8 +159,8 @@ sendSlackAlert threadTsM alert pid pTitle channelM = do
             ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ slackMonitorAlert sAlerting monitorTitle monitorUrl chartUrl
             MonitorsRecoveryAlert{..} -> Just $ slackMonitorAlert sRecovered monitorTitle monitorUrl Nothing
-            LogPatternAlert lp -> Just $ logPatternCard lp pTitle
-            LogPatternRateChangeAlert{..} -> Just $ rateChangeCard patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle isError
+            LogPatternAlert lp -> Just $ card $ logPatternCard lp pTitle
+            LogPatternRateChangeAlert rc -> Just $ card $ rateChangeCard rc pTitle
             ShapeAlert -> Nothing
           isDefaultChannel = cid == sd.channelId
       join <$> forM (mkPayload alert) \payload -> do
@@ -289,6 +291,11 @@ card c = attachmentMessage (c.status.label <> " · " <> title) c.status.tone blo
         <> foldMap (\(alt, img) -> [tagged "chart" $ maybe (slackContext ["Chart unavailable · <" <> c.url <> "|open the issue>"]) (slackImage alt Nothing) img]) c.chart
         <> [tagged "footer" $ slackContext [dots c.footer] | not (null c.footer)]
         <> [tagged "actions" $ slackActions $ zipWith (\i (l, u) -> slackButton l (Just "primary" <* guard (i == 0)) u) [0 :: Int ..] c.actions | not (null c.actions)]
+
+
+-- | A card's root message, and its one-line reply for when it happens again.
+cardMessages :: Card -> (Incidents.SlackPayload, Incidents.SlackPayload)
+cardMessages c = (card c, reply c.status c.facts)
 
 
 -- | A thread reply is one line: what changed, then the numbers that say how much.
@@ -571,20 +578,19 @@ slackNewEndpointsAlert projectName endpoints targetUrl projectUrl =
       }
 
 
-logPatternCard :: NewLogPattern -> Text -> Incidents.SlackPayload
+logPatternCard :: NewLogPattern -> Text -> Card
 logPatternCard NewLogPattern{..} project =
-  card
-    Card
-      { status
-      , title = stripSummaryBadges patternText
-      , url = issueUrl
-      , note = []
-      , facts = catMaybes [serviceName <&> \s -> "*" <> slackEscape s <> "*", T.toUpper . slackEscape <$> logLevel, Just $ "matched " <> countNoun occurrenceCount "time"]
-      , body = [tagged "evidence" $ slackSection $ snippet 400 $ fromMaybe patternText sampleMessage]
-      , chart = Nothing
-      , footer = ["Field `" <> slackEscape sourceField <> "`", "Project " <> slackEscape project]
-      , actions = [("Open issue", issueUrl)]
-      }
+  Card
+    { status
+    , title = stripSummaryBadges patternText
+    , url = issueUrl
+    , note = []
+    , facts = catMaybes [serviceName <&> \s -> "*" <> slackEscape s <> "*", T.toUpper . slackEscape <$> logLevel, Just $ "matched " <> countNoun occurrenceCount "time"]
+    , body = [tagged "evidence" $ slackSection $ snippet 400 $ fromMaybe patternText sampleMessage]
+    , chart = Nothing
+    , footer = ["Field `" <> slackEscape sourceField <> "`", "Project " <> slackEscape project]
+    , actions = [("Open issue", issueUrl)]
+    }
   where
     status
       | isError = Status ":red_circle:" "New error log pattern" Critical
@@ -592,20 +598,19 @@ logPatternCard NewLogPattern{..} project =
       | otherwise = Status ":large_blue_circle:" "New log pattern" Calm
 
 
-rateChangeCard :: Text -> Text -> Maybe Text -> Maybe Text -> RateChangeDirection -> Double -> Double -> Double -> Text -> Bool -> Incidents.SlackPayload
-rateChangeCard patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent project isError =
-  card
-    Card
-      { status = Status (if spike then ":chart_with_upwards_trend:" else ":chart_with_downwards_trend:") ((if isError then "Error log " else "Log ") <> bool "drop" "spike" spike) (if isError then Critical else bool Calm Elevated spike)
-      , title = stripSummaryBadges patternText
-      , url = issueUrl
-      , note = []
-      , facts = catMaybes [serviceName <&> \s -> "*" <> slackEscape s <> "*", T.toUpper . slackEscape <$> logLevel] <> ["*" <> perHour currentRate <> "*", "baseline " <> perHour baselineMean, "*" <> bool "−" "+" spike <> formatWithCommas (fromIntegral (round (abs changePercent) :: Int)) <> "%*"]
-      , body = []
-      , chart = Nothing
-      , footer = ["Project " <> slackEscape project]
-      , actions = [("Open issue", issueUrl)]
-      }
+rateChangeCard :: RateChange -> Text -> Card
+rateChangeCard RateChange{..} project =
+  Card
+    { status = Status (if spike then ":chart_with_upwards_trend:" else ":chart_with_downwards_trend:") ((if isError then "Error log " else "Log ") <> bool "drop" "spike" spike) (if isError then Critical else bool Calm Elevated spike)
+    , title = stripSummaryBadges patternText
+    , url = issueUrl
+    , note = []
+    , facts = catMaybes [serviceName <&> \s -> "*" <> slackEscape s <> "*", T.toUpper . slackEscape <$> logLevel] <> ["*" <> perHour currentRate <> "*", "baseline " <> perHour baselineMean, "*" <> bool "−" "+" spike <> formatWithCommas (fromIntegral (round (abs changePercent) :: Int)) <> "%*"]
+    , body = []
+    , chart = Nothing
+    , footer = ["Project " <> slackEscape project]
+    , actions = [("Open issue", issueUrl)]
+    }
   where
     spike = direction == Spike
     perHour r = prettyPrintCount (round r) <> "/hr"
@@ -844,7 +849,7 @@ sendPagerdutyAlertToService integrationKey (LogPatternAlert NewLogPattern{issueU
       kind = if isError then "Error Log Pattern" else "Log Pattern" :: Text
       sev = if isError || logLevel == Just "error" then Notify.PDCritical else Notify.PDWarning
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-" <> T.take 40 pat) (projectTitle <> ": New " <> kind <> " - " <> T.take 80 pat) sev (AE.object ["pattern" AE..= pat, "service" AE..= serviceName, "level" AE..= logLevel, "is_error" AE..= isError]) issueUrl
-sendPagerdutyAlertToService integrationKey LogPatternRateChangeAlert{issueUrl, patternText, logLevel, serviceName, direction, currentRate, baselineMean, changePercent, isError} projectTitle _ =
+sendPagerdutyAlertToService integrationKey (LogPatternRateChangeAlert RateChange{issueUrl, patternText, logLevel, serviceName, direction, currentRate, baselineMean, changePercent, isError}) projectTitle _ =
   let pat = stripSummaryBadges patternText
       kind = if isError then "Error Log Pattern" else "Log Pattern" :: Text
       sev = if isError || direction == Spike then Notify.PDCritical else Notify.PDWarning
