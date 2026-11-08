@@ -58,7 +58,7 @@ tabs:
             description: 'Request rate across inbound requests AND SDK-instrumented outbound calls. Measures system load and usage patterns.'
             icon: activity
             query: |
-              (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http")
+              {{request_kql}}
               | summarize count() by bin_auto(timestamp)
             unit: req/min
             summarize_by: rate
@@ -69,7 +69,7 @@ tabs:
             description: '95th percentile response time across inbound requests AND SDK-instrumented outbound calls. 95% complete faster than this.'
             icon: clock
             query: |
-              (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http") and duration != null
+              {{request_kql}} and duration != null
               | summarize p95(duration) / 1000000 by bin_auto(timestamp)
             unit: ms
             summarize_by: mean
@@ -80,7 +80,7 @@ tabs:
             description: 'Percentage of failed requests (5xx errors) across inbound requests AND SDK-instrumented outbound calls. A failing third-party dependency raises this. Lower is better.'
             icon: alert-triangle
             query: |
-              (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http")
+              {{request_kql}}
               | summarize countif(status_code == "ERROR" or coalesce(attributes.http.response.status_code, 0) >= 500) * 100.0 / count() by bin_auto(timestamp)
             unit: '%'
             summarize_by: mean
@@ -93,7 +93,7 @@ tabs:
             description: 'Application Performance Index (0-1). Measures user satisfaction based on response times. >0.9 is excellent, <0.5 is poor.'
             icon: face-smile
             query: |
-              (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http") and duration != null
+              {{request_kql}} and duration != null
               | summarize (countif(duration <= 500000000) + countif(duration > 500000000 and duration <= 2000000000) * 0.5) / count() by bin_auto(timestamp)
             unit: '/ 1'
             decimals: 2
@@ -118,7 +118,7 @@ tabs:
             title: 'Total Requests'
             icon: list-tree
             query: |
-              (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http")
+              {{request_kql}}
               | summarize count()
             unit: reqs
             layout: { w: 3, h: 2 }
@@ -155,7 +155,7 @@ tabs:
         title: 'Request latency distribution'
         description: 'Every request in a log-scaled latency bucket over time, shaded by count, errors in red. Click a cell to open its requests in the Explorer.'
         query: |
-          (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http") and duration > 0
+          {{request_kql}} and duration > 0
           | summarize count() by bin_auto(timestamp), log_bin(duration), iff(status_code == "ERROR", "error", "ok")
         unit: ns
         layout: { w: 12, h: 4 }
@@ -245,7 +245,7 @@ tabs:
       - type: 'timeseries'
         title: 'HTTP Requests by Status Code'
         query: |
-          (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http") and attributes.http.response.status_code != null
+          {{request_kql}} and attributes.http.response.status_code != null
           | summarize count() by bin_auto(timestamp), coalesce(tostring(attributes.http.response.status_code), "unknown")
           | order by timestamp desc
           | limit 10000
@@ -257,7 +257,7 @@ tabs:
         title: 'HTTP Errors (4xx & 5xx) - Incoming'
         theme: 'roma'
         query: |
-          (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http") and attributes.http.response.status_code != null and attributes.http.response.status_code >= 400
+          {{request_kql}} and attributes.http.response.status_code != null and attributes.http.response.status_code >= 400
           | extend error_category = case(attributes.http.response.status_code >= 500, "5xx", attributes.http.response.status_code >= 400, "4xx", tostring(attributes.http.response.status_code))
           | summarize count() by bin_auto(timestamp), error_category
           | order by timestamp desc
@@ -272,7 +272,7 @@ tabs:
         hide_subtitle: true
         summarize_by: max
         query: |
-          (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http") and duration != null
+          {{request_kql}} and duration != null
           | summarize percentiles(duration, 50, 75, 90, 95, 99) by bin_auto(timestamp)
           | order by timestamp desc
         unit: ns
@@ -283,7 +283,7 @@ tabs:
         title: 'Requests by country'
         description: 'Where incoming requests come from, located from the client IP address. Shades are log-scaled.'
         query: &by_country |
-          (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http") and attributes.geo.country.iso_code != null
+          {{request_kql}} and attributes.geo.country.iso_code != null
           | summarize count() by attributes.geo.country.iso_code
         unit: reqs
         layout: { w: 8, h: 5 }

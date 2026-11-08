@@ -81,6 +81,7 @@ import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe, unUUIDId)
 import Pkg.LiveTail qualified as LiveTail
+import Pkg.Parser qualified as Parser
 import Pkg.Metrics (wireTypeErrorsRef)
 import Pkg.Metrics qualified as Metrics
 import Pkg.QueryCache qualified as QueryCache
@@ -893,7 +894,7 @@ placeRecords geoM recs = place <$> adopted
     adoptSender r = case unAesonTextMaybe r.resource of
       Just res
         | Just ip <- Telemetry.atMapText "monoscope.sender_ip" (Just res) ->
-            let browser = Telemetry.atMapText "telemetry.sdk.language" (Just res) `elem` map Just ["webjs", "javascript", "js"] || isJust (Telemetry.atMapText "user_agent.original" (Just res))
+            let browser = Parser.isBrowserRecord (AE.object ["resource" AE..= res, "name" AE..= r.name])
                 dropSender = \case AE.Object (KEM.delete "sender_ip" -> o) -> AE.Object o <$ guard (not $ KEM.null o); v -> Just v
              in (if browser then merge "client" (AE.object ["address" AE..= ip]) else Relude.id) r{resource = Just $ AesonText $ Map.update dropSender "monoscope" res}
       _ -> r

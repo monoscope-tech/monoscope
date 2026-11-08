@@ -469,12 +469,15 @@ spec = do
       export "geo-browser" [] [mkAttr "telemetry.sdk.language" "webjs", sender]
       export "geo-sdk" [mkAttr "client.address" "81.2.69.142", mkAttr "geo.country.iso_code" "NG"] []
       export "geo-proxied" [] [mkAttr "telemetry.sdk.language" "nodejs", sender]
+      -- The OTel web SDK sets neither marker; a page view is a browser by its name, as RUM counts it.
+      export "Pageview geo-otelweb" [] [sender]
       -- A browser exporting straight to /v1/traces is placed by the address it connected from.
       let direct = mkSpanRequest "c0ffee00c0ffee00c0ffee00c0ffee00" "c0ffee00c0ffee01" Nothing "geo-direct" [] Nothing [] (mkResource apiKey [mkAttr "user_agent.original" "Mozilla/5.0"]) frozenTime
       OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider Nothing (Just "81.2.69.142") (encodeMessage direct) `shouldReturn` (Right "" :: Either Text ByteString)
       dbQuery tr [sql| SELECT name, attributes #>> '{client,address}', attributes #>> '{geo,country,iso_code}', attributes #>> '{geo,locality,name}', resource -> 'monoscope' IS NOT NULL
-                       FROM otel_logs_and_spans WHERE project_id = ? AND name LIKE 'geo-%' ORDER BY name |] (Only testPid)
-        `shouldReturn` ( [ ("geo-browser", Just "89.160.20.112", Just "SE", Just "Linköping", False)
+                       FROM otel_logs_and_spans WHERE project_id = ? AND name LIKE '%geo-%' ORDER BY name |] (Only testPid)
+        `shouldReturn` ( [ ("Pageview geo-otelweb", Just "89.160.20.112", Just "SE", Just "Linköping", False)
+                         , ("geo-browser", Just "89.160.20.112", Just "SE", Just "Linköping", False)
                          , ("geo-direct", Just "81.2.69.142", Just "GB", Just "London", False)
                          , ("geo-proxied", Nothing, Nothing, Nothing, False)
                          , ("geo-sdk", Just "81.2.69.142", Just "NG", Nothing, False)

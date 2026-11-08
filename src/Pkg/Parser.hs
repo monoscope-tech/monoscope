@@ -1,7 +1,8 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, TemplateLang (..), fillQueryTemplate, browserKql, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds, AudienceFilters (..), audienceFilters, audienceKql, ResultShape (..), resultShape) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, TemplateLang (..), fillQueryTemplate, browserKql, requestKql, isBrowserRecord, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds, AudienceFilters (..), audienceFilters, audienceKql, ResultShape (..), resultShape) where
 
 import Control.Error (hush)
+import Data.Aeson qualified as AE
 import Data.Char (isAlphaNum)
 import Data.Default (Default (def))
 import Data.List (lookup)
@@ -13,6 +14,7 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Pkg.Deriving (WrappedEnumSC (..))
+import Pkg.Parser.Eval (evalExpr, filterExpr, resolveIn)
 import Pkg.Parser.Expr
 import Pkg.Parser.Stats
 import PyF (fmt)
@@ -1008,6 +1010,26 @@ clientRequestSql = "(kind = 'client' AND COALESCE(attributes___url___path, '') N
 browserKql = "(resource.telemetry.sdk.language in (\"webjs\", \"javascript\", \"js\") or resource.user_agent.original != null or name in (\"documentLoad\", \"documentFetch\") or name startswith \"Pageview \")"
 
 
+-- | HTTP traffic: server spans plus the SDK payload span, which also carries outbound calls the SDK
+-- captured. TimeFusion's dashboard rollups declare its compiled SQL verbatim, so an edit here must be
+-- mirrored in TimeFusion's @schemas/otel_logs_and_spans.yaml@.
+requestKql :: Text
+requestKql = "(kind == \"server\" or name == \"apitoolkit-http-span\" or name == \"monoscope.http\")"
+
+
+-- | 'browserKql' evaluated in memory over a record's @resource@ and @name@, so ingest treats as a
+-- browser exactly what the RUM dashboards count as one.
+--
+-- >>> map (isBrowserRecord . fromMaybe AE.Null . AE.decode) ["{\"resource\":{\"telemetry\":{\"sdk\":{\"language\":\"webjs\"}}}}", "{\"resource\":{\"user_agent\":{\"original\":\"Mozilla/5.0\"}}}", "{\"name\":\"documentLoad\"}", "{\"name\":\"Pageview /cart\"}", "{\"resource\":{\"telemetry\":{\"sdk\":{\"language\":\"nodejs\"}}},\"name\":\"GET /api\"}"]
+-- [True,True,True,True,False]
+isBrowserRecord :: AE.Value -> Bool
+isBrowserRecord row = any (fromRight False . evalExpr (resolveIn row)) browserExpr
+
+
+browserExpr :: Maybe Expr
+browserExpr = filterExpr =<< hush (parseQueryToAST browserKql)
+
+
 variablePresets :: BinDensity -> Text -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Map.Map Text Text
 variablePresets density pid mf mt allParams currentTime =
   let fmtUTC = maybe "" formatUTC
@@ -1034,6 +1056,7 @@ variablePresets density pid mf mt allParams currentTime =
            , ("error_filter", errorSql)
            , ("client_request_filter", clientRequestSql)
            , ("browser_kql", browserKql)
+           , ("request_kql", requestKql)
            , ("audience_sessions", audienceSessions)
            , ("audience_kql_literal", sqlStringLit $ audienceKql audience)
            , ("table_search", sqlStringLit $ maybeToMonoid $ join $ Map.lookup "table-search" $ Map.fromList allParams)

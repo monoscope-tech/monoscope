@@ -542,7 +542,7 @@ tabs:
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND hashes @> ARRAY['{{var-endpointHash}}']
-            AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR COALESCE(resource___user_agent___original, '') <> '' OR name IN ('documentLoad', 'documentFetch') OR name LIKE 'Pageview %')
+            AND {{browser_filter}}
             {{time_filter}}
           GROUP BY page ORDER BY COUNT(*) DESC LIMIT 20
 
@@ -630,7 +630,7 @@ tabs:
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND hashes @> ARRAY['{{var-endpointHash}}']
-            AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR COALESCE(resource___user_agent___original, '') <> '' OR name IN ('documentLoad', 'documentFetch') OR name LIKE 'Pageview %')
+            AND {{browser_filter}}
             {{time_filter}}
           GROUP BY browser
           ORDER BY COUNT(*) DESC LIMIT 20
@@ -660,7 +660,7 @@ tabs:
               AND hashes @> ARRAY['{{var-endpointHash}}']
               AND attributes___session___id IS NOT NULL
               AND attributes___session___id <> ''
-              AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR COALESCE(resource___user_agent___original, '') <> '' OR name IN ('documentLoad', 'documentFetch') OR name LIKE 'Pageview %')
+              AND {{browser_filter}}
               {{time_filter}}
           ), vital_samples AS (
             SELECT
