@@ -271,7 +271,6 @@ statusCard :: Status -> Text -> Text -> [Text] -> Card
 statusCard status title url note = Card{status, title, url, note, facts = [], body = [], chart = Nothing, footer = [], actions = []}
 
 
--- | Escaped bold, for names and other source text set apart in a line.
 bold :: Text -> Text
 bold t = "*" <> slackEscape t <> "*"
 
@@ -869,7 +868,6 @@ sampleReport :: NotificationAlerts
 sampleReport = ReportAlert Projects.RTWeekly "2025-01-01" "2025-01-02" 42 1250 (V.singleton ("api", 42, 1250)) "https://example.com" (Just "https://example.com/chart.png") (Just "https://example.com/errors.png")
 
 
--- | Discord presentation per runtime alert: content line and embed colour.
 data AlertMessages = AlertMessages {discordContent :: Text, discordColor :: Int}
 
 
