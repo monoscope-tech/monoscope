@@ -540,7 +540,8 @@ uptimeMessages d issueUrl =
   cardMessages
     (statusCard (Status ":red_circle:" "Down" Critical) (if T.null d.name then d.url else d.name) issueUrl)
       { facts = [bold $ maybe "No response" (("HTTP " <>) . show) d.statusCode, "expected " <> show d.expectedStatus, show d.durationMs <> " ms"]
-      , body = [tagged "evidence" $ slackSection $ "`" <> slackEscape d.url <> "`\n" <> slackEscape d.reason]
+      , -- A status code is already in the facts; only a failed request needs its reason.
+        body = [tagged "evidence" $ slackSection $ "`" <> slackEscape d.url <> "`" <> foldMap (const $ "\n" <> slackEscape d.reason) (guard (isNothing d.statusCode))]
       , footer = ["Down since " <> atUtc d.downSince]
       , actions = [("Open issue", issueUrl)]
       }
@@ -556,10 +557,10 @@ cronMessages d issueUrl =
       }
 
 
--- | A failing check that passed again: the root turns green and the reply says for how long it was down.
+-- | A failing check that passed again: the root turns green, and its facts say
+-- how long it was down instead of the failing reading.
 recoveredMessages :: Text -> Text -> NominalDiffTime -> (Incidents.SlackPayload, Incidents.SlackPayload)
-recoveredMessages title issueUrl down =
-  (card (statusCard sRecovered title issueUrl){note = ["back after " <> lasted down]}, reply sRecovered title ["back after " <> lasted down])
+recoveredMessages title issueUrl down = cardMessages (statusCard sRecovered title issueUrl){facts = ["back after " <> lasted down]}
 
 
 slackReportAlert :: Projects.ReportType -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Maybe Text -> Maybe Text -> Incidents.SlackPayload
