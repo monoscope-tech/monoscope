@@ -40,6 +40,8 @@ data ContainerRow = ContainerRow
   , uptime :: Maybe Double
   , restarts :: Maybe Double
   , ready :: Maybe Double
+  , nodeStats :: Bool
+  -- ^ A host row fed by kubeletstats node metrics, whose CPU is cores with no core count.
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (HI.DecodeRow, NFData)

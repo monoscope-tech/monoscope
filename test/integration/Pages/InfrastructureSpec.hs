@@ -125,7 +125,7 @@ spec = do
       -- "Not ready" wrapped across the badge border; the export icon is the correctly framed symbol.
       goldenParts "infrastructure-containers"
         . ordNub
-        $ tagsWith ["data-header-actions", "data-live-mode=", "data-component=\"facet-rail\"", "value=\"otel-demo\"", "facet-count", "w-80 max-w-80", "hidden max-md:inline-flex", "bg-fillWarning-strong", "badge-error", "M288 32c0-17.7", "Runtime: kubernetes", "Container: checkout", "Image: demo:2.2.0", "Workload: checkout", "CPU limit used: 25%", "Memory limit used: 50%", "Latest reported readiness: Ready"] html
+        $ tagsWith ["data-header-actions", "data-live-mode=", "data-component=\"facet-rail\"", "value=\"otel-demo\"", "facet-count", "w-72 max-w-72 overflow-hidden max-md:w-auto", "hidden max-md:inline-flex", "bg-fillWarning-strong", "badge-error", "M288 32c0-17.7", "Runtime: kubernetes", "Container: checkout", "Image: demo:2.2.0", "Workload: checkout", "CPU limit used: 25%", "Memory limit used: 50%", "Latest reported readiness: Ready"] html
         <> tagsWith ["popovertarget=\"containersForm-columns\""] customizeOnly
         <> tagsWith ["containers.csv"] exportOnly
 

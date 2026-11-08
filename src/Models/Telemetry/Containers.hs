@@ -111,7 +111,7 @@ memPctOfLimit r = ratio r.memBytes r.memLimit
 -- them as a parameter carries no injection risk.
 --
 -- >>> metricNameInList
--- "('container.cpu.usage','container.cpu.utilization','container.memory.working_set','container.memory.usage.total','container.memory.usage','container.memory.usage.limit','k8s.container.cpu_limit','k8s.container.cpu_request','k8s.container.memory_limit','k8s.container.memory_request','k8s.container.restarts','k8s.container.ready','k8s.pod.cpu.usage','k8s.pod.memory.working_set','k8s.pod.memory.usage','system.cpu.utilization','system.memory.usage','system.cpu.load_average.1m','system.filesystem.utilization','system.uptime')"
+-- "('container.cpu.usage','container.cpu.utilization','container.memory.working_set','container.memory.usage.total','container.memory.usage','container.memory.usage.limit','k8s.container.cpu_limit','k8s.container.cpu_request','k8s.container.memory_limit','k8s.container.memory_request','k8s.container.restarts','k8s.container.ready','k8s.pod.cpu.usage','k8s.pod.memory.working_set','k8s.pod.memory.usage','system.cpu.utilization','system.memory.usage','system.cpu.load_average.1m','system.filesystem.utilization','system.uptime','k8s.node.cpu.usage','k8s.node.memory.working_set','k8s.node.memory.available','k8s.node.filesystem.usage','k8s.node.filesystem.capacity')"
 containerMetricNames :: [Text]
 containerMetricNames =
   [ "container.cpu.usage"
@@ -137,6 +137,12 @@ containerMetricNames =
   , "system.cpu.load_average.1m"
   , "system.filesystem.utilization"
   , "system.uptime"
+  , -- kubeletstats on a node with no hostmetrics agent: CPU in cores, memory and disk in bytes.
+    "k8s.node.cpu.usage"
+  , "k8s.node.memory.working_set"
+  , "k8s.node.memory.available"
+  , "k8s.node.filesystem.usage"
+  , "k8s.node.filesystem.capacity"
   ]
 
 
@@ -473,7 +479,8 @@ containersWithLimit limitM useTimefusion pid fromTime' toTime =
           MAX(CASE WHEN metric_name = 'container.cpu.usage' THEN value END),
           MAX(CASE WHEN metric_name = 'container.cpu.utilization' THEN value END) / 100,
           MAX(CASE WHEN metric_name = 'k8s.pod.cpu.usage' THEN value END),
-          SUM(CASE WHEN metric_name = 'system.cpu.utilization' AND cpu_mode <> 'idle' THEN value END)),
+          SUM(CASE WHEN metric_name = 'system.cpu.utilization' AND cpu_mode <> 'idle' THEN value END),
+          MAX(CASE WHEN metric_name = 'k8s.node.cpu.usage' THEN value END)),
         -- A node has no quota, so its capacity is the limit: how many cores it has to spend.
         COALESCE(
           MAX(CASE WHEN metric_name = 'k8s.container.cpu_limit' THEN value END),
@@ -489,17 +496,23 @@ containersWithLimit limitM useTimefusion pid fromTime' toTime =
           MAX(CASE WHEN metric_name = 'k8s.pod.memory.working_set' THEN value END),
           MAX(CASE WHEN metric_name = 'k8s.pod.memory.usage' THEN value END),
           MAX(CASE WHEN metric_name = 'system.memory.usage' AND mem_state = 'used' THEN value END),
-          MAX(CASE WHEN metric_name = 'system.memory.usage' AND mem_state IS NULL THEN value END)),
+          MAX(CASE WHEN metric_name = 'system.memory.usage' AND mem_state IS NULL THEN value END),
+          MAX(CASE WHEN metric_name = 'k8s.node.memory.working_set' THEN value END)),
         COALESCE(
           MAX(CASE WHEN metric_name = 'k8s.container.memory_limit' THEN value END),
           MAX(CASE WHEN metric_name = 'container.memory.usage.limit' THEN value END),
-          SUM(CASE WHEN metric_name = 'system.memory.usage' AND mem_state IS NOT NULL THEN value END)),
+          SUM(CASE WHEN metric_name = 'system.memory.usage' AND mem_state IS NOT NULL THEN value END),
+          -- The kubelet's available is capacity less working set, so together they are the node's memory.
+          MAX(CASE WHEN metric_name = 'k8s.node.memory.working_set' THEN value END) + MAX(CASE WHEN metric_name = 'k8s.node.memory.available' THEN value END)),
         MAX(CASE WHEN metric_name = 'k8s.container.memory_request' THEN value END),
         MAX(CASE WHEN metric_name = 'system.cpu.load_average.1m' THEN value END),
-        MAX(CASE WHEN metric_name = 'system.filesystem.utilization' THEN value END),
+        COALESCE(
+          MAX(CASE WHEN metric_name = 'system.filesystem.utilization' THEN value END),
+          MAX(CASE WHEN metric_name = 'k8s.node.filesystem.usage' THEN value END) / NULLIF(MAX(CASE WHEN metric_name = 'k8s.node.filesystem.capacity' THEN value END), 0)),
         MAX(CASE WHEN metric_name = 'system.uptime' THEN value END),
         MAX(CASE WHEN metric_name = 'k8s.container.restarts' THEN value END),
-        MAX(CASE WHEN metric_name = 'k8s.container.ready' THEN value END)
+        MAX(CASE WHEN metric_name = 'k8s.container.ready' THEN value END),
+        COALESCE(BOOL_OR(metric_name LIKE 'k8s.node.%'), FALSE)
       FROM latest
       WHERE rn = 1
       GROUP BY container_name, scope, pod_name, namespace, node_name, cluster
@@ -512,7 +525,7 @@ containersWithLimit limitM useTimefusion pid fromTime' toTime =
     -- window still only reads itself.
     fromTime = max fromTime' (addUTCTime (-freshnessWindow) toTime)
     raw = fromString . toString
-    isHost = "metric_name LIKE 'system.%'"
+    isHost = "(metric_name LIKE 'system.%' OR metric_name LIKE 'k8s.node.%')"
     isPod = "metric_name LIKE 'k8s.pod.%'"
     isContainer = "NOT (" <> isHost <> " OR " <> isPod <> ")"
     scopeExpr = "CASE WHEN " <> isHost <> " THEN 'host' WHEN " <> isPod <> " THEN 'pod' ELSE 'container' END"
@@ -543,5 +556,5 @@ containersWithLimit limitM useTimefusion pid fromTime' toTime =
 
 -- $setup
 -- >>> :set -XOverloadedStrings -XOverloadedRecordDot
--- >>> let row :: Text -> Scope -> Maybe Text -> ContainerRow; row n s p = ContainerRow n s p Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+-- >>> let row :: Text -> Scope -> Maybe Text -> ContainerRow; row n s p = ContainerRow n s p Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing False
 -- >>> let emptyRow :: Text -> ContainerRow; emptyRow n = row n ScopeContainer Nothing

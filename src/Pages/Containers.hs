@@ -171,14 +171,14 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
   where
     containerColumns :: [Column ContainerVM]
     containerColumns =
-      [ col "Container" renderNameCol & withAttrs [class_ "w-80 max-w-80 overflow-hidden max-md:w-auto max-md:max-w-none"]
+      [ col "Container" renderNameCol & withAttrs [class_ "w-72 max-w-72 overflow-hidden max-md:w-auto max-md:max-w-none"]
       , col "Pod" (textCell (.podName)) & withAttrs [class_ "w-72 max-w-72 overflow-hidden max-2xl:hidden"]
       , col "Namespace" (textCell (.namespace)) & withAttrs [class_ "w-32 max-2xl:hidden"]
       , col "Node" (textCell (.nodeName)) & withAttrs [class_ "w-36 max-md:hidden"]
       , col "CPU (cores)" (numCell (showFFloat' 3) (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
-      , col "CPU limit used" (pctCell "CPU limit used" cpuPctOfLimit) & withAttrs [class_ "w-36 max-md:hidden"]
+      , col "CPU limit used" (pctCell "CPU limit used" cpuPctOfLimit) & withAttrs [class_ "w-32 whitespace-normal max-md:hidden"]
       , col "Memory" (numCell formatBytes (.memBytes)) & withAttrs [class_ "w-28 text-right max-md:hidden"]
-      , col "Memory limit used" (pctCell "Memory limit used" memPctOfLimit) & withAttrs [class_ "w-40 max-md:hidden"]
+      , col "Memory limit used" (pctCell "Memory limit used" memPctOfLimit) & withAttrs [class_ "w-32 whitespace-normal max-md:hidden"]
       , col "Restarts" (numCell (showFFloat' 0) (.restarts))
           & withColHeaderExtra
             ( let explanation = "Latest cumulative restart count reported within the selected time range. This is not the number of restarts during the range."
