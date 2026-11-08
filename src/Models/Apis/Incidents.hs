@@ -219,7 +219,13 @@ deliveryOperation =
     WHEN d.operation = 'post_reply' THEN jsonb_build_object('tag', 'PostReply', 'contents', r.message_ts)
     WHEN d.operation = 'post_analysis' THEN jsonb_build_object('tag', 'PostAnalysis', 'contents', jsonb_build_array(r.message_ts, d.agent_run_id))
     WHEN d.operation = 'update_root' THEN jsonb_build_object('tag', 'UpdateRoot', 'contents', r.message_ts)
-    WHEN d.operation = 'post_activity' THEN jsonb_build_object('tag', 'PostActivity', 'contents', r.message_ts)
+    WHEN d.operation = 'post_activity' THEN jsonb_build_object('tag', 'PostActivity', 'contents', jsonb_build_array(r.message_ts,
+      (SELECT jsonb_build_object('event', a.event, 'at', a.created_at, 'metadata', a.metadata,
+          'actor', NULLIF(btrim(concat_ws(' ', actor.first_name, actor.last_name)), ''),
+          'assignee', NULLIF(btrim(concat_ws(' ', assignee.first_name, assignee.last_name)), ''))
+        FROM apis.issue_activity_log a LEFT JOIN users.users actor ON actor.id = a.created_by
+        LEFT JOIN users.users assignee ON assignee.id::text = a.metadata ->> 'assignee_id'
+        WHERE a.id = d.activity_id)))
   END|]
 
 
@@ -677,7 +683,7 @@ recordIncidentEventTx update = do
 -- | 'PostStandalone' is a reply with no thread to join. It posts like a root but
 -- is not one: it can never own the root's timestamp, and only 'PostRoot' may wait
 -- on one (@CHECK (operation = 'post_root' OR state <> 'waiting_root')@).
-data DeliveryOperation timestamp = PostRoot | PostStandalone | PostReply timestamp | PostAnalysis timestamp (UUIDId "ai_routine_run") | UpdateRoot timestamp | PostActivity timestamp
+data DeliveryOperation timestamp = PostRoot | PostStandalone | PostReply timestamp | PostAnalysis timestamp (UUIDId "ai_routine_run") | UpdateRoot timestamp | PostActivity timestamp Issues.ActivityNote
   deriving stock (Eq, Foldable, Functor, Generic, Show, Traversable)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
   deriving (HI.DecodeValue) via Aeson (DeliveryOperation timestamp)
@@ -798,12 +804,8 @@ claimSlackDeliveriesTx now = do
     <> deliveryOperation
     -- An inherited root's first event replies with the full root message.
     <> [HI.sql|, CASE WHEN d.operation = 'post_analysis' THEN d.agent_payload
-          WHEN d.operation = 'post_activity' THEN (SELECT jsonb_build_object('event', a.event, 'at', a.created_at, 'metadata', a.metadata,
-              'actor', NULLIF(btrim(concat_ws(' ', actor.first_name, actor.last_name)), ''),
-              'assignee', NULLIF(btrim(concat_ws(' ', assignee.first_name, assignee.last_name)), ''))
-            FROM apis.issue_activity_log a LEFT JOIN users.users actor ON actor.id = a.created_by
-            LEFT JOIN users.users assignee ON assignee.id::text = a.metadata ->> 'assignee_id'
-            WHERE a.id = d.activity_id)
+          -- A lifecycle reply is rendered from the note its operation carries.
+          WHEN d.operation = 'post_activity' THEN '{}'::jsonb
           WHEN d.operation = 'post_reply' THEN (CASE WHEN d.event_id = r.first_event_id THEN e.root_payload ELSE e.reply_payload END)
             || CASE WHEN d.reply_broadcast THEN '{"reply_broadcast": true}'::jsonb ELSE '{}'::jsonb END
           ELSE e.root_payload END,
@@ -860,7 +862,7 @@ correlateSlackDelivery delivery (SlackPayload payload) =
         PostRoot -> "monoscope_incident_root"
         -- Not a root: a Slack event carrying it must not claim the root's timestamp.
         PostStandalone -> "monoscope_incident_delivery"
-        (PostReply _; PostAnalysis _ _; PostActivity _) -> "monoscope_incident_delivery"
+        (PostReply _; PostAnalysis _ _; PostActivity _ _) -> "monoscope_incident_delivery"
         UpdateRoot _ -> "monoscope_incident_root"
    in SlackPayload
         $ KM.insert
@@ -980,7 +982,7 @@ confirmIncidentSearch search timestamp = case search.operation of
   PostStandalone -> pure False
   PostReply root -> confirmAt root
   PostAnalysis root _ -> confirmAt root
-  PostActivity root -> confirmAt root
+  PostActivity root _ -> confirmAt root
   UpdateRoot root -> confirmAt root
   where
     confirmAt root =

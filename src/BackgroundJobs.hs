@@ -1645,7 +1645,8 @@ sendAlertToChannels alert (rootPayload, replyPayload) issue project users alertU
             }
       case result of
         Incidents.Recorded{} -> tryStep "slack-incident-delivery" runSlackIncidentDeliveries
-        other -> Log.logAttention "Issue alert was not recorded for Slack" (project.id, issue.id, show @Text other)
+        Incidents.AlreadyRecorded{} -> pass
+        (Incidents.NoOpenEpisode; Incidents.Rejected _) -> Log.logAttention "Issue alert was not recorded for Slack" (project.id, issue.id, show @Text result)
       let fan = Fanout{slack = QueuedSlack, threads = Nothing, email = Just FanoutEmail{recipients = map (CI.original . (.email)) users, subject = subj, body = ET.renderEmail subj html}}
       True <$ fanOutToTeam team fan alert project.id project.title alertUrl
 
@@ -5062,12 +5063,12 @@ runSlackIncidentDeliveries = do
                 Incidents.PostReply ts -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
                 Incidents.PostAnalysis ts _ -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
                 Incidents.UpdateRoot ts -> (Notify.SlackUpdate $ Incidents.slackTimestampText ts, Nothing)
-                Incidents.PostActivity ts -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
-              rendered = case delivery.operation of
-                (Incidents.PostReply _; Incidents.PostAnalysis _ _) -> Right delivery.payload
-                Incidents.PostActivity _ -> first toText $ Mail.activityReply <$> AE.eitherDecode (AE.encode delivery.payload)
-                (Incidents.PostRoot; Incidents.PostStandalone; Incidents.UpdateRoot _) -> Right $ Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
-              message payload =
+                Incidents.PostActivity ts _ -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
+              payload = case delivery.operation of
+                (Incidents.PostReply _; Incidents.PostAnalysis _ _) -> delivery.payload
+                Incidents.PostActivity _ note -> Mail.activityReply note
+                (Incidents.PostRoot; Incidents.PostStandalone; Incidents.UpdateRoot _) -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
+              message =
                 Notify.SlackData
                   { Notify.channelId = delivery.channelId
                   , Notify.botToken = sd.botToken
@@ -5080,11 +5081,10 @@ runSlackIncidentDeliveries = do
           allowed <- case delivery.operation of
             Incidents.PostAnalysis _ runId -> Issues.incidentReportAllowed delivery.projectId runId
             (Incidents.PostRoot; Incidents.PostStandalone; Incidents.PostReply{}; Incidents.UpdateRoot{}; Incidents.PostActivity{}) -> pure True
-          case rendered of
-            _ | not allowed -> pure $ Incidents.DeliveryRejected "incident_routine_authority_withdrawn"
-            Left invalid -> pure $ Incidents.DeliveryRejected $ "invalid_activity: " <> invalid
-            Right payload ->
-              Notify.deliverSlack operation (message payload) <&> \case
+          if not allowed
+            then pure $ Incidents.DeliveryRejected "incident_routine_authority_withdrawn"
+            else
+              Notify.deliverSlack operation message <&> \case
                 Notify.SlackSent ts -> maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
                 -- Without a bot token nothing can ever recover the timestamp.
                 Notify.SlackAccepted ->

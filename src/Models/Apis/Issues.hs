@@ -3845,7 +3845,7 @@ logIssueActivity issueId event createdBy metadataM = do
         SELECT #{issueId}, #{event}, #{createdBy}, #{Aeson <$> metadataM}, #{now}
         WHERE EXISTS (SELECT 1 FROM apis.issues WHERE id = #{issueId}) |]
   Hasql.interpExecute_
-    $ if event `notElem` slackRelayedEvents
+    $ if not (relayedToSlack event)
       then logged
       else
         [HI.sql| WITH logged AS (|]
@@ -3860,10 +3860,13 @@ logIssueActivity issueId event createdBy metadataM = do
         WHERE NOT threadless AND NOT (#{closing} AND phase <> 'active') |]
 
 
--- | The lifecycle events a Slack thread hears about. Regressions and escalations
--- are absent: the alert pipeline posts those itself, with their evidence.
-slackRelayedEvents :: [IssueEvent]
-slackRelayedEvents = [IEAcknowledged, IEUnacknowledged, IEAckExpired, IEArchived, IEUnarchived, IEResolved, IEAutoResolved, IEReopened, IEAssigned, IEUnassigned, IECommented, IELinked, IEMerged, IESpam, IENotSpam]
+-- | Whether a Slack thread hears about this lifecycle event. Regressions and
+-- escalations do not: the alert pipeline posts those itself, with their evidence.
+relayedToSlack :: IssueEvent -> Bool
+relayedToSlack = \case
+  (IEAcknowledged; IEUnacknowledged; IEAckExpired; IEArchived; IEUnarchived; IEResolved; IEAutoResolved; IEReopened) -> True
+  (IEAssigned; IEUnassigned; IECommented; IELinked; IEMerged; IESpam; IENotSpam) -> True
+  (IECreated; IERegressed; IEEscalated; IEViewed) -> False
 
 
 -- | One relayed lifecycle event, as the Slack worker reads it back to render.
@@ -3874,7 +3877,7 @@ data ActivityNote = ActivityNote
   , metadata :: Maybe AE.Value
   , at :: UTCTime
   }
-  deriving stock (Generic, Show)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 

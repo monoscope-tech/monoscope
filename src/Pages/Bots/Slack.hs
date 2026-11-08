@@ -1610,7 +1610,7 @@ reconcileIncidentDeliveries = do
             Incidents.PostStandalone -> ("conversations.history", [("limit", "15")])
             Incidents.PostReply root -> ("conversations.replies", [("ts", Incidents.slackTimestampText root), ("limit", "15")])
             Incidents.PostAnalysis root _ -> ("conversations.replies", [("ts", Incidents.slackTimestampText root), ("limit", "15")])
-            Incidents.PostActivity root -> ("conversations.replies", [("ts", Incidents.slackTimestampText root), ("limit", "15")])
+            Incidents.PostActivity root _ -> ("conversations.replies", [("ts", Incidents.slackTimestampText root), ("limit", "15")])
             Incidents.UpdateRoot root -> ("conversations.history", [("oldest", Incidents.slackTimestampText root), ("latest", Incidents.slackTimestampText root), ("inclusive", "true"), ("limit", "1")])
           params = [("channel", search.channelId), ("include_all_metadata", "true")] <> scope <> foldMap (pure . ("cursor",)) search.cursor
           matching message = do
@@ -1625,7 +1625,7 @@ reconcileIncidentDeliveries = do
                 publicationTimestamp appId "monoscope_incident_delivery" "delivery_id" search.id message
               Incidents.PostReply root -> matchReply root message
               Incidents.PostAnalysis root _ -> matchReply root message
-              Incidents.PostActivity root -> matchReply root message
+              Incidents.PostActivity root _ -> matchReply root message
               Incidents.UpdateRoot root -> do
                 guard $ message.ts == Incidents.slackTimestampText root && fromMaybe message.ts message.thread_ts == message.ts
                 publicationTimestamp appId "monoscope_incident_root" "delivery_id" search.id message
