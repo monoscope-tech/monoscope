@@ -66,13 +66,13 @@
 <div class="w-full table-refresh" id="anomalyListContainer" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h" data-hx-trigger="issuesListChanged from:body" data-hx-target="this" data-hx-swap="outerHTML" data-hx-select="#anomalyListContainer" hx-preload="false">
 <div class="max-md:px-2 px-4 pt-2 pb-2">
 <div class="w-full mx-auto space-y-2 pb-24" id="anomalyListForm_page">
-<label class="input input-sm flex items-center gap-2 w-full h-9 bg-transparent border-strokeWeak shadow-none">
+<label class="input input-sm flex shrink-0 items-center gap-2 w-full h-9 bg-transparent border-strokeWeak shadow-none">
 <svg class="icon h-3.5 w-3.5 shrink-0 text-iconNeutral" width="1em" height="1em" viewBox="0 0 512 512">
 <g>
 <path d="M416 208c0 45.9-14.9 88.3-40 122.7l126.6 126.7c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0s208 93.1 208 208zM208 352a144 144 0 1 0 0-288 144 144 0 1 0 0 288z" />
 </g>
 </svg>
-<input type="search" class="min-w-0 grow bg-transparent max-md:text-base" placeholder="Search" aria-label="Search" _="on input set v to my value.toLowerCase() then repeat for el in &lt;#anomalyListForm_page .itemsListItem/&gt; if (el.dataset.filter or el.textContent).toLowerCase().includes(v) remove .hidden from el else add .hidden to el end end on htmx:after:swap from document if my value is not &#39;&#39; send input to me end on keydown[key is &#39;Escape&#39;] set my value to &#39;&#39; then send input to me">
+<input type="search" class="min-w-0 grow bg-transparent text-sm max-md:text-base" placeholder="Search" aria-label="Search" _="on input set v to my value.toLowerCase() then repeat for el in &lt;#anomalyListForm_page .itemsListItem/&gt; if (el.dataset.filter or el.textContent).toLowerCase().includes(v) remove .hidden from el else add .hidden to el end end on htmx:after:swap from document if my value is not &#39;&#39; send input to me end on keydown[key is &#39;Escape&#39;] set my value to &#39;&#39; then send input to me">
 </label>
 <div class="grid overflow-x-auto overflow-y-hidden my-0 group/grid surface-table" id="anomalyListForm_grid">
 <form class="flex flex-col w-full divide-y" id="anomalyListForm" onkeydown="return event.key != &#39;Enter&#39; || event.target.tagName != &#39;INPUT&#39;;">
@@ -542,13 +542,13 @@
 <div class="w-full table-refresh" id="anomalyListContainer" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type[]=runtime_exception" data-hx-trigger="issuesListChanged from:body" data-hx-target="this" data-hx-swap="outerHTML" data-hx-select="#anomalyListContainer" hx-preload="false">
 <div class="max-md:px-2 px-4 pt-2 pb-2">
 <div class="w-full mx-auto space-y-2 pb-24" id="anomalyListForm_page">
-<label class="input input-sm flex items-center gap-2 w-full h-9 bg-transparent border-strokeWeak shadow-none">
+<label class="input input-sm flex shrink-0 items-center gap-2 w-full h-9 bg-transparent border-strokeWeak shadow-none">
 <svg class="icon h-3.5 w-3.5 shrink-0 text-iconNeutral" width="1em" height="1em" viewBox="0 0 512 512">
 <g>
 <path d="M416 208c0 45.9-14.9 88.3-40 122.7l126.6 126.7c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0s208 93.1 208 208zM208 352a144 144 0 1 0 0-288 144 144 0 1 0 0 288z" />
 </g>
 </svg>
-<input type="search" class="min-w-0 grow bg-transparent max-md:text-base" placeholder="Search" aria-label="Search" _="on input set v to my value.toLowerCase() then repeat for el in &lt;#anomalyListForm_page .itemsListItem/&gt; if (el.dataset.filter or el.textContent).toLowerCase().includes(v) remove .hidden from el else add .hidden to el end end on htmx:after:swap from document if my value is not &#39;&#39; send input to me end on keydown[key is &#39;Escape&#39;] set my value to &#39;&#39; then send input to me">
+<input type="search" class="min-w-0 grow bg-transparent text-sm max-md:text-base" placeholder="Search" aria-label="Search" _="on input set v to my value.toLowerCase() then repeat for el in &lt;#anomalyListForm_page .itemsListItem/&gt; if (el.dataset.filter or el.textContent).toLowerCase().includes(v) remove .hidden from el else add .hidden to el end end on htmx:after:swap from document if my value is not &#39;&#39; send input to me end on keydown[key is &#39;Escape&#39;] set my value to &#39;&#39; then send input to me">
 </label>
 <div class="grid overflow-x-auto overflow-y-hidden my-0 group/grid surface-table" id="anomalyListForm_grid">
 <form class="flex flex-col w-full divide-y" id="anomalyListForm" onkeydown="return event.key != &#39;Enter&#39; || event.target.tagName != &#39;INPUT&#39;;">

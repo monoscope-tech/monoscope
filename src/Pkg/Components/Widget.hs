@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), VizType (..), vizWidget, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
+module Pkg.Components.Widget (Widget (..), VizType (..), vizWidget, widgetWith_, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -728,7 +728,14 @@ infraTimeseries pid wid title unit query =
 
 -- use either index or the xxhash as id
 widget_ :: Widget -> Html ()
-widget_ w' = case w.wType of
+widget_ = widgetWith_ mempty
+
+
+-- | A widget with controls of the page's own in its header, just before the menu: the Explorer's
+-- latency card carries its Percentiles/Heatmap switch there. Not stored on the widget, so a
+-- chart copied to a dashboard does not take the page's controls with it.
+widgetWith_ :: Html () -> Widget -> Html ()
+widgetWith_ actions w' = case w.wType of
   WTAnomalies ->
     wgtCard_ $ withCardFrame False w (w._projectId <&> \pid -> ("View all", (urls.issues pid).listGet Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] [])) $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
   -- rounded-3xl: its cards are rounded-2xl inside the grid's ~8px margin, so corners stay concentric.
@@ -752,7 +759,7 @@ widget_ w' = case w.wType of
   WTLogs -> wgtCard_ $ renderLogsWidget w
   WTServiceMap -> wgtCard_ $ withCardFrame True w (ctaAction w) $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
   WTFlamegraph -> gridItem_ $ div_ [class_ "h-full "] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
-  _ -> gridItem_ $ div_ [class_ " w-full h-full group/wgt "] $ renderChart w
+  _ -> gridItem_ $ div_ [class_ " w-full h-full group/wgt "] $ renderChart actions w
   where
     normalizedChildren = fold $ listToMaybe (normalizeWidgetLayouts [w']) >>= (.children)
     w = (w' & #children .~ (normalizedChildren <$ w'.children)) & #id %~ (<|> (slugify <$> w'.title))
@@ -1068,8 +1075,8 @@ valueSlot_ :: Text -> Text -> Maybe Text -> Html ()
 valueSlot_ cls wid valueM = span_ [class_ $ cls <> bool " hidden" "" (isJust valueM), id_ $ wid <> "Value"] $ whenJust valueM toHtml
 
 
-renderWidgetHeader :: Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Html ()
-renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "min-h-8 px-1 leading-none flex justify-between items-center " <> bool "grid-stack-handle" "" (or widget.standalone), id_ $ wId <> "_header"] do
+renderWidgetHeader :: Html () -> Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Html ()
+renderWidgetHeader actions widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "min-h-8 px-1 leading-none flex justify-between items-center " <> bool "grid-stack-handle" "" (or widget.standalone), id_ $ wId <> "_header"] do
   when (or widget._centerTitle) $ div_ ""
   div_ [class_ "inline-flex gap-3 items-center group/h min-w-0"] do
     span_ [class_ "text-sm text-textStrong font-semibold flex items-center gap-1 min-w-0"] do
@@ -1155,6 +1162,7 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
             <> Utils.drawerLoadAttrs_ (urls.dashboardWidgetExpandGet p d wId Nothing)
         )
         $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
+    actions
     let widgetMenuPop = wId <> "-widget-menu"
     div_ [class_ "inline-block"] do
       button_ ([type_ "button", class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Widget menu", data_ "tippy-content" "Widget Menu"] <> Utils.popoverTrigger_ widgetMenuPop)
@@ -1265,7 +1273,7 @@ withCardFrame :: Bool -> Widget -> Maybe (Text, Text) -> Html () -> Html ()
 withCardFrame flexCol widget extraAction body = do
   let naked = or widget.naked
   div_ [class_ "gap-0.5 flex flex-col h-full"] do
-    unless naked $ renderWidgetHeader widget Nothing Nothing Nothing extraAction
+    unless naked $ renderWidgetHeader mempty widget Nothing Nothing Nothing extraAction
     div_ [class_ "flex-1 flex min-h-0"]
       $ div_
         [ class_ $ "h-full w-full " <> bool "" "flex flex-col " flexCol <> bool "surface-raised rounded-2xl" "" naked
@@ -1426,8 +1434,8 @@ renderStatContent widget valueM = do
         descIcon_ widget.description " text-iconNeutral"
 
 
-renderChart :: Widget -> Html ()
-renderChart widget = do
+renderChart :: Html () -> Widget -> Html ()
+renderChart actions widget = do
   -- A heatmap's unit labels its buckets; its cells, and so its headline, are counts.
   let unit = bool (fromMaybe "" widget.unit) "" (widget.wType == WTHeatmap)
       -- Summing latencies or percentages ("5.3s" of p99s) means nothing; unless asked, those headline their peak.
@@ -1482,7 +1490,7 @@ renderChart widget = do
       isStat = isStatWidget widget
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
     unless (or widget.naked || isStat)
-      $ renderWidgetHeader widget valueM rateM widget.expandBtnFn Nothing
+      $ renderWidgetHeader actions widget valueM rateM widget.expandBtnFn Nothing
     div_ [class_ $ "flex-1 flex min-h-0 " <> bool "" (gridStackHandleClassFor widget) isStat] do
       div_
         [ class_

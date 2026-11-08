@@ -81,7 +81,7 @@ import Pages.Monitors qualified as AlertUI
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), enrichSchemaWithFacets, logQueryBox_)
 import Pkg.Components.Table (FacetChoice (..), FacetContent (..), FacetLayout (..), FacetNode (..), FacetOverflow (..), FacetsConfig (..), facetHeadCount, facetNode_, facetTail_, sidebar_)
 import Pkg.Components.TimePicker qualified as Components
-import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries))
+import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (CamelSchema (..))
 import Pkg.LiveTail (capRowValue)
@@ -744,6 +744,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   let stampPng = Widget.stampPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid sinceM fromM toM
   chartWidget <- stampPng logChartWidget
   latencyWidget <- stampPng logLatencyWidget
+  heatmapWidget <- stampPng logHeatmapWidget
   vizChart <- stampPng logVizWidget{Widget.wType = fromMaybe WTTimeseries $ mfilter (/= Widget.WTLogs) (Widget.vizWidget effectiveVizType)}
 
   let bwconf =
@@ -775,6 +776,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
           , targetPattern = pTargetM
           , chartWidget
           , latencyWidget
+          , heatmapWidget
           , vizChart
           , queryResultCount = 0
           , sessionSort = fromMaybe LogQueries.SortLastSeen $ rightToMaybe . parseUrlPiece =<< sortByM
@@ -812,14 +814,24 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
         , Widget.title = Just "All traces"
         , Widget.allowZoom = Just True
         }
-    -- Per-bin percentiles of a few hundred requests are mostly noise; a heatmap shows the bands,
-    -- the slow tail and which of it failed, as Datadog's, Honeycomb's and Dash0's explorers do.
     logLatencyWidget =
+      logWidgetBase
+        { Widget.wType = WTTimeseriesLine
+        , Widget.title = Just "Latency percentiles"
+        , Widget.hideSubtitle = Just True
+        , Widget.summarizeBy = Just Widget.SBMax
+        , Widget.query = Just "duration != null | summarize percentiles(duration, 50, 75, 90, 95) by bin_auto(timestamp)"
+        , Widget.unit = Just "ns"
+        }
+    -- The latency card's other view, switched in from its header: the bands, the slow tail and
+    -- which of it failed, across the whole row.
+    logHeatmapWidget =
       logWidgetBase
         { Widget.wType = Widget.WTHeatmap
         , Widget.title = Just "Latency distribution"
         , Widget.query = Just "duration > 0 | summarize count() by bin_auto(timestamp), log_bin(duration), iff(status_code == \"ERROR\", \"error\", \"ok\")"
         , Widget.unit = Just "ns"
+        , Widget.layout = Just (def{Widget.w = Just 12, Widget.h = Just 4})
         }
 
 
@@ -1365,6 +1377,7 @@ data ApiLogsPageData = ApiLogsPageData
   , targetPattern :: Maybe Text
   , chartWidget :: Widget.Widget
   , latencyWidget :: Widget.Widget
+  , heatmapWidget :: Widget.Widget
   , vizChart :: Widget.Widget
   -- ^ The chart tab's widget; its type follows the checked tab once the page is up.
   , queryResultCount :: Int
@@ -1550,8 +1563,16 @@ apiLogsPage page = do
         $ if page.vizType `elem` [Widget.VizSessions, Widget.VizPatterns]
           then sessionsSummarySkeleton_
           else div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
-            div_ [class_ "flex-1 min-w-0 h-full"] $ Widget.widget_ page.chartWidget
-            div_ [class_ "flex-1 min-w-0 max-md:hidden"] $ Widget.widget_ page.latencyWidget
+            -- One radio pair drives the swap; both latency headers carry labels for it at the same
+            -- right-hand spot, so switching back never moves the pointer. Remembered per browser.
+            input_ [type_ "radio", name_ "latency-view", id_ "latency-view-lines", class_ "sr-only", checked_, [__|on change set localStorage.latencyView to 'lines'|]]
+            input_ [type_ "radio", name_ "latency-view", id_ "latency-view-heatmap", class_ "sr-only", [__|init if localStorage.latencyView is 'heatmap' set my.checked to true end on change set localStorage.latencyView to 'heatmap'|]]
+            let latencyToggle_ = div_ [class_ "flex items-center gap-0.5 rounded-md bg-fillWeak p-0.5", role_ "radiogroup", Aria.label_ "Latency view"] do
+                  label_ [Lucid.for_ "latency-view-lines", class_ "flex h-5.5 w-6 cursor-pointer items-center justify-center rounded text-iconNeutral hover:text-textStrong group-has-[#latency-view-lines:checked]/pg:bg-bgRaised group-has-[#latency-view-lines:checked]/pg:text-textBrand", data_ "tippy-content" "Percentiles", Aria.label_ "Percentiles"] $ faSprite_ "chart-line" "regular" "h-3.5 w-3.5"
+                  label_ [Lucid.for_ "latency-view-heatmap", class_ "flex h-5.5 w-6 cursor-pointer items-center justify-center rounded text-iconNeutral hover:text-textStrong group-has-[#latency-view-heatmap:checked]/pg:bg-bgRaised group-has-[#latency-view-heatmap:checked]/pg:text-textBrand", data_ "tippy-content" "Heatmap", Aria.label_ "Heatmap"] $ faSprite_ "grid" "regular" "h-3.5 w-3.5"
+            div_ [class_ "flex-1 min-w-0 h-full group-has-[#latency-view-heatmap:checked]/pg:hidden"] $ Widget.widget_ page.chartWidget
+            div_ [class_ "flex-1 min-w-0 max-md:hidden group-has-[#latency-view-heatmap:checked]/pg:hidden"] $ Widget.widgetWith_ latencyToggle_ page.latencyWidget
+            div_ [class_ "hidden flex-1 min-w-0 h-full group-has-[#latency-view-heatmap:checked]/pg:block"] $ Widget.widgetWith_ latencyToggle_ page.heatmapWidget
 
       -- Skeletons cloned by swapSessionsRegionIfNeeded during the (multi-second)
       -- viz-tab swap, mirroring each incoming region's height so layout doesn't jump.
