@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { collapseLongTail, createSeriesConfig, heatmapOptions, updateChartConfiguration, visibleMax } from '../src/widgets';
+import { collapseLongTail, createSeriesConfig, heatmapCellQuery, heatmapOptions, updateChartConfiguration, visibleMax } from '../src/widgets';
 
 describe('collapseLongTail', () => {
   test('keeps the eight largest series and preserves the remainder as Other', () => {
@@ -76,5 +76,17 @@ describe('heatmapOptions', () => {
     // Solid mixes into the background, so the scale bar starts at the shade the faintest cell has.
     expect(o.visualMap.map((v: any) => v.inRange.color)).toEqual([['black>blue@0.3', 'blue'], ['black>red@0.75', 'red']]);
     expect([o.legend.data, o.visualMap[0].text]).toEqual([['Errors', 'OK'], ['10 (max)', 'count: 1']]);
+  });
+});
+
+describe('heatmapCellQuery', () => {
+  test('a cell filters to its bucket and time bin, errors only when red, on the field log_bin buckets', () => {
+    const cell = [0, 4, 9, 1, 1, Date.UTC(2026, 10, 8, 1, 0), Date.UTC(2026, 10, 8, 1, 0, 30), 1e6, 10 ** 6.25];
+    expect(heatmapCellQuery('kind == "server" | summarize count() by bin_auto(timestamp), log_bin(duration)', false, cell)).toEqual({
+      filter: 'duration >= 1000000 and duration < 1778280',
+      from: '2026-11-08T01:00:00.000Z',
+      to: '2026-11-08T01:00:30.000Z',
+    });
+    expect(heatmapCellQuery('summarize count() by bin_auto(timestamp), log_bin(attributes.db.duration)', true, [...cell.slice(0, 8), Infinity]).filter).toBe('attributes.db.duration >= 1000000 and status_code == "ERROR"');
   });
 });

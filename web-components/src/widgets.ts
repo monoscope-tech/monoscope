@@ -395,11 +395,14 @@ export const heatmapOptions = (opt: any, source: ChartRow[], unit: string, style
   const label = (v: number) => (DURATION_UNITS.has(unit) ? formatDuration(convertToNanoseconds(v, unit)).replace('.0', '') : formatNumber(v));
   const sorted = [...rows].sort((r1, r2) => Number(r1[0]) - Number(r2[0]));
   const times = sorted.map((r) => Number(r[0]));
-  // [x, y, count, errors, shade]: shaded by log count so one slow request stays visible beside a thousand fast ones.
+  // [x, y, count, errors, shade, from, to, low, high]: shaded by log count so one slow request stays visible
+  // beside a thousand fast ones; the cell's own time and value bounds ride along for a click to filter by.
+  const binMs = times.length > 1 ? Math.min(...times.slice(1).map((t, i) => t - times[i])) : 0;
   const cells = sorted.flatMap((r, x) => buckets.flatMap((v, y) => {
     const sum = (cs: typeof cols) => cs.reduce((acc, c) => acc + (Number(r[c.col]) || 0), 0);
     const n = sum(colsOf(v)), e = sum(colsOf(v).filter((c) => c.err));
-    return n > 0 ? [[x, y, n, e, Math.log10((e || n) + 1)]] : [];
+    const high = buckets[y + 1] ?? (onLadder ? v * 10 ** 0.25 : Infinity);
+    return n > 0 ? [[x, y, n, e, Math.log10((e || n) + 1), times[x], times[x] + binMs, v, high]] : [];
   }));
   const multiDay = times.length > 1 && times.at(-1)! - times[0] > 86_400_000;
   const time = (t: number, full = false) => window.echarts.time.format(t, full || multiDay ? '{MM}-{dd} {HH}:{mm}' : '{HH}:{mm}', false);
@@ -411,7 +414,7 @@ export const heatmapOptions = (opt: any, source: ChartRow[], unit: string, style
     const max = Math.max(1, ...data.map((d) => d[4]));
     return {
       visual: { show: false, seriesIndex, dimension: 4, min: Math.log10(2), max, inRange: { color: [window.echarts.color.lerp(floor, [styles.tooltipBg, color]), color] } },
-      series: { name, type: 'heatmap', data, itemStyle: { color, borderColor: styles.tooltipBg, borderWidth: 1 }, emphasis: { itemStyle: { borderColor: styles.textColor, borderWidth: 1 } } },
+      series: { name, type: 'heatmap', data, cursor: 'pointer', itemStyle: { color, borderColor: styles.tooltipBg, borderWidth: 1 }, emphasis: { itemStyle: { borderColor: styles.textColor, borderWidth: 1 } } },
     };
   };
   const errorCells = cells.filter((c) => c[3]), okCells = cells.filter((c) => !c[3]);
@@ -432,10 +435,18 @@ export const heatmapOptions = (opt: any, source: ChartRow[], unit: string, style
       ...opt.tooltip,
       trigger: 'item',
       formatter: ({ value: [x, y, n, e] }: { value: number[] }) =>
-        `${time(times[x], true)}<br/>${label(buckets[y])}${buckets[y + 1] ? ` – ${label(buckets[y + 1])}` : '+'}: <b>${formatNumber(n)}</b>${e ? `, <b>${formatNumber(e)} errors</b>` : ''}`,
+        `${time(times[x], true)}<br/>${label(buckets[y])}${buckets[y + 1] ? ` – ${label(buckets[y + 1])}` : '+'}: <b>${formatNumber(n)}</b>${e ? `, <b>${formatNumber(e)} errors</b>` : ''}<br/><span style="opacity:.7">Click to see these ${e ? 'errors' : 'requests'}</span>`,
     },
     series: layers.map((l) => l.series),
   };
+};
+
+// A clicked heatmap cell as the events behind it: its time bin and value bucket, and only the errors when
+// the cell is red. The Explorer narrows its own query and range; elsewhere the Explorer opens on them.
+export const heatmapCellQuery = (query: string, errors: boolean, [, , , , , from, to, low, high]: number[]) => {
+  const field = query.match(/log_bin\(\s*([\w.]+)\s*\)/)?.[1] ?? 'duration';
+  const filter = [`${field} >= ${Math.ceil(low)}`, Number.isFinite(high) && `${field} < ${Math.ceil(high)}`, errors && 'status_code == "ERROR"'].filter(Boolean).join(' and ');
+  return { filter, from: new Date(from).toISOString(), to: new Date(to > from ? to : from + 1).toISOString() };
 };
 
 // The y ceiling of the series still shown: hiding p95 in the legend rescales to what is left
@@ -1237,6 +1248,27 @@ export const chartWidget = (widgetData: WidGetData) => {
   // Shift-click isolates a series; shift-clicking the isolated one brings every series back.
   let shiftClick = false;
   chartEl?.addEventListener('pointerdown', (e) => (shiftClick = e.shiftKey), { capture: true, signal: controller.signal });
+  if (widgetData.chartType === 'heatmap')
+    chart.on('click', ({ seriesName, value }: { seriesName: string; value: number[] }) => {
+      const { filter, from, to } = heatmapCellQuery(widgetData.query ?? '', seriesName === 'Errors', value);
+      const editor = document.getElementById('filterElement') as any;
+      if (!editor?.handleAddQuery) {
+        // A dashboard query still carries its variables; the page URL holds their values.
+        const vars = new URLSearchParams(window.location.search);
+        const events = (widgetData.query ?? '').split('|')[0].trim().replace(/\{\{var-([\w-]+)\}\}/g, (_, k) => vars.get(`var-${k}`) ?? '');
+        window.location.href = `/p/${widgetData.pid}/log_explorer?${new URLSearchParams({ query: [events, filter].filter(Boolean).join(' and '), from, to })}`;
+        return;
+      }
+      const url = new URL(window.location.href);
+      url.searchParams.set('from', from);
+      url.searchParams.set('to', to);
+      url.searchParams.delete('since');
+      window.history.replaceState({}, '', url);
+      window.updateTimePicker?.({ from, to }, { skipSetParams: true });
+      // The heatmap view hides the list it is filtering, so the click lands on the events themselves.
+      if ((document.getElementById('viz-heatmap') as HTMLInputElement | null)?.checked) document.getElementById('viz-logs')?.click();
+      editor.handleAddQuery(filter);
+    });
   chart.on('legendselectchanged', ({ name, selected }: { name: string; selected: Record<string, boolean> }) => {
     if (shiftClick) {
       const names = Object.keys(selected), prev = legendSelections.get(chart);
