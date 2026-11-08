@@ -653,6 +653,13 @@ data HostMapFill = FillCPU | FillMemory | FillStorage
   deriving (Display) via WrappedEnumSC 'Nothing "Fill" HostMapFill
 
 
+fillValue :: HostMapFill -> HostRow -> Maybe Double
+fillValue = \case
+  FillCPU -> (.cpuPct)
+  FillMemory -> (.memoryPct)
+  FillStorage -> (.storagePct)
+
+
 data HostMapData = HostMapData
   { pid :: Projects.ProjectId
   , window :: TimePicker.TimeWindow
@@ -683,7 +690,10 @@ hostMapGetH pid fillM groupM providerM regionM osM fromParam toParam sinceParam 
   body <- withDeferredBody deferredM "hostMapContainer" url hostMapSkeleton_ do
     allHosts <- hostsFromRows <$> infraSnapshot pid window
     let groups = groupRows (Just . hostGroupLabel grouping) $ applyHostFilters filters allHosts
-    pure HostMapData{pid, window, fill = parseParam FillCPU display fillM, grouping, filters, allHosts, groups}
+        -- Unpicked, the map colours by whichever signal the most hosts report: kubelet-only nodes have no CPU percentage.
+        coverage f = V.length $ V.filter (isJust . fillValue f) allHosts
+        bestFill = fromMaybe FillCPU $ viaNonEmpty head $ sortOn (Down . coverage) [minBound ..]
+    pure HostMapData{pid, window, fill = parseParam bestFill display fillM, grouping, filters, allHosts, groups}
   addRespHeaders $ HostMapPage $ PageCtx (infrastructureBW pid "Host Map" window bw) body
   where
     hostMapSkeleton_ = div_ [class_ "flex min-h-full flex-col bg-bgBase", role_ "status", Aria.label_ "Loading host map"] do
@@ -729,7 +739,7 @@ hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col b
     mapUrl = windowed page.window ((urls.traces page.pid).hostMapGetH (Just $ display page.fill) (nonEmptyT $ Just $ hostGroupParam page.grouping) page.filters.provider page.filters.region page.filters.osType) Nothing
     legend colour label = span_ [class_ "inline-flex items-center gap-1.5"] $ span_ [class_ $ "h-3 w-3 " <> colour, style_ hexClipPath] mempty >> toHtml label
     hostHex enlarged host = div_ [class_ $ "flex flex-col items-center gap-1 " <> bool "" "w-24" enlarged] do
-      let value = case page.fill of FillCPU -> host.cpuPct; FillMemory -> host.memoryPct; FillStorage -> host.storagePct
+      let value = fillValue page.fill host
       button_
         ( [ class_ $ "inline-flex items-center justify-center text-textInverse-strong transition-transform hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong motion-reduce:transform-none " <> utilizationClass value
           , type_ "button"
