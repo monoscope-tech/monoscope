@@ -47,6 +47,7 @@ import Models.Projects.DashboardTemplates (askTemplates, loadDashboardFromVM, re
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
+import Pkg.ImpactReview qualified as ImpactReview
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
@@ -89,16 +90,24 @@ data GitSyncForm = GitSyncForm
 -- name, find its row, verify the signature, and only then queue a job. Queueing before
 -- 'Git.verifyWebhook' returns is how a forged body gets to enqueue work.
 gitWebhookPostH :: Git.GitHost -> Git.WebhookReq -> ATBaseCtx AE.Value
-gitWebhookPostH Git.GitHub req | req.event == Just "pull_request" = do
+gitWebhookPostH Git.GitHub req | req.event `elem` map Just ["pull_request", "issue_comment" :: Text] = do
   ctx <- ask @Config.AuthContext
   let secret = ctx.config.githubAppWebhookSecret
+      status s = AE.object ["status" AE..= (s :: Text)]
   if T.null secret
     then throwError err503{errBody = "GitHub App webhook secret is not configured"}
     else case Git.verifyWebhook Git.GitHub (Just secret) req of
       Left _ -> throwError err401{errBody = "Invalid GitHub signature"}
-      Right () -> case ImpactReviews.decodeEvent req.body of
-        Left err -> AE.object ["status" AE..= ("ignored" :: Text)] <$ Log.logInfo "Ignoring GitHub PR event" err
-        Right event -> ImpactReviews.receiveEvent event $> AE.object ["status" AE..= ("ok" :: Text)]
+      Right ()
+        | req.event == Just "issue_comment" -> case ImpactReviews.decodeComment req.body of
+            Left err -> status "ignored" <$ Log.logTrace "Ignoring GitHub comment" err
+            Right request ->
+              ImpactReview.requestReview request >>= \case
+                Left err -> status "error" <$ Log.logAttention "PR review request was not queued" (request.owner, request.repo, request.number, err)
+                Right () -> pure $ status "ok"
+        | otherwise -> case ImpactReviews.decodeEvent req.body of
+            Left err -> status "ignored" <$ Log.logInfo "Ignoring GitHub PR event" err
+            Right event -> ImpactReviews.receiveEvent Nothing event $> status "ok"
 gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
   Nothing -> errResp "missing repository" <$ Log.logAttention "Git webhook without a repository name" (Git.hostSlug host)
   Just fullName -> do

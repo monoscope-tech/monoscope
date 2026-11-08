@@ -218,9 +218,9 @@ removeRepository pid rid = do
     lift do
       when (repository.host == Git.GitHub && isNothing repository.apiBase)
         $ Hasql.executeTx
-          [HI.sql| INSERT INTO projects.pr_review_settings (project_id, owner, repo, enabled, include_evidence)
-            VALUES (#{pid}, lower(#{repository.owner}), lower(#{repository.repo}), false, false)
-            ON CONFLICT (project_id, owner, repo) DO UPDATE SET enabled = false |]
+          [HI.sql| INSERT INTO projects.pr_review_settings (project_id, owner, repo, trigger, include_evidence)
+            VALUES (#{pid}, lower(#{repository.owner}), lower(#{repository.repo}), 'when_asked', false)
+            ON CONFLICT (project_id, owner, repo) DO UPDATE SET trigger = 'when_asked' |]
       Hasql.executeTx
         [HI.sql| DELETE FROM projects.code_mappings m USING projects.git_credentials c
           WHERE m.project_id = #{pid} AND m.credential_id = c.id AND c.project_id = m.project_id

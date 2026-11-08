@@ -192,8 +192,16 @@ schema role = \case
               ]
         )
       , ("coverage", array 0 10 (bounded 1 $ Just 400) & O.description ?~ "Missing evidence or verification only. Do not summarize completed investigation.")
+      , ("summary", bounded 1 (Just 600) & O.description ?~ "One or two plain sentences for the PR author: what the change does and the main reason for its merge risk. No production numbers, links, code or Markdown.")
+      ,
+        ( "assessments"
+        , array 5 5 (object [("dimension", enum ["alignment", "impact", "verification", "rollback", "error_detection"]), ("grade", enum ["good", "fair", "poor", "not_applicable"]), ("gaps", array 0 3 $ bounded 1 $ Just 300)])
+            & O.description
+            ?~ "Grade each dimension once; gaps say concretely what raises the risk, without production numbers. alignment: the code does what the title and description claim; undocumented drive-by changes lower it. impact: blast radius; auth, permissions, payments, personal data, secrets, data migrations, dependency bumps, infra or config, and heavily used production paths raise it (good = small, poor = large). verification: tests or recorded proof exercise the changed behaviour, before and after; user-facing changes without end-to-end proof are poor. rollback: good = easily reverted; poor = one-way door such as a destructive migration, a data rewrite or an external side effect. error_detection: if this breaks in production, telemetry or monitors show it before users do; swallowed errors and new paths without logs, spans or metrics lower it; not_applicable only when nothing changed runs in production."
+        )
       ]
   where
+    enum values = text & O.enum_ ?~ map AE.String values
     uuid = text & O.format ?~ "uuid"
     testFiles = ("testFiles", array 1 100 $ object [("path", bounded 1 (Just 4096) & O.description ?~ "Ordinary repository-relative path; no traversal, backslashes or .git components."), ("content", text & O.maxLength ?~ 262144 & O.description ?~ "Complete UTF-8 contents. All testFiles together must fit 256 KiB of UTF-8 bytes; the generated Git patch must also fit 256 KiB.")])
     patch = bounded 1 (Just 262144) & O.description ?~ "Unified Git diff accepted by git apply (diff --git, ---/+++ paths and @@ hunks), containing test/fixture changes only. Do not use *** Begin Patch or *** Add File syntax. Git infers hunk line counts from the patch body."

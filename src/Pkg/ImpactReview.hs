@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.ImpactReview (reviewPullRequest, fixIssue, ReviewResult (..), ReviewDraft, Finding (..), Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, ReviewQuery, mkReviewQuery) where
+module Pkg.ImpactReview (reviewPullRequest, requestReview, fixIssue, ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, ReviewQuery, mkReviewQuery) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
@@ -9,6 +9,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
 import Data.Default (def)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
+import Data.Effectful.CodeReview.Artifacts (sha256)
 import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types (Evidence (..), EvidenceKind (..), KnowledgeSnapshot (..), Observation (..), QueryKind (..), QueryObservation (..), ReviewMemory (..))
@@ -20,7 +21,7 @@ import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.OpenApi.Schema.Validation qualified as Schema
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, nominalDay)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Effectful (Eff, IOE, (:>))
@@ -84,7 +85,51 @@ data ChangedLine = ChangedLine {path :: Text, line :: Int, side :: DiffSide}
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data ReviewDraft = ReviewDraft {findings :: [Finding], coverage :: [Text]}
+-- | The merge-risk rubric (warpdotdev/common-skills merge-risk). The model grades each
+-- dimension; Monoscope derives the overall risk so the model cannot pick it.
+data Dimension = Alignment | Impact | Verification | Rollback | ErrorDetection
+  deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" Dimension
+
+
+data Grade = Good | Fair | Poor | NotApplicable
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" Grade
+
+
+data Assessment = Assessment {dimension :: Dimension, grade :: Grade, gaps :: [Text]}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data Risk = LowRisk | MediumRisk | HighRisk
+  deriving stock (Eq, Ord, Show)
+
+
+-- | Weighted mean of grade points (good 1, fair 2, poor 3; not applicable counts as good).
+-- Impact and verification weigh 2, rollback 1.5, the rest 1.
+--
+-- >>> let uniform g = [Assessment d g [] | d <- universe]
+-- >>> map (mergeRisk . uniform) [Good, Fair, Poor]
+-- [LowRisk,MediumRisk,HighRisk]
+-- >>> mergeRisk [Assessment d (if d == Impact then Poor else Good) [] | d <- universe]
+-- LowRisk
+-- >>> mergeRisk [Assessment d (if d `elem` [Impact, Verification] then Poor else Good) [] | d <- universe]
+-- MediumRisk
+-- >>> mergeRisk [Assessment d (if d == Alignment then Good else Poor) [] | d <- universe]
+-- HighRisk
+mergeRisk :: [Assessment] -> Risk
+mergeRisk assessments
+  | score < 1.5 = LowRisk
+  | score < 2.25 = MediumRisk
+  | otherwise = HighRisk
+  where
+    score = sum [weight a.dimension * points a.grade | a <- assessments] / max 1 (sum $ map (weight . (.dimension)) assessments)
+    weight = \case Impact -> 2; Verification -> 2; Rollback -> 1.5; (Alignment; ErrorDetection) -> 1 :: Double
+    points = \case Good -> 1; NotApplicable -> 1; Fair -> 2; Poor -> 3
+
+
+data ReviewDraft = ReviewDraft {findings :: [Finding], coverage :: [Text], summary :: Text, assessments :: [Assessment]}
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -125,6 +170,8 @@ data ReviewResult = ReviewResult
   , windowStart :: UTCTime
   , windowEnd :: UTCTime
   , knowledge :: Maybe [Agent.KnowledgeNote]
+  , summary :: Maybe Text
+  , assessments :: Maybe [Assessment]
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -184,15 +231,15 @@ patchLines path = go Nothing . lines
 -- >>> let file = Git.PullRequestFile "a.hs" "modified" (Just "@@ -1 +1 @@\n-old\n+new")
 -- >>> let measured = Evidence "t1" Telemetry Nothing Nothing "/evidence" Nothing (Just (Observation 10 1)) Nothing Nothing
 -- >>> let finding = Finding (ChangedLine "a.hs" 1 Head) "Risk" "Check" ["t1"]
--- >>> let result = ReviewResult NoFinding [finding] [] [] now now Nothing
+-- >>> let result = ReviewResult NoFinding [finding] [] [] now now Nothing Nothing Nothing
 -- >>> fmap (.verdict) (validateResult [file] [measured] [] result)
 -- Right WorthChecking
--- >>> validateResult [file] [measured] [] (ReviewResult NoFinding [finding{evidenceKeys = ["invented"]}] [] [] now now Nothing) & either id (const "accepted")
+-- >>> validateResult [file] [measured] [] (ReviewResult NoFinding [finding{evidenceKeys = ["invented"]}] [] [] now now Nothing Nothing Nothing) & either id (const "accepted")
 -- "Finding cites unavailable evidence"
--- >>> validateResult [file] [measured] [] (ReviewResult NoFinding [finding{location = ChangedLine "a.hs" 2 Head}] [] [] now now Nothing) & either id (const "accepted")
+-- >>> validateResult [file] [measured] [] (ReviewResult NoFinding [finding{location = ChangedLine "a.hs" 2 Head}] [] [] now now Nothing Nothing Nothing) & either id (const "accepted")
 -- "Finding does not reference a changed line"
 -- >>> let malformed = Git.PullRequestFile "a.hs" "modified" (Just "@@ -0 +0 @@\n-old\n+new")
--- >>> validateResult [malformed] [measured] [] (ReviewResult NoFinding [finding{location = ChangedLine "a.hs" 0 Head}] [] [] now now Nothing) & either id (const "accepted")
+-- >>> validateResult [malformed] [measured] [] (ReviewResult NoFinding [finding{location = ChangedLine "a.hs" 0 Head}] [] [] now now Nothing Nothing Nothing) & either id (const "accepted")
 -- "Finding does not reference a changed line"
 validateResult :: [Git.PullRequestFile] -> [Evidence] -> [Text] -> ReviewResult -> Either Text ReviewResult
 validateResult files evidence gaps result = do
@@ -211,7 +258,22 @@ validateDraft changed evidence value = do
   candidate <- case AE.fromJSON value of AE.Error _ -> Left "Review draft does not match the required schema"; AE.Success draft -> Right draft
   unless (null $ Schema.validateJSON mempty (Policy.toolSchema Policy.SubmitReview) (AE.toJSON candidate)) $ Left "Review draft violates its schema"
   validateFindings changed evidence candidate.findings
+  validateAssessments candidate
   pure candidate
+
+
+-- | One grade per dimension; only error detection can be not applicable.
+--
+-- >>> let graded g = [Assessment d g ["gap"] | d <- universe]
+-- >>> let check = either id (const "accepted") . validateAssessments . ReviewDraft [] [] "Adds retries."
+-- >>> map check [graded Good, take 4 (graded Good), graded NotApplicable, [a{gaps = replicate 4 "gap"} | a <- graded Fair]]
+-- ["accepted","Grade each merge-risk dimension exactly once","Only error detection can be not applicable","Each dimension lists at most three gaps of up to 300 characters"]
+validateAssessments :: ReviewDraft -> Either Text ()
+validateAssessments draft = do
+  unless (sort (map (.dimension) draft.assessments) == universe) $ Left "Grade each merge-risk dimension exactly once"
+  unless (all (\a -> a.grade /= NotApplicable || a.dimension == ErrorDetection) draft.assessments) $ Left "Only error detection can be not applicable"
+  unless (all (\a -> length a.gaps <= 3 && all (\gap -> not (T.null $ T.strip gap) && T.length gap <= 300) a.gaps) draft.assessments) $ Left "Each dimension lists at most three gaps of up to 300 characters"
+  unless (not (T.null $ T.strip draft.summary) && T.length draft.summary <= 600) $ Left "Summarize the change and its risk in 1 to 600 characters"
 
 
 validateFindings :: [ChangedLine] -> [(Text, EvidenceKind)] -> [Finding] -> Either Text ()
@@ -230,6 +292,19 @@ evidenceWindow :: UTCTime -> UTCTime -> Expr
 evidenceWindow begin end = And (Cmp GTEq timestamp (TimestampLit $ toText $ iso8601Show begin)) (Cmp LTEq timestamp (TimestampLit $ toText $ iso8601Show end))
   where
     timestamp = Subject "timestamp" "timestamp" []
+
+
+-- | A comment delivery carries no PR head, so read it with the installation token
+-- before recording the ask; the 👀 reaction tells the asker it was queued.
+requestReview :: (DB es, HTTP.HTTP :> es, IOE :> es, Reader AuthContext :> es) => Reviews.CommentRequest -> Eff es (Either Text ())
+requestReview request = runErrorNoCallStack @Text do
+  cfg <- (.config) <$> ask @AuthContext
+  token <- either throwError pure =<< GitSync.githubToken cfg.githubAppId cfg.githubAppPrivateKey (GitSync.AppInstallation request.installationId)
+  conn <- either (throwError . Git.gitConnErrorMessage) pure $ Git.mkGitConn Git.GitHub Nothing token
+  let ref = Git.RepoRef request.owner request.repo ""
+  pr <- either throwError pure =<< Git.getPullRequest conn ref request.number
+  Reviews.receiveEvent (Just request.ask) Reviews.PullRequestEvent{owner = request.owner, repo = request.repo, installationId = request.installationId, number = request.number, revision = T.toLower pr.head.revision, updatedAt = pr.updatedAt, state = Reviews.pullRequestState pr.state pr.draft}
+  either throwError pure =<< Git.reactToComment conn ref request.ask.commentId "eyes"
 
 
 reviewPullRequest :: Reviews.ReviewId -> ATBackgroundCtx ()
@@ -289,11 +364,13 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
         Right result -> do
           ctx <- ask @AuthContext
           let body =
-                maybe "Documentation-only change. No production impact review was needed." (renderReview ctx.config.hostUrl completed True) result <> case fmap (.policy) authority of
+                maybe "Documentation-only change. No production impact review was needed." (renderReview ctx.config.hostUrl completed MonoscopeView) result <> case fmap (.policy) authority of
                   Just Issues.Observe -> "\n\nObserve policy: the GitHub comment was not updated."
                   (Nothing; Just Issues.Autonomous; Just Issues.ReviewSelected{}) -> ""
               findings = if maybe True ((== NoFinding) . (.verdict)) result then Issues.ResultNoFindings else Issues.ResultSucceeded
-          pure $ Issues.CompletedResult findings Issues.PublishAnswer $ Issues.reportAnswer body completed.result
+              -- Cited evidence first; the run page draws these widgets live over the review window.
+              widgets = [w{Widget.pngProfile = Nothing} | r <- toList result, e <- sortOn (\e -> not $ any (elem e.key . (.evidenceKeys)) r.findings) r.evidence, Just w <- [evidenceWidget r.windowStart r.windowEnd e]]
+          pure $ Issues.CompletedResult findings Issues.PublishAnswer $ (Issues.reportAnswer body completed.result){Issues.widgets = AE.toJSON <$> nonEmpty (take 4 widgets)}
       void $ Issues.completeRun context completion
 
     execute :: Reviews.ReviewRun -> Issues.EventRun -> Issues.RunContext -> ReviewCtx ()
@@ -309,9 +386,12 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
       token <- require =<< GitSync.githubToken cfg.githubAppId cfg.githubAppPrivateKey (GitSync.AppInstallation installationId)
       conn <- require $ first Git.gitConnErrorMessage $ GitSync.credentialConn credential token
       pr <- require =<< Git.getPullRequest conn ref run.number
-      if pr.head.revision /= run.revision || pr.state /= "open" || pr.draft
+      trigger <- maybe Reviews.ReadyPullRequests (.trigger) . find (\s -> s.owner == run.owner && s.repo == run.repo) <$> Reviews.repositorySettings run.projectId
+      let prState = Reviews.pullRequestState pr.state pr.draft
+          eligible = prState == Reviews.Open || prState == Reviews.Draft && (isJust run.request || trigger == Reviews.AllPullRequests)
+      if pr.head.revision /= run.revision || not eligible
         then do
-          Reviews.receiveEvent Reviews.PullRequestEvent{owner = run.owner, repo = run.repo, installationId, number = run.number, revision = pr.head.revision, updatedAt = pr.updatedAt, reviewable = pr.state == "open" && not pr.draft}
+          Reviews.receiveEvent Nothing Reviews.PullRequestEvent{owner = run.owner, repo = run.repo, installationId, number = run.number, revision = pr.head.revision, updatedAt = pr.updatedAt, state = prState}
           Reviews.supersedeRun run
         else do
           files <- require =<< Git.getPullRequestFiles conn ref run.number
@@ -326,11 +406,11 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                 Nothing -> analyse run execution context conn (filter ((== credential.id) . (.credentialId)) mappings) pr files
                 Just retained -> require $ first toText $ AET.parseEither AE.parseJSON retained
               requireActive run execution
-              Issues.saveRunResult context "Production impact review" (renderReview cfg.hostUrl run True result)
+              Issues.saveRunResult context "Production impact review" (renderReview cfg.hostUrl run MonoscopeView result)
               publish run execution context conn ref pr result
 
     sameRevision :: Git.PullRequest -> Git.PullRequest -> Bool
-    sameRevision expected actual = expected.head == actual.head && expected.base == actual.base && actual.state == "open" && not actual.draft
+    sameRevision expected actual = expected.head == actual.head && expected.base == actual.base && actual.state == "open" && actual.draft == expected.draft
 
     analyse :: Reviews.ReviewRun -> Issues.EventRun -> Issues.RunContext -> Git.GitConn -> [CodeContext.CodeMapping] -> Git.PullRequest -> [Git.PullRequestFile] -> ReviewCtx ReviewResult
     analyse run execution context conn mappings pr files = do
@@ -400,13 +480,13 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
             output <- require answer
             parsed <- require $ first (const "Review agent returned invalid review JSON") $ AE.eitherDecodeStrict @ReviewDraft $ encodeUtf8 output
             pure (parsed, Map.elems memory.evidence, memory.notes)
-          else pure (ReviewDraft [] ["No mapped service is available for production investigation."], [], [])
+          else pure (ReviewDraft [] ["No mapped service is available for production investigation."] "" [], [], [])
       let allEvidence = evidence <> queried
           queryGaps =
             ["A production query reached its result limit." | any (maybe False (.limitReached) . (.queryResult)) queried]
               <> ["A production query truncated oversized fields." | any (maybe False (.fieldsTruncated) . (.queryResult)) queried]
-          validated = validateResult initial.files allEvidence (initial.coverage <> queryGaps) (ReviewResult NoFinding draft.findings draft.coverage allEvidence from until (Just notes))
-          reviewed = fromRight (ReviewResult CoverageUnknown [] (initial.coverage <> queryGaps <> ["The model review did not produce verifiable findings; rerun the review."]) allEvidence from until Nothing) validated
+          validated = validateResult initial.files allEvidence (initial.coverage <> queryGaps) (ReviewResult NoFinding draft.findings draft.coverage allEvidence from until (Just notes) (guarded (not . T.null) draft.summary) (guarded (not . null) draft.assessments))
+          reviewed = fromRight (ReviewResult CoverageUnknown [] (initial.coverage <> queryGaps <> ["The model review did not produce verifiable findings; rerun the review."]) allEvidence from until Nothing Nothing Nothing) validated
       whenLeft_ validated $ \err -> Log.logAttention "Production impact model validation failed" (run.id, err)
       requireActive run execution
       Reviews.saveResult run reviewed
@@ -455,8 +535,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
               current <- require =<< Git.getPullRequest conn ref run.number
               unless (sameRevision pr current) $ throwError $ ReviewFailure "PR changed before publication"
               void $ require . first AI.toolDenialMessage =<< AI.authorizeRunOperation context Catalog.ExternalPublication
-              let runLink = "\n\n[Run and artifacts](" <> hostPath cfg.hostUrl (urls.aiRoutineRunGet run.projectId context.rootId Nothing) <> ")"
-                  body = marker <> "\n" <> renderReview cfg.hostUrl run includeEvidence result <> runLink
+              let body = marker <> "\n" <> renderReview cfg.hostUrl run GitHubComment{includeEvidence, runUrl = hostPath cfg.hostUrl (urls.aiRoutineRunGet run.projectId context.rootId Nothing)} result
                   comment = Catalog.ReviewComment run.id body
               response <-
                 either (throwError . ReviewPublicationRefused) pure =<< AI.executeNativeOperation context (Catalog.PublishPullRequestComment comment) \case
@@ -523,20 +602,9 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           LATERAL jsonb_path_query(schema, '$.**.query') q
           WHERE project_id = #{run.projectId} AND jsonb_typeof(q) = 'string' ORDER BY id LIMIT #{evidenceLimit}|]
       telemetry <- forM (zip [1 :: Int ..] (take maxEvidence stats)) \(n, (service, environment, count, errors)) -> do
-        let selector = "resource.service.name == " <> decodeUtf8 (AE.encode service) <> if T.null environment then "" else " and resource.deployment.environment.name == " <> decodeUtf8 (AE.encode environment)
-            widget = (def :: Widget.Widget){Widget.wType = Widget.WTTimeseries, Widget.title = Just "Observed service events", Widget.query = Just (selector <> " and " <> toQText (evidenceWindow from until) <> " | summarize events = count() by bin_auto(timestamp)"), Widget.pngProfile = Just Widget.PngSlack}
-        chart <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.config.hostUrl run.projectId widget Nothing (Just $ toText $ iso8601Show from) (Just $ toText $ iso8601Show until)
-        pure
-          $ Evidence
-            ("telemetry-" <> show n)
-            Telemetry
-            (Just service)
-            (guarded (not . T.null) environment)
-            (link $ (urls.logExplorer run.projectId).logExplorerGet (Just selector) Nothing Nothing (Just $ toText $ iso8601Show from) (Just $ toText $ iso8601Show until) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing)
-            Nothing
-            (Just $ Observation count errors)
-            chart
-            Nothing
+        let item = Evidence ("telemetry-" <> show n) Telemetry (Just service) (guarded (not . T.null) environment) "" Nothing (Just $ Observation count errors) Nothing Nothing
+        chart <- evidencePng run.projectId from until item
+        pure item{url = link $ (urls.logExplorer run.projectId).logExplorerGet (Just $ serviceSelector item) Nothing Nothing (Just $ toText $ iso8601Show from) (Just $ toText $ iso8601Show until) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing, chartUrl = chart}
       let references kind rows =
             zipWith
               ( \n (url, query) ->
@@ -562,34 +630,99 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
       pure (telemetry <> references Monitor [(link $ (urls.monitors run.projectId).overviewGet i, q) | (i, q) <- monitors] <> references Dashboard [(link $ urls.dashboardsGet run.projectId d Nothing Nothing Nothing Nothing [], q) | (d, q) <- dashboards], gaps)
 
 
-renderReview :: Text -> Reviews.ReviewRun -> Bool -> ReviewResult -> Text
-renderReview host run includeEvidence result =
+-- | One evidence item as one widget: the run page draws it live and GitHub gets its PNG.
+-- Log and span samples have no widget, so their bodies never leave Monoscope as images.
+evidenceWidget :: UTCTime -> UTCTime -> Evidence -> Maybe Widget.Widget
+evidenceWidget from until item = case item.queryResult of
+  Just QueryObservation{kind = Aggregated, headers, dataset} | all (all (\case AE.Number{} -> True; AE.Null -> True; _ -> False)) dataset ->
+    Just (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.title = Just "Review query", Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.source = AE.toJSON $ V.cons (AE.toJSON <$> headers) dataset}, Widget.pngProfile = Just Widget.PngSlack}
+  Just _ -> Nothing
+  Nothing -> case (item.kind, item.service) of
+    (Telemetry, Just _) ->
+      Just (def :: Widget.Widget){Widget.wType = Widget.WTTimeseries, Widget.title = Just "Observed service events", Widget.query = Just (serviceSelector item <> " and " <> toQText (evidenceWindow from until) <> " | summarize events = count() by bin_auto(timestamp)"), Widget.pngProfile = Just Widget.PngSlack}
+    _ -> Nothing
+
+
+serviceSelector :: Evidence -> Text
+serviceSelector item = T.intercalate " and " $ ["resource.service.name == " <> decodeUtf8 (AE.encode service) | Just service <- [item.service]] <> ["resource.deployment.environment.name == " <> decodeUtf8 (AE.encode environment) | Just environment <- [item.environment]]
+
+
+evidencePng :: (ELog.Log :> es, Reader AuthContext :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Evidence -> Eff es (Maybe Text)
+evidencePng pid from until item = do
+  ctx <- ask @AuthContext
+  fmap join $ forM (evidenceWidget from until item) \widget -> Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.config.hostUrl pid widget Nothing (Just $ toText $ iso8601Show from) (Just $ toText $ iso8601Show until)
+
+
+-- | Where a review is read. GitHub shows production detail only when the repository opts in.
+data Audience = GitHubComment {includeEvidence :: Bool, runUrl :: Text} | MonoscopeView
+
+
+-- | Model-authored text is escaped and defanged; only host-built links appear.
+renderReview :: Text -> Reviews.ReviewRun -> Audience -> ReviewResult -> Text
+renderReview host run audience result =
   T.intercalate "\n\n"
-    $ [ "### Monoscope production impact · " <> label result.verdict
-      , "Project `" <> run.projectId.toText <> "` · reviewed `" <> run.revision <> "` · advisory"
-      , "Evidence window (UTC): " <> show result.windowStart <> " → " <> show result.windowEnd
-      ]
-    <> concatMap findingText result.findings
-    <> ["![" <> (if isJust item.queryResult then "Review query results" else "Observed service events") <> "](" <> url <> ")" | includeEvidence, item <- take 3 $ filter (\e -> any (elem e.key . (.evidenceKeys)) result.findings) result.evidence, Just url <- [item.chartUrl]]
-    <> ["**Coverage:** " <> (if includeEvidence then plain $ T.intercalate " " result.coverage else "Open Monoscope for evidence and coverage details.") | not $ null result.coverage]
-    <> ["[Review history and settings](" <> hostPath host (urls.codeMappingsSettings run.projectId Nothing) <> ")"]
+    $ ["### " <> maybe ("Monoscope production impact · " <> label result.verdict) (riskHeading . mergeRisk) result.assessments]
+    <> [plain s | Just s <- [result.summary]]
+    <> foldMap (pure . riskTable) result.assessments
+    <> (if null result.findings then [] else ("#### Worth checking in production (" <> show (length result.findings) <> ")") : map findingText result.findings)
+    <> ["![" <> (if isJust item.queryResult then "Review query results" else "Observed service events") <> "](" <> url <> ")" | github && shown, item <- take 3 $ filter (\e -> any (elem e.key . (.evidenceKeys)) result.findings) result.evidence, Just url <- [item.chartUrl]]
+    <> coverage
+    <> [footer]
   where
+    (github, shown) = case audience of GitHubComment{includeEvidence} -> (True, includeEvidence); MonoscopeView -> (False, True)
     label = \case
       WorthChecking -> "Worth checking"
       CoverageUnknown -> "Coverage unknown"
       NoFinding -> "No finding"
+    riskHeading = \case
+      LowRisk -> "🟢 Merge risk: low"
+      MediumRisk -> "🟡 Merge risk: medium"
+      HighRisk -> "🔴 Merge risk: high"
+    riskTable assessments =
+      T.unlines
+        $ ["| | Verdict | What raises the risk |", "| :-- | :-- | :-- |"]
+        <> ["| **" <> dimensionName a.dimension <> "** | " <> gradeText a.dimension a.grade <> " | " <> (if null a.gaps then "—" else T.intercalate (if github then "<br>" else "; ") (map plain a.gaps)) <> " |" | a <- sortOn (.dimension) assessments]
+    dimensionName = \case Alignment -> "Alignment"; Impact -> "Impact"; Verification -> "Verification"; Rollback -> "Rollback cost"; ErrorDetection -> "Error detection"
+    gradeText dimension grade =
+      (case grade of Good -> "✅ "; NotApplicable -> "✅ "; Fair -> "👀 "; Poor -> "⚠️ ") <> case (dimension, grade) of
+        (_, NotApplicable) -> "n/a"
+        (Impact, Good) -> "small"
+        (Impact, Fair) -> "medium"
+        (Impact, Poor) -> "large"
+        (Rollback, Good) -> "low"
+        (Rollback, Fair) -> "medium"
+        (Rollback, Poor) -> "high"
+        ((Alignment; Verification; ErrorDetection), Good) -> "good"
+        ((Alignment; Verification; ErrorDetection), Fair) -> "decent"
+        ((Alignment; Verification; ErrorDetection), Poor) -> "poor"
     findingText finding =
-      [ "**`" <> clean finding.location.path <> ":" <> show finding.location.line <> "` (" <> show finding.location.side <> ")**"
-      ]
-        <> (if includeEvidence then ["**Inferred:** " <> plain finding.mechanism, "**Next check:** " <> plain finding.nextStep] else ["Production details are available in Monoscope."])
+      T.intercalate "\n" . map (\line -> if T.null line then ">" else "> " <> line)
+        $ ["[!WARNING]" | github]
+        <> ["**[`" <> clean finding.location.path <> ":" <> show finding.location.line <> "`](" <> diffLink finding.location <> ")** (" <> T.toLower (show finding.location.side) <> ")"]
+        <> (if shown then [plain finding.mechanism, "", "**Next check:** " <> plain finding.nextStep] else ["Production details are available in Monoscope."])
+        <> ["" | shown]
         <> map evidenceText (filter (\e -> e.key `elem` finding.evidenceKeys) result.evidence)
+    diffLink location = "https://github.com/" <> run.owner <> "/" <> run.repo <> "/pull/" <> show run.number <> "/files#diff-" <> sha256 (encodeUtf8 location.path) <> (case location.side of Base -> "L"; Head -> "R") <> show location.line
     evidenceText item =
       "["
         <> T.toLower (show item.kind)
         <> " evidence]("
         <> item.url
         <> ")"
-        <> if includeEvidence then foldMap (\observed -> " · **Observed:** " <> show observed.events <> " events · " <> show observed.errors <> " errors") item.observed <> foldMap (const " · **Observed:** query results") item.queryResult <> foldMap ((" · service: " <>) . plain) item.service <> foldMap ((" · environment: " <>) . plain) item.environment else ""
+        <> if shown then foldMap (\observed -> " · **Observed:** " <> show observed.events <> " events · " <> show observed.errors <> " errors") item.observed <> foldMap (const " · **Observed:** query results") item.queryResult <> foldMap ((" · service: " <>) . plain) item.service <> foldMap ((" · environment: " <>) . plain) item.environment else ""
+    coverage
+      | null result.coverage = []
+      | not shown = ["**Coverage:** Open Monoscope for evidence and coverage details."]
+      | github = ["<details><summary>Coverage gaps (" <> show (length result.coverage) <> ")</summary>\n\n" <> gaps <> "\n</details>"]
+      | otherwise = ["**Coverage gaps**", gaps]
+      where
+        gaps = T.unlines $ map (("- " <>) . plain) result.coverage
+    window = toText (formatTime defaultTimeLocale "%b %-e" result.windowStart) <> " to " <> toText (formatTime defaultTimeLocale "%b %-e, %Y" result.windowEnd) <> " (UTC)"
+    settings = hostPath host (urls.codeMappingsSettings run.projectId Nothing)
+    footer = case audience of
+      GitHubComment{runUrl} ->
+        "<sub>Reviewed <a href=\"https://github.com/" <> run.owner <> "/" <> run.repo <> "/commit/" <> run.revision <> "\"><code>" <> T.take 7 run.revision <> "</code></a> against production telemetry from " <> window <> " · <a href=\"" <> runUrl <> "\">Run and evidence</a> · <a href=\"" <> settings <> "\">Review settings</a><br>Comment <code>@monoscope review</code> to review again, or <code>@monoscope prove it</code> to record proof.</sub>"
+      MonoscopeView -> "Reviewed `" <> T.take 7 run.revision <> "` against production telemetry from " <> window <> " · [Review settings](" <> settings <> ")"
     plain = T.concatMap (\c -> (if c `elem` ("\\*_|#!" :: String) then "\\" else "") <> one c) . clean
     clean = T.replace "://" ":／／" . T.map (\c -> fromMaybe c $ lookup c ([('[', '［'), (']', '］'), ('@', '＠'), ('<', '‹'), ('>', '›'), ('`', '\''), ('\n', ' '), ('\r', ' ')] :: [(Char, Char)]))
 
@@ -620,15 +753,9 @@ requestEvidence pid currentServices windowStart windowEnd request = do
               if LBS.length (AE.encode observation) > 65536
                 then pure $ Left "Query result exceeds its text budget; select fewer columns or rows"
                 else do
-                  chart <-
-                    if aggregated && all (all (\case AE.Number{} -> True; AE.Null -> True; _ -> False)) rows
-                      then do
-                        let dataset = (def :: Widget.WidgetDataset){Widget.source = AE.toJSON $ V.cons (AE.toJSON <$> V.fromList headers) rows}
-                            widget = (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.title = Just "Review query", Widget.dataset = Just dataset, Widget.pngProfile = Just Widget.PngSlack}
-                        Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.config.hostUrl pid widget Nothing (Just $ toText $ iso8601Show windowStart) (Just $ toText $ iso8601Show windowEnd)
-                      else pure Nothing
-                  let url = hostPath ctx.config.hostUrl $ urls.codeMappingsSettings pid Nothing
-                      evidence = Evidence ("query-" <> show (Map.size queried + 1)) Telemetry (Just request.service) Nothing url (Just query) Nothing chart (Just observation)
+                  let item = Evidence ("query-" <> show (Map.size queried + 1)) Telemetry (Just request.service) Nothing (hostPath ctx.config.hostUrl $ urls.codeMappingsSettings pid Nothing) (Just query) Nothing Nothing (Just observation)
+                  chart <- evidencePng pid windowStart windowEnd item
+                  let evidence = item{chartUrl = chart}
                   permitted <- elem request.service <$> currentServices
                   if not permitted
                     then pure $ Left "Service or review authorization is no longer available"

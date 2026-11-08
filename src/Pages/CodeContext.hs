@@ -77,6 +77,7 @@ import Text.Slugify (slugify)
 import Utils (LoadingSize (..), TabStrip (..), countNoun, faSprite_, htmxIndicator_, navTabStrip_, nonEmptyT, renderMarkdown)
 import Web.Auth (demoGuestSessionId)
 import Web.FormUrlEncoded (FromForm)
+import Web.HttpApiData (toUrlPiece)
 import Web.Links (CookieProtectedRoutes (..), IssuesRoutes' (..), RepositoryTab (..), urls)
 
 
@@ -604,9 +605,8 @@ repositoriesPageH pid selection = do
                 , Table.col
                     "Production impact reviews"
                     ( \repository -> case find (\s -> repository.host == Git.GitHub && isNothing repository.apiBase && s.owner == T.toLower repository.owner && s.repo == T.toLower repository.repo) settings of
-                        Just s | s.enabled && not (null $ servicesFor repository) -> colorChip_ SuccessBadge "circle-check" "Enabled"
-                        Just s | s.enabled -> colorChip_ WarningBadge "circle-info" "Link a service"
-                        Just _ -> colorChip_ NeutralBadge "circle-info" "Off"
+                        Just _ | null (servicesFor repository) -> colorChip_ WarningBadge "circle-info" "Link a service"
+                        Just s -> colorChip_ (if s.trigger == ImpactReviews.WhenAsked then NeutralBadge else SuccessBadge) "circle-check" $ triggerLabel s.trigger
                         Nothing -> colorChip_ NeutralBadge "circle-info" "Not configured"
                     )
                 , Table.col
@@ -746,7 +746,7 @@ repositoriesPageH pid selection = do
               Just value -> case AE.fromJSON value of
                 AE.Error _ -> p_ [class_ "text-sm text-textWeak"] "The saved review could not be displayed. Rerun the review."
                 AE.Success result -> do
-                  div_ [class_ "prose prose-sm max-w-none break-words [&_pre]:overflow-x-auto"] $ renderMarkdown (ImpactReview.renderReview cfg.hostUrl run True result)
+                  div_ [class_ "prose prose-sm max-w-none break-words [&_pre]:overflow-x-auto"] $ renderMarkdown (ImpactReview.renderReview cfg.hostUrl run ImpactReview.MonoscopeView result)
                   for_ (nonEmpty =<< result.knowledge) \notes -> details_ [class_ "mt-3 text-sm text-textWeak"] do
                     summary_ [class_ "cursor-pointer font-medium"] "Service knowledge from this review"
                     p_ [class_ "mt-2 text-xs"] "Agent conclusions from the recorded evidence window. Recheck against current code and telemetry."
@@ -827,9 +827,23 @@ usageText total =
     <> (if total.unreportedAttempts == 0 then "" else " · attempts without model receipts: " <> show total.unreportedAttempts <> " (cost unknown)")
 
 
+triggerLabel :: ImpactReviews.ReviewTrigger -> Text
+triggerLabel = \case
+  ImpactReviews.ReadyPullRequests -> "Ready pull requests"
+  ImpactReviews.AllPullRequests -> "Drafts and ready pull requests"
+  ImpactReviews.WhenAsked -> "Only when asked"
+
+
+triggerOptions_ :: Monad m => ImpactReviews.ReviewTrigger -> HtmlT m ()
+triggerOptions_ current = options_ (Just $ toUrlPiece current) [(toUrlPiece t, triggerLabel t) | t <- universe]
+
+
+askHint :: Text
+askHint = "Comment @monoscope review on any pull request to ask for a review, or @monoscope prove it to also record proof."
+
+
 data ReviewReadiness
   = ReviewReady ImpactReviews.ReviewSettings
-  | ReviewDisabled
   | ReviewNeedsRoutine
   | ReviewNeedsService
   | ReviewNeedsApp
@@ -872,7 +886,7 @@ repositoryGetH pid rid = do
         | repository.host /= Git.GitHub || isJust repository.apiBase = ReviewUnsupportedHost
         | any T.null ([cfg.githubAppWebhookSecret, cfg.githubAppId, cfg.githubAppPrivateKey] :: [Text]) = ReviewNeedsServer
         | not (any (isJust . (.service)) mappings) = ReviewNeedsService
-        | Just s <- reviewSettings = if not s.enabled then ReviewDisabled else if isNothing cfg.impactReviewAgent then ReviewNeedsAgent else maybe ReviewNeedsRoutine (const $ ReviewReady s) routine
+        | Just s <- reviewSettings = if isNothing cfg.impactReviewAgent then ReviewNeedsAgent else maybe ReviewNeedsRoutine (const $ ReviewReady s) routine
         | otherwise = ReviewNeedsApp
   resources <- maybe (pure []) (RepositorySync.resources pid . (.id)) dashboardSync
   conflictVersions <- forM (filter (.conflicted) resources) $ \resource -> (resource.id,) <$> RepositorySync.localDefinition resource
@@ -1050,11 +1064,10 @@ instance ToHtml RepositoryGet where
           let setupRequired = (,True) . callout_ WarningBadge (Just "Setup required")
               (readiness, blocked) = case page.reviewReadiness of
                 ReviewReady settings -> (,False) do
-                  colorChip_ SuccessBadge "circle-check" "Ready for pull requests"
-                  p_ [class_ "text-sm text-textWeak"] $ if settings.includeEvidence then "Reviews share production aggregates and links in GitHub." else "Reviews share links to production evidence in GitHub."
+                  colorChip_ SuccessBadge "circle-check" $ triggerLabel settings.trigger
+                  p_ [class_ "text-sm text-textWeak"] $ toHtml askHint
                 ReviewNeedsAgent -> setupRequired "Automatic reviews are unavailable. Ask your Monoscope administrator to finish review setup."
                 ReviewNeedsRoutine -> setupRequired "Activate or resume the Production impact review routine. Repository settings choose which pull requests it reviews."
-                ReviewDisabled -> (colorChip_ NeutralBadge "circle-info" "Reviews disabled", False)
                 ReviewNeedsService -> setupRequired "Link a named service so reviews can find the production telemetry for this repository."
                 ReviewNeedsApp -> setupRequired "Link source context through the GitHub App to receive automatic pull request reviews. A token connection can still provide source context and configuration sync."
                 ReviewNeedsServer -> setupRequired "An administrator must configure the GitHub App and webhook before automatic reviews can run."
@@ -1063,8 +1076,8 @@ instance ToHtml RepositoryGet where
           when (canEdit && repository.host == Git.GitHub && isNothing repository.apiBase) $ post (urls.repositoryReviewsPost pid rid) [class_ "grid items-end gap-3 sm:grid-cols-2"] do
             input_ [type_ "hidden", name_ "owner", value_ repository.owner]
             input_ [type_ "hidden", name_ "repo", value_ repository.repo]
-            formSelectField_ FieldSm "Automatic pull request reviews" "enabled" False
-              $ options_ (Just $ bool "false" "true" $ maybe False (.enabled) page.reviewSettings) [("true", "On"), ("false", "Off")]
+            formSelectField_ FieldSm "Review pull requests" "trigger" False
+              $ triggerOptions_ (maybe ImpactReviews.ReadyPullRequests (.trigger) page.reviewSettings)
             formSelectField_ FieldSm "Production evidence in GitHub" "includeEvidence" False
               $ options_ (Just $ bool "false" "true" $ maybe False (.includeEvidence) page.reviewSettings) [("false", "Links only"), ("true", "Aggregates and links")]
             button_ [type_ "submit", class_ $ "btn btn-sm mb-1 justify-self-start sm:col-span-2 " <> bool "btn-primary" "btn-outline" blocked] "Save review settings"
@@ -1282,7 +1295,7 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
         addMappingForm_ (fromRight [] repoResult) cred
     when (isNothing repositoryM) $ section_ [class_ "pt-6 space-y-3 border-t border-strokeWeak"] do
       h3_ [class_ "text-sm font-semibold text-textStrong"] "Production impact reviews"
-      p_ [class_ "text-xs text-textWeak"] "The Production impact review routine reviews ready pull requests for enabled repositories. Activate the routine to start automatic reviews and inspect its runs."
+      p_ [class_ "text-xs text-textWeak"] $ toHtml $ "The Production impact review routine reviews pull requests for linked repositories. " <> askHint
       a_ [href_ (urls.aiRoutinesGet pid <> "#routine-production-impact-review"), class_ "text-sm text-textBrand hover:underline"] "Manage review routine and runs"
       when (T.null authConfig.githubAppWebhookSecret) $ p_ [class_ "text-xs text-textError"] "Reviews need a GitHub App webhook secret. Ask your Monoscope administrator to configure it."
       when (null reviewSettings) $ p_ [class_ "text-xs text-textWeak"] "Link a repository using a GitHub App installation to enable automatic reviews."
@@ -1293,15 +1306,15 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
             input_ [type_ "hidden", name_ "repo", value_ settings.repo]
             span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml (settings.owner <> "/" <> settings.repo)
             label_ [class_ "text-xs text-textWeak space-y-1"] do
-              span_ [class_ "block"] "PR reviews"
-              select_ [name_ "enabled", class_ "select select-sm"] $ options_ (Just $ bool "false" "true" settings.enabled) [("true", "Enabled"), ("false", "Disabled")]
+              span_ [class_ "block"] "Review pull requests"
+              select_ [name_ "trigger", class_ "select select-sm"] $ triggerOptions_ settings.trigger
             label_ [class_ "text-xs text-textWeak space-y-1"] do
               span_ [class_ "block"] "Production evidence in GitHub"
               select_ [name_ "includeEvidence", class_ "select select-sm"] $ options_ (Just $ bool "false" "true" settings.includeEvidence) [("true", "Aggregates and links"), ("false", "Links only")]
             button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save review settings"
           else div_ [class_ "space-y-1 rounded-lg border border-strokeWeak p-3"] do
             p_ [class_ "text-sm font-medium text-textStrong break-all"] $ toHtml $ settings.owner <> "/" <> settings.repo
-            colorChip_ NeutralBadge "code-branch" $ if settings.enabled then "Reviews enabled" else "Reviews disabled"
+            colorChip_ NeutralBadge "code-branch" $ triggerLabel settings.trigger
             p_ [class_ "text-xs text-textWeak"] $ if settings.includeEvidence then "Production evidence: aggregates and links" else "Production evidence: links only"
   where
     sample = fromMaybe "" sampleM
