@@ -441,6 +441,9 @@ spec = describe "Monitoring" do
       cronAdded <- fromRightShow <$> call tr (Alerts.cronMonitorPostH pid (Alerts.CronForm "nightly-billing" "Nightly billing" 3600 300))
       goldenParts "uptime-cron-forms" . ordNub $ tagsWith ["value name=\"url\"", "hx-target:inherited=\"this\""] (renderT added) <> tagsWith ["value name=\"slug\"", "hx-target:inherited=\"this\""] (renderT cronAdded)
 
+      void $ runQueryEffect tr $ ProjectMembers.createEveryoneTeam pid (Servant.getResponse tr.trSessAndHeader).user.id
+      setupSlackData tr pid "T_UPTIME"
+      dbExec tr [sql|UPDATE projects.projects SET error_alerts = TRUE WHERE id = ?|] (Only pid)
       -- One failure is a blip; two open a downtime issue; a success resolves it.
       let uptimeNamed n = maybe (fail $ "no uptime check " <> toString n) pure . find ((== n) . (.name)) =<< runQueryEffect tr (PromCfg.configsByProjectId pid PromCfg.CKUptime)
       shop <- uptimeNamed "Shop"
@@ -455,6 +458,9 @@ spec = describe "Monitoring" do
       resolved <- downtime >>= maybe (fail "issue vanished") pure
       isJust resolved.archivedAt `shouldBe` True
       runTestBg frozenTime tr (Issues.selectLatestStateEvent resolved.id) `shouldReturn` Just Issues.IEResolved
+      -- Downtime posts one Slack card; recovery replies in its thread and edits the card, once.
+      dbQuery @_ @(Only Text) tr [sql|SELECT d.operation FROM apis.slack_incident_deliveries d JOIN apis.incident_episodes e ON e.id = d.episode_id WHERE e.issue_id = ? ORDER BY d.sequence|] (Only opened.id)
+        `shouldReturn` map Only ["post_root", "post_reply", "update_root"]
       -- Through the worker, a refused connection is recorded as a failure.
       void $ runQueryEffect tr $ PromCfg.insertConfig pid PromCfg.CKUptime "refused" "http://127.0.0.1:1/health" 60 Nothing (AE.object []) (Just 200)
       refused <- uptimeNamed "refused"

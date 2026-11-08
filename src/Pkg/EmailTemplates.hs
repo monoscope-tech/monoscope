@@ -29,6 +29,7 @@ module Pkg.EmailTemplates (
   ReportEvidence (..),
   HistoricalReportEvidence (..),
   monitorAlertEmail,
+  checkAlertEmail,
   monitorRecoveryEmail,
   freeTierUsageEmail,
   planUpgradedEmail,
@@ -1146,6 +1147,19 @@ monitorAlertEmail projectName monitorTitle monitorUrl currentValue threshold dir
     )
     "View Monitor"
     monitorUrl
+
+
+-- | An uptime check or cron monitor failing: what failed, and the facts that say how.
+checkAlertEmail :: Text -> Text -> [Text] -> Text -> (Text, Html ())
+checkAlertEmail projectName headline facts =
+  ctaEmail
+    ("[···] " <> headline <> " - " <> projectName)
+    True
+    ( do
+        h1_ $ toHtml headline
+        forM_ facts $ p_ . toHtml
+    )
+    "View Issue"
 
 
 monitorRecoveryEmail :: Text -> Text -> Text -> (Text, Html ())

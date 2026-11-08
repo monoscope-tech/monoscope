@@ -4963,9 +4963,11 @@ evaluateCronMonitor now m = do
       latest = viaNonEmpty last $ sortWith fst [(c.timestamp, st) | c <- spans, attr "monitor.slug" c == Just m.slug, maybe True (c.timestamp >) m.lastCheckinAt, Just st <- [completion c]]
       lastSeen = (fst <$> latest) <|> m.lastCheckinAt
       expectedBy = addUTCTime (fromIntegral $ m.intervalSecs + m.graceSecs) (fromMaybe m.createdAt lastSeen)
-      open failure =
-        Issues.insertIssue
-          =<< Issues.createCronIssue m.projectId Issues.CronData{monitorId = UUID.toText m.id, slug = m.slug, name = m.name, failure, expectedBy, lastCheckinAt = lastSeen}
+      open failure = do
+        let d = Issues.CronData{monitorId = UUID.toText m.id, slug = m.slug, name = m.name, failure, expectedBy, lastCheckinAt = lastSeen}
+            headline = (if T.null m.name then m.slug else m.name) <> bool " failed" " missed its run" (failure == Issues.CFMissed)
+        issue <- Issues.createCronIssue m.projectId d
+        alertCheckIssue issue "cron" (Mail.cronMessages d) headline ["Expected by " <> formatUTC expectedBy, maybe "No check-in yet" (("Last check-in " <>) . formatUTC) lastSeen]
   whenJust latest \(at, status) -> void $ Monitors.recordCronCheckin m.id at status
   case latest of
     Just (_, Monitors.CSOk) -> resolveOpenIssue m.projectId (Issues.cronTargetHash (UUID.toText m.id)) Issues.Cron now []
@@ -4982,27 +4984,60 @@ applyUptimeResult cfg now ms res = do
       ok = res == Right expected
       reason = either ("request failed: " <>) (\c -> bool ("status " <> show c <> ", expected " <> show expected) "ok" ok) res
   (before, after) <- PromCfg.recordUptime cfg.id ok (reason <> " · " <> show ms <> "ms")
-  when (not ok && after == 2)
-    $ Issues.insertIssue
-    =<< Issues.createUptimeIssue
-      cfg.projectId
-      Issues.UptimeData
-        { checkId = cfg.id.toText
-        , name = cfg.name
-        , url = cfg.url
-        , expectedStatus = expected
-        , statusCode = rightToMaybe res
-        , reason
-        , durationMs = ms
-        , downSince = addUTCTime (negate $ fromIntegral cfg.scrapeIntervalSeconds) now
-        }
+  when (not ok && after == 2) do
+    let d =
+          Issues.UptimeData
+            { checkId = cfg.id.toText
+            , name = cfg.name
+            , url = cfg.url
+            , expectedStatus = expected
+            , statusCode = rightToMaybe res
+            , reason
+            , durationMs = ms
+            , downSince = addUTCTime (negate $ fromIntegral cfg.scrapeIntervalSeconds) now
+            }
+    issue <- Issues.createUptimeIssue cfg.projectId d
+    alertCheckIssue issue "uptime" (Mail.uptimeMessages d) ((if T.null cfg.name then cfg.url else cfg.name) <> " is down") [cfg.url, reason]
   when (ok && before >= 2) $ resolveOpenIssue cfg.projectId (Issues.uptimeTargetHash cfg.id.toText) Issues.Uptime now ["after_failures" AE..= before]
 
 
--- | Archive a recovered signal's open issue and log it as resolved.
+-- | Open (or reopen) a failing check's one long-lived issue and alert on it, so a
+-- recurring outage replies in the check's thread instead of starting a new one.
+alertCheckIssue :: Issues.Issue -> Text -> (Text -> (Incidents.SlackPayload, Incidents.SlackPayload)) -> Text -> [Text] -> ATBackgroundCtx ()
+alertCheckIssue fresh reason messages headline facts = do
+  ctx <- ask @Config.AuthContext
+  now <- Time.currentTime
+  persisted <- Hasql.transaction TxS.ReadCommitted TxS.Write $ Issues.reopenOrInsertIssueTx now fresh
+  Projects.projectById fresh.projectId >>= traverse_ \project -> do
+    users <- Projects.usersByProjectId fresh.projectId
+    let issue = (fresh :: Issues.Issue){Issues.id = persisted}
+        url = issuePageUrl ctx fresh.projectId persisted
+        (subj, html) = ET.checkAlertEmail project.title headline facts url
+    void $ notifyIssue issue project users Issues.issueNotifyDedupHours reason (MonitorsAlert headline url Nothing) (messages url) url subj html
+
+
+-- | Archive a recovered signal's open issue and log it as resolved. A check that
+-- alerted says so in its thread and on every channel it alerted, before the
+-- resolution is logged, so the thread hears it once.
 resolveOpenIssue :: Projects.ProjectId -> Text -> Issues.IssueType -> UTCTime -> [(AE.Key, AE.Value)] -> ATBackgroundCtx ()
 resolveOpenIssue pid hash ty now extra =
-  Issues.selectIssueByHash pid hash (Issues.OpenOfType ty) >>= traverse_ \i -> Issues.resolveIssues pid [i.id] Nothing (Just $ AE.object (("recovered_at" AE..= now) : extra))
+  Issues.selectIssueByHash pid hash (Issues.OpenOfType ty) >>= traverse_ \i -> do
+    ctx <- ask @Config.AuthContext
+    let source = Incidents.IssueIncident i.id
+        url = issuePageUrl ctx pid i.id
+    recovered <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+      open <- mfilter ((== Incidents.EpisodeActive) . (.phase)) <$> Incidents.latestEpisodeTx pid source
+      forM open \episode -> do
+        let (rootPayload, replyPayload) = Mail.recoveredMessages i.title url (diffUTCTime now episode.startedAt)
+        Incidents.recordIncidentEventTx Incidents.IncidentUpdate{projectId = pid, source, observedAt = now, change = Incidents.IncidentRecovered, delivery = Incidents.PublishIncident, issueId = Just i.id, rootPayload, replyPayload, destinations = []}
+    whenJust recovered \_ -> do
+      tryStep "slack-incident-delivery" runSlackIncidentDeliveries
+      Projects.projectById pid >>= traverse_ \project -> do
+        teamM <- ProjectMembers.getEveryoneTeam pid
+        let (subj, html) = ET.monitorRecoveryEmail project.title i.title url
+        users <- Projects.usersByProjectId pid
+        whenJust teamM \team -> void $ fanOutToTeam team Fanout{slack = QueuedSlack, threads = Nothing, email = Just FanoutEmail{recipients = map (CI.original . (.email)) users, subject = subj, body = ET.renderEmail subj html}} (MonitorsRecoveryAlert i.title url) pid project.title url
+    Issues.resolveIssues pid [i.id] Nothing (Just $ AE.object (("recovered_at" AE..= now) : extra))
 
 
 -- | A read against TimeFusion when the project's reads are switched to it.

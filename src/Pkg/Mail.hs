@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, personName, activityReply, withOwner, Card, card, logPatternCard, rateChangeCard, cardMessages, RateChange (..), slackNewEndpointsAlert, slackReportAlert, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization, arr, mrkdwn, plainTxt, slackEscape, slackSection, slackHeader, slackContext, slackImage, dcGallery, slackActions) where
+module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, personName, activityReply, withOwner, Card, card, logPatternCard, rateChangeCard, cardMessages, uptimeMessages, cronMessages, recoveredMessages, RateChange (..), slackNewEndpointsAlert, slackReportAlert, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization, arr, mrkdwn, plainTxt, slackEscape, slackSection, slackHeader, slackContext, slackImage, dcGallery, slackActions) where
 
 import Control.Lens (Traversal', ix, (%~), (.~), (^..), (^?))
 import Data.Aeson qualified as AE
@@ -531,6 +531,34 @@ rootBlocks = ix "attachments" . nth 0 . key "blocks" . _Array
 
 blockId :: AE.Value -> Maybe Text
 blockId = (^? key "block_id" . _String)
+
+
+-- | An uptime check confirmed down, and the reply when it is still down.
+uptimeMessages :: Issues.UptimeData -> Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
+uptimeMessages d issueUrl =
+  cardMessages
+    (statusCard (Status ":red_circle:" "Down" Critical) (if T.null d.name then d.url else d.name) issueUrl)
+      { facts = [bold $ maybe "No response" (("HTTP " <>) . show) d.statusCode, "expected " <> show d.expectedStatus, show d.durationMs <> " ms"]
+      , body = [tagged "evidence" $ slackSection $ "`" <> slackEscape d.url <> "`\n" <> slackEscape d.reason]
+      , footer = ["Down since " <> atUtc d.downSince]
+      , actions = [("Open issue", issueUrl)]
+      }
+
+
+-- | A cron monitor that missed its window or reported a failed run.
+cronMessages :: Issues.CronData -> Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
+cronMessages d issueUrl =
+  cardMessages
+    (statusCard (Status ":red_circle:" (case d.failure of Issues.CFMissed -> "Missed run"; Issues.CFFailed -> "Run failed") Critical) (if T.null d.name then d.slug else d.name) issueUrl)
+      { facts = ["`" <> slackEscape d.slug <> "`", "expected by " <> atUtc d.expectedBy, maybe "no check-in yet" (("last check-in " <>) . atUtc) d.lastCheckinAt]
+      , actions = [("Open issue", issueUrl)]
+      }
+
+
+-- | A failing check that passed again: the root turns green and the reply says for how long it was down.
+recoveredMessages :: Text -> Text -> NominalDiffTime -> (Incidents.SlackPayload, Incidents.SlackPayload)
+recoveredMessages title issueUrl down =
+  (card (statusCard sRecovered title issueUrl){note = ["back after " <> lasted down]}, reply sRecovered title ["back after " <> lasted down])
 
 
 slackReportAlert :: Projects.ReportType -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Maybe Text -> Maybe Text -> Incidents.SlackPayload
