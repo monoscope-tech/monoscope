@@ -202,7 +202,10 @@ spec = describe "Monitoring" do
       widgetId <- maybe (fail "the saved widget has no id") pure savedWidget.id
       let widgetMonitor pid = runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId pid (Just dashboardId) widgetId
           widgetUrl = "/p/" <> testPid.toText <> "/dashboards/" <> dashboardId.toText <> "?expand=" <> widgetId
-          linksTo url notification = unless (url `T.isInfixOf` jsonText notification) $ expectationFailure $ "Missing widget link in " <> show (deliverySummary [notification])
+          -- A one-line thread reply links nothing; its root carries the links.
+          linksTo url = \case
+            SlackNotification sd | isJust sd.threadTs -> pass
+            notification -> unless (url `T.isInfixOf` jsonText notification) $ expectationFailure $ "Missing widget link in " <> show (deliverySummary [notification])
           putWidget w = (void <$> call tr (Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing w)) `shouldReturn` Right ()
           upsertAlert = call tr . Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId)
           check = advanceMinutes tr 1 >> deliverySummary . fst <$> captureNotifs tr checkTriggeredQueryMonitors
@@ -524,7 +527,7 @@ spec = describe "Monitoring" do
       dataset.source `shouldBe` AE.toJSON @[AE.Value] [AE.toJSON (["timestamp", "Monitor value"] :: [Text]), row earlier (Just (84 :: Double)), row (addUTCTime 60 earlier) (Nothing :: Maybe Double), row t0 (Just (100 :: Double))]
       configured <- fetchMonitor tr snapshot
       let (root, _) = Mail.monitorIncidentMessages configured 100 Monitors.MSAlerting t0 Nothing "https://example.com/incident" "https://example.com/monitor" Nothing
-      jsonText root `shouldContainAll` ["*100 s*  ·  threshold 60 s", "Chart unavailable"]
+      jsonText root `shouldContainAll` ["*100 s*  ·  above 60 s", "Chart unavailable"]
       jsonText (snd $ Mail.monitorDataUnavailableMessage configured Monitors.NoMeasurements t0 (Just (earlier, 84)) "https://example.com/incident" "https://example.com/monitor") `shouldSatisfy` T.isInfixOf "last value 84 s"
 
       -- Reminders: none by default, only when the interval is due, counted up to stop-after; recovery always reports.

@@ -292,7 +292,7 @@ spec = around withTestResources do
     let alert = Mail.RuntimeErrorAlert{issueId = "issue-trend-fallback", issueTitle = "Upstream timeout", errorData = (def :: ErrorPatterns.ATError){ErrorPatterns.hash = "slack-trend-fallback", ErrorPatterns.errorType = "UpstreamTimeout", ErrorPatterns.message = "The upstream request timed out"}, runtimeAlertType = Mail.NewRuntimeError, chartUrl = Nothing, occurrenceText = Nothing, firstSeenText = Nothing, ongoingFor = Nothing}
     (trend, _) <- captureNotifs tr $ Mail.sendSlackAlert Nothing alert testPid "Notifications" (Just "C_NOTIF_CHANNEL")
     [payload] <- pure [d.payload | SlackNotification d <- trend]
-    payloadText payload `shouldContainAll` ["Trend unavailable", "Open issue"]
+    payloadText payload `shouldContainAll` ["Chart unavailable", "Open issue"]
     (T.isInfixOf "image_url" (payloadText payload), slackPayloadViolations payload) `shouldBe` (False, [])
 
     -- A team routes Slack and PagerDuty to its own targets until it is deleted.
