@@ -288,6 +288,7 @@ extra-source-files:
     static/migrations/0269_pr_review_proofs.sql
     static/migrations/0270_pr_review_proof_recipes.sql
     static/migrations/0271_review_scheduling.sql
+    static/migrations/0272_otel_geo_country_column.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb
     test/fixtures/github-app-test.pem
