@@ -1,7 +1,8 @@
-module Data.Effectful.CodeReview.Explanation (renderExplanation, readExplanationMedia, proofScript, proofCast, proofFailure, renderProof, BrowserMedia (..), browserMedia, renderVideo) where
+module Data.Effectful.CodeReview.Explanation (renderExplanation, readExplanationMedia, proofScript, proofCast, proofFailure, Window (..), clipCast, renderProof, BrowserMedia (..), browserMedia, renderVideo) where
 
 import Conduit (runConduit, (.|))
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
@@ -11,7 +12,9 @@ import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), readPrivateArtif
 import Data.Effectful.CodeReview.Types hiding (sha256)
 import Data.FileEmbed (embedFile)
 import Data.List (lookup)
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
+import Data.Scientific (toRealFloat)
 import Data.Text qualified as T
 import GHC.Clock (getMonotonicTimeNSec)
 import Relude
@@ -198,12 +201,76 @@ proofCast logBytes = do
     _ -> Left "The proof recording is not an asciinema cast"
 
 
--- | An animated preview (GitHub inlines GIFs) and a video. Both tools read guest-recorded bytes,
--- so they run unprivileged with bounded time, input duration and output size.
-renderProof :: ByteString -> IO (Either Text (ByteString, ByteString))
-renderProof cast = renderMedia cast \_ run -> do
-  run "agg" ["--idle-time-limit", "2", "--fps-cap", "12", "--font-size", "16", "--theme", "github-dark", "proof.input", "proof.gif"]
-  run "ffmpeg" (quiet <> ["-t", "120", "-i", "proof.gif", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "26", "-fs", show mediaLimit, "proof.mp4"])
+-- | Where a proof's clip sits in the whole recording, in seconds.
+data Window = Window {start :: Double, end :: Double, total :: Double}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+-- | The section of a recording the comment plays, at most eight seconds: from just before the
+-- first output containing @highlight@, or the end of the recording when that never prints.
+-- Earlier output replays at once, so the clip opens on the full screen. A row under the terminal
+-- is a timeline of the whole recording: the clip's section is blue, and a dot marks the moment.
+--
+-- >>> let cast = "{\"version\":2,\"width\":40,\"height\":2}\n[0.5,\"o\",\"boot\\r\\n\"]\n[12,\"o\",\"== ke\"]\n[12.5,\"o\",\"y\\r\\n\"]\n[30,\"o\",\"done\"]"
+-- >>> snd <$> clipCast (Just "key") cast
+-- Right (Window {start = 11.0, end = 19.0, total = 30.0})
+-- >>> snd <$> clipCast Nothing cast
+-- Right (Window {start = 22.0, end = 30.0, total = 30.0})
+-- >>> map (fmap (\(t, _ :: Text, _ :: Text) -> t) . AE.decodeStrict @(Double, Text, Text)) . drop 1 . BS8.lines . fst <$> clipCast (Just "key") cast
+-- Right [Just 0.0,Just 0.0,Just 0.0,Just 1.0,Just 1.5,Just 8.0]
+-- >>> clipCast Nothing "not a cast"
+-- Left "The proof recording is not an asciinema cast"
+clipCast :: Maybe Text -> ByteString -> Either Text (ByteString, Window)
+clipCast highlight cast = case BS8.lines cast of
+  header : rest
+    | Just meta <- AE.decodeStrict @AE.Object header
+    , Just (AE.Number (toRealFloat @Double -> columns)) <- KM.lookup "width" meta
+    , Just (AE.Number (toRealFloat @Double -> rows)) <- KM.lookup "height" meta -> do
+        let outputs = [(t, text) | Just (AE.Array (toList -> [AE.Number (toRealFloat -> t), AE.String "o", AE.String text])) <- map AE.decodeStrict rest]
+            total = maybe 0 (fst . last) (nonEmpty outputs)
+            printed = T.concat (map snd outputs)
+            -- The time of the output that holds the highlight's first character.
+            moment = do
+              needle <- mfilter (not . T.null) highlight
+              let at = T.length $ fst $ T.breakOn needle printed
+              guard (at < T.length printed)
+              fst <$> find ((> at) . snd) (zip (map fst outputs) (scanl1 (+) (map (T.length . snd) outputs)))
+            window
+              | total <= 8 = Window 0 total total
+              | Just m <- moment = let from = max 0 (min (m - 1) (total - 8)) in Window from (from + 8) total
+              | otherwise = Window (total - 8) total total
+            width = floor columns :: Int
+            row = floor rows + 1 :: Int
+            clock seconds = let whole = floor seconds :: Int in show (whole `div` 60) <> ":" <> T.justifyRight 2 '0' (show (whole `mod` 60))
+            timeline now =
+              let cells = max 10 (width - 2 - T.length (clock now) - T.length (clock total))
+                  cell at = min (cells - 1) $ floor (at / max 1e-9 total * fromIntegral cells)
+                  paint i
+                    | i == cell now = ("\ESC[97m", "●")
+                    | i >= cell window.start && i <= cell window.end = ("\ESC[38;2;59;130;246m", "━")
+                    | otherwise = ("\ESC[38;2;100;116;139m", "─")
+                  track = foldMap (\run -> fst (NE.head run) <> foldMap snd run) $ NE.groupWith fst $ map paint [0 .. cells - 1]
+               in "\ESC7\ESC[" <> show row <> ";1H\ESC[2K\ESC[0m" <> clock now <> " " <> track <> "\ESC[0m " <> clock total <> "\ESC8"
+            event at text = decodeUtf8 @Text (AE.encode (at, "o" :: Text, text))
+            events =
+              [event (0 :: Double) ("\ESC[1;" <> show (row - 1) <> "r")]
+                <> [event 0 text | (t, text) <- outputs, t < window.start]
+                <> [event 0 (timeline window.start)]
+                <> [event (t - window.start) (text <> timeline t) | (t, text) <- outputs, t >= window.start, t <= window.end]
+                <> [event (window.end - window.start) (timeline window.end)]
+        Right (encodeUtf8 $ T.unlines $ decodeUtf8 (AE.encode $ KM.insert "height" (AE.toJSON row) meta) : events, window)
+  _ -> Left "The proof recording is not an asciinema cast"
+
+
+-- | The clip ('clipCast') as an animated preview (GitHub inlines GIFs) and the whole recording as a
+-- video. Both tools read guest-recorded bytes, so they run unprivileged with bounded time, input
+-- duration and output size.
+renderProof :: ByteString -> ByteString -> IO (Either Text (ByteString, ByteString))
+renderProof clip cast = renderMedia cast \directory run -> do
+  writeFileBS (directory </> "clip.cast") clip
+  for_ [("proof.input", "full.gif"), ("clip.cast", "proof.gif")] \(input, output) -> run "agg" ["--idle-time-limit", "2", "--fps-cap", "12", "--font-size", "16", "--theme", "github-dark", input, output]
+  run "ffmpeg" (quiet <> ["-t", "120", "-i", "full.gif", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "26", "-fs", show mediaLimit, "proof.mp4"])
 
 
 -- | A browser recording's full video and a preview that plays inline at full comment width, both

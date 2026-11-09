@@ -71,6 +71,8 @@ A UI proof's browser recording is drawn inside a browser window, titled and addr
 A claim graded `matches` or `differs` must cite a recorded proof key. The model cannot claim a recording that does not exist.
 The guest image needs `asciinema`, and a writable `/dev/shm` (mounted by `guest-init.sh`). The worker image needs `agg` and `ffmpeg`.
 
+**Clips.** The comment's preview of each side is an eight-second clip, not the whole recording. `record_proof` takes an optional `highlight`: text the command prints when the claimed behaviour shows. The clip starts a second before that output, or covers the recording's end when it never prints. Earlier output replays at once, so the clip opens on the full screen. A row under the terminal is a timeline of the whole recording, with the clip's section in blue and a dot at the current moment. The preview links to the full video.
+
 Repositories can add `.monoscope/PROOF.md`: free-form guidance on when to prove changes and how to start the app offline.
 The agent reads it from the base revision, so a pull request cannot rewrite its own rules.
 [Fast proofs, by stack](proof-strategies.md) covers how to make a proof start in seconds.
