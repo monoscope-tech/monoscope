@@ -48,6 +48,7 @@ module Models.Projects.ImpactReviews (
   proofSignedPath,
   saveProofs,
   ProofRecipe (..),
+  SetupReuse (..),
   proofRecipe,
   proofSides,
   proofFile,
@@ -346,14 +347,9 @@ selectRuns pid rid =
     ORDER BY r.created_at DESC LIMIT 20|]
 
 
--- | Reviews one project may run at once. More of its pull requests wait in the job queue, so one
--- busy tenant cannot take every sandbox slot on the host.
-reviewsPerProject :: Int64
-reviewsPerProject = 2
-
-
--- | Admission happens here, before a review's time budget starts: past this node's agent slots, or
--- 'reviewsPerProject' for this project across nodes, the run waits in the job queue instead of for a VM.
+-- | Admission happens here, before a review's time budget starts: past this node's agent slots, or two
+-- reviews of this project across nodes (so one busy tenant cannot take every slot), the run waits in
+-- the job queue instead of for a VM.
 claimRun :: DB es => Workspace.Slots -> ReviewRun -> Eff es Bool
 claimRun slots run = Hasql.transaction TxS.ReadCommitted TxS.Write do
   let payload = Aeson $ AE.toJSON $ Jobs.ReviewPullRequest run.id
@@ -362,7 +358,7 @@ claimRun slots run = Hasql.transaction TxS.ReadCommitted TxS.Write do
   void $ Hasql.queryTx @[Text] [HI.sql|SELECT pg_advisory_xact_lock(hashtextextended('pr_review_admission', 0))::text|]
   Hasql.oneTx @Bool
     [HI.sql|WITH busy AS (
-    SELECT count(*) FILTER (WHERE o.project_id = #{run.projectId}) >= #{reviewsPerProject} OR count(*) FILTER (WHERE o.lease_node = #{slots.node}) >= #{fromIntegral @Int @Int64 slots.agents} AS saturated
+    SELECT count(*) FILTER (WHERE o.project_id = #{run.projectId}) >= 2 OR count(*) FILTER (WHERE o.lease_node = #{slots.node}) >= #{fromIntegral @Int @Int64 slots.agents} AS saturated
     FROM projects.pr_review_threads o WHERE o.id <> #{run.threadId} AND o.lease_until > now()
   ), leased AS (
     UPDATE projects.pr_review_threads t SET lease_owner = #{run.id}, lease_node = #{slots.node}, lease_until = now() + interval '10 minutes'
@@ -584,10 +580,16 @@ instance FromHttpApiData ProofFile where
 
 -- | Stores one proof's recordings, all sides or none, under the run's next unused key.
 -- Only the run holding the review lease can record, so a superseded attempt cannot add media.
--- | Stores a proof's sides under its next key, and whether its setup replayed the repository's saved
--- recipe byte for byte, the measure of proof determinism. The setup behind a successful head
--- recording becomes the saved recipe.
-saveProofs :: DB es => ReviewRun -> UUIDId "agent_attempt" -> Maybe Text -> NonEmpty Agent.ProofMedia -> Eff es (Either Text (Text, Bool))
+-- | Whether a proof's setup replayed the repository's saved recipe byte for byte, the measure of
+-- how deterministic proofs are.
+data SetupReuse = NoSetup | Reused | Changed
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (AE.ToJSON, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "" SetupReuse
+
+
+-- | Stores a proof's sides under its next key. The setup behind a successful head recording becomes
+-- the repository's saved recipe.
+saveProofs :: DB es => ReviewRun -> UUIDId "agent_attempt" -> Maybe Text -> NonEmpty Agent.ProofMedia -> Eff es (Either Text (Text, SetupReuse))
 saveProofs run attempt setup sides = Hasql.transaction TxS.ReadCommitted TxS.Write do
   HI.OneColumn leased <-
     Hasql.oneTx
@@ -617,13 +619,13 @@ saveProofs run attempt setup sides = Hasql.transaction TxS.ReadCommitted TxS.Wri
           SELECT #{run.projectId}, #{run.owner}, #{run.repo}, #{setup}, #{run.revision}, #{run.id}
           WHERE #{setup}::text IS NOT NULL AND #{any (\p -> p.side == Agent.Head && p.exitCode == Just 0) sides}
           ON CONFLICT (project_id, owner, repo) DO UPDATE SET setup = EXCLUDED.setup, revision = EXCLUDED.revision, run_id = EXCLUDED.run_id, updated_at = now()
-        ) SELECT #{setup}::text IS NOT NULL AND (SELECT setup FROM prior) IS NOT DISTINCT FROM #{setup}|]
+        ) SELECT CASE WHEN #{setup}::text IS NULL THEN #{NoSetup} WHEN (SELECT setup FROM prior) = #{setup} THEN #{Reused} ELSE #{Changed} END|]
     | otherwise -> Left ("Proof " <> key <> " was already recorded; record the proof again") <$ Tx.condemn
 
 
 data ProofRecipe = ProofRecipe {setup :: Text, revision :: Text}
-  deriving stock (Generic, Show)
-  deriving anyclass (AE.ToJSON, HI.DecodeRow)
+  deriving stock (Generic)
+  deriving anyclass (HI.DecodeRow)
 
 
 proofRecipe :: DB es => ReviewRun -> Eff es (Maybe ProofRecipe)

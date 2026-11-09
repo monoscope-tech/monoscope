@@ -23,7 +23,7 @@ import Data.Map.Strict qualified as Map
 import Data.OpenApi.Schema.Validation qualified as Schema
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, nominalDay)
-import Data.UUID qualified as UUID
+import Data.Effectful.CodeReview.Checkout qualified as Checkout (Fetch (..))
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Effectful (Eff, IOE, (:>))
@@ -384,13 +384,12 @@ reviewConnection run = runErrorNoCallStack @Text do
 -- repository is cold; later ones start from its latest build and compile incrementally.
 prepareReviewWorkspace :: Reviews.ReviewId -> ATBackgroundCtx ()
 prepareReviewWorkspace rid = whenJustM (Reviews.getRun rid) \run -> do
-  cfg <- (.config) <$> ask @AuthContext
   outcome <- runErrorNoCallStack @Text do
     (_, _, _, conn) <- either throwError pure =<< reviewConnection run
     pr <- either throwError pure =<< Git.getPullRequest conn (Git.RepoRef run.owner run.repo run.revision) run.number
     either throwError pure
       =<< Agent.prepareRepository
-        Agent.Request{projectId = run.projectId, runId = run.id, attemptId = UUIDId UUID.nil, repository = "https://github.com/" <> run.owner <> "/" <> run.repo <> ".git", base = pr.base.revision, head = pr.head.revision, gitToken = conn.token.reveal, prompt = "", provider = cfg.impactReviewProvider, model = fst $ LLM.modelAndEffort cfg.openaiModel, thinkingLevel = Agent.Off}
+        Checkout.Fetch{projectId = run.projectId, repository = "https://github.com/" <> run.owner <> "/" <> run.repo <> ".git", base = pr.base.revision, head = pr.head.revision, gitToken = conn.token.reveal}
   either (Log.logAttention "Review workspace preparation failed" . (run.id,)) (const $ Log.logInfo "Review workspace ready" (run.projectId, run.owner, run.repo)) outcome
 
 
@@ -564,7 +563,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                   ( \setup sides -> do
                       requireActive run execution
                       stored <- Reviews.saveProofs run attemptId setup sides
-                      for_ stored \(_, reused) -> Log.logInfo "Proof setup" (run.id, if isNothing setup then "none" else if reused then "reused" else "changed" :: Text)
+                      for_ stored (Log.logInfo "Proof setup" . (run.id,) . snd)
                       pure $ fst <$> stored
                   )
                   ( \value -> do

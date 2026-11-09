@@ -2920,7 +2920,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let attempt = UUIDId UUID.nil
         saveProof = runQueryEffect tr $ Reviews.saveProofs middle attempt (Just "make serve &") (sideProof Agent.Base 1 :| [sideProof Agent.Head 0])
     -- The first replays no saved recipe; later ones replay the one it saved.
-    traverse (const saveProof) [1 .. 4 :: Int] `shouldReturn` ([Right ("proof-1", False), Right ("proof-2", True), Right ("proof-3", True), Left "Proof budget exhausted; cite the proofs already recorded"] :: [Either Text (Text, Bool)])
+    traverse (const saveProof) [1 .. 4 :: Int] `shouldReturn` ([Right ("proof-1", Reviews.Changed), Right ("proof-2", Reviews.Reused), Right ("proof-3", Reviews.Reused), Left "Proof budget exhausted; cite the proofs already recorded"] :: [Either Text (Text, Reviews.SetupReuse)])
     fmap (.setup) <$> runQueryEffect tr (Reviews.proofRecipe middle) `shouldReturn` Just "make serve &"
 
   it "reviewComment_leadsWithMergeRiskAndShowsProductionDetailOnlyWhereAllowed" \_ -> do

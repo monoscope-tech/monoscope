@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Checkout (Source (..), Prepared (..), Envelope (..), withCheckout) where
+module Data.Effectful.CodeReview.Checkout (Source (..), Fetch (..), Prepared (..), Envelope (..), withCheckout) where
 
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
@@ -6,12 +6,13 @@ import Data.Char (isAlphaNum, isAscii)
 import Data.Effectful.AgentWorkspace.Guest qualified as Guest
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), artifactCheckout, peerPreparation, sha256, withVerifiedArtifacts)
 import Data.Effectful.CodeReview.Policy qualified as Policy
-import Data.Effectful.CodeReview.Types (ArtifactRequest (..), FixResult (..), Request (..), Revision, TestArtifact, mkRevision, revisionText)
+import Data.Effectful.CodeReview.Types (ArtifactRequest (..), FixResult (..), Revision, TestArtifact, mkRevision, revisionText)
 import Data.List (lookup)
 import Data.List.Extra (nubOrd)
 import Data.Text qualified as T
 import Deriving.Aeson qualified as DAE
 import GHC.Clock (getMonotonicTimeNSec)
+import GHC.Records (HasField)
 import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..))
 import Pkg.GitCommand qualified as HostGit
 import Relude
@@ -28,8 +29,15 @@ import UnliftIO.Exception (catch, throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
 
 
+-- | What a repository checkout reads. An agent request carries it; a workspace build needs no more ('Fetch').
+type Fetchable r = (HasField "projectId" r (UUIDId "project"), HasField "repository" r Text, HasField "base" r Text, HasField "head" r Text, HasField "gitToken" r Text)
+
+
+data Fetch = Fetch {projectId :: UUIDId "project", repository :: Text, base :: Text, head :: Text, gitToken :: Text}
+
+
 data Source where
-  Repository :: Request run -> Source
+  Repository :: Fetchable r => r -> Source
   VerifiedCandidate :: ArtifactRequest -> Source
 
 
@@ -103,7 +111,7 @@ withCheckout store source action = do
       instructions <- maybe (pure "") instruction $ asum $ map (`lookup` files) instructionNames
       duration <- elapsed started
       tryAny $ action (Prepared Nothing Nothing Nothing directory metadata instructions project repository baseRevision headRevision status duration (Policy.policy Policy.Advisory (revisionText baseRevision) (revisionText headRevision) instructions)) evidence
-    prepare :: FilePath -> Request run -> IO (FilePath, Revision, Revision, CacheStatus)
+    prepare :: Fetchable r => FilePath -> r -> IO (FilePath, Revision, Revision, CacheStatus)
     prepare temporary request = do
       baseRevision <- either (const invalid) pure $ mkRevision request.base
       headRevision <- either (const invalid) pure $ mkRevision request.head
