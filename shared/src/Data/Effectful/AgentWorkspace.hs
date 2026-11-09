@@ -26,6 +26,7 @@ import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.TH
 import GHC.Clock (getMonotonicTimeNSec)
+import GHC.Conc (getNumProcessors)
 import GHC.TypeLits (Symbol)
 import Network.HTTP.Client.TLS qualified as TLS
 import Network.Minio qualified as Minio
@@ -33,8 +34,7 @@ import Network.URI (URI (..), URIAuth (..), parseURI)
 import Pkg.Deriving (UUIDId (..), WrappedEnumSC (..))
 import Pkg.GitCommand qualified as HostGit
 import Relude hiding (Identity, identity, withFile)
-import GHC.Conc (getNumProcessors)
-import System.Directory (findExecutable, canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, listDirectory, removePathForcibly, renameDirectory, renameFile)
+import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, findExecutable, listDirectory, removePathForcibly, renameDirectory, renameFile)
 import System.Environment (getEnvironment)
 import System.FileLock (SharedExclusive (..), tryLockFile, unlockFile, withFileLock, withTryFileLock)
 import System.FilePath (isAbsolute, takeDirectory, takeFileName, (</>))
@@ -727,14 +727,19 @@ runWorkspaceReal = interpret $ \env -> \case
       withOwner request.ownerPid $ prune RetainUnarchived options request
     pure $ case outcome of Right (Just result) -> Right result; _ -> Left "Checkpoint pruning could not complete"
   RunWorkspace options operation requestFile -> liftIO do
-    outcome <- tryAny $ Timeout.timeout (420 * 1000000) do
+    -- A cold build of a large repository takes far longer than a lookup or a transfer.
+    let budget = case operation of Prepare{} -> 3600; (Lookup; Archive{}; Restore{}) -> 420
+    outcome <- tryAny $ Timeout.timeout (budget * 1000000) do
       request <- decode =<< readBounded requestFile 65536
       withOwner request.ownerPid $ case operation of
         Lookup -> do
           root <- canonicalizePath options.cacheDir
           withProjectLock root request.projectId $ lookupWorkspace options operation request
         (Prepare{}; Archive{}; Restore{}) -> lookupWorkspace options operation request
-    pure $ case outcome of Right (Just prepared) -> Right prepared; _ -> Left "Workspace preparation or integrity verification failed"
+    pure $ case outcome of
+      Right (Just prepared) -> Right prepared
+      Right Nothing -> Left "Workspace preparation timed out"
+      Left failure -> Left $ "Workspace preparation or integrity verification failed: " <> toText (displayException failure)
   WithWorkspace options requestFile action -> localSeqUnliftIO env $ \unlift -> liftIO do
     outcome <- tryAny do
       request <- decode =<< readBounded requestFile 65536
@@ -1307,16 +1312,17 @@ lookupWorkspace options operation request = do
         locked = withProjectLock root request.projectId
         latestPointer = parent </> ("latest-" <> toString (lineage identity) <> ".json")
         -- The lineage's latest build at another base. Missing, evicted or mismatched means a cold start.
-        ancestorSnapshot = join . rightToMaybe <$> tryAny do
-          name <- decode @FilePath =<< readBounded latestPointer 4096
-          let ancestorDirectory = parent </> takeFileName name
-              disk = ancestorDirectory </> "baseline.qcow2"
-          manifest <- decode @Manifest =<< readBounded (ancestorDirectory </> "manifest.json") 65536
-          let Identity project repository _ imageBuild script dependencies = manifest.identity
-          ensure $ Identity project repository identity.base imageBuild script dependencies == identity
-          measured <- fingerprint disk
-          ensure $ measured.sha256 == manifest.sha256
-          pure $ Just $ Snapshot disk manifest.sha256
+        ancestorSnapshot =
+          join . rightToMaybe <$> tryAny do
+            name <- decode @FilePath =<< readBounded latestPointer 4096
+            let ancestorDirectory = parent </> takeFileName name
+                disk = ancestorDirectory </> "baseline.qcow2"
+            manifest <- decode @Manifest =<< readBounded (ancestorDirectory </> "manifest.json") 65536
+            let Identity project repository _ imageBuild script dependencies = manifest.identity
+            ensure $ Identity project repository identity.base imageBuild script dependencies == identity
+            measured <- fingerprint disk
+            ensure $ measured.sha256 == manifest.sha256
+            pure $ Just $ Snapshot disk manifest.sha256
     case operation of
       Lookup -> load
       Archive remoteFile -> locked $ transfer root identity Upload remoteFile \remote prefix connection -> do
@@ -1356,73 +1362,72 @@ lookupWorkspace options operation request = do
         cleanCheckout <- canonicalizePath checkout
         saved <- locked load
         case saved of
-            Just _ -> pure saved
-            Nothing -> withTempDirectory parent ".prepare-" \temporary -> withSystemTempDirectory "monoscope-native-baseline" \source -> do
-              let clean = source </> "checkout"
-                  git args = readProcessStdout_ $ HostGit.command environment HostGit.Local source args
-                  execute cwd quiet argv = do
-                    result <- rpc @Execution $ Execute $ GuestCommand argv cwd quiet
-                    ensure $ result.exitCode == 0
-                    pure $ T.strip result.stdout
-                  guestGit args = execute (Just "/workspace") False $ "/usr/bin/git" :| (["-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"] <> args)
-                  parseHash value = maybe invalid pure $ viaNonEmpty head (words value) >>= mkFingerprint
-                  copy hostPath destination = rpc @() $ CopyFile $ Copy hostPath destination
-              void $ git ["init", "--quiet", clean]
-              void $ git ["-C", clean, "fetch", "--quiet", "--no-tags", "--", cleanCheckout, toString baseText]
-              void $ git ["-C", clean, "checkout", "--quiet", "--detach", toString baseText]
-              void $ git ["-C", clean, "remote", "add", "origin", toString repoText]
-              started <- getMonotonicTimeNSec
-              let sandbox = Sandbox image.assetDir 2 1024 OfflineCow (one ("/baseline", clean))
-              ancestor <- ancestorSnapshot
-              case ancestor of
+          Just _ -> pure saved
+          Nothing -> withTempDirectory parent ".prepare-" \temporary -> withSystemTempDirectory "monoscope-native-baseline" \source -> do
+            let clean = source </> "checkout"
+                git args = readProcessStdout_ $ HostGit.command environment HostGit.Local source args
+                execute cwd quiet argv = do
+                  result <- rpc @Execution $ Execute $ GuestCommand argv cwd quiet
+                  ensure $ result.exitCode == 0
+                  pure $ T.strip result.stdout
+                guestGit args = execute (Just "/workspace") False $ "/usr/bin/git" :| (["-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"] <> args)
+                parseHash value = maybe invalid pure $ viaNonEmpty head (words value) >>= mkFingerprint
+                copy hostPath destination = rpc @() $ CopyFile $ Copy hostPath destination
+            void $ git ["init", "--quiet", clean]
+            void $ git ["-C", clean, "fetch", "--quiet", "--no-tags", "--", cleanCheckout, toString baseText]
+            void $ git ["-C", clean, "checkout", "--quiet", "--detach", toString baseText]
+            void $ git ["-C", clean, "remote", "add", "origin", toString repoText]
+            started <- getMonotonicTimeNSec
+            let sandbox = Sandbox image.assetDir 2 1024 OfflineCow (one ("/baseline", clean))
+            ancestor <- ancestorSnapshot
+            case ancestor of
+              Nothing -> do
+                rpc @() $ Create sandbox
+                for_ [("/bin/mkdir" :: Text) :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/baseline/.", "/workspace"]] $ void . execute Nothing False
+              -- Warm start: the repository's latest build moves to this base. Ignored build output
+              -- (target/, dist-newstyle/, node_modules/) survives, so the script rebuilds incrementally.
+              -- upload-pack honours safe.directory only from global config, hence the private one.
+              Just snapshot -> do
+                restoreSnapshot rpc image.buildId sandbox snapshot (source </> "ancestor.qcow2")
+                moved <- rpc @Execution $ Execute $ GuestCommand ("/bin/bash" :| ["-c", "exec 2>&1; set -e; export GIT_CONFIG_GLOBAL=/tmp/monoscope-warm-gitconfig; git config --global safe.directory '*'; g() { git -c core.hooksPath=/dev/null -C /workspace \"$@\"; }; g fetch --quiet --no-tags /baseline HEAD; g checkout --quiet --force --detach FETCH_HEAD; g clean -fdq"]) (Just "/workspace") False
+                unless (moved.exitCode == 0) $ throwIO $ userError $ "Warm start could not move to the new base: " <> toString (T.takeEnd 2000 moved.stdout)
+            void $ execute Nothing False $ "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]
+            tracked <- git ["-C", clean, "ls-files", "-z"]
+            writeFileLBS (source </> "tracked") tracked
+            copy (source </> "tracked") "/run/monoscope-baseline-paths"
+            writeFileBS (source </> "fingerprint.sh") $ encodeUtf8 fingerprintScript
+            copy (source </> "fingerprint.sh") "/run/monoscope-fingerprint.sh"
+            let sourceHash = execute (Just "/workspace") False ("/bin/bash" :| ["--noprofile", "--norc", "/run/monoscope-fingerprint.sh"]) >>= parseHash
+            before <- sourceHash
+            for_ dependency \expected -> do
+              archive <- maybe invalid pure options.dependencyArchive
+              copy archive "/run/monoscope-dependencies.tar"
+              measured <- execute (Just "/workspace") False $ "/usr/bin/sha256sum" :| ["/run/monoscope-dependencies.tar"]
+              actual <- parseHash measured
+              ensure $ actual == expected.sha256
+            writeFileBS (source </> "prepare.sh") scriptBytes
+            copy (source </> "prepare.sh") "/run/monoscope-prepare.sh"
+            void $ execute (Just "/workspace") True $ agentCommand ["/bin/bash", "--noprofile", "--norc", "/run/monoscope-prepare.sh"]
+            revision <- guestGit ["rev-parse", "HEAD"]
+            after <- sourceHash
+            ensure $ revision == baseText && before == after
+            checkpoint <- rpc @CheckpointData $ Checkpoint $ temporary </> "baseline.qcow2"
+            ensure $ checkpoint.guestAssetBuildId == image.buildId
+            measured <- fingerprint $ temporary </> "baseline.qcow2"
+            ended <- getMonotonicTimeNSec
+            let manifest = Manifest 1 identity image.assetDir checkpoint.createdAt measured.sha256 (fromIntegral (ended - started) / 1000000) measured.bytes 2 1024 Unpriced
+            writeFileLBS (temporary </> "manifest.json") $ AE.encode manifest
+            Posix.setFileMode (temporary </> "manifest.json") 0o600
+            traverse_ sync [temporary </> "baseline.qcow2", temporary </> "manifest.json", temporary]
+            locked do
+              published <- load
+              case published of
+                Just _ -> pure published
                 Nothing -> do
-                  rpc @() $ Create sandbox
-                  for_ [("/bin/mkdir" :: Text) :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/baseline/.", "/workspace"]] $ void . execute Nothing False
-                -- Warm start: the repository's latest build moves to this base. Ignored build output
-                -- (target/, dist-newstyle/, node_modules/) survives, so the script rebuilds incrementally.
-                Just snapshot -> do
-                  restoreSnapshot rpc image.buildId sandbox snapshot (source </> "ancestor.qcow2")
-                  let workspaceGit args = void $ execute (Just "/workspace") False $ "/usr/bin/git" :| (["-c", "safe.directory=*", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"] <> args)
-                  workspaceGit ["fetch", "--quiet", "--no-tags", "/baseline", "HEAD"]
-                  workspaceGit ["checkout", "--quiet", "--force", "--detach", "FETCH_HEAD"]
-                  workspaceGit ["clean", "-fdq"]
-              void $ execute Nothing False $ "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]
-              tracked <- git ["-C", clean, "ls-files", "-z"]
-              writeFileLBS (source </> "tracked") tracked
-              copy (source </> "tracked") "/run/monoscope-baseline-paths"
-              writeFileBS (source </> "fingerprint.sh") $ encodeUtf8 fingerprintScript
-              copy (source </> "fingerprint.sh") "/run/monoscope-fingerprint.sh"
-              let sourceHash = execute (Just "/workspace") False ("/bin/bash" :| ["--noprofile", "--norc", "/run/monoscope-fingerprint.sh"]) >>= parseHash
-              before <- sourceHash
-              for_ dependency \expected -> do
-                archive <- maybe invalid pure options.dependencyArchive
-                copy archive "/run/monoscope-dependencies.tar"
-                measured <- execute (Just "/workspace") False $ "/usr/bin/sha256sum" :| ["/run/monoscope-dependencies.tar"]
-                actual <- parseHash measured
-                ensure $ actual == expected.sha256
-              writeFileBS (source </> "prepare.sh") scriptBytes
-              copy (source </> "prepare.sh") "/run/monoscope-prepare.sh"
-              void $ execute (Just "/workspace") True $ agentCommand ["/bin/bash", "--noprofile", "--norc", "/run/monoscope-prepare.sh"]
-              revision <- guestGit ["rev-parse", "HEAD"]
-              after <- sourceHash
-              ensure $ revision == baseText && before == after
-              checkpoint <- rpc @CheckpointData $ Checkpoint $ temporary </> "baseline.qcow2"
-              ensure $ checkpoint.guestAssetBuildId == image.buildId
-              measured <- fingerprint $ temporary </> "baseline.qcow2"
-              ended <- getMonotonicTimeNSec
-              let manifest = Manifest 1 identity image.assetDir checkpoint.createdAt measured.sha256 (fromIntegral (ended - started) / 1000000) measured.bytes 2 1024 Unpriced
-              writeFileLBS (temporary </> "manifest.json") $ AE.encode manifest
-              Posix.setFileMode (temporary </> "manifest.json") 0o600
-              traverse_ sync [temporary </> "baseline.qcow2", temporary </> "manifest.json", temporary]
-              locked do
-                published <- load
-                case published of
-                  Just _ -> pure published
-                  Nothing -> do
-                    renameDirectory temporary directory
-                    sync parent
-                    publish latestPointer $ takeFileName directory
-                    load
+                  renameDirectory temporary directory
+                  sync parent
+                  publish latestPointer $ takeFileName directory
+                  load
   where
     -- One pointer per repository, image, script and dependency set names its latest build, whatever its base.
     lineage :: Identity -> Text
@@ -1590,8 +1595,9 @@ canonical :: FilePath -> IO ()
 canonical path = canonicalizePath path >>= ensure . (== path)
 
 
-ensure :: Bool -> IO ()
-ensure condition = unless condition invalid
+-- | The failing check's location travels with the error, so an operator can tell which one tripped.
+ensure :: HasCallStack => Bool -> IO ()
+ensure condition = unless condition $ throwIO $ userError $ "Invalid prepared workspace: " <> prettyCallStack callStack
 
 
 invalid :: IO a

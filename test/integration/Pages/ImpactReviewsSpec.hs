@@ -213,6 +213,7 @@ refuse = \case
   Agent.ReadSessionContext{} -> Right Nothing
   Agent.ReviewRepository{} -> Left "Unexpected advisory review"
   Agent.ReviewSource{} -> Left "Unexpected source review"
+  Agent.PrepareRepository{} -> Left "Unexpected workspace preparation"
   Agent.ReviewPatch{} -> Left "Unexpected patch comparison"
   Agent.FixRepository{} -> Left "Unexpected issue-fix task"
   Agent.AdmitRegression{} -> Left "Unexpected admission task"
@@ -2754,7 +2755,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       deliver tr ignored `shouldReturn` AE.object ["status" AE..= ("ignored" :: Text)]
     dbOne tr "SELECT count(*)::int FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest'" () `shouldReturn` (1 :: Int)
     [old] <- runQueryEffect tr $ Reviews.latestRuns testPid
-    runQueryEffect tr (Reviews.claimRun old) `shouldReturn` True
+    runQueryEffect tr (Reviews.claimRun 100 old) `shouldReturn` True
     runQueryEffect tr (Reviews.currentRun old) `shouldReturn` True
     dbOne tr "SELECT lease_until > now() + interval '9 minutes' FROM projects.pr_review_threads WHERE id = ?" (Only old.threadId) `shouldReturn` True
     dbOne tr "SELECT payload FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest'" () `shouldReturn` Aeson (AE.toJSON $ Jobs.ReviewPullRequest old.id)
@@ -2766,14 +2767,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runs <- runQueryEffect tr $ Reviews.latestRuns testPid
     map (.latestRevision) runs `shouldBe` [next, next]
     new <- maybe (fail "new revision missing") pure $ find ((== next) . (.revision)) runs
-    runQueryEffect tr (Reviews.claimRun new) `shouldReturn` False
+    runQueryEffect tr (Reviews.claimRun 100 new) `shouldReturn` False
     dbOne tr "SELECT payload FROM background_jobs WHERE run_at > now() AND payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest new.id) `shouldReturn` Aeson (AE.toJSON $ Jobs.ReviewPullRequest new.id)
     runQueryEffect tr $ Reviews.releaseRun old
-    runQueryEffect tr (Reviews.claimRun new) `shouldReturn` True
+    runQueryEffect tr (Reviews.claimRun 100 new) `shouldReturn` True
     runQueryEffect tr (Reviews.currentRun new) `shouldReturn` True
     dbExec tr "UPDATE projects.pr_review_threads SET lease_until = now() - interval '1 second' WHERE id = ?" (Only new.threadId)
     runQueryEffect tr (Reviews.currentRun new) `shouldReturn` False
-    runQueryEffect tr (Reviews.claimRun new) `shouldReturn` True
+    runQueryEffect tr (Reviews.claimRun 100 new) `shouldReturn` True
     void $ deliver tr $ payload "converted_to_draft" next "2025-01-01T00:01:30Z"
     runQueryEffect tr (Reviews.currentRun new) `shouldReturn` False
     void $ deliver tr $ payload "closed" next "2025-01-01T00:02:00Z"
@@ -2798,7 +2799,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     otherRun.revision `shouldBe` T.replicate 40 "c"
     -- Switching to asks only keeps a running review; unlinking the repository revokes it,
     -- and the released run stays rerunnable.
-    runQueryEffect tr (Reviews.claimRun otherRun) `shouldReturn` True
+    runQueryEffect tr (Reviews.claimRun 100 otherRun) `shouldReturn` True
     runQueryEffect tr $ Reviews.updateSettings otherPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.WhenAsked True)
     runQueryEffect tr (Reviews.currentRun otherRun) `shouldReturn` True
     dbExec tr "DELETE FROM projects.code_mappings WHERE project_id = ?" (Only otherPid)
@@ -2867,6 +2868,47 @@ spec = around withTestResources $ describe "Production impact reviews" do
     otherPid <- createTestProject tr "Other proof project"
     for_ [T.replace "sig=" "sig=0" link.preview, T.replace testPid.toText otherPid.toText link.preview, T.replace "proof-1-head.gif" "proof-1-base.gif" link.preview] \forged ->
       (H.statusCode . (.simpleStatus) <$> fetch forged) `shouldReturn` 403
+
+  it "workspacePrepare_warmStartsFromTheRepositoryLatestBuild" \_ -> withTemp "native-ancestor" \directory -> do
+    image <- guestImage
+    store <- storeIn directory
+    bridge <- canonicalizePath "test/fixtures/native-sandbox.sh"
+    let repository = directory </> "repository"
+        scriptFile = directory </> "prepare.sh"
+        requestFile = directory </> "request.json"
+        prepareAt stage base = do
+          writeFileLBS requestFile $ AE.encode $ AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= base]
+          runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir (toText image) bridge scriptFile Nothing) (Workspace.Prepare repository) requestFile) >>= either (fail . toString . ((stage <> ": ") <>)) (maybe (fail "Workspace missing") (parse (field "manifest" >=> field "identity" >=> field "base") . AE.toJSON))
+    initRepo repository
+    original <- commit repository [(".gitignore", "build/\n"), ("app.sh", "v1\n")]
+    -- Like a compiler cache, the build keeps state in an ignored directory. At the second base it
+    -- refuses to run unless that state came along, so a cold start fails this test.
+    writeFileBS scriptFile "set -eu\nif [ \"$(cat app.sh)\" = v2 ]; then test -s build/runs; fi\nmkdir -p build\necho run >> build/runs\n"
+    prepareAt "cold" original `shouldReturn` (original :: Text)
+    next <- commit repository [("app.sh", "v2\n")]
+    prepareAt "warm" next `shouldReturn` next
+
+  it "admission_capsReviewsPerProjectAndHostAndSavesProofRecipes" \tr -> do
+    setup tr
+    let event n = Reviews.PullRequestEvent "impact-org" "checkout" 987654 n (T.replicate 40 (show n)) frozenTime Reviews.Open
+        sideProof side code = Proof.ProofMedia{side, revision = T.replicate 40 "7", exitCode = Just code, setup = Just "make serve &", cast = "cast", gif = "gif", mp4 = "mp4"}
+        deferred rid = dbOne tr "SELECT count(*)::int FROM background_jobs WHERE payload = ? AND run_at > now()" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest rid)
+    for_ [7, 8, 9] \n -> void $ runQueryEffect tr $ Reviews.receiveEvent Nothing $ event n
+    -- Each queued review also queues the build of its workspace.
+    dbOne tr "SELECT count(*)::int FROM background_jobs WHERE payload->>'tag' = 'PrepareReviewWorkspace'" () `shouldReturn` (3 :: Int)
+    [early, middle, late] <- sortOn (\(run :: Reviews.ReviewRun) -> run.number) <$> runQueryEffect tr (Reviews.latestRuns testPid)
+    -- Two reviews per project run at once; the third waits in the queue rather than for a VM.
+    traverse (\run -> runQueryEffect tr $ Reviews.claimRun 100 run) [early, middle, late] `shouldReturn` [True, True, False]
+    deferred late.id `shouldReturn` (1 :: Int)
+    runQueryEffect tr $ Reviews.releaseRun early
+    -- The host's capacity counts every project.
+    runQueryEffect tr (Reviews.claimRun 1 late) `shouldReturn` False
+    runQueryEffect tr (Reviews.claimRun 2 late) `shouldReturn` True
+    -- A setup whose head recording succeeded becomes the repository's recipe; an attempt stores at most three proofs.
+    let attempt = UUIDId UUID.nil
+        saveProof = runQueryEffect tr $ Reviews.saveProofs middle attempt (sideProof Agent.Base 1 :| [sideProof Agent.Head 0])
+    traverse (const saveProof) [1 .. 4 :: Int] `shouldReturn` ([Right "proof-1", Right "proof-2", Right "proof-3", Left "Proof budget exhausted; cite the proofs already recorded"] :: [Either Text Text])
+    fmap (.setup) <$> runQueryEffect tr (Reviews.proofRecipe middle) `shouldReturn` Just "make serve &"
 
   it "reviewComment_leadsWithMergeRiskAndShowsProductionDetailOnlyWhereAllowed" \_ -> do
     let pid = UUIDId UUID.nil
@@ -3213,7 +3255,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         Nothing -> pass
       Just leased <- runQueryEffect tr $ Reviews.getRun review.id
       bracket_
-        (runQueryEffect tr (Reviews.claimRun leased) >>= (`shouldBe` True))
+        (runQueryEffect tr (Reviews.claimRun 100 leased) >>= (`shouldBe` True))
         (runQueryEffect tr $ Reviews.releaseRun leased)
         do
           dbExec tr "DELETE FROM background_jobs WHERE payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest review.id)
@@ -3470,7 +3512,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       retry
       tryAny (within (if unexpected then withHTTPResponses (\_ _ -> throwIO $ userError "private-exception-detail") else Reader.local (\ctx -> ctx{config = cfg{githubAppPrivateKey = ""}})) $ Impact.reviewPullRequest run.id) >>= (`shouldSatisfy` isLeft)
       failedRun <- incomplete
-      runQueryEffect tr (Reviews.claimRun failedRun) `shouldReturn` True
+      runQueryEffect tr (Reviews.claimRun 100 failedRun) `shouldReturn` True
       runQueryEffect tr $ Reviews.releaseRun failedRun
     (failedRequests, failedAgent) <- attempt $ repositoryReview \_ _ _ _ -> pure $ Left "private-agent-failure"
     failedAgent `shouldSatisfy` isLeft
@@ -3907,7 +3949,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let lateCall = Agent.ModelCall{id = uid 902, attemptId = lateAttempt, provider = receipt.provider, model = receipt.model}
     runQueryEffect tr (Usage.recordCall testPid (Usage.Fix fid) lateCall) `shouldReturn` True
     runQueryEffect tr (Usage.recordUsage testPid (Usage.Fix fid) receipt{Agent.id = uid 900, Agent.attemptId = lateAttempt, Agent.callId = Just lateCall.id, Agent.costNanousd = Nothing, Agent.succeeded = False}) `shouldReturn` True
-    runQueryEffect tr (Reviews.claimRun review) `shouldReturn` True
+    runQueryEffect tr (Reviews.claimRun 100 review) `shouldReturn` True
     reviewAttempt <- maybe (fail "Review attempt missing") pure =<< runQueryEffect tr (Reviews.startAttempt review "fixture" "gpt-5.6-luna#high")
     let reviewCall = Agent.ModelCall{id = uid 903, attemptId = reviewAttempt, provider = receipt.provider, model = receipt.model}
     runQueryEffect tr (Usage.recordCall testPid (Usage.Review review.id) reviewCall) `shouldReturn` True
