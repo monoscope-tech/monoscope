@@ -450,8 +450,9 @@ errorIncidentMessages alertType err now episode ongoing projectUrl incidentUrl c
   , reply (if isJust ongoing then sStillFailing else runtimeStatus alertType) (errorAlertTitle err) (foldMap (\r -> ["*" <> r <> "*"]) occurrence <> change <> foldMap (\d -> ["ongoing " <> d]) ongoing)
   )
   where
-    -- A name says whom it hit without posting an address to the channel.
-    footer = ["Started " <> atUtc (maybe now (.startedAt) episode)] <> foldMap (\u -> ["User " <> slackEscape u]) (impact.userName <|> impact.userEmail) <> foldMap (\t -> ["Tenant " <> slackEscape t]) impact.tenant <> ["Project " <> slackEscape impact.projectName]
+    -- Who it hit and for which customer; identity is opt-in per project.
+    user = (\n -> n <> foldMap (\e -> " (" <> e <> ")") impact.userEmail) <$> impact.userName <|> impact.userEmail
+    footer = ["Started " <> atUtc (maybe now (.startedAt) episode)] <> foldMap (\u -> ["User " <> slackEscape u]) user <> foldMap (\t -> ["Tenant " <> slackEscape t]) impact.tenant <> ["Project " <> slackEscape impact.projectName]
 
 
 tagged :: Text -> AE.Value -> AE.Value

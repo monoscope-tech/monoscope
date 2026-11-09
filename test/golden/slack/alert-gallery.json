@@ -41,7 +41,7 @@
                             "block_id": "footer",
                             "elements": [
                                 {
-                                    "text": "Started Dec 31, 21:30 UTC  ·  User Ada Lovelace  ·  Project Acme API",
+                                    "text": "Started Dec 31, 21:30 UTC  ·  User Ada Lovelace (ada@example.com)  ·  Project Acme API",
                                     "type": "mrkdwn"
                                 }
                             ],
@@ -159,7 +159,7 @@
                             "block_id": "footer",
                             "elements": [
                                 {
-                                    "text": "Started Dec 31, 21:30 UTC  ·  User Ada Lovelace  ·  Project Acme API",
+                                    "text": "Started Dec 31, 21:30 UTC  ·  User Ada Lovelace (ada@example.com)  ·  Project Acme API",
                                     "type": "mrkdwn"
                                 }
                             ],
@@ -323,7 +323,7 @@
                             "block_id": "footer",
                             "elements": [
                                 {
-                                    "text": "Started Dec 31, 21:30 UTC  ·  User Ada Lovelace  ·  Project Acme API",
+                                    "text": "Started Dec 31, 21:30 UTC  ·  User Ada Lovelace (ada@example.com)  ·  Project Acme API",
                                     "type": "mrkdwn"
                                 }
                             ],
@@ -414,7 +414,7 @@
                             "block_id": "footer",
                             "elements": [
                                 {
-                                    "text": "Started Dec 31, 21:30 UTC  ·  User Ada Lovelace  ·  Project Acme API",
+                                    "text": "Started Dec 31, 21:30 UTC  ·  User Ada Lovelace (ada@example.com)  ·  Project Acme API",
                                     "type": "mrkdwn"
                                 }
                             ],
@@ -496,7 +496,7 @@
                             "block_id": "footer",
                             "elements": [
                                 {
-                                    "text": "Started Dec 31, 21:30 UTC  ·  User Ada Lovelace  ·  Project Acme API",
+                                    "text": "Started Dec 31, 21:30 UTC  ·  User Ada Lovelace (ada@example.com)  ·  Project Acme API",
                                     "type": "mrkdwn"
                                 }
                             ],

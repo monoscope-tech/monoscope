@@ -77,7 +77,7 @@ spec = describe "Monitoring" do
         messages trend = Mail.errorIncidentMessages Mail.NewRuntimeError err frozenTime Nothing Nothing "https://example.com" "https://example.com/issues/1" trend (Just "1/hr") [] impact
         (root, reply) = messages (Just "https://example.com/error-trend.png")
         withoutTrend = jsonText $ fst $ messages Nothing
-    jsonText root `shouldContainAll` ["```HttpExceptionRequest", ":red_circle: *New error*  <https://example.com/issues/1|HTTP request failed · api.example.com/oauth/token>", "*monoscope-dev*  ·  *1/hr*", "Started Jan 1, 00:00 UTC  ·  User Ada Lovelace  ·  Tenant Acme Corp  ·  Project Monoscope", "https://example.com/error-trend.png", "#E5484D"]
+    jsonText root `shouldContainAll` ["```HttpExceptionRequest", ":red_circle: *New error*  <https://example.com/issues/1|HTTP request failed · api.example.com/oauth/token>", "*monoscope-dev*  ·  *1/hr*", "Started Jan 1, 00:00 UTC  ·  User Ada Lovelace (ada@example.com)  ·  Tenant Acme Corp  ·  Project Monoscope", "https://example.com/error-trend.png", "#E5484D"]
     jsonText root `shouldNotSatisfy` T.isInfixOf err.message
     (withoutTrend, jsonText reply) `shouldSatisfy` \(w, r) -> "Chart unavailable" `T.isInfixOf` w && not ("image_url" `T.isInfixOf` w) && ":red_circle: *New error*  ·  *1/hr*" `T.isInfixOf` r
     slackPayloadViolations (AE.toJSON root) <> slackPayloadViolations (AE.toJSON reply) `shouldBe` []

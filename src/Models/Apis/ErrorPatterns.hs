@@ -60,7 +60,7 @@ import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..), enumLit, selectFrom)
+import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..), enumLit, rawSql, selectFrom)
 import Relude hiding (id)
 import Utils (truncateHour)
 
@@ -220,6 +220,7 @@ data ATError = ATError
   , -- Everything below is read from OTel semantic-convention attributes, and absent
     -- from rows stored before it existed (the codec defaults a missing field to Nothing).
     release :: Maybe Text
+  , tenantId :: Maybe Text
   , handled :: Maybe Bool
   , mechanism :: Maybe CaptureMechanism
   , level :: Maybe Text
@@ -556,10 +557,12 @@ batchUpsertErrorPatterns pid errors now =
             -- Toastable columns (message, error_data, parent_hash) are content-derived from hash
             -- and refreshed only on regression to avoid pg_toast bloat from per-occurrence rewrites.
             message = CASE WHEN ^{regresses} THEN EXCLUDED.message ELSE apis.error_patterns.message END,
-            -- Also once when this occurrence names a user and the sample does not: the issue's User
-            -- card shows the sample, and one stored anonymously stays anonymous forever otherwise.
-            error_data = CASE WHEN ^{regresses} OR (COALESCE(EXCLUDED.error_data->>'user_id', EXCLUDED.error_data->>'user_email') IS NOT NULL
-                                            AND COALESCE(apis.error_patterns.error_data->>'user_id', apis.error_patterns.error_data->>'user_email') IS NULL) THEN EXCLUDED.error_data ELSE apis.error_patterns.error_data END,
+            -- Also when this occurrence identifies more (user, tenant) than the sample alerts render;
+            -- unidentified occurrences never read the stored, TOASTed sample.
+            error_data = CASE WHEN ^{regresses} THEN EXCLUDED.error_data
+                              WHEN ^{identifies "EXCLUDED"} = 0 THEN apis.error_patterns.error_data
+                              WHEN ^{identifies "EXCLUDED"} > ^{identifies "apis.error_patterns"} THEN EXCLUDED.error_data
+                              ELSE apis.error_patterns.error_data END,
             parent_hash = CASE WHEN ^{regresses} THEN EXCLUDED.parent_hash ELSE apis.error_patterns.parent_hash END,
             -- Write-once, which is how the 23,372 rows that predate the column acquire
             -- one: a row takes its shape the next time it occurs and never pays a
@@ -621,6 +624,10 @@ batchUpsertErrorPatterns pid errors now =
     -- A resolved pattern regresses on its next occurrence, unless it was resolved "in
     -- next release" and the occurrence still reports that release.
     newerRelease = [HI.sql| EXCLUDED.last_release IS NOT NULL AND (apis.error_patterns.last_release_at IS NULL OR EXCLUDED.last_release_at >= apis.error_patterns.last_release_at) |]
+    identifies :: Text -> HI.Sql
+    identifies row = rawSql $ "((COALESCE(" <> d "user_id" <> ", " <> d "user_email" <> ") IS NOT NULL)::int + (COALESCE(" <> d "tenant_name" <> ", " <> d "tenant_id" <> ") IS NOT NULL)::int)"
+      where
+        d k = row <> ".error_data->>'" <> k <> "'"
     regresses =
       [HI.sql| apis.error_patterns.state = 'resolved'
                AND (apis.error_patterns.resolved_in_release IS NULL

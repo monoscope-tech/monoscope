@@ -165,6 +165,9 @@ spec = around withTestResources $ describe "Error patterns" do
     -- The chart marks where each release began; a later event of the same release must not move it.
     emit "1.1" [] (-25)
     fmap zonedTimeToUTC . (.lastReleaseSince) <$> current `shouldReturn` Just (at (-30))
+    -- Alerts render the stored sample: a tenant first sent on a later occurrence (id only) must reach it.
+    emit "1.1" [("user.id", "u-1"), ("tenant.id", "acme")] (-22)
+    ((.userId) &&& (.tenantId)) . (.errorData) <$> current `shouldReturn` (Just "u-1", Just "acme")
 
     -- A malformed assignee is refused instead of unassigning.
     let assign = fmap void . call tr . Pages.Issues.assignErrorPostH testPid errUuid . Pages.Issues.AssignErrorForm . Just
