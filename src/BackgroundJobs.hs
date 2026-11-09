@@ -311,6 +311,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> unlessStale scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
     ReviewPullRequest rid -> ImpactReview.reviewPullRequest rid
+    PrepareReviewWorkspace rid -> ImpactReview.prepareReviewWorkspace rid
     FixIssue pid fid -> ImpactReview.fixIssue pid fid
     AnalyzeRepository pid rid -> analyzeRepository pid rid
     RepositorySyncTick scheduled -> unlessStale scheduled 300 do

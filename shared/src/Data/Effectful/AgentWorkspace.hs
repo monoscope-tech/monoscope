@@ -37,7 +37,7 @@ import GHC.Conc (getNumProcessors)
 import System.Directory (findExecutable, canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, listDirectory, removePathForcibly, renameDirectory, renameFile)
 import System.Environment (getEnvironment)
 import System.FileLock (SharedExclusive (..), tryLockFile, unlockFile, withFileLock, withTryFileLock)
-import System.FilePath (isAbsolute, takeDirectory, (</>))
+import System.FilePath (isAbsolute, takeDirectory, takeFileName, (</>))
 import System.IO (hClose, withBinaryFile)
 import System.IO.Error (catchIOError, isDoesNotExistError, tryIOError, userError)
 import System.IO.Temp (createTempDirectory, withSystemTempDirectory, withTempDirectory, withTempFile)
@@ -1291,7 +1291,7 @@ lookupWorkspace options operation request = do
   ensure $ T.length scriptText <= 65536 && not (T.null $ T.strip scriptText)
   dependency <- traverse fingerprint options.dependencyArchive
   environment <- getEnvironment
-  withSandbox (case operation of Prepare{} -> VerifierPool; (Lookup; Archive{}; Restore{}) -> NoVm) options.bridge \rpc -> do
+  withSandbox (case operation of Prepare{} -> PreparePool; (Lookup; Archive{}; Restore{}) -> NoVm) options.bridge \rpc -> do
     image <- rpc @Image $ Resolve options.image
     for_ request.expectedImageBuildId $ ensure . (== image.buildId)
     assetDir <- canonicalizePath image.assetDir
@@ -1305,6 +1305,18 @@ lookupWorkspace options operation request = do
         directory = parent </> toString (case key of Fingerprint value -> value)
         load = loadWorkspace identity image directory (rpc . InspectCheckpoint)
         locked = withProjectLock root request.projectId
+        latestPointer = parent </> ("latest-" <> toString (lineage identity) <> ".json")
+        -- The lineage's latest build at another base. Missing, evicted or mismatched means a cold start.
+        ancestorSnapshot = join . rightToMaybe <$> tryAny do
+          name <- decode @FilePath =<< readBounded latestPointer 4096
+          let ancestorDirectory = parent </> takeFileName name
+              disk = ancestorDirectory </> "baseline.qcow2"
+          manifest <- decode @Manifest =<< readBounded (ancestorDirectory </> "manifest.json") 65536
+          let Identity project repository _ imageBuild script dependencies = manifest.identity
+          ensure $ Identity project repository identity.base imageBuild script dependencies == identity
+          measured <- fingerprint disk
+          ensure $ measured.sha256 == manifest.sha256
+          pure $ Just $ Snapshot disk manifest.sha256
     case operation of
       Lookup -> load
       Archive remoteFile -> locked $ transfer root identity Upload remoteFile \remote prefix connection -> do
@@ -1337,12 +1349,13 @@ lookupWorkspace options operation request = do
             renameDirectory temporary directory
             sync parent
             pure (restored :: Prepared){path = directory </> "baseline.qcow2"}
+      -- The build runs outside the project lock, so this tenant's other reviews keep looking up and
+      -- leasing while it compiles; only publication is locked, and a build that lost the race is discarded.
       Prepare checkout -> do
         ensure $ isAbsolute checkout
         cleanCheckout <- canonicalizePath checkout
-        locked do
-          saved <- load
-          case saved of
+        saved <- locked load
+        case saved of
             Just _ -> pure saved
             Nothing -> withTempDirectory parent ".prepare-" \temporary -> withSystemTempDirectory "monoscope-native-baseline" \source -> do
               let clean = source </> "checkout"
@@ -1359,8 +1372,21 @@ lookupWorkspace options operation request = do
               void $ git ["-C", clean, "checkout", "--quiet", "--detach", toString baseText]
               void $ git ["-C", clean, "remote", "add", "origin", toString repoText]
               started <- getMonotonicTimeNSec
-              rpc @() $ Create $ Sandbox image.assetDir 2 1024 OfflineCow (one ("/baseline", clean))
-              for_ [("/bin/mkdir" :: Text) :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/baseline/.", "/workspace"], "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]] $ void . execute Nothing False
+              let sandbox = Sandbox image.assetDir 2 1024 OfflineCow (one ("/baseline", clean))
+              ancestor <- ancestorSnapshot
+              case ancestor of
+                Nothing -> do
+                  rpc @() $ Create sandbox
+                  for_ [("/bin/mkdir" :: Text) :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/baseline/.", "/workspace"]] $ void . execute Nothing False
+                -- Warm start: the repository's latest build moves to this base. Ignored build output
+                -- (target/, dist-newstyle/, node_modules/) survives, so the script rebuilds incrementally.
+                Just snapshot -> do
+                  restoreSnapshot rpc image.buildId sandbox snapshot (source </> "ancestor.qcow2")
+                  let workspaceGit args = void $ execute (Just "/workspace") False $ "/usr/bin/git" :| (["-c", "safe.directory=*", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"] <> args)
+                  workspaceGit ["fetch", "--quiet", "--no-tags", "/baseline", "HEAD"]
+                  workspaceGit ["checkout", "--quiet", "--force", "--detach", "FETCH_HEAD"]
+                  workspaceGit ["clean", "-fdq"]
+              void $ execute Nothing False $ "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]
               tracked <- git ["-C", clean, "ls-files", "-z"]
               writeFileLBS (source </> "tracked") tracked
               copy (source </> "tracked") "/run/monoscope-baseline-paths"
@@ -1388,10 +1414,19 @@ lookupWorkspace options operation request = do
               writeFileLBS (temporary </> "manifest.json") $ AE.encode manifest
               Posix.setFileMode (temporary </> "manifest.json") 0o600
               traverse_ sync [temporary </> "baseline.qcow2", temporary </> "manifest.json", temporary]
-              renameDirectory temporary directory
-              sync parent
-              load
+              locked do
+                published <- load
+                case published of
+                  Just _ -> pure published
+                  Nothing -> do
+                    renameDirectory temporary directory
+                    sync parent
+                    publish latestPointer $ takeFileName directory
+                    load
   where
+    -- One pointer per repository, image, script and dependency set names its latest build, whatever its base.
+    lineage :: Identity -> Text
+    lineage identity = digestText $ sha $ toStrict $ AE.encode (identity.repository, identity.imageBuildId, identity.preparationSha256, identity.dependency)
     loadWorkspace :: Identity -> Image -> FilePath -> (FilePath -> IO CheckpointData) -> IO (Maybe Prepared)
     loadWorkspace identity image directory inspect = do
       loaded <- tryIOError $ readBounded (directory </> "manifest.json") 65536
@@ -1603,20 +1638,22 @@ withSandbox pool bridge = withSandboxRelease pool bridge (const pass)
 
 
 -- | Which host-wide VM slots a sandbox draws from. Verifier VMs start while an agent VM holds its
--- slot, so they have their own pool and agents can never starve them. Image lookups start no VM.
-data Pool = AgentPool | VerifierPool | NoVm
+-- slot, so they have their own pool and agents can never starve them; long workspace builds get
+-- one slot of their own so they cannot starve proofs. Image lookups start no VM.
+data Pool = AgentPool | VerifierPool | PreparePool | NoVm
   deriving stock (Eq, Show)
 
 
 -- | Holds one of this host's slots for the pool. Slots are lock files, so every process on the node
--- shares them and each node of a cluster counts its own. @IMPACT_REVIEW_VM_SLOTS=agents,verifiers@
--- overrides the default of a quarter of the cores for agents and two verifiers.
+-- shares them and each node of a cluster counts its own. @IMPACT_REVIEW_VM_SLOTS=agents,verifiers,prepare@
+-- overrides the default: a quarter of the cores for agents, two verifiers and one build. Admission
+-- happens earlier, in the review queue, so a busy slot here fails fast rather than spending a review's budget.
 withSlot :: Pool -> IO a -> IO a
 withSlot pool action = do
   configured <- lookupEnv "IMPACT_REVIEW_VM_SLOTS"
   cores <- getNumProcessors
   directory <- fromMaybe "/tmp/monoscope-vm-slots" <$> lookupEnv "IMPACT_REVIEW_VM_SLOT_DIR"
-  let (agents, verifiers) = fromMaybe (max 1 (cores `div` 4), 2) $ configured >>= \text -> case T.splitOn "," (toText text) of [a, v] -> (,) <$> readMaybe (toString a) <*> readMaybe (toString v); _ -> Nothing
+  let (agents, verifiers, builds) = fromMaybe (max 1 (cores `div` 4), 2, 1) $ configured >>= \text -> case mapM (readMaybe . toString) (T.splitOn "," (toText text)) of Just [a, v, b] -> Just (a, v, b); _ -> Nothing
       slots name count = [directory </> name <> "-" <> show n | n <- [1 .. max 1 count :: Int]]
       acquire paths waited = do
         held <- foldM (\found path -> maybe (tryLockFile path Exclusive) (pure . Just) found) Nothing paths
@@ -1625,13 +1662,14 @@ withSlot pool action = do
           Nothing
             | waited >= slotWaitSeconds -> throwIO $ userError "Every sandbox slot on this host is busy; retry later"
             | otherwise -> threadDelay 1000000 >> acquire paths (waited + 1)
+  let held name count = createDirectoryIfMissing True directory >> bracket (acquire (slots name count) (0 :: Int)) unlockFile (const action)
   case pool of
     NoVm -> action
-    (AgentPool; VerifierPool) -> do
-      createDirectoryIfMissing True directory
-      bracket (acquire (if pool == AgentPool then slots "agent" agents else slots "verifier" verifiers) (0 :: Int)) unlockFile (const action)
+    AgentPool -> held "agent" agents
+    VerifierPool -> held "verifier" verifiers
+    PreparePool -> held "prepare" builds
   where
-    slotWaitSeconds = 300
+    slotWaitSeconds = 45
 
 
 -- | Cleanup is observed before restoring the action's exception, including cancellation.

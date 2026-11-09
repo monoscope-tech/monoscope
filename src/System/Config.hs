@@ -138,6 +138,7 @@ data EnvConfig = EnvConfig
   , impactReviewDependencyArchive :: Maybe FilePath
   , impactReviewSkills :: [Text]
   , impactReviewProvider :: Text
+  , impactReviewConcurrency :: Int
   , impactReviewArtifactBucket :: Maybe Text
   , -- Kill switch for the LLM review of endpoint groups the classifier could
     -- not decide. Report-only regardless; this turns off the spend.
@@ -326,6 +327,7 @@ instance DefConfig EnvConfig where
       , postmarkFromEmail = "hello@monoscope.tech"
       , openaiModel = "gpt-5.6-luna#high"
       , impactReviewProvider = "openai"
+      , impactReviewConcurrency = 4
       , -- "minimal" is not a reasoning effort gpt-5.6-luna accepts; the API 400s
         -- on it, which silently killed every judge call (log- and error-pattern
         -- merge) with "LLM judge failed". "low" is the cheapest one it takes.

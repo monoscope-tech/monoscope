@@ -1,7 +1,7 @@
 {-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Data.Effectful.CodeReview (CodeReview (..), SessionIdentity (..), SessionSubject (..), NativePause, FixContext (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), readSessionContext, Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), proofBudget, DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), Revision, mkRevision, revisionText, reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, workerHost, runCodeReviewTest, validExplanation) where
+module Data.Effectful.CodeReview (CodeReview (..), SessionIdentity (..), SessionSubject (..), NativePause, FixContext (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), readSessionContext, prepareRepository, Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), proofBudget, DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), Revision, mkRevision, revisionText, reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, workerHost, runCodeReviewTest, validExplanation) where
 
 import Control.Concurrent.STM qualified as STM
 import Control.Monad.Trans.Except (throwE)
@@ -35,6 +35,7 @@ import System.Directory (listDirectory, removeFile, removePathForcibly)
 import System.Environment (getEnvironment)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose)
+import System.IO.Temp (withSystemTempDirectory)
 import System.IO.Error (isDoesNotExistError, tryIOError)
 import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
 import UnliftIO.Async (forConcurrently)
@@ -215,6 +216,9 @@ data CodeReview :: Effect where
   ReviewSource :: ReviewMode -> Request "pr_review" -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (DraftSubmission -> m (Either Text ())) -> CodeReview m (Either Text Text)
   ReviewPatch :: Request "pr_review" -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (Text -> m (Either Text ())) -> CodeReview m (Either Text Text)
   ReviewRepository :: SessionIdentity m ReviewContext -> Request "pr_review" -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (NonEmpty ProofMedia -> m (Either Text Text)) -> (AE.Value -> m (Either Text ())) -> CodeReview m (Either Text Text)
+  -- | Builds the workspace checkpoint at the request's base, warm from the repository's latest
+  -- build when one exists. Runs outside any review's budget; a no-op when the checkpoint exists.
+  PrepareRepository :: Request "pr_review" -> CodeReview m (Either Text ())
   AdmitRegression :: SessionIdentity m (UUIDId "agent_attempt") -> AdmissionRequest -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> CodeReview m (Either Text AdmissionDecision)
   FixRepository :: SessionIdentity m FixContext -> FixRequest -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (TestArtifact -> m (Either Text Text)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (PhaseReceipt -> m (Either Text ())) -> (FixResult -> m (Either Text ReviewedFix)) -> CodeReview m (Either Text ReviewedFix)
 
@@ -313,6 +317,13 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
     case mode of
       BoundedPatch -> launch (SourcePatchTask request) $ callbacks Nothing Nothing $ DraftText validateText
       CheckoutHarness -> launch (SourceTask request) $ callbacks (Just $ unlift . recordAllocation) (Just $ unlift . recordCheck) $ StructuredDraft validateValue
+  PrepareRepository request -> liftIO case (artifactStore, hostConfig) of
+    (Just store, Right (Just host)) | Just configured <- host.workspace -> fmap (join . first show) $ tryAny $ fmap join $ Checkout.withCheckout store (Checkout.Repository request) \fetched _ ->
+      withSystemTempDirectory "monoscope-prepare-request" \directory -> do
+        let requestFile = directory </> "request.json"
+        writeFileLBS requestFile $ AE.encode $ AE.object ["projectId" AE..= request.projectId, "repository" AE..= request.repository, "base" AE..= request.base]
+        void <$> runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir host.image host.bridge configured.script configured.dependencyArchive) (Workspace.Prepare fetched.directory) requestFile)
+    _ -> pure $ Left "Workspace preparation is not configured on this host"
   ReviewPatch request recordCall recordUsage check -> localSeqUnliftIO env \unlift ->
     liftIO
       $ launch
@@ -940,6 +951,7 @@ runCodeReviewTest respond respondFix respondAdmission respondArtifacts respondEx
   FixRepository _ request _ _ _ _ _ _ _ _ check -> case respondFix request of
     Left message -> pure $ Left message
     Right result -> localSeqUnliftIO env $ \unlift -> (>>= matchingReview result) <$> unlift (check result)
+  PrepareRepository _ -> pure $ Right ()
   AdmitRegression _ request _ _ _ _ -> pure $ respondAdmission request
   ReviewVerifiedFix _ request verified _ _ _ _ -> pure $ respondReview request >>= reviewOutcome request verified
   VerifyFixArtifacts _ request -> pure $ VerifiedFix request.result <$ respondArtifacts request

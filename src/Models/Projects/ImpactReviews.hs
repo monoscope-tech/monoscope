@@ -322,8 +322,9 @@ receiveEvent request event =
     WHERE r.revision = #{event.revision} AND r.state = #{Queued}
   ), jobs AS (
     INSERT INTO background_jobs (run_at, status, payload)
-    SELECT now(), 'queued', jsonb_build_object('tag', 'ReviewPullRequest', 'contents', id)
-    FROM runs WHERE state = #{Queued} AND id NOT IN (SELECT id FROM prior) RETURNING 1
+    SELECT now(), 'queued', jsonb_build_object('tag', tag, 'contents', id)
+    FROM runs, unnest(ARRAY['ReviewPullRequest', 'PrepareReviewWorkspace']) tag
+    WHERE state = #{Queued} AND id NOT IN (SELECT id FROM prior) RETURNING 1
   ) SELECT CASE WHEN EXISTS (SELECT 1 FROM jobs) THEN #{RunQueued} WHEN EXISTS (SELECT 1 FROM decided WHERE queue) THEN #{JoinedRun} ELSE #{NotReviewable} END|]
 
 
@@ -347,18 +348,20 @@ reviewsPerProject :: Int64
 reviewsPerProject = 2
 
 
-claimRun :: DB es => ReviewRun -> Eff es Bool
-claimRun run = do
+-- | Admission happens here, before a review's time budget starts: past @capacity@ reviews in total,
+-- or 'reviewsPerProject' for this project, the run waits in the job queue instead of for a VM.
+claimRun :: DB es => Int -> ReviewRun -> Eff es Bool
+claimRun capacity run = do
   let payload = Aeson $ AE.toJSON $ Jobs.ReviewPullRequest run.id
   fromMaybe False
     <$> Hasql.interpOne
       [HI.sql|WITH busy AS (
-    SELECT count(*) >= #{reviewsPerProject} AS full FROM projects.pr_review_threads o
-    WHERE o.project_id = #{run.projectId} AND o.id <> #{run.threadId} AND o.lease_until > now()
+    SELECT count(*) FILTER (WHERE o.project_id = #{run.projectId}) >= #{reviewsPerProject} OR count(*) >= #{fromIntegral @Int @Int64 capacity} AS saturated
+    FROM projects.pr_review_threads o WHERE o.id <> #{run.threadId} AND o.lease_until > now()
   ), leased AS (
     UPDATE projects.pr_review_threads t SET lease_owner = #{run.id}, lease_until = now() + interval '10 minutes'
     WHERE t.id = #{run.threadId} AND t.latest_revision = #{run.revision}
-      AND (t.lease_until IS NULL OR t.lease_until < now()) AND NOT (SELECT full FROM busy)
+      AND (t.lease_until IS NULL OR t.lease_until < now()) AND NOT (SELECT saturated FROM busy)
       AND EXISTS (SELECT 1 FROM projects.pr_review_runs r WHERE r.id = #{run.id} AND r.state IN (#{Queued}, #{Reviewing}, #{Incomplete}))
     RETURNING t.id
   ), claimed AS (
@@ -369,7 +372,7 @@ claimRun run = do
     SELECT CASE WHEN t.lease_until > now() AND t.lease_owner <> r.id THEN t.lease_until + interval '1 second'
       WHEN t.lease_until > now() THEN now() + interval '1 second' ELSE now() + interval '15 seconds' END, 'queued', #{payload}
     FROM projects.pr_review_threads t JOIN projects.pr_review_runs r ON r.thread_id = t.id
-    WHERE r.id = #{run.id} AND t.latest_revision = r.revision AND (t.lease_until > now() OR (SELECT full FROM busy))
+    WHERE r.id = #{run.id} AND t.latest_revision = r.revision AND (t.lease_until > now() OR (SELECT saturated FROM busy))
       AND r.state IN (#{Queued}, #{Reviewing}, #{Incomplete}) AND NOT EXISTS (SELECT 1 FROM claimed)
     RETURNING id
   ) SELECT EXISTS (SELECT 1 FROM claimed)|]

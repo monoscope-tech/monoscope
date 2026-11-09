@@ -171,7 +171,7 @@ schema role = \case
     object
       [ ("claim", bounded 1 (Just 200) & O.description ?~ "The behaviour this recording proves, as the PR author would state it.")
       , ("command", bounded 1 (Just 16384) & O.description ?~ "Bash run from /workspace on each revision and recorded. Exit nonzero when the claimed behaviour is absent.")
-      , ("setup", bounded 1 (Just 16384) & O.description ?~ "Optional bash run first and not recorded: build and start the app in the background, migrate and seed its data, and wait until it answers. Reuse the repository's saved setup unchanged when it still applies.")
+      , ("setup", bounded 1 (Just 16384) & O.description ?~ "Optional bash run first and not recorded: build and start the app in the background, migrate and seed its data, and wait until it answers. Reuse the repository's saved setup unchanged when it still applies. It runs in its own shell, so exports do not reach the command; use fixed ports or write values to a file.")
       ]
       & O.required .~ ["claim", "command"]
   RecallKnowledge -> object [("service", bounded 1 Nothing)]
