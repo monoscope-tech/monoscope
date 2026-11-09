@@ -170,7 +170,8 @@ queryLimit, submissionLimit :: Int
 (queryLimit, submissionLimit) = (20, 5)
 
 
-data SavedGuest = SavedGuest {id :: UUIDId "native_checkpoint", guest :: Guest.Suspended, sha256 :: Text, remaining :: Int, submissions :: Int}
+-- | @proofs@ is absent in checkpoints written before proof recording existed.
+data SavedGuest = SavedGuest {id :: UUIDId "native_checkpoint", guest :: Guest.Suspended, sha256 :: Text, remaining :: Int, submissions :: Int, proofs :: Maybe Int}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 
@@ -178,7 +179,7 @@ data SavedGuest = SavedGuest {id :: UUIDId "native_checkpoint", guest :: Guest.S
 instance AE.FromJSON SavedGuest where
   parseJSON value = do
     saved <- AE.genericParseJSON AE.defaultOptions value
-    unless (saved.remaining >= 0 && saved.remaining <= queryLimit && saved.submissions >= 0 && saved.submissions <= submissionLimit) $ fail "Invalid native continuation budget"
+    unless (saved.remaining >= 0 && saved.remaining <= queryLimit && saved.submissions >= 0 && saved.submissions <= submissionLimit && all (\n -> n >= 0 && n <= proofBudget) saved.proofs) $ fail "Invalid native continuation budget"
     pure saved
 
 
@@ -432,6 +433,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                   persist progress = for_ retention \retained -> do
                     retained.persist progress
                     pruneNativeSnapshots retained.directory $ case progress of Waiting saved -> Just saved.id; FixWaiting saved _ -> Just saved.id; Finished{} -> Nothing
+              -- A resumed session keeps its proof attempts, so the budget is checked before VMs run.
+              writeIORef proofCount $ fromMaybe 0 $ (.proofs) =<< paused
               for_ sessionDirectory \directory -> case paused of
                 Nothing -> do
                   removed <- tryIOError $ removeFile $ directory </> "active.jsonl"
@@ -467,7 +470,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                         Native.writePrivateArtifact generation "session.jsonl" $ fromStrict transcript
                         session <- readIORef guest >>= maybe (fail "Native continuation requires a live guest") pure
                         disk <- session.suspend $ generation </> "guest.qcow2"
-                        let saved = SavedGuest identifier disk (Native.sha256 transcript) remaining submissions
+                        attempted <- readIORef proofCount
+                        let saved = SavedGuest identifier disk (Native.sha256 transcript) remaining submissions (Just attempted)
                         persist $ case workflowState of
                           Just (FixReady current) -> FixWaiting saved $ SavedFix current.id $ Native.candidateSnapshot <$> current.progress
                           (Nothing; Just AdmissionReady; Just SourceReady) -> Waiting saved

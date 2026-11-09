@@ -290,7 +290,7 @@ receiveEvent request event =
   maybe NotReviewable HI.getOneColumn
     <$> Hasql.interpOne
       [HI.sql|WITH eligible AS (
-    SELECT DISTINCT m.project_id, coalesce(s.trigger, #{ReadyPullRequests}) AS trigger FROM projects.code_mappings m
+    SELECT DISTINCT m.project_id, CASE WHEN s.enabled IS FALSE THEN #{WhenAsked} ELSE coalesce(s.trigger, #{ReadyPullRequests}) END AS trigger FROM projects.code_mappings m
     JOIN projects.git_credentials c ON c.id = m.credential_id AND c.project_id = m.project_id
     LEFT JOIN projects.pr_review_settings s ON s.project_id = m.project_id AND s.owner = lower(m.owner) AND s.repo = lower(m.repo)
     WHERE c.host = 'github' AND c.api_base IS NULL AND c.installation_id = #{event.installationId}
@@ -422,7 +422,7 @@ releaseRun run =
 repositorySettings :: DB es => ProjectId -> Eff es [ReviewSettings]
 repositorySettings pid =
   Hasql.interp
-    [HI.sql|SELECT DISTINCT lower(m.owner), lower(m.repo), coalesce(s.trigger, #{ReadyPullRequests}), coalesce(s.include_evidence, false)
+    [HI.sql|SELECT DISTINCT lower(m.owner), lower(m.repo), CASE WHEN s.enabled IS FALSE THEN #{WhenAsked} ELSE coalesce(s.trigger, #{ReadyPullRequests}) END, coalesce(s.include_evidence, false)
     FROM projects.code_mappings m JOIN projects.git_credentials c ON c.id = m.credential_id AND c.project_id = m.project_id
     LEFT JOIN projects.pr_review_settings s ON s.project_id = m.project_id AND s.owner = lower(m.owner) AND s.repo = lower(m.repo)
     WHERE m.project_id = #{pid} AND c.host = 'github' AND c.api_base IS NULL AND c.installation_id IS NOT NULL
