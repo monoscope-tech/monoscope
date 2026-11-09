@@ -52,7 +52,7 @@ data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Kno
 
 
 -- | @record_proof@ arguments; the tool schema calls the shell text @command@.
-data ProofArgs = ProofArgs {claim :: Text, shellCommand :: Text}
+data ProofArgs = ProofArgs {claim :: Text, shellCommand :: Text, setup :: Maybe Text}
   deriving stock (Generic)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "shellCommand" "command"]] ProofArgs
 
@@ -643,7 +643,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                           else recordSides request outbox identifier proof save
                     recordSides request outbox identifier proof save =
                       active \session -> runExceptT do
-                        (result, logs) <- ExceptT $ regression request session.baseline identifier (AE.object ["script" AE..= Media.proofScript proof.shellCommand, "failureMessage" AE..= Media.proofFailure]) [("base", request.base), ("head", request.head)] outbox
+                        (result, logs) <- ExceptT $ regression request session.baseline identifier (AE.object ["script" AE..= Media.proofScript proof.setup proof.shellCommand, "failureMessage" AE..= Media.proofFailure]) [("base", request.base), ("head", request.head)] outbox
                         for_ result.receipts \receipt -> ExceptT $ Outbox.deliver outbox (Outbox.Check receipt) record
                         -- Both sides render at once; each is an agg and ffmpeg pass under the review lease.
                         recorded <-
@@ -653,7 +653,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             (cast, output) <- ExceptT $ Media.proofCast <$> readFileBS logFile
                             (gif, mp4) <- ExceptT $ Media.renderProof cast
                             let summary = AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "output" AE..= T.takeEnd 3000 output]
-                            pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4}, summary)
+                            pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, setup = proof.setup, cast, gif, mp4}, summary)
                         sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty $ map fst recorded
                         key <- ExceptT $ save sides
                         pure $ AE.object ["key" AE..= key, "claim" AE..= proof.claim, "sides" AE..= map snd recorded, "note" AE..= ("Cite this key in a claim. The PR author sees both recordings." :: Text)]

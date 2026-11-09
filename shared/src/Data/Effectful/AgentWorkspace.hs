@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
 import Control.Exception qualified as Exception
@@ -33,9 +33,10 @@ import Network.URI (URI (..), URIAuth (..), parseURI)
 import Pkg.Deriving (UUIDId (..), WrappedEnumSC (..))
 import Pkg.GitCommand qualified as HostGit
 import Relude hiding (Identity, identity, withFile)
-import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, listDirectory, removePathForcibly, renameDirectory, renameFile)
+import GHC.Conc (getNumProcessors)
+import System.Directory (findExecutable, canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, listDirectory, removePathForcibly, renameDirectory, renameFile)
 import System.Environment (getEnvironment)
-import System.FileLock (SharedExclusive (..), withFileLock, withTryFileLock)
+import System.FileLock (SharedExclusive (..), tryLockFile, unlockFile, withFileLock, withTryFileLock)
 import System.FilePath (isAbsolute, takeDirectory, (</>))
 import System.IO (hClose, withBinaryFile)
 import System.IO.Error (catchIOError, isDoesNotExistError, tryIOError, userError)
@@ -1143,7 +1144,7 @@ verifyArtifactRegression options request = do
               copy :: RPC -> FilePath -> Text -> IO ()
               copy rpc path destination = rpc @() $ CopyFile $ Copy path destination
           privateWrite logPath ""
-          outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox options.bridge \rpc -> do
+          outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox VerifierPool options.bridge \rpc -> do
             image <- rpc @Image $ Resolve options.image
             ensure $ image.buildId == request.imageBuildId
             let sandbox = Sandbox image.assetDir 2 1024 OfflineCow $ one ("/checkout", checkout)
@@ -1290,7 +1291,7 @@ lookupWorkspace options operation request = do
   ensure $ T.length scriptText <= 65536 && not (T.null $ T.strip scriptText)
   dependency <- traverse fingerprint options.dependencyArchive
   environment <- getEnvironment
-  withSandbox options.bridge \rpc -> do
+  withSandbox (case operation of Prepare{} -> VerifierPool; (Lookup; Archive{}; Restore{}) -> NoVm) options.bridge \rpc -> do
     image <- rpc @Image $ Resolve options.image
     for_ request.expectedImageBuildId $ ensure . (== image.buildId)
     assetDir <- canonicalizePath image.assetDir
@@ -1597,16 +1598,53 @@ fingerprintScript =
 type RPC = forall value. AE.FromJSON value => Command value -> IO value
 
 
-withSandbox :: FilePath -> (RPC -> IO a) -> IO a
-withSandbox bridge = withSandboxRelease bridge (const pass)
+withSandbox :: Pool -> FilePath -> (RPC -> IO a) -> IO a
+withSandbox pool bridge = withSandboxRelease pool bridge (const pass)
+
+
+-- | Which host-wide VM slots a sandbox draws from. Verifier VMs start while an agent VM holds its
+-- slot, so they have their own pool and agents can never starve them. Image lookups start no VM.
+data Pool = AgentPool | VerifierPool | NoVm
+  deriving stock (Eq, Show)
+
+
+-- | Holds one of this host's slots for the pool. Slots are lock files, so every process on the node
+-- shares them and each node of a cluster counts its own. @IMPACT_REVIEW_VM_SLOTS=agents,verifiers@
+-- overrides the default of a quarter of the cores for agents and two verifiers.
+withSlot :: Pool -> IO a -> IO a
+withSlot pool action = do
+  configured <- lookupEnv "IMPACT_REVIEW_VM_SLOTS"
+  cores <- getNumProcessors
+  directory <- fromMaybe "/tmp/monoscope-vm-slots" <$> lookupEnv "IMPACT_REVIEW_VM_SLOT_DIR"
+  let (agents, verifiers) = fromMaybe (max 1 (cores `div` 4), 2) $ configured >>= \text -> case T.splitOn "," (toText text) of [a, v] -> (,) <$> readMaybe (toString a) <*> readMaybe (toString v); _ -> Nothing
+      slots name count = [directory </> name <> "-" <> show n | n <- [1 .. max 1 count :: Int]]
+      acquire paths waited = do
+        held <- foldM (\found path -> maybe (tryLockFile path Exclusive) (pure . Just) found) Nothing paths
+        case held of
+          Just lock -> pure lock
+          Nothing
+            | waited >= slotWaitSeconds -> throwIO $ userError "Every sandbox slot on this host is busy; retry later"
+            | otherwise -> threadDelay 1000000 >> acquire paths (waited + 1)
+  case pool of
+    NoVm -> action
+    (AgentPool; VerifierPool) -> do
+      createDirectoryIfMissing True directory
+      bracket (acquire (if pool == AgentPool then slots "agent" agents else slots "verifier" verifiers) (0 :: Int)) unlockFile (const action)
+  where
+    slotWaitSeconds = 300
 
 
 -- | Cleanup is observed before restoring the action's exception, including cancellation.
-withSandboxRelease :: FilePath -> (AllocationOutcome -> IO ()) -> (RPC -> IO a) -> IO a
-withSandboxRelease bridge released action = do
+-- The bridge and the VMs it starts run at the lowest CPU and I/O priority, so ingestion and
+-- web requests on the same host always preempt a guest's compile.
+withSandboxRelease :: Pool -> FilePath -> (AllocationOutcome -> IO ()) -> (RPC -> IO a) -> IO a
+withSandboxRelease pool bridge released action = withSlot pool do
   environment <- filter (\(key, _) -> key `elem` ["PATH", "HOME", "XDG_CACHE_HOME"] || "GONDOLIN_" `isPrefixOf` key) <$> getEnvironment
+  ionice <- findExecutable "ionice"
+  let lowest = ["-n", "19", bridge]
+      (program, arguments) = maybe ("nice", lowest) (\path -> (path, ["-c", "3", "nice"] <> lowest)) ionice
   bracket
-    (bracketOnError (startProcess $ setCreateGroup True $ setEnv environment $ setStdin createPipe $ setStdout createPipe $ setStderr nullStream $ proc bridge []) stopProcess \process -> (process,) <$> (getPid process >>= maybe invalid pure))
+    (bracketOnError (startProcess $ setCreateGroup True $ setEnv environment $ setStdin createPipe $ setStdout createPipe $ setStderr nullStream $ proc program arguments) stopProcess \process -> (process,) <$> (getPid process >>= maybe invalid pure))
     (\(process, owner) -> stopProcess process `Exception.finally` (Signal.signalProcessGroup Signal.sigKILL owner `catchIOError` \failure -> unless (isDoesNotExistError failure) $ throwIO failure))
     \(process, _) -> Exception.mask \restore -> do
       pending <- newIORef False
