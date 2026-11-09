@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), Slots (..), hostSlots, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
 import Control.Exception qualified as Exception
@@ -46,10 +46,11 @@ import System.Posix.IO qualified as Posix
 import System.Posix.Process (getParentProcessID)
 import System.Posix.Signals qualified as Signal
 import System.Posix.Unistd (fileSynchronise)
+import System.Posix.Unistd qualified as Uname
 import System.Process.Typed (ExitCode (..), byteStringInput, createPipe, getPid, getStdin, getStdout, nullStream, proc, readProcessStdout_, setCreateGroup, setEnv, setStderr, setStdin, setStdout, startProcess, stopProcess, waitExitCode, withProcessTerm)
 import UnliftIO.Async (withAsync)
 import UnliftIO.Concurrent (myThreadId, threadDelay)
-import UnliftIO.Exception (bracket, bracketOnError, catchAny, evaluate, onException, throwIO, throwTo, tryAny)
+import UnliftIO.Exception (bracket, bracketOnError, catchAny, evaluate, handleAny, onException, throwIO, throwTo, tryAny)
 import UnliftIO.Timeout qualified as Timeout
 import "cryptonite" Crypto.Hash (Context, Digest, SHA256, hash, hashFinalize, hashInit, hashUpdate, hashlazy)
 
@@ -735,7 +736,8 @@ runWorkspaceReal = interpret $ \env -> \case
         Lookup -> do
           root <- canonicalizePath options.cacheDir
           withProjectLock root request.projectId $ lookupWorkspace options operation request
-        (Prepare{}; Archive{}; Restore{}) -> lookupWorkspace options operation request
+        Prepare{} -> lookupWorkspace options operation request `Exception.catch` \(WarmStartFailed _) -> lookupWorkspace options operation request
+        (Archive{}; Restore{}) -> lookupWorkspace options operation request
     pure $ case outcome of
       Right (Just prepared) -> Right prepared
       Right Nothing -> Left "Workspace preparation timed out"
@@ -1311,18 +1313,16 @@ lookupWorkspace options operation request = do
         load = loadWorkspace identity image directory (rpc . InspectCheckpoint)
         locked = withProjectLock root request.projectId
         latestPointer = parent </> ("latest-" <> toString (lineage identity) <> ".json")
-        -- The lineage's latest build at another base. Missing, evicted or mismatched means a cold start.
+        -- The lineage's latest build at another base. Missing, evicted or mismatched means a cold
+        -- start; restoring verifies the disk's hash as it copies.
         ancestorSnapshot =
-          join . rightToMaybe <$> tryAny do
+          rightToMaybe <$> tryAny do
             name <- decode @FilePath =<< readBounded latestPointer 4096
             let ancestorDirectory = parent </> takeFileName name
-                disk = ancestorDirectory </> "baseline.qcow2"
             manifest <- decode @Manifest =<< readBounded (ancestorDirectory </> "manifest.json") 65536
             let Identity project repository _ imageBuild script dependencies = manifest.identity
             ensure $ Identity project repository identity.base imageBuild script dependencies == identity
-            measured <- fingerprint disk
-            ensure $ measured.sha256 == manifest.sha256
-            pure $ Just $ Snapshot disk manifest.sha256
+            pure $ Snapshot (ancestorDirectory </> "baseline.qcow2") manifest.sha256
     case operation of
       Lookup -> load
       Archive remoteFile -> locked $ transfer root identity Upload remoteFile \remote prefix connection -> do
@@ -1366,9 +1366,10 @@ lookupWorkspace options operation request = do
           Nothing -> withTempDirectory parent ".prepare-" \temporary -> withSystemTempDirectory "monoscope-native-baseline" \source -> do
             let clean = source </> "checkout"
                 git args = readProcessStdout_ $ HostGit.command environment HostGit.Local source args
+                execute :: HasCallStack => Maybe Text -> Bool -> NonEmpty Text -> IO Text
                 execute cwd quiet argv = do
                   result <- rpc @Execution $ Execute $ GuestCommand argv cwd quiet
-                  ensure $ result.exitCode == 0
+                  unless (result.exitCode == 0) $ throwIO $ userError $ toString (T.unwords $ toList argv) <> " exited " <> show result.exitCode <> ": " <> toString (T.takeEnd 2000 result.stdout) <> "\n" <> prettyCallStack callStack
                   pure $ T.strip result.stdout
                 guestGit args = execute (Just "/workspace") False $ "/usr/bin/git" :| (["-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"] <> args)
                 parseHash value = maybe invalid pure $ viaNonEmpty head (words value) >>= mkFingerprint
@@ -1386,11 +1387,11 @@ lookupWorkspace options operation request = do
                 for_ [("/bin/mkdir" :: Text) :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/baseline/.", "/workspace"]] $ void . execute Nothing False
               -- Warm start: the repository's latest build moves to this base. Ignored build output
               -- (target/, dist-newstyle/, node_modules/) survives, so the script rebuilds incrementally.
-              -- upload-pack honours safe.directory only from global config, hence the private one.
-              Just snapshot -> do
+              -- The ancestor's .git was writable by its build script, so it is replaced by the host's
+              -- checkout before root runs git. A failed warm start forgets the ancestor and retries cold.
+              Just snapshot -> handleAny (\failure -> removePathForcibly latestPointer >> throwIO (WarmStartFailed $ toText $ displayException failure)) do
                 restoreSnapshot rpc image.buildId sandbox snapshot (source </> "ancestor.qcow2")
-                moved <- rpc @Execution $ Execute $ GuestCommand ("/bin/bash" :| ["-c", "exec 2>&1; set -e; export GIT_CONFIG_GLOBAL=/tmp/monoscope-warm-gitconfig; git config --global safe.directory '*'; g() { git -c core.hooksPath=/dev/null -C /workspace \"$@\"; }; g fetch --quiet --no-tags /baseline HEAD; g checkout --quiet --force --detach FETCH_HEAD; g clean -fdq"]) (Just "/workspace") False
-                unless (moved.exitCode == 0) $ throwIO $ userError $ "Warm start could not move to the new base: " <> toString (T.takeEnd 2000 moved.stdout)
+                void $ execute (Just "/workspace") False $ "/bin/bash" :| ["-c", "exec 2>&1; set -e; rm -rf .git; cp -R /baseline/.git .git; g() { git -c safe.directory=/workspace -c core.hooksPath=/dev/null \"$@\"; }; g reset --quiet --hard; g clean -fdq"]
             void $ execute Nothing False $ "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]
             tracked <- git ["-C", clean, "ls-files", "-z"]
             writeFileLBS (source </> "tracked") tracked
@@ -1643,6 +1644,12 @@ withSandbox :: Pool -> FilePath -> (RPC -> IO a) -> IO a
 withSandbox pool bridge = withSandboxRelease pool bridge (const pass)
 
 
+-- | A warm start failed and its ancestor was forgotten, so the build can retry cold in a fresh VM.
+newtype WarmStartFailed = WarmStartFailed Text
+  deriving stock (Show)
+  deriving anyclass (Exception)
+
+
 -- | Which host-wide VM slots a sandbox draws from. Verifier VMs start while an agent VM holds its
 -- slot, so they have their own pool and agents can never starve them; long workspace builds get
 -- one slot of their own so they cannot starve proofs. Image lookups start no VM.
@@ -1650,43 +1657,54 @@ data Pool = AgentPool | VerifierPool | PreparePool | NoVm
   deriving stock (Eq, Show)
 
 
--- | Holds one of this host's slots for the pool. Slots are lock files, so every process on the node
--- shares them and each node of a cluster counts its own. @IMPACT_REVIEW_VM_SLOTS=agents,verifiers,prepare@
--- overrides the default: a quarter of the cores for agents, two verifiers and one build. Admission
--- happens earlier, in the review queue, so a busy slot here fails fast rather than spending a review's budget.
-withSlot :: Pool -> IO a -> IO a
-withSlot pool action = do
+-- | This node's VM slots per pool. @IMPACT_REVIEW_VM_SLOTS=agents,verifiers,builds@ overrides the
+-- default: a quarter of the cores for agents, two verifiers and one build. The agent count is also
+-- the node's review admission capacity, so the queue never admits a review the node has no VM for.
+data Slots = Slots {node :: Text, agents :: Int, verifiers :: Int, builds :: Int}
+
+
+hostSlots :: IO Slots
+hostSlots = do
   configured <- lookupEnv "IMPACT_REVIEW_VM_SLOTS"
   cores <- getNumProcessors
-  directory <- fromMaybe "/tmp/monoscope-vm-slots" <$> lookupEnv "IMPACT_REVIEW_VM_SLOT_DIR"
+  node <- toText . Uname.nodeName <$> Uname.getSystemID
   let (agents, verifiers, builds) = fromMaybe (max 1 (cores `div` 4), 2, 1) $ configured >>= \text -> case mapM (readMaybe . toString) (T.splitOn "," (toText text)) of Just [a, v, b] -> Just (a, v, b); _ -> Nothing
-      slots name count = [directory </> name <> "-" <> show n | n <- [1 .. max 1 count :: Int]]
-      acquire paths waited = do
-        held <- foldM (\found path -> maybe (tryLockFile path Exclusive) (pure . Just) found) Nothing paths
-        case held of
+  pure Slots{..}
+
+
+-- | Holds one of this host's slots for the pool. Slots are lock files, so every process on the node
+-- shares them and each node of a cluster counts its own. Admission happens earlier, in the review
+-- queue, so a busy agent or verifier slot fails fast rather than spending a review's budget; a build
+-- has its own job budget and waits its turn.
+withSlot :: Pool -> IO a -> IO a
+withSlot pool action = do
+  slots <- hostSlots
+  directory <- fromMaybe "/tmp/monoscope-vm-slots" <$> lookupEnv "IMPACT_REVIEW_VM_SLOT_DIR"
+  let paths name count = [directory </> name <> "-" <> show n | n <- [1 .. max 1 count :: Int]]
+      acquire patience candidates waited = do
+        free <- foldM (\found path -> maybe (tryLockFile path Exclusive) (pure . Just) found) Nothing candidates
+        case free of
           Just lock -> pure lock
           Nothing
-            | waited >= slotWaitSeconds -> throwIO $ userError "Every sandbox slot on this host is busy; retry later"
-            | otherwise -> threadDelay 1000000 >> acquire paths (waited + 1)
-  let held name count = createDirectoryIfMissing True directory >> bracket (acquire (slots name count) (0 :: Int)) unlockFile (const action)
+            | waited >= patience -> throwIO $ userError "Every sandbox slot on this host is busy; retry later"
+            | otherwise -> threadDelay 1000000 >> acquire patience candidates (waited + 1)
+      held name count patience = createDirectoryIfMissing True directory >> bracket (acquire patience (paths name count) (0 :: Int)) unlockFile (const action)
   case pool of
     NoVm -> action
-    AgentPool -> held "agent" agents
-    VerifierPool -> held "verifier" verifiers
-    PreparePool -> held "prepare" builds
-  where
-    slotWaitSeconds = 45
+    AgentPool -> held "agent" slots.agents 45
+    VerifierPool -> held "verifier" slots.verifiers 45
+    PreparePool -> held "prepare" slots.builds 3600
 
 
 -- | Cleanup is observed before restoring the action's exception, including cancellation.
--- The bridge and the VMs it starts run at the lowest CPU and I/O priority, so ingestion and
--- web requests on the same host always preempt a guest's compile.
+-- The bridge and the VMs it starts run at the lowest CPU priority and low best-effort I/O priority
+-- (idle I/O could starve a guest outright), so ingestion and web requests preempt a guest's compile.
 withSandboxRelease :: Pool -> FilePath -> (AllocationOutcome -> IO ()) -> (RPC -> IO a) -> IO a
 withSandboxRelease pool bridge released action = withSlot pool do
   environment <- filter (\(key, _) -> key `elem` ["PATH", "HOME", "XDG_CACHE_HOME"] || "GONDOLIN_" `isPrefixOf` key) <$> getEnvironment
   ionice <- findExecutable "ionice"
   let lowest = ["-n", "19", bridge]
-      (program, arguments) = maybe ("nice", lowest) (,["-c", "3", "nice"] <> lowest) ionice
+      (program, arguments) = maybe ("nice", lowest) (,["-c", "2", "-n", "7", "nice"] <> lowest) ionice
   bracket
     (bracketOnError (startProcess $ setCreateGroup True $ setEnv environment $ setStdin createPipe $ setStdout createPipe $ setStderr nullStream $ proc program arguments) stopProcess \process -> (process,) <$> (getPid process >>= maybe invalid pure))
     (\(process, owner) -> stopProcess process `Exception.finally` (Signal.signalProcessGroup Signal.sigKILL owner `catchIOError` \failure -> unless (isDoesNotExistError failure) $ throwIO failure))

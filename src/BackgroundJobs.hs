@@ -101,7 +101,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import OddJobs.ConfigBuilder (mkConfig)
-import OddJobs.Job (ConcurrencyControl (..), Config (cfgJobOrdering, cfgOnJobFailed, cfgOnJobTimeout), Job (..), JobErrHandler (..), JobOrdering (EarliestRunAtFirst), LogEvent (..), LogLevel, Status (Failed), createJob, scheduleJob, startJobRunner, throwParsePayload)
+import OddJobs.Job (ConcurrencyControl (..), Config (cfgConcurrencyControl, cfgDefaultJobTimeout, cfgJobOrdering, cfgOnJobFailed, cfgOnJobTimeout, cfgTableName), Seconds (..), Job (..), JobErrHandler (..), JobOrdering (EarliestRunAtFirst), LogEvent (..), LogLevel, Status (Failed), createJob, scheduleJob, startJobRunner, throwParsePayload)
 import OddJobs.Types (FailureMode (FailPermanent))
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
@@ -3302,8 +3302,12 @@ jobsWorkerInitWithTools logger appCtx tp projectTools = when appCtx.config.enabl
         threadDelay (30 * 60 * 1_000_000)
         tryStepIO logger appCtx "ensureDailyJobScheduled" $ ensureDailyJobScheduled appCtx
     )
-    $ startJobRunner
-    $ jobsWorkerConfig logger appCtx tp projectTools
+    $ UIO.concurrently_ (startJobRunner config)
+    -- Workspace builds take up to an hour, past the queue's timeout, so they run one at a time from
+    -- their own table with a budget just above 'Workspace.RunWorkspace's, which reports first.
+    $ startJobRunner config{cfgTableName = "background_jobs_long", cfgConcurrencyControl = MaxConcurrentJobs 1, cfgDefaultJobTimeout = Seconds 3660}
+  where
+    config = jobsWorkerConfig logger appCtx tp projectTools
 
 
 queuedFailure :: Issues.RunFailure

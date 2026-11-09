@@ -4,7 +4,7 @@
 module Data.Effectful.CodeReview (CodeReview (..), SessionIdentity (..), SessionSubject (..), NativePause, FixContext (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), readSessionContext, prepareRepository, Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), proofBudget, DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), Revision, mkRevision, revisionText, reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, workerHost, runCodeReviewTest, validExplanation) where
 
 import Control.Concurrent.STM qualified as STM
-import Control.Monad.Trans.Except (throwE)
+import Control.Monad.Trans.Except (except, throwE)
 import Control.Monad.Trans.State.Strict qualified as State
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
@@ -215,7 +215,7 @@ data CodeReview :: Effect where
   ReviewVerifiedFix :: SessionIdentity m (UUIDId "agent_attempt") -> FixReviewRequest -> VerifiedFix -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> CodeReview m (Either Text FixReviewOutcome)
   ReviewSource :: ReviewMode -> Request "pr_review" -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (DraftSubmission -> m (Either Text ())) -> CodeReview m (Either Text Text)
   ReviewPatch :: Request "pr_review" -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (Text -> m (Either Text ())) -> CodeReview m (Either Text Text)
-  ReviewRepository :: SessionIdentity m ReviewContext -> Request "pr_review" -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (NonEmpty ProofMedia -> m (Either Text Text)) -> (AE.Value -> m (Either Text ())) -> CodeReview m (Either Text Text)
+  ReviewRepository :: SessionIdentity m ReviewContext -> Request "pr_review" -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (Maybe Text -> NonEmpty ProofMedia -> m (Either Text Text)) -> (AE.Value -> m (Either Text ())) -> CodeReview m (Either Text Text)
   -- | Builds the workspace checkpoint at the request's base, warm from the repository's latest
   -- build when one exists. Runs outside any review's budget; a no-op when the checkpoint exists.
   PrepareRepository :: Request "pr_review" -> CodeReview m (Either Text ())
@@ -255,7 +255,7 @@ data Callbacks format result = Callbacks
   , usage :: ModelUsage -> IO ()
   , allocations :: Maybe (AllocationReceipt -> IO ())
   , checks :: Maybe (CheckReceipt -> IO ())
-  , proofs :: Maybe (NonEmpty ProofMedia -> IO (Either Text Text))
+  , proofs :: Maybe (Maybe Text -> NonEmpty ProofMedia -> IO (Either Text Text))
   , phase :: PhaseReceipt -> IO (Either Text ())
   , validate :: DraftValidator format result
   }
@@ -293,7 +293,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
           , usage = unlift . recordUsage
           , allocations = Just $ unlift . recordAllocation
           , checks = Just $ unlift . recordCheck
-          , proofs = Just $ unlift . recordProof
+          , proofs = Just \setup -> unlift . recordProof setup
           , phase = const $ pure $ Left "Fix phases require an issue-fix task"
           , validate = StructuredDraft $ \value -> (decodeUtf8 (AE.encode value) <$) <$> unlift (check value)
           }
@@ -319,10 +319,10 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
       CheckoutHarness -> launch (SourceTask request) $ callbacks (Just $ unlift . recordAllocation) (Just $ unlift . recordCheck) $ StructuredDraft validateValue
   PrepareRepository request -> liftIO case (artifactStore, hostConfig) of
     (Just store, Right (Just host)) | Just configured <- host.workspace -> join . first show <$> tryAny (join <$> Checkout.withCheckout store (Checkout.Repository request) \fetched _ ->
-      withSystemTempDirectory "monoscope-prepare-request" \directory -> do
+      withSystemTempDirectory "monoscope-prepare-request" \directory -> runExceptT do
         let requestFile = directory </> "request.json"
-        writeFileLBS requestFile $ AE.encode $ AE.object ["projectId" AE..= request.projectId, "repository" AE..= request.repository, "base" AE..= request.base]
-        void <$> runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir host.image host.bridge configured.script configured.dependencyArchive) (Workspace.Prepare fetched.directory) requestFile))
+        liftIO . writeFileLBS requestFile . AE.encode =<< except (Workspace.mkRequest request.projectId request.repository request.base Nothing)
+        void $ ExceptT $ runEff $ Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir host.image host.bridge configured.script configured.dependencyArchive) (Workspace.Prepare fetched.directory) requestFile)
     _ -> pure $ Left "Workspace preparation is not configured on this host"
   ReviewPatch request recordCall recordUsage check -> localSeqUnliftIO env \unlift ->
     liftIO
@@ -664,9 +664,9 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             (cast, output) <- ExceptT $ Media.proofCast <$> readFileBS logFile
                             (gif, mp4) <- ExceptT $ Media.renderProof cast
                             let summary = AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "output" AE..= T.takeEnd 3000 output]
-                            pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, setup = proof.setup, cast, gif, mp4}, summary)
+                            pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4}, summary)
                         sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty $ map fst recorded
-                        key <- ExceptT $ save sides
+                        key <- ExceptT $ save proof.setup sides
                         pure $ AE.object ["key" AE..= key, "claim" AE..= proof.claim, "sides" AE..= map snd recorded, "note" AE..= ("Cite this key in a claim. The PR author sees both recordings." :: Text)]
 
                     receive :: Maybe Checkout.Prepared -> Maybe GuestSession -> Int -> Int -> Maybe (Accepted result) -> IO (Either Text result)

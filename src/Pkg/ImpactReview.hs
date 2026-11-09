@@ -9,10 +9,11 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
 import Data.Default (def)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
+import Data.Effectful.AgentWorkspace qualified as Workspace (hostSlots)
 import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Artifacts (sha256)
 import Data.Effectful.CodeReview.Policy qualified as Policy
-import Data.Effectful.CodeReview.Types (Evidence (..), EvidenceKind (..), KnowledgeSnapshot (..), Observation (..), ProofMedia (..), QueryKind (..), QueryObservation (..), ReviewMemory (..))
+import Data.Effectful.CodeReview.Types (Evidence (..), EvidenceKind (..), KnowledgeSnapshot (..), Observation (..), QueryKind (..), QueryObservation (..), ReviewMemory (..))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as LLM
 import Data.Effectful.Wreq qualified as HTTP
@@ -384,16 +385,13 @@ reviewConnection run = runErrorNoCallStack @Text do
 prepareReviewWorkspace :: Reviews.ReviewId -> ATBackgroundCtx ()
 prepareReviewWorkspace rid = whenJustM (Reviews.getRun rid) \run -> do
   cfg <- (.config) <$> ask @AuthContext
-  outcome <- Timeout.timeout (3600 * 1000000) $ runErrorNoCallStack @Text do
+  outcome <- runErrorNoCallStack @Text do
     (_, _, _, conn) <- either throwError pure =<< reviewConnection run
     pr <- either throwError pure =<< Git.getPullRequest conn (Git.RepoRef run.owner run.repo run.revision) run.number
     either throwError pure
       =<< Agent.prepareRepository
         Agent.Request{projectId = run.projectId, runId = run.id, attemptId = UUIDId UUID.nil, repository = "https://github.com/" <> run.owner <> "/" <> run.repo <> ".git", base = pr.base.revision, head = pr.head.revision, gitToken = conn.token.reveal, prompt = "", provider = cfg.impactReviewProvider, model = fst $ LLM.modelAndEffort cfg.openaiModel, thinkingLevel = Agent.Off}
-  case outcome of
-    Just (Right ()) -> Log.logInfo "Review workspace ready" (run.projectId, run.owner, run.repo)
-    Just (Left err) -> Log.logAttention "Review workspace preparation failed" (run.id, err)
-    Nothing -> Log.logAttention "Review workspace preparation timed out" run.id
+  either (Log.logAttention "Review workspace preparation failed" . (run.id,)) (const $ Log.logInfo "Review workspace ready" (run.projectId, run.owner, run.repo)) outcome
 
 
 reviewPullRequest :: Reviews.ReviewId -> ATBackgroundCtx ()
@@ -406,7 +404,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
   where
     review run
       | run.revision /= run.latestRevision = Reviews.supersedeRun run
-      | otherwise = bracket ((\ctx -> Reviews.claimRun ctx.config.impactReviewConcurrency run) =<< ask @AuthContext) (\claimed -> when claimed $ Reviews.releaseRun run) $ \claimed ->
+      | otherwise = bracket (liftIO Workspace.hostSlots >>= (`Reviews.claimRun` run)) (\claimed -> when claimed $ Reviews.releaseRun run) $ \claimed ->
           when claimed
             $ Issues.getEventRoutine run.projectId Issues.EventPullRequest
             >>= \case
@@ -563,13 +561,11 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                       unless (receipt.revision == case receipt.side of Agent.Base -> pr.base.revision; Agent.Head -> pr.head.revision) $ throwError $ ReviewFailure "Check receipt references another revision"
                       unlessM (Reviews.recordCheck run receipt) $ throwError $ ReviewFailure "Check receipt conflicts with recorded execution"
                   )
-                  ( \sides -> do
+                  ( \setup sides -> do
                       requireActive run execution
-                      -- Whether proofs replay the saved setup byte for byte is the measure of their determinism.
-                      stored <- Reviews.proofRecipe run
-                      let reuse = case ((.setup) <$> stored, (head sides).setup) of (Just recipe, Just used) | recipe == used -> "reused" :: Text; (_, Nothing) -> "none"; (_, Just _) -> "changed"
-                      Log.logInfo "Proof setup" (run.id, reuse)
-                      Reviews.saveProofs run attemptId sides
+                      stored <- Reviews.saveProofs run attemptId setup sides
+                      for_ stored \(_, reused) -> Log.logInfo "Proof setup" (run.id, if isNothing setup then "none" else if reused then "reused" else "changed" :: Text)
+                      pure $ fst <$> stored
                   )
                   ( \value -> do
                       queried <- State.gets @ReviewMemory (Map.elems . (.evidence))

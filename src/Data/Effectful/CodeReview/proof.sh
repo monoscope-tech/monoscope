@@ -1,14 +1,21 @@
 # Frozen proof check. The host prepends `set -- BASE64_COMMAND BASE64_SETUP`. The setup runs first,
-# unrecorded; the command is recorded with asciinema, and the cast returns base64-encoded between
-# markers in this check's own log.
+# unrecorded, and must leave the commit and tracked files as they were, so the recording shows the
+# revision under review; the command is recorded with asciinema, and the cast returns base64-encoded
+# between markers in this check's own log.
 set -u
 export HOME="${HOME:-/tmp}" TERM=xterm-256color LANG=C.UTF-8 LC_ALL=C.UTF-8
 command -v asciinema >/dev/null || exit 127
 if [ -n "${2:-}" ]; then
   printf %s "$2" | base64 -d > /tmp/monoscope-setup.sh
+  source_state() { git -c safe.directory='*' rev-parse HEAD 2>&1; git -c safe.directory='*' status --porcelain --untracked-files=no 2>&1; }
+  before=$(source_state)
   if ! bash /tmp/monoscope-setup.sh > /tmp/monoscope-setup.log 2>&1; then
     tail -c 4000 /tmp/monoscope-setup.log
     echo "monoscope-proof-failed: setup exited nonzero"
+    exit 1
+  fi
+  if [ "$(source_state)" != "$before" ]; then
+    echo "monoscope-proof-failed: setup changed the commit or tracked files; seed data and start services without editing source"
     exit 1
   fi
 fi
