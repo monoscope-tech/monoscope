@@ -51,7 +51,7 @@ main() {
   for arg in "$@"; do
     case "$arg" in
       --force|-f) force=1 ;;
-      *) [ -n "$version" ] || version="$arg" ;;
+      *) [ -n "$version" ] || version="v${arg#v}" ;;
     esac
   done
 
