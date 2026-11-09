@@ -173,7 +173,8 @@ schema role = \case
       , ("command", bounded 1 (Just 16384) & O.description ?~ "Bash run from /workspace on each revision and recorded. Exit nonzero when the claimed behaviour is absent.")
       , ("setup", bounded 1 (Just 16384) & O.description ?~ "Optional bash run first and not recorded: build and start the app in the background, migrate and seed its data, and wait until it answers. Reuse the repository's saved setup unchanged when it still applies. It runs in its own shell, so exports do not reach the command; use fixed ports or write values to a file.")
       ]
-      & O.required .~ ["claim", "command"]
+      & O.required
+      .~ ["claim", "command"]
   RecallKnowledge -> object [("service", bounded 1 Nothing)]
   RememberKnowledge -> object [("service", bounded 1 Nothing), ("summary", bounded 1 $ Just 600), ("evidenceKeys", array 1 3 text)]
   ListProjectMemory -> object [("query", bounded 1 $ Just 200)] & O.required .~ []

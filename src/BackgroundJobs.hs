@@ -101,7 +101,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import OddJobs.ConfigBuilder (mkConfig)
-import OddJobs.Job (ConcurrencyControl (..), Config (cfgConcurrencyControl, cfgDefaultJobTimeout, cfgJobOrdering, cfgOnJobFailed, cfgOnJobTimeout, cfgTableName), Seconds (..), Job (..), JobErrHandler (..), JobOrdering (EarliestRunAtFirst), LogEvent (..), LogLevel, Status (Failed), createJob, scheduleJob, startJobRunner, throwParsePayload)
+import OddJobs.Job (ConcurrencyControl (..), Config (cfgConcurrencyControl, cfgDefaultJobTimeout, cfgJobOrdering, cfgOnJobFailed, cfgOnJobTimeout, cfgTableName), Job (..), JobErrHandler (..), JobOrdering (EarliestRunAtFirst), LogEvent (..), LogLevel, Seconds (..), Status (Failed), createJob, scheduleJob, startJobRunner, throwParsePayload)
 import OddJobs.Types (FailureMode (FailPermanent))
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)

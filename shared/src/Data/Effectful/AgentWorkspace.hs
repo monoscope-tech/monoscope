@@ -1366,7 +1366,7 @@ lookupWorkspace options operation request = do
                 execute :: HasCallStack => Maybe Text -> Bool -> NonEmpty Text -> IO Text
                 execute cwd quiet argv = do
                   result <- rpc @Execution $ Execute $ GuestCommand argv cwd quiet
-                  unless (result.exitCode == 0) $ throwIO $ userError $ toString (T.unwords $ toList argv) <> " exited " <> show result.exitCode <> ": " <> toString (T.takeEnd 2000 result.stdout) <> "\n" <> prettyCallStack callStack
+                  unless (result.exitCode == 0) $ throwIO $ userError $ toString (unwords $ toList argv) <> " exited " <> show result.exitCode <> ": " <> toString (T.takeEnd 2000 result.stdout) <> "\n" <> prettyCallStack callStack
                   pure $ T.strip result.stdout
                 guestGit args = execute (Just "/workspace") False $ "/usr/bin/git" :| (["-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"] <> args)
                 parseHash value = maybe invalid pure $ viaNonEmpty head (words value) >>= mkFingerprint

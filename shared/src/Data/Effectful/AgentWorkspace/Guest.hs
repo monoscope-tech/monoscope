@@ -8,7 +8,7 @@ import Data.Aeson qualified as AE
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.Conduit.Combinators qualified as CC
-import Data.Effectful.AgentWorkspace (AllocationOutcome (..), AllocationReceipt, Command (..), Copy (..), Execution (..), GuestCommand (..), Image (..), ImageId (..), Isolation (..), LogExit (..), LoggedCommand (..), Overflow (..), RegressionOptions (..), Revision, Sandbox (..), TestArtifact (..), agentCommand, agentResources, hostAllocation, revisionText, Pool (..), withSandboxRelease)
+import Data.Effectful.AgentWorkspace (AllocationOutcome (..), AllocationReceipt, Command (..), Copy (..), Execution (..), GuestCommand (..), Image (..), ImageId (..), Isolation (..), LogExit (..), LoggedCommand (..), Overflow (..), Pool (..), RegressionOptions (..), Revision, Sandbox (..), TestArtifact (..), agentCommand, agentResources, hostAllocation, revisionText, withSandboxRelease)
 import Data.Effectful.AgentWorkspace qualified as AgentWorkspace
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T

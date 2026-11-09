@@ -35,8 +35,8 @@ import System.Directory (listDirectory, removeFile, removePathForcibly)
 import System.Environment (getEnvironment)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose)
-import System.IO.Temp (withSystemTempDirectory)
 import System.IO.Error (isDoesNotExistError, tryIOError)
+import System.IO.Temp (withSystemTempDirectory)
 import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
 import UnliftIO.Async (forConcurrently)
 import UnliftIO.Exception (catch, finally, throwIO, tryAny)
@@ -318,11 +318,17 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
       BoundedPatch -> launch (SourcePatchTask request) $ callbacks Nothing Nothing $ DraftText validateText
       CheckoutHarness -> launch (SourceTask request) $ callbacks (Just $ unlift . recordAllocation) (Just $ unlift . recordCheck) $ StructuredDraft validateValue
   PrepareRepository request -> liftIO case (artifactStore, hostConfig) of
-    (Just store, Right (Just host)) | Just configured <- host.workspace -> join . first show <$> tryAny (join <$> Checkout.withCheckout store (Checkout.Repository request) \fetched _ ->
-      withSystemTempDirectory "monoscope-prepare-request" \directory -> runExceptT do
-        let requestFile = directory </> "request.json"
-        liftIO . writeFileLBS requestFile . AE.encode =<< except (Workspace.mkRequest request.projectId request.repository request.base Nothing)
-        void $ ExceptT $ runEff $ Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir host.image host.bridge configured.script configured.dependencyArchive) (Workspace.Prepare fetched.directory) requestFile)
+    (Just store, Right (Just host))
+      | Just configured <- host.workspace ->
+          join
+            . first show
+            <$> tryAny
+              ( join <$> Checkout.withCheckout store (Checkout.Repository request) \fetched _ ->
+                  withSystemTempDirectory "monoscope-prepare-request" \directory -> runExceptT do
+                    let requestFile = directory </> "request.json"
+                    liftIO . writeFileLBS requestFile . AE.encode =<< except (Workspace.mkRequest request.projectId request.repository request.base Nothing)
+                    void $ ExceptT $ runEff $ Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir host.image host.bridge configured.script configured.dependencyArchive) (Workspace.Prepare fetched.directory) requestFile
+              )
     _ -> pure $ Left "Workspace preparation is not configured on this host"
   ReviewPatch request recordCall recordUsage check -> localSeqUnliftIO env \unlift ->
     liftIO

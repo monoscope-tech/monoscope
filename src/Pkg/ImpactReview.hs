@@ -12,6 +12,7 @@ import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.AgentWorkspace qualified as Workspace (hostSlots)
 import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Artifacts (sha256)
+import Data.Effectful.CodeReview.Checkout qualified as Checkout (Fetch (..))
 import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types (Evidence (..), EvidenceKind (..), KnowledgeSnapshot (..), Observation (..), QueryKind (..), QueryObservation (..), ReviewMemory (..))
 import Data.Effectful.Hasql qualified as Hasql
@@ -23,7 +24,6 @@ import Data.Map.Strict qualified as Map
 import Data.OpenApi.Schema.Validation qualified as Schema
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, nominalDay)
-import Data.Effectful.CodeReview.Checkout qualified as Checkout (Fetch (..))
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Effectful (Eff, IOE, (:>))

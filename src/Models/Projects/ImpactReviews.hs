@@ -609,7 +609,9 @@ saveProofs run attempt setup sides = Hasql.transaction TxS.ReadCommitted TxS.Wri
     | not leased -> Left "Review authorization is no longer available" <$ Tx.condemn
     | full -> Left "Proof budget exhausted; cite the proofs already recorded" <$ Tx.condemn
     | all isJust stored ->
-        Right . (key,) . HI.getOneColumn
+        Right
+          . (key,)
+          . HI.getOneColumn
           <$> Hasql.oneTx
             [HI.sql|WITH prior AS (
           SELECT setup FROM projects.pr_review_proof_recipes WHERE project_id = #{run.projectId} AND owner = #{run.owner} AND repo = #{run.repo}
