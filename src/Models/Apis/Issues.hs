@@ -1955,6 +1955,7 @@ data EventRun = EventRun
   , status :: RoutineRunStatus
   , requestedBy :: Projects.UserId
   , instructions :: Text
+  , chainAttempt :: Int64
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
@@ -2571,9 +2572,10 @@ startEventRunWith enqueue routine admissionContext continuation convId input = d
             AND original.conversation_id = #{convId} AND original.input IS NOT NULL AND original.instructions IS NOT NULL))
           AND NOT EXISTS (SELECT 1 FROM previous WHERE (status = 'running' AND routine_id = #{routine.id}) OR (NOT #{restart} AND status IN ('succeeded', 'no_findings', 'cancelled')))
         ON CONFLICT DO NOTHING
-        RETURNING id, started_at, status, requested_by, instructions
-      ) SELECT id, started_at, status, requested_by, instructions FROM inserted
-        UNION ALL SELECT id, started_at, status, requested_by, instructions FROM previous
+        RETURNING id, started_at, status, requested_by, instructions,
+          attempt - COALESCE((SELECT o.attempt FROM original o WHERE o.id = ai_routine_runs.root_run_id), attempt) + 1 AS chain_attempt
+      ) SELECT id, started_at, status, requested_by, instructions, chain_attempt FROM inserted
+        UNION ALL SELECT id, started_at, status, requested_by, instructions, attempt - COALESCE((SELECT attempt FROM original), attempt) + 1 FROM previous
           WHERE #{resume} AND EXISTS (SELECT 1 FROM admitted) AND NOT EXISTS (SELECT 1 FROM inserted) AND requested_by IS NOT NULL
             AND (#{member} IS NULL OR requested_by = #{member})
             AND conversation_id = #{convId} AND routine_id = #{routine.id} LIMIT 1|]

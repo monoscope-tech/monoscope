@@ -420,19 +420,21 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                     outcome <- tryAny $ Timeout.timeout (540 * 1000000) $ runErrorNoCallStack $ execute run execution context
                     let retryMessage = "Review failed; retry to collect current evidence"
                         finish = void . Issues.completeRun context
-                        failReview failureResult message detail = do
+                        failReview retries failureResult message detail = do
                           Log.logAttention "Production impact review failed" (run.id, detail)
                           active <- Issues.routineRunActive run.projectId execution.id
                           finish $ if active then failureResult (Issues.RunFailure message Issues.RunOnly) else Issues.CancelledResult Nothing
                           Reviews.recordFailure run message
-                          throwIO $ ReviewFailure message
+                          -- Deferring nodes requeue with fresh odd-jobs attempts, so agent retries are bounded per chain here.
+                          -- Publication recovery reuses the stored result, calls no model, and retries until it reconciles.
+                          when (retries && (isJust run.result || execution.chainAttempt < 3)) $ throwIO $ ReviewFailure message
                     case outcome of
                       Left err
                         | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> Jobs.deferOperationReview run.projectId identifier deadline
-                        | otherwise -> failReview Issues.FailedResult retryMessage (show @Text err)
-                      Right Nothing -> failReview Issues.TimedOutResult "Review exceeded its nine-minute budget" "Review timed out"
-                      Right (Just (Left (ReviewFailure err))) -> failReview Issues.FailedResult retryMessage err
-                      Right (Just (Left NativeSessionLost)) -> failReview Issues.FailedResult nativeSessionLostMessage nativeSessionLostMessage
+                        | otherwise -> failReview True Issues.FailedResult retryMessage (show @Text err)
+                      Right Nothing -> failReview True Issues.TimedOutResult "Review exceeded its nine-minute budget" "Review timed out"
+                      Right (Just (Left (ReviewFailure err))) -> failReview True Issues.FailedResult retryMessage err
+                      Right (Just (Left NativeSessionLost)) -> failReview False Issues.FailedResult nativeSessionLostMessage nativeSessionLostMessage
                       Right (Just (Left (ReviewPublicationRefused reason))) -> do
                         finish $ Issues.CancelledResult $ Just reason
                         Reviews.recordFailure run reason
@@ -504,7 +506,8 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
       headRevision <- require $ first show $ Agent.mkRevision pr.head.revision
       let mapped = any (isJust . (.service)) mappings
       saved <- if mapped then require =<< Agent.readSessionContext (Agent.ReviewSubject run.id) context.rootId else pure Nothing
-      when mapped $ requireRetainedSession run.projectId (Usage.Review run.id) saved
+      -- A chain's first execution has nothing to resume: earlier calls belong to a finished review of this head.
+      when (mapped && context.id /= context.rootId) $ requireRetainedSession run.projectId (Usage.Review run.id) saved
       initial <- maybe (freshInput cfg baseRevision headRevision) (pure . (.input)) saved
       unless (initial.base == baseRevision && initial.head == headRevision) $ throwError $ ReviewFailure "Review source changed while awaiting continuation"
       let evidence = initial.evidence

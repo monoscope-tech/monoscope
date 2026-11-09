@@ -958,6 +958,18 @@ cmd_image_who() { # <sha> — immutable image labels preserve the original PR bu
     | node -e 'const labels = JSON.parse(require("node:fs").readFileSync(0, "utf8")).config?.Labels ?? {}; for (const [name, key] of [["built by", "io.monoscope.builder"], ["built revision", "org.opencontainers.image.revision"], ["source tree", "io.monoscope.source-tree"], ["build inputs", "io.monoscope.build-inputs"]]) console.log(name + ":", labels[key] ?? "unknown");'
 }
 
+# The proof worker is a plain container on the KVM host (Swarm cannot pass /dev/kvm), so CapRover never
+# rolls it. It runs every background job, so it must run the server build production just received.
+cmd_deploy_worker() { # [sha]
+  local sha worker=$IMAGE-impact-worker
+  sha=$(git rev-parse "${1:-HEAD}^{commit}")
+  caprover_env
+  [ -n "${IMPACT_WORKER_HOST:-}" ] || { note "IMPACT_WORKER_HOST unset — proof worker not redeployed"; return 0; }
+  scripts/ci/release.sh worker "$sha"
+  ssh -o BatchMode=yes "$IMPACT_WORKER_HOST" "sudo docker pull -q $worker:$sha && sudo docker tag $worker:$sha $worker:current && sudo systemctl restart monoscope-impact-worker"
+  note "proof worker restarted on $sha"
+}
+
 # ---------------------------------------------------------------- ship
 #
 # Check and deploy an already merged revision; publishing changes remains PR-only.
@@ -1006,6 +1018,7 @@ cmd_ship() {
   note "ship: 3/3 deploy"
   cmd_deploy "$sha"
   cmd_deploy_status
+  cmd_deploy_worker "$sha" || note "WARNING: deployed, but the proof worker still runs the previous build — \`make deploy-worker\`"
   # Best-effort: broker config is not a verdict on this commit, so it never fails a ship —
   # but a silent miss leaves live_tail keeping rows for days, so say it where it is seen.
   scripts/kafka-topics.sh || {
@@ -1220,6 +1233,7 @@ case "$cmd" in
   deploy)      cmd_deploy "$@" ;;
   deploy-rollback) cmd_deploy "${1:?rollback needs a SHA}" rollback ;;
   deploy-status) cmd_deploy_status ;;
+  deploy-worker) cmd_deploy_worker "$@" ;;
   deployed)    cmd_deployed "$@" ;;
   ship)        cmd_ship "$@" ;;
   builder)     cmd_builder "$@" ;;

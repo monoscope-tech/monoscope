@@ -314,6 +314,7 @@ Deploying needs three values, read from the environment or `.env` (gitignored):
 | `CAPROVER_APP` | the app name to deploy |
 | `CAPROVER_APP_TOKEN` | that app's deploy token (CapRover → app → Deployment) |
 | `CAPROVER_PASSWORD` | optional, admin password — only `make deploy-status` needs it |
+| `IMPACT_WORKER_HOST` | optional, ssh target of the KVM host; `make ship` then rebuilds the proof worker from the deployed image and restarts it (`make deploy-worker` alone) |
 
 Use the per-app deploy token, not the admin password: it deploys that one app and
 nothing else, and it can be rotated on its own. The password is optional on
