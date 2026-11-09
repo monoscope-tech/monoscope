@@ -28,6 +28,7 @@ import Data.Effectful.CodeReview.Checkout qualified as Checkout
 import Data.Effectful.CodeReview.Explanation qualified as Media
 import Data.Effectful.CodeReview.Outbox qualified as Outbox
 import Data.Effectful.CodeReview.Policy qualified as Policy
+import Data.Effectful.CodeReview.Types qualified as Proof (ProofMedia (..))
 import Data.Effectful.GitPublication qualified as Publication
 import Data.Effectful.LLM qualified as LLM
 import Data.Effectful.ReviewEvaluation qualified as Evaluation
@@ -103,6 +104,11 @@ import "cryptonite" Crypto.Hash.Algorithms (SHA256, SHA512)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
+-- | A complete merge-risk grading, which every accepted review draft carries.
+graded :: [(AE.Key, AE.Value)]
+graded = ["claims" AE..= ([] :: [AE.Value]), "summary" AE..= ("Changes retry handling." :: Text), "assessments" AE..= [Impact.Assessment d Impact.Good [] | d <- universe]]
+
+
 revision :: Text
 revision = T.replicate 40 "a"
 
@@ -142,16 +148,33 @@ payload action sha timestamp =
     , "repository" AE..= AE.object ["full_name" AE..= ("impact-org/checkout" :: Text)]
     , "pull_request"
         AE..= AE.object
-          ["state" AE..= (if action == "closed" then "closed" else "open" :: Text), "draft" AE..= (action == "converted_to_draft"), "updated_at" AE..= timestamp, "head" AE..= AE.object ["sha" AE..= sha]]
+          ["state" AE..= (if action == "closed" then "closed" else "open" :: Text), "draft" AE..= (action == "converted_to_draft"), "changed_files" AE..= (1 :: Int), "updated_at" AE..= timestamp, "base" AE..= AE.object ["sha" AE..= T.replicate 40 "d"], "head" AE..= AE.object ["sha" AE..= sha]]
     ]
 
 
 deliver :: TestResources -> AE.Value -> IO AE.Value
-deliver tr value = do
+deliver tr = fmap snd . deliverEvent tr "pull_request" (const $ pure Nothing)
+
+
+-- | A signed delivery of @event@, with @respond@ answering the GitHub API calls it makes.
+deliverEvent :: TestResources -> Text -> (Text -> IO (Maybe AE.Value)) -> AE.Value -> IO ([(Text, LByteString)], AE.Value)
+deliverEvent tr event respond value = do
+  app <- githubApp tr
   let body = toStrict $ AE.encode value
       signature = "sha256=" <> decodeUtf8 (B16.encode $ BA.convert (HMAC.hmac ("impact-secret" :: ByteString) body :: HMAC.HMAC SHA256))
-      configured = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = "impact-secret"}}}
-  snd <$> runAsBaseRecordingHTTP configured (GitSyncPage.gitWebhookPostH Git.GitHub $ Git.WebhookReq (Just "pull_request") (Just signature) Nothing Nothing Nothing body)
+      configured = tr{trATCtx = tr.trATCtx{config = app{githubAppWebhookSecret = "impact-secret"}}}
+  runAsBaseRecordingHTTP configured $ githubResponses respond $ GitSyncPage.gitWebhookPostH Git.GitHub $ Git.WebhookReq (Just event) (Just signature) Nothing Nothing Nothing body
+
+
+commentPayload :: Text -> Text -> AE.Value
+commentPayload association body =
+  AE.object
+    [ "action" AE..= ("created" :: Text)
+    , "installation" AE..= AE.object ["id" AE..= (987654 :: Int)]
+    , "repository" AE..= AE.object ["full_name" AE..= ("impact-org/checkout" :: Text)]
+    , "issue" AE..= AE.object ["number" AE..= (7 :: Int), "pull_request" AE..= AE.object []]
+    , "comment" AE..= AE.object ["id" AE..= (55 :: Int), "body" AE..= body, "author_association" AE..= association, "user" AE..= AE.object ["login" AE..= ("ada" :: Text), "type" AE..= ("User" :: Text)]]
+    ]
 
 
 -- | The GitHub App configuration plus a transport answering its token exchange
@@ -163,7 +186,7 @@ githubApp tr = do
   pure tr.trATCtx.config{githubAppId = "123", githubAppPrivateKey = extractBase64 $ B64.encodeBase64 pem}
 
 
-githubResponses :: (Text -> IO (Maybe AE.Value)) -> ATBackgroundCtx a -> ATBackgroundCtx a
+githubResponses :: (HTTP.HTTP :> es, IOE :> es) => (Text -> IO (Maybe AE.Value)) -> Eff es a -> Eff es a
 githubResponses respond = withHTTPResponses \_ endpoint ->
   if "/access_tokens" `T.isSuffixOf` toText endpoint
     then pure $ Just $ AE.encode $ AE.object ["token" AE..= ("fixture-token" :: Text), "expires_at" AE..= ("2030-01-01T00:00:00Z" :: Text)]
@@ -201,7 +224,7 @@ refuse = \case
 -- | A review agent that only answers repository reviews.
 repositoryReview :: (forall m. Agent.Request "pr_review" -> (Agent.TelemetryQuery -> m (Either Text AE.Value)) -> (Agent.KnowledgeRequest -> m (Either Text AE.Value)) -> (forall r. m r -> IO r) -> IO (Either Text Text)) -> ATBackgroundCtx a -> ATBackgroundCtx a
 repositoryReview answer = interpose @Agent.CodeReview \env -> \case
-  Agent.ReviewRepository _ request respond knowledge _ _ _ _ _ -> localSeqUnliftIO env \unlift -> liftIO $ answer request respond knowledge unlift
+  Agent.ReviewRepository _ request respond knowledge _ _ _ _ _ _ -> localSeqUnliftIO env \unlift -> liftIO $ answer request respond knowledge unlift
   operation -> pure $ refuse operation
 
 
@@ -1119,7 +1142,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         uid n = UUIDId $ UUID.fromWords 57 0x4000 0x80000000 n
         document = AE.object ["title" AE..= ("Retry context" :: Text), "body" AE..= ("Recheck callers before changing retry behavior." :: Text)]
         page = "00000000-0000-4000-8000-000000000099" :: Text
-        draft line keys = AE.object ["findings" AE..= V.singleton (AE.object ["location" AE..= AE.object ["path" AE..= ("src/handler.txt" :: Text), "line" AE..= (line :: Word32), "side" AE..= ("head" :: Text)], "mechanism" AE..= ("Retry metadata is removed before calling the helper." :: Text), "nextStep" AE..= ("Check retry behavior." :: Text), "evidenceKeys" AE..= (keys :: [Text])]), "coverage" AE..= ([] :: [Text])]
+        draft line keys = AE.object (graded <> ["findings" AE..= V.singleton (AE.object ["location" AE..= AE.object ["path" AE..= ("src/handler.txt" :: Text), "line" AE..= (line :: Word32), "side" AE..= ("head" :: Text)], "mechanism" AE..= ("Retry metadata is removed before calling the helper." :: Text), "nextStep" AE..= ("Check retry behavior." :: Text), "evidenceKeys" AE..= (keys :: [Text])]), "coverage" AE..= ([] :: [Text])])
         accepted = draft 1 ["telemetry-1"]
         regression = "set -eu\ntest \"$(id -u)\" = 1000\ntest ! -w \"$0\"\n. ./src/runtime.sh\nif [ \"$(retry_token original)\" != original ]; then echo 'retry token was lost' >&2; exit 1; fi\necho 'retry token preserved'\n" :: Text
         tool name args = const $ pure $ SdkTool name args
@@ -1148,6 +1171,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     void $ commit repository [("src/helper.txt", "unreviewed-later-change\n")]
     plan <- newIORef ([] :: [[AE.Value] -> IO SdkReply])
     replies <- newIORef ([] :: [AE.Value])
+    proofs <- newIORef ([] :: [Proof.ProofMedia])
     ready <- MVar.newEmptyMVar
     blocked <- MVar.newEmptyMVar :: IO (MVar.MVar ())
     let prefix = [readPath "/skills/0/SKILL.md", readPath "/skills/1/systematic-debugging/SKILL.md", readPath "/skills/1/systematic-debugging/root-cause-tracing.md", readPath "/workspace/.agents/skills/repo-review/SKILL.md", shell $ "set -eu; test \"$(id -u)\" = 1000; test ! -w /usr/bin/git; echo supervisor-tools-protected; pwd; uname -s; git rev-parse HEAD; git show " <> base <> ":src/handler.txt; rg preserve-retry-metadata src; git diff " <> base <> "..." <> headRevision <> "; test -z \"$(printenv IMPACT_REVIEW_FIXTURE_SECRET || true)\"; echo host-credentials-absent; test \"$(cat src/handler.txt)\" = 'calls helper without retry metadata'; echo repository-check-passed; if (printf changed > /skills/0/SKILL.md) 2>/dev/null; then exit 1; fi; if (printf changed > /checkout/AGENTS.md) 2>/dev/null; then exit 1; fi; echo readonly-mounts-enforced; test -z \"$(git config --get-regexp extraheader || true)\"", shell "printf 'first-output-line\\n'; seq 1 2505", fmap (\path -> SdkTool "read" $ AE.object ["path" AE..= path, "limit" AE..= (2 :: Int)]) . fullOutput, fmap (\path -> SdkTool "bash" $ AE.object ["command" AE..= ("head -n 1 '" <> path <> "'")]) . fullOutput]
@@ -1189,6 +1213,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   (const pass)
                   (\receipt -> liftIO $ modifyIORef' allocations (<> [receipt]))
                   (\receipt -> liftIO $ modifyIORef' checks (<> [receipt]))
+                  (\sides -> liftIO $ modifyIORef' proofs (<> toList sides) $> Right "proof-1")
                   ( \draftValue -> liftIO do
                       modifyIORef' submissions (<> [draftValue])
                       pure $ if draftValue == accepted then Right () else Left "Finding does not reference a changed line"
@@ -1252,6 +1277,17 @@ spec = around withTestResources $ describe "Production impact reviews" do
       toolReply "tool-3" timeoutReplies >>= (`shouldSatisfy` T.isInfixOf "Command exited with code 137")
       toolReply "tool-3" timeoutReplies >>= (`shouldNotSatisfy` T.isInfixOf "timeout: sending signal")
       doesFileExist (repository </> "timeout-retained.txt") `shouldReturn` False
+      -- A proof replays the claim's command under asciinema on base and head, and the host
+      -- renders each recording; the model only sees the recorded output.
+      (proofResult, _, _, _, _, proofReplies) <- run 11 [tool "record_proof" $ AE.object ["claim" AE..= ("Keeps the retry token" :: Text), "command" AE..= ("set -eu\n. ./src/runtime.sh\necho \"== retry token: $(retry_token original)\"\ntest \"$(retry_token original)\" = original" :: Text)], tool "submit_review" accepted]
+      isRight proofResult `shouldBe` True
+      toolReply "tool-0" proofReplies >>= (`shouldContainAll` ["proof-1", "== retry token: original", "== retry token: dropped"])
+      recorded <- readIORef proofs
+      map (\proof -> (proof.side, proof.exitCode)) recorded `shouldBe` [(Agent.Base, Just 0), (Agent.Head, Just 1)]
+      for_ recorded \proof -> do
+        BS.take 6 proof.gif `shouldBe` "GIF89a"
+        BS.length proof.mp4 `shouldSatisfy` (> 0)
+        decodeUtf8 proof.cast `shouldSatisfy` T.isInfixOf "== retry token"
       beforeImage <- length <$> requests
       (imageResult, _, _, _, _, _) <- run 9 [readPath "/workspace/review image.txt", tool "submit_review" accepted]
       isRight imageResult `shouldBe` True
@@ -1267,7 +1303,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         jsonText body `shouldContainAll` ["never remove retry metadata", "retry-review", "repo-review", "pi-review", "systematic-debugging", "test-driven-development", "verification-before-completion"]
         messages <- parse (field "messages") body :: IO [AE.Value]
         let systemMessages = filter (\message -> AET.parseMaybe (field "role") message == Just ("system" :: Text)) messages
-        jsonText systemMessages `shouldContainAll` ["Use read to examine files", "Use edit for precise changes", "Use write only for new files or complete rewrites."]
+        jsonText systemMessages `shouldContainAll` ["Use read to examine files", "Use edit for targeted changes", "Use write only for new files or complete rewrites."]
         for_ ["host-only-skill", "private-host-skill-body", "fixture-git-token"] \text -> jsonText body `shouldNotSatisfy` T.isInfixOf text
       let cancelPlan = prefix <> [tool "query_telemetry" $ AE.object ["service" AE..= ("test-service" :: Text), "query" AE..= ("| summarize count()" :: Text)]]
       baselineSessions <- map (.id) <$> sandboxSessions
@@ -1296,7 +1332,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         sdkTemp = directory </> "tmp"
         caseFile = directory </> "case.json"
         uid n = UUIDId $ UUID.fromWords 56 0x4000 0x80000000 n
-        draft line keys = AE.object ["findings" AE..= V.singleton (AE.object ["location" AE..= AE.object ["path" AE..= ("runtime.sh" :: Text), "line" AE..= (line :: Word32), "side" AE..= ("head" :: Text)], "mechanism" AE..= ("Retry metadata is removed before calling the helper." :: Text), "nextStep" AE..= ("Check retry behavior." :: Text), "evidenceKeys" AE..= (keys :: [Text])]), "coverage" AE..= ([] :: [Text])]
+        draft line keys = AE.object (graded <> ["findings" AE..= V.singleton (AE.object ["location" AE..= AE.object ["path" AE..= ("runtime.sh" :: Text), "line" AE..= (line :: Word32), "side" AE..= ("head" :: Text)], "mechanism" AE..= ("Retry metadata is removed before calling the helper." :: Text), "nextStep" AE..= ("Check retry behavior." :: Text), "evidenceKeys" AE..= (keys :: [Text])]), "coverage" AE..= ([] :: [Text])])
         accepted = draft 1 ["telemetry-1"]
         summarizing = T.isInfixOf "You are a context summarization assistant" . jsonText
     createDirectoryIfMissing True sdkTemp
@@ -1447,6 +1483,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   (\receipt -> liftIO $ retained receipt.id.toText (AE.toJSON receipt) >> modifyIORef' usage (<> [receipt]))
                   (\receipt -> liftIO $ retained (Agent.allocationId receipt).toText (AE.object ["tag" AE..= ("Allocation" :: Text), "contents" AE..= receipt]) >> modifyIORef' allocations (<> [receipt]))
                   (\receipt -> liftIO $ retained receipt.id.toText (AE.object ["tag" AE..= ("Check" :: Text), "contents" AE..= receipt]) >> modifyIORef' checks (<> [receipt]))
+                  (const $ pure $ Left "Unexpected proof")
                   (\draftValue -> liftIO $ modifyIORef' submissions (<> [draftValue]) $> Right ())
             listDirectory sdkTemp `shouldReturn` []
             queued <- filter (T.isSuffixOf ".json" . toText) <$> listDirectory journal
@@ -1495,7 +1532,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
               Just mode -> Agent.reviewSource mode request (const pass) (const pass) (const pass) (const pass) (\case Agent.ProviderText raw -> check raw; Agent.Structured value -> check $ jsonText value)
               Nothing ->
                 if structured
-                  then Agent.reviewRepository Agent.Isolated request (pure . unused) (pure . unused) (const pass) (const pass) (const pass) (const pass) (check . jsonText)
+                  then Agent.reviewRepository Agent.Isolated request (pure . unused) (pure . unused) (const pass) (const pass) (const pass) (const pass) (const $ pure $ Left "Unexpected proof") (check . jsonText)
                   else Agent.reviewPatch request (const pass) (const pass) check
       run (Right rejected) (Left "Review rejected") `shouldReturn` Left "Review rejected"
       run (Right accepted) (Right ()) `shouldReturn` Right accepted
@@ -1508,7 +1545,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           script = directory </> "review.sh"
           drained = directory </> "drained"
       writeFileBS script "read request\nprintf '%s\\n' '{\"tag\":\"Knowledge\",\"contents\":{\"tag\":\"Recall\",\"contents\":\"test-service\"}}'\nread reply\nsleep 0.25\nprintf drained > \"$1\"\n"
-      outcome <- tryAny $ runEff $ scripted Nothing "sh" [script, drained] $ Agent.reviewRepository Agent.Isolated request (const $ pure $ Left "Unexpected telemetry") (const $ throwIO $ AI.AgentAwaitingReview (uid 3) frozenTime) (const pass) (const pass) (const pass) (const pass) (const $ pure $ Left "Unexpected result")
+      outcome <- tryAny $ runEff $ scripted Nothing "sh" [script, drained] $ Agent.reviewRepository Agent.Isolated request (const $ pure $ Left "Unexpected telemetry") (const $ throwIO $ AI.AgentAwaitingReview (uid 3) frozenTime) (const pass) (const pass) (const pass) (const pass) (const $ pure $ Left "Unexpected proof") (const $ pure $ Left "Unexpected result")
       case outcome of
         Left err -> case fromException err of
           Just (AI.AgentAwaitingReview identifier deadline) -> (identifier, deadline) `shouldBe` (uid 3, frozenTime)
@@ -1521,7 +1558,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let repository = directory </> "repository"
         sdkTemp = directory </> "tmp"
         uid n = UUIDId $ UUID.fromWords 57 0x4000 0x80000000 n
-        accepted = AE.object ["findings" AE..= ([] :: [AE.Value]), "coverage" AE..= ([] :: [Text])]
+        accepted = AE.object (graded <> ["findings" AE..= ([] :: [AE.Value]), "coverage" AE..= ([] :: [Text])])
         decodedAs expected = either (fail . toString) (either fail pure . AE.eitherDecodeStrict . encodeUtf8 >=> (`shouldBe` expected))
     createDirectoryIfMissing True sdkTemp
     initRepo repository
@@ -1672,7 +1709,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     isLeft <$> lookupPrepared options{Workspace.dependencyArchive = Just link} `shouldReturn` True
     let next results = pure $ case length results of
           0 -> SdkTool "run_regression" (AE.object ["script" AE..= replay, "failureMessage" AE..= ("dependency echo lost" :: Text)])
-          1 -> SdkTool "submit_review" (AE.object ["findings" AE..= ([] :: [AE.Value]), "coverage" AE..= ([] :: [AE.Value])])
+          1 -> SdkTool "submit_review" (AE.object (graded <> ["findings" AE..= ([] :: [AE.Value]), "coverage" AE..= ([] :: [AE.Value])]))
           _ -> SdkText "Fixture finished."
     withSdkModel directory "dependency-fixture" next \models requests -> do
       let request = Agent.Request{projectId = testPid, runId = uid 1, attemptId = uid 2, repository = toText repository, base, head = headRevision, gitToken = "", prompt = "Check actual offline dependency behavior.", provider = "dependency-fixture", model = "fixture", thinkingLevel = Agent.Off}
@@ -1681,7 +1718,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             result <-
               runEff
                 $ sdkAgent store [models, profile, diagnostic, "--prepare", trustedScript, "--dependencies", archive, "--cli", cli]
-                $ Agent.reviewRepository Agent.Isolated request{Agent.runId = uid n} (const $ pure $ Left "Unexpected query") (const $ pure $ Left "Unexpected knowledge") (const pass) (const pass) (const pass) (\receipt -> liftIO $ modifyIORef' checks (<> [receipt])) (const $ pure $ Right ())
+                $ Agent.reviewRepository Agent.Isolated request{Agent.runId = uid n} (const $ pure $ Left "Unexpected query") (const $ pure $ Left "Unexpected knowledge") (const pass) (const pass) (const pass) (\receipt -> liftIO $ modifyIORef' checks (<> [receipt])) (const $ pure $ Left "Unexpected proof") (const $ pure $ Right ())
             (result,) <$> readIORef checks
       writeFileBS archive $ bytes <> "changed"
       (unseeded, _) <- run 1 script
@@ -1693,7 +1730,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       length <$> requests `shouldReturn` 0
       (result, checks) <- run 4 script
       encoded <- either (\failure -> readFileBS diagnostic >>= fail . (toString failure <>) . toString . decodeUtf8 @Text) pure result
-      AE.eitherDecodeStrict @AE.Value (encodeUtf8 encoded) `shouldBe` Right (AE.object ["findings" AE..= ([] :: [AE.Value]), "coverage" AE..= ([] :: [AE.Value])])
+      AE.eitherDecodeStrict @AE.Value (encodeUtf8 encoded) `shouldBe` Right (AE.object (graded <> ["findings" AE..= ([] :: [AE.Value]), "coverage" AE..= ([] :: [AE.Value])]))
       fingerprint <- parse (field "sha256") manifest :: IO Text
       map (\receipt -> (receipt.side, receipt.status, AE.toJSON receipt.workspace)) checks `shouldBe` [(Agent.Base, Agent.Passed, AE.toJSON fingerprint), (Agent.Head, Agent.Failed, AE.toJSON fingerprint)]
       events <- mapMaybe (AE.decodeStrict @AE.Value) . BSC.lines <$> readFileBS diagnostic
@@ -2226,7 +2263,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         decode = either (fail . toString) pure . AE.eitherDecodeStrict @AE.Value . encodeUtf8
         at key = AET.parseEither (field key)
         cleaned value = for_ ["directory", "repositorySkills"] $ \key -> parse (field key) value >>= doesDirectoryExist >>= (`shouldBe` False)
-        run input flags validate = runEff $ scripted (Just store) "test/fixtures/native-checkout-agent.mjs" (launched : flags) $ Agent.reviewRepository Agent.Isolated input (const $ pure $ Left "Unexpected query") (const $ pure $ Left "Unexpected knowledge") (const $ liftIO $ if "--replay-call" `elem` flags then modifyIORef' recoveredCalls (+ 1) else fail "Unexpected model call") (const $ liftIO $ fail "Unexpected model usage") (const $ liftIO $ fail "Unexpected allocation") (const $ liftIO $ fail "Unexpected check") validate
+        run input flags validate = runEff $ scripted (Just store) "test/fixtures/native-checkout-agent.mjs" (launched : flags) $ Agent.reviewRepository Agent.Isolated input (const $ pure $ Left "Unexpected query") (const $ pure $ Left "Unexpected knowledge") (const $ liftIO $ if "--replay-call" `elem` flags then modifyIORef' recoveredCalls (+ 1) else fail "Unexpected model call") (const $ liftIO $ fail "Unexpected model usage") (const $ liftIO $ fail "Unexpected allocation") (const $ liftIO $ fail "Unexpected check") (const $ pure $ Left "Unexpected proof") validate
         check input flags = run input flags (const $ pure $ Right ()) >>= either (fail . toString) decode
         withRun n input = input{Agent.runId = UUIDId $ UUID.fromWords 42 0 0 n} :: Agent.Request "pr_review"
     preparedFirst <- check request []
@@ -2250,6 +2287,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 (const $ liftIO $ fail "Unexpected usage")
                 (const $ liftIO $ fail "Unexpected allocation")
                 (const $ liftIO $ fail "Unexpected check")
+                (const $ pure $ Left "Unexpected proof")
                 (const $ liftIO $ writeIORef validated True >> throwIO (userError "Fixture validation failed"))
       if mode == "cancel"
         then withAsync runLifetime \worker -> do
@@ -2758,13 +2796,108 @@ spec = around withTestResources $ describe "Production impact reviews" do
     [otherRun] <- runQueryEffect tr $ Reviews.latestRuns otherPid
     otherRun.projectId `shouldBe` otherPid
     otherRun.revision `shouldBe` T.replicate 40 "c"
-    -- Disabling a repository during work must release the lease and remain rerunnable.
+    -- Switching to asks only keeps a running review; unlinking the repository revokes it,
+    -- and the released run stays rerunnable.
     runQueryEffect tr (Reviews.claimRun otherRun) `shouldReturn` True
-    runQueryEffect tr $ Reviews.updateSettings otherPid (Reviews.ReviewSettings "impact-org" "checkout" False True)
+    runQueryEffect tr $ Reviews.updateSettings otherPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.WhenAsked True)
+    runQueryEffect tr (Reviews.currentRun otherRun) `shouldReturn` True
+    dbExec tr "DELETE FROM projects.code_mappings WHERE project_id = ?" (Only otherPid)
     runQueryEffect tr (Reviews.currentRun otherRun) `shouldReturn` False
     runQueryEffect tr $ Reviews.releaseRun otherRun
     released <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun otherRun.id)
     released.state `shouldBe` Reviews.Incomplete
+
+  it "reviewTriggers_draftsFollowTheModeAndMembersCanAskInEveryMode" \tr -> do
+    setup tr
+    let queued = dbOne tr "SELECT count(*)::int FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest' AND status = 'queued'" ()
+        mode trigger = runQueryEffect tr $ Reviews.updateSettings testPid (Reviews.ReviewSettings "impact-org" "checkout" trigger False)
+        sha = T.replicate 40
+        draftHead = AE.object ["head" AE..= AE.object ["sha" AE..= sha "c"], "base" AE..= AE.object ["sha" AE..= sha "0"], "state" AE..= ("open" :: Text), "draft" AE..= True, "changed_files" AE..= (1 :: Int), "updated_at" AE..= ("2025-01-01T00:05:00Z" :: Text)]
+        api permission url = pure $ if "/pulls/7" `T.isSuffixOf` url then Just draftHead else if "/reactions" `T.isSuffixOf` url then Just (AE.object []) else if "/collaborators/ada/permission" `T.isSuffixOf` url then Just (AE.object ["permission" AE..= (permission :: Text)]) else Nothing
+    void $ deliver tr $ payload "converted_to_draft" (sha "a") "2025-01-01T00:00:00Z"
+    queued `shouldReturn` 0
+    mode Reviews.AllPullRequests
+    void $ deliver tr $ payload "converted_to_draft" (sha "b") "2025-01-01T00:01:00Z"
+    queued `shouldReturn` 1
+    mode Reviews.WhenAsked
+    void $ deliver tr $ payload "synchronize" (sha "c") "2025-01-01T00:02:00Z"
+    queued `shouldReturn` 1
+    runQueryEffect tr (Reviews.latestRuns testPid) >>= (`shouldSatisfy` all ((== sha "c") . (.latestRevision)))
+    -- Contributors and ordinary comments queue nothing and call no GitHub API.
+    for_ @[] [("CONTRIBUTOR", "@monoscope prove it"), ("MEMBER", "looks good to me" :: Text)] \(association :: Text, body) ->
+      deliverEvent tr "issue_comment" (api "write") (commentPayload association body) `shouldReturn` ([], AE.object ["status" AE..= ("ignored" :: Text)])
+    -- Org membership is not write access: a read-only member's ask queues nothing and gets no reaction.
+    (readOnly, _) <- deliverEvent tr "issue_comment" (api "read") $ commentPayload "MEMBER" "@monoscope review"
+    map fst readOnly `shouldNotSatisfy` any ("/reactions" `T.isSuffixOf`)
+    queued `shouldReturn` 1
+    -- A member's ask reviews the draft head even though this mode never runs on its own.
+    (calls, response) <- deliverEvent tr "issue_comment" (api "write") $ commentPayload "MEMBER" "@monoscope prove it, and check the empty state"
+    response `shouldBe` AE.object ["status" AE..= ("ok" :: Text)]
+    map fst calls `shouldSatisfy` any ("/issues/comments/55/reactions" `T.isSuffixOf`)
+    queued `shouldReturn` 2
+    asked <- maybe (fail "asked run missing") pure . find ((== sha "c") . (.revision)) =<< runQueryEffect tr (Reviews.latestRuns testPid)
+    asked.request `shouldBe` Just Reviews.Ask{login = "ada", commentId = 55, command = Reviews.Prove, focus = Just "and check the empty state"}
+    -- A later ask before any worker starts takes the queued run over instead of queueing twice.
+    void $ deliverEvent tr "issue_comment" (api "write") $ commentPayload "MEMBER" "@monoscope review"
+    queued `shouldReturn` 2
+    runQueryEffect tr (Reviews.getRun asked.id) >>= (`shouldSatisfy` (== Just (Just Reviews.Review)) . fmap (fmap (.command) . (.request)))
+    -- An ask on a closed pull request queues nothing and is not acknowledged.
+    (closedCalls, _) <- deliverEvent tr "issue_comment" (\url -> if "/pulls/7" `T.isSuffixOf` url then pure $ Just $ AE.object ["head" AE..= AE.object ["sha" AE..= sha "c"], "base" AE..= AE.object ["sha" AE..= sha "0"], "state" AE..= ("closed" :: Text), "draft" AE..= False, "changed_files" AE..= (1 :: Int), "updated_at" AE..= ("2025-01-01T00:04:00Z" :: Text)] else api "write" url) $ commentPayload "MEMBER" "@monoscope review"
+    map fst closedCalls `shouldNotSatisfy` any ("/reactions" `T.isSuffixOf`)
+    queued `shouldReturn` 2
+
+  it "proofMedia_servesOnlySignedRecordingsOfTheirProject" \tr -> do
+    setup tr
+    void $ deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
+    [run] <- runQueryEffect tr $ Reviews.latestRuns testPid
+    let attempt = UUIDId UUID.nil
+    dbExec tr "INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, revision, exit_code, cast_bytes, gif, mp4) VALUES (?, ?, 'proof-1', 'head', ?, 0, convert_to('cast', 'UTF8'), convert_to('GIF89a fixture', 'UTF8'), convert_to('mp4 fixture', 'UTF8'))" (run.id, attempt, revision)
+    [link] <- map (Impact.proofLink tr.trATCtx run) <$> runQueryEffect tr (Reviews.proofSides run attempt)
+    let app = genericServeTWithContext (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider) (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused")) (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+        fetchWith headers url = WT.runSession (WT.request $ WT.setPath Wai.defaultRequest{Wai.requestHeaders = headers} $ encodeUtf8 $ fromMaybe url $ T.stripPrefix tr.trATCtx.config.hostUrl url) app
+        fetch = fetchWith []
+    preview <- fetch link.preview
+    (H.statusCode preview.simpleStatus, lookup "Content-Type" preview.simpleHeaders, preview.simpleBody) `shouldBe` (200, Just "image/gif", "GIF89a fixture")
+    video <- fetch link.video
+    (H.statusCode video.simpleStatus, lookup "Content-Type" video.simpleHeaders) `shouldBe` (200, Just "video/mp4")
+    -- Safari plays video only through byte ranges.
+    ranged <- fetchWith [("Range", "bytes=0-2")] link.video
+    (H.statusCode ranged.simpleStatus, ranged.simpleBody) `shouldBe` (206, "mp4")
+    -- A signature binds the project, review and file: none of them can be swapped.
+    otherPid <- createTestProject tr "Other proof project"
+    for_ [T.replace "sig=" "sig=0" link.preview, T.replace testPid.toText otherPid.toText link.preview, T.replace "proof-1-head.gif" "proof-1-base.gif" link.preview] \forged ->
+      (H.statusCode . (.simpleStatus) <$> fetch forged) `shouldReturn` 403
+
+  it "reviewComment_leadsWithMergeRiskAndShowsProductionDetailOnlyWhereAllowed" \_ -> do
+    let pid = UUIDId UUID.nil
+        run = Reviews.ReviewRun{id = UUIDId UUID.nil, threadId = UUIDId UUID.nil, projectId = pid, owner = "acme", repo = "checkout", number = 42, revision = T.replicate 40 "a", state = Reviews.Completed, result = Nothing, error = Nothing, commentId = Nothing, latestRevision = T.replicate 40 "a", createdAt = frozenTime, request = Nothing}
+        telemetry = Impact.Evidence "telemetry-1" Impact.Telemetry (Just "checkout-api") (Just "production") "https://app.monoscope.tech/p/x/log_explorer" Nothing (Just $ Impact.Observation 120340 312) (Just "https://app.monoscope.tech/p/x/widget.png?widgetZ=fixture") Nothing
+        finding path line mechanism next = Impact.Finding (Impact.ChangedLine path line Impact.Head) mechanism next ["telemetry-1"]
+        grades = [(Impact.Alignment, Impact.Good, []), (Impact.Impact, Impact.Poor, ["Changes how payment captures are retried", "checkout-api serves every order"]), (Impact.Verification, Impact.Fair, ["No test covers a capture that times out twice"]), (Impact.Rollback, Impact.Good, []), (Impact.ErrorDetection, Impact.Poor, ["The new retry path logs nothing when it gives up"])]
+        result =
+          Impact.ReviewResult
+            Impact.WorthChecking
+            [ finding "src/payments/capture.ts" 88 "A retried capture reuses the same idempotency key only on the first retry; a second timeout sends a fresh key, so a slow provider can charge twice." "Count captures with two or more retries in the last week, then add a test for a double timeout."
+            , finding "src/payments/capture.ts" 120 "The give-up branch swallows the provider error, so a failed capture leaves no log or span error." "Log the provider error and mark the span as an error before returning."
+            ]
+            ["No load test covers the retry backoff.", "Provider-side duplicates are not visible in this project's telemetry."]
+            [telemetry]
+            frozenTime
+            (addUTCTime (7 * 86400) frozenTime)
+            Nothing
+            (Just "Adds retries to payment capture. A second timeout can charge a customer twice, and the give-up path is silent in production.")
+            (Just [Impact.Assessment d g gaps | (d, g, gaps) <- grades])
+            ( Just
+                [ Impact.Claim "Retries a timed-out capture once" Impact.Matches "The capture command now retries after the first timeout and succeeds." ["proof-1"]
+                , Impact.Claim "Reuses the idempotency key on every retry" Impact.Differs "The second retry sent a new key, so the provider saw two charges." ["proof-2"]
+                , Impact.Claim "Shows the retry count in the receipt" Impact.Unverified "The receipt page needs a browser, which this review cannot record." []
+                ]
+            )
+            (Just [Impact.ProofLink key side (T.replicate 40 (if side == Agent.Base then "d" else "a")) (Just $ if side == Agent.Base then 1 else 0) (media "gif") (media "mp4") (media "cast") | key <- ["proof-1", "proof-2"], side <- [Agent.Base, Agent.Head], let media ext = "https://app.monoscope.tech/p/x/reviews/r/proofs/" <> key <> "-" <> T.toLower (show side) <> "." <> ext <> "?sig=s"])
+        render audience = Impact.renderReview "https://app.monoscope.tech" run audience result
+    goldenText "impact-review/github-comment.md" $ render $ Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y"
+    goldenText "impact-review/github-comment-links-only.md" $ render $ Impact.GitHubComment False "https://app.monoscope.tech/p/x/ai/runs/y"
+    goldenText "impact-review/monoscope-view.md" $ render Impact.MonoscopeView
 
   it "keeps started calls attributable until matching usage arrives, including after billing changes" \tr -> do
     setup tr
@@ -2815,7 +2948,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           abrupt = recovery `elem` [WorkerWake, RuntimeWake]
           extraCall = recovery `elem` [ProviderWake, WorkerWake, RuntimeWake]
           pageId = UUIDId $ UUID.fromWords 62 0x4000 0x80000000 1
-          draft = AE.object ["findings" AE..= V.singleton (AE.object ["location" AE..= AE.object ["path" AE..= ("completed.txt" :: Text), "line" AE..= (1 :: Int), "side" AE..= ("head" :: Text)], "mechanism" AE..= ("The changed behavior needs a retry check against the recorded count." :: Text), "nextStep" AE..= ("Check retry behavior." :: Text), "evidenceKeys" AE..= (["query-1"] :: [Text])]), "coverage" AE..= ([] :: [Text])]
+          draft = AE.object (graded <> ["findings" AE..= V.singleton (AE.object ["location" AE..= AE.object ["path" AE..= ("completed.txt" :: Text), "line" AE..= (1 :: Int), "side" AE..= ("head" :: Text)], "mechanism" AE..= ("The changed behavior needs a retry check against the recorded count." :: Text), "nextStep" AE..= ("Check retry behavior." :: Text), "evidenceKeys" AE..= (["query-1"] :: [Text])]), "coverage" AE..= ([] :: [Text])])
           plan =
             [ SdkTool "query_telemetry" $ AE.object ["service" AE..= ("test-service" :: Text), "query" AE..= ("| summarize count()" :: Text)]
             , SdkTool "remember_knowledge" $ AE.object ["service" AE..= ("test-service" :: Text), "summary" AE..= ("Recheck the recorded retry observation." :: Text), "evidenceKeys" AE..= (["query-1"] :: [Text])]
@@ -2887,8 +3020,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
       flip finally cleanup $ withSdkProvider directory "context-fixture" provider \models observed -> do
         let backend :: ATBackgroundCtx a -> ATBackgroundCtx a
             backend = impose (sdkAgent store $ [models, image, directory </> "worker.log"] <> [arg | recovery == RuntimeWake, arg <- ["--bridge", bridge]]) \env -> \case
-              Agent.ReviewRepository selected request respond knowledge calls usage allocations checks validate ->
-                passthrough env $ Agent.ReviewRepository selected request{Agent.repository = toText repository} respond knowledge calls usage allocations checks validate
+              Agent.ReviewRepository selected request respond knowledge calls usage allocations checks proofs validate ->
+                passthrough env $ Agent.ReviewRepository selected request{Agent.repository = toText repository} respond knowledge calls usage allocations checks proofs validate
               operation -> passthrough env operation
             worker at = runTestBgRecordingHTTP at tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport $ backend $ BackgroundJobs.processBackgroundJob tr.trATCtx $ Jobs.ReviewPullRequest review.id
         initial <- tryAny $ worker frozenTime
@@ -2943,7 +3076,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           uid n = UUIDId $ UUID.fromWords 61 0x4000 0x80000000 n
           sessionDirectory = store.usageDir </> toString (uid 1 :: UUIDId "pr_review").toText </> "sessions" </> toString (uid 4 :: UUIDId "ai_routine_run").toText
           suspendedDisks = filterM doesDirectoryExist . map (sessionDirectory </>) =<< listDirectory sessionDirectory
-          draft = AE.object ["findings" AE..= ([] :: [AE.Value]), "coverage" AE..= ([] :: [Text])]
+          draft = AE.object (graded <> ["findings" AE..= ([] :: [AE.Value]), "coverage" AE..= ([] :: [Text])])
           plan =
             [ SdkTool "bash" $ AE.object ["command" AE..= ("printf 'edit\\n' >> completed.txt; head -c 70000 /dev/zero | tr '\\0' x" :: Text)]
             , SdkTool "write_project_memory" $ AE.object ["pageId" AE..= ("00000000-0000-4000-8000-000000000099" :: Text), "version" AE..= (0 :: Int), "document" AE..= AE.object ["title" AE..= ("Resume context" :: Text), "body" AE..= ("Keep the original pending action." :: Text)]]
@@ -2988,6 +3121,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   (const pass)
                   (const pass)
                   (const pass)
+                  (const $ pure $ Left "Unexpected proof")
                   (const $ pure $ Right ())
             run = invoke (uid 4) request
         suspended <- tryAny run
@@ -3058,7 +3192,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       [review] <- runQueryEffect tr $ Reviews.latestRuns testPid
       Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventPullRequest
       runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ExternalPosts) Catalog.ReviewEditors
-      let result = Impact.ReviewResult Impact.NoFinding [] [] [] frozenTime frozenTime Nothing
+      let result = Impact.ReviewResult Impact.NoFinding [] [] [] frozenTime frozenTime Nothing Nothing Nothing Nothing Nothing
       runQueryEffect tr $ Reviews.saveResult review result
       dbExec tr "DELETE FROM background_jobs WHERE payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest review.id)
       cfg <- githubApp tr
@@ -3101,7 +3235,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     reviewPid <- createTestProject tr "Impact review isolation"
     setupProject tr reviewPid
     dbExec tr "UPDATE projects.projects SET customer_id = 'cus_impact_usage', billing_provider = ? WHERE id = ?" (Projects.StripeProvider, reviewPid)
-    runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" True True)
+    runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.ReadyPullRequests True)
     void $ deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
     [run] <- runQueryEffect tr $ Reviews.latestRuns reviewPid
     apiKey <- createTestAPIKey tr reviewPid "Impact review telemetry"
@@ -3122,7 +3256,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         appComment (n :: Int) (app :: Int) body = AE.object ["id" AE..= n, "body" AE..= (body :: Text), "performed_via_github_app" AE..= AE.object ["id" AE..= app]]
         transport :: Bool -> ATBackgroundCtx a -> ATBackgroundCtx a
         transport hasComment = pullRequestApi files [appComment n app marker | hasComment, (n, app) <- [(88, 456), (99, 123)]] pass (prAt revision)
-        result = Impact.ReviewResult Impact.WorthChecking [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "The changed operation may stop emitting the signal used by the monitor. *check* @impact-review-test [outside](https://untrusted.invalid)\r#heading" "Check the monitor query before deploying." ["telemetry-1"]] [] [] frozenTime frozenTime Nothing
+        result = Impact.ReviewResult Impact.WorthChecking [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "The changed operation may stop emitting the signal used by the monitor. *check* @impact-review-test [outside](https://untrusted.invalid)\r#heading" "Check the monitor query before deploying." ["telemetry-1"]] [] [] frozenTime frozenTime Nothing (Just "Moves retry handling into the checkout operation. @impact-review-test | the monitor may lose its signal.") (Just [Impact.Assessment d (if d == Impact.ErrorDetection then Impact.Poor else Impact.Good) ["New path emits no span | table-breaking gap" | d == Impact.ErrorDetection] | d <- universe]) (Just []) Nothing
         resultText = pure . Right . jsonText
         fakeAgent :: ATBackgroundCtx a -> ATBackgroundCtx a
         fakeAgent = fakeAgentWith []
@@ -3130,7 +3264,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         fakeAgentWith arguments =
           interpose @LLM.LLM (\_ _ -> liftIO $ fail "Legacy LLM loop called instead of checkout harness")
             . interpose @Agent.CodeReview \env -> \case
-              Agent.ReviewRepository _ request respond knowledge recordCall recordUsage recordAllocation recordCheck check -> localSeqUnliftIO env \unlift ->
+              Agent.ReviewRepository _ request respond knowledge recordCall recordUsage recordAllocation recordCheck recordProof check -> localSeqUnliftIO env \unlift ->
                 liftIO $ withSystemTempDirectory "impact-review-response" \directory -> do
                   request.prompt `shouldNotSatisfy` T.isInfixOf "private-log-body-must-not-leave-monoscope"
                   dbOne tr "SELECT count(*)::int FROM projects.pr_review_attempts WHERE id = ? AND run_id = ? AND project_id = ? AND provider = ?" (request.attemptId, request.runId, request.projectId, request.provider) `shouldReturn` (1 :: Int)
@@ -3157,7 +3291,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                     unlift (knowledge $ Agent.ProjectMemory $ Memory.Read page) `shouldReturn` saved
                   let response = directory </> "result.json"
                   writeFileLBS response $ AE.encode result{Impact.coverage = ["Related test toolchain unavailable"]}
-                  reply <- runEff $ scripted Nothing "test/fixtures/impact-review-agent.mjs" ([response, toString reviewPid.toText] <> arguments) $ Agent.reviewRepository Agent.Isolated request (liftIO . unlift . respond) (liftIO . unlift . knowledge) (liftIO . unlift . recordCall) (liftIO . unlift . recordUsage) (liftIO . unlift . recordAllocation) (liftIO . unlift . recordCheck) (liftIO . unlift . check)
+                  reply <- runEff $ scripted Nothing "test/fixtures/impact-review-agent.mjs" ([response, toString reviewPid.toText] <> arguments) $ Agent.reviewRepository Agent.Isolated request (liftIO . unlift . respond) (liftIO . unlift . knowledge) (liftIO . unlift . recordCall) (liftIO . unlift . recordUsage) (liftIO . unlift . recordAllocation) (liftIO . unlift . recordCheck) (liftIO . unlift . recordProof) (liftIO . unlift . check)
                   diagnostic <- tryAny $ decodeUtf8 <$> readFileBS (response <> ".failure")
                   pure $ first (<> either (const "") ("\n" <>) diagnostic) reply
               operation -> pure $ refuse operation
@@ -3173,7 +3307,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         reaches path = any (T.isInfixOf path . fst)
         reviewState = fmap (.state) <$> runQueryEffect tr (Reviews.getRun run.id)
         queryResult = result{Impact.evidence = [Impact.Evidence "telemetry-1" Impact.Monitor Nothing Nothing "/monitor" (Just "private-customer-query") Nothing Nothing Nothing]}
-    for_ @[] [False, True] \includeEvidence -> Impact.renderReview cfg.hostUrl run includeEvidence queryResult `shouldNotSatisfy` T.isInfixOf "private-customer-query"
+    for_ @[] [Impact.GitHubComment False "/run", Impact.GitHubComment True "/run", Impact.MonoscopeView] \audience -> Impact.renderReview cfg.hostUrl run audience queryResult `shouldNotSatisfy` T.isInfixOf "private-customer-query"
     (requests, ()) <- within (transport True . fakeAgent) $ Impact.reviewPullRequest run.id
     requests `shouldNotSatisfy` reaches "/contents/"
     requests `shouldSatisfy` reaches "/files?per_page=100&page=2"
@@ -3184,10 +3318,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
       runQueryEffect tr (Memory.latestPages reviewPid) >>= (\pages -> map (.author) pages `shouldBe` [Memory.Run visible.id])
       runQueryEffect tr (Issues.listArtifacts reviewPid visible.conversationId Nothing) >>= (`shouldSatisfy` (not . null))
       (_, detail) <- testServant tr $ AIThreads.routineRunGetH reviewPid visible.id Nothing
-      renderT detail `shouldContainAll` ["write project memory", "publish pull request comment"]
+      -- The run page draws the review's evidence as live widgets, not only prose.
+      renderT detail `shouldContainAll` ["write project memory", "publish pull request comment", "Merge risk: low", "Observed service events"]
     length (filter (T.isInfixOf "/issues/comments/99" . fst) requests) `shouldBe` 1
     let published = sentTo "/issues/comments/99" requests
-    published `shouldContainAll` ["Worth checking", "Related test toolchain unavailable", "production query reached its result limit", "Observed", "/widget.png?widgetZ=", "![Review query results]", "\\\\*check", revision]
+    published `shouldContainAll` ["Merge risk: low", "Worth checking", "Related test toolchain unavailable", "production query reached its result limit", "test-service](", "/widget.png?widgetZ=", "![Review query results]", "\\\\*check", revision]
     for_ @[] ["@impact-review-test", "https://untrusted.invalid", "long-review-log-body", "another-in-scope-event", "checkout-review-span", "Review temperature gauge"] \hidden -> published `shouldNotSatisfy` T.isInfixOf hidden
     completed <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
     (completed.state, completed.commentId) `shouldBe` (Reviews.Completed, Just 99)
@@ -3244,7 +3379,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         [credential] <- runQueryEffect tr $ GitSync.getGitHubCredentials pid
         runQueryEffect tr $ CodeContext.insertCodeMapping pid credential.id (Git.RepoRef "impact-org" "noisy" "main") Nothing "" ""
         event <- either (fail . show) pure $ Reviews.decodeEvent $ toStrict $ AE.encode $ payload "opened" revision "2025-01-01T00:00:00Z"
-        runQueryEffect tr $ for_ [8 .. 28] \number -> Reviews.receiveEvent (event{Reviews.number = number, Reviews.repo = "noisy"} :: Reviews.PullRequestEvent)
+        runQueryEffect tr $ for_ [8 .. 28] \number -> Reviews.receiveEvent Nothing (event{Reviews.number = number, Reviews.repo = "noisy"} :: Reviews.PullRequestEvent)
     runQueryEffect tr (Reviews.latestChecks reviewPid) >>= (\executions -> length executions `shouldBe` 2)
     let userId = (getResponse tr.trSessAndHeader :: Projects.Session).user.id
     customerRows <- runQueryEffect tr $ Reviews.customerUsage userId
@@ -3311,15 +3446,15 @@ spec = around withTestResources $ describe "Production impact reviews" do
     fst <$> runTestBgRecordingHTTP frozenTime tr (Impact.reviewPullRequest run.id) `shouldReturn` []
     map (.status) <$> runQueryEffect tr (Issues.listRoutineRuns reviewPid 12) `shouldReturn` [Issues.RunFailed]
     -- Reruns recover the app-owned comment and keep production prose out of links-only output.
-    void $ Test.call tr $ CodeContextPage.impactReviewSettingsPostH reviewPid (Reviews.ReviewSettings "impact-org" "checkout" True False)
+    void $ Test.call tr $ CodeContextPage.impactReviewSettingsPostH reviewPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.ReadyPullRequests False)
     void $ Test.call tr $ CodeContextPage.impactReviewRetryH reviewPid run.id
     retryPayloads <- dbQuery tr "SELECT payload FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest' AND payload->>'contents' = ?" (Only run.id.toText) :: IO [Only (Aeson AE.Value)]
     retryPayloads `shouldBe` replicate 2 (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest run.id)
     (linksRequests, ()) <- within (transport True . fakeAgentWith ["--expect-knowledge"]) $ Impact.reviewPullRequest run.id
     runQueryEffect tr (Reviews.priorKnowledge run "test-service") >>= (\notes -> length notes `shouldBe` 1)
     let linksPublished = sentTo "/issues/comments/99" linksRequests
-    linksPublished `shouldSatisfy` T.isInfixOf "telemetry evidence"
-    for_ @[] ["Observed", "/widget.png", "The changed operation"] \hidden -> linksPublished `shouldNotSatisfy` T.isInfixOf hidden
+    linksPublished `shouldSatisfy` T.isInfixOf "production evidence are in the [full review]("
+    for_ @[] [": query results", "/widget.png", "The changed operation", "Related test toolchain unavailable"] \hidden -> linksPublished `shouldNotSatisfy` T.isInfixOf hidden
     -- Final publication validation also rejects fabricated locations if the effect is bypassed.
     retry
     let invalid = result{Impact.findings = [Impact.Finding (Impact.ChangedLine "unrelated.hs" 1 Impact.Head) "Invented mechanism" "Invented next step" ["telemetry-1"]]}
@@ -3432,30 +3567,41 @@ spec = around withTestResources $ describe "Production impact reviews" do
     void $ review $ fakeAgentWith ["--billing-change-before-usage"]
     dbOne tr "SELECT count(*) FROM projects.pr_review_usage u JOIN projects.pr_review_attempts a ON a.id = u.attempt_id WHERE u.project_id = ? AND a.customer_id IS NULL AND u.customer_id IS NULL" (Only reviewPid) `shouldReturn` (2 :: Int64)
 
-    -- Revoking review permission while the agent runs also revokes its query tool.
+    -- Unlinking the repository while the agent runs revokes its tools and publication;
+    -- switching to asks only does not cancel a review already running.
     revokedRequests <- review $ repositoryReview \_ respond knowledge unlift -> do
       let request = Agent.TelemetryQuery "test-service" "| summarize count()"
       unlift (respond request) >>= (`shouldSatisfy` isRight)
-      runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" False False)
+      runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.WhenAsked False)
+      unlift (respond request) >>= (`shouldSatisfy` isRight)
+      dbExec tr "UPDATE projects.code_mappings SET repo = 'unlinked' WHERE project_id = ?" (Only reviewPid)
       unlift (respond request) >>= (`shouldSatisfy` isLeft)
       unlift (knowledge $ Agent.Recall "test-service") >>= (`shouldSatisfy` isLeft)
       resultText result
     revokedRequests `shouldNotSatisfy` reaches "/issues/"
-    runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" True False)
+    dbExec tr "UPDATE projects.code_mappings SET repo = 'checkout' WHERE project_id = ?" (Only reviewPid)
+    -- whenAsked_supersedesAQueuedAutomaticReview: switching to asks only stops an automatic run that has not started.
+    runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.WhenAsked False)
+    quiet <- review (interpose @Agent.CodeReview \_ _ -> liftIO $ fail "An automatic review ran after the repository switched to asks only")
+    quiet `shouldNotSatisfy` reaches "/issues/comments/99"
+    reviewState `shouldReturn` Just Reviews.Superseded
+    runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.ReadyPullRequests False)
     -- Unmapped repositories publish a coverage gap without calling the model.
     dbExec tr "UPDATE projects.code_mappings SET service = NULL WHERE project_id = ?" (Only reviewPid)
     unmapped <- sentTo "/issues/comments/99" <$> review (interpose @Agent.CodeReview \_ _ -> liftIO $ fail "Review agent called without measured evidence")
     unmapped `shouldSatisfy` T.isInfixOf "Coverage unknown"
-    unmapped `shouldNotSatisfy` T.isInfixOf "telemetry evidence"
-    void $ testServant tr $ CodeContextPage.impactReviewSettingsPostH reviewPid (Reviews.ReviewSettings "impact-org" "checkout" False False)
+    unmapped `shouldNotSatisfy` T.isInfixOf "test-service]("
+    void $ testServant tr $ CodeContextPage.impactReviewSettingsPostH reviewPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.WhenAsked False)
     void $ deliver tr $ payload "synchronize" (T.replicate 40 "b") "2025-01-01T00:01:00Z"
-    length <$> runQueryEffect tr (Reviews.latestRuns reviewPid) `shouldReturn` 1
-    runQueryEffect tr (Reviews.repositorySettings reviewPid) >>= \settings -> map (\s -> (s.enabled, s.includeEvidence)) settings `shouldBe` [(False, False)]
+    -- Asks-only mode queues nothing, but the push still supersedes the older head.
+    runQueryEffect tr (Reviews.latestRuns reviewPid) >>= \runs -> map (\r -> (r.revision, r.latestRevision)) runs `shouldBe` [(revision, T.replicate 40 "b")]
+    runQueryEffect tr (Reviews.repositorySettings reviewPid) >>= \settings -> map (\s -> (s.trigger, s.includeEvidence)) settings `shouldBe` [(Reviews.WhenAsked, False)]
+    dbExec tr "UPDATE projects.pr_review_threads SET latest_revision = ? WHERE project_id = ?" (revision, reviewPid)
     -- A metrics-only service still needs an investigation when there are no log/span counts.
     [credential] <- runQueryEffect tr $ GitSync.getGitHubCredentials reviewPid
     runQueryEffect tr $ CodeContext.insertCodeMapping reviewPid credential.id (Git.RepoRef "impact-org" "checkout" "main") (Just "test-service") "" ""
     dbExec tr "DELETE FROM otel_logs_and_spans WHERE project_id = ?" (Only reviewPid)
-    runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" True True)
+    runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.ReadyPullRequests True)
     metricsRequests <- review $ repositoryReview \_ respond _ unlift -> do
       let request = Agent.TelemetryQuery "test-service" "metrics | metric_name == \"review.temperature\" | summarize avg(value)"
       observed <- unlift $ respond request

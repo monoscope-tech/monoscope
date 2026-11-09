@@ -250,7 +250,7 @@ runEvaluationReal = interpret $ \_ -> \case
                             completed receipt = liftIO $ change $ \current -> current{usage = current.usage <> [receipt]}
                             checkValue :: AE.Value -> IO (Either Text ())
                             checkValue value = case study of
-                              ImpactStudy -> pure $ void $ Impact.validateDraft changed (map (\item -> (item.key, item.kind)) input.evidence) value
+                              ImpactStudy -> pure $ void $ Impact.validateDraft changed (map (\item -> (item.key, item.kind)) input.evidence) [] value
                               SourceStudy -> runExceptT do
                                 unless (null $ Schema.validateJSON mempty Policy.sourceReviewSchema value) $ throwE "Source review violates its schema"
                                 candidate <- case AE.fromJSON @SourceDraft value of AE.Error _ -> throwE "Source review does not match its schema"; AE.Success draft -> pure draft
@@ -276,7 +276,7 @@ runEvaluationReal = interpret $ \_ -> \case
                           SourceStudy -> Agent.reviewSource mode request started completed allocation execution (\case Agent.Structured value -> validate value; Agent.ProviderText raw -> validateText raw)
                           ImpactStudy -> case mode of
                             BoundedPatch -> Agent.reviewPatch request started completed validateText
-                            CheckoutHarness -> Agent.reviewRepository Agent.Isolated request (const $ pure $ Left "Only supplied evaluation evidence is available") (const $ pure $ Left "Project memory is excluded from this comparison") started completed allocation execution validate
+                            CheckoutHarness -> Agent.reviewRepository Agent.Isolated request (const $ pure $ Left "Only supplied evaluation evidence is available") (const $ pure $ Left "Project memory is excluded from this comparison") started completed allocation execution (const $ pure $ Left "Proof recordings are excluded from this comparison") validate
                         ended <- getMonotonicTimeNSec
                         current <- readIORef row
                         let elapsed = (ended - began + 999999) `div` 1000000

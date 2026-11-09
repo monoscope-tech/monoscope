@@ -75,6 +75,8 @@ module Pkg.Git (
   getPullRequestFiles,
   listPullRequestComments,
   publishPullRequestComment,
+  reactToComment,
+  canWrite,
   ConfigurationPullRequest (..),
   getConfigurationPullRequest,
   publishConfiguration,
@@ -97,6 +99,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Lens (AsValue, key, values, _Bool, _Integer, _String)
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
+import Data.Char (isAlphaNum)
 import Data.Effectful.Wreq qualified as W
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -657,6 +660,8 @@ data PullRequest = PullRequest
   , draft :: Bool
   , changedFiles :: Int
   , updatedAt :: UTCTime
+  , title :: Maybe Text
+  , body :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON) via DAE.Snake PullRequest
@@ -751,6 +756,25 @@ publishPullRequestComment conn repo number commentId body
         Nothing -> W.postWith (gitOpts conn) (toString $ repoUrl conn repo ("/issues/" <> show number <> "/comments")) payload
         Just cid -> W.patchWith (gitOpts conn) (toString $ repoUrl conn repo ("/issues/comments/" <> show cid)) payload
       pure $ result >>= fmap (.id) . first (const "GitHub did not return a comment ID") . AE.eitherDecode @GitHubObjectId . (^. W.responseBody)
+
+
+newtype CollaboratorPermission = CollaboratorPermission {permission :: Text}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON)
+
+
+-- | Whether a GitHub login can push to the repository. Org membership alone does not imply it.
+canWrite :: W.HTTP :> es => GitConn -> RepoRef -> Text -> Eff es (Either Text Bool)
+canWrite conn repo login
+  | T.null login || T.any (\c -> not (isAlphaNum c || c == '-')) login = pure $ Right False
+  | otherwise = fmap ((`elem` ["admin", "maintain", "write"]) . (.permission)) <$> githubJson @CollaboratorPermission conn repo ("/collaborators/" <> login <> "/permission")
+
+
+-- | Acknowledge a comment with a reaction, e.g. @eyes@ when an ask is queued.
+reactToComment :: W.HTTP :> es => GitConn -> RepoRef -> Int64 -> Text -> Eff es (Either Text ())
+reactToComment conn repo commentId content
+  | conn.host /= GitHub = pure $ Left "Pull request reviews require GitHub"
+  | otherwise = void <$> tryHttp (W.postWith (gitOpts conn) (toString $ repoUrl conn repo ("/issues/comments/" <> show commentId <> "/reactions")) (AE.object ["content" AE..= content]))
 
 
 data ConfigurationPullRequest = ConfigurationPullRequest

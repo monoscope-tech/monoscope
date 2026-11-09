@@ -40,6 +40,8 @@ module Web.Links (
   logExplorerLinks,
   explorerUrl,
   widgetPngPath,
+  ProofMediaGet,
+  proofMediaPath,
 ) where
 
 import Data.Aeson qualified as AE
@@ -594,6 +596,14 @@ data ProjectsRoutes' mode = ProjectsRoutes'
 
 -- | Served at the top level, outside the cookie-authenticated records: signed for chat unfurls.
 type WidgetPngGet = "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[PNG] (Headers '[Header "Cache-Control" Text] LBS.ByteString)
+
+
+-- | Recorded proof media, signed per file so GitHub's image proxy can fetch it without a session.
+type ProofMediaGet = "p" :> ProjectId :> "reviews" :> Capture "review_id" (UUIDId "pr_review") :> "proofs" :> Capture "file" ImpactReviews.ProofFile :> QPT "sig" :> RawM
+
+
+proofMediaPath :: Projects.ProjectId -> UUIDId "pr_review" -> ImpactReviews.ProofFile -> Text -> Text
+proofMediaPath pid rid file sig = safeLink' (("/" <>) . toUrlPiece) (Proxy @ProofMediaGet) (Proxy @ProofMediaGet) pid rid file (Just sig)
 
 
 -- $setup

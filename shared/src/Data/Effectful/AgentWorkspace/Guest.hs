@@ -303,7 +303,7 @@ runSession path = do
                               checked <- tryAny $ do
                                 regression <- either (const $ fail "Invalid native regression request") pure $ AgentWorkspace.mkRegressionRequest request.projectId request.runId request.attemptId verifierSession (revisionText request.base) session.imageBuildId session.baseline artifact [("base", revisionText request.base), ("head", revisionText request.head)]
                                 verified <- AgentWorkspace.verifyRegression options regression
-                                traverse_ (uncurry session.copyIn) $ AgentWorkspace.regressionLogs options verified
+                                traverse_ (\(_, hostPath, guestPath) -> session.copyIn hostPath guestPath) $ AgentWorkspace.regressionLogs options verified
                                 pure $ AE.toJSON verified
                               pure $ first (maybe "Local check could not run" AgentWorkspace.regressionErrorText . fromException) checked
                         liftIO $ send response

@@ -54,6 +54,25 @@ Wiki revisions retain the actual writing attempt and shared run.
 Usage distinguishes model calls, missing receipts, verifier checks, workspace allocations and retained media.
 Cost estimates remain separate from customer charges.
 
+## Pull request triggers and proof
+
+Each linked repository chooses when reviews run: **Ready pull requests** (the default), **Drafts and ready pull requests**, or **Only when asked**.
+In every mode, an owner, member or collaborator can comment `@monoscope review`, `@monoscope test` or `@monoscope prove it`.
+Text after the command is passed to the agent as an untrusted focus note.
+Monoscope reacts with 👀 when it queues the ask. An ask for a head that is already under review joins that review and records no new proof.
+The GitHub App must subscribe to `issue_comment` events and hold `pull_requests: write` to react.
+Automatic runs skip pull requests that change only documentation, tests or CI. An ask always reviews.
+
+`record_proof {claim, command}` replays one bash command under asciinema in fresh offline verifier VMs, on the base and the head.
+The host decodes each cast from the check log, renders a GIF with `agg` and an MP4 with `ffmpeg`, and stores them in `projects.pr_review_proofs`.
+Signed links at `/p/<project>/reviews/<review>/proofs/<file>` serve the media, so GitHub's image proxy can show the GIF without a session.
+A claim graded `matches` or `differs` must cite a recorded proof key. The model cannot claim a recording that does not exist.
+The guest image needs `asciinema`, and a writable `/dev/shm` (mounted by `guest-init.sh`). The worker image needs `agg` and `ffmpeg`.
+
+Repositories can add `.monoscope/PROOF.md`: free-form guidance on when to prove changes and how to start the app offline.
+The agent reads it from the base revision, so a pull request cannot rewrite its own rules.
+Monoscope skills (`investigate`, `kql-reference`) can be mounted for the agent through `IMPACT_REVIEW_SKILLS`.
+
 ## Prepare a project workspace
 
 Use a private request containing `projectId`, a credential-free `repository` and its exact `base` revision.

@@ -234,8 +234,15 @@ FROM runtime AS server
 COPY --from=builder --chown=monoscope:monoscope --chmod=755 /build/dist/monoscope-server /usr/local/bin/chart-cli ./
 COPY --from=builder --chown=monoscope:monoscope /build/static ./static
 
+# agg renders proof recordings (asciinema casts) into GIF previews; pinned by checksum.
+FROM scratch AS agg
+ADD --checksum=sha256:f111e315cd71056b116302342553dd765b7297579ed511f111d0cedb442aeda6 --chmod=755 https://github.com/asciinema/agg/releases/download/v1.9.0/agg-x86_64-unknown-linux-gnu /agg-amd64
+ADD --checksum=sha256:2b4be407b97e00e1c313a41d154ced8fa3d02c560c8f47a0db4950a2576444c9 --chmod=755 https://github.com/asciinema/agg/releases/download/v1.9.0/agg-aarch64-unknown-linux-gnu /agg-arm64
+
 FROM runtime AS impact-tools
+ARG TARGETARCH
 USER root
+COPY --from=agg /agg-${TARGETARCH} /usr/local/bin/agg
 RUN case "$(dpkg --print-architecture)" in \
       amd64) qemu=qemu-system-x86 ;; \
       arm64) qemu=qemu-system-arm ;; \

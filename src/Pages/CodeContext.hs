@@ -7,7 +7,7 @@
 -- which reaches @Pkg.Components.Widget@, which imports @LogItem@ — a cycle. The renderer in
 -- "Pages.Components" only ever builds the URL, so nothing on the rendering side has to know
 -- this module exists.
-module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, FrameSource (..), repositoriesGetH, RepositoriesGet (..), serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, RepositoryRemoval (..), repositorySourceGetH, RepositorySourceGet, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, ReviewChange (..), repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), MappingsPanel, MappingRejection (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixEvidenceH, issueFixMediaH, issueFixPackageH) where
+module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, FrameSource (..), repositoriesGetH, RepositoriesGet (..), serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, RepositoryRemoval (..), repositorySourceGetH, RepositorySourceGet, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, ReviewChange (..), repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), MappingsPanel, MappingRejection (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixEvidenceH, issueFixMediaH, issueFixPackageH, rangedMedia) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Commonmark qualified as Markdown
@@ -77,6 +77,7 @@ import Text.Slugify (slugify)
 import Utils (LoadingSize (..), TabStrip (..), countNoun, faSprite_, htmxIndicator_, navTabStrip_, nonEmptyT, renderMarkdown)
 import Web.Auth (demoGuestSessionId)
 import Web.FormUrlEncoded (FromForm)
+import Web.HttpApiData (toUrlPiece)
 import Web.Links (CookieProtectedRoutes (..), IssuesRoutes' (..), RepositoryTab (..), urls)
 
 
@@ -159,27 +160,32 @@ issueFixMediaH pid fid asset request send = do
     else do
       bytes <- either (const $ throwError err503{errHeaders = [(Header.hCacheControl, "private, no-store")]}) (pure . Artifacts.verifiedBytes) =<< Artifacts.readFixMedia explanation asset
       void $ issueFixForViewer pid fid session
-      let size = fromIntegral $ LBS.length bytes :: Integer
-          full = Just (H.status200, (0, size - 1))
-          selected = case lookup Header.hRange $ Wai.requestHeaders request of
-            Just value
-              | Wai.requestMethod request == H.methodGet
-              , Just [range] <- Header.parseByteRanges value ->
-                  (H.status206,) <$> case range of
-                    Header.ByteRangeFrom startByte | startByte < size -> Just (startByte, size - 1)
-                    Header.ByteRangeFromTo startByte lastByte | startByte < size && startByte <= lastByte -> Just (startByte, min lastByte $ size - 1)
-                    Header.ByteRangeSuffix count | count > 0 -> Just (max 0 $ size - count, size - 1)
-                    _ -> Nothing
-            _ -> full
-          mime = case asset of Artifacts.Video -> "video/mp4"; Artifacts.Diagram -> "image/svg+xml"; Artifacts.Captions -> "text/vtt; charset=utf-8"; (Artifacts.Before; Artifacts.Cause; Artifacts.Change; Artifacts.After) -> "image/png"
-          headers = [(Header.hContentType, mime), (Header.hCacheControl, "private, no-store"), (Header.hVary, "Cookie, Authorization"), (Header.hAcceptRanges, "bytes"), ("X-Content-Type-Options", "nosniff"), ("Content-Security-Policy", "default-src 'none'; sandbox")]
-      liftIO $ send $ case selected of
-        Nothing -> Wai.responseLBS H.status416 ((Header.hContentRange, "bytes */" <> encodeUtf8 (show size)) : headers) ""
-        Just (status, (startByte, lastByte)) ->
-          let byteCount = lastByte - startByte + 1
-              responseHeaders = headers <> [(Header.hContentLength, encodeUtf8 $ show byteCount)] <> [(Header.hContentRange, encodeUtf8 $ "bytes " <> show startByte <> "-" <> show lastByte <> "/" <> show size) | status == H.status206]
-              body = if Wai.requestMethod request == H.methodHead then "" else LBS.take (fromIntegral byteCount) $ LBS.drop (fromIntegral startByte) bytes
-           in Wai.responseLBS status responseHeaders body
+      let mime = case asset of Artifacts.Video -> "video/mp4"; Artifacts.Diagram -> "image/svg+xml"; Artifacts.Captions -> "text/vtt; charset=utf-8"; (Artifacts.Before; Artifacts.Cause; Artifacts.Change; Artifacts.After) -> "image/png"
+      liftIO $ send $ rangedMedia request [(Header.hContentType, mime), (Header.hCacheControl, "private, no-store"), (Header.hVary, "Cookie, Authorization")] bytes
+
+
+-- | Media bytes with single-range support, which Safari needs to play video.
+rangedMedia :: Wai.Request -> [Header.Header] -> LBS.ByteString -> Wai.Response
+rangedMedia request extra bytes = case selected of
+  Nothing -> Wai.responseLBS H.status416 ((Header.hContentRange, "bytes */" <> encodeUtf8 (show size)) : headers) ""
+  Just (status, (startByte, lastByte)) ->
+    let byteCount = lastByte - startByte + 1
+        responseHeaders = headers <> [(Header.hContentLength, encodeUtf8 $ show byteCount)] <> [(Header.hContentRange, encodeUtf8 $ "bytes " <> show startByte <> "-" <> show lastByte <> "/" <> show size) | status == H.status206]
+        body = if Wai.requestMethod request == H.methodHead then "" else LBS.take (fromIntegral byteCount) $ LBS.drop (fromIntegral startByte) bytes
+     in Wai.responseLBS status responseHeaders body
+  where
+    size = fromIntegral $ LBS.length bytes :: Integer
+    headers = extra <> [(Header.hAcceptRanges, "bytes"), ("X-Content-Type-Options", "nosniff"), ("Content-Security-Policy", "default-src 'none'; sandbox")]
+    selected = case lookup Header.hRange $ Wai.requestHeaders request of
+      Just value
+        | Wai.requestMethod request == H.methodGet
+        , Just [range] <- Header.parseByteRanges value ->
+            (H.status206,) <$> case range of
+              Header.ByteRangeFrom startByte | startByte < size -> Just (startByte, size - 1)
+              Header.ByteRangeFromTo startByte lastByte | startByte < size && startByte <= lastByte -> Just (startByte, min lastByte $ size - 1)
+              Header.ByteRangeSuffix count | count > 0 -> Just (max 0 $ size - count, size - 1)
+              _ -> Nothing
+      _ -> Just (H.status200, (0, size - 1))
 
 
 -- | Source around one stack frame, read from the repository linked to the project.
@@ -604,9 +610,8 @@ repositoriesPageH pid selection = do
                 , Table.col
                     "Production impact reviews"
                     ( \repository -> case find (\s -> repository.host == Git.GitHub && isNothing repository.apiBase && s.owner == T.toLower repository.owner && s.repo == T.toLower repository.repo) settings of
-                        Just s | s.enabled && not (null $ servicesFor repository) -> colorChip_ SuccessBadge "circle-check" "Enabled"
-                        Just s | s.enabled -> colorChip_ WarningBadge "circle-info" "Link a service"
-                        Just _ -> colorChip_ NeutralBadge "circle-info" "Off"
+                        Just _ | null (servicesFor repository) -> colorChip_ WarningBadge "circle-info" "Link a service"
+                        Just s -> colorChip_ (triggerBadge s.trigger) "circle-check" $ triggerLabel s.trigger
                         Nothing -> colorChip_ NeutralBadge "circle-info" "Not configured"
                     )
                 , Table.col
@@ -746,7 +751,7 @@ repositoriesPageH pid selection = do
               Just value -> case AE.fromJSON value of
                 AE.Error _ -> p_ [class_ "text-sm text-textWeak"] "The saved review could not be displayed. Rerun the review."
                 AE.Success result -> do
-                  div_ [class_ "prose prose-sm max-w-none break-words [&_pre]:overflow-x-auto"] $ renderMarkdown (ImpactReview.renderReview cfg.hostUrl run True result)
+                  div_ [class_ "prose prose-sm max-w-none break-words [&_pre]:overflow-x-auto"] $ renderMarkdown (ImpactReview.renderReview cfg.hostUrl run ImpactReview.MonoscopeView result)
                   for_ (nonEmpty =<< result.knowledge) \notes -> details_ [class_ "mt-3 text-sm text-textWeak"] do
                     summary_ [class_ "cursor-pointer font-medium"] "Service knowledge from this review"
                     p_ [class_ "mt-2 text-xs"] "Agent conclusions from the recorded evidence window. Recheck against current code and telemetry."
@@ -827,9 +832,35 @@ usageText total =
     <> (if total.unreportedAttempts == 0 then "" else " · attempts without model receipts: " <> show total.unreportedAttempts <> " (cost unknown)")
 
 
+triggerLabel :: ImpactReviews.ReviewTrigger -> Text
+triggerLabel = \case
+  ImpactReviews.ReadyPullRequests -> "Ready pull requests"
+  ImpactReviews.AllPullRequests -> "Drafts and ready pull requests"
+  ImpactReviews.WhenAsked -> "Only when asked"
+
+
+-- | One repository's review settings as form fields; a repository without saved settings shows the defaults.
+reviewSettingsFields_ :: Monad m => Text -> Text -> Maybe ImpactReviews.ReviewSettings -> HtmlT m ()
+reviewSettingsFields_ owner repo settings = do
+  input_ [type_ "hidden", name_ "owner", value_ owner]
+  input_ [type_ "hidden", name_ "repo", value_ repo]
+  let trigger = maybe ImpactReviews.ReadyPullRequests (.trigger) settings
+      evidence = bool "false" "true" $ any (.includeEvidence) settings
+  formSelectField_ FieldSm "Review pull requests" "trigger" False $ options_ (Just $ toUrlPiece trigger) [(toUrlPiece t, triggerLabel t) | t <- universe]
+  formSelectField_ FieldSm "Production evidence in GitHub" "includeEvidence" False $ options_ (Just evidence) [("false", "Links only"), ("true", "Aggregates and links")]
+
+
+-- | Asks-only reviews are quiet until someone comments, so they read as neutral, not active.
+triggerBadge :: ImpactReviews.ReviewTrigger -> BadgeColor
+triggerBadge = \case ImpactReviews.WhenAsked -> NeutralBadge; (ImpactReviews.ReadyPullRequests; ImpactReviews.AllPullRequests) -> SuccessBadge
+
+
+askHint :: Text
+askHint = "Comment @monoscope review on any pull request to ask for a review, or @monoscope prove it to also record proof."
+
+
 data ReviewReadiness
   = ReviewReady ImpactReviews.ReviewSettings
-  | ReviewDisabled
   | ReviewNeedsRoutine
   | ReviewNeedsService
   | ReviewNeedsApp
@@ -872,7 +903,7 @@ repositoryGetH pid rid = do
         | repository.host /= Git.GitHub || isJust repository.apiBase = ReviewUnsupportedHost
         | any T.null ([cfg.githubAppWebhookSecret, cfg.githubAppId, cfg.githubAppPrivateKey] :: [Text]) = ReviewNeedsServer
         | not (any (isJust . (.service)) mappings) = ReviewNeedsService
-        | Just s <- reviewSettings = if not s.enabled then ReviewDisabled else if isNothing cfg.impactReviewAgent then ReviewNeedsAgent else maybe ReviewNeedsRoutine (const $ ReviewReady s) routine
+        | Just s <- reviewSettings = if isNothing cfg.impactReviewAgent then ReviewNeedsAgent else maybe ReviewNeedsRoutine (const $ ReviewReady s) routine
         | otherwise = ReviewNeedsApp
   resources <- maybe (pure []) (RepositorySync.resources pid . (.id)) dashboardSync
   conflictVersions <- forM (filter (.conflicted) resources) $ \resource -> (resource.id,) <$> RepositorySync.localDefinition resource
@@ -1050,23 +1081,17 @@ instance ToHtml RepositoryGet where
           let setupRequired = (,True) . callout_ WarningBadge (Just "Setup required")
               (readiness, blocked) = case page.reviewReadiness of
                 ReviewReady settings -> (,False) do
-                  colorChip_ SuccessBadge "circle-check" "Ready for pull requests"
-                  p_ [class_ "text-sm text-textWeak"] $ if settings.includeEvidence then "Reviews share production aggregates and links in GitHub." else "Reviews share links to production evidence in GitHub."
+                  colorChip_ (triggerBadge settings.trigger) "circle-check" $ triggerLabel settings.trigger
+                  p_ [class_ "text-sm text-textWeak"] $ toHtml askHint
                 ReviewNeedsAgent -> setupRequired "Automatic reviews are unavailable. Ask your Monoscope administrator to finish review setup."
                 ReviewNeedsRoutine -> setupRequired "Activate or resume the Production impact review routine. Repository settings choose which pull requests it reviews."
-                ReviewDisabled -> (colorChip_ NeutralBadge "circle-info" "Reviews disabled", False)
                 ReviewNeedsService -> setupRequired "Link a named service so reviews can find the production telemetry for this repository."
                 ReviewNeedsApp -> setupRequired "Link source context through the GitHub App to receive automatic pull request reviews. A token connection can still provide source context and configuration sync."
                 ReviewNeedsServer -> setupRequired "An administrator must configure the GitHub App and webhook before automatic reviews can run."
                 ReviewUnsupportedHost -> (callout_ NeutralBadge (Just "Unavailable") "Automatic pull request reviews currently support GitHub.com. Source context and configuration sync remain available for this host.", True)
           readiness
           when (canEdit && repository.host == Git.GitHub && isNothing repository.apiBase) $ post (urls.repositoryReviewsPost pid rid) [class_ "grid items-end gap-3 sm:grid-cols-2"] do
-            input_ [type_ "hidden", name_ "owner", value_ repository.owner]
-            input_ [type_ "hidden", name_ "repo", value_ repository.repo]
-            formSelectField_ FieldSm "Automatic pull request reviews" "enabled" False
-              $ options_ (Just $ bool "false" "true" $ maybe False (.enabled) page.reviewSettings) [("true", "On"), ("false", "Off")]
-            formSelectField_ FieldSm "Production evidence in GitHub" "includeEvidence" False
-              $ options_ (Just $ bool "false" "true" $ maybe False (.includeEvidence) page.reviewSettings) [("false", "Links only"), ("true", "Aggregates and links")]
+            reviewSettingsFields_ repository.owner repository.repo page.reviewSettings
             button_ [type_ "submit", class_ $ "btn btn-sm mb-1 justify-self-start sm:col-span-2 " <> bool "btn-primary" "btn-outline" blocked] "Save review settings"
             when blocked $ p_ [class_ "text-xs text-textWeak sm:col-span-2"] "Saved settings take effect once setup is complete."
           div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-2"] do
@@ -1282,26 +1307,19 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
         addMappingForm_ (fromRight [] repoResult) cred
     when (isNothing repositoryM) $ section_ [class_ "pt-6 space-y-3 border-t border-strokeWeak"] do
       h3_ [class_ "text-sm font-semibold text-textStrong"] "Production impact reviews"
-      p_ [class_ "text-xs text-textWeak"] "The Production impact review routine reviews ready pull requests for enabled repositories. Activate the routine to start automatic reviews and inspect its runs."
+      p_ [class_ "text-xs text-textWeak"] $ toHtml $ "The Production impact review routine reviews pull requests for linked repositories. " <> askHint
       a_ [href_ (urls.aiRoutinesGet pid <> "#routine-production-impact-review"), class_ "text-sm text-textBrand hover:underline"] "Manage review routine and runs"
       when (T.null authConfig.githubAppWebhookSecret) $ p_ [class_ "text-xs text-textError"] "Reviews need a GitHub App webhook secret. Ask your Monoscope administrator to configure it."
       when (null reviewSettings) $ p_ [class_ "text-xs text-textWeak"] "Link a repository using a GitHub App installation to enable automatic reviews."
       forM_ reviewSettings \settings ->
         if canEdit
           then form_ ([class_ "flex flex-wrap items-end gap-3 rounded-lg border border-strokeWeak p-3", hxPost_ (maybe (urls.impactReviewSettingsPost pid) (urls.repositoryReviewsPost pid . (.id)) repositoryM), hxTarget_ "#code-mappings-content"] <> scopedSwap) $ do
-            input_ [type_ "hidden", name_ "owner", value_ settings.owner]
-            input_ [type_ "hidden", name_ "repo", value_ settings.repo]
             span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml (settings.owner <> "/" <> settings.repo)
-            label_ [class_ "text-xs text-textWeak space-y-1"] do
-              span_ [class_ "block"] "PR reviews"
-              select_ [name_ "enabled", class_ "select select-sm"] $ options_ (Just $ bool "false" "true" settings.enabled) [("true", "Enabled"), ("false", "Disabled")]
-            label_ [class_ "text-xs text-textWeak space-y-1"] do
-              span_ [class_ "block"] "Production evidence in GitHub"
-              select_ [name_ "includeEvidence", class_ "select select-sm"] $ options_ (Just $ bool "false" "true" settings.includeEvidence) [("true", "Aggregates and links"), ("false", "Links only")]
+            reviewSettingsFields_ settings.owner settings.repo (Just settings)
             button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save review settings"
           else div_ [class_ "space-y-1 rounded-lg border border-strokeWeak p-3"] do
             p_ [class_ "text-sm font-medium text-textStrong break-all"] $ toHtml $ settings.owner <> "/" <> settings.repo
-            colorChip_ NeutralBadge "code-branch" $ if settings.enabled then "Reviews enabled" else "Reviews disabled"
+            colorChip_ NeutralBadge "code-branch" $ triggerLabel settings.trigger
             p_ [class_ "text-xs text-textWeak"] $ if settings.includeEvidence then "Production evidence: aggregates and links" else "Production evidence: links only"
   where
     sample = fromMaybe "" sampleM

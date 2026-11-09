@@ -31,6 +31,7 @@ import Log (Logger)
 import Lucid
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types qualified as H
 import Network.Wai (Request)
@@ -198,6 +199,7 @@ data Routes mode = Routes
           :> Post '[JSON] AE.Value
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> RawM
   , widgetPngGet :: mode :- WidgetPngGet
+  , proofMediaGet :: mode :- ProofMediaGet
   , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[HTML] (RespHeaders Onboarding.ProxiedPage)
   , deviceCode :: mode :- "api" :> "device" :> "code" :> Post '[JSON] Auth.DeviceCodeResponse
   , deviceToken :: mode :- "api" :> "device" :> "token" :> QPT "device_code" :> Post '[JSON] Auth.DeviceTokenResponse
@@ -251,6 +253,7 @@ server otlpTraces otlpLogs =
                 }
         , avatarGet = avatarGetH
         , widgetPngGet = widgetPngGetH
+        , proofMediaGet = proofMediaGetH
         , proxyLanding = \path ->
             Onboarding.proxyLandingH path
               & State.evalState @TriggerEvents mempty
@@ -795,6 +798,16 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
         Charts.queryMetrics widgetWithPid.dbSource (Just Charts.DTMetric) (Just pid) widgetWithPid.query widgetWithPid.sql sinceStr fromDStr toDStr Nothing (Just $ Parser.binDensityFor $ Just $ Widget.mapWidgetTypeToChartType widgetWithPid.wType) scopedParams
           <&> \m -> widgetWithPid & #dataset ?~ Widget.toWidgetDataset m
   addRespHeaders processedWidget
+
+
+-- | Proof media never changes under a signed name: keys are not reused within a run.
+proofMediaGetH :: Projects.ProjectId -> UUIDId "pr_review" -> ImpactReviews.ProofFile -> Maybe Text -> Request -> (Wai.Response -> IO Wai.ResponseReceived) -> ATBaseCtx Wai.ResponseReceived
+proofMediaGetH pid rid file sigM request send = do
+  ctx <- ask @AuthContext
+  whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid (ImpactReviews.proofSignedPath rid file) sigM) \err -> Error.throwError err403{errBody = err}
+  bytes <- maybe (Error.throwError err404) pure =<< ImpactReviews.proofFile pid rid file
+  let mime = case file.format of ImpactReviews.Gif -> "image/gif"; ImpactReviews.Mp4 -> "video/mp4"; ImpactReviews.Cast -> "application/x-asciicast"
+  liftIO $ send $ PageCodeContext.rangedMedia request [(H.hContentType, mime), (H.hCacheControl, "public, max-age=31536000, immutable")] (toLazy bytes)
 
 
 -- | Public endpoint for rendering widgets to PNG (for bot embeds). Requires valid HMAC signature.

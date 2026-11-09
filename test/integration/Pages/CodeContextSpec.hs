@@ -741,7 +741,7 @@ spec = do
         _ <- testServant tr $ PageCodeContext.repositorySourceEnabledPostH testPid repository.id (PageCodeContext.SourceContextForm False)
         map (.service) <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) `shouldReturn` [Just "checkout"]
         runQueryEffect tr (W.runHTTPWreq $ withUnavailableRepositoryAPI $ CodeContext.fetchSnippet tr.trATCtx.codeBlobCache tr.trATCtx.config testPid (Just "checkout") Nothing "main.py" 1) `shouldReturn` Left (CodeContext.NoMapping "main.py")
-        runQueryEffect tr $ ImpactReviews.receiveEvent (ImpactReviews.PullRequestEvent "team" "checkout" 42 1 (T.replicate 40 "a") frozenTime True)
+        void $ runQueryEffect tr $ ImpactReviews.receiveEvent Nothing (ImpactReviews.PullRequestEvent "team" "checkout" 42 1 (T.replicate 40 "a") frozenTime ImpactReviews.Open)
         length <$> runQueryEffect tr (ImpactReviews.latestRuns testPid) `shouldReturn` 1
 
       it "repositoryOverview_listsEveryRepositoryOnceWithoutCallingTheProvider" \tr -> do
@@ -796,9 +796,9 @@ spec = do
         _ <- call tr $ PageCodeContext.repositorySourcePostH testPid repository.id (PageCodeContext.CodeMappingForm (Just "foreign/private") (Just "release") (Just "checkout") Nothing (Just "/app/") Nothing Nothing)
         mappings <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
         map (\m -> (m.owner, m.repo, m.ref, m.credentialId)) (filter ((== Just "checkout") . (.service)) mappings) `shouldBe` [("team", "checkout", "release", account.id)]
-        _ <- testServant tr $ PageCodeContext.repositoryReviewsPostH testPid repository.id (ImpactReviews.ReviewSettings "foreign" "private" False False)
+        _ <- testServant tr $ PageCodeContext.repositoryReviewsPostH testPid repository.id (ImpactReviews.ReviewSettings "foreign" "private" ImpactReviews.WhenAsked False)
         settings <- runQueryEffect tr $ ImpactReviews.repositorySettings testPid
-        map (\s -> (s.owner, s.repo, s.enabled)) settings `shouldMatchList` [("team", "checkout", False), ("team", "catalog", True)]
+        map (\s -> (s.owner, s.repo, s.trigger)) settings `shouldMatchList` [("team", "checkout", ImpactReviews.WhenAsked), ("team", "catalog", ImpactReviews.ReadyPullRequests)]
         for_ (filter ((== "checkout") . (.repo)) mappings) \mapping -> void $ testServant tr $ PageCodeContext.repositorySourceDeleteH testPid repository.id mapping.id
         map (.repo) <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) `shouldReturn` ["catalog"]
 
@@ -1067,8 +1067,6 @@ spec = do
         noRunner `shouldNotSatisfy` T.isInfixOf "Ready for pull requests"
         noRunner `shouldSatisfy` T.isInfixOf "Automatic reviews are unavailable. Ask your Monoscope administrator to finish review setup."
         readiness (withConfig (\c -> c{githubAppPrivateKey = ""}) configured) >>= (`shouldSatisfy` \case PageCodeContext.ReviewNeedsServer -> True; _ -> False)
-        runQueryEffect tr $ ImpactReviews.updateSettings testPid (ImpactReviews.ReviewSettings "team" "checkout" False False)
-        readiness withoutAgent >>= (`shouldSatisfy` \case PageCodeContext.ReviewDisabled -> True; _ -> False)
         for_ details.content.mappings \mapping -> runQueryEffect tr $ CodeContext.deleteCodeMapping testPid mapping.id
         void $ runQueryEffect tr $ GitSync.deleteGitHubSync sync.id
         map (.id) <$> runQueryEffect tr (GitSync.getRepositories testPid) `shouldReturn` [repository.id]
@@ -1089,7 +1087,7 @@ spec = do
           sync <- syncOf tr testPid origin "team" "checkout" (GitSync.PersonalToken "fixture") "ops"
           void $ seedDash tr \d -> d{Dashboards.title = "Local overview", Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "overview.yaml", Dashboards.fileSha = Just "provider-version"}
         repository <- runQueryEffect tr (GitSync.getRepositories testPid) >>= maybe (fail "public repository missing") pure . find (isNothing . (.apiBase))
-        let review n sha = runQueryEffect tr $ ImpactReviews.receiveEvent (ImpactReviews.PullRequestEvent "team" "checkout" 42 n (T.replicate 40 sha) frozenTime True)
+        let review n sha = void $ runQueryEffect tr $ ImpactReviews.receiveEvent Nothing (ImpactReviews.PullRequestEvent "team" "checkout" 42 n (T.replicate 40 sha) frozenTime ImpactReviews.Open)
             runIds = map (.id) <$> runQueryEffect tr (ImpactReviews.latestRuns testPid)
         review 1 "a"
         history <- runIds
@@ -1107,7 +1105,7 @@ spec = do
         [(d.title, d.filePath, d.fileSha) | d <- dashboards, isNothing d.gitSyncId] `shouldBe` [("Local overview", Nothing, Nothing)]
         length (filter (isJust . (.gitSyncId)) dashboards) `shouldBe` 1
         runIds `shouldReturn` history
-        dbQuery tr "SELECT enabled, include_evidence FROM projects.pr_review_settings WHERE project_id = ? AND owner = 'team' AND repo = 'checkout'" (Only testPid) `shouldReturn` [(False, False)]
+        dbQuery tr "SELECT trigger, include_evidence FROM projects.pr_review_settings WHERE project_id = ? AND owner = 'team' AND repo = 'checkout'" (Only testPid) `shouldReturn` [("when_asked" :: Text, False)]
         runQueryEffect tr (GitSync.removeRepository testPid repository.id) `shouldReturn` Left GitSync.ConnectionMissing
         review 2 "b"
         runIds `shouldReturn` history

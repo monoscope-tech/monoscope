@@ -1,8 +1,10 @@
-module Data.Effectful.CodeReview.Explanation (renderExplanation, readExplanationMedia) where
+module Data.Effectful.CodeReview.Explanation (renderExplanation, readExplanationMedia, proofScript, proofCast, proofFailure, renderProof) where
 
 import Conduit (runConduit, (.|))
 import Data.Aeson qualified as AE
+import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
+import Data.ByteString.Char8 qualified as BS8
 import Data.Char (isControl, isDigit)
 import Data.Conduit.Combinators qualified as CC
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), readPrivateArtifact, sha256, verifyArtifacts)
@@ -18,7 +20,7 @@ import System.Environment (getEnvironment)
 import System.FileLock (SharedExclusive (..), withFileLock)
 import System.FilePath ((</>))
 import System.IO.Error (userError)
-import System.IO.Temp (withTempDirectory)
+import System.IO.Temp (withSystemTempDirectory, withTempDirectory)
 import System.Posix.Files qualified as Posix
 import System.Posix.IO qualified as Posix
 import System.Posix.Unistd (fileSynchronise)
@@ -26,6 +28,7 @@ import System.Process.Typed (ExitCode (..), createPipe, getStderr, getStdout, nu
 import UnliftIO.Async (concurrently)
 import UnliftIO.Exception (bracket, throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
+import "base64" Data.ByteString.Base64 qualified as Base64
 
 
 newtype Assertion = Assertion {failureMessage :: Text}
@@ -147,6 +150,78 @@ renderExplanation store request = withinBudget $ do
         renameDirectory temporary directory
         sync parent
         pure manifest
+
+
+-- | The frozen check behind a proof: @proof.sh@ with the command as its base64 argument.
+-- The base64 alphabet has no shell metacharacters, so a double-quoted literal is a safe quote.
+--
+-- >>> map (`T.isInfixOf` proofScript "echo hi") ["set -- \"ZWNobyBoaQ==\"", "echo hi", castBegin, castEnd, proofFailure]
+-- [True,False,True,True,True]
+proofScript :: Text -> Text
+proofScript command = "set -- " <> show @Text (extractBase64 $ Base64.encodeBase64 $ encodeUtf8 command) <> "\n" <> decodeUtf8 $(embedFile "src/Data/Effectful/CodeReview/proof.sh")
+
+
+castBegin :: Text
+castBegin = "::monoscope-cast::"
+
+
+castEnd :: Text
+castEnd = "::monoscope-cast-end::"
+
+
+proofFailure :: Text
+proofFailure = "monoscope-proof-failed"
+
+
+-- | A cast's size limit; @proof.sh@ prints nothing larger, and the host does not trust that.
+castLimit :: Int
+castLimit = 524288
+
+
+-- | The recorded cast in a proof check's log, and the terminal output it shows.
+--
+-- >>> let cast = "{\"version\": 2, \"width\": 80, \"height\": 24}\n[0.1, \"o\", \"hello\\r\\n\"]\n"
+-- >>> let logged encoded = "noise\n::monoscope-cast::\n" <> encoded <> "\n::monoscope-cast-end::\n"
+-- >>> fmap snd $ proofCast $ logged $ extractBase64 $ Base64.encodeBase64' cast
+-- Right "hello\r\n"
+-- >>> proofCast "asciinema: no tty"
+-- Left "The proof produced no recording. Log tail: asciinema: no tty"
+-- >>> proofCast $ logged $ extractBase64 $ Base64.encodeBase64' "not a cast"
+-- Left "The proof recording is not an asciinema cast"
+-- >>> either ("not valid base64" `T.isInfixOf`) (const False) $ proofCast $ logged "%%%"
+-- True
+-- >>> proofCast $ logged $ BS.replicate 800000 65
+-- Left "The proof recording exceeds its size limit"
+proofCast :: ByteString -> Either Text (ByteString, Text)
+proofCast logBytes = do
+  let between = fst $ BS.breakSubstring (encodeUtf8 castEnd) $ snd $ BS.breakSubstring (encodeUtf8 castBegin) logBytes
+  encoded <- maybeToRight ("The proof produced no recording. Log tail: " <> decodeUtf8 (BS.takeEnd 600 logBytes)) $ find (not . BS.null) $ drop 1 $ BS8.lines between
+  when (BS.length encoded > castLimit * 4 `div` 3 + 4) $ Left "The proof recording exceeds its size limit"
+  cast <- first ("The proof recording is not valid base64: " <>) $ Base64.decodeBase64Untyped encoded
+  case BS8.lines cast of
+    header : events
+      | Just (_ :: AE.Object) <- AE.decodeStrict header ->
+          Right (cast, T.concat [output | Just (AE.Array (toList -> [_, AE.String "o", AE.String output])) <- map AE.decodeStrict events])
+    _ -> Left "The proof recording is not an asciinema cast"
+
+
+-- | An animated preview (GitHub inlines GIFs) and a video. Both tools read guest-recorded bytes,
+-- so they run unprivileged with bounded time, input duration and output size.
+renderProof :: ByteString -> IO (Either Text (ByteString, ByteString))
+renderProof cast = do
+  outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-proof" \directory -> do
+    environment <- filter ((== "PATH") . fst) <$> getEnvironment
+    writeFileBS (directory </> "proof.cast") cast
+    let run program args = withProcessTerm (setStdin nullStream $ setStdout nullStream $ setStderr nullStream $ setEnv environment $ setWorkingDir directory $ proc program args) waitExitCode >>= \code -> unless (code == ExitSuccess) $ throwIO $ userError $ program <> " exited with " <> show code
+    run "agg" ["--idle-time-limit", "2", "--fps-cap", "12", "--font-size", "16", "--theme", "github-dark", "proof.cast", "proof.gif"]
+    run "ffmpeg" ["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-t", "120", "-i", "proof.gif", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "26", "-fs", show mediaLimit, "proof.mp4"]
+    join bitraverse (\name -> readPrivateArtifact directory name mediaLimit) ("proof.gif", "proof.mp4")
+  pure $ case outcome of
+    Right (Just media) -> Right media
+    Right Nothing -> Left "Rendering the proof recording timed out"
+    Left failure -> Left $ "The proof recording could not be rendered: " <> toText (displayException failure)
+  where
+    mediaLimit = 8 * 1048576
 
 
 readExplanationMedia :: FilePath -> Explanation -> Text -> IO (Either Text ByteString)

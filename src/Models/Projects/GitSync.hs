@@ -125,6 +125,7 @@ import Jose.Jws qualified as Jws
 import Jose.Jwt (Jwt (..))
 import Models.Projects.Dashboards (Dashboard, DashboardId)
 import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.ProjectApiKeys (decryptAPIKey, decryptSecret, encryptSecret)
 import Models.Projects.Projects (PersistentSessionId, ProjectId)
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), selectFrom)
@@ -218,9 +219,9 @@ removeRepository pid rid = do
     lift do
       when (repository.host == Git.GitHub && isNothing repository.apiBase)
         $ Hasql.executeTx
-          [HI.sql| INSERT INTO projects.pr_review_settings (project_id, owner, repo, enabled, include_evidence)
-            VALUES (#{pid}, lower(#{repository.owner}), lower(#{repository.repo}), false, false)
-            ON CONFLICT (project_id, owner, repo) DO UPDATE SET enabled = false |]
+          [HI.sql| INSERT INTO projects.pr_review_settings (project_id, owner, repo, trigger, enabled, include_evidence)
+            VALUES (#{pid}, lower(#{repository.owner}), lower(#{repository.repo}), #{ImpactReviews.WhenAsked}, false, false)
+            ON CONFLICT (project_id, owner, repo) DO UPDATE SET trigger = EXCLUDED.trigger, enabled = false |]
       Hasql.executeTx
         [HI.sql| DELETE FROM projects.code_mappings m USING projects.git_credentials c
           WHERE m.project_id = #{pid} AND m.credential_id = c.id AND c.project_id = m.project_id
