@@ -56,4 +56,4 @@ The receipt page needs a browser, which this review cannot record.
 
 </details>
 
-<sub>Reviewed <a href="https://github.com/acme/checkout/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"><code>aaaaaaa</code></a> against production telemetry from Jan 1 to Jan 8, 2025 (UTC) · <a href="https://app.monoscope.tech/p/x/ai/runs/y">Open the full review</a> · <a href="https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings">Review settings</a><br>Comment <code>@monoscope review</code> to review again, or <code>@monoscope prove it</code> to record proof.</sub>
+<sub>Reviewed [`aaaaaaa`](https://github.com/acme/checkout/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) against production telemetry from Jan 1 to Jan 8, 2025 (UTC) · [Open the full review](https://app.monoscope.tech/p/x/ai/runs/y) · [Review settings](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings)<br>Comment `@monoscope review` to review again, or `@monoscope prove it` to record proof.</sub>

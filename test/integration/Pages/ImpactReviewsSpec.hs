@@ -148,7 +148,7 @@ payload action sha timestamp =
     , "repository" AE..= AE.object ["full_name" AE..= ("impact-org/checkout" :: Text)]
     , "pull_request"
         AE..= AE.object
-          ["state" AE..= (if action == "closed" then "closed" else "open" :: Text), "draft" AE..= (action == "converted_to_draft"), "updated_at" AE..= timestamp, "head" AE..= AE.object ["sha" AE..= sha]]
+          ["state" AE..= (if action == "closed" then "closed" else "open" :: Text), "draft" AE..= (action == "converted_to_draft"), "changed_files" AE..= (1 :: Int), "updated_at" AE..= timestamp, "base" AE..= AE.object ["sha" AE..= T.replicate 40 "d"], "head" AE..= AE.object ["sha" AE..= sha]]
     ]
 
 
@@ -3580,6 +3580,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
       resultText result
     revokedRequests `shouldNotSatisfy` reaches "/issues/"
     dbExec tr "UPDATE projects.code_mappings SET repo = 'checkout' WHERE project_id = ?" (Only reviewPid)
+    -- whenAsked_supersedesAQueuedAutomaticReview: switching to asks only stops an automatic run that has not started.
+    runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.WhenAsked False)
+    quiet <- review (interpose @Agent.CodeReview \_ _ -> liftIO $ fail "An automatic review ran after the repository switched to asks only")
+    quiet `shouldNotSatisfy` reaches "/issues/comments/99"
+    reviewState `shouldReturn` Just Reviews.Superseded
     runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.ReadyPullRequests False)
     -- Unmapped repositories publish a coverage gap without calling the model.
     dbExec tr "UPDATE projects.code_mappings SET service = NULL WHERE project_id = ?" (Only reviewPid)

@@ -343,14 +343,14 @@ evidenceWindow begin end = And (Cmp GTEq timestamp (TimestampLit $ toText $ iso8
 requestReview :: (DB es, ELog.Log :> es, HTTP.HTTP :> es, IOE :> es, Reader AuthContext :> es) => Reviews.CommentRequest -> Eff es (Either Text ())
 requestReview request = runErrorNoCallStack @Text do
   cfg <- (.config) <$> ask @AuthContext
-  token <- either throwError pure =<< GitSync.githubToken cfg.githubAppId cfg.githubAppPrivateKey (GitSync.AppInstallation request.installationId)
-  conn <- either (throwError . Git.gitConnErrorMessage) pure $ Git.mkGitConn Git.GitHub Nothing token
+  token <- orThrow =<< GitSync.githubToken cfg.githubAppId cfg.githubAppPrivateKey (GitSync.AppInstallation request.installationId)
+  conn <- orThrow $ first Git.gitConnErrorMessage $ Git.mkGitConn Git.GitHub Nothing token
   let ref = Git.RepoRef request.owner request.repo ""
-  writer <- either throwError pure =<< Git.canWrite conn ref request.ask.login
+  writer <- orThrow =<< Git.canWrite conn ref request.ask.login
   if not writer
     then Log.logInfo "Ignoring a PR review ask from someone without write access" (request.owner, request.repo, request.number)
     else do
-      pr <- either throwError pure =<< Git.getPullRequest conn ref request.number
+      pr <- orThrow =<< Git.getPullRequest conn ref request.number
       reception <- Reviews.receiveEvent (Just request.ask) $ Reviews.pullRequestEvent request.owner request.repo request.installationId request.number pr
       -- A queued review takes the ask over; one already running answers it without new proof.
       Log.logInfo "PR review ask received" (request.owner, request.repo, request.number, request.ask.command, show @Text reception)
@@ -359,6 +359,9 @@ requestReview request = runErrorNoCallStack @Text do
         $ whenLeftM_ (Git.reactToComment conn ref request.ask.commentId "eyes")
         $ Log.logAttention "Could not acknowledge a PR review ask"
         . (request.owner,request.repo,request.number,)
+  where
+    orThrow :: Error Text :> es' => Either Text a -> Eff es' a
+    orThrow = either throwError pure
 
 
 reviewPullRequest :: Reviews.ReviewId -> ATBackgroundCtx ()
@@ -442,7 +445,8 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
       pr <- require =<< Git.getPullRequest conn ref run.number
       trigger <- maybe Reviews.ReadyPullRequests (.trigger) . find (\s -> s.owner == run.owner && s.repo == run.repo) <$> Reviews.repositorySettings run.projectId
       let event = Reviews.pullRequestEvent run.owner run.repo installationId run.number pr
-          eligible = event.state == Reviews.Open || event.state == Reviews.Draft && (isJust run.request || trigger == Reviews.AllPullRequests)
+          -- An automatic run queued before the repository switched to asks only no longer runs.
+          eligible = (isJust run.request || trigger /= Reviews.WhenAsked) && (event.state == Reviews.Open || event.state == Reviews.Draft && (isJust run.request || trigger == Reviews.AllPullRequests))
       if event.revision /= run.revision || not eligible
         then do
           void $ Reviews.receiveEvent Nothing event
@@ -540,13 +544,13 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                   )
             output <- require answer
             parsed <- require $ first (const "Review agent returned invalid review JSON") $ AE.eitherDecodeStrict @ReviewDraft $ encodeUtf8 output
-            (parsed,Map.elems memory.evidence,memory.notes,) <$> recordedProofs
-          else pure (ReviewDraft [] ["No mapped service is available for production investigation."] "" [] [], [], [], [])
+            (Just parsed,Map.elems memory.evidence,memory.notes,) <$> recordedProofs
+          else pure (Nothing, [], [], [])
       let allEvidence = evidence <> queried
           queryGaps =
             ["A production query reached its result limit." | any (maybe False (.limitReached) . (.queryResult)) queried]
               <> ["A production query truncated oversized fields." | any (maybe False (.fieldsTruncated) . (.queryResult)) queried]
-          validated = validateResult initial.files allEvidence (initial.coverage <> queryGaps) (emptyResult NoFinding draft.findings from until){coverage = draft.coverage, evidence = allEvidence, knowledge = Just notes, summary = guarded (not . T.null) draft.summary, assessments = guarded (not . null) draft.assessments, claims = guarded (not . null) draft.claims, proofs = guarded (not . null) links}
+          validated = validateResult initial.files allEvidence (initial.coverage <> queryGaps) (emptyResult NoFinding (foldMap (.findings) draft) from until){coverage = maybe ["No mapped service is available for production investigation."] (.coverage) draft, evidence = allEvidence, knowledge = Just notes, summary = (.summary) <$> draft, assessments = (.assessments) <$> draft, claims = guarded (not . null) . (.claims) =<< draft, proofs = guarded (not . null) links}
           reviewed = fromRight (emptyResult CoverageUnknown [] from until){coverage = initial.coverage <> queryGaps <> ["The model review did not produce verifiable findings; rerun the review."], evidence = allEvidence} validated
       whenLeft_ validated $ \err -> Log.logAttention "Production impact model validation failed" (run.id, err)
       requireActive run execution
@@ -746,7 +750,7 @@ renderReview host run audience result =
     <> coverage
     <> [footer]
   where
-    (github, shown) = case audience of GitHubComment{includeEvidence} -> (True, includeEvidence); MonoscopeView -> (False, True)
+    (github, shown, runUrl) = case audience of GitHubComment{includeEvidence, runUrl = url} -> (True, includeEvidence, Just url); MonoscopeView -> (False, True, Nothing)
     label = \case
       WorthChecking -> "Worth checking"
       CoverageUnknown -> "Coverage unknown"
@@ -803,19 +807,31 @@ renderReview host run audience result =
         <> foldMap (const ": query results") item.queryResult
     count n noun = prettyPrintCount (fromIntegral n) <> " " <> noun <> bool "s" "" (n == 1)
     coverage
-      | null result.coverage = []
-      | not shown = []
+      | null result.coverage || not shown = []
       | github = ["<details><summary>What this review could not verify (" <> show (length result.coverage) <> ")</summary>\n\n" <> gaps <> "\n</details>"]
       | otherwise = ["**What this review could not verify**", gaps]
       where
         gaps = unlines $ map (("- " <>) . plain) result.coverage
     window = toText (formatTime defaultTimeLocale "%b %-e" result.windowStart) <> " to " <> toText (formatTime defaultTimeLocale "%b %-e, %Y" result.windowEnd)
-    fullReview = case audience of GitHubComment{runUrl} -> "[full review](" <> runUrl <> ")"; MonoscopeView -> "full review"
+    fullReview = maybe "full review" (\url -> "[full review](" <> url <> ")") runUrl
     settings = hostPath host (urls.codeMappingsSettings run.projectId Nothing)
-    footer = case audience of
-      GitHubComment{runUrl} ->
-        "<sub>Reviewed <a href=\"https://github.com/" <> run.owner <> "/" <> run.repo <> "/commit/" <> run.revision <> "\"><code>" <> T.take 7 run.revision <> "</code></a> against production telemetry from " <> window <> " (UTC) · <a href=\"" <> runUrl <> "\">Open the full review</a> · <a href=\"" <> settings <> "\">Review settings</a><br>Comment <code>@monoscope review</code> to review again, or <code>@monoscope prove it</code> to record proof.</sub>"
-      MonoscopeView -> "Reviewed `" <> T.take 7 run.revision <> "` against production telemetry from " <> window <> " (UTC) · [Review settings](" <> settings <> ")"
+    footer =
+      (if github then \line -> "<sub>" <> line <> "<br>Comment `@monoscope review` to review again, or `@monoscope prove it` to record proof.</sub>" else id)
+        $ "Reviewed [`"
+        <> T.take 7 run.revision
+        <> "`](https://github.com/"
+        <> run.owner
+        <> "/"
+        <> run.repo
+        <> "/commit/"
+        <> run.revision
+        <> ") against production telemetry from "
+        <> window
+        <> " (UTC)"
+        <> foldMap (\url -> " · [Open the full review](" <> url <> ")") runUrl
+        <> " · [Review settings]("
+        <> settings
+        <> ")"
     plain = T.concatMap (\c -> (if c `elem` ("\\*_|#!" :: String) then "\\" else "") <> one c) . clean
     clean = T.replace "://" ":／／" . T.map (\c -> fromMaybe c $ lookup c ([('[', '［'), (']', '］'), ('@', '＠'), ('<', '‹'), ('>', '›'), ('`', '\''), ('\n', ' '), ('\r', ' ')] :: [(Char, Char)]))
 

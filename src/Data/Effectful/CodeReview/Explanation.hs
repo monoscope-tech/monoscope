@@ -152,45 +152,51 @@ renderExplanation store request = withinBudget $ do
         pure manifest
 
 
--- | The frozen check behind a proof. The command runs under asciinema, and the cast is
--- printed base64 between markers so it returns through the retained check log.
+-- | The frozen check behind a proof: @proof.sh@ with the command as its base64 argument.
+-- The base64 alphabet has no shell metacharacters, so a double-quoted literal is a safe quote.
 --
--- >>> "base64 -d" `T.isInfixOf` proofScript "echo hi"
--- True
--- >>> "echo hi" `T.isInfixOf` proofScript "echo hi"
--- False
+-- >>> map (`T.isInfixOf` proofScript "echo hi") ["set -- \"ZWNobyBoaQ==\"", "echo hi", castBegin, castEnd, proofFailure]
+-- [True,False,True,True,True]
 proofScript :: Text -> Text
-proofScript command =
-  unlines
-    [ "set -u"
-    , "export HOME=\"${HOME:-/tmp}\" TERM=xterm-256color LANG=C.UTF-8 LC_ALL=C.UTF-8"
-    , "command -v asciinema >/dev/null || exit 127"
-    , "printf %s " <> show @Text (extractBase64 $ Base64.encodeBase64 $ encodeUtf8 command) <> " | base64 -d > /tmp/monoscope-proof.sh"
-    , "asciinema rec --quiet --overwrite --cols 110 --rows 32 --idle-time-limit 2 --command 'bash /tmp/monoscope-proof.sh; echo $? > /tmp/monoscope-proof.status' /tmp/monoscope-proof.cast </dev/null >/dev/null 2>/tmp/monoscope-proof.err || cat /tmp/monoscope-proof.err"
-    , "status=$(cat /tmp/monoscope-proof.status 2>/dev/null || echo 125)"
-    , "if [ -s /tmp/monoscope-proof.cast ] && [ \"$(stat -c %s /tmp/monoscope-proof.cast)\" -le 524288 ]; then printf '\\n" <> castBegin <> "\\n'; base64 -w0 /tmp/monoscope-proof.cast; printf '\\n" <> castEnd <> "\\n'; fi"
-    , "[ \"$status\" = 0 ] || echo \"" <> proofFailure <> ": exit $status\""
-    , "exit \"$status\""
-    ]
+proofScript command = "set -- " <> show @Text (extractBase64 $ Base64.encodeBase64 $ encodeUtf8 command) <> "\n" <> decodeUtf8 $(embedFile "src/Data/Effectful/CodeReview/proof.sh")
 
 
-castBegin, castEnd, proofFailure :: Text
-(castBegin, castEnd, proofFailure) = ("::monoscope-cast::", "::monoscope-cast-end::", "monoscope-proof-failed")
+castBegin :: Text
+castBegin = "::monoscope-cast::"
+
+
+castEnd :: Text
+castEnd = "::monoscope-cast-end::"
+
+
+proofFailure :: Text
+proofFailure = "monoscope-proof-failed"
+
+
+-- | A cast's size limit; @proof.sh@ prints nothing larger, and the host does not trust that.
+castLimit :: Int
+castLimit = 524288
 
 
 -- | The recorded cast in a proof check's log, and the terminal output it shows.
 --
 -- >>> let cast = "{\"version\": 2, \"width\": 80, \"height\": 24}\n[0.1, \"o\", \"hello\\r\\n\"]\n"
--- >>> fmap snd $ proofCast $ "noise\n::monoscope-cast::\n" <> extractBase64 (Base64.encodeBase64' cast) <> "\n::monoscope-cast-end::\n"
+-- >>> let logged encoded = "noise\n::monoscope-cast::\n" <> encoded <> "\n::monoscope-cast-end::\n"
+-- >>> fmap snd $ proofCast $ logged $ extractBase64 $ Base64.encodeBase64' cast
 -- Right "hello\r\n"
 -- >>> proofCast "asciinema: no tty"
 -- Left "The proof produced no recording. Log tail: asciinema: no tty"
+-- >>> proofCast $ logged $ extractBase64 $ Base64.encodeBase64' "not a cast"
+-- Left "The proof recording is not an asciinema cast"
+-- >>> either ("not valid base64" `T.isInfixOf`) (const False) $ proofCast $ logged "%%%"
+-- True
+-- >>> proofCast $ logged $ BS.replicate 800000 65
+-- Left "The proof recording exceeds its size limit"
 proofCast :: ByteString -> Either Text (ByteString, Text)
 proofCast logBytes = do
-  let (_, rest) = BS.breakSubstring (encodeUtf8 castBegin) logBytes
-      encoded = BS.takeWhile (`notElem` [10, 13]) $ BS.dropWhile (`elem` [10, 13]) $ BS.drop (BS.length $ encodeUtf8 castBegin) rest
-  when (BS.null rest || BS.null encoded) $ Left $ "The proof produced no recording. Log tail: " <> decodeUtf8 (BS.takeEnd 600 logBytes)
-  cast <- first (const "The proof recording is not valid base64") $ Base64.decodeBase64Untyped encoded
+  encoded <- maybeToRight ("The proof produced no recording. Log tail: " <> decodeUtf8 (BS.takeEnd 600 logBytes)) $ find (not . BS.null) $ drop 1 $ BS8.lines $ snd $ BS.breakSubstring (encodeUtf8 castBegin) logBytes
+  when (BS.length encoded > castLimit * 4 `div` 3 + 4) $ Left "The proof recording exceeds its size limit"
+  cast <- first ("The proof recording is not valid base64: " <>) $ Base64.decodeBase64Untyped encoded
   case BS8.lines cast of
     header : events
       | Just (_ :: AE.Object) <- AE.decodeStrict header ->
@@ -198,7 +204,8 @@ proofCast logBytes = do
     _ -> Left "The proof recording is not an asciinema cast"
 
 
--- | An animated preview (GitHub inlines GIFs) and a video, both bounded for publication.
+-- | An animated preview (GitHub inlines GIFs) and a video. Both tools read guest-recorded bytes,
+-- so they run unprivileged with bounded time, input duration and output size.
 renderProof :: ByteString -> IO (Either Text (ByteString, ByteString))
 renderProof cast = do
   outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-proof" \directory -> do
@@ -206,12 +213,14 @@ renderProof cast = do
     writeFileBS (directory </> "proof.cast") cast
     let run program args = withProcessTerm (setStdin nullStream $ setStdout nullStream $ setStderr nullStream $ setEnv environment $ setWorkingDir directory $ proc program args) waitExitCode >>= \code -> unless (code == ExitSuccess) $ throwIO $ userError $ program <> " exited with " <> show code
     run "agg" ["--idle-time-limit", "2", "--fps-cap", "12", "--font-size", "16", "--theme", "github-dark", "proof.cast", "proof.gif"]
-    run "ffmpeg" ["-hide_banner", "-loglevel", "error", "-y", "-i", "proof.gif", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "26", "proof.mp4"]
-    (,) <$> readPrivateArtifact directory "proof.gif" (8 * 1048576) <*> readPrivateArtifact directory "proof.mp4" (8 * 1048576)
+    run "ffmpeg" ["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-t", "120", "-i", "proof.gif", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "26", "-fs", show mediaLimit, "proof.mp4"]
+    join bitraverse (\name -> readPrivateArtifact directory name mediaLimit) ("proof.gif", "proof.mp4")
   pure $ case outcome of
     Right (Just media) -> Right media
     Right Nothing -> Left "Rendering the proof recording timed out"
     Left failure -> Left $ "The proof recording could not be rendered: " <> toText (displayException failure)
+  where
+    mediaLimit = 8 * 1048576
 
 
 readExplanationMedia :: FilePath -> Explanation -> Text -> IO (Either Text ByteString)

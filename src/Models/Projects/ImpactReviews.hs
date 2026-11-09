@@ -165,8 +165,6 @@ data Ask = Ask {login :: Text, commentId :: Int64, command :: Command, focus :: 
 
 -- | A verified ask whose head revision is still unknown: comment deliveries carry no PR head.
 data CommentRequest = CommentRequest {owner :: Text, repo :: Text, installationId :: Int64, number :: Int, ask :: Ask}
-  deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 newtype Repository = Repository {fullName :: Text}
@@ -174,12 +172,7 @@ newtype Repository = Repository {fullName :: Text}
   deriving (AE.FromJSON) via DAE.Snake Repository
 
 
-data PullRequestStatus = PullRequestStatus {head :: Git.CommitRef, state :: Text, draft :: Bool, updatedAt :: UTCTime}
-  deriving stock (Generic, Show)
-  deriving (AE.FromJSON) via DAE.Snake PullRequestStatus
-
-
-data GitHubEvent = GitHubEvent {action :: Text, repository :: Repository, installation :: Git.GitHubObjectId, number :: Int, pullRequest :: PullRequestStatus}
+data GitHubEvent = GitHubEvent {action :: Text, repository :: Repository, installation :: Git.GitHubObjectId, number :: Int, pullRequest :: Git.PullRequest}
   deriving stock (Generic, Show)
   deriving (AE.FromJSON) via DAE.Snake GitHubEvent
 
@@ -194,7 +187,7 @@ data EventDecodeError = UnsupportedAction | InvalidPayload
 -- >>> map AE.toJSON [UnsupportedAction, InvalidPayload]
 -- [String "unsupported_action",String "invalid_payload"]
 --
--- >>> let body = "{\"action\":\"opened\",\"number\":1,\"installation\":{\"id\":1},\"repository\":{\"full_name\":\"acme/service\"},\"pull_request\":{\"state\":\"open\",\"draft\":false,\"updated_at\":\"2025-01-01T00:00:00Z\",\"head\":{\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}" :: Text
+-- >>> let body = "{\"action\":\"opened\",\"number\":1,\"installation\":{\"id\":1},\"repository\":{\"full_name\":\"acme/service\"},\"pull_request\":{\"state\":\"open\",\"draft\":false,\"changed_files\":1,\"updated_at\":\"2025-01-01T00:00:00Z\",\"base\":{\"sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"head\":{\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}" :: Text
 -- >>> fmap (\e -> (e.number, e.state)) $ decodeEvent $ encodeUtf8 body
 -- Right (1,Open)
 -- >>> fmap (.state) $ decodeEvent $ encodeUtf8 $ T.replace "\"draft\":false" "\"draft\":true" body
@@ -210,22 +203,14 @@ decodeEvent body = do
   unless (event.action `elem` ["opened", "synchronize", "reopened", "ready_for_review", "closed", "converted_to_draft"]) $ Left UnsupportedAction
   (owner, repo) <- repositoryName event.repository
   unless (event.number > 0) $ Left InvalidPayload
-  let pr = event.pullRequest
-      revision = pr.head.revision
+  let revision = event.pullRequest.head.revision
   unless (T.length revision == 40 && T.all isHexDigit revision) $ Left InvalidPayload
-  pure PullRequestEvent{owner, repo, installationId = event.installation.id, number = event.number, revision = T.toLower revision, updatedAt = pr.updatedAt, state = pullRequestState pr.state pr.draft}
+  pure $ pullRequestEvent owner repo event.installation.id event.number event.pullRequest
 
 
 -- | The event a fetched pull request implies, as if GitHub had just delivered it.
 pullRequestEvent :: Text -> Text -> Int64 -> Int -> Git.PullRequest -> PullRequestEvent
-pullRequestEvent owner repo installationId number pr = PullRequestEvent{owner, repo, installationId, number, revision = T.toLower pr.head.revision, updatedAt = pr.updatedAt, state = pullRequestState pr.state pr.draft}
-
-
-pullRequestState :: Text -> Bool -> PullRequestState
-pullRequestState status draft
-  | status /= "open" = Closed
-  | draft = Draft
-  | otherwise = Open
+pullRequestEvent owner repo installationId number pr = PullRequestEvent{owner, repo, installationId, number, revision = T.toLower pr.head.revision, updatedAt = pr.updatedAt, state = if pr.state /= "open" then Closed else if pr.draft then Draft else Open}
 
 
 repositoryName :: Repository -> Either EventDecodeError (Text, Text)
@@ -580,16 +565,24 @@ instance FromHttpApiData ProofFile where
 -- Only the run holding the review lease can record, so a superseded attempt cannot add media.
 saveProofs :: DB es => ReviewRun -> UUIDId "agent_attempt" -> NonEmpty Agent.ProofMedia -> Eff es (Either Text Text)
 saveProofs run attempt sides = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  HI.OneColumn leased <-
+    Hasql.oneTx
+      [HI.sql|SELECT EXISTS (SELECT 1 FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
+    WHERE r.id = #{run.id} AND r.state = #{Reviewing} AND t.lease_owner = r.id AND t.lease_until > now())|]
   HI.OneColumn used <- Hasql.oneTx [HI.sql|SELECT count(DISTINCT key) FROM projects.pr_review_proofs WHERE run_id = #{run.id}|]
   let key = "proof-" <> show (used + 1 :: Int64)
-  stored <- forM sides \proof ->
-    Hasql.queryTx @(Maybe (HI.OneColumn Bool))
-      [HI.sql|INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, revision, exit_code, cast_bytes, gif, mp4)
-    SELECT r.id, #{attempt}, #{key}, #{proof.side}, #{proof.revision}, #{fromIntegral @Int @Int32 <$> proof.exitCode}, #{proof.cast}, #{proof.gif}, #{proof.mp4}
-    FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
-    WHERE r.id = #{run.id} AND r.state = #{Reviewing} AND t.lease_owner = r.id AND t.lease_until > now()
-    ON CONFLICT (run_id, key, side) DO NOTHING RETURNING true|]
-  if all isJust stored then pure $ Right key else Left "Review authorization is no longer available" <$ Tx.condemn
+  stored <-
+    if not leased
+      then pure []
+      else forM (toList sides) \proof ->
+        Hasql.queryTx @(Maybe (HI.OneColumn Bool))
+          [HI.sql|INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, revision, exit_code, cast_bytes, gif, mp4)
+        VALUES (#{run.id}, #{attempt}, #{key}, #{proof.side}, #{proof.revision}, #{fromIntegral @Int @Int32 <$> proof.exitCode}, #{proof.cast}, #{proof.gif}, #{proof.mp4})
+        ON CONFLICT (run_id, key, side) DO NOTHING RETURNING true|]
+  case (leased, all isJust stored) of
+    (False, _) -> Left "Review authorization is no longer available" <$ Tx.condemn
+    (True, False) -> Left ("Proof " <> key <> " was already recorded; record the proof again") <$ Tx.condemn
+    (True, True) -> pure $ Right key
 
 
 proofSides :: DB es => ReviewRun -> UUIDId "agent_attempt" -> Eff es [ProofSide]

@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
 import Control.Exception qualified as Exception
@@ -1058,10 +1058,10 @@ prune archivePolicy options request = do
     pure final
 
 
--- | Retained host logs paired with the guest paths the report advertises for them.
-regressionLogs :: RegressionOptions -> RegressionResult -> [(FilePath, Text)]
+-- | Retained host logs, by side, paired with the guest paths the report advertises for them.
+regressionLogs :: RegressionOptions -> RegressionResult -> [(Side, FilePath, Text)]
 regressionLogs options result =
-  [ (options.artifactDir </> toString (UUID.toText check) </> (if key.side == Base then "base.log" else "head.log"), path)
+  [ (key.side, options.artifactDir </> toString (UUID.toText check) </> (if key.side == Base then "base.log" else "head.log"), path)
   | let Identifier check = result.report.id
   , Measured key measured <- result.report.results
   , Just path <- [measured.logPath]

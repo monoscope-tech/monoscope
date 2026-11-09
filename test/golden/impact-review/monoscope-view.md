@@ -54,4 +54,4 @@ The receipt page needs a browser, which this review cannot record.
 - Provider-side duplicates are not visible in this project's telemetry.
 
 
-Reviewed `aaaaaaa` against production telemetry from Jan 1 to Jan 8, 2025 (UTC) · [Review settings](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings)
+Reviewed [`aaaaaaa`](https://github.com/acme/checkout/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) against production telemetry from Jan 1 to Jan 8, 2025 (UTC) · [Review settings](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings)

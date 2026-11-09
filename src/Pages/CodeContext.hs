@@ -839,12 +839,15 @@ triggerLabel = \case
   ImpactReviews.WhenAsked -> "Only when asked"
 
 
-triggerOptions_ :: Monad m => ImpactReviews.ReviewTrigger -> HtmlT m ()
-triggerOptions_ current = options_ (Just $ toUrlPiece current) [(toUrlPiece t, triggerLabel t) | t <- universe]
-
-
-evidenceOptions_ :: Monad m => Bool -> HtmlT m ()
-evidenceOptions_ current = options_ (Just $ bool "false" "true" current) [("false", "Links only"), ("true", "Aggregates and links")]
+-- | One repository's review settings as form fields; a repository without saved settings shows the defaults.
+reviewSettingsFields_ :: Monad m => Text -> Text -> Maybe ImpactReviews.ReviewSettings -> HtmlT m ()
+reviewSettingsFields_ owner repo settings = do
+  input_ [type_ "hidden", name_ "owner", value_ owner]
+  input_ [type_ "hidden", name_ "repo", value_ repo]
+  let trigger = maybe ImpactReviews.ReadyPullRequests (.trigger) settings
+      evidence = bool "false" "true" $ any (.includeEvidence) settings
+  formSelectField_ FieldSm "Review pull requests" "trigger" False $ options_ (Just $ toUrlPiece trigger) [(toUrlPiece t, triggerLabel t) | t <- universe]
+  formSelectField_ FieldSm "Production evidence in GitHub" "includeEvidence" False $ options_ (Just evidence) [("false", "Links only"), ("true", "Aggregates and links")]
 
 
 -- | Asks-only reviews are quiet until someone comments, so they read as neutral, not active.
@@ -1088,12 +1091,7 @@ instance ToHtml RepositoryGet where
                 ReviewUnsupportedHost -> (callout_ NeutralBadge (Just "Unavailable") "Automatic pull request reviews currently support GitHub.com. Source context and configuration sync remain available for this host.", True)
           readiness
           when (canEdit && repository.host == Git.GitHub && isNothing repository.apiBase) $ post (urls.repositoryReviewsPost pid rid) [class_ "grid items-end gap-3 sm:grid-cols-2"] do
-            input_ [type_ "hidden", name_ "owner", value_ repository.owner]
-            input_ [type_ "hidden", name_ "repo", value_ repository.repo]
-            formSelectField_ FieldSm "Review pull requests" "trigger" False
-              $ triggerOptions_ (maybe ImpactReviews.ReadyPullRequests (.trigger) page.reviewSettings)
-            formSelectField_ FieldSm "Production evidence in GitHub" "includeEvidence" False
-              $ evidenceOptions_ (maybe False (.includeEvidence) page.reviewSettings)
+            reviewSettingsFields_ repository.owner repository.repo page.reviewSettings
             button_ [type_ "submit", class_ $ "btn btn-sm mb-1 justify-self-start sm:col-span-2 " <> bool "btn-primary" "btn-outline" blocked] "Save review settings"
             when blocked $ p_ [class_ "text-xs text-textWeak sm:col-span-2"] "Saved settings take effect once setup is complete."
           div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-2"] do
@@ -1316,11 +1314,8 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
       forM_ reviewSettings \settings ->
         if canEdit
           then form_ ([class_ "flex flex-wrap items-end gap-3 rounded-lg border border-strokeWeak p-3", hxPost_ (maybe (urls.impactReviewSettingsPost pid) (urls.repositoryReviewsPost pid . (.id)) repositoryM), hxTarget_ "#code-mappings-content"] <> scopedSwap) $ do
-            input_ [type_ "hidden", name_ "owner", value_ settings.owner]
-            input_ [type_ "hidden", name_ "repo", value_ settings.repo]
             span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml (settings.owner <> "/" <> settings.repo)
-            formSelectField_ FieldSm "Review pull requests" "trigger" False $ triggerOptions_ settings.trigger
-            formSelectField_ FieldSm "Production evidence in GitHub" "includeEvidence" False $ evidenceOptions_ settings.includeEvidence
+            reviewSettingsFields_ settings.owner settings.repo (Just settings)
             button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save review settings"
           else div_ [class_ "space-y-1 rounded-lg border border-strokeWeak p-3"] do
             p_ [class_ "text-sm font-medium text-textStrong break-all"] $ toHtml $ settings.owner <> "/" <> settings.repo

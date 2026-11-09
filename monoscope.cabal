@@ -323,6 +323,7 @@ extra-source-files:
     static/public/dashboards/redis.yaml
     static/public/dashboards/rum.yaml
     static/public/dashboards/timefusion.yaml
+    src/Data/Effectful/CodeReview/proof.sh
 
 source-repository head
   type: git
