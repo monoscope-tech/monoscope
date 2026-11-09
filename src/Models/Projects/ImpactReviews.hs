@@ -177,15 +177,15 @@ data GitHubEvent = GitHubEvent {action :: Text, repository :: Repository, instal
   deriving (AE.FromJSON) via DAE.Snake GitHubEvent
 
 
-data EventDecodeError = UnsupportedAction | InvalidPayload
+data EventDecodeError = UnsupportedAction | InvalidPayload | NotAnAsk | UntrustedAuthor
   deriving stock (Generic, Show)
   deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" EventDecodeError
 
 
 -- | Decode the supported wire shape and refine its coordinates at the boundary.
 --
--- >>> map AE.toJSON [UnsupportedAction, InvalidPayload]
--- [String "unsupported_action",String "invalid_payload"]
+-- >>> map AE.toJSON [UnsupportedAction, InvalidPayload, NotAnAsk, UntrustedAuthor]
+-- [String "unsupported_action",String "invalid_payload",String "not_an_ask",String "untrusted_author"]
 --
 -- >>> let body = "{\"action\":\"opened\",\"number\":1,\"installation\":{\"id\":1},\"repository\":{\"full_name\":\"acme/service\"},\"pull_request\":{\"state\":\"open\",\"draft\":false,\"changed_files\":1,\"updated_at\":\"2025-01-01T00:00:00Z\",\"base\":{\"sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"head\":{\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}" :: Text
 -- >>> fmap (\e -> (e.number, e.state)) $ decodeEvent $ encodeUtf8 body
@@ -247,17 +247,17 @@ data CommentEvent = CommentEvent {action :: Text, repository :: Repository, inst
 -- Right ("acme",4,Prove)
 -- >>> let reject before after = either (show @Text) (const "accepted") $ decodeComment $ encodeUtf8 $ T.replace before after body
 -- >>> map (uncurry reject) [("MEMBER", "CONTRIBUTOR"), ("\"User\"", "\"Bot\""), ("prove it", "hello"), ("\"pull_request\":{}", "\"pull_request\":null"), ("created", "edited")]
--- ["UnsupportedAction","UnsupportedAction","UnsupportedAction","UnsupportedAction","UnsupportedAction"]
+-- ["UntrustedAuthor","UntrustedAuthor","NotAnAsk","NotAnAsk","UnsupportedAction"]
 decodeComment :: ByteString -> Either EventDecodeError CommentRequest
 decodeComment body = do
   event <- first (const InvalidPayload) $ AE.eitherDecodeStrict @CommentEvent body
   (owner, repo) <- repositoryName event.repository
   let comment = event.comment
   unless (event.issue.number > 0) $ Left InvalidPayload
-  (command, focus) <- maybeToRight UnsupportedAction do
-    guard $ event.action == "created" && isJust event.issue.pullRequest
-    guard $ comment.user.type_ /= "Bot" && comment.authorAssociation `elem` ["OWNER", "MEMBER", "COLLABORATOR"]
-    parseAsk comment.body
+  unless (event.action == "created") $ Left UnsupportedAction
+  unless (isJust event.issue.pullRequest) $ Left NotAnAsk
+  unless (comment.user.type_ /= "Bot" && comment.authorAssociation `elem` ["OWNER", "MEMBER", "COLLABORATOR"]) $ Left UntrustedAuthor
+  (command, focus) <- maybeToRight NotAnAsk $ parseAsk comment.body
   pure CommentRequest{owner, repo, installationId = event.installation.id, number = event.issue.number, ask = Ask{login = comment.user.login, commentId = comment.id, command, focus}}
 
 
@@ -432,10 +432,10 @@ repositorySettings pid =
 updateSettings :: DB es => ProjectId -> ReviewSettings -> Eff es ()
 updateSettings pid settings =
   Hasql.interpExecute_
-    [HI.sql|INSERT INTO projects.pr_review_settings (project_id, owner, repo, trigger, include_evidence)
-    SELECT #{pid}, #{settings.owner}, #{settings.repo}, #{settings.trigger}, #{settings.includeEvidence}
+    [HI.sql|INSERT INTO projects.pr_review_settings (project_id, owner, repo, trigger, enabled, include_evidence)
+    SELECT #{pid}, #{settings.owner}, #{settings.repo}, #{settings.trigger}, #{settings.trigger /= WhenAsked}, #{settings.includeEvidence}
     WHERE EXISTS (SELECT 1 FROM projects.code_mappings WHERE project_id = #{pid} AND lower(owner) = #{settings.owner} AND lower(repo) = #{settings.repo})
-    ON CONFLICT (project_id, owner, repo) DO UPDATE SET trigger = EXCLUDED.trigger, include_evidence = EXCLUDED.include_evidence|]
+    ON CONFLICT (project_id, owner, repo) DO UPDATE SET trigger = EXCLUDED.trigger, enabled = EXCLUDED.enabled, include_evidence = EXCLUDED.include_evidence|]
 
 
 latestRuns :: DB es => ProjectId -> Eff es [ReviewRun]
@@ -569,20 +569,22 @@ saveProofs run attempt sides = Hasql.transaction TxS.ReadCommitted TxS.Write do
     Hasql.oneTx
       [HI.sql|SELECT EXISTS (SELECT 1 FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
     WHERE r.id = #{run.id} AND r.state = #{Reviewing} AND t.lease_owner = r.id AND t.lease_until > now())|]
-  HI.OneColumn used <- Hasql.oneTx [HI.sql|SELECT count(DISTINCT key) FROM projects.pr_review_proofs WHERE run_id = #{run.id}|]
-  let key = "proof-" <> show (used + 1 :: Int64)
+  (used :: Int64, taken :: Int64) <- Hasql.oneTx [HI.sql|SELECT count(DISTINCT key), count(DISTINCT key) FILTER (WHERE attempt_id = #{attempt}) FROM projects.pr_review_proofs WHERE run_id = #{run.id}|]
+  let key = "proof-" <> show (used + 1)
+      full = taken >= fromIntegral Agent.proofBudget
   stored <-
-    if not leased
+    if not leased || full
       then pure []
       else forM (toList sides) \proof ->
         Hasql.queryTx @(Maybe (HI.OneColumn Bool))
           [HI.sql|INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, revision, exit_code, cast_bytes, gif, mp4)
         VALUES (#{run.id}, #{attempt}, #{key}, #{proof.side}, #{proof.revision}, #{fromIntegral @Int @Int32 <$> proof.exitCode}, #{proof.cast}, #{proof.gif}, #{proof.mp4})
         ON CONFLICT (run_id, key, side) DO NOTHING RETURNING true|]
-  case (leased, all isJust stored) of
-    (False, _) -> Left "Review authorization is no longer available" <$ Tx.condemn
-    (True, False) -> Left ("Proof " <> key <> " was already recorded; record the proof again") <$ Tx.condemn
-    (True, True) -> pure $ Right key
+  if
+    | not leased -> Left "Review authorization is no longer available" <$ Tx.condemn
+    | full -> Left "Proof budget exhausted; cite the proofs already recorded" <$ Tx.condemn
+    | all isJust stored -> pure $ Right key
+    | otherwise -> Left ("Proof " <> key <> " was already recorded; record the proof again") <$ Tx.condemn
 
 
 proofSides :: DB es => ReviewRun -> UUIDId "agent_attempt" -> Eff es [ProofSide]

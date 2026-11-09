@@ -1,7 +1,7 @@
 {-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Data.Effectful.CodeReview (CodeReview (..), SessionIdentity (..), SessionSubject (..), NativePause, FixContext (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), readSessionContext, Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), Revision, mkRevision, revisionText, reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, workerHost, runCodeReviewTest, validExplanation) where
+module Data.Effectful.CodeReview (CodeReview (..), SessionIdentity (..), SessionSubject (..), NativePause, FixContext (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), readSessionContext, Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), proofBudget, DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), Revision, mkRevision, revisionText, reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, workerHost, runCodeReviewTest, validExplanation) where
 
 import Control.Concurrent.STM qualified as STM
 import Control.Monad.Trans.Except (throwE)
@@ -638,24 +638,21 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                           then pure $ Left "Proof budget exhausted; cite the proofs already recorded"
                           else recordSides request outbox identifier proof save
                     recordSides request outbox identifier proof save =
-                      active \session -> do
-                        verified <- regression request session.baseline identifier (AE.object ["script" AE..= Media.proofScript proof.shellCommand, "failureMessage" AE..= Media.proofFailure]) [("base", request.base), ("head", request.head)] outbox
-                        case verified of
-                          Left failure -> pure $ Left failure
-                          Right (result, logs) -> runExceptT do
-                            for_ result.receipts \receipt -> ExceptT $ Outbox.deliver outbox (Outbox.Check receipt) record
-                            -- Both sides render at once; each is an agg and ffmpeg pass under the review lease.
-                            recorded <-
-                              ExceptT $ sequence <$> forConcurrently result.receipts \receipt -> runExceptT do
-                                let side = case receipt.side of Base -> Workspace.Base; Head -> Workspace.Head
-                                logFile <- maybe (throwE "The proof log was not retained") pure $ listToMaybe [path | (logged, path, _) <- logs, logged == side]
-                                (cast, output) <- ExceptT $ Media.proofCast <$> readFileBS logFile
-                                (gif, mp4) <- ExceptT $ Media.renderProof cast
-                                let summary = AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "output" AE..= T.takeEnd 3000 output]
-                                pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4}, summary)
-                            sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty $ map fst recorded
-                            key <- ExceptT $ save sides
-                            pure $ AE.object ["key" AE..= key, "claim" AE..= proof.claim, "sides" AE..= map snd recorded, "note" AE..= ("Cite this key in a claim. The PR author sees both recordings." :: Text)]
+                      active \session -> runExceptT do
+                        (result, logs) <- ExceptT $ regression request session.baseline identifier (AE.object ["script" AE..= Media.proofScript proof.shellCommand, "failureMessage" AE..= Media.proofFailure]) [("base", request.base), ("head", request.head)] outbox
+                        for_ result.receipts \receipt -> ExceptT $ Outbox.deliver outbox (Outbox.Check receipt) record
+                        -- Both sides render at once; each is an agg and ffmpeg pass under the review lease.
+                        recorded <-
+                          ExceptT $ sequence <$> forConcurrently result.receipts \receipt -> runExceptT do
+                            let side = case receipt.side of Base -> Workspace.Base; Head -> Workspace.Head
+                            logFile <- maybe (throwE "The proof log was not retained") pure $ listToMaybe [path | (logged, path, _) <- logs, logged == side]
+                            (cast, output) <- ExceptT $ Media.proofCast <$> readFileBS logFile
+                            (gif, mp4) <- ExceptT $ Media.renderProof cast
+                            let summary = AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "output" AE..= T.takeEnd 3000 output]
+                            pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4}, summary)
+                        sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty $ map fst recorded
+                        key <- ExceptT $ save sides
+                        pure $ AE.object ["key" AE..= key, "claim" AE..= proof.claim, "sides" AE..= map snd recorded, "note" AE..= ("Cite this key in a claim. The PR author sees both recordings." :: Text)]
 
                     receive :: Maybe Checkout.Prepared -> Maybe GuestSession -> Int -> Int -> Maybe (Accepted result) -> IO (Either Text result)
                     receive supplied guestSession remaining submissions accepted = do
@@ -741,13 +738,14 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                 ((FixTask{}, _); (AdmissionTask{}, _); (PeerTask{}, _)) -> pure $ Left "Regression requires an authorized source review"
                               writeMessage response
                               receive supplied guestSession remaining submissions Nothing
-                          | invocation.name == Policy.RecordProof && validTool invocation -> do
+                          | invocation.name == Policy.RecordProof && validTool invocation && remaining > 0 -> do
+                              -- Each attempt also spends the persisted query budget, which a resumed session keeps.
                               response <- case (task, journal, callbacks.proofs) of
                                 (AdvisoryTask _ request, Just outbox, Just save) -> recordProof request outbox verifierSession invocation save
                                 ((AdvisoryTask{}, _, _); (SourceTask{}, _, _); (FixTask{}, _, _); (AdmissionTask{}, _, _); (PeerTask{}, _, _)) -> pure $ Left "Proof requires an authorized pull request review"
                                 ((PatchTask{}, _, _); (SourcePatchTask{}, _, _)) -> pure $ Left "Proof requires an authorized pull request review"
                               writeMessage response
-                              receive supplied guestSession remaining submissions Nothing
+                              receive supplied guestSession (remaining - 1) submissions Nothing
                           | invocation.name `elem` [Policy.ReproduceIssue, Policy.ProposeFix, Policy.VerifyFix] && validTool invocation -> case (task, supplied, journal, guestSession) of
                               (FixTask _ request, Just checkout, Just outbox, Just (FixReady session)) -> do
                                 (outcome, current) <- State.runStateT (runExceptT $ (workflow request checkout outbox session).invoke invocation) (FlowState session.progress remaining)

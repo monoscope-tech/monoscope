@@ -310,14 +310,15 @@ validateClaims recorded claims = do
 --
 -- >>> let graded g = [Assessment d g ["gap"] | d <- universe]
 -- >>> let check as = either id (const "accepted") $ validateAssessments $ ReviewDraft [] [] "Adds retries." as []
--- >>> map check [graded Good, take 4 (graded Good), graded NotApplicable, [a{gaps = replicate 4 "gap"} | a <- graded Fair]]
--- ["accepted","Grade each merge-risk dimension exactly once","Only error detection can be not applicable","Each dimension lists at most three gaps of up to 300 characters"]
+-- >>> map check [graded Good, take 4 (graded Good), graded NotApplicable, [a{gaps = [" "]} | a <- graded Fair]]
+-- ["accepted","Grade each merge-risk dimension exactly once","Only error detection can be not applicable","Each gap needs text"]
 validateAssessments :: ReviewDraft -> Either Text ()
 validateAssessments draft = do
   unless (sort (map (.dimension) draft.assessments) == universe) $ Left "Grade each merge-risk dimension exactly once"
   unless (all (\a -> a.grade /= NotApplicable || a.dimension == ErrorDetection) draft.assessments) $ Left "Only error detection can be not applicable"
-  unless (all (\a -> length a.gaps <= 3 && all (\gap -> not (T.null $ T.strip gap) && T.length gap <= 300) a.gaps) draft.assessments) $ Left "Each dimension lists at most three gaps of up to 300 characters"
-  unless (not (T.null $ T.strip draft.summary) && T.length draft.summary <= 600) $ Left "Summarize the change and its risk in 1 to 600 characters"
+  -- Lengths are bounded by the submit_review schema; blank text passes it, so check that here.
+  unless (all (all (not . T.null . T.strip) . (.gaps)) draft.assessments) $ Left "Each gap needs text"
+  unless (not $ T.null $ T.strip draft.summary) $ Left "Summarize the change and its risk"
 
 
 validateFindings :: [ChangedLine] -> [(Text, EvidenceKind)] -> [Finding] -> Either Text ()

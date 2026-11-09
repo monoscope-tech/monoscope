@@ -194,7 +194,8 @@ castLimit = 524288
 -- Left "The proof recording exceeds its size limit"
 proofCast :: ByteString -> Either Text (ByteString, Text)
 proofCast logBytes = do
-  encoded <- maybeToRight ("The proof produced no recording. Log tail: " <> decodeUtf8 (BS.takeEnd 600 logBytes)) $ find (not . BS.null) $ drop 1 $ BS8.lines $ snd $ BS.breakSubstring (encodeUtf8 castBegin) logBytes
+  let between = fst $ BS.breakSubstring (encodeUtf8 castEnd) $ snd $ BS.breakSubstring (encodeUtf8 castBegin) logBytes
+  encoded <- maybeToRight ("The proof produced no recording. Log tail: " <> decodeUtf8 (BS.takeEnd 600 logBytes)) $ find (not . BS.null) $ drop 1 $ BS8.lines between
   when (BS.length encoded > castLimit * 4 `div` 3 + 4) $ Left "The proof recording exceeds its size limit"
   cast <- first ("The proof recording is not valid base64: " <>) $ Base64.decodeBase64Untyped encoded
   case BS8.lines cast of
