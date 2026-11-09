@@ -698,11 +698,14 @@ spec = describe "Monitoring" do
             -- One worker run drains every thread: three replies and two root edits each.
             deliver = slack . fst <$> captureNotifs tr runSlackIncidentDeliveries
             stranded = dbQuery @_ @(Text, Text) tr [sql|SELECT operation, state FROM apis.slack_incident_deliveries WHERE state NOT IN ('delivered', 'failed')|] ()
+            -- The SQL that queues this run writes its payload by hand; matching the encoded constructor pins it.
+            deliveryRun = PGS.Only $ Aeson $ AE.toJSON Jobs.DeliverSlackIncidents
+            queuedRuns = dbOne @_ @Int tr [sql|SELECT count(*)::int FROM background_jobs WHERE status = 'queued' AND payload = ?|] deliveryRun
         void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid True iid (Just 60)
         void $ call tr $ IssuesPage.triagePostH testPid iid (IssuesPage.TriageForm Nothing (Just actor.id.toText))
         void $ call tr $ IssuesPage.commentPostH testPid iid (IssuesPage.CommentForm "rolling back <the> deploy")
-        -- The actions queue an immediate delivery run rather than waiting for the monitor tick.
-        dbOne @_ @Int tr [sql|SELECT count(*)::int FROM background_jobs WHERE status = 'queued' AND payload = '{"tag": "DeliverSlackIncidents"}'::jsonb|] () `shouldReturn` 1
+        -- The actions queue one immediate delivery run rather than waiting for the monitor tick.
+        queuedRuns `shouldReturn` 1
         delivered <- deliver
         let lifecycle = filter (isJust . (.threadTs)) delivered
             rootEdits = [slackText sd | sd <- delivered, sd.payload ^? key "metadata" . key "event_type" . _String == Just "monoscope_incident_root", sd.channelId == "C1"]
@@ -721,6 +724,11 @@ spec = describe "Monitoring" do
         void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid False iid Nothing
         sort . map (\sd -> (sd.channelId, isJust sd.threadTs)) <$> deliver `shouldReturn` [("C1", False), ("C1", True)]
         stranded `shouldReturn` []
+        -- With no thread left to reply in, an action queues no delivery run.
+        dbExec tr [sql|DELETE FROM background_jobs WHERE payload = ?|] deliveryRun
+        dbExec tr [sql|UPDATE apis.slack_incident_roots SET message_ts = NULL, threadless = TRUE|] ()
+        void $ call tr $ IssuesPage.commentPostH testPid iid (IssuesPage.CommentForm "still rolling back")
+        queuedRuns `shouldReturn` 0
 
       it "records manual error resolution once and updates both incident threads without claiming recovery" \tr -> do
         update <- setupWithIssue tr

@@ -3841,19 +3841,20 @@ logIssueActivity issueId event createdBy metadataM = do
 
 
 activitySql :: UTCTime -> IssueId -> IssueEvent -> Maybe Projects.UserId -> Maybe AE.Value -> HI.Sql
-activitySql now issueId event createdBy metadataM =
-  -- A person's action on an issue replies in the latest Slack thread each channel
-  -- holds for it; it never starts a thread. A closing action on an episode the
-  -- alert pipeline already closed would only repeat that pipeline's own reply.
-  let closing = event `elem` [IEResolved, IEAutoResolved]
-      relay = slackRelay event
-      logged =
-        [HI.sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, metadata, created_at)
+activitySql now issueId event createdBy metadataM = case slackRelay event of
+  NotRelayed -> logged
+  Relayed -> relayed ["post_activity"]
+  RelayedWithOwner -> relayed ["post_activity", "update_root"]
+  where
+    -- A person's action on an issue replies in the latest Slack thread each channel
+    -- holds for it; it never starts a thread. A closing action on an episode the
+    -- alert pipeline already closed would only repeat that pipeline's own reply.
+    closing = event `elem` [IEResolved, IEAutoResolved]
+    logged =
+      [HI.sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, metadata, created_at)
         SELECT #{issueId}, #{event}, #{createdBy}, #{Aeson <$> metadataM}, #{now}
         WHERE EXISTS (SELECT 1 FROM apis.issues WHERE id = #{issueId}) |]
-   in if relay == NotRelayed
-        then logged
-        else
+    relayed (operations :: [Text]) =
           [HI.sql| WITH logged AS (|]
             <> logged
             <> [HI.sql| RETURNING id, issue_id), latest AS (
@@ -3865,9 +3866,10 @@ activitySql now issueId event createdBy metadataM =
         , queued AS (
         INSERT INTO apis.slack_incident_deliveries (root_id, episode_id, event_id, operation, available_at, activity_id)
         SELECT root_id, episode_id, first_event_id, operation, #{now}, activity_id FROM latest
-        CROSS JOIN unnest(CASE WHEN #{relay == RelayedWithOwner} THEN ARRAY['post_activity', 'update_root'] ELSE ARRAY['post_activity'] END) operation
+        CROSS JOIN unnest(#{V.fromList operations}::text[]) operation
         WHERE NOT threadless AND NOT (#{closing} AND phase <> 'active') RETURNING 1)
-        -- Send now rather than on the next monitor tick: a person is watching the thread.
+        -- Send now rather than on the next monitor tick: a person is watching the thread. The
+        -- payload is BgJobs' DeliverSlackIncidents; an integration test pins the encoding.
         INSERT INTO background_jobs (run_at, status, payload)
         SELECT #{now}, 'queued', jsonb_build_object('tag', 'DeliverSlackIncidents')
         WHERE EXISTS (SELECT 1 FROM queued) AND NOT EXISTS (SELECT 1 FROM background_jobs
@@ -3878,7 +3880,7 @@ activitySql now issueId event createdBy metadataM =
 -- are not relayed: the alert pipeline posts those itself, with their evidence.
 -- An ownership change also re-renders the root, which shows who holds the issue.
 data SlackRelay = NotRelayed | Relayed | RelayedWithOwner
-  deriving stock (Eq, Show)
+  deriving stock (Show)
 
 
 slackRelay :: IssueEvent -> SlackRelay

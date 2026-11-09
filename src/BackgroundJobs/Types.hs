@@ -50,7 +50,8 @@ data BgJobs
   | RunConversation Projects.ProjectId (UUIDId "ai_routine_run")
   | AIRoutineRun (UUIDId "ai_routine") UTCTime
   | InvestigateIncident Projects.ProjectId (UUIDId "incident_event") (UUIDId "slack_incident_root")
-  | DeliverSlackIncidents
+  | -- | 'Issues.activitySql' writes this payload by hand; an integration test pins the encoding.
+    DeliverSlackIncidents
   | ResetSlackSession Projects.ProjectId Projects.UserId (UUIDId "slack_event")
   | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
   | ProcessIssuesEnhancement UTCTime

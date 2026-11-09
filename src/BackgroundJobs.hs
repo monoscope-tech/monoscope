@@ -5148,7 +5148,8 @@ runSlackIncidentDeliveries = do
   -- A thread sends its deliveries strictly in order, one per claim, so keep
   -- claiming until nothing is due: a burst of lifecycle replies drains in one run.
   -- Bounded, since a delivery retried for immediate resend is claimable again.
-  unless ctx.config.pauseNotifications $ void $ iterateWhileM 10 do
+  unless ctx.config.pauseNotifications do
+   exhausted <- fmap isJust . runMaybeT . replicateM_ 10 $ guard <=< lift $ do
     now <- Time.currentTime
     deliveries <- Incidents.claimSlackDeliveries now
     not (null deliveries) <$ forConcurrently deliveries \delivery -> do
@@ -5196,12 +5197,9 @@ runSlackIncidentDeliveries = do
       finishedAt <- Time.currentTime
       saved <- Incidents.finishSlackDelivery finishedAt delivery outcome
       unless saved $ Log.logAttention "Slack delivery completion did not match its lease or root" (delivery.id, delivery.rootId)
-  unless ctx.config.pauseNotifications do
-    Slack.reconcileIncidentDeliveries
-    Incidents.enqueueIncidentInvestigations
-  where
-    iterateWhileM :: Monad m => Int -> m Bool -> m Int
-    iterateWhileM limit step = go 0 where go n = if n >= limit then pure n else step >>= bool (pure n) (go (n + 1))
+   when exhausted $ Log.logAttention "Slack deliveries were still due after every claim round" (10 :: Int)
+   Slack.reconcileIncidentDeliveries
+   Incidents.enqueueIncidentInvestigations
 
 
 -- | An unavailable evaluation changes evidence availability, not the alert state.
