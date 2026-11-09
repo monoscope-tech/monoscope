@@ -3855,9 +3855,9 @@ activitySql now issueId event createdBy metadataM = case slackRelay event of
         SELECT #{issueId}, #{event}, #{createdBy}, #{Aeson <$> metadataM}, #{now}
         WHERE EXISTS (SELECT 1 FROM apis.issues WHERE id = #{issueId}) |]
     relayed (operations :: [Text]) =
-          [HI.sql| WITH logged AS (|]
-            <> logged
-            <> [HI.sql| RETURNING id, issue_id), latest AS (
+      [HI.sql| WITH logged AS (|]
+        <> logged
+        <> [HI.sql| RETURNING id, issue_id), latest AS (
           SELECT DISTINCT ON (r.team_id, r.channel_id) r.id AS root_id, r.episode_id, r.first_event_id, r.threadless, e.phase, logged.id AS activity_id
           FROM logged JOIN apis.issues i ON i.id = logged.issue_id
           JOIN apis.incident_episodes e ON e.project_id = i.project_id AND e.issue_id = logged.issue_id
