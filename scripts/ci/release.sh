@@ -89,8 +89,22 @@ build() {
   printf '%s@%s\n' "$IMAGE" "$digest"
 }
 
+# The proof worker takes the server build from the production image by digest, so only its own layers build.
+worker() {
+  local sha deps
+  sha=$(git rev-parse "$1^{commit}")
+  require_local_builder
+  deps=${MONOSCOPE_DEPS_IMAGE:-"ghcr.io/monoscope-tech/monoscope-deps@$(registry_digest ghcr.io/monoscope-tech/monoscope-deps:latest)"}
+  git archive "$sha" | docker buildx build --builder "$MONOSCOPE_BUILDER" --platform linux/amd64 -f Dockerfile --target impact-worker \
+    --build-context "server=docker-image://$IMAGE@$(registry_digest "$IMAGE:$sha")" \
+    --build-arg "DEPS_IMAGE=$deps" --build-arg "RUNTIME_IMAGE=debian@$(registry_digest debian:12-slim)" --build-arg "GIT_HASH=$sha" \
+    --label "org.opencontainers.image.revision=$sha" --cache-from "type=registry,ref=$IMAGE:buildcache" \
+    --provenance=false --push -t "$IMAGE-impact-worker:$sha" -
+}
+
 case "${1:-}" in
   build) shift; build "$@" ;;
+  worker) worker "$2" ;;
   local-context) require_local_context ;;
   local-builder) require_local_builder ;;
   current-master) current_master "$2" ;;
@@ -98,5 +112,5 @@ case "${1:-}" in
     current_master "$2"
     docker buildx imagetools create --prefer-index=false -t "$IMAGE:latest" "$IMAGE@$3"
     ;;
-  *) die "usage: release.sh build [sha] | local-context | local-builder | current-master sha | latest sha digest" ;;
+  *) die "usage: release.sh build [sha] | worker sha | local-context | local-builder | current-master sha | latest sha digest" ;;
 esac

@@ -196,11 +196,12 @@ githubResponses respond = withHTTPResponses \_ endpoint ->
 -- | A pull request whose files, comments and comment writes GitHub answers; anything else is the PR itself.
 pullRequestApi :: [Git.PullRequestFile] -> [AE.Value] -> IO () -> AE.Value -> ATBackgroundCtx a -> ATBackgroundCtx a
 pullRequestApi files comments published pr = githubResponses \url ->
-  Just <$> if
-    | "/files?per_page=100" `T.isInfixOf` url -> pure $ AE.toJSON $ if "&page=2" `T.isSuffixOf` url then drop 100 files else take 100 files
-    | "/comments?per_page=100&page=1" `T.isSuffixOf` url -> pure $ AE.toJSON comments
-    | "/issues/comments/99" `T.isSuffixOf` url || "/issues/7/comments" `T.isSuffixOf` url -> published $> AE.object ["id" AE..= (99 :: Int)]
-    | otherwise -> pure pr
+  Just
+    <$> if
+      | "/files?per_page=100" `T.isInfixOf` url -> pure $ AE.toJSON $ if "&page=2" `T.isSuffixOf` url then drop 100 files else take 100 files
+      | "/comments?per_page=100&page=1" `T.isSuffixOf` url -> pure $ AE.toJSON comments
+      | "/issues/comments/99" `T.isSuffixOf` url || "/issues/7/comments" `T.isSuffixOf` url -> published $> AE.object ["id" AE..= (99 :: Int)]
+      | otherwise -> pure pr
 
 
 pullRequestAt :: Text -> Text -> Int -> AE.Value
@@ -3552,6 +3553,22 @@ spec = around withTestResources $ describe "Production impact reviews" do
     void $ review fakeAgent
     reviewState `shouldReturn` Just Reviews.Completed
     fmap (.error) <$> runQueryEffect tr (Reviews.getRun run.id) `shouldReturn` Just Nothing
+    -- reviewRetries_stopAfterThreeInOneChain (#820): a deferring node requeues with fresh odd-jobs attempts, so
+    -- without a per-chain budget a failing review retried 54 times.
+    retry
+    failures <- replicateM 3 $ snd <$> within (transport True . fakeAgentWith ["--fail-after-usage"]) (tryAny $ Impact.reviewPullRequest run.id)
+    map isLeft failures `shouldBe` [True, True, False]
+    void $ review fakeAgent
+    -- reask_afterCompletedReview_startsFresh (#820): the finished chain's model calls are not a lost session to
+    -- the next ask, and a lost one ends the chain instead of retrying. The real agent records calls; this fixture does not.
+    finishedAttempt <- dbOne tr "SELECT id FROM projects.pr_review_attempts WHERE run_id = ? ORDER BY started_at DESC, id DESC LIMIT 1" (Only run.id)
+    runQueryEffect tr (Usage.recordCall reviewPid (Usage.Review run.id) $ Agent.ModelCall (UUIDId $ UUID.fromWords 72 0 0 1) finishedAttempt "fixture" "fixture") `shouldReturn` True
+    void $ review fakeAgent
+    reviewState `shouldReturn` Just Reviews.Completed
+    retry
+    lost <- replicateM 2 $ snd <$> within (transport True . fakeAgentWith ["--fail-after-usage"]) (tryAny $ Impact.reviewPullRequest run.id)
+    map isLeft lost `shouldBe` [True, False]
+    void $ review fakeAgent
     let rejectedPublication = withHTTPResponses \_ endpoint -> if "/issues/comments/99" `T.isSuffixOf` toText endpoint then throwIO $ userError "Publication transport interrupted" else pure Nothing
         sentBody recorded = do
           [(_, encoded)] <- pure $ filter (T.isInfixOf "/issues/comments/99" . fst) recorded
