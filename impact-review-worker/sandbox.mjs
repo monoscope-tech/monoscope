@@ -27,7 +27,7 @@ try {
           const config = tag === 'Resume' ? contents[0] : contents;
           if (vm || config.isolation !== 'offline_cow') throw new Error('Invalid sandbox transition');
           const options = { sessionLabel: 'monoscope-native-workspace', cpus: config.cpus, memory: `${config.memoryMiB}M`,
-            sandbox: { imagePath: config.imagePath, netEnabled: false }, rootfs: { mode: 'cow' },
+            sandbox: { imagePath: config.imagePath, netEnabled: false }, rootfs: { mode: 'cow', size: '64G' },
             tmpfs: Object.fromEntries(Object.entries(DEFAULT_GUEST_TMPFS).filter(([path]) => path !== '/root')),
             vfs: { mounts: Object.fromEntries(Object.entries(config.mounts).map(([guest, host]) => [guest, new ReadonlyProvider(new RealFSProvider(host))])) } };
           vm = snapshot ? await VmCheckpoint.load(snapshot).resume(options) : await VM.create(options);
