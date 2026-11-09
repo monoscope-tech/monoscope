@@ -578,8 +578,6 @@ instance FromHttpApiData ProofFile where
      in ProofFile key <$> parseUrlPiece side <*> parseUrlPiece extension
 
 
--- | Stores one proof's recordings, all sides or none, under the run's next unused key.
--- Only the run holding the review lease can record, so a superseded attempt cannot add media.
 -- | Whether a proof's setup replayed the repository's saved recipe byte for byte, the measure of
 -- how deterministic proofs are.
 data SetupReuse = NoSetup | Reused | Changed
@@ -587,8 +585,9 @@ data SetupReuse = NoSetup | Reused | Changed
   deriving (AE.ToJSON, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "" SetupReuse
 
 
--- | Stores a proof's sides under its next key. The setup behind a successful head recording becomes
--- the repository's saved recipe.
+-- | Stores one proof's recordings, all sides or none, under the run's next unused key. Only the run
+-- holding the review lease can record, so a superseded attempt cannot add media. The setup behind a
+-- successful head recording becomes the repository's saved recipe.
 saveProofs :: DB es => ReviewRun -> UUIDId "agent_attempt" -> Maybe Text -> NonEmpty Agent.ProofMedia -> Eff es (Either Text (Text, SetupReuse))
 saveProofs run attempt setup sides = Hasql.transaction TxS.ReadCommitted TxS.Write do
   HI.OneColumn leased <-

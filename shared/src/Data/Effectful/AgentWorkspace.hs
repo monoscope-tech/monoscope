@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), Slots (..), hostSlots, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), Slots (..), hostSlots, buildSeconds, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
 import Control.Exception qualified as Exception
@@ -45,8 +45,7 @@ import System.Posix.Files qualified as Posix
 import System.Posix.IO qualified as Posix
 import System.Posix.Process (getParentProcessID)
 import System.Posix.Signals qualified as Signal
-import System.Posix.Unistd (fileSynchronise)
-import System.Posix.Unistd qualified as Uname
+import System.Posix.Unistd (SystemID (..), fileSynchronise, getSystemID)
 import System.Process.Typed (ExitCode (..), byteStringInput, createPipe, getPid, getStdin, getStdout, nullStream, proc, readProcessStdout_, setCreateGroup, setEnv, setStderr, setStdin, setStdout, startProcess, stopProcess, waitExitCode, withProcessTerm)
 import UnliftIO.Async (withAsync)
 import UnliftIO.Concurrent (myThreadId, threadDelay)
@@ -728,8 +727,7 @@ runWorkspaceReal = interpret $ \env -> \case
       withOwner request.ownerPid $ prune RetainUnarchived options request
     pure $ case outcome of Right (Just result) -> Right result; _ -> Left "Checkpoint pruning could not complete"
   RunWorkspace options operation requestFile -> liftIO do
-    -- A cold build of a large repository takes far longer than a lookup or a transfer.
-    let budget = case operation of Prepare{} -> 3600; (Lookup; Archive{}; Restore{}) -> 420
+    let budget = case operation of Prepare{} -> buildSeconds; (Lookup; Archive{}; Restore{}) -> 420
     outcome <- tryAny $ Timeout.timeout (budget * 1000000) do
       request <- decode =<< readBounded requestFile 65536
       withOwner request.ownerPid $ case operation of
@@ -1298,7 +1296,7 @@ lookupWorkspace options operation request = do
   ensure $ T.length scriptText <= 65536 && not (T.null $ T.strip scriptText)
   dependency <- traverse fingerprint options.dependencyArchive
   environment <- getEnvironment
-  withSandbox (case operation of Prepare{} -> PreparePool; (Lookup; Archive{}; Restore{}) -> NoVm) options.bridge \rpc -> do
+  withSandbox NoVm options.bridge \rpc -> do
     image <- rpc @Image $ Resolve options.image
     for_ request.expectedImageBuildId $ ensure . (== image.buildId)
     assetDir <- canonicalizePath image.assetDir
@@ -1314,14 +1312,13 @@ lookupWorkspace options operation request = do
         locked = withProjectLock root request.projectId
         latestPointer = parent </> ("latest-" <> toString (lineage identity) <> ".json")
         -- The lineage's latest build at another base. Missing, evicted or mismatched means a cold
-        -- start; restoring verifies the disk's hash as it copies.
+        -- start; restoring verifies the copied disk's hash.
         ancestorSnapshot =
           rightToMaybe <$> tryAny do
             name <- decode @FilePath =<< readBounded latestPointer 4096
             let ancestorDirectory = parent </> takeFileName name
             manifest <- decode @Manifest =<< readBounded (ancestorDirectory </> "manifest.json") 65536
-            let Identity project repository _ imageBuild script dependencies = manifest.identity
-            ensure $ Identity project repository identity.base imageBuild script dependencies == identity
+            ensure $ manifest.identity.projectId == identity.projectId && lineage manifest.identity == lineage identity
             pure $ Snapshot (ancestorDirectory </> "baseline.qcow2") manifest.sha256
     case operation of
       Lookup -> load
@@ -1363,7 +1360,7 @@ lookupWorkspace options operation request = do
         saved <- locked load
         case saved of
           Just _ -> pure saved
-          Nothing -> withTempDirectory parent ".prepare-" \temporary -> withSystemTempDirectory "monoscope-native-baseline" \source -> do
+          Nothing -> withSlot PreparePool $ withTempDirectory parent ".prepare-" \temporary -> withSystemTempDirectory "monoscope-native-baseline" \source -> do
             let clean = source </> "checkout"
                 git args = readProcessStdout_ $ HostGit.command environment HostGit.Local source args
                 execute :: HasCallStack => Maybe Text -> Bool -> NonEmpty Text -> IO Text
@@ -1650,6 +1647,11 @@ newtype WarmStartFailed = WarmStartFailed Text
   deriving anyclass (Exception)
 
 
+-- | A workspace build's time budget, slot wait included: a cold build of a large repository.
+buildSeconds :: Int
+buildSeconds = 3600
+
+
 -- | Which host-wide VM slots a sandbox draws from. Verifier VMs start while an agent VM holds its
 -- slot, so they have their own pool and agents can never starve them; long workspace builds get
 -- one slot of their own so they cannot starve proofs. Image lookups start no VM.
@@ -1667,7 +1669,7 @@ hostSlots :: IO Slots
 hostSlots = do
   configured <- lookupEnv "IMPACT_REVIEW_VM_SLOTS"
   cores <- getNumProcessors
-  node <- toText . Uname.nodeName <$> Uname.getSystemID
+  node <- toText . nodeName <$> getSystemID
   let (agents, verifiers, builds) = fromMaybe (max 1 (cores `div` 4), 2, 1) $ configured >>= \text -> case mapM (readMaybe . toString) (T.splitOn "," (toText text)) of Just [a, v, b] -> Just (a, v, b); _ -> Nothing
   pure Slots{..}
 
@@ -1693,7 +1695,7 @@ withSlot pool action = do
     NoVm -> action
     AgentPool -> held "agent" slots.agents 45
     VerifierPool -> held "verifier" slots.verifiers 45
-    PreparePool -> held "prepare" slots.builds 3600
+    PreparePool -> held "prepare" slots.builds buildSeconds
 
 
 -- | Cleanup is observed before restoring the action's exception, including cancellation.

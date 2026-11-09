@@ -3305,7 +3305,7 @@ jobsWorkerInitWithTools logger appCtx tp projectTools = when appCtx.config.enabl
     $ UIO.concurrently_ (startJobRunner config)
     -- Workspace builds take up to an hour, past the queue's timeout, so they run one at a time from
     -- their own table with a budget just above 'Workspace.RunWorkspace's, which reports first.
-    $ startJobRunner config{cfgTableName = "background_jobs_long", cfgConcurrencyControl = MaxConcurrentJobs 1, cfgDefaultJobTimeout = Seconds 3660}
+    $ startJobRunner config{cfgTableName = "background_jobs_long", cfgConcurrencyControl = MaxConcurrentJobs 1, cfgDefaultJobTimeout = Seconds (Workspace.buildSeconds + 60)}
   where
     config = jobsWorkerConfig logger appCtx tp projectTools
 

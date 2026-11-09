@@ -414,12 +414,12 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
         let tagged :: AE.ToJSON value => Text -> value -> AE.Value
             tagged tag contents = AE.object ["tag" AE..= tag, "contents" AE..= contents]
             (scope, source, payload, role) = case task of
-              PatchTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, tagged "PatchTask" request{gitToken = ""}, Policy.Patch)
-              SourcePatchTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, tagged "PatchTask" request{gitToken = ""}, Policy.SourcePatch)
-              SourceTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, AE.toJSON request{gitToken = ""}, Policy.Source)
-              AdvisoryTask _ request -> (Outbox.Advisory request.runId, Checkout.Repository request, AE.toJSON request{gitToken = ""}, Policy.Advisory)
-              FixTask _ request -> (Outbox.IssueFix request.request.runId, Checkout.Repository @(Request _) request.request{head = request.request.base}, tagged "FixTask" request{request = request.request{gitToken = ""}}, Policy.Fix)
-              AdmissionTask _ request -> (Outbox.Admission request.fix.request.runId, Checkout.Repository @(Request _) request.fix.request{head = request.fix.request.base}, tagged "AdmitTask" (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: AdmissionRequest), Policy.Admission)
+              PatchTask request -> (Outbox.Advisory request.runId, Checkout.Repository (Checkout.fetchOf (.head) request), tagged "PatchTask" request{gitToken = ""}, Policy.Patch)
+              SourcePatchTask request -> (Outbox.Advisory request.runId, Checkout.Repository (Checkout.fetchOf (.head) request), tagged "PatchTask" request{gitToken = ""}, Policy.SourcePatch)
+              SourceTask request -> (Outbox.Advisory request.runId, Checkout.Repository (Checkout.fetchOf (.head) request), AE.toJSON request{gitToken = ""}, Policy.Source)
+              AdvisoryTask _ request -> (Outbox.Advisory request.runId, Checkout.Repository (Checkout.fetchOf (.head) request), AE.toJSON request{gitToken = ""}, Policy.Advisory)
+              FixTask _ request -> (Outbox.IssueFix request.request.runId, Checkout.Repository (Checkout.fetchOf (.base) request.request), tagged "FixTask" request{request = request.request{gitToken = ""}}, Policy.Fix)
+              AdmissionTask _ request -> (Outbox.Admission request.fix.request.runId, Checkout.Repository (Checkout.fetchOf (.base) request.fix.request), tagged "AdmitTask" (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: AdmissionRequest), Policy.Admission)
               PeerTask _ request -> (Outbox.PeerReview request.fix.request.runId, Checkout.VerifiedCandidate request.artifacts, tagged "ReviewFixTask" (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: FixReviewRequest), Policy.Peer)
             record = \case
               Outbox.Call receipt -> callbacks.calls receipt $> Right ()
