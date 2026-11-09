@@ -51,7 +51,7 @@ import {
   middleTruncatePath,
 } from './log-list-utils';
 import { expandSince, expandFromToRange, parseChartZoom, copyParams, PAGE_CONTEXT_PARAMS, SCOPE_PARAMS, TIME_PARAMS } from './time-range-utils';
-import { toEChartsColor } from './widgets';
+import { logFailure, ShownFailure, toEChartsColor } from './widgets';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { keyed } from 'lit/directives/keyed.js';
 
@@ -101,21 +101,17 @@ const columnWidthVars = (columns: string[], width: (column: string) => number | 
     .map(([column, w]) => `--col-${column}-width: ${w}px`)
     .join('; ');
 
-// A failure the reader is already shown: a rejected query, an HTTP error, a dropped connection,
-// an unparseable body. Logged as a warning — the browser SDK files every console.error as a runtime exception.
-export class FetchFailure extends Error {}
-const toFetchFailure = (e: unknown): never => {
-  throw new FetchFailure((e instanceof Error && e.message) || 'Network error');
+const toShownFailure = (e: unknown): never => {
+  throw new ShownFailure((e instanceof Error && e.message) || 'Network error');
 };
-const logFailure = (...args: unknown[]) => (args.some((a) => a instanceof FetchFailure) ? console.warn : console.error)(...args);
 
 // Every JSON read this list makes wants the same three things: the Accept header that
 // keeps an expired session answering 401 instead of redirecting to an HTML login page,
 // the session cookie, and a message a human can act on when it fails.
 async function fetchJson<T>(url: string): Promise<T> {
-  const resp = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' }).catch(toFetchFailure);
-  if (!resp.ok) throw new FetchFailure(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
-  return (await resp.json().catch(toFetchFailure)) as T;
+  const resp = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' }).catch(toShownFailure);
+  if (!resp.ok) throw new ShownFailure(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
+  return (await resp.json().catch(toShownFailure)) as T;
 }
 
 // Special item types for virtual list
@@ -504,7 +500,7 @@ export class LogList extends LitElement {
     }
     this.workerCallbacks.delete(id);
     if (type !== 'success' && queryError) this.reportQueryError(error);
-    type === 'success' ? cb.resolve({ tree, meta }) : cb.reject(expected ? new FetchFailure(error) : new Error(error));
+    type === 'success' ? cb.resolve({ tree, meta }) : cb.reject(expected ? new ShownFailure(error) : new Error(error));
   }
 
   // A server-reported query error (bad field, unsupported query) belongs under
@@ -527,11 +523,11 @@ export class LogList extends LitElement {
       let data: LogDataResponse;
       if (early) {
         window.logDataPromise = null;
-        data = await early.catch(toFetchFailure);
+        data = await early.catch(toShownFailure);
       } else {
         data = await fetchJson<LogDataResponse>(url);
       }
-      if (data.error) throw new FetchFailure(this.reportQueryError(data.error));
+      if (data.error) throw new ShownFailure(this.reportQueryError(data.error));
       const colIdxMap = data.colIdxMap || {};
       const isSessions = this.mode === 'sessions';
       // The sessions summary is computed in the same scan as the rows and shipped
@@ -601,10 +597,10 @@ export class LogList extends LitElement {
     const earlyPromise = window.logDataPromise;
     if (earlyPromise) {
       window.logDataPromise = null;
-      const data = await earlyPromise.catch(toFetchFailure);
+      const data = await earlyPromise.catch(toShownFailure);
       // Propagate server errors instead of silently falling through to the worker —
       // otherwise the user waits 2 min for "Worker timeout" masking the real cause.
-      if (data.error) throw new FetchFailure(this.reportQueryError(data.error));
+      if (data.error) throw new ShownFailure(this.reportQueryError(data.error));
       const { logsData, serviceColors, nextUrl, recentUrl, count, traces } = data;
       const colIdxMap = data.colIdxMap ?? {};
       const tree = logsData?.length ? groupSpans(logsData, colIdxMap, this.expandedTraces, this.flipDirection, traces || []) : [];
@@ -640,7 +636,7 @@ export class LogList extends LitElement {
       setTimeout(() => {
         if (this.workerCallbacks.has(id)) {
           this.workerCallbacks.delete(id);
-          reject(new FetchFailure('Worker timeout'));
+          reject(new ShownFailure('Worker timeout'));
         }
       }, 120000);
     });

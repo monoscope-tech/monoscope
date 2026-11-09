@@ -1,5 +1,5 @@
-import { describe, test, expect } from 'vitest';
-import { beginChartFetch, ChartQueryError, isUnexpectedChartError } from '../src/widgets';
+import { describe, test, expect, vi } from 'vitest';
+import { beginChartFetch, ChartQueryError, logFailure } from '../src/widgets';
 
 // Regression: dashboard widgets showed the "Query execution failed" overlay on
 // top of freshly rendered bars. A failed /chart_data response arriving AFTER a
@@ -29,9 +29,14 @@ describe('beginChartFetch', () => {
 
 // A typo in the user's KQL ("Unknown field \"npdy\"") was console.error'd and filed as a
 // critical runtime exception; only failures the user did not cause should report.
-describe('isUnexpectedChartError', () => {
+describe('logFailure', () => {
   test.each([
-    [new ChartQueryError('Unknown field "npdy". Did you mean "body"?'), false],
-    [new Error('widget request failed: 503 Service Unavailable'), true],
-  ])('%s → %s', (error, expected) => expect(isUnexpectedChartError(error)).toBe(expected));
+    [new ChartQueryError('Unknown field "npdy". Did you mean "body"?'), 'warn'],
+    [new Error('widget request failed: 503 Service Unavailable'), 'error'],
+  ] as const)('%s → console.%s', (error, level) => {
+    const spy = vi.spyOn(console, level).mockImplementation(() => {});
+    logFailure('Failed to fetch new data:', error);
+    expect(spy).toHaveBeenCalledWith('Failed to fetch new data:', error);
+    spy.mockRestore();
+  });
 });

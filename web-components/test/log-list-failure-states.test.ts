@@ -6,7 +6,7 @@
 // screen. Getting that split wrong during an incident either hides the cause or throws away
 // the evidence. None of these paths were tested.
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { FetchFailure } from '../src/log-list';
+import { ShownFailure } from '../src/widgets';
 import { serverTransport, logPage, deferredTransport, mountList, ids, treeFromLogs } from './log-list-harness';
 
 // The two channels the component reports on: a parse error routed to the query box, and a
@@ -242,7 +242,7 @@ describe('an empty result', () => {
 // already shown is only warned — that is how "Database temporarily unavailable" became an issue.
 describe('console reporting', () => {
   test.each([
-    ['a fetch failure is only warned', new FetchFailure('Database temporarily unavailable'), 'warn'],
+    ['a fetch failure is only warned', new ShownFailure('Database temporarily unavailable'), 'warn'],
     ['a code bug is still an error', new TypeError('x is undefined'), 'error'],
   ] as const)('%s', async (_, error, level) => {
     const spies = { warn: vi.spyOn(console, 'warn').mockImplementation(() => {}), error: vi.spyOn(console, 'error').mockImplementation(() => {}) };
