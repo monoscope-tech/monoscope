@@ -2356,7 +2356,7 @@ data Context = Context
 -- are queried by KQL, never read back through 'otelSpanColsSql'.)
 --
 -- >>> length otelColumns
--- 91
+-- 92
 data OtelLogsAndSpans = OtelLogsAndSpans
   { project_id :: Text
   , id :: Text -- UUID
