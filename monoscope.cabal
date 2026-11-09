@@ -286,6 +286,8 @@ extra-source-files:
     static/migrations/0267_slack_issue_activity.sql
     static/migrations/0268_pr_review_triggers.sql
     static/migrations/0269_pr_review_proofs.sql
+    static/migrations/0270_pr_review_proof_recipes.sql
+    static/migrations/0271_review_scheduling.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb
     test/fixtures/github-app-test.pem

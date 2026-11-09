@@ -8,7 +8,7 @@ import Data.Aeson qualified as AE
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.Conduit.Combinators qualified as CC
-import Data.Effectful.AgentWorkspace (AllocationOutcome (..), AllocationReceipt, Command (..), Copy (..), Execution (..), GuestCommand (..), Image (..), ImageId (..), Isolation (..), LogExit (..), LoggedCommand (..), Overflow (..), RegressionOptions (..), Revision, Sandbox (..), TestArtifact (..), agentCommand, agentResources, hostAllocation, revisionText, withSandboxRelease)
+import Data.Effectful.AgentWorkspace (AllocationOutcome (..), AllocationReceipt, Command (..), Copy (..), Execution (..), GuestCommand (..), Image (..), ImageId (..), Isolation (..), LogExit (..), LoggedCommand (..), Overflow (..), Pool (..), RegressionOptions (..), Revision, Sandbox (..), TestArtifact (..), agentCommand, agentResources, hostAllocation, revisionText, withSandboxRelease)
 import Data.Effectful.AgentWorkspace qualified as AgentWorkspace
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -136,7 +136,7 @@ withGuest host expected checkout revision start lease attempt allocate retain ac
         finished <- getMonotonicTimeNSec
         fmap (\identifier -> hostAllocation identifier attempt (max 1 $ (finished - started) `div` 1000000) released) <$> readIORef vmIdentity
       record send = measured >>= traverse_ send
-  outcome <- (`onException` (void $ tryAny $ record retain)) $ tryAny $ restore $ withSandboxRelease host.bridge (writeIORef release) \rpc -> do
+  outcome <- (`onException` (void $ tryAny $ record retain)) $ tryAny $ restore $ withSandboxRelease AgentPool host.bridge (writeIORef release) \rpc -> do
     let execute cwd argv = rpc $ Execute $ GuestCommand argv (Just cwd) False
         run cwd argv = execute cwd argv >>= \result -> if result.exitCode == 0 then pure result.stdout else failure "Guest preparation failed"
         workspace = run "/workspace" . fromList

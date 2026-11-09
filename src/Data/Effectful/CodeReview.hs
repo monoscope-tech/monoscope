@@ -1,10 +1,10 @@
 {-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Data.Effectful.CodeReview (CodeReview (..), SessionIdentity (..), SessionSubject (..), NativePause, FixContext (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), readSessionContext, Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), proofBudget, DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), Revision, mkRevision, revisionText, reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, workerHost, runCodeReviewTest, validExplanation) where
+module Data.Effectful.CodeReview (CodeReview (..), SessionIdentity (..), SessionSubject (..), NativePause, FixContext (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), readSessionContext, prepareRepository, Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), proofBudget, DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), Revision, mkRevision, revisionText, reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, workerHost, runCodeReviewTest, validExplanation) where
 
 import Control.Concurrent.STM qualified as STM
-import Control.Monad.Trans.Except (throwE)
+import Control.Monad.Trans.Except (except, throwE)
 import Control.Monad.Trans.State.Strict qualified as State
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
@@ -36,6 +36,7 @@ import System.Environment (getEnvironment)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose)
 import System.IO.Error (isDoesNotExistError, tryIOError)
+import System.IO.Temp (withSystemTempDirectory)
 import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
 import UnliftIO.Async (forConcurrently)
 import UnliftIO.Exception (catch, finally, throwIO, tryAny)
@@ -52,7 +53,7 @@ data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Kno
 
 
 -- | @record_proof@ arguments; the tool schema calls the shell text @command@.
-data ProofArgs = ProofArgs {claim :: Text, shellCommand :: Text}
+data ProofArgs = ProofArgs {claim :: Text, shellCommand :: Text, setup :: Maybe Text}
   deriving stock (Generic)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "shellCommand" "command"]] ProofArgs
 
@@ -214,7 +215,10 @@ data CodeReview :: Effect where
   ReviewVerifiedFix :: SessionIdentity m (UUIDId "agent_attempt") -> FixReviewRequest -> VerifiedFix -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> CodeReview m (Either Text FixReviewOutcome)
   ReviewSource :: ReviewMode -> Request "pr_review" -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (DraftSubmission -> m (Either Text ())) -> CodeReview m (Either Text Text)
   ReviewPatch :: Request "pr_review" -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (Text -> m (Either Text ())) -> CodeReview m (Either Text Text)
-  ReviewRepository :: SessionIdentity m ReviewContext -> Request "pr_review" -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (NonEmpty ProofMedia -> m (Either Text Text)) -> (AE.Value -> m (Either Text ())) -> CodeReview m (Either Text Text)
+  ReviewRepository :: SessionIdentity m ReviewContext -> Request "pr_review" -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (Maybe Text -> NonEmpty ProofMedia -> m (Either Text Text)) -> (AE.Value -> m (Either Text ())) -> CodeReview m (Either Text Text)
+  -- | Builds the workspace checkpoint at the request's base, warm from the repository's latest
+  -- build when one exists. Runs outside any review's budget; a no-op when the checkpoint exists.
+  PrepareRepository :: Checkout.Fetch -> CodeReview m (Either Text ())
   AdmitRegression :: SessionIdentity m (UUIDId "agent_attempt") -> AdmissionRequest -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> CodeReview m (Either Text AdmissionDecision)
   FixRepository :: SessionIdentity m FixContext -> FixRequest -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (TestArtifact -> m (Either Text Text)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (PhaseReceipt -> m (Either Text ())) -> (FixResult -> m (Either Text ReviewedFix)) -> CodeReview m (Either Text ReviewedFix)
 
@@ -251,7 +255,7 @@ data Callbacks format result = Callbacks
   , usage :: ModelUsage -> IO ()
   , allocations :: Maybe (AllocationReceipt -> IO ())
   , checks :: Maybe (CheckReceipt -> IO ())
-  , proofs :: Maybe (NonEmpty ProofMedia -> IO (Either Text Text))
+  , proofs :: Maybe (Maybe Text -> NonEmpty ProofMedia -> IO (Either Text Text))
   , phase :: PhaseReceipt -> IO (Either Text ())
   , validate :: DraftValidator format result
   }
@@ -289,7 +293,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
           , usage = unlift . recordUsage
           , allocations = Just $ unlift . recordAllocation
           , checks = Just $ unlift . recordCheck
-          , proofs = Just $ unlift . recordProof
+          , proofs = Just \setup -> unlift . recordProof setup
           , phase = const $ pure $ Left "Fix phases require an issue-fix task"
           , validate = StructuredDraft $ \value -> (decodeUtf8 (AE.encode value) <$) <$> unlift (check value)
           }
@@ -313,6 +317,19 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
     case mode of
       BoundedPatch -> launch (SourcePatchTask request) $ callbacks Nothing Nothing $ DraftText validateText
       CheckoutHarness -> launch (SourceTask request) $ callbacks (Just $ unlift . recordAllocation) (Just $ unlift . recordCheck) $ StructuredDraft validateValue
+  PrepareRepository request -> liftIO case (artifactStore, hostConfig) of
+    (Just store, Right (Just host))
+      | Just configured <- host.workspace ->
+          join
+            . first show
+            <$> tryAny
+              ( join <$> Checkout.withCheckout store (Checkout.Repository request) \fetched _ ->
+                  withSystemTempDirectory "monoscope-prepare-request" \directory -> runExceptT do
+                    let requestFile = directory </> "request.json"
+                    liftIO . writeFileLBS requestFile . AE.encode =<< except (Workspace.mkRequest request.projectId request.repository request.base Nothing)
+                    void $ ExceptT $ runEff $ Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir host.image host.bridge configured.script configured.dependencyArchive) (Workspace.Prepare fetched.directory) requestFile
+              )
+    _ -> pure $ Left "Workspace preparation is not configured on this host"
   ReviewPatch request recordCall recordUsage check -> localSeqUnliftIO env \unlift ->
     liftIO
       $ launch
@@ -403,12 +420,12 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
         let tagged :: AE.ToJSON value => Text -> value -> AE.Value
             tagged tag contents = AE.object ["tag" AE..= tag, "contents" AE..= contents]
             (scope, source, payload, role) = case task of
-              PatchTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, tagged "PatchTask" request{gitToken = ""}, Policy.Patch)
-              SourcePatchTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, tagged "PatchTask" request{gitToken = ""}, Policy.SourcePatch)
-              SourceTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, AE.toJSON request{gitToken = ""}, Policy.Source)
-              AdvisoryTask _ request -> (Outbox.Advisory request.runId, Checkout.Repository request, AE.toJSON request{gitToken = ""}, Policy.Advisory)
-              FixTask _ request -> (Outbox.IssueFix request.request.runId, Checkout.Repository request.request{head = request.request.base}, tagged "FixTask" request{request = request.request{gitToken = ""}}, Policy.Fix)
-              AdmissionTask _ request -> (Outbox.Admission request.fix.request.runId, Checkout.Repository request.fix.request{head = request.fix.request.base}, tagged "AdmitTask" (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: AdmissionRequest), Policy.Admission)
+              PatchTask request -> (Outbox.Advisory request.runId, Checkout.Repository (Checkout.fetchOf (.head) request), tagged "PatchTask" request{gitToken = ""}, Policy.Patch)
+              SourcePatchTask request -> (Outbox.Advisory request.runId, Checkout.Repository (Checkout.fetchOf (.head) request), tagged "PatchTask" request{gitToken = ""}, Policy.SourcePatch)
+              SourceTask request -> (Outbox.Advisory request.runId, Checkout.Repository (Checkout.fetchOf (.head) request), AE.toJSON request{gitToken = ""}, Policy.Source)
+              AdvisoryTask _ request -> (Outbox.Advisory request.runId, Checkout.Repository (Checkout.fetchOf (.head) request), AE.toJSON request{gitToken = ""}, Policy.Advisory)
+              FixTask _ request -> (Outbox.IssueFix request.request.runId, Checkout.Repository (Checkout.fetchOf (.base) request.request), tagged "FixTask" request{request = request.request{gitToken = ""}}, Policy.Fix)
+              AdmissionTask _ request -> (Outbox.Admission request.fix.request.runId, Checkout.Repository (Checkout.fetchOf (.base) request.fix.request), tagged "AdmitTask" (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: AdmissionRequest), Policy.Admission)
               PeerTask _ request -> (Outbox.PeerReview request.fix.request.runId, Checkout.VerifiedCandidate request.artifacts, tagged "ReviewFixTask" (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: FixReviewRequest), Policy.Peer)
             record = \case
               Outbox.Call receipt -> callbacks.calls receipt $> Right ()
@@ -643,7 +660,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                           else recordSides request outbox identifier proof save
                     recordSides request outbox identifier proof save =
                       active \session -> runExceptT do
-                        (result, logs) <- ExceptT $ regression request session.baseline identifier (AE.object ["script" AE..= Media.proofScript proof.shellCommand, "failureMessage" AE..= Media.proofFailure]) [("base", request.base), ("head", request.head)] outbox
+                        (result, logs) <- ExceptT $ regression request session.baseline identifier (AE.object ["script" AE..= Media.proofScript proof.setup proof.shellCommand, "failureMessage" AE..= Media.proofFailure]) [("base", request.base), ("head", request.head)] outbox
                         for_ result.receipts \receipt -> ExceptT $ Outbox.deliver outbox (Outbox.Check receipt) record
                         -- Both sides render at once; each is an agg and ffmpeg pass under the review lease.
                         recorded <-
@@ -655,7 +672,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             let summary = AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "output" AE..= T.takeEnd 3000 output]
                             pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4}, summary)
                         sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty $ map fst recorded
-                        key <- ExceptT $ save sides
+                        key <- ExceptT $ save proof.setup sides
                         pure $ AE.object ["key" AE..= key, "claim" AE..= proof.claim, "sides" AE..= map snd recorded, "note" AE..= ("Cite this key in a claim. The PR author sees both recordings." :: Text)]
 
                     receive :: Maybe Checkout.Prepared -> Maybe GuestSession -> Int -> Int -> Maybe (Accepted result) -> IO (Either Text result)
@@ -940,6 +957,7 @@ runCodeReviewTest respond respondFix respondAdmission respondArtifacts respondEx
   FixRepository _ request _ _ _ _ _ _ _ _ check -> case respondFix request of
     Left message -> pure $ Left message
     Right result -> localSeqUnliftIO env $ \unlift -> (>>= matchingReview result) <$> unlift (check result)
+  PrepareRepository _ -> pure $ Right ()
   AdmitRegression _ request _ _ _ _ -> pure $ respondAdmission request
   ReviewVerifiedFix _ request verified _ _ _ _ -> pure $ respondReview request >>= reviewOutcome request verified
   VerifyFixArtifacts _ request -> pure $ VerifiedFix request.result <$ respondArtifacts request

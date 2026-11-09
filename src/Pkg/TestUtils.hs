@@ -1319,7 +1319,7 @@ testJobsRunner t logger authCtx job = Relude.when authCtx.config.enableBackgroun
 getBackgroundJobs :: Connection -> IO (V.Vector Job)
 getBackgroundJobs conn = V.fromList <$> PGS.query conn q ()
   where
-    q = [sql|SELECT id, created_at, updated_at, run_at, status, payload,last_error, attempts, locked_at, locked_by FROM background_jobs|]
+    q = [sql|SELECT id, created_at, updated_at, run_at, status, payload,last_error, attempts, locked_at, locked_by FROM (SELECT * FROM background_jobs UNION ALL SELECT * FROM background_jobs_long) jobs|]
 
 
 -- | The loaded body of a deferred response. A shell here means the handler skipped the query

@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), Slots (..), hostSlots, buildSeconds, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
 import Control.Exception qualified as Exception
@@ -26,6 +26,7 @@ import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.TH
 import GHC.Clock (getMonotonicTimeNSec)
+import GHC.Conc (getNumProcessors)
 import GHC.TypeLits (Symbol)
 import Network.HTTP.Client.TLS qualified as TLS
 import Network.Minio qualified as Minio
@@ -33,10 +34,10 @@ import Network.URI (URI (..), URIAuth (..), parseURI)
 import Pkg.Deriving (UUIDId (..), WrappedEnumSC (..))
 import Pkg.GitCommand qualified as HostGit
 import Relude hiding (Identity, identity, withFile)
-import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, listDirectory, removePathForcibly, renameDirectory, renameFile)
+import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, findExecutable, listDirectory, removePathForcibly, renameDirectory, renameFile)
 import System.Environment (getEnvironment)
-import System.FileLock (SharedExclusive (..), withFileLock, withTryFileLock)
-import System.FilePath (isAbsolute, takeDirectory, (</>))
+import System.FileLock (SharedExclusive (..), tryLockFile, unlockFile, withFileLock, withTryFileLock)
+import System.FilePath (isAbsolute, takeDirectory, takeFileName, (</>))
 import System.IO (hClose, withBinaryFile)
 import System.IO.Error (catchIOError, isDoesNotExistError, tryIOError, userError)
 import System.IO.Temp (createTempDirectory, withSystemTempDirectory, withTempDirectory, withTempFile)
@@ -44,11 +45,11 @@ import System.Posix.Files qualified as Posix
 import System.Posix.IO qualified as Posix
 import System.Posix.Process (getParentProcessID)
 import System.Posix.Signals qualified as Signal
-import System.Posix.Unistd (fileSynchronise)
+import System.Posix.Unistd (SystemID (..), fileSynchronise, getSystemID)
 import System.Process.Typed (ExitCode (..), byteStringInput, createPipe, getPid, getStdin, getStdout, nullStream, proc, readProcessStdout_, setCreateGroup, setEnv, setStderr, setStdin, setStdout, startProcess, stopProcess, waitExitCode, withProcessTerm)
 import UnliftIO.Async (withAsync)
 import UnliftIO.Concurrent (myThreadId, threadDelay)
-import UnliftIO.Exception (bracket, bracketOnError, catchAny, evaluate, onException, throwIO, throwTo, tryAny)
+import UnliftIO.Exception (bracket, bracketOnError, catchAny, evaluate, handleAny, onException, throwIO, throwTo, tryAny)
 import UnliftIO.Timeout qualified as Timeout
 import "cryptonite" Crypto.Hash (Context, Digest, SHA256, hash, hashFinalize, hashInit, hashUpdate, hashlazy)
 
@@ -726,14 +727,19 @@ runWorkspaceReal = interpret $ \env -> \case
       withOwner request.ownerPid $ prune RetainUnarchived options request
     pure $ case outcome of Right (Just result) -> Right result; _ -> Left "Checkpoint pruning could not complete"
   RunWorkspace options operation requestFile -> liftIO do
-    outcome <- tryAny $ Timeout.timeout (420 * 1000000) do
+    let budget = case operation of Prepare{} -> buildSeconds; (Lookup; Archive{}; Restore{}) -> 420
+    outcome <- tryAny $ Timeout.timeout (budget * 1000000) do
       request <- decode =<< readBounded requestFile 65536
       withOwner request.ownerPid $ case operation of
         Lookup -> do
           root <- canonicalizePath options.cacheDir
           withProjectLock root request.projectId $ lookupWorkspace options operation request
-        (Prepare{}; Archive{}; Restore{}) -> lookupWorkspace options operation request
-    pure $ case outcome of Right (Just prepared) -> Right prepared; _ -> Left "Workspace preparation or integrity verification failed"
+        Prepare{} -> lookupWorkspace options operation request `Exception.catch` \(WarmStartFailed _) -> lookupWorkspace options operation request
+        (Archive{}; Restore{}) -> lookupWorkspace options operation request
+    pure $ case outcome of
+      Right (Just prepared) -> Right prepared
+      Right Nothing -> Left "Workspace preparation timed out"
+      Left failure -> Left $ "Workspace preparation or integrity verification failed: " <> toText (displayException failure)
   WithWorkspace options requestFile action -> localSeqUnliftIO env $ \unlift -> liftIO do
     outcome <- tryAny do
       request <- decode =<< readBounded requestFile 65536
@@ -1143,7 +1149,7 @@ verifyArtifactRegression options request = do
               copy :: RPC -> FilePath -> Text -> IO ()
               copy rpc path destination = rpc @() $ CopyFile $ Copy path destination
           privateWrite logPath ""
-          outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox options.bridge \rpc -> do
+          outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox VerifierPool options.bridge \rpc -> do
             image <- rpc @Image $ Resolve options.image
             ensure $ image.buildId == request.imageBuildId
             let sandbox = Sandbox image.assetDir 2 1024 OfflineCow $ one ("/checkout", checkout)
@@ -1290,7 +1296,7 @@ lookupWorkspace options operation request = do
   ensure $ T.length scriptText <= 65536 && not (T.null $ T.strip scriptText)
   dependency <- traverse fingerprint options.dependencyArchive
   environment <- getEnvironment
-  withSandbox options.bridge \rpc -> do
+  withSandbox NoVm options.bridge \rpc -> do
     image <- rpc @Image $ Resolve options.image
     for_ request.expectedImageBuildId $ ensure . (== image.buildId)
     assetDir <- canonicalizePath image.assetDir
@@ -1304,6 +1310,16 @@ lookupWorkspace options operation request = do
         directory = parent </> toString (case key of Fingerprint value -> value)
         load = loadWorkspace identity image directory (rpc . InspectCheckpoint)
         locked = withProjectLock root request.projectId
+        latestPointer = parent </> ("latest-" <> toString (lineage identity) <> ".json")
+        -- The lineage's latest build at another base. Missing, evicted or mismatched means a cold
+        -- start; restoring verifies the copied disk's hash.
+        ancestorSnapshot =
+          rightToMaybe <$> tryAny do
+            name <- decode @FilePath =<< readBounded latestPointer 4096
+            let ancestorDirectory = parent </> takeFileName name
+            manifest <- decode @Manifest =<< readBounded (ancestorDirectory </> "manifest.json") 65536
+            ensure $ manifest.identity.projectId == identity.projectId && lineage manifest.identity == lineage identity
+            pure $ Snapshot (ancestorDirectory </> "baseline.qcow2") manifest.sha256
     case operation of
       Lookup -> load
       Archive remoteFile -> locked $ transfer root identity Upload remoteFile \remote prefix connection -> do
@@ -1336,61 +1352,84 @@ lookupWorkspace options operation request = do
             renameDirectory temporary directory
             sync parent
             pure (restored :: Prepared){path = directory </> "baseline.qcow2"}
+      -- The build runs outside the project lock, so this tenant's other reviews keep looking up and
+      -- leasing while it compiles; only publication is locked, and a build that lost the race is discarded.
       Prepare checkout -> do
         ensure $ isAbsolute checkout
         cleanCheckout <- canonicalizePath checkout
-        locked do
-          saved <- load
-          case saved of
-            Just _ -> pure saved
-            Nothing -> withTempDirectory parent ".prepare-" \temporary -> withSystemTempDirectory "monoscope-native-baseline" \source -> do
-              let clean = source </> "checkout"
-                  git args = readProcessStdout_ $ HostGit.command environment HostGit.Local source args
-                  execute cwd quiet argv = do
-                    result <- rpc @Execution $ Execute $ GuestCommand argv cwd quiet
-                    ensure $ result.exitCode == 0
-                    pure $ T.strip result.stdout
-                  guestGit args = execute (Just "/workspace") False $ "/usr/bin/git" :| (["-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"] <> args)
-                  parseHash value = maybe invalid pure $ viaNonEmpty head (words value) >>= mkFingerprint
-                  copy hostPath destination = rpc @() $ CopyFile $ Copy hostPath destination
-              void $ git ["init", "--quiet", clean]
-              void $ git ["-C", clean, "fetch", "--quiet", "--no-tags", "--", cleanCheckout, toString baseText]
-              void $ git ["-C", clean, "checkout", "--quiet", "--detach", toString baseText]
-              void $ git ["-C", clean, "remote", "add", "origin", toString repoText]
-              started <- getMonotonicTimeNSec
-              rpc @() $ Create $ Sandbox image.assetDir 2 1024 OfflineCow (one ("/baseline", clean))
-              for_ [("/bin/mkdir" :: Text) :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/baseline/.", "/workspace"], "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]] $ void . execute Nothing False
-              tracked <- git ["-C", clean, "ls-files", "-z"]
-              writeFileLBS (source </> "tracked") tracked
-              copy (source </> "tracked") "/run/monoscope-baseline-paths"
-              writeFileBS (source </> "fingerprint.sh") $ encodeUtf8 fingerprintScript
-              copy (source </> "fingerprint.sh") "/run/monoscope-fingerprint.sh"
-              let sourceHash = execute (Just "/workspace") False ("/bin/bash" :| ["--noprofile", "--norc", "/run/monoscope-fingerprint.sh"]) >>= parseHash
-              before <- sourceHash
-              for_ dependency \expected -> do
-                archive <- maybe invalid pure options.dependencyArchive
-                copy archive "/run/monoscope-dependencies.tar"
-                measured <- execute (Just "/workspace") False $ "/usr/bin/sha256sum" :| ["/run/monoscope-dependencies.tar"]
-                actual <- parseHash measured
-                ensure $ actual == expected.sha256
-              writeFileBS (source </> "prepare.sh") scriptBytes
-              copy (source </> "prepare.sh") "/run/monoscope-prepare.sh"
-              void $ execute (Just "/workspace") True $ agentCommand ["/bin/bash", "--noprofile", "--norc", "/run/monoscope-prepare.sh"]
-              revision <- guestGit ["rev-parse", "HEAD"]
-              after <- sourceHash
-              ensure $ revision == baseText && before == after
-              checkpoint <- rpc @CheckpointData $ Checkpoint $ temporary </> "baseline.qcow2"
-              ensure $ checkpoint.guestAssetBuildId == image.buildId
-              measured <- fingerprint $ temporary </> "baseline.qcow2"
-              ended <- getMonotonicTimeNSec
-              let manifest = Manifest 1 identity image.assetDir checkpoint.createdAt measured.sha256 (fromIntegral (ended - started) / 1000000) measured.bytes 2 1024 Unpriced
-              writeFileLBS (temporary </> "manifest.json") $ AE.encode manifest
-              Posix.setFileMode (temporary </> "manifest.json") 0o600
-              traverse_ sync [temporary </> "baseline.qcow2", temporary </> "manifest.json", temporary]
-              renameDirectory temporary directory
-              sync parent
-              load
+        saved <- locked load
+        case saved of
+          Just _ -> pure saved
+          Nothing -> withSlot PreparePool $ withTempDirectory parent ".prepare-" \temporary -> withSystemTempDirectory "monoscope-native-baseline" \source -> do
+            let clean = source </> "checkout"
+                git args = readProcessStdout_ $ HostGit.command environment HostGit.Local source args
+                execute :: HasCallStack => Maybe Text -> Bool -> NonEmpty Text -> IO Text
+                execute cwd quiet argv = do
+                  result <- rpc @Execution $ Execute $ GuestCommand argv cwd quiet
+                  unless (result.exitCode == 0) $ throwIO $ userError $ toString (unwords $ toList argv) <> " exited " <> show result.exitCode <> ": " <> toString (T.takeEnd 2000 result.stdout) <> "\n" <> prettyCallStack callStack
+                  pure $ T.strip result.stdout
+                guestGit args = execute (Just "/workspace") False $ "/usr/bin/git" :| (["-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"] <> args)
+                parseHash value = maybe invalid pure $ viaNonEmpty head (words value) >>= mkFingerprint
+                copy hostPath destination = rpc @() $ CopyFile $ Copy hostPath destination
+            void $ git ["init", "--quiet", clean]
+            void $ git ["-C", clean, "fetch", "--quiet", "--no-tags", "--", cleanCheckout, toString baseText]
+            void $ git ["-C", clean, "checkout", "--quiet", "--detach", toString baseText]
+            void $ git ["-C", clean, "remote", "add", "origin", toString repoText]
+            started <- getMonotonicTimeNSec
+            let sandbox = Sandbox image.assetDir 2 1024 OfflineCow (one ("/baseline", clean))
+            ancestor <- ancestorSnapshot
+            case ancestor of
+              Nothing -> do
+                rpc @() $ Create sandbox
+                for_ [("/bin/mkdir" :: Text) :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/baseline/.", "/workspace"]] $ void . execute Nothing False
+              -- Warm start: the repository's latest build moves to this base. Ignored build output
+              -- (target/, dist-newstyle/, node_modules/) survives, so the script rebuilds incrementally.
+              -- The ancestor's .git was writable by its build script, so it is replaced by the host's
+              -- checkout before root runs git. A failed warm start forgets the ancestor and retries cold.
+              Just snapshot -> handleAny (\failure -> removePathForcibly latestPointer >> throwIO (WarmStartFailed $ toText $ displayException failure)) do
+                restoreSnapshot rpc image.buildId sandbox snapshot (source </> "ancestor.qcow2")
+                void $ execute (Just "/workspace") False $ "/bin/bash" :| ["-c", "exec 2>&1; set -e; rm -rf .git; cp -R /baseline/.git .git; g() { git -c safe.directory=/workspace -c core.hooksPath=/dev/null \"$@\"; }; g reset --quiet --hard; g clean -fdq"]
+            void $ execute Nothing False $ "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]
+            tracked <- git ["-C", clean, "ls-files", "-z"]
+            writeFileLBS (source </> "tracked") tracked
+            copy (source </> "tracked") "/run/monoscope-baseline-paths"
+            writeFileBS (source </> "fingerprint.sh") $ encodeUtf8 fingerprintScript
+            copy (source </> "fingerprint.sh") "/run/monoscope-fingerprint.sh"
+            let sourceHash = execute (Just "/workspace") False ("/bin/bash" :| ["--noprofile", "--norc", "/run/monoscope-fingerprint.sh"]) >>= parseHash
+            before <- sourceHash
+            for_ dependency \expected -> do
+              archive <- maybe invalid pure options.dependencyArchive
+              copy archive "/run/monoscope-dependencies.tar"
+              measured <- execute (Just "/workspace") False $ "/usr/bin/sha256sum" :| ["/run/monoscope-dependencies.tar"]
+              actual <- parseHash measured
+              ensure $ actual == expected.sha256
+            writeFileBS (source </> "prepare.sh") scriptBytes
+            copy (source </> "prepare.sh") "/run/monoscope-prepare.sh"
+            void $ execute (Just "/workspace") True $ agentCommand ["/bin/bash", "--noprofile", "--norc", "/run/monoscope-prepare.sh"]
+            revision <- guestGit ["rev-parse", "HEAD"]
+            after <- sourceHash
+            ensure $ revision == baseText && before == after
+            checkpoint <- rpc @CheckpointData $ Checkpoint $ temporary </> "baseline.qcow2"
+            ensure $ checkpoint.guestAssetBuildId == image.buildId
+            measured <- fingerprint $ temporary </> "baseline.qcow2"
+            ended <- getMonotonicTimeNSec
+            let manifest = Manifest 1 identity image.assetDir checkpoint.createdAt measured.sha256 (fromIntegral (ended - started) / 1000000) measured.bytes 2 1024 Unpriced
+            writeFileLBS (temporary </> "manifest.json") $ AE.encode manifest
+            Posix.setFileMode (temporary </> "manifest.json") 0o600
+            traverse_ sync [temporary </> "baseline.qcow2", temporary </> "manifest.json", temporary]
+            locked do
+              published <- load
+              case published of
+                Just _ -> pure published
+                Nothing -> do
+                  renameDirectory temporary directory
+                  sync parent
+                  publish latestPointer $ takeFileName directory
+                  load
   where
+    -- One pointer per repository, image, script and dependency set names its latest build, whatever its base.
+    lineage :: Identity -> Text
+    lineage identity = digestText $ sha $ toStrict $ AE.encode (identity.repository, identity.imageBuildId, identity.preparationSha256, identity.dependency)
     loadWorkspace :: Identity -> Image -> FilePath -> (FilePath -> IO CheckpointData) -> IO (Maybe Prepared)
     loadWorkspace identity image directory inspect = do
       loaded <- tryIOError $ readBounded (directory </> "manifest.json") 65536
@@ -1554,8 +1593,9 @@ canonical :: FilePath -> IO ()
 canonical path = canonicalizePath path >>= ensure . (== path)
 
 
-ensure :: Bool -> IO ()
-ensure condition = unless condition invalid
+-- | The failing check's location travels with the error, so an operator can tell which one tripped.
+ensure :: HasCallStack => Bool -> IO ()
+ensure condition = unless condition $ throwIO $ userError $ "Invalid prepared workspace: " <> prettyCallStack callStack
 
 
 invalid :: IO a
@@ -1597,16 +1637,78 @@ fingerprintScript =
 type RPC = forall value. AE.FromJSON value => Command value -> IO value
 
 
-withSandbox :: FilePath -> (RPC -> IO a) -> IO a
-withSandbox bridge = withSandboxRelease bridge (const pass)
+withSandbox :: Pool -> FilePath -> (RPC -> IO a) -> IO a
+withSandbox pool bridge = withSandboxRelease pool bridge (const pass)
+
+
+-- | A warm start failed and its ancestor was forgotten, so the build can retry cold in a fresh VM.
+newtype WarmStartFailed = WarmStartFailed Text
+  deriving stock (Show)
+  deriving anyclass (Exception)
+
+
+-- | A workspace build's time budget, slot wait included: a cold build of a large repository.
+buildSeconds :: Int
+buildSeconds = 3600
+
+
+-- | Which host-wide VM slots a sandbox draws from. Verifier VMs start while an agent VM holds its
+-- slot, so they have their own pool and agents can never starve them; long workspace builds get
+-- one slot of their own so they cannot starve proofs. Image lookups start no VM.
+data Pool = AgentPool | VerifierPool | PreparePool | NoVm
+  deriving stock (Eq, Show)
+
+
+-- | This node's VM slots per pool. @IMPACT_REVIEW_VM_SLOTS=agents,verifiers,builds@ overrides the
+-- default: a quarter of the cores for agents, two verifiers and one build. The agent count is also
+-- the node's review admission capacity, so the queue never admits a review the node has no VM for.
+data Slots = Slots {node :: Text, agents :: Int, verifiers :: Int, builds :: Int}
+
+
+hostSlots :: IO Slots
+hostSlots = do
+  configured <- lookupEnv "IMPACT_REVIEW_VM_SLOTS"
+  cores <- getNumProcessors
+  node <- toText . nodeName <$> getSystemID
+  let (agents, verifiers, builds) = fromMaybe (max 1 (cores `div` 4), 2, 1) $ configured >>= \text -> case mapM (readMaybe . toString) (T.splitOn "," (toText text)) of Just [a, v, b] -> Just (a, v, b); _ -> Nothing
+  pure Slots{..}
+
+
+-- | Holds one of this host's slots for the pool. Slots are lock files, so every process on the node
+-- shares them and each node of a cluster counts its own. Admission happens earlier, in the review
+-- queue, so a busy agent or verifier slot fails fast rather than spending a review's budget; a build
+-- has its own job budget and waits its turn.
+withSlot :: Pool -> IO a -> IO a
+withSlot pool action = do
+  slots <- hostSlots
+  directory <- fromMaybe "/tmp/monoscope-vm-slots" <$> lookupEnv "IMPACT_REVIEW_VM_SLOT_DIR"
+  let paths name count = [directory </> name <> "-" <> show n | n <- [1 .. max 1 count :: Int]]
+      acquire patience candidates waited = do
+        free <- foldM (\found path -> maybe (tryLockFile path Exclusive) (pure . Just) found) Nothing candidates
+        case free of
+          Just lock -> pure lock
+          Nothing
+            | waited >= patience -> throwIO $ userError "Every sandbox slot on this host is busy; retry later"
+            | otherwise -> threadDelay 1000000 >> acquire patience candidates (waited + 1)
+      held name count patience = createDirectoryIfMissing True directory >> bracket (acquire patience (paths name count) (0 :: Int)) unlockFile (const action)
+  case pool of
+    NoVm -> action
+    AgentPool -> held "agent" slots.agents 45
+    VerifierPool -> held "verifier" slots.verifiers 45
+    PreparePool -> held "prepare" slots.builds buildSeconds
 
 
 -- | Cleanup is observed before restoring the action's exception, including cancellation.
-withSandboxRelease :: FilePath -> (AllocationOutcome -> IO ()) -> (RPC -> IO a) -> IO a
-withSandboxRelease bridge released action = do
+-- The bridge and the VMs it starts run at the lowest CPU priority and low best-effort I/O priority
+-- (idle I/O could starve a guest outright), so ingestion and web requests preempt a guest's compile.
+withSandboxRelease :: Pool -> FilePath -> (AllocationOutcome -> IO ()) -> (RPC -> IO a) -> IO a
+withSandboxRelease pool bridge released action = withSlot pool do
   environment <- filter (\(key, _) -> key `elem` ["PATH", "HOME", "XDG_CACHE_HOME"] || "GONDOLIN_" `isPrefixOf` key) <$> getEnvironment
+  ionice <- findExecutable "ionice"
+  let lowest = ["-n", "19", bridge]
+      (program, arguments) = maybe ("nice", lowest) (,["-c", "2", "-n", "7", "nice"] <> lowest) ionice
   bracket
-    (bracketOnError (startProcess $ setCreateGroup True $ setEnv environment $ setStdin createPipe $ setStdout createPipe $ setStderr nullStream $ proc bridge []) stopProcess \process -> (process,) <$> (getPid process >>= maybe invalid pure))
+    (bracketOnError (startProcess $ setCreateGroup True $ setEnv environment $ setStdin createPipe $ setStdout createPipe $ setStderr nullStream $ proc program arguments) stopProcess \process -> (process,) <$> (getPid process >>= maybe invalid pure))
     (\(process, owner) -> stopProcess process `Exception.finally` (Signal.signalProcessGroup Signal.sigKILL owner `catchIOError` \failure -> unless (isDoesNotExistError failure) $ throwIO failure))
     \(process, _) -> Exception.mask \restore -> do
       pending <- newIORef False

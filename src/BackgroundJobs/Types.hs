@@ -54,6 +54,7 @@ data BgJobs
   | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
   | ProcessIssuesEnhancement UTCTime
   | ReviewPullRequest (UUIDId "pr_review")
+  | PrepareReviewWorkspace (UUIDId "pr_review")
   | FixIssue Projects.ProjectId (UUIDId "issue_fix")
   | AnalyzeRepository Projects.ProjectId (UUIDId "repository")
   | RepositorySyncTick UTCTime

@@ -47,6 +47,9 @@ module Models.Projects.ImpactReviews (
   ProofFile (..),
   proofSignedPath,
   saveProofs,
+  ProofRecipe (..),
+  SetupReuse (..),
+  proofRecipe,
   proofSides,
   proofFile,
 ) where
@@ -54,6 +57,7 @@ module Models.Projects.ImpactReviews (
 import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
 import Data.Char (isHexDigit)
+import Data.Effectful.AgentWorkspace qualified as Workspace (Slots (..))
 import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Types qualified as Agent (ProofMedia (..))
 import Data.Effectful.Hasql qualified as Hasql
@@ -318,10 +322,14 @@ receiveEvent request event =
   ), prior AS (
     SELECT r.id FROM projects.pr_review_runs r JOIN decided d ON d.id = r.thread_id
     WHERE r.revision = #{event.revision} AND r.state = #{Queued}
+  ), queued AS (
+    SELECT id FROM runs WHERE state = #{Queued} AND id NOT IN (SELECT id FROM prior)
+  ), builds AS (
+    INSERT INTO background_jobs_long (run_at, status, payload)
+    SELECT now(), 'queued', jsonb_build_object('tag', 'PrepareReviewWorkspace', 'contents', id) FROM queued
   ), jobs AS (
     INSERT INTO background_jobs (run_at, status, payload)
-    SELECT now(), 'queued', jsonb_build_object('tag', 'ReviewPullRequest', 'contents', id)
-    FROM runs WHERE state = #{Queued} AND id NOT IN (SELECT id FROM prior) RETURNING 1
+    SELECT now(), 'queued', jsonb_build_object('tag', 'ReviewPullRequest', 'contents', id) FROM queued RETURNING 1
   ) SELECT CASE WHEN EXISTS (SELECT 1 FROM jobs) THEN #{RunQueued} WHEN EXISTS (SELECT 1 FROM decided WHERE queue) THEN #{JoinedRun} ELSE #{NotReviewable} END|]
 
 
@@ -339,15 +347,23 @@ selectRuns pid rid =
     ORDER BY r.created_at DESC LIMIT 20|]
 
 
-claimRun :: DB es => ReviewRun -> Eff es Bool
-claimRun run = do
+-- | Admission happens here, before a review's time budget starts: past this node's agent slots, or two
+-- reviews of this project across nodes (so one busy tenant cannot take every slot), the run waits in
+-- the job queue instead of for a VM.
+claimRun :: DB es => Workspace.Slots -> ReviewRun -> Eff es Bool
+claimRun slots run = Hasql.transaction TxS.ReadCommitted TxS.Write do
   let payload = Aeson $ AE.toJSON $ Jobs.ReviewPullRequest run.id
-  fromMaybe False
-    <$> Hasql.interpOne
-      [HI.sql|WITH leased AS (
-    UPDATE projects.pr_review_threads t SET lease_owner = #{run.id}, lease_until = now() + interval '10 minutes'
+  -- Concurrent claims would each count the others' leases as free; the lock makes them take turns,
+  -- and read committed gives the counting statement a snapshot taken after the lock.
+  void $ Hasql.queryTx @[Text] [HI.sql|SELECT pg_advisory_xact_lock(hashtextextended('pr_review_admission', 0))::text|]
+  Hasql.oneTx @Bool
+    [HI.sql|WITH busy AS (
+    SELECT count(*) FILTER (WHERE o.project_id = #{run.projectId}) >= 2 OR count(*) FILTER (WHERE o.lease_node = #{slots.node}) >= #{fromIntegral @Int @Int64 slots.agents} AS saturated
+    FROM projects.pr_review_threads o WHERE o.id <> #{run.threadId} AND o.lease_until > now()
+  ), leased AS (
+    UPDATE projects.pr_review_threads t SET lease_owner = #{run.id}, lease_node = #{slots.node}, lease_until = now() + interval '10 minutes'
     WHERE t.id = #{run.threadId} AND t.latest_revision = #{run.revision}
-      AND (t.lease_until IS NULL OR t.lease_until < now())
+      AND (t.lease_until IS NULL OR t.lease_until < now()) AND NOT (SELECT saturated FROM busy)
       AND EXISTS (SELECT 1 FROM projects.pr_review_runs r WHERE r.id = #{run.id} AND r.state IN (#{Queued}, #{Reviewing}, #{Incomplete}))
     RETURNING t.id
   ), claimed AS (
@@ -355,9 +371,10 @@ claimRun run = do
     WHERE id = #{run.id} AND thread_id IN (SELECT id FROM leased) RETURNING id
   ), deferred AS (
     INSERT INTO background_jobs (run_at, status, payload)
-    SELECT (CASE WHEN t.lease_owner = r.id THEN now() ELSE t.lease_until END) + interval '1 second', 'queued', #{payload}
+    SELECT CASE WHEN t.lease_until > now() AND t.lease_owner <> r.id THEN t.lease_until + interval '1 second'
+      WHEN t.lease_until > now() THEN now() + interval '1 second' ELSE now() + interval '15 seconds' END, 'queued', #{payload}
     FROM projects.pr_review_threads t JOIN projects.pr_review_runs r ON r.thread_id = t.id
-    WHERE r.id = #{run.id} AND t.latest_revision = r.revision AND t.lease_until > now()
+    WHERE r.id = #{run.id} AND t.latest_revision = r.revision AND (t.lease_until > now() OR (SELECT saturated FROM busy))
       AND r.state IN (#{Queued}, #{Reviewing}, #{Incomplete}) AND NOT EXISTS (SELECT 1 FROM claimed)
     RETURNING id
   ) SELECT EXISTS (SELECT 1 FROM claimed)|]
@@ -561,10 +578,18 @@ instance FromHttpApiData ProofFile where
      in ProofFile key <$> parseUrlPiece side <*> parseUrlPiece extension
 
 
--- | Stores one proof's recordings, all sides or none, under the run's next unused key.
--- Only the run holding the review lease can record, so a superseded attempt cannot add media.
-saveProofs :: DB es => ReviewRun -> UUIDId "agent_attempt" -> NonEmpty Agent.ProofMedia -> Eff es (Either Text Text)
-saveProofs run attempt sides = Hasql.transaction TxS.ReadCommitted TxS.Write do
+-- | Whether a proof's setup replayed the repository's saved recipe byte for byte, the measure of
+-- how deterministic proofs are.
+data SetupReuse = NoSetup | Reused | Changed
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (AE.ToJSON, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "" SetupReuse
+
+
+-- | Stores one proof's recordings, all sides or none, under the run's next unused key. Only the run
+-- holding the review lease can record, so a superseded attempt cannot add media. The setup behind a
+-- successful head recording becomes the repository's saved recipe.
+saveProofs :: DB es => ReviewRun -> UUIDId "agent_attempt" -> Maybe Text -> NonEmpty Agent.ProofMedia -> Eff es (Either Text (Text, SetupReuse))
+saveProofs run attempt setup sides = Hasql.transaction TxS.ReadCommitted TxS.Write do
   HI.OneColumn leased <-
     Hasql.oneTx
       [HI.sql|SELECT EXISTS (SELECT 1 FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
@@ -583,8 +608,29 @@ saveProofs run attempt sides = Hasql.transaction TxS.ReadCommitted TxS.Write do
   if
     | not leased -> Left "Review authorization is no longer available" <$ Tx.condemn
     | full -> Left "Proof budget exhausted; cite the proofs already recorded" <$ Tx.condemn
-    | all isJust stored -> pure $ Right key
+    | all isJust stored ->
+        Right
+          . (key,)
+          . HI.getOneColumn
+          <$> Hasql.oneTx
+            [HI.sql|WITH prior AS (
+          SELECT setup FROM projects.pr_review_proof_recipes WHERE project_id = #{run.projectId} AND owner = #{run.owner} AND repo = #{run.repo}
+        ), saved AS (
+          INSERT INTO projects.pr_review_proof_recipes (project_id, owner, repo, setup, revision, run_id)
+          SELECT #{run.projectId}, #{run.owner}, #{run.repo}, #{setup}, #{run.revision}, #{run.id}
+          WHERE #{setup}::text IS NOT NULL AND #{any (\p -> p.side == Agent.Head && p.exitCode == Just 0) sides}
+          ON CONFLICT (project_id, owner, repo) DO UPDATE SET setup = EXCLUDED.setup, revision = EXCLUDED.revision, run_id = EXCLUDED.run_id, updated_at = now()
+        ) SELECT CASE WHEN #{setup}::text IS NULL THEN #{NoSetup} WHEN (SELECT setup FROM prior) = #{setup} THEN #{Reused} ELSE #{Changed} END|]
     | otherwise -> Left ("Proof " <> key <> " was already recorded; record the proof again") <$ Tx.condemn
+
+
+data ProofRecipe = ProofRecipe {setup :: Text, revision :: Text}
+  deriving stock (Generic)
+  deriving anyclass (HI.DecodeRow)
+
+
+proofRecipe :: DB es => ReviewRun -> Eff es (Maybe ProofRecipe)
+proofRecipe run = Hasql.interpOne [HI.sql|SELECT setup, revision FROM projects.pr_review_proof_recipes WHERE project_id = #{run.projectId} AND owner = #{run.owner} AND repo = #{run.repo}|]
 
 
 proofSides :: DB es => ReviewRun -> UUIDId "agent_attempt" -> Eff es [ProofSide]

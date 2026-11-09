@@ -152,13 +152,15 @@ renderExplanation store request = withinBudget $ do
         pure manifest
 
 
--- | The frozen check behind a proof: @proof.sh@ with the command as its base64 argument.
--- The base64 alphabet has no shell metacharacters, so a double-quoted literal is a safe quote.
+-- | The frozen check behind a proof: @proof.sh@ with the command and optional setup as base64
+-- arguments. The base64 alphabet has no shell metacharacters, so double-quoted literals are safe.
 --
--- >>> map (`T.isInfixOf` proofScript "echo hi") ["set -- \"ZWNobyBoaQ==\"", "echo hi", castBegin, castEnd, proofFailure]
+-- >>> map (`T.isInfixOf` proofScript Nothing "echo hi") ["set -- \"ZWNobyBoaQ==\" \"\"", "echo hi", castBegin, castEnd, proofFailure]
 -- [True,False,True,True,True]
-proofScript :: Text -> Text
-proofScript command = "set -- " <> show @Text (extractBase64 $ Base64.encodeBase64 $ encodeUtf8 command) <> "\n" <> decodeUtf8 $(embedFile "src/Data/Effectful/CodeReview/proof.sh")
+-- >>> "set -- \"ZWNobyBoaQ==\" \"c2VlZA==\"" `T.isInfixOf` proofScript (Just "seed") "echo hi"
+-- True
+proofScript :: Maybe Text -> Text -> Text
+proofScript setup command = "set -- " <> unwords (map (show @Text . extractBase64 . Base64.encodeBase64 . encodeUtf8) [command, fold setup]) <> "\n" <> decodeUtf8 $(embedFile "src/Data/Effectful/CodeReview/proof.sh")
 
 
 castBegin :: Text
@@ -212,7 +214,7 @@ renderProof cast = do
   outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-proof" \directory -> do
     environment <- filter ((== "PATH") . fst) <$> getEnvironment
     writeFileBS (directory </> "proof.cast") cast
-    let run program args = withProcessTerm (setStdin nullStream $ setStdout nullStream $ setStderr nullStream $ setEnv environment $ setWorkingDir directory $ proc program args) waitExitCode >>= \code -> unless (code == ExitSuccess) $ throwIO $ userError $ program <> " exited with " <> show code
+    let run program args = withProcessTerm (setStdin nullStream $ setStdout nullStream $ setStderr nullStream $ setEnv environment $ setWorkingDir directory $ proc "nice" (["-n", "19", program] <> args)) waitExitCode >>= \code -> unless (code == ExitSuccess) $ throwIO $ userError $ program <> " exited with " <> show code
     run "agg" ["--idle-time-limit", "2", "--fps-cap", "12", "--font-size", "16", "--theme", "github-dark", "proof.cast", "proof.gif"]
     run "ffmpeg" ["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-t", "120", "-i", "proof.gif", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "26", "-fs", show mediaLimit, "proof.mp4"]
     join bitraverse (\name -> readPrivateArtifact directory name mediaLimit) ("proof.gif", "proof.mp4")

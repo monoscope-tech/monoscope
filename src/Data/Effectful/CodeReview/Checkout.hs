@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Checkout (Source (..), Prepared (..), Envelope (..), withCheckout) where
+module Data.Effectful.CodeReview.Checkout (Source (..), Fetch (..), fetchOf, Prepared (..), Envelope (..), withCheckout) where
 
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
@@ -28,8 +28,17 @@ import UnliftIO.Exception (catch, throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
 
 
+-- | What a repository checkout reads; a workspace build needs no more than this.
+data Fetch = Fetch {projectId :: UUIDId "project", repository :: Text, base :: Text, head :: Text, gitToken :: Text}
+
+
+-- | The checkout of a request, at the head the given selector picks; fixes start from the base.
+fetchOf :: (Request run -> Text) -> Request run -> Fetch
+fetchOf at request = Fetch request.projectId request.repository request.base (at request) request.gitToken
+
+
 data Source where
-  Repository :: Request run -> Source
+  Repository :: Fetch -> Source
   VerifiedCandidate :: ArtifactRequest -> Source
 
 
@@ -103,7 +112,7 @@ withCheckout store source action = do
       instructions <- maybe (pure "") instruction $ asum $ map (`lookup` files) instructionNames
       duration <- elapsed started
       tryAny $ action (Prepared Nothing Nothing Nothing directory metadata instructions project repository baseRevision headRevision status duration (Policy.policy Policy.Advisory (revisionText baseRevision) (revisionText headRevision) instructions)) evidence
-    prepare :: FilePath -> Request run -> IO (FilePath, Revision, Revision, CacheStatus)
+    prepare :: FilePath -> Fetch -> IO (FilePath, Revision, Revision, CacheStatus)
     prepare temporary request = do
       baseRevision <- either (const invalid) pure $ mkRevision request.base
       headRevision <- either (const invalid) pure $ mkRevision request.head
