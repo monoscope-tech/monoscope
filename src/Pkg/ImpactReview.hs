@@ -317,8 +317,8 @@ validateAssessments draft = do
   unless (sort (map (.dimension) draft.assessments) == universe) $ Left "Grade each merge-risk dimension exactly once"
   unless (all (\a -> a.grade /= NotApplicable || a.dimension == ErrorDetection) draft.assessments) $ Left "Only error detection can be not applicable"
   -- Lengths are bounded by the submit_review schema; blank text passes it, so check that here.
-  unless (all (all (not . T.null . T.strip) . (.gaps)) draft.assessments) $ Left "Each gap needs text"
-  unless (not $ T.null $ T.strip draft.summary) $ Left "Summarize the change and its risk"
+  when (any (any (T.null . T.strip) . (.gaps)) draft.assessments) $ Left "Each gap needs text"
+  when (T.null $ T.strip draft.summary) $ Left "Summarize the change and its risk"
 
 
 validateFindings :: [ChangedLine] -> [(Text, EvidenceKind)] -> [Finding] -> Either Text ()
