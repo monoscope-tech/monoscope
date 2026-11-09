@@ -1,6 +1,6 @@
 # Impact reviews: follow-ups after #812
 
-Status (2026-11-09): the stacked sandboxes PR implements E (in-job preparation and ancestor warm starts) and F (queue admission, host slots, CPU priority, charged attempts), plus proof recipes. Restore-on-miss from S3 waits for a second node.
+Status (2026-11-09): #813 implements E (in-job preparation and ancestor warm starts) and F (queue admission, host slots, CPU priority, charged attempts), plus proof recipes. The follow-up adds restore-on-miss from S3 in the build job, one build per base, and build outcomes in the logs. Still open: ancestor warm starts from S3 (a pointer in object storage), and the metrics below.
 
 PR #812 shipped triggers, merge-risk grading, widget evidence and terminal proof. Its description and `docs/agent-operations.md` describe that work. What remains:
 

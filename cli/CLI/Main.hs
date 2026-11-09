@@ -179,8 +179,8 @@ commandParser =
           , cmd "maintain" (WorkspaceMaintainCmd <$> strOption (long "config" <> metavar "FILE")) (progDesc "Archive and evict idle checkpoints to the host cache budget")
           , cmd "prune" (WorkspacePruneCmd <$> requestOption <*> (Workspace.PruneOptions <$> strOption (long "cache" <> metavar "DIRECTORY") <*> remoteOption)) (progDesc "Evict idle archived project checkpoints to an allocated-byte budget")
           , cmd "load" (options (pure Workspace.Lookup)) (progDesc "Verify a prepared workspace")
-          , cmd "archive" (options (Workspace.Archive <$> remoteOption)) (progDesc "Archive a verified checkpoint in self-hosted object storage")
-          , cmd "restore" (options (Workspace.Restore <$> remoteOption)) (progDesc "Restore and verify an archived checkpoint")
+          , cmd "archive" (options (pure Workspace.Archive)) (progDesc "Archive a verified checkpoint in self-hosted object storage")
+          , cmd "restore" (options (pure Workspace.Restore)) (progDesc "Restore and verify an archived checkpoint")
           , cmd "check" (RegressionCmd <$> strOption (long "request" <> metavar "FILE") <*> (Workspace.RegressionOptions <$> strOption (long "artifacts" <> metavar "DIRECTORY") <*> strOption (long "checkout" <> metavar "DIRECTORY") <*> strOption (long "image" <> metavar "IMAGE") <*> strOption (long "bridge" <> metavar "EXECUTABLE"))) (progDesc "Replay and retain a frozen regression in isolated workspaces")
           , cmd "lease" leaseOptions (progDesc "Hold a private prepared workspace until stdin closes")
           , cmd "prepare" (options (Workspace.Prepare <$> strOption (long "checkout" <> metavar "DIRECTORY"))) (progDesc "Build and atomically publish a pinned workspace")
@@ -196,6 +196,7 @@ commandParser =
         <*> strOption (long "bridge" <> metavar "EXECUTABLE")
         <*> strOption (long "script" <> metavar "FILE")
         <*> optional (strOption (long "dependencies" <> metavar "FILE"))
+        <*> optional remoteOption
 
 
 cmd :: String -> Parser a -> InfoMod a -> Mod CommandFields a

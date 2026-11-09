@@ -465,7 +465,7 @@ sdkAgent store arguments action = do
   let option name = case dropWhile (/= name) arguments of _ : value : _ -> Just value; _ -> Nothing
       positional n = fromMaybe "" $ viaNonEmpty head $ drop n arguments
       (models, image, diagnostic) = (positional 0, positional 1, fromMaybe "/dev/null" $ viaNonEmpty head $ drop 2 arguments)
-      host = if null image then Right Nothing else Just . (\configured -> configured{Guest.bridge = fromMaybe "test/fixtures/native-sandbox.sh" $ option "--bridge"}) <$> Agent.workerHost (maybeToList $ option "--skill") (option "--prepare") (option "--dependencies") (toText image) "impact-review-worker/pi-host.mjs"
+      host = if null image then Right Nothing else Just . (\configured -> configured{Guest.bridge = fromMaybe "test/fixtures/native-sandbox.sh" $ option "--bridge"}) <$> Agent.workerHost (maybeToList $ option "--skill") (option "--prepare") (option "--dependencies") Nothing (toText image) "impact-review-worker/pi-host.mjs"
   Agent.runCodeReviewWith (Just store) host (Just $ \environment -> setEnv ([("IMPACT_REVIEW_MODELS", models), ("IMPACT_REVIEW_USAGE_DIR", store.usageDir), ("IMPACT_REVIEW_CACHE_DIR", store.cacheDir), ("IMPACT_REVIEW_FIXTURE_SECRET", "host-only-fixture")] <> [("TMPDIR", temporary) | Just temporary <- [option "--temp"]] <> [("IMPACT_REVIEW_NATIVE_CLI", cli) | Just cli <- [option "--cli"]] <> filter (\(key, _) -> key `elem` ["PATH", "HOME", "TMPDIR", "IMPACT_REVIEW_OUTBOX_DIR", "IMPACT_REVIEW_SESSION_FILE"] && not (key == "TMPDIR" && isJust (option "--temp"))) environment) $ proc "sh" ["-c", "exec node impact-review-worker/pi-host.mjs 2>>\"$1\"", "sdk-worker", diagnostic]) action
 
 
@@ -736,7 +736,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let testPatch = shortHunks canonicalPatch
     writeFileBS scriptFile "test -f runtime.sh"
     writeFileLBS requestFile $ AE.encode $ AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= base]
-    prepared <- runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir (toText image) bridge scriptFile Nothing) (Workspace.Prepare repository) requestFile) >>= either (fail . toString) (maybe (fail "Fix workspace missing") (pure . AE.toJSON))
+    prepared <- runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir (toText image) bridge scriptFile Nothing Nothing) (Workspace.Prepare repository) requestFile) >>= either (fail . toString) (maybe (fail "Fix workspace missing") (pure . AE.toJSON))
     baseRevision <- either (fail . show) pure $ Agent.mkRevision base
     imageId <- parse (field "manifest" >=> field "identity" >=> field "imageBuildId") prepared
     fingerprint <- parse (field "manifest" >=> field "sha256") prepared :: IO Text
@@ -1067,7 +1067,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         mapMaybe (leftToMaybe . (.validation)) rejected.submissions `shouldSatisfy` any (T.isInfixOf rejection)
       writeFileBS scriptFile "printf dependencies-ready > .prepared-proof"
       writeFileLBS requestFile $ AE.encode $ AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= base]
-      checkpoint <- runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir (toText profile) bridge scriptFile Nothing) (Workspace.Prepare repository) requestFile) >>= either (fail . toString) (maybe (fail "Calibration preparation missing") (pure . AE.toJSON))
+      checkpoint <- runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir (toText profile) bridge scriptFile Nothing Nothing) (Workspace.Prepare repository) requestFile) >>= either (fail . toString) (maybe (fail "Calibration preparation missing") (pure . AE.toJSON))
       fingerprint <- parse (field "manifest" >=> field "sha256") checkpoint :: IO Text
       writeIORef
         plan
@@ -1675,7 +1675,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         npm cwd args = readProcessStdout_ $ setWorkingDir cwd $ proc "npm" args
         preparation = "set -eu\nmkdir -p /home/review-agent/dependency-cache\ntar -xf /run/monoscope-dependencies.tar -C /home/review-agent/dependency-cache\nnpm ci --offline --ignore-scripts --no-audit --no-fund --cache /home/review-agent/dependency-cache\ntest ! -e /workspace/install-script-ran\ntest ! -e /home/review-agent/dependency-cache/host-only-secret\n" :: ByteString
         replay = "set -eu\ntest ! -e /workspace/install-script-ran\ntest ! -e node_modules/monoscope-dependency-fixture/vm-only\ntouch node_modules/monoscope-dependency-fixture/vm-only\nnode check.cjs\n" :: Text
-        options = Workspace.Options store.cacheDir (toText profile) bridge script (Just archive)
+        options = Workspace.Options store.cacheDir (toText profile) bridge script (Just archive) Nothing
         lookupPrepared configured = runEff $ Workspace.runWorkspaceReal $ Workspace.runWorkspace configured Workspace.Lookup requestFile
     traverse_ (createDirectoryIfMissing True) [fixture, cache]
     initRepo repository
@@ -1910,7 +1910,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           request = directory </> "request.json"
           checks = directory </> "checks"
           source = "module Main where\nimport Data.Aeson (eitherDecodeStrict')\nimport qualified Data.ByteString.Char8 as BS\nmain = case eitherDecodeStrict' (BS.pack (show (\"cached\" :: String))) :: Either String String of\n  Right \"cached\" -> putStrLn \"cached-package-check-passed\"\n  _ -> fail \"cached dependency decoding failed\"\n" :: ByteString
-          options = Workspace.Options cache (toText profile) bridge script Nothing
+          options = Workspace.Options cache (toText profile) bridge script Nothing Nothing
           lookupPrepared encodedRequest workspaceOptions = do
             writeFileLBS request $ AE.encode encodedRequest
             runEff $ Workspace.runWorkspaceReal $ Workspace.runWorkspace workspaceOptions Workspace.Lookup request
@@ -2883,7 +2883,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     for_ [T.replace "sig=" "sig=0" link.preview, T.replace testPid.toText otherPid.toText link.preview, T.replace "proof-1-head.gif" "proof-1-base.gif" link.preview] \forged ->
       (H.statusCode . (.simpleStatus) <$> fetch forged) `shouldReturn` 403
 
-  it "workspacePrepare_warmStartsFromTheRepositoryLatestBuild" \_ -> withTemp "native-ancestor" \directory -> do
+  it "workspacePrepare_warmStartsFromTheRepositoryLatestBuild" \tr -> withTemp "native-ancestor" \directory -> do
     image <- guestImage
     store <- storeIn directory
     bridge <- canonicalizePath "test/fixtures/native-sandbox.sh"
@@ -2892,28 +2892,44 @@ spec = around withTestResources $ describe "Production impact reviews" do
         requestFile = directory </> "request.json"
         prepareAt stage base = do
           writeFileLBS requestFile $ AE.encode $ AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= base]
-          runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir (toText image) bridge scriptFile Nothing) (Workspace.Prepare repository) requestFile) >>= either (fail . toString . ((stage <> ": ") <>)) (maybe (fail "Workspace missing") (parse (field "manifest" >=> field "identity" >=> field "base") . AE.toJSON))
+          runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir (toText image) bridge scriptFile Nothing Nothing) (Workspace.Prepare repository) requestFile) >>= either (fail . toString . ((stage <> ": ") <>)) (maybe (fail "Workspace missing") (parse (\value -> (,) <$> (field "manifest" >=> field "identity" >=> field "base") value <*> field "outcome" value) . AE.toJSON))
+        built start = AE.toJSON $ Workspace.Built start Nothing
     initRepo repository
     original <- commit repository [(".gitignore", "build/\n"), ("app.sh", "v1\n")]
     -- Like a compiler cache, the build keeps state in an ignored directory. At the second base it
     -- refuses to run unless that state came along, so a cold start fails this test.
     writeFileBS scriptFile "set -eu\nif [ \"$(cat app.sh)\" = v2 ]; then test -s build/runs; fi\nmkdir -p build\necho run >> build/runs\n"
-    prepareAt "cold" original `shouldReturn` (original :: Text)
+    prepareAt "cold" original `shouldReturn` (original :: Text, built Workspace.Cold)
     next <- commit repository [("app.sh", "v2\n")]
-    prepareAt "warm" next `shouldReturn` next
+    prepareAt "warm" next `shouldReturn` (next, built Workspace.Warm)
     -- A damaged ancestor is forgotten and the build retries cold rather than failing.
     void $ readProcessStdout_ $ proc "sh" ["-c", "find \"$0\" -name baseline.qcow2 -exec sh -c 'printf corrupt > \"$1\"' _ {} \\;", store.cacheDir]
     third <- commit repository [("app.sh", "v3\n")]
-    prepareAt "fallback" third `shouldReturn` third
+    (fallbackBase, fallback) <- prepareAt "fallback" third
+    fallbackBase `shouldBe` third
+    -- The cold retry still reports the failed warm start, so the build job can raise it.
+    decodeUtf8 @Text (AE.encode fallback) `shouldSatisfy` T.isInfixOf "ColdAfterWarm"
+    -- A build that misses locally restores the archived checkpoint instead of compiling.
+    requireMinio tr pendingWith do
+      let config = tr.trATCtx.config
+          remote = directory </> "remote.json"
+          run operation = runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir (toText image) bridge scriptFile Nothing (Just remote)) operation requestFile) >>= either (fail . toString) (maybe (fail "Workspace missing") (pure . AE.toJSON))
+      writeFileLBS remote $ AE.encode $ AE.object ["endpoint" AE..= config.s3Endpoint, "bucket" AE..= config.s3Bucket, "region" AE..= config.s3Region, "accessKey" AE..= config.s3AccessKey, "secretKey" AE..= config.s3SecretKey, "maxBytes" AE..= (1073741824 :: Int)]
+      Posix.setFileMode remote 0o600
+      void $ run Workspace.Archive
+      removePathForcibly $ store.cacheDir </> toString testPid.toText </> "workspaces"
+      run (Workspace.Prepare repository) >>= parse (field "outcome") >>= (`shouldBe` AE.toJSON Workspace.Restored)
 
   it "admission_capsReviewsPerProjectAndHostAndSavesProofRecipes" \tr -> do
     setup tr
-    let event n = Reviews.PullRequestEvent "impact-org" "checkout" 987654 n (T.replicate 40 (show n)) frozenTime Reviews.Open
+    let eventAt base n = Reviews.PullRequestEvent "impact-org" "checkout" 987654 n (T.replicate 40 (show n)) base frozenTime Reviews.Open
+        event = eventAt (T.replicate 40 "b")
         sideProof side code = Proof.ProofMedia{side, revision = T.replicate 40 "7", exitCode = Just code, cast = "cast", gif = "gif", mp4 = "mp4", browser = False, shots = [], chapters = []}
         deferred rid = dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload = ? AND run_at > now()" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest rid)
     for_ [7, 8, 9] \n -> void $ runQueryEffect tr $ Reviews.receiveEvent Nothing $ event n
-    -- Each queued review also queues the build of its workspace.
-    dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'PrepareReviewWorkspace'" () `shouldReturn` (3 :: Int)
+    -- Reviews of one base share a single workspace build; another base queues its own.
+    let builds = dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'PrepareReviewWorkspace'" ()
+    builds `shouldReturn` (1 :: Int)
     [early, middle, late] <- sortOn (\(run :: Reviews.ReviewRun) -> run.number) <$> runQueryEffect tr (Reviews.latestRuns testPid)
     -- Two reviews per project run at once; the third waits in the queue rather than for a VM.
     traverse (\run -> runQueryEffect tr $ Reviews.claimRun (slots 100) run) [early, middle, late] `shouldReturn` [True, True, False]
@@ -2928,10 +2944,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- The first replays no saved recipe; later ones replay the one it saved.
     traverse (const saveProof) [1 .. 4 :: Int] `shouldReturn` ([Right ("proof-1", Reviews.Changed), Right ("proof-2", Reviews.Reused), Right ("proof-3", Reviews.Reused), Left "Proof budget exhausted; cite the proofs already recorded"] :: [Either Text (Text, Reviews.SetupReuse)])
     fmap (.setup) <$> runQueryEffect tr (Reviews.proofRecipe middle) `shouldReturn` Just "make serve &"
+    void $ runQueryEffect tr $ Reviews.receiveEvent Nothing $ eventAt (T.replicate 40 "c") 4
+    builds `shouldReturn` 2
 
   it "reviewComment_leadsWithMergeRiskAndShowsProductionDetailOnlyWhereAllowed" \_ -> do
     let pid = UUIDId UUID.nil
-        run = Reviews.ReviewRun{id = UUIDId UUID.nil, threadId = UUIDId UUID.nil, projectId = pid, owner = "acme", repo = "checkout", number = 42, revision = T.replicate 40 "a", state = Reviews.Completed, result = Nothing, error = Nothing, commentId = Nothing, latestRevision = T.replicate 40 "a", createdAt = frozenTime, request = Nothing}
+        run = Reviews.ReviewRun{id = UUIDId UUID.nil, threadId = UUIDId UUID.nil, projectId = pid, owner = "acme", repo = "checkout", number = 42, revision = T.replicate 40 "a", state = Reviews.Completed, result = Nothing, error = Nothing, commentId = Nothing, latestRevision = T.replicate 40 "a", createdAt = frozenTime, request = Nothing, base = Nothing}
         telemetry = Impact.Evidence "telemetry-1" Impact.Telemetry (Just "checkout-api") (Just "production") "https://app.monoscope.tech/p/x/log_explorer" Nothing (Just $ Impact.Observation 120340 312) (Just "https://app.monoscope.tech/p/x/widget.png?widgetZ=fixture") Nothing
         finding path line mechanism next = Impact.Finding (Impact.ChangedLine path line Impact.Head) mechanism next ["telemetry-1"]
         grades = [(Impact.Alignment, Impact.Good, []), (Impact.Impact, Impact.Poor, ["Changes how payment captures are retried", "checkout-api serves every order"]), (Impact.Verification, Impact.Fair, ["No test covers a capture that times out twice"]), (Impact.Rollback, Impact.Good, []), (Impact.ErrorDetection, Impact.Poor, ["The new retry path logs nothing when it gives up"])]

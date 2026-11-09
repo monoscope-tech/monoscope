@@ -318,7 +318,7 @@ mainStudy modes action = do
   image <- lookupEnv "IMPACT_REVIEW_GUEST_IMAGE"
   prepare <- lookupEnv "IMPACT_REVIEW_PREPARE_SCRIPT"
   archive <- lookupEnv "IMPACT_REVIEW_DEPENDENCY_ARCHIVE"
-  let host = traverse (\selected -> Agent.workerHost [] prepare archive (toText selected) adapter) image
+  let host = traverse (\selected -> Agent.workerHost [] prepare archive Nothing (toText selected) adapter) image
   result <- runEff $ Agent.runCodeReviewReal (Just $ Agent.ArtifactStore usage cache) host (Just adapter) [] $ runEvaluationReal action
   case result of
     Left failure -> die $ show failure

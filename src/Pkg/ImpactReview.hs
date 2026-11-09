@@ -10,7 +10,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
 import Data.Default (def)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
-import Data.Effectful.AgentWorkspace qualified as Workspace (hostSlots)
+import Data.Effectful.AgentWorkspace qualified as Workspace (Outcome (..), Start (..), hostSlots)
 import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Artifacts (sha256)
 import Data.Effectful.CodeReview.Checkout qualified as Checkout (Fetch (..))
@@ -394,11 +394,15 @@ prepareReviewWorkspace :: Reviews.ReviewId -> ATBackgroundCtx ()
 prepareReviewWorkspace rid = whenJustM (Reviews.getRun rid) \run -> do
   outcome <- runErrorNoCallStack @Text do
     (_, _, _, conn) <- either throwError pure =<< reviewConnection run
-    pr <- either throwError pure =<< Git.getPullRequest conn (Git.RepoRef run.owner run.repo run.revision) run.number
+    -- Runs queued before the base was recorded look it up.
+    base <- maybe ((.base.revision) <$> (either throwError pure =<< Git.getPullRequest conn (Git.RepoRef run.owner run.repo run.revision) run.number)) pure run.base
     either throwError pure
       =<< Agent.prepareRepository
-        Checkout.Fetch{projectId = run.projectId, repository = "https://github.com/" <> run.owner <> "/" <> run.repo <> ".git", base = pr.base.revision, head = pr.head.revision, gitToken = conn.token.reveal}
-  either (Log.logAttention "Review workspace preparation failed" . (run.id,)) (const $ Log.logInfo "Review workspace ready" (run.projectId, run.owner, run.repo)) outcome
+        Checkout.Fetch{projectId = run.projectId, repository = "https://github.com/" <> run.owner <> "/" <> run.repo <> ".git", base, head = base, gitToken = conn.token.reveal}
+  case outcome of
+    Left err -> Log.logAttention "Review workspace preparation failed" (run.id, err)
+    Right (Workspace.Built (Workspace.ColdAfterWarm why) _) -> Log.logAttention "Review workspace built cold after its warm start failed" (run.id, why)
+    Right prepared -> Log.logInfo "Review workspace ready" (run.projectId, run.owner, run.repo, prepared)
 
 
 reviewPullRequest :: Reviews.ReviewId -> ATBackgroundCtx ()

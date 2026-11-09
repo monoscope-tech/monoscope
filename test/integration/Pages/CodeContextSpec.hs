@@ -742,7 +742,7 @@ spec = do
         _ <- testServant tr $ PageCodeContext.repositorySourceEnabledPostH testPid repository.id (PageCodeContext.SourceContextForm False)
         map (.service) <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) `shouldReturn` [Just "checkout"]
         runQueryEffect tr (W.runHTTPWreq $ withUnavailableRepositoryAPI $ CodeContext.fetchSnippet tr.trATCtx.codeBlobCache tr.trATCtx.config testPid (Just "checkout") Nothing "main.py" 1) `shouldReturn` Left (CodeContext.NoMapping "main.py")
-        void $ runQueryEffect tr $ ImpactReviews.receiveEvent Nothing (ImpactReviews.PullRequestEvent "team" "checkout" 42 1 (T.replicate 40 "a") frozenTime ImpactReviews.Open)
+        void $ runQueryEffect tr $ ImpactReviews.receiveEvent Nothing (ImpactReviews.PullRequestEvent "team" "checkout" 42 1 (T.replicate 40 "a") (T.replicate 40 "b") frozenTime ImpactReviews.Open)
         length <$> runQueryEffect tr (ImpactReviews.latestRuns testPid) `shouldReturn` 1
 
       it "repositoryOverview_listsEveryRepositoryOnceWithoutCallingTheProvider" \tr -> do
@@ -1100,7 +1100,7 @@ spec = do
           sync <- syncOf tr testPid origin "team" "checkout" (GitSync.PersonalToken "fixture") "ops"
           void $ seedDash tr \d -> d{Dashboards.title = "Local overview", Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "overview.yaml", Dashboards.fileSha = Just "provider-version"}
         repository <- runQueryEffect tr (GitSync.getRepositories testPid) >>= maybe (fail "public repository missing") pure . find (isNothing . (.apiBase))
-        let review n sha = void $ runQueryEffect tr $ ImpactReviews.receiveEvent Nothing (ImpactReviews.PullRequestEvent "team" "checkout" 42 n (T.replicate 40 sha) frozenTime ImpactReviews.Open)
+        let review n sha = void $ runQueryEffect tr $ ImpactReviews.receiveEvent Nothing (ImpactReviews.PullRequestEvent "team" "checkout" 42 n (T.replicate 40 sha) (T.replicate 40 "b") frozenTime ImpactReviews.Open)
             runIds = map (.id) <$> runQueryEffect tr (ImpactReviews.latestRuns testPid)
         review 1 "a"
         history <- runIds

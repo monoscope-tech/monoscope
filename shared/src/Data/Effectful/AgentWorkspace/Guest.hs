@@ -36,7 +36,7 @@ data Host = Host {image :: Text, bridge :: FilePath, skills :: [FilePath], works
 
 
 -- | A trusted preparation script and its optional dependency archive select a prepared checkpoint.
-data Workspace = Workspace {script :: FilePath, dependencyArchive :: Maybe FilePath}
+data Workspace = Workspace {script :: FilePath, dependencyArchive :: Maybe FilePath, remote :: Maybe FilePath}
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
 
@@ -249,7 +249,7 @@ withGuest host expected checkout revision start lease attempt allocate retain ac
   where
     failure = throwIO . userError
     withLease use = case (host.workspace, lease) of
-      (Just configured, Just held) -> AgentWorkspace.leaseWorkspace (AgentWorkspace.Options held.cacheDir host.image host.bridge configured.script configured.dependencyArchive) held.request use
+      (Just configured, Just held) -> AgentWorkspace.leaseWorkspace (AgentWorkspace.Options held.cacheDir host.image host.bridge configured.script configured.dependencyArchive configured.remote) held.request use
       _ -> use Nothing
 
 

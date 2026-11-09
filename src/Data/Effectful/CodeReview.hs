@@ -216,9 +216,10 @@ data CodeReview :: Effect where
   ReviewSource :: ReviewMode -> Request "pr_review" -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (DraftSubmission -> m (Either Text ())) -> CodeReview m (Either Text Text)
   ReviewPatch :: Request "pr_review" -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (Text -> m (Either Text ())) -> CodeReview m (Either Text Text)
   ReviewRepository :: SessionIdentity m ReviewContext -> Request "pr_review" -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> ProofHooks m -> (AE.Value -> m (Either Text ())) -> CodeReview m (Either Text Text)
-  -- | Builds the workspace checkpoint at the request's base, warm from the repository's latest
-  -- build when one exists. Runs outside any review's budget; a no-op when the checkpoint exists.
-  PrepareRepository :: Checkout.Fetch -> CodeReview m (Either Text ())
+  -- | Makes the workspace checkpoint at the request's base available on this host: already here,
+  -- restored from object storage, or built (warm from the repository's latest build when one exists).
+  -- Runs outside any review's budget.
+  PrepareRepository :: Checkout.Fetch -> CodeReview m (Either Text Workspace.Outcome)
   -- | The configured guest image's build, which a fix run pins before its first check.
   ResolveImage :: CodeReview m (Either Text (UUIDId "guest_image"))
   AdmitRegression :: SessionIdentity m (UUIDId "agent_attempt") -> AdmissionRequest -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> CodeReview m (Either Text AdmissionDecision)
@@ -321,16 +322,16 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
       CheckoutHarness -> launch (SourceTask request) $ callbacks (Just $ unlift . recordAllocation) (Just $ unlift . recordCheck) $ StructuredDraft validateValue
   PrepareRepository request -> liftIO case (artifactStore, hostConfig) of
     (Just store, Right (Just host))
-      | Just configured <- host.workspace ->
-          join
-            . first show
-            <$> tryAny
-              ( join <$> Checkout.withCheckout store (Checkout.Repository request) \fetched _ ->
-                  withSystemTempDirectory "monoscope-prepare-request" \directory -> runExceptT do
-                    let requestFile = directory </> "request.json"
-                    liftIO . writeFileLBS requestFile . AE.encode =<< except (Workspace.mkRequest request.projectId request.repository request.base Nothing)
-                    void $ ExceptT $ runEff $ Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir host.image host.bridge configured.script configured.dependencyArchive) (Workspace.Prepare fetched.directory) requestFile
-              )
+      | Just configured <- host.workspace -> withSystemTempDirectory "monoscope-prepare-request" \directory -> runExceptT do
+          let requestFile = directory </> "request.json"
+              run operation = ExceptT $ runEff $ Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir host.image host.bridge configured.script configured.dependencyArchive configured.remote) operation requestFile
+          liftIO . writeFileLBS requestFile . AE.encode =<< except (Workspace.mkRequest request.projectId request.repository request.base Nothing)
+          -- A checkpoint already on this host needs no checkout.
+          prepared <-
+            run Workspace.Lookup >>= \case
+              Just cached -> pure cached
+              Nothing -> maybe (throwE "Workspace preparation returned no checkpoint") pure =<< ExceptT (join . join . first show <$> tryAny (Checkout.withCheckout store (Checkout.Repository request) \fetched _ -> runExceptT $ run $ Workspace.Prepare fetched.directory))
+          pure $ Workspace.preparedOutcome prepared
     _ -> pure $ Left "Workspace preparation is not configured on this host"
   ResolveImage -> liftIO case hostConfig of
     Right (Just host) -> first show <$> tryAny (Workspace.withSandboxRelease Workspace.VerifierPool host.bridge (const pass) \rpc -> (\(Workspace.ImageId build) -> UUIDId build) . (.buildId) <$> rpc (Workspace.Resolve host.image))
@@ -979,7 +980,7 @@ runCodeReviewTest respond respondFix respondAdmission respondArtifacts respondEx
   FixRepository _ request _ _ _ _ _ _ _ _ check -> case respondFix request of
     Left message -> pure $ Left message
     Right result -> localSeqUnliftIO env $ \unlift -> (>>= matchingReview result) <$> unlift (check result)
-  PrepareRepository _ -> pure $ Right ()
+  PrepareRepository _ -> pure $ Right Workspace.Cached
   ResolveImage -> pure $ Right $ UUIDId UUID.nil
   AdmitRegression _ request _ _ _ _ -> pure $ respondAdmission request
   ReviewVerifiedFix _ request verified _ _ _ _ -> pure $ respondReview request >>= reviewOutcome request verified
@@ -1026,10 +1027,10 @@ reviewOutcome request verified decision = do
     ReviewBlocked values -> concerns ReviewUnavailable values
 
 
-workerHost :: [FilePath] -> Maybe FilePath -> Maybe FilePath -> Text -> FilePath -> Either Text Guest.Host
-workerHost skills script archive image agent = do
+workerHost :: [FilePath] -> Maybe FilePath -> Maybe FilePath -> Maybe FilePath -> Text -> FilePath -> Either Text Guest.Host
+workerHost skills script archive remote image agent = do
   when (isNothing script && isJust archive) $ Left "A dependency archive requires a trusted preparation script"
-  pure $ Guest.Host image (takeDirectory agent </> "sandbox.mjs") (skills <> [takeDirectory agent </> "skills" </> "superpowers"]) ((`Guest.Workspace` archive) <$> script)
+  pure $ Guest.Host image (takeDirectory agent </> "sandbox.mjs") (skills <> [takeDirectory agent </> "skills" </> "superpowers"]) ((\prepare -> Guest.Workspace prepare archive remote) <$> script)
 
 
 nativeKey :: AE.ToJSON value => value -> FilePath
