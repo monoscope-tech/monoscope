@@ -2209,11 +2209,11 @@ unparsablePayload_ = span_ [class_ "text-xs italic text-textWeak"] "details unav
 -- to people without being presented to the model as assistant output.
 --
 -- Model widgets carry no id, yet a table derives its hx-target from one; each gets a
--- fallback, never a bare @#@:
+-- fallback, never an empty one:
 --
 -- >>> let turn = [def{Issues.role = Issues.ChatUser, Issues.content = "slow checkouts"}, def{Issues.role = Issues.ChatAssistant, Issues.content = "{\"query\":\"name != null\",\"visualization\":\"table\"}"}]
 -- >>> let html = renderText $ aiChatHistoryView_ (pure . href_) (UUIDId UUID.nil) turn
--- >>> ("hx-target=\"#chat-" `TL.isInfixOf` html, "hx-target=\"#\"" `TL.isInfixOf` html)
+-- >>> ("hx-target=\"[id=&#39;chat-" `TL.isInfixOf` html, "hx-target=\"[id=&#39;&#39;]\"" `TL.isInfixOf` html)
 -- (True,False)
 aiChatHistoryView_ :: (Text -> [Attribute]) -> Projects.ProjectId -> [Issues.AIChatMessage] -> Html ()
 aiChatHistoryView_ artifactLinkAttrs pid = render
