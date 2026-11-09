@@ -658,6 +658,7 @@ flattenedOtelAttributesBuiltin =
     , "attributes.exception.message"
     , "attributes.exception.stacktrace"
     , "attributes.exception.type"
+    , "attributes.geo.country.iso_code"
     , "attributes.http.request.body.size"
     , "attributes.http.request.method"
     , "attributes.http.request.method_original"
