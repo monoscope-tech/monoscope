@@ -129,6 +129,16 @@ spec = around withTestResources $ describe "Error patterns" do
     upsertAt traceless{ErrorPatterns.traceId = Just "def456", ErrorPatterns.when = at 60} (at 800)
     refPairs <$> refs `shouldReturn` ((Just "abc123", Just frozenTime), (Just "def456", Just (at 60)))
 
+    -- A sample stored before identity capture left the issue's User card anonymous forever;
+    -- the first identified occurrence replaces it once, and later ones don't rewrite it.
+    let anon = mkErr "AnonError" Nothing "anon-hash" "boom"
+        sampleEmail = fmap ((.userEmail) . (.errorData)) . byHash tr
+    upsertAt anon frozenTime
+    upsertAt anon{ErrorPatterns.userEmail = Just "a@b.c"} frozenTime
+    sampleEmail "anon-hash" `shouldReturn` Just "a@b.c"
+    upsertAt anon{ErrorPatterns.userEmail = Just "z@y.x"} frozenTime
+    sampleEmail "anon-hash" `shouldReturn` Just "a@b.c"
+
     -- The hourly job schedules baselines and spike detection for projects with fresh telemetry.
     bg tr $ BackgroundJobs.runHourlyJob frozenTime 0
     let errorJob = \case BackgroundJobs.ErrorBaselineCalculation p -> [("baseline" :: Text, p)]; BackgroundJobs.ErrorSpikeDetection p -> [("spike", p)]; _ -> []

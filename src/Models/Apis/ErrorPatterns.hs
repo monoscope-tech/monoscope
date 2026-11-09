@@ -556,7 +556,10 @@ batchUpsertErrorPatterns pid errors now =
             -- Toastable columns (message, error_data, parent_hash) are content-derived from hash
             -- and refreshed only on regression to avoid pg_toast bloat from per-occurrence rewrites.
             message = CASE WHEN ^{regresses} THEN EXCLUDED.message ELSE apis.error_patterns.message END,
-            error_data = CASE WHEN ^{regresses} THEN EXCLUDED.error_data ELSE apis.error_patterns.error_data END,
+            -- Also once when this occurrence names a user and the sample does not: the issue's User
+            -- card shows the sample, and one stored anonymously stays anonymous forever otherwise.
+            error_data = CASE WHEN ^{regresses} OR (COALESCE(EXCLUDED.error_data->>'user_id', EXCLUDED.error_data->>'user_email') IS NOT NULL
+                                            AND COALESCE(apis.error_patterns.error_data->>'user_id', apis.error_patterns.error_data->>'user_email') IS NULL) THEN EXCLUDED.error_data ELSE apis.error_patterns.error_data END,
             parent_hash = CASE WHEN ^{regresses} THEN EXCLUDED.parent_hash ELSE apis.error_patterns.parent_hash END,
             -- Write-once, which is how the 23,372 rows that predate the column acquire
             -- one: a row takes its shape the next time it occurs and never pays a

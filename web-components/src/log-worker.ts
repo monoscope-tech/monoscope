@@ -6,27 +6,31 @@ self.onmessage = async (e: MessageEvent) => {
 
   if (type !== 'fetch') return;
 
+  // Every failure up to a parsed body is the server's or the network's, shown to the reader
+  // and flagged `expected` so the list does not console.error it.
+  const fail = (error: string, queryError = false) => self.postMessage({ type: 'error', error, queryError, expected: true, id });
+  let data;
   try {
     const response = await fetch(url, {
       method: 'GET',
       headers: { Accept: 'application/json' },
       credentials: 'include',
     });
-
     // A gateway timeout answers with an HTML page; parsing it would surface a JSON error.
     if (!response.ok && !response.headers.get('content-type')?.includes('json')) {
-      const timedOut = [504, 524].includes(response.status);
-      self.postMessage({ type: 'error', error: timedOut ? 'The query timed out. Try a shorter time range or a narrower filter.' : `Request failed (HTTP ${response.status})`, id });
-      return;
+      return fail([504, 524].includes(response.status) ? 'The query timed out. Try a shorter time range or a narrower filter.' : `Request failed (HTTP ${response.status})`);
     }
-    const data = await response.json();
-
+    // An empty or truncated body (a dropped connection, a restarting server) threw
+    // "Unexpected end of JSON input" from response.json().
+    data = await response.json().catch(() => null);
+    if (!data) return fail(`The server sent an incomplete response (HTTP ${response.status}). Retry to load events.`);
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : 'Network error');
+  }
+  try {
     // `error` is the only failure field LogResult carries — reading `message`
     // first silently swallowed every server message into the generic fallback.
-    if (data.error) {
-      self.postMessage({ type: 'error', error: data.error, queryError: true, id });
-      return;
-    }
+    if (data.error) return fail(data.error, true);
 
     const { logsData, serviceColors, nextUrl, recentUrl, cols, count, traces, hasMore, queryResultCount, viz } = data;
 

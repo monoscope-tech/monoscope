@@ -1486,14 +1486,16 @@ function getActiveGrid(): HTMLElement | null {
 
 (window as any).debounce = debounce;
 
-function bindFunctionsToObjects(rootObj: any, obj: any) {
+// Walks only the option's own JSON shape. `tooltip.appendTo` is a DOM element on dashboards, and
+// htmx's `_htmx` expando points back at it: descending into it overflowed the stack.
+export function bindFunctionsToObjects(rootObj: any, obj: any) {
   if (!obj || typeof obj !== 'object') return;
 
   Object.keys(obj).forEach((key) => {
     const value = obj[key];
     if (typeof value === 'function') {
       obj[key] = value.bind(rootObj);
-    } else if (value && typeof value === 'object') {
+    } else if (Array.isArray(value) || (value && Object.getPrototypeOf(value) === Object.prototype)) {
       bindFunctionsToObjects(rootObj, value);
     }
   });
