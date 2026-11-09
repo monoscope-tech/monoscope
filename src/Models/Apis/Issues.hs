@@ -92,7 +92,6 @@ module Models.Apis.Issues (
   createFeedbackIssue,
   feedbackTargetHash,
   setSpamState,
-  resolveIssues,
   createFrontendIssue,
   PerformanceData (..),
   createPerformanceIssue,
@@ -268,6 +267,7 @@ module Models.Apis.Issues (
   parseActivityEvent,
   IssueActivity (..),
   logIssueActivity,
+  resolveIssueTx,
   ActivityNote (..),
   Ownership (..),
   recordIssueView,
@@ -802,7 +802,7 @@ ON CONFLICT (project_id, target_hash, issue_type)
   WHERE acknowledged_at IS NULL AND archived_at IS NULL
 DO UPDATE SET
   updated_at = EXCLUDED.updated_at,
-  title = CASE WHEN apis.issues.issue_type IN ('query_alert', 'log_pattern_rate_change', 'uptime', 'cron') THEN EXCLUDED.title ELSE apis.issues.title END,
+  title = CASE WHEN apis.issues.issue_type IN (^{enumLit QueryAlert}, ^{enumLit LogPatternRateChange}, ^{enumLit Uptime}, ^{enumLit Cron}) THEN EXCLUDED.title ELSE apis.issues.title END,
   affected_requests = apis.issues.affected_requests + EXCLUDED.affected_requests,
   affected_clients = apis.issues.affected_clients + EXCLUDED.affected_clients,
   issue_data = EXCLUDED.issue_data
@@ -1367,12 +1367,12 @@ setArchiveState pid iids archiveM
       ArchiveUntilEscalating -> (Nothing, True)
 
 
--- | Resolved issues leave the Inbox for good, and the timeline says resolved rather than archived.
-resolveIssues :: (DB es, Time :> es) => Projects.ProjectId -> [IssueId] -> Maybe Projects.UserId -> Maybe AE.Value -> Eff es ()
-resolveIssues pid iids actor meta = do
-  now <- Time.currentTime
-  void $ setArchiveState pid iids (Just (now, ArchiveIndefinite))
-  forM_ iids \i -> logIssueActivity i IEResolved actor meta
+-- | Resolve one issue inside a caller's transaction: it leaves the Inbox for good,
+-- and the timeline says resolved rather than archived.
+resolveIssueTx :: UTCTime -> Projects.ProjectId -> IssueId -> Maybe AE.Value -> Tx.Transaction ()
+resolveIssueTx now pid iid meta = do
+  Hasql.executeTx [HI.sql| UPDATE apis.issues SET archived_at = #{now}, updated_at = #{now}, archived_until = NULL, archive_until_escalating = FALSE WHERE project_id = #{pid} AND id = #{iid} |]
+  Hasql.executeTx $ activitySql now iid IEResolved Nothing meta
 
 
 -- | Lift archives, returning the reopened ids. A reopen must not collide with an
@@ -3837,50 +3837,65 @@ stateEventSql = [HI.sql|a.event IN ('resolved', 'auto_resolved', 'reopened', 're
 logIssueActivity :: (DB es, Time :> es) => IssueId -> IssueEvent -> Maybe Projects.UserId -> Maybe AE.Value -> Eff es ()
 logIssueActivity issueId event createdBy metadataM = do
   now <- Time.currentTime
-  -- A person's action on an issue replies in the latest Slack thread each channel
-  -- holds for it; it never starts a thread. A closing action on an episode the
-  -- alert pipeline already closed would only repeat that pipeline's own reply.
-  let closing = event `elem` [IEResolved, IEAutoResolved]
-      logged =
-        [HI.sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, metadata, created_at)
+  Hasql.interpExecute_ $ activitySql now issueId event createdBy metadataM
+
+
+activitySql :: UTCTime -> IssueId -> IssueEvent -> Maybe Projects.UserId -> Maybe AE.Value -> HI.Sql
+activitySql now issueId event createdBy metadataM = case slackRelay event of
+  NotRelayed -> logged
+  Relayed -> relayed ["post_activity"]
+  RelayedWithOwner -> relayed ["post_activity", "update_root"]
+  where
+    -- A person's action on an issue replies in the latest Slack thread each channel
+    -- holds for it; it never starts a thread. A closing action on an episode the
+    -- alert pipeline already closed would only repeat that pipeline's own reply.
+    closing = event `elem` [IEResolved, IEAutoResolved]
+    logged =
+      [HI.sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, metadata, created_at)
         SELECT #{issueId}, #{event}, #{createdBy}, #{Aeson <$> metadataM}, #{now}
         WHERE EXISTS (SELECT 1 FROM apis.issues WHERE id = #{issueId}) |]
-  Hasql.interpExecute_
-    $ if not (relayedToSlack event)
-      then logged
-      else
-        [HI.sql| WITH logged AS (|]
-          <> logged
-          <> [HI.sql| RETURNING id, issue_id), latest AS (
+    relayed (operations :: [Text]) =
+      [HI.sql| WITH logged AS (|]
+        <> logged
+        <> [HI.sql| RETURNING id, issue_id), latest AS (
           SELECT DISTINCT ON (r.team_id, r.channel_id) r.id AS root_id, r.episode_id, r.first_event_id, r.threadless, e.phase, logged.id AS activity_id
           FROM logged JOIN apis.issues i ON i.id = logged.issue_id
           JOIN apis.incident_episodes e ON e.project_id = i.project_id AND e.issue_id = logged.issue_id
           JOIN apis.slack_incident_roots r ON r.episode_id = e.id
           ORDER BY r.team_id, r.channel_id, e.started_at DESC)
+        , queued AS (
         INSERT INTO apis.slack_incident_deliveries (root_id, episode_id, event_id, operation, available_at, activity_id)
         SELECT root_id, episode_id, first_event_id, operation, #{now}, activity_id FROM latest
-        CROSS JOIN unnest(CASE WHEN #{changesOwnership event} THEN ARRAY['post_activity', 'update_root'] ELSE ARRAY['post_activity'] END) operation
-        WHERE NOT threadless AND NOT (#{closing} AND phase <> 'active') |]
+        CROSS JOIN unnest(#{V.fromList operations}::text[]) operation
+        WHERE NOT threadless AND NOT (#{closing} AND phase <> 'active') RETURNING 1)
+        -- Send now rather than on the next monitor tick: a person is watching the thread. The
+        -- payload is BgJobs' DeliverSlackIncidents; an integration test pins the encoding.
+        INSERT INTO background_jobs (run_at, status, payload)
+        SELECT #{now}, 'queued', jsonb_build_object('tag', 'DeliverSlackIncidents')
+        WHERE EXISTS (SELECT 1 FROM queued) AND NOT EXISTS (SELECT 1 FROM background_jobs
+          WHERE status = 'queued' AND payload = jsonb_build_object('tag', 'DeliverSlackIncidents')) |]
 
 
--- | Whether a Slack thread hears about this lifecycle event. Regressions and
--- escalations do not: the alert pipeline posts those itself, with their evidence.
-relayedToSlack :: IssueEvent -> Bool
-relayedToSlack = \case
-  (IEAcknowledged; IEUnacknowledged; IEAckExpired; IEArchived; IEUnarchived; IEResolved; IEAutoResolved; IEReopened) -> True
-  (IEAssigned; IEUnassigned; IECommented; IELinked; IEMerged; IESpam; IENotSpam) -> True
-  (IECreated; IERegressed; IEEscalated; IEViewed) -> False
+-- | What a Slack thread hears about a lifecycle event. Regressions and escalations
+-- are not relayed: the alert pipeline posts those itself, with their evidence.
+-- An ownership change also re-renders the root, which shows who holds the issue.
+data SlackRelay = NotRelayed | Relayed | RelayedWithOwner
+  deriving stock (Show)
 
 
--- | Whether the event changes who holds the issue, which its Slack root shows.
-changesOwnership :: IssueEvent -> Bool
-changesOwnership = \case
-  (IEAcknowledged; IEUnacknowledged; IEAckExpired; IEAssigned; IEUnassigned) -> True
-  (IEArchived; IEUnarchived; IEResolved; IEAutoResolved; IEReopened; IECommented; IELinked; IEMerged; IESpam; IENotSpam; IECreated; IERegressed; IEEscalated; IEViewed) -> False
+slackRelay :: IssueEvent -> SlackRelay
+slackRelay = \case
+  (IEAcknowledged; IEUnacknowledged; IEAckExpired; IEAssigned; IEUnassigned) -> RelayedWithOwner
+  (IEArchived; IEUnarchived; IEResolved; IEAutoResolved; IEReopened; IECommented; IELinked; IEMerged; IESpam; IENotSpam) -> Relayed
+  (IECreated; IERegressed; IEEscalated; IEViewed) -> NotRelayed
 
 
 -- | Who holds an issue right now, as its Slack root shows it. Acknowledged iff
 -- 'acknowledgedUntil' is set; an API-key acknowledgement has no named member.
+-- The claim query builds this object in SQL; the example pins its keys.
+--
+-- >>> isJust $ AE.decode @Ownership "{\"acknowledgedBy\":\"Ada\",\"acknowledgedUntil\":\"2025-01-01T01:00:00+00:00\",\"assignee\":null}"
+-- True
 data Ownership = Ownership {acknowledgedBy :: Maybe Text, acknowledgedUntil :: Maybe UTCTime, assignee :: Maybe Text}
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -3888,6 +3903,10 @@ data Ownership = Ownership {acknowledgedBy :: Maybe Text, acknowledgedUntil :: M
 
 
 -- | One relayed lifecycle event, as the Slack worker reads it back to render.
+-- The claim query builds this object in SQL; the example pins its keys.
+--
+-- >>> isJust $ AE.decode @ActivityNote "{\"event\":\"acknowledged\",\"issue\":\"TypeError\",\"actor\":\"Ada\",\"assignee\":null,\"metadata\":null,\"at\":\"2025-01-01T00:00:00+00:00\"}"
+-- True
 data ActivityNote = ActivityNote
   { event :: IssueEvent
   , issue :: Maybe Text

@@ -4,6 +4,7 @@ import BackgroundJobs (checkTriggeredQueryMonitors, evaluateQueryMonitorValue, n
 import Codec.Compression.GZip qualified as GZip
 import Control.Lens ((.~), (^.), (^?))
 import Data.Aeson qualified as AE
+import Data.Aeson.Encode.Pretty qualified as AEP
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Lens (key, _String)
 import Data.ByteString.Base64.URL qualified as B64URL
@@ -12,6 +13,7 @@ import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.Notify (Notification (..))
 import Data.Effectful.Notify qualified as Notify
 import Data.HashMap.Strict qualified as HashMap
+import Data.List (partition)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
@@ -134,7 +136,7 @@ spec = describe "Monitoring" do
           , entry "new endpoints" (Mail.slackNewEndpointsAlert "Acme API" endpoints issue "https://example.com") []
           , entry "weekly report" (Mail.slackReportAlert Projects.RTWeekly "2025-01-01T00:00:00Z" "2025-01-08T00:00:00Z" 42 125000 (V.fromList [("orders-api", 30, 90000), ("payments", 12, 35000)]) "Acme API" "https://example.com/reports/1" chart chart) []
           ]
-    goldenText "slack/alert-gallery.json" $ decodeUtf8 $ AE.encode gallery
+    goldenText "slack/alert-gallery.json" $ decodeUtf8 $ AEP.encodePretty gallery
     concatMap slackPayloadViolations gallery `shouldBe` []
 
   around withTestResources do
@@ -692,13 +694,18 @@ spec = describe "Monitoring" do
         iid <- dbOne @_ @Issues.IssueId tr [sql|SELECT issue_id FROM apis.incident_episodes WHERE source_id = ?|] (Only mid)
         rootTs <- dbQuery @_ @(Text, Text) tr [sql|SELECT channel_id, message_ts FROM apis.slack_incident_roots ORDER BY channel_id|] ()
         let actor = (Servant.getResponse tr.trSessAndHeader).user
-            who = "*" <> Mail.personName actor <> "*"
-            -- A root sends one delivery per tick, in order: three replies and two root edits.
-            deliver = slack . fst <$> captureNotifs tr (replicateM_ 6 runSlackIncidentDeliveries)
+            who = "*" <> Projects.userLabel actor <> "*"
+            -- One worker run drains every thread: three replies and two root edits each.
+            deliver = slack . fst <$> captureNotifs tr runSlackIncidentDeliveries
             stranded = dbQuery @_ @(Text, Text) tr [sql|SELECT operation, state FROM apis.slack_incident_deliveries WHERE state NOT IN ('delivered', 'failed')|] ()
+            -- The SQL that queues this run writes its payload by hand; matching the encoded constructor pins it.
+            deliveryRun = PGS.Only $ Aeson $ AE.toJSON Jobs.DeliverSlackIncidents
+            queuedRuns = dbOne @_ @Int tr [sql|SELECT count(*)::int FROM background_jobs WHERE status = 'queued' AND payload = ?|] deliveryRun
         void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid True iid (Just 60)
         void $ call tr $ IssuesPage.triagePostH testPid iid (IssuesPage.TriageForm Nothing (Just actor.id.toText))
         void $ call tr $ IssuesPage.commentPostH testPid iid (IssuesPage.CommentForm "rolling back <the> deploy")
+        -- The actions queue one immediate delivery run rather than waiting for the monitor tick.
+        queuedRuns `shouldReturn` 1
         delivered <- deliver
         let lifecycle = filter (isJust . (.threadTs)) delivered
             rootEdits = [slackText sd | sd <- delivered, sd.payload ^? key "metadata" . key "event_type" . _String == Just "monoscope_incident_root", sd.channelId == "C1"]
@@ -717,6 +724,11 @@ spec = describe "Monitoring" do
         void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid False iid Nothing
         sort . map (\sd -> (sd.channelId, isJust sd.threadTs)) <$> deliver `shouldReturn` [("C1", False), ("C1", True)]
         stranded `shouldReturn` []
+        -- With no thread left to reply in, an action queues no delivery run.
+        dbExec tr [sql|DELETE FROM background_jobs WHERE payload = ?|] deliveryRun
+        dbExec tr [sql|UPDATE apis.slack_incident_roots SET message_ts = NULL, threadless = TRUE|] ()
+        void $ call tr $ IssuesPage.commentPostH testPid iid (IssuesPage.CommentForm "still rolling back")
+        queuedRuns `shouldReturn` 0
 
       it "records manual error resolution once and updates both incident threads without claiming recovery" \tr -> do
         update <- setupWithIssue tr
@@ -870,6 +882,15 @@ spec = describe "Monitoring" do
         advanceMinutes tr (24 * 60)
         nextDay <- evaluate 84
         (sort (replies nextDay), roots nextDay) `shouldBe` (sort [(cid, ts, Just (AE.Bool True)) | (cid, ts, _) <- edits], [])
+        -- Recovering the same day stays in the thread; recovering on the next day surfaces it again.
+        advanceMinutes tr 1
+        sameDay <- evaluate 18
+        sort (replies sameDay) `shouldBe` sort [(cid, ts, Nothing) | (cid, ts, _) <- edits]
+        advanceMinutes tr 1
+        void $ evaluate 84
+        advanceMinutes tr (24 * 60)
+        recoveredNextDay <- evaluate 18
+        sort (replies recoveredNextDay) `shouldBe` sort [(cid, ts, Just (AE.Bool True)) | (cid, ts, _) <- edits]
 
       it "records recovery while muted and refreshes the root when delivery resumes" \tr -> do
         mid <- monitorOf <$> setupWithIssue tr
@@ -920,6 +941,16 @@ spec = describe "Monitoring" do
         fireAgain
         map (\(i, u, _, _) -> (i, isJust u)) <$> issueRows `shouldReturn` [(firstIssue, True)]
 
+      it "reports an issue alert Slack could not record as not sent, and still sends the email" \tr -> do
+        setupSlackData tr testPid "T1"
+        project <- runTestBgNoReset tr (Projects.projectById testPid) >>= maybe (fail "test project missing") pure
+        users <- runTestBgNoReset tr (Projects.usersByProjectId testPid)
+        -- Never inserted: the outbox rejects an alert for an issue it cannot find.
+        unsaved <- runTestBgNoReset tr $ Issues.createQueryAlertIssue testPid "unsaved" "Never saved" "" 60 84 Issues.Above
+        let messages = Mail.uptimeMessages (Issues.UptimeData "1" "Shop" "https://shop.example.com" 200 (Just 503) "status 503" 10 frozenTime) "https://example.com/issues/1"
+        (notifs, sent) <- captureNotifs tr $ Jobs.sendAlertToChannels (Mail.MonitorsAlert "Shop is down" "https://example.com" Nothing) messages unsaved project users "https://example.com" "Shop is down" (Lucid.toHtml ("Shop is down" :: Text))
+        (sent, null [() | EmailNotification _ <- notifs], slack notifs) `shouldBe` (False, False, [])
+
       it "delivers channel-specific roots, replies, and updates through the notification worker" \tr -> do
         update <- setupWithIssue tr
         setupSlackData tr testPid "T1"
@@ -928,10 +959,11 @@ spec = describe "Monitoring" do
         (sort (map (.channelId) rootNotifications), map (.threadTs) rootNotifications) `shouldBe` (["C1", "C2"], [Nothing, Nothing])
         void $ runTestBgNoReset tr $ I.recordIncidentEvent update{I.observedAt = addUTCTime 60 frozenTime, I.change = I.IncidentRecovered}
         advanceMinutes tr 1
-        replies <- slack . fst <$> captureNotifs tr runSlackIncidentDeliveries
-        let parents = sort [(sd.channelId, sd.threadTs) | sd <- replies]
+        -- One run drains each thread in order: its reply, then its root edit.
+        delivered <- slack . fst <$> captureNotifs tr runSlackIncidentDeliveries
+        let (replies, edits) = partition (isJust . (.threadTs)) delivered
+            parents = sort [(sd.channelId, sd.threadTs) | sd <- replies]
         (all (isJust . snd) parents, length (ordNub $ map snd parents)) `shouldBe` (True, 2)
-        edits <- slack . fst <$> captureNotifs tr runSlackIncidentDeliveries
         sort [(sd.channelId, KM.lookup "ts" obj) | sd <- edits, AE.Object obj <- [sd.payload]] `shouldBe` [(cid, AE.String <$> ts) | (cid, ts) <- parents]
         -- Message metadata correlates every post with its stored root and delivery.
         for_ ([("post_root", "monoscope_incident_root", rootNotifications), ("post_reply", "monoscope_incident_delivery", replies), ("update_root", "monoscope_incident_root", edits)] :: [(Text, Text, [Notify.SlackData])]) \(operation, eventType, messages) ->
