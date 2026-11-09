@@ -73,6 +73,25 @@ Repositories can add `.monoscope/PROOF.md`: free-form guidance on when to prove 
 The agent reads it from the base revision, so a pull request cannot rewrite its own rules.
 Monoscope skills (`investigate`, `kql-reference`) can be mounted for the agent through `IMPACT_REVIEW_SKILLS`.
 
+## Sharing one host fairly
+
+Reviews, proofs and workspace builds can share a host with ingestion and the web server.
+- **Admission in the queue:** `claimRun` admits at most 2 reviews per project and `IMPACT_REVIEW_CONCURRENCY` (default 4) in total. The rest wait in the job queue and retry every 15 s, so waiting never spends a review's 9-minute budget. A tenant with many pull requests gets parallel reviews up to its cap, and other tenants keep their turn.
+- **Host slots:** every VM takes a lock-file slot under `IMPACT_REVIEW_VM_SLOT_DIR` (default `/tmp/monoscope-vm-slots`), shared by every process on the node. There are three pools, so nested VMs cannot deadlock: agents (a quarter of the cores), verifiers (2) and builds (1). `IMPACT_REVIEW_VM_SLOTS=agents,verifiers,builds` overrides the defaults. A busy slot fails within 45 s, because the queue has already done the waiting. Under k3s, each node counts its own slots.
+- **CPU priority:** sandbox bridges, their VMs, `agg` and `ffmpeg` run under `nice -n 19` (plus `ionice -c3` where it exists), so ingestion and web requests always preempt a guest's compile.
+- **Charged attempts:** every `record_proof` attempt counts against the budget of three, failed ones included. It also spends the query budget. The count survives a resumed session, and stored proofs are capped per attempt.
+
+## Warm workspaces
+
+Every queued review also queues `PrepareReviewWorkspace`. That job builds the workspace checkpoint at the pull request's base, outside any review's budget, with an hour's limit. It is a no-op when the checkpoint already exists.
+- **Warm starts:** a build at a new base starts from the repository's latest checkpoint (`latest-LINEAGE.json` under the project's workspaces). In the VM it checks out the new base, keeps gitignored output (`target/`, `dist-newstyle/`, `node_modules/`) and reruns the preparation script, which compiles incrementally. The result is stored under the exact key, and the same source fingerprint checks apply.
+- **Cold starts:** only a repository's first build is cold. A tenant's concurrent pull requests share one checkpoint, each through its own copy-on-write overlay.
+- **Locking:** a build no longer holds the project lock while compiling. Only publication is locked, and a build that loses the race is discarded.
+
+## Proof recipes
+
+`record_proof` takes an optional `setup` script. It runs before the recording and is not recorded: build and start the app, migrate, seed, and wait for it. When a proof's head recording succeeds, the host stores that setup as the repository's recipe (`projects.pr_review_proof_recipes`). The next review's prompt carries it verbatim, and the agent passes it back unchanged. Each proof logs whether its setup was reused, changed or absent, which measures how deterministic proofs are.
+
 ## Prepare a project workspace
 
 Use a private request containing `projectId`, a credential-free `repository` and its exact `base` revision.

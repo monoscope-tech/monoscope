@@ -1,5 +1,7 @@
 # Impact reviews: follow-ups after #812
 
+Status (2026-11-09): the stacked sandboxes PR implements E (in-job preparation and ancestor warm starts) and F (queue admission, host slots, CPU priority, charged attempts), plus proof recipes. Restore-on-miss from S3 waits for a second node.
+
 PR #812 shipped triggers, merge-risk grading, widget evidence and terminal proof. Its description and `docs/agent-operations.md` describe that work. What remains:
 
 - Browser proof: Playwright `recordVideo` in a second guest image.

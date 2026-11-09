@@ -318,11 +318,11 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
       BoundedPatch -> launch (SourcePatchTask request) $ callbacks Nothing Nothing $ DraftText validateText
       CheckoutHarness -> launch (SourceTask request) $ callbacks (Just $ unlift . recordAllocation) (Just $ unlift . recordCheck) $ StructuredDraft validateValue
   PrepareRepository request -> liftIO case (artifactStore, hostConfig) of
-    (Just store, Right (Just host)) | Just configured <- host.workspace -> fmap (join . first show) $ tryAny $ fmap join $ Checkout.withCheckout store (Checkout.Repository request) \fetched _ ->
+    (Just store, Right (Just host)) | Just configured <- host.workspace -> join . first show <$> tryAny (join <$> Checkout.withCheckout store (Checkout.Repository request) \fetched _ ->
       withSystemTempDirectory "monoscope-prepare-request" \directory -> do
         let requestFile = directory </> "request.json"
         writeFileLBS requestFile $ AE.encode $ AE.object ["projectId" AE..= request.projectId, "repository" AE..= request.repository, "base" AE..= request.base]
-        void <$> runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir host.image host.bridge configured.script configured.dependencyArchive) (Workspace.Prepare fetched.directory) requestFile)
+        void <$> runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir host.image host.bridge configured.script configured.dependencyArchive) (Workspace.Prepare fetched.directory) requestFile))
     _ -> pure $ Left "Workspace preparation is not configured on this host"
   ReviewPatch request recordCall recordUsage check -> localSeqUnliftIO env \unlift ->
     liftIO

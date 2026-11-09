@@ -1686,7 +1686,7 @@ withSandboxRelease pool bridge released action = withSlot pool do
   environment <- filter (\(key, _) -> key `elem` ["PATH", "HOME", "XDG_CACHE_HOME"] || "GONDOLIN_" `isPrefixOf` key) <$> getEnvironment
   ionice <- findExecutable "ionice"
   let lowest = ["-n", "19", bridge]
-      (program, arguments) = maybe ("nice", lowest) (\path -> (path, ["-c", "3", "nice"] <> lowest)) ionice
+      (program, arguments) = maybe ("nice", lowest) (,["-c", "3", "nice"] <> lowest) ionice
   bracket
     (bracketOnError (startProcess $ setCreateGroup True $ setEnv environment $ setStdin createPipe $ setStdout createPipe $ setStderr nullStream $ proc program arguments) stopProcess \process -> (process,) <$> (getPid process >>= maybe invalid pure))
     (\(process, owner) -> stopProcess process `Exception.finally` (Signal.signalProcessGroup Signal.sigKILL owner `catchIOError` \failure -> unless (isDoesNotExistError failure) $ throwIO failure))
