@@ -250,7 +250,7 @@ clipCast highlight cast = case BS8.lines cast of
                     | i == cell now = ("\ESC[97m", "●")
                     | i >= cell window.start && i <= cell window.end = ("\ESC[38;2;59;130;246m", "━")
                     | otherwise = ("\ESC[38;2;100;116;139m", "─")
-                  track = foldMap (\run -> fst (NE.head run) <> foldMap snd run) $ NE.groupWith fst $ map paint [0 .. cells - 1]
+                  track = foldMap (\run@((color, _) :| _) -> color <> foldMap snd run) $ NE.groupWith fst $ map paint [0 .. cells - 1]
                in "\ESC7\ESC[" <> show row <> ";1H\ESC[2K\ESC[0m" <> clock now <> " " <> track <> "\ESC[0m " <> clock total <> "\ESC8"
             event at text = decodeUtf8 @Text (AE.encode (at, "o" :: Text, text))
             events =
@@ -259,7 +259,7 @@ clipCast highlight cast = case BS8.lines cast of
                 <> [event 0 (timeline window.start)]
                 <> [event (t - window.start) (text <> timeline t) | (t, text) <- outputs, t >= window.start, t <= window.end]
                 <> [event (window.end - window.start) (timeline window.end)]
-        Right (encodeUtf8 $ T.unlines $ decodeUtf8 (AE.encode $ KM.insert "height" (AE.toJSON row) meta) : events, window)
+        Right (encodeUtf8 $ unlines $ decodeUtf8 (AE.encode $ KM.insert "height" (AE.toJSON row) meta) : events, window)
   _ -> Left "The proof recording is not an asciinema cast"
 
 
