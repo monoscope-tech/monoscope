@@ -1389,6 +1389,17 @@ sortableTableHead_ widget columns selected =
           else headerRow title
 
 
+-- | A CSS selector for any element id. Widget ids are title slugs, and @#5xx-rate_stat@ is not
+-- a valid selector: an id starting with a digit made htmx throw on every refresh.
+--
+-- >>> idSelector "5xx-rate_stat"
+-- "[id='5xx-rate_stat']"
+-- >>> idSelector "it's"
+-- "[id='it\\'s']"
+idSelector :: Text -> Text
+idSelector i = "[id='" <> T.replace "'" "\\'" i <> "']"
+
+
 renderTable :: Widget -> Html ()
 renderTable widget = do
   let tableId = maybeToMonoid widget.id
@@ -1399,8 +1410,8 @@ renderTable widget = do
         class_ "dashboard-table-wrap h-full overflow-auto rounded-[inherit] pb-2"
       , hxGet_ $ widgetFetchUrl eagerWidget
       , hxTrigger_ $ bool "intersect once, update-query from:window, table-sort" "update-query from:window, table-sort" (isJust widget.html) <> memptyIfFalse (or widget.searchable) ", input delay:250ms, search"
-      , hxTarget_ $ "#" <> tableId
-      , hxSelect_ $ "#" <> tableId
+      , hxTarget_ $ idSelector tableId
+      , hxSelect_ $ idSelector tableId
       , hxSwap_ "outerHTML"
       , term "hx-sync" "this:replace"
       , term "hx-vals" "js:{...Object.fromEntries(new URLSearchParams(location.search)), ...JSON.parse(this.closest('[data-constants]')?.dataset.constants || '{}'), 'table-sort': this.dataset.tableSort || '', 'table-search': this.querySelector('input[type=search]')?.value || ''}"
@@ -1426,8 +1437,8 @@ renderStatContent widget valueM = do
       class_ $ "stat-widget px-3 flex flex-col [[data-stat-grid=plain]_&]:my-auto " <> bool "py-3 " "py-2 " (or widget._isNested)
     , hxGet_ $ widgetFetchUrl (widget & #eager ?~ True)
     , hxTrigger_ $ bool "intersect once, update-query from:window" "update-query from:window" hasData
-    , hxTarget_ $ "#" <> statContentId
-    , hxSelect_ $ "#" <> statContentId
+    , hxTarget_ $ idSelector statContentId
+    , hxSelect_ $ idSelector statContentId
     , hxSwap_ "outerHTML"
     , term "hx-vals" "js:{...Object.fromEntries(new URLSearchParams(location.search)), ...JSON.parse(this.closest('[data-constants]')?.dataset.constants || '{}')}"
     ]

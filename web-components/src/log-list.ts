@@ -51,7 +51,7 @@ import {
   middleTruncatePath,
 } from './log-list-utils';
 import { expandSince, expandFromToRange, parseChartZoom, copyParams, PAGE_CONTEXT_PARAMS, SCOPE_PARAMS, TIME_PARAMS } from './time-range-utils';
-import { toEChartsColor } from './widgets';
+import { logFailure, ShownFailure, toEChartsColor } from './widgets';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { keyed } from 'lit/directives/keyed.js';
 
@@ -101,13 +101,17 @@ const columnWidthVars = (columns: string[], width: (column: string) => number | 
     .map(([column, w]) => `--col-${column}-width: ${w}px`)
     .join('; ');
 
+const toShownFailure = (e: unknown): never => {
+  throw new ShownFailure((e instanceof Error && e.message) || 'Network error');
+};
+
 // Every JSON read this list makes wants the same three things: the Accept header that
 // keeps an expired session answering 401 instead of redirecting to an HTML login page,
 // the session cookie, and a message a human can act on when it fails.
 async function fetchJson<T>(url: string): Promise<T> {
-  const resp = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' });
-  if (!resp.ok) throw new Error(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
-  return (await resp.json()) as T;
+  const resp = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' }).catch(toShownFailure);
+  if (!resp.ok) throw new ShownFailure(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
+  return (await resp.json().catch(toShownFailure)) as T;
 }
 
 // Special item types for virtual list
@@ -488,7 +492,7 @@ export class LogList extends LitElement {
   }
 
   private handleWorkerMsg(e: MessageEvent) {
-    const { type, tree, meta, error, queryError, id } = e.data;
+    const { type, tree, meta, error, queryError, expected, id } = e.data;
     const cb = this.workerCallbacks.get(id);
     if (!cb) {
       console.warn('[Worker] No callback found for message id:', id);
@@ -496,7 +500,7 @@ export class LogList extends LitElement {
     }
     this.workerCallbacks.delete(id);
     if (type !== 'success' && queryError) this.reportQueryError(error);
-    type === 'success' ? cb.resolve({ tree, meta }) : cb.reject(new Error(error));
+    type === 'success' ? cb.resolve({ tree, meta }) : cb.reject(expected ? new ShownFailure(error) : new Error(error));
   }
 
   // A server-reported query error (bad field, unsupported query) belongs under
@@ -519,11 +523,11 @@ export class LogList extends LitElement {
       let data: LogDataResponse;
       if (early) {
         window.logDataPromise = null;
-        data = await early;
+        data = await early.catch(toShownFailure);
       } else {
         data = await fetchJson<LogDataResponse>(url);
       }
-      if (data.error) throw new Error(this.reportQueryError(data.error));
+      if (data.error) throw new ShownFailure(this.reportQueryError(data.error));
       const colIdxMap = data.colIdxMap || {};
       const isSessions = this.mode === 'sessions';
       // The sessions summary is computed in the same scan as the rows and shipped
@@ -593,10 +597,10 @@ export class LogList extends LitElement {
     const earlyPromise = window.logDataPromise;
     if (earlyPromise) {
       window.logDataPromise = null;
-      const data = await earlyPromise;
+      const data = await earlyPromise.catch(toShownFailure);
       // Propagate server errors instead of silently falling through to the worker —
       // otherwise the user waits 2 min for "Worker timeout" masking the real cause.
-      if (data.error) throw new Error(this.reportQueryError(data.error));
+      if (data.error) throw new ShownFailure(this.reportQueryError(data.error));
       const { logsData, serviceColors, nextUrl, recentUrl, count, traces } = data;
       const colIdxMap = data.colIdxMap ?? {};
       const tree = logsData?.length ? groupSpans(logsData, colIdxMap, this.expandedTraces, this.flipDirection, traces || []) : [];
@@ -632,7 +636,7 @@ export class LogList extends LitElement {
       setTimeout(() => {
         if (this.workerCallbacks.has(id)) {
           this.workerCallbacks.delete(id);
-          reject(new Error('Worker timeout'));
+          reject(new ShownFailure('Worker timeout'));
         }
       }, 120000);
     });
@@ -1651,7 +1655,7 @@ export class LogList extends LitElement {
       };
       this.requestUpdate();
     } catch (e) {
-      console.error('fetchAggregateChildren failed:', e);
+      logFailure('fetchAggregateChildren failed:', e);
       const existing = this.expandedAggregates[key];
       if (existing) {
         this.expandedAggregates = { ...this.expandedAggregates, [key]: { ...existing, loading: false } };
@@ -1798,7 +1802,7 @@ export class LogList extends LitElement {
       this.updateVisibleItems();
       this.requestUpdate();
     } catch (e) {
-      console.error('Failed to load session children:', e);
+      logFailure('Failed to load session children:', e);
       // Roll back optimistic expansion so the next click retries the fetch
       // instead of going down the (no-op) collapse branch.
       parent.expanded = false;
@@ -2027,7 +2031,7 @@ export class LogList extends LitElement {
       // A newer full fetch owns the UI now. Do not surface an error from the
       // obsolete request or replace the newer request's loading state.
       if (gen !== this.fetchGeneration) return;
-      console.error(error);
+      logFailure(error);
       // An Error with an empty message (a bare `new Error()`, some DOM exceptions) took the
       // first branch and produced a blank toast — a failure the reader is shown nothing about.
       const msg = (error instanceof Error && error.message) || 'Network error';

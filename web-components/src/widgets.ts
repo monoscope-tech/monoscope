@@ -50,8 +50,13 @@ export const chartLayoutForSize = (options: any, width: number, height: number, 
   return { ...laid, series: laid.series.map((s: any) => ({ ...s, itemStyle: { ...s.itemStyle, borderWidth: gap } })) };
 };
 
+// A failure the reader is already shown (a rejected query, a lapsed session, an HTTP error, a
+// dropped connection). Warned, never console.error'd: the browser SDK files those as exceptions.
+export class ShownFailure extends Error {}
+export const logFailure = (...args: unknown[]) => (args.some((a) => a instanceof ShownFailure) ? console.warn : console.error)(...args);
+
 /** A query failure already sanitized by the chart endpoint. */
-export class ChartQueryError extends Error {}
+export class ChartQueryError extends ShownFailure {}
 
 /** A stream always ends with complete or error; EOF alone is not success. */
 export async function readChartResponse<T>(response: Response, partial: (data: T) => void): Promise<T> {
@@ -752,10 +757,7 @@ const canFetchData = (widgetData: WidGetData) => !!widgetData.pid && widgetData.
 type ChartPrefetch = { url: string; response: Promise<ChartDataResponse | null>; controller: AbortController; latest?: ChartDataResponse; partial?: (data: ChartDataResponse) => void };
 const chartDataPrefetch = new Map<string, ChartPrefetch>();
 const streamUrl = (url: string) => url.replace('/chart_data?', '/chart_data/stream?');
-class ChartSessionError extends Error {}
-// The user's own query rejected (unknown field, syntax) or a lapsed session: shown in the
-// chart banner, never console.error'd — the browser SDK files those as critical exceptions.
-export const isUnexpectedChartError = (e: unknown) => !(e instanceof ChartQueryError || e instanceof ChartSessionError);
+class ChartSessionError extends ShownFailure {}
 // /chart_data intermittently answers 401 while the page's session is fine (server-side
 // lookup, cause unknown); reloading on each one looped the page every ~2s. One re-fetch
 // after a second confirms it, shared by every chart that hit it at the same time.
@@ -970,7 +972,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   } catch (e) {
     clearTimeout(partialTimer);
     if (signal.aborted || isStale()) return;
-    if (isUnexpectedChartError(e)) console.error('Failed to fetch new data:', e);
+    logFailure('Failed to fetch new data:', e);
     if (e instanceof ChartSessionError) reportFailure(e.message, async () => window.location.reload());
     else reportFailure(e instanceof ChartQueryError ? e.message : "Couldn't load this chart. Retry to fetch it again.");
   } finally {
@@ -1486,14 +1488,16 @@ function getActiveGrid(): HTMLElement | null {
 
 (window as any).debounce = debounce;
 
-function bindFunctionsToObjects(rootObj: any, obj: any) {
+// Walks only the option's own JSON shape. `tooltip.appendTo` is a DOM element on dashboards, and
+// htmx's `_htmx` expando points back at it: descending into it overflowed the stack.
+export function bindFunctionsToObjects(rootObj: any, obj: any) {
   if (!obj || typeof obj !== 'object') return;
 
   Object.keys(obj).forEach((key) => {
     const value = obj[key];
     if (typeof value === 'function') {
       obj[key] = value.bind(rootObj);
-    } else if (value && typeof value === 'object') {
+    } else if (Array.isArray(value) || (value && Object.getPrototypeOf(value) === Object.prototype)) {
       bindFunctionsToObjects(rootObj, value);
     }
   });

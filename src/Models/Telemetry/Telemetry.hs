@@ -2524,6 +2524,7 @@ atErrorFrom spanObj mechanism handled typ msg stack =
         , sessionId = getUserAttrM "id" "session"
         , tenantName = getSpanAttr "tenant.name" <|> getIdentityAttrM "name" ["tenant", "organization"]
         , release = attr "service.version"
+        , tenantId = getIdentityAttrM "id" ["tenant", "organization"]
         , handled
         , mechanism = Just mechanism
         , level = spanObj.level <|> (display <$> (spanObj.severity >>= (.severity_text))) <|> ("error" <$ guard (spanObj.status_code == Just "ERROR"))

@@ -129,6 +129,16 @@ spec = around withTestResources $ describe "Error patterns" do
     upsertAt traceless{ErrorPatterns.traceId = Just "def456", ErrorPatterns.when = at 60} (at 800)
     refPairs <$> refs `shouldReturn` ((Just "abc123", Just frozenTime), (Just "def456", Just (at 60)))
 
+    -- A sample stored before identity capture left the issue's User card anonymous forever;
+    -- the first identified occurrence replaces it once, and later ones don't rewrite it.
+    let anon = mkErr "AnonError" Nothing "anon-hash" "boom"
+        sampleEmail = fmap ((.userEmail) . (.errorData)) . byHash tr
+    upsertAt anon frozenTime
+    upsertAt anon{ErrorPatterns.userEmail = Just "a@b.c"} frozenTime
+    sampleEmail "anon-hash" `shouldReturn` Just "a@b.c"
+    upsertAt anon{ErrorPatterns.userEmail = Just "z@y.x"} frozenTime
+    sampleEmail "anon-hash" `shouldReturn` Just "a@b.c"
+
     -- The hourly job schedules baselines and spike detection for projects with fresh telemetry.
     bg tr $ BackgroundJobs.runHourlyJob frozenTime 0
     let errorJob = \case BackgroundJobs.ErrorBaselineCalculation p -> [("baseline" :: Text, p)]; BackgroundJobs.ErrorSpikeDetection p -> [("spike", p)]; _ -> []
@@ -155,6 +165,9 @@ spec = around withTestResources $ describe "Error patterns" do
     -- The chart marks where each release began; a later event of the same release must not move it.
     emit "1.1" [] (-25)
     fmap zonedTimeToUTC . (.lastReleaseSince) <$> current `shouldReturn` Just (at (-30))
+    -- Alerts render the stored sample: a tenant first sent on a later occurrence (id only) must reach it.
+    emit "1.1" [("user.id", "u-1"), ("tenant.id", "acme")] (-22)
+    ((.userId) &&& (.tenantId)) . (.errorData) <$> current `shouldReturn` (Just "u-1", Just "acme")
 
     -- A malformed assignee is refused instead of unassigning.
     let assign = fmap void . call tr . Pages.Issues.assignErrorPostH testPid errUuid . Pages.Issues.AssignErrorForm . Just
