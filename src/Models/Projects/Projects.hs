@@ -3,6 +3,7 @@ module Models.Projects.Projects (
   -- Users
   User (..),
   userDisplayName,
+  userLabel,
   UserId,
   pattern UserId,
   systemUserId,
@@ -243,6 +244,11 @@ data User = User
 -- | A member's name, when they have given one.
 userDisplayName :: User -> Maybe Text
 userDisplayName u = guarded (not . T.null) $ T.strip $ u.firstName <> " " <> u.lastName
+
+
+-- | How a member is labelled where a name is required: their name, or their id.
+userLabel :: User -> Text
+userLabel u = fromMaybe u.id.toText $ userDisplayName u
 
 
 createUser :: (Time :> es, UUIDEff :> es) => Text -> Text -> Text -> Text -> Eff es User

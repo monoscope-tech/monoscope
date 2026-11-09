@@ -554,11 +554,15 @@ cronMessages d issueUrl =
 
 -- | What a check is called: its name, or what it watches when it has none.
 uptimeName :: Issues.UptimeData -> Text
-uptimeName d = if T.null d.name then d.url else d.name
+uptimeName d = d.name `orIfBlank` d.url
 
 
 cronName :: Issues.CronData -> Text
-cronName d = if T.null d.name then d.slug else d.name
+cronName d = d.name `orIfBlank` d.slug
+
+
+orIfBlank :: Text -> Text -> Text
+orIfBlank name fallback = if T.null (T.strip name) then fallback else name
 
 
 -- | A failing check that passed again: the root turns green, and its facts say

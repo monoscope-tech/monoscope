@@ -1852,14 +1852,15 @@ patternVolumes :: DB es => Projects.ProjectId -> [LogPatterns.LogPatternWithRate
 patternVolumes pid fired now
   | null fired = pure mempty
   | otherwise =
-      Map.fromListWith (flip (<>))
+      -- Rows arrive newest first and each is prepended, so every series ends oldest first.
+      Map.fromListWith (<>)
         . map (\(field, hash, at, n) -> ((field, hash), [(at, n)]))
         <$> Hasql.interp @[(Text, Text, UTCTime, Int64)]
           [HI.sql|SELECT s.source_field, s.pattern_hash, s.hour_bucket, s.event_count FROM apis.log_pattern_hourly_stats s
             JOIN unnest(#{V.fromList $ map (.sourceField) fired}::text[], #{V.fromList $ map (.patternHash) fired}::text[]) AS p(field, hash)
               ON s.source_field = p.field AND s.pattern_hash = p.hash
             WHERE s.project_id = #{pid} AND s.hour_bucket >= #{addUTCTime (-86400) now}
-            ORDER BY s.hour_bucket|]
+            ORDER BY s.hour_bucket DESC|]
 
 
 -- | A log pattern's last day of hourly volume, against the baseline it broke from.
@@ -5149,57 +5150,57 @@ runSlackIncidentDeliveries = do
   -- claiming until nothing is due: a burst of lifecycle replies drains in one run.
   -- Bounded, since a delivery retried for immediate resend is claimable again.
   unless ctx.config.pauseNotifications do
-   exhausted <- fmap isJust . runMaybeT . replicateM_ 10 $ guard <=< lift $ do
-    now <- Time.currentTime
-    deliveries <- Incidents.claimSlackDeliveries now
-    not (null deliveries) <$ forConcurrently deliveries \delivery -> do
-      activeProject <- Projects.activeProjectById delivery.projectId
-      installation <- if isJust activeProject then Integrations.getProjectSlackData delivery.projectId else pure Nothing
-      outcome <- case installation of
-        Just sd | sd.teamId == delivery.teamId -> do
-          let (operation, parent) = case delivery.operation of
-                Incidents.PostRoot -> (Notify.SlackPost, Nothing)
-                Incidents.PostStandalone -> (Notify.SlackPost, Nothing)
-                Incidents.PostReply ts -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
-                Incidents.PostAnalysis ts _ -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
-                Incidents.UpdateRoot ts -> (Notify.SlackUpdate $ Incidents.slackTimestampText ts, Nothing)
-                Incidents.PostActivity ts _ -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
-              payload = case delivery.operation of
-                (Incidents.PostReply _; Incidents.PostAnalysis _ _) -> delivery.payload
-                Incidents.PostActivity _ note -> Mail.activityReply note
-                -- Every root render states who holds the issue now.
-                (Incidents.PostRoot; Incidents.PostStandalone; Incidents.UpdateRoot _) -> Mail.withOwner delivery.owner $ Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
-              message payload' =
-                Notify.SlackData
-                  { Notify.channelId = delivery.channelId
-                  , Notify.botToken = sd.botToken
-                  , Notify.payload = AE.toJSON $ Incidents.correlateSlackDelivery delivery payload'
-                  , Notify.threadTs = parent
-                  , Notify.webhookUrl = if delivery.channelId == sd.channelId then sd.webhookUrl else Nothing
-                  , Notify.projectIdCtx = delivery.projectId.toText
-                  , Notify.teamIdCtx = sd.teamId
-                  }
-          allowed <- case delivery.operation of
-            Incidents.PostAnalysis _ runId -> Issues.incidentReportAllowed delivery.projectId runId
-            (Incidents.PostRoot; Incidents.PostStandalone; Incidents.PostReply{}; Incidents.UpdateRoot{}; Incidents.PostActivity{}) -> pure True
-          if not allowed
-            then pure $ Incidents.DeliveryRejected "incident_routine_authority_withdrawn"
-            else
-              Notify.deliverSlack operation (message payload) <&> \case
-                Notify.SlackSent ts -> maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
-                -- Without a bot token nothing can ever recover the timestamp.
-                Notify.SlackAccepted ->
-                  Incidents.WebhookAccepted $ if T.null sd.botToken then Incidents.Threadless else Incidents.ThreadCapable
-                Notify.SlackRateLimited seconds -> Incidents.DeliveryRetry (addUTCTime (fromIntegral seconds) now) "ratelimited"
-                Notify.SlackRejected reason -> Incidents.DeliveryRejected reason
-                Notify.SlackAmbiguous -> Incidents.DeliveryUncertain "network_outcome_unknown"
-        _ -> pure $ Incidents.DeliveryRejected "installation_replaced_or_removed"
-      finishedAt <- Time.currentTime
-      saved <- Incidents.finishSlackDelivery finishedAt delivery outcome
-      unless saved $ Log.logAttention "Slack delivery completion did not match its lease or root" (delivery.id, delivery.rootId)
-   when exhausted $ Log.logAttention "Slack deliveries were still due after every claim round" (10 :: Int)
-   Slack.reconcileIncidentDeliveries
-   Incidents.enqueueIncidentInvestigations
+    exhausted <- fmap isJust . runMaybeT . replicateM_ 10 $ guard <=< lift $ do
+      now <- Time.currentTime
+      deliveries <- Incidents.claimSlackDeliveries now
+      not (null deliveries) <$ forConcurrently deliveries \delivery -> do
+        activeProject <- Projects.activeProjectById delivery.projectId
+        installation <- if isJust activeProject then Integrations.getProjectSlackData delivery.projectId else pure Nothing
+        outcome <- case installation of
+          Just sd | sd.teamId == delivery.teamId -> do
+            let (operation, parent) = case delivery.operation of
+                  Incidents.PostRoot -> (Notify.SlackPost, Nothing)
+                  Incidents.PostStandalone -> (Notify.SlackPost, Nothing)
+                  Incidents.PostReply ts -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
+                  Incidents.PostAnalysis ts _ -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
+                  Incidents.UpdateRoot ts -> (Notify.SlackUpdate $ Incidents.slackTimestampText ts, Nothing)
+                  Incidents.PostActivity ts _ -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
+                payload = case delivery.operation of
+                  (Incidents.PostReply _; Incidents.PostAnalysis _ _) -> delivery.payload
+                  Incidents.PostActivity _ note -> Mail.activityReply note
+                  -- Every root render states who holds the issue now.
+                  (Incidents.PostRoot; Incidents.PostStandalone; Incidents.UpdateRoot _) -> Mail.withOwner delivery.owner $ Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
+                message payload' =
+                  Notify.SlackData
+                    { Notify.channelId = delivery.channelId
+                    , Notify.botToken = sd.botToken
+                    , Notify.payload = AE.toJSON $ Incidents.correlateSlackDelivery delivery payload'
+                    , Notify.threadTs = parent
+                    , Notify.webhookUrl = if delivery.channelId == sd.channelId then sd.webhookUrl else Nothing
+                    , Notify.projectIdCtx = delivery.projectId.toText
+                    , Notify.teamIdCtx = sd.teamId
+                    }
+            allowed <- case delivery.operation of
+              Incidents.PostAnalysis _ runId -> Issues.incidentReportAllowed delivery.projectId runId
+              (Incidents.PostRoot; Incidents.PostStandalone; Incidents.PostReply{}; Incidents.UpdateRoot{}; Incidents.PostActivity{}) -> pure True
+            if not allowed
+              then pure $ Incidents.DeliveryRejected "incident_routine_authority_withdrawn"
+              else
+                Notify.deliverSlack operation (message payload) <&> \case
+                  Notify.SlackSent ts -> maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
+                  -- Without a bot token nothing can ever recover the timestamp.
+                  Notify.SlackAccepted ->
+                    Incidents.WebhookAccepted $ if T.null sd.botToken then Incidents.Threadless else Incidents.ThreadCapable
+                  Notify.SlackRateLimited seconds -> Incidents.DeliveryRetry (addUTCTime (fromIntegral seconds) now) "ratelimited"
+                  Notify.SlackRejected reason -> Incidents.DeliveryRejected reason
+                  Notify.SlackAmbiguous -> Incidents.DeliveryUncertain "network_outcome_unknown"
+          _ -> pure $ Incidents.DeliveryRejected "installation_replaced_or_removed"
+        finishedAt <- Time.currentTime
+        saved <- Incidents.finishSlackDelivery finishedAt delivery outcome
+        unless saved $ Log.logAttention "Slack delivery completion did not match its lease or root" (delivery.id, delivery.rootId)
+    when exhausted $ Log.logAttention "Slack deliveries were still due after every claim round" (10 :: Int)
+    Slack.reconcileIncidentDeliveries
+    Incidents.enqueueIncidentInvestigations
 
 
 -- | An unavailable evaluation changes evidence availability, not the alert state.

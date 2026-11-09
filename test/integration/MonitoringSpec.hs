@@ -694,7 +694,7 @@ spec = describe "Monitoring" do
         iid <- dbOne @_ @Issues.IssueId tr [sql|SELECT issue_id FROM apis.incident_episodes WHERE source_id = ?|] (Only mid)
         rootTs <- dbQuery @_ @(Text, Text) tr [sql|SELECT channel_id, message_ts FROM apis.slack_incident_roots ORDER BY channel_id|] ()
         let actor = (Servant.getResponse tr.trSessAndHeader).user
-            who = "*" <> fromMaybe actor.id.toText (Projects.userDisplayName actor) <> "*"
+            who = "*" <> Projects.userLabel actor <> "*"
             -- One worker run drains every thread: three replies and two root edits each.
             deliver = slack . fst <$> captureNotifs tr runSlackIncidentDeliveries
             stranded = dbQuery @_ @(Text, Text) tr [sql|SELECT operation, state FROM apis.slack_incident_deliveries WHERE state NOT IN ('delivered', 'failed')|] ()

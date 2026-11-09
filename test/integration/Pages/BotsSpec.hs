@@ -4422,6 +4422,8 @@ spec = around withTestResources do
             , ("Keep a long plain answer", 1, longExplanation, longExplanation, 0, 6)
             , ("Keep a long chart explanation", 1, longWords, widgetAnswer Nothing (Just longWords), 2, 6)
             , ("Keep an unbroken answer", 1, unbroken, unbroken, 0, 5)
+            , -- Model text that names a broadcast must never ping the channel.
+              ("Quote a broadcast", 1, "<\8203!channel> was mentioned in a log line, not by us", "<!channel> was mentioned in a log line, not by us", 0, 1)
             ]
               <> [ ("Show " <> shape <> bool " from a primary query: " " from a widget: " modern <> query, 1, expected, decodeUtf8 $ AE.encode $ if modern then AE.object ["widgets" .= ([AE.object ["type" .= shape, "query" .= query]] :: [AE.Value])] else AE.object ["query" .= query, "visualization" .= shape], 0, 1)
                  | shape <- ["logs", "table", "top_list"], modern <- [False, True], (query, expected) <- [("name == \"qa-missing-event\"", "No data found"), ("summarize matches=count()", "matches\n0")]
