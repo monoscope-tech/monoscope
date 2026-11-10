@@ -593,8 +593,8 @@ tabs:
 
       - type: 'timeseries'
         title: 'Rollup Misses by Reason (/min)'
-        description: 'Aggregates that fell through to a raw scan. The dominant reason says what to fix next: stale_coverage = maintenance behind, unknown_filter / unsupported_shape = query shape, unaligned_bucket_width = dashboard bin.'
-        query: metrics | where metric_name == "timefusion.rollup.misses" | summarize rate(value) * 60 by bin_auto(timestamp), attributes.reason
+        description: 'Aggregates that fell through to a raw scan, including shapes no build can serve (timefusion.rollup.unservable: tiny_interior, unaligned_bucket_width, multi_scan_source), which stay out of the hit rate. The dominant reason says what to fix next: stale_coverage = maintenance behind, unknown_filter / unsupported_shape = query shape, unaligned_bucket_width = dashboard bin.'
+        query: metrics | where metric_name in ("timefusion.rollup.misses", "timefusion.rollup.unservable") | summarize rate(value) * 60 by bin_auto(timestamp), attributes.reason
         unit: /min
         layout: { w: 6, h: 4 }
 
