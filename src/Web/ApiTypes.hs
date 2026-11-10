@@ -422,6 +422,7 @@ data BulkAction a = BulkAction
   { action :: Text
   , ids :: [a]
   , durationMinutes :: Maybe Int
+  , reason :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON, ToSchema) via SnakeJSON JsonValueSchema (BulkAction a)

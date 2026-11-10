@@ -323,7 +323,7 @@ parseAssignee members = \case
 
 -- | The runtime-exception issues among these, each with its error pattern.
 issueErrors :: Projects.ProjectId -> [Issues.Issue] -> ATAuthCtx [(Issues.Issue, ErrorPatterns.ErrorPattern)]
-issueErrors pid issues = catMaybes <$> forM [i | i <- issues, i.issueType == Issues.RuntimeException] \i -> fmap (i,) <$> ErrorPatterns.getErrorPatternByHash pid i.targetHash
+issueErrors pid issues = catMaybes <$> forM issues \i -> fmap (i,) <$> Issues.issueError pid i
 
 
 memberLabel :: ProjectMembers.ProjectMemberVM -> Text
@@ -386,16 +386,14 @@ issueBulkActionsPostH pid action durationM valueM items = do
           case parseAssignee members valueM of
             Right assigneeM -> assignIssues pid sess.user.id issues assigneeM $> ([], Nothing, maybe "Unassigned" (const "Assigned") assigneeM)
             Left _ -> pure ([], Nothing, "Pick a member to assign")
-        -- The error first seen earliest becomes canonical (created_at ties within one extraction
-        -- pass, so first event time decides); the rest join its group and leave the Inbox.
-        BAMerge -> do
-          errs <- selectedErrors
-          case sortOn (\(_, e) -> (zonedTimeToUTC (fromMaybe e.createdAt e.firstTraceAt), zonedTimeToUTC e.createdAt, e.id)) errs of
-            (_, canon) : rest@(_ : _) -> do
-              void $ PatternMerge.mergeErrorPatterns pid canon.id ((.id) . snd <$> rest)
-              void $ Issues.setArchiveState pid ((.id) . fst <$> rest) (Just (now, Issues.ArchiveIndefinite))
-              pure ((.id) . fst <$> rest, Just Issues.IEMerged, "Merged " <> show (length rest) <> " into " <> canon.errorType)
-            _ -> pure ([], Nothing, "Select two or more errors to merge")
+        BAMerge ->
+          Issues.mergeIssues pid (Just sess.user.id) Nothing issues <&> \case
+            Just (canon, merged) -> ([], Nothing, "Merged " <> show (length merged) <> " into " <> canon.title)
+            Nothing -> ([], Nothing, "Select two or more issues to merge")
+        BAUnmerge ->
+          Issues.unmergeIssues pid (Just sess.user.id) issues <&> \case
+            [] -> ([], Nothing, "None of these were merged")
+            ids -> ([], Nothing, "Unmerged " <> show (length ids) <> " \x2014 back in the Inbox")
         BASpam -> Issues.setSpamState pid issueIds (Just now) $> (issueIds, Just Issues.IESpam, "Marked as spam")
         BAUnspam -> Issues.setSpamState pid issueIds Nothing $> (issueIds, Just Issues.IENotSpam, "No longer spam")
       forM_ eventM \ev -> forM_ logIds \u -> Issues.logIssueActivity u ev (Just sess.user.id) Nothing
@@ -2481,7 +2479,7 @@ issueBulkActions pid tab members =
   [ BulkAction{icon = Just i, title = t, uri = url a, choices = cs}
   | (i, t, a, cs) <- case tab of
       TabAcknowledged -> [("arrow-rotate-left", "Unacknowledge", BAUnacknowledge, []), ("archive", "Archive", BAArchive, [])] <> triage
-      TabArchived -> [("arrow-rotate-left", "Unarchive", BAUnarchive, [])]
+      TabArchived -> [("arrow-rotate-left", "Unarchive", BAUnarchive, []), ("code-merge", "Unmerge", BAUnmerge, [])]
       TabSpam -> [("arrow-rotate-left", "Not spam", BAUnspam, [])]
       TabInbox -> [("check", "Acknowledge", BAAcknowledge, []), ("archive", "Archive", BAArchive, [])] <> triage
   ]
@@ -2998,6 +2996,7 @@ issueActivityTimeline_ userMap now activities
       Issues.Lifecycle Issues.IEViewed -> ("eye", "bg-fillWeaker text-textWeak", "Viewed")
       Issues.Lifecycle Issues.IELinked -> ("link", "bg-fillBrand-weak text-fillBrand-strong", "Linked an external issue")
       Issues.Lifecycle Issues.IEMerged -> ("code-merge", "bg-fillWeaker text-textWeak", "Merged into another issue")
+      Issues.Lifecycle Issues.IEUnmerged -> ("arrow-rotate-left", "bg-fillWeaker text-textWeak", "Unmerged")
       Issues.Lifecycle Issues.IESpam -> ("ban", "bg-fillWeaker text-textWeak", "Marked as spam")
       Issues.Lifecycle Issues.IENotSpam -> ("arrow-rotate-left", "bg-fillWeaker text-textWeak", "Marked as not spam")
 
