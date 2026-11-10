@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Models.Projects.IssueFixes (FixId, StepId, Revision, mkRevision, revisionText, Setup (..), Candidate (..), Step (..), Phase (..), Progress, phase, verifiedRevision, Run (..), Failure (..), createRun, getRun, recordStep, queueJob, Lease, Checkpoint, checkpointContents, getCheckpoint, saveReviewedJob, claimJob, agentRunContext, currentJob, releaseJob, failJob, finishJob, completedResult, completedExplanation, CompletedFix, completedFixContents, publicationForUser, mediaForUser, latestMediaForUser, validateResult, artifactRequest, recordJobStep) where
+module Models.Projects.IssueFixes (FixId, StepId, Revision, mkRevision, revisionText, Setup (..), Candidate (..), Step (..), Phase (..), Progress, phase, verifiedRevision, Run (..), Failure (..), createRun, autofixCandidates, getRun, recordStep, queueJob, Lease, Checkpoint, checkpointContents, getCheckpoint, saveReviewedJob, claimJob, agentRunContext, currentJob, releaseJob, failJob, finishJob, completedResult, completedExplanation, CompletedFix, completedFixContents, publicationForUser, mediaForUser, latestMediaForUser, validateResult, artifactRequest, recordJobStep) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
@@ -11,6 +11,7 @@ import Data.Effectful.CodeReview.Types (Candidate (..), Failure (..), Revision, 
 import Data.Effectful.CodeReview.Types qualified as Agent
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
+import Data.Time (addUTCTime, nominalDay)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Effectful (Eff, (:>))
@@ -152,6 +153,11 @@ advance setup progress (Observe check) = do
       unless (T.toLower check.revision == revisionText revision) $ Left WrongRevision
 
 
+-- | The credentials fix runs accept, as @c@: a github.com App installation.
+appCredential :: HI.Sql
+appCredential = [HI.sql|c.host = 'github' AND c.api_base IS NULL AND c.installation_id IS NOT NULL|]
+
+
 createRun :: DB es => ProjectId -> FixId -> IssueId -> CodeMappingId -> Revision -> UUIDId "guest_image" -> Eff es (Maybe FixId)
 createRun pid fid issue mapping base image =
   Hasql.interpOne
@@ -162,11 +168,27 @@ createRun pid fid issue mapping base image =
     JOIN projects.code_mappings m ON m.project_id = p.id AND m.service = i.service
     JOIN projects.git_credentials c ON c.id = m.credential_id AND c.project_id = p.id
     WHERE p.id = #{pid} AND p.deleted_at IS NULL AND i.id = #{issue} AND i.archived_at IS NULL
-      AND m.id = #{mapping} AND c.host = 'github' AND c.api_base IS NULL AND c.installation_id IS NOT NULL
+      AND m.id = #{mapping} AND ^{appCredential}
     ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
       WHERE issue_fix_runs.project_id = EXCLUDED.project_id AND issue_fix_runs.issue_id = EXCLUDED.issue_id
         AND issue_fix_runs.setup = EXCLUDED.setup
     RETURNING id|]
+
+
+-- | Up to @n@ open issues from the last week that triage has had an hour with, each with a mapping
+-- 'createRun' accepts and no fix run yet; newest first.
+autofixCandidates :: (DB es, Time :> es) => ProjectId -> Int -> Eff es [(IssueId, CodeMappingId)]
+autofixCandidates pid n =
+  Time.currentTime >>= \now ->
+    Hasql.interp
+      [HI.sql|SELECT DISTINCT ON (i.created_at, i.id) i.id, m.id FROM apis.issues i
+    JOIN projects.code_mappings m ON m.project_id = i.project_id AND m.service = i.service
+    JOIN projects.git_credentials c ON c.id = m.credential_id AND c.project_id = i.project_id
+    WHERE i.project_id = #{pid} AND i.archived_at IS NULL AND i.spam_at IS NULL AND i.issue_type <> 'api_change'
+      AND i.created_at BETWEEN #{addUTCTime (-7 * nominalDay) now} AND #{addUTCTime (-3600) now}
+      AND ^{appCredential}
+      AND NOT EXISTS (SELECT 1 FROM projects.issue_fix_runs f WHERE f.issue_id = i.id)
+    ORDER BY i.created_at DESC, i.id, length(m.path_prefix) DESC LIMIT #{n}|]
 
 
 getRun :: DB es => ProjectId -> FixId -> Eff es (Either Failure (Maybe (Run Progress)))
@@ -226,7 +248,7 @@ recordStepWith scope pid fid expected sid step = do
                 AND i.archived_at IS NULL AND i.service = r.setup->>'service' AND m.service = i.service
                 AND m.owner = r.setup->>'owner' AND m.repo = r.setup->>'repo'
                 AND c.id = (r.setup->>'credentialId')::uuid AND c.installation_id = (r.setup->>'installationId')::bigint
-                AND c.host = 'github' AND c.api_base IS NULL AND c.installation_id IS NOT NULL
+                AND ^{appCredential}
               FOR UPDATE OF r
             ), inserted AS (
               INSERT INTO projects.issue_fix_steps (id, run_id, version, step)
@@ -265,7 +287,7 @@ queueJob pid uid fid = Hasql.transaction TxS.ReadCommitted TxS.Write do
             (id, root_run_id, project_id, conversation_id, requested_by, input, policy, source, scheduled_at, started_at, status, permission_ceiling)
             VALUES (#{identifier}, #{identifier}, #{pid}, #{conversation}, #{uid}, #{input}, #{Issues.Autonomous}, #{Issues.FixRun fid}, now(), now(), 'running', #{ProjectMembers.PAdmin})|]
           Hasql.executeTx [HI.sql|INSERT INTO projects.issue_fix_jobs (run_id, requested_by, agent_run_id) VALUES (#{fid}, #{uid}, #{identifier})|]
-          Hasql.executeTx [HI.sql|INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued', #{Aeson $ AE.toJSON $ Jobs.FixIssue pid fid})|]
+          Hasql.executeTx [HI.sql|INSERT INTO background_jobs_long (run_at, status, payload) VALUES (now(), 'queued', #{Aeson $ AE.toJSON $ Jobs.FixIssue pid fid})|]
           pure True
 
 

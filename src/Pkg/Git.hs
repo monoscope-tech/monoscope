@@ -49,6 +49,7 @@ module Pkg.Git (
   fetchRepository,
   defaultBranchOf,
   fetchDefaultBranch,
+  headRevision,
   computeContentSha,
   Deployment (..),
   DeploymentStatus (..),

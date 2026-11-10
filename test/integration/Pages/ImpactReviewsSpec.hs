@@ -219,6 +219,7 @@ refuse = \case
   Agent.ReviewRepository{} -> Left "Unexpected advisory review"
   Agent.ReviewSource{} -> Left "Unexpected source review"
   Agent.PrepareRepository{} -> Left "Unexpected workspace preparation"
+  Agent.ResolveImage -> Left "Unexpected image resolution"
   Agent.ReviewPatch{} -> Left "Unexpected patch comparison"
   Agent.FixRepository{} -> Left "Unexpected issue-fix task"
   Agent.AdmitRegression{} -> Left "Unexpected admission task"
@@ -4206,6 +4207,25 @@ spec = around withTestResources $ describe "Production impact reviews" do
       runQueryEffect tr (Fixes.completedResult testPid fid) >>= (`shouldSatisfy` isJust)
       map (toText . (.key)) <$> runQueryEffect tr (Issues.listRunArtifacts testPid original.id) `shouldReturn` map (toText . (.key)) artifacts
 
+  it "autofix_queuesEachTriagedIssueOnceUntilItsRoutineIsPaused" \tr -> do
+    (_, issue, _) <- fixFixture tr "autofix-runtime"
+    let sweepAt = addUTCTime 7200 frozenTime
+        seed ty target at = seedIssue tr (issueSeed ty target){service = Just "test-service", at}
+    void $ seed Issues.ApiChange "autofix-schema" frozenTime
+    void $ seed Issues.Performance "autofix-fresh" (addUTCTime (-60) sweepAt)
+    Right (routine, _) <- runTestBg frozenTime tr $ Issues.ensureRoutineTemplate (getResponse tr.trSessAndHeader :: Projects.Session).user.id testPid "UTC" Issues.issueAutofixTemplate
+    cfg <- githubApp tr
+    let sweep = void $ runTestBgRecordingHTTP sweepAt tr $ Reader.local (\ctx -> ctx{config = cfg}) $ githubResponses (\url -> pure $ AE.object ["sha" AE..= revision] <$ guard ("/commits/" `T.isInfixOf` url)) $ BackgroundJobs.processBackgroundJob tr.trATCtx $ Jobs.AutofixIssues testPid
+        fixed = dbQuery tr "SELECT run.issue_id FROM projects.issue_fix_runs run JOIN projects.issue_fix_jobs job ON job.run_id = run.id ORDER BY run.created_at" ()
+    -- API changes and issues triage has not had an hour with are skipped; a second sweep adds nothing.
+    sweep >> sweep
+    fixed `shouldReturn` [Only issue]
+    dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'FixIssue'" () `shouldReturn` (1 :: Int)
+    void $ seed Issues.RuntimeException "autofix-paused" frozenTime
+    runQueryEffect tr $ Issues.pauseRoutine testPid routine
+    sweep
+    fixed `shouldReturn` [Only issue]
+
   it "nativeFix_applicationJobSharesRunAuthorityReceiptsAndCompletion" \tr -> do
     (mapping, issue, base) <- fixFixture tr "application-fix"
     let uid n = UUIDId $ UUID.fromWords 95 0 0 n
@@ -4218,7 +4238,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     [shared] <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
     shared.source `shouldBe` Issues.FixRun fid
     runQueryEffect tr (Issues.runContextFor testPid $ Issues.ConversationClaim shared.id) `shouldReturn` Nothing
-    dbQuery tr "SELECT payload FROM background_jobs WHERE payload->>'tag' = 'FixIssue'" () `shouldReturn` [Only $ Aeson $ AE.toJSON $ Jobs.FixIssue testPid fid]
+    dbQuery tr "SELECT payload FROM background_jobs_long WHERE payload->>'tag' = 'FixIssue'" () `shouldReturn` [Only $ Aeson $ AE.toJSON $ Jobs.FixIssue testPid fid]
     unleased <- runQueryEffect tr $ Fixes.recordStep testPid fid 0 (uid 6) Fixes.RestartReproduction
     unleased `shouldSatisfy` isLeft
     lease <- maybe (fail "Fix lease missing") pure =<< runQueryEffect tr (Fixes.claimJob testPid fid)
