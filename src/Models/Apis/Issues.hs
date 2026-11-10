@@ -303,6 +303,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Effectful.Wreq qualified as HTTP
 import Data.Generics.Product.Fields qualified as Fields
+import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
@@ -1395,23 +1396,26 @@ mergeIssues pid actor reason issues = do
 -- from automatic re-merging, and they return to the Inbox.
 unmergeIssues :: (DB es, Time :> es) => Projects.ProjectId -> Maybe Projects.UserId -> [Issue] -> Eff es [IssueId]
 unmergeIssues pid actor issues = do
-  merged <-
-    Hasql.interp
-      [HI.sql|SELECT i.id FROM apis.issues i WHERE i.project_id = #{pid} AND i.id = ANY(#{V.fromList $ (.id) <$> issues}) AND i.archived_at IS NOT NULL
-      AND EXISTS (SELECT 1 FROM apis.issue_activity_log a WHERE a.issue_id = i.id AND a.event = #{IEMerged})|]
-  forM_ [i | i <- issues, i.id `elem` merged] $ issueError pid >=> traverse_ (PatternMerge.unmergePattern pid . (.id))
-  void $ setArchiveState pid merged Nothing
-  merged <$ forM_ merged \i -> logIssueActivity i IEUnmerged actor Nothing
+  states <- mergeStates pid issues
+  let merged = [i | i <- issues, isJust i.archivedAt, Map.lookup i.id states == Just IEMerged]
+  forM_ merged $ issueError pid >=> traverse_ (PatternMerge.unmergePattern pid . (.id))
+  void $ setArchiveState pid ((.id) <$> merged) Nothing
+  (.id) <$> merged <$ forM_ merged \i -> logIssueActivity i.id IEUnmerged actor Nothing
 
 
 -- | Drops issues a person unmerged since their last merge, so automatic merging cannot undo that call.
 withoutUnmerged :: DB es => Projects.ProjectId -> [Issue] -> Eff es [Issue]
-withoutUnmerged pid issues = do
-  unmerged <-
-    Hasql.interp @[IssueId]
-      [HI.sql|SELECT i.id FROM apis.issues i WHERE i.project_id = #{pid} AND i.id = ANY(#{V.fromList $ (.id) <$> issues})
-      AND (SELECT a.event FROM apis.issue_activity_log a WHERE a.issue_id = i.id AND a.event IN (#{IEMerged}, #{IEUnmerged}) ORDER BY a.created_at DESC, a.id DESC LIMIT 1) = #{IEUnmerged}|]
-  pure $ filter ((`notElem` unmerged) . (.id)) issues
+withoutUnmerged pid issues = mergeStates pid issues <&> \states -> filter ((/= Just IEUnmerged) . (`Map.lookup` states) . (.id)) issues
+
+
+-- | Each issue's latest merge or unmerge.
+mergeStates :: DB es => Projects.ProjectId -> [Issue] -> Eff es (Map IssueId IssueEvent)
+mergeStates pid issues =
+  Map.fromList
+    <$> Hasql.interp
+      [HI.sql|SELECT DISTINCT ON (a.issue_id) a.issue_id, a.event FROM apis.issue_activity_log a JOIN apis.issues i ON i.id = a.issue_id
+      WHERE i.project_id = #{pid} AND a.issue_id = ANY(#{V.fromList $ (.id) <$> issues}) AND a.event IN (#{IEMerged}, #{IEUnmerged})
+      ORDER BY a.issue_id, a.created_at DESC, a.id DESC|]
 
 
 issueError :: DB es => Projects.ProjectId -> Issue -> Eff es (Maybe ErrorPatterns.ErrorPattern)

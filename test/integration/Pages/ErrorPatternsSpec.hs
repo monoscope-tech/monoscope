@@ -335,6 +335,9 @@ spec = around withTestResources $ describe "Error patterns" do
     -- The routine merging again does not undo that unmerge.
     bulk "merge" [idd.id, ic.id] `shouldReturn` []
     isJust . (.archivedAt) <$> issueById tr idd.id `shouldReturn` False
+    -- Unmerge reads the latest merge event, so archiving an unmerged issue does not make it unmergeable.
+    void $ bulk "archive" [idd.id]
+    bulk "unmerge" [idd.id] `shouldReturn` []
 
     -- A pattern merged after its issue exists is silent on every sweep path (canonical_id once gated only one).
     [canon, dupe] <- seed tr "MergeSilenceError" (Just "silence-shape") [("silence-canon", "canonical form"), ("silence-dupe", "duplicate form")]
