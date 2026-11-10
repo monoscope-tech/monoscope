@@ -54,5 +54,10 @@ const [c, p] = [await clear.boundingBox(), await pause.boundingBox()];
 if (Math.abs(c.y - p.y) > 4) { console.log('Clear wrapped onto its own row'); process.exit(1); }
 ```
 
+The recording is the first thing a reviewer sees, so pace it like a demo: hold about two seconds on
+each state worth seeing (`await page.waitForTimeout(2000)`), and chapter only the steps a user would
+take, never setup or teardown. Aim for 10 to 30 seconds.
+
 Write `chapters.tsv` and close the context before any `process.exit`, or the video is lost. Name
-screenshots for what they show; crop them to the part that changed. Keep the whole run under a minute.
+screenshots for the state they show (`Clear wraps below Pause.png`, not `toolbar.png`); crop them to
+the part that changed.
