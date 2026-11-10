@@ -1380,7 +1380,7 @@ setArchiveState pid iids archiveM
 mergeIssues :: (DB es, Time :> es) => Projects.ProjectId -> Maybe Projects.UserId -> Maybe Text -> [Issue] -> Eff es (Maybe (Issue, [IssueId]))
 mergeIssues pid actor reason issues = do
   backed <- forM issues \i -> (i,) <$> issueError pid i
-  case sortOn (\(i, e) -> (maybe (zonedTimeToUTC i.createdAt) (\p -> zonedTimeToUTC $ fromMaybe p.createdAt p.firstTraceAt) e, zonedTimeToUTC i.createdAt, i.id)) backed of
+  case sortOn (\(i, e) -> (zonedTimeToUTC $ maybe i.createdAt (\p -> fromMaybe p.createdAt p.firstTraceAt) e, zonedTimeToUTC i.createdAt, i.id)) backed of
     (canon, canonError) : rest@(_ : _) -> do
       now <- Time.currentTime
       let ids = (.id) . fst <$> rest
