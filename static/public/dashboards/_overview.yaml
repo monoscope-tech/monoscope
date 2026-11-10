@@ -1,4 +1,6 @@
 title: Overview
+tags: [overview, http, logs, traces, events]
+starred: true
 read_only: true
 icon: qrcode
 preview: /public/assets/svgs/screens/http-stats.svg

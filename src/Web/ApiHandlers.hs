@@ -97,7 +97,7 @@ module Web.ApiHandlers (
   synthStackFromSpans,
 ) where
 
-import Control.Lens ((%~), (.~), (?~), _Just)
+import Control.Lens ((%~), (.~), (?~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM

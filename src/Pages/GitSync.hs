@@ -43,7 +43,7 @@ import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_)
-import Models.Projects.DashboardTemplates (askTemplates, loadDashboardFromVM, requireEditable, updateSchema)
+import Models.Projects.DashboardTemplates (askTemplates, loadDashboardFromVM, templateList, updateSchema)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
@@ -64,6 +64,7 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, act, addErrorToast, addRespHeaders, addSuccessToast, done, redirectCS)
 import Utils (LoadingSize (..), faSprite_, hostPath, htmxIndicator_, renderMarkdown)
+import Web.ApiTypes (readOnlyMessage)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
 import Web.Links (CookieProtectedRoutes (..), ProjectsRoutes' (..), urls)
@@ -639,6 +640,7 @@ instance ToHtml DashboardRepositoryGet where
         GitSync.RepositoryMissing -> "That repository is no longer connected to this project. Choose another repository."
         GitSync.OwnedByRepository _ -> "This dashboard already belongs to another repository. Disconnect its dashboard sync before assigning it elsewhere."
         GitSync.FileOwnedByDashboard _ -> "Another dashboard already uses this file in the repository. Rename this dashboard or choose another folder before syncing."
+        GitSync.BuiltInReadOnly -> readOnlyMessage
       case dash.gitSyncId >>= \sid -> find ((== sid) . (.id)) page.repositories of
         Just repository -> div_ [class_ "rounded-xl border border-strokeWeak p-4 sm:p-5 space-y-3"] do
           colorChip_ SuccessBadge "circle-check" "Repository assigned"
@@ -703,15 +705,12 @@ dashboardRepositoryPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Dash
 dashboardRepositoryPostH pid did form = do
   requireGitWrite pid
   dashboard <- Dashboards.getDashboardByProjectId pid did >>= maybe (throwError err404) pure
-  templates <- askTemplates
-  ed <- requireEditable dashboard
   assignmentError <-
     GitSync.assignDashboardRepository pid did form.repositoryId >>= \case
       Left err -> pure $ Just err
-      Right () -> do
-        when (isNothing dashboard.schema)
-          $ void
-          $ updateSchema ed (fromMaybe def $ loadDashboardFromVM templates dashboard) Nothing
+      Right ed -> do
+        templates <- templateList <$> askTemplates
+        when (isNothing dashboard.schema) $ void $ updateSchema ed (fromMaybe def $ loadDashboardFromVM templates dashboard) Nothing
         queueGitSyncPush pid did
         pure Nothing
   dashboardRepositoryPageH pid did assignmentError

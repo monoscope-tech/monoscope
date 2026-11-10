@@ -30,7 +30,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as ApiIssues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
-import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled, loadDashboardFromVM)
+import Models.Projects.DashboardTemplates (ReadOnly (..), dashboardTemplatesCompiled, loadDashboardFromVM)
 import Models.Projects.Dashboards (DashboardVM (savedViews, schema))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.GitSync qualified as GitSync
@@ -235,13 +235,13 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     length after `shouldBe` length added
 
     -- A patch built before an HTMX swap can name only stale ids; applying it would wipe the canvas.
-    _ <- testServant tr $ Dashboards.dashboardWidgetReorderPatchH testPid dashId Nothing (reorder [("not-a-real-widget", (0, 0, 3, 3))])
+    void <$> call tr (Dashboards.dashboardWidgetReorderPatchH testPid dashId Nothing (reorder [("not-a-real-widget", (0, 0, 3, 3))])) `shouldReturn` Right ()
     map (.id) <$> storedWidgets tr dashId `shouldReturn` map (.id) after
 
     -- Every typed widget gets a position and size unique to its index; w1 moves to the
     -- origin (not an absent coordinate); w2..w5 are left out of the patch, so deleted.
     let placed = [(wid, ((i * 2) `mod` 12, i, 1 + (i `mod` 4), 2 + (i `mod` 3))) | (i, wid) <- zip [0 ..] typed]
-    _ <- testServant tr $ Dashboards.dashboardWidgetReorderPatchH testPid dashId Nothing (reorder $ (w1, (0, 0, 3, 3)) : placed)
+    void <$> call tr (Dashboards.dashboardWidgetReorderPatchH testPid dashId Nothing (reorder $ (w1, (0, 0, 3, 3)) : placed)) `shouldReturn` Right ()
     reloaded <- storedWidgets tr dashId
     sort (map geometry reloaded) `shouldBe` sort [(Just wid, Just x, Just y, Just w, Just h) | (wid, (x, y, w, h)) <- (w1, (0, 0, 3, 3)) : placed]
     sort (map (show @Text . (.wType)) reloaded) `shouldBe` sort ("WTStat" : map show allWidgetTypes)
@@ -1108,7 +1108,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     void $ runTestBg frozenTime tr $ DashboardModel.deleteDashboardsByIds testPid [tagged]
 
     renamed <- titled "Test Dashboard"
-    _ <- testServant tr $ Dashboards.dashboardRenamePatchH testPid renamed.id Dashboards.DashboardRenameForm{Dashboards.title = "Updated Dashboard", Dashboards.fileDir = Nothing}
+    void <$> call tr (Dashboards.dashboardRenamePatchH testPid renamed.id Dashboards.DashboardRenameForm{Dashboards.title = "Updated Dashboard", Dashboards.fileDir = Nothing}) `shouldReturn` Right ()
     removed <- titled "Dashboard 1"
     show @Text <$> call tr (Dashboards.dashboardDeleteH testPid removed.id) `shouldReturn` "DashboardNoContent"
     _ <- titled "Updated Dashboard" >>= testServant tr . Dashboards.dashboardDuplicatePostH testPid . (.id)
@@ -1162,10 +1162,10 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         tabWidgets = length . DashboardModel.allWidgets
         freeze did = dbExec tr "UPDATE projects.dashboards SET schema = '{\"title\":\"Frozen\",\"widgets\":[]}'::jsonb WHERE id = ?" (Only did)
     template <- maybe (fail "missing _overview.yaml") pure $ find ((== Just "_overview.yaml") . (.file)) dashboardTemplatesCompiled
-    _ <- runAuthHandler tr $ Dashboards.entrypointRedirectGetH "_overview.yaml" [] testPid []
+    _ <- runAuthHandler tr $ Dashboards.entrypointRedirectGetH "_overview.yaml" testPid []
     did <- runQueryEffect tr (DashboardModel.getDashboardByBaseTemplate testPid "_overview.yaml") >>= maybe (fail "no overview row") pure
     -- Title and starring come from the template: built-ins start starred.
-    dbQuery tr "SELECT title, starred_since IS NOT NULL FROM projects.dashboards WHERE id = ?" (Only did) `shouldReturn` [("Overview" :: Text, True)]
+    dbQuery tr "SELECT title, starred_since IS NOT NULL, array_to_string(tags, ',') FROM projects.dashboards WHERE id = ?" (Only did) `shouldReturn` [("Overview" :: Text, True, "overview,http,logs,traces,events" :: Text)]
     -- A row frozen before read-only existed still renders the template, so deploys reach it.
     freeze did
     (_, shown) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
@@ -1182,13 +1182,12 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     -- A widget monitor writes its thresholds into the schema, so it is an edit too.
     alertForm <- either (fail . toString) pure $ urlDecodeAsForm @Dashboards.WidgetAlertForm "widgetId=any&query=name%20!%3D%20null&alertThreshold=1&direction=above"
     call tr (Dashboards.widgetAlertUpsertH testPid "any" (Just did) alertForm) <&> void >>= (`shouldBe` Left Dashboards.ReadOnlyDashboard)
-    traverse
-      status
-      [ void $ Dashboards.dashboardWidgetReorderPatchH testPid did (Just "overview") mempty
-      , void $ Dashboards.dashboardRenamePatchH testPid did renameForm
-      , void $ Dashboards.dashboardTabRenamePatchH testPid did "overview" (Dashboards.TabRenameForm "Mine")
-      ]
-      `shouldReturn` replicate 3 403
+    -- Every page edit route declares the one read-only refusal.
+    void <$> call tr (Dashboards.dashboardWidgetReorderPatchH testPid did (Just "overview") mempty) `shouldReturn` Left ReadOnly
+    void <$> call tr (Dashboards.dashboardRenamePatchH testPid did renameForm) `shouldReturn` Left ReadOnly
+    void <$> call tr (Dashboards.dashboardTabRenamePatchH testPid did "overview" (Dashboards.TabRenameForm "Mine")) `shouldReturn` Left ReadOnly
+    sourceWidget <- maybe (fail "overview has no titled widget") pure $ viaNonEmpty head [slugify t | tab <- fold shown.tabs, w <- tab.widgets, Just t <- [w.title]]
+    void <$> call tr (Dashboards.dashboardDuplicateWidgetPostH testPid did sourceWidget (Just did)) `shouldReturn` Left ReadOnly
     -- The YAML drawer's route never refuses: its status area says why nothing was saved.
     Done yamlSave <- call tr $ Dashboards.dashboardYamlPutH testPid did (Dashboards.YamlForm "title: Mine\nwidgets: []\n")
     yamlSave `shouldSatisfy` \case Dashboards.YamlReadOnly -> True; _ -> False
@@ -1203,11 +1202,13 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     copyId <- dbOne tr "SELECT id FROM projects.dashboards WHERE project_id = ? AND title = 'Overview (Copy)' AND base_template IS NULL" (Only testPid)
     (copyVm, copy) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid copyId Nothing
     (copy.readOnly, copy.title, tabWidgets copy, isJust copyVm.schema) `shouldBe` (Nothing, (<> " (Copy)") <$> template.title, tabWidgets template, True)
-    status (void $ Dashboards.dashboardRenamePatchH testPid copyId renameForm) `shouldReturn` 200
+    void <$> call tr (Dashboards.dashboardRenamePatchH testPid copyId renameForm) `shouldReturn` Right ()
     -- A copy of a repository-owned dashboard is the user's own: sharing its (repository, file)
     -- key broke the unique index, so duplicating any synced dashboard failed.
     Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
-    runQueryEffect tr (GitSync.assignDashboardRepository testPid copyId sync.id) `shouldReturn` Right ()
+    -- Linking hands later writes to git, so a built-in is refused there too.
+    void <$> runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id) `shouldReturn` Left GitSync.BuiltInReadOnly
+    void <$> runQueryEffect tr (GitSync.assignDashboardRepository testPid copyId sync.id) `shouldReturn` Right ()
     status (void $ Dashboards.dashboardDuplicatePostH testPid copyId) `shouldReturn` 200
     dbQuery tr "SELECT git_sync_id IS NULL FROM projects.dashboards WHERE project_id = ? AND title = 'Mine (Copy)'" (Only testPid)
       `shouldReturn` [Only True]

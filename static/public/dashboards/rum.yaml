@@ -1,4 +1,5 @@
 title: Real User Monitoring
+tags: [rum, browser, frontend, web-vitals]
 icon: web
 preview: /public/assets/svgs/screens/http-stats.svg
 description: Browser experience, Core Web Vitals, frontend errors, and user sessions from OpenTelemetry

@@ -204,17 +204,20 @@ configurationProvider tr prState = withHTTPResponses \_ endpoint -> do
 setupSyncOn :: TestResources -> Git.GitHost -> Text -> Text -> Maybe Text -> IO ()
 setupSyncOn tr host owner repo secret = do
   void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
-  void $ call tr $ GitSyncPage.gitSyncSettingsPostH testPid
-    GitSyncPage.GitSyncForm
-      { host = Just host
-      , apiBase = if host == Git.Gitea then Just "https://git.example.com" else Nothing
-      , owner = owner
-      , repo = repo
-      , branch = "main"
-      , accessToken = "tok"
-      , webhookSecret = secret
-      , pathPrefix = Nothing
-      }
+  void
+    $ call tr
+    $ GitSyncPage.gitSyncSettingsPostH
+      testPid
+      GitSyncPage.GitSyncForm
+        { host = Just host
+        , apiBase = if host == Git.Gitea then Just "https://git.example.com" else Nothing
+        , owner = owner
+        , repo = repo
+        , branch = "main"
+        , accessToken = "tok"
+        , webhookSecret = secret
+        , pathPrefix = Nothing
+        }
 
 
 -- | HMAC-SHA256 hex of a body, the digest three of the four hosts send.
@@ -265,8 +268,8 @@ spec = do
         , ("dashboards/", [entry "src/main.hs" "s1", entry "dashboards/ok.yaml" "s2"], [], [("create", "dashboards/ok.yaml")])
         , ("dashboards/", [entry "dashboards/test.yml" "sha"], [], [("create", "dashboards/test.yml")])
         , ("app/dashboards/", [entry "app/dashboards/x.yaml" "sha", entry "dashboards/y.yaml" "sha2"], [], [("create", "app/dashboards/x.yaml")])
-        ] ::
-          [(Text, [GitSync.TreeEntry], [(Text, Text)], [(Text, Text)])]
+        ]
+          :: [(Text, [GitSync.TreeEntry], [(Text, Text)], [(Text, Text)])]
       )
       \(prefix, entries, db, expected) -> shape (GitSync.buildSyncPlan prefix entries (known db)) `shouldBe` expected
     (.title) <$> GitSync.yamlToDashboard "title: Minimal\nwidgets: []\n" `shouldBe` Right (Just "Minimal")
@@ -290,8 +293,8 @@ spec = do
           , (Git.Gitea, gitea, "https://git.acme.dev/api/v1/repos/acme/api/contents/dashboards/a.yaml?ref=main")
           , (Git.GitLab, Nothing, "https://gitlab.com/api/v4/projects/acme%2Fapi/repository/files/dashboards%2Fa.yaml/raw?ref=main")
           , (Git.Bitbucket, Nothing, "https://api.bitbucket.org/2.0/repositories/acme/api/src/main/dashboards/a.yaml")
-          ] ::
-            [(Git.GitHost, Maybe Text, Text)]
+          ]
+            :: [(Git.GitHost, Maybe Text, Text)]
         )
         \(host, origin, url) -> onHost host origin [(["contents"], "{\"content\":\"aGVsbG8K\"}"), (["/raw"], "hello\n"), (["/src/"], "hello\n")] (\c -> Git.fetchFile c acme "dashboards/a.yaml") `shouldReturn` (Right "hello\n", [("GET", url)])
       -- A tree is listed at the commit the branch resolved to. GitLab names the blob hash @id@, Gitea
@@ -301,8 +304,8 @@ spec = do
           , (Git.Gitea, gitea, "git/trees", "{\"sha\":\"075d94cc\",\"tree\":[{\"path\":\"dashboards/a.yaml\",\"mode\":\"100755\",\"type\":\"blob\",\"size\":918,\"sha\":\"b1\"}]}", "b1")
           , (Git.GitLab, Nothing, "repository/tree", "[{\"id\":\"b1\",\"name\":\"a.yaml\",\"type\":\"blob\",\"path\":\"dashboards/a.yaml\",\"mode\":\"100644\"}]", "b1")
           , (Git.Bitbucket, Nothing, "max_depth", bbTree, Git.computeContentSha "hello\n")
-          ] ::
-            [(Git.GitHost, Maybe Text, Text, LBS.ByteString, Text)]
+          ]
+            :: [(Git.GitHost, Maybe Text, Text, LBS.ByteString, Text)]
         )
         \(host, origin, treeRoute, tree, sha) -> do
           (result, requests) <- onHost host origin [(["commits"], commitOf host), ([treeRoute], tree), (["/src/c1/dashboards/a.yaml$"], "hello\n")] \c -> Git.fetchTree c acme "dashboards/"
@@ -1265,7 +1268,7 @@ spec = do
 
       it "repositoryOwnership_isolatesIdenticalPathsQueuesOnlyAssignedPushesAndRetainsDashboardsOnDisconnect" \tr -> do
         let connect owner = syncOf tr testPid Nothing owner "dashboards" (GitSync.AppInstallation 42) ""
-            assign did sync = runQueryEffect tr $ GitSync.assignDashboardRepository testPid did sync.id
+            assign did sync = void <$> runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id)
             queuePush = runAuthHandler tr . GitSyncPage.queueGitSyncPush testPid
             pushesOf did = pendingJobs tr <&> \jobs -> length [() | BackgroundJobs.GitSyncPushDashboard project d <- jobs, project == testPid, d == did.unwrap]
         -- repositorySync_acceptsIndependentRepositoriesForDifferentTeams
@@ -1284,7 +1287,7 @@ spec = do
         assign dashA syncB `shouldReturn` Left (GitSync.OwnedByRepository syncA.id)
         assign conflict syncA `shouldReturn` Left (GitSync.FileOwnedByDashboard dashA)
         otherPid <- createTestProject tr "Other repository project"
-        runQueryEffect tr (GitSync.assignDashboardRepository otherPid dashA syncA.id) `shouldReturn` Left GitSync.RepositoryMissing
+        void <$> runQueryEffect tr (GitSync.assignDashboardRepository otherPid dashA syncA.id) `shouldReturn` Left GitSync.RepositoryMissing
         _ <- runQueryEffect tr $ GitSync.updateDashboardGitInfo dashA "overview.yaml" "sha-a"
         _ <- runQueryEffect tr $ GitSync.updateDashboardGitInfo dashB "overview.yaml" "sha-b"
         fmap (\d -> (d.filePath, d.fileSha)) <$> dashOf tr dashA `shouldReturn` Just (Just "overview.yaml", Just "sha-a")
@@ -1401,7 +1404,7 @@ spec = do
         pendingJobs tr >>= \queued -> [sid | BackgroundJobs.GitSyncPushRepository pid sid <- queued, pid == testPid] `shouldBe` [sync.id]
         firstRequests <- push "open"
         ((,) <$> (.pullRequestNumber) <*> (.lastError)) <$> syncById tr sync `shouldReturn` (Just 17, Nothing)
-        void $ testServant tr $ DashboardPage.dashboardRenamePatchH testPid did (DashboardPage.DashboardRenameForm "Updated overview" Nothing)
+        void $ call tr $ DashboardPage.dashboardRenamePatchH testPid did (DashboardPage.DashboardRenameForm "Updated overview" Nothing)
         secondRequests <- push "open"
         (.pullRequestNumber) <$> syncById tr sync `shouldReturn` Just 17
         length [() | (url, _) <- firstRequests <> secondRequests, "/pulls" `T.isSuffixOf` url] `shouldBe` 1
@@ -1429,7 +1432,7 @@ spec = do
       it "repositoryPush_doesNotAdvanceThePullCursorPastOtherRemoteDashboards" \tr -> do
         sync <- syncOf tr testPid (Just "https://127.0.0.1:1") "team" "dashboards" (GitSync.PersonalToken "fixture") ""
         did <- seedDash tr \d -> d{Dashboards.title = "Local", Dashboards.schema = Just def, Dashboards.filePath = Just "local.yaml"}
-        runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id) `shouldReturn` Right ()
+        void <$> runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id) `shouldReturn` Right ()
         let transport :: (IOE :> es, W.HTTP :> es) => Eff es a -> Eff es a
             transport = gitHost [("remote.yaml", blobOf "title: Remote\nwidgets: []\n"), ("/contents/", "{\"content\":{\"sha\":\"local-blob\"}}"), ("/git/trees/", treeOf [("dashboards/local.yaml", "local-blob"), ("dashboards/remote.yaml", "remote-blob")])] "{\"sha\":\"head\"}"
         for_ [BackgroundJobs.GitSyncPushDashboard testPid did.unwrap, BackgroundJobs.GitSyncRepository testPid sync.id] $ runJob tr transport

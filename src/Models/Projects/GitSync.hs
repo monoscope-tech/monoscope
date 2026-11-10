@@ -115,6 +115,7 @@ import Deriving.Aeson.Stock qualified as DAES
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception (throwIO)
 import Effectful.Log (Log)
+import Effectful.Reader.Static (Reader)
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
@@ -123,6 +124,7 @@ import Hasql.Transaction.Sessions qualified as TxS
 import Jose.Jwa (JwsAlg (RS256))
 import Jose.Jws qualified as Jws
 import Jose.Jwt (Jwt (..))
+import Models.Projects.DashboardTemplates (Editable, askTemplates, editableIn)
 import Models.Projects.Dashboards (Dashboard, DashboardId)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ImpactReviews qualified as ImpactReviews
@@ -130,8 +132,9 @@ import Models.Projects.ProjectApiKeys (decryptAPIKey, decryptSecret, encryptSecr
 import Models.Projects.Projects (PersistentSessionId, ProjectId)
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), selectFrom)
 import Pkg.Git qualified as Git
-import Relude
+import Relude hiding (Reader)
 import Relude.Extra.Bifunctor (bimapF)
+import System.Config (AuthContext)
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import System.Logging (logWarn)
@@ -671,18 +674,23 @@ getRepositoryDashboardState pid sid =
     <$> Hasql.interp [HI.sql| SELECT id, file_path, file_sha FROM projects.dashboards WHERE project_id = #{pid} AND git_sync_id = #{sid} AND file_path IS NOT NULL |]
 
 
-data DashboardRepositoryError = DashboardMissing | RepositoryMissing | OwnedByRepository GitHubSyncId | FileOwnedByDashboard DashboardId
+data DashboardRepositoryError = DashboardMissing | RepositoryMissing | OwnedByRepository GitHubSyncId | FileOwnedByDashboard DashboardId | BuiltInReadOnly
   deriving stock (Eq, Show)
 
 
-assignDashboardRepository :: DB es => ProjectId -> DashboardId -> GitHubSyncId -> Eff es (Either DashboardRepositoryError ())
-assignDashboardRepository pid did sid = Hasql.transaction TxS.ReadCommitted TxS.Write do
-  repositories <- Hasql.queryTx @[GitHubSync] (selectFrom @GitHubSync <> [HI.sql| WHERE project_id = #{pid} AND id = #{sid} FOR UPDATE |])
-  dashboards <- Hasql.queryTx @[Dashboards.DashboardVM] (selectFrom @Dashboards.DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND id = #{did} FOR UPDATE |])
-  case (listToMaybe repositories, listToMaybe dashboards) of
-    (Nothing, _) -> pure $ Left RepositoryMissing
-    (_, Nothing) -> pure $ Left DashboardMissing
-    (Just sync, Just dash) -> case dash.gitSyncId of
+-- | Linking hands every later write to git, so a built-in read-only dashboard is refused here;
+-- a linked one comes back with its write proof.
+assignDashboardRepository :: (DB es, IOE :> es, Reader AuthContext :> es) => ProjectId -> DashboardId -> GitHubSyncId -> Eff es (Either DashboardRepositoryError Editable)
+assignDashboardRepository pid did sid =
+  askTemplates >>= \templates -> Hasql.transaction TxS.ReadCommitted TxS.Write do
+    repositories <- Hasql.queryTx @[GitHubSync] (selectFrom @GitHubSync <> [HI.sql| WHERE project_id = #{pid} AND id = #{sid} FOR UPDATE |])
+    dashboards <- Hasql.queryTx @[Dashboards.DashboardVM] (selectFrom @Dashboards.DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND id = #{did} FOR UPDATE |])
+    case (listToMaybe repositories, listToMaybe dashboards) of
+      (Nothing, _) -> pure $ Left RepositoryMissing
+      (_, Nothing) -> pure $ Left DashboardMissing
+      (Just sync, Just dash) -> whenRight (Left BuiltInReadOnly) (editableIn templates dash) (link sync dash)
+  where
+    link sync dash ed = case dash.gitSyncId of
       Just other | other /= sid -> pure $ Left $ OwnedByRepository other
       _ -> do
         let rawPath = fromMaybe (titleToFilePath dash.title) dash.filePath
@@ -690,7 +698,7 @@ assignDashboardRepository pid did sid = Hasql.transaction TxS.ReadCommitted TxS.
         conflicts <- Hasql.queryTx @[HI.OneColumn DashboardId] [HI.sql| SELECT id FROM projects.dashboards WHERE git_sync_id = #{sid} AND file_path = #{path} AND id <> #{did} LIMIT 1 |]
         case conflicts of
           HI.OneColumn other : _ -> pure $ Left $ FileOwnedByDashboard other
-          [] -> Right () <$ Hasql.executeTx [HI.sql| UPDATE projects.dashboards SET git_sync_id = #{sid}, file_path = #{path}, file_sha = CASE WHEN git_sync_id IS NULL THEN NULL ELSE file_sha END WHERE project_id = #{pid} AND id = #{did} |]
+          [] -> Right ed <$ Hasql.executeTx [HI.sql| UPDATE projects.dashboards SET git_sync_id = #{sid}, file_path = #{path}, file_sha = CASE WHEN git_sync_id IS NULL THEN NULL ELSE file_sha END WHERE project_id = #{pid} AND id = #{did} |]
 
 
 updateDashboardGitInfo :: (DB es, Time :> es) => DashboardId -> Text -> Text -> Eff es Int64

@@ -1,4 +1,4 @@
-module Models.Projects.DashboardTemplates (askTemplates, getDashboardTemplates, loadDashboardFromVM, detach, duplicate, Editable, editable, requireEditable, updateSchema, updateTitle, dashboardTemplatesCompiled) where
+module Models.Projects.DashboardTemplates (Templates, askTemplates, templateList, getDashboardTemplates, loadDashboardFromVM, detach, duplicate, ReadOnly (..), Editable, editableIn, requireEditable, updateSchema, updateTitle, dashboardTemplatesCompiled) where
 
 import Control.Lens ((%~))
 import Data.Effectful.Hasql qualified as Hasql
@@ -15,7 +15,7 @@ import Relude hiding (Reader, ask)
 import Servant (ServerError)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
 import System.FilePath (isExtensionOf)
-import System.Types (DB)
+import System.Types (DB, Refusal (..))
 import Web.ApiTypes qualified as ApiT
 
 
@@ -32,7 +32,7 @@ detach templates vm = vm{Dashboards.baseTemplate = Nothing, Dashboards.schema = 
 -- | The copier's own detached copy, outside any repository: a shared (repository, file) key is unique.
 duplicate :: (IOE :> es, Reader AuthContext :> es) => Projects.UserId -> UTCTime -> Dashboards.DashboardId -> Dashboards.DashboardVM -> Eff es Dashboards.DashboardVM
 duplicate uid now did vm =
-  askTemplates <&> \templates ->
+  askTemplates <&> \(Templates templates) ->
     let copy = detach templates vm
      in copy
           { Dashboards.id = did
@@ -51,16 +51,33 @@ duplicate uid now did vm =
     copied = (<> " (Copy)")
 
 
--- | Proof a dashboard's content may be written; only 'editable' makes one, never for a built-in read-only dashboard.
+-- | The one refusal for writing a built-in dashboard; @/api/v1@ answers it as 'ApiT.DashboardReadOnly'.
+data ReadOnly = ReadOnly
+  deriving stock (Eq, Show)
+
+
+instance Refusal ReadOnly where refusalMessage _ = ApiT.readOnlyMessage
+
+
+-- | Proof a dashboard's content may be written; only this module makes one, never for a built-in read-only dashboard.
 newtype Editable = Editable Dashboards.DashboardId
 
 
-editable :: (IOE :> es, Reader AuthContext :> es) => Dashboards.DashboardVM -> Eff es (Maybe Editable)
-editable vm = askTemplates <&> \templates -> Editable vm.id <$ guard (isNothing $ Dashboards.readOnlyTemplate templates vm)
+-- | The templates one request loads; only 'askTemplates' makes them, so an empty list cannot grant write access.
+newtype Templates = Templates [Dashboards.Dashboard]
 
 
+templateList :: Templates -> [Dashboards.Dashboard]
+templateList (Templates ts) = ts
+
+
+editableIn :: Templates -> Dashboards.DashboardVM -> Either ReadOnly Editable
+editableIn (Templates templates) vm = maybe (Right $ Editable vm.id) (const $ Left ReadOnly) (Dashboards.readOnlyTemplate templates vm)
+
+
+-- | For @/api/v1@: a built-in dashboard is the 403 'ApiT.DashboardReadOnly'.
 requireEditable :: (Error ServerError :> es, IOE :> es, Reader AuthContext :> es) => Dashboards.DashboardVM -> Eff es Editable
-requireEditable vm = editable vm `whenNothingM` ApiT.refuse ApiT.DashboardReadOnly
+requireEditable vm = askTemplates >>= either (const $ ApiT.refuse ApiT.DashboardReadOnly) pure . (`editableIn` vm)
 
 
 -- | Replace a dashboard's schema, optionally stamping @updated_at@. In-page widget edits pass
@@ -84,8 +101,8 @@ dashboardTemplatesCompiled :: [Dashboards.Dashboard]
 dashboardTemplatesCompiled = rights [Dashboards.decodeDashboard f bs | (f, bs) <- sortWith fst $(embedDir "static/public/dashboards"), "yaml" `isExtensionOf` f]
 
 
-askTemplates :: (IOE :> es, Reader AuthContext :> es) => Eff es [Dashboards.Dashboard]
-askTemplates = getDashboardTemplates . (.config) =<< ask @AuthContext
+askTemplates :: (IOE :> es, Reader AuthContext :> es) => Eff es Templates
+askTemplates = Templates <$> (getDashboardTemplates . (.config) =<< ask @AuthContext)
 
 
 -- Reload from disk only in development; deployments always use the compiled templates.
