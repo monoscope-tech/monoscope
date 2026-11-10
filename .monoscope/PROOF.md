@@ -1,30 +1,28 @@
 # Proving changes in this repository
 
-Reviews run offline in a VM. The Haskell server cannot be built there within a review's budget, so prove
-what runs without it: CLI and script behaviour in the terminal, and UI changes to the web components in a
-browser.
+Reviews run offline in a VM, and the Haskell server cannot be rebuilt there within a review's
+budget. The guest ships a recent production build of it instead, so prove frontend changes in the
+real app, and CLI and script behaviour in the terminal.
 
-## UI changes in `web-components/`
+## Frontend changes (`web-components/`, `static/`)
 
-`web-components/bench/live-tail.html` mounts the real Live Tail (log list, query editor, toolbar) on
-synthetic logs; add a page beside it to mount another component the same way. The bench page gives the
-component the whole viewport, while the app shows it beside the ~233px sidebar: to prove a layout at a
-given window width, set the viewport to that width minus the sidebar (1047px for a 1280px window). The guest ships the
-dependencies at `/opt/proof`.
-
-Setup (unrecorded; it links gitignored paths only):
+Setup (unrecorded; it links and writes gitignored paths only):
 
 ```bash
-ln -sfn /opt/proof/node_modules node_modules
-ln -sfn /opt/proof/web-components/node_modules web-components/node_modules
-./node_modules/.bin/tailwindcss -i static/public/assets/css/tailwind.css -o static/public/assets/css/tailwind.min.css >/tmp/tailwind.log 2>&1
-cd web-components && (npx vite --config bench/live-tail.vite.config.ts --host 127.0.0.1 --port 3098 --strictPort >/tmp/vite.log 2>&1 &)
-for i in $(seq 1 120); do curl -sf -o /dev/null http://127.0.0.1:3098/bench/live-tail.html && break; sleep 1; done
+monoscope-app
 ```
 
+It swaps this checkout's frontend into the guest's server, starts it on `http://127.0.0.1:8080`
+against a migrated Postgres, and returns once sample traffic is flowing: an hour of history from
+four services, then a few requests a second, so Live Tail streams. The demo project at
+`/p/00000000-0000-0000-0000-000000000000/` needs no login. Server-rendered markup (`src/Pages`)
+stays the guest's build, so a change there is unverified, not disproved. The CSS is rebuilt from
+this checkout, so a class this pull request removes from `src/` can unstyle the guest's markup.
+Run it once per VM.
+
 Command: write the Playwright script into `web-components/` (so `playwright` resolves; the file is
-untracked) with a quoted heredoc, so nothing in it needs escaping, then run it. It records the
-interaction and writes to `$PROOF_MEDIA`:
+untracked) with a quoted heredoc, so nothing in it needs escaping, then run it. Record the whole
+window, sidebar included, at 1280x800:
 
 ```bash
 cd web-components && cat > proof.mjs <<'JS'
@@ -35,10 +33,11 @@ const step = (label) => { chapters.push(((Date.now() - t0) / 1000).toFixed(1) + 
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, recordVideo: { dir: out, size: { width: 1280, height: 800 } } });
 const page = await context.newPage();
+await page.goto('http://127.0.0.1:8080/p/00000000-0000-0000-0000-000000000000/log_explorer');
 step('Open Live Tail');
-await page.goto('http://127.0.0.1:3098/bench/live-tail.html?frames=1&fields=50');
-await page.waitForTimeout(4000);
-await page.screenshot({ path: `${out}/Live Tail toolbar.png`, clip: { x: 0, y: 0, width: 1280, height: 160 } });
+await page.getByRole('link', { name: 'Live Tail' }).click();
+await page.waitForTimeout(2000);
+await page.screenshot({ path: `${out}/Live Tail toolbar at 1280px.png`, clip: { x: 0, y: 80, width: 1280, height: 60 } });
 // …the steps that show the change, each behind step('…'), then an assertion that exits 1 on the base.
 await context.close(); await browser.close();
 writeFileSync(`${out}/chapters.tsv`, chapters.join('\n') + '\n');
@@ -46,8 +45,8 @@ JS
 node proof.mjs
 ```
 
-The components render into light DOM (no shadow root). Locate controls by role and wait for them before
-asserting, and assert on what the user sees, so the base recording fails and the head passes:
+Locate controls by role and wait for them before asserting, and assert on what the user sees, so
+the base recording fails and the head passes:
 
 ```js
 const clear = page.getByRole('button', { name: 'Clear' }), pause = page.getByRole('button', { name: /Pause|Resume/ });
@@ -60,6 +59,11 @@ The recording is the first thing a reviewer sees, so pace it like a demo: hold a
 each state worth seeing (`await page.waitForTimeout(2000)`), and chapter only the steps a user would
 take, never setup or teardown. Aim for 10 to 30 seconds.
 
-Write `chapters.tsv` and close the context before any `process.exit`, or the video is lost. Name
-screenshots for the state they show (`Clear wraps below Pause.png`, not `toolbar.png`); crop them to
-the part that changed.
+Write `chapters.tsv` and close the context before any `process.exit`, or the video is lost. The same
+script records both sides, so name screenshots for what they frame (`Live Tail toolbar at
+1280px.png`), never for the outcome you expect; crop them to the part that changed.
+
+For a state the sample traffic cannot produce, `web-components/bench/` mounts one component on
+synthetic data without the server (`cd web-components && npx vite --config
+bench/live-tail.vite.config.ts --port 3098`). It has no sidebar, so subtract the app's sidebar from
+the viewport to match a window width.
