@@ -1396,8 +1396,10 @@ sortableTableHead_ widget columns selected =
 -- "[id='5xx-rate_stat']"
 -- >>> idSelector "it's"
 -- "[id='it\\'s']"
+-- >>> idSelector "a\\b"
+-- "[id='a\\\\b']"
 idSelector :: Text -> Text
-idSelector i = "[id='" <> T.replace "'" "\\'" i <> "']"
+idSelector i = "[id='" <> T.replace "'" "\\'" (T.replace "\\" "\\\\" i) <> "']"
 
 
 renderTable :: Widget -> Html ()

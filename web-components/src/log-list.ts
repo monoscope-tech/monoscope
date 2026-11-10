@@ -9,7 +9,7 @@ import debounce from 'lodash/debounce';
 import { LiveStream, tableRowToArray, traceEntriesFor } from './live-stream';
 // Import worker as URL instead of worker instance
 import LogWorkerUrl from './log-worker?worker&url';
-import { applySpanExpansion, groupSpans } from './log-worker-functions';
+import { applySpanExpansion, groupSpans, incompleteResponse } from './log-worker-functions';
 import { formatNumber, scaleDuration } from './stat-value';
 import { spriteUrl } from './assets';
 import clsx from 'clsx';
@@ -111,7 +111,9 @@ const toShownFailure = (e: unknown): never => {
 async function fetchJson<T>(url: string): Promise<T> {
   const resp = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' }).catch(toShownFailure);
   if (!resp.ok) throw new ShownFailure(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
-  return (await resp.json().catch(toShownFailure)) as T;
+  return (await resp.json().catch(() => {
+    throw new ShownFailure(incompleteResponse(resp.status));
+  })) as T;
 }
 
 // Special item types for virtual list

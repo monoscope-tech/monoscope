@@ -3,6 +3,7 @@ module Models.Apis.ErrorPatterns (
   ErrorPatternId (..),
   ErrorState (..),
   ATError (..),
+  errorTenant,
   CaptureMechanism (..),
   ErrorPatternL (..),
   -- Queries
@@ -512,6 +513,16 @@ findCanonicalMatch pid service eType msg =
           AND error_type = #{eType} AND message = #{msg}
           AND canonical_id IS NULL AND merge_override = FALSE
         ORDER BY created_at ASC LIMIT 1 |]
+
+
+-- | The customer an error hit: the tenant's name, else its id.
+--
+-- >>> errorTenant (def :: ATError){tenantId = Just "t-1"}
+-- Just "t-1"
+-- >>> errorTenant (def :: ATError){tenantName = Just "Acme", tenantId = Just "t-1"}
+-- Just "Acme"
+errorTenant :: ATError -> Maybe Text
+errorTenant e = e.tenantName <|> e.tenantId
 
 
 -- | What an upsert did to a single pattern row.

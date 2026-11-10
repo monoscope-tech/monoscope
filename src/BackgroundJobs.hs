@@ -2141,7 +2141,7 @@ dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors)
                         impact =
                           Mail.AlertImpact
                             { Mail.projectName = project.title
-                            , Mail.tenant = sub.errorData.tenantName <|> sub.errorData.tenantId
+                            , Mail.tenant = ErrorPatterns.errorTenant sub.errorData
                             , Mail.userName = sub.errorData.userName <* guard project.includeUserIdentityInAlerts
                             , Mail.userEmail = sub.errorData.userEmail <* guard project.includeUserIdentityInAlerts
                             }

@@ -7,6 +7,7 @@
 // takes the collapse branch and the reader can never retry.
 import { describe, test, expect, vi, afterEach } from 'vitest';
 import { row, mountList, stubFetch } from './log-list-harness';
+import { incompleteResponse } from '../src/log-worker-functions';
 
 const SESSION = 'sess-1';
 
@@ -148,6 +149,23 @@ describe('when the fetch fails', () => {
     await (el as any).expandSessionTrace(SESSION);
     expect((el as any).loadingSessions[SESSION]).toBeUndefined();
     restoreOk();
+  });
+
+  // The worker and the list said different things about the same empty body.
+  test('an empty body reads the same as it does in the worker', async () => {
+    const el = await sessionsList();
+    const toasts: string[] = [];
+    const onToast = (e: any) => toasts.push(...e.detail.value);
+    document.body.addEventListener('errorToast', onToast);
+    const original = globalThis.fetch;
+    (globalThis as any).fetch = async () => ({ ok: true, status: 200, json: async () => JSON.parse('') });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await (el as any).expandSessionTrace(SESSION);
+
+    expect(toasts).toEqual([incompleteResponse(200)]);
+    document.body.removeEventListener('errorToast', onToast);
+    (globalThis as any).fetch = original;
   });
 
   test('the list is left exactly as it was', async () => {
