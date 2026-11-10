@@ -806,7 +806,7 @@ proofMediaGetH pid rid file sigM request send = do
   ctx <- ask @AuthContext
   whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid (ImpactReviews.proofSignedPath rid file) sigM) \err -> Error.throwError err403{errBody = err}
   bytes <- maybe (Error.throwError err404) pure =<< ImpactReviews.proofFile pid rid file
-  let mime = case file.asset of ImpactReviews.Recording ImpactReviews.Gif -> "image/gif"; ImpactReviews.Recording ImpactReviews.Mp4 -> "video/mp4"; ImpactReviews.Recording ImpactReviews.Cast -> "application/x-asciicast"; ImpactReviews.Screenshot _ -> "image/png"
+  let mime = case file.asset of ImpactReviews.Recording ImpactReviews.Gif -> if "RIFF" `BS.isPrefixOf` bytes then "image/webp" else "image/gif"; ImpactReviews.Recording ImpactReviews.Mp4 -> "video/mp4"; ImpactReviews.Recording ImpactReviews.Cast -> "application/x-asciicast"; ImpactReviews.Screenshot _ -> "image/png"
   liftIO $ send $ PageCodeContext.rangedMedia request [(H.hContentType, mime), (H.hCacheControl, "public, max-age=31536000, immutable")] (toLazy bytes)
 
 

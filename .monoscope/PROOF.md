@@ -20,11 +20,12 @@ cd web-components && (npx vite --config bench/live-tail.vite.config.ts --host 12
 for i in $(seq 1 120); do curl -sf -o /dev/null http://127.0.0.1:3098/bench/live-tail.html && break; sleep 1; done
 ```
 
-Command: run a Playwright script from `web-components/` (so `playwright` resolves) that records the
+Command: write the Playwright script into `web-components/` (so `playwright` resolves; the file is
+untracked) with a quoted heredoc, so nothing in it needs escaping, then run it. It records the
 interaction and writes to `$PROOF_MEDIA`:
 
 ```bash
-cd web-components && node --input-type=module -e "$(cat <<'JS'
+cd web-components && cat > proof.mjs <<'JS'
 import { chromium } from 'playwright';
 import { writeFileSync } from 'node:fs';
 const out = process.env.PROOF_MEDIA, t0 = Date.now(), chapters = [];
@@ -40,7 +41,7 @@ await page.screenshot({ path: `${out}/Live Tail toolbar.png`, clip: { x: 0, y: 0
 await context.close(); await browser.close();
 writeFileSync(`${out}/chapters.tsv`, chapters.join('\n') + '\n');
 JS
-)"
+node proof.mjs
 ```
 
 Name screenshots for what they show; crop them to the part that changed. Keep the whole run under a minute.
