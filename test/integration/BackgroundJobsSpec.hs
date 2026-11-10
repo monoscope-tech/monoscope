@@ -22,9 +22,9 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
-import Hasql.Interpolate qualified as HI
 import Database.PostgreSQL.Simple.Notification qualified as PGN
 import Effectful.Time qualified as Time
+import Hasql.Interpolate qualified as HI
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues (ReportListItem (..))
 import Models.Apis.Issues qualified as Issues
