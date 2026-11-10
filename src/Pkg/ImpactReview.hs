@@ -1102,12 +1102,18 @@ autofixIssues pid = whenJustM (Issues.getEventRoutine pid Issues.EventIssueFix) 
     Left err -> Log.logAttention "Autofix could not resolve the agent image" (pid, err)
     Right image -> for_ candidates \(issue, mid) -> whenJust (find ((== mid) . (.id)) mappings) \mapping -> do
       queued <- runExceptT do
-        (_, conn) <- ExceptT $ first show <$> CodeContext.mappingConnection cfg pid mapping
-        base <- ExceptT $ (>>= first show . Fixes.mkRevision) <$> Git.headRevision conn (Git.RepoRef mapping.owner mapping.repo mapping.ref)
+        (_, conn) <- ExceptT $ first RepositoryUnreachable <$> CodeContext.mappingConnection cfg pid mapping
+        base <- ExceptT $ (>>= first InvalidHead . Fixes.mkRevision) . first HeadUnavailable <$> Git.headRevision conn (Git.RepoRef mapping.owner mapping.repo mapping.ref)
         let fid = UUIDId issue.unUUIDId
-        void $ ExceptT $ maybeToRight "The issue or its repository mapping changed" <$> Fixes.createRun pid fid issue mid base image
-        unlessM (lift $ Fixes.queueJob pid routine.requestedBy fid) $ throwE "The routine owner can no longer queue fixes"
-      whenLeft_ queued \err -> Log.logAttention "Autofix could not queue a fix" (pid, issue, err)
+        void $ ExceptT $ maybeToRight RunRefused <$> Fixes.createRun pid fid issue mid base image
+        unlessM (lift $ Fixes.queueJob pid routine.requestedBy fid) $ throwE QueueRefused
+      whenLeft_ queued \skip -> Log.logAttention "Autofix could not queue a fix" (pid, issue, show @Text skip)
+
+
+-- | Why the autofix sweep left a candidate unqueued. 'RunRefused': the issue or its mapping changed
+-- since selection; 'QueueRefused': the routine's owner can no longer queue fixes.
+data AutofixSkip = RepositoryUnreachable CodeContext.SnippetError | HeadUnavailable Text | InvalidHead Fixes.Failure | RunRefused | QueueRefused
+  deriving stock (Show)
 
 
 fixIssue :: Projects.ProjectId -> Fixes.FixId -> ATBackgroundCtx ()
