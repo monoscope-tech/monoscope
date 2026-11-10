@@ -75,6 +75,7 @@ import Text.HTML.SanitizeXSS (sanitizeBalance)
 import Text.Parsec qualified as Parsec
 import Text.Slugify (slugify)
 import Utils (LoadingSize (..), TabStrip (..), countNoun, faSprite_, htmxIndicator_, navTabStrip_, nonEmptyT, renderMarkdown)
+import Web.ApiTypes (readOnlyMessage)
 import Web.Auth (demoGuestSessionId)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (toUrlPiece)
@@ -957,9 +958,9 @@ repositoryFolderPostH pid rid form = do
   let kind = T.toLower $ show @Text candidate.kind
       directory = if candidate.kind == RepositorySync.Dashboard then "dashboards/" else "monitors/"
       path = (if T.null sync.pathPrefix then "" else sync.pathPrefix <> "/") <> directory <> kind <> "-" <> show candidate.localId <> ".yaml"
-  assignment <- if candidate.kind == RepositorySync.Dashboard then GitSync.assignDashboardRepository pid (UUIDId candidate.localId) sync.id else pure $ Right ()
+  assignment <- if candidate.kind == RepositorySync.Dashboard then void <$> GitSync.assignDashboardRepository pid (UUIDId candidate.localId) sync.id else pure $ Right ()
   case assignment of
-    Left GitSync.BuiltInReadOnly -> addErrorToast "Could not move dashboard" (Just "Built-in dashboards always show the version we ship. Duplicate it and sync the copy.")
+    Left GitSync.BuiltInReadOnly -> addErrorToast "Could not move dashboard" (Just readOnlyMessage)
     Left _ -> addErrorToast "Could not move dashboard" (Just "Its repository assignment changed. Refresh and try again.")
     Right () -> do
       RepositorySync.registerResource pid sync.id candidate.kind candidate.localId path

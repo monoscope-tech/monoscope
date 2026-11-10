@@ -1268,7 +1268,7 @@ spec = do
 
       it "repositoryOwnership_isolatesIdenticalPathsQueuesOnlyAssignedPushesAndRetainsDashboardsOnDisconnect" \tr -> do
         let connect owner = syncOf tr testPid Nothing owner "dashboards" (GitSync.AppInstallation 42) ""
-            assign did sync = runQueryEffect tr $ GitSync.assignDashboardRepository testPid did sync.id
+            assign did sync = void <$> runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id)
             queuePush = runAuthHandler tr . GitSyncPage.queueGitSyncPush testPid
             pushesOf did = pendingJobs tr <&> \jobs -> length [() | BackgroundJobs.GitSyncPushDashboard project d <- jobs, project == testPid, d == did.unwrap]
         -- repositorySync_acceptsIndependentRepositoriesForDifferentTeams
@@ -1287,7 +1287,7 @@ spec = do
         assign dashA syncB `shouldReturn` Left (GitSync.OwnedByRepository syncA.id)
         assign conflict syncA `shouldReturn` Left (GitSync.FileOwnedByDashboard dashA)
         otherPid <- createTestProject tr "Other repository project"
-        runQueryEffect tr (GitSync.assignDashboardRepository otherPid dashA syncA.id) `shouldReturn` Left GitSync.RepositoryMissing
+        void <$> runQueryEffect tr (GitSync.assignDashboardRepository otherPid dashA syncA.id) `shouldReturn` Left GitSync.RepositoryMissing
         _ <- runQueryEffect tr $ GitSync.updateDashboardGitInfo dashA "overview.yaml" "sha-a"
         _ <- runQueryEffect tr $ GitSync.updateDashboardGitInfo dashB "overview.yaml" "sha-b"
         fmap (\d -> (d.filePath, d.fileSha)) <$> dashOf tr dashA `shouldReturn` Just (Just "overview.yaml", Just "sha-a")
@@ -1432,7 +1432,7 @@ spec = do
       it "repositoryPush_doesNotAdvanceThePullCursorPastOtherRemoteDashboards" \tr -> do
         sync <- syncOf tr testPid (Just "https://127.0.0.1:1") "team" "dashboards" (GitSync.PersonalToken "fixture") ""
         did <- seedDash tr \d -> d{Dashboards.title = "Local", Dashboards.schema = Just def, Dashboards.filePath = Just "local.yaml"}
-        runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id) `shouldReturn` Right ()
+        void <$> runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id) `shouldReturn` Right ()
         let transport :: (IOE :> es, W.HTTP :> es) => Eff es a -> Eff es a
             transport = gitHost [("remote.yaml", blobOf "title: Remote\nwidgets: []\n"), ("/contents/", "{\"content\":{\"sha\":\"local-blob\"}}"), ("/git/trees/", treeOf [("dashboards/local.yaml", "local-blob"), ("dashboards/remote.yaml", "remote-blob")])] "{\"sha\":\"head\"}"
         for_ [BackgroundJobs.GitSyncPushDashboard testPid did.unwrap, BackgroundJobs.GitSyncRepository testPid sync.id] $ runJob tr transport

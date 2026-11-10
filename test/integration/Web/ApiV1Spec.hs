@@ -2,18 +2,16 @@ module Web.ApiV1Spec (spec) where
 
 import Control.Lens (cosmos, ix, (^.), (^..), (^?), _Just)
 import Data.Aeson qualified as AE
-import Data.Aeson.Types qualified as AET
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Lens (key, _Array, _Number, _Object, _String)
+import Data.Aeson.Types qualified as AET
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPRecord, withGoldenCache)
-import System.Environment (setEnv, unsetEnv)
-import System.IO.Temp (withSystemTempDirectory)
-import UnliftIO.Exception (bracket_)
 import Data.List qualified as List
 import Data.Map qualified as Map
 import Data.OpenApi (OpenApi, info, title, version)
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
@@ -35,28 +33,30 @@ import Network.Wai.Test qualified as WT
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts
 import Pages.Charts.Types (MetricsData (..))
-import Pages.LogExplorer.Log qualified as Log
-import Pkg.Components.Widget qualified as Widget
-import Pkg.Git qualified as Git
-import Pkg.Parser.Expr qualified as ParserExpr
-import Data.Set qualified as S
 import Pages.Dashboards qualified as DashPage
+import Pages.LogExplorer.Log qualified as Log
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
+import Pkg.Components.Widget qualified as Widget
+import Pkg.Git qualified as Git
 import Pkg.MonitorConfig (MonitorCondition (unit), MonitorConfig (condition, environment, service))
+import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.TestUtils
 import Servant (NoContent (..))
 import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Environment (setEnv, unsetEnv)
+import System.IO.Temp (withSystemTempDirectory)
 import System.Types (ATBaseCtx, ApiPrincipal (..), effToServantHandlerTestHTTP)
+import UnliftIO.Exception (bracket_)
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
 import Web.Auth (resolveApiKeyProject)
 import Web.MCP qualified as MCP
+import Web.Operations qualified as Operations (Cli (..), Operation (..), listingOf, operations, pathParams)
 import Web.Routes (apiV1OpenApiSpec, apiV1Server)
 import Web.Routes qualified as Routes
-import Web.Operations qualified as Operations (Cli (..), Operation (..), listingOf, operations, pathParams)
 import Web.Wire qualified as Wire
 
 
@@ -291,7 +291,7 @@ spec = describe "API v1" do
       (.summary.id) <$> runB (ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid (doc "dashes/foo.yaml" "foo")) `shouldReturn` applied.summary.id
       Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
       remote <- runB $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid (doc "overview.yaml" "Repository overview")
-      runQueryEffect tr (GitSync.assignDashboardRepository testPid remote.summary.id sync.id) `shouldReturn` Right ()
+      void <$> runQueryEffect tr (GitSync.assignDashboardRepository testPid remote.summary.id sync.id) `shouldReturn` Right ()
       localDash <- runB $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid (doc "overview.yaml" "Local overview")
       localDash.summary.id `shouldNotBe` remote.summary.id
       fmap (.title) <$> runQueryEffect tr (Dashboards.getDashboardByProjectId testPid remote.summary.id) `shouldReturn` Just "Repository overview"

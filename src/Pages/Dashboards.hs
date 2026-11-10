@@ -28,8 +28,8 @@ module Pages.Dashboards (
   WidgetReorderItem (..),
   dashboardDeleteH,
   dashboardRenamePatchH,
-  DashboardRenamed (..),
-  LayoutSaved (..),
+  DashboardRenamed,
+  LayoutSaved,
   WidgetCopied (..),
   DashboardRenameForm (..),
   dashboardDuplicatePostH,
@@ -53,7 +53,7 @@ module Pages.Dashboards (
   addVariableDefaults,
   dashboardBulkActionPostH,
   TabRenameForm (..),
-  TabRenameRes (..),
+  TabRenamed,
   -- Widget alerts
   WidgetAlertForm (..),
   widgetAlertUpsertH,
@@ -1351,7 +1351,7 @@ dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = act do
         reorderedWidgets = reorderWidgets widgetOrder oldWidgets
         deletedWidgetIds = filter (`notElem` newWidgetIds) $ mapMaybe (.id) oldWidgets
     -- Safety: if patch has IDs but none match existing widgets, it's a stale/race request — skip
-    unless (not (null oldWidgets) && not (Map.null widgetOrder) && null reorderedWidgets) do
+    when (null oldWidgets || Map.null widgetOrder || not (null reorderedWidgets)) do
       -- Delete alerts for removed widgets first (before updating dashboard to avoid orphaned monitors)
       unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds pid (Just dashId) deletedWidgetIds
       _ <- updateSchema ed (overDashWidgets tabSlugM (const reorderedWidgets) dash) Nothing
@@ -2798,9 +2798,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = act do
 
 
 newtype WidgetCopied = WidgetCopied Widget.Widget
-
-
-instance Outcome WidgetCopied where outcomeBody (WidgetCopied w) = toHtml w
+  deriving (Outcome) via Rendered Widget.Widget
 
 
 dashboardWidgetExpandGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders WidgetEditor)
@@ -3191,31 +3189,26 @@ newtype TabRenameForm = TabRenameForm
   deriving anyclass (FromForm)
 
 
--- | Response for tab rename containing new tab name and slug
-data TabRenameRes = TabRenameRes
-  { newName :: Text
-  , newSlug :: Text
-  }
-  deriving stock (Generic, Show)
+-- | The renamed tab's URL: the client redirect re-renders the tab strip under the new name.
+newtype TabRenamed = TabRenamed Text
 
 
--- | Nothing to swap: the client redirect re-renders the tab strip under the new name.
-instance Outcome TabRenameRes where outcomeToast _ = Just "Tab renamed successfully"
+instance Outcome TabRenamed where
+  outcomeRedirect (TabRenamed url) = Just url
+  outcomeToast _ = Just "Tab renamed successfully"
 
 
 -- | Handler for renaming a tab
-dashboardTabRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> TabRenameForm -> ATAuthCtx (ActionResult ReadOnly TabRenameRes)
+dashboardTabRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> TabRenameForm -> ATAuthCtx (ActionResult ReadOnly TabRenamed)
 dashboardTabRenamePatchH pid dashId tabSlug form = act do
   _ <- Projects.sessionAndProject pid
   withEditableDash pid dashId \ed _ dash -> do
     now <- Time.currentTime
     tabs <- dash.tabs `whenNothing` throwError err404{errBody = "Dashboard has no tabs"}
     (idx, _) <- findTabBySlug tabs tabSlug `whenNothing` throwError err404{errBody = "Tab not found: " <> encodeUtf8 tabSlug}
-    let newSlug = slugify form.newName
     _ <- updateSchema ed (dash & #tabs ?~ (tabs & ix idx . #name .~ form.newName)) (Just now)
     syncDashboardAndQueuePush pid dashId
-    redirectCS $ dashboardUrl pid dashId (Just newSlug) []
-    pure TabRenameRes{newName = form.newName, newSlug}
+    pure $ TabRenamed $ dashboardUrl pid dashId (Just $ slugify form.newName) []
 
 
 -- | Form for YAML schema editing

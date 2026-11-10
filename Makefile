@@ -80,7 +80,7 @@ GHCI_RTS = -M16g
 GHCID_RESTART = echo "── ghcid exited at $$(date +%T) (a branch switch or cabal change usually does this); restarting"; sleep 2
 
 live-reload: kill-live-reload
-	@$(REAP_GHCI); scripts/ghci-budget.sh
+	@GHCI_MAX=$${GHCI_MAX:-6} $(REAP_GHCI)
 	@trap 'exit 130' INT TERM; while :; do \
 	  $(REAP_GHCI); \
 	  ghcid --command 'cabal repl monoscope --no-semaphore --ghc-options="-j$(NCPUS) -O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --repl-options="+RTS $(GHCI_RTS) -RTS" --with-compiler=$(GHC)' --test ':! $(REAP_GHCI)' --test ':run Start.startApp' $(RELOAD_ASSETS) $(RELOAD_ENV) --warnings; \
@@ -141,7 +141,7 @@ TEST_MATCH ?=
 # Hspec args live in .test-args, read on every run: refocus a running watcher with
 # `echo '--match LiveTail' > .test-args` instead of restarting it. TEST_MATCH seeds the file.
 live-test-dev: build-chart-cli
-	@$(REAP_GHCI); scripts/ghci-budget.sh
+	@GHCI_MAX=$${GHCI_MAX:-6} $(REAP_GHCI)
 	@$(if $(TEST_MATCH),echo '--match "$(TEST_MATCH)"' > .test-args,touch .test-args)
 	@echo "live-test-dev: hspec args from .test-args: [$$(cat .test-args)] (empty = whole suite)" | tee build-test-dev.log
 	@trap 'exit 130' INT TERM; while :; do \

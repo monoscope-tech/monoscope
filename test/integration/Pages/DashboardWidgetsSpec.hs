@@ -1207,8 +1207,8 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     -- key broke the unique index, so duplicating any synced dashboard failed.
     Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
     -- Linking hands later writes to git, so a built-in is refused there too.
-    runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id) `shouldReturn` Left GitSync.BuiltInReadOnly
-    runQueryEffect tr (GitSync.assignDashboardRepository testPid copyId sync.id) `shouldReturn` Right ()
+    void <$> runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id) `shouldReturn` Left GitSync.BuiltInReadOnly
+    void <$> runQueryEffect tr (GitSync.assignDashboardRepository testPid copyId sync.id) `shouldReturn` Right ()
     status (void $ Dashboards.dashboardDuplicatePostH testPid copyId) `shouldReturn` 200
     dbQuery tr "SELECT git_sync_id IS NULL FROM projects.dashboards WHERE project_id = ? AND title = 'Mine (Copy)'" (Only testPid)
       `shouldReturn` [Only True]

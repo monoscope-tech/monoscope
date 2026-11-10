@@ -262,12 +262,13 @@ let refreshCycleStart = 0;
 const refreshFills = new WeakMap<Element, Animation>();
 const syncRefreshProgress = (restart = false) => {
   const interval = window.dashboardRefreshInterval;
+  const still = !interval || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   if (restart) refreshCycleStart = performance.now();
   document.querySelectorAll('[data-refresh-progress]').forEach((fill) => {
     if (interval && !restart && refreshFills.has(fill)) return;
     refreshFills.get(fill)?.cancel();
     refreshFills.delete(fill);
-    if (!interval || !fill.animate || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    if (still || !fill.animate) return;
     const anim = fill.animate([{ scale: '0 1' }, { scale: '1 1' }], { duration: interval, easing: 'linear', fill: 'forwards' });
     anim.currentTime = performance.now() - refreshCycleStart;
     refreshFills.set(fill, anim);
