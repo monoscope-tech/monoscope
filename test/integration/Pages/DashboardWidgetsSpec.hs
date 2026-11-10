@@ -16,7 +16,7 @@ import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.ProtoLens (defMessage)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
@@ -51,7 +51,7 @@ import Pages.Projects qualified as ManageMembers
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (mkHasqlPool)
 import Pkg.Git qualified as Git
-import Pkg.Parser (TemplateLang (..), browserKql, fillQueryTemplate, parseQueryToAST, variablePresets)
+import Pkg.Parser (SqlQueryCfg (..), TemplateLang (..), browserKql, defSqlQueryCfg, fillQueryTemplate, parseQueryToAST, variablePresets)
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.SchemaLearning qualified as SchemaLearning
 import Pkg.TestUtils
@@ -710,6 +710,20 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     md.dataText `shouldBe` [["a' OR 'x'='x", testPid.toText]]
 
   -- The probe counts real executions (each run advances the sequence), so a hit repeats a value.
+  it "chart cache: refreshing a live range never sends a query narrower than one bucket" \tr -> do
+    -- The partial-first-bucket re-read sent TimeFusion a 1-6s sliver per widget per 15s refresh.
+    let query = "summarize count(*) by bin(timestamp, 10s)"
+    ast <- either (fail . show) pure $ parseQueryToAST query
+    windows <- newIORef []
+    let fetch cfg _ _ = liftIO (modifyIORef' windows (cfg.dateRange :)) $> def
+        refresh now =
+          let from = addUTCTime (-3600) now
+           in runTestBg frozenTime tr $ Charts.queryMetricsWithCacheUsing fetch Nothing Charts.DTMetric testPid Nothing ast (defSqlQueryCfg testPid now Nothing Nothing){dateRange = (Just from, Nothing)} query now (Just from) Nothing
+    for_ @[] [4.5, 19.5, 34.5] \offset -> void $ refresh $ addUTCTime offset frozenTime
+    ranges <- readIORef windows
+    length ranges `shouldSatisfy` (>= 3)
+    [(lo, hi) | (Just lo, Just hi) <- ranges, diffUTCTime hi lo < 10] `shouldBe` []
+
   it "complete-result SQL cache: hits, isolates keys, shares across stream and JSON, expires, single-flights, degrades" \tr -> do
     let probe = "SELECT (nextval('raw_cache_probe') - 1)::double precision"
         reset = dbExec tr "DELETE FROM query_cache WHERE source = 'raw-sql'; DROP SEQUENCE IF EXISTS raw_cache_probe; CREATE SEQUENCE raw_cache_probe" ()
@@ -767,8 +781,8 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     let heavy = "SELECT q.call::text, n::text, repeat('x', 80) FROM (SELECT nextval('cache_benchmark_calls') AS call, pg_sleep(0.1)) q CROSS JOIN generate_series(1, 1000) n"
         fetch window streaming =
           if streaming
-                then completeFrame @Charts.MetricsData =<< runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just heavy) (Just window) Nothing Nothing Nothing Nothing [("var-endpointHash", Just "benchmark")])
-                else runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just heavy) (Just window) Nothing Nothing Nothing Nothing [("var-endpointHash", Just "benchmark")]
+            then completeFrame @Charts.MetricsData =<< runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just heavy) (Just window) Nothing Nothing Nothing Nothing [("var-endpointHash", Just "benchmark")])
+            else runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just heavy) (Just window) Nothing Nothing Nothing Nothing [("var-endpointHash", Just "benchmark")]
     exec "CREATE SEQUENCE cache_benchmark_calls"
     for_ ["24H", "3D", "7D"] \window -> do
       exec "DELETE FROM query_cache WHERE source = 'raw-sql'; ALTER SEQUENCE cache_benchmark_calls RESTART WITH 1"
@@ -803,11 +817,18 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     samplesKey <- createTestAPIKey tr' samples "container-resources"
     let container name = [mkAttr "service.name" name, mkAttr "k8s.container.name" name, mkAttr "k8s.pod.name" (name <> "-0")]
     for_
-      ( [ ("web", "container.cpu.usage", 0.25, now), ("web", "container.cpu.usage", 0.75, now), ("web", "container.memory.working_set", 300, now)
-      , ("web", "k8s.container.memory_limit", 400, now), ("web", "k8s.container.restarts", 2, addUTCTime (-60) now), ("web", "k8s.container.restarts", 5, now)
-      , ("worker", "container.cpu.usage", 0.1, now), ("worker", "container.memory.working_set", 100, now)
-      , ("expired", "container.cpu.usage", 0.9, addUTCTime (-48 * 3600) now)
-      ] :: [(Text, Text, Double, UTCTime)] )
+      ( [ ("web", "container.cpu.usage", 0.25, now)
+        , ("web", "container.cpu.usage", 0.75, now)
+        , ("web", "container.memory.working_set", 300, now)
+        , ("web", "k8s.container.memory_limit", 400, now)
+        , ("web", "k8s.container.restarts", 2, addUTCTime (-60) now)
+        , ("web", "k8s.container.restarts", 5, now)
+        , ("worker", "container.cpu.usage", 0.1, now)
+        , ("worker", "container.memory.working_set", 100, now)
+        , ("expired", "container.cpu.usage", 0.9, addUTCTime (-48 * 3600) now)
+        ]
+          :: [(Text, Text, Double, UTCTime)]
+      )
       \(name, metric, value, stamp) -> ingestMetric tr' samplesKey (container name) [] metric value stamp
     overview <- DashboardModel.readDashboardFile "static/public/dashboards" "_overview.yaml"
     containers <- widgetTitled "Containers" $ foldMap DashboardModel.allWidgets overview
@@ -904,11 +925,11 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     eagerOnes (renderedWidgets $ tabDashboard swapped) `shouldBe` []
     -- A tab navigation is the shared fragment contract, reflecting URL values into the variables bar.
     errorsTab <- partialHtml =<< getTab tr dashId "errors" tabsContent selected
-    goldenParts "dashboard-endpoint-tabs" $
-      foldMap (elementsWith ["id=\"dashboard-tabs-content\"", "name=\"endpointHash\""] . renderT) [domainPicker, endpointPicker]
-        <> tagsWith ["swap-oob=", "id=\"dashboard-tabs-content\"", "class=\"dash-variable-input"] (renderT errorsTab)
-        <> elementsWith ["tab-active\""] (renderT errorsTab)
-        <> [toStrict $ fold $ mapWidget >>= (.html)]
+    goldenParts "dashboard-endpoint-tabs"
+      $ foldMap (elementsWith ["id=\"dashboard-tabs-content\"", "name=\"endpointHash\""] . renderT) [domainPicker, endpointPicker]
+      <> tagsWith ["swap-oob=", "id=\"dashboard-tabs-content\"", "class=\"dash-variable-input"] (renderT errorsTab)
+      <> elementsWith ["tab-active\""] (renderT errorsTab)
+      <> [toStrict $ fold $ mapWidget >>= (.html)]
 
     -- Shipbubble 2026-10-19: 17 MySQL errors in 1.4M queries showed as "0.00%", and the
     -- Databases tab had no way to read the error itself.
@@ -1103,7 +1124,9 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     dIds <- map (.id) . filter ((/= "Updated Dashboard (Copy)") . (.title)) <$> listed
     _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid Dashboards.BAAddTeams Dashboards.DashboardBulkActionForm{itemId = dIds, teamIds = V.toList $ V.map (.id) $ V.filter ((/= "broo") . (.handle)) teams}
     let handles db = sort $ mapMaybe (\tid -> (.handle) <$> V.find ((== tid) . (.id)) teams) (V.toList db.teams)
-    sort . map (\db -> (db.title, handles db)) <$> listed
+    sort
+      . map (\db -> (db.title, handles db))
+      <$> listed
       `shouldReturn` [("Dashboard 2", ["everyone", "hello", "hii"]), ("Updated Dashboard", ["everyone", "hello", "hii"]), ("Updated Dashboard (Copy)", ["everyone"])]
     listed >>= \ds -> void $ testServant tr $ Dashboards.dashboardBulkActionPostH testPid Dashboards.BADelete Dashboards.DashboardBulkActionForm{itemId = map (.id) ds, teamIds = []}
     null <$> listed `shouldReturn` True
@@ -1159,7 +1182,8 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     -- A widget monitor writes its thresholds into the schema, so it is an edit too.
     alertForm <- either (fail . toString) pure $ urlDecodeAsForm @Dashboards.WidgetAlertForm "widgetId=any&query=name%20!%3D%20null&alertThreshold=1&direction=above"
     call tr (Dashboards.widgetAlertUpsertH testPid "any" (Just did) alertForm) <&> void >>= (`shouldBe` Left Dashboards.ReadOnlyDashboard)
-    traverse status
+    traverse
+      status
       [ void $ Dashboards.dashboardWidgetReorderPatchH testPid did (Just "overview") mempty
       , void $ Dashboards.dashboardRenamePatchH testPid did renameForm
       , void $ Dashboards.dashboardTabRenamePatchH testPid did "overview" (Dashboards.TabRenameForm "Mine")

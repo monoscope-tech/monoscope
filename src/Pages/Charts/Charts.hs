@@ -1,6 +1,6 @@
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Pages.Charts.Charts (queryMetrics, queryProjectMetrics, queryMetricsStream, ChartStream, streamQuery_, MetricsData (..), MetricsStats (..), DataType (..), convertTimestampsToMs) where
+module Pages.Charts.Charts (queryMetrics, queryProjectMetrics, queryMetricsStream, queryMetricsWithCacheUsing, ChartStream, streamQuery_, MetricsData (..), MetricsStats (..), DataType (..), convertTimestampsToMs) where
 
 import Control.Concurrent (threadWaitRead)
 import Control.Concurrent.STM qualified as STM
@@ -387,9 +387,13 @@ queryMetricsWithCacheUsing fetch progress respDataType pid source queryAST sqlQu
   | respDataType /= DTMetric = executeQueryWith sqlQueryCfg queryAST
   | resultShape queryAST /= TimeSeries = executeQueryWith sqlQueryCfg queryAST
   | otherwise = do
-      let reqFrom = fromMaybe (addUTCTime (-86400) now) fromD
-      let reqTo = fromMaybe now toD
       let cacheKey = QC.generateCacheKey pid source queryAST sqlQueryCfg
+      -- A live range slides on every refresh. Starting it on a bucket boundary keeps
+      -- its first bucket whole, so a refresh never re-reads a sub-bucket sliver.
+      let live = isNothing toD
+      let reqFrom = (if live then QC.bucketStart cacheKey.binInterval else id) $ fromMaybe (addUTCTime (-86400) now) fromD
+      let reqTo = fromMaybe now toD
+      let missCfg = if live then sqlQueryCfg{dateRange = (Just reqFrom, snd sqlQueryCfg.dateRange)} else sqlQueryCfg
       cacheResult <- QC.lookupCache cacheKey (reqFrom, reqTo)
       case cacheResult of
         QC.CacheHit entry -> do
@@ -447,13 +451,13 @@ queryMetricsWithCacheUsing fetch progress respDataType pid source queryAST sqlQu
                     $ QC.updateCache cacheKey (slidingWindowStart, reqTo) trimmed originalQuery
                   let result = trimCached cacheKey trimmed reqFrom reqTo
                   refetchUnlessAdequate (slidingWindowStart <= reqFrom) trimmed result
-        QC.CacheMiss -> recordCacheOutcome "miss" *> fetchAndCache cacheKey (reqFrom, reqTo)
-        QC.CacheBypassed _ -> recordCacheOutcome "bypassed" *> fetchAndCache cacheKey (reqFrom, reqTo)
+        QC.CacheMiss -> recordCacheOutcome "miss" *> fetchAndCache missCfg cacheKey (reqFrom, reqTo)
+        QC.CacheBypassed _ -> recordCacheOutcome "bypassed" *> fetchAndCache missCfg cacheKey (reqFrom, reqTo)
   where
     recordCacheOutcome outcome = Metrics.bump Metrics.dashboardQueryCacheOutcomes [("outcome", OA.toAttribute (outcome :: Text))]
     trimCached key value a b = (QC.trimToRange value (QC.bucketStart key.binInterval a) b){from = Just $ floor $ utcTimeToPOSIXSeconds a}
-    fetchAndCache cacheKey range = do
-      result <- executeQueryWith sqlQueryCfg queryAST
+    fetchAndCache cfg cacheKey range = do
+      result <- executeQueryWith cfg queryAST
       when (isNothing result.error) $ QC.updateCache cacheKey range result originalQuery
       pure result
     executeQueryWith cfg ast = fetch cfg ast progress
