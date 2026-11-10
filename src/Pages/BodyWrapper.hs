@@ -959,8 +959,10 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                       input_ [type_ "hidden", name_ "intervalMinutes", value_ "1440"]
                       button_ [type_ "submit", class_ "w-full text-start"] "Make daily routine"
                     li_ [] $ button_ [type_ "button", class_ "text-textError", hxDelete_ $ urls.aiThreadDelete project.id c.conversationId, hxSwap_ "none", hxConfirm_ "Delete this chat and its message history? This cannot be undone."] "Delete chat"
+          activeType = (.conversationType) <$> find ((== bcfg.activeConversationId) . Just . (.conversationId)) bcfg.conversations
           routineCard c = do
-            let isActive = bcfg.activeConversationId == Just c.conversationId
+            -- A PR thread is listed under its routine, so the routine marks where you are.
+            let isActive = bcfg.activeConversationId == Just c.conversationId || (activeType == Just Issues.CTPullRequest && c.routineKind == Just Issues.SchedulePullRequest)
                 cadenceLabel = foldMap Issues.routineKindLabel c.routineKind
                 statusLabel = scheduleLabel c
                 stateLabel

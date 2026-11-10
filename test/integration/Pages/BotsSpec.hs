@@ -1548,6 +1548,8 @@ spec = around withTestResources do
       runTestBg frozenTime tr do
         startConversation convId Issues.CTWeb
         startConversation (UUIDId issueId.unUUIDId) Issues.CTAnomaly
+        -- Per-PR review threads belong to their routine, not the people's conversation list.
+        startConversation (conversation 2) Issues.CTPullRequest >> Issues.renameConversation testPid (conversation 2) "acme/api #7"
         Issues.insertChatMessage testPid convId Issues.ChatUser "Watch checkout latency" Nothing Nothing
         for_ (["First run result", "Second run result"] :: [Text]) \r -> Issues.insertChatMessage testPid convId Issues.ChatAssistant r Nothing Nothing
         void $ Issues.saveArtifact testPid convId artifact (Just "Checkout review") "## Summary\nAll good.\n\n## Follow-up\nLatency recovered." Issues.ArtifactReplace
@@ -1558,6 +1560,7 @@ spec = around withTestResources do
       doc <- page convId (Just artifact)
       doc `shouldContainAll` ["All good.", "Latency recovered."]
       thread `shouldContainAll` ["First run result", "Second run result"]
+      (T.isInfixOf "acme/api #7" threads, T.isInfixOf "acme/api #7" thread) `shouldBe` (False, False)
       goldenParts "ai-conversation-pages" $ concat (
         [ elementsWith ["href=\"/p/" <> pidText <> "/ai/routines\"", "href=\"/p/" <> pidText <> "/ai\""] threads
         , tagsWith ["id=\"ai-composer-modal\"", "data-header-actions"] threads
