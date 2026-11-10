@@ -173,6 +173,7 @@ schema role = \case
       [ ("claim", bounded 1 (Just 200) & O.description ?~ "The behaviour this recording proves, as the PR author would state it.")
       , ("command", bounded 1 (Just 16384) & O.description ?~ "Bash run from /workspace on each revision and recorded. Exit nonzero when the claimed behaviour is absent.")
       , ("setup", bounded 1 (Just 16384) & O.description ?~ "Optional bash run first and not recorded: build and start the app in the background, migrate and seed its data, and wait until it answers. Reuse the repository's saved setup unchanged when it still applies. It runs in its own shell, so exports do not reach the command; use fixed ports or write values to a file.")
+      , ("highlight", bounded 1 (Just 200) & O.description ?~ "Optional text the command prints at the moment the claimed behaviour shows, such as a step heading. For a terminal proof, the comment's preview is an eight-second clip from there, with a timeline of the whole recording; without it, the clip is the recording's end.")
       ]
       & O.required
       .~ ["claim", "command"]

@@ -1291,9 +1291,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
       doesFileExist (repository </> "timeout-retained.txt") `shouldReturn` False
       -- A proof replays the claim's command under asciinema on base and head, and the host
       -- renders each recording; the model only sees the recorded output.
-      (proofResult, _, _, _, _, proofReplies) <- run 11 [tool "record_proof" $ AE.object ["claim" AE..= ("Keeps the retry token" :: Text), "command" AE..= ("set -eu\n. ./src/runtime.sh\necho \"== retry token: $(retry_token original)\"\ntest \"$(retry_token original)\" = original" :: Text)], tool "submit_review" accepted]
+      (proofResult, _, _, _, _, proofReplies) <- run 11 [tool "record_proof" $ AE.object ["claim" AE..= ("Keeps the retry token" :: Text), "highlight" AE..= ("== retry token" :: Text), "command" AE..= ("set -eu\n. ./src/runtime.sh\necho \"== retry token: $(retry_token original)\"\ntest \"$(retry_token original)\" = original" :: Text)], tool "submit_review" accepted]
       isRight proofResult `shouldBe` True
-      toolReply "tool-0" proofReplies >>= (`shouldContainAll` ["proof-1", "== retry token: original", "== retry token: dropped"])
+      -- The preview is the highlighted clip; the reply tells the agent where it sits in the recording.
+      toolReply "tool-0" proofReplies >>= (`shouldContainAll` ["proof-1", "== retry token: original", "== retry token: dropped", "clip", "total"])
       recorded <- readIORef proofs
       map (\proof -> (proof.side, proof.exitCode)) recorded `shouldBe` [(Agent.Base, Just 0), (Agent.Head, Just 1)]
       for_ recorded \proof -> do

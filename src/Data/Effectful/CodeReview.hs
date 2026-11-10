@@ -53,7 +53,7 @@ data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Kno
 
 
 -- | @record_proof@ arguments; the tool schema calls the shell text @command@.
-data ProofArgs = ProofArgs {claim :: Text, shellCommand :: Text, setup :: Maybe Text}
+data ProofArgs = ProofArgs {claim :: Text, shellCommand :: Text, setup :: Maybe Text, highlight :: Maybe Text}
   deriving stock (Generic)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "shellCommand" "command"]] ProofArgs
 
@@ -681,8 +681,9 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             logBytes <- readFileBS logFile
                             (cast, output) <- except $ Media.proofCast logBytes
                             let browser = Media.browserMedia logBytes
-                            (gif, mp4) <- ExceptT $ maybe (Media.renderProof cast) (Media.renderVideo browser.page) browser.video
-                            let summary = AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "output" AE..= T.takeEnd 3000 output, "screenshots" AE..= map fst browser.shots, "video" AE..= isJust browser.video]
+                            (clip, window) <- except $ Media.clipCast proof.highlight cast
+                            (gif, mp4) <- ExceptT $ maybe (Media.renderProof clip cast) (Media.renderVideo browser.page) browser.video
+                            let summary = AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "clip" AE..= (window <$ guard @Maybe (isNothing browser.video)), "output" AE..= T.takeEnd 3000 output, "screenshots" AE..= map fst browser.shots, "video" AE..= isJust browser.video]
                             pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4, browser = isJust browser.video, shots = browser.shots, chapters = browser.chapters}, summary)
                         sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty $ map fst recorded
                         key <- ExceptT $ hooks.save proof.setup sides
