@@ -390,7 +390,10 @@ issueBulkActionsPostH pid action durationM valueM items = do
           Issues.mergeIssues pid (Just sess.user.id) Nothing issues <&> \case
             Just (canon, merged) -> ([], Nothing, "Merged " <> show (length merged) <> " into " <> canon.title)
             Nothing -> ([], Nothing, "Select two or more issues to merge")
-        BAUnmerge -> Issues.unmergeIssues pid (Just sess.user.id) issues <&> \ids -> ([], Nothing, "Unmerged " <> show (length ids) <> " \x2014 back in the Inbox")
+        BAUnmerge ->
+          Issues.unmergeIssues pid (Just sess.user.id) issues <&> \case
+            [] -> ([], Nothing, "None of these were merged")
+            ids -> ([], Nothing, "Unmerged " <> show (length ids) <> " \x2014 back in the Inbox")
         BASpam -> Issues.setSpamState pid issueIds (Just now) $> (issueIds, Just Issues.IESpam, "Marked as spam")
         BAUnspam -> Issues.setSpamState pid issueIds Nothing $> (issueIds, Just Issues.IENotSpam, "No longer spam")
       forM_ eventM \ev -> forM_ logIds \u -> Issues.logIssueActivity u ev (Just sess.user.id) Nothing

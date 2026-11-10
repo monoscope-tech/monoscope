@@ -338,6 +338,11 @@ spec = around withTestResources $ describe "Error patterns" do
     -- Unmerge reads the latest merge event, so archiving an unmerged issue does not make it unmergeable.
     void $ bulk "archive" [idd.id]
     bulk "unmerge" [idd.id] `shouldReturn` []
+    -- Any issue type merges, and an archived issue never becomes the open one.
+    [la, lb] <- forM ["merge-log-a", "merge-log-b"] (seedIssue tr . issueSeed Issues.LogPattern)
+    length <$> bulk "merge" [la, lb] `shouldReturn` 2
+    [merged] <- filterM (fmap (isJust . (.archivedAt)) . issueById tr) [la, lb]
+    bulk "merge" [merged, idd.id] `shouldReturn` []
 
     -- A pattern merged after its issue exists is silent on every sweep path (canonical_id once gated only one).
     [canon, dupe] <- seed tr "MergeSilenceError" (Just "silence-shape") [("silence-canon", "canonical form"), ("silence-dupe", "duplicate form")]

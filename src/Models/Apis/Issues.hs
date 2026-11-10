@@ -1376,19 +1376,20 @@ setArchiveState pid iids archiveM
       ArchiveUntilEscalating -> (Nothing, True)
 
 
--- | Folds duplicates into the issue first seen earliest (an error's first event decides: one
--- extraction pass can stamp several rows with the same created_at). Error-backed duplicates join
--- the canonical error's group; every duplicate leaves the Inbox, recording what it was merged into.
+-- | Folds the open issues among @issues@ into the one first seen earliest (an error's first event
+-- decides: one extraction pass can stamp several rows with the same created_at), preferring an
+-- error-backed one so error-backed duplicates can join its group. Every duplicate leaves the Inbox,
+-- recording what it was merged into.
 mergeIssues :: (DB es, Time :> es) => Projects.ProjectId -> Maybe Projects.UserId -> Maybe Text -> [Issue] -> Eff es (Maybe (Issue, [IssueId]))
 mergeIssues pid actor reason issues = do
-  backed <- traverse (traverseToSnd $ issueError pid) issues
-  case sortOn (\(i, e) -> (zonedTimeToUTC $ maybe i.createdAt (\p -> fromMaybe p.createdAt p.firstTraceAt) e, zonedTimeToUTC i.createdAt, i.id)) backed of
+  backed <- traverse (traverseToSnd $ issueError pid) [i | i <- issues, isNothing i.archivedAt]
+  case sortOn (\(i, e) -> (isNothing e, zonedTimeToUTC $ maybe i.createdAt (\p -> fromMaybe p.createdAt p.firstTraceAt) e, zonedTimeToUTC i.createdAt, i.id)) backed of
     (canon, canonError) : rest@(_ : _) -> do
       now <- Time.currentTime
       let ids = (.id) . fst <$> rest
       for_ canonError \c -> PatternMerge.mergeErrorPatterns pid c.id [e.id | (_, Just e) <- rest]
       void $ setArchiveState pid ids (Just (now, ArchiveIndefinite))
-      forM_ ids \i -> logIssueActivity i IEMerged actor $ Just $ AE.object ["into" AE..= canon.id, "reason" AE..= reason]
+      forM_ ids \i -> logIssueActivity i IEMerged actor $ Just $ AE.object ["into" AE..= canon.id, "reason" AE..= (T.take 500 <$> reason)]
       pure $ Just (canon, ids)
     _ -> pure Nothing
 
