@@ -46,7 +46,9 @@ dependency pre-bundling on first load, and the recording shows what users get.
 
 Never build the server in a proof. Copy the production binary into the guest, migrate its
 database at image build time, and swap in the checkout's frontend before starting it. Monoscope
-does this with `monoscope-app`: about 4 seconds of Vite, then the server is up in seconds. When the
+does this with `monoscope-app`: rebuilding the frontend, starting Postgres and the server, and
+ingesting an hour of sample traffic take 7 seconds together, against 25 seconds of migrations
+paid once per image. When the
 change is in Haskell, prove it with a focused test or doctest from a warm `dist-newstyle`
 checkpoint, at `-O0`, building one component, or through `cabal repl` with `:script`, which skips
 linking.
