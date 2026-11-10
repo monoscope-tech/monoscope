@@ -293,6 +293,7 @@ extra-source-files:
     static/migrations/0274_issue_fix_routines.sql
     static/migrations/0275_pr_review_proof_progress.sql
     static/migrations/0276_pr_review_run_base.sql
+    static/migrations/0277_read_only_rum_dashboard.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb
     test/fixtures/github-app-test.pem

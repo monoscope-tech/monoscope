@@ -462,10 +462,11 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         swapParts = elementsWith ["id=\"dashboard-variables\"", "id=\"dashboard-views-menu\""] . renderT
         status action = runAuthHandler tr $ catchError @Servant.ServerError (action $> (200 :: Int)) (\_ err -> pure err.errHTTPCode)
         saveIn pid name = Dashboards.dashboardViewPostH pid did (Dashboards.DashboardViewForm name [])
-    -- Arbitrary variables, window and tab are kept without freezing the template into the row.
+    -- Arbitrary variables, window and tab are kept without rewriting the dashboard's schema.
+    (before, _) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
     saved <- fmap fromRightShow . call tr . Dashboards.dashboardViewPostH testPid did =<< form "name=Mobile+Safari&var-browser=Safari&since=7D&activeTabSlug=errors"
     (vm, _) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
-    (isNothing vm.schema, map (.name) (V.toList vm.savedViews)) `shouldBe` (True, ["Mobile Safari"])
+    (AE.encode vm.schema == AE.encode before.schema, map (.name) (V.toList vm.savedViews)) `shouldBe` (True, ["Mobile Safari"])
     deleted <- call tr $ Dashboards.dashboardViewDeleteH testPid did "Mobile Safari" [("var-browser", Just "Safari"), ("since", Just "7D"), ("activeTabSlug", Just "errors")]
     views `shouldReturn` []
     traverse (fmap void . call tr . saveIn testPid) ["  ", T.replicate 101 "x"] `shouldReturn` [Left Dashboards.InvalidViewName, Left Dashboards.InvalidViewName]
@@ -534,7 +535,8 @@ spec = around withTestResources $ describe "Dashboard widgets" do
 
     -- Runs even for a project that never opened its RUM dashboard. Last: it drops a column.
     pid <- createTestProject tr "Unopened RUM dashboard"
-    did <- newDashboard tr "rum.yaml" "Existing RUM dashboard"
+    let did = UUIDId $ UUID.fromWords 0xda5 0x7a9 0x9 0x2
+    _ <- runTestBg frozenTime tr $ DashboardModel.insert (DashboardModel.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){DashboardModel.baseTemplate = Just "rum.yaml", DashboardModel.title = "Existing RUM dashboard"}
     dbExec tr "ALTER TABLE projects.dashboards DROP COLUMN saved_views; CREATE TABLE projects.rum_segments (project_id uuid, name text, filters jsonb)" ()
     dbExec tr "INSERT INTO projects.rum_segments VALUES (?, 'Safari', '{\"browser\":\"Safari\",\"app\":null,\"errored\":true}'), (?, 'Safari', '{\"browser\":\"Safari\",\"errored\":false}')" (testPid, pid)
     migrate "static/migrations/0255_dashboard_saved_views.sql"
@@ -1222,6 +1224,13 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     withResource tr.trPool \conn -> void . PG.execute_ conn . Query =<< readFileBS "static/migrations/0266_read_only_builtin_dashboards.sql"
     dbQuery tr "SELECT title, base_template IS NULL, schema IS NULL FROM projects.dashboards WHERE project_id = ? AND (id = ? OR title = 'Overview (Customized)')" (testPid, did)
       >>= (`shouldMatchList` ([("Overview", False, True), ("Overview (Customized)", True, False)] :: [(Text, Bool, Bool)]))
+    -- RUM followed in 0277, the same way.
+    _ <- runAuthHandler tr $ Dashboards.rumRedirectH testPid [] []
+    rumId <- runQueryEffect tr (DashboardModel.getDashboardByBaseTemplate testPid "rum.yaml") >>= maybe (fail "no rum row") pure
+    freeze rumId
+    withResource tr.trPool \conn -> void . PG.execute_ conn . Query =<< readFileBS "static/migrations/0277_read_only_rum_dashboard.sql"
+    dbQuery tr "SELECT title, base_template IS NULL, schema IS NULL FROM projects.dashboards WHERE project_id = ? AND (id = ? OR title = 'Real User Monitoring (Customized)')" (testPid, rumId)
+      >>= (`shouldMatchList` ([("Real User Monitoring", False, True), ("Real User Monitoring (Customized)", True, False)] :: [(Text, Bool, Bool)]))
     -- Creating from a built-in template in the gallery makes the same editable copy
     -- (last: newDashboard clears the project's dashboards).
     galleryId <- newDashboard tr "endpoint-stats.yaml" "My endpoints"
