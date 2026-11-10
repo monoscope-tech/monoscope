@@ -1414,7 +1414,7 @@ eventCard_ view@IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflo
             field f = errM >>= f . (.base.errorData)
             userContext = case replaySession of
               Just (_, meta) | rows@(_ : _) <- present [("name", meta.userName), ("email", meta.userEmail), ("id", meta.userId)] -> rows
-              _ -> present [("name", field (.userName)), ("email", field (.userEmail)), ("id", field (.userId)), ("location", place), ("ip", field (.userIp)), ("tenant", field (.tenantName) <|> field (.tenantId))]
+              _ -> present [("name", field (.userName)), ("email", field (.userEmail)), ("id", field (.userId)), ("location", place), ("ip", field (.userIp)), ("tenant", field ErrorPatterns.errorTenant)]
             highlights =
               present
                 [ ("handled", bool "no" "yes" <$> field (.handled))

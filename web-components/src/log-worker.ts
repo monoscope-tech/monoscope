@@ -1,5 +1,5 @@
 'use strict';
-import { groupSpans } from './log-worker-functions';
+import { groupSpans, incompleteResponse } from './log-worker-functions';
 
 self.onmessage = async (e: MessageEvent) => {
   const { type, url, colIdxMap, expandedTraces, flipDirection, id } = e.data;
@@ -20,10 +20,8 @@ self.onmessage = async (e: MessageEvent) => {
     if (!response.ok && !response.headers.get('content-type')?.includes('json')) {
       return fail([504, 524].includes(response.status) ? 'The query timed out. Try a shorter time range or a narrower filter.' : `Request failed (HTTP ${response.status})`);
     }
-    // An empty or truncated body (a dropped connection, a restarting server) threw
-    // "Unexpected end of JSON input" from response.json().
     data = await response.json().catch(() => null);
-    if (!data) return fail(`The server sent an incomplete response (HTTP ${response.status}). Retry to load events.`);
+    if (!data) return fail(incompleteResponse(response.status));
   } catch (error) {
     return fail(error instanceof Error ? error.message : 'Network error');
   }
