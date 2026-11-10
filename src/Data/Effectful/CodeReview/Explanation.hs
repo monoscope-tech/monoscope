@@ -217,7 +217,8 @@ renderVideo video = renderMedia video \directory run -> do
   let total = max 1 $ fromMaybe 30 $ readMaybe @Double $ toString $ T.strip $ decodeUtf8 probed
       shown = min 30 total
       seconds = round total :: Int
-  writeFileText (directory </> "proof.label") $ "▶  Play full video  ·  " <> show (seconds `div` 60) <> ":" <> T.justifyRight 2 '0' (show (seconds `mod` 60))
+  -- Bytes, not Text: the worker's locale cannot encode the play symbol.
+  writeFileBS (directory </> "proof.label") $ encodeUtf8 $ "▶  Play full video  ·  " <> show (seconds `div` 60) <> ":" <> T.justifyRight 2 '0' (show (seconds `mod` 60))
   let preview (fps, width, quality) = do
         let timeline = "drawbox=x=0:y=ih-6:w=iw:h=6:color=white@0.3:t=fill,drawbox=x=0:y=ih-6:w=iw*" <> show (shown / total) <> ":h=6:color=0x2F6FED@0.5:t=fill"
             label = "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:textfile=proof.label:fontcolor=white:fontsize=20:box=1:boxcolor=0x0B1220@0.8:boxborderw=12:x=w-tw-26:y=h-th-30"

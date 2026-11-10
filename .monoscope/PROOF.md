@@ -7,7 +7,9 @@ browser.
 ## UI changes in `web-components/`
 
 `web-components/bench/live-tail.html` mounts the real Live Tail (log list, query editor, toolbar) on
-synthetic logs; add a page beside it to mount another component the same way. The guest ships the
+synthetic logs; add a page beside it to mount another component the same way. The bench page gives the
+component the whole viewport, while the app shows it beside the ~233px sidebar: to prove a layout at a
+given window width, set the viewport to that width minus the sidebar (1047px for a 1280px window). The guest ships the
 dependencies at `/opt/proof`.
 
 Setup (unrecorded; it links gitignored paths only):
