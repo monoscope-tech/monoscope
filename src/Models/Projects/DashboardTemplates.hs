@@ -1,4 +1,4 @@
-module Models.Projects.DashboardTemplates (Templates, askTemplates, templateList, getDashboardTemplates, loadDashboardFromVM, detach, duplicate, ReadOnly (..), Editable, editableIn, editable, requireEditable, updateSchema, updateTitle, dashboardTemplatesCompiled) where
+module Models.Projects.DashboardTemplates (Templates, askTemplates, templateList, getDashboardTemplates, loadDashboardFromVM, detach, duplicate, ReadOnly (..), Editable, editableIn, requireEditable, updateSchema, updateTitle, dashboardTemplatesCompiled) where
 
 import Control.Lens ((%~))
 import Data.Effectful.Hasql qualified as Hasql
@@ -75,12 +75,9 @@ editableIn :: Templates -> Dashboards.DashboardVM -> Either ReadOnly Editable
 editableIn (Templates templates) vm = maybe (Right $ Editable vm.id) (const $ Left ReadOnly) (Dashboards.readOnlyTemplate templates vm)
 
 
-editable :: (IOE :> es, Reader AuthContext :> es) => Dashboards.DashboardVM -> Eff es (Either ReadOnly Editable)
-editable vm = (`editableIn` vm) <$> askTemplates
-
-
-requireEditable :: Error ServerError :> es => Either ReadOnly Editable -> Eff es Editable
-requireEditable = either (const $ ApiT.refuse ApiT.DashboardReadOnly) pure
+-- | For @/api/v1@: a built-in dashboard is the 403 'ApiT.DashboardReadOnly'.
+requireEditable :: (Error ServerError :> es, IOE :> es, Reader AuthContext :> es) => Dashboards.DashboardVM -> Eff es Editable
+requireEditable vm = askTemplates >>= either (const $ ApiT.refuse ApiT.DashboardReadOnly) pure . (`editableIn` vm)
 
 
 -- | Replace a dashboard's schema, optionally stamping @updated_at@. In-page widget edits pass
