@@ -22,6 +22,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
+import Hasql.Interpolate qualified as HI
 import Database.PostgreSQL.Simple.Notification qualified as PGN
 import Effectful.Time qualified as Time
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
@@ -427,6 +428,22 @@ spec = around withTestResources do
     let disabled = tr.trATCtx{Config.config = tr.trATCtx.config{Config.enableBackgroundJobs = False, Config.enableDailyJobScheduling = False}}
     Timeout.timeout 1_000_000 (BackgroundJobs.jobsWorkerInit tr.trLogger disabled tr.trTracerProvider) `shouldReturn` Just ()
     dailyJobs `shouldReturn` 2
+
+  it "dual-exec: the TimeFusion arm outwaits a deploy drain instead of dropping the UPDATE" \tr -> do
+    -- Two drain refusals, then the write lands: what TimeFusion returns across a handoff.
+    dbExec
+      tr
+      [sql|CREATE SEQUENCE tf_drain_calls; CREATE TABLE tf_drain_target (n int); INSERT INTO tf_drain_target VALUES (0);
+           CREATE FUNCTION tf_drain_probe() RETURNS int LANGUAGE plpgsql AS $$ BEGIN
+             IF nextval('tf_drain_calls') <= 2 THEN
+               RAISE EXCEPTION 'TimeFusion is draining for deployment; retry on the replacement' USING ERRCODE = 'XX000';
+             END IF;
+             RETURN 1;
+           END $$|]
+      ()
+    let ctx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.enableTimefusionWrites = True}}
+    void $ runTestBg frozenTime tr $ BackgroundJobs.dualExecPgTfWithSql ctx [HI.sql|UPDATE tf_drain_target SET n = n|] [HI.sql|UPDATE tf_drain_target SET n = tf_drain_probe()|]
+    dbOne @() @Int tr [sql|SELECT n FROM tf_drain_target|] () `shouldReturn` 1
 
 
 -- Round-trips the real settings form so the toggle is written the way the UI writes it.
