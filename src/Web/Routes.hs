@@ -31,6 +31,7 @@ import Log (Logger)
 import Lucid
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Projects.DashboardTemplates qualified as DashboardTemplates
 import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types qualified as H
@@ -321,14 +322,14 @@ cookieProtectedServer :: Maybe AI.ProjectTools -> Servant.ServerT (Servant.Named
 cookieProtectedServer projectTools =
   CookieProtectedRoutes
     { -- Dashboard handlers
-      dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml" ["overview", "http", "logs", "traces", "events"]
+      dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml"
     , slackInstallGet = Slack.startInstallGetH
     , slackEvidenceGet = Slack.startEvidenceGetH
     , slackEvidenceDisconnectPost = Slack.disconnectEvidencePostH
     , slackIdentityGet = Slack.linkIdentityGetH
     , slackIdentityPost = Slack.linkIdentityPostH
     , slackLinkProjectGet = Slack.linkProjectGetH
-    , endpointDetailsRedirect = Dashboards.entrypointRedirectGetH "endpoint-stats.yaml" ["endpoints", "http", "events"]
+    , endpointDetailsRedirect = Dashboards.entrypointRedirectGetH "endpoint-stats.yaml"
     , rumRedirect = Dashboards.rumRedirectH
     , dashboardViewPost = Dashboards.dashboardViewPostH
     , dashboardViewDelete = Dashboards.dashboardViewDeleteH
@@ -980,7 +981,11 @@ type instance Opaque "Dashboards.DashboardForm" = Dashboards.DashboardForm
 type instance Opaque "Dashboards.DashboardGet" = Dashboards.DashboardGet
 type instance Opaque "Dashboards.DashboardNew" = Dashboards.DashboardNew
 type instance Opaque "Dashboards.DashboardRenameForm" = Dashboards.DashboardRenameForm
+type instance Opaque "Dashboards.DashboardRenamed" = Dashboards.DashboardRenamed
 type instance Opaque "Dashboards.DashboardRes" = Dashboards.DashboardRes
+type instance Opaque "Dashboards.LayoutSaved" = Dashboards.LayoutSaved
+type instance Opaque "Dashboards.WidgetCopied" = Dashboards.WidgetCopied
+type instance Opaque "DashboardTemplates.ReadOnly" = DashboardTemplates.ReadOnly
 type instance Opaque "Dashboards.DashboardSettleSample" = Dashboards.DashboardSettleSample
 type instance Opaque "Dashboards.DashboardViewForm" = Dashboards.DashboardViewForm
 type instance Opaque "Dashboards.DashboardYaml" = Dashboards.DashboardYaml

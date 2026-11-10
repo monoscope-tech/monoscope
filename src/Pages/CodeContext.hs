@@ -959,6 +959,7 @@ repositoryFolderPostH pid rid form = do
       path = (if T.null sync.pathPrefix then "" else sync.pathPrefix <> "/") <> directory <> kind <> "-" <> show candidate.localId <> ".yaml"
   assignment <- if candidate.kind == RepositorySync.Dashboard then GitSync.assignDashboardRepository pid (UUIDId candidate.localId) sync.id else pure $ Right ()
   case assignment of
+    Left GitSync.BuiltInReadOnly -> addErrorToast "Could not move dashboard" (Just "Built-in dashboards always show the version we ship. Duplicate it and sync the copy.")
     Left _ -> addErrorToast "Could not move dashboard" (Just "Its repository assignment changed. Refresh and try again.")
     Right () -> do
       RepositorySync.registerResource pid sync.id candidate.kind candidate.localId path

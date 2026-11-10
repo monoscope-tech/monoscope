@@ -267,7 +267,7 @@ const syncRefreshProgress = (restart = false) => {
     if (interval && !restart && refreshFills.has(fill)) return;
     refreshFills.get(fill)?.cancel();
     refreshFills.delete(fill);
-    if (!interval || !fill.animate) return;
+    if (!interval || !fill.animate || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
     const anim = fill.animate([{ scale: '0 1' }, { scale: '1 1' }], { duration: interval, easing: 'linear', fill: 'forwards' });
     anim.currentTime = performance.now() - refreshCycleStart;
     refreshFills.set(fill, anim);

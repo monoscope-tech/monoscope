@@ -129,7 +129,7 @@ import Models.Apis.MonitorDefinitions (compileAlertSql, monitorConfig, monitorFr
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Apis.ShareEvents qualified as ShareEvents
-import Models.Projects.DashboardTemplates (duplicate, requireEditable, updateSchema, updateTitle)
+import Models.Projects.DashboardTemplates (duplicate, editable, requireEditable, updateSchema, updateTitle)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as PM
@@ -736,7 +736,7 @@ apiDashboardApply principal pid doc = do
   let newTitle = fromMaybe (T.takeWhileEnd (/= '/') doc.filePath) doc.title
   case existingM of
     Just existing -> do
-      ed <- requireEditable existing
+      ed <- requireEditable =<< editable existing
       _ <- updateSchema ed doc.schema (Just now)
       _ <- updateTitle ed newTitle
       whenJust doc.tags (void . Dashboards.updateTags pid existing.id . V.fromList)
@@ -756,7 +756,7 @@ apiDashboardPatch pid did patch = do
   vm <- dashboardVM pid did
   now <- Time.currentTime
   when (isJust patch.title || isJust patch.schema) do
-    ed <- requireEditable vm
+    ed <- requireEditable =<< editable vm
     whenJust patch.title $ void . updateTitle ed
     whenJust patch.schema $ \s -> void $ updateSchema ed s (Just now)
   whenJust patch.tags $ void . Dashboards.updateTags pid did . V.fromList
@@ -801,7 +801,7 @@ apiDashboardYaml pid did = do
 withWidgets :: Projects.ProjectId -> Dashboards.DashboardId -> ([Widget.Widget] -> [Widget.Widget]) -> ATBaseCtx ()
 withWidgets pid did f = do
   vm <- dashboardVM pid did
-  ed <- requireEditable vm
+  ed <- requireEditable =<< editable vm
   now <- Time.currentTime
   void $ updateSchema ed (fromMaybe def vm.schema & #widgets %~ f) (Just now)
 

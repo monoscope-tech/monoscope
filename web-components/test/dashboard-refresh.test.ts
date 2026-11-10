@@ -97,6 +97,14 @@ describe('auto-refresh interval', () => {
 
       selectInterval(0);
       expect(live()).toHaveLength(0);
+
+      // With reduced motion the button stays still; Pause still says it is live.
+      const motion = vi.mocked(window.matchMedia).getMockImplementation();
+      vi.mocked(window.matchMedia).mockImplementation((query) => ({ matches: query.includes('reduce') }) as MediaQueryList);
+      selectInterval(15000);
+      vi.advanceTimersByTime(15000);
+      expect(live()).toHaveLength(0);
+      vi.mocked(window.matchMedia).mockImplementation(motion!);
     } finally {
       delete (Element.prototype as Partial<Element>).animate;
     }

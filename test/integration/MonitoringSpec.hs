@@ -1,7 +1,9 @@
 module MonitoringSpec (spec) where
 
 import BackgroundJobs (checkTriggeredQueryMonitors, evaluateQueryMonitorValue, notifyErrorSubscriptions, processProjectErrors, runSlackIncidentDeliveries)
+import BackgroundJobs qualified as Jobs
 import Codec.Compression.GZip qualified as GZip
+import Control.Exception (ErrorCall (..), bracket_)
 import Control.Lens ((.~), (^.), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Encode.Pretty qualified as AEP
@@ -10,6 +12,7 @@ import Data.Aeson.Lens (key, _String)
 import Data.ByteString.Base64.URL qualified as B64URL
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.Hasql qualified as EHasql
+import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify (Notification (..))
 import Data.Effectful.Notify qualified as Notify
 import Data.HashMap.Strict qualified as HashMap
@@ -21,20 +24,28 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Effectful.Dispatch.Dynamic (interpose)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
+import Langchain.LLM.Core qualified as Chat
+import Lucid qualified
 import Models.Apis.ErrorPatterns qualified as Errors
 import Models.Apis.Incidents qualified as I
+import Models.Apis.Integrations qualified as Integrations
+import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
+import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types.URI (urlDecode)
 import Network.Wreq qualified as Wreq
+import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Slack qualified as SlackPage
 import Pages.Dashboards qualified as Dashboards
@@ -42,24 +53,11 @@ import Pages.Issues qualified as IssuesPage
 import Pages.Monitors qualified as Alerts
 import Pages.Projects qualified as ProjectPages
 import Pages.Settings qualified as Settings
+import Pkg.AI qualified as AI
+import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail qualified as Mail
-import BackgroundJobs qualified as Jobs
-import Control.Exception (ErrorCall (..), bracket_)
-import Data.Effectful.LLM qualified as ELLM
-import Database.PostgreSQL.Simple qualified as PGS
-import Effectful.Dispatch.Dynamic (interpose)
-import Langchain.LLM.Core qualified as Chat
-import Lucid qualified
-import Models.Apis.Integrations qualified as Integrations
-import Models.Apis.Investigations qualified as Investigations
-import Models.Projects.ProjectMembers qualified as PM
-import Pages.AIThreads qualified as AIThreads
-import Pkg.AI qualified as AI
-import Pkg.AgentCatalog qualified as Catalog
-import UnliftIO.Exception (throwIO, tryAny)
-import Web.Routes qualified as Routes
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import Relude.Unsafe qualified as Unsafe
@@ -67,6 +65,8 @@ import Servant qualified
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx)
 import UnliftIO.Async (concurrently)
+import UnliftIO.Exception (throwIO, tryAny)
+import Web.Routes qualified as Routes
 
 
 spec :: Spec
@@ -262,7 +262,7 @@ spec = describe "Monitoring" do
       setupDiscordData tr testPid "G_MONITOR_SIM"
       putWidget savedWidget{Widget.title = Just "Checkout failures", Widget.alertThreshold = Just 1, Widget.unit = Just "events"}
       fmap (.alertConfig.title) <$> widgetMonitor testPid `shouldReturn` Just "Checkout failures · Widget Monitor Lifecycle"
-      void $ testServant tr $ Dashboards.dashboardRenamePatchH testPid dashboardId Dashboards.DashboardRenameForm{Dashboards.title = "Renamed Dashboard", Dashboards.fileDir = Nothing}
+      void $ call tr $ Dashboards.dashboardRenamePatchH testPid dashboardId Dashboards.DashboardRenameForm{Dashboards.title = "Renamed Dashboard", Dashboards.fileDir = Nothing}
       monitorId <- widgetMonitor testPid >>= maybe (fail "the widget monitor was not saved") (\m -> m.id <$ (m.alertConfig.title `shouldBe` "Checkout failures · Renamed Dashboard"))
       -- An explorer edit of a widget monitor keeps the derived title, not the form's stale hidden one.
       void $ testServant tr $ Alerts.alertUpsertPostH testPid alertForm{Alerts.unit = Just "events", Alerts.alertId = Just monitorId.toText, Alerts.recipientEmails = [], Alerts.recipientEmailAll = Nothing, Alerts.title = "Stale hidden title", Alerts.severity = "Error", Alerts.subject = "Checkout errors", Alerts.message = "A checkout request failed", Alerts.query = "name == \"checkout\"", Alerts.since = "1h", Alerts.from = "", Alerts.to = "", Alerts.frequency = Just "1m", Alerts.timeWindow = Just "1h", Alerts.source = Just "widget", Alerts.vizType = Just "timeseries", Alerts.widgetId = Just widgetId, Alerts.dashboardId = Just dashboardId.toText, Alerts.environment = Nothing, Alerts.service = Nothing}
@@ -317,7 +317,7 @@ spec = describe "Monitoring" do
       let copyDashboardId = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef1
       sourceDashboardVM <- maybe (fail "the source dashboard disappeared") pure savedDash
       void $ runTestBgNoReset tr $ DashboardModel.insert sourceDashboardVM{DashboardModel.id = copyDashboardId, DashboardModel.title = "Widget Monitor Copy", DashboardModel.schema = Just (def :: DashboardModel.Dashboard){DashboardModel.title = Just "Widget Monitor Copy"}, DashboardModel.filePath = Nothing}
-      copyWidget <- call tr $ Dashboards.dashboardDuplicateWidgetPostH testPid copyDashboardId widgetId (Just dashboardId)
+      Right (Dashboards.WidgetCopied copyWidget) <- call tr $ Dashboards.dashboardDuplicateWidgetPostH testPid copyDashboardId widgetId (Just dashboardId)
       copyWidgetId <- maybe (fail "the copied widget has no id") pure copyWidget.id
       copyMonitor <- runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just copyDashboardId) copyWidgetId) >>= maybe (fail "the copied widget has no monitor") pure
       (copyMonitor.notificationCount, copyMonitor.currentValue, copyMonitor.alertConfig.title) `shouldBe` (0, 0, "Checkout errors · Widget Monitor Copy")
@@ -325,12 +325,12 @@ spec = describe "Monitoring" do
       copyNotifs <- fst <$> captureNotifs tr (evaluateQueryMonitorValue copyMonitor copyAt 1)
       deliverySummary copyNotifs `shouldBe` ["discord:C_MONITOR", "email:alerts@example.com", "pagerduty:widget-monitor-test:PDTrigger", "whatsapp:+15550001111"]
       mapM_ (linksTo $ "/p/" <> testPid.toText <> "/dashboards/" <> copyDashboardId.toText <> "?expand=" <> copyWidgetId) copyNotifs
-      void $ testServant tr $ Dashboards.dashboardWidgetReorderPatchH testPid copyDashboardId Nothing Map.empty
+      void $ call tr $ Dashboards.dashboardWidgetReorderPatchH testPid copyDashboardId Nothing Map.empty
 
       -- Deleting the widget deletes its monitor, and only this project's.
       let otherMonitorId = Monitors.QueryMonitorId [uuid|a11e7ed0-0000-0000-0000-000000000001|]
       void $ runTestBgNoReset tr $ Monitors.queryMonitorUpsert firedMonitor{Monitors.id = otherMonitorId, Monitors.projectId = otherPid, Monitors.currentStatus = Monitors.MSNormal}
-      void $ testServant tr $ Dashboards.dashboardWidgetReorderPatchH testPid dashboardId Nothing Map.empty
+      void $ call tr $ Dashboards.dashboardWidgetReorderPatchH testPid dashboardId Nothing Map.empty
       isNothing <$> widgetMonitor testPid `shouldReturn` True
       fmap (.id) <$> widgetMonitor otherPid `shouldReturn` Just otherMonitorId
 
@@ -1173,7 +1173,6 @@ spec = describe "Monitoring" do
             readIORef pages `shouldReturn` []
           getTestTime tr.trTestClock >>= run . I.claimSlackDeliveries >>= (`shouldBe` [])
 
-
   around withTestResources $ describe "Autonomous incident routines" do
     for_ [("recovery", const I.IncidentRecovered), ("resolution", I.IncidentResolved)] \(label, closing) ->
       it ("proactiveIncident_runsOneAnalysisPerEventAndReportsOnlyRecordedRecovery: " <> label) \tr -> do
@@ -1741,16 +1740,18 @@ historyPage messages next = AE.object ["ok" AE..= True, "messages" AE..= message
 reconcile :: TestResources -> TestResources -> IORef [(Maybe Text, AE.Value)] -> (Wreq.Options -> String -> Maybe Text -> IO ()) -> IO [Text]
 reconcile tr resources pages expect = do
   now <- getTestTime tr.trTestClock
-  fmap (map fst . fst) $ runTestBgRecordingHTTP now resources $ withHTTPResponses
-    ( \opts endpoint -> do
-        opts ^. Wreq.param "channel" `shouldBe` ["C1"]
-        opts ^. Wreq.param "include_all_metadata" `shouldBe` ["true"]
-        (cursor, body) <- atomicModifyIORef' pages (\case [] -> ([], Nothing); item : rest -> (rest, Just item)) >>= maybe (fail "Unexpected history request") pure
-        opts ^. Wreq.param "cursor" `shouldBe` maybeToList cursor
-        expect opts endpoint cursor
-        pure $ Just $ AE.encode body
-    )
-    SlackPage.reconcileIncidentDeliveries
+  fmap (map fst . fst)
+    $ runTestBgRecordingHTTP now resources
+    $ withHTTPResponses
+      ( \opts endpoint -> do
+          opts ^. Wreq.param "channel" `shouldBe` ["C1"]
+          opts ^. Wreq.param "include_all_metadata" `shouldBe` ["true"]
+          (cursor, body) <- atomicModifyIORef' pages (\case [] -> ([], Nothing); item : rest -> (rest, Just item)) >>= maybe (fail "Unexpected history request") pure
+          opts ^. Wreq.param "cursor" `shouldBe` maybeToList cursor
+          expect opts endpoint cursor
+          pure $ Just $ AE.encode body
+      )
+      SlackPage.reconcileIncidentDeliveries
 
 
 data IncidentInterruption

@@ -119,6 +119,7 @@ data Dashboard = Dashboard
   , icon :: Maybe Text
   , file :: Maybe Text
   , readOnly :: Maybe Bool
+  , starred :: Maybe Bool
   , tags :: Maybe [Text]
   , teams :: Maybe [Text]
   , refreshInterval :: Maybe Text
