@@ -176,7 +176,7 @@ schema role = \case
       ]
       & O.required
       .~ ["claim", "command"]
-  PlanProofs -> object [("claims", array 1 6 $ bounded 1 (Just 200) & O.description ?~ "A claim as record_proof will state it.")]
+  PlanProofs -> object [("claims", array 1 3 $ bounded 1 (Just 200) & O.description ?~ "A claim as record_proof will state it.")]
   RecallKnowledge -> object [("service", bounded 1 Nothing)]
   RememberKnowledge -> object [("service", bounded 1 Nothing), ("summary", bounded 1 $ Just 600), ("evidenceKeys", array 1 3 text)]
   ListProjectMemory -> object [("query", bounded 1 $ Just 200)] & O.required .~ []

@@ -3357,7 +3357,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                     unlift (knowledge $ Agent.ProjectMemory $ Memory.Read page) `shouldReturn` saved
                   let response = directory </> "result.json"
                   writeFileLBS response $ AE.encode result{Impact.coverage = ["Related test toolchain unavailable"]}
-                  reply <- runEff $ scripted Nothing "test/fixtures/impact-review-agent.mjs" ([response, toString reviewPid.toText] <> arguments) $ Agent.reviewRepository Agent.Isolated request (liftIO . unlift . respond) (liftIO . unlift . knowledge) (liftIO . unlift . recordCall) (liftIO . unlift . recordUsage) (liftIO . unlift . recordAllocation) (liftIO . unlift . recordCheck) Agent.ProofHooks{save = \proofSetup -> liftIO . unlift . hooks.save proofSetup, progress = liftIO . unlift . hooks.progress} (liftIO . unlift . check)
+                  reply <- runEff $ scripted Nothing "test/fixtures/impact-review-agent.mjs" ([response, toString reviewPid.toText] <> arguments) $ Agent.reviewRepository Agent.Isolated request (liftIO . unlift . respond) (liftIO . unlift . knowledge) (liftIO . unlift . recordCall) (liftIO . unlift . recordUsage) (liftIO . unlift . recordAllocation) (liftIO . unlift . recordCheck) (Agent.hoistHooks (liftIO . unlift) hooks) (liftIO . unlift . check)
                   diagnostic <- tryAny $ decodeUtf8 <$> readFileBS (response <> ".failure")
                   pure $ first (<> either (const "") ("\n" <>) diagnostic) reply
               operation -> pure $ refuse operation

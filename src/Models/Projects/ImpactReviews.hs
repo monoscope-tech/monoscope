@@ -485,6 +485,8 @@ supersedeRun run = Hasql.interpExecute_ [HI.sql|UPDATE projects.pr_review_runs S
 startAttempt :: DB es => ReviewRun -> Text -> Text -> Eff es (Maybe (UUIDId "agent_attempt"))
 startAttempt run provider modelSpec = do
   current <- currentRun run
+  -- An attempt shows only its own proofs; the comment it updates stays the run's.
+  when current $ Hasql.interpExecute_ [HI.sql|UPDATE projects.pr_review_runs SET proof_progress = '[]' WHERE id = #{run.id}|]
   if current then Usage.startAttempt run.projectId (Usage.Review run.id) provider modelSpec else pure Nothing
 
 
@@ -666,8 +668,8 @@ proofSides run attempt =
     FROM projects.pr_review_proofs p WHERE run_id = #{run.id} AND attempt_id = #{attempt} ORDER BY key, side|]
 
 
--- | How far one planned claim has got: waiting, being recorded, or recorded under a proof key.
-data ClaimState = Pending | Running | Proved Text
+-- | How far one planned claim has got: waiting, being recorded, recorded under a proof key, or failed.
+data ClaimState = Pending | Running | Proved Text | Unrecorded
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -691,6 +693,7 @@ advance event claims = case event of
   Agent.Planned planned -> [fromMaybe (ClaimProgress c Pending) (find ((== c) . (.claim)) claims) | c <- toList planned]
   Agent.Started c -> mark c Running
   Agent.Recorded c key -> mark c (Proved key)
+  Agent.Unproved c -> mark c Unrecorded
   where
     mark c next = if any ((== c) . (.claim)) claims then [ClaimProgress p.claim (if p.claim == c then next else p.state) | p <- claims] else claims <> [ClaimProgress c next]
 
@@ -704,7 +707,7 @@ recordProgress run event = do
 
 
 progressComment :: DB es => ReviewRun -> Eff es (Maybe Int64)
-progressComment run = join . fmap HI.getOneColumn <$> Hasql.interpOne [HI.sql|SELECT progress_comment_id FROM projects.pr_review_runs WHERE id = #{run.id}|]
+progressComment run = (>>= HI.getOneColumn) <$> Hasql.interpOne [HI.sql|SELECT progress_comment_id FROM projects.pr_review_runs WHERE id = #{run.id}|]
 
 
 setProgressComment :: DB es => ReviewRun -> Int64 -> Eff es ()

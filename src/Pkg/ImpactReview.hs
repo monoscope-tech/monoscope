@@ -434,7 +434,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                           Reviews.recordFailure run message
                           -- Deferring nodes requeue with fresh odd-jobs attempts, so agent retries are bounded per chain here.
                           -- Publication recovery reuses the stored result, calls no model, and retries until it reconciles.
-                          when (retries && (isJust run.result || execution.chainAttempt < 3)) $ throwIO $ ReviewFailure message
+                          if retries && (isJust run.result || execution.chainAttempt < 3) then throwIO $ ReviewFailure message else stopProgress run message
                     case outcome of
                       Left err
                         | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> Jobs.deferOperationReview run.projectId identifier deadline
@@ -445,11 +445,20 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                       Right (Just (Left (ReviewPublicationRefused reason))) -> do
                         finish $ Issues.CancelledResult $ Just reason
                         Reviews.recordFailure run reason
+                        stopProgress run reason
                       Right (Just (Right ())) -> do
                         current <- Reviews.getRun run.id
                         case current of
                           Just completed | completed.state == Reviews.Completed -> completeReview completed execution.id execution.startedAt
-                          _ -> finish $ Issues.CancelledResult $ Just "The PR changed or review authorization was withdrawn before publication."
+                          _ -> do
+                            finish $ Issues.CancelledResult $ Just "The PR changed or review authorization was withdrawn before publication."
+                            stopProgress run "The pull request changed or review authorization was withdrawn before publication."
+    -- A review that stops for good says so in its progress comment instead of leaving it running.
+    stopProgress :: Reviews.ReviewRun -> Text -> ATBackgroundCtx ()
+    stopProgress run reason = whenJustM (Reviews.progressComment run) \cid -> whenRightM_ (reviewConnection run) \(_, _, _, conn) -> do
+      stopped <- Git.publishPullRequestComment conn (Git.RepoRef run.owner run.repo run.revision) run.number (Just cid) (reviewMarker run <> "\n#### Review stopped\n\n" <> plain reason)
+      whenLeft_ stopped $ Log.logAttention "Proof progress comment failed" . (run.id,)
+
     completeReview :: Reviews.ReviewRun -> UUIDId "ai_routine_run" -> UTCTime -> ATBackgroundCtx ()
     completeReview completed runId startedAt = do
       context <- AI.requireRunContext completed.projectId $ Issues.EventClaim (Issues.PullRequestReview completed.id) runId startedAt
@@ -576,9 +585,10 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                         stored <- Reviews.saveProofs run attemptId setup sides
                         for_ stored (Log.logInfo "Proof setup" . (run.id,) . snd)
                         pure $ fst <$> stored
-                    , progress = \event -> do
-                        claims <- Reviews.recordProgress run event
-                        raise . publishProgress run context conn pr claims =<< recordedProofs
+                    , progress = \event -> whenM (Reviews.currentRun run) do
+                        -- Bookkeeping: a failure is logged and the proof goes on.
+                        updated <- tryAny $ Reviews.recordProgress run event >>= \claims -> raise . publishProgress run context conn pr claims =<< recordedProofs
+                        whenLeft_ updated $ Log.logAttention "Proof progress comment failed" . (run.id,) . show @Text
                     }
                   ( \value -> do
                       queried <- State.gets @ReviewMemory (Map.elems . (.evidence))
@@ -665,24 +675,23 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                   (Catalog.WriteWiki{}; Catalog.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
               cid <- require $ first toText $ AET.parseEither AE.parseJSON response
               Reviews.finishRun run (Just cid)
-    -- Where a run writes: its progress comment if it made one; else an ask answers below itself in a
-    -- new comment, and a pushed revision updates the latest review.
+    -- Where a run writes: its progress comment while it still exists; else an ask answers below itself
+    -- in a new comment, and a pushed revision updates the latest review.
     reviewComment :: Reviews.ReviewRun -> Git.GitConn -> Git.RepoRef -> ReviewCtx (Maybe Int64)
-    reviewComment run conn ref =
-      Reviews.progressComment run >>= \case
-        Just cid -> pure $ Just cid
-        Nothing | isJust run.request -> pure Nothing
-        Nothing -> do
-          cfg <- (.config) <$> ask @AuthContext
-          comments <- require =<< Git.listPullRequestComments conn ref run.number
-          appId <- maybe (throwError $ ReviewFailure "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
-          pure $ viaNonEmpty last [c.id | c <- comments, fmap (.id) c.performedViaGithubApp == Just appId, reviewMarker run `T.isInfixOf` c.body]
+    reviewComment run conn ref = do
+      cfg <- (.config) <$> ask @AuthContext
+      comments <- require =<< Git.listPullRequestComments conn ref run.number
+      appId <- maybe (throwError $ ReviewFailure "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
+      progress <- Reviews.progressComment run
+      let ours = [c.id | c <- comments, fmap (.id) c.performedViaGithubApp == Just appId, reviewMarker run `T.isInfixOf` c.body]
+      pure $ find (`elem` ours) progress <|> if isJust run.request then Nothing else viaNonEmpty last ours
 
     -- Bookkeeping, so the PR author can watch claims get proved: a failed update is logged and the
     -- review goes on. Every update happens inside the agent's run, before the finished review replaces it.
     publishProgress :: Reviews.ReviewRun -> Issues.RunContext -> Git.GitConn -> Git.PullRequest -> [Reviews.ClaimProgress] -> [ProofLink] -> ReviewCtx ()
     publishProgress run context conn pr claims links =
-      whenRightM_ (AI.authorizeRunOperation context Catalog.ExternalPublication) \_ -> do
+      -- A publication that waits for a person's approval shows nothing until it is approved.
+      whenRightM_ (AI.authorizeRunOperation context Catalog.ExternalPublication) \policy -> when (isNothing $ Issues.reviewApprover policy.execution policy.capability) do
         cfg <- (.config) <$> ask @AuthContext
         let ref = Git.RepoRef run.owner run.repo run.revision
         published <- tryError @ReviewFailure do
@@ -949,10 +958,13 @@ renderProgress host baseRevision headRevision claims links =
   where
     recorded = [key | Reviews.ClaimProgress _ (Reviews.Proved key) <- claims]
     recording key = find (\p -> p.key == key && p.side == Agent.Head) links
-    line c = case c.state of
-      Reviews.Pending -> statusIcon host 16 "pending" <> " " <> plain c.claim <> " · *Pending*"
-      Reviews.Running -> statusIcon host 16 "running" <> " " <> plain c.claim <> " · *Running*"
-      Reviews.Proved key -> statusIcon host 16 "recorded" <> " " <> plain c.claim <> foldMap (\p -> " · [Watch recording](" <> p.video <> ")") (recording key)
+    line c =
+      let (icon, suffix) = case c.state of
+            Reviews.Pending -> ("pending", " · *Pending*")
+            Reviews.Running -> ("running", " · *Running*")
+            Reviews.Proved key -> ("recorded", foldMap (\p -> " · [Watch recording](" <> p.video <> ")") (recording key))
+            Reviews.Unrecorded -> ("unverified", " · *Not recorded*")
+       in statusIcon host 16 icon <> " " <> plain c.claim <> suffix
 
 
 requestEvidence :: (DB es, ELog.Log :> es, IOE :> es, Labeled "timefusion" Hasql.Hasql :> es, Reader AuthContext :> es, State.State ReviewMemory :> es, Time.Time :> es, Timeout.Timeout :> es, Tracing :> es) => Projects.ProjectId -> Eff es [Text] -> UTCTime -> UTCTime -> Agent.TelemetryQuery -> Eff es (Either Text AE.Value)

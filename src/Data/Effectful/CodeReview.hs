@@ -1,7 +1,7 @@
 {-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Data.Effectful.CodeReview (CodeReview (..), SessionIdentity (..), SessionSubject (..), NativePause, FixContext (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), readSessionContext, prepareRepository, Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), proofBudget, ProofHooks (..), ProofProgress (..), DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), Revision, mkRevision, revisionText, reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, workerHost, runCodeReviewTest, validExplanation) where
+module Data.Effectful.CodeReview (CodeReview (..), SessionIdentity (..), SessionSubject (..), NativePause, FixContext (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), readSessionContext, prepareRepository, Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), proofBudget, ProofHooks (..), ProofProgress (..), hoistHooks, DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), Revision, mkRevision, revisionText, reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, workerHost, runCodeReviewTest, validExplanation) where
 
 import Control.Concurrent.STM qualified as STM
 import Control.Monad.Trans.Except (except, throwE)
@@ -293,7 +293,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
           , usage = unlift . recordUsage
           , allocations = Just $ unlift . recordAllocation
           , checks = Just $ unlift . recordCheck
-          , proofs = Just ProofHooks{save = \setup -> unlift . hooks.save setup, progress = unlift . hooks.progress}
+          , proofs = Just $ hoistHooks unlift hooks
           , phase = const $ pure $ Left "Fix phases require an issue-fix task"
           , validate = StructuredDraft $ \value -> (decodeUtf8 (AE.encode value) <$) <$> unlift (check value)
           }
@@ -659,9 +659,9 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                           then pure $ Left "Proof budget exhausted; cite the proofs already recorded"
                           else do
                             hooks.progress $ Started proof.claim
-                            recorded <- recordSides request outbox identifier proof hooks.save
-                            recorded <$ for_ (AET.parseMaybe (AE.withObject "Proof" (AE..: "key")) =<< rightToMaybe recorded) (hooks.progress . Recorded proof.claim)
-                    recordSides request outbox identifier proof save =
+                            recorded <- recordSides request outbox identifier proof hooks
+                            recorded <$ whenLeft_ recorded (const $ hooks.progress $ Unproved proof.claim)
+                    recordSides request outbox identifier proof hooks =
                       active \session -> runExceptT do
                         (result, logs) <- ExceptT $ regression request session.baseline identifier (AE.object ["script" AE..= Media.proofScript proof.setup proof.shellCommand, "failureMessage" AE..= Media.proofFailure]) [("base", request.base), ("head", request.head)] outbox
                         for_ result.receipts \receipt -> ExceptT $ Outbox.deliver outbox (Outbox.Check receipt) record
@@ -677,7 +677,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             let summary = AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "output" AE..= T.takeEnd 3000 output, "screenshots" AE..= map fst browser.shots, "video" AE..= isJust browser.video]
                             pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4, browser = isJust browser.video, shots = browser.shots, chapters = browser.chapters}, summary)
                         sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty $ map fst recorded
-                        key <- ExceptT $ save proof.setup sides
+                        key <- ExceptT $ hooks.save proof.setup sides
+                        lift $ hooks.progress $ Recorded proof.claim key
                         pure $ AE.object ["key" AE..= key, "claim" AE..= proof.claim, "sides" AE..= map snd recorded, "note" AE..= ("Cite this key in a claim. The PR author sees both recordings." :: Text)]
 
                     receive :: Maybe Checkout.Prepared -> Maybe GuestSession -> Int -> Int -> Maybe (Accepted result) -> IO (Either Text result)
@@ -764,14 +765,15 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                 ((FixTask{}, _); (AdmissionTask{}, _); (PeerTask{}, _)) -> pure $ Left "Regression requires an authorized source review"
                               writeMessage response
                               receive supplied guestSession remaining submissions Nothing
-                          | invocation.name == Policy.PlanProofs && validTool invocation -> do
+                          | invocation.name == Policy.PlanProofs && validTool invocation && remaining > 0 -> do
                               response <- case (task, callbacks.proofs, AET.parseEither (AE.withObject "Plan" (AE..: "claims")) invocation.arguments) of
                                 (AdvisoryTask{}, Just hooks, Right claims) -> Right (AE.object ["planned" AE..= length claims]) <$ hooks.progress (Planned claims)
                                 (_, _, Left _) -> pure $ Left "Tool arguments do not match the host contract"
                                 ((AdvisoryTask{}, Nothing, Right _); (SourceTask{}, _, Right _); (FixTask{}, _, Right _); (AdmissionTask{}, _, Right _); (PeerTask{}, _, Right _)) -> pure $ Left "Proof requires an authorized pull request review"
                                 ((PatchTask{}, _, Right _); (SourcePatchTask{}, _, Right _)) -> pure $ Left "Proof requires an authorized pull request review"
+                              -- Each plan edits the PR comment, so it spends the query budget like any other call.
                               writeMessage response
-                              receive supplied guestSession remaining submissions Nothing
+                              receive supplied guestSession (remaining - 1) submissions Nothing
                           | invocation.name == Policy.RecordProof && validTool invocation && remaining > 0 -> do
                               -- Each attempt also spends the persisted query budget, which a resumed session keeps.
                               response <- case (task, journal, callbacks.proofs) of

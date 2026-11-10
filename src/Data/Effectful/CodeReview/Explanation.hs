@@ -213,9 +213,9 @@ renderProof cast = renderMedia cast \_ run -> do
 -- whole video, the part it covers, its own position, and the full length to play.
 renderVideo :: Maybe (Text, Text) -> ByteString -> IO (Either Text (ByteString, ByteString))
 renderVideo page video = renderMedia video \directory run -> do
-  -- Text goes to drawtext as UTF-8 files: the worker's locale cannot encode it, and files need no escaping.
+  -- Text goes to drawtext as UTF-8 files the worker's locale need not encode; expansion=none keeps a URL's % literal.
   for_ [("proof.title", maybe "" fst page), ("proof.url", maybe "" snd page), ("proof.nav", "←    →    ↻")] \(name, text) -> writeFileBS (directory </> name) (encodeUtf8 text)
-  let text = ("drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:" <>)
+  let text = ("drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:expansion=none:" <>)
       window =
         intercalate
           ","
