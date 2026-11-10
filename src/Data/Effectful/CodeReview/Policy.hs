@@ -205,7 +205,7 @@ schema role = \case
         ( "claims"
         , array 0 5 (object [("title", bounded 1 $ Just 200), ("status", enum ["matches", "differs", "unverified"]), ("summary", bounded 1 $ Just 600), ("proofKeys", array 0 3 text)])
             & O.description
-            ?~ "What the PR says it does, checked. matches and differs must cite proof keys from record_proof; differs means the recording contradicts the PR description. unverified explains what could not be recorded."
+            ?~ "What the PR says it does, checked. matches and differs must cite proof keys from record_proof; differs means the recording contradicts the PR description. unverified explains what could not be recorded. The title names the behaviour in a few words (\"End survey closes a live survey\"). The summary is one sentence about what a user now sees, then what they saw before: \"Clear sits beside Pause on one row at 1280px; before, it wrapped below the filters.\" Leave out how it was checked (recording, revision, base, head, passes, fails); the recording shows that."
         )
       , ("summary", bounded 1 (Just 600) & O.description ?~ "One or two plain sentences for the PR author: what the change does and the main reason for its merge risk. No production numbers, links, code or Markdown.")
       ,
