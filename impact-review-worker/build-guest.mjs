@@ -7,8 +7,8 @@ import { buildAssets, getDefaultBuildConfig } from '@earendil-works/gondolin';
 import { z } from 'zod';
 
 const cwd = fileURLToPath(new URL('.', import.meta.url));
-const profile = z.enum(['minimal', 'monoscope']).parse(process.argv[2] ?? 'minimal');
-const outputDir = resolve(cwd, process.argv[3] ?? (profile === 'minimal' ? '.guest' : '.guest-monoscope'));
+const profile = z.enum(['minimal', 'monoscope', 'browser']).parse(process.argv[2] ?? 'minimal');
+const outputDir = resolve(cwd, process.argv[3] ?? (profile === 'minimal' ? '.guest' : `.guest-${profile}`));
 const preferred = z.enum(['docker', 'podman']).optional().parse(process.env.IMPACT_REVIEW_CONTAINER_ENGINE);
 const engine = (preferred ? [preferred] : ['docker', 'podman']).find((candidate) => {
   try { execFileSync(candidate, ['--version'], { stdio: 'ignore' }); return true; }
@@ -17,7 +17,8 @@ const engine = (preferred ? [preferred] : ['docker', 'podman']).find((candidate)
 if (!engine) throw new Error(`No usable container engine: ${preferred ?? 'install Docker or Podman'}`);
 const context = await mkdtemp(join(tmpdir(), 'monoscope-guest-build-'));
 try {
-  await cp(join(cwd, profile === 'minimal' ? 'Dockerfile.guest' : 'Dockerfile.monoscope'), join(context, 'Dockerfile'));
+  await cp(join(cwd, { minimal: 'Dockerfile.guest', monoscope: 'Dockerfile.monoscope', browser: 'Dockerfile.browser' }[profile]), join(context, 'Dockerfile'));
+  if (profile === 'browser') for (const path of ['package.json', 'package-lock.json', 'web-components/package.json', 'web-components/package-lock.json']) await cp(resolve(cwd, '..', path), join(context, path), { recursive: true });
   const args = ['build', '--iidfile', join(context, 'image-id')];
   if (profile === 'monoscope') {
     const source = process.env.IMPACT_REVIEW_DEPS_IMAGE ?? 'ghcr.io/monoscope-tech/monoscope-deps:latest';

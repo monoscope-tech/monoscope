@@ -45,6 +45,7 @@ module Models.Projects.ImpactReviews (
   ProofSide (..),
   ProofFormat (..),
   ProofFile (..),
+  ProofAsset (..),
   proofSignedPath,
   saveProofs,
   ProofRecipe (..),
@@ -56,7 +57,7 @@ module Models.Projects.ImpactReviews (
 
 import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
-import Data.Char (isHexDigit)
+import Data.Char (isDigit, isHexDigit)
 import Data.Effectful.AgentWorkspace qualified as Workspace (Slots (..))
 import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Types qualified as Agent (ProofMedia (..))
@@ -545,7 +546,7 @@ priorRepositoryKnowledge pid ref service =
 
 
 -- | Metadata of one recorded side; the media stays in the database until a viewer asks.
-data ProofSide = ProofSide {key :: Text, side :: Agent.RevisionSide, revision :: Text, exitCode :: Maybe Int32}
+data ProofSide = ProofSide {key :: Text, side :: Agent.RevisionSide, revision :: Text, exitCode :: Maybe Int32, browser :: Bool, chapters :: Aeson [(Double, Text)], shots :: Aeson [Text]}
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
 
@@ -555,27 +556,39 @@ data ProofFormat = Gif | Mp4 | Cast
   deriving (FromHttpApiData, HI.EncodeValue, ToHttpApiData) via WrappedEnumSC 'Nothing "" ProofFormat
 
 
--- | One recorded side of a proof in one format, named like @proof-2-head.mp4@.
+-- | A side's recording in one format, or one of its numbered screenshots.
+data ProofAsset = Recording ProofFormat | Screenshot Int16
+  deriving stock (Eq, Show)
+
+
+-- | One recorded side of a proof, named like @proof-2-head.mp4@, or a screenshot numbered from one
+-- like @proof-2-head-1.png@.
 --
--- >>> parseUrlPiece @ProofFile "proof-2-head.mp4" == Right (ProofFile "proof-2" Agent.Head Mp4)
+-- >>> parseUrlPiece @ProofFile "proof-2-head.mp4" == Right (ProofFile "proof-2" Agent.Head (Recording Mp4))
 -- True
--- >>> toUrlPiece (ProofFile "proof-1" Agent.Base Gif)
--- "proof-1-base.gif"
--- >>> map (isLeft . parseUrlPiece @ProofFile) ["proof-1-side.gif", "proof-1-head.png", "proof-1"]
--- [True,True,True]
-data ProofFile = ProofFile {key :: Text, side :: Agent.RevisionSide, format :: ProofFormat}
+-- >>> parseUrlPiece @ProofFile "proof-2-base-3.png" == Right (ProofFile "proof-2" Agent.Base (Screenshot 3))
+-- True
+-- >>> map toUrlPiece [ProofFile "proof-1" Agent.Base (Recording Gif), ProofFile "proof-1" Agent.Head (Screenshot 2)]
+-- ["proof-1-base.gif","proof-1-head-2.png"]
+-- >>> map (isLeft . parseUrlPiece @ProofFile) ["proof-1-side.gif", "proof-1-head.png", "proof-1-head-2.gif", "proof-1-head-5.png", "proof-x-head.gif", "proof-1"]
+-- [True,True,True,True,True,True]
+data ProofFile = ProofFile {key :: Text, side :: Agent.RevisionSide, asset :: ProofAsset}
   deriving stock (Eq, Show)
 
 
 instance ToHttpApiData ProofFile where
-  toUrlPiece file = file.key <> "-" <> toUrlPiece file.side <> "." <> toUrlPiece file.format
+  toUrlPiece file = file.key <> "-" <> toUrlPiece file.side <> case file.asset of Recording format -> "." <> toUrlPiece format; Screenshot n -> "-" <> show n <> ".png"
 
 
 instance FromHttpApiData ProofFile where
-  parseUrlPiece piece =
+  parseUrlPiece piece = do
     let (stem, extension) = first (T.dropEnd 1) $ T.breakOnEnd "." piece
-        (key, side) = first (T.dropEnd 1) $ T.breakOnEnd "-" stem
-     in ProofFile key <$> parseUrlPiece side <*> parseUrlPiece extension
+    (n, side, asset) <- case (T.splitOn "-" stem, extension) of
+      (["proof", n, side], _) -> (n,side,) . Recording <$> parseUrlPiece extension
+      (["proof", n, side, shot], "png") -> (n,side,) . Screenshot <$> parseUrlPiece shot
+      _ -> Left "Not a proof file"
+    unless (not (T.null n) && T.all isDigit n && case asset of Screenshot i -> i `elem` [1 .. 4]; Recording _ -> True) $ Left "Not a proof file"
+    ProofFile ("proof-" <> n) <$> parseUrlPiece side <*> pure asset
 
 
 -- | Whether a proof's setup replayed the repository's saved recipe byte for byte, the measure of
@@ -602,9 +615,14 @@ saveProofs run attempt setup sides = Hasql.transaction TxS.ReadCommitted TxS.Wri
       then pure []
       else forM (toList sides) \proof ->
         Hasql.queryTx @(Maybe (HI.OneColumn Bool))
-          [HI.sql|INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, revision, exit_code, cast_bytes, gif, mp4)
-        VALUES (#{run.id}, #{attempt}, #{key}, #{proof.side}, #{proof.revision}, #{fromIntegral @Int @Int32 <$> proof.exitCode}, #{proof.cast}, #{proof.gif}, #{proof.mp4})
-        ON CONFLICT (run_id, key, side) DO NOTHING RETURNING true|]
+          [HI.sql|WITH saved AS (INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, revision, exit_code, cast_bytes, gif, mp4, browser, chapters)
+        VALUES (#{run.id}, #{attempt}, #{key}, #{proof.side}, #{proof.revision}, #{fromIntegral @Int @Int32 <$> proof.exitCode}, #{proof.cast}, #{proof.gif}, #{proof.mp4}, #{proof.browser}, #{Aeson proof.chapters})
+        ON CONFLICT (run_id, key, side) DO NOTHING RETURNING run_id, key, side
+      ), shots AS (
+        INSERT INTO projects.pr_review_proof_shots (run_id, key, side, n, label, png)
+        SELECT saved.run_id, saved.key, saved.side, shot.n, shot.label, shot.png
+        FROM saved, unnest(#{V.fromList (map fst proof.shots)}::text[], #{V.fromList (map snd proof.shots)}::bytea[]) WITH ORDINALITY AS shot(label, png, n)
+      ) SELECT true FROM saved|]
   if
     | not leased -> Left "Review authorization is no longer available" <$ Tx.condemn
     | full -> Left "Proof budget exhausted; cite the proofs already recorded" <$ Tx.condemn
@@ -634,7 +652,11 @@ proofRecipe run = Hasql.interpOne [HI.sql|SELECT setup, revision FROM projects.p
 
 
 proofSides :: DB es => ReviewRun -> UUIDId "agent_attempt" -> Eff es [ProofSide]
-proofSides run attempt = Hasql.interp [HI.sql|SELECT key, side, revision, exit_code FROM projects.pr_review_proofs WHERE run_id = #{run.id} AND attempt_id = #{attempt} ORDER BY key, side|]
+proofSides run attempt =
+  Hasql.interp
+    [HI.sql|SELECT key, side, revision, exit_code, browser, chapters,
+      coalesce((SELECT jsonb_agg(s.label ORDER BY s.n) FROM projects.pr_review_proof_shots s WHERE s.run_id = p.run_id AND s.key = p.key AND s.side = p.side), '[]')
+    FROM projects.pr_review_proofs p WHERE run_id = #{run.id} AND attempt_id = #{attempt} ORDER BY key, side|]
 
 
 -- | What a proof media link signs; the prefix keeps it apart from widget signatures under the same key.
@@ -646,6 +668,9 @@ proofFile :: DB es => ProjectId -> ReviewId -> ProofFile -> Eff es (Maybe ByteSt
 proofFile pid rid file =
   fmap HI.getOneColumn
     <$> Hasql.interpOne
-      [HI.sql|SELECT CASE #{file.format} WHEN 'gif' THEN p.gif WHEN 'mp4' THEN p.mp4 ELSE p.cast_bytes END
+      [HI.sql|SELECT CASE #{format} WHEN 'gif' THEN p.gif WHEN 'mp4' THEN p.mp4 WHEN 'png' THEN s.png ELSE p.cast_bytes END
     FROM projects.pr_review_proofs p JOIN projects.pr_review_runs r ON r.id = p.run_id JOIN projects.pr_review_threads t ON t.id = r.thread_id
-    WHERE t.project_id = #{pid} AND p.run_id = #{rid} AND p.key = #{file.key} AND p.side = #{file.side}|]
+      LEFT JOIN projects.pr_review_proof_shots s ON s.run_id = p.run_id AND s.key = p.key AND s.side = p.side AND s.n = #{shot}
+    WHERE t.project_id = #{pid} AND p.run_id = #{rid} AND p.key = #{file.key} AND p.side = #{file.side} AND (#{format} <> 'png' OR s.png IS NOT NULL)|]
+  where
+    (format, shot) = case file.asset of Recording f -> (toUrlPiece f, Nothing); Screenshot n -> ("png" :: Text, Just n)

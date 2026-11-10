@@ -1,0 +1,18 @@
+# The minimal guest plus what a UI proof needs offline: Node, the root (Tailwind) and web-components
+# dependencies at the base lockfiles, and Playwright's Chromium and ffmpeg. A proof links
+# /opt/proof/node_modules and /opt/proof/web-components/node_modules into its checkout; both are
+# gitignored, so tracked files stay untouched.
+FROM node:24-bookworm-slim AS node
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends bash git ripgrep ca-certificates asciinema curl fonts-liberation fonts-noto-color-emoji && rm -rf /var/lib/apt/lists/*
+COPY --from=node /usr/local/bin/node /usr/local/bin/
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/proof/browsers
+COPY package.json package-lock.json /opt/proof/
+COPY web-components/package.json web-components/package-lock.json /opt/proof/web-components/
+RUN cd /opt/proof && npm ci --no-audit --no-fund && cd web-components && npm ci --no-audit --no-fund && npm install --no-save --no-audit --no-fund playwright@1.58.2 \
+  && npx playwright install --with-deps chromium && rm -rf /root/.npm /var/lib/apt/lists/* && chmod -R a+rX /opt/proof
+
+RUN useradd --create-home --uid 1000 --user-group --shell /bin/bash review-agent

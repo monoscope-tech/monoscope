@@ -1,4 +1,18 @@
-### 🟡 Merge risk: medium
+### ⚠️ Reuses the idempotency key on every retry
+
+The second retry sent a new key, so the provider saw two charges.
+
+<a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s"><img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.gif?sig=s" alt="Recording" width="100%"></a>
+
+[Watch full video](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
+
+<sub>Merge-base · exit 1</sub>
+
+<img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base.gif?sig=s" alt="Merge-base" width="100%">
+
+**Also checked** · 1 match · 1 not verified<br>✅ Retries a timed-out capture once · [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s)<br>👀 Shows the retry count in the receipt
+
+#### 🟡 Merge risk: medium
 
 Adds retries to payment capture. A second timeout can charge a customer twice, and the give-up path is silent in production.
 
@@ -9,25 +23,6 @@ Adds retries to payment capture. A second timeout can charge a customer twice, a
 | **Verification** | 👀 decent | No test covers a capture that times out twice |
 | **Rollback cost** | ✅ low | — |
 | **Error detection** | ⚠️ poor | The new retry path logs nothing when it gives up |
-
-#### Proof · 1 holds · 1 differs · 1 not verified
-
-**✅ Retries a timed-out capture once**
-
-The capture command now retries after the first timeout and succeeds.
-
-<table><tr><td><sub>Before · ddddddd · exit 1 · <a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-base.mp4?sig=s">video</a> · <a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-base.cast?sig=s">cast</a></sub><br><a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-base.mp4?sig=s"><img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-base.gif?sig=s" alt="Before · ddddddd · exit 1: Retries a timed-out capture once" width="440"></a></td><td><sub>This PR · aaaaaaa · exit 0 · <a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s">video</a> · <a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.cast?sig=s">cast</a></sub><br><a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s"><img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.gif?sig=s" alt="This PR · aaaaaaa · exit 0: Retries a timed-out capture once" width="440"></a></td></tr></table>
-
-> [!CAUTION]
-> **Doesn't do what the PR says: Reuses the idempotency key on every retry**
->
-> The second retry sent a new key, so the provider saw two charges.
-
-<table><tr><td><sub>Before · ddddddd · exit 1 · <a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base.mp4?sig=s">video</a> · <a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base.cast?sig=s">cast</a></sub><br><a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base.mp4?sig=s"><img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base.gif?sig=s" alt="Before · ddddddd · exit 1: Reuses the idempotency key on every retry" width="440"></a></td><td><sub>This PR · aaaaaaa · exit 0 · <a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s">video</a> · <a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.cast?sig=s">cast</a></sub><br><a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s"><img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.gif?sig=s" alt="This PR · aaaaaaa · exit 0: Reuses the idempotency key on every retry" width="440"></a></td></tr></table>
-
-**👀 Not verified: Shows the retry count in the receipt**
-
-The receipt page needs a browser, which this review cannot record.
 
 #### Worth checking in production (2)
 
@@ -56,4 +51,4 @@ The receipt page needs a browser, which this review cannot record.
 
 </details>
 
-<sub>Reviewed [`aaaaaaa`](https://github.com/acme/checkout/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) against production telemetry from Jan 1 to Jan 8, 2025 (UTC) · [Open the full review](https://app.monoscope.tech/p/x/ai/runs/y) · [Review settings](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings)<br>Comment `@monoscope review` to review again, or `@monoscope prove it` to record proof.</sub>
+<sub>Reviewed [`aaaaaaa`](https://github.com/acme/checkout/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) with production telemetry from Jan 1 to Jan 8, 2025 · [Open the full review](https://app.monoscope.tech/p/x/ai/runs/y) · [Review settings](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings) · Comment `@monoscope prove it` to prove again</sub>

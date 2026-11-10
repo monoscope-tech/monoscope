@@ -1,4 +1,20 @@
-### 🟡 Merge risk: medium
+### ⚠️ Reuses the idempotency key on every retry
+
+The second retry sent a new key, so the provider saw two charges.
+
+![Recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.gif?sig=s)
+
+[Watch full video](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
+
+<sub>Merge-base · exit 1</sub>
+
+![Merge-base](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base.gif?sig=s)
+
+**Also checked** · 1 match · 1 not verified
+✅ Retries a timed-out capture once · [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s)
+👀 Shows the retry count in the receipt
+
+#### 🟡 Merge risk: medium
 
 Adds retries to payment capture. A second timeout can charge a customer twice, and the give-up path is silent in production.
 
@@ -9,28 +25,6 @@ Adds retries to payment capture. A second timeout can charge a customer twice, a
 | **Verification** | 👀 decent | No test covers a capture that times out twice |
 | **Rollback cost** | ✅ low | — |
 | **Error detection** | ⚠️ poor | The new retry path logs nothing when it gives up |
-
-#### Proof · 1 holds · 1 differs · 1 not verified
-
-**✅ Retries a timed-out capture once**
-
-The capture command now retries after the first timeout and succeeds.
-
-![Before · ddddddd · exit 1](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-base.gif?sig=s) ![This PR · aaaaaaa · exit 0](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.gif?sig=s)
-
-[Watch Before](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-base.mp4?sig=s) · [Watch This PR](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s)
-
-**⚠️ Differs from the PR: Reuses the idempotency key on every retry**
-
-The second retry sent a new key, so the provider saw two charges.
-
-![Before · ddddddd · exit 1](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base.gif?sig=s) ![This PR · aaaaaaa · exit 0](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.gif?sig=s)
-
-[Watch Before](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base.mp4?sig=s) · [Watch This PR](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
-
-**👀 Not verified: Shows the retry count in the receipt**
-
-The receipt page needs a browser, which this review cannot record.
 
 #### Worth checking in production (2)
 
@@ -54,4 +48,4 @@ The receipt page needs a browser, which this review cannot record.
 - Provider-side duplicates are not visible in this project's telemetry.
 
 
-Reviewed [`aaaaaaa`](https://github.com/acme/checkout/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) against production telemetry from Jan 1 to Jan 8, 2025 (UTC) · [Review settings](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings)
+Reviewed [`aaaaaaa`](https://github.com/acme/checkout/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) with production telemetry from Jan 1 to Jan 8, 2025 · [Review settings](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings)

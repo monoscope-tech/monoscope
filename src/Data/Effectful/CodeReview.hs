@@ -667,10 +667,12 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                           ExceptT $ sequence <$> forConcurrently result.receipts \receipt -> runExceptT do
                             let side = case receipt.side of Base -> Workspace.Base; Head -> Workspace.Head
                             logFile <- maybe (throwE "The proof log was not retained") pure $ listToMaybe [path | (logged, path, _) <- logs, logged == side]
-                            (cast, output) <- ExceptT $ Media.proofCast <$> readFileBS logFile
-                            (gif, mp4) <- ExceptT $ Media.renderProof cast
-                            let summary = AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "output" AE..= T.takeEnd 3000 output]
-                            pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4}, summary)
+                            logBytes <- readFileBS logFile
+                            (cast, output) <- except $ Media.proofCast logBytes
+                            let browser = Media.browserMedia logBytes
+                            (gif, mp4) <- ExceptT $ maybe (Media.renderProof cast) Media.renderVideo browser.video
+                            let summary = AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "output" AE..= T.takeEnd 3000 output, "screenshots" AE..= map fst browser.shots, "video" AE..= isJust browser.video]
+                            pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4, browser = isJust browser.video, shots = browser.shots, chapters = browser.chapters}, summary)
                         sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty $ map fst recorded
                         key <- ExceptT $ save proof.setup sides
                         pure $ AE.object ["key" AE..= key, "claim" AE..= proof.claim, "sides" AE..= map snd recorded, "note" AE..= ("Cite this key in a claim. The PR author sees both recordings." :: Text)]
