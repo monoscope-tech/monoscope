@@ -3333,8 +3333,10 @@ jobsWorkerInitWithTools logger appCtx tp projectTools = when appCtx.config.enabl
     $ UIO.concurrently_ (startJobRunner config)
     -- Workspace builds (up to an hour) and reviews (30 minutes) outlast the queue's timeout, which odd-jobs
     -- also treats as a stale lock, so they run from their own table with a budget just above a build's.
-    -- VM slots bound them: one build at a time per node, and claimRun admits reviews by agent slots.
-    $ startJobRunner config{cfgTableName = "background_jobs_long", cfgConcurrencyControl = MaxConcurrentJobs 8, cfgDefaultJobTimeout = Seconds (Workspace.buildSeconds + 60)}
+    -- VM slots bound them: one build at a time per node, and claimRun admits reviews by agent slots. A
+    -- node without agent slots (web replicas, no KVM) would hold these jobs it cannot run, so it skips them.
+    $ Workspace.hostSlots
+    >>= \slots -> when (slots.agents > 0) $ startJobRunner config{cfgTableName = "background_jobs_long", cfgConcurrencyControl = MaxConcurrentJobs 8, cfgDefaultJobTimeout = Seconds (Workspace.buildSeconds + 60)}
   where
     config = jobsWorkerConfig logger appCtx tp projectTools
 
