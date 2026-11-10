@@ -51,13 +51,16 @@ COPY cli ./cli
 # prof-way build with LATE cost centres on monoscope code only — deps are built
 # prof-way but with no cost centres, so runtime overhead (~2-5%) stays on our
 # code. Enables +RTS -p CPU samples and -hc heap censuses (see GHCRTS below).
-RUN printf 'package *\n  profiling: True\n  profiling-detail: none\npackage monoscope\n  profiling-detail: late\n' >> cabal.project.local
+# The server links only profiled objects; the vanilla pass exists only to run Template Haskell
+# splices, so it builds at -O0 (package.yaml's ghc-prof-options restores -O1 for the profiled pass).
+# AutoInstrument rules out -fexternal-interpreter, which would drop the vanilla pass entirely.
+RUN printf 'package *\n  profiling: True\n  profiling-detail: none\npackage monoscope\n  profiling-detail: late\n  optimization: False\n' >> cabal.project.local
 
 # GHC outputs are mutable. Use a fresh namespace to avoid legacy shared mounts,
 # and hold its lock through compilation and copying the executable.
 # Build Haskell dependencies (fast - already cached in deps image)
 RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/.cabal/store \
-    --mount=type=cache,id=monoscope-production-dist-locked-v1,target=/build/dist-newstyle,sharing=locked \
+    --mount=type=cache,id=monoscope-production-dist-locked-v2,target=/build/dist-newstyle,sharing=locked \
     cabal update && cabal build --only-dependencies exe:monoscope-server -j --semaphore
 
 # The dependency image is a cache, not the authority for npm versions. Install
@@ -106,7 +109,7 @@ RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/publi
 # object can survive with a stale entry (2026-09-08 incident), so evict it and let the
 # splice re-read the manifest this build just wrote. One module recompile is noise here.
 RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/.cabal/store \
-    --mount=type=cache,id=monoscope-production-dist-locked-v1,target=/build/dist-newstyle,sharing=locked \
+    --mount=type=cache,id=monoscope-production-dist-locked-v2,target=/build/dist-newstyle,sharing=locked \
     (command -v hpack >/dev/null && hpack || echo "hpack not installed, using committed monoscope.cabal") && \
     find /build/dist-newstyle -name 'BodyWrapper.*' -delete && \
     cabal build exe:monoscope-server -j --semaphore --ghc-options="+RTS -A64m -n2m -RTS" && \
