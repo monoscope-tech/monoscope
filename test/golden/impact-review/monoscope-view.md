@@ -6,7 +6,7 @@ The second retry sent a new key, so the provider saw two charges.
 
 [Watch full video](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
 
-<sub>Merge-base · exit 1</sub>
+*Merge-base · exit 1*
 
 ![Merge-base](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base.gif?sig=s)
 

@@ -589,10 +589,10 @@ threadPageGetH pid convId docM runM hxTarget = do
                     when canEdit $ button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save instructions"
               when (null runs && isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] "No runs yet. An active routine starts when the next matching event arrives."
             div_
-              ([id_ "ai-thread-results"] <> if any ((== Issues.RunRunning) . (.status)) runs then [hxGet_ threadHref, hxTrigger_ "every 2s", hxSelect_ "#ai-thread-results", term "hx-select-oob" "#pageTitleText:outerHTML", hxSwap_ "outerHTML"] else [])
+              ([id_ "ai-thread-results"] <> if any ((== Issues.RunRunning) . (.status)) runs then [hxGet_ threadHref, hxTrigger_ "every 2s", hxSelect_ "#ai-thread-results", term "hx-select-oob" "#pageTitleText:outerHTML", hxSwap_ "outerMorph"] else [])
               do
-                whenJust (nonEmpty runs) \allRuns -> section_ [class_ "mb-6", Aria.label_ "Routine runs"] do
-                  let (recent, older) = splitAt 5 $ toList allRuns
+                unless (null runs) $ section_ [class_ "mb-6", Aria.label_ "Routine runs"] do
+                  let (recent, older) = splitAt 5 runs
                       -- A routine's runs span many subjects (PRs, threads); a subject's own runs differ by attempt.
                       runRow run = a_ ([href_ $ runUrl projectId run.id, class_ "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-2 hover:bg-fillHover focus-visible:outline-2 focus-visible:-outline-offset-2"] <> inspectorAttrs (urls.aiRoutineRunGet projectId run.id activeConversationIdM) <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) do
                         span_ [class_ "min-w-0 truncate text-sm text-textStrong"] $ toHtml $ if Just run.conversationId == activeConversationIdM then "Attempt " <> show @Text run.attempt else fromMaybe "Run" run.title
@@ -603,7 +603,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                       runList = div_ [class_ "divide-y divide-strokeWeak overflow-hidden rounded-lg border border-strokeWeak bg-bgRaised"] . mapM_ runRow
                   h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Runs"
                   runList recent
-                  unless (null older) $ details_ [class_ "group/older mt-2"] do
+                  unless (null older) $ details_ [class_ "group/older mt-2", term "hx-morph-skip" ""] do
                     summary_ [class_ "cursor-pointer list-none rounded-md px-1 py-1 text-xs font-medium text-textBrand hover:underline [&::-webkit-details-marker]:hidden"] do
                       span_ [class_ "group-open/older:hidden"] $ toHtml $ "Show " <> show @Text (length older) <> " older"
                       span_ [class_ "hidden group-open/older:inline"] "Show fewer"

@@ -924,8 +924,10 @@ renderReview host run audience result =
        in [ if github then "<a href=\"" <> hero.video <> "\"><img src=\"" <> hero.preview <> "\" alt=\"Recording\" width=\"100%\"></a>" else image ("Recording", hero.preview)
           , T.intercalate " · " $ ("[Watch full video](" <> hero.video <> ")") : ["[" <> timestamp at <> " " <> plain chapter <> "](" <> hero.video <> "#t=" <> T.dropWhileEnd (== '.') (T.dropWhileEnd (== '0') (show at)) <> ")" | (at, chapter) <- fold hero.chapters]
           ]
-            <> concat [("<sub>Merge-base" <> exit p <> "</sub>") : map image (stills p) | Just p <- [base], or p.browser || isJust pr]
-            <> concat [("<sub>This PR <code>" <> T.take 8 p.revision <> "</code></sub>") : map image (stills p) | Just p <- [pr], or p.browser]
+            <> concat [caption ("Merge-base" <> exit p) : map image (stills p) | Just p <- [base], or p.browser || isJust pr]
+            <> concat [caption ("This PR " <> if github then "<code>" <> T.take 8 p.revision <> "</code>" else "`" <> T.take 8 p.revision <> "`") : map image (stills p) | Just p <- [pr], or p.browser]
+    -- Monoscope renders Markdown with embedded HTML as text, so only GitHub gets <sub>.
+    caption text = if github then "<sub>" <> text <> "</sub>" else "*" <> text <> "*"
     -- A terminal recording's exit code is its verdict; a screenshot carries its own.
     exit p = case (or p.browser, p.exitCode) of (False, Just code) | code /= 0 -> " · exit " <> show code; _ -> ""
     timestamp at = let total = floor at :: Int in show (total `div` 60) <> ":" <> T.justifyRight 2 '0' (show (total `mod` 60))
