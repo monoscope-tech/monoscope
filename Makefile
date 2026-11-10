@@ -140,7 +140,13 @@ live-test-reload-all:
 TEST_MATCH ?=
 # Hspec args live in .test-args, read on every run: refocus a running watcher with
 # `echo '--match LiveTail' > .test-args` instead of restarting it. TEST_MATCH seeds the file.
-live-test-dev: build-chart-cli
+# The impact-review specs launch the worker's Node host; CI installs its packages, and a fresh
+# checkout has an empty node_modules, so those specs failed only locally. Reinstalls on a lock change.
+IMPACT_WORKER_DEPS := impact-review-worker/node_modules/.package-lock.json
+$(IMPACT_WORKER_DEPS): impact-review-worker/package-lock.json
+	cd impact-review-worker && npm ci --ignore-scripts --no-audit
+
+live-test-dev: build-chart-cli $(IMPACT_WORKER_DEPS)
 	@GHCI_MAX=$${GHCI_MAX:-6} $(REAP_GHCI)
 	@$(if $(TEST_MATCH),echo '--match "$(TEST_MATCH)"' > .test-args,touch .test-args)
 	@echo "live-test-dev: hspec args from .test-args: [$$(cat .test-args)] (empty = whole suite)" | tee build-test-dev.log
@@ -180,7 +186,7 @@ test: test-shards
 # on a stock (100) server; bump SHARDS with the tmpfs DB (`make timescaledb-docker-tmp`,
 # max_connections=200). Per-shard output: build-shard-<i>.log.
 SHARDS ?= 6
-test-shards:
+test-shards: $(IMPACT_WORKER_DEPS)
 	cabal build integration-tests --ghc-options="-O0 +RTS -A64m -RTS"
 	@bin=$$(cabal list-bin integration-tests); echo "sharding $(SHARDS)x: $$bin"; \
 	rm -f build-shard-*.log; \
@@ -210,7 +216,7 @@ test-doctests:
 # the TimescaleDB container. Drop it and the harness boots tmp-postgres from the homebrew
 # postgres on PATH, which has no timescaledb_toolkit — migration 0001 fails and EVERY example
 # dies in setup with SomePostgreSqlException, looking for all the world like a broken change.
-test-integration:
+test-integration: $(IMPACT_WORKER_DEPS)
 	LOG_LEVEL=attention USE_EXTERNAL_DB=true cabal test integration-tests -j --ghc-options="-O0" --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
 
 # TimeFusion bring-up for integration tests. Delegates to the timefusion repo.
