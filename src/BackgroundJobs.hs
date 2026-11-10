@@ -3329,9 +3329,10 @@ jobsWorkerInitWithTools logger appCtx tp projectTools = when appCtx.config.enabl
         tryStepIO logger appCtx "ensureDailyJobScheduled" $ ensureDailyJobScheduled appCtx
     )
     $ UIO.concurrently_ (startJobRunner config)
-    -- Workspace builds take up to an hour, past the queue's timeout, so they run one at a time from
-    -- their own table with a budget just above 'Workspace.RunWorkspace's, which reports first.
-    $ startJobRunner config{cfgTableName = "background_jobs_long", cfgConcurrencyControl = MaxConcurrentJobs 1, cfgDefaultJobTimeout = Seconds (Workspace.buildSeconds + 60)}
+    -- Workspace builds (up to an hour) and reviews (30 minutes) outlast the queue's timeout, which odd-jobs
+    -- also treats as a stale lock, so they run from their own table with a budget just above a build's.
+    -- VM slots bound them: one build at a time per node, and claimRun admits reviews by agent slots.
+    $ startJobRunner config{cfgTableName = "background_jobs_long", cfgConcurrencyControl = MaxConcurrentJobs 8, cfgDefaultJobTimeout = Seconds (Workspace.buildSeconds + 60)}
   where
     config = jobsWorkerConfig logger appCtx tp projectTools
 

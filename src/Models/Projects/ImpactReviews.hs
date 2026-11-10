@@ -60,7 +60,7 @@ import Data.Aeson qualified as AE
 import Data.Char (isDigit, isHexDigit)
 import Data.Effectful.AgentWorkspace qualified as Workspace (Slots (..))
 import Data.Effectful.CodeReview qualified as Agent
-import Data.Effectful.CodeReview.Types qualified as Agent (ProofMedia (..))
+import Data.Effectful.CodeReview.Types qualified as Agent (ProofMedia (..), reviewSeconds)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -329,7 +329,7 @@ receiveEvent request event =
     INSERT INTO background_jobs_long (run_at, status, payload)
     SELECT now(), 'queued', jsonb_build_object('tag', 'PrepareReviewWorkspace', 'contents', id) FROM queued
   ), jobs AS (
-    INSERT INTO background_jobs (run_at, status, payload)
+    INSERT INTO background_jobs_long (run_at, status, payload)
     SELECT now(), 'queued', jsonb_build_object('tag', 'ReviewPullRequest', 'contents', id) FROM queued RETURNING 1
   ) SELECT CASE WHEN EXISTS (SELECT 1 FROM jobs) THEN #{RunQueued} WHEN EXISTS (SELECT 1 FROM decided WHERE queue) THEN #{JoinedRun} ELSE #{NotReviewable} END|]
 
@@ -362,7 +362,7 @@ claimRun slots run = Hasql.transaction TxS.ReadCommitted TxS.Write do
     SELECT count(*) FILTER (WHERE o.project_id = #{run.projectId}) >= 2 OR count(*) FILTER (WHERE o.lease_node = #{slots.node}) >= #{fromIntegral @Int @Int64 slots.agents} AS saturated
     FROM projects.pr_review_threads o WHERE o.id <> #{run.threadId} AND o.lease_until > now()
   ), leased AS (
-    UPDATE projects.pr_review_threads t SET lease_owner = #{run.id}, lease_node = #{slots.node}, lease_until = now() + interval '10 minutes'
+    UPDATE projects.pr_review_threads t SET lease_owner = #{run.id}, lease_node = #{slots.node}, lease_until = now() + make_interval(secs => #{fromIntegral @Int @Int32 (Agent.reviewSeconds + 300)})
     WHERE t.id = #{run.threadId} AND t.latest_revision = #{run.revision}
       AND (t.lease_until IS NULL OR t.lease_until < now()) AND NOT (SELECT saturated FROM busy)
       AND EXISTS (SELECT 1 FROM projects.pr_review_runs r WHERE r.id = #{run.id} AND r.state IN (#{Queued}, #{Reviewing}, #{Incomplete}))
@@ -371,7 +371,7 @@ claimRun slots run = Hasql.transaction TxS.ReadCommitted TxS.Write do
     UPDATE projects.pr_review_runs SET state = #{Reviewing}, error = NULL
     WHERE id = #{run.id} AND thread_id IN (SELECT id FROM leased) RETURNING id
   ), deferred AS (
-    INSERT INTO background_jobs (run_at, status, payload)
+    INSERT INTO background_jobs_long (run_at, status, payload)
     SELECT CASE WHEN t.lease_until > now() AND t.lease_owner <> r.id THEN t.lease_until + interval '1 second'
       WHEN t.lease_until > now() THEN now() + interval '1 second' ELSE now() + interval '15 seconds' END, 'queued', #{payload}
     FROM projects.pr_review_threads t JOIN projects.pr_review_runs r ON r.thread_id = t.id
@@ -468,7 +468,7 @@ retryRun pid rid = do
       FROM projects.pr_review_threads t WHERE r.id = #{rid} AND r.thread_id = t.id AND t.project_id = #{pid}
         AND r.revision = t.latest_revision AND (t.lease_until IS NULL OR t.lease_until < now())
       RETURNING r.id)
-      INSERT INTO background_jobs (run_at, status, payload) SELECT now(), 'queued', #{payload} FROM retried|]
+      INSERT INTO background_jobs_long (run_at, status, payload) SELECT now(), 'queued', #{payload} FROM retried|]
 
 
 supersedeRun :: DB es => ReviewRun -> Eff es ()

@@ -2762,14 +2762,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
     replicateM_ 2 $ deliver tr firstEvent `shouldReturn` AE.object ["status" AE..= ("ok" :: Text)]
     for_ @[] [AE.object [], payload "edited" revision "2025-01-01T00:00:00Z"] \ignored ->
       deliver tr ignored `shouldReturn` AE.object ["status" AE..= ("ignored" :: Text)]
-    dbOne tr "SELECT count(*)::int FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest'" () `shouldReturn` (1 :: Int)
+    dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'ReviewPullRequest'" () `shouldReturn` (1 :: Int)
     [old] <- runQueryEffect tr $ Reviews.latestRuns testPid
     runQueryEffect tr (Reviews.claimRun (slots 100) old) `shouldReturn` True
     runQueryEffect tr (Reviews.currentRun old) `shouldReturn` True
     dbOne tr "SELECT lease_until > now() + interval '9 minutes' FROM projects.pr_review_threads WHERE id = ?" (Only old.threadId) `shouldReturn` True
-    dbOne tr "SELECT payload FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest'" () `shouldReturn` Aeson (AE.toJSON $ Jobs.ReviewPullRequest old.id)
+    dbOne tr "SELECT payload FROM background_jobs_long WHERE payload->>'tag' = 'ReviewPullRequest'" () `shouldReturn` Aeson (AE.toJSON $ Jobs.ReviewPullRequest old.id)
     (_, ()) <- runTestBgRecordingHTTP frozenTime tr $ Impact.reviewPullRequest old.id
-    dbOne tr "SELECT count(*)::int FROM background_jobs WHERE payload = ? AND status = 'queued'" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest old.id) `shouldReturn` (2 :: Int)
+    dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload = ? AND status = 'queued'" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest old.id) `shouldReturn` (2 :: Int)
     void $ deliver tr $ payload "synchronize" next "2025-01-01T00:01:00Z"
     void $ deliver tr firstEvent
     runQueryEffect tr (Reviews.currentRun old) `shouldReturn` False
@@ -2777,7 +2777,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     map (.latestRevision) runs `shouldBe` [next, next]
     new <- maybe (fail "new revision missing") pure $ find ((== next) . (.revision)) runs
     runQueryEffect tr (Reviews.claimRun (slots 100) new) `shouldReturn` False
-    dbOne tr "SELECT payload FROM background_jobs WHERE run_at > now() AND payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest new.id) `shouldReturn` Aeson (AE.toJSON $ Jobs.ReviewPullRequest new.id)
+    dbOne tr "SELECT payload FROM background_jobs_long WHERE run_at > now() AND payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest new.id) `shouldReturn` Aeson (AE.toJSON $ Jobs.ReviewPullRequest new.id)
     runQueryEffect tr $ Reviews.releaseRun old
     runQueryEffect tr (Reviews.claimRun (slots 100) new) `shouldReturn` True
     runQueryEffect tr (Reviews.currentRun new) `shouldReturn` True
@@ -2819,7 +2819,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
 
   it "reviewTriggers_draftsFollowTheModeAndMembersCanAskInEveryMode" \tr -> do
     setup tr
-    let queued = dbOne tr "SELECT count(*)::int FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest' AND status = 'queued'" ()
+    let queued = dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'ReviewPullRequest' AND status = 'queued'" ()
         mode trigger = runQueryEffect tr $ Reviews.updateSettings testPid (Reviews.ReviewSettings "impact-org" "checkout" trigger False)
         sha = T.replicate 40
         draftHead = AE.object ["head" AE..= AE.object ["sha" AE..= sha "c"], "base" AE..= AE.object ["sha" AE..= sha "0"], "state" AE..= ("open" :: Text), "draft" AE..= True, "changed_files" AE..= (1 :: Int), "updated_at" AE..= ("2025-01-01T00:05:00Z" :: Text)]
@@ -2905,7 +2905,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     setup tr
     let event n = Reviews.PullRequestEvent "impact-org" "checkout" 987654 n (T.replicate 40 (show n)) frozenTime Reviews.Open
         sideProof side code = Proof.ProofMedia{side, revision = T.replicate 40 "7", exitCode = Just code, cast = "cast", gif = "gif", mp4 = "mp4", browser = False, shots = [], chapters = []}
-        deferred rid = dbOne tr "SELECT count(*)::int FROM background_jobs WHERE payload = ? AND run_at > now()" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest rid)
+        deferred rid = dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload = ? AND run_at > now()" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest rid)
     for_ [7, 8, 9] \n -> void $ runQueryEffect tr $ Reviews.receiveEvent Nothing $ event n
     -- Each queued review also queues the build of its workspace.
     dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'PrepareReviewWorkspace'" () `shouldReturn` (3 :: Int)
@@ -3253,11 +3253,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
       runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ExternalPosts) Catalog.ReviewEditors
       let result = Impact.ReviewResult Impact.NoFinding [] [] [] frozenTime frozenTime Nothing Nothing Nothing Nothing Nothing
       runQueryEffect tr $ Reviews.saveResult review result
-      dbExec tr "DELETE FROM background_jobs WHERE payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest review.id)
+      dbExec tr "DELETE FROM background_jobs_long WHERE payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest review.id)
       cfg <- githubApp tr
       let worker at = runTestBgRecordingHTTP at tr $ Reader.local (\ctx -> ctx{config = cfg}) $ pullRequestApi [Git.PullRequestFile "checkout.hs" "modified" (Just "@@ -1 +1 @@\n-old\n+new")] [] pass (pullRequestAt (T.replicate 40 "d") revision 1) $ BackgroundJobs.processBackgroundJob tr.trATCtx $ Jobs.ReviewPullRequest review.id
           publications = length . filter (T.isSuffixOf "/issues/7/comments" . fst)
-          queued = dbOne tr "SELECT count(*)::int FROM background_jobs WHERE payload = ? AND status IN ('queued', 'retry')" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest review.id) :: IO Int
+          queued = dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload = ? AND status IN ('queued', 'retry')" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest review.id) :: IO Int
       (initial, ()) <- worker frozenTime
       publications initial `shouldBe` 0
       Just waiting <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.PullRequestReview review.id
@@ -3275,7 +3275,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         (runQueryEffect tr (Reviews.claimRun (slots 100) leased) >>= (`shouldBe` True))
         (runQueryEffect tr $ Reviews.releaseRun leased)
         do
-          dbExec tr "DELETE FROM background_jobs WHERE payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest review.id)
+          dbExec tr "DELETE FROM background_jobs_long WHERE payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest review.id)
           (busy, ()) <- worker resumedAt
           publications busy `shouldBe` 0
           Just stillWaiting <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.PullRequestReview review.id
@@ -3507,7 +3507,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- Reruns recover the app-owned comment and keep production prose out of links-only output.
     void $ Test.call tr $ CodeContextPage.impactReviewSettingsPostH reviewPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.ReadyPullRequests False)
     void $ Test.call tr $ CodeContextPage.impactReviewRetryH reviewPid run.id
-    retryPayloads <- dbQuery tr "SELECT payload FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest' AND payload->>'contents' = ?" (Only run.id.toText) :: IO [Only (Aeson AE.Value)]
+    retryPayloads <- dbQuery tr "SELECT payload FROM background_jobs_long WHERE payload->>'tag' = 'ReviewPullRequest' AND payload->>'contents' = ?" (Only run.id.toText) :: IO [Only (Aeson AE.Value)]
     retryPayloads `shouldBe` replicate 2 (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest run.id)
     (linksRequests, ()) <- within (transport True . fakeAgentWith ["--expect-knowledge"]) $ Impact.reviewPullRequest run.id
     runQueryEffect tr (Reviews.priorKnowledge run "test-service") >>= (\notes -> length notes `shouldBe` 1)

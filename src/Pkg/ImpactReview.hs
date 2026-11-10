@@ -14,7 +14,7 @@ import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Artifacts (sha256)
 import Data.Effectful.CodeReview.Checkout qualified as Checkout (Fetch (..))
 import Data.Effectful.CodeReview.Policy qualified as Policy
-import Data.Effectful.CodeReview.Types (Evidence (..), EvidenceKind (..), KnowledgeSnapshot (..), Observation (..), QueryKind (..), QueryObservation (..), ReviewMemory (..))
+import Data.Effectful.CodeReview.Types (Evidence (..), EvidenceKind (..), KnowledgeSnapshot (..), Observation (..), QueryKind (..), QueryObservation (..), ReviewMemory (..), reviewSeconds)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as LLM
 import Data.Effectful.Wreq qualified as HTTP
@@ -424,7 +424,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                 whenJustM (Issues.startEventRun routine (Issues.PullRequestReviewRequest run.id) continuation convId input) \execution ->
                   when (execution.status == Issues.RunRunning) do
                     context <- AI.requireRunContext run.projectId $ Issues.EventClaim (Issues.PullRequestReview run.id) execution.id execution.startedAt
-                    outcome <- tryAny $ Timeout.timeout (540 * 1000000) $ runErrorNoCallStack $ execute run execution context
+                    outcome <- tryAny $ Timeout.timeout (reviewSeconds * 1000000) $ runErrorNoCallStack $ execute run execution context
                     let retryMessage = "Review failed; retry to collect current evidence"
                         finish = void . Issues.completeRun context
                         failReview retries failureResult message detail = do
@@ -439,7 +439,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                       Left err
                         | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> Jobs.deferOperationReview run.projectId identifier deadline
                         | otherwise -> failReview True Issues.FailedResult retryMessage (show @Text err)
-                      Right Nothing -> failReview True Issues.TimedOutResult "Review exceeded its nine-minute budget" "Review timed out"
+                      Right Nothing -> failReview True Issues.TimedOutResult ("Review exceeded its " <> show (reviewSeconds `div` 60) <> "-minute budget") "Review timed out"
                       Right (Just (Left (ReviewFailure err))) -> failReview True Issues.FailedResult retryMessage err
                       Right (Just (Left NativeSessionLost)) -> failReview False Issues.FailedResult nativeSessionLostMessage nativeSessionLostMessage
                       Right (Just (Left (ReviewPublicationRefused reason))) -> do
