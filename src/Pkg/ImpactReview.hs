@@ -457,7 +457,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
     -- A review that stops for good says so in its progress comment instead of leaving it running.
     stopProgress :: Reviews.ReviewRun -> Text -> ATBackgroundCtx ()
     stopProgress run reason = whenJustM (Reviews.progressComment run) \cid -> whenRightM_ (reviewConnection run) \(_, _, _, conn) -> do
-      stopped <- Git.publishPullRequestComment conn (Git.RepoRef run.owner run.repo run.revision) run.number (Just cid) (reviewMarker run <> "\n#### Review stopped\n\n" <> plain reason)
+      stopped <- Git.publishPullRequestComment conn (Git.RepoRef run.owner run.repo run.revision) run.number (Just cid) (reviewMarker run <> "\n#### Review stopped\n\n" <> plain reason <> "\n\nComment `@monoscope review` to run it again.")
       whenLeft_ stopped $ Log.logAttention "Proof progress comment failed" . (run.id,)
 
     completeReview :: Reviews.ReviewRun -> UUIDId "ai_routine_run" -> UTCTime -> ATBackgroundCtx ()
