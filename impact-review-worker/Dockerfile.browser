@@ -2,6 +2,8 @@
 # dependencies at the base lockfiles, and Playwright's Chromium and ffmpeg. A proof links
 # /opt/proof/node_modules and /opt/proof/web-components/node_modules into its checkout; both are
 # gitignored, so tracked files stay untouched.
+ARG SERVER_IMAGE=ghcr.io/monoscope-tech/monoscope:latest
+FROM ${SERVER_IMAGE} AS server
 FROM node:24-bookworm-slim AS node
 
 FROM debian:bookworm-slim
@@ -21,3 +23,37 @@ RUN cd /opt/proof && npm ci --no-audit --no-fund && cd web-components && npm ci 
 # Proof commands run with a reset environment, so Playwright finds its browsers at its default path.
 RUN useradd --create-home --uid 1000 --user-group --shell /bin/bash review-agent \
   && install -d -o review-agent -g review-agent /home/review-agent/.cache && ln -s /opt/proof/browsers /home/review-agent/.cache/ms-playwright
+
+# The production server for app proofs (monoscope-app.sh): its runtime libraries, Postgres with
+# TimescaleDB migrated here once so a proof boots in seconds, and an OTLP traffic generator.
+RUN curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/keyrings/pgdg.asc \
+  && curl -fsSL https://packagecloud.io/timescale/timescaledb/gpgkey -o /usr/share/keyrings/timescale.asc \
+  && echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+  && echo "deb [signed-by=/usr/share/keyrings/timescale.asc] https://packagecloud.io/timescale/timescaledb/debian/ bookworm main" > /etc/apt/sources.list.d/timescale.list \
+  && mkdir -p /etc/postgresql-common && echo 'create_main_cluster = false' > /etc/postgresql-common/createcluster.conf \
+  && apt-get update && apt-get install -y --no-install-recommends postgresql-18 timescaledb-2-postgresql-18 timescaledb-toolkit-postgresql-18 \
+    libgmp10 librdkafka1 libpq5 libsnappy1v5 liblz4-1 libzstd1 libsasl2-2 libldap-2.5-0 libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libjpeg62-turbo libgif7 fontconfig fonts-dejavu-core \
+  && rm -rf /var/lib/apt/lists/*
+COPY proto/opentelemetry /opt/traffic/proto/opentelemetry
+RUN cd /opt/traffic && npm install --no-save --no-audit --no-fund protobufjs@7.6.6 && rm -rf /root/.npm
+ENV PATH=/usr/lib/postgresql/18/bin:$PATH
+COPY --from=server --chown=review-agent:review-agent /opt/monoscope /opt/monoscope
+WORKDIR /opt/monoscope
+USER review-agent
+RUN printf '%s\n' "DATABASE_URL='host=/tmp user=postgres dbname=monoscope'" PORT=8080 GRPC_PORT=4317 ENVIRONMENT=DEV LOGGING_DESTINATION=StdOut GHCRTS= \
+    MIGRATIONS_DIR=/opt/monoscope/static/migrations/ MIGRATE_AND_INITIALIZE_ON_START=False SHOW_DEMO_PROJECT=True REQUEST_PUBSUB_TOPICS=x \
+    ENABLE_BACKGROUND_JOBS=False ENABLE_KAFKA_SERVICE=False ENABLE_PUBSUB_SERVICE=False ENABLE_OTLP_GRPC_SERVICE=False \
+    API_KEY_ENCRYPTION_SECRET_KEY=monoscope123456monoscope12345678 > app.env \
+  && node -p "require('./static/public/assets/web-components/dist/manifest.json')['index.html'].file" > entry \
+  && initdb -A trust -U postgres -D pgdata >/dev/null \
+  && printf '%s\n' "shared_preload_libraries='timescaledb'" "unix_socket_directories='/tmp'" "listen_addresses=''" fsync=off synchronous_commit=off full_page_writes=off "timescaledb.telemetry_level=off" >> pgdata/postgresql.conf \
+  && pg_ctl -D pgdata -l /tmp/postgres.log -w start && createdb -h /tmp -U postgres monoscope \
+  && (set -a && . ./app.env && MIGRATE_AND_INITIALIZE_ON_START=True exec ./monoscope-server >/tmp/migrate.log 2>&1 & echo $! > /tmp/server.pid) \
+  && for _ in $(seq 1 1800); do curl -sf -o /dev/null http://127.0.0.1:8080/ping || ! kill -0 $(cat /tmp/server.pid) && break; sleep 1; done \
+  && { curl -sf -o /dev/null http://127.0.0.1:8080/p/00000000-0000-0000-0000-000000000000/log_explorer || { tail -n 40 /tmp/migrate.log; exit 1; }; } \
+  && psql -qh /tmp -U postgres -d monoscope -c "INSERT INTO projects.project_api_keys (project_id, title, key_prefix) VALUES ('00000000-0000-0000-0000-000000000000', 'Proof traffic', 'proof')" \
+  && kill $(cat /tmp/server.pid) && pg_ctl -D pgdata -w stop
+USER root
+WORKDIR /
+COPY monoscope-traffic.mjs /opt/traffic/
+COPY --chmod=755 monoscope-app.sh /usr/local/bin/monoscope-app
