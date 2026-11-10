@@ -15,7 +15,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import GHC.Clock (getMonotonicTimeNSec)
 import Relude
-import System.Directory (canonicalizePath, createDirectoryIfMissing, removePathForcibly, renameDirectory)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, getFileSize, removePathForcibly, renameDirectory)
 import System.Environment (getEnvironment)
 import System.FileLock (SharedExclusive (..), withFileLock)
 import System.FilePath ((</>))
@@ -201,25 +201,29 @@ proofCast logBytes = do
 -- | An animated preview (GitHub inlines GIFs) and a video. Both tools read guest-recorded bytes,
 -- so they run unprivileged with bounded time, input duration and output size.
 renderProof :: ByteString -> IO (Either Text (ByteString, ByteString))
-renderProof cast = renderMedia cast \run -> do
+renderProof cast = renderMedia cast \_ run -> do
   run "agg" ["--idle-time-limit", "2", "--fps-cap", "12", "--font-size", "16", "--theme", "github-dark", "proof.input", "proof.gif"]
   run "ffmpeg" (quiet <> ["-t", "120", "-i", "proof.gif", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "26", "-fs", show mediaLimit, "proof.mp4"])
 
 
 -- | A browser recording's full video and a preview that plays inline at full comment width: the
--- first 30 seconds at 8 fps with a palette built from the recording itself, so UI text stays legible.
+-- first 30 seconds as an animated WebP (a GIF of a scrolling UI runs to several megabytes), at the
+-- sharpest setting that fits under GitHub's image proxy limit.
 renderVideo :: ByteString -> IO (Either Text (ByteString, ByteString))
-renderVideo video = renderMedia video \run -> do
+renderVideo video = renderMedia video \directory run -> do
   run "ffmpeg" (quiet <> ["-t", "120", "-i", "proof.input", "-an", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "24", "-fs", show mediaLimit, "proof.mp4"])
-  run "ffmpeg" (quiet <> ["-t", "30", "-i", "proof.input", "-vf", "fps=8,scale='min(1200,iw)':-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=160:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4", "-fs", show mediaLimit, "proof.gif"])
+  let preview (fps, width, quality) = do
+        run "ffmpeg" (quiet <> ["-t", "30", "-i", "proof.input", "-vf", "fps=" <> fps <> ",scale='min(" <> width <> ",iw)':-2:flags=lanczos", "-c:v", "libwebp_anim", "-quality", quality, "-loop", "0", "-f", "webp", "proof.gif"])
+        (<= 4718592) <$> getFileSize (directory </> "proof.gif")
+  unlessM (anyM preview [("8", "1200", "60"), ("6", "960", "50"), ("4", "800", "40")]) $ throwIO $ userError "the preview exceeds GitHub's image size limit"
 
 
-renderMedia :: ByteString -> ((String -> [String] -> IO ()) -> IO ()) -> IO (Either Text (ByteString, ByteString))
+renderMedia :: ByteString -> (FilePath -> (String -> [String] -> IO ()) -> IO ()) -> IO (Either Text (ByteString, ByteString))
 renderMedia input steps = do
   outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-proof" \directory -> do
     environment <- filter ((== "PATH") . fst) <$> getEnvironment
     writeFileBS (directory </> "proof.input") input
-    steps \program args -> withProcessTerm (setStdin nullStream $ setStdout nullStream $ setStderr nullStream $ setEnv environment $ setWorkingDir directory $ proc "nice" (["-n", "19", program] <> args)) waitExitCode >>= \code -> unless (code == ExitSuccess) $ throwIO $ userError $ program <> " exited with " <> show code
+    steps directory \program args -> withProcessTerm (setStdin nullStream $ setStdout nullStream $ setStderr nullStream $ setEnv environment $ setWorkingDir directory $ proc "nice" (["-n", "19", program] <> args)) waitExitCode >>= \code -> unless (code == ExitSuccess) $ throwIO $ userError $ program <> " exited with " <> show code
     join bitraverse (\name -> readPrivateArtifact directory name mediaLimit) ("proof.gif", "proof.mp4")
   pure $ case outcome of
     Right (Just media) -> Right media
