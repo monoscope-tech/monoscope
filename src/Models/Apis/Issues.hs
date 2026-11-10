@@ -345,6 +345,7 @@ import Pkg.AgentCatalog qualified as Catalog
 import Pkg.DeriveUtils (SqlEnum (..), UUIDId (..), WrappedEnumSC (..), rawSql, selectFrom)
 import Pkg.Parser (ScopedQuery (..))
 import Relude hiding (id)
+import Relude.Extra.Tuple (traverseToSnd)
 import Servant (FromHttpApiData (..), ToHttpApiData (..))
 import System.Logging (logAttention)
 import System.Types (DB)
@@ -1380,7 +1381,7 @@ setArchiveState pid iids archiveM
 -- the canonical error's group; every duplicate leaves the Inbox, recording what it was merged into.
 mergeIssues :: (DB es, Time :> es) => Projects.ProjectId -> Maybe Projects.UserId -> Maybe Text -> [Issue] -> Eff es (Maybe (Issue, [IssueId]))
 mergeIssues pid actor reason issues = do
-  backed <- forM issues \i -> (i,) <$> issueError pid i
+  backed <- traverse (traverseToSnd $ issueError pid) issues
   case sortOn (\(i, e) -> (zonedTimeToUTC $ maybe i.createdAt (\p -> fromMaybe p.createdAt p.firstTraceAt) e, zonedTimeToUTC i.createdAt, i.id)) backed of
     (canon, canonError) : rest@(_ : _) -> do
       now <- Time.currentTime
