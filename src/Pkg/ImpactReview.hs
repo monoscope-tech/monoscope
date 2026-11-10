@@ -642,7 +642,8 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                 marker = "<!-- monoscope-impact:" <> run.projectId.toText <> " -->"
             comments <- require =<< Git.listPullRequestComments conn ref run.number
             appId <- maybe (throwError $ ReviewFailure "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
-            let existing = (.id) <$> find (\c -> fmap (.id) c.performedViaGithubApp == Just appId && marker `T.isInfixOf` c.body) comments
+            -- An ask is answered below it in a new comment; a pushed revision updates the latest review.
+            let existing = if isJust run.request then Nothing else viaNonEmpty last [c.id | c <- comments, fmap (.id) c.performedViaGithubApp == Just appId, marker `T.isInfixOf` c.body]
             whenM (Reviews.currentRun run) do
               current <- require =<< Git.getPullRequest conn ref run.number
               unless (sameRevision pr current) $ throwError $ ReviewFailure "PR changed before publication"

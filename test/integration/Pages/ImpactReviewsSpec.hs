@@ -3572,6 +3572,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
     lost <- replicateM 2 $ snd <$> within (transport True . fakeAgentWith ["--fail-after-usage"]) (tryAny $ Impact.reviewPullRequest run.id)
     map isLeft lost `shouldBe` [True, False]
     void $ review fakeAgent
+    -- askedProof_postsANewComment (#826): an ask's answer lands below it, not in the review comment far above.
+    dbExec tr "UPDATE projects.pr_review_runs SET request = ? WHERE id = ?" (Aeson $ AE.toJSON Reviews.Ask{login = "ada", commentId = 77, command = Reviews.Prove, focus = Nothing}, run.id)
+    askRequests <- review fakeAgent
+    (askRequests `shouldSatisfy` reaches "/issues/7/comments") >> (askRequests `shouldNotSatisfy` reaches "/issues/comments/99")
+    dbExec tr "UPDATE projects.pr_review_runs SET request = NULL WHERE id = ?" (Only run.id)
     let rejectedPublication = withHTTPResponses \_ endpoint -> if "/issues/comments/99" `T.isSuffixOf` toText endpoint then throwIO $ userError "Publication transport interrupted" else pure Nothing
         sentBody recorded = do
           [(_, encoded)] <- pure $ filter (T.isInfixOf "/issues/comments/99" . fst) recorded

@@ -24,7 +24,7 @@ import System.IO.Temp (withSystemTempDirectory, withTempDirectory)
 import System.Posix.Files qualified as Posix
 import System.Posix.IO qualified as Posix
 import System.Posix.Unistd (fileSynchronise)
-import System.Process.Typed (ExitCode (..), createPipe, getStderr, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, setWorkingDir, waitExitCode, withProcessTerm)
+import System.Process.Typed (ExitCode (..), createPipe, getStderr, getStdout, nullStream, proc, readProcessStdout_, setEnv, setStderr, setStdin, setStdout, setWorkingDir, waitExitCode, withProcessTerm)
 import UnliftIO.Async (concurrently)
 import UnliftIO.Exception (bracket, throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
@@ -208,12 +208,20 @@ renderProof cast = renderMedia cast \_ run -> do
 
 -- | A browser recording's full video and a preview that plays inline at full comment width: the
 -- first 30 seconds as an animated WebP (a GIF of a scrolling UI runs to several megabytes), at the
--- sharpest setting that fits under GitHub's image proxy limit.
+-- sharpest setting that fits under GitHub's image proxy limit. Like a player, the preview shows a
+-- timeline of the whole video, the part it covers, its own position, and the full length to play.
 renderVideo :: ByteString -> IO (Either Text (ByteString, ByteString))
 renderVideo video = renderMedia video \directory run -> do
   run "ffmpeg" (quiet <> ["-t", "120", "-i", "proof.input", "-an", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "24", "-fs", show mediaLimit, "proof.mp4"])
+  probed <- readProcessStdout_ (proc "ffprobe" ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", directory </> "proof.mp4"])
+  let total = max 1 $ fromMaybe 30 $ readMaybe @Double $ toString $ T.strip $ decodeUtf8 probed
+      shown = min 30 total
+      seconds = round total :: Int
+  writeFileText (directory </> "proof.label") $ "▶  Play full video  ·  " <> show (seconds `div` 60) <> ":" <> T.justifyRight 2 '0' (show (seconds `mod` 60))
   let preview (fps, width, quality) = do
-        run "ffmpeg" (quiet <> ["-t", "30", "-i", "proof.input", "-vf", "fps=" <> fps <> ",scale='min(" <> width <> ",iw)':-2:flags=lanczos", "-c:v", "libwebp_anim", "-quality", quality, "-loop", "0", "-f", "webp", "proof.gif"])
+        let timeline = "drawbox=x=0:y=ih-6:w=iw:h=6:color=white@0.3:t=fill,drawbox=x=0:y=ih-6:w=iw*" <> show (shown / total) <> ":h=6:color=0x2F6FED@0.5:t=fill"
+            label = "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:textfile=proof.label:fontcolor=white:fontsize=20:box=1:boxcolor=0x0B1220@0.8:boxborderw=12:x=w-tw-26:y=h-th-30"
+        run "ffmpeg" (quiet <> ["-t", "30", "-i", "proof.input", "-f", "lavfi", "-i", "color=c=0x2F6FED:s=1920x6:r=" <> fps, "-filter_complex", "[0:v]fps=" <> fps <> ",scale='min(" <> width <> ",iw)':-2:flags=lanczos," <> timeline <> "," <> label <> "[v];[v][1:v]overlay=x=W*t/" <> show total <> "-w:y=H-6:shortest=1", "-c:v", "libwebp_anim", "-quality", quality, "-loop", "0", "-f", "webp", "proof.gif"])
         (<= 4718592) <$> getFileSize (directory </> "proof.gif")
   unlessM (anyM preview [("8", "1200", "60"), ("6", "960", "50"), ("4", "800", "40")]) $ throwIO $ userError "the preview exceeds GitHub's image size limit"
 
