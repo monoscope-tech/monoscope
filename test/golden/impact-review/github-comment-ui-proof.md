@@ -1,4 +1,4 @@
-### ✅ Shows the retry count in the receipt
+### <img src="https://app.monoscope.tech/public/assets/proof/matches.svg" alt="Matches" width="20" height="20" align="top"> Shows the retry count in the receipt
 
 The receipt shows Retried once under the charge; before, it showed only the amount.
 
@@ -16,7 +16,7 @@ The receipt shows Retried once under the charge; before, it showed only the amou
 
 <img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head-2.png?sig=s" alt="Retry history" width="100%">
 
-**Also checked** · 1 match<br>✅ Retries a timed-out capture once · [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
+**Also checked** · 1 match<br><img src="https://app.monoscope.tech/public/assets/proof/matches.svg" alt="Matches" width="16" height="16" align="absmiddle"> Retries a timed-out capture once · [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
 
 #### 🟡 Merge risk: medium
 

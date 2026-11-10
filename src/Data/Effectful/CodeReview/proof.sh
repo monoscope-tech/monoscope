@@ -2,8 +2,8 @@
 # unrecorded, and must leave the commit and tracked files as they were, so the recording shows the
 # revision under review; the command is recorded with asciinema, and the cast returns base64-encoded
 # between markers in this check's own log. A UI proof also writes screenshots (*.png, named by what
-# they show), one video (*.webm or *.mp4) and optional chapters.tsv (seconds<TAB>label) to
-# $PROOF_MEDIA; those return the same way.
+# they show), one video (*.webm or *.mp4), optional chapters.tsv (seconds<TAB>label) and page.tsv
+# (title<TAB>url, for the browser frame) to $PROOF_MEDIA; those return the same way.
 set -u
 export HOME="${HOME:-/tmp}" TERM=xterm-256color LANG=C.UTF-8 LC_ALL=C.UTF-8 PROOF_MEDIA=/tmp/monoscope-proof-media
 mkdir -p "$PROOF_MEDIA"
@@ -40,5 +40,6 @@ done
 video=$(ls "$PROOF_MEDIA"/*.webm "$PROOF_MEDIA"/*.mp4 2>/dev/null | head -n 1)
 [ -n "$video" ] && [ "$(stat -c %s "$video")" -le 12582912 ] && emit video "${video##*.}" "$video"
 [ -s "$PROOF_MEDIA/chapters.tsv" ] && [ "$(stat -c %s "$PROOF_MEDIA/chapters.tsv")" -le 4096 ] && emit chapters "" "$PROOF_MEDIA/chapters.tsv"
+[ -s "$PROOF_MEDIA/page.tsv" ] && [ "$(stat -c %s "$PROOF_MEDIA/page.tsv")" -le 2048 ] && emit page "" "$PROOF_MEDIA/page.tsv"
 [ "$status" = 0 ] || echo "monoscope-proof-failed: exit $status"
 exit "$status"

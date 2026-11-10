@@ -206,23 +206,40 @@ renderProof cast = renderMedia cast \_ run -> do
   run "ffmpeg" (quiet <> ["-t", "120", "-i", "proof.gif", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "26", "-fs", show mediaLimit, "proof.mp4"])
 
 
--- | A browser recording's full video and a preview that plays inline at full comment width: the
--- first 30 seconds as an animated WebP (a GIF of a scrolling UI runs to several megabytes), at the
--- sharpest setting that fits under GitHub's image proxy limit. Like a player, the preview shows a
--- timeline of the whole video, the part it covers, its own position, and the full length to play.
-renderVideo :: ByteString -> IO (Either Text (ByteString, ByteString))
-renderVideo video = renderMedia video \directory run -> do
-  run "ffmpeg" (quiet <> ["-t", "120", "-i", "proof.input", "-an", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "24", "-fs", show mediaLimit, "proof.mp4"])
+-- | A browser recording's full video and a preview that plays inline at full comment width, both
+-- inside a drawn browser window showing the page's title and URL. The preview is the first 30
+-- seconds as an animated WebP (a GIF of a scrolling UI runs to several megabytes), at the sharpest
+-- setting that fits under GitHub's image proxy limit. Like a player, it shows a timeline of the
+-- whole video, the part it covers, its own position, and the full length to play.
+renderVideo :: Maybe (Text, Text) -> ByteString -> IO (Either Text (ByteString, ByteString))
+renderVideo page video = renderMedia video \directory run -> do
+  -- Text goes to drawtext as UTF-8 files: the worker's locale cannot encode it, and files need no escaping.
+  for_ [("proof.title", maybe "" fst page), ("proof.url", maybe "" snd page), ("proof.nav", "←    →    ↻")] \(name, text) -> writeFileBS (directory </> name) (encodeUtf8 text)
+  let text = ("drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:" <>)
+      window =
+        intercalate
+          ","
+          [ "drawbox=x=24:y=24:w=1280:h=38:color=0x1F2023:t=fill"
+          , "drawbox=x=24:y=62:w=1280:h=40:color=0x35363A:t=fill"
+          , text "text=●:fontcolor=0xFF5F57:fontsize=14:x=42:y=36"
+          , text "text=●:fontcolor=0xFEBC2E:fontsize=14:x=62:y=36"
+          , text "text=●:fontcolor=0x28C840:fontsize=14:x=82:y=36"
+          , "drawbox=x=112:y=30:w=260:h=32:color=0x35363A:t=fill"
+          , text "textfile=proof.title:fontcolor=white@0.9:fontsize=13:x=128:y=40"
+          , text "textfile=proof.nav:fontcolor=white@0.55:fontsize=16:x=42:y=73"
+          , "drawbox=x=134:y=68:w=1156:h=28:color=0x202124:t=fill"
+          , text "textfile=proof.url:fontcolor=white@0.85:fontsize=14:x=150:y=75"
+          ]
+  run "ffmpeg" (quiet <> ["-t", "120", "-i", "proof.input", "-f", "lavfi", "-i", "color=c=0xDCE1EA:s=1328x926", "-filter_complex", "[0:v]scale=1280:800:force_original_aspect_ratio=decrease,pad=1280:800:(ow-iw)/2:(oh-ih)/2[page];[1:v]" <> window <> "[frame];[frame][page]overlay=24:102:shortest=1", "-an", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-crf", "24", "-fs", show mediaLimit, "proof.mp4"])
   probed <- readProcessStdout_ (proc "ffprobe" ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", directory </> "proof.mp4"])
   let total = max 1 $ fromMaybe 30 $ readMaybe @Double $ toString $ T.strip $ decodeUtf8 probed
       shown = min 30 total
       seconds = round total :: Int
-  -- Bytes, not Text: the worker's locale cannot encode the play symbol.
   writeFileBS (directory </> "proof.label") $ encodeUtf8 $ "▶  Play full video  ·  " <> show (seconds `div` 60) <> ":" <> T.justifyRight 2 '0' (show (seconds `mod` 60))
   let preview (fps, width, quality) = do
         let timeline = "drawbox=x=0:y=ih-6:w=iw:h=6:color=white@0.3:t=fill,drawbox=x=0:y=ih-6:w=iw*" <> show (shown / total) <> ":h=6:color=0x2F6FED@0.5:t=fill"
-            label = "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:textfile=proof.label:fontcolor=white:fontsize=20:box=1:boxcolor=0x0B1220@0.8:boxborderw=12:x=w-tw-26:y=h-th-30"
-        run "ffmpeg" (quiet <> ["-t", "30", "-i", "proof.input", "-f", "lavfi", "-i", "color=c=0x2F6FED:s=1920x6:r=" <> fps, "-filter_complex", "[0:v]fps=" <> fps <> ",scale='min(" <> width <> ",iw)':-2:flags=lanczos," <> timeline <> "," <> label <> "[v];[v][1:v]overlay=x=W*t/" <> show total <> "-w:y=H-6:shortest=1", "-c:v", "libwebp_anim", "-quality", quality, "-loop", "0", "-f", "webp", "proof.gif"])
+            label = text "textfile=proof.label:fontcolor=white:fontsize=20:box=1:boxcolor=0x0B1220@0.8:boxborderw=12:x=w-tw-26:y=h-th-30"
+        run "ffmpeg" (quiet <> ["-t", "30", "-i", "proof.mp4", "-f", "lavfi", "-i", "color=c=0x2F6FED:s=1920x6:r=" <> fps, "-filter_complex", "[0:v]fps=" <> fps <> ",scale='min(" <> width <> ",iw)':-2:flags=lanczos," <> timeline <> "," <> label <> "[v];[v][1:v]overlay=x=W*t/" <> show total <> "-w:y=H-6:shortest=1", "-c:v", "libwebp_anim", "-quality", quality, "-loop", "0", "-f", "webp", "proof.gif"])
         (<= 4718592) <$> getFileSize (directory </> "proof.gif")
   unlessM (anyM preview [("8", "1200", "60"), ("6", "960", "50"), ("4", "800", "40")]) $ throwIO $ userError "the preview exceeds GitHub's image size limit"
 
@@ -249,18 +266,19 @@ mediaLimit = 8 * 1048576
 
 
 -- | What a UI proof wrote to @$PROOF_MEDIA@: its browser recording, PNG screenshots in the order
--- taken, and chapters (seconds and label) that link into the video.
-data BrowserMedia = BrowserMedia {video :: Maybe ByteString, shots :: [(Text, ByteString)], chapters :: [(Double, Text)]}
+-- taken, chapters (seconds and label) that link into the video, and the page's title and URL for
+-- the browser frame drawn around it.
+data BrowserMedia = BrowserMedia {video :: Maybe ByteString, shots :: [(Text, ByteString)], chapters :: [(Double, Text)], page :: Maybe (Text, Text)}
   deriving stock (Eq, Show)
 
 
 -- |
 -- >>> let section name param bytes = "\n::monoscope-" <> name <> "::" <> param <> "\n" <> extractBase64 (Base64.encodeBase64' bytes) <> "\n::monoscope-" <> name <> "-end::\n"
--- >>> let logged = "noise" <> section "shot" "Menu open" "\137PNG1" <> section "shot" "Not an image" "GIF89a" <> section "video" "webm" "webm-bytes" <> section "chapters" "" "0\tOpen the menu\n7.5\tEnd the survey\nbad\tline\n"
+-- >>> let logged = "noise" <> section "shot" "Menu open" "\137PNG1" <> section "shot" "Not an image" "GIF89a" <> section "video" "webm" "webm-bytes" <> section "chapters" "" "0\tOpen the menu\n7.5\tEnd the survey\nbad\tline\n" <> section "page" "" "Explorer\t127.0.0.1:8080/p/x\n"
 -- >>> browserMedia logged
--- BrowserMedia {video = Just "webm-bytes", shots = [("Menu open","\137PNG1")], chapters = [(0.0,"Open the menu"),(7.5,"End the survey")]}
+-- BrowserMedia {video = Just "webm-bytes", shots = [("Menu open","\137PNG1")], chapters = [(0.0,"Open the menu"),(7.5,"End the survey")], page = Just ("Explorer","127.0.0.1:8080/p/x")}
 -- >>> browserMedia "a terminal proof's log"
--- BrowserMedia {video = Nothing, shots = [], chapters = []}
+-- BrowserMedia {video = Nothing, shots = [], chapters = [], page = Nothing}
 browserMedia :: ByteString -> BrowserMedia
 browserMedia logBytes =
   BrowserMedia
@@ -268,6 +286,7 @@ browserMedia logBytes =
     , shots = take 4 [(T.strip label, png) | (label, png) <- sections "shot", "\137PNG" `BS.isPrefixOf` png]
     , -- Chapters only point into a video.
       chapters = take 12 [(at, T.take 80 label) | (_, tsv) <- take 1 (sections "chapters" <* sections "video"), line <- lines (decodeUtf8 tsv), let (at', label') = T.breakOn "\t" line, Just at <- [readMaybe @Double (toString at')], at >= 0, let label = T.strip (T.drop 1 label'), not (T.null label)]
+    , page = listToMaybe [bimap (T.take 34 . T.strip) (T.take 140 . T.strip . T.drop 1) (T.breakOn "\t" line) | (_, tsv) <- sections "page", line <- take 1 (lines (decodeUtf8 tsv))]
     }
   where
     sections name = [(param, decoded) | (param, encoded) <- logSections name logBytes, Right decoded <- [Base64.decodeBase64Untyped encoded]]

@@ -276,7 +276,7 @@ runEvaluationReal = interpret $ \_ -> \case
                           SourceStudy -> Agent.reviewSource mode request started completed allocation execution (\case Agent.Structured value -> validate value; Agent.ProviderText raw -> validateText raw)
                           ImpactStudy -> case mode of
                             BoundedPatch -> Agent.reviewPatch request started completed validateText
-                            CheckoutHarness -> Agent.reviewRepository Agent.Isolated request (const $ pure $ Left "Only supplied evaluation evidence is available") (const $ pure $ Left "Project memory is excluded from this comparison") started completed allocation execution (\_ _ -> pure $ Left "Proof recordings are excluded from this comparison") validate
+                            CheckoutHarness -> Agent.reviewRepository Agent.Isolated request (const $ pure $ Left "Only supplied evaluation evidence is available") (const $ pure $ Left "Project memory is excluded from this comparison") started completed allocation execution Agent.ProofHooks{save = \_ _ -> pure $ Left "Proof recordings are excluded from this comparison", progress = const pass} validate
                         ended <- getMonotonicTimeNSec
                         current <- readIORef row
                         let elapsed = (ended - began + 999999) `div` 1000000
