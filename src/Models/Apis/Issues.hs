@@ -75,6 +75,7 @@ module Models.Apis.Issues (
   setArchiveState,
   mergeIssues,
   unmergeIssues,
+  withoutUnmerged,
   ArchiveWindow (..),
   expireArchives,
   wakeOnEscalation,
@@ -1400,6 +1401,16 @@ unmergeIssues pid actor issues = do
   forM_ [i | i <- issues, i.id `elem` merged] $ issueError pid >=> traverse_ (PatternMerge.unmergePattern pid . (.id))
   void $ setArchiveState pid merged Nothing
   merged <$ forM_ merged \i -> logIssueActivity i IEUnmerged actor Nothing
+
+
+-- | Drops issues a person unmerged since their last merge, so automatic merging cannot undo that call.
+withoutUnmerged :: DB es => Projects.ProjectId -> [Issue] -> Eff es [Issue]
+withoutUnmerged pid issues = do
+  unmerged <-
+    Hasql.interp @[IssueId]
+      [HI.sql|SELECT i.id FROM apis.issues i WHERE i.project_id = #{pid} AND i.id = ANY(#{V.fromList $ (.id) <$> issues})
+      AND (SELECT a.event FROM apis.issue_activity_log a WHERE a.issue_id = i.id AND a.event IN (#{IEMerged}, #{IEUnmerged}) ORDER BY a.created_at DESC, a.id DESC LIMIT 1) = #{IEUnmerged}|]
+  pure $ filter ((`notElem` unmerged) . (.id)) issues
 
 
 issueError :: DB es => Projects.ProjectId -> Issue -> Eff es (Maybe ErrorPatterns.ErrorPattern)

@@ -1225,7 +1225,7 @@ apiIssuesBulk principal pid ba = do
     , ("unacknowledge", logged Issues.IEUnacknowledged Nothing $ Issues.setAckState pid ba.ids Nothing)
     , ("archive", logged Issues.IEArchived Nothing $ Issues.setArchiveState pid ba.ids (Just (now, Issues.ArchiveIndefinite)))
     , ("unarchive", logged Issues.IEUnarchived Nothing $ Issues.setArchiveState pid ba.ids Nothing)
-    , ("merge", selected >>= Issues.mergeIssues pid (principalUser principal) ba.reason <&> BulkSucceeded . maybe [] (\(canon, merged) -> canon.id : merged))
+    , ("merge", selected >>= Issues.withoutUnmerged pid >>= Issues.mergeIssues pid (principalUser principal) ba.reason <&> BulkSucceeded . maybe [] (\(canon, merged) -> canon.id : merged))
     , ("unmerge", BulkSucceeded <$> (selected >>= Issues.unmergeIssues pid (principalUser principal)))
     ]
   where

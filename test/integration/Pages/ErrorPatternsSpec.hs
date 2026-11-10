@@ -332,6 +332,9 @@ spec = around withTestResources $ describe "Error patterns" do
     bulk "unmerge" [idd.id, ic.id] `shouldReturn` [idd.id]
     ((.canonicalId) &&& (.mergeOverride)) <$> byId tr md.id `shouldReturn` (Nothing, True)
     mapM (fmap (isJust . (.archivedAt)) . issueById tr . (.id)) [ic, idd] `shouldReturn` [False, False]
+    -- The routine merging again does not undo that unmerge.
+    bulk "merge" [idd.id, ic.id] `shouldReturn` []
+    isJust . (.archivedAt) <$> issueById tr idd.id `shouldReturn` False
 
     -- A pattern merged after its issue exists is silent on every sweep path (canonical_id once gated only one).
     [canon, dupe] <- seed tr "MergeSilenceError" (Just "silence-shape") [("silence-canon", "canonical form"), ("silence-dupe", "duplicate form")]
