@@ -287,7 +287,7 @@ queueJob pid uid fid = Hasql.transaction TxS.ReadCommitted TxS.Write do
             (id, root_run_id, project_id, conversation_id, requested_by, input, policy, source, scheduled_at, started_at, status, permission_ceiling)
             VALUES (#{identifier}, #{identifier}, #{pid}, #{conversation}, #{uid}, #{input}, #{Issues.Autonomous}, #{Issues.FixRun fid}, now(), now(), 'running', #{ProjectMembers.PAdmin})|]
           Hasql.executeTx [HI.sql|INSERT INTO projects.issue_fix_jobs (run_id, requested_by, agent_run_id) VALUES (#{fid}, #{uid}, #{identifier})|]
-          Hasql.executeTx [HI.sql|INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued', #{Aeson $ AE.toJSON $ Jobs.FixIssue pid fid})|]
+          Hasql.executeTx [HI.sql|INSERT INTO background_jobs_long (run_at, status, payload) VALUES (now(), 'queued', #{Aeson $ AE.toJSON $ Jobs.FixIssue pid fid})|]
           pure True
 
 

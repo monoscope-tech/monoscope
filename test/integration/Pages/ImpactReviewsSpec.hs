@@ -4220,7 +4220,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- API changes and issues triage has not had an hour with are skipped; a second sweep adds nothing.
     sweep >> sweep
     fixed `shouldReturn` [Only issue]
-    dbOne tr "SELECT count(*)::int FROM background_jobs WHERE payload->>'tag' = 'FixIssue'" () `shouldReturn` (1 :: Int)
+    dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'FixIssue'" () `shouldReturn` (1 :: Int)
     void $ seed Issues.RuntimeException "autofix-paused" frozenTime
     runQueryEffect tr $ Issues.pauseRoutine testPid routine
     sweep
@@ -4238,7 +4238,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     [shared] <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
     shared.source `shouldBe` Issues.FixRun fid
     runQueryEffect tr (Issues.runContextFor testPid $ Issues.ConversationClaim shared.id) `shouldReturn` Nothing
-    dbQuery tr "SELECT payload FROM background_jobs WHERE payload->>'tag' = 'FixIssue'" () `shouldReturn` [Only $ Aeson $ AE.toJSON $ Jobs.FixIssue testPid fid]
+    dbQuery tr "SELECT payload FROM background_jobs_long WHERE payload->>'tag' = 'FixIssue'" () `shouldReturn` [Only $ Aeson $ AE.toJSON $ Jobs.FixIssue testPid fid]
     unleased <- runQueryEffect tr $ Fixes.recordStep testPid fid 0 (uid 6) Fixes.RestartReproduction
     unleased `shouldSatisfy` isLeft
     lease <- maybe (fail "Fix lease missing") pure =<< runQueryEffect tr (Fixes.claimJob testPid fid)
