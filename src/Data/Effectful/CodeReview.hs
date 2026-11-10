@@ -422,6 +422,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
       (Right host, Just command) -> do
         verifierSession <- UUID4.nextRandom
         proofCount <- newIORef (0 :: Int)
+        -- A review's agent stops a minute before its job; fixes keep the main queue's short budget.
+        let budget = case task of AdvisoryTask{} -> reviewSeconds - 60; _ -> 480
         let tagged :: AE.ToJSON value => Text -> value -> AE.Value
             tagged tag contents = AE.object ["tag" AE..= tag, "contents" AE..= contents]
             (scope, source, payload, role) = case task of
@@ -466,8 +468,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                   unless (Native.sha256 transcript == saved.sha256) $ fail "Native continuation transcript has changed"
                   Native.writePrivateArtifact directory "active.jsonl" $ fromStrict transcript
               environment <- getEnvironment
-              let selected = maybe [] (\outbox -> [("IMPACT_REVIEW_OUTBOX_DIR", Outbox.outboxPath outbox)]) journal <> maybe [] (\directory -> [("IMPACT_REVIEW_SESSION_FILE", directory </> "active.jsonl")]) sessionDirectory
-                  childEnvironment = selected <> filter (\(name, _) -> name `notElem` ["IMPACT_REVIEW_OUTBOX_DIR", "IMPACT_REVIEW_SESSION_FILE"]) environment
+              let selected = [("IMPACT_REVIEW_AGENT_SECONDS", show budget)] <> maybe [] (\outbox -> [("IMPACT_REVIEW_OUTBOX_DIR", Outbox.outboxPath outbox)]) journal <> maybe [] (\directory -> [("IMPACT_REVIEW_SESSION_FILE", directory </> "active.jsonl")]) sessionDirectory
+                  childEnvironment = selected <> filter (\(name, _) -> name `notElem` ["IMPACT_REVIEW_AGENT_SECONDS", "IMPACT_REVIEW_OUTBOX_DIR", "IMPACT_REVIEW_SESSION_FILE"]) environment
               withProcessTerm (setStdin createPipe $ setStdout createPipe $ command childEnvironment) \process -> do
                 guest <- newIORef Nothing
                 let stop =
@@ -904,8 +906,6 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                   )
                   `finally` stop
         -- Replay persisted work before starting a child, fetching source or calling a model.
-        -- A review's agent stops a minute before its job; fixes keep the main queue's short budget.
-        let budget = case task of AdvisoryTask{} -> reviewSeconds - 60; _ -> 480
         outcome <- tryAny $ Timeout.timeout (budget * 1000000) $ withJournal \journal -> do
           recovered <- maybe (pure $ Right ()) (`Outbox.replay` record) journal
           case recovered of

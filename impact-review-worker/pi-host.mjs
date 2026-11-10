@@ -257,7 +257,8 @@ export function hostTools(preparedCheckout, root, guestOperation) {
 async function main() {
   const controller = new AbortController();
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => controller.abort());
-  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(420000)]);
+  // The host's budget; stopping 20 s early leaves the host a clean error instead of a kill.
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout((Number(process.env.IMPACT_REVIEW_AGENT_SECONDS ?? 440) - 20) * 1000)]);
   let root, sessionManager, exchange;
   let pending = Promise.resolve();
   try {
