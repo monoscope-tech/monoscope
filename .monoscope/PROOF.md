@@ -44,4 +44,15 @@ JS
 node proof.mjs
 ```
 
-Name screenshots for what they show; crop them to the part that changed. Keep the whole run under a minute.
+The components render into light DOM (no shadow root). Locate controls by role and wait for them before
+asserting, and assert on what the user sees, so the base recording fails and the head passes:
+
+```js
+const clear = page.getByRole('button', { name: 'Clear' }), pause = page.getByRole('button', { name: /Pause|Resume/ });
+await clear.waitFor();
+const [c, p] = [await clear.boundingBox(), await pause.boundingBox()];
+if (Math.abs(c.y - p.y) > 4) { console.log('Clear wrapped onto its own row'); process.exit(1); }
+```
+
+Write `chapters.tsv` and close the context before any `process.exit`, or the video is lost. Name
+screenshots for what they show; crop them to the part that changed. Keep the whole run under a minute.
