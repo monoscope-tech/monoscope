@@ -1094,7 +1094,7 @@ agentThinking = \case
 -- | While the autofix routine is active, queues fix runs for its candidates, owned by its installer.
 -- A run reuses its issue's id, so overlapping sweeps converge on one run.
 autofixIssues :: Projects.ProjectId -> ATBackgroundCtx ()
-autofixIssues pid = whenJustM (Issues.getEventRoutine pid Issues.EventIssueFix) \routine -> do
+autofixIssues pid = whenJustM (Issues.getEventRoutine pid Issues.EventIssueFix) \_ -> do
   cfg <- (.config) <$> ask @AuthContext
   candidates <- Fixes.autofixCandidates pid 3
   mappings <- CodeContext.getCodeMappings pid
@@ -1103,16 +1103,18 @@ autofixIssues pid = whenJustM (Issues.getEventRoutine pid Issues.EventIssueFix) 
     Right image -> for_ candidates \(issue, mid) -> whenJust (find ((== mid) . (.id)) mappings) \mapping -> do
       queued <- runExceptT do
         (_, conn) <- ExceptT $ first RepositoryUnreachable <$> CodeContext.mappingConnection cfg pid mapping
-        base <- ExceptT $ (>>= first InvalidHead . Fixes.mkRevision) . first HeadUnavailable <$> Git.headRevision conn (Git.RepoRef mapping.owner mapping.repo mapping.ref)
+        base <- ExceptT $ (first InvalidHead . Fixes.mkRevision <=< first HeadUnavailable) <$> Git.headRevision conn (Git.RepoRef mapping.owner mapping.repo mapping.ref)
         let fid = UUIDId issue.unUUIDId
+        -- Image and head lookups take time; a routine paused meanwhile must not start this run.
+        current <- ExceptT $ maybeToRight RoutineStopped <$> Issues.getEventRoutine pid Issues.EventIssueFix
         void $ ExceptT $ maybeToRight RunRefused <$> Fixes.createRun pid fid issue mid base image
-        unlessM (lift $ Fixes.queueJob pid routine.requestedBy fid) $ throwE QueueRefused
+        unlessM (lift $ Fixes.queueJob pid current.requestedBy fid) $ throwE QueueRefused
       whenLeft_ queued \skip -> Log.logAttention "Autofix could not queue a fix" (pid, issue, show @Text skip)
 
 
 -- | Why the autofix sweep left a candidate unqueued. 'RunRefused': the issue or its mapping changed
 -- since selection; 'QueueRefused': the routine's owner can no longer queue fixes.
-data AutofixSkip = RepositoryUnreachable CodeContext.SnippetError | HeadUnavailable Text | InvalidHead Fixes.Failure | RunRefused | QueueRefused
+data AutofixSkip = RepositoryUnreachable CodeContext.SnippetError | HeadUnavailable Text | InvalidHead Fixes.Failure | RoutineStopped | RunRefused | QueueRefused
   deriving stock (Show)
 
 
