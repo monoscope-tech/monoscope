@@ -214,16 +214,16 @@ renderProof cast = renderMedia cast \_ run -> do
 renderVideo :: Maybe (Text, Text) -> ByteString -> IO (Either Text (ByteString, ByteString))
 renderVideo page video = renderMedia video \directory run -> do
   -- Text goes to drawtext as UTF-8 files the worker's locale need not encode; expansion=none keeps a URL's % literal.
-  for_ [("proof.title", maybe "" fst page), ("proof.url", maybe "" snd page), ("proof.nav", "←    →    ↻")] \(name, text) -> writeFileBS (directory </> name) (encodeUtf8 text)
+  for_ [("proof.title", maybe "" fst page), ("proof.url", maybe "" snd page), ("proof.nav", "←    →    ↻"), ("proof.dot", "●")] \(name, text) -> writeFileBS (directory </> name) (encodeUtf8 text)
   let text = ("drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:expansion=none:" <>)
       window =
         intercalate
           ","
           [ "drawbox=x=24:y=24:w=1280:h=38:color=0x1F2023:t=fill"
           , "drawbox=x=24:y=62:w=1280:h=40:color=0x35363A:t=fill"
-          , text "text=●:fontcolor=0xFF5F57:fontsize=14:x=42:y=36"
-          , text "text=●:fontcolor=0xFEBC2E:fontsize=14:x=62:y=36"
-          , text "text=●:fontcolor=0x28C840:fontsize=14:x=82:y=36"
+          , text "textfile=proof.dot:fontcolor=0xFF5F57:fontsize=14:x=42:y=36"
+          , text "textfile=proof.dot:fontcolor=0xFEBC2E:fontsize=14:x=62:y=36"
+          , text "textfile=proof.dot:fontcolor=0x28C840:fontsize=14:x=82:y=36"
           , "drawbox=x=112:y=30:w=260:h=32:color=0x35363A:t=fill"
           , text "textfile=proof.title:fontcolor=white@0.9:fontsize=13:x=128:y=40"
           , text "textfile=proof.nav:fontcolor=white@0.55:fontsize=16:x=42:y=73"
