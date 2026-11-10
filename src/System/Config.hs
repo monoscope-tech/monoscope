@@ -132,6 +132,9 @@ data EnvConfig = EnvConfig
   , impactReviewUsageDir :: Maybe FilePath
   , impactReviewCacheDir :: Maybe FilePath
   , impactReviewWorkspaceMaintenance :: Maybe FilePath
+  , -- Object-storage configuration file that a workspace build restores from on a local miss;
+    -- the same file the maintenance configuration names as its remote.
+    impactReviewWorkspaceRemote :: Maybe FilePath
   , impactReviewAgent :: Maybe FilePath
   , impactReviewGuestImage :: Maybe Text
   , impactReviewPrepareScript :: Maybe FilePath

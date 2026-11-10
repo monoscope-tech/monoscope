@@ -121,6 +121,7 @@ data ReviewRun = ReviewRun
   , latestRevision :: Text
   , createdAt :: UTCTime
   , request :: Maybe Ask
+  , base :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, HI.DecodeRow)
@@ -157,6 +158,7 @@ data PullRequestEvent = PullRequestEvent
   , installationId :: Int64
   , number :: Int
   , revision :: Text
+  , base :: Text
   , updatedAt :: UTCTime
   , state :: PullRequestState
   }
@@ -222,7 +224,7 @@ decodeEvent body = do
 
 -- | The event a fetched pull request implies, as if GitHub had just delivered it.
 pullRequestEvent :: Text -> Text -> Int64 -> Int -> Git.PullRequest -> PullRequestEvent
-pullRequestEvent owner repo installationId number pr = PullRequestEvent{owner, repo, installationId, number, revision = T.toLower pr.head.revision, updatedAt = pr.updatedAt, state = if pr.state /= "open" then Closed else if pr.draft then Draft else Open}
+pullRequestEvent owner repo installationId number pr = PullRequestEvent{owner, repo, installationId, number, revision = T.toLower pr.head.revision, base = T.toLower pr.base.revision, updatedAt = pr.updatedAt, state = if pr.state /= "open" then Closed else if pr.draft then Draft else Open}
 
 
 repositoryName :: Repository -> Either EventDecodeError (Text, Text)
@@ -297,6 +299,7 @@ parseAsk body = listToMaybe $ mapMaybe command $ T.breakOnAll "@" body
 -- out-of-order delivery cannot replace a newer head, and duplicates queue once.
 -- A closure, or a draft in a mode that skips drafts, supersedes the revision's run;
 -- an ask queues in every mode, replaces a finished run of the same revision and joins a queued one.
+-- A queued review queues its workspace build unless one for the same project, repository and base waits.
 receiveEvent :: DB es => Maybe Ask -> PullRequestEvent -> Eff es Reception
 receiveEvent request event =
   maybe NotReviewable HI.getOneColumn
@@ -320,21 +323,27 @@ receiveEvent request event =
       #{event.state} <> #{Closed} AND (#{request}::jsonb IS NOT NULL OR (#{event.state} = #{Open} AND e.trigger <> #{WhenAsked}) OR e.trigger = #{AllPullRequests}) AS queue
     FROM threads t JOIN eligible e ON e.project_id = t.project_id
   ), runs AS (
-    INSERT INTO projects.pr_review_runs (thread_id, revision, state, request)
-    SELECT id, #{event.revision}, CASE WHEN queue THEN #{Queued} ELSE #{Superseded} END, #{request} FROM decided WHERE stop OR queue
-    ON CONFLICT (thread_id, revision) DO UPDATE SET state = EXCLUDED.state, request = coalesce(EXCLUDED.request, projects.pr_review_runs.request),
+    INSERT INTO projects.pr_review_runs (thread_id, revision, state, request, base)
+    SELECT id, #{event.revision}, CASE WHEN queue THEN #{Queued} ELSE #{Superseded} END, #{request}, #{event.base} FROM decided WHERE stop OR queue
+    ON CONFLICT (thread_id, revision) DO UPDATE SET state = EXCLUDED.state, request = coalesce(EXCLUDED.request, projects.pr_review_runs.request), base = EXCLUDED.base,
       result = CASE WHEN EXCLUDED.request IS NULL THEN projects.pr_review_runs.result END, error = NULL
     WHERE EXCLUDED.state = #{Superseded} OR projects.pr_review_runs.state = #{Superseded}
       OR (EXCLUDED.request IS NOT NULL AND projects.pr_review_runs.state IN (#{Queued}, #{Completed}, #{Incomplete}))
-    RETURNING id, state
+    RETURNING id, state, thread_id
   ), prior AS (
     SELECT r.id FROM projects.pr_review_runs r JOIN decided d ON d.id = r.thread_id
     WHERE r.revision = #{event.revision} AND r.state = #{Queued}
   ), queued AS (
-    SELECT id FROM runs WHERE state = #{Queued} AND id NOT IN (SELECT id FROM prior)
+    SELECT r.id, t.project_id FROM runs r JOIN threads t ON t.id = r.thread_id WHERE r.state = #{Queued} AND r.id NOT IN (SELECT id FROM prior)
   ), builds AS (
     INSERT INTO background_jobs_long (run_at, status, payload)
-    SELECT now(), 'queued', jsonb_build_object('tag', 'PrepareReviewWorkspace', 'contents', id) FROM queued
+    SELECT now(), 'queued', jsonb_build_object('tag', 'PrepareReviewWorkspace', 'contents', q.id) FROM queued q
+    WHERE NOT EXISTS (
+      SELECT 1 FROM background_jobs_long j
+      JOIN projects.pr_review_runs r ON r.id::text = j.payload->>'contents'
+      JOIN projects.pr_review_threads t ON t.id = r.thread_id
+      WHERE j.payload->>'tag' = 'PrepareReviewWorkspace' AND j.status IN ('queued', 'retry', 'locked')
+        AND t.project_id = q.project_id AND t.owner = #{event.owner} AND t.repo = #{event.repo} AND r.base = #{event.base})
   ), jobs AS (
     INSERT INTO background_jobs_long (run_at, status, payload)
     SELECT now(), 'queued', jsonb_build_object('tag', 'ReviewPullRequest', 'contents', id) FROM queued RETURNING 1
@@ -349,7 +358,7 @@ selectRuns :: DB es => Maybe ProjectId -> Maybe ReviewId -> Eff es [ReviewRun]
 selectRuns pid rid =
   Hasql.interp
     [HI.sql|SELECT r.id, t.id, t.project_id, t.owner, t.repo, t.number::bigint, r.revision,
-    r.state, r.result, r.error, t.comment_id, t.latest_revision, r.created_at, r.request
+    r.state, r.result, r.error, t.comment_id, t.latest_revision, r.created_at, r.request, r.base
     FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
     WHERE (#{pid}::uuid IS NULL OR t.project_id = #{pid}) AND (#{rid}::uuid IS NULL OR r.id = #{rid})
     ORDER BY r.created_at DESC LIMIT 20|]
