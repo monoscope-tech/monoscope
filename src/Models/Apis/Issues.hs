@@ -2092,8 +2092,8 @@ issueTriageTemplate =
     [SignalIssues]
 
 
--- | Installed for every project with a mapped repository. Fix runs are native jobs attached to this
--- routine: its policy bounds them, and pausing it stops new ones.
+-- | Installed for every project with a mapped repository. Fix runs are native jobs this routine
+-- starts; pausing or deleting it stops new ones.
 issueAutofixTemplate :: RoutineTemplate
 issueAutofixTemplate =
   RoutineTemplate

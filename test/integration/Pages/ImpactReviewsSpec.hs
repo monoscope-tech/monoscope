@@ -2653,7 +2653,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     for_ (zip [0 ..] [Fixes.Observe baseline{Agent.id = uid 10, Agent.checkId = uid 11}, Fixes.ProposeCandidate (Fixes.Candidate result.head result.rootCause), Fixes.Observe baseline, Fixes.Observe candidate]) \(version, step) -> do
       progressed <- runQueryEffect tr $ Fixes.recordStep testPid result.runId version (uid $ 20 + fromIntegral version) step
       progressed `shouldSatisfy` isRight
-    runQueryEffect tr (Fixes.queueJob testPid user Nothing result.runId) `shouldReturn` True
+    runQueryEffect tr (Fixes.queueJob testPid user result.runId) `shouldReturn` True
     peer <- maybe (fail "Native publication review attempt missing") pure =<< runQueryEffect tr (Usage.startAttempt testPid (Usage.Fix result.runId) "fixture" "native-publication")
     dbExec tr "UPDATE projects.issue_fix_jobs SET result = ?, verified_result = ?, investigation = '{}'::jsonb, checkpoint_investigation = '{}'::jsonb, explanation = ?, media_retained_at = now(), review_attempt_id = ?, review_rationale = 'Fixture independent approval' WHERE run_id = ?" (Aeson result, Aeson result, Aeson cacheRepair, peer, result.runId)
     completed <- maybe (fail "Native publication capability missing") pure =<< runQueryEffect tr (Fixes.publicationForUser testPid result.runId user)
@@ -4110,7 +4110,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     (mapping, issue, _) <- fixFixture tr "sdk-job-recovery"
     baseRevision <- fixRevision base
     runQueryEffect tr (Fixes.createRun testPid fid issue mapping.id baseRevision imageId) `shouldReturn` Just fid
-    runQueryEffect tr (Fixes.queueJob testPid (getResponse tr.trSessAndHeader).user.id Nothing fid) `shouldReturn` True
+    runQueryEffect tr (Fixes.queueJob testPid (getResponse tr.trSessAndHeader).user.id fid) `shouldReturn` True
     [original] <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
     original.source `shouldBe` Issues.FixRun fid
     appConfig <- githubApp tr
@@ -4207,7 +4207,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       runQueryEffect tr (Fixes.completedResult testPid fid) >>= (`shouldSatisfy` isJust)
       map (toText . (.key)) <$> runQueryEffect tr (Issues.listRunArtifacts testPid original.id) `shouldReturn` map (toText . (.key)) artifacts
 
-  it "autofix_queuesEachTriagedIssueOnceUnderItsRoutineUntilPaused" \tr -> do
+  it "autofix_queuesEachTriagedIssueOnceUntilItsRoutineIsPaused" \tr -> do
     (_, issue, _) <- fixFixture tr "autofix-runtime"
     let sweepAt = addUTCTime 7200 frozenTime
         seed ty target at = seedIssue tr (issueSeed ty target){service = Just "test-service", at}
@@ -4216,7 +4216,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     Right (routine, _) <- runTestBg frozenTime tr $ Issues.ensureRoutineTemplate (getResponse tr.trSessAndHeader :: Projects.Session).user.id testPid "UTC" Issues.issueAutofixTemplate
     cfg <- githubApp tr
     let sweep = void $ runTestBgRecordingHTTP sweepAt tr $ Reader.local (\ctx -> ctx{config = cfg}) $ githubResponses (\url -> pure $ AE.object ["sha" AE..= revision] <$ guard ("/commits/" `T.isInfixOf` url)) $ BackgroundJobs.processBackgroundJob tr.trATCtx $ Jobs.AutofixIssues testPid
-        fixed = dbQuery tr "SELECT run.issue_id FROM projects.issue_fix_runs run JOIN projects.issue_fix_jobs job ON job.run_id = run.id JOIN apis.ai_routine_runs agent ON agent.id = job.agent_run_id JOIN apis.ai_routines routine ON routine.id = agent.routine_id WHERE routine.conversation_id = ? ORDER BY run.created_at" (Only routine)
+        fixed = dbQuery tr "SELECT run.issue_id FROM projects.issue_fix_runs run JOIN projects.issue_fix_jobs job ON job.run_id = run.id ORDER BY run.created_at" ()
     -- API changes and issues triage has not had an hour with are skipped; a second sweep adds nothing.
     sweep >> sweep
     fixed `shouldReturn` [Only issue]
@@ -4233,8 +4233,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
         image = uid 3
         user = (getResponse tr.trSessAndHeader :: Projects.Session).user.id
     runQueryEffect tr (Fixes.createRun testPid fid issue mapping.id base image) `shouldReturn` Just fid
-    runQueryEffect tr (Fixes.queueJob testPid user Nothing fid) `shouldReturn` True
-    runQueryEffect tr (Fixes.queueJob testPid user Nothing fid) `shouldReturn` True
+    runQueryEffect tr (Fixes.queueJob testPid user fid) `shouldReturn` True
+    runQueryEffect tr (Fixes.queueJob testPid user fid) `shouldReturn` True
     [shared] <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
     shared.source `shouldBe` Issues.FixRun fid
     runQueryEffect tr (Issues.runContextFor testPid $ Issues.ConversationClaim shared.id) `shouldReturn` Nothing
@@ -4318,7 +4318,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                         (readBack, changed, resubmitted) <- bracket_ (access False) (access True) do
                           readBack <- send $ Memory.Read page
                           changed <- send $ Memory.Write edit{Memory.version = 1}
-                          resubmitted <- runQueryEffect tr $ Fixes.queueJob testPid user Nothing request.request.runId
+                          resubmitted <- runQueryEffect tr $ Fixes.queueJob testPid user request.request.runId
                           pure (readBack, changed, resubmitted)
                         restored <- send $ Memory.Read page
                         modifyIORef' revokedReplies (<> [(isRight created, isLeft readBack, isLeft changed, not resubmitted, isLeft restored)])
@@ -4361,7 +4361,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         notes = length <$> runQueryEffect tr (Reviews.priorRepositoryKnowledge testPid (Git.RepoRef "impact-org" "checkout" revision) "test-service")
         queue jobId = do
           runQueryEffect tr (Fixes.createRun testPid jobId issue mapping.id base image) `shouldReturn` Just jobId
-          runQueryEffect tr (Fixes.queueJob testPid user Nothing jobId) `shouldReturn` True
+          runQueryEffect tr (Fixes.queueJob testPid user jobId) `shouldReturn` True
         -- A refused job completes nothing.
         refused jobId mode = do
           tryAny (run jobId mode) >>= (`shouldSatisfy` isLeft)

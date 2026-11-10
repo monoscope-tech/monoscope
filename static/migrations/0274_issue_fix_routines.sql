@@ -1,5 +1,5 @@
 BEGIN;
--- Autofix is an event routine. Its fix runs attach to it, so its policy bounds them and pausing it stops new ones.
+-- Autofix is an event routine: its fix runs attach to it, so pausing it or lowering its policy stops them.
 ALTER TABLE apis.ai_routines
   DROP CONSTRAINT ai_routine_schedule_kind,
   DROP CONSTRAINT ai_routine_schedule_shape,
@@ -13,12 +13,6 @@ ALTER TABLE apis.ai_routines
         AND schedule_hour IS NULL AND schedule_minute IS NULL AND schedule_weekday IS NULL
         AND instructions IS NOT NULL AND length(btrim(instructions)) > 0 AND template_version IS NOT NULL
         AND (template_key IS NOT NULL OR schedule_kind = 'incident'))
-  );
-
-ALTER TABLE apis.ai_routine_runs DROP CONSTRAINT native_fix_run_grant,
-  ADD CONSTRAINT native_fix_run_grant CHECK (
-    source->>'tag' <> 'FixRun' OR (root_run_id = id AND policy = '"autonomous"'::jsonb
-      AND permission_ceiling = 'admin' AND input IS NOT NULL)
   );
 
 COMMIT;

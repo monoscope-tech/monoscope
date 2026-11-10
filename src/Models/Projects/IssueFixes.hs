@@ -11,7 +11,7 @@ import Data.Effectful.CodeReview.Types (Candidate (..), Failure (..), Revision, 
 import Data.Effectful.CodeReview.Types qualified as Agent
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, nominalDay)
+import Data.Time (addUTCTime, nominalDay)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Effectful (Eff, (:>))
@@ -172,10 +172,11 @@ createRun pid fid issue mapping base image =
 
 -- | Up to @n@ open issues from the last week that triage has had an hour with, each with a mapping
 -- 'createRun' accepts and no fix run yet; newest first.
-autofixCandidates :: DB es => ProjectId -> UTCTime -> Int -> Eff es [(IssueId, CodeMappingId)]
-autofixCandidates pid now n =
-  Hasql.interp
-    [HI.sql|SELECT DISTINCT ON (i.created_at, i.id) i.id, m.id FROM apis.issues i
+autofixCandidates :: (DB es, Time :> es) => ProjectId -> Int -> Eff es [(IssueId, CodeMappingId)]
+autofixCandidates pid n =
+  Time.currentTime >>= \now ->
+    Hasql.interp
+      [HI.sql|SELECT DISTINCT ON (i.created_at, i.id) i.id, m.id FROM apis.issues i
     JOIN projects.code_mappings m ON m.project_id = i.project_id AND m.service = i.service
     JOIN projects.git_credentials c ON c.id = m.credential_id AND c.project_id = i.project_id
     WHERE i.project_id = #{pid} AND i.archived_at IS NULL AND i.spam_at IS NULL AND i.issue_type <> 'api_change'
@@ -253,9 +254,8 @@ recordStepWith scope pid fid expected sid step = do
           if saved == Just True then fmap (>>= maybeToRight Unavailable) (getRun pid fid) else pure $ Left StepConflict
 
 
--- | @routine@ attaches the fix run to its routine, whose policy then bounds it.
-queueJob :: DB es => ProjectId -> Projects.UserId -> Maybe (UUIDId "ai_routine") -> FixId -> Eff es Bool
-queueJob pid uid routine fid = Hasql.transaction TxS.ReadCommitted TxS.Write do
+queueJob :: DB es => ProjectId -> Projects.UserId -> FixId -> Eff es Bool
+queueJob pid uid fid = Hasql.transaction TxS.ReadCommitted TxS.Write do
   HI.OneColumn subjectM <-
     Hasql.oneTx @(HI.OneColumn (Maybe Text))
       [HI.sql|SELECT (SELECT issue.title FROM projects.issue_fix_runs fix
@@ -279,8 +279,8 @@ queueJob pid uid routine fid = Hasql.transaction TxS.ReadCommitted TxS.Write do
             VALUES (#{pid}, #{conversation}, #{Issues.CTWeb}, #{title}, '{}'::jsonb)|]
           Hasql.executeTx
             [HI.sql|INSERT INTO apis.ai_routine_runs
-            (id, root_run_id, routine_id, project_id, conversation_id, requested_by, input, policy, source, scheduled_at, started_at, status, permission_ceiling)
-            VALUES (#{identifier}, #{identifier}, #{routine}, #{pid}, #{conversation}, #{uid}, #{input}, #{Issues.Autonomous}, #{Issues.FixRun fid}, now(), now(), 'running', #{ProjectMembers.PAdmin})|]
+            (id, root_run_id, project_id, conversation_id, requested_by, input, policy, source, scheduled_at, started_at, status, permission_ceiling)
+            VALUES (#{identifier}, #{identifier}, #{pid}, #{conversation}, #{uid}, #{input}, #{Issues.Autonomous}, #{Issues.FixRun fid}, now(), now(), 'running', #{ProjectMembers.PAdmin})|]
           Hasql.executeTx [HI.sql|INSERT INTO projects.issue_fix_jobs (run_id, requested_by, agent_run_id) VALUES (#{fid}, #{uid}, #{identifier})|]
           Hasql.executeTx [HI.sql|INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued', #{Aeson $ AE.toJSON $ Jobs.FixIssue pid fid})|]
           pure True
