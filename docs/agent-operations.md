@@ -66,6 +66,8 @@ Automatic runs skip pull requests that change only documentation, tests or CI. A
 `record_proof {claim, command}` replays one bash command under asciinema in fresh offline verifier VMs, on the base and the head.
 The host decodes each cast from the check log, renders a GIF with `agg` and an MP4 with `ffmpeg`, and stores them in `projects.pr_review_proofs`.
 Signed links at `/p/<project>/reviews/<review>/proofs/<file>` serve the media, so GitHub's image proxy can show the GIF without a session.
+A UI proof's browser recording is drawn inside a browser window, titled and addressed from the `page.tsv` the proof writes, and its preview is an animated WebP cut from that framed video.
+`plan_proofs {claims}` lists the claims before they are recorded. The review comment then updates in place as each goes from pending to running to recorded (`projects.pr_review_runs.proof_progress`), and the finished review replaces that comment. Progress updates are best effort and skipped when publication is not allowed.
 A claim graded `matches` or `differs` must cite a recorded proof key. The model cannot claim a recording that does not exist.
 The guest image needs `asciinema`, and a writable `/dev/shm` (mounted by `guest-init.sh`). The worker image needs `agg` and `ffmpeg`.
 

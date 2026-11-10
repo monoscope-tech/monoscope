@@ -22,7 +22,8 @@ Run it once per VM.
 
 Command: write the Playwright script into `web-components/` (so `playwright` resolves; the file is
 untracked) with a quoted heredoc, so nothing in it needs escaping, then run it. Record the whole
-window, sidebar included, at 1280x800:
+window, sidebar included, at 1280x800. The host draws a browser window around the recording from
+`page.tsv` (title and URL), and the dot below shows where each click lands:
 
 ```bash
 cd web-components && cat > proof.mjs <<'JS'
@@ -32,8 +33,16 @@ const out = process.env.PROOF_MEDIA, t0 = Date.now(), chapters = [];
 const step = (label) => { chapters.push(((Date.now() - t0) / 1000).toFixed(1) + '\t' + label); console.log('== ' + label); };
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, recordVideo: { dir: out, size: { width: 1280, height: 800 } } });
+await context.addInitScript(() => addEventListener('DOMContentLoaded', () => {
+  const dot = document.documentElement.appendChild(document.createElement('div'));
+  dot.style.cssText = 'position:fixed;z-index:2147483647;left:-40px;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;background:#2f6fedaa;border:2px solid #fff;pointer-events:none;transition:scale .1s';
+  addEventListener('mousemove', (e) => { dot.style.left = e.clientX + 'px'; dot.style.top = e.clientY + 'px'; }, true);
+  addEventListener('mousedown', () => { dot.style.scale = '.6'; }, true);
+  addEventListener('mouseup', () => { dot.style.scale = ''; }, true);
+}));
 const page = await context.newPage();
 await page.goto('http://127.0.0.1:8080/p/00000000-0000-0000-0000-000000000000/log_explorer');
+writeFileSync(`${out}/page.tsv`, `${await page.title()}\t${page.url().replace(/^https?:\/\//, '')}\n`);
 step('Open Live Tail');
 await page.getByRole('link', { name: 'Live Tail' }).click();
 await page.waitForTimeout(2000);
@@ -61,7 +70,8 @@ take, never setup or teardown. Aim for 10 to 30 seconds.
 
 Write `chapters.tsv` and close the context before any `process.exit`, or the video is lost. The same
 script records both sides, so name screenshots for what they frame (`Live Tail toolbar at
-1280px.png`), never for the outcome you expect; crop them to the part that changed.
+1280px.png`), never for the outcome you expect. Crop them to the part that changed: the recording
+shows the whole window, the stills show the detail.
 
 For a state the sample traffic cannot produce, `web-components/bench/` mounts one component on
 synthetic data without the server (`cd web-components && npx vite --config

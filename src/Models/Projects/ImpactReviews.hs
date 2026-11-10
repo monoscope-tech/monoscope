@@ -53,6 +53,12 @@ module Models.Projects.ImpactReviews (
   proofRecipe,
   proofSides,
   proofFile,
+  ClaimState (..),
+  ClaimProgress (..),
+  advance,
+  recordProgress,
+  progressComment,
+  setProgressComment,
 ) where
 
 import BackgroundJobs.Types qualified as Jobs
@@ -89,6 +95,7 @@ import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 -- >>> import Relude
 -- >>> import Data.Aeson qualified as AE
 -- >>> import Data.Text qualified as T
+-- >>> import Data.Effectful.CodeReview qualified as Agent
 
 
 data ReviewState = Queued | Reviewing | Completed | Incomplete | Superseded
@@ -478,6 +485,8 @@ supersedeRun run = Hasql.interpExecute_ [HI.sql|UPDATE projects.pr_review_runs S
 startAttempt :: DB es => ReviewRun -> Text -> Text -> Eff es (Maybe (UUIDId "agent_attempt"))
 startAttempt run provider modelSpec = do
   current <- currentRun run
+  -- An attempt shows only its own proofs; the comment it updates stays the run's.
+  when current $ Hasql.interpExecute_ [HI.sql|UPDATE projects.pr_review_runs SET proof_progress = '[]' WHERE id = #{run.id}|]
   if current then Usage.startAttempt run.projectId (Usage.Review run.id) provider modelSpec else pure Nothing
 
 
@@ -657,6 +666,52 @@ proofSides run attempt =
     [HI.sql|SELECT key, side, revision, exit_code, browser, chapters,
       coalesce((SELECT jsonb_agg(s.label ORDER BY s.n) FROM projects.pr_review_proof_shots s WHERE s.run_id = p.run_id AND s.key = p.key AND s.side = p.side), '[]')
     FROM projects.pr_review_proofs p WHERE run_id = #{run.id} AND attempt_id = #{attempt} ORDER BY key, side|]
+
+
+-- | How far one planned claim has got: waiting, being recorded, recorded under a proof key, or failed.
+data ClaimState = Pending | Running | Proved Text | Unrecorded
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data ClaimProgress = ClaimProgress {claim :: Text, state :: ClaimState}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | A plan keeps the state of the claims it repeats; a claim recorded outside the plan joins the end.
+--
+-- >>> let plan = advance (Agent.Planned ("A" :| ["B"])) []
+-- >>> plan
+-- [ClaimProgress {claim = "A", state = Pending},ClaimProgress {claim = "B", state = Pending}]
+-- >>> advance (Agent.Recorded "C" "proof-1") (advance (Agent.Started "A") plan)
+-- [ClaimProgress {claim = "A", state = Running},ClaimProgress {claim = "B", state = Pending},ClaimProgress {claim = "C", state = Proved "proof-1"}]
+-- >>> advance (Agent.Planned ("B" :| ["A"])) (advance (Agent.Started "A") plan)
+-- [ClaimProgress {claim = "B", state = Pending},ClaimProgress {claim = "A", state = Running}]
+advance :: Agent.ProofProgress -> [ClaimProgress] -> [ClaimProgress]
+advance event claims = case event of
+  Agent.Planned planned -> [fromMaybe (ClaimProgress c Pending) (find ((== c) . (.claim)) claims) | c <- toList planned]
+  Agent.Started c -> mark c Running
+  Agent.Recorded c key -> mark c (Proved key)
+  Agent.Unproved c -> mark c Unrecorded
+  where
+    mark c next = if any ((== c) . (.claim)) claims then [ClaimProgress p.claim (if p.claim == c then next else p.state) | p <- claims] else claims <> [ClaimProgress c next]
+
+
+-- | Applies a proof event to the run's plan; one agent drives a run, so the read and write cannot race.
+recordProgress :: DB es => ReviewRun -> Agent.ProofProgress -> Eff es [ClaimProgress]
+recordProgress run event = do
+  current <- fromMaybe [] <$> Hasql.interpOneJson [HI.sql|SELECT proof_progress FROM projects.pr_review_runs WHERE id = #{run.id}|]
+  let next = advance event current
+  next <$ Hasql.interpExecute_ [HI.sql|UPDATE projects.pr_review_runs SET proof_progress = #{Aeson next} WHERE id = #{run.id}|]
+
+
+progressComment :: DB es => ReviewRun -> Eff es (Maybe Int64)
+progressComment run = (>>= HI.getOneColumn) <$> Hasql.interpOne [HI.sql|SELECT progress_comment_id FROM projects.pr_review_runs WHERE id = #{run.id}|]
+
+
+setProgressComment :: DB es => ReviewRun -> Int64 -> Eff es ()
+setProgressComment run cid = Hasql.interpExecute_ [HI.sql|UPDATE projects.pr_review_runs SET progress_comment_id = #{cid} WHERE id = #{run.id}|]
 
 
 -- | What a proof media link signs; the prefix keeps it apart from widget signatures under the same key.

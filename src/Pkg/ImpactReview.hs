@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.ImpactReview (reviewPullRequest, prepareReviewWorkspace, requestReview, fixIssue, ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Claim (..), ClaimStatus (..), ProofLink (..), Shot (..), proofLink, Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, ReviewQuery, mkReviewQuery) where
+module Pkg.ImpactReview (reviewPullRequest, prepareReviewWorkspace, requestReview, fixIssue, ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Claim (..), ClaimStatus (..), ProofLink (..), Shot (..), proofLink, Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, renderProgress, ReviewQuery, mkReviewQuery) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
@@ -27,8 +27,8 @@ import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, nominalDay
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (getAeson)
-import Effectful (Eff, IOE, (:>))
-import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
+import Effectful (Eff, IOE, raise, (:>))
+import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, tryError)
 import Effectful.Labeled (Labeled)
 import Effectful.Log qualified as ELog
 import Effectful.Reader.Static (Reader, ask)
@@ -434,7 +434,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                           Reviews.recordFailure run message
                           -- Deferring nodes requeue with fresh odd-jobs attempts, so agent retries are bounded per chain here.
                           -- Publication recovery reuses the stored result, calls no model, and retries until it reconciles.
-                          when (retries && (isJust run.result || execution.chainAttempt < 3)) $ throwIO $ ReviewFailure message
+                          if retries && (isJust run.result || execution.chainAttempt < 3) then throwIO $ ReviewFailure message else stopProgress run message
                     case outcome of
                       Left err
                         | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> Jobs.deferOperationReview run.projectId identifier deadline
@@ -445,11 +445,20 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                       Right (Just (Left (ReviewPublicationRefused reason))) -> do
                         finish $ Issues.CancelledResult $ Just reason
                         Reviews.recordFailure run reason
+                        stopProgress run reason
                       Right (Just (Right ())) -> do
                         current <- Reviews.getRun run.id
                         case current of
                           Just completed | completed.state == Reviews.Completed -> completeReview completed execution.id execution.startedAt
-                          _ -> finish $ Issues.CancelledResult $ Just "The PR changed or review authorization was withdrawn before publication."
+                          _ -> do
+                            finish $ Issues.CancelledResult $ Just "The PR changed or review authorization was withdrawn before publication."
+                            stopProgress run "The pull request changed or review authorization was withdrawn before publication."
+    -- A review that stops for good says so in its progress comment instead of leaving it running.
+    stopProgress :: Reviews.ReviewRun -> Text -> ATBackgroundCtx ()
+    stopProgress run reason = whenJustM (Reviews.progressComment run) \cid -> whenRightM_ (reviewConnection run) \(_, _, _, conn) -> do
+      stopped <- Git.publishPullRequestComment conn (Git.RepoRef run.owner run.repo run.revision) run.number (Just cid) (reviewMarker run <> "\n#### Review stopped\n\n" <> plain reason)
+      whenLeft_ stopped $ Log.logAttention "Proof progress comment failed" . (run.id,)
+
     completeReview :: Reviews.ReviewRun -> UUIDId "ai_routine_run" -> UTCTime -> ATBackgroundCtx ()
     completeReview completed runId startedAt = do
       context <- AI.requireRunContext completed.projectId $ Issues.EventClaim (Issues.PullRequestReview completed.id) runId startedAt
@@ -570,12 +579,17 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                       unless (receipt.revision == case receipt.side of Agent.Base -> pr.base.revision; Agent.Head -> pr.head.revision) $ throwError $ ReviewFailure "Check receipt references another revision"
                       unlessM (Reviews.recordCheck run receipt) $ throwError $ ReviewFailure "Check receipt conflicts with recorded execution"
                   )
-                  ( \setup sides -> do
-                      requireActive run execution
-                      stored <- Reviews.saveProofs run attemptId setup sides
-                      for_ stored (Log.logInfo "Proof setup" . (run.id,) . snd)
-                      pure $ fst <$> stored
-                  )
+                  Agent.ProofHooks
+                    { save = \setup sides -> do
+                        requireActive run execution
+                        stored <- Reviews.saveProofs run attemptId setup sides
+                        for_ stored (Log.logInfo "Proof setup" . (run.id,) . snd)
+                        pure $ fst <$> stored
+                    , progress = \event -> whenM (Reviews.currentRun run) do
+                        -- Bookkeeping: a failure is logged and the proof goes on.
+                        updated <- tryAny $ Reviews.recordProgress run event >>= \claims -> raise . publishProgress run context conn pr claims =<< recordedProofs
+                        whenLeft_ updated $ Log.logAttention "Proof progress comment failed" . (run.id,) . show @Text
+                    }
                   ( \value -> do
                       queried <- State.gets @ReviewMemory (Map.elems . (.evidence))
                       recorded <- recordedProofs
@@ -639,16 +653,12 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           whenM (Reviews.currentRun run) do
             settings <- Reviews.repositorySettings run.projectId
             let includeEvidence = maybe False (.includeEvidence) $ find (\s -> s.owner == run.owner && s.repo == run.repo) settings
-                marker = "<!-- monoscope-impact:" <> run.projectId.toText <> " -->"
-            comments <- require =<< Git.listPullRequestComments conn ref run.number
-            appId <- maybe (throwError $ ReviewFailure "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
-            -- An ask is answered below it in a new comment; a pushed revision updates the latest review.
-            let existing = if isJust run.request then Nothing else viaNonEmpty last [c.id | c <- comments, fmap (.id) c.performedViaGithubApp == Just appId, marker `T.isInfixOf` c.body]
+            existing <- reviewComment run conn ref
             whenM (Reviews.currentRun run) do
               current <- require =<< Git.getPullRequest conn ref run.number
               unless (sameRevision pr current) $ throwError $ ReviewFailure "PR changed before publication"
               void $ require . first AI.toolDenialMessage =<< AI.authorizeRunOperation context Catalog.ExternalPublication
-              let body = marker <> "\n" <> renderReview cfg.hostUrl run GitHubComment{includeEvidence, runUrl = hostPath cfg.hostUrl (urls.aiRoutineRunGet run.projectId context.rootId Nothing)} result
+              let body = reviewMarker run <> "\n" <> renderReview cfg.hostUrl run GitHubComment{includeEvidence, runUrl = hostPath cfg.hostUrl (urls.aiRoutineRunGet run.projectId context.rootId Nothing)} result
                   comment = Catalog.ReviewComment run.id body
               response <-
                 either (throwError . ReviewPublicationRefused) pure =<< AI.executeNativeOperation context (Catalog.PublishPullRequestComment comment) \case
@@ -665,6 +675,30 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                   (Catalog.WriteWiki{}; Catalog.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
               cid <- require $ first toText $ AET.parseEither AE.parseJSON response
               Reviews.finishRun run (Just cid)
+    -- Where a run writes: its progress comment while it still exists; else an ask answers below itself
+    -- in a new comment, and a pushed revision updates the latest review.
+    reviewComment :: Reviews.ReviewRun -> Git.GitConn -> Git.RepoRef -> ReviewCtx (Maybe Int64)
+    reviewComment run conn ref = do
+      cfg <- (.config) <$> ask @AuthContext
+      comments <- require =<< Git.listPullRequestComments conn ref run.number
+      appId <- maybe (throwError $ ReviewFailure "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
+      progress <- Reviews.progressComment run
+      let ours = [c.id | c <- comments, fmap (.id) c.performedViaGithubApp == Just appId, reviewMarker run `T.isInfixOf` c.body]
+      pure $ find (`elem` ours) progress <|> if isJust run.request then Nothing else viaNonEmpty last ours
+
+    -- Bookkeeping, so the PR author can watch claims get proved: a failed update is logged and the
+    -- review goes on. Every update happens inside the agent's run, before the finished review replaces it.
+    publishProgress :: Reviews.ReviewRun -> Issues.RunContext -> Git.GitConn -> Git.PullRequest -> [Reviews.ClaimProgress] -> [ProofLink] -> ReviewCtx ()
+    publishProgress run context conn pr claims links =
+      -- A publication that waits for a person's approval shows nothing until it is approved.
+      whenRightM_ (AI.authorizeRunOperation context Catalog.ExternalPublication) \policy -> when (isNothing $ Issues.reviewApprover policy.execution policy.capability) do
+        cfg <- (.config) <$> ask @AuthContext
+        let ref = Git.RepoRef run.owner run.repo run.revision
+        published <- tryError @ReviewFailure do
+          existing <- reviewComment run conn ref
+          require =<< Git.publishPullRequestComment conn ref run.number existing (reviewMarker run <> "\n" <> renderProgress cfg.hostUrl pr.base.revision pr.head.revision claims links)
+        either (\(_, failure) -> Log.logAttention "Proof progress comment failed" (run.id, show @Text failure)) (Reviews.setProgressComment run) published
+
     reconcileComment :: (Error ReviewFailure :> es, HTTP.HTTP :> es, Reader AuthContext :> es) => Reviews.ReviewRun -> Git.GitConn -> Catalog.OperationCall -> Eff es (Maybe (Either Text AE.Value))
     reconcileComment run conn = \case
       Catalog.NativeCall (Catalog.PublishPullRequestComment retained) | retained.reviewId == run.id -> do
@@ -821,12 +855,12 @@ renderReview host run audience result =
     proofSection claims = case sortOn (\c -> (c.status /= Differs, null (sidesOf c))) claims of
       [] -> []
       lead : rest ->
-        ("### " <> icon lead.status <> " " <> plain lead.title)
+        ("### " <> icon 20 lead.status <> " " <> plain lead.title)
           : plain lead.summary
           : foldMap media (nonEmpty $ sidesOf lead)
             <> [ T.intercalate
                    (if github then "<br>" else "\n")
-                   (("**Also checked** · " <> T.intercalate " · " [show n <> " " <> bool plural singular (n == 1) | (status, singular, plural) <- [(Matches, "match", "match"), (Differs, "differs", "differ"), (Unverified, "not verified", "not verified")], let n = length (filter ((== status) . (.status)) rest), n > 0]) : [icon c.status <> " " <> plain c.title <> foldMap (\p -> " · [Watch recording](" <> p.video <> ")") (find ((== Agent.Head) . (.side)) (sidesOf c)) | c <- rest])
+                   (("**Also checked** · " <> T.intercalate " · " [show n <> " " <> bool plural singular (n == 1) | (status, singular, plural) <- [(Matches, "match", "match"), (Differs, "differs", "differ"), (Unverified, "not verified", "not verified")], let n = length (filter ((== status) . (.status)) rest), n > 0]) : [icon 16 c.status <> " " <> plain c.title <> foldMap (\p -> " · [Watch recording](" <> p.video <> ")") (find ((== Agent.Head) . (.side)) (sidesOf c)) | c <- rest])
                | not (null rest)
                ]
     sidesOf claim = [p | key <- take 1 claim.proofKeys, p <- fold result.proofs, p.key == key]
@@ -844,7 +878,7 @@ renderReview host run audience result =
     -- A terminal recording's exit code is its verdict; a screenshot carries its own.
     exit p = case (or p.browser, p.exitCode) of (False, Just code) | code /= 0 -> " · exit " <> show code; _ -> ""
     timestamp at = let total = floor at :: Int in show (total `div` 60) <> ":" <> T.justifyRight 2 '0' (show (total `mod` 60))
-    icon = \case Matches -> "✅"; Differs -> "⚠️"; Unverified -> "👀"
+    icon size status = if github then statusIcon host size (T.toLower $ show status) else case status of Matches -> "✅"; Differs -> "⚠️"; Unverified -> "👀"
     sideName = \case Agent.Base -> "Merge-base"; Agent.Head -> "This PR"
     attr = T.replace "\"" "&quot;" . clean
     dimensionName = \case Alignment -> "Alignment"; Impact -> "Impact"; Verification -> "Verification"; Rollback -> "Rollback cost"; ErrorDetection -> "Error detection"
@@ -894,8 +928,43 @@ renderReview host run audience result =
         <> " · [Review settings]("
         <> settings
         <> ")"
-    plain = T.concatMap (\c -> (if c `elem` ("\\*_|#!" :: String) then "\\" else "") <> one c) . clean
-    clean = T.replace "://" ":／／" . T.map (\c -> fromMaybe c $ lookup c ([('[', '［'), (']', '］'), ('@', '＠'), ('<', '‹'), ('>', '›'), ('`', '\''), ('\n', ' '), ('\r', ' ')] :: [(Char, Char)]))
+
+
+-- | Model-authored text, escaped for Markdown and defanged so it cannot link, mention or embed.
+plain, clean :: Text -> Text
+plain = T.concatMap (\c -> (if c `elem` ("\\*_|#!" :: String) then "\\" else "") <> one c) . clean
+clean = T.replace "://" ":／／" . T.map (\c -> fromMaybe c $ lookup c ([('[', '［'), (']', '］'), ('@', '＠'), ('<', '‹'), ('>', '›'), ('`', '\''), ('\n', ' '), ('\r', ' ')] :: [(Char, Char)]))
+
+
+-- | Identifies the project's review comment among the app's comments on a pull request.
+reviewMarker :: Reviews.ReviewRun -> Text
+reviewMarker run = "<!-- monoscope-impact:" <> run.projectId.toText <> " -->"
+
+
+-- | One of the proof status icons, sized for a line of text or a heading.
+statusIcon :: Text -> Int -> Text -> Text
+statusIcon host size name = "<img src=\"" <> hostPath host ("/public/assets/proof/" <> name <> ".svg") <> "\" alt=\"" <> T.toTitle name <> "\" width=\"" <> show size <> "\" height=\"" <> show size <> "\" align=\"" <> bool "absmiddle" "top" (size > 16) <> "\">"
+
+
+-- | The comment while a review proves its claims: each planned claim and how far it has got, the
+-- first recording as soon as it exists, and a footer saying the review is still running.
+renderProgress :: Text -> Text -> Text -> [Reviews.ClaimProgress] -> [ProofLink] -> Text
+renderProgress host baseRevision headRevision claims links =
+  T.intercalate "\n\n"
+    $ ["#### Proving this PR · " <> show (length recorded) <> " of " <> show (length claims) <> " recorded"]
+    <> ["<a href=\"" <> p.video <> "\"><img src=\"" <> p.preview <> "\" alt=\"Recording\" width=\"100%\"></a>" | p <- take 1 (mapMaybe recording recorded)]
+    <> [T.intercalate "<br>" [line c | c <- claims] | not (null claims)]
+    <> ["<sub>Proof on <code>" <> T.take 8 headRevision <> "</code> (from <code>" <> T.take 8 baseRevision <> "</code>) · still running</sub>"]
+  where
+    recorded = [key | Reviews.ClaimProgress _ (Reviews.Proved key) <- claims]
+    recording key = find (\p -> p.key == key && p.side == Agent.Head) links
+    line c =
+      let (icon, suffix) = case c.state of
+            Reviews.Pending -> ("pending", " · *Pending*")
+            Reviews.Running -> ("running", " · *Running*")
+            Reviews.Proved key -> ("recorded", foldMap (\p -> " · [Watch recording](" <> p.video <> ")") (recording key))
+            Reviews.Unrecorded -> ("unverified", " · *Not recorded*")
+       in statusIcon host 16 icon <> " " <> plain c.claim <> suffix
 
 
 requestEvidence :: (DB es, ELog.Log :> es, IOE :> es, Labeled "timefusion" Hasql.Hasql :> es, Reader AuthContext :> es, State.State ReviewMemory :> es, Time.Time :> es, Timeout.Timeout :> es, Tracing :> es) => Projects.ProjectId -> Eff es [Text] -> UTCTime -> UTCTime -> Agent.TelemetryQuery -> Eff es (Either Text AE.Value)
