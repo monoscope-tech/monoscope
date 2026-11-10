@@ -98,6 +98,16 @@ agentResources :: (Word16, Word32)
 agentResources = (2, 1024)
 
 
+-- | A check VM: a UI proof runs Chromium and a dev server in it, so it gets more than the agent's VM.
+checkResources :: Resources
+checkResources = Resources 4 4096
+
+
+-- | A check's log carries a proof's recording, screenshots and video between markers.
+checkLogLimit :: Word32
+checkLogLimit = 24 * 1048576
+
+
 hostAllocation :: UUIDId "agent_allocation" -> UUIDId "agent_attempt" -> Word64 -> AllocationOutcome -> AllocationReceipt
 hostAllocation identifier attempt durationMs = AllocationReceipt . uncurry (AllocationData identifier attempt durationMs) agentResources
 
@@ -1134,7 +1144,7 @@ verifyArtifactRegression options request = do
           modifyIORef' executions (<> [Pending key])
           persist Running
           started <- getMonotonicTimeNSec
-          observation <- newIORef $ Measurement Blocked Nothing (Resources 2 1024) Unpriced 0 0 (sha "") "" Nothing Nothing (Just "Check did not complete with usable execution evidence") Nothing Nothing Nothing Nothing
+          observation <- newIORef $ Measurement Blocked Nothing checkResources Unpriced 0 0 (sha "") "" Nothing Nothing (Just "Check did not complete with usable execution evidence") Nothing Nothing Nothing Nothing
           let logPath = directory </> (if side == Base then "base.log" else "head.log")
               change f = modifyIORef' observation f >> readIORef observation >>= update key
               checked :: RPC -> NonEmpty Text -> IO Text
@@ -1152,7 +1162,7 @@ verifyArtifactRegression options request = do
           outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox VerifierPool options.bridge \rpc -> do
             image <- rpc @Image $ Resolve options.image
             ensure $ image.buildId == request.imageBuildId
-            let sandbox = Sandbox image.assetDir 2 1024 OfflineCow $ one ("/checkout", checkout)
+            let sandbox = Sandbox image.assetDir checkResources.cpus checkResources.memoryMiB OfflineCow $ one ("/checkout", checkout)
             case request.workspace of
               Pristine -> rpc @() $ Create sandbox
               PreparedCheckpoint snapshot -> do
@@ -1209,13 +1219,13 @@ verifyArtifactRegression options request = do
               when (side == Head && firstFrozen /= Just frozen) do
                 change $ \measured -> measured{reason = Just "Candidate changed the frozen regression files"}
                 invalid
-            result <- rpc @LogExit $ ExecuteLogged $ LoggedCommand (GuestCommand (agentCommand ["/bin/bash", "--noprofile", "--norc", "/run/monoscope-regression.sh"]) (Just "/workspace") False) logPath 1048576 CloseSandbox
+            result <- rpc @LogExit $ ExecuteLogged $ LoggedCommand (GuestCommand (agentCommand ["/bin/bash", "--noprofile", "--norc", "/run/monoscope-regression.sh"]) (Just "/workspace") False) logPath checkLogLimit CloseSandbox
             case result of
               LogLimit -> change $ \measured -> measured{status = OutputLimit, reason = Just "Check output limit"}
               Exited exit -> do
                 change $ \measured -> measured{exitCode = Just exit}
                 after <- sourceHash "/run/monoscope-baseline-paths"
-                logBytes <- readBounded logPath 1048576
+                logBytes <- readBounded logPath (fromIntegral checkLogLimit)
                 let (status, reason)
                       | before /= after = (Invalidated, Just "Tracked source changed during the check")
                       | exit `elem` [126, 127] = (Blocked, Just "Check command or dependency unavailable")
@@ -1229,13 +1239,13 @@ verifyArtifactRegression options request = do
               publish counter (3 :: Word8)
               change $ \measured -> measured{status = CleanupFailed}
             _ -> pass
-          log <- readBounded logPath 1048576
+          log <- readBounded logPath (fromIntegral checkLogLimit)
           sync logPath
           ended <- getMonotonicTimeNSec
           change $ \measured -> measured{durationMs = fromIntegral (ended - started) / 1000000, logBytes = fromIntegral $ BS.length log, logSha256 = sha log, tail = decodeUtf8With lenientDecode $ BS.drop (max 0 $ BS.length log - 4096) log, logPath = Just $ "/run/monoscope-review-output/check-" <> toText (identifierText checkId) <> "-" <> (if side == Base then "base" else "head") <> ".log"}
           measured <- readIORef observation
           let kind = case artifact.testPatch of Nothing -> Just $ ScriptCheck template.regressionSha256; Just _ -> case measured.testPatchDisposition of Just Injected -> Just $ InjectedTest template.regressionSha256; Just Retained -> Just $ RetainedTest template.regressionSha256; Nothing -> Nothing
-              receipt = RegressionReceipt key.id request.attemptId checkId side revision request.imageBuildId workspaceHash template.scriptSha256 kind measured.status measured.exitCode (ceiling measured.durationMs) 2 1024 measured.logBytes measured.logSha256
+              receipt = RegressionReceipt key.id request.attemptId checkId side revision request.imageBuildId workspaceHash template.scriptSha256 kind measured.status measured.exitCode (ceiling measured.durationMs) checkResources.cpus checkResources.memoryMiB measured.logBytes measured.logSha256
           publish (takeDirectory root </> identifierText receipt.id <> ".json") $ AE.object ["tag" AE..= ("Check" :: Text), "contents" AE..= receipt]
           modifyIORef' receipts (<> [receipt])
       results <- readIORef executions

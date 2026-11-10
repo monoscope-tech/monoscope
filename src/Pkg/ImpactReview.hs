@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.ImpactReview (reviewPullRequest, prepareReviewWorkspace, requestReview, fixIssue, ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Claim (..), ClaimStatus (..), ProofLink (..), proofLink, Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, ReviewQuery, mkReviewQuery) where
+module Pkg.ImpactReview (reviewPullRequest, prepareReviewWorkspace, requestReview, fixIssue, ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Claim (..), ClaimStatus (..), ProofLink (..), Shot (..), proofLink, Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, ReviewQuery, mkReviewQuery) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
@@ -26,6 +26,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple.Newtypes (getAeson)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Effectful.Labeled (Labeled)
@@ -143,7 +144,13 @@ data Claim = Claim {title :: Text, status :: ClaimStatus, summary :: Text, proof
 
 
 -- | One recorded side of a proof, with signed media links the host built.
-data ProofLink = ProofLink {key :: Text, side :: Agent.RevisionSide, revision :: Text, exitCode :: Maybe Int32, preview :: Text, video :: Text, recording :: Text}
+-- A browser proof also carries its screenshots and chapters; results stored before them decode without.
+data ProofLink = ProofLink {key :: Text, side :: Agent.RevisionSide, revision :: Text, exitCode :: Maybe Int32, preview :: Text, video :: Text, recording :: Text, browser :: Maybe Bool, shots :: Maybe [Shot], chapters :: Maybe [(Double, Text)]}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data Shot = Shot {label :: Text, url :: Text}
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -292,7 +299,7 @@ validateDraft changed evidence recorded value = do
 -- | A claim can only say what a recording showed: it cites proofs recorded on both sides,
 -- and a matching claim's head recording succeeded.
 --
--- >>> let recorded key code = [ProofLink key side "r" (Just $ if side == Agent.Head then code else 1) "" "" "" | side <- [Agent.Base, Agent.Head]]
+-- >>> let recorded key code = [ProofLink key side "r" (Just $ if side == Agent.Head then code else 1) "" "" "" Nothing Nothing Nothing | side <- [Agent.Base, Agent.Head]]
 -- >>> let claim status keys = Claim "Prints the version" status "Shown by the CLI." keys
 -- >>> let check = either id (const "accepted") . validateClaims (recorded "proof-1" 0 <> recorded "proof-2" 1 <> take 1 (recorded "proof-3" 0))
 -- >>> map check [[claim Matches ["proof-1"]], [claim Unverified []], [claim Differs ["proof-2"]], [claim Differs []], [claim Matches ["proof-9"]], [claim Matches ["proof-2"]], [claim Differs ["proof-3"]]]
@@ -760,10 +767,22 @@ evidencePng pid from until item = do
 
 
 proofLink :: AuthContext -> Reviews.ReviewRun -> Reviews.ProofSide -> ProofLink
-proofLink ctx run proof = ProofLink{key = proof.key, side = proof.side, revision = proof.revision, exitCode = proof.exitCode, preview = url Reviews.Gif, video = url Reviews.Mp4, recording = url Reviews.Cast}
+proofLink ctx run proof =
+  ProofLink
+    { key = proof.key
+    , side = proof.side
+    , revision = proof.revision
+    , exitCode = proof.exitCode
+    , preview = url $ Reviews.Recording Reviews.Gif
+    , video = url $ Reviews.Recording Reviews.Mp4
+    , recording = url $ Reviews.Recording Reviews.Cast
+    , browser = Just proof.browser
+    , shots = Just [Shot label (url $ Reviews.Screenshot n) | (n, label) <- zip [1 ..] (getAeson proof.shots)]
+    , chapters = Just $ getAeson proof.chapters
+    }
   where
-    url format =
-      let file = Reviews.ProofFile proof.key proof.side format
+    url asset =
+      let file = Reviews.ProofFile proof.key proof.side asset
        in hostPath ctx.config.hostUrl $ proofMediaPath run.projectId run.id file $ Widget.signWidgetUrl ctx.env.apiKeyEncryptionSecretKey run.projectId (Reviews.proofSignedPath run.id file)
 
 
@@ -775,10 +794,10 @@ data Audience = GitHubComment {includeEvidence :: Bool, runUrl :: Text} | Monosc
 renderReview :: Text -> Reviews.ReviewRun -> Audience -> ReviewResult -> Text
 renderReview host run audience result =
   T.intercalate "\n\n"
-    $ ["### " <> maybe ("Monoscope production impact · " <> label result.verdict) (riskHeading . mergeRisk) result.assessments]
+    $ proofSection (fold result.claims)
+    <> [(if null (fold result.claims) then "### " else "#### ") <> maybe ("Monoscope production impact · " <> label result.verdict) (riskHeading . mergeRisk) result.assessments]
     <> [plain s | Just s <- [result.summary]]
     <> foldMap (pure . riskTable) result.assessments
-    <> proofSection (fold result.claims)
     <> (if null result.findings then [] else ("#### Worth checking in production (" <> show (length result.findings) <> ")") : map findingText result.findings)
     <> ["![" <> (if isJust item.queryResult then "Review query results" else "Observed service events") <> "](" <> url <> ")" | github && shown, item <- take 3 $ filter (\e -> any (elem e.key . (.evidenceKeys)) result.findings) result.evidence, Just url <- [item.chartUrl]]
     <> coverage
@@ -797,26 +816,35 @@ renderReview host run audience result =
       T.intercalate "\n"
         $ ["| Check | Verdict | What raises the risk |", "| :-- | :-- | :-- |"]
         <> ["| **" <> dimensionName a.dimension <> "** | " <> gradeText a.dimension a.grade <> " | " <> (if null a.gaps then "—" else T.intercalate (if github then "<br>" else "; ") (map plain a.gaps)) <> " |" | a <- sortOn (.dimension) assessments]
-    proofSection = \case
+    -- Like a reviewer's proof: the claim that matters most, its recording and stills, then the rest in a line each.
+    proofSection claims = case sortOn (\c -> (c.status /= Differs, null (sidesOf c))) claims of
       [] -> []
-      claims -> ("#### Proof · " <> T.intercalate " · " [show n <> " " <> outcome | (status, singular, plural) <- [(Matches, "holds", "hold"), (Differs, "differs", "differ"), (Unverified, "not verified", "not verified")], let n = length (filter ((== status) . (.status)) claims), n > 0, let outcome = if n == 1 then singular else plural]) : map claimText claims
-    claimText claim =
-      T.intercalate "\n\n"
-        $ ( case (claim.status, github) of
-              (Differs, True) -> ["> [!CAUTION]\n> **Doesn't do what the PR says: " <> plain claim.title <> "**\n>\n> " <> plain claim.summary]
-              (Differs, False) -> ["**⚠️ Differs from the PR: " <> plain claim.title <> "**", plain claim.summary]
-              (Matches, _) -> ["**✅ " <> plain claim.title <> "**", plain claim.summary]
-              (Unverified, _) -> ["**👀 Not verified: " <> plain claim.title <> "**", plain claim.summary]
-          )
-        <> [recordings claim.title sides | key <- claim.proofKeys, let sides = filter ((== key) . (.key)) (fold result.proofs), not (null sides)]
-    recordings title sides
-      | github =
-          "<table><tr>"
-            <> foldMap (\p -> "<td><sub>" <> sideLabel p <> " · <a href=\"" <> p.video <> "\">video</a> · <a href=\"" <> p.recording <> "\">cast</a></sub><br><a href=\"" <> p.video <> "\"><img src=\"" <> p.preview <> "\" alt=\"" <> attr (sideLabel p <> ": " <> title) <> "\" width=\"440\"></a></td>") sides
-            <> "</tr></table>"
-      | otherwise = T.intercalate " " ["![" <> sideLabel p <> "](" <> p.preview <> ")" | p <- sides] <> "\n\n" <> T.intercalate " · " ["[Watch " <> sideName p.side <> "](" <> p.video <> ")" | p <- sides]
-    sideName = \case Agent.Base -> "Before"; Agent.Head -> "This PR"
-    sideLabel p = sideName p.side <> " · " <> T.take 7 p.revision <> foldMap ((" · exit " <>) . show) p.exitCode
+      lead : rest ->
+        ("### " <> icon lead.status <> " " <> plain lead.title)
+          : plain lead.summary
+          : foldMap media (nonEmpty $ sidesOf lead)
+            <> [ T.intercalate
+                   (if github then "<br>" else "\n")
+                   (("**Also checked** · " <> T.intercalate " · " [show n <> " " <> bool plural singular (n == 1) | (status, singular, plural) <- [(Matches, "match", "match"), (Differs, "differs", "differ"), (Unverified, "not verified", "not verified")], let n = length (filter ((== status) . (.status)) rest), n > 0]) : [icon c.status <> " " <> plain c.title <> foldMap (\p -> " · [Watch recording](" <> p.video <> ")") (find ((== Agent.Head) . (.side)) (sidesOf c)) | c <- rest])
+               | not (null rest)
+               ]
+    sidesOf claim = [p | key <- take 1 claim.proofKeys, p <- fold result.proofs, p.key == key]
+    media sides =
+      let pr = find ((== Agent.Head) . (.side)) sides
+          base = find ((== Agent.Base) . (.side)) sides
+          hero = fromMaybe (head sides) pr
+          stills p = case fold p.shots of [] -> [(sideName p.side, p.preview)]; shots -> [(s.label, s.url) | s <- shots]
+          image (alt, url) = if github then "<img src=\"" <> url <> "\" alt=\"" <> attr alt <> "\" width=\"100%\">" else "![" <> plain alt <> "](" <> url <> ")"
+       in [ if github then "<a href=\"" <> hero.video <> "\"><img src=\"" <> hero.preview <> "\" alt=\"Recording\" width=\"100%\"></a>" else image ("Recording", hero.preview)
+          , T.intercalate " · " $ ("[Watch full video](" <> hero.video <> ")") : ["[" <> timestamp at <> " " <> plain chapter <> "](" <> hero.video <> "#t=" <> T.dropWhileEnd (== '.') (T.dropWhileEnd (== '0') (show at)) <> ")" | (at, chapter) <- fold hero.chapters]
+          ]
+            <> concat [("<sub>Merge-base" <> exit p <> "</sub>") : map image (stills p) | Just p <- [base], or p.browser || isJust pr]
+            <> concat [("<sub>This PR <code>" <> T.take 8 p.revision <> "</code></sub>") : map image (stills p) | Just p <- [pr], or p.browser]
+    -- A terminal recording's exit code is its verdict; a screenshot carries its own.
+    exit p = case (or p.browser, p.exitCode) of (False, Just code) | code /= 0 -> " · exit " <> show code; _ -> ""
+    timestamp at = let total = floor at :: Int in show (total `div` 60) <> ":" <> T.justifyRight 2 '0' (show (total `mod` 60))
+    icon = \case Matches -> "✅"; Differs -> "⚠️"; Unverified -> "👀"
+    sideName = \case Agent.Base -> "Merge-base"; Agent.Head -> "This PR"
     attr = T.replace "\"" "&quot;" . clean
     dimensionName = \case Alignment -> "Alignment"; Impact -> "Impact"; Verification -> "Verification"; Rollback -> "Rollback cost"; ErrorDetection -> "Error detection"
     gradeText dimension grade =
@@ -850,7 +878,7 @@ renderReview host run audience result =
     fullReview = maybe "full review" (\url -> "[full review](" <> url <> ")") runUrl
     settings = hostPath host (urls.codeMappingsSettings run.projectId Nothing)
     footer =
-      (if github then \line -> "<sub>" <> line <> "<br>Comment `@monoscope review` to review again, or `@monoscope prove it` to record proof.</sub>" else id)
+      (if github then \line -> "<sub>" <> line <> " · Comment `@monoscope prove it` to prove again</sub>" else id)
         $ "Reviewed [`"
         <> T.take 7 run.revision
         <> "`](https://github.com/"
@@ -859,9 +887,8 @@ renderReview host run audience result =
         <> run.repo
         <> "/commit/"
         <> run.revision
-        <> ") against production telemetry from "
+        <> ") with production telemetry from "
         <> window
-        <> " (UTC)"
         <> foldMap (\url -> " · [Open the full review](" <> url <> ")") runUrl
         <> " · [Review settings]("
         <> settings

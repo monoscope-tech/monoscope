@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Explanation (renderExplanation, readExplanationMedia, proofScript, proofCast, proofFailure, renderProof) where
+module Data.Effectful.CodeReview.Explanation (renderExplanation, readExplanationMedia, proofScript, proofCast, proofFailure, renderProof, BrowserMedia (..), browserMedia, renderVideo) where
 
 import Conduit (runConduit, (.|))
 import Data.Aeson qualified as AE
@@ -155,20 +155,12 @@ renderExplanation store request = withinBudget $ do
 -- | The frozen check behind a proof: @proof.sh@ with the command and optional setup as base64
 -- arguments. The base64 alphabet has no shell metacharacters, so double-quoted literals are safe.
 --
--- >>> map (`T.isInfixOf` proofScript Nothing "echo hi") ["set -- \"ZWNobyBoaQ==\" \"\"", "echo hi", castBegin, castEnd, proofFailure]
--- [True,False,True,True,True]
+-- >>> map (`T.isInfixOf` proofScript Nothing "echo hi") ["set -- \"ZWNobyBoaQ==\" \"\"", "echo hi", "::monoscope-%s::%s", "::monoscope-%s-end::", "emit cast", proofFailure]
+-- [True,False,True,True,True,True]
 -- >>> "set -- \"ZWNobyBoaQ==\" \"c2VlZA==\"" `T.isInfixOf` proofScript (Just "seed") "echo hi"
 -- True
 proofScript :: Maybe Text -> Text -> Text
 proofScript setup command = "set -- " <> unwords (map (show @Text . extractBase64 . Base64.encodeBase64 . encodeUtf8) [command, fold setup]) <> "\n" <> decodeUtf8 $(embedFile "src/Data/Effectful/CodeReview/proof.sh")
-
-
-castBegin :: Text
-castBegin = "::monoscope-cast::"
-
-
-castEnd :: Text
-castEnd = "::monoscope-cast-end::"
 
 
 proofFailure :: Text
@@ -196,8 +188,7 @@ castLimit = 524288
 -- Left "The proof recording exceeds its size limit"
 proofCast :: ByteString -> Either Text (ByteString, Text)
 proofCast logBytes = do
-  let between = fst $ BS.breakSubstring (encodeUtf8 castEnd) $ snd $ BS.breakSubstring (encodeUtf8 castBegin) logBytes
-  encoded <- maybeToRight ("The proof produced no recording. Log tail: " <> decodeUtf8 (BS.takeEnd 600 logBytes)) $ find (not . BS.null) $ drop 1 $ BS8.lines between
+  encoded <- maybeToRight ("The proof produced no recording. Log tail: " <> decodeUtf8 (BS.takeEnd 600 logBytes)) $ find (not . BS.null) $ map snd $ logSections "cast" logBytes
   when (BS.length encoded > castLimit * 4 `div` 3 + 4) $ Left "The proof recording exceeds its size limit"
   cast <- first ("The proof recording is not valid base64: " <>) $ Base64.decodeBase64Untyped encoded
   case BS8.lines cast of
@@ -210,20 +201,79 @@ proofCast logBytes = do
 -- | An animated preview (GitHub inlines GIFs) and a video. Both tools read guest-recorded bytes,
 -- so they run unprivileged with bounded time, input duration and output size.
 renderProof :: ByteString -> IO (Either Text (ByteString, ByteString))
-renderProof cast = do
+renderProof cast = renderMedia cast \run -> do
+  run "agg" ["--idle-time-limit", "2", "--fps-cap", "12", "--font-size", "16", "--theme", "github-dark", "proof.input", "proof.gif"]
+  run "ffmpeg" (quiet <> ["-t", "120", "-i", "proof.gif", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "26", "-fs", show mediaLimit, "proof.mp4"])
+
+
+-- | A browser recording's full video and a preview that plays inline at full comment width: the
+-- first 30 seconds at 8 fps with a palette built from the recording itself, so UI text stays legible.
+renderVideo :: ByteString -> IO (Either Text (ByteString, ByteString))
+renderVideo video = renderMedia video \run -> do
+  run "ffmpeg" (quiet <> ["-t", "120", "-i", "proof.input", "-an", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "24", "-fs", show mediaLimit, "proof.mp4"])
+  run "ffmpeg" (quiet <> ["-t", "30", "-i", "proof.input", "-vf", "fps=8,scale='min(1200,iw)':-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=160:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4", "-fs", show mediaLimit, "proof.gif"])
+
+
+renderMedia :: ByteString -> ((String -> [String] -> IO ()) -> IO ()) -> IO (Either Text (ByteString, ByteString))
+renderMedia input steps = do
   outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-proof" \directory -> do
     environment <- filter ((== "PATH") . fst) <$> getEnvironment
-    writeFileBS (directory </> "proof.cast") cast
-    let run program args = withProcessTerm (setStdin nullStream $ setStdout nullStream $ setStderr nullStream $ setEnv environment $ setWorkingDir directory $ proc "nice" (["-n", "19", program] <> args)) waitExitCode >>= \code -> unless (code == ExitSuccess) $ throwIO $ userError $ program <> " exited with " <> show code
-    run "agg" ["--idle-time-limit", "2", "--fps-cap", "12", "--font-size", "16", "--theme", "github-dark", "proof.cast", "proof.gif"]
-    run "ffmpeg" ["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-t", "120", "-i", "proof.gif", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "26", "-fs", show mediaLimit, "proof.mp4"]
+    writeFileBS (directory </> "proof.input") input
+    steps \program args -> withProcessTerm (setStdin nullStream $ setStdout nullStream $ setStderr nullStream $ setEnv environment $ setWorkingDir directory $ proc "nice" (["-n", "19", program] <> args)) waitExitCode >>= \code -> unless (code == ExitSuccess) $ throwIO $ userError $ program <> " exited with " <> show code
     join bitraverse (\name -> readPrivateArtifact directory name mediaLimit) ("proof.gif", "proof.mp4")
   pure $ case outcome of
     Right (Just media) -> Right media
     Right Nothing -> Left "Rendering the proof recording timed out"
     Left failure -> Left $ "The proof recording could not be rendered: " <> toText (displayException failure)
+
+
+quiet :: [String]
+quiet = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y"]
+
+
+mediaLimit :: Int
+mediaLimit = 8 * 1048576
+
+
+-- | What a UI proof wrote to @$PROOF_MEDIA@: its browser recording, PNG screenshots in the order
+-- taken, and chapters (seconds and label) that link into the video.
+data BrowserMedia = BrowserMedia {video :: Maybe ByteString, shots :: [(Text, ByteString)], chapters :: [(Double, Text)]}
+  deriving stock (Eq, Show)
+
+
+-- |
+-- >>> let section name param bytes = "\n::monoscope-" <> name <> "::" <> param <> "\n" <> extractBase64 (Base64.encodeBase64' bytes) <> "\n::monoscope-" <> name <> "-end::\n"
+-- >>> let logged = "noise" <> section "shot" "Menu open" "\137PNG1" <> section "shot" "Not an image" "GIF89a" <> section "video" "webm" "webm-bytes" <> section "chapters" "" "0\tOpen the menu\n7.5\tEnd the survey\nbad\tline\n"
+-- >>> browserMedia logged
+-- BrowserMedia {video = Just "webm-bytes", shots = [("Menu open","\137PNG1")], chapters = [(0.0,"Open the menu"),(7.5,"End the survey")]}
+-- >>> browserMedia "a terminal proof's log"
+-- BrowserMedia {video = Nothing, shots = [], chapters = []}
+browserMedia :: ByteString -> BrowserMedia
+browserMedia logBytes =
+  BrowserMedia
+    { video = snd <$> listToMaybe (sections "video")
+    , shots = take 4 [(T.strip label, png) | (label, png) <- sections "shot", "\137PNG" `BS.isPrefixOf` png]
+    , -- Chapters only point into a video.
+      chapters = take 12 [(at, T.take 80 label) | (_, tsv) <- take 1 (sections "chapters" <* sections "video"), line <- lines (decodeUtf8 tsv), let (at', label') = T.breakOn "\t" line, Just at <- [readMaybe @Double (toString at')], at >= 0, let label = T.strip (T.drop 1 label'), not (T.null label)]
+    }
   where
-    mediaLimit = 8 * 1048576
+    sections name = [(param, decoded) | (param, encoded) <- logSections name logBytes, Right decoded <- [Base64.decodeBase64Untyped encoded]]
+
+
+-- | The sections @proof.sh@ prints as @::monoscope-NAME::PARAM@, a base64 payload line and
+-- @::monoscope-NAME-end::@, in order and still encoded.
+logSections :: ByteString -> ByteString -> [(Text, ByteString)]
+logSections name = go
+  where
+    begin = "::monoscope-" <> name <> "::"
+    end = "::monoscope-" <> name <> "-end::"
+    go bytes = case BS.breakSubstring begin bytes of
+      (_, rest)
+        | BS.null rest -> []
+        | otherwise ->
+            let (param, body) = BS8.break (== '\n') (BS.drop (BS.length begin) rest)
+                (encoded, remaining) = BS.breakSubstring end (BS.drop 1 body)
+             in (decodeUtf8 param, BS8.strip encoded) : go remaining
 
 
 readExplanationMedia :: FilePath -> Explanation -> Text -> IO (Either Text ByteString)
