@@ -18,4 +18,6 @@ RUN cd /opt/proof && npm ci --no-audit --no-fund && cd web-components && npm ci 
 # Proofs run as the agent account and Vite writes its dependency cache under node_modules; each VM has
 # its own copy-on-write disk, so a shared writable cache directory leaks nothing between runs.
 
-RUN useradd --create-home --uid 1000 --user-group --shell /bin/bash review-agent
+# Proof commands run with a reset environment, so Playwright finds its browsers at its default path.
+RUN useradd --create-home --uid 1000 --user-group --shell /bin/bash review-agent \
+  && install -d -o review-agent -g review-agent /home/review-agent/.cache && ln -s /opt/proof/browsers /home/review-agent/.cache/ms-playwright
