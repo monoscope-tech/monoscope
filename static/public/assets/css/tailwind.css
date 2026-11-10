@@ -1020,6 +1020,10 @@
   @apply font-normal;
 }
 
+/* Agent reports quote findings, not speech: no typographic quotes or italics. */
+.prose blockquote { font-style: normal !important; }
+.prose blockquote p::before, .prose blockquote p::after { content: none !important; }
+
 :root {
   /* Lets transitions interpolate to intrinsic sizes (height: auto etc.) — inherits everywhere */
   interpolate-size: allow-keywords;

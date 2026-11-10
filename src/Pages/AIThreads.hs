@@ -592,7 +592,8 @@ threadPageGetH pid convId docM runM hxTarget = do
               ([id_ "ai-thread-results"] <> if any ((== Issues.RunRunning) . (.status)) runs then [hxGet_ threadHref, hxTrigger_ "every 2s", hxSelect_ "#ai-thread-results", term "hx-select-oob" "#pageTitleText:outerHTML", hxSwap_ "outerMorph"] else [])
               do
                 unless (null runs) $ section_ [class_ "mb-6", Aria.label_ "Routine runs"] do
-                  let (recent, older) = splitAt 5 runs
+                  -- A subject's own thread leads with its result, so only the latest attempt stays open.
+                  let (recent, older) = splitAt (if all ((== activeConversationIdM) . Just . (.conversationId)) runs then 1 else 5) runs
                       -- A routine's runs span many subjects (PRs, threads); a subject's own runs differ by attempt.
                       runRow run = a_ ([href_ $ runUrl projectId run.id, class_ "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-2 hover:bg-fillHover focus-visible:outline-2 focus-visible:-outline-offset-2"] <> inspectorAttrs (urls.aiRoutineRunGet projectId run.id activeConversationIdM) <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) do
                         span_ [class_ "min-w-0 truncate text-sm text-textStrong"] $ toHtml $ if Just run.conversationId == activeConversationIdM then "Attempt " <> show @Text run.attempt else fromMaybe "Run" run.title

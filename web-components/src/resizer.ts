@@ -40,7 +40,8 @@ document.addEventListener('keydown', (e) => {
   if (!sep || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
   e.preventDefault();
   const target = document.getElementById(sep.dataset.resizeTarget ?? '');
-  if (target) resize(sep, target.offsetWidth + (e.key === 'ArrowLeft' ? -10 : 10) * sign(sep), true);
+  // aria-valuenow is the last width set; offsetWidth lags while a width transition runs.
+  if (target) resize(sep, (Number(sep.getAttribute('aria-valuenow')) || target.offsetWidth) + (e.key === 'ArrowLeft' ? -10 : 10) * sign(sep), true);
 });
 
 document.addEventListener('pointerdown', (e) => {
