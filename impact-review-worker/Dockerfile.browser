@@ -13,6 +13,9 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/proof/browsers
 COPY package.json package-lock.json /opt/proof/
 COPY web-components/package.json web-components/package-lock.json /opt/proof/web-components/
 RUN cd /opt/proof && npm ci --no-audit --no-fund && cd web-components && npm ci --no-audit --no-fund && npm install --no-save --no-audit --no-fund playwright@1.58.2 \
-  && npx playwright install --with-deps chromium && rm -rf /root/.npm /var/lib/apt/lists/* && chmod -R a+rX /opt/proof
+  && npx playwright install --with-deps chromium && rm -rf /root/.npm /var/lib/apt/lists/* && chmod -R a+rX /opt/proof \
+  && mkdir -p /opt/proof/web-components/node_modules/.vite && chmod 1777 /opt/proof/web-components/node_modules/.vite
+# Proofs run as the agent account and Vite writes its dependency cache under node_modules; each VM has
+# its own copy-on-write disk, so a shared writable cache directory leaks nothing between runs.
 
 RUN useradd --create-home --uid 1000 --user-group --shell /bin/bash review-agent
