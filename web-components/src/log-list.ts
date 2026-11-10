@@ -9,7 +9,7 @@ import debounce from 'lodash/debounce';
 import { LiveStream, tableRowToArray, traceEntriesFor } from './live-stream';
 // Import worker as URL instead of worker instance
 import LogWorkerUrl from './log-worker?worker&url';
-import { applySpanExpansion, groupSpans, incompleteResponse } from './log-worker-functions';
+import { applySpanExpansion, groupSpans } from './log-worker-functions';
 import { formatNumber, scaleDuration } from './stat-value';
 import { spriteUrl } from './assets';
 import clsx from 'clsx';
@@ -51,7 +51,9 @@ import {
   middleTruncatePath,
 } from './log-list-utils';
 import { expandSince, expandFromToRange, parseChartZoom, copyParams, PAGE_CONTEXT_PARAMS, SCOPE_PARAMS, TIME_PARAMS } from './time-range-utils';
-import { logFailure, ShownFailure, toEChartsColor } from './widgets';
+import { toEChartsColor } from './widgets';
+import { asShown, fetchJson, logFailure, ShownFailure } from './fetch-failures';
+import { shouldReloadForStaleChunk } from './stale-chunk-reload';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { keyed } from 'lit/directives/keyed.js';
 
@@ -100,21 +102,6 @@ const columnWidthVars = (columns: string[], width: (column: string) => number | 
     .filter(([, w]) => !!w)
     .map(([column, w]) => `--col-${column}-width: ${w}px`)
     .join('; ');
-
-const toShownFailure = (e: unknown): never => {
-  throw new ShownFailure((e instanceof Error && e.message) || 'Network error');
-};
-
-// Every JSON read this list makes wants the same three things: the Accept header that
-// keeps an expired session answering 401 instead of redirecting to an HTML login page,
-// the session cookie, and a message a human can act on when it fails.
-async function fetchJson<T>(url: string): Promise<T> {
-  const resp = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' }).catch(toShownFailure);
-  if (!resp.ok) throw new ShownFailure(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
-  return (await resp.json().catch(() => {
-    throw new ShownFailure(incompleteResponse(resp.status));
-  })) as T;
-}
 
 // Special item types for virtual list
 type VirtualListItem = EventLine | { type: 'fetchRecent' } | { type: 'loadMore' } | { type: 'aggregateChildren'; parentKey: string };
@@ -197,6 +184,7 @@ type FetchPage = { tree: EventLine[]; meta: FetchMeta };
 
 /** The /log_explorer/expand body: child rows of one pattern or session. */
 type ExpandResponse = {
+  error?: string;
   rows?: any[][];
   cols?: string[];
   colIdxMap?: ColIdxMap;
@@ -490,7 +478,12 @@ export class LogList extends LitElement {
     if (this.worker) return;
     this.worker = new Worker(LogWorkerUrl, { type: 'module' });
     this.worker.onmessage = (e) => this.handleWorkerMsg(e);
-    this.worker.onerror = (e: ErrorEvent) => console.error('[Worker] Error:', e.message, e.filename, e.lineno);
+    // No message means the worker script never loaded: a tab left open across a deploy whose chunk
+    // is gone ("[Worker] Error: undefined undefined undefined"). Reload once onto the current build.
+    this.worker.onerror = (e: ErrorEvent) => {
+      if (!e.message && shouldReloadForStaleChunk(Date.now(), sessionStorage)) return window.location.reload();
+      console.error('[Worker] Error:', e.message || 'the log worker failed to load', e.filename, e.lineno);
+    };
   }
 
   private handleWorkerMsg(e: MessageEvent) {
@@ -525,7 +518,7 @@ export class LogList extends LitElement {
       let data: LogDataResponse;
       if (early) {
         window.logDataPromise = null;
-        data = await early.catch(toShownFailure);
+        data = await early.catch(asShown);
       } else {
         data = await fetchJson<LogDataResponse>(url);
       }
@@ -599,7 +592,7 @@ export class LogList extends LitElement {
     const earlyPromise = window.logDataPromise;
     if (earlyPromise) {
       window.logDataPromise = null;
-      const data = await earlyPromise.catch(toShownFailure);
+      const data = await earlyPromise.catch(asShown);
       // Propagate server errors instead of silently falling through to the worker —
       // otherwise the user waits 2 min for "Worker timeout" masking the real cause.
       if (data.error) throw new ShownFailure(this.reportQueryError(data.error));
@@ -1625,6 +1618,7 @@ export class LogList extends LitElement {
     }
     try {
       const data = await fetchJson<ExpandResponse>(this.buildExpandUrl(key, skip));
+      if (data.error) throw new ShownFailure(data.error);
       const cols: string[] = data.cols || [];
       const childIdxMap: ColIdxMap = data.colIdxMap || {};
       if (!Object.keys(childIdxMap).length) cols.forEach((c, i) => (childIdxMap[c] = i));
@@ -1785,6 +1779,7 @@ export class LogList extends LitElement {
     this.requestUpdate();
     try {
       const data = await fetchJson<ExpandResponse>(this.buildExpandUrl(sessionId, 0));
+      if (data.error) throw new ShownFailure(data.error);
       const childIdxMap: ColIdxMap = data.colIdxMap || {};
       const rows = data.rows || [];
       const traces = data.traces || [];

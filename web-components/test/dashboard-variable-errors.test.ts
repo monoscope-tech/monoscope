@@ -39,11 +39,14 @@ describe('dashboard variable option refresh', () => {
     consoleError.mockRestore();
   });
 
-  test('a 5xx still reports', async () => {
+  // A 5xx used to be console.error'd while the picker showed nothing: filed as an issue, invisible to the reader.
+  test('a 5xx marks the picker with its status instead of filing an issue', async () => {
+    const input = picker();
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    respond(503, 'unavailable');
-    await (window as any).reloadVarWhitelist(picker());
-    expect(consoleError).toHaveBeenCalled();
+    respond(503, '<html>unavailable</html>');
+    await (window as any).reloadVarWhitelist(input);
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(input.closest('fieldset')!.title).toBe("Couldn't load options (HTTP 503). Retry later.");
     consoleError.mockRestore();
   });
 });

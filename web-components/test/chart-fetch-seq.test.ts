@@ -1,5 +1,6 @@
 import { describe, test, expect, vi } from 'vitest';
-import { beginChartFetch, ChartQueryError, logFailure } from '../src/widgets';
+import { beginChartFetch, ChartQueryError } from '../src/widgets';
+import { logFailure } from '../src/fetch-failures';
 
 // Regression: dashboard widgets showed the "Query execution failed" overlay on
 // top of freshly rendered bars. A failed /chart_data response arriving AFTER a

@@ -5,6 +5,7 @@
 // Registration is global — v4 dropped hx-ext as the activation mechanism — so each hook gates
 // itself on the hx-ext marker attribute the call sites already carry.
 import { copyParams, SCOPE_PARAMS, TIME_PARAMS } from './time-range-utils';
+import { asShown, logFailure } from './fetch-failures';
 
 const htmx4 = (window as any).htmx;
 
@@ -673,10 +674,10 @@ function reloadVarWhitelist(input: HTMLElement, background = false): Promise<voi
   };
   refresh.request = (async () => {
     try {
-      const response = await fetch(url);
-      if (response.status < 500 && !response.ok) return markInvalid((await response.text()) || `Variable options request failed: ${response.status}`);
-      if (!response.ok) throw new Error(`Variable options request failed: ${response.status}`);
-      const { data_text, error } = await response.json();
+      const response = await fetch(url).catch(asShown);
+      // A 5xx body is an error page, not a message; the server already records its own failure.
+      if (!response.ok) return markInvalid((response.status < 500 && (await response.text())) || `Couldn't load options (HTTP ${response.status}). Retry later.`);
+      const { data_text, error } = await response.json().catch(() => asShown(new Error(`Unreadable variable options (HTTP ${response.status})`)));
       if (error) return markInvalid(error);
       markInvalid();
       if (!Array.isArray(data_text)) throw new Error('Variable options response is missing data');
@@ -711,7 +712,7 @@ function reloadVarWhitelist(input: HTMLElement, background = false): Promise<voi
         if (tgfy.state?.dropdown?.visible) tgfy.dropdown.show(tgfy.state.inputText || '');
       }
     } catch (e) {
-      console.error(`Error fetching data for ${(input as any).name}:`, e);
+      logFailure(`Error fetching data for ${(input as any).name}:`, e);
     } finally {
       if (variableRefreshes.get(input) === refresh) variableRefreshes.delete(input);
     }

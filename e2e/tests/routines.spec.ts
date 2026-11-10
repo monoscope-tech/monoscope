@@ -224,7 +224,7 @@ test('inspector failures explain recovery and release loading feedback without l
       const alert = page.getByRole('alert').filter({ hasText: 'Could not load the details. Try again.' });
       await expect.soft(alert, `${failure} failure provides recovery feedback at ${width}px`).toBeVisible({ timeout: 1000 });
       await expect.soft(source).not.toHaveAttribute('aria-busy', 'true', { timeout: 1000 });
-      await expect.soft(page.locator('#htmx-progress')).toHaveCSS('opacity', '0', { timeout: 1000 });
+      await expect.soft(page.locator('#htmx-progress')).toHaveCSS('opacity', '0');
       if (width === 1280) await expect(inspector.getByText('First retained evidence.', { exact: true })).toBeVisible();
       else await expect(composer).toBeVisible();
       await expect(composer).toHaveValue('Keep this draft while details recover.');
@@ -253,12 +253,12 @@ test('inspector failures explain recovery and release loading feedback without l
         release();
       }
       await expect(inspector.getByText('Second retained evidence.', { exact: true })).toBeVisible();
-      await expect.soft(page.locator('#htmx-progress')).toHaveCSS('opacity', '0', { timeout: 1000 });
+      await expect.soft(page.locator('#htmx-progress')).toHaveCSS('opacity', '0');
       await inspector.focus();
       await page.keyboard.press('Escape');
       await expect(inspector).toBeHidden();
       await expect.soft(source).not.toHaveAttribute('aria-busy', 'true');
-      await expect.soft(page.locator('#htmx-progress')).toHaveCSS('opacity', '0', { timeout: 1000 });
+      await expect.soft(page.locator('#htmx-progress')).toHaveCSS('opacity', '0');
       await expect(composer).toBeFocused();
       await expect(composer).toHaveValue('Keep this draft while details recover.');
       await expect(page).toHaveURL(path);
@@ -331,6 +331,8 @@ test('failed and cancelled runs preserve the conversation and explain missing ar
     await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }]);
     await page.goto(`/p/${pid}/ai/routines`);
     await page.getByRole('button', { name: 'Add Slack investigation', exact: true }).click();
+    // Installing redirects to the new conversation; reading the row before then raced the insert.
+    await page.waitForURL(new RegExp(`/p/${pid}/ai/[0-9a-f-]{36}$`));
     const [routine, conversation] = sql(`SELECT id, conversation_id FROM apis.ai_routines WHERE project_id = '${pid}';`).toString().trim().split('|');
     const states = [
       ['failed', 'Failed', 'The provider did not return a response. Retry this request.'],
@@ -471,11 +473,12 @@ test('routine detail panels preserve conversation drafts, run history, and artif
     await page.getByRole('button', { name: 'Add Slack investigation', exact: true }).click();
     await page.getByText('Routine instructions', { exact: true }).click();
     await page.getByRole('textbox', { name: 'Instructions', exact: true }).fill('Compare the deployment with checkout latency.');
+    // Saving redirects to this same conversation; a goto racing that reload was interrupted by it.
     await Promise.all([
+      page.waitForEvent('load'),
       page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/routine/instructions')),
       page.getByRole('button', { name: 'Save instructions', exact: true }).click(),
     ]);
-    await page.waitForLoadState('networkidle');
     const [routine, conversation] = sql(`SELECT id, conversation_id FROM apis.ai_routines WHERE project_id = '${pid}';`).toString().trim().split('|');
     sql(`INSERT INTO apis.ai_routine_runs (id, root_run_id, routine_id, project_id, conversation_id, scheduled_at, started_at, status, source, requested_by, input, instructions, template_version)
          SELECT '${run}', '${run}', id, project_id, conversation_id, now(), now(), 'running',

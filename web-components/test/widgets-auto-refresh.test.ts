@@ -502,7 +502,9 @@ describe('Log Explorer chart auto-refresh', () => {
       '<div id="volume_bordered"></div><div id="volume_error" class="hidden"><div id="volume_errorMsg"></div><button id="volume_retry" hidden>Retry</button></div>';
 
     const logged: string[] = [];
-    const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+    // Warned, not console.error'd: the chart banner shows it and the server records its own 502.
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const spy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
       logged.push(args.map(String).join(' '));
     });
     // A gateway returning HTML: `ok` is false and json() rejects exactly the way Safari's does.
@@ -516,7 +518,9 @@ describe('Log Explorer chart auto-refresh', () => {
     chartWidget(widget('volume'));
     (globalThis as any).triggerIntersection();
     await vi.waitFor(() => expect(logged.length).toBeGreaterThan(0));
+    expect(errors).not.toHaveBeenCalled();
     spy.mockRestore();
+    errors.mockRestore();
 
     const retry = document.getElementById('volume_retry') as HTMLButtonElement;
     expect(retry.hidden).toBe(false);

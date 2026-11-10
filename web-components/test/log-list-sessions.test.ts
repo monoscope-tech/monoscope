@@ -7,7 +7,7 @@
 // takes the collapse branch and the reader can never retry.
 import { describe, test, expect, vi, afterEach } from 'vitest';
 import { row, mountList, stubFetch } from './log-list-harness';
-import { incompleteResponse } from '../src/log-worker-functions';
+import { incompleteResponse } from '../src/fetch-failures';
 
 const SESSION = 'sess-1';
 

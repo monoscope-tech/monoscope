@@ -2444,10 +2444,16 @@ extractATError spanObj (AE.Object o) = do
   -- Strings-only, no NUL-scrub: these feed computeErrorHashes, so widening the
   -- accepted values (or scrubbing) would re-key existing error patterns.
   let getTextOrEmpty k = fromMaybe "" $ asTextRaw =<< KEM.lookup k attrs
-      -- `exception.escaped` is deprecated but still the only OTel handled/unhandled signal.
-      escaped = KEM.lookup "escaped" attrs >>= \case AE.Bool b -> Just b; AE.String t -> readMaybe (toString $ T.toTitle t); _ -> Nothing
-  pure $ atErrorFrom spanObj ErrorPatterns.CMExceptionEvent (not <$> escaped) (getTextOrEmpty "type") (getTextOrEmpty "message") (getTextOrEmpty "stacktrace")
+  pure $ atErrorFrom spanObj ErrorPatterns.CMExceptionEvent (handledOf =<< KEM.lookup "escaped" attrs) (getTextOrEmpty "type") (getTextOrEmpty "message") (getTextOrEmpty "stacktrace")
 extractATError _ _ = Nothing
+
+
+-- | @exception.escaped@ is deprecated but still OTel's only handled/unhandled signal.
+--
+-- >>> map handledOf [AE.Bool False, AE.String "true", AE.Null]
+-- [Just True,Just False,Nothing]
+handledOf :: AE.Value -> Maybe Bool
+handledOf = fmap not . \case AE.Bool b -> Just b; AE.String t -> readMaybe (toString $ T.toTitle t); _ -> Nothing
 
 
 -- | Fallback extractor for error-severity records with no exception event.
@@ -2460,12 +2466,13 @@ extractATError _ _ = Nothing
 extractATErrorFromRecord :: OtelLogsAndSpans -> Maybe ErrorPatterns.ATError
 extractATErrorFromRecord spanObj =
   let attrs = unAesonTextMaybe spanObj.attributes
-      excAttr k = asTextRaw =<< Map.lookup k =<< jsonToMap =<< Map.lookup "exception" =<< attrs
+      excVal k = Map.lookup k =<< jsonToMap =<< Map.lookup "exception" =<< attrs
+      excAttr = asTextRaw <=< excVal
       bodyTxt = asTextRaw =<< unAesonTextMaybe spanObj.body
       typ = fromMaybe "Error" (excAttr "type")
       msg = fromMaybe "" $ excAttr "message" <|> bodyTxt <|> spanObj.status_message
       stack = fromMaybe "" (excAttr "stacktrace")
-   in atErrorFrom spanObj (bool ErrorPatterns.CMSpanStatus ErrorPatterns.CMLogRecord (isJust spanObj.severity || spanObj.kind == Just "log")) Nothing typ msg stack <$ guard (not (T.null msg && T.null stack))
+   in atErrorFrom spanObj (bool ErrorPatterns.CMSpanStatus ErrorPatterns.CMLogRecord (isJust spanObj.severity || spanObj.kind == Just "log")) (handledOf =<< excVal "escaped") typ msg stack <$ guard (not (T.null msg && T.null stack))
 
 
 -- | Build an 'ErrorPatterns.ATError' from a span/log plus the extracted
