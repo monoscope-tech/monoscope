@@ -834,7 +834,7 @@ evidenceWidget from until item = case item.queryResult of
   Just _ -> Nothing
   Nothing -> case (item.kind, item.service) of
     (Telemetry, Just _) ->
-      Just (def :: Widget.Widget){Widget.wType = Widget.WTTimeseries, Widget.title = Just "Observed service events", Widget.query = Just (serviceSelector item <> " and " <> toQText (evidenceWindow from until) <> " | summarize events = count() by bin_auto(timestamp)")}
+      Just (def :: Widget.Widget){Widget.wType = Widget.WTTimeseries, Widget.title = Just "Observed service events", Widget.query = Just (serviceSelector item <> " and " <> toQText (evidenceWindow from until) <> " | summarize events = count() by bin_auto(timestamp)"), Widget.timeFrom = Just $ toText $ iso8601Show from, Widget.timeTo = Just $ toText $ iso8601Show until}
     _ -> Nothing
 
 
