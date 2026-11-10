@@ -1,7 +1,7 @@
 {-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Data.Effectful.CodeReview (CodeReview (..), SessionIdentity (..), SessionSubject (..), NativePause, FixContext (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), readSessionContext, prepareRepository, Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), proofBudget, ProofHooks (..), ProofProgress (..), hoistHooks, DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), Revision, mkRevision, revisionText, reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, workerHost, runCodeReviewTest, validExplanation) where
+module Data.Effectful.CodeReview (CodeReview (..), SessionIdentity (..), SessionSubject (..), NativePause, FixContext (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), readSessionContext, prepareRepository, resolveImage, Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), proofBudget, ProofHooks (..), ProofProgress (..), hoistHooks, DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), Revision, mkRevision, revisionText, reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, workerHost, runCodeReviewTest, validExplanation) where
 
 import Control.Concurrent.STM qualified as STM
 import Control.Monad.Trans.Except (except, throwE)
@@ -219,6 +219,8 @@ data CodeReview :: Effect where
   -- | Builds the workspace checkpoint at the request's base, warm from the repository's latest
   -- build when one exists. Runs outside any review's budget; a no-op when the checkpoint exists.
   PrepareRepository :: Checkout.Fetch -> CodeReview m (Either Text ())
+  -- | The configured guest image's build, which a fix run pins before its first check.
+  ResolveImage :: CodeReview m (Either Text (UUIDId "guest_image"))
   AdmitRegression :: SessionIdentity m (UUIDId "agent_attempt") -> AdmissionRequest -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> CodeReview m (Either Text AdmissionDecision)
   FixRepository :: SessionIdentity m FixContext -> FixRequest -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (TestArtifact -> m (Either Text Text)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (PhaseReceipt -> m (Either Text ())) -> (FixResult -> m (Either Text ReviewedFix)) -> CodeReview m (Either Text ReviewedFix)
 
@@ -330,6 +332,9 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                     void $ ExceptT $ runEff $ Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir host.image host.bridge configured.script configured.dependencyArchive) (Workspace.Prepare fetched.directory) requestFile
               )
     _ -> pure $ Left "Workspace preparation is not configured on this host"
+  ResolveImage -> liftIO case hostConfig of
+    Right (Just host) -> first show <$> tryAny (Workspace.withSandboxRelease Workspace.VerifierPool host.bridge (const pass) \rpc -> (\(Workspace.ImageId build) -> UUIDId build) . (.buildId) <$> rpc (Workspace.Resolve host.image))
+    _ -> pure $ Left "Agent sandbox is not configured on this host"
   ReviewPatch request recordCall recordUsage check -> localSeqUnliftIO env \unlift ->
     liftIO
       $ launch
@@ -975,6 +980,7 @@ runCodeReviewTest respond respondFix respondAdmission respondArtifacts respondEx
     Left message -> pure $ Left message
     Right result -> localSeqUnliftIO env $ \unlift -> (>>= matchingReview result) <$> unlift (check result)
   PrepareRepository _ -> pure $ Right ()
+  ResolveImage -> pure $ Right $ UUIDId UUID.nil
   AdmitRegression _ request _ _ _ _ -> pure $ respondAdmission request
   ReviewVerifiedFix _ request verified _ _ _ _ -> pure $ respondReview request >>= reviewOutcome request verified
   VerifyFixArtifacts _ request -> pure $ VerifiedFix request.result <$ respondArtifacts request

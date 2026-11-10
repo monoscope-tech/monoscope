@@ -10,6 +10,7 @@ module Models.Projects.CodeContext (
   CodeMappingId,
   Snippet (..),
   SnippetError (..),
+  mappingConnection,
   snippetErrorMessage,
   getCodeMappings,
   insertCodeMapping,

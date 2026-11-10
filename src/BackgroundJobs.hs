@@ -314,6 +314,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
     ReviewPullRequest rid -> ImpactReview.reviewPullRequest rid
     PrepareReviewWorkspace rid -> ImpactReview.prepareReviewWorkspace rid
     FixIssue pid fid -> ImpactReview.fixIssue pid fid
+    AutofixIssues pid -> ImpactReview.autofixIssues pid
     AnalyzeRepository pid rid -> analyzeRepository pid rid
     RepositorySyncTick scheduled -> unlessStale scheduled 300 do
       syncs <- Hasql.interp @[GitSync.GitHubSync] [HI.sql| SELECT * FROM projects.git_sync WHERE sync_enabled |]
@@ -444,8 +445,9 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
         lift $ Hasql.interpExecute_ [HI.sql| INSERT INTO projects.repository_analysis (repository_id, suggestions) VALUES (#{rid}, #{suggestions}) ON CONFLICT (repository_id) DO UPDATE SET suggestions = EXCLUDED.suggestions, analyzed_at = now(), error = NULL |]
       for_ (leftToMaybe result) \err -> Hasql.interpExecute_ [HI.sql| INSERT INTO projects.repository_analysis (repository_id, error) VALUES (#{rid}, #{err}) ON CONFLICT (repository_id) DO UPDATE SET error = EXCLUDED.error, analyzed_at = now() |]
       -- One analysis per project provisions at a time; a concurrent one skips, the holder installs.
-      when (isRight result) $ void $ withXactLease ctx ("routine-provision:" <> pid.toText) $ whenJustM (Projects.projectById pid) \project ->
-        Issues.provisionRoutineTemplate project Issues.issueTriageTemplate >>= traverse_ \routine -> enqueueAIRoutine ctx routine.id routine.scheduledAt
+      when (isRight result) $ void $ withXactLease ctx ("routine-provision:" <> pid.toText) $ whenJustM (Projects.projectById pid) \project -> do
+        mapped <- not . null <$> CodeContext.getCodeMappings pid
+        for_ (Issues.issueTriageTemplate : [Issues.issueAutofixTemplate | mapped]) $ Issues.provisionRoutineTemplate project >=> traverse_ \routine -> enqueueAIRoutine ctx routine.id routine.scheduledAt
     runConversation :: Projects.ProjectId -> UUIDId "ai_routine_run" -> ATBackgroundCtx ()
     runConversation project identifier = do
       let claim = Issues.runContextFor project $ Issues.ConversationClaim identifier
@@ -1020,6 +1022,7 @@ runDailyJobScheduling authCtx =
               -- nothing and is the destructive half, so it stays hourly.
               sched 96 900 (`EndpointTemplateDiscovery` p)
               sched 24 3600 (`EndpointMergeCleanup` p)
+              sched 24 3600 (\_ -> AutofixIssues p)
               sched 24 3600 (`LogPatternHourlyProcessing` p)
               -- The extraction worker owns live span/log/error derivation.
               -- SafetyNetReprocess is the hourly catch-up for

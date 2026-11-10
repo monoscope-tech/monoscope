@@ -1,8 +1,9 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.ImpactReview (reviewPullRequest, prepareReviewWorkspace, requestReview, fixIssue, ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Claim (..), ClaimStatus (..), ProofLink (..), Shot (..), proofLink, Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, renderProgress, ReviewQuery, mkReviewQuery) where
+module Pkg.ImpactReview (reviewPullRequest, prepareReviewWorkspace, requestReview, fixIssue, autofixIssues, ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Claim (..), ClaimStatus (..), ProofLink (..), Shot (..), proofLink, Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, renderProgress, ReviewQuery, mkReviewQuery) where
 
 import BackgroundJobs.Types qualified as Jobs
+import Control.Monad.Trans.Except (except, throwE)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Lazy qualified as LBS
@@ -1088,6 +1089,27 @@ agentThinking = \case
   Just OpenAI.ReasoningEffort_Low -> Agent.Low
   Just OpenAI.ReasoningEffort_Medium -> Agent.Medium
   Just OpenAI.ReasoningEffort_High -> Agent.High
+
+
+-- | Queues fix runs for the autofix routine's candidates, attached to that routine and owned by its
+-- installer. A run reuses its issue's id, so overlapping sweeps converge on one run.
+autofixIssues :: Projects.ProjectId -> ATBackgroundCtx ()
+autofixIssues pid = whenJustM (Issues.getEventRoutine pid Issues.EventIssueFix) \routine -> do
+  cfg <- (.config) <$> ask @AuthContext
+  candidates <- Time.currentTime >>= \now -> Fixes.autofixCandidates pid now 3
+  mappings <- CodeContext.getCodeMappings pid
+  unless (null candidates) $ Agent.resolveImage >>= \case
+    Left err -> Log.logAttention "Autofix could not resolve the agent image" (pid, err)
+    Right image -> for_ candidates \(issue, mid) -> whenJust (find ((== mid) . (.id)) mappings) \mapping -> do
+      queued <- runExceptT do
+        (_, conn) <- ExceptT $ first show <$> CodeContext.mappingConnection cfg pid mapping
+        head' <- ExceptT $ Git.headRevision conn (Git.RepoRef mapping.owner mapping.repo mapping.ref)
+        base <- except $ first show $ Fixes.mkRevision head'
+        let fid = UUIDId issue.unUUIDId
+        created <- lift $ Fixes.createRun pid fid issue mid base image
+        unless (isJust created) $ throwE "The issue or its repository mapping changed"
+        unlessM (lift $ Fixes.queueJob pid routine.requestedBy (Just routine.id) fid) $ throwE "The routine owner can no longer queue fixes"
+      whenLeft_ queued \err -> Log.logAttention "Autofix could not queue a fix" (pid, issue, err)
 
 
 fixIssue :: Projects.ProjectId -> Fixes.FixId -> ATBackgroundCtx ()

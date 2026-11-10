@@ -58,6 +58,7 @@ data BgJobs
   | ReviewPullRequest (UUIDId "pr_review")
   | PrepareReviewWorkspace (UUIDId "pr_review")
   | FixIssue Projects.ProjectId (UUIDId "issue_fix")
+  | AutofixIssues Projects.ProjectId
   | AnalyzeRepository Projects.ProjectId (UUIDId "repository")
   | RepositorySyncTick UTCTime
   | GitSyncFromRepo Projects.ProjectId
