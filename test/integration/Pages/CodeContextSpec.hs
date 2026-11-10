@@ -29,6 +29,7 @@ import Effectful (Eff, IOE, runEff, (:>))
 import Effectful.Dispatch.Dynamic (interpose, interpret)
 import Effectful.Error.Static (catchError)
 import Hasql.Interpolate qualified as HI
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.MonitorDefinitions qualified as MonitorDefinitions
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
@@ -1038,6 +1039,18 @@ spec = do
         analyze provider
         Just current <- runQueryEffect tr $ GitSync.getRepository testPid repository.id
         current.sourceEnabled `shouldBe` False
+        -- Analysis installs issue triage once, outside the demo project; a deleted default stays deleted.
+        let triage pid = find ((== Just "issue-triage") . (.templateKey)) <$> runQueryEffect tr (Issues.listConversations pid)
+        isJust <$> triage testPid `shouldReturn` False
+        otherPid <- createTestProject tr "triage"
+        otherAccount <- grantOf tr otherPid Git.GitHub Nothing "team" Nothing (Just "fixture")
+        Just otherRepository <- runQueryEffect tr $ GitSync.connectRepository otherPid otherAccount.id (Git.GitRepo "team/checkout" "checkout" True "main")
+        let analyzeOther = void $ runJob tr provider (BackgroundJobs.AnalyzeRepository otherPid otherRepository.id)
+        analyzeOther
+        Just installed <- triage otherPid
+        void $ call tr $ AIThreads.routineDeleteH otherPid installed.conversationId
+        analyzeOther
+        isJust <$> triage otherPid `shouldReturn` False
         (.syncEnabled) <$> syncById tr sync `shouldReturn` False
         runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= (`shouldSatisfy` null)
         -- An ambiguous layout enables nothing.

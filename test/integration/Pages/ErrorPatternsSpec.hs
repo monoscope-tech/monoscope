@@ -27,6 +27,8 @@ import Pkg.Components.Table qualified as Table
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.TestUtils
 import Servant qualified
+import Web.ApiHandlers qualified as ApiH
+import Web.ApiTypes qualified as ApiT
 import System.Config (AuthContext (..), EnvConfig (..))
 
 
@@ -259,7 +261,7 @@ spec = around withTestResources $ describe "Error patterns" do
     exc "GET /api/users/:id" "TypeError" "Cannot read properties of undefined (reading 'userId')" "TypeError: Cannot read properties of undefined (reading 'userId')\n    at UserController.getUser (/app/src/controllers/user.js:42:15)\n    at Layer.handle (/app/node_modules/express/lib/router/layer.js:95:5)" (at (-30))
     exc "GET /api/orders/:id" "TypeError" "Cannot read properties of undefined (reading 'orderId')" "TypeError: Cannot read properties of undefined (reading 'orderId')\n    at OrderController.getOrder (/app/src/controllers/order.js:38:12)\n    at Layer.handle (/app/node_modules/express/lib/router/layer.js:95:5)" (at (-20))
     exc "POST /api/connect" "ConnectionRefusedError" "connect ECONNREFUSED 10.0.0.1:5432" "ConnectionRefusedError: connect ECONNREFUSED 10.0.0.1:5432\n    at TCPConnectWrap.afterConnect (/app/node_modules/pg/lib/connection.js:79:18)" (at (-10))
-    forM_ ([("MergeAError", -50), ("MergeBError", -40)] :: [(Text, NominalDiffTime)]) \(ty, dt) -> exc "GET /api/merge" ty "merge probe" (ty <> ": merge probe\n    at probe (/app/src/" <> ty <> ".js:1:1)") (at dt)
+    forM_ ([("MergeAError", -50), ("MergeBError", -40), ("MergeCError", -35), ("MergeDError", -30)] :: [(Text, NominalDiffTime)]) \(ty, dt) -> exc "GET /api/merge" ty "merge probe" (ty <> ": merge probe\n    at probe (/app/src/" <> ty <> ".js:1:1)") (at dt)
     -- Keep the queued enrichment jobs for the deterministic LLM interpreter below.
     drainExtractionWorker tr
     void $ runBackgroundJobsWhere frozenTime tr.trATCtx quiet
@@ -320,6 +322,16 @@ spec = around withTestResources $ describe "Error patterns" do
     ((.canonicalId) &&& (.mergeOverride)) <$> byId tr mb.id `shouldReturn` (Just ma.id, True)
     mapM (fmap (isJust . (.archivedAt)) . issueById tr . (.id)) [ia, ib] `shouldReturn` [False, True]
     dbOne tr [sql| SELECT count(*)::int FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'merged' |] (Only ib.id) `shouldReturn` (1 :: Int)
+    -- The API merge the triage routine calls records why, and unmerge undoes it; an issue never merged is untouched.
+    [mc, md] <- forM ["MergeCError", "MergeDError"] (patternOf tr)
+    [ic, idd] <- forM [mc, md] (issueOf tr . (.hash))
+    let bulk action ids = (.succeeded) <$> toBaseServantResponse tr (ApiH.apiIssuesBulk ApiT.ApiKeyPrincipal testPid ApiT.BulkAction{ApiT.action = action, ApiT.ids = ids, ApiT.durationMinutes = Nothing, ApiT.reason = Just "same throw site"})
+    sort <$> bulk "merge" [idd.id, ic.id] `shouldReturn` sort [ic.id, idd.id]
+    (.canonicalId) <$> byId tr md.id `shouldReturn` Just mc.id
+    dbOne tr [sql| SELECT metadata->>'reason' FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'merged' |] (Only idd.id) `shouldReturn` ("same throw site" :: Text)
+    bulk "unmerge" [idd.id, ic.id] `shouldReturn` [idd.id]
+    ((.canonicalId) &&& (.mergeOverride)) <$> byId tr md.id `shouldReturn` (Nothing, True)
+    mapM (fmap (isJust . (.archivedAt)) . issueById tr . (.id)) [ic, idd] `shouldReturn` [False, False]
 
     -- A pattern merged after its issue exists is silent on every sweep path (canonical_id once gated only one).
     [canon, dupe] <- seed tr "MergeSilenceError" (Just "silence-shape") [("silence-canon", "canonical form"), ("silence-dupe", "duplicate form")]

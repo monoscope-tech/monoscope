@@ -263,14 +263,14 @@ spec = describe "API v1" do
       inactive.deactivatedAt `shouldSatisfy` isJust
       (.deactivatedAt) <$> stored inactive.id >>= (`shouldSatisfy` isJust)
       spare <- runB $ ApiH.apiMonitorCreate testPid (input "bulk-b" "count(*)")
-      deleted <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [inactive.id.unwrap, spare.id.unwrap], ApiT.durationMinutes = Nothing}
+      deleted <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [inactive.id.unwrap, spare.id.unwrap], ApiT.durationMinutes = Nothing, ApiT.reason = Nothing}
       (length deleted.succeeded, deleted.failed) `shouldBe` (2, [])
       bogus <- replicateM 2 UUIDV4.nextRandom
-      missing <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = bogus, ApiT.durationMinutes = Nothing}
+      missing <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = bogus, ApiT.durationMinutes = Nothing, ApiT.reason = Nothing}
       -- SDK wire shape: each failure is {id, error}, not a tuple.
       missing.succeeded `shouldBe` []
       map (\f -> (f.id, f.error)) missing.failed `shouldMatchList` map (,"not applied") bogus
-      runB (ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "nuke", ApiT.ids = [], ApiT.durationMinutes = Nothing}) `shouldThrow` anyException
+      runB (ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "nuke", ApiT.ids = [], ApiT.durationMinutes = Nothing, ApiT.reason = Nothing}) `shouldThrow` anyException
       runB (ApiH.apiMonitorGet testPid (Monitors.QueryMonitorId UUID.nil)) `shouldThrow` anyException
       NoContent <- runB $ ApiH.apiMonitorDelete testPid created.id
       pass
@@ -295,7 +295,7 @@ spec = describe "API v1" do
       localDash <- runB $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid (doc "overview.yaml" "Local overview")
       localDash.summary.id `shouldNotBe` remote.summary.id
       fmap (.title) <$> runQueryEffect tr (Dashboards.getDashboardByProjectId testPid remote.summary.id) `shouldReturn` Just "Repository overview"
-      bulk <- runB $ ApiH.apiDashboardBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [applied.summary.id.unwrap, localDash.summary.id.unwrap], ApiT.durationMinutes = Nothing}
+      bulk <- runB $ ApiH.apiDashboardBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [applied.summary.id.unwrap, localDash.summary.id.unwrap], ApiT.durationMinutes = Nothing, ApiT.reason = Nothing}
       length bulk.succeeded `shouldBe` 2
       NoContent <- runB $ ApiH.apiDashboardDelete testPid created.summary.id
       pass
@@ -312,7 +312,7 @@ spec = describe "API v1" do
       NoContent <- runB $ ApiH.apiTeamDelete testPid created.summary.id
       t1 <- runB $ ApiH.apiTeamCreate testPid (team "t-a" "t-a")
       t2 <- runB $ ApiH.apiTeamCreate testPid (team "t-b" "t-b")
-      (length . (.succeeded)) <$> runB (ApiH.apiTeamsBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [t1.summary.id, t2.summary.id], ApiT.durationMinutes = Nothing}) `shouldReturn` 2
+      (length . (.succeeded)) <$> runB (ApiH.apiTeamsBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [t1.summary.id, t2.summary.id], ApiT.durationMinutes = Nothing, ApiT.reason = Nothing}) `shouldReturn` 2
 
       added <- runB $ ApiH.apiMemberAdd testPid ApiT.MemberAdd{ApiT.email = Just "member@example.com", ApiT.userId = Nothing, ApiT.permission = Just PM.PView}
       (added.email, added.permission) `shouldBe` ("member@example.com", PM.PView)
@@ -391,9 +391,9 @@ spec = describe "API v1" do
 
       issues <- runB $ ApiH.apiIssuesList testPid Nothing Nothing Nothing Nothing Nothing
       (issues.perPage > 0, issues.totalCount >= 0) `shouldBe` (True, True)
-      (.succeeded) <$> runB (ApiH.apiIssuesBulk ApiT.ApiKeyPrincipal testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing}) `shouldReturn` []
+      (.succeeded) <$> runB (ApiH.apiIssuesBulk ApiT.ApiKeyPrincipal testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing, ApiT.reason = Nothing}) `shouldReturn` []
       (.perPage) <$> runB (ApiH.apiLogPatternsList testPid Nothing Nothing) >>= (`shouldSatisfy` (> 0))
-      (.succeeded) <$> runB (ApiH.apiLogPatternsBulk ApiT.ApiKeyPrincipal testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing}) `shouldReturn` []
+      (.succeeded) <$> runB (ApiH.apiLogPatternsBulk ApiT.ApiKeyPrincipal testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing, ApiT.reason = Nothing}) `shouldReturn` []
       runQueryEffect tr $ Endpoints.bulkInsertEndpoints $ fromList [(def :: Endpoints.Endpoint){Endpoints.projectId = testPid, Endpoints.urlPath = "/api-v1-probe", Endpoints.urlParams = AE.object [], Endpoints.method = "GET", Endpoints.host = "probe.test", Endpoints.hash = "api-v1-probe", Endpoints.serviceName = Just "probe"}]
       endpoints <- runB $ ApiH.apiEndpointsList testPid (Just "api-v1-probe") Nothing Nothing Nothing
       map (\e -> (e.urlPath, e.host, e.serviceName)) endpoints.items `shouldBe` [("/api-v1-probe", "probe.test", Just "probe")]

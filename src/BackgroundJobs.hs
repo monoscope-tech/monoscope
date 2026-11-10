@@ -443,6 +443,8 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
         let suggestions = GitSync.AnalysisSuggestions names matches metadata.defaultBranch
         lift $ Hasql.interpExecute_ [HI.sql| INSERT INTO projects.repository_analysis (repository_id, suggestions) VALUES (#{rid}, #{suggestions}) ON CONFLICT (repository_id) DO UPDATE SET suggestions = EXCLUDED.suggestions, analyzed_at = now(), error = NULL |]
       for_ (leftToMaybe result) \err -> Hasql.interpExecute_ [HI.sql| INSERT INTO projects.repository_analysis (repository_id, error) VALUES (#{rid}, #{err}) ON CONFLICT (repository_id) DO UPDATE SET error = EXCLUDED.error, analyzed_at = now() |]
+      when (isRight result) $ whenJustM (Projects.projectById pid) \project ->
+        Issues.provisionRoutineTemplate project Issues.issueTriageTemplate >>= traverse_ \routine -> enqueueAIRoutine ctx routine.id routine.scheduledAt
     runConversation :: Projects.ProjectId -> UUIDId "ai_routine_run" -> ATBackgroundCtx ()
     runConversation project identifier = do
       let claim = Issues.runContextFor project $ Issues.ConversationClaim identifier

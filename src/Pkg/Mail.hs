@@ -500,6 +500,7 @@ activityReply note = oneLine (fromMaybe "issue" note.issue) line
       Issues.IECommented -> ":speech_balloon: " <> who <> "\n" <> foldMap (T.intercalate "\n" . map ("> " <>) . lines . slackEscape . T.take 1500) (meta "body")
       Issues.IELinked -> ":link: " <> who <> " linked " <> maybe "an external issue" (\u -> "<" <> u <> "|" <> slackEscape (fromMaybe u $ meta "title") <> ">") (meta "url")
       Issues.IEMerged -> ":twisted_rightwards_arrows: " <> who <> " merged this into another issue"
+      Issues.IEUnmerged -> ":leftwards_arrow_with_hook: " <> who <> " unmerged this"
       Issues.IESpam -> ":no_entry_sign: " <> who <> " marked this as spam"
       Issues.IENotSpam -> ":leftwards_arrow_with_hook: " <> who <> " marked this as not spam"
       (Issues.IECreated; Issues.IERegressed; Issues.IEEscalated; Issues.IEViewed) -> ":information_source: Issue updated"

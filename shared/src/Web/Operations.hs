@@ -159,7 +159,7 @@ operations =
   , op "unack_issue" (Write POST) "/issues/{issue_id}/unack" (Just Edit) "Un-acknowledge issue" [at "issues unack" []]
   , op "archive_issue" (Write POST) "/issues/{issue_id}/archive" (Just Edit) "Archive issue" [at "issues archive" []]
   , op "unarchive_issue" (Write POST) "/issues/{issue_id}/unarchive" (Just Edit) "Unarchive issue" [at "issues unarchive" []]
-  , op "bulk_issues" (Write POST) "/issues/bulk" (Just Edit) "Bulk acknowledge/archive issues" [at "issues bulk" $ bulk "acknowledge|unack|archive|unarchive" [flag "for" "MINUTES" "For acknowledge: pause notifications for N minutes" (Body "duration_minutes") Int]]
+  , op "bulk_issues" (Write POST) "/issues/bulk" (Just Edit) "Bulk acknowledge/archive/merge issues. merge folds the ids into the earliest-seen one, which stays open; unmerge restores merged issues" [at "issues bulk" $ bulk "acknowledge|unack|archive|unarchive|merge|unmerge" [flag "for" "MINUTES" "For acknowledge: pause notifications for N minutes" (Body "duration_minutes") Int, flag "reason" "TEXT" "For merge: the shared root cause, recorded on each merged issue" (Body "reason") Str]]
   , -- Incidents
     op "list_incidents" GET "/incidents" (Just View) "List recent incidents" [list "incidents list" [flag "phase" "PHASE" "active|recovered|resolved" (Query "phase") Str, Opt (Option ("limit" :| ["n"]) Optional "N" "Maximum incidents (default: 20)" (Query "limit") Int)] "id" [self "phase" State, col "started" "started_at" Muted, col "last_event" "last_event_at" Muted]]
   , op "get_incident" GET "/incidents/{incident_id}" (Just View) "Get incident by ID" [at "incidents get" []]
