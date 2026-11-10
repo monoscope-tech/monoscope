@@ -1400,9 +1400,10 @@ unmergeIssues :: (DB es, Time :> es) => Projects.ProjectId -> Maybe Projects.Use
 unmergeIssues pid actor issues = do
   states <- mergeStates pid issues
   let merged = [i | i <- issues, isJust i.archivedAt, Map.lookup i.id states == Just IEMerged]
+      ids = (.id) <$> merged
   forM_ merged $ issueError pid >=> traverse_ (PatternMerge.unmergePattern pid . (.id))
-  void $ setArchiveState pid ((.id) <$> merged) Nothing
-  (.id) <$> merged <$ forM_ merged \i -> logIssueActivity i.id IEUnmerged actor Nothing
+  void $ setArchiveState pid ids Nothing
+  ids <$ forM_ ids \i -> logIssueActivity i IEUnmerged actor Nothing
 
 
 -- | Drops issues a person unmerged since their last merge, so automatic merging cannot undo that call.
