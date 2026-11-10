@@ -707,7 +707,7 @@ export class LiveTail extends LitElement {
         >
           ${KINDS.map(([value, label]) => html`<option value=${value}>${label}</option>`)}
         </select>
-        <div class="flex-1 basis-64 min-w-64 max-md:order-last max-md:basis-full">
+        <div class="flex-1 basis-48 min-w-48 max-md:order-last max-md:basis-full">
           <query-editor
             class=${`${this.aiSearchOpen ? 'hidden' : 'flex'} w-full items-center min-h-[38px]`}
             project-id=${this.projectId}
