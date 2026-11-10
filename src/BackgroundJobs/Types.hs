@@ -256,9 +256,15 @@ queueJobTx timing payload = do
       (at, bound) = case timing of
         WakeNow -> ([HI.sql|app_now()|], [HI.sql|LEAST(run_at, app_now())|])
         DeferUntil deadline -> ([HI.sql|#{deadline}|], [HI.sql|GREATEST(run_at, #{deadline})|])
+      -- Reviews and workspace builds outlast the main queue's timeout, which odd-jobs also treats as a
+      -- stale lock; every other job is short, so a new constructor defaults there.
+      table = case payload of
+        ReviewPullRequest{} -> [HI.sql|background_jobs_long|]
+        PrepareReviewWorkspace{} -> [HI.sql|background_jobs_long|]
+        _ -> [HI.sql|background_jobs|]
   Hasql.executeTx
     [HI.sql|WITH ready AS (
-      UPDATE background_jobs SET run_at = ^{bound}
+      UPDATE ^{table} SET run_at = ^{bound}
       WHERE payload = #{job} AND status IN ('queued', 'retry') RETURNING id
-    ) INSERT INTO background_jobs (run_at, status, payload)
+    ) INSERT INTO ^{table} (run_at, status, payload)
       SELECT ^{at}, 'queued', #{job} WHERE NOT EXISTS (SELECT 1 FROM ready)|]

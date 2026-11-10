@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Types (AgentAwaitingReview (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), FixContext (..), Evidence (..), EvidenceKind (..), Observation (..), QueryKind (..), QueryObservation (..), KnowledgeSnapshot (..), ThinkingLevel (..), ReviewMode (..), DraftSubmission (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionResult (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), FixReviewRequest (..), FixReviewDecision (..), FixReviewResult (..), Explanation (..), validExplanation, PricingStatus (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), ProofMedia (..), WorkspaceFingerprint, mkWorkspaceFingerprint, Revision, mkRevision, revisionText, Candidate (..), Step (..), Failure (..)) where
+module Data.Effectful.CodeReview.Types (reviewSeconds, AgentAwaitingReview (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), FixContext (..), Evidence (..), EvidenceKind (..), Observation (..), QueryKind (..), QueryObservation (..), KnowledgeSnapshot (..), ThinkingLevel (..), ReviewMode (..), DraftSubmission (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionResult (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), FixReviewRequest (..), FixReviewDecision (..), FixReviewResult (..), Explanation (..), validExplanation, PricingStatus (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), ProofMedia (..), WorkspaceFingerprint, mkWorkspaceFingerprint, Revision, mkRevision, revisionText, Candidate (..), Step (..), Failure (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Char (isHexDigit)
@@ -119,6 +119,12 @@ data RevisionSide = Base | Head
 -- | One side of a recorded proof: the claim's command replayed under asciinema in a fresh VM,
 -- rendered on the host as an animated preview and a video. A UI proof's preview and video come from
 -- the browser recording it made, with its labelled screenshots and chapters.
+-- | A pull-request review's wall-clock budget. Slow repositories build inside it, so it is long; the
+-- review lease and the agent's own limit derive from it.
+reviewSeconds :: Int
+reviewSeconds = 30 * 60
+
+
 data ProofMedia = ProofMedia {side :: RevisionSide, revision :: Text, exitCode :: Maybe Int, cast :: ByteString, gif :: ByteString, mp4 :: ByteString, browser :: Bool, shots :: [(Text, ByteString)], chapters :: [(Double, Text)]}
 
 
