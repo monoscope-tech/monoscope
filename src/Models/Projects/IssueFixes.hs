@@ -153,6 +153,11 @@ advance setup progress (Observe check) = do
       unless (T.toLower check.revision == revisionText revision) $ Left WrongRevision
 
 
+-- | The credentials fix runs accept, as @c@: a github.com App installation.
+appCredential :: HI.Sql
+appCredential = [HI.sql|c.host = 'github' AND c.api_base IS NULL AND c.installation_id IS NOT NULL|]
+
+
 createRun :: DB es => ProjectId -> FixId -> IssueId -> CodeMappingId -> Revision -> UUIDId "guest_image" -> Eff es (Maybe FixId)
 createRun pid fid issue mapping base image =
   Hasql.interpOne
@@ -163,7 +168,7 @@ createRun pid fid issue mapping base image =
     JOIN projects.code_mappings m ON m.project_id = p.id AND m.service = i.service
     JOIN projects.git_credentials c ON c.id = m.credential_id AND c.project_id = p.id
     WHERE p.id = #{pid} AND p.deleted_at IS NULL AND i.id = #{issue} AND i.archived_at IS NULL
-      AND m.id = #{mapping} AND c.host = 'github' AND c.api_base IS NULL AND c.installation_id IS NOT NULL
+      AND m.id = #{mapping} AND ^{appCredential}
     ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
       WHERE issue_fix_runs.project_id = EXCLUDED.project_id AND issue_fix_runs.issue_id = EXCLUDED.issue_id
         AND issue_fix_runs.setup = EXCLUDED.setup
@@ -181,7 +186,7 @@ autofixCandidates pid n =
     JOIN projects.git_credentials c ON c.id = m.credential_id AND c.project_id = i.project_id
     WHERE i.project_id = #{pid} AND i.archived_at IS NULL AND i.spam_at IS NULL AND i.issue_type <> 'api_change'
       AND i.created_at BETWEEN #{addUTCTime (-7 * nominalDay) now} AND #{addUTCTime (-3600) now}
-      AND c.host = 'github' AND c.api_base IS NULL AND c.installation_id IS NOT NULL
+      AND ^{appCredential}
       AND NOT EXISTS (SELECT 1 FROM projects.issue_fix_runs f WHERE f.issue_id = i.id)
     ORDER BY i.created_at DESC, i.id, length(m.path_prefix) DESC LIMIT #{n}|]
 
@@ -243,7 +248,7 @@ recordStepWith scope pid fid expected sid step = do
                 AND i.archived_at IS NULL AND i.service = r.setup->>'service' AND m.service = i.service
                 AND m.owner = r.setup->>'owner' AND m.repo = r.setup->>'repo'
                 AND c.id = (r.setup->>'credentialId')::uuid AND c.installation_id = (r.setup->>'installationId')::bigint
-                AND c.host = 'github' AND c.api_base IS NULL AND c.installation_id IS NOT NULL
+                AND ^{appCredential}
               FOR UPDATE OF r
             ), inserted AS (
               INSERT INTO projects.issue_fix_steps (id, run_id, version, step)
