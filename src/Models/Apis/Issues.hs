@@ -219,6 +219,7 @@ module Models.Apis.Issues (
   listVisibleRoutineRuns,
   getConversation,
   conversationIssueId,
+  isPersonConversation,
   getConversationTitle,
   setConversationTitle,
   renameConversation,
@@ -2282,6 +2283,14 @@ conversationIssueId :: ConversationSummary -> Maybe IssueId
 conversationIssueId conversation = case conversation.conversationType of
   CTAnomaly -> Just $ UUIDId conversation.conversationId.unUUIDId
   (CTTrace; CTLogExplorer; CTDashboard; CTSlackThread; CTDiscordThread; CTWeb; CTPullRequest) -> Nothing
+
+
+-- | Conversations people start. Routines and their per-subject threads (one per reviewed PR) live under the routine.
+isPersonConversation :: ConversationSummary -> Bool
+isPersonConversation c =
+  isNothing c.routineKind && case c.conversationType of
+    CTPullRequest -> False
+    (CTAnomaly; CTTrace; CTLogExplorer; CTDashboard; CTSlackThread; CTDiscordThread; CTWeb) -> True
 
 
 setConversationTitle :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Text -> Eff es ()

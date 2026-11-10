@@ -80,6 +80,7 @@ module Utils (
   renderMarkdown,
   renderMarkdownToc,
   renderMarkdownTocWithPrefix,
+  textOnlyHtml,
   jsonToMap,
   fieldContextMenuItems_,
   fieldMenuActions,
@@ -98,6 +99,11 @@ module Utils (
 )
 where
 
+import Commonmark qualified as Markdown
+import Commonmark.Blocks qualified as MarkdownBlocks
+import Commonmark.Extensions (gfmExtensions)
+import Commonmark.Tag qualified as MarkdownTag
+import Commonmark.TokParsers (symbol)
 import Data.Aeson as AE
 import Data.Aeson.Extra.Merge (lodashMerge)
 import Data.Aeson.Key qualified as AEK
@@ -138,8 +144,10 @@ import Pkg.IngestBudget qualified as IngestBudget
 import Relude hiding (notElem)
 import Relude.Extra.Tuple (toSnd)
 import Servant hiding ((:>))
+import Text.HTML.SanitizeXSS (sanitizeBalance)
 import Text.MMark qualified as MMark
 import Text.MMark.Extension qualified as MExt
+import Text.Parsec qualified as Parsec
 import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
 import Text.URI qualified as URI
@@ -1571,13 +1579,19 @@ renderMarkdown = fst . renderMarkdownToc
 
 
 -- | Rendered markdown plus its @##@ headings as (anchor id, text); MMark already gives each heading that id.
+-- MMark rejects input CommonMark accepts (agent reports with images, tables and raw tags), so those
+-- fall back to GFM instead of printing the raw source; embedded HTML stays text.
+--
+-- >>> let html = toStrict $ renderText $ renderMarkdown "### Merge risk\n\nA <b>tag</b> ![Before](https://x.test/a.gif?sig=1) <sub>base</sub>\n\n| Check | Verdict |\n| :-- | :-- |\n| **Impact** | small |\n"
+-- >>> map (`T.isInfixOf` html) ["<h3", "<table", "<strong>Impact", "&lt;b&gt;", "| :--"]
+-- [True,True,True,True,False]
 renderMarkdownToc :: Text -> (Html (), [(Text, Text)])
 renderMarkdownToc = renderMarkdownTocWithPrefix ""
 
 
 renderMarkdownTocWithPrefix :: Text -> Text -> (Html (), [(Text, Text)])
 renderMarkdownTocWithPrefix prefix md = case MMark.parse "" md of
-  Left _ -> (toHtml md, [])
+  Left _ -> (either (const $ toHtml md) (toHtmlRaw . sanitizeBalance . toStrict . Markdown.renderHtml @()) $ runIdentity $ Markdown.commonmarkWith (textOnlyHtml $ gfmExtensions <> Markdown.defaultSyntaxSpec) "" md, [])
   Right parsed ->
     let doc = if T.null prefix then parsed else MMark.useExtension scoped parsed
      in ( toHtmlRaw $ MMark.render doc
@@ -1604,6 +1618,15 @@ renderMarkdownTocWithPrefix prefix md = case MMark.parse "" md of
               inline -> render inline
           )
     heading element (inlines, body) = element [id_ $ prefix <> MExt.headerId (MExt.getOis inlines), tabindex_ "-1"] body >> toHtmlRaw ("\n" :: Text)
+
+
+-- | Embedded HTML is text; only Markdown constructs may create markup.
+textOnlyHtml :: forall a. Markdown.IsBlock (Markdown.Html a) (Markdown.Html a) => Markdown.SyntaxSpec Identity (Markdown.Html a) (Markdown.Html a) -> Markdown.SyntaxSpec Identity (Markdown.Html a) (Markdown.Html a)
+textOnlyHtml syntax =
+  syntax
+    { Markdown.syntaxBlockSpecs = filter ((/= (MarkdownBlocks.rawHtmlSpec @Identity @(Markdown.Html a) @(Markdown.Html a)).blockType) . (.blockType)) syntax.syntaxBlockSpecs
+    , Markdown.syntaxInlineParsers = (Markdown.str . Markdown.untokenize <$> Parsec.try ((:) <$> symbol '<' <*> MarkdownTag.htmlTag)) : syntax.syntaxInlineParsers
+    }
 
 
 jsonToMap :: AE.Value -> Maybe (Map Text AE.Value)

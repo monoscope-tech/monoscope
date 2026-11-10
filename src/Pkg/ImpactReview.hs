@@ -234,7 +234,7 @@ type ReviewCtx = Eff (Error ReviewFailure ': ATBackgroundEffects)
 
 
 nativeSessionLostMessage :: Text
-nativeSessionLostMessage = "Native session data is missing. Restore its storage or start a new request."
+nativeSessionLostMessage = "Saved progress was lost, so this run cannot resume. Start it again for a fresh run."
 
 
 requireRetainedSession :: (DB es, Error ReviewFailure :> es) => Projects.ProjectId -> Usage.Run kind -> Maybe context -> Eff es ()

@@ -5,6 +5,7 @@ module Pages.AIThreads (AIPage (..), PolicySaved (..), PromptError (..), NewThre
 import BackgroundJobs qualified
 import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
+import Data.Aeson.Encode.Pretty qualified as AEP
 import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
 import Data.CaseInsensitive qualified as CI
@@ -227,7 +228,7 @@ threadsGetH pid = do
               faSprite_ "plus" "regular" "h-3.5 w-3.5"
               span_ [class_ "max-md:hidden"] "New chat"
           }
-  addRespHeaders $ PageCtx pageConfig $ conversationsPage_ $ filter (isNothing . (.routineKind)) allConversations
+  addRespHeaders $ PageCtx pageConfig $ conversationsPage_ $ filter Issues.isPersonConversation allConversations
   where
     conversationsPage_ :: [Issues.ConversationSummary] -> Html ()
     conversationsPage_ items = div_ [class_ "h-full overflow-y-auto bg-bgBase"] do
@@ -409,9 +410,12 @@ threadPageGetH pid convId docM runM hxTarget = do
         ([id_ "routine-run", class_ "space-y-5"] <> [attribute | run.status == Issues.RunRunning, attribute <- [hxGet_ $ urls.aiRoutineRunGet pid run.id (Just convId), hxTrigger_ "every 5s", hxSelect_ "#routine-run", hxTarget_ "this", hxSwap_ "outerMorph", term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]])
         do
           header_ [class_ "space-y-2"] do
-            h2_ [class_ "text-base font-semibold text-textStrong break-words"] $ toHtml $ fromMaybe "Run" run.title
-            div_ [class_ "flex flex-wrap items-center gap-3 text-sm text-textWeak"] do
+            div_ [class_ "flex items-baseline justify-between gap-3"] do
+              h2_ [class_ "min-w-0 text-base font-semibold text-textStrong break-words"] $ toHtml $ fromMaybe "Run" run.title
+              when (run.conversationId /= convId) $ a_ [href_ $ threadUrl pid run.conversationId, class_ "shrink-0 text-xs font-medium text-textBrand hover:underline"] "Open thread"
+            div_ [class_ "flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak [&>*+*]:before:me-2 [&>*+*]:before:text-textDisabled [&>*+*]:before:content-['·']"] do
               span_ [role_ "status"] $ uncurry tonePill_ $ runStatus run.status
+              time_ [datetime_ $ show run.startedAt, class_ "tabular-nums"] $ toHtml $ formatTime defaultTimeLocale "%e %b %Y, %H:%M UTC" run.startedAt
               span_ $ toHtml $ case run.source of
                 (Issues.InteractiveRun _; Issues.ConversationRun _) -> "Web request"
                 Issues.FixRun{} -> "Code fix"
@@ -426,7 +430,6 @@ threadPageGetH pid convId docM runM hxTarget = do
               whenJust requestedBy $ \user -> do
                 let name = T.strip $ user.firstName <> " " <> user.lastName
                 span_ [class_ "min-w-0 break-words"] $ toHtml $ "Requested by " <> if T.null name then CI.original user.email else name
-              time_ [datetime_ $ show run.startedAt] $ toHtml $ formatTime defaultTimeLocale "%e %b %Y, %H:%M UTC" run.startedAt
           sequence_ fixEvidence
           whenJust run.error $ p_ [class_ $ "rounded-lg border border-strokeWeak p-4 text-sm break-words " <> (case run.status of Issues.RunFailed -> "text-textError"; Issues.RunTimedOut -> "text-textWarning"; (Issues.RunRunning; Issues.RunSucceeded; Issues.RunNoFindings; Issues.RunCancelled) -> "text-textWeak"), role_ "status"] . toHtml
           whenJust evidence.input $ \input -> section_ [Aria.label_ "Run request"] do
@@ -513,7 +516,7 @@ threadPageGetH pid convId docM runM hxTarget = do
           for_ ([("Findings", evidence.findings), ("Tool results", evidence.actions)] :: [(Text, Maybe AE.Value)]) \(title, value) -> whenJust value \body ->
             details_ [class_ "rounded-lg border border-strokeWeak p-4"] do
               summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ toHtml @Text title
-              pre_ [class_ "mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs text-textWeak"] $ toHtml @Text $ decodeUtf8 $ AE.encode body
+              pre_ [class_ "mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs text-textWeak"] $ toHtml @Text $ decodeUtf8 $ AEP.encodePretty body
           when retained $ p_ [class_ "text-sm text-textWeak"] "This conversation was deleted. Its run and artifacts are retained here."
       where
         preview value =
@@ -542,55 +545,69 @@ threadPageGetH pid convId docM runM hxTarget = do
           div_ [class_ "max-w-3xl mx-auto px-5 py-8"] do
             unless (null docs) $ div_ [class_ "mb-5"] documentsNav_
             for_ routineM routineOverview_
-            when (any (isJust . (.routineKind)) conversationM) $ section_ [class_ "mb-6 space-y-4", Aria.label_ "Routine configuration"] do
-              when (isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] $ toHtml $ foldMap (\c -> maybe "" Issues.routineKindLabel c.routineKind <> " · " <> bool "Paused" "Active" c.routineActive) conversationM
-              for_ (conversationM >>= (.routinePolicy)) \policy -> do
-                let selection = case policy of Issues.ReviewSelected selected -> Just selected; (Issues.Observe; Issues.Autonomous) -> Nothing
-                if canEdit
-                  then form_ [hxPost_ $ foldMap (urls.aiRoutinePolicyPost projectId) activeConversationIdM, hxSwap_ "none", class_ "group/policy space-y-2 rounded-xl border border-strokeWeak bg-bgRaised p-4"] do
-                    label_ [Lucid.for_ "routine-policy", class_ "block text-sm font-medium text-textStrong"] "Execution policy"
-                    select_ [id_ "routine-policy", name_ "policy", class_ "select select-sm w-full text-base sm:text-xs"] do
-                      option_ ([value_ "observe"] <> [selected_ "selected" | policy == Issues.Observe]) "Observe"
-                      option_ ([value_ "autonomous"] <> [selected_ "selected" | policy == Issues.Autonomous]) "Autonomous"
-                      option_ ([value_ "review"] <> [selected_ "selected" | isJust selection]) "Review selected actions"
-                    fieldset_ [class_ "hidden space-y-3 group-has-[option[value=review]:checked]/policy:block"] do
-                      legend_ [class_ "text-sm font-medium text-textStrong"] "Actions requiring review"
-                      for_ [minBound @Catalog.ReviewClass .. maxBound] \actionClass -> label_ [class_ "flex items-center gap-2 text-sm text-textStrong"] do
-                        input_ $ [type_ "checkbox", name_ "reviewClass", value_ $ toText $ encodeEnumSC @"" actionClass, class_ "checkbox checkbox-sm"] <> [checked_ | any (elem actionClass . (.classes)) selection]
-                        toHtml $ reviewClassLabel actionClass
-                      label_ [class_ "block space-y-1 text-sm text-textStrong"] do
-                        span_ "Required reviewer"
-                        select_ [name_ "reviewApprover", class_ "select select-sm w-full text-base sm:text-xs"]
-                          $ for_ @[] [Catalog.ReviewEditors, Catalog.ReviewAdministrators] \approver ->
-                            option_ ([value_ $ toText $ encodeEnumSC @"Review" approver] <> [selected_ "selected" | approver == maybe Catalog.ReviewEditors (.approver) selection]) $ toHtml $ reviewerLabel approver
-                      p_ [class_ "text-xs text-textWeak"] "Only checked action classes require review. Unchecked actions stay automatic. Choose at least one class."
+            when (any (isJust . (.routineKind)) conversationM) do
+              when (isNothing routineM) $ p_ [class_ "mb-3 text-sm text-textWeak"] $ toHtml $ foldMap (\c -> maybe "" Issues.routineKindLabel c.routineKind <> " · " <> bool "Paused" "Active" c.routineActive) conversationM
+              -- Setup, not daily reading: collapsed so runs and results lead.
+              details_ [class_ "group/settings mb-6 rounded-xl border border-strokeWeak bg-bgRaised", Aria.label_ "Routine configuration"] do
+                summary_ [class_ "flex cursor-pointer list-none items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:outline-offset-2 [&::-webkit-details-marker]:hidden"] do
+                  faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-iconNeutral transition-transform duration-150 group-open/settings:rotate-90 rtl:-scale-x-100"
+                  "Settings"
+                  whenJust (conversationM >>= (.routinePolicy)) $ span_ [class_ "ms-auto text-xs font-normal text-textWeak"] . toHtml . policyLabel
+                div_ [class_ "space-y-6 border-t border-strokeWeak p-4"] do
+                  for_ (conversationM >>= (.routinePolicy)) \policy -> do
+                    let selection = case policy of Issues.ReviewSelected selected -> Just selected; (Issues.Observe; Issues.Autonomous) -> Nothing
+                    if canEdit
+                      then form_ [hxPost_ $ foldMap (urls.aiRoutinePolicyPost projectId) activeConversationIdM, hxSwap_ "none", class_ "group/policy space-y-2"] do
+                        label_ [Lucid.for_ "routine-policy", class_ "block text-sm font-medium text-textStrong"] "Execution policy"
+                        select_ [id_ "routine-policy", name_ "policy", class_ "select select-sm w-full text-base sm:text-xs"] do
+                          option_ ([value_ "observe"] <> [selected_ "selected" | policy == Issues.Observe]) "Observe"
+                          option_ ([value_ "autonomous"] <> [selected_ "selected" | policy == Issues.Autonomous]) "Autonomous"
+                          option_ ([value_ "review"] <> [selected_ "selected" | isJust selection]) "Review selected actions"
+                        fieldset_ [class_ "hidden space-y-3 group-has-[option[value=review]:checked]/policy:block"] do
+                          legend_ [class_ "text-sm font-medium text-textStrong"] "Actions requiring review"
+                          for_ [minBound @Catalog.ReviewClass .. maxBound] \actionClass -> label_ [class_ "flex items-center gap-2 text-sm text-textStrong"] do
+                            input_ $ [type_ "checkbox", name_ "reviewClass", value_ $ toText $ encodeEnumSC @"" actionClass, class_ "checkbox checkbox-sm"] <> [checked_ | any (elem actionClass . (.classes)) selection]
+                            toHtml $ reviewClassLabel actionClass
+                          label_ [class_ "block space-y-1 text-sm text-textStrong"] do
+                            span_ "Required reviewer"
+                            select_ [name_ "reviewApprover", class_ "select select-sm w-full text-base sm:text-xs"]
+                              $ for_ @[] [Catalog.ReviewEditors, Catalog.ReviewAdministrators] \approver ->
+                                option_ ([value_ $ toText $ encodeEnumSC @"Review" approver] <> [selected_ "selected" | approver == maybe Catalog.ReviewEditors (.approver) selection]) $ toHtml $ reviewerLabel approver
+                          p_ [class_ "text-xs text-textWeak"] "Only checked action classes require review. Unchecked actions stay automatic. Choose at least one class."
 
-                    p_ [class_ "text-sm text-textWeak"] "Observe reads evidence and saves results. Autonomous also changes project resources, updates project knowledge, and publishes requested results within the authorizing member's current role, without per-action approval."
-                    p_ [class_ "text-xs text-textWeak"] "Restrictions apply immediately. Greater authority applies to future runs."
-                    button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save policy"
-                  else p_ [class_ "text-sm text-textWeak"] $ toHtml $ case policy of
-                    Issues.Observe -> "Execution policy: Observe"
-                    Issues.Autonomous -> "Execution policy: Autonomous"
-                    Issues.ReviewSelected selected -> "Review selected actions: " <> T.intercalate ", " (map reviewClassLabel $ toList selected.classes) <> ". Reviewers: " <> reviewerLabel selected.approver <> "."
-              details_ [class_ "rounded-xl border border-strokeWeak bg-bgRaised p-4"] do
-                summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Routine instructions"
-                p_ [class_ "my-3 text-sm text-textWeak"] "Changes apply to future runs. Past runs keep the instructions they used."
-                if canEdit
-                  then do
-                    form_ [hxPost_ $ foldMap (urls.aiRoutineInstructionsPost projectId) activeConversationIdM, hxSwap_ "none", class_ "space-y-3"] do
-                      label_ [Lucid.for_ "routine-instructions", class_ "block text-sm font-medium text-textStrong"] "Instructions"
-                      textarea_ [id_ "routine-instructions", name_ "instructions", required_ "required", maxlength_ "4000", rows_ "8", class_ "textarea w-full text-base sm:text-sm"] $ toHtml $ fromMaybe "" instructions
-                      button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save instructions"
-                  else p_ [class_ "whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe "" instructions
+                        p_ [class_ "text-sm text-textWeak"] "Observe reads evidence and saves results. Autonomous also changes project resources, updates project knowledge, and publishes requested results within the authorizing member's current role, without per-action approval."
+                        p_ [class_ "text-xs text-textWeak"] "Restrictions apply immediately. Greater authority applies to future runs."
+                        button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save policy"
+                      else p_ [class_ "text-sm text-textWeak"] $ toHtml $ case policy of
+                        Issues.Observe -> "Execution policy: Observe"
+                        Issues.Autonomous -> "Execution policy: Autonomous"
+                        Issues.ReviewSelected selected -> "Review selected actions: " <> T.intercalate ", " (map reviewClassLabel $ toList selected.classes) <> ". Reviewers: " <> reviewerLabel selected.approver <> "."
+                  form_ [hxPost_ $ foldMap (urls.aiRoutineInstructionsPost projectId) activeConversationIdM, hxSwap_ "none", class_ "space-y-2", Aria.label_ "Routine instructions"] do
+                    label_ [Lucid.for_ "routine-instructions", class_ "block text-sm font-medium text-textStrong"] "Instructions"
+                    textarea_ ([id_ "routine-instructions", name_ "instructions", required_ "required", maxlength_ "4000", rows_ "8", class_ "textarea w-full text-base sm:text-sm"] <> [readonly_ "" | not canEdit]) $ toHtml $ fromMaybe "" instructions
+                    p_ [class_ "text-xs text-textWeak"] "Changes apply to future runs. Past runs keep the instructions they used."
+                    when canEdit $ button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save instructions"
               when (null runs && isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] "No runs yet. An active routine starts when the next matching event arrives."
             div_
               ([id_ "ai-thread-results"] <> if any ((== Issues.RunRunning) . (.status)) runs then [hxGet_ threadHref, hxTrigger_ "every 2s", hxSelect_ "#ai-thread-results", term "hx-select-oob" "#pageTitleText:outerHTML", hxSwap_ "outerHTML"] else [])
               do
-                unless (null runs) $ section_ [class_ "mb-6 space-y-2", Aria.label_ "Routine runs"] do
-                  h2_ [class_ "text-sm font-semibold text-textStrong"] "Runs"
-                  for_ runs \run -> a_ ([href_ $ runUrl projectId run.id, class_ "flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:outline-offset-2"] <> inspectorAttrs (urls.aiRoutineRunGet projectId run.id activeConversationIdM) <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) do
-                    time_ [datetime_ $ show run.startedAt, class_ "text-sm text-textStrong"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt
-                    span_ [id_ $ runStatusId run] $ uncurry tonePill_ $ runStatus run.status
+                whenJust (nonEmpty runs) \allRuns -> section_ [class_ "mb-6", Aria.label_ "Routine runs"] do
+                  let (recent, older) = splitAt 5 $ toList allRuns
+                      -- A routine's runs span many subjects (PRs, threads); a subject's own runs differ by attempt.
+                      runRow run = a_ ([href_ $ runUrl projectId run.id, class_ "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-2 hover:bg-fillHover focus-visible:outline-2 focus-visible:-outline-offset-2"] <> inspectorAttrs (urls.aiRoutineRunGet projectId run.id activeConversationIdM) <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) do
+                        span_ [class_ "min-w-0 truncate text-sm text-textStrong"] $ toHtml $ if Just run.conversationId == activeConversationIdM then "Attempt " <> show @Text run.attempt else fromMaybe "Run" run.title
+                        span_ [id_ $ runStatusId run, class_ "row-span-2"] $ uncurry tonePill_ $ runStatus run.status
+                        span_ [class_ "flex min-w-0 gap-1.5 text-xs text-textWeak"] do
+                          time_ [datetime_ $ show run.startedAt, class_ "shrink-0 tabular-nums"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt
+                          whenJust run.error \err -> span_ [class_ "truncate", title_ err] $ toHtml $ "· " <> err
+                      runList = div_ [class_ "divide-y divide-strokeWeak overflow-hidden rounded-lg border border-strokeWeak bg-bgRaised"] . mapM_ runRow
+                  h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Runs"
+                  runList recent
+                  unless (null older) $ details_ [class_ "group/older mt-2"] do
+                    summary_ [class_ "cursor-pointer list-none rounded-md px-1 py-1 text-xs font-medium text-textBrand hover:underline [&::-webkit-details-marker]:hidden"] do
+                      span_ [class_ "group-open/older:hidden"] $ toHtml $ "Show " <> show @Text (length older) <> " older"
+                      span_ [class_ "hidden group-open/older:inline"] "Show fewer"
+                    div_ [class_ "mt-2"] $ runList older
                 if hasVisibleHistory messages
                   then do
                     when (isJust routineM) $ h2_ [class_ "mb-2 mt-6 text-xs font-medium uppercase tracking-wide text-textWeak"] "Recent results"
@@ -642,14 +659,18 @@ threadPageGetH pid convId docM runM hxTarget = do
             header_ [class_ "flex shrink-0 items-center justify-between gap-3 border-b border-strokeWeak px-4 py-3"] do
               span_ [class_ "text-sm font-medium text-textWeak"] $ bool "Run details" "Artifact" (isJust openDoc)
               case activeConversationIdM of
-                Just _ -> a_ ([id_ "ai-inspector-close", href_ threadHref, Aria.label_ "Back to conversation", class_ "btn btn-sm btn-ghost gap-2"] <> inspectorAttrs threadHref) do
-                  faSprite_ "xmark" "regular" "size-3.5"
-                  span_ "Close"
+                Just _ ->
+                  a_ ([id_ "ai-inspector-close", href_ threadHref, Aria.label_ "Close details", title_ "Close (Esc)", class_ "btn btn-sm btn-square btn-ghost text-iconNeutral transition-[color,background-color,scale] hover:bg-fillWeak hover:text-iconBrand active:scale-[0.96] max-md:min-h-11 max-md:min-w-11"] <> inspectorAttrs threadHref)
+                    $ faSprite_ "xmark" "regular" "size-3.5"
                 Nothing -> a_ ([id_ "ai-inspector-close", href_ $ urls.aiRoutinesGet projectId, class_ "btn btn-sm btn-ghost gap-2"] <> navTabAttrs) do
                   faSprite_ "arrow-left" "regular" "size-3.5"
                   span_ "All routines"
             div_ [class_ "min-h-0 grow overflow-y-auto px-5 py-5"] $ maybe (foldMap documentView_ openDoc) identity runContent
       where
+        policyLabel = \case
+          Issues.Observe -> "Observe" :: Text
+          Issues.Autonomous -> "Autonomous"
+          Issues.ReviewSelected _ -> "Review selected actions"
         reviewClassLabel = \case
           Catalog.KnowledgeChanges -> "Project knowledge"
           Catalog.ProjectChanges -> "Project resources"

@@ -295,6 +295,8 @@ bodyWrapper bcfg child = do
       meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1.0"]
       meta_ [name_ "description", content_ $ "Monoscope — " <> bcfg.pageTitle]
       meta_ [httpEquiv_ "X-UA-Compatible", content_ "ie=edge"]
+      -- Before first paint, so a resized sidebar never flashes its default width.
+      script_ "try{const w=localStorage.getItem('resizer-sidenav_width');if(w)document.documentElement.style.setProperty('--sidenav-w',w)}catch{}"
       -- Keep htmx 4's explicit inheritance instead of letting htmx-2-compat switch the
       -- implicit model back on. Attributes meant to inherit say so (`hx-preload:inherited`
       -- on body / settings nav / dashboard tabs); everything else stays local, which also
@@ -737,10 +739,27 @@ projectsDropDown currProject projects = do
 
 
 sideNav :: Projects.Session -> Projects.Project -> BWConfig -> Html ()
-sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeaker max-md:bg-bgBase text-sm max-md:fixed max-md:z-50 max-md:w-60 max-md:h-full max-md:-translate-x-full max-md:transition-transform group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0 md:min-w-13 md:w-13 md:shrink-0 group-has-[#sidenav-toggle:checked]/pg:md:w-60 h-full md:transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeaker max-md:bg-bgBase text-sm max-md:fixed max-md:z-50 max-md:w-60 max-md:h-full max-md:-translate-x-full max-md:transition-transform group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0 md:min-w-13 md:w-13 md:shrink-0 group-has-[#sidenav-toggle:checked]/pg:md:w-[var(--sidenav-w,15rem)] h-full md:transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
   span_ [Aria.hidden_ "true", class_ "pointer-events-none absolute inset-x-0 bottom-0 h-64 bg-gradient-to-t from-fillBrand-weak/30 via-fillBrand-weak/10 to-transparent"] ""
-  -- Right border resize handle (desktop only)
-  label_ [term "for" "sidenav-toggle", class_ "max-md:hidden absolute right-0 top-0 bottom-0 w-1 border-r border-strokeWeak cursor-e-resize group-has-[#sidenav-toggle:checked]/pg:cursor-w-resize hover:border-strokeBrand-strong hover:w-1 transition-colors z-10", Aria.label_ "Toggle sidebar"] ""
+  -- Right edge (desktop): collapsed it expands on click; expanded it drags to resize (resizer.ts), double-click collapses.
+  label_ [term "for" "sidenav-toggle", class_ "max-md:hidden group-has-[#sidenav-toggle:checked]/pg:hidden absolute right-0 top-0 bottom-0 w-1 border-r border-strokeWeak cursor-e-resize hover:border-strokeBrand-strong transition-colors z-10", Aria.label_ "Expand sidebar"] ""
+  div_
+    [ class_ "max-md:hidden hidden group-has-[#sidenav-toggle:checked]/pg:block absolute -right-1 inset-y-0 z-10 w-2 cursor-col-resize touch-none after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-strokeWeak after:transition-[background-color,width] after:duration-100 hover:after:w-0.5 hover:after:bg-strokeBrand-strong focus-visible:outline-none focus-visible:after:w-0.5 focus-visible:after:bg-strokeFocus"
+    , role_ "separator"
+    , tabindex_ "0"
+    , Aria.label_ "Resize sidebar"
+    , title_ "Drag to resize · double-click to collapse"
+    , term "aria-orientation" "vertical"
+    , term "aria-valuemin" "200"
+    , term "aria-controls" "side-nav-menu"
+    , data_ "resize-target" "side-nav-menu"
+    , data_ "resize-key" "sidenav_width"
+    , data_ "resize-var" "--sidenav-w"
+    , data_ "min" "200"
+    , data_ "max" "420"
+    , [__|on dblclick set #sidenav-toggle.checked to false then trigger change on #sidenav-toggle|]
+    ]
+    ""
   div_ [class_ "relative z-[1] px-1 group-has-[#sidenav-toggle:checked]/pg:px-2 flex flex-col grow min-h-0 overflow-hidden"] do
     input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
     -- Project picker + Toggle (context + sidebar control)
@@ -885,7 +904,8 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
             , Components.filterInputAttr_ "#ai-conversation-nav .ai-thread-item"
             ]
         p_ [class_ "hidden px-2 py-2 text-xs text-textWeak", term "hx-live:.hidden" "q('.ai-thread-item:not(.hidden) in #ai-conversation-nav').count > 0"] "No matching conversations"
-      let (routines, chats) = partition (isJust . (.routineKind)) bcfg.conversations
+      let routines = filter (isJust . (.routineKind)) bcfg.conversations
+          chats = filter Issues.isPersonConversation bcfg.conversations
           conversationHref c = urls.aiThreadGet project.id c.conversationId Nothing
           scheduleLabel c
             | isJust c.routineRunningSince = "Running now"

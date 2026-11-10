@@ -1408,7 +1408,20 @@ idSelector :: Text -> Text
 idSelector i = "[id='" <> T.replace "'" "\\'" (T.replace "\\" "\\\\" i) <> "']"
 
 
+-- | A query-less table carries its rows (@[headers, row…]@) and renders them; there is nothing to fetch.
+--
+-- >>> let w = def & #wType .~ WTTable & #dataset ?~ (def & #source .~ AE.toJSON ([["service", "errors"], ["checkout-api", AE.Number 3]] :: [[AE.Value]]))
+-- >>> let html = toStrict $ renderText $ renderTable w
+-- >>> map (`T.isInfixOf` html) ["errors", "checkout-api", "data-table-fetch"]
+-- [True,True,False]
 renderTable :: Widget -> Html ()
+renderTable widget | Just (headers, rows) <- inlineRows = withCardFrame True widget (ctaAction widget) $ div_ [class_ "dashboard-table-wrap h-full overflow-auto rounded-[inherit] pb-2"] $ renderTableWithDataAndParams widget headers rows []
+  where
+    inlineRows = do
+      guard $ isNothing widget.query && isNothing widget.sql && isNothing widget.html
+      AE.Array (V.uncons -> Just (AE.Array header, rows)) <- (.source) <$> widget.dataset
+      (,) <$> traverse (\case AE.String t -> Just t; _ -> Nothing) header <*> traverse (\case AE.Array row -> Just $ cell <$> row; _ -> Nothing) rows
+    cell = \case AE.String t -> t; AE.Null -> ""; v -> decodeUtf8 $ AE.encode v
 renderTable widget = do
   let tableId = maybeToMonoid widget.id
       eagerWidget = widget & #eager ?~ True & #pngUrl .~ Nothing & #html .~ Nothing & #dataset .~ Nothing

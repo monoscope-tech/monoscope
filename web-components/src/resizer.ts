@@ -1,7 +1,9 @@
 // Behaviour for Components.resizer_: a separator with data-resize-target sets that element's
 // width by pointer drag or arrow keys, clamped to [data-min, data-max] (px, or vw) and to its
 // parent's width. A finished resize persists to localStorage as `resizer-<data-resize-key>`
-// and, when data-url-param is present, to the URL. Delegated, so swapped-in panels need no init.
+// and, when data-url-param is present, to the URL. With data-resize-var the width goes to that CSS
+// property on <html> instead, so class-driven widths (a collapsed sidebar) still win. Delegated, so
+// swapped-in panels need no init.
 const len = (v: string | undefined, fallback: number) =>
   !v ? fallback : v.endsWith('vw') ? (innerWidth * parseFloat(v)) / 100 : parseFloat(v);
 
@@ -17,7 +19,9 @@ function resize(sep: HTMLElement, width?: number, persist = false) {
   sep.setAttribute('aria-valuenow', String(w));
   sep.setAttribute('aria-valuetext', `${w} pixels`);
   if (width === undefined) return;
-  target.style.width = `${w}px`;
+  const prop = sep.dataset.resizeVar;
+  if (prop) document.documentElement.style.setProperty(prop, `${w}px`);
+  else target.style.width = `${w}px`;
   dispatchEvent(new Event('loglist-resize'));
   if (!persist) return;
   localStorage.setItem(`resizer-${sep.dataset.resizeKey}`, `${w}px`);
@@ -47,12 +51,14 @@ document.addEventListener('pointerdown', (e) => {
   const move = (m: PointerEvent) => resize(sep, w0 + (m.clientX - x0) * sign(sep));
   sep.setPointerCapture(e.pointerId);
   document.body.classList.add('select-none');
+  target.style.transition = 'none'; // a width transition makes the edge lag the pointer
   sep.addEventListener('pointermove', move);
   sep.addEventListener(
     'lostpointercapture',
     () => {
       sep.removeEventListener('pointermove', move);
       document.body.classList.remove('select-none');
+      target.style.transition = '';
       resize(sep, target.offsetWidth, true);
     },
     { once: true }
