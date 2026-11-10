@@ -71,13 +71,14 @@ The guest image needs `asciinema`, and a writable `/dev/shm` (mounted by `guest-
 
 Repositories can add `.monoscope/PROOF.md`: free-form guidance on when to prove changes and how to start the app offline.
 The agent reads it from the base revision, so a pull request cannot rewrite its own rules.
+[Fast proofs, by stack](proof-strategies.md) covers how to make a proof start in seconds.
 Monoscope skills (`investigate`, `kql-reference`) can be mounted for the agent through `IMPACT_REVIEW_SKILLS`.
 
 ## Sharing one host fairly
 
 Reviews, proofs and workspace builds can share a host with ingestion and the web server.
 - **Host slots:** every VM takes a lock-file slot under `IMPACT_REVIEW_VM_SLOT_DIR` (default `/tmp/monoscope-vm-slots`), shared by every process on the node. There are three pools, so nested VMs cannot deadlock: agents (a quarter of the cores), verifiers (2) and builds (1). `IMPACT_REVIEW_VM_SLOTS=agents,verifiers,builds` overrides the defaults. Under k3s, each node counts its own slots.
-- **Admission in the queue:** `claimRun` admits at most 2 reviews per project across nodes, and no more on a node than its agent slots; each lease records its node. Claims take turns under an advisory lock, so concurrent workers cannot overshoot. The rest wait in the job queue and retry every 15 s, so waiting never spends a review's 9-minute budget, and a busy agent or verifier slot fails within 45 s.
+- **Admission in the queue:** `claimRun` admits at most 2 reviews per project across nodes, and no more on a node than its agent slots; each lease records its node. Claims take turns under an advisory lock, so concurrent workers cannot overshoot. The rest wait in the job queue and retry every 15 s, so waiting never spends a review's 30-minute budget, and a busy agent or verifier slot fails within 45 s.
 - **CPU priority:** sandbox bridges, their VMs, `agg` and `ffmpeg` run under `nice -n 19` (plus `ionice -c2 -n7` where it exists), so ingestion and web requests preempt a guest's compile.
 - **Charged attempts:** every `record_proof` attempt counts against the budget of three, failed ones included. It also spends the query budget. The count survives a resumed session, and stored proofs are capped per attempt.
 
