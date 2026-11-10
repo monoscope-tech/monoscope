@@ -323,7 +323,7 @@ parseAssignee members = \case
 
 -- | The runtime-exception issues among these, each with its error pattern.
 issueErrors :: Projects.ProjectId -> [Issues.Issue] -> ATAuthCtx [(Issues.Issue, ErrorPatterns.ErrorPattern)]
-issueErrors pid issues = catMaybes <$> forM [i | i <- issues, i.issueType == Issues.RuntimeException] \i -> fmap (i,) <$> ErrorPatterns.getErrorPatternByHash pid i.targetHash
+issueErrors pid issues = catMaybes <$> forM issues \i -> fmap (i,) <$> Issues.issueError pid i
 
 
 memberLabel :: ProjectMembers.ProjectMemberVM -> Text

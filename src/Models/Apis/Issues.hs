@@ -76,6 +76,7 @@ module Models.Apis.Issues (
   mergeIssues,
   unmergeIssues,
   withoutUnmerged,
+  issueError,
   ArchiveWindow (..),
   expireArchives,
   wakeOnEscalation,
