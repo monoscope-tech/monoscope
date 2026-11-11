@@ -1054,6 +1054,16 @@ spec = do
         void $ call tr $ AIThreads.routineDeleteH otherPid installed.conversationId
         analyzeOther
         isJust <$> triage otherPid `shouldReturn` False
+        -- An older installation still on its template's text follows the newer version; an edited one keeps its own.
+        let older = Issues.issueTriageTemplate{Issues.version = 1, Issues.prompt = "Older triage instructions"}
+            user = (getResponse tr.trSessAndHeader :: Projects.Session).user.id
+            stored pid = dbQuery tr "SELECT r.instructions, r.template_version, (SELECT m.content FROM apis.ai_chat_messages m WHERE m.project_id = r.project_id AND m.conversation_id = r.conversation_id ORDER BY m.created_at LIMIT 1) FROM apis.ai_routines r WHERE r.project_id = ? AND r.template_key = 'issue-triage'" (Only pid)
+        [unedited, edited] <- forM ["upgrade", "edited"] (createTestProject tr)
+        convs <- forM [unedited, edited] \pid -> runTestBg frozenTime tr (Issues.ensureRoutineTemplate user pid "UTC" older) >>= either (fail . show) (pure . fst)
+        for_ (drop 1 convs) \conv -> runQueryEffect tr $ Issues.setRoutineInstructions edited conv "Our own triage instructions"
+        forM_ [unedited, edited] \pid -> runQueryEffect tr (Projects.projectById pid) >>= traverse_ (runTestBg frozenTime tr . (`Issues.provisionRoutineTemplate` Issues.issueTriageTemplate))
+        stored unedited `shouldReturn` [(Issues.issueTriageTemplate.prompt, 2 :: Int, Issues.issueTriageTemplate.prompt)]
+        stored edited `shouldReturn` [("Our own triage instructions" :: Text, 1 :: Int, "Older triage instructions" :: Text)]
         (.syncEnabled) <$> syncById tr sync `shouldReturn` False
         runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= (`shouldSatisfy` null)
         -- An ambiguous layout enables nothing.

@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module BackgroundJobs.Types (BgJobs (..), Conversion (..), insertJob, wakeJob, reviewOperation, deferOperationReview, wakeStoppedReviews, startConversation, startCommand) where
+module BackgroundJobs.Types (BgJobs (..), Conversion (..), insertJob, wakeJob, longJob, reviewOperation, deferOperationReview, wakeStoppedReviews, startConversation, startCommand) where
 
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
@@ -252,20 +252,26 @@ queueReviewTx project wake identifier = do
 data JobTiming = WakeNow | DeferUntil UTCTime
 
 
+-- | Jobs for the agent hosts' queue: reviews, fixes, their publication and workspace builds outlast the
+-- main queue's timeout (which odd-jobs also treats as a stale lock), and the autofix sweep needs the agent
+-- sandbox. Every other job is short, so a new constructor defaults to the main queue.
+longJob :: BgJobs -> Bool
+longJob = \case
+  ReviewPullRequest{} -> True
+  PrepareReviewWorkspace{} -> True
+  FixIssue{} -> True
+  PublishFix{} -> True
+  AutofixIssues{} -> True
+  _ -> False
+
+
 queueJobTx :: JobTiming -> BgJobs -> Tx.Transaction ()
 queueJobTx timing payload = do
   let job = HI.AsJsonb payload
       (at, bound) = case timing of
         WakeNow -> ([HI.sql|app_now()|], [HI.sql|LEAST(run_at, app_now())|])
         DeferUntil deadline -> ([HI.sql|#{deadline}|], [HI.sql|GREATEST(run_at, #{deadline})|])
-      -- Reviews, fixes, their publication and workspace builds outlast the main queue's timeout, which
-      -- odd-jobs also treats as a stale lock; every other job is short, so a new constructor defaults there.
-      table = case payload of
-        ReviewPullRequest{} -> [HI.sql|background_jobs_long|]
-        PrepareReviewWorkspace{} -> [HI.sql|background_jobs_long|]
-        FixIssue{} -> [HI.sql|background_jobs_long|]
-        PublishFix{} -> [HI.sql|background_jobs_long|]
-        _ -> [HI.sql|background_jobs|]
+      table = if longJob payload then [HI.sql|background_jobs_long|] else [HI.sql|background_jobs|]
   Hasql.executeTx
     [HI.sql|WITH ready AS (
       UPDATE ^{table} SET run_at = ^{bound}
