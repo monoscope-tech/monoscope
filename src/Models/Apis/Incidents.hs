@@ -76,8 +76,8 @@ import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Investigations (SlackTimestamp, slackTimestamp, slackTimestampText)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
+import Models.Ids qualified as Projects
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), enumLit, rawSql)
 import Relude
 import Servant (FromHttpApiData, ToHttpApiData (..))

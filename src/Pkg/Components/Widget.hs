@@ -38,7 +38,7 @@ import Lucid.Htmx (hxGet_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, h
 import Lucid.Hyperscript (__)
 import Models.Apis.LogQueries qualified as LogQueries (ExplorerUrl (..), LogEndpoint (..))
 import Models.Apis.Monitors qualified as Monitors
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), copyButton_, emDash_, emptyState_, localTimeFmt_, searchInput_)

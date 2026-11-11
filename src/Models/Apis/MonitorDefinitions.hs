@@ -11,8 +11,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Models.Apis.Monitors qualified as Monitors
+import Models.Ids qualified as Projects
 import Models.Projects.ProjectMembers qualified as PM
-import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (SnakeJSON (..), SnakeSchema (..))
 import Pkg.MonitorConfig (MonitorCondition (..), MonitorConfig (..), MonitorEvaluation (..), MonitorNotification (..))
 import Pkg.Parser qualified as Parser

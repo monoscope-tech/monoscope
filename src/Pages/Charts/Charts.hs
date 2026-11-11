@@ -39,7 +39,7 @@ import Effectful.Time qualified as Time
 import GHC.Clock (getMonotonicTimeNSec)
 import Log qualified
 import Models.Apis.LogQueries qualified as LogQueries
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import OpenTelemetry.Attributes qualified as OA
 import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components

@@ -38,7 +38,7 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.SchemaLearning qualified as SchemaLearning
 import Relude hiding (id)

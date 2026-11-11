@@ -36,7 +36,7 @@ import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Models.Apis.LogPatterns qualified as LogPatterns
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import NeatInterpolation (text)
 import Network.HTTP.Types qualified as H
 import Network.Wai qualified as Wai

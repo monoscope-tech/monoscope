@@ -69,9 +69,9 @@ import GHC.Records (HasField (..))
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction.Sessions qualified as TxS
 import Language.Haskell.TH.Syntax qualified as THS
+import Models.Ids qualified as Projects
 import Models.Projects.Activation qualified as Activation
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Projects.Projects qualified as Projects
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (SortField (..), SortOrder (..), UUIDId (..), WrappedEnumSC (..), selectFrom)

@@ -47,6 +47,7 @@ import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries (selectLogTable)
 import Models.Apis.Monitors qualified as Monitors
+import Models.Ids qualified as Projects
 import Models.Projects.AgentUsage qualified as Usage
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
@@ -54,7 +55,6 @@ import Models.Projects.ImpactReviews qualified as Reviews
 import Models.Projects.IssueFixes qualified as Fixes
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
-import Models.Projects.Projects qualified as Projects
 import OpenAI.V1.Chat.Completions qualified as OpenAI
 import OpenTelemetry.Attributes qualified as OA
 import Pkg.AI qualified as AI

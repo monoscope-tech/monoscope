@@ -60,7 +60,7 @@ import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Models.Apis.LogQueries qualified as LogQueries
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..), enumLit, rawSql, selectFrom)
 import Relude hiding (id)
 import Utils (truncateHour)

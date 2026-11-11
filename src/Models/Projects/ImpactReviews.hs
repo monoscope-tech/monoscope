@@ -83,9 +83,9 @@ import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
+import Models.Ids (ProjectId)
 import Models.Projects.AgentUsage (ProjectUsage (..), UsageCost (..), UsageTotals (..), customerUsage)
 import Models.Projects.AgentUsage qualified as Usage
-import Models.Projects.Projects (ProjectId)
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.Git qualified as Git
 import Relude

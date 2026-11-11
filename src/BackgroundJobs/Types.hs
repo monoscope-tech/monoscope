@@ -17,7 +17,7 @@ import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Pkg.DeriveUtils (DB, UUIDId)
 import Relude
 

@@ -11,7 +11,7 @@ import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Pkg.DeriveUtils (DB, WrappedEnumSC (..))
 import Relude
 import Servant (FromHttpApiData, ToHttpApiData (..))

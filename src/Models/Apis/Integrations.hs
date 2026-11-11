@@ -86,10 +86,10 @@ import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
+import Models.Ids qualified as Projects
 import Models.Projects.ProjectApiKeys qualified as Secrets
 import Models.Projects.ProjectMembers (activeMembership)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Projects.Projects qualified as Projects
 import Network.Wreq qualified as Wreq
 import Pkg.DeriveUtils (UUIDId, enumLit, refineText)
 import Pkg.Slack (SlackTokenLifetime (..), SlackUserGrant (..), slackEvidenceScopes)

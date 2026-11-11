@@ -390,6 +390,7 @@ library
       Models.Apis.PrometheusScrapeConfigs
       Models.Apis.SchemaCatalog
       Models.Apis.ShareEvents
+      Models.Ids
       Models.Projects.Activation
       Models.Projects.AgentUsage
       Models.Projects.CodeContext
@@ -1004,6 +1005,7 @@ test-suite test-dev
       Models.Apis.PrometheusScrapeConfigs
       Models.Apis.SchemaCatalog
       Models.Apis.ShareEvents
+      Models.Ids
       Models.Projects.Activation
       Models.Projects.AgentUsage
       Models.Projects.CodeContext

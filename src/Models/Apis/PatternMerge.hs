@@ -48,7 +48,7 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Apis.ErrorPatterns (ErrorPattern, ErrorPatternId)
 import Models.Apis.LogPatterns (LogPattern, LogPatternId)
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Pkg.DeriveUtils (selectFrom, showPGFloatArray)
 import Pkg.ErrorFingerprint qualified as EF
 import PostgreSQL.Binary.Decoding qualified as PB

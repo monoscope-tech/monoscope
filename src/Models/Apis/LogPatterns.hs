@@ -53,7 +53,7 @@ import Effectful (Eff, type (:>))
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..), selectFrom)
 import Relude hiding (id)
 import Utils (truncateHour)

@@ -60,7 +60,7 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Apis.ApiChanges (AnomalyTypes, FieldEvidence)
 import Models.Apis.ApiChanges qualified as ApiChanges
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Pkg.DeriveUtils (DB, UUIDId (..))
 import Pkg.SchemaLearning (CatalogEntry, SchemaKey, SchemaShardState, SummaryDoc (..), TopK)
 import Pkg.SchemaLearning qualified as SchemaLearning

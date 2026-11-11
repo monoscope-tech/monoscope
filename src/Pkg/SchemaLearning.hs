@@ -87,7 +87,7 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude
 import Utils (toXXHash)

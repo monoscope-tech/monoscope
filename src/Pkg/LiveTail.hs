@@ -135,7 +135,7 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import GHC.Generics (Generically (..))
 import Hasql.Interpolate qualified as HI
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnumSC (..), unAesonText)

@@ -9,7 +9,7 @@ import Data.Aeson qualified as AE
 import Data.OpenApi (ToParamSchema)
 import Data.Text.Display (Display)
 import Hasql.Interpolate qualified as HI
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData (..))

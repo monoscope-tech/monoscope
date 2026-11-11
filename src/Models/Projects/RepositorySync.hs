@@ -43,10 +43,10 @@ import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.MonitorDefinitions (MonitorInput (..), monitorConfig, monitorFromInput, monitorToInput)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
+import Models.Ids qualified as Projects
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as Members
-import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.MonitorConfig (encodeMonitorConfig)
 import Relude hiding (local)
