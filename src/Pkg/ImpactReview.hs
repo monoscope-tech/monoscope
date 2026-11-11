@@ -1193,10 +1193,11 @@ publishIssueFix pid fid = do
     run <- ExceptT $ first (const NotPublishable) . (>>= maybeToRight Fixes.Unavailable) <$> Fixes.getRun pid fid
     mapping <- ExceptT $ maybeToRight MappingRemoved . find ((== run.setup.mappingId) . (.id)) <$> CodeContext.getCodeMappings pid
     accounts <- lift $ GitSync.getGitHubCredentials pid
-    personal <- lift $ fmap catMaybes $ forM [c | c <- accounts, c.host == Git.GitHub, isNothing c.apiBase, isNothing c.installationId] \c ->
-      GitSync.getGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) pid c.id <&> (>>= GitSync.credentialCreds) <&> \case
-        Just (GitSync.PersonalToken token) -> Just (token, Publication.uploadCredential $ GitSync.PersonalToken token)
-        (Nothing; Just GitSync.AppInstallation{}) -> Nothing
+    personal <-
+      lift $ catMaybes <$> forM [c | c <- accounts, c.host == Git.GitHub, isNothing c.apiBase, isNothing c.installationId] \c ->
+        GitSync.getGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) pid c.id <&> \credential -> case credential >>= GitSync.credentialCreds of
+          Just (GitSync.PersonalToken token) -> Just (token, Publication.uploadCredential $ GitSync.PersonalToken token)
+          (Nothing; Just GitSync.AppInstallation{}) -> Nothing
     installation <- ExceptT $ first TokenUnavailable <$> GitSync.githubToken cfg.githubAppId cfg.githubAppPrivateKey (GitSync.AppInstallation run.setup.installationId)
     let signed asset = hostPath cfg.hostUrl $ fixMediaPath pid fid asset $ Widget.signWidgetUrl ctx.env.apiKeyEncryptionSecretKey pid (Fixes.fixMediaSignedPath fid asset)
         linked = Publication.installationCredential installation $ Publication.MediaUrls (signed Artifacts.Video) (signed Artifacts.Cause)
