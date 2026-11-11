@@ -30,7 +30,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as ApiIssues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
-import Models.Projects.DashboardTemplates (ReadOnly (..), dashboardTemplatesCompiled, loadDashboardFromVM)
+import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled, loadDashboardFromVM)
 import Models.Projects.Dashboards (DashboardVM (savedViews, schema))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.GitSync qualified as GitSync
@@ -1185,11 +1185,11 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     alertForm <- either (fail . toString) pure $ urlDecodeAsForm @Dashboards.WidgetAlertForm "widgetId=any&query=name%20!%3D%20null&alertThreshold=1&direction=above"
     call tr (Dashboards.widgetAlertUpsertH testPid "any" (Just did) alertForm) <&> void >>= (`shouldBe` Left Dashboards.ReadOnlyDashboard)
     -- Every page edit route declares the one read-only refusal.
-    void <$> call tr (Dashboards.dashboardWidgetReorderPatchH testPid did (Just "overview") mempty) `shouldReturn` Left ReadOnly
-    void <$> call tr (Dashboards.dashboardRenamePatchH testPid did renameForm) `shouldReturn` Left ReadOnly
-    void <$> call tr (Dashboards.dashboardTabRenamePatchH testPid did "overview" (Dashboards.TabRenameForm "Mine")) `shouldReturn` Left ReadOnly
+    void <$> call tr (Dashboards.dashboardWidgetReorderPatchH testPid did (Just "overview") mempty) `shouldReturn` Left Dashboards.EditReadOnly
+    void <$> call tr (Dashboards.dashboardRenamePatchH testPid did renameForm) `shouldReturn` Left Dashboards.EditReadOnly
+    void <$> call tr (Dashboards.dashboardTabRenamePatchH testPid did "overview" (Dashboards.TabRenameForm "Mine")) `shouldReturn` Left Dashboards.EditReadOnly
     sourceWidget <- maybe (fail "overview has no titled widget") pure $ viaNonEmpty head [slugify t | tab <- fold shown.tabs, w <- tab.widgets, Just t <- [w.title]]
-    void <$> call tr (Dashboards.dashboardDuplicateWidgetPostH testPid did sourceWidget (Just did)) `shouldReturn` Left ReadOnly
+    void <$> call tr (Dashboards.dashboardDuplicateWidgetPostH testPid did sourceWidget (Just did)) `shouldReturn` Left Dashboards.EditReadOnly
     -- The YAML drawer's route never refuses: its status area says why nothing was saved.
     Done yamlSave <- call tr $ Dashboards.dashboardYamlPutH testPid did (Dashboards.YamlForm "title: Mine\nwidgets: []\n")
     yamlSave `shouldSatisfy` \case Dashboards.YamlReadOnly -> True; _ -> False
@@ -1205,6 +1205,10 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     (copyVm, copy) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid copyId Nothing
     (copy.readOnly, copy.title, tabWidgets copy, isJust copyVm.schema) `shouldBe` (Nothing, (<> " (Copy)") <$> template.title, tabWidgets template, True)
     void <$> call tr (Dashboards.dashboardRenamePatchH testPid copyId renameForm) `shouldReturn` Right ()
+    -- A missing dashboard, tab or widget is a declared refusal too, not an undeclared 404.
+    void <$> call tr (Dashboards.dashboardRenamePatchH testPid (UUIDId UUID.nil) renameForm) `shouldReturn` Left Dashboards.DashboardGone
+    void <$> call tr (Dashboards.dashboardTabRenamePatchH testPid copyId "no-such-tab" (Dashboards.TabRenameForm "Mine")) `shouldReturn` Left (Dashboards.TabGone "no-such-tab")
+    void <$> call tr (Dashboards.dashboardDuplicateWidgetPostH testPid copyId "no-such-widget" Nothing) `shouldReturn` Left (Dashboards.WidgetGone "no-such-widget")
     -- A copy of a repository-owned dashboard is the user's own: sharing its (repository, file)
     -- key broke the unique index, so duplicating any synced dashboard failed.
     Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""

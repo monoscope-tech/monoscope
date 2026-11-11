@@ -275,6 +275,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
     with:
       revision: ${{ github.sha }}
+      wait_minutes: 150
 
   # The gate. `if` is what enforces it, and it is deliberately spelled out rather
   # than left to `needs`: build-and-test is now allowed to be SKIPPED, but only

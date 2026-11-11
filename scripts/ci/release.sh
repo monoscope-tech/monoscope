@@ -10,6 +10,23 @@ sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -
 registry_digest() {
   docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}'
 }
+# CI never compiles the image; the Mac does (~70 min cold). Poll the registry for up to
+# IMAGE_WAIT_MINUTES instead of failing the deploy, and stop once a newer master commit
+# supersedes this one: its own run deploys, and this one would be refused as stale anyway.
+await_image() { # sha tree
+  local deadline=$((SECONDS + ${IMAGE_WAIT_MINUTES:-0} * 60)) digest
+  while :; do
+    digest=$(registry_digest "$IMAGE:$1" 2>/dev/null || registry_digest "$IMAGE:tree-$2" 2>/dev/null) && { echo "$digest"; return; }
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    if [ "${GITHUB_REF:-}" = refs/heads/master ] && [ "$(git ls-remote "$REMOTE" refs/heads/master | cut -f1)" != "$1" ]; then
+      echo "release: $1 is superseded on master; the newer commit's run deploys" >&2
+      return 1
+    fi
+    echo "release: waiting for $IMAGE:$1 to be built on the Mac" >&2
+    sleep 60
+  done
+}
+
 current_master() {
   local current
   current=$(git ls-remote --exit-code "$REMOTE" refs/heads/master) || die "cannot verify current master"
@@ -40,8 +57,8 @@ build() {
   [ -z "$(git status --porcelain)" ] || die "working tree is dirty"
   tree=$(git rev-parse 'HEAD^{tree}')
   if [ -n "${GITHUB_ACTIONS:-}" ]; then
-    digest=$(registry_digest "$IMAGE:$sha") || digest=$(registry_digest "$IMAGE:tree-$tree") ||
-      die "production image is missing; generate it locally on the Mac before updating the pull request"
+    digest=$(await_image "$sha" "$tree") ||
+      die "production image is missing; generate it locally on the Mac (make deploy-image, or leave make image-follow running)"
     fingerprint=$(docker buildx imagetools inspect "$IMAGE@$digest" --format '{{json .Image}}' | node -e '
       let input = "";
       process.stdin.on("data", chunk => input += chunk);

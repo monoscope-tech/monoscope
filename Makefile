@@ -526,6 +526,14 @@ ci-selftest:
 deploy-image:
 	./scripts/ci/ci.sh image $(SHA)
 
+# Builds the image for master's head, and only that one, so deploys never wait on a missing
+# image; a newer head cancels an older build. Leave it running in a pane (tmux-image-follow).
+image-follow:
+	DOCKER_CONTEXT=$${DOCKER_CONTEXT:-orbstack} MONOSCOPE_BUILDER=$${MONOSCOPE_BUILDER:-monoscope-local-amd64} scripts/ci/image-follow.sh
+
+tmux-image-follow:
+	$(call tmux_pane,image-follow,make image-follow)
+
 # Deploy an already merged master locally: checks → image → CapRover. CI then has
 # nothing left to do but confirm it, because every check is attested and the
 # image and the deploy are already done.
@@ -589,6 +597,6 @@ tf-image:
 builder-rm:
 	./scripts/ci/ci.sh builder rm
 
-.PHONY: ci ci-signoff ci-status ci-shell land ci-down ci-clean ci-selftest deploy-image ship kafka-topics deploy-app rollback-app deploy-status deploy-worker builder-setup builder-status builder-rm tf-image
+.PHONY: ci ci-signoff ci-status ci-shell land ci-down ci-clean ci-selftest deploy-image image-follow tmux-image-follow ship kafka-topics deploy-app rollback-app deploy-status deploy-worker builder-setup builder-status builder-rm tf-image
 
 .PHONY: all test fmt fmt-check hpack-check lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev tmux-live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin tmux-web-components-watch tmux-minio-local kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf

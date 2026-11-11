@@ -483,10 +483,9 @@ describe('LogList — MED correctness', () => {
     el.transport = serverTransport(logPage(['new']));
 
     await (el as any).fetchData('newer', false, true, false, true);
-    await new Promise((resolve) => requestAnimationFrame(resolve));
 
     expect(ids(el)[0]).toBe('new');
-    expect(container.scrollTop).toBe(0);
+    await expect.poll(() => container.scrollTop).toBe(0); // the reveal lands on a later frame under load
     expect(restore).not.toHaveBeenCalled();
   });
 

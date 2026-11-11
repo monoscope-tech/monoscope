@@ -429,8 +429,10 @@ run_integration() {
   MONOSCOPE_BIN=$(scripts/cli-bin.sh $CABAL_FLAGS "$CABAL_OPTS")
   export MONOSCOPE_BIN
   [ -x "$MONOSCOPE_BIN" ] || die "CLI binary was not built at $MONOSCOPE_BIN"
+  # Baked into monoscope-deps; this only covers an older deps image, and must not hang on a stalled mirror.
   if ! command -v ffmpeg >/dev/null || ! command -v dot >/dev/null; then
-    apt-get update && apt-get install -y --no-install-recommends ffmpeg graphviz
+    timeout 600 sh -c 'apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update && apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends ffmpeg graphviz' \
+      || die "could not install ffmpeg/graphviz (stalled package mirror?)"
   fi
   (cd impact-review-worker && npm ci --ignore-scripts --no-audit && npm test)
   prepare_web_deps

@@ -679,7 +679,7 @@ run version global = \case
   AuthCmd c -> void (resolveMode global) >> runAuth c
   EventsCmd kindOverride evCmd -> withCfgMode global $ \cfg mode -> case evCmd of
     EvSearch opts ->
-      let finalOpts = (opts :: EventsSearchOpts){kind = opts.kind <|> kindOverride}
+      let finalOpts = opts{kind = opts.kind <|> kindOverride, idOnly = opts.idOnly}
        in runEventsSearch cfg finalOpts mode
     EvGet opts -> runEventsGet cfg opts mode
     EvTail opts -> runEventsTail cfg opts kindOverride

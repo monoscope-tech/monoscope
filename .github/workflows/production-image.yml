@@ -6,6 +6,11 @@ on:
       revision:
         required: true
         type: string
+      wait_minutes:
+        description: How long to wait for the Mac to push the image before failing
+        required: false
+        type: number
+        default: 0
     secrets:
       GH_TOKEN:
         required: true
@@ -18,6 +23,7 @@ jobs:
   image:
     name: Production image
     runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.wait_minutes + 30 }}
     permissions:
       contents: read
       packages: write
@@ -33,7 +39,9 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GH_TOKEN }}
-      # Missing images fail here; compilation must happen on the local Mac.
+      # Compilation happens on the local Mac; this waits up to wait_minutes for its push.
       - name: Resolve locally built production image
         id: image
+        env:
+          IMAGE_WAIT_MINUTES: ${{ inputs.wait_minutes }}
         run: scripts/ci/release.sh build
