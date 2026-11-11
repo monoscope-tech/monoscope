@@ -21,6 +21,8 @@ import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Default (def)
 import Data.Default qualified as Default
 import Data.Effectful.AgentWorkspace qualified as Workspace
+import Data.Effectful.CodeReview qualified as CodeReview
+import Data.Effectful.GitPublication qualified as Publication
 import Data.Effectful.Hasql (Hasql, withHasqlTimefusion)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
@@ -135,6 +137,7 @@ import Relude.Extra.Foldable1 (maximum1, minimum1)
 import Relude.Extra.Tuple (fmapToSnd)
 import System.Clock (Clock (Monotonic), diffTimeSpec, getTime, toNanoSecs)
 import System.Config qualified as Config
+import System.Directory (findExecutable)
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, forkWithCtx, setStatus, withSpan, withSpan_)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
@@ -315,6 +318,9 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
     PrepareReviewWorkspace rid -> ImpactReview.prepareReviewWorkspace rid
     FixIssue pid fid -> ImpactReview.fixIssue pid fid
     AutofixIssues pid -> ImpactReview.autofixIssues pid
+    PublishFix pid fid -> do
+      github <- liftIO $ findExecutable "gh"
+      Publication.runGitPublicationReal (CodeReview.ArtifactStore <$> authCtx.config.impactReviewUsageDir <*> authCtx.config.impactReviewCacheDir) github $ ImpactReview.publishIssueFix pid fid
     AnalyzeRepository pid rid -> analyzeRepository pid rid
     RepositorySyncTick scheduled -> unlessStale scheduled 300 do
       syncs <- Hasql.interp @[GitSync.GitHubSync] [HI.sql| SELECT * FROM projects.git_sync WHERE sync_enabled |]

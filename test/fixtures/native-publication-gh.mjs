@@ -9,10 +9,10 @@ const state = JSON.parse(readFileSync(stateFile)), args = process.argv.slice(2),
 const value = (flag) => args[args.indexOf(flag) + 1];
 const save = () => writeFileSync(stateFile, JSON.stringify(state));
 const emit = (value) => console.log(JSON.stringify(value));
-assert.equal(process.env.GH_TOKEN, 'ghp_fixture');
+assert.equal(process.env.GH_TOKEN, state.token ?? 'ghp_fixture');
 assert.equal(process.env.GH_HOST, 'github.com');
 assert.ok(process.env.GH_CONFIG_DIR.startsWith(process.cwd()));
-assert.ok(!args.join(' ').includes('ghp_fixture'));
+assert.ok(!args.join(' ').includes(process.env.GH_TOKEN));
 appendFileSync(join(root, 'commands.jsonl'), JSON.stringify(args) + '\n');
 if (state.pr && mode === 'fork') state.pr.head.repo.full_name = 'impact-org/fork';
 if (state.pr && mode === 'merged') { Object.assign(state.pr, { state: 'closed', merged: true, draft: false }); save(); }

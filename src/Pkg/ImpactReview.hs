@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.ImpactReview (reviewPullRequest, prepareReviewWorkspace, requestReview, fixIssue, autofixIssues, ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Claim (..), ClaimStatus (..), Issue (..), ProofLink (..), Shot (..), proofLink, Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, renderProgress, ReviewQuery, mkReviewQuery) where
+module Pkg.ImpactReview (reviewPullRequest, prepareReviewWorkspace, requestReview, fixIssue, autofixIssues, publishIssueFix, PublishSkip (..), ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Claim (..), ClaimStatus (..), Issue (..), ProofLink (..), Shot (..), proofLink, Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, renderProgress, ReviewQuery, mkReviewQuery) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Control.Monad.Trans.Except (throwE)
@@ -16,6 +16,7 @@ import Data.Effectful.CodeReview.Artifacts (sha256)
 import Data.Effectful.CodeReview.Checkout qualified as Checkout (Fetch (..))
 import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types (Evidence (..), EvidenceKind (..), KnowledgeSnapshot (..), Observation (..), QueryKind (..), QueryObservation (..), ReviewMemory (..), reviewSeconds)
+import Data.Effectful.GitPublication qualified as Publication
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as LLM
 import Data.Effectful.Wreq qualified as HTTP
@@ -70,7 +71,7 @@ import System.Tracing (Tracing)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB)
 import UnliftIO.Exception (bracket, throwIO, tryAny)
 import Utils (hostPath, prettyPrintCount)
-import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), proofMediaPath, proofRatingPath, urls)
+import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), fixMediaPath, proofMediaPath, proofRatingPath, urls)
 
 
 -- $setup
@@ -1177,11 +1178,58 @@ data AutofixSkip = RepositoryUnreachable CodeContext.SnippetError | HeadUnavaila
   deriving stock (Show)
 
 
+-- | Opens a verified fix's draft pull request. A personal GitHub token connected to the project uploads
+-- the video and diagram to GitHub; tokens that cannot push are skipped, and without one the App
+-- installation opens it with links to Monoscope-signed copies. The issue's timeline records the PR once.
+publishIssueFix :: Projects.ProjectId -> Fixes.FixId -> Eff (Publication.GitPublication ': ATBackgroundEffects) ()
+publishIssueFix pid fid = do
+  ctx <- ask @AuthContext
+  let cfg = ctx.config
+  outcome <- runExceptT do
+    owner <- ExceptT $ maybeToRight NotPublishable <$> Fixes.jobOwner pid fid
+    completed <- ExceptT $ maybeToRight NotPublishable <$> Fixes.publicationForUser pid fid owner
+    run <- ExceptT $ first (const NotPublishable) . (>>= maybeToRight Fixes.Unavailable) <$> Fixes.getRun pid fid
+    mapping <- ExceptT $ maybeToRight MappingRemoved . find ((== run.setup.mappingId) . (.id)) <$> CodeContext.getCodeMappings pid
+    accounts <- lift $ GitSync.getGitHubCredentials pid
+    personal <- lift $ fmap catMaybes $ forM [c | c <- accounts, c.host == Git.GitHub, isNothing c.apiBase, isNothing c.installationId] \c ->
+      GitSync.getGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) pid c.id <&> (>>= GitSync.credentialCreds) <&> \case
+        Just (GitSync.PersonalToken token) -> Just (token, Publication.uploadCredential $ GitSync.PersonalToken token)
+        (Nothing; Just GitSync.AppInstallation{}) -> Nothing
+    installation <- ExceptT $ first TokenUnavailable <$> GitSync.githubToken cfg.githubAppId cfg.githubAppPrivateKey (GitSync.AppInstallation run.setup.installationId)
+    let signed asset = hostPath cfg.hostUrl $ fixMediaPath pid fid asset $ Widget.signWidgetUrl ctx.env.apiKeyEncryptionSecretKey pid (Fixes.fixMediaSignedPath fid asset)
+        linked = Publication.installationCredential installation $ Publication.MediaUrls (signed Artifacts.Video) (signed Artifacts.Cause)
+        authorize _ = maybe (Left Publication.AccessRevoked) (const $ Right ()) <$> Fixes.publicationForUser pid fid owner
+        record (receipt :: Publication.Receipt) =
+          Right () <$ do
+            let link = AE.object ["url" AE..= receipt.url, "title" AE..= ("Draft fix PR #" <> show @Text receipt.number)]
+            unlessM (Hasql.interpScalar [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.issue_activity_log WHERE issue_id = #{run.issueId} AND event = #{Issues.IELinked} AND metadata->>'url' = #{receipt.url})|])
+              $ Issues.logIssueActivity run.issueId Issues.IELinked (Just owner) (Just link)
+        publishWith (token, credential) = runExceptT do
+          conn <- hoistEither $ first (RepositoryUnreadable . Git.gitConnErrorMessage) $ Git.mkGitConn Git.GitHub Nothing token
+          access <- ExceptT $ first RepositoryUnreadable <$> Git.getRepositoryAccess conn (Git.RepoRef run.setup.owner run.setup.repo mapping.ref)
+          request <- hoistEither $ first PublicationFailed $ Publication.requestFor completed mapping.ref access.visibility cfg.hostUrl
+          ExceptT $ first PublicationFailed <$> Publication.publishFix request credential authorize record
+        attempt = \case
+          [] -> pure $ Left NotPublishable
+          [only] -> publishWith only
+          candidate : rest ->
+            publishWith candidate >>= \case
+              Left (PublicationFailed Publication.AccessRevoked) -> attempt rest
+              done -> pure done
+    void $ ExceptT $ attempt $ [(token, credential) | (token, Right credential) <- personal] <> [(installation, linked)]
+  whenLeft_ outcome \skip -> Log.logAttention "Verified fix was not published" (pid, fid, show @Text skip)
+
+
+-- | Why a verified fix has no pull request yet. 'NotPublishable': no longer an approved fix its owner can see.
+data PublishSkip = NotPublishable | MappingRemoved | TokenUnavailable Text | RepositoryUnreadable Text | PublicationFailed Publication.Failure
+  deriving stock (Show)
+
+
 fixIssue :: Projects.ProjectId -> Fixes.FixId -> ATBackgroundCtx ()
 fixIssue pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob) \claimed -> for_ claimed \lease -> do
   outcome <- tryAny $ Timeout.timeout (540 * 1000000) $ runErrorNoCallStack $ execute lease
   case outcome of
-    Right (Just (Right ())) -> pass
+    Right (Just (Right ())) -> Jobs.wakeJob $ Jobs.PublishFix pid fid
     _ -> do
       let message = case outcome of
             Right (Just (Left NativeSessionLost)) -> nativeSessionLostMessage

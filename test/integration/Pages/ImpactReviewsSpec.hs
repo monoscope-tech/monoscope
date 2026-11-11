@@ -44,7 +44,7 @@ import Database.PostgreSQL.Simple (execute)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful (Eff, IOE, runEff, (:>))
-import Effectful.Dispatch.Dynamic (impose, interpose, localSeqUnliftIO, passthrough)
+import Effectful.Dispatch.Dynamic (impose, interpose, interpret, localSeqUnliftIO, passthrough)
 import Effectful.Error.Static (catchError)
 import Effectful.Reader.Static qualified as Reader
 import Models.Apis.Investigations qualified as Investigations
@@ -2669,6 +2669,22 @@ spec = around withTestResources $ describe "Production impact reviews" do
     peer <- maybe (fail "Native publication review attempt missing") pure =<< runQueryEffect tr (Usage.startAttempt testPid (Usage.Fix result.runId) "fixture" "native-publication")
     dbExec tr "UPDATE projects.issue_fix_jobs SET result = ?, verified_result = ?, investigation = '{}'::jsonb, checkpoint_investigation = '{}'::jsonb, explanation = ?, media_retained_at = now(), review_attempt_id = ?, review_rationale = 'Fixture independent approval' WHERE run_id = ?" (Aeson result, Aeson result, Aeson cacheRepair, peer, result.runId)
     completed <- maybe (fail "Native publication capability missing") pure =<< runQueryEffect tr (Fixes.publicationForUser testPid result.runId user)
+    -- The publish job tries the project's personal tokens first; one that cannot push falls back to the App
+    -- installation, whose pull request links Monoscope-signed media. The issue records the PR once.
+    void $ runQueryEffect tr $ GitSync.upsertGitHubCredential (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "ada" Nothing (Just "ghp_fixture")
+    app <- githubApp tr
+    attempts <- newIORef []
+    let opened = Publication.Receipt 7 "https://github.com/impact-org/checkout/pull/7" result.head "source" "media" (Publication.MediaUrls "video" "diagram") True Publication.Open
+        publisher = interpret \env -> \case
+          Publication.PublishFix _ credential _ accept -> localSeqUnliftIO env \unlift -> do
+            modifyIORef' attempts (Publication.linkedMedia credential :)
+            maybe (pure $ Left Publication.AccessRevoked) (\_ -> Left Publication.NotConfigured <$ unlift (accept opened)) (Publication.linkedMedia credential)
+        publishJob = void $ runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = app}) $ githubResponses (\_ -> pure $ Just $ AE.object ["full_name" AE..= ("impact-org/checkout" :: Text), "visibility" AE..= ("private" :: Text), "permissions" AE..= AE.object ["push" AE..= True]]) $ publisher $ Impact.publishIssueFix testPid result.runId
+    publishJob >> publishJob
+    tried <- readIORef attempts
+    map isJust tried `shouldBe` [True, False, True, False]
+    for_ (catMaybes tried) \urls -> (urls.video, urls.diagram) `shouldSatisfy` \(video, diagram) -> all (T.isInfixOf ("/issue-fixes/" <> result.runId.toText <> "/shared/")) [video, diagram] && "/shared/video?sig=" `T.isInfixOf` video && "/shared/cause?sig=" `T.isInfixOf` diagram
+    dbOne tr "SELECT count(*)::int FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'linked' AND metadata->>'url' = ?" (result.issueId, opened.url) `shouldReturn` (1 :: Int)
     publication <- either (fail . show) pure $ Publication.requestFor completed "main" Publication.Private "https://monoscope.example"
     credential <- either (fail . show) pure $ Publication.uploadCredential $ GitSync.PersonalToken "ghp_fixture"
     stages <- newIORef []
@@ -2730,12 +2746,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
     dbExec tr "INSERT INTO projects.project_members (project_id, user_id, permission, created_at) VALUES (?, ?, 'admin', '2000-01-01')" (testPid, earlierOwner)
     deniedProjects <- forM [(False, originalPlan), (True, "Free")] \(active, plan) -> do
       dbExec tr "UPDATE projects.projects SET active = ?, payment_plan = ? WHERE id = ?" (active, plan, testPid)
-      mediaDenied <- isNothing <$> runQueryEffect tr (Fixes.mediaForUser testPid result.runId user)
+      mediaDenied <- isNothing <$> runQueryEffect tr (Fixes.mediaFor testPid result.runId (Fixes.Member user))
       listingDenied <- null <$> runQueryEffect tr (Fixes.latestMediaForUser testPid user)
       publicationDenied <- failure validate
       pageStatus <- runAuthHandler tr $ catchError @ServerError (CodeContextPage.issueFixGetH testPid result.runId $> 200) (\_ err -> pure err.errHTTPCode)
       pure (mediaDenied, listingDenied, publicationDenied, pageStatus)
-    isJust <$> runQueryEffect tr (Fixes.mediaForUser testPid result.runId earlierOwner) `shouldReturn` True
+    isJust <$> runQueryEffect tr (Fixes.mediaFor testPid result.runId (Fixes.Member earlierOwner)) `shouldReturn` True
     dbExec tr "UPDATE projects.projects SET active = true, payment_plan = ? WHERE id = ?" (originalPlan, testPid)
     deniedProjects `shouldBe` replicate 2 (True, True, Just Publication.AccessRevoked, 404)
     isJust <$> runQueryEffect tr (Fixes.publicationForUser testPid result.runId user) `shouldReturn` True
@@ -2770,6 +2786,16 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- Corrupt media is rejected before creating or updating remote resources.
     writeFileBS (media </> "explanation.mp4") "corrupted video"
     failure validate `shouldReturn` Just Publication.SourceChanged
+    -- An App installation token cannot upload attachments, so its pull request is created already linking
+    -- signed copies: nothing is uploaded and the (here corrupt) retained media is never read.
+    resetRemote
+    readState >>= writeFileLBS stateFile . AE.encode . withKey "token" (AE.String "ghs_fixture")
+    writeIORef stages []
+    let links = Publication.MediaUrls "https://monoscope.example/p/fix/shared/video?sig=a" "https://monoscope.example/p/fix/shared/cause?sig=b"
+    linkedReceipt <- runEff $ HTTP.runHTTPRecord httpRequests $ withHTTPResponses fixture $ Publication.runGitPublicationReal (Just store) (Just github) $ Publication.publishFix publication (Publication.installationCredential "ghs_fixture" links) (liftIO . authorize) (liftIO . validate)
+    fmap ((.assets) . Publication.publicationReceipt) linkedReceipt `shouldBe` Right links
+    writes `shouldReturn` (["create"] :: [Text])
+    reverse <$> readIORef stages `shouldReturn` [Publication.Prepare, Publication.Discover, Publication.Branch, Publication.Create, Publication.Complete]
 
   it "queues signed source-repository events once, rejects unverified and unconfigured deliveries, and retains the latest revision" \tr -> do
     setup tr

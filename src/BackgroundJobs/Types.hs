@@ -59,6 +59,7 @@ data BgJobs
   | PrepareReviewWorkspace (UUIDId "pr_review")
   | FixIssue Projects.ProjectId (UUIDId "issue_fix")
   | AutofixIssues Projects.ProjectId
+  | PublishFix Projects.ProjectId (UUIDId "issue_fix")
   | AnalyzeRepository Projects.ProjectId (UUIDId "repository")
   | RepositorySyncTick UTCTime
   | GitSyncFromRepo Projects.ProjectId
@@ -257,12 +258,13 @@ queueJobTx timing payload = do
       (at, bound) = case timing of
         WakeNow -> ([HI.sql|app_now()|], [HI.sql|LEAST(run_at, app_now())|])
         DeferUntil deadline -> ([HI.sql|#{deadline}|], [HI.sql|GREATEST(run_at, #{deadline})|])
-      -- Reviews, fixes and workspace builds outlast the main queue's timeout, which odd-jobs also treats
-      -- as a stale lock; every other job is short, so a new constructor defaults there.
+      -- Reviews, fixes, their publication and workspace builds outlast the main queue's timeout, which
+      -- odd-jobs also treats as a stale lock; every other job is short, so a new constructor defaults there.
       table = case payload of
         ReviewPullRequest{} -> [HI.sql|background_jobs_long|]
         PrepareReviewWorkspace{} -> [HI.sql|background_jobs_long|]
         FixIssue{} -> [HI.sql|background_jobs_long|]
+        PublishFix{} -> [HI.sql|background_jobs_long|]
         _ -> [HI.sql|background_jobs|]
   Hasql.executeTx
     [HI.sql|WITH ready AS (
