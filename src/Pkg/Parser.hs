@@ -12,7 +12,7 @@ import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (NominalDiffTime, UTCTime (..), addUTCTime, diffUTCTime, secondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Pkg.Deriving (WrappedEnumSC (..))
 import Pkg.Parser.Eval (evalExpr, filterExpr, resolveIn)
 import Pkg.Parser.Expr

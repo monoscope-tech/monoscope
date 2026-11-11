@@ -39,7 +39,7 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Hasql.Session qualified as Session
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils (UUIDId (..), selectFrom)
 import Relude hiding (ask, id)

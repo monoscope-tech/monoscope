@@ -86,11 +86,11 @@ import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.MonitorDefinitions (MonitorInput (..))
+import Models.Ids qualified as Projects
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (TeamId)
 import Models.Projects.ProjectMembers qualified as PM
-import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Types qualified as Charts
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (CamelSchema (..), JsonValueSchema (..), SnakeJSON (..), SnakeSchema (..), WrappedEnumSC (..))

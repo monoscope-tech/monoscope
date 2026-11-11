@@ -45,7 +45,7 @@ import Effectful (Eff, (:>))
 import Effectful.Labeled (Labeled)
 import Hasql.Interpolate qualified as HI
 import Models.Apis.Monitors qualified as Monitors
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Models.Telemetry.Containers qualified as Containers
 import Pkg.DeriveUtils (AesonText (..), DB, rawSql, unAesonText)
 import Pkg.Parser.Expr (isErrorSql)

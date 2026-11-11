@@ -181,6 +181,7 @@ import Hasql.Interpolate qualified as HI
 import Hasql.Statement (Statement)
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
+import Models.Ids (ProjectId, UserId, pattern UserId)
 import Pkg.DeriveUtils (DB, SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), WrappedEnumShow (..), idFromText, selectFrom)
 import Pkg.IngestBudget qualified as IngestBudget
 import Pkg.Parser.Stats (Section)
@@ -199,19 +200,6 @@ instance AE.FromJSON (CI.CI Text) where
 
 instance AE.ToJSON (CI.CI Text) where
   toJSON = AE.toJSON . CI.original
-
-
--- | Typed user id. Aliased to 'UUIDId' rather than given its own newtype so it
--- inherits the shared encode/decode/schema instances and the @.toText@/@.unwrap@
--- accessors instead of restating them.
-type UserId = UUIDId "user"
-
-
-pattern UserId :: UUID.UUID -> UserId
-pattern UserId u = UUIDId u
-
-
-{-# COMPLETE UserId #-}
 
 
 -- | The creator recorded on rows the system makes rather than a person (API and
@@ -301,9 +289,6 @@ createEmptyUser email = EHasql.interpOne [HI.sql| insert into users.users (email
 
 
 ---------------------------------
-type ProjectId = UUIDId "project"
-
-
 projectIdFromText :: Text -> Maybe ProjectId
 projectIdFromText = idFromText
 

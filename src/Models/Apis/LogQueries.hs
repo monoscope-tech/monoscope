@@ -66,7 +66,7 @@ import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Apis.LogPatterns qualified as LogPatterns
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import OpenTelemetry.Attributes qualified as OA
 import Pkg.DeriveUtils (DB, WrappedEnumSC (..), WrappedEnumShow (..), rawSql)
 import Pkg.Drain qualified as Drain

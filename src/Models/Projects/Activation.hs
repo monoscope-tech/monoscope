@@ -9,7 +9,7 @@ import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Pkg.DeriveUtils (DB, WrappedEnumSC (..))
 import Relude
 

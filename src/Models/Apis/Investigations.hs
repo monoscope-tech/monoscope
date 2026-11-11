@@ -132,8 +132,8 @@ import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Langchain.LLM.Core qualified as LLM
 import Models.Apis.Integrations qualified as Integrations
+import Models.Ids qualified as Projects
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Projects.Projects qualified as Projects
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import Pkg.AgentCatalog (ReviewApprover (..))
 import Pkg.AgentCatalog qualified as Catalog

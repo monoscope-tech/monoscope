@@ -16,7 +16,7 @@ import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 qualified
 import Hasql.Decoders qualified as HD
 import Hasql.DynamicStatements.Snippet (toPreparableStatement)
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Pkg.Parser.Expr qualified as ParserExpr
 import System.Types (ATBaseCtx)
 

@@ -60,7 +60,7 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import GHC.Clock (getMonotonicTime)
 import Hasql.Interpolate qualified as HI
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), atMapText, generateSummary)
 import OpenTelemetry.Attributes qualified as OA
 import Pages.Charts.Types (DataType, MetricsData (..), MetricsStats (..))

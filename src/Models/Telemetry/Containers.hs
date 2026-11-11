@@ -54,7 +54,7 @@ import Data.Vector qualified as V
 import Effectful (Eff, IOE, (:>))
 import Effectful.Labeled (Labeled)
 import Hasql.Interpolate qualified as HI
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Models.Telemetry.ContainerTypes (ContainerRow (..), ContainerSnapshotKey, Runtime (..), Scope (..))
 import Relude
 import System.Clock (TimeSpec)

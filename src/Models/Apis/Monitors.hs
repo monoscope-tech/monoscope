@@ -57,9 +57,9 @@ import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Language.Haskell.TH.Syntax qualified as THS
 import Models.Apis.Issues qualified as Issues
+import Models.Ids qualified as Projects
 import Models.Projects.Activation qualified as Activation
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), selectFrom)
 import Relude
 import Servant (FromHttpApiData, ToHttpApiData (..))

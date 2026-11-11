@@ -55,7 +55,7 @@ import Effectful.Labeled (Labeled)
 import GHC.Records (HasField)
 import Hasql.Interpolate qualified as HI
 import Hasql.Session qualified as HSession
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Models.Telemetry.Telemetry (BulkCol (..), SpanKind (..), SpanRecord (..), SpanStatus (..), atMapText, castColumn, column, tsColumn, unnestInsert)
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnumSC (..), idFromText)
 import Relude

@@ -10,7 +10,7 @@ import Data.Vector qualified as V
 import Langchain.LLM.Core qualified as LLM
 import Models.Apis.Investigations (Task (..), TaskStatus (..))
 import Models.Apis.Investigations qualified as Investigations
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Pkg.DeriveUtils (UUIDId, encodeEnumSC)
 import Relude
 import Utils (fmtDate, hostPath, truncateText)

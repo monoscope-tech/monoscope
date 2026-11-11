@@ -41,7 +41,7 @@ import Effectful.Log (Log)
 import Effectful.Log qualified as Log
 import Effectful.Reader.Static qualified as Eff
 import Hasql.Interpolate qualified as HI
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Client (managerResponseTimeout, responseTimeoutMicro)
 import Network.HTTP.Client.TLS (tlsManagerSettings)

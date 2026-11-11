@@ -9,8 +9,8 @@ import Effectful (Eff, IOE, type (:>))
 import Effectful.Error.Static (Error)
 import Effectful.Reader.Static (Reader, ask)
 import Hasql.Interpolate qualified as HI
+import Models.Ids qualified as Projects
 import Models.Projects.Dashboards qualified as Dashboards
-import Models.Projects.Projects qualified as Projects
 import Relude hiding (Reader, ask)
 import Servant (ServerError)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))

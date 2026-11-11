@@ -20,7 +20,7 @@ import Effectful (Eff, IOE, (:>))
 import Effectful.Log (Log)
 import Effectful.Time (Time, currentTime)
 import Hasql.Interpolate qualified as HI
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Network.HTTP.Types (RequestHeaders, hCookie, hUserAgent, parseQuery, renderSimpleQuery, urlDecode, urlEncode)
 import Network.Wai (Middleware, mapResponseHeaders, queryString, requestHeaders)
 import Pkg.DeriveUtils (DB)

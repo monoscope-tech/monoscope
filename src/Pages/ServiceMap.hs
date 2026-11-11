@@ -11,7 +11,7 @@ import Data.Time (addUTCTime)
 import Data.Vector qualified as V
 import Effectful.Time qualified as Time
 import Lucid
-import Models.Projects.Projects qualified as Projects
+import Models.Ids qualified as Projects
 import Models.Telemetry.ServiceGraph (ServiceGraph (..), ServiceNode (..), drawnEdges, drawnNodes, endpointDependencyGraphForRange, serviceGraphForRange)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pages.Components (explorerNavTabs_, searchInput_)

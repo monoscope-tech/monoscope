@@ -51,9 +51,9 @@ import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Log (Log)
 import Hasql.Interpolate qualified as HI
+import Models.Ids (ProjectId)
 import Models.Projects.GitSync (GitHubCredentialId, credentialConn, credentialCreds, getGitHubCredential, githubToken)
 import Models.Projects.GitSync qualified as GitSync
-import Models.Projects.Projects (ProjectId)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Relude
