@@ -978,7 +978,11 @@ selectIssues pid projection f = do
         let col = rawSql pfx
          in [HI.sql| COALESCE(
                CASE WHEN ^{col}issue_type = ^{enumLit RuntimeException} THEN GREATEST(
-                 (SELECT MAX(GREATEST(ep.last_event_at, ep.recent_trace_at)) FROM apis.error_patterns ep WHERE ^{issuePattern col}),
+                 (SELECT MAX(GREATEST(ep.last_event_at, ep.recent_trace_at))
+                  FROM apis.error_patterns ep
+                  WHERE ep.project_id = ^{col}project_id
+                    AND ((^{col}is_framework AND ep.parent_hash = ^{col}target_hash)
+                      OR (NOT ^{col}is_framework AND ep.hash = ^{col}target_hash))),
                  (^{col}issue_data->>'last_seen')::timestamptz)
                WHEN ^{col}issue_type = ^{enumLit ApiChange} THEN COALESCE(
                  (SELECT MAX(an.created_at) FROM apis.anomalies an
@@ -992,8 +996,6 @@ selectIssues pid projection f = do
         -- Output aliases of the IssueL projection; only that query (prefix "i.") has them.
         Just (s, c) | s == '-' || s == '+', pfx == "i.", c `elem` ["event_count", "users_count"] -> c <> bool " ASC" " DESC" (s == '-') <> ", i.created_at DESC"
         _ -> pfx <> "critical DESC, " <> pfx <> "created_at DESC"
-      issuePattern pfx =
-        [HI.sql| ep.project_id = ^{pfx}project_id AND ((^{pfx}is_framework AND ep.parent_hash = ^{pfx}target_hash) OR (NOT ^{pfx}is_framework AND ep.hash = ^{pfx}target_hash)) |]
       arrF pfx col xs = if null xs then mempty else [HI.sql| AND ^{pfx}^{col} = ANY(#{xs}::text[])|]
       mkFilters pfx =
         foldMap (\(s, e) -> [HI.sql| AND ^{pfx}created_at >= #{s} AND ^{pfx}created_at <= #{e}|]) f.timeRange
@@ -1001,7 +1003,9 @@ selectIssues pid projection f = do
           <> sqlNullFilter pfx [HI.sql|archived_at|] f.archive
           <> sqlNullFilter pfx [HI.sql|spam_at|] f.spam
           <> bool mempty [HI.sql| AND (^{pfx}severity IS NULL OR ^{pfx}severity != 'low')|] f.hideLowSeverity
-          <> [HI.sql| AND COALESCE(^{pfx}issue_type = ^{enumLit RuntimeException} AND (SELECT bool_and(ep.synthetic) FROM apis.error_patterns ep WHERE ^{issuePattern pfx}), FALSE) = #{f.synthetic}|]
+          -- Framework issues group many patterns and are never synthetic; the partial index makes the usual probe free.
+          <> [HI.sql| AND (^{pfx}issue_type = ^{enumLit RuntimeException} AND NOT ^{pfx}is_framework
+                AND EXISTS (SELECT 1 FROM apis.error_patterns ep WHERE ep.synthetic AND ep.project_id = ^{pfx}project_id AND ep.hash = ^{pfx}target_hash)) = #{f.synthetic}|]
           <> arrF pfx [HI.sql|service|] f.services
           <> foldMap (\service -> [HI.sql| AND ^{pfx}service = #{service}|]) f.service
           <> foldMap (\environment -> [HI.sql| AND ^{pfx}environment = #{environment}|]) f.environment
