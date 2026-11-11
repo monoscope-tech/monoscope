@@ -1,11 +1,12 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Models.Projects.IssueFixes (FixId, StepId, Revision, mkRevision, revisionText, Setup (..), Candidate (..), Step (..), Phase (..), Progress, phase, verifiedRevision, Run (..), Failure (..), createRun, autofixCandidates, getRun, recordStep, queueJob, Lease, Checkpoint, checkpointContents, getCheckpoint, saveReviewedJob, claimJob, agentRunContext, currentJob, releaseJob, failJob, finishJob, completedResult, completedExplanation, CompletedFix, completedFixContents, publicationForUser, mediaForUser, latestMediaForUser, validateResult, artifactRequest, recordJobStep) where
+module Models.Projects.IssueFixes (FixId, StepId, Revision, mkRevision, revisionText, Setup (..), Candidate (..), Step (..), Phase (..), Progress, phase, verifiedRevision, Run (..), Failure (..), createRun, autofixCandidates, jobOwner, getRun, recordStep, queueJob, Lease, Checkpoint, checkpointContents, getCheckpoint, saveReviewedJob, claimJob, agentRunContext, currentJob, releaseJob, failJob, finishJob, completedResult, completedExplanation, CompletedFix, completedFixContents, publicationForUser, MediaViewer (..), mediaFor, fixMediaSignedPath, latestMediaForUser, validateResult, artifactRequest, recordJobStep) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
 import Data.Char (isHexDigit)
 import Data.Effectful.AgentArtifacts (RetainedFix, retainedFix)
+import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.CodeReview (ReviewedFix, explainedFixResult, fixExplanation, reviewedFixApproval, reviewedFixResult, validExplanation)
 import Data.Effectful.CodeReview.Types (Candidate (..), Failure (..), Revision, Step (..), mkRevision, revisionText)
 import Data.Effectful.CodeReview.Types qualified as Agent
@@ -30,6 +31,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId)
 import Relude
 import System.Types (DB)
+import Web.HttpApiData (toUrlPiece)
 
 
 type FixId = UUIDId "issue_fix"
@@ -176,7 +178,7 @@ createRun pid fid issue mapping base image =
 
 
 -- | Up to @n@ open issues from the last week that triage has had an hour with, each with a mapping
--- 'createRun' accepts and no fix run yet; newest first.
+-- 'createRun' accepts and no fix run in the last day (a failed one is retried a day later); newest first.
 autofixCandidates :: (DB es, Time :> es) => ProjectId -> Int -> Eff es [(IssueId, CodeMappingId)]
 autofixCandidates pid n =
   Time.currentTime >>= \now ->
@@ -187,7 +189,7 @@ autofixCandidates pid n =
     WHERE i.project_id = #{pid} AND i.archived_at IS NULL AND i.spam_at IS NULL AND i.issue_type <> 'api_change'
       AND i.created_at BETWEEN #{addUTCTime (-7 * nominalDay) now} AND #{addUTCTime (-3600) now}
       AND ^{appCredential}
-      AND NOT EXISTS (SELECT 1 FROM projects.issue_fix_runs f WHERE f.issue_id = i.id)
+      AND NOT EXISTS (SELECT 1 FROM projects.issue_fix_runs f WHERE f.issue_id = i.id AND f.created_at > #{addUTCTime (-nominalDay) now})
     ORDER BY i.created_at DESC, i.id, length(m.path_prefix) DESC LIMIT #{n}|]
 
 
@@ -257,6 +259,11 @@ recordStepWith scope pid fid expected sid step = do
             ) UPDATE projects.issue_fix_runs SET version = version + 1
               WHERE id IN (SELECT run_id FROM inserted) RETURNING TRUE|]
           if saved == Just True then fmap (>>= maybeToRight Unavailable) (getRun pid fid) else pure $ Left StepConflict
+
+
+-- | The member who queued a fix; publication acts with their access.
+jobOwner :: DB es => ProjectId -> FixId -> Eff es (Maybe Projects.UserId)
+jobOwner pid fid = Hasql.interpOne [HI.sql|SELECT j.requested_by FROM projects.issue_fix_jobs j JOIN projects.issue_fix_runs r ON r.id = j.run_id WHERE r.project_id = #{pid} AND j.run_id = #{fid}|]
 
 
 queueJob :: DB es => ProjectId -> Projects.UserId -> FixId -> Eff es Bool
@@ -394,7 +401,7 @@ completedFixContents (CompletedFix artifacts explanation) = (artifacts, explanat
 
 publicationForUser :: DB es => ProjectId -> FixId -> Projects.UserId -> Eff es (Maybe CompletedFix)
 publicationForUser pid fid user = do
-  saved <- mediaForUser pid fid user
+  saved <- mediaFor pid fid (Member user)
   case saved of
     Nothing -> pure Nothing
     Just (result, explanation) -> do
@@ -411,15 +418,25 @@ publicationForUser pid fid user = do
         _ -> Nothing
 
 
-mediaForUser :: DB es => ProjectId -> FixId -> Projects.UserId -> Eff es (Maybe (Agent.FixResult, Agent.Explanation))
-mediaForUser pid fid user = do
+-- | Who reads retained fix media: an eligible member, or GitHub through a link 'fixMediaSignedPath' signed.
+data MediaViewer = Member Projects.UserId | SignedLink
+
+
+mediaFor :: DB es => ProjectId -> FixId -> MediaViewer -> Eff es (Maybe (Agent.FixResult, Agent.Explanation))
+mediaFor pid fid viewer = do
   row <-
     Hasql.interpOne @(Aeson Agent.FixResult, Aeson Agent.Explanation)
-      [HI.sql| SELECT j.result, j.explanation FROM projects.issue_fix_jobs j
-    JOIN projects.issue_fix_run_access a ON a.run_id = j.run_id
-    WHERE a.project_id = #{pid} AND a.user_id = #{user} AND j.run_id = #{fid}
+      $ [HI.sql| SELECT j.result, j.explanation FROM projects.issue_fix_jobs j JOIN projects.issue_fix_runs r ON r.id = j.run_id
+    WHERE r.project_id = #{pid} AND j.run_id = #{fid}
       AND j.result IS NOT NULL AND j.explanation IS NOT NULL AND j.media_retained_at IS NOT NULL |]
+      <> case viewer of
+        Member user -> [HI.sql| AND EXISTS (SELECT 1 FROM projects.issue_fix_run_access a WHERE a.run_id = j.run_id AND a.project_id = #{pid} AND a.user_id = #{user}) |]
+        SignedLink -> mempty
   pure $ (\(Aeson result, Aeson explanation) -> (result, explanation)) <$> row
+
+
+fixMediaSignedPath :: FixId -> Artifacts.Asset -> Text
+fixMediaSignedPath fid asset = "fix:" <> fid.toText <> "/" <> toUrlPiece asset
 
 
 latestMediaForUser :: DB es => ProjectId -> Projects.UserId -> Eff es [Agent.FixResult]

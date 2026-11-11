@@ -86,7 +86,7 @@ issueFixForViewer :: (DB es, Error ServerError :> es) => Projects.ProjectId -> I
 issueFixForViewer pid fid session = do
   let missing = err404{errHeaders = [(Header.hCacheControl, "private, no-store")]}
   when (session.persistentSession.id == demoGuestSessionId) $ throwError missing
-  maybe (throwError missing) pure =<< IssueFixes.mediaForUser pid fid session.user.id
+  maybe (throwError missing) pure =<< IssueFixes.mediaFor pid fid (IssueFixes.Member session.user.id)
 
 
 issueFixGetH :: Projects.ProjectId -> IssueFixes.FixId -> ATAuthCtx (Headers '[Header "Cache-Control" Text] (Html ()))
@@ -110,7 +110,7 @@ issueFixEvidenceH :: Projects.ProjectId -> IssueFixes.FixId -> ATAuthCtx (Html (
 issueFixEvidenceH pid fid = do
   session <- Projects.getSession
   when (session.persistentSession.id == demoGuestSessionId) $ throwError err404
-  media <- IssueFixes.mediaForUser pid fid session.user.id
+  media <- IssueFixes.mediaFor pid fid (IssueFixes.Member session.user.id)
   pure $ maybe (p_ [role_ "status", class_ "text-sm text-textWeak"] "No explanation is available for this fix.") (uncurry $ issueFixEvidence_ pid fid) media
 
 
@@ -161,8 +161,7 @@ issueFixMediaH pid fid asset request send = do
     else do
       bytes <- either (const $ throwError err503{errHeaders = [(Header.hCacheControl, "private, no-store")]}) (pure . Artifacts.verifiedBytes) =<< Artifacts.readFixMedia explanation asset
       void $ issueFixForViewer pid fid session
-      let mime = case asset of Artifacts.Video -> "video/mp4"; Artifacts.Diagram -> "image/svg+xml"; Artifacts.Captions -> "text/vtt; charset=utf-8"; (Artifacts.Before; Artifacts.Cause; Artifacts.Change; Artifacts.After) -> "image/png"
-      liftIO $ send $ rangedMedia request [(Header.hContentType, mime), (Header.hCacheControl, "private, no-store"), (Header.hVary, "Cookie, Authorization")] bytes
+      liftIO $ send $ rangedMedia request [(Header.hContentType, Artifacts.assetMime asset), (Header.hCacheControl, "private, no-store"), (Header.hVary, "Cookie, Authorization")] bytes
 
 
 -- | Media bytes with single-range support, which Safari needs to play video.

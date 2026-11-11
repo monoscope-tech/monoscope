@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Data.Effectful.GitPublication (GitPublication (..), Request, requestFor, UploadCredential, uploadCredential, Visibility (..), Stage (..), Failure (..), Authorization (..), MediaUrls (..), PullState (..), Receipt (..), PublishedFix, publicationReceipt, publishFix, runGitPublicationReal, runGitPublicationTest) where
+module Data.Effectful.GitPublication (GitPublication (..), Request, requestFor, UploadCredential, uploadCredential, installationCredential, linkedMedia, Visibility (..), Stage (..), Failure (..), Authorization (..), MediaUrls (..), PullState (..), Receipt (..), PublishedFix, publicationReceipt, publishFix, runGitPublicationReal, runGitPublicationTest) where
 
 import Data.Aeson qualified as AE
 import Data.Char (isAlphaNum, isAscii)
@@ -48,13 +48,29 @@ requestFor completed target visibility origin = do
     _ -> Left InvalidRequest
 
 
-newtype UploadCredential = UploadCredential Text
+-- | How a publication carries its video and diagram. A person's token uploads them as GitHub
+-- attachments; an App installation token cannot, so its pull request links Monoscope-signed copies.
+data UploadCredential = AttachedMedia Text | LinkedMedia Text MediaUrls
 
 
 uploadCredential :: GitSync.GitCreds -> Either Failure UploadCredential
 uploadCredential = \case
-  GitSync.PersonalToken token | not (T.null $ T.strip token) -> Right $ UploadCredential token
+  GitSync.PersonalToken token | not (T.null $ T.strip token) -> Right $ AttachedMedia token
   (GitSync.PersonalToken{}; GitSync.AppInstallation{}) -> Left NativeUnavailable
+
+
+-- | An installation token and the signed media URLs its pull request links.
+installationCredential :: Text -> MediaUrls -> UploadCredential
+installationCredential = LinkedMedia
+
+
+-- | The media a credential's pull request links; 'Nothing' uploads them as attachments.
+linkedMedia :: UploadCredential -> Maybe MediaUrls
+linkedMedia = snd . credentialToken
+
+
+credentialToken :: UploadCredential -> (Text, Maybe MediaUrls)
+credentialToken = \case AttachedMedia token -> (token, Nothing); LinkedMedia token urls -> (token, Just urls)
 
 
 newtype PublishedFix = PublishedFix Receipt
@@ -76,13 +92,13 @@ makeEffect ''GitPublication
 
 runGitPublicationReal :: (HTTP.HTTP :> es, IOE :> es) => Maybe ArtifactStore -> Maybe FilePath -> Eff (GitPublication ': es) a -> Eff es a
 runGitPublicationReal store githubCli = interpret \env -> \case
-  PublishFix request@(Request artifacts explanation _ _ _ _) (UploadCredential token) authorize validate -> localSeqUnlift env \unlift -> withSeqEffToIO \runInIO -> case (store, githubCli) of
+  PublishFix request@(Request artifacts explanation _ _ _ _) (credentialToken -> (token, linked)) authorize validate -> localSeqUnlift env \unlift -> withSeqEffToIO \runInIO -> case (store, githubCli) of
     (Just configured, Just github) -> do
       outcome <- tryAny $ Timeout.timeout (480 * 1000000) $ do
-        published <- Native.publish configured github token artifacts explanation (contextFor request Prepare) (runInIO . unlift . authorize)
+        published <- Native.publish configured github token linked artifacts explanation (contextFor request Prepare) (runInIO . unlift . authorize)
         case published of
           Left failure -> pure $ Left failure
-          Right receipt | validReceipt request receipt -> runInIO $ runExceptT do
+          Right receipt | validReceipt request linked receipt -> runInIO $ runExceptT do
             ExceptT $ confirmRemote request token receipt
             ExceptT $ unlift $ validate receipt
             pure $ PublishedFix receipt
@@ -135,10 +151,10 @@ runGitPublicationReal store githubCli = interpret \env -> \case
 
 runGitPublicationTest :: (Request -> Either Failure Receipt) -> Eff (GitPublication ': es) a -> Eff es a
 runGitPublicationTest respond = interpret \env -> \case
-  PublishFix request _ authorize validate -> localSeqUnlift env \unlift -> runExceptT do
+  PublishFix request credential authorize validate -> localSeqUnlift env \unlift -> runExceptT do
     receipt <- hoistEither $ respond request
     ExceptT $ unlift $ authorize Prepare
-    unless (validReceipt request receipt) $ hoistEither $ Left InvalidReceipt
+    unless (validReceipt request (linkedMedia credential) receipt) $ hoistEither $ Left InvalidReceipt
     ExceptT $ unlift $ authorize Complete
     ExceptT $ unlift $ validate receipt
     pure $ PublishedFix receipt
@@ -151,8 +167,8 @@ contextFor (Request artifacts explanation target visibility description repo) st
    in Authorization result.projectId result.runId result.head explanation.source (show (hashlazy (AE.encode $ Map.toAscList explanation.files) :: Digest SHA256)) ("monoscope/fix/" <> result.projectId.toText <> "/" <> result.runId.toText <> "/" <> result.candidateId.toText) target repo visibility (T.strip $ until (not . T.isInfixOf "\n\n\n") (T.replace "\n\n\n" "\n\n") cleaned) stage
 
 
-validReceipt :: Request -> Receipt -> Bool
-validReceipt request receipt =
+validReceipt :: Request -> Maybe MediaUrls -> Receipt -> Bool
+validReceipt request linked receipt =
   let context = contextFor request Complete
    in receipt.number
         > 0
@@ -166,7 +182,7 @@ validReceipt request receipt =
         == T.toLower ("https://github.com/" <> context.repo <> "/pull/" <> show receipt.number)
         && receipt.assets.video
         /= receipt.assets.diagram
-        && all assetUrl [receipt.assets.video, receipt.assets.diagram]
+        && maybe (all assetUrl [receipt.assets.video, receipt.assets.diagram]) (== receipt.assets) linked
   where
     assetUrl value = case parseURI $ toString value of
       Just uri

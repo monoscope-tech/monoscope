@@ -50,9 +50,10 @@ data Journal = Journal {identity :: Authorization, state :: PublicationState}
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
--- Backend returns a receipt, never the application's PublishedFix capability.
-publish :: ArtifactStore -> FilePath -> Text -> ArtifactRequest -> Explanation -> Authorization -> (Stage -> IO (Either Failure ())) -> IO (Either Failure Receipt)
-publish store executable token artifacts explanation context authorize = do
+-- Backend returns a receipt, never the application's PublishedFix capability. With @linked@ media the
+-- pull request is created already carrying those URLs, so no attachment is uploaded.
+publish :: ArtifactStore -> FilePath -> Text -> Maybe MediaUrls -> ArtifactRequest -> Explanation -> Authorization -> (Stage -> IO (Either Failure ())) -> IO (Either Failure Receipt)
+publish store executable token linked artifacts explanation context authorize = do
   outcome <- tryAny $ Timeout.timeout (480 * 1000000) $ runExceptT $ do
     ensure NativeUnavailable $ isAbsolute executable && validToken token
     permit Prepare
@@ -140,7 +141,7 @@ publish store executable token artifacts explanation context authorize = do
                   following <- viaNonEmpty Relude.head rest
                   line <- find (not . T.null . T.strip) following
                   url <- if asset == Video then Just line else T.stripPrefix "![Reproduction, inferred cause, and verified fix](" line >>= T.stripSuffix ")"
-                  guard $ assetUrl url
+                  guard $ assetUrl asset url
                   pure (asset, url)
             body :: Map Asset Text -> Maybe Asset -> Text
             body urls uploading =
@@ -156,11 +157,12 @@ publish store executable token artifacts explanation context authorize = do
                   ]
                 <> "\n"
         void $ git InvalidRequest temporary HostGit.Local ["check-ref-format", "refs/heads/" <> toString context.targetBranch]
-        help <- decodeUtf8 @Text <$> gh ["pr", "edit", "--help"]
-        ensure NativeUnavailable $ "--attach" `elem` words help
-        for_ [Video, Diagram] \asset -> do
-          bytes <- ExceptT $ first (const SourceChanged) <$> readExplanationMedia store.usageDir explanation (file asset)
-          liftIO $ writeFileBS (temporary </> toString (file asset)) bytes
+        when (isNothing linked) do
+          help <- decodeUtf8 @Text <$> gh ["pr", "edit", "--help"]
+          ensure NativeUnavailable $ "--attach" `elem` words help
+          for_ [Video, Diagram] \asset -> do
+            bytes <- ExceptT $ first (const SourceChanged) <$> readExplanationMedia store.usageDir explanation (file asset)
+            liftIO $ writeFileBS (temporary </> toString (file asset)) bytes
         -- The verifier owns and cleans up the exact bundle-derived checkout.
         verified <- liftIO $ withVerifiedArtifacts store artifacts \verifiedArtifacts -> runExceptT do
           let checkout = artifactCheckout verifiedArtifacts
@@ -177,7 +179,7 @@ publish store executable token artifacts explanation context authorize = do
               ensure SourceChanged $ isNothing previous || previous == Just (revisionText result.head)
               when (isNothing previous) $ void (git PushFailed checkout (HostGit.GitHub $ Just token) ["push", "--porcelain", "--force-with-lease=refs/heads/" <> toString context.branch <> ":", toString artifacts.repository, toString (revisionText result.head) <> ":refs/heads/" <> toString context.branch])
               guardRemote Create
-              created <- api "POST" (endpoint <> "/pulls") (Just $ AE.object ["title" AE..= result.summary, "head" AE..= context.branch, "base" AE..= context.targetBranch, "draft" AE..= True, "body" AE..= body Map.empty Nothing]) >>= checked
+              created <- api "POST" (endpoint <> "/pulls") (Just $ AE.object ["title" AE..= result.summary, "head" AE..= context.branch, "base" AE..= context.targetBranch, "draft" AE..= True, "body" AE..= body preset Nothing]) >>= checked
               save $ Draft created.number
               pure created
           (final, progress) <-
@@ -191,6 +193,7 @@ publish store executable token artifacts explanation context authorize = do
                       save next
                       pure (remote, next)
                     else do
+                      when (isJust linked) $ throwE PullRequestChanged
                       case progress of Finished _ -> throwE StateChanged; Uploading _ _ -> throwE UploadUncertain; (Prepared; Draft{}) -> pass
                       ensure PullRequestChanged $ remote.state == Open && remote.draft && normalized (fromMaybe "" remote.body) == normalized (body urls Nothing)
                       guardRemote $ if asset == Video then AttachVideo else AttachDiagram
@@ -223,8 +226,11 @@ publish store executable token artifacts explanation context authorize = do
     key = \case Video -> "video"; Diagram -> "diagram"
     file = \case Video -> "explanation.mp4"; Diagram -> "cause.png"
     reference = \case Video -> "![](explanation.mp4)"; Diagram -> "![Reproduction, inferred cause, and verified fix](cause.png)"
-    validToken value = T.length value == 40 && T.all isHexDigit value || any (\prefix -> maybe False (\rest -> not (T.null rest) && T.all (\c -> isAscii c && (isAlphaNum c || c == '_')) rest) $ T.stripPrefix prefix value) ["ghp_", "gho_", "github_pat_"]
-    assetUrl url = maybe False (isJust . UUID.fromText) $ T.stripPrefix "https://github.com/user-attachments/assets/" url
+    validToken value = T.length value == 40 && T.all isHexDigit value || any (\prefix -> maybe False (\rest -> not (T.null rest) && T.all (\c -> isAscii c && (isAlphaNum c || c == '_')) rest) $ T.stripPrefix prefix value) ["ghp_", "gho_", "ghs_", "github_pat_"]
+    preset = maybe Map.empty (\urls -> Map.fromList [(Video, urls.video), (Diagram, urls.diagram)]) linked
+    assetUrl asset url = case linked of
+      Just _ -> Map.lookup asset preset == Just url
+      Nothing -> maybe False (isJust . UUID.fromText) $ T.stripPrefix "https://github.com/user-attachments/assets/" url
 
 
 newtype PullNumber = PullNumber {number :: Word64}

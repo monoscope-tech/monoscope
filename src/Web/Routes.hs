@@ -7,6 +7,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
+import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as Wreq
 import Data.IP qualified as IP
@@ -32,6 +33,7 @@ import Lucid
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.ImpactReviews qualified as ImpactReviews
+import Models.Projects.IssueFixes qualified as IssueFixes
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types qualified as H
 import Network.Wai (Request)
@@ -202,6 +204,7 @@ data Routes mode = Routes
   , proofMediaGet :: mode :- ProofMediaGet
   , proofRatingGet :: mode :- ProofRatingGet
   , proofRatingPost :: mode :- ProofRatingPost
+  , fixMediaGet :: mode :- FixMediaGet
   , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[HTML] (RespHeaders Onboarding.ProxiedPage)
   , deviceCode :: mode :- "api" :> "device" :> "code" :> Post '[JSON] Auth.DeviceCodeResponse
   , deviceToken :: mode :- "api" :> "device" :> "token" :> QPT "device_code" :> Post '[JSON] Auth.DeviceTokenResponse
@@ -258,6 +261,7 @@ server otlpTraces otlpLogs =
         , proofMediaGet = proofMediaGetH
         , proofRatingGet = proofRatingH False
         , proofRatingPost = proofRatingH True
+        , fixMediaGet = fixMediaGetH
         , proxyLanding = \path ->
             Onboarding.proxyLandingH path
               & State.evalState @TriggerEvents mempty
@@ -831,6 +835,15 @@ proofRatingH record pid rid rating sigM = do
     $ if record
       then p_ $ "Thanks. Monoscope recorded that this proof " <> verdict <> "."
       else form_ [method_ "post"] $ p_ ("Tell Monoscope this proof " <> verdict <> "?") >> button_ [type_ "submit", style_ "font:inherit;padding:.5rem 1rem;cursor:pointer"] "Record my answer"
+
+
+fixMediaGetH :: Projects.ProjectId -> UUIDId "issue_fix" -> Artifacts.Asset -> Maybe Text -> Request -> (Wai.Response -> IO Wai.ResponseReceived) -> ATBaseCtx Wai.ResponseReceived
+fixMediaGetH pid fid asset sigM request send = do
+  ctx <- ask @AuthContext
+  whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid (IssueFixes.fixMediaSignedPath fid asset) sigM) \err -> Error.throwError err403{errBody = err}
+  (_, explanation) <- maybe (Error.throwError err404) pure =<< IssueFixes.mediaFor pid fid IssueFixes.SignedLink
+  bytes <- either (const $ Error.throwError err503) (pure . Artifacts.verifiedBytes) =<< Artifacts.readFixMedia explanation asset
+  liftIO $ send $ PageCodeContext.rangedMedia request [(H.hContentType, Artifacts.assetMime asset), (H.hCacheControl, "public, max-age=31536000, immutable")] bytes
 
 
 -- | Public endpoint for rendering widgets to PNG (for bot embeds). Requires valid HMAC signature.

@@ -45,6 +45,8 @@ module Web.Links (
   ProofRatingPost,
   proofRatingPath,
   proofMediaPath,
+  FixMediaGet,
+  fixMediaPath,
 ) where
 
 import Data.Aeson qualified as AE
@@ -611,6 +613,14 @@ type ProofRatingPost = "p" :> ProjectId :> "reviews" :> Capture "review_id" (UUI
 
 proofRatingPath :: Projects.ProjectId -> UUIDId "pr_review" -> ImpactReviews.Rating -> Text -> Text
 proofRatingPath pid rid rating sig = safeLink' (("/" <>) . toUrlPiece) (Proxy @ProofRatingGet) (Proxy @ProofRatingGet) pid rid rating (Just sig)
+
+
+-- | A verified fix's video or diagram, signed per asset so a pull request opened by the GitHub App can show it.
+type FixMediaGet = "p" :> ProjectId :> "issue-fixes" :> Capture "id" (UUIDId "issue_fix") :> "shared" :> Capture "asset" Artifacts.Asset :> QPT "sig" :> RawM
+
+
+fixMediaPath :: Projects.ProjectId -> UUIDId "issue_fix" -> Artifacts.Asset -> Text -> Text
+fixMediaPath pid fid asset sig = safeLink' (("/" <>) . toUrlPiece) (Proxy @FixMediaGet) (Proxy @FixMediaGet) pid fid asset (Just sig)
 
 
 proofMediaPath :: Projects.ProjectId -> UUIDId "pr_review" -> ImpactReviews.ProofFile -> Text -> Text

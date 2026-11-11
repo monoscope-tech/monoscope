@@ -1,4 +1,6 @@
-module Data.Effectful.AgentArtifacts (AgentArtifacts (..), Asset (..), ArtifactFailure (..), RetainedFix, retainedFix, MediaBytes, verifiedBytes, PublicationArchive, archiveBytes, configuredBucket, assetFile, retainFixMedia, readFixMedia, packageFixMedia, publicationDescription, runAgentArtifactsReal, runAgentArtifactsTest) where
+{-# LANGUAGE OrPatterns #-}
+
+module Data.Effectful.AgentArtifacts (AgentArtifacts (..), Asset (..), ArtifactFailure (..), RetainedFix, retainedFix, MediaBytes, verifiedBytes, PublicationArchive, archiveBytes, configuredBucket, assetFile, assetMime, retainFixMedia, readFixMedia, packageFixMedia, publicationDescription, runAgentArtifactsReal, runAgentArtifactsTest) where
 
 import Conduit (runConduit, (.|))
 import Data.Aeson qualified as AE
@@ -65,6 +67,8 @@ configuredBucket config = case config.impactReviewArtifactBucket of
 
 
 assetFile :: Asset -> Text
+assetMime :: Asset -> ByteString
+assetMime = \case Video -> "video/mp4"; Diagram -> "image/svg+xml"; Captions -> "text/vtt; charset=utf-8"; (Before; Cause; Change; After) -> "image/png"
 assetFile = \case Video -> "explanation.mp4"; Diagram -> "diagram.svg"; Captions -> "captions.vtt"; Before -> "before.png"; Cause -> "cause.png"; Change -> "change.png"; After -> "after.png"
 
 
