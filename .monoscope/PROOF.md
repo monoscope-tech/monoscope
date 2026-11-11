@@ -1,8 +1,15 @@
 # Proving changes in this repository
 
-Reviews run offline in a VM, and the Haskell server cannot be rebuilt there within a review's
-budget. The guest ships a recent production build of it instead, so prove frontend changes in the
-real app, and CLI and script behaviour in the terminal.
+Reviews run in a VM that can read package registries and nothing else, and the Haskell server
+cannot be rebuilt there within a review's budget. The guest ships a recent production build of it
+instead, so prove frontend changes in the real app, and CLI and script behaviour in the terminal.
+
+## Haskell changes
+
+A cold build of this repository takes over an hour, so do not install GHC to build it in a proof.
+`cabal` is on the PATH only when the review starts from a prepared workspace, whose
+`dist-newstyle` makes one focused test or doctest fast. Without it, mark the claim unverified and
+say which test would prove it.
 
 ## Frontend changes (`web-components/`, `static/`)
 

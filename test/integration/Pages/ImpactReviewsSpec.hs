@@ -542,7 +542,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           receive = Timeout.timeout (15 * 1000000) (BSC.hGetLine (getStdout child) >>= either fail pure . AE.eitherDecodeStrict @AE.Value) >>= maybe (fail "SDK sandbox did not reply") pure
           exec argv = send "Execute" (AE.object ["argv" AE..= (argv :: [Text]), "cwd" AE..= AE.Null, "quiet" AE..= False]) >> receive >>= parse (field "Right")
           unit = AE.object ["Right" AE..= ([] :: [AE.Value])]
-      send "Create" $ AE.object ["imagePath" AE..= image, "cpus" AE..= (2 :: Int), "memoryMiB" AE..= (1024 :: Int), "isolation" AE..= ("offline_cow" :: Text), "mounts" AE..= AE.object []]
+      send "Create" $ AE.object ["imagePath" AE..= image, "cpus" AE..= (2 :: Int), "memoryMiB" AE..= (1024 :: Int), "isolation" AE..= ("registry_cow" :: Text), "mounts" AE..= AE.object []]
       receive `shouldReturn` unit
       resolved <- exec ["/usr/bin/getent", "-s", "files", "hosts", "localhost"]
       parse (field "exitCode") resolved `shouldReturn` (0 :: Int)
@@ -1239,7 +1239,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         map (.status) checks `shouldBe` [Agent.Passed, Agent.Failed, Agent.Invalidated, Agent.Invalidated] <> if n == 1 then [Agent.Blocked, Agent.Blocked] else [Agent.OutputLimit, Agent.OutputLimit]
         map (.exitCode) (take 2 checks) `shouldBe` [Just 0, Just 1]
         when (n == 1) $ map (.exitCode) (drop 4 checks) `shouldBe` [Just 127, Just 127]
-        when (n /= 1) $ map (.logBytes) checks `shouldSatisfy` all (<= 1024 * 1024)
+        when (n /= 1) $ map (.logBytes) checks `shouldSatisfy` all (<= Workspace.checkLogLimit)
         submissions `shouldBe` [draft 2 ["telemetry-1"], accepted]
         memories `shouldBe` [if n == 1 then AE.object ["tag" AE..= ("List" :: Text)] else AE.object ["tag" AE..= ("Search" :: Text), "contents" AE..= ("retry" :: Text)], AE.object ["tag" AE..= ("Read" :: Text), "contents" AE..= page], AE.object ["tag" AE..= ("Write" :: Text), "contents" AE..= AE.object ["pageId" AE..= page, "version" AE..= (0 :: Int), "document" AE..= document]]]
         length allocations `shouldBe` 1
@@ -2902,6 +2902,21 @@ spec = around withTestResources $ describe "Production impact reviews" do
     posted <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest{Wai.requestMethod = "POST"} $ encodeUtf8 $ rateUrl Reviews.Up) app
     H.statusCode posted.simpleStatus `shouldBe` 200
     dbOne tr "SELECT rating FROM projects.pr_review_runs WHERE id = ?" (Only run.id) `shouldReturn` ("up" :: Text)
+
+  it "sandbox_installsFromPackageRegistriesButReachesNothingElse" \_ -> withTemp "registry-egress" \directory -> do
+    image <- guestImage
+    store <- storeIn directory
+    bridge <- canonicalizePath "test/fixtures/native-sandbox.sh"
+    let repository = directory </> "repository"
+        scriptFile = directory </> "prepare.sh"
+        requestFile = directory </> "request.json"
+    initRepo repository
+    base <- commit repository [("app.sh", "v1\n")]
+    -- A build or proof may fetch packages, so a missing toolchain is installable; it cannot write
+    -- to a registry or reach any other host, GitHub included.
+    writeFileBS scriptFile "set -eu\ncurl -sSfI https://registry.npmjs.org/ >/dev/null\n! curl -sf -o /dev/null https://github.com/\ncurl -sSfI https://raw.githubusercontent.com/haskell/ghcup-metadata/master/ghcup-0.0.8.yaml >/dev/null\n! curl -sf -o /dev/null https://raw.githubusercontent.com/torvalds/linux/master/README\n! curl -sf -o /dev/null -X POST https://registry.npmjs.org/-/v1/search\n"
+    writeFileLBS requestFile $ AE.encode $ AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= (base :: Text)]
+    runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir (toText image) bridge scriptFile Nothing Nothing) (Workspace.Prepare repository) requestFile) >>= either (fail . toString) (const pass)
 
   it "workspacePrepare_warmStartsFromTheRepositoryLatestBuild" \tr -> withTemp "native-ancestor" \directory -> do
     image <- guestImage

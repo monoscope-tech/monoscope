@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Outcome (..), Start (..), preparedOutcome, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), Slots (..), hostSlots, buildSeconds, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, checkLogLimit, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Outcome (..), Start (..), preparedOutcome, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), Slots (..), hostSlots, buildSeconds, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
 import Control.Exception qualified as Exception
@@ -391,7 +391,9 @@ data Image = Image {assetDir :: FilePath, buildId :: ImageId}
   deriving anyclass (AE.FromJSON)
 
 
-data Isolation = OfflineCow
+-- | A copy-on-write root whose only network is read access to package registries ('sandbox.mjs'
+-- holds the list), so a guest can install what a build or proof needs without reaching anything else.
+data Isolation = RegistryCow
   deriving stock (Generic, Read, Show)
   deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" Isolation
 
@@ -1182,7 +1184,7 @@ verifyArtifactRegression options request = do
           outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox VerifierPool options.bridge \rpc -> do
             image <- rpc @Image $ Resolve options.image
             ensure $ image.buildId == request.imageBuildId
-            let sandbox = Sandbox image.assetDir checkResources.cpus checkResources.memoryMiB OfflineCow $ one ("/checkout", checkout)
+            let sandbox = Sandbox image.assetDir checkResources.cpus checkResources.memoryMiB RegistryCow $ one ("/checkout", checkout)
             case request.workspace of
               Pristine -> rpc @() $ Create sandbox
               PreparedCheckpoint snapshot -> do
@@ -1413,7 +1415,7 @@ lookupWorkspace options operation request = do
                 void $ git ["-C", clean, "checkout", "--quiet", "--detach", toString baseText]
                 void $ git ["-C", clean, "remote", "add", "origin", toString repoText]
                 started <- getMonotonicTimeNSec
-                let sandbox = Sandbox image.assetDir 2 1024 OfflineCow (one ("/baseline", clean))
+                let sandbox = Sandbox image.assetDir 2 1024 RegistryCow (one ("/baseline", clean))
                 ancestor <- ancestorSnapshot
                 case ancestor of
                   Nothing -> do

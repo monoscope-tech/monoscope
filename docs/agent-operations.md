@@ -63,7 +63,9 @@ Monoscope reacts with 👀 when it queues the ask. An ask for a head that is alr
 The GitHub App must subscribe to `issue_comment` events and hold `pull_requests: write` to react.
 Automatic runs skip pull requests that change only documentation, tests or CI. An ask always reviews.
 
-`record_proof {claim, command}` replays one bash command under asciinema in fresh offline verifier VMs, on the base and the head.
+`record_proof {claim, command}` replays one bash command under asciinema in fresh verifier VMs, on the base and the head.
+
+**Network.** Every guest (agent, proof, workspace build) can read package registries and reach nothing else: `sandbox.mjs` allows GET and HEAD to Debian apt, npm, PyPI, crates.io and rustup, the Go proxy, Hackage and ghcup, Maven and RubyGems, sets a fixed User-Agent, and blocks internal ranges. Guest commands run as uid 1000, so a missing toolchain comes from a user-space installer (ghcup, rustup, npm, `pip --user`, `go install`) in a proof's setup, and a workspace build caches it in the checkpoint. GitHub is excluded: a repository's traffic insights list visited paths, which pull request code could use to exfiltrate source.
 The host decodes each cast from the check log, renders a GIF with `agg` and an MP4 with `ffmpeg`, and stores them in `projects.pr_review_proofs`.
 Signed links at `/p/<project>/reviews/<review>/proofs/<file>` serve the media, so GitHub's image proxy can show the GIF without a session.
 A UI proof's browser recording is drawn inside a browser window, titled and addressed from the `page.tsv` the proof writes, and its preview is an animated WebP cut from that framed video.
@@ -107,7 +109,7 @@ Every queued review also queues `PrepareReviewWorkspace` in `background_jobs_lon
 
 Use a private request containing `projectId`, a credential-free `repository` and its exact `base` revision.
 Keep the trusted preparation script outside customer checkouts.
-Dependencies come from the pinned guest image or an explicit host-owned archive; preparation has no network credentials.
+Dependencies come from the pinned guest image, an explicit host-owned archive, or the package registries guests can read; preparation has no network credentials.
 
 ```sh
 monoscope workspace prepare \
