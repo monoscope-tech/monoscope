@@ -258,6 +258,10 @@ never slow every check down for it. The precedent: after another branch built in
 the shared `dist`, GHC left some live modules without `.hie` files and weeder reported
 their callees dead, so the weeder check recompiles any tracked module missing one.
 
+**`make land PR=<n>` merges without losing the race to a busy master**: it signs off, waits for
+the tree's image, and merges only while `origin/master` is still the base; if master moved, it
+rebases and repeats. Merging after master moved leaves a tree with no image, so the deploy fails.
+
 **`make ship` is the whole deploy from here** — checks, image, push, CapRover —
 so the slow half stops being a queue you wait on:
 

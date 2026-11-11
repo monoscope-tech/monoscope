@@ -36,6 +36,7 @@ import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware)
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
+import Pages.BodyWrapper (frontendBuild)
 import Pages.Replay (processReplayEvents)
 import Pkg.AdConversions qualified as AdConversions
 import Pkg.DeriveUtils (staticAssetHashes, stripAssetHash)
@@ -388,6 +389,7 @@ runServer appLogger env tp = do
           -- . loggingMiddleware
           . AdConversions.attributionMiddleware
           . hashedAssetMiddleware
+          . (\app req respond -> app req (respond . mapResponseHeaders (("X-Monoscope-Build", encodeUtf8 frontendBuild) :)))
           $ server
   let bgJobWorker = BackgroundJobs.jobsWorkerInitWithTools appLogger env tp (Just Routes.mcpProjectTools)
       effectiveReplayBatch =

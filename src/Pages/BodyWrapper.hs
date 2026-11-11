@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, BWConfig (..), stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus, externalHeadScripts_) where
+module Pages.BodyWrapper (bodyWrapper, frontendBuild, BWConfig (..), stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus, externalHeadScripts_) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
@@ -270,6 +270,12 @@ data BWConfig = BWConfig
   deriving anyclass (Default)
 
 
+-- | The frontend bundle this server serves. Every response carries it (System.Server), so a tab
+-- still running an earlier bundle notices on its next request and reloads once.
+frontendBuild :: Text
+frontendBuild = $(viteAssetFile "index.html")
+
+
 bodyWrapper :: BWConfig -> Html () -> Html ()
 bodyWrapper bcfg child = do
   let isProd = bcfg.config.environment /= Dev
@@ -303,6 +309,7 @@ bodyWrapper bcfg child = do
       link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
       meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
       meta_ [name_ "theme-color", content_ themeColor, id_ "theme-color-meta"]
+      meta_ [name_ "monoscope-build", content_ frontendBuild]
 
       -- Resource hints. Avatars are served from /api/avatar (same origin) and easepick's
       -- CSS is self-hosted now, so only the origins actually contacted are listed — an
@@ -402,7 +409,7 @@ bodyWrapper bcfg child = do
           spriteSolid: "${spriteSolidURL}", spriteRegular: "${spriteRegularURL}", worldMap: "${worldMapURL}"
         };|]
 
-      script_ [type_ "module", src_ $(viteAssetFile "index.html")] ("" :: Text)
+      script_ [type_ "module", src_ frontendBuild] ("" :: Text)
 
       when isProd
         $ script_
