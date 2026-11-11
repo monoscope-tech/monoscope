@@ -127,6 +127,7 @@ data ApiError
   | UserNotCreated
   | UnknownBulkAction Text
   | NonPositiveTimeWindow
+  | InvalidMonitorQuery Text
   | Required Text
   | EveryoneTeamNotUpdatable
   | EveryoneTeamNotDeletable
@@ -153,6 +154,7 @@ refusal e = problem status ApiProblem{code = c, message = msg, field = fieldM, s
       UserNotCreated -> (err404, PUserNotCreated, "Could not create user", Nothing)
       UnknownBulkAction a -> (err400, PUnknownBulkAction, "Unknown bulk action: " <> a, Just "action")
       NonPositiveTimeWindow -> (err400, PNonPositiveTimeWindow, "time_window_mins must be positive", Just "time_window_mins")
+      InvalidMonitorQuery m -> (err400, PInvalidQuery, m, Just "query")
       Required f -> (err400, PRequired, f <> " is required", Just f)
       EveryoneTeamNotUpdatable -> (err400, PEveryoneTeamNotUpdatable, "The everyone team cannot be updated via this endpoint", Nothing)
       EveryoneTeamNotDeletable -> (err400, PEveryoneTeamNotDeletable, "The everyone team cannot be deleted", Nothing)

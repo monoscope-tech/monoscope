@@ -125,7 +125,7 @@ import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
-import Models.Apis.MonitorDefinitions (compileAlertSql, monitorConfig, monitorFromInput, monitorToInput)
+import Models.Apis.MonitorDefinitions (monitorConfig, monitorFromInput, monitorToInput)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Apis.ShareEvents qualified as ShareEvents
@@ -541,7 +541,7 @@ saveMonitor :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Monitors.Q
 saveMonitor pid mid existingM inp = do
   when (inp.timeWindowMins <= 0) $ refuse NonPositiveTimeWindow
   now <- Time.currentTime
-  let mon = monitorFromInput pid now mid existingM inp
+  mon <- either (refuse . InvalidMonitorQuery) pure $ monitorFromInput pid now mid existingM inp
   mon <$ Monitors.queryMonitorUpsert mon
 
 
@@ -576,55 +576,37 @@ apiMonitorYaml pid mid = do
 -- | PATCH — merge fields into existing monitor.
 apiMonitorPatch :: Projects.ProjectId -> Monitors.QueryMonitorId -> MonitorPatch -> ATBaseCtx Monitors.QueryMonitor
 apiMonitorPatch pid mid patch = do
-  when (maybe False (<= 0) patch.timeWindowMins) $ refuse NonPositiveTimeWindow
   existing <- apiMonitorGet pid mid
-  now <- Time.currentTime
-  let ac = existing.alertConfig
-      mergedAc =
-        ac
-          { Monitors.unit = mfilter (not . T.null) $ T.strip <$> (patch.unit <|> ac.unit)
-          , Monitors.title = fromMaybe ac.title patch.title
-          , Monitors.severity = fromMaybe ac.severity patch.severity
-          , Monitors.subject = fromMaybe ac.subject patch.subject
-          , Monitors.message = fromMaybe ac.message patch.message
-          , Monitors.emails = maybe ac.emails (V.fromList . fmap CI.mk) patch.emails
-          , Monitors.emailAll = fromMaybe ac.emailAll patch.emailAll
-          , Monitors.slackChannels = maybe ac.slackChannels V.fromList patch.slackChannels
-          }
-      updateActive m = maybe m (\a -> m{Monitors.deactivatedAt = bool (Just now) Nothing a}) patch.active
-      merged =
-        updateActive
-          existing
-            { Monitors.updatedAt = now
-            , Monitors.logQuery = fromMaybe existing.logQuery patch.query
-            , -- Recompile whenever the query or its window moves: this is what alert
-              -- evaluation runs, and inheriting it from `existing` left the monitor
-              -- alerting on its previous query.
-              Monitors.logQueryAsSql =
-                fromRight existing.logQueryAsSql
-                  $ compileAlertSql
-                    pid
-                    (fromMaybe existing.timeWindowMins patch.timeWindowMins)
-                    (patch.environment <|> existing.environment)
-                    (patch.service <|> existing.service)
-                    (fromMaybe existing.logQuery patch.query)
-            , Monitors.alertThreshold = fromMaybe existing.alertThreshold patch.alertThreshold
-            , Monitors.warningThreshold = patch.warningThreshold <|> existing.warningThreshold
-            , Monitors.triggerLessThan = fromMaybe existing.triggerLessThan patch.triggerLessThan
-            , Monitors.checkIntervalMins = fromMaybe existing.checkIntervalMins patch.checkIntervalMins
-            , Monitors.timeWindowMins = fromMaybe existing.timeWindowMins patch.timeWindowMins
-            , Monitors.thresholdSustainedForMins = fromMaybe existing.thresholdSustainedForMins patch.thresholdSustainedForMins
-            , Monitors.renotifyIntervalMins = patch.notifyAfterMins <|> existing.renotifyIntervalMins
-            , Monitors.stopAfterCount = patch.stopAfterCount <|> existing.stopAfterCount
-            , Monitors.alertConfig = mergedAc
-            , Monitors.teams = maybe existing.teams V.fromList patch.teams
-            , Monitors.visualizationType = fromMaybe existing.visualizationType patch.visualizationType
-            , Monitors.alertRecoveryThreshold = patch.alertRecoveryThreshold <|> existing.alertRecoveryThreshold
-            , Monitors.warningRecoveryThreshold = patch.warningRecoveryThreshold <|> existing.warningRecoveryThreshold
-            , Monitors.environment = patch.environment <|> existing.environment
-            , Monitors.service = patch.service <|> existing.service
-            }
-  merged <$ Monitors.queryMonitorUpsert merged
+  let i = monitorToInput existing
+      (<?) :: Maybe a -> a -> a
+      (<?) = flip fromMaybe
+  saveMonitor pid mid (Just existing)
+    $ MonitorInput
+      { unit = patch.unit <|> i.unit
+      , title = patch.title <? i.title
+      , query = patch.query <? i.query
+      , severity = patch.severity <|> i.severity
+      , subject = patch.subject <|> i.subject
+      , message = patch.message <|> i.message
+      , emails = patch.emails <? i.emails
+      , emailAll = patch.emailAll <|> i.emailAll
+      , slackChannels = patch.slackChannels <? i.slackChannels
+      , alertThreshold = patch.alertThreshold <? i.alertThreshold
+      , warningThreshold = patch.warningThreshold <|> i.warningThreshold
+      , triggerLessThan = patch.triggerLessThan <? i.triggerLessThan
+      , checkIntervalMins = patch.checkIntervalMins <? i.checkIntervalMins
+      , timeWindowMins = patch.timeWindowMins <? i.timeWindowMins
+      , thresholdSustainedForMins = patch.thresholdSustainedForMins <|> i.thresholdSustainedForMins
+      , notifyAfterMins = patch.notifyAfterMins <|> i.notifyAfterMins
+      , stopAfterCount = patch.stopAfterCount <|> i.stopAfterCount
+      , teams = patch.teams <? i.teams
+      , visualizationType = patch.visualizationType <|> i.visualizationType
+      , alertRecoveryThreshold = patch.alertRecoveryThreshold <|> i.alertRecoveryThreshold
+      , warningRecoveryThreshold = patch.warningRecoveryThreshold <|> i.warningRecoveryThreshold
+      , active = patch.active
+      , environment = patch.environment <|> i.environment
+      , service = patch.service <|> i.service
+      }
 
 
 apiMonitorDelete :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx NoContent

@@ -36,6 +36,7 @@ import Models.Apis.Incidents qualified as I
 import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
+import Models.Apis.MonitorDefinitions (monitorFromInput)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.Dashboards (DashboardVM (..))
@@ -50,6 +51,7 @@ import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Slack qualified as SlackPage
 import Pages.Dashboards qualified as Dashboards
 import Pages.Issues qualified as IssuesPage
+import Pages.LogExplorer.Log qualified as Log
 import Pages.Monitors qualified as Alerts
 import Pages.Projects qualified as ProjectPages
 import Pages.Settings qualified as Settings
@@ -178,6 +180,35 @@ spec = describe "Monitoring" do
         Right (ids, _) -> ids `shouldBe` ["m1", "m2", "m4", "m5", "m5"]
         Left _ -> expectationFailure "processMessages returned Left WriteFailure"
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
+
+    it "alert form semantics: any results needs one match, windows parse their unit, the editor reopens on the saved condition, below monitors read the lowest group" \tr -> do
+      let (anyId, belowId) = (UUID.fromWords 0 0 7 1, UUID.fromWords 0 0 7 2)
+          upsert f = void $ testServant tr $ Alerts.alertUpsertPostH testPid f{Alerts.environment = Nothing, Alerts.service = Nothing}
+      -- "Any results" was saved as threshold 0, which a reading of 0 breaches; "12h" parsed as 12 minutes.
+      upsert alertForm{Alerts.alertId = Just (UUID.toText anyId), Alerts.conditionType = Just "has_matches", Alerts.alertThreshold = 50, Alerts.timeWindow = Just "12h"}
+      anyResults <- fetchMonitor tr (Monitors.QueryMonitorId anyId)
+      (anyResults.alertThreshold, anyResults.timeWindowMins, anyResults.lastEvaluated) `shouldBe` (1, 720, Nothing)
+      evalMonitorValueAt t0 tr anyResults.id 0
+      (.currentStatus) <$> fetchMonitor tr anyResults.id `shouldReturn` Monitors.MSNormal
+      evalMonitorValueAt (addUTCTime 60 t0) tr anyResults.id 1
+      (.currentStatus) <$> fetchMonitor tr anyResults.id `shouldReturn` Monitors.MSAlerting
+      -- Reopening it in the editor used to select "threshold" and a 5-minute window, which a save then wrote back.
+      editor <- renderT <$> call tr (Log.alertFormH testPid (Just $ UUID.toText anyId))
+      editor `shouldContainAll` ["value=\"has_matches\" selected", "value=\"720m\" selected"]
+      -- A grouped "below" monitor read its highest group, so the lowest one never alerted.
+      upsert alertForm{Alerts.alertId = Just (UUID.toText belowId), Alerts.direction = Issues.Below, Alerts.alertThreshold = 2, Alerts.query = "name == \"edsl-a\" or name == \"edsl-b\" | summarize count() by name", Alerts.frequency = Just "1m", Alerts.timeWindow = Just "1h"}
+      apiKey <- createTestAPIKey tr testPid "below-monitor"
+      now <- getCurrentTime
+      for_ ["edsl-a", "edsl-a", "edsl-a", "edsl-b" :: Text] \n -> ingestTrace tr apiKey n now
+      advanceMinutes tr 1
+      void $ captureNotifs tr checkTriggeredQueryMonitors
+      below <- fetchMonitor tr (Monitors.QueryMonitorId belowId)
+      (below.currentValue, below.currentStatus) `shouldBe` (1, Monitors.MSAlerting)
+      -- A dashboard widget's query carries template placeholders; the monitor read them raw and matched nothing.
+      let templated = UUID.fromWords 0 0 7 3
+      upsert alertForm{Alerts.alertId = Just (UUID.toText templated), Alerts.alertThreshold = 1, Alerts.query = "name == \"edsl-a\" and (\"{{var-app}}\" == \"\" or resource.service.name == \"{{var-app}}\")", Alerts.frequency = Just "1m", Alerts.timeWindow = Just "1h"}
+      void $ captureNotifs tr checkTriggeredQueryMonitors
+      ((.currentValue) &&& (.currentStatus)) <$> fetchMonitor tr (Monitors.QueryMonitorId templated) `shouldReturn` (3, Monitors.MSAlerting)
 
     -- Monitor queries and bulk actions were keyed on monitor id alone, so a user on one
     -- project could mute/deactivate/resolve/delete or toggle another tenant's monitors.
@@ -341,8 +372,8 @@ spec = describe "Monitoring" do
           readings = Monitors.QueryMonitorId $ UUID.fromWords 0 0 0 902
       stored <-
         either (fail . toString) pure
-          $ Alerts.convertToQueryMonitor testPid frozenTime hystStored
-          $ alertForm{Alerts.alertId = Just (UUID.toText hystStored.unwrap), Alerts.warningThreshold = Just "80", Alerts.alertThreshold = 100, Alerts.query = "", Alerts.frequency = Just "1m", Alerts.alertRecoveryThreshold = Just "60", Alerts.warningRecoveryThreshold = Just "50", Alerts.environment = Nothing, Alerts.service = Nothing}
+          $ monitorFromInput testPid frozenTime hystStored Nothing
+          $ Alerts.alertFormInput alertForm{Alerts.alertId = Just (UUID.toText hystStored.unwrap), Alerts.warningThreshold = Just "80", Alerts.alertThreshold = 100, Alerts.query = "", Alerts.frequency = Just "1m", Alerts.alertRecoveryThreshold = Just "60", Alerts.warningRecoveryThreshold = Just "50", Alerts.environment = Nothing, Alerts.service = Nothing}
       runTestBg frozenTime tr (Monitors.queryMonitorUpsert stored) `shouldReturn` 1
       m0 <- fetchMonitor tr hystStored
       (m0.alertThreshold, m0.warningThreshold, m0.alertRecoveryThreshold, m0.warningRecoveryThreshold, m0.currentStatus) `shouldBe` (100, Just 80, Just 60, Just 50, Monitors.MSNormal)
@@ -447,6 +478,11 @@ spec = describe "Monitoring" do
       cronAdded <- fromRightShow <$> call tr (Alerts.cronMonitorPostH pid (Alerts.CronForm "nightly-billing" "Nightly billing" 3600 300))
       goldenParts "uptime-cron-forms" . ordNub $ tagsWith ["value name=\"url\"", "hx-target:inherited=\"this\""] (renderT added) <> tagsWith ["value name=\"slug\"", "hx-target:inherited=\"this\""] (renderT cronAdded)
 
+      -- Uptime checks share Prometheus targets' table, which needs edit access; so do cron monitors.
+      setRole tr pid ProjectMembers.PView
+      shopId <- maybe (fail "no uptime check") (pure . (.id)) . V.headM =<< runQueryEffect tr (PromCfg.configsByProjectId pid PromCfg.CKUptime)
+      traverse (httpStatus tr) [void $ Alerts.uptimeCheckPostH pid (Alerts.UptimeForm "Viewer" "https://viewer.example.com" Nothing Nothing), void $ Alerts.uptimeCheckToggleH pid shopId, void $ Alerts.uptimeCheckDeleteH pid shopId, void $ Alerts.cronMonitorPostH pid (Alerts.CronForm "viewer" "Viewer" 3600 300)] `shouldReturn` [403, 403, 403, 403]
+      setRole tr pid ProjectMembers.PAdmin
       void $ runQueryEffect tr $ ProjectMembers.createEveryoneTeam pid (Servant.getResponse tr.trSessAndHeader).user.id
       setupSlackData tr pid "T_UPTIME"
       dbExec tr [sql|UPDATE projects.projects SET error_alerts = TRUE WHERE id = ?|] (Only pid)

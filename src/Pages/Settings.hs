@@ -113,7 +113,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formCheckbox_, formField_, grantsTrial, headerRow_, iconBadge_, keyboardActivateAttr_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, searchInput_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), ResourceRow (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, dialogTrigger_, disclosure_, emptyState_, formActionsModal_, formCheckbox_, formField_, grantsTrial, headerRow_, iconBadge_, keyboardActivateAttr_, localTimeFmt_, modalWith_, nativeDialog_, options_, paymentPlanPicker, resourceList_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
@@ -712,20 +712,12 @@ parseLabelsText t =
 
 
 prometheusPage :: PrometheusSettings -> Html ()
-prometheusPage settings = settingsSection_ $ div_
-  [ [__|on closeModal
-    set targetDialog to event.target.closest('dialog')
-    call targetDialog.close()
-    wait 0ms
-    call document.getElementById(targetDialog.id + '-trigger').focus()
-  |]
-  ]
-  do
-    headerRow_ [] do
-      settingsH2_ "Prometheus targets"
-      when canEdit $ promTargetModal_ settings.projectId Nothing
-    unless canEdit $ p_ [class_ "text-sm text-textWeak"] "A project editor can configure Prometheus targets."
-    prometheusTargetsList settings
+prometheusPage settings = settingsSection_ do
+  headerRow_ [] do
+    settingsH2_ "Prometheus targets"
+    when canEdit $ promTargetModal_ settings.projectId Nothing
+  unless canEdit $ p_ [class_ "text-sm text-textWeak"] "A project editor can configure Prometheus targets."
+  prometheusTargetsList settings
   where
     canEdit = maybe False (>= ProjectMembers.PEdit) settings.permission
 
@@ -733,23 +725,16 @@ prometheusPage settings = settingsSection_ $ div_
 -- | The saved config determines the dialog identity and save endpoint.
 promTargetModal_ :: Projects.ProjectId -> Maybe PromCfg.PrometheusScrapeConfig -> Html ()
 promTargetModal_ pid mcfg = do
-  button_ [id_ (modalId <> "-trigger"), type_ "button", class_ (if isNothing mcfg then "btn btn-sm btn-primary gap-1.5" else "btn btn-xs btn-ghost"), onclick_ $ "document.getElementById('" <> modalId <> "').showModal()"] do
+  dialogTrigger_ modalId [class_ (if isNothing mcfg then "btn btn-sm btn-primary gap-1.5" else "btn btn-xs btn-ghost")] do
     when (isNothing mcfg) $ faSprite_ "plus" "regular" "w-3 h-3"
     toHtml (if isNothing mcfg then "Add target" else "Edit" :: Text)
-  term "dialog" [id_ modalId, Aria.label_ heading, class_ "modal p-3 sm:p-8 overscroll-contain"] $ div_ [class_ "modal-box w-full max-w-2xl p-4 sm:p-6 flex flex-col gap-5"] do
-    div_ do
-      h2_ [class_ "text-textStrong text-xl font-semibold"] $ toHtml heading
-      p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml desc
+  nativeDialog_ modalId heading "w-full max-w-2xl p-4 sm:p-6 flex flex-col gap-5" do
+    p_ [class_ "text-sm text-textWeak -mt-3"] $ toHtml desc
     form_
       [ hxPost_ action
       , class_ "flex flex-col gap-4"
       , hxTarget_ "#prometheus-targets"
       , hxSwap_ "outerMorph"
-      , [__|on htmx:after:request
-        if event.target is me and event.detail.ctx.response.status is 200 and event.detail.ctx.response.headers.get('HX-Reswap') is not 'none'
-          call me.closest('dialog').close()
-        end
-      |]
       ]
       do
         field_ "name" "Name" True def{placeholder = "api-gateway", value = maybe "" (.name) mcfg, extraAttrs = [autofocus_]}
@@ -823,47 +808,40 @@ statusBadge_ ok = span_ [class_ $ "cbadge-sm inline-flex items-center gap-1 max-
 
 
 prometheusTargetsList :: PrometheusSettings -> Html ()
-prometheusTargetsList settings = div_ [id_ "prometheus-targets", class_ "mt-4"] do
-  if V.null cfgs
-    then emptyState_ def{icon = Just "objects-column"} "Scrape your Prometheus endpoints" $ if canEdit then "Add a /metrics endpoint to collect metrics on a schedule. Targets are grouped under the name you give them." else "A project editor can add a /metrics endpoint to collect metrics on a schedule."
-    else do
-      searchInput_ "w-full mb-3" "Filter targets…" [filterInputAttr_ "#prometheus-targets .itemsListItem"]
-      div_ [class_ "flex flex-col gap-2"] $ V.forM_ cfgs (prometheusTargetRow settings.projectId canEdit)
+prometheusTargetsList settings =
+  div_ [id_ "prometheus-targets", class_ "mt-4"]
+    $ resourceList_ "prometheus-targets" (Just "Filter targets…") (emptyState_ def{icon = Just "objects-column"} "Scrape your Prometheus endpoints" $ if canEdit then "Add a /metrics endpoint to collect metrics on a schedule. Targets are grouped under the name you give them." else "A project editor can add a /metrics endpoint to collect metrics on a schedule.")
+    $ map targetRow (V.toList settings.configs)
   where
-    cfgs = settings.configs
     canEdit = maybe False (>= ProjectMembers.PEdit) settings.permission
-
-
-prometheusTargetRow :: Projects.ProjectId -> Bool -> PromCfg.PrometheusScrapeConfig -> Html ()
-prometheusTargetRow pid canEdit cfg = div_ [class_ "itemsListItem flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between border border-strokeWeak rounded-md p-3"] do
-  div_ [class_ "flex flex-col min-w-0 gap-1"] do
-    div_ [class_ "flex items-center gap-2 flex-wrap"] do
-      healthBadge_
-      span_ [class_ "text-textStrong font-medium"] $ toHtml cfg.name
-      unless cfg.enabled $ span_ [class_ "cbadge-sm badge-neutral"] "paused"
-      when (isJust cfg.authHeader) $ faSprite_ "lock" "solid" "w-3 h-3 text-iconNeutral"
-    span_ [class_ "text-xs text-textWeak truncate"] $ toHtml cfg.url
-    div_ [class_ "text-xs text-textWeak flex items-center gap-1.5 flex-wrap"] do
-      toHtml ("every " <> show cfg.scrapeIntervalSeconds <> "s" :: Text)
-      whenJust cfg.lastScrapedAt \t -> span_ [] $ "· scraped " >> localTimeFmt_ "MMM dd, HH:mm" t
-      whenJust cfg.lastStatus \s -> span_ [class_ "truncate max-w-xs", title_ s] $ toHtml ("· " <> s)
-  div_ [class_ "flex flex-wrap items-center gap-1 shrink-0"] do
-    -- Filter the metrics explorer to this target's series (metric_source = service_name,
-    -- which sampleToMetricRecord sets to the config name).
-    a_ [class_ "btn btn-xs btn-ghost", href_ $ (urls.traces pid).metricsOVGetH Nothing Nothing Nothing Nothing (Just cfg.name) Nothing Nothing Nothing Nothing Nothing Nothing] "View metrics"
-    let swapList = [hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
-    when canEdit do
-      promTargetModal_ pid (Just cfg)
-      button_ ([class_ "btn btn-xs btn-ghost", hxPatch_ $ urls.prometheusSettingsToggle pid cfg.id] <> swapList) $ toHtml (bool "Resume" "Pause" cfg.enabled :: Text)
-      button_ ([class_ "btn btn-xs btn-ghost text-textError", hxDelete_ $ urls.prometheusSettingsDelete pid cfg.id, hxConfirm_ "Remove this Prometheus target?"] <> swapList) "Delete"
-  where
-    -- Scrape health derived from last_status ("ok: …" / "error: …"). Distinct from the
-    -- on/off state so a target that's enabled-but-failing never shows a reassuring green.
-    healthBadge_ = case T.toLower . T.strip <$> cfg.lastStatus of
-      Just s
-        | "ok" `T.isPrefixOf` s -> statusBadge_ True "healthy"
-        | "error" `T.isPrefixOf` s -> statusBadge_ False "failing"
-      _ -> span_ [class_ "cbadge-sm badge-neutral"] "pending"
+    pid = settings.projectId
+    targetRow cfg =
+      ResourceRow
+        { -- From last_status ("ok: …" / "error: …"), apart from on/off, so an enabled-but-failing target never shows green.
+          health = case T.toLower . T.strip <$> cfg.lastStatus of
+            Just st | "ok" `T.isPrefixOf` st -> (SuccessBadge, "circle-check", "healthy")
+            Just st | "error" `T.isPrefixOf` st -> (ErrorBadge, "circle-exclamation", "failing")
+            _ -> (NeutralBadge, "clock", "pending")
+        , title = do
+            span_ [class_ "text-textStrong font-medium"] $ toHtml cfg.name
+            unless cfg.enabled $ span_ [class_ "cbadge-sm badge-neutral"] "paused"
+            when (isJust cfg.authHeader) $ faSprite_ "lock" "solid" "w-3 h-3 text-iconNeutral"
+        , details =
+            [ toHtml cfg.url
+            , div_ [class_ "flex items-center gap-1.5 flex-wrap"] do
+                toHtml ("every " <> show cfg.scrapeIntervalSeconds <> "s" :: Text)
+                whenJust cfg.lastScrapedAt \t -> span_ [] $ "· scraped " >> localTimeFmt_ "MMM dd, HH:mm" t
+                whenJust cfg.lastStatus \st -> span_ [class_ "truncate max-w-xs", title_ st] $ toHtml ("· " <> st)
+            ]
+        , actions = do
+            -- The metrics explorer filtered to this target's series (metric_source is the config name).
+            a_ [class_ "btn btn-xs btn-ghost", href_ $ (urls.traces pid).metricsOVGetH Nothing Nothing Nothing Nothing (Just cfg.name) Nothing Nothing Nothing Nothing Nothing Nothing] "View metrics"
+            let swapList = [hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
+            when canEdit do
+              promTargetModal_ pid (Just cfg)
+              button_ ([class_ "btn btn-xs btn-ghost", hxPatch_ $ urls.prometheusSettingsToggle pid cfg.id] <> swapList) $ toHtml (bool "Resume" "Pause" cfg.enabled :: Text)
+              button_ ([class_ "btn btn-xs btn-ghost text-textError", hxDelete_ $ urls.prometheusSettingsDelete pid cfg.id, hxConfirm_ "Remove this Prometheus target?"] <> swapList) "Delete"
+        }
 
 
 ----------------------------------------------------------------------
@@ -1451,8 +1429,19 @@ overageReqs n = max 0 (n - 20_000_000)
 
 
 -- | Sticky table header cell: opaque background so scrolled rows can't show through.
-stickyTh_ :: Text -> Html () -> Html ()
-stickyTh_ cls = th_ [class_ ("font-medium px-3 py-2 sticky top-0 z-10 bg-fillWeak border-b border-strokeWeak " <> cls)]
+-- | A billing table: 'Table.Table' with a sticky header inside @scroll@ (the grid's y overflow).
+usageTable :: Text -> Text -> [Table.Column a] -> [a] -> (a -> [Attribute]) -> Table.Table a
+usageTable elemID scroll columns rows rowAttrs =
+  Table.Table
+    { config = def{Table.renderAsTable = True, Table.elemID, Table.noSurface = True, Table.gridClasses = "border border-strokeWeak rounded-md " <> scroll, Table.tableClasses = "w-full text-sm tabular-nums border-separate border-spacing-0", Table.thClasses = "font-medium px-3 py-2 sticky top-0 z-10 bg-fillWeak border-b border-strokeWeak text-textWeak text-xs uppercase tracking-wide", Table.containerClasses = "w-full"}
+    , columns
+    , rows = V.fromList rows
+    , features = def{Table.rowAttrs = Just rowAttrs}
+    }
+
+
+usageCol :: Text -> Text -> (a -> Html ()) -> Table.Column a
+usageCol cls name = Table.withAttrs [class_ $ "px-3 py-2 " <> cls] . Table.col name
 
 
 -- | Per-day usage table for the last 30 days. Cost shown is the marginal
@@ -1484,40 +1473,24 @@ dailyUsageBreakdown_ isFree cycleStartDay inputRate outputRate rows = div_ [clas
           withRunning = reverse $ snd $ mapAccumL (\acc u -> let acc' = bool acc 0 (u.day < cycleStartDay) + u.requests in (acc', (u, acc' - u.requests, acc'))) (0 :: Int64) (sortWith (.day) rows)
       unless hasMetrics
         $ callout_ NeutralBadge (Just "No metric ingestion this cycle.") "Only logs and traces have been ingested."
-      div_ [class_ "border border-strokeWeak rounded-md overflow-hidden max-h-96 overflow-y-auto"] do
-        table_ [class_ "w-full text-sm tabular-nums border-separate border-spacing-0"] do
-          -- `border-separate` keeps the header's border-bottom from being clipped
-          -- by sticky positioning.
-          thead_ [class_ "text-textWeak text-xs uppercase tracking-wide"] do
-            tr_ do
-              stickyTh_ "text-left" "Date"
-              stickyTh_ "text-right" "Events"
-              stickyTh_ "text-right" "Metrics"
-              stickyTh_ "text-right" "AI tokens"
-              stickyTh_ "text-left w-1/4" ""
-              stickyTh_ "text-right" "Est. cost"
-          let countCell :: Int64 -> Int64 -> Bool -> Html ()
-              countCell bytes n0 strong = td_ [class_ "px-3 py-2 text-right whitespace-nowrap"] do
-                div_ [class_ (bool "text-textWeak" "text-textStrong" strong)]
-                  $ toHtml @Text
-                  $ bool (fmt (commaizeF n0)) "—" (n0 <= 0)
-                when (bytes > 0)
-                  $ div_ [class_ "text-2xs text-textWeak/80 leading-tight"]
-                  $ toHtml @Text (formatBytes bytes)
-          tbody_ do
-            forM_ withRunning \(u, prev, cur) -> do
-              let pct = max 1 $ min 100 $ (u.requests * 100) `div` maxDay
-                  preCycle = u.day < cycleStartDay
-                  dayOverage = overageReqs cur - overageReqs prev
-              tr_ [class_ $ "border-t border-strokeWeak align-top" <> bool "" " opacity-50" preCycle, title_ $ bool "" "Previous cycle — shown for context" preCycle] do
-                td_ [class_ $ "px-3 py-2 " <> bool "text-textStrong" "text-textWeak" preCycle] $ toHtml $ fmtDate "%a %b %e" u.day
-                countCell u.eventBytes (max 0 (u.requests - u.metrics)) True
-                countCell u.metricBytes u.metrics False
-                countCell 0 (u.aiInputTokens + u.aiOutputTokens) False
-                td_ [class_ "px-3 py-2"] do
-                  div_ [class_ "h-1.5 bg-fillWeak rounded-full overflow-hidden"] do
-                    div_ [class_ "h-full bg-fillBrand-strong", style_ ("width: " <> show pct <> "%")] mempty
-                td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml $ if isFree then "—" else usd (fromIntegral dayOverage / 1_000_000 + fromIntegral u.aiCostMicrousd / 1_000_000)
+      let countCell :: Bool -> (Int64, Int64) -> Html ()
+          countCell strong (bytes, n0) = do
+            div_ [class_ (bool "text-textWeak" "text-textStrong" strong)] $ toHtml @Text $ bool (fmt (commaizeF n0)) "—" (n0 <= 0)
+            when (bytes > 0) $ div_ [class_ "text-2xs text-textWeak/80 leading-tight"] $ toHtml @Text (formatBytes bytes)
+          num = usageCol "text-right whitespace-nowrap"
+      toHtml
+        $ usageTable
+          "daily-usage"
+          "max-h-96 overflow-y-auto"
+          [ usageCol "text-left" "Date" \(u, _, _) -> span_ [class_ $ bool "text-textStrong" "text-textWeak" (u.day < cycleStartDay)] $ toHtml $ fmtDate "%a %b %e" u.day
+          , num "Events" \(u, _, _) -> countCell True (u.eventBytes, max 0 (u.requests - u.metrics))
+          , num "Metrics" \(u, _, _) -> countCell False (u.metricBytes, u.metrics)
+          , num "AI tokens" \(u, _, _) -> countCell False (0, u.aiInputTokens + u.aiOutputTokens)
+          , usageCol "w-1/4" "" \(u, _, _) -> div_ [class_ "h-1.5 bg-fillWeak rounded-full overflow-hidden"] $ div_ [class_ "h-full bg-fillBrand-strong", style_ ("width: " <> show (max 1 $ min 100 $ (u.requests * 100) `div` maxDay) <> "%")] mempty
+          , usageCol "text-right text-textWeak" "Est. cost" \(u, prev, cur) -> toHtml $ if isFree then "—" else usd (fromIntegral (overageReqs cur - overageReqs prev) / 1_000_000 + fromIntegral u.aiCostMicrousd / 1_000_000)
+          ]
+          withRunning
+          (\(u, _, _) -> let preCycle = u.day < cycleStartDay in [class_ $ "align-top" <> bool "" " opacity-50" preCycle, title_ $ bool "" "Previous cycle — shown for context" preCycle])
       when (activeDays < 30) $ div_ [class_ "text-xs text-textWeak"] $ toHtml $ countNoun activeDays "day" <> " with activity since " <> cycleStartText <> "."
       div_ [class_ "text-xs text-textWeak"] do
         if isFree
@@ -1549,31 +1522,24 @@ pastCyclesSection_ isFree basePrice cycles = div_ [class_ "border-t border-strok
   div_ [class_ "flex items-baseline justify-between"] do
     sectionLabel_ "Past cycles"
     span_ [class_ "text-xs text-textWeak"] $ toHtml $ countNoun (length cycles) "cycle"
-  div_ [class_ "border border-strokeWeak rounded-md overflow-hidden"] do
-    table_ [class_ "w-full text-sm tabular-nums border-separate border-spacing-0"] do
-      thead_ [class_ "text-textWeak text-xs uppercase tracking-wide"] do
-        tr_ do
-          stickyTh_ "text-left" "Cycle"
-          stickyTh_ "text-right" "Requests"
-          stickyTh_ "text-right" "Volume"
-          stickyTh_ "text-right" $ bool "Est. cost" "Charged" invoiced
-      tbody_ do
-        forM_ cycles \c -> do
-          -- end is exclusive; subtract 1 day for the human-facing label.
-          let endLabel = fmtDate "%b %-d" (addDays (-1) c.end)
-              startLabel = fmtDate "%b %-d, %Y" c.start
-              overage = overageReqs c.requests
-          tr_ [class_ "border-t border-strokeWeak"] do
-            td_ [class_ "px-3 py-2 text-textStrong"] $ toHtml @Text (startLabel <> " – " <> endLabel)
-            td_ [class_ "px-3 py-2 text-right text-textStrong"] $ toHtml @Text (fmt (commaizeF c.requests))
-            td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml @Text (bool "—" (formatBytes c.bytes) (c.bytes > 0))
-            td_ [class_ "px-3 py-2 text-right text-textWeak"] case c.invoice of
-              -- The amount is the link: an invoice the customer can open is the
-              -- only way to settle "why was I charged this".
-              Just inv ->
-                let amount = toHtml (usdCents inv.total)
-                 in maybe amount (\u -> a_ [class_ "link text-textBrand inline-flex items-center gap-1", href_ u, target_ "_blank", rel_ "noopener", title_ $ maybe "View this invoice on Stripe" ("Stripe invoice " <>) inv.number] $ amount <> faSprite_ "arrow-up-right-from-square" "regular" "w-3 h-3") inv.hostedUrl
-              Nothing -> toHtml $ bool (usd (fromIntegral basePrice + fromIntegral overage / 1_000_000 + fromIntegral c.aiCostMicrousd / 1_000_000)) "—" isFree
+  -- end is exclusive; subtract 1 day for the human-facing label.
+  toHtml
+    $ usageTable
+      "past-cycles"
+      "overflow-y-hidden"
+      [ usageCol "text-left text-textStrong" "Cycle" \c -> toHtml @Text (fmtDate "%b %-d, %Y" c.start <> " – " <> fmtDate "%b %-d" (addDays (-1) c.end))
+      , usageCol "text-right text-textStrong" "Requests" \c -> toHtml @Text (fmt (commaizeF c.requests))
+      , usageCol "text-right text-textWeak" "Volume" \c -> toHtml @Text (bool "—" (formatBytes c.bytes) (c.bytes > 0))
+      , usageCol "text-right text-textWeak" (bool "Est. cost" "Charged" invoiced) \c -> case c.invoice of
+          -- The amount is the link: an invoice the customer can open is the
+          -- only way to settle "why was I charged this".
+          Just inv ->
+            let amount = toHtml (usdCents inv.total)
+             in maybe amount (\u -> a_ [class_ "link text-textBrand inline-flex items-center gap-1", href_ u, target_ "_blank", rel_ "noopener", title_ $ maybe "View this invoice on Stripe" ("Stripe invoice " <>) inv.number] $ amount <> faSprite_ "arrow-up-right-from-square" "regular" "w-3 h-3") inv.hostedUrl
+          Nothing -> toHtml $ bool (usd (fromIntegral basePrice + fromIntegral (overageReqs c.requests) / 1_000_000 + fromIntegral c.aiCostMicrousd / 1_000_000)) "—" isFree
+      ]
+      cycles
+      (const [])
   unless isFree
     $ div_ [class_ "text-xs text-textWeak"]
     $ bool

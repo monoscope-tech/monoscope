@@ -699,10 +699,13 @@ export const chartDataUrl = ({
   timeTo,
   dashboardId,
   widgetType,
-}: Pick<WidGetData, 'chartId' | 'query' | 'querySQL' | 'rollupSQL' | 'rollupFrom' | 'sqlSig' | 'pid' | 'chartType' | 'dbSource' | 'timeFrom' | 'timeTo' | 'dashboardId' | 'widgetType'>): string => {
+  scope,
+}: Pick<WidGetData, 'chartId' | 'query' | 'querySQL' | 'rollupSQL' | 'rollupFrom' | 'sqlSig' | 'pid' | 'chartType' | 'dbSource' | 'timeFrom' | 'timeTo' | 'dashboardId' | 'widgetType' | 'scope'>): string => {
   const params = new URLSearchParams(window.location.search);
   params.set('pid', pid);
   if (dashboardId) params.set('dashboard_id', dashboardId);
+  // A chart pinned to a scope (a monitor's preview) reads it in place of the viewer's selection.
+  if (scope) params.set('pinned_scope', JSON.stringify(scope));
   // A widget carrying its own window is about that window, not the page's. `since`
   // has to go with them: the server prefers it over from/to, so leaving it behind
   // would silently widen the request back to the page range.
@@ -1047,6 +1050,7 @@ type WidGetData = {
   // Labelled instants (e.g. releases) drawn as vertical lines; `at` is ISO-8601.
   markers?: { label: string; at: string }[] | null;
   dashboardId?: string | null;
+  scope?: { environment?: string | null; service?: string | null } | null;
 };
 
 /**

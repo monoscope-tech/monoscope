@@ -50,6 +50,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import Pkg.Mail (arr, dcGallery, plainTxt, slackActions, slackContext, slackEscape, slackHeader, slackImage, slackSection)
 import Pkg.Parser (parseQueryToAST)
+import Pkg.Parser.Expr (isErrorKql)
 import Pkg.SchemaLearning (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude hiding (Reader, ask)
 import Servant.API (Header)
@@ -556,7 +557,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
             let stamp = toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ"
                 png q theme = Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just q, Widget.theme = theme} Nothing (Just $ stamp report.startTime) (Just $ stamp report.endTime)
             eventsUrl <- png "summarize count(*) by bin_auto(timestamp), status_code" Nothing
-            errorsUrl <- png "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code" (Just "roma")
+            errorsUrl <- png (isErrorKql <> " | summarize count(*) by bin_auto(timestamp), status_code") (Just "roma")
             send $ ReplyText $ formatReport report eventsUrl errorsUrl
     GeneralQueryIntent -> do
       threadM <- resolveThread

@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CmpOp (..), MatchOp (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, FreeTextMatch (..), freeTextMatch, freeTextRegex, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, severityIsErrorSql, sqlStringLit) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CmpOp (..), MatchOp (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, FreeTextMatch (..), freeTextMatch, freeTextRegex, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, isErrorSql, isErrorKql, sqlStringLit) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -1079,26 +1079,28 @@ outputFieldAliases =
     ]
 
 
--- | When a record with no @errors@ payload — a log — still counts as an error. The three
--- signals are alternatives because SDKs populate different ones: a bare @level@, an OTel
--- @severity_number@ (17 is ERROR), or a span-shaped @status_code@.
+-- | When a record counts as an error. The signals are alternatives because SDKs populate
+-- different ones: a bare @level@, an OTel @severity_number@ (17 is ERROR, 21 FATAL), a
+-- span's @status_code@, or a recorded exception. 'isErrorKql' is the same rule for
+-- surfaces that take a query ('Pkg.Parser.Eval' pins their agreement), and
+-- 'Models.Telemetry.Telemetry.isErrorRecord' the same rule over a decoded row.
 --
--- One definition, used by both the @errors@ flag below and @is_error@ in
--- 'Models.Apis.LogQueries'. They were separate copies of this text, and the copies in
--- 'Models.Telemetry.Report' have already drifted from it — see the note there.
-severityIsErrorSql :: T.Text
-severityIsErrorSql = "lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR'"
+-- Two predicates deliberately stay separate: RUM's @errorSql@ and the HTTP-error filters
+-- in dashboard templates, whose text TimeFusion's rollups match verbatim.
+isErrorSql, isErrorKql :: T.Text
+isErrorSql = "(lower(level) IN ('error', 'fatal') OR severity___severity_number >= 17 OR status_code = 'ERROR' OR attributes___exception___type IS NOT NULL)"
+isErrorKql = "(level =~ /^(error|fatal)$/ or severity.severity_number >= 17 or status_code == \"ERROR\" or attributes.exception.type != null)"
 
 
 -- | The @errors@ flag as the event tables project it: structured error data for a span, or
--- 'severityIsErrorSql' for a log, which carries no @errors@ payload.
+-- 'isErrorSql' for a log, which carries no @errors@ payload.
 --
 -- Shared with the projection in 'Pkg.Parser.otelLogsCols' so a row's @errors: true@ and a
 -- @errors == true@ filter cannot mean two different things. It is the one output field whose
 -- value is computed rather than read from the column of the same name, which is why
 -- 'outputFieldAliases' — a name-to-name map — cannot carry it.
 errorFlagSql :: T.Text
-errorFlagSql = "COALESCE(errors is not null OR (kind = 'log' AND (" <> severityIsErrorSql <> ")), false)"
+errorFlagSql = "COALESCE(errors is not null OR (kind = 'log' AND " <> isErrorSql <> "), false)"
 
 
 -- Transform dot notation to triple-underscore notation for flattened attributes
@@ -1386,7 +1388,7 @@ scalarFuncToSQL name args
 -- spellings of each verdict agree:
 --
 -- >>> display (Cmp Eq (Subject "errors" "errors" []) (Boolean True))
--- "(COALESCE(errors is not null OR (kind = 'log' AND (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR')), false))"
+-- "(COALESCE(errors is not null OR (kind = 'log' AND (lower(level) IN ('error', 'fatal') OR severity___severity_number >= 17 OR status_code = 'ERROR' OR attributes___exception___type IS NOT NULL)), false))"
 -- >>> display (Cmp NotEq (Subject "errors" "errors" []) (Boolean True)) == display (Cmp Eq (Subject "errors" "errors" []) (Boolean False))
 -- True
 -- >>> T.isPrefixOf "(NOT " (display (Cmp Eq (Subject "errors" "errors" []) (Boolean False)))

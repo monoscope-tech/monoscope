@@ -71,7 +71,7 @@ import OpenTelemetry.Attributes qualified as OA
 import Pkg.DeriveUtils (DB, WrappedEnumSC (..), WrappedEnumShow (..), rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.Parser
-import Pkg.Parser.Expr (flattenedOtelAttributes, severityIsErrorSql, transformFlattenedAttribute)
+import Pkg.Parser.Expr (flattenedOtelAttributes, isErrorSql, transformFlattenedAttribute)
 import Pkg.Parser.Stats (Section, Sources (..))
 import Relude hiding (many, some)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
@@ -854,7 +854,7 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
           MAX(COALESCE(NULLIF(attributes___user___full_name, ''), NULLIF(attributes___user___name, ''))),
           COUNT(*)::BIGINT,
           COUNT(*) FILTER (WHERE |]
-      <> rawSql severityIsErrorSql
+      <> rawSql isErrorSql
       <> [HI.sql|)::BIGINT,
           MIN(timestamp), MAX(COALESCE(end_time, timestamp)),
           ARRAY_REMOVE(ARRAY_AGG(DISTINCT resource___service___name), NULL)
@@ -899,7 +899,7 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
             (ARRAY_AGG(attributes___url___path ORDER BY timestamp) FILTER (WHERE attributes___url___path IS NOT NULL AND attributes___url___path <> ''))[1],
             (ARRAY_AGG(attributes___user_agent___original ORDER BY timestamp) FILTER (WHERE attributes___user_agent___original IS NOT NULL AND attributes___user_agent___original <> ''))[1],
             (ARRAY_AGG(COALESCE(NULLIF(status_message, ''), NULLIF(body::text, '')) ORDER BY timestamp) FILTER (WHERE (|]
-          <> rawSql severityIsErrorSql
+          <> rawSql isErrorSql
           <> [HI.sql|) AND COALESCE(NULLIF(status_message, ''), NULLIF(body::text, '')) IS NOT NULL))[1]
           FROM otel_logs_and_spans
           WHERE |]

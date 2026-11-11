@@ -250,19 +250,26 @@ spec = describe "API v1" do
       recompiled <- stored created.id
       recompiled.logQuery `shouldBe` "status_code == 500"
       recompiled.logQueryAsSql `shouldSatisfy` T.isInfixOf "500"
+      -- A query that doesn't compile is refused rather than stored beside the previous SQL.
+      (runB (ApiH.apiMonitorPatch testPid created.id (def :: ApiT.MonitorPatch){ApiT.query = Just "status_code == (("}) >>= evaluateWHNF_) `shouldThrow` anyException
+      (.logQuery) <$> stored created.id `shouldReturn` "status_code == 500"
       notify <- runB $ ApiH.apiMonitorPatch testPid created.id (def :: ApiT.MonitorPatch){ApiT.emails = Just ["a@b.com"], ApiT.emailAll = Just True, ApiT.slackChannels = Just ["#alerts"], ApiT.severity = Just "critical"}
       (length notify.alertConfig.emails, notify.alertConfig.emailAll, toList notify.alertConfig.slackChannels, notify.alertConfig.severity) `shouldBe` (1, True, ["#alerts"], "critical")
       (.mutedUntil) <$> runB (ApiH.apiMonitorMute testPid created.id (Just 60)) >>= (`shouldSatisfy` isJust)
       (.mutedUntil) <$> runB (ApiH.apiMonitorUnmute testPid created.id) `shouldReturn` Nothing
       -- deactivated_at was DB-inert on upsert: assert against a re-read, never the handler's return.
-      void $ runB $ ApiH.apiMonitorUpdate testPid created.id (input "toggle" "count(*)" :: ApiT.MonitorInput){ApiT.active = Just False}
-      (.deactivatedAt) <$> stored created.id >>= (`shouldSatisfy` isJust)
-      void $ runB $ ApiH.apiMonitorUpdate testPid created.id (input "toggle" "count(*)" :: ApiT.MonitorInput){ApiT.active = Just True}
+      void $ runB $ ApiH.apiMonitorUpdate testPid created.id (input "toggle" "summarize count()" :: ApiT.MonitorInput){ApiT.active = Just False}
+      paused <- stored created.id
+      paused.deactivatedAt `shouldSatisfy` isJust
+      -- An edit that omits `active` keeps the monitor paused, and keeps when it paused.
+      void $ runB $ ApiH.apiMonitorUpdate testPid created.id (input "toggle" "summarize count()")
+      (.deactivatedAt) <$> stored created.id `shouldReturn` paused.deactivatedAt
+      void $ runB $ ApiH.apiMonitorUpdate testPid created.id (input "toggle" "summarize count()" :: ApiT.MonitorInput){ApiT.active = Just True}
       (.deactivatedAt) <$> stored created.id `shouldReturn` Nothing
-      inactive <- runB $ ApiH.apiMonitorCreate testPid (input "inactive-on-create" "count(*)" :: ApiT.MonitorInput){ApiT.active = Just False}
+      inactive <- runB $ ApiH.apiMonitorCreate testPid (input "inactive-on-create" "summarize count()" :: ApiT.MonitorInput){ApiT.active = Just False}
       inactive.deactivatedAt `shouldSatisfy` isJust
       (.deactivatedAt) <$> stored inactive.id >>= (`shouldSatisfy` isJust)
-      spare <- runB $ ApiH.apiMonitorCreate testPid (input "bulk-b" "count(*)")
+      spare <- runB $ ApiH.apiMonitorCreate testPid (input "bulk-b" "summarize count()")
       deleted <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [inactive.id.unwrap, spare.id.unwrap], ApiT.durationMinutes = Nothing, ApiT.reason = Nothing}
       (length deleted.succeeded, deleted.failed) `shouldBe` (2, [])
       bogus <- replicateM 2 UUIDV4.nextRandom
@@ -338,7 +345,7 @@ spec = describe "API v1" do
           denied :: IO () -> IO ()
           denied = (`shouldThrow` anyException)
       otherPid <- createTestProject tr "Other API project"
-      monitor <- runB $ ApiH.apiMonitorCreate otherPid (def :: ApiT.MonitorInput){ApiT.title = "foreign", ApiT.query = "count(*)", ApiT.alertThreshold = 1, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
+      monitor <- runB $ ApiH.apiMonitorCreate otherPid (def :: ApiT.MonitorInput){ApiT.title = "foreign", ApiT.query = "summarize count()", ApiT.alertThreshold = 1, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
       dash <- runB $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal otherPid ApiT.DashboardInput{ApiT.title = "foreign", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
       foreignTeam <- runB $ ApiH.apiTeamCreate otherPid (team "foreign" "foreign")
       foreignKey <- runB $ ApiH.apiKeyCreate otherPid ApiT.ApiKeyCreate{ApiT.title = "foreign"}

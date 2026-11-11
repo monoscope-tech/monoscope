@@ -651,6 +651,8 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         staging = [("environment", Just "staging"), ("service", Just "catalog")]
     chartData staging `shouldReturn` (Nothing, V.singleton (V.singleton "checkout"))
     chartData (("dashboard_id", Just "overview") : staging) `shouldReturn` (Nothing, V.fromList [V.singleton "catalog", V.singleton "checkout"])
+    -- A monitor's preview pins the monitor's scope over the viewer's: it drew the session's instead.
+    chartData [("pinned_scope", Just "{\"environment\":\"staging\",\"service\":\"catalog\"}")] `shouldReturn` (Nothing, V.singleton (V.singleton "catalog"))
     -- Copy SQL translates KQL (not an echo) under the same scope, and keeps the chart's grouping.
     let copySql q dash = Servant.getResponse <$> asCheckout (Dashboards.widgetSqlTextGetH testPid q dash Nothing Nothing Nothing)
     copied <- copySql (Just "status_code == \"ERROR\"") Nothing

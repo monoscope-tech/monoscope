@@ -47,6 +47,7 @@ import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_)
 import Pkg.Components.Widget (WidgetType (..))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.EmailTemplates qualified as ET
+import Pkg.Parser.Expr (isErrorKql)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
@@ -116,7 +117,7 @@ data ReportData = ReportData
 -- | Shared widget definitions for chart URL generation
 eventsWidget, errorsWidget :: Widget.Widget
 eventsWidget = def{Widget.wType = WTTimeseries, Widget.query = Just "summarize count(*) by bin_auto(timestamp), coalesce(status_code, level)"}
-errorsWidget = eventsWidget{Widget.query = Just "(status_code == \"ERROR\" or attributes.exception.type != null or severity.severity_number >= 17 or level =~ /(?i)^(error|fatal)$/) | summarize count(*) by bin_auto(timestamp), status_code", Widget.theme = Just "roma"}
+errorsWidget = eventsWidget{Widget.query = Just $ isErrorKql <> " | summarize count(*) by bin_auto(timestamp), status_code", Widget.theme = Just "roma"}
 
 
 -- | New reports persist one evidence snapshot. The legacy decoder below remains for

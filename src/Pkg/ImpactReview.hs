@@ -54,10 +54,10 @@ import OpenAI.V1.Chat.Completions qualified as OpenAI
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), rawSql)
 import Pkg.Git qualified as Git
 import Pkg.LiveTail (capRowValue)
-import Pkg.Parser.Expr (CmpOp (..), Expr (..), FieldKey (..), Subject (..), ToQueryText (..), Values (..))
+import Pkg.Parser.Expr (CmpOp (..), Expr (..), FieldKey (..), Subject (..), ToQueryText (..), Values (..), isErrorSql)
 import Pkg.Parser.Stats qualified as KQL
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -766,7 +766,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
             Hasql.withHasqlTimefusion ctx.env.enableTimefusionReads
               $ Hasql.interp
                 [HI.sql|SELECT resource___service___name, coalesce(resource___deployment___environment___name, ''),
-          count(*)::bigint, count(*) FILTER (WHERE status_code = 'ERROR' OR severity___severity_number >= 17)::bigint
+          count(*)::bigint, count(*) FILTER (WHERE ^{rawSql isErrorSql})::bigint
           FROM otel_logs_and_spans WHERE project_id = #{run.projectId.toText} AND timestamp >= #{from} AND timestamp <= #{until}
             AND resource___service___name = ANY(#{V.fromList services})
           GROUP BY resource___service___name, resource___deployment___environment___name

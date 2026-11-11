@@ -745,7 +745,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   chartWidget <- stampPng logChartWidget
   latencyWidget <- stampPng logLatencyWidget
   heatmapWidget <- stampPng logHeatmapWidget
-  vizChart <- stampPng logVizWidget{Widget.wType = fromMaybe WTTimeseries $ mfilter (/= Widget.WTLogs) (Widget.vizWidget effectiveVizType)}
+  vizChart <- stampPng logVizWidget{Widget.wType = Widget.vizChart effectiveVizType}
 
   let bwconf =
         bw
@@ -1810,9 +1810,10 @@ instance ToHtml AlertForm where
               then input_ [type_ "hidden", name_ "title", value_ title]
               else formField_ FieldSm def{value = title, placeholder = "e.g. High error rate on checkout API"} "Name" "title" True Nothing
 
-            let defaultFrequency = maybe 5 (.checkIntervalMins) alertM
-                conditionType = bool "has_matches" "threshold_exceeded" $ maybe True (\x -> x.alertThreshold > 0 && isJust x.warningThreshold) alertM
-            AlertUI.monitorScheduleSection_ project.paymentPlan defaultFrequency 5 (AlertUI.SelectCondition $ Just conditionType)
+            -- "Any results" is saved as a count of at least one ('AlertUI.alertFormInput').
+            let anyResults m = m.alertThreshold == 1 && isNothing m.warningThreshold && isNothing m.alertRecoveryThreshold && not m.triggerLessThan
+                conditionType = bool "threshold_exceeded" "has_matches" $ any anyResults alertM
+            AlertUI.monitorScheduleSection_ project.paymentPlan (maybe 5 (.checkIntervalMins) alertM) (maybe 5 (.timeWindowMins) alertM) (AlertUI.SelectCondition $ Just conditionType)
 
             AlertUI.thresholdsSection_ (alertM >>= (.alertConfig.unit)) Nothing (fmap (.alertThreshold) alertM) ((.warningThreshold) =<< alertM) (maybe False (.triggerLessThan) alertM) ((.alertRecoveryThreshold) =<< alertM) ((.warningRecoveryThreshold) =<< alertM)
 

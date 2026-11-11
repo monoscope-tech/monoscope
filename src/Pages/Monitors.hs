@@ -1,6 +1,7 @@
 module Pages.Monitors (
   alertSingleGetH,
-  convertToQueryMonitor,
+  alertFormInput,
+  scheduleOf,
   alertSingleToggleActiveH,
   alertUpsertPostH,
   alertTeamDeleteH,
@@ -41,11 +42,12 @@ module Pages.Monitors (
 )
 where
 
+import Control.Lens ((.~))
 import Data.Aeson qualified as AE
-import Data.CaseInsensitive qualified as CI
 import Data.Char (isAsciiLower, isDigit)
 import Data.Default (def)
 import Data.Effectful.UUID qualified as UUIDEff
+import Data.Generics.Labels ()
 import Data.List (partition)
 import Data.Map.Strict qualified as Map
 import Data.Ord (clamp)
@@ -57,6 +59,7 @@ import Data.Vector qualified as V
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
+import GHC.Records (HasField)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
@@ -64,6 +67,7 @@ import Lucid.Htmx
 import Models.Apis.Integrations qualified as Slack
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Apis.MonitorDefinitions (MonitorInput (..), monitorFromInput)
 import Models.Apis.Monitors (MonitorBulkAction (..))
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
@@ -75,16 +79,15 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPa
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils (Channel (channelId, channelName))
-import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), agoText, detailTab_, durationMenu_, emptyState_, formCheckbox_, formField_, formSelectField_, inlineIconBtn_, metadataChip_, options_, panel_, silenceBadge_, tagInput_, untilLabel)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), ResourceRow (..), agoText, detailTab_, durationMenu_, emptyState_, formCheckbox_, formField_, formSelectField_, inlineIconBtn_, metadataChip_, options_, panel_, resourceList_, silenceBadge_, tagInput_, untilLabel)
 import Pages.Projects (TBulkActionForm (..))
 import Pages.Settings (safeScrapeUrl)
 import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..))
-import Pkg.Parser (SqlQueryCfg (..), applyScopedQuery, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, mkScopedQuery, parseQueryToAST, parseQueryToComponents)
-import Pkg.Parser.Expr (ToQueryText (..))
+import Pkg.Parser (intervalSeconds, parseQueryToAST)
+import Pkg.Parser.Expr (ToQueryText (..), kqlTimespanToTimeBucket)
 import Pkg.QueryCache (rewriteBinAutoToFixed)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -138,71 +141,60 @@ data AlertUpsertForm = AlertUpsertForm
   deriving (FromForm) via (FormWithOptional '["teams"] AlertUpsertForm)
 
 
--- | 'Left' carries the parse error of a query the monitor could never evaluate.
-convertToQueryMonitor :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorId -> AlertUpsertForm -> Either Text Monitors.QueryMonitor
-convertToQueryMonitor projectId now queryMonitorId alertForm =
-  let nonBlank = mfilter (not . T.null) . fmap T.strip
-      isThreshold = alertForm.conditionType == Just "threshold_exceeded"
-      thresholdOf = (guard isThreshold >>) . (readMaybe . toString =<<)
-      environment = nonBlank alertForm.environment
-      service = nonBlank alertForm.service
-      scope = mkScopedQuery projectId (Nothing, Nothing) environment service
-      sqlQueryCfg = (applyScopedQuery scope $ defSqlQueryCfg projectId fixedUTCTime Nothing Nothing){alertLookbackMins = timeWindowMins}
-      timeWindowMins = maybe 60 (max 1 . parseIntervalToMins) alertForm.timeWindow
-      alertConfig =
-        Monitors.MonitorAlertConfig
-          { unit = nonBlank alertForm.unit
-          , severity = alertForm.severity
-          , title = alertForm.title
-          , subject = alertForm.subject
-          , message = alertForm.message
-          , emails = V.fromList $ map CI.mk alertForm.recipientEmails
-          , emailAll = fromMaybe False alertForm.recipientEmailAll
-          , slackChannels = V.fromList alertForm.recipientSlacks
-          }
-   in parseQueryToComponents sqlQueryCfg alertForm.query <&> \(_, qc) ->
-        Monitors.QueryMonitor
-          { id = queryMonitorId
-          , createdAt = now
-          , updatedAt = now
-          , projectId = projectId
-          , checkIntervalMins = maybe 5 (max 1 . fromMaybe 5 . readMaybe . toString . T.dropEnd 1) alertForm.frequency
-          , alertThreshold = bool 0 alertForm.alertThreshold isThreshold
-          , warningThreshold = thresholdOf alertForm.warningThreshold
-          , logQuery = alertForm.query
-          , logQueryAsSql = fromMaybe "" qc.finalAlertQuery
-          , lastEvaluated = Just now
-          , warningLastTriggered = Nothing
-          , alertLastTriggered = Nothing
-          , triggerLessThan = alertForm.direction == Issues.Below
-          , thresholdSustainedForMins = 0
-          , alertConfig
-          , deletedAt = Nothing
-          , deactivatedAt = Nothing
-          , mutedUntil = Nothing
-          , visualizationType = fromMaybe "timeseries" alertForm.vizType
-          , teams = V.fromList alertForm.teams
-          , widgetId = alertForm.widgetId
-          , dashboardId = UUIDId <$> (UUID.fromText =<< alertForm.dashboardId)
-          , alertRecoveryThreshold = thresholdOf alertForm.alertRecoveryThreshold
-          , warningRecoveryThreshold = thresholdOf alertForm.warningRecoveryThreshold
-          , currentStatus = Monitors.MSNormal
-          , currentValue = 0
-          , renotifyIntervalMins = parseIntervalToMins (fromMaybe "30m" alertForm.notifyAfter) <$ guard (alertForm.notifyAfterCheck == Just True)
-          , stopAfterCount = fromMaybe 5 alertForm.stopAfter <$ guard (alertForm.stopAfterCheck == Just True)
-          , notificationCount = 0
-          , timeWindowMins
-          , environment
-          , service
-          }
+-- | The alert form as a 'MonitorInput'. "The query has any results" is a count of at least
+-- one — the same monitor as a threshold of 1, so it round-trips through the editor.
+alertFormInput :: AlertUpsertForm -> MonitorInput
+alertFormInput form =
+  let (checkIntervalMins, timeWindowMins, notifyAfterMins, stopAfterCount) = scheduleOf form
+   in MonitorInput
+        { unit = nonBlank form.unit
+        , title = form.title
+        , query = form.query
+        , severity = Just form.severity
+        , subject = Just form.subject
+        , message = Just form.message
+        , alertThreshold = bool 1 form.alertThreshold isThreshold
+        , warningThreshold = thresholdOf form.warningThreshold
+        , triggerLessThan = isThreshold && form.direction == Issues.Below
+        , checkIntervalMins
+        , timeWindowMins
+        , thresholdSustainedForMins = Nothing
+        , notifyAfterMins
+        , stopAfterCount
+        , emails = form.recipientEmails
+        , emailAll = form.recipientEmailAll
+        , slackChannels = form.recipientSlacks
+        , teams = form.teams
+        , visualizationType = form.vizType
+        , alertRecoveryThreshold = thresholdOf form.alertRecoveryThreshold
+        , warningRecoveryThreshold = thresholdOf form.warningRecoveryThreshold
+        , active = Nothing
+        , environment = nonBlank form.environment
+        , service = nonBlank form.service
+        }
+  where
+    nonBlank = mfilter (not . T.null) . fmap T.strip
+    isThreshold = form.conditionType == Just "threshold_exceeded"
+    thresholdOf = (guard isThreshold >>) . (readMaybe . toString =<<)
 
 
-parseIntervalToMins :: Text -> Int
-parseIntervalToMins = \case
-  "1h" -> 60
-  "6h" -> 360
-  "24h" -> 1440
-  t -> fromMaybe 30 $ readMaybe $ toString $ T.dropEnd 1 t
+-- | Check interval, window, renotify interval and stop-after count, from the schedule fields
+-- the alert form and the widget monitor form both post.
+scheduleOf :: (HasField "frequency" r (Maybe Text), HasField "notifyAfter" r (Maybe Text), HasField "notifyAfterCheck" r (Maybe Bool), HasField "stopAfter" r (Maybe Int), HasField "stopAfterCheck" r (Maybe Bool), HasField "timeWindow" r (Maybe Text)) => r -> (Int, Int, Maybe Int, Maybe Int)
+scheduleOf form =
+  ( maybe 5 (max 1) (parseIntervalToMins =<< form.frequency)
+  , maybe 60 (max 1) (parseIntervalToMins =<< form.timeWindow)
+  , fromMaybe 30 (parseIntervalToMins =<< form.notifyAfter) <$ guard (form.notifyAfterCheck == Just True)
+  , fromMaybe 5 form.stopAfter <$ guard (form.stopAfterCheck == Just True)
+  )
+
+
+-- | A form interval (@5m@, @12h@, @1d@) in minutes.
+--
+-- >>> map parseIntervalToMins ["5m", "1h", "12h", "1d", "soon"]
+-- [Just 5,Just 60,Just 720,Just 1440,Nothing]
+parseIntervalToMins :: Text -> Maybe Int
+parseIntervalToMins = fmap (round . (/ 60)) . (intervalSeconds <=< kqlTimespanToTimeBucket)
 
 
 minsToInterval :: Int -> Text
@@ -225,16 +217,12 @@ alertUpsertPostH pid form = do
   -- For widget-tied alerts, preserve the query from the widget (can't edit directly)
   existingMonitor <- maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMonitorId) alertId
 
-  case convertToQueryMonitor pid now queryMonitorId form{recipientEmailAll = Just emailAll} of
+  -- A widget-tied monitor's query, scope and title follow its widget, not this form.
+  let input = alertFormInput form{recipientEmailAll = Just emailAll}
+      widgetTied e = input & #query .~ e.logQuery & #environment .~ e.environment & #service .~ e.service & #title .~ e.alertConfig.title
+  case monitorFromInput pid now queryMonitorId existingMonitor $ maybe input widgetTied $ mfilter (isJust . (.widgetId)) existingMonitor of
     Left err -> addToast "error" "Monitor query is invalid" (Just err) Nothing >> addRespHeaders (AlertNoContent "")
-    Right baseMonitor -> do
-      let
-        -- The form has no active/inactive control, and convertToQueryMonitor defaults
-        -- deactivatedAt to Nothing — so carry the stored value or editing a deactivated
-        -- monitor here would silently re-activate it.
-        withStoredState m = maybe m (\e -> m{Monitors.deactivatedAt = e.deactivatedAt}) existingMonitor
-        queryMonitor = withStoredState $ maybe baseMonitor (\e -> baseMonitor{Monitors.logQuery = e.logQuery, Monitors.logQueryAsSql = e.logQueryAsSql, Monitors.environment = e.environment, Monitors.service = e.service, Monitors.alertConfig = baseMonitor.alertConfig{Monitors.title = e.alertConfig.title}}) $ mfilter (isJust . (.widgetId)) existingMonitor
-
+    Right queryMonitor -> do
       _ <- Monitors.queryMonitorUpsert queryMonitor
       when (isNothing alertId)
         $ void
@@ -772,7 +760,7 @@ unifiedOverviewPage pid alert currTime teams = do
         div_ [class_ "border border-strokeWeak rounded-lg max-md:p-2 p-3 h-48 md:h-80 overflow-hidden"] do
           Widget.widget_
             $ (def :: Widget)
-              { Widget.wType = Widget.mapChartTypeToWidgetType alert.visualizationType
+              { Widget.wType = Widget.monitorChartType alert.logQuery alert.visualizationType
               , Widget.query = Just binnedQuery
               , Widget.title = Just "Query Results"
               , Widget.standalone = Just True
@@ -781,6 +769,7 @@ unifiedOverviewPage pid alert currTime teams = do
               , Widget.alertThreshold = Just alert.alertThreshold
               , Widget.warningThreshold = alert.warningThreshold
               , Widget.showThresholdLines = Just Widget.TLAlways
+              , Widget.scope = Just $ Widget.ChartScope alert.environment alert.service
               }
       div_ [class_ "max-md:hidden w-78 shrink-0"] $ alertSidebar_ display alert currTime
 
@@ -920,18 +909,19 @@ uptimeChecksList_ pid checks = div_ [id_ "uptime-checks", class_ "space-y-4", te
     formSelectField_ FieldSm "Every" "interval" False $ options_ Nothing [("60", "1 min"), ("300", "5 min"), ("900", "15 min"), ("3600", "1 hour")]
     formField_ FieldSm def{inputType = "number", value = "200", extraAttrs = [min_ "100", max_ "599"]} "Expect" "expectedStatus" False Nothing
     button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add check"
-  div_ [class_ "surface-raised rounded-xl divide-y divide-strokeWeak"] do
-    when (V.null checks) $ emptyState_ def{size = ESCompact} "No uptime checks yet" "Add a URL above to start checking it."
-    forM_ checks \c -> do
-      let up = isJust c.lastStatus && c.consecutiveFailures == 0
-      div_ [class_ "flex items-center gap-3 px-4 py-3 text-sm"] do
-        span_ [class_ $ "w-2 h-2 rounded-full shrink-0 " <> if not c.enabled then "bg-fillWeak" else bool "bg-fillError-strong" "bg-fillSuccess-strong" up, term "data-tippy-content" $ bool "Paused" (bool "Down or not yet checked" "Up" up) c.enabled] ""
-        div_ [class_ "min-w-0 flex-1"] do
-          div_ [class_ "font-medium text-textStrong truncate"] $ toHtml c.name
-          div_ [class_ "text-xs text-textWeak truncate"] $ toHtml $ c.url <> " \x00b7 expects " <> show (fromMaybe 200 c.expectedStatus) <> " \x00b7 every " <> show (c.scrapeIntervalSeconds `div` 60) <> " min"
-        span_ [class_ "text-xs text-textWeak truncate max-w-64"] $ toHtml $ fromMaybe "Not checked yet" c.lastStatus
-        button_ [type_ "button", class_ "btn btn-xs btn-ghost", hxPost_ ((urls.monitors pid).uptimeToggle c.id)] $ bool "Resume" "Pause" c.enabled
-        button_ [type_ "button", class_ "btn btn-xs btn-ghost text-textError", hxPost_ ((urls.monitors pid).uptimeDelete c.id), hxConfirm_ ("Delete the check for " <> c.url <> "?")] "Delete"
+  resourceList_ "uptime-checks" Nothing (emptyState_ def{size = ESCompact} "No uptime checks yet" "Add a URL above to start checking it.") $ V.toList checks <&> \c ->
+    ResourceRow
+      { health = case (c.enabled, c.lastStatus, c.consecutiveFailures) of
+          (False, _, _) -> (NeutralBadge, "pause", "Paused")
+          (True, Nothing, _) -> (NeutralBadge, "clock", "Not checked yet")
+          (True, Just _, 0) -> (SuccessBadge, "circle-check", "Up")
+          (True, Just _, _) -> (ErrorBadge, "circle-exclamation", "Down")
+      , title = span_ [class_ "font-medium text-textStrong truncate"] $ toHtml c.name
+      , details = [toHtml $ c.url <> " \x00b7 expects " <> show (fromMaybe 200 c.expectedStatus) <> " \x00b7 every " <> show (c.scrapeIntervalSeconds `div` 60) <> " min", toHtml $ fromMaybe "Not checked yet" c.lastStatus]
+      , actions = do
+          button_ [type_ "button", class_ "btn btn-xs btn-ghost", hxPost_ ((urls.monitors pid).uptimeToggle c.id)] $ bool "Resume" "Pause" c.enabled
+          button_ [type_ "button", class_ "btn btn-xs btn-ghost text-textError", hxPost_ ((urls.monitors pid).uptimeDelete c.id), hxConfirm_ ("Delete the check for " <> c.url <> "?")] "Delete"
+      }
 
 
 data UptimeForm = UptimeForm {name :: Text, url :: Text, interval :: Maybe Int, expectedStatus :: Maybe Int}
@@ -968,7 +958,7 @@ instance ToHtml UptimeList where
 
 uptimeCheckPostH :: Projects.ProjectId -> UptimeForm -> ATAuthCtx (ActionResult UptimeRejection UptimeList)
 uptimeCheckPostH pid form = act do
-  _ <- Projects.sessionAndProject pid
+  _ <- requireEdit pid
   let url = T.strip form.url
       name = T.strip form.name
   if
@@ -982,11 +972,16 @@ uptimeCheckPostH pid form = act do
 
 
 uptimeCheckToggleH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders UptimeList)
-uptimeCheckToggleH pid cid = Projects.sessionAndProject pid >> PromCfg.toggleEnabled pid cid >> (addRespHeaders =<< uptimeList pid)
+uptimeCheckToggleH pid cid = requireEdit pid >> PromCfg.toggleEnabled pid cid >> (addRespHeaders =<< uptimeList pid)
 
 
 uptimeCheckDeleteH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders UptimeList)
-uptimeCheckDeleteH pid cid = Projects.sessionAndProject pid >> PromCfg.deleteConfig pid cid >> (addRespHeaders =<< uptimeList pid)
+uptimeCheckDeleteH pid cid = requireEdit pid >> PromCfg.deleteConfig pid cid >> (addRespHeaders =<< uptimeList pid)
+
+
+-- | Uptime checks share the scrape-target table with Prometheus targets, whose settings need edit access.
+requireEdit :: Projects.ProjectId -> ATAuthCtx (Projects.Session, Projects.Project)
+requireEdit = ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit
 
 
 uptimeList :: Projects.ProjectId -> ATAuthCtx UptimeList
@@ -1023,15 +1018,16 @@ cronMonitorsList_ pid mons = div_ [id_ "cron-monitors", class_ "space-y-4", term
     formSelectField_ FieldSm "Runs every" "interval" False $ options_ Nothing [("300", "5 min"), ("900", "15 min"), ("3600", "1 hour"), ("21600", "6 hours"), ("86400", "1 day"), ("604800", "1 week")]
     formSelectField_ FieldSm "Grace" "grace" False $ options_ Nothing [("300", "5 min"), ("900", "15 min"), ("3600", "1 hour")]
     button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add monitor"
-  div_ [class_ "surface-raised rounded-xl divide-y divide-strokeWeak"] do
-    when (null mons) $ emptyState_ def{size = ESCompact} "No cron monitors yet" "Add one above, then send a check-in from the job."
-    forM_ mons \m -> div_ [class_ "flex items-center gap-3 px-4 py-3 text-sm"] do
-      span_ [class_ $ "w-2 h-2 rounded-full shrink-0 " <> case m.lastStatus of { Just Monitors.CSOk -> "bg-fillSuccess-strong"; Just Monitors.CSError -> "bg-fillError-strong"; Nothing -> "bg-fillWeak" }] ""
-      div_ [class_ "min-w-0 flex-1"] do
-        div_ [class_ "font-medium text-textStrong truncate"] $ toHtml m.name
-        div_ [class_ "text-xs text-textWeak truncate font-mono"] $ toHtml $ m.slug <> " \x00b7 every " <> show (m.intervalSecs `div` 60) <> " min"
-      span_ [class_ "text-xs text-textWeak"] $ toHtml $ maybe "No check-in yet" (("Last: " <>) . toText . formatTime defaultTimeLocale "%F %R UTC") m.lastCheckinAt
-      button_ [type_ "button", class_ "btn btn-xs btn-ghost text-textError", hxPost_ ((urls.monitors pid).cronDelete m.id), hxConfirm_ ("Delete the monitor " <> m.slug <> "?")] "Delete"
+  resourceList_ "cron-monitors" Nothing (emptyState_ def{size = ESCompact} "No cron monitors yet" "Add one above, then send a check-in from the job.") $ mons <&> \m ->
+    ResourceRow
+      { health = case m.lastStatus of
+          Just Monitors.CSOk -> (SuccessBadge, "circle-check", "OK")
+          Just Monitors.CSError -> (ErrorBadge, "circle-exclamation", "Failed")
+          Nothing -> (NeutralBadge, "clock", "No check-in yet")
+      , title = span_ [class_ "font-medium text-textStrong truncate"] $ toHtml m.name
+      , details = [span_ [class_ "font-mono"] $ toHtml $ m.slug <> " \x00b7 every " <> show (m.intervalSecs `div` 60) <> " min", toHtml $ maybe "No check-in yet" (("Last: " <>) . toText . formatTime defaultTimeLocale "%F %R UTC") m.lastCheckinAt]
+      , actions = button_ [type_ "button", class_ "btn btn-xs btn-ghost text-textError", hxPost_ ((urls.monitors pid).cronDelete m.id), hxConfirm_ ("Delete the monitor " <> m.slug <> "?")] "Delete"
+      }
 
 
 data CronForm = CronForm {slug :: Text, name :: Text, interval :: Int, grace :: Int}
@@ -1069,7 +1065,7 @@ instance ToHtml CronList where
 
 cronMonitorPostH :: Projects.ProjectId -> CronForm -> ATAuthCtx (ActionResult CronRejection CronList)
 cronMonitorPostH pid form = act do
-  _ <- Projects.sessionAndProject pid
+  _ <- requireEdit pid
   let slug = T.toLower (T.strip form.slug)
       name = T.strip form.name
   if
@@ -1082,7 +1078,7 @@ cronMonitorPostH pid form = act do
 
 
 cronMonitorDeleteH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders CronList)
-cronMonitorDeleteH pid mid = Projects.sessionAndProject pid >> Monitors.deleteCronMonitor pid mid >> (addRespHeaders =<< cronList pid)
+cronMonitorDeleteH pid mid = requireEdit pid >> Monitors.deleteCronMonitor pid mid >> (addRespHeaders =<< cronList pid)
 
 
 cronList :: Projects.ProjectId -> ATAuthCtx CronList

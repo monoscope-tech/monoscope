@@ -83,6 +83,7 @@ import Models.Apis.IssueEnhancement qualified as Enhancement
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Apis.MonitorDefinitions (compileAlertSql, monitorToInput)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMergeDB
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
@@ -123,7 +124,6 @@ import Pkg.ImpactReview qualified as ImpactReview
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), addConvertKitUserOrganization, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Mail qualified as Mail
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.Queue (getOrInitKafkaProducer, kafkaSaslExtraProps)
 import Pkg.SchemaLearning (SummaryDoc (..))
@@ -5280,13 +5280,7 @@ evaluateQueryMonitor monitor startWall = do
       title = monitor.alertConfig.title
       -- Positivity is enforced at every write boundary and by the database.
       lookbackMins = monitor.timeWindowMins
-      -- Re-parse on every evaluation so parser fixes apply to existing monitors
-      -- without needing a DB migration of cached SQL.
-      scope = mkScopedQuery monitor.projectId (Nothing, Nothing) monitor.environment monitor.service
-      parseCfg = (applyScopedQuery scope $ defSqlQueryCfg monitor.projectId fixedUTCTime Nothing Nothing){alertLookbackMins = lookbackMins, targetsTimefusion = tfEnabled}
-  freshSql <- case parseQueryToComponents parseCfg monitor.logQuery of
-    Right (_, qc) -> maybe (throwIO $ CE.ErrorCall "monitor query produced no alert SQL") pure qc.finalAlertQuery
-    Left err -> throwIO $ CE.ErrorCall $ "monitor KQL parse failed: " <> toString err
+  freshSql <- either (throwIO . CE.ErrorCall . ("monitor KQL failed to compile: " <>) . toString) pure $ compileAlertSql tfEnabled monitor.projectId (monitorToInput monitor)
   start <- liftIO $ getTime Monotonic
   -- Both supported KQL sources (spans and metrics) follow the telemetry read
   -- backend. Metrics must use the same backend as their generated expressions.
@@ -5304,7 +5298,7 @@ evaluateQueryMonitor monitor startWall = do
       | any (\value -> isNaN value || isInfinite value) values -> do
           Log.logWarn "Monitor query returned a non-finite measurement; skipping evaluation" (monitor.id, title)
           recordMonitorDataGap monitor startWall Monitors.NonFiniteMeasurements
-      | otherwise -> evaluateWithResults monitor startWall title (foldr max v vs) durationNs
+      | otherwise -> evaluateWithResults monitor startWall title (foldr (bool max min monitor.triggerLessThan) v vs) durationNs
 
 
 evaluateWithResults :: Monitors.QueryMonitor -> UTCTime -> Text -> Double -> Integer -> ATBackgroundCtx ()
@@ -5571,7 +5565,7 @@ aboveVolumeFloor sr = case sr.direction of
 -- Nothing is explicitly rejected: a pattern with no level is not a reliable
 -- incident signal, and was the single biggest source of historical noise.
 isAlertableLogLevel :: Maybe Text -> Bool
-isAlertableLogLevel = maybe False ((`elem` ["ERROR", "WARN", "WARNING", "FATAL", "CRITICAL"]) . T.toUpper)
+isAlertableLogLevel = any ((>= SLWarn) . snd) . (Telemetry.parseSeverity =<<)
 
 
 -- | Detect log pattern volume spikes and create issues.

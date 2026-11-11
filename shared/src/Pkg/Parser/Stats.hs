@@ -1515,6 +1515,11 @@ data QueryError = QueryError {message :: Text, column :: Int, width :: Int, hint
 -- >>> isLeft (parseQueryDiagnosed Nothing "| summarize count(*) by bin(timestamp, 30sec)")
 -- True
 --
+-- A second summarize is rejected at its own token; the compiler would merge both into one level:
+--
+-- >>> parseQueryDiagnosed Nothing "summarize max(duration) by bin(timestamp, 1m) | summarize min(max_duration)"
+-- Left (QueryError {message = "A query can have only one summarize", column = 49, width = 9, hint = Just "Put every aggregation in one summarize, e.g. summarize max(duration), min(duration) by bin_auto(timestamp)"})
+--
 -- >>> parseQueryDiagnosed Nothing "attribute contains \"x\""
 -- Left (QueryError {message = "Unknown field \"attribute\"", column = 1, width = 9, hint = Just "Did you mean \"attributes\"?"})
 -- >>> (.column) <$> either Just (const Nothing) (parseQueryDiagnosed Nothing "kind == \"a\" and attribut contains \"x\"")
@@ -1527,6 +1532,9 @@ parseQueryDiagnosed srcM (T.strip -> q) = do
   let at (tok, msg, hint) = let before = fst (T.breakOn tok q) in QueryError{message = msg, column = T.length before + 1, width = T.length tok, hint}
       noHint (tok, msg) = (tok, msg, Nothing)
   let sourced = maybe ast ((: ast) . Source) srcM
+  -- One SQL level aggregates once, so a second summarize can't read the first one's output.
+  whenJust (guard (length [() | SummarizeCommand{} <- ast] > 1) *> (fst <$> T.breakOnAll "summarize" q !!? 1)) \before ->
+    Left QueryError{message = "A query can have only one summarize", column = T.length before + 1, width = 9, hint = Just "Put every aggregation in one summarize, e.g. summarize max(duration), min(duration) by bin_auto(timestamp)"}
   first at $ maybeToLeft ast (unknownField sourced <|> noHint <$> (badTimespan ast <|> seriesOffMetrics sourced))
 
 

@@ -617,7 +617,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       -- the doctest on 'Pkg.Parser.Expr.displayExprHelper'; what belongs here is the wiring.
       let whereOf q = snd $ T.breakOn "WHERE" $ fst $ fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) q
       whereOf "errors == true" `shouldSatisfy` T.isInfixOf errorFlagSql
-      whereOf "errors == true" `shouldNotSatisfy` T.isInfixOf "NOT "
+      whereOf "errors == true" `shouldNotSatisfy` T.isInfixOf ("NOT " <> errorFlagSql)
       whereOf "errors == false" `shouldSatisfy` T.isInfixOf ("NOT " <> errorFlagSql)
       whereOf "errors != true" `shouldBe` whereOf "errors == false"
       -- Nothing that already worked moves: the column itself stays addressable.

@@ -1038,14 +1038,6 @@ removeProjectId (AE.Array arr) = AE.Array $ V.map removeProjectId arr
 removeProjectId v = v
 
 
--- | Uppercased severity text → (canonical text, level); aliases resolve to their canonical entry.
-severityMap :: Map.Map Text (Text, Telemetry.SeverityLevel)
-severityMap = base <> Map.mapMaybe (`Map.lookup` base) aliases
-  where
-    base = Map.fromList [(t, (t, sl)) | (t, sl) <- [("TRACE", Telemetry.SLTrace), ("DEBUG", Telemetry.SLDebug), ("INFO", Telemetry.SLInfo), ("WARN", Telemetry.SLWarn), ("ERROR", Telemetry.SLError), ("FATAL", Telemetry.SLFatal)]]
-    aliases = Map.fromList [("WARNING", "WARN" :: Text), ("INFORMATION", "INFO"), ("CRITICAL", "FATAL")]
-
-
 -- | Gate a project's converted records on its cache: an unknown project yields nothing, so
 -- 'processBatchPipeline' can tell it from a project whose rows sampling later leaves out.
 forKnownProject :: HM.HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> [a] -> [a]
@@ -1100,7 +1092,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM logRecord =
       !validTimestamp = validTsOr validObservedTimestamp timeNano
 
       !parentId = hexIdMaybe (logRecord ^. PLF.spanId)
-      !severity' = Map.lookup (T.toUpper severityText) severityMap
+      !severity' = Telemetry.parseSeverity severityText
 
       otelLog =
         OtelLogsAndSpans

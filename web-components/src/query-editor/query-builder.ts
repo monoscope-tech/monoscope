@@ -47,12 +47,12 @@ export class QueryBuilderComponent extends LitElement {
 
   // Precompiled regex patterns for performance - created once, reused many times
   private readonly QUERY_PATTERNS = {
-    summarize: /\|\s*summarize\s+([^|]+?)(?:by\s+([^|]+?))?(?:\||$)/i,
+    summarize: /(?:^|\|)\s*summarize\s+([^|]+?)(?:by\s+([^|]+?))?(?:\||$)/i,
     groupBy: /\bgroup\s+by\s+([^|]+?)(?:\||$)/i,
     sortBy: /\|\s*(sort|order)\s+by\s+([^|]+?)(?:\||$)/i,
     take: /\|\s*take\s+(\d+)/i,
-    summarizeClause: /\|\s*summarize\s+[^|]+/i,
-    summarizeClauseWithCapture: /\|\s*summarize\s+[^|]+?(?=\||$)/i,
+    summarizeClause: /(?:^|\|)\s*summarize\s+[^|]+/i,
+    summarizeClauseWithCapture: /(?:^|\|)\s*summarize\s+[^|]+?(?=\||$)/i,
     sortByClause: /\|\s*(sort|order)\s+by\s+[^|]+/i,
     sortByClauseWithCapture: /\|\s*(sort|order)\s+by\s+[^|]+?(?=\||$)/i,
     takeClause: /\|\s*take\s+\d+/i,
