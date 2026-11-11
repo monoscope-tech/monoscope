@@ -317,12 +317,8 @@ spec = describe "Monitoring" do
       (firedMonitor.currentStatus, firedMonitor.currentValue, firedMonitor.notificationCount) `shouldBe` (Monitors.MSAlerting, 1, 1)
       deliverySummary fired `shouldBe` ["discord:C_MONITOR", "email:alerts@example.com", "pagerduty:widget-monitor-test:PDTrigger", "slack:C_NOTIF_CHANNEL", "whatsapp:+15550001111"]
       mapM_ (linksTo widgetUrl) fired
-      check `shouldReturn` []
-      -- A webhook accepts the root without its timestamp: capture the app's own message before lifecycle replies.
-      rootId <- dbOne tr [sql|SELECT r.id FROM apis.slack_incident_roots r JOIN apis.incident_episodes e ON e.id = r.episode_id WHERE e.project_id = ? AND e.source_id = ? AND r.channel_id = 'C_NOTIF_CHANNEL'|] (testPid, firedMonitor.id)
-      receipt <- receiveSlackEvent tr $ slackRootEvent "EvMonitorRoot" "T_MONITOR_SIM" "C_NOTIF_CHANNEL" rootId "1788900000.000001" "A_TEST"
-      runTestBgNoReset tr (I.captureSlackRoot "A_TEST" receipt) `shouldReturn` True
-      deliverySummary . fst <$> captureNotifs tr runSlackIncidentDeliveries `shouldReturn` ["slack-update:C_NOTIF_CHANNEL"]
+      -- The bot posts the root and gets its timestamp, so the root's edit follows on the next tick.
+      check `shouldReturn` ["slack-update:C_NOTIF_CHANNEL"]
 
       (void <$> call tr (Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget{Widget.alertThreshold = Nothing})) `shouldReturn` Left Dashboards.MonitorNeedsThreshold
       putWidget savedWidget{Widget.query = Just "name == \"search\"", Widget.alertThreshold = Just 2}
@@ -1544,9 +1540,14 @@ spec = describe "Monitoring" do
       -- than a reply to a thread that does not exist.
       advanceMinutes tr 1
       now <- getTestTime tr.trTestClock
-      void $ run $ I.recordIncidentEvent update{I.observedAt = now, I.change = I.IncidentRecovered}
+      -- As in production, the thread reply is one line ("Resolved by …") and the card carries the issue.
+      void $ run $ I.recordIncidentEvent update{I.observedAt = now, I.change = I.IncidentRecovered, I.replyPayload = I.SlackPayload $ KM.fromList [("text", AE.String "Resolved by Ada")]}
       followups <- run $ I.claimSlackDeliveries now
       map (.operation) followups `shouldContain` [I.PostStandalone]
+      -- A standalone post lands in the channel with nothing above it, so it carries the event's full
+      -- card (title, status, links), never the bare thread reply ("Resolved by …") that says nothing alone.
+      Aeson card <- dbOne tr [sql|SELECT root_payload FROM apis.incident_events WHERE episode_id = (SELECT episode_id FROM apis.slack_incident_roots WHERE id = ?) ORDER BY observed_at DESC, id DESC LIMIT 1|] (PGS.Only root.rootId)
+      [AE.toJSON followup.payload | followup <- followups, followup.operation == I.PostStandalone] `shouldBe` [card :: AE.Value]
       -- Nothing may be left queued that can never be claimed. `shouldContain`
       -- alone passed while an unclaimable update_root sat pending behind the
       -- reply — and because noEarlierUnsettledDelivery blocks on the earliest
@@ -1560,6 +1561,16 @@ spec = describe "Monitoring" do
                WHERE r.threadless AND d.state NOT IN ('delivered','failed','sending')|]
           ()
       (stranded :: [(Text, Text)]) `shouldBe` []
+
+    it "posts through the bot so replies thread, and through the install webhook only where the bot is not a member" \tr -> do
+      update <- setupWithIssue tr
+      setupSlackData tr testPid "T1"
+      dbExec tr [sql|UPDATE apis.slack SET channel_id = 'PRIVATE_ALERTS' WHERE project_id = ?|] (PGS.Only testPid)
+      void $ runTestBgNoReset tr $ I.recordIncidentEvent update{I.destinations = [I.SlackDestination "T1" "C_PUBLIC", I.SlackDestination "T1" "PRIVATE_ALERTS"]}
+      sent <- slack . fst <$> captureNotifs tr runSlackIncidentDeliveries
+      -- The install-time webhook returns no timestamp, so it is only the fallback when Slack refuses the bot.
+      sort [(sd.channelId, isJust sd.webhookUrl) | sd <- sent] `shouldBe` [("C_PUBLIC", False), ("PRIVATE_ALERTS", False), ("PRIVATE_ALERTS", True)]
+      dbQuery tr [sql|SELECT channel_id, message_ts IS NOT NULL FROM apis.slack_incident_roots ORDER BY channel_id|] () `shouldReturn` [("C_PUBLIC" :: Text, True), ("PRIVATE_ALERTS", False)]
 
     it "stops waiting for a timestamp recovery that never arrives" \tr -> do
       update <- setupWithIssue tr

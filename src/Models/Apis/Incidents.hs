@@ -823,7 +823,8 @@ claimSlackDeliveriesTx now = do
           WHEN d.operation = 'post_activity' THEN '{}'::jsonb
           WHEN d.activity_id IS NOT NULL THEN (SELECT latest.root_payload FROM apis.incident_events latest
             WHERE latest.episode_id = d.episode_id ORDER BY latest.observed_at DESC, latest.id DESC LIMIT 1)
-          WHEN d.operation = 'post_reply' THEN (CASE WHEN d.event_id = r.first_event_id THEN e.root_payload ELSE e.reply_payload END)
+          -- A reply with no thread to join lands in the channel alone, so it posts the event's full card.
+          WHEN d.operation = 'post_reply' THEN (CASE WHEN d.event_id = r.first_event_id OR r.threadless THEN e.root_payload ELSE e.reply_payload END)
             || CASE WHEN d.reply_broadcast THEN '{"reply_broadcast": true}'::jsonb ELSE '{}'::jsonb END
           ELSE e.root_payload END,
         initial.root_payload,

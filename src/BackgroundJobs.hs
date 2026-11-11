@@ -5182,23 +5182,32 @@ runSlackIncidentDeliveries = do
                   Incidents.PostActivity _ note -> Mail.activityReply note
                   -- Every root render states who holds the issue now.
                   (Incidents.PostRoot; Incidents.PostStandalone; Incidents.UpdateRoot _) -> Mail.withOwner delivery.owner $ Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
-                message payload' =
+                message hook =
                   Notify.SlackData
                     { Notify.channelId = delivery.channelId
                     , Notify.botToken = sd.botToken
-                    , Notify.payload = AE.toJSON $ Incidents.correlateSlackDelivery delivery payload'
+                    , Notify.payload = AE.toJSON $ Incidents.correlateSlackDelivery delivery payload
                     , Notify.threadTs = parent
-                    , Notify.webhookUrl = if delivery.channelId == sd.channelId then sd.webhookUrl else Nothing
+                    , Notify.webhookUrl = hook
                     , Notify.projectIdCtx = delivery.projectId.toText
                     , Notify.teamIdCtx = sd.teamId
                     }
+                -- A webhook returns no timestamp, so nothing threads under its post: the bot posts whenever it
+                -- can, and the install-time webhook only reaches the channel when the bot is not in it.
+                webhook = if delivery.channelId == sd.channelId then sd.webhookUrl else Nothing
+                send
+                  | T.null sd.botToken = Notify.deliverSlack operation (message webhook)
+                  | otherwise =
+                      Notify.deliverSlack operation (message Nothing) >>= \case
+                        Notify.SlackRejected reason | reason `elem` ["not_in_channel", "channel_not_found"], isJust webhook -> Notify.deliverSlack operation (message webhook)
+                        result -> pure result
             allowed <- case delivery.operation of
               Incidents.PostAnalysis _ runId -> Issues.incidentReportAllowed delivery.projectId runId
               (Incidents.PostRoot; Incidents.PostStandalone; Incidents.PostReply{}; Incidents.UpdateRoot{}; Incidents.PostActivity{}) -> pure True
             if not allowed
               then pure $ Incidents.DeliveryRejected "incident_routine_authority_withdrawn"
               else
-                Notify.deliverSlack operation (message payload) <&> \case
+                send <&> \case
                   Notify.SlackSent ts -> maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
                   -- Without a bot token nothing can ever recover the timestamp.
                   Notify.SlackAccepted ->

@@ -476,7 +476,10 @@ runNotifyTest ref = interpret \_ -> \case
           _ -> sd
     idx <- liftIO $ atomicModifyIORef' ref (\notifications -> (SlackNotification captured : notifications, length notifications + 1))
     let timestamp = "1788900000." <> T.justifyRight 6 '0' (show idx)
+    -- A channel whose id starts with "PRIVATE" stands for one the bot has not joined.
     pure $ case operation of
       SlackUpdate ts -> SlackSent ts
-      SlackPost -> maybe (SlackSent timestamp) (const SlackAccepted) sd.webhookUrl
+      SlackPost
+        | isNothing sd.webhookUrl && "PRIVATE" `T.isPrefixOf` sd.channelId -> SlackRejected "not_in_channel"
+        | otherwise -> maybe (SlackSent timestamp) (const SlackAccepted) sd.webhookUrl
   GetNotifications -> liftIO $ reverse <$> readIORef ref
