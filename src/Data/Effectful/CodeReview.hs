@@ -41,6 +41,7 @@ import System.IO (hClose)
 import System.IO.Error (isDoesNotExistError, tryIOError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
+import Text.HTML.TagSoup qualified as TagSoup
 import UnliftIO.Async (forConcurrently)
 import UnliftIO.Exception (catch, finally, throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
@@ -1043,17 +1044,19 @@ fetchDocument url
           pure $ AE.object ["url" AE..= url, "status" AE..= HTTP.statusCode (HTTP.responseStatus response), "location" AE..= header "Location", "text" AE..= T.take 60000 (if any ("html" `T.isInfixOf`) (header "Content-Type") then pageText text else text)]
 
 
--- | A page's readable text: scripts and styles dropped, tags removed, common entities decoded.
+-- | A page's readable text: scripts and styles dropped, every tag a word break, all entities decoded.
 --
 -- >>> pageText "<html><style>p{}</style><p>Use <code>cabal&nbsp;run</code> &amp; wait</p><script>x()</script></html>"
 -- "Use cabal run & wait"
+-- >>> pageText "<h1>It&#8217;s &#x2014; done</h1><p>Next</p>"
+-- "It\8217s \8212 done Next"
 pageText :: Text -> Text
-pageText = unwords . words . entities . foldMap (T.drop 1 . T.dropWhile (/= '>')) . T.splitOn "<" . ("<" <>) . dropBlock "style" . dropBlock "script"
+pageText = unwords . words . foldMap (\case TagSoup.TagText text -> text; _ -> " ") . visible . TagSoup.parseTags
   where
-    dropBlock tag page = case T.breakOn ("<" <> tag) page of
-      (before, rest) | T.null rest -> before
-      (before, rest) -> before <> dropBlock tag (T.drop (T.length tag + 3) (snd (T.breakOn ("</" <> tag <> ">") rest)))
-    entities page = foldl' (\acc (entity, char) -> T.replace entity char acc) page ([("&nbsp;", " "), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"), ("&amp;", "&")] :: [(Text, Text)])
+    visible = \case
+      TagSoup.TagOpen tag _ : rest | tag `elem` ["script", "style"] -> visible $ drop 1 $ dropWhile (not . TagSoup.isTagCloseName tag) rest
+      tag : rest -> tag : visible rest
+      [] -> []
 
 
 reviewOutcome :: FixReviewRequest -> VerifiedFix -> FixReviewDecision -> Either Text FixReviewOutcome
