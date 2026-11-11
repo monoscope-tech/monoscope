@@ -116,7 +116,7 @@ Two deliberate differences from your normal `make test`:
   Checks that do not need services start only the runner; `e2e` starts Postgres,
   and `integration-tests` starts all three services.
   When every selected check is already attested, `make ci` skips Docker entirely.
-  Local CI runs serialize automatically to avoid overloading the host.
+  Local CI container runs serialize automatically to avoid overloading the host; host checks (hlint, release-tests) and already-attested checks never wait for the lock.
   Worktree runs mount their shared Git metadata so attestation fingerprints work in containers.
   If HLint is installed on the host, `make ci` runs that check there, as the GitHub workflow does.
   The host passes its attestation-ref list to the runner, which has no SSH keys.

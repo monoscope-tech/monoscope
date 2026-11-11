@@ -677,22 +677,6 @@ prune_orphan_stacks() {
 collect_host() { [ -n "$1" ] || return 0; local r=0; wait "$1" || r=$?; cat "$2"; rm -f "$2"; return "$r"; }
 
 cmd_local() {
-  # Serialize local runs: they oversubscribe the host, and every checkout shares the
-  # cabal store and dist (`shell` takes no lock, so a hand build there can race a run).
-  if [ "${CI_LOCAL_LOCKED:-}" != true ]; then
-    python3 -c '
-import fcntl, os, sys
-with open(sys.argv[1], "w") as lock:
-    try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        print("ci: waiting for another local CI run", file=sys.stderr)
-        fcntl.flock(lock, fcntl.LOCK_EX)
-    os.set_inheritable(lock.fileno(), True)
-    os.execvpe(sys.argv[2], [sys.argv[2], "local", *sys.argv[3:]], {**os.environ, "CI_LOCAL_LOCKED": "true"})
-' "${TMPDIR:-/tmp}/monoscope-ci-$(id -u).lock" "$0" "$@"
-    return
-  fi
-  prune_orphan_stacks || true
   # The dependency image has no HLint; the host tool is also how CI runs it.
   local c host_rc=0 host_hlint=false host_pid='' host_log='' host_fp='' release_pid='' release_log=''
   local -a container_checks=()
@@ -727,15 +711,37 @@ with open(sys.argv[1], "w") as lock:
     fi
     container_checks=("${pending[@]}")
   fi
-  set -- "${container_checks[@]}"
-  command -v docker >/dev/null 2>&1 || die "docker is required for \`ci.sh local\`"
-  docker compose version >/dev/null 2>&1 || die "docker compose v2 is required"
   if [ "$host_hlint" = true ]; then
     host_log=$(mktemp -t ci-hlint-log.XXXXXX)
     host_fp=$(mktemp -t ci-hlint-fp.XXXXXX)
     CI_FINGERPRINTS_PATH="$host_fp" "$0" run hlint > "$host_log" 2>&1 &
     host_pid=$!
   fi
+  # Serialize container runs: they oversubscribe the host, and every checkout shares the
+  # cabal store and dist (`shell` takes no lock, so a hand build there can race a run).
+  # Host checks and fully attested selections never queue behind another session.
+  if [ "${CI_LOCAL_LOCKED:-}" != true ]; then
+    local rc=0
+    python3 -c '
+import fcntl, os, sys
+with open(sys.argv[1], "w") as lock:
+    try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("ci: waiting for another local CI run", file=sys.stderr)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+    os.set_inheritable(lock.fileno(), True)
+    os.execvpe(sys.argv[2], [sys.argv[2], "local", *sys.argv[3:]], {**os.environ, "CI_LOCAL_LOCKED": "true"})
+' "${TMPDIR:-/tmp}/monoscope-ci-$(id -u).lock" "$0" "${container_checks[@]}" || rc=$?
+    collect_host "$host_pid" "$host_log" || host_rc=$?
+    rm -f "$host_fp"
+    collect_host "$release_pid" "$release_log" || host_rc=$?
+    [ "$host_rc" -eq 0 ] || return "$host_rc"
+    return "$rc"
+  fi
+  prune_orphan_stacks || true
+  set -- "${container_checks[@]}"
+  command -v docker >/dev/null 2>&1 || die "docker is required for \`ci.sh local\`"
+  docker compose version >/dev/null 2>&1 || die "docker compose v2 is required"
   # Postgres and MinIO are deliberately cache-free integration fixtures (Postgres
   # is tmpfs-backed).  Keeping their *containers* after a run made a second local
   # integration invocation inherit the first run's deterministic test IDs and
@@ -1132,8 +1138,14 @@ cmd_selftest() {
   local cached_ref
   cached_ref=$(mktemp -t ci-selftest-refs.XXXXXX)
   attest_ref frontend "$(fingerprint frontend)" node > "$cached_ref"
-  assert "cached local skips containers" skipped \
-    "$(CI_LOCAL_LOCKED=true CI_REMOTE_REFS_FILE="$cached_ref" "$0" local frontend 2>&1 | sed -n 's/.*all selected checks are already attested.*/skipped/p')"
+  # Under a held lock, so an attested selection that queued would print "waiting".
+  assert "cached local skips containers and the lock" skipped \
+    "$(python3 -c 'import fcntl, subprocess, sys
+with open(sys.argv[1], "w") as lock:
+    try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError: pass
+    subprocess.run(sys.argv[2:], timeout=120)' "${TMPDIR:-/tmp}/monoscope-ci-$(id -u).lock" \
+      env CI_REMOTE_REFS_FILE="$cached_ref" "$0" local frontend 2>&1 | tr '\n' ' ' | sed -n '/waiting for another/!s/.*all selected checks are already attested.*/skipped/p')"
   rm -f "$cached_ref"
 
   # A change under a check's inputs must move its fingerprint; one outside must not.
