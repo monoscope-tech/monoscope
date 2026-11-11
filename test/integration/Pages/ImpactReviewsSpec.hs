@@ -2954,6 +2954,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
       void $ run Workspace.Archive
       removePathForcibly $ store.cacheDir </> toString testPid.toText </> "workspaces"
       run (Workspace.Prepare repository) >>= parse (field "outcome") >>= (`shouldBe` AE.toJSON Workspace.Restored)
+      -- A fresh node has no local ancestor: it restores the lineage's latest archived build and starts warm.
+      removePathForcibly $ store.cacheDir </> toString testPid.toText </> "workspaces"
+      fourth <- commit repository [("app.sh", "v4\n")]
+      writeFileLBS requestFile $ AE.encode $ AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= fourth]
+      run (Workspace.Prepare repository) >>= parse (field "outcome" >=> field "contents") >>= (`shouldSatisfy` ((== Just (AE.toJSON Workspace.Warm)) . listToMaybe @AE.Value))
 
   it "admission_capsReviewsPerProjectAndHostAndSavesProofRecipes" \tr -> do
     setup tr

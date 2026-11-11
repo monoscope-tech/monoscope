@@ -219,6 +219,11 @@ data Window = Window {start :: Double, end :: Double, total :: Double}
 -- Right (Window {start = 22.0, end = 30.0, total = 30.0})
 -- >>> map (fmap (\(t, _ :: Text, _ :: Text) -> t) . AE.decodeStrict @(Double, Text, Text)) . drop 1 . BS8.lines . fst <$> clipCast (Just "key") cast
 -- Right [Just 0.0,Just 0.0,Just 0.0,Just 1.0,Just 1.5,Just 8.0]
+-- >>> let plain escape = "{\"version\":2,\"width\":40,\"height\":30}\n[0.5,\"o\",\"" <> escape <> "ok\\r\\n\"]"
+-- >>> ("\"height\":4" `BS.isInfixOf`) . fst <$> clipCast Nothing (plain "\\u001b[1m")
+-- Right True
+-- >>> ("\"height\":31" `BS.isInfixOf`) . fst <$> clipCast Nothing (plain "\\u001b[2J")
+-- Right True
 -- >>> clipCast Nothing "not a cast"
 -- Left "The proof recording is not an asciinema cast"
 clipCast :: Maybe Text -> ByteString -> Either Text (ByteString, Window)
@@ -241,7 +246,10 @@ clipCast highlight cast = case BS8.lines cast of
               | Just m <- moment = let from = max 0 (min (m - 1) (total - 8)) in Window from (from + 8) total
               | otherwise = Window (total - 8) total total
             width = floor columns :: Int
-            row = floor rows + 1 :: Int
+            -- Plain output (colours at most, no cursor movement) only fills the rows it printed, so
+            -- the clip drops the empty terminal below it; anything else keeps its full screen.
+            plain = all (\escape -> "[" `T.isPrefixOf` escape && T.all (\c -> isDigit c || c == ';') (T.drop 1 (T.takeWhile (/= 'm') escape)) && "m" `T.isInfixOf` escape) (drop 1 (T.splitOn "\ESC" printed))
+            row = 1 + if plain then min (floor rows) (max 3 (length (T.lines printed) + 1)) else floor rows :: Int
             clock seconds = let whole = floor seconds :: Int in show (whole `div` 60) <> ":" <> T.justifyRight 2 '0' (show (whole `mod` 60))
             timeline now =
               let cells = max 10 (width - 2 - T.length (clock now) - T.length (clock total))

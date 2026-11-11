@@ -11,6 +11,9 @@ import Data.Char (isDigit)
 import Data.Default (def)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.AgentWorkspace qualified as Workspace (Outcome (..), Start (..), hostSlots)
+import GHC.Clock (getMonotonicTime)
+import OpenTelemetry.Attributes qualified as OA
+import Pkg.Metrics qualified as Metrics
 import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Artifacts (sha256)
 import Data.Effectful.CodeReview.Checkout qualified as Checkout (Fetch (..))
@@ -413,6 +416,7 @@ reviewConnection run = runErrorNoCallStack @Text do
 -- repository is cold; later ones start from its latest build and compile incrementally.
 prepareReviewWorkspace :: Reviews.ReviewId -> ATBackgroundCtx ()
 prepareReviewWorkspace rid = whenJustM (Reviews.getRun rid) \run -> do
+  started <- liftIO getMonotonicTime
   outcome <- runErrorNoCallStack @Text do
     (_, _, _, conn) <- either throwError pure =<< reviewConnection run
     -- Runs queued before the base was recorded look it up.
@@ -420,6 +424,9 @@ prepareReviewWorkspace rid = whenJustM (Reviews.getRun rid) \run -> do
     either throwError pure
       =<< Agent.prepareRepository
         Checkout.Fetch{projectId = run.projectId, repository = "https://github.com/" <> run.owner <> "/" <> run.repo <> ".git", base, head = base, gitToken = conn.token.reveal}
+  ended <- liftIO getMonotonicTime
+  Metrics.recordMs Metrics.workspacePrepareHist ((ended - started) * 1000) . one . ("outcome",) . OA.toAttribute @Text
+    $ either (const "failed") (\case Workspace.Cached -> "cached"; Workspace.Restored -> "restored"; Workspace.Built Workspace.Cold _ -> "cold"; Workspace.Built Workspace.Warm _ -> "warm"; Workspace.Built (Workspace.ColdAfterWarm _) _ -> "cold_after_warm") outcome
   case outcome of
     Left err -> Log.logAttention "Review workspace preparation failed" (run.id, err)
     Right (Workspace.Built (Workspace.ColdAfterWarm why) _) -> Log.logAttention "Review workspace built cold after its warm start failed" (run.id, why)
