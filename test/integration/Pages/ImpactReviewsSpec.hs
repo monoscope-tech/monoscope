@@ -2947,6 +2947,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     fmap (.setup) <$> runQueryEffect tr (Reviews.proofRecipe middle) `shouldReturn` Just "make serve &"
     void $ runQueryEffect tr $ Reviews.receiveEvent Nothing $ eventAt (T.replicate 40 "c") 4
     builds `shouldReturn` 2
+    -- askOnReviewedHead_answersInANewComment: an ask on a head that already has a progress comment answers below itself.
+    dbExec tr "UPDATE projects.pr_review_runs SET state = 'completed', progress_comment_id = 55 WHERE revision = ?" (Only $ T.replicate 40 "7")
+    void $ runQueryEffect tr $ Reviews.receiveEvent (Just Reviews.Ask{login = "ada", commentId = 78, command = Reviews.Prove, focus = Nothing}) (event 7)
+    dbQuery tr "SELECT state, progress_comment_id FROM projects.pr_review_runs WHERE revision = ?" (Only $ T.replicate 40 "7") `shouldReturn` [("queued" :: Text, Nothing :: Maybe Int64)]
 
   it "reviewComment_leadsWithMergeRiskAndShowsProductionDetailOnlyWhereAllowed" \_ -> do
     let pid = UUIDId UUID.nil
