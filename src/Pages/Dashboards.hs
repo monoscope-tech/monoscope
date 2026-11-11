@@ -28,6 +28,7 @@ module Pages.Dashboards (
   WidgetReorderItem (..),
   dashboardDeleteH,
   dashboardRenamePatchH,
+  EditRefusal (..),
   DashboardRenamed,
   LayoutSaved,
   WidgetCopied (..),
@@ -1340,23 +1341,24 @@ dashboardWidgetReorderPatchH
   -- ^ Optional tab slug for tabbed dashboards
   -> Map Text WidgetReorderItem
   -- ^ The ordered list of widget IDs
-  -> ATAuthCtx (ActionResult ReadOnly LayoutSaved)
+  -> ATAuthCtx (ActionResult EditRefusal LayoutSaved)
 dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = act do
   _ <- Projects.sessionAndProject pid
-  withEditableDash pid dashId \ed _ dash -> do
-    let oldWidgets = case (tabSlugM, dash.tabs) of
-          (Just slug, Just tabs) -> foldMap ((.widgets) . snd) $ findTabBySlug tabs slug
-          _ -> dash.widgets
-        newWidgetIds = Map.keys widgetOrder
-        reorderedWidgets = reorderWidgets widgetOrder oldWidgets
-        deletedWidgetIds = filter (`notElem` newWidgetIds) $ mapMaybe (.id) oldWidgets
-    -- Safety: if patch has IDs but none match existing widgets, it's a stale/race request — skip
-    when (null oldWidgets || Map.null widgetOrder || not (null reorderedWidgets)) do
-      -- Delete alerts for removed widgets first (before updating dashboard to avoid orphaned monitors)
-      unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds pid (Just dashId) deletedWidgetIds
-      _ <- updateSchema ed (overDashWidgets tabSlugM (const reorderedWidgets) dash) Nothing
-      syncDashboardAndQueuePush pid dashId
-    pure LayoutSaved
+  withEditableDash pid dashId \ed _ dash ->
+    Right <$> do
+      let oldWidgets = case (tabSlugM, dash.tabs) of
+            (Just slug, Just tabs) -> foldMap ((.widgets) . snd) $ findTabBySlug tabs slug
+            _ -> dash.widgets
+          newWidgetIds = Map.keys widgetOrder
+          reorderedWidgets = reorderWidgets widgetOrder oldWidgets
+          deletedWidgetIds = filter (`notElem` newWidgetIds) $ mapMaybe (.id) oldWidgets
+      -- Safety: if patch has IDs but none match existing widgets, it's a stale/race request — skip
+      when (null oldWidgets || Map.null widgetOrder || not (null reorderedWidgets)) do
+        -- Delete alerts for removed widgets first (before updating dashboard to avoid orphaned monitors)
+        unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds pid (Just dashId) deletedWidgetIds
+        _ <- updateSchema ed (overDashWidgets tabSlugM (const reorderedWidgets) dash) Nothing
+        syncDashboardAndQueuePush pid dashId
+      pure LayoutSaved
 
 
 data LayoutSaved = LayoutSaved
@@ -1398,18 +1400,37 @@ getDashAndVM pid dashId fileM = (\(_, vm, dash) -> (vm, dash)) <$> getDashWithAc
 
 -- | The row, the dashboard it renders and whether it may be written, from one template load.
 getDashWithAccess :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, IOE :> es, Wreq.HTTP :> es) => Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Eff es (Either ReadOnly Editable, Dashboards.DashboardVM, Dashboards.Dashboard)
-getDashWithAccess pid dashId fileM = do
+getDashWithAccess pid dashId fileM =
+  loadDashWithAccess pid dashId fileM `whenNothingM` throwError err404{errBody = "Dashboard with ID not found. ID:" <> encodeUtf8 dashId.toText}
+
+
+loadDashWithAccess :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, IOE :> es, Wreq.HTTP :> es) => Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Eff es (Maybe (Either ReadOnly Editable, Dashboards.DashboardVM, Dashboards.Dashboard))
+loadDashWithAccess pid dashId fileM = do
   templates <- askTemplates
-  dashVM <-
-    Dashboards.getDashboardByProjectId pid dashId
-      `whenNothingM` throwError err404{errBody = "Dashboard with ID not found. ID:" <> encodeUtf8 dashId.toText}
-  dash <- maybe (pure $ fromMaybe def (loadDashboardFromVM (templateList templates) dashVM)) Dashboards.readDashboardEndpoint fileM
-  pure (editableIn templates dashVM, dashVM, dash)
+  Dashboards.getDashboardByProjectId pid dashId >>= traverse \dashVM -> do
+    dash <- maybe (pure $ fromMaybe def (loadDashboardFromVM (templateList templates) dashVM)) Dashboards.readDashboardEndpoint fileM
+    pure (editableIn templates dashVM, dashVM, dash)
 
 
--- | Run a content edit, refused as 'ReadOnly' on a built-in dashboard.
-withEditableDash :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, IOE :> es, Wreq.HTTP :> es) => Projects.ProjectId -> Dashboards.DashboardId -> (Editable -> Dashboards.DashboardVM -> Dashboards.Dashboard -> Eff es a) -> Eff es (Either ReadOnly a)
-withEditableDash pid dashId k = getDashWithAccess pid dashId Nothing >>= \(access, vm, dash) -> traverse (\ed -> k ed vm dash) access
+-- | Every way a dashboard edit is refused; the edit routes declare it in their types.
+data EditRefusal = EditReadOnly | DashboardGone | TabGone Text | WidgetGone Text
+  deriving stock (Eq, Show)
+
+
+instance Refusal EditRefusal where
+  refusalMessage = \case
+    EditReadOnly -> refusalMessage ReadOnly
+    DashboardGone -> "This dashboard no longer exists. Reload to see the current list."
+    TabGone _ -> "This tab no longer exists. Reload to see the current version."
+    WidgetGone _ -> "This widget is no longer on the dashboard. Reload to see the current version."
+
+
+-- | Run a content edit; a missing or built-in read-only dashboard is refused.
+withEditableDash :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, IOE :> es, Wreq.HTTP :> es) => Projects.ProjectId -> Dashboards.DashboardId -> (Editable -> Dashboards.DashboardVM -> Dashboards.Dashboard -> Eff es (Either EditRefusal a)) -> Eff es (Either EditRefusal a)
+withEditableDash pid dashId k =
+  loadDashWithAccess pid dashId Nothing >>= \case
+    Nothing -> pure $ Left DashboardGone
+    Just (access, vm, dash) -> whenRight (Left EditReadOnly) access \ed -> k ed vm dash
 
 
 -- | Page shell shared by the dashboard and dashboard-tab handlers.
@@ -2603,23 +2624,24 @@ data DashboardRenameForm = DashboardRenameForm
 
 -- | Handler for renaming a dashboard.
 -- It updates the title and optionally the git file path.
-dashboardRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardRenameForm -> ATAuthCtx (ActionResult ReadOnly DashboardRenamed)
+dashboardRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardRenameForm -> ATAuthCtx (ActionResult EditRefusal DashboardRenamed)
 dashboardRenamePatchH pid dashId form = act do
   _ <- Projects.sessionAndProject pid
-  withEditableDash pid dashId \ed dashVM _ -> do
-    _ <- updateTitle ed form.title
-    whenJust dashVM.schema \schema -> void $ updateSchema ed (schema & #title ?~ form.title) Nothing
-    when (form.title /= dashVM.title) do
-      monitors <- Monitors.queryMonitorsAll pid
-      forM_ monitors \monitor ->
-        when (monitor.dashboardId == Just dashId)
-          $ whenJust (monitor.widgetId >>= \wid -> dashVM.schema >>= findWidgetInDashboard wid) \(_, widget) ->
-            void $ Monitors.queryMonitorUpsert monitor{Monitors.alertConfig = monitor.alertConfig{Monitors.title = widgetMonitorTitle form.title widget.title}}
-    let newPath = dashFilePath (fromMaybe "" form.fileDir) form.title
-    when (isNothing dashVM.gitSyncId && Just newPath /= dashVM.filePath) $ void $ GitSync.updateDashboardGitInfo dashId newPath ""
-    syncDashboardAndQueuePush pid dashId
-    addTriggerEvent "closeModal" ""
-    pure $ DashboardRenamed form.title
+  withEditableDash pid dashId \ed dashVM _ ->
+    Right <$> do
+      _ <- updateTitle ed form.title
+      whenJust dashVM.schema \schema -> void $ updateSchema ed (schema & #title ?~ form.title) Nothing
+      when (form.title /= dashVM.title) do
+        monitors <- Monitors.queryMonitorsAll pid
+        forM_ monitors \monitor ->
+          when (monitor.dashboardId == Just dashId)
+            $ whenJust (monitor.widgetId >>= \wid -> dashVM.schema >>= findWidgetInDashboard wid) \(_, widget) ->
+              void $ Monitors.queryMonitorUpsert monitor{Monitors.alertConfig = monitor.alertConfig{Monitors.title = widgetMonitorTitle form.title widget.title}}
+      let newPath = dashFilePath (fromMaybe "" form.fileDir) form.title
+      when (isNothing dashVM.gitSyncId && Just newPath /= dashVM.filePath) $ void $ GitSync.updateDashboardGitInfo dashId newPath ""
+      syncDashboardAndQueuePush pid dashId
+      addTriggerEvent "closeModal" ""
+      pure $ DashboardRenamed form.title
 
 
 -- | The renamed title, swapped into the page heading.
@@ -2727,74 +2749,76 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
 -- Returns the duplicated widget that will be converted to HTML automatically.
 -- If the original widget has an alert, the alert is also duplicated with the new widget.
 -- When source_dashboard_id is provided and differs from target dashboard, this copies the widget to a different dashboard.
-dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (ActionResult ReadOnly WidgetCopied)
+dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (ActionResult EditRefusal WidgetCopied)
 dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = act do
   _ <- Projects.sessionAndProject pid
   let sourceDashId = fromMaybe targetDashId sourceDashIdM
       isCrossDashboard = sourceDashId /= targetDashId
 
-  -- Get source dashboard to find the widget
-  (_, sourceDash) <- getDashAndVM pid sourceDashId Nothing
-  (tabSlugM, widgetToDuplicate) <- findWidgetInDashboard widgetId sourceDash `whenNothing` throwError err404{errBody = "Widget not found in dashboard"}
-  withEditableDash pid targetDashId \targetEd targetVM targetDash -> do
-    newWidgetId <- UUID.genUUID <&> UUID.toText
-    now <- Time.currentTime
-    let titleSuffix = bool " (Copy)" "" isCrossDashboard
-        copiedTitle = (case maybeToMonoid widgetToDuplicate.title of "" -> "Widget"; t -> t) <> titleSuffix
+  source <- fmap (\(_, _, d) -> d) <$> loadDashWithAccess pid sourceDashId Nothing
+  case (source, findWidgetInDashboard widgetId =<< source) of
+    (Nothing, _) -> pure $ Left DashboardGone
+    (_, Nothing) -> pure $ Left $ WidgetGone widgetId
+    (_, Just (tabSlugM, widgetToDuplicate)) -> withEditableDash pid targetDashId \targetEd targetVM targetDash ->
+      Right <$> do
+        newWidgetId <- UUID.genUUID <&> UUID.toText
+        now <- Time.currentTime
+        let titleSuffix = bool " (Copy)" "" isCrossDashboard
+            copiedTitle = (case maybeToMonoid widgetToDuplicate.title of "" -> "Widget"; t -> t) <> titleSuffix
 
-    -- Clone alert if original widget has one
-    existingMonitorM <- Monitors.queryMonitorByWidgetId pid (Just sourceDashId) (normalizeWidgetId widgetId)
-    newAlertIdM <- forM existingMonitorM \monitor -> do
-      newMonitorId <- Monitors.QueryMonitorId <$> UUID.genUUID
-      let newMonitor =
-            monitor
-              { Monitors.id = newMonitorId
-              , Monitors.createdAt = now
-              , Monitors.updatedAt = now
-              , Monitors.widgetId = Just newWidgetId
-              , Monitors.dashboardId = Just targetDashId
-              , Monitors.alertConfig = monitor.alertConfig{Monitors.title = widgetMonitorTitle targetVM.title (Just copiedTitle)}
-              , Monitors.alertLastTriggered = Nothing
-              , Monitors.warningLastTriggered = Nothing
-              , Monitors.currentStatus = Monitors.MSNormal
-              }
-      void $ Monitors.queryMonitorUpsert newMonitor
-      pure newMonitorId.toText
+        -- Clone alert if original widget has one
+        existingMonitorM <- Monitors.queryMonitorByWidgetId pid (Just sourceDashId) (normalizeWidgetId widgetId)
+        newAlertIdM <- forM existingMonitorM \monitor -> do
+          newMonitorId <- Monitors.QueryMonitorId <$> UUID.genUUID
+          let newMonitor =
+                monitor
+                  { Monitors.id = newMonitorId
+                  , Monitors.createdAt = now
+                  , Monitors.updatedAt = now
+                  , Monitors.widgetId = Just newWidgetId
+                  , Monitors.dashboardId = Just targetDashId
+                  , Monitors.alertConfig = monitor.alertConfig{Monitors.title = widgetMonitorTitle targetVM.title (Just copiedTitle)}
+                  , Monitors.alertLastTriggered = Nothing
+                  , Monitors.warningLastTriggered = Nothing
+                  , Monitors.currentStatus = Monitors.MSNormal
+                  }
+          void $ Monitors.queryMonitorUpsert newMonitor
+          pure newMonitorId.toText
 
-    -- Target dashboard (might be the source); its title names the toast on a cross-dashboard copy
-    let targetDashNameM = dashTitle targetVM.title <$ guard isCrossDashboard
-        widgetCopy =
-          widgetToDuplicate
-            { Widget.id = Just newWidgetId
-            , Widget.title = Just copiedTitle
-            , Widget._projectId = Just pid
-            , Widget._dashboardId = Just targetDashId.toText
-            , Widget.alertId = newAlertIdM
-            , Widget.alertStatus = Nothing
-            }
+        -- Target dashboard (might be the source); its title names the toast on a cross-dashboard copy
+        let targetDashNameM = dashTitle targetVM.title <$ guard isCrossDashboard
+            widgetCopy =
+              widgetToDuplicate
+                { Widget.id = Just newWidgetId
+                , Widget.title = Just copiedTitle
+                , Widget._projectId = Just pid
+                , Widget._dashboardId = Just targetDashId.toText
+                , Widget.alertId = newAlertIdM
+                , Widget.alertStatus = Nothing
+                }
 
-    let targetTabs = fold targetDash.tabs
-        -- The copy belongs beside the original, on the tab the user is actually looking
-        -- at — this used to always land on the first tab, so duplicating a widget on any
-        -- other tab made the copy appear somewhere the user was not. Falling back to the
-        -- first tab still covers a cross-dashboard copy, where the source tab need not exist.
-        destinationTabM = (tabSlugM >>= fmap snd . findTabBySlug targetTabs) <|> viaNonEmpty head targetTabs
+        let targetTabs = fold targetDash.tabs
+            -- The copy belongs beside the original, on the tab the user is actually looking
+            -- at — this used to always land on the first tab, so duplicating a widget on any
+            -- other tab made the copy appear somewhere the user was not. Falling back to the
+            -- first tab still covers a cross-dashboard copy, where the source tab need not exist.
+            destinationTabM = (tabSlugM >>= fmap snd . findTabBySlug targetTabs) <|> viaNonEmpty head targetTabs
 
-    Log.logTrace "Widget duplication"
-      $ AE.object
-        [ "widgetId" AE..= widgetId
-        , "targetDashboardId" AE..= targetDashId
-        , "sourceTab" AE..= tabSlugM
-        , "destinationTab" AE..= ((.slug) <$> destinationTabM)
-        , "targetTabCount" AE..= length targetTabs
-        ]
+        Log.logTrace "Widget duplication"
+          $ AE.object
+            [ "widgetId" AE..= widgetId
+            , "targetDashboardId" AE..= targetDashId
+            , "sourceTab" AE..= tabSlugM
+            , "destinationTab" AE..= ((.slug) <$> destinationTabM)
+            , "targetTabCount" AE..= length targetTabs
+            ]
 
-    _ <- updateSchema targetEd (overDashWidgets ((.slug) <$> destinationTabM) (<> [widgetCopy]) targetDash) (Just now)
-    syncDashboardAndQueuePush pid targetDashId
+        _ <- updateSchema targetEd (overDashWidgets ((.slug) <$> destinationTabM) (<> [widgetCopy]) targetDash) (Just now)
+        syncDashboardAndQueuePush pid targetDashId
 
-    addWidgetJSON $ encodeText widgetCopy
-    addToast "success" (maybe "Widget duplicated successfully" ("Copied to " <>) targetDashNameM) Nothing (dashboardUrl pid targetDashId ((.slug) <$> destinationTabM) [] <$ targetDashNameM)
-    pure $ WidgetCopied widgetCopy
+        addWidgetJSON $ encodeText widgetCopy
+        addToast "success" (maybe "Widget duplicated successfully" ("Copied to " <>) targetDashNameM) Nothing (dashboardUrl pid targetDashId ((.slug) <$> destinationTabM) [] <$ targetDashNameM)
+        pure $ WidgetCopied widgetCopy
 
 
 newtype WidgetCopied = WidgetCopied Widget.Widget
@@ -3199,16 +3223,17 @@ instance Outcome TabRenamed where
 
 
 -- | Handler for renaming a tab
-dashboardTabRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> TabRenameForm -> ATAuthCtx (ActionResult ReadOnly TabRenamed)
+dashboardTabRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> TabRenameForm -> ATAuthCtx (ActionResult EditRefusal TabRenamed)
 dashboardTabRenamePatchH pid dashId tabSlug form = act do
   _ <- Projects.sessionAndProject pid
-  withEditableDash pid dashId \ed _ dash -> do
-    now <- Time.currentTime
-    tabs <- dash.tabs `whenNothing` throwError err404{errBody = "Dashboard has no tabs"}
-    (idx, _) <- findTabBySlug tabs tabSlug `whenNothing` throwError err404{errBody = "Tab not found: " <> encodeUtf8 tabSlug}
-    _ <- updateSchema ed (dash & #tabs ?~ (tabs & ix idx . #name .~ form.newName)) (Just now)
-    syncDashboardAndQueuePush pid dashId
-    pure $ TabRenamed $ dashboardUrl pid dashId (Just $ slugify form.newName) []
+  withEditableDash pid dashId \ed _ dash -> case dash.tabs >>= (`findTabBySlug` tabSlug) of
+    Nothing -> pure $ Left $ TabGone tabSlug
+    Just (idx, _) ->
+      Right <$> do
+        now <- Time.currentTime
+        _ <- updateSchema ed (dash & #tabs . _Just . ix idx . #name .~ form.newName) (Just now)
+        syncDashboardAndQueuePush pid dashId
+        pure $ TabRenamed $ dashboardUrl pid dashId (Just $ slugify form.newName) []
 
 
 -- | Form for YAML schema editing

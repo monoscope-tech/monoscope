@@ -31,7 +31,6 @@ import Log (Logger)
 import Lucid
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
-import Models.Projects.DashboardTemplates qualified as DashboardTemplates
 import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types qualified as H
@@ -1002,10 +1001,10 @@ type instance Opaque "Dashboards.DashboardGet" = Dashboards.DashboardGet
 type instance Opaque "Dashboards.DashboardNew" = Dashboards.DashboardNew
 type instance Opaque "Dashboards.DashboardRenameForm" = Dashboards.DashboardRenameForm
 type instance Opaque "Dashboards.DashboardRenamed" = Dashboards.DashboardRenamed
+type instance Opaque "Dashboards.EditRefusal" = Dashboards.EditRefusal
 type instance Opaque "Dashboards.DashboardRes" = Dashboards.DashboardRes
 type instance Opaque "Dashboards.LayoutSaved" = Dashboards.LayoutSaved
 type instance Opaque "Dashboards.WidgetCopied" = Dashboards.WidgetCopied
-type instance Opaque "DashboardTemplates.ReadOnly" = DashboardTemplates.ReadOnly
 type instance Opaque "Dashboards.DashboardSettleSample" = Dashboards.DashboardSettleSample
 type instance Opaque "Dashboards.DashboardViewForm" = Dashboards.DashboardViewForm
 type instance Opaque "Dashboards.DashboardYaml" = Dashboards.DashboardYaml

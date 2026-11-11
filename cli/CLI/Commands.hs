@@ -593,12 +593,9 @@ validateEventsOpts opts = do
   -- with `Unknown field "POISON_ROW_DROPPED"` before the rewrite ever ran.
   validateQueryOrDie (rewriteBareQuery (T.strip opts.query))
   kindNorm <- validateAndNormalizeKind opts.kind
-  -- DuplicateRecordFields makes record-update on @kind@ ambiguous
-  -- (also a field on EventsTailOpts/EventsContextOpts) — bind to a typed let
-  -- so GHC resolves which record we're updating.
-  let opts' :: EventsSearchOpts
-      opts' = opts{kind = kindNorm}
-  pure opts'
+  -- @kind@ is also a field of EventsTailOpts/EventsContextOpts; naming @idOnly@, which only
+  -- EventsSearchOpts has, picks the record without the type-directed disambiguation GHC is dropping.
+  pure opts{kind = kindNorm, idOnly = opts.idOnly}
 
 
 -- | 'events get ID' — fetch one event (or full trace tree with --tree).

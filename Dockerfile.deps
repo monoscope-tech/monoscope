@@ -88,10 +88,15 @@ RUN cd e2e && npm ci --prefer-offline --no-audit && \
   npx playwright install --with-deps chromium && \
   touch /usr/local/share/monoscope-playwright-deps
 
+# Integration tests render replays (ffmpeg) and graphs (dot); installing them per run once
+# hung sign-off for 55 minutes on a stalled download. Last, so earlier layers stay cached.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg graphviz && rm -rf /var/lib/apt/lists/*
+
 # The resulting image contains:
 # - All system libraries
 # - GHC (from ARG GHC_VERSION above)
 # - protoc
 # - Node.js, bun, workbox-cli, and pre-built chart-cli
+# - ffmpeg and graphviz for integration tests
 # - All npm dependencies pre-installed
 # - All Haskell dependencies pre-compiled in ~/.cabal/store
