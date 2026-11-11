@@ -326,7 +326,9 @@ receiveEvent request event =
     INSERT INTO projects.pr_review_runs (thread_id, revision, state, request, base)
     SELECT id, #{event.revision}, CASE WHEN queue THEN #{Queued} ELSE #{Superseded} END, #{request}, #{event.base} FROM decided WHERE stop OR queue
     ON CONFLICT (thread_id, revision) DO UPDATE SET state = EXCLUDED.state, request = coalesce(EXCLUDED.request, projects.pr_review_runs.request), base = EXCLUDED.base,
-      result = CASE WHEN EXCLUDED.request IS NULL THEN projects.pr_review_runs.result END, error = NULL
+      result = CASE WHEN EXCLUDED.request IS NULL THEN projects.pr_review_runs.result END, error = NULL,
+      -- An ask answers below itself, so it does not reuse the comment an earlier review of this head updated.
+      progress_comment_id = CASE WHEN EXCLUDED.request IS NULL THEN projects.pr_review_runs.progress_comment_id END
     WHERE EXCLUDED.state = #{Superseded} OR projects.pr_review_runs.state = #{Superseded}
       OR (EXCLUDED.request IS NOT NULL AND projects.pr_review_runs.state IN (#{Queued}, #{Completed}, #{Incomplete}))
     RETURNING id, state, thread_id
