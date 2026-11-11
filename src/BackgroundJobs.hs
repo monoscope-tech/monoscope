@@ -102,7 +102,7 @@ import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Config (cfgConcurrencyControl, cfgDefaultJobTimeout, cfgJobOrdering, cfgOnJobFailed, cfgOnJobTimeout, cfgTableName), Job (..), JobErrHandler (..), JobOrdering (EarliestRunAtFirst), LogEvent (..), LogLevel, Seconds (..), Status (Failed), createJob, scheduleJob, startJobRunner, throwParsePayload)
-import OddJobs.Types (FailureMode (FailPermanent))
+import OddJobs.Types (FailureMode (FailPermanent), TableName)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Bots.Slack qualified as Slack
@@ -184,12 +184,16 @@ jobsRunner logger authCtx tp projectTools job = when authCtx.config.enableBackgr
 -- | Enqueue background jobs for immediate execution. The pool checkout and the
 -- @"background_jobs"@ queue name were respelled at 22 call sites before this.
 enqueueJobs :: MonadIO m => Config.AuthContext -> [BgJobs] -> m ()
-enqueueJobs ctx jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (void . createJob conn "background_jobs") jobs
+enqueueJobs ctx jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (\j -> void $ createJob conn (jobTable j) j) jobs
+
+
+jobTable :: BgJobs -> TableName
+jobTable job = if Jobs.longJob job then "background_jobs_long" else "background_jobs"
 
 
 -- | Enqueue background jobs to run at a given time.
 enqueueAt :: MonadIO m => Config.AuthContext -> UTCTime -> [BgJobs] -> m ()
-enqueueAt ctx at jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (\j -> void $ scheduleJob conn "background_jobs" j at) jobs
+enqueueAt ctx at jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (\j -> void $ scheduleJob conn (jobTable j) j at) jobs
 
 
 -- | Enqueue each job independently; a failed enqueue does not abort the rest and is returned under its label.
@@ -947,7 +951,7 @@ runDailyJobScheduling authCtx =
     seedJobs :: SimplePG.Connection -> UTCTime -> Int -> Int -> (UTCTime -> BgJobs) -> IO ()
     seedJobs conn from count step mkJob = forM_ ([0 .. count - 1] :: [Int]) \i -> do
       let at = addUTCTime (fromIntegral @Int $ i * step) from
-      void $ scheduleJob conn "background_jobs" (mkJob at) at
+      void $ scheduleJob conn (jobTable $ mkJob at) (mkJob at) at
 
     schedule = do
       Log.logInfo "Running daily job" ()
