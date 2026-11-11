@@ -700,6 +700,7 @@ library
     , slugify
     , smtp-mail
     , stm
+    , tagsoup
     , template-haskell
     , temporary
     , text
@@ -1344,6 +1345,7 @@ test-suite test-dev
     , slugify
     , smtp-mail
     , stm
+    , tagsoup
     , template-haskell
     , temporary
     , text

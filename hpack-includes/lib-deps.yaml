@@ -113,6 +113,7 @@
 - servant-server
 - servant-queryparam-core
 - servant-queryparam-server
+- tagsoup
 - text
 - text-display
 - text-builder-linear
