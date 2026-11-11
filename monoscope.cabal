@@ -296,6 +296,7 @@ extra-source-files:
     static/migrations/0277_read_only_rum_dashboard.sql
     static/migrations/0278_pr_review_rating.sql
     static/migrations/0279_any_results_monitors_count_one.sql
+    static/migrations/0280_error_pattern_synthetic.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb
     test/fixtures/github-app-test.pem
