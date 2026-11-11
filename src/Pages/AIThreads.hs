@@ -435,9 +435,8 @@ threadPageGetH pid convId docM runM hxTarget = do
           whenJust evidence.input $ \input -> section_ [Aria.label_ "Run request"] do
             h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Request"
             p_ [class_ "whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml input
-          details_ [class_ "rounded-lg border border-strokeWeak p-4", term "hx-morph-skip" ""] do
-            summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ case run.source of Issues.FixRun{} -> "Fix workflow"; (Issues.ScheduledRun; Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}) -> "Instructions used for this run"
-            p_ [class_ "mt-3 whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe (case run.source of Issues.FixRun{} -> "The fix must reproduce the issue, pass the retained regression, and pass independent review."; (Issues.ScheduledRun; Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}) -> "This run predates instruction snapshots.") evidence.instructions
+          disclosure_ [term "hx-morph-skip" ""] (case run.source of Issues.FixRun{} -> "Fix workflow"; (Issues.ScheduledRun; Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}) -> "Instructions used for this run") do
+            p_ [class_ "whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe (case run.source of Issues.FixRun{} -> "The fix must reproduce the issue, pass the retained regression, and pass independent review."; (Issues.ScheduledRun; Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}) -> "This run predates instruction snapshots.") evidence.instructions
             whenJust evidence.templateVersion $ \version -> p_ [class_ "mt-2 text-xs text-textWeak"] $ toHtml $ "Template version " <> show @Text version
           unless (null operations) $ section_ [Aria.label_ "Action history", class_ "space-y-3"] do
             div_ [class_ "flex items-center justify-between gap-3"] do
@@ -513,10 +512,7 @@ threadPageGetH pid convId docM runM hxTarget = do
               else for_ artifacts \artifact -> article_ [class_ "border-t border-strokeWeak pt-4"] do
                 h3_ [class_ "font-medium text-textStrong break-words"] $ toHtml artifact.title
                 div_ [class_ "prose prose-sm mt-4 max-w-none break-words overflow-x-auto"] $ fst $ renderMarkdownTocWithPrefix ("ai-run-" <> run.id.toText <> "-" <> toText artifact.key <> "-") $ fromMaybe "" artifact.content
-          for_ ([("Findings", evidence.findings), ("Tool results", evidence.actions)] :: [(Text, Maybe AE.Value)]) \(title, value) -> whenJust value \body ->
-            details_ [class_ "rounded-lg border border-strokeWeak p-4"] do
-              summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ toHtml @Text title
-              pre_ [class_ "mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs text-textWeak"] $ toHtml @Text $ decodeUtf8 $ AEP.encodePretty body
+          for_ ([("Findings", evidence.findings), ("Tool results", evidence.actions)] :: [(Text, Maybe AE.Value)]) \(title, value) -> whenJust value $ disclosure_ [] (toHtml title) . pre_ [class_ "max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs text-textWeak"] . toHtml @Text . decodeUtf8 . AEP.encodePretty
           when retained $ p_ [class_ "text-sm text-textWeak"] "This conversation was deleted. Its run and artifacts are retained here."
       where
         preview value =
@@ -548,12 +544,8 @@ threadPageGetH pid convId docM runM hxTarget = do
             when (any (isJust . (.routineKind)) conversationM) do
               when (isNothing routineM) $ p_ [class_ "mb-3 text-sm text-textWeak"] $ toHtml $ foldMap (\c -> maybe "" Issues.routineKindLabel c.routineKind <> " · " <> bool "Paused" "Active" c.routineActive) conversationM
               -- Setup, not daily reading: collapsed so runs and results lead.
-              details_ [class_ "group/settings mb-6 rounded-xl border border-strokeWeak bg-bgRaised", Aria.label_ "Routine configuration"] do
-                summary_ [class_ "flex cursor-pointer list-none items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:outline-offset-2 [&::-webkit-details-marker]:hidden"] do
-                  faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-iconNeutral transition-transform duration-150 group-open/settings:rotate-90 rtl:-scale-x-100"
-                  "Settings"
-                  whenJust (conversationM >>= (.routinePolicy)) $ span_ [class_ "ms-auto text-xs font-normal text-textWeak"] . toHtml . policyLabel
-                div_ [class_ "space-y-6 border-t border-strokeWeak p-4"] do
+              disclosure_ [class_ "mb-6", Aria.label_ "Routine configuration"] ("Settings" >> whenJust (conversationM >>= (.routinePolicy)) (span_ [class_ "ms-auto text-xs font-normal text-textWeak"] . toHtml . policyLabel))
+                $ div_ [class_ "space-y-6"] do
                   for_ (conversationM >>= (.routinePolicy)) \policy -> do
                     let selection = case policy of Issues.ReviewSelected selected -> Just selected; (Issues.Observe; Issues.Autonomous) -> Nothing
                     if canEdit
@@ -927,6 +919,15 @@ operationReviewPostH pid identifier form = do
   when (response == Investigations.ReviewUnavailable) $ throwError Servant.err403
   when (response == Investigations.ReviewExpired) $ addErrorToast "This action's review deadline has passed." Nothing
   done . OperationReviewed response . (.content) . Servant.getResponse =<< operationGetH pid identifier
+
+
+-- | Bordered disclosure with a turning chevron, shared by routine settings and run evidence.
+disclosure_ :: [Attribute] -> Html () -> Html () -> Html ()
+disclosure_ attrs summary body = details_ ([class_ "group/disclosure rounded-xl border border-strokeWeak bg-bgRaised"] <> attrs) do
+  summary_ [class_ "flex cursor-pointer list-none items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:-outline-offset-2 [&::-webkit-details-marker]:hidden"] do
+    faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-iconNeutral transition-transform duration-150 group-open/disclosure:rotate-90 rtl:-scale-x-100"
+    summary
+  div_ [class_ "border-t border-strokeWeak p-4"] body
 
 
 runStatus :: Issues.RoutineRunStatus -> (BadgeColor, Text)
