@@ -68,6 +68,9 @@ The host decodes each cast from the check log, renders a GIF with `agg` and an M
 Signed links at `/p/<project>/reviews/<review>/proofs/<file>` serve the media, so GitHub's image proxy can show the GIF without a session.
 A UI proof's browser recording is drawn inside a browser window, titled and addressed from the `page.tsv` the proof writes, and its preview is an animated WebP cut from that framed video.
 `plan_proofs {claims}` lists the claims before they are recorded. The review comment then updates in place as each goes from pending to running to recorded (`projects.pr_review_runs.proof_progress`), and the finished review replaces that comment. Progress updates are best effort and skipped when publication is not allowed.
+One recording can prove several planned claims (`record_proof`'s `covers`), so a review can check up to twelve. Anything a recording shows broken that the PR does not claim to change is reported as a "New issue found while testing" callout. The comment's footer asks "Did the proof get it right?"; its signed Yes and No links record `pr_review_runs.rating`.
+A saved proof setup is offered only while `.monoscope/PROOF.md` is unchanged since the revision it was recorded at.
+`make ship` retags the worker image and leaves the restart to a transient unit on the worker host, which waits until no review or workspace build is running (at most 40 minutes), so a deploy never kills a review.
 A claim graded `matches` or `differs` must cite a recorded proof key. The model cannot claim a recording that does not exist.
 The guest image needs `asciinema`, and a writable `/dev/shm` (mounted by `guest-init.sh`). The worker image needs `agg` and `ffmpeg`.
 

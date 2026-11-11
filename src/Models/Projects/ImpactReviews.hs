@@ -47,6 +47,9 @@ module Models.Projects.ImpactReviews (
   ProofFile (..),
   ProofAsset (..),
   proofSignedPath,
+  Rating (..),
+  ratingSignedPath,
+  rateRun,
   saveProofs,
   ProofRecipe (..),
   SetupReuse (..),
@@ -482,7 +485,7 @@ retryRun :: DB es => ProjectId -> ReviewId -> Eff es ()
 retryRun pid rid = do
   let payload = Aeson $ AE.toJSON $ Jobs.ReviewPullRequest rid
   Hasql.interpExecute_
-    [HI.sql|WITH retried AS (UPDATE projects.pr_review_runs r SET state = #{Queued}, result = NULL, error = NULL
+    [HI.sql|WITH retried AS (UPDATE projects.pr_review_runs r SET state = #{Queued}, result = NULL, error = NULL, rating = NULL, rated_at = NULL
       FROM projects.pr_review_threads t WHERE r.id = #{rid} AND r.thread_id = t.id AND t.project_id = #{pid}
         AND r.revision = t.latest_revision AND (t.lease_until IS NULL OR t.lease_until < now())
       RETURNING r.id)
@@ -695,18 +698,20 @@ data ClaimProgress = ClaimProgress {claim :: Text, state :: ClaimState}
 -- >>> let plan = advance (Agent.Planned ("A" :| ["B"])) []
 -- >>> plan
 -- [ClaimProgress {claim = "A", state = Pending},ClaimProgress {claim = "B", state = Pending}]
--- >>> advance (Agent.Recorded "C" "proof-1") (advance (Agent.Started "A") plan)
+-- >>> advance (Agent.Recorded ("C" :| []) "proof-1") (advance (Agent.Started ("A" :| [])) plan)
 -- [ClaimProgress {claim = "A", state = Running},ClaimProgress {claim = "B", state = Pending},ClaimProgress {claim = "C", state = Proved "proof-1"}]
--- >>> advance (Agent.Planned ("B" :| ["A"])) (advance (Agent.Started "A") plan)
+-- >>> map (.state) $ advance (Agent.Recorded ("A" :| ["B"]) "proof-2") plan
+-- [Proved "proof-2",Proved "proof-2"]
+-- >>> advance (Agent.Planned ("B" :| ["A"])) (advance (Agent.Started ("A" :| [])) plan)
 -- [ClaimProgress {claim = "B", state = Pending},ClaimProgress {claim = "A", state = Running}]
 advance :: Agent.ProofProgress -> [ClaimProgress] -> [ClaimProgress]
 advance event claims = case event of
   Agent.Planned planned -> [fromMaybe (ClaimProgress c Pending) (find ((== c) . (.claim)) claims) | c <- toList planned]
-  Agent.Started c -> mark c Running
-  Agent.Recorded c key -> mark c (Proved key)
-  Agent.Unproved c -> mark c Unrecorded
+  Agent.Started covered -> mark covered Running
+  Agent.Recorded covered key -> mark covered (Proved key)
+  Agent.Unproved covered -> mark covered Unrecorded
   where
-    mark c next = if any ((== c) . (.claim)) claims then [ClaimProgress p.claim (if p.claim == c then next else p.state) | p <- claims] else claims <> [ClaimProgress c next]
+    mark covered next = [ClaimProgress p.claim (if p.claim `elem` covered then next else p.state) | p <- claims] <> [ClaimProgress c next | c <- toList covered, c `notElem` map (.claim) claims]
 
 
 -- | Applies a proof event to the run's plan; one agent drives a run, so the read and write cannot race.
@@ -723,6 +728,24 @@ progressComment run = (>>= HI.getOneColumn) <$> Hasql.interpOne [HI.sql|SELECT p
 
 setProgressComment :: DB es => ReviewRun -> Int64 -> Eff es ()
 setProgressComment run cid = Hasql.interpExecute_ [HI.sql|UPDATE projects.pr_review_runs SET progress_comment_id = #{cid} WHERE id = #{run.id}|]
+
+
+-- | The PR author's answer to "Did the proof get it right?".
+data Rating = Up | Down
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (FromHttpApiData, HI.EncodeValue, ToHttpApiData) via WrappedEnumSC 'Nothing "" Rating
+
+
+ratingSignedPath :: ReviewId -> Rating -> Text
+ratingSignedPath rid rating = "rating:" <> rid.toText <> "/" <> toUrlPiece rating
+
+
+rateRun :: DB es => ProjectId -> ReviewId -> Rating -> Eff es Bool
+rateRun pid rid rating =
+  (> 0)
+    <$> Hasql.interpExecute
+      [HI.sql|UPDATE projects.pr_review_runs r SET rating = #{rating}, rated_at = now()
+      FROM projects.pr_review_threads t WHERE r.id = #{rid} AND t.id = r.thread_id AND t.project_id = #{pid}|]
 
 
 -- | What a proof media link signs; the prefix keeps it apart from widget signatures under the same key.

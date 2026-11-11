@@ -201,6 +201,8 @@ data Routes mode = Routes
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> RawM
   , widgetPngGet :: mode :- WidgetPngGet
   , proofMediaGet :: mode :- ProofMediaGet
+  , proofRatingGet :: mode :- ProofRatingGet
+  , proofRatingPost :: mode :- ProofRatingPost
   , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[HTML] (RespHeaders Onboarding.ProxiedPage)
   , deviceCode :: mode :- "api" :> "device" :> "code" :> Post '[JSON] Auth.DeviceCodeResponse
   , deviceToken :: mode :- "api" :> "device" :> "token" :> QPT "device_code" :> Post '[JSON] Auth.DeviceTokenResponse
@@ -255,6 +257,8 @@ server otlpTraces otlpLogs =
         , avatarGet = avatarGetH
         , widgetPngGet = widgetPngGetH
         , proofMediaGet = proofMediaGetH
+        , proofRatingGet = proofRatingH False
+        , proofRatingPost = proofRatingH True
         , proxyLanding = \path ->
             Onboarding.proxyLandingH path
               & State.evalState @TriggerEvents mempty
@@ -809,6 +813,22 @@ proofMediaGetH pid rid file sigM request send = do
   bytes <- maybe (Error.throwError err404) pure =<< ImpactReviews.proofFile pid rid file
   let mime = case file.asset of ImpactReviews.Recording ImpactReviews.Gif -> if "RIFF" `BS.isPrefixOf` bytes then "image/webp" else "image/gif"; ImpactReviews.Recording ImpactReviews.Mp4 -> "video/mp4"; ImpactReviews.Recording ImpactReviews.Cast -> "application/x-asciicast"; ImpactReviews.Screenshot _ -> "image/png"
   liftIO $ send $ PageCodeContext.rangedMedia request [(H.hContentType, mime), (H.hCacheControl, "public, max-age=31536000, immutable")] (toLazy bytes)
+
+
+-- | A PR author's Yes or No on a review's proofs, from the signed links in its comment. A GET only asks,
+-- so mail scanners and link unfurlers that open every link cannot answer; the button POSTs.
+proofRatingH :: Bool -> Projects.ProjectId -> UUIDId "pr_review" -> ImpactReviews.Rating -> Maybe Text -> ATBaseCtx (Html ())
+proofRatingH record pid rid rating sigM = do
+  ctx <- ask @AuthContext
+  whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid (ImpactReviews.ratingSignedPath rid rating) sigM) \err -> Error.throwError err403{errBody = err}
+  when record $ unlessM (ImpactReviews.rateRun pid rid rating) $ Error.throwError err404
+  let verdict = case rating of ImpactReviews.Up -> "got it right"; ImpactReviews.Down -> "got it wrong"
+  pure
+    $ html_
+    $ body_ [style_ "font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem"]
+    $ if record
+      then p_ $ "Thanks. Monoscope recorded that this proof " <> verdict <> "."
+      else form_ [method_ "post"] $ p_ ("Tell Monoscope this proof " <> verdict <> "?") >> button_ [type_ "submit", style_ "font:inherit;padding:.5rem 1rem;cursor:pointer"] "Record my answer"
 
 
 -- | Public endpoint for rendering widgets to PNG (for bot embeds). Requires valid HMAC signature.

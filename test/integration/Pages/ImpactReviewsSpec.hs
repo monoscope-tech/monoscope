@@ -98,6 +98,7 @@ import UnliftIO.Exception (bracket_, finally, throwIO, tryAny)
 import UnliftIO.MVar qualified as MVar
 import UnliftIO.Timeout qualified as Timeout
 import Web.HttpApiData (parseUrlPiece)
+import Web.Links (proofRatingPath)
 import Web.Routes qualified as Routes
 import "cryptonite" Crypto.Hash (Digest, hash)
 import "cryptonite" Crypto.Hash.Algorithms (SHA256, SHA512)
@@ -200,6 +201,7 @@ pullRequestApi files comments published pr = githubResponses \url ->
     <$> if
       | "/files?per_page=100" `T.isInfixOf` url -> pure $ AE.toJSON $ if "&page=2" `T.isSuffixOf` url then drop 100 files else take 100 files
       | "/comments?per_page=100&page=1" `T.isSuffixOf` url -> pure $ AE.toJSON comments
+      | "/compare/" `T.isInfixOf` url -> pure $ AE.object ["files" AE..= ([] :: [AE.Value])]
       | "/issues/comments/99" `T.isSuffixOf` url || "/issues/7/comments" `T.isSuffixOf` url -> published $> AE.object ["id" AE..= (99 :: Int)]
       | otherwise -> pure pr
 
@@ -2315,6 +2317,13 @@ spec = around withTestResources $ describe "Production impact reviews" do
       observedLifetime <- readJSON lifetime
       traverse (`at` observedLifetime) ["checkoutPresent", "metadataPresent"] `shouldBe` Right [True, True]
       cleaned observedLifetime
+    -- planProofs_reachesTheReviewThroughTheHost: the agent's plan arrives at the progress hook, and the reply says so.
+    plans <- newIORef ([] :: [[Text]])
+    let planReply = directory </> "plan-reply.json"
+        planned = \case Agent.Planned claims -> modifyIORef' plans (<> [toList claims]); (Agent.Started{}; Agent.Recorded{}; Agent.Unproved{}) -> pass
+    void $ runEff $ scripted (Just store) "test/fixtures/native-child-lifetime.mjs" [planReply, "plan"] $ Agent.reviewRepository Agent.Isolated request (const $ pure $ Left "Unexpected query") (const $ pure $ Left "Unexpected knowledge") (const pass) (const pass) (const pass) (const pass) Agent.ProofHooks{save = \_ _ -> pure $ Left "Unexpected proof", progress = liftIO . planned} (const $ pure $ Right ())
+    readIORef plans `shouldReturn` [["Shows the retry count", "Retries once"]]
+    readJSON planReply `shouldReturn` AE.object ["Right" AE..= AE.object ["planned" AE..= (2 :: Int)]]
     (preparedSecond, preparedThird) <- concurrently (check (withRun 2 request) []) (check (withRun 3 request) [])
     for_ [preparedSecond, preparedThird] \value -> do
       at "cacheStatus" value `shouldBe` Right ("hit" :: Text)
@@ -2883,6 +2892,16 @@ spec = around withTestResources $ describe "Production impact reviews" do
     otherPid <- createTestProject tr "Other proof project"
     for_ [T.replace "sig=" "sig=0" link.preview, T.replace testPid.toText otherPid.toText link.preview, T.replace "proof-1-head.gif" "proof-1-base.gif" link.preview] \forged ->
       (H.statusCode . (.simpleStatus) <$> fetch forged) `shouldReturn` 403
+    -- proofRating_recordsTheAuthorsVerdict: the comment's signed Yes and No links rate the review; a forged one is refused.
+    let rateUrl r = proofRatingPath testPid run.id r $ Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid (Reviews.ratingSignedPath run.id r)
+    (H.statusCode . (.simpleStatus) <$> fetch (T.replace "sig=" "sig=0" $ rateUrl Reviews.Down)) `shouldReturn` 403
+    (H.statusCode . (.simpleStatus) <$> fetch (T.replace "/up?" "/down?" $ rateUrl Reviews.Up)) `shouldReturn` 403
+    -- Opening the link only asks: mail scanners and unfurlers open every link, so the button POSTs.
+    (H.statusCode . (.simpleStatus) <$> fetch (rateUrl Reviews.Up)) `shouldReturn` 200
+    dbOne tr "SELECT rating IS NULL FROM projects.pr_review_runs WHERE id = ?" (Only run.id) `shouldReturn` True
+    posted <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest{Wai.requestMethod = "POST"} $ encodeUtf8 $ rateUrl Reviews.Up) app
+    H.statusCode posted.simpleStatus `shouldBe` 200
+    dbOne tr "SELECT rating FROM projects.pr_review_runs WHERE id = ?" (Only run.id) `shouldReturn` ("up" :: Text)
 
   it "workspacePrepare_warmStartsFromTheRepositoryLatestBuild" \tr -> withTemp "native-ancestor" \directory -> do
     image <- guestImage
@@ -2978,13 +2997,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 ]
             )
             (Just [Impact.ProofLink key side (T.replicate 40 (if side == Agent.Base then "d" else "a")) (Just $ if side == Agent.Base then 1 else 0) (media "gif") (media "mp4") (media "cast") (Just browser) (Just [Impact.Shot label (media (show n <> ".png")) | browser, (n, label) <- zip [1 :: Int ..] (if side == Agent.Base then ["Receipt without retries"] else ["Receipt with retry count", "Retry history"])]) (Just [(t, step) | browser, (t, step) <- [(0, "Open the receipt"), (6.4, "Retry the charge"), (14.2, "Read the retry count")]]) | (key, browser) <- [("proof-1", True), ("proof-2", False)], side <- [Agent.Base, Agent.Head], let media ext = "https://app.monoscope.tech/p/x/reviews/r/proofs/" <> key <> "-" <> T.toLower (show side) <> (if "png" `T.isSuffixOf` ext then "-" else ".") <> ext <> "?sig=s"])
+            Nothing
         render audience = Impact.renderReview "https://app.monoscope.tech" run audience result
-    goldenText "impact-review/github-comment.md" $ render $ Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y"
-    goldenText "impact-review/github-comment-links-only.md" $ render $ Impact.GitHubComment False "https://app.monoscope.tech/p/x/ai/runs/y"
+    goldenText "impact-review/github-comment.md" $ render $ Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y" Nothing
+    goldenText "impact-review/github-comment-links-only.md" $ render $ Impact.GitHubComment False "https://app.monoscope.tech/p/x/ai/runs/y" Nothing
     goldenText "impact-review/monoscope-view.md" $ render Impact.MonoscopeView
     -- A browser proof leads with its recording, chapters and the merge-base and pull-request stills.
     let uiProof = result{Impact.claims = Just [Impact.Claim "Shows the retry count in the receipt" Impact.Matches "The receipt shows Retried once under the charge; before, it showed only the amount." ["proof-1"], Impact.Claim "Retries a timed-out capture once" Impact.Matches "The capture command retries after the first timeout and succeeds." ["proof-2"]]}
-    goldenText "impact-review/github-comment-ui-proof.md" $ Impact.renderReview "https://app.monoscope.tech" run (Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y") uiProof
+    goldenText "impact-review/github-comment-ui-proof.md" $ Impact.renderReview "https://app.monoscope.tech" run (Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y" (Just \case Reviews.Up -> "https://app.monoscope.tech/rate/up"; Reviews.Down -> "https://app.monoscope.tech/rate/down")) uiProof{Impact.issues = Just [Impact.Issue "Receipt total overflows its card at 1280px" "The total runs 9px past the receipt card on the right; it fits at 1440px." ["proof-1"]]}
     -- While proofs run, the comment lists each planned claim and how far it has got.
     goldenText "impact-review/github-comment-progress.md" $ Impact.renderProgress "https://app.monoscope.tech" (T.replicate 40 "d") (T.replicate 40 "a") [Reviews.ClaimProgress "Shows the retry count in the receipt" (Reviews.Proved "proof-1"), Reviews.ClaimProgress "Retries a timed-out capture once" Reviews.Running, Reviews.ClaimProgress "Keeps the receipt link | after a retry" Reviews.Pending] (fold uiProof.proofs)
 
@@ -3281,7 +3301,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       [review] <- runQueryEffect tr $ Reviews.latestRuns testPid
       Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventPullRequest
       runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ExternalPosts) Catalog.ReviewEditors
-      let result = Impact.ReviewResult Impact.NoFinding [] [] [] frozenTime frozenTime Nothing Nothing Nothing Nothing Nothing
+      let result = Impact.ReviewResult Impact.NoFinding [] [] [] frozenTime frozenTime Nothing Nothing Nothing Nothing Nothing Nothing
       runQueryEffect tr $ Reviews.saveResult review result
       dbExec tr "DELETE FROM background_jobs_long WHERE payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest review.id)
       cfg <- githubApp tr
@@ -3345,7 +3365,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         appComment (n :: Int) (app :: Int) body = AE.object ["id" AE..= n, "body" AE..= (body :: Text), "performed_via_github_app" AE..= AE.object ["id" AE..= app]]
         transport :: Bool -> ATBackgroundCtx a -> ATBackgroundCtx a
         transport hasComment = pullRequestApi files [appComment n app marker | hasComment, (n, app) <- [(88, 456), (99, 123)]] pass (prAt revision)
-        result = Impact.ReviewResult Impact.WorthChecking [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "The changed operation may stop emitting the signal used by the monitor. *check* @impact-review-test [outside](https://untrusted.invalid)\r#heading" "Check the monitor query before deploying." ["telemetry-1"]] [] [] frozenTime frozenTime Nothing (Just "Moves retry handling into the checkout operation. @impact-review-test | the monitor may lose its signal.") (Just [Impact.Assessment d (if d == Impact.ErrorDetection then Impact.Poor else Impact.Good) ["New path emits no span | table-breaking gap" | d == Impact.ErrorDetection] | d <- universe]) (Just []) Nothing
+        result = Impact.ReviewResult Impact.WorthChecking [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "The changed operation may stop emitting the signal used by the monitor. *check* @impact-review-test [outside](https://untrusted.invalid)\r#heading" "Check the monitor query before deploying." ["telemetry-1"]] [] [] frozenTime frozenTime Nothing (Just "Moves retry handling into the checkout operation. @impact-review-test | the monitor may lose its signal.") (Just [Impact.Assessment d (if d == Impact.ErrorDetection then Impact.Poor else Impact.Good) ["New path emits no span | table-breaking gap" | d == Impact.ErrorDetection] | d <- universe]) (Just []) Nothing Nothing
         resultText = pure . Right . jsonText
         fakeAgent :: ATBackgroundCtx a -> ATBackgroundCtx a
         fakeAgent = fakeAgentWith []
@@ -3357,7 +3377,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 liftIO $ withSystemTempDirectory "impact-review-response" \directory -> do
                   request.prompt `shouldNotSatisfy` T.isInfixOf "private-log-body-must-not-leave-monoscope"
                   dbOne tr "SELECT count(*)::int FROM projects.pr_review_attempts WHERE id = ? AND run_id = ? AND project_id = ? AND provider = ?" (request.attemptId, request.runId, request.projectId, request.provider) `shouldReturn` (1 :: Int)
-                  when ("--prove-live" `elem` arguments) $ traverse_ (unlift . hooks.progress) [Agent.Planned ("Shows the retry count" :| ["Retries once"]), Agent.Started "Shows the retry count", Agent.Recorded "Shows the retry count" "proof-1"]
+                  for_ [("--expect-recipe", True), ("--expect-no-recipe", False)] \(flag, expected) -> when (flag `elem` arguments) $ ("saved proof setup" `T.isInfixOf` request.prompt) `shouldBe` expected
+                  when ("--prove-live" `elem` arguments) $ traverse_ (unlift . hooks.progress) [Agent.Planned ("Shows the retry count" :| ["Retries once"]), Agent.Started ("Shows the retry count" :| []), Agent.Recorded ("Shows the retry count" :| []) "proof-1"]
                   when ("--billing-change-before-usage" `elem` arguments) $ dbExec tr "UPDATE projects.projects SET customer_id = 'cus_after_attempt', billing_provider = ? WHERE id = ?" (Projects.LemonSqueezyProvider, reviewPid)
                   when (null arguments) do
                     title <- either (fail . toString) pure $ Memory.mkMemoryText "Review context"
@@ -3397,7 +3418,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         reaches path = any (T.isInfixOf path . fst)
         reviewState = fmap (.state) <$> runQueryEffect tr (Reviews.getRun run.id)
         queryResult = result{Impact.evidence = [Impact.Evidence "telemetry-1" Impact.Monitor Nothing Nothing "/monitor" (Just "private-customer-query") Nothing Nothing Nothing]}
-    for_ @[] [Impact.GitHubComment False "/run", Impact.GitHubComment True "/run", Impact.MonoscopeView] \audience -> Impact.renderReview cfg.hostUrl run audience queryResult `shouldNotSatisfy` T.isInfixOf "private-customer-query"
+    for_ @[] [Impact.GitHubComment False "/run" Nothing, Impact.GitHubComment True "/run" Nothing, Impact.MonoscopeView] \audience -> Impact.renderReview cfg.hostUrl run audience queryResult `shouldNotSatisfy` T.isInfixOf "private-customer-query"
     (requests, ()) <- within (transport True . fakeAgent) $ Impact.reviewPullRequest run.id
     requests `shouldNotSatisfy` reaches "/contents/"
     requests `shouldSatisfy` reaches "/files?per_page=100&page=2"
@@ -3607,6 +3628,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
     dbExec tr "UPDATE projects.pr_review_runs SET request = ? WHERE id = ?" (Aeson $ AE.toJSON Reviews.Ask{login = "ada", commentId = 77, command = Reviews.Prove, focus = Nothing}, run.id)
     askRequests <- review fakeAgent
     (askRequests `shouldSatisfy` reaches "/issues/7/comments") >> (askRequests `shouldNotSatisfy` reaches "/issues/comments/99")
+    -- savedProofSetup_followsItsProofMd: a saved setup is offered until .monoscope/PROOF.md changes after it.
+    dbExec tr "INSERT INTO projects.pr_review_proof_recipes (project_id, owner, repo, setup, revision, run_id) VALUES (?, 'impact-org', 'checkout', 'make serve &', ?, ?)" (reviewPid, T.replicate 40 "e", run.id)
+    let comparedFiles paths = withHTTPResponses \_ endpoint -> pure if "/compare/" `T.isInfixOf` toText endpoint then Just $ AE.encode $ AE.object ["files" AE..= [AE.object ["filename" AE..= path, "status" AE..= ("modified" :: Text)] | path <- paths :: [Text]]] else Nothing
+    void $ review $ comparedFiles ["src/app.hs"] . fakeAgentWith ["--expect-recipe"]
+    void $ review $ comparedFiles ["src/app.hs", ".monoscope/PROOF.md"] . fakeAgentWith ["--expect-no-recipe"]
+    dbExec tr "DELETE FROM projects.pr_review_proof_recipes WHERE project_id = ?" (Only reviewPid)
     -- askedProof_updatesOneCommentLive: each proof step edits the comment the ask created, and the
     -- finished review replaces it there rather than posting a second one.
     liveRequests <- review $ fakeAgentWith ["--prove-live"]

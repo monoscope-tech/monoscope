@@ -53,7 +53,7 @@ data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Kno
 
 
 -- | @record_proof@ arguments; the tool schema calls the shell text @command@.
-data ProofArgs = ProofArgs {claim :: Text, shellCommand :: Text, setup :: Maybe Text, highlight :: Maybe Text}
+data ProofArgs = ProofArgs {claim :: Text, shellCommand :: Text, setup :: Maybe Text, highlight :: Maybe Text, covers :: Maybe [Text]}
   deriving stock (Generic)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "shellCommand" "command"]] ProofArgs
 
@@ -666,9 +666,10 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                         if taken >= proofBudget
                           then pure $ Left "Proof budget exhausted; cite the proofs already recorded"
                           else do
-                            hooks.progress $ Started proof.claim
+                            let covered = proof.claim :| fold proof.covers
+                            hooks.progress $ Started covered
                             recorded <- recordSides request outbox identifier proof hooks
-                            recorded <$ whenLeft_ recorded (const $ hooks.progress $ Unproved proof.claim)
+                            recorded <$ whenLeft_ recorded (const $ hooks.progress $ Unproved covered)
                     recordSides request outbox identifier proof hooks =
                       active \session -> runExceptT do
                         (result, logs) <- ExceptT $ regression request session.baseline identifier (AE.object ["script" AE..= Media.proofScript proof.setup proof.shellCommand, "failureMessage" AE..= Media.proofFailure]) [("base", request.base), ("head", request.head)] outbox
@@ -687,7 +688,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4, browser = isJust browser.video, shots = browser.shots, chapters = browser.chapters}, summary)
                         sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty $ map fst recorded
                         key <- ExceptT $ hooks.save proof.setup sides
-                        lift $ hooks.progress $ Recorded proof.claim key
+                        lift $ hooks.progress $ Recorded (proof.claim :| fold proof.covers) key
                         pure $ AE.object ["key" AE..= key, "claim" AE..= proof.claim, "sides" AE..= map snd recorded, "note" AE..= ("Cite this key in a claim. The PR author sees both recordings." :: Text)]
 
                     receive :: Maybe Checkout.Prepared -> Maybe GuestSession -> Int -> Int -> Maybe (Accepted result) -> IO (Either Text result)

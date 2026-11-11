@@ -14,6 +14,11 @@ process.once('SIGTERM', () => {
   process.exit(0);
 });
 const mode = process.argv[3];
+if (mode === 'plan') {
+  console.log(JSON.stringify({ tag: 'Tool', contents: { name: 'plan_proofs', arguments: { claims: ['Shows the retry count', 'Retries once'] } } }));
+  writeFileSync(process.argv[2], (await lines.next()).value);
+  process.exit(0);
+}
 console.log(JSON.stringify(mode === 'callback' ? { tag: 'Validate', contents: {} }
   : mode === 'cancel' ? { tag: 'Tool', contents: { name: 'query_telemetry', arguments: { service: 'fixture', query: 'logs | take 1' } } }
   : { tag: 'InvalidFixtureMessage', contents: [] }));

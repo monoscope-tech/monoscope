@@ -876,7 +876,7 @@ export class LiveTail extends LitElement {
           >${row.service ?? 'Unknown service'}</span
         >
         <time data-time class="shrink-0 tabular-nums text-textWeak" datetime=${row.timestamp} title=${row.timestamp}
-          >${row.timestamp.slice(11, 23)}</time
+          >${new Date(row.timestamp).toISOString().slice(11, 23)}</time
         >
         <div data-message class="col-span-2 md:col-span-1 min-w-0 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
           ${this.selectedFields.length

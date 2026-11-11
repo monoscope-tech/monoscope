@@ -384,6 +384,14 @@ describe('Live Tail fields and details', () => {
     expect(el.querySelector('input[aria-label*="timestamp in each row"]')).toBeNull();
   });
 
+  // The server trims trailing zeros (…48.18Z), so slicing the string showed "17:51:48.18Z".
+  test('liveTail_timestamp_keepsMillisecondsWhenTheServerTrimsZeros', async () => {
+    const el = await mount();
+    el.appendRows([{ ...logRow(1), timestamp: '2026-11-10T17:51:48.18Z' }, { ...logRow(2), timestamp: '2026-11-10T17:51:49Z' }]);
+    await el.updateComplete;
+    expect([...el.querySelectorAll('[data-time]')].map((t: Element) => t.textContent!.trim())).toEqual(['17:51:48.180', '17:51:49.000']);
+  });
+
   // With the picker open, every row batch re-sorted and re-rendered ~2,000 field labels:
   // 87% of the main thread at 4x CPU (customer report 2026-10-28).
   test('liveTail_fieldPicker_rendersOnlyWhileOpenAndHoldsStillUnderLoad', async () => {

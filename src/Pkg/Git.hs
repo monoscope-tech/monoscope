@@ -74,6 +74,7 @@ module Pkg.Git (
   getPublicationPullRequest,
   getPullRequest,
   getPullRequestFiles,
+  filesBetween,
   listPullRequestComments,
   publishPullRequestComment,
   reactToComment,
@@ -736,6 +737,16 @@ getPullRequest conn repo number = githubJson conn repo ("/pulls/" <> show number
 -- | Fetch all pages before validating changed-line citations.
 getPullRequestFiles :: W.HTTP :> es => GitConn -> RepoRef -> Int -> Eff es (Either Text [PullRequestFile])
 getPullRequestFiles conn repo number = paginate 100 \page -> githubJson conn repo ("/pulls/" <> show number <> "/files?per_page=100&page=" <> show page)
+
+
+-- | Paths changed between two revisions; GitHub truncates at 300 files, so a list that long is an error.
+filesBetween :: W.HTTP :> es => GitConn -> RepoRef -> Text -> Text -> Eff es (Either Text [Text])
+filesBetween conn repo from to = (>>= \c -> if length c.files >= 300 then Left "GitHub truncated the comparison" else Right (map (.filename) c.files)) <$> githubJson @CommitComparison conn repo ("/compare/" <> from <> "..." <> to)
+
+
+newtype CommitComparison = CommitComparison {files :: [PullRequestFile]}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON)
 
 
 listPullRequestComments :: W.HTTP :> es => GitConn -> RepoRef -> Int -> Eff es (Either Text [PullRequestComment])

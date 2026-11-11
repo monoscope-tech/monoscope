@@ -129,8 +129,8 @@ data ProofMedia = ProofMedia {side :: RevisionSide, revision :: Text, exitCode :
 
 
 -- | A review's proofs as they happen, so its comment can show what is planned, running, recorded
--- (under its proof key) or failed.
-data ProofProgress = Planned (NonEmpty Text) | Started Text | Recorded Text Text | Unproved Text
+-- (under its proof key) or failed. One recording can prove several claims.
+data ProofProgress = Planned (NonEmpty Text) | Started (NonEmpty Text) | Recorded (NonEmpty Text) Text | Unproved (NonEmpty Text)
 
 
 -- | How a review stores each recorded proof (returning its key) and reports progress.
