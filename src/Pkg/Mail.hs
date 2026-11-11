@@ -452,7 +452,7 @@ errorIncidentMessages alertType err now episode ongoing projectUrl incidentUrl c
   where
     -- Who it hit and for which customer; identity is opt-in per project.
     user = (\n -> n <> foldMap (\e -> " (" <> e <> ")") impact.userEmail) <$> impact.userName <|> impact.userEmail
-    footer = ["Started " <> atUtc (maybe now (.startedAt) episode)] <> foldMap (\u -> ["User " <> slackEscape u]) user <> foldMap (\t -> ["Tenant " <> slackEscape t]) impact.tenant <> ["Project " <> slackEscape impact.projectName]
+    footer = ["Started " <> atUtc (maybe now (.startedAt) episode)] <> foldMap (\u -> ["User " <> slackEscape u]) user <> foldMap (\t -> ["Tenant " <> slackEscape t]) impact.tenant <> foldMap (\s -> ["Synthetic " <> slackEscape s]) err.synthetic <> ["Project " <> slackEscape impact.projectName]
 
 
 tagged :: Text -> AE.Value -> AE.Value

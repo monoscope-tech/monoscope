@@ -918,6 +918,8 @@ data IssueFilters = IssueFilters
   -- ^ activity-bucket granularity, 'PIssueL' only: @"24h"@ = 24 hourly buckets, else 7 daily.
   , hideLowSeverity :: Bool
   -- ^ Inbox behaviour: drop @severity = 'low'@ so demoted silent drops don't clutter the list.
+  , synthetic :: Bool
+  -- ^ List the errors only automated browsers have hit, instead of the rest.
   , limit :: Int
   , offset :: Int
   }
@@ -938,6 +940,7 @@ defIssueFilters =
     , order = Nothing
     , period = "7d"
     , hideLowSeverity = False
+    , synthetic = False
     , limit = 50
     , offset = 0
     }
@@ -975,11 +978,7 @@ selectIssues pid projection f = do
         let col = rawSql pfx
          in [HI.sql| COALESCE(
                CASE WHEN ^{col}issue_type = ^{enumLit RuntimeException} THEN GREATEST(
-                 (SELECT MAX(GREATEST(ep.last_event_at, ep.recent_trace_at))
-                  FROM apis.error_patterns ep
-                  WHERE ep.project_id = ^{col}project_id
-                    AND ((^{col}is_framework AND ep.parent_hash = ^{col}target_hash)
-                      OR (NOT ^{col}is_framework AND ep.hash = ^{col}target_hash))),
+                 (SELECT MAX(GREATEST(ep.last_event_at, ep.recent_trace_at)) FROM apis.error_patterns ep WHERE ^{issuePattern col}),
                  (^{col}issue_data->>'last_seen')::timestamptz)
                WHEN ^{col}issue_type = ^{enumLit ApiChange} THEN COALESCE(
                  (SELECT MAX(an.created_at) FROM apis.anomalies an
@@ -993,6 +992,8 @@ selectIssues pid projection f = do
         -- Output aliases of the IssueL projection; only that query (prefix "i.") has them.
         Just (s, c) | s == '-' || s == '+', pfx == "i.", c `elem` ["event_count", "users_count"] -> c <> bool " ASC" " DESC" (s == '-') <> ", i.created_at DESC"
         _ -> pfx <> "critical DESC, " <> pfx <> "created_at DESC"
+      issuePattern pfx =
+        [HI.sql| ep.project_id = ^{pfx}project_id AND ((^{pfx}is_framework AND ep.parent_hash = ^{pfx}target_hash) OR (NOT ^{pfx}is_framework AND ep.hash = ^{pfx}target_hash)) |]
       arrF pfx col xs = if null xs then mempty else [HI.sql| AND ^{pfx}^{col} = ANY(#{xs}::text[])|]
       mkFilters pfx =
         foldMap (\(s, e) -> [HI.sql| AND ^{pfx}created_at >= #{s} AND ^{pfx}created_at <= #{e}|]) f.timeRange
@@ -1000,12 +1001,13 @@ selectIssues pid projection f = do
           <> sqlNullFilter pfx [HI.sql|archived_at|] f.archive
           <> sqlNullFilter pfx [HI.sql|spam_at|] f.spam
           <> bool mempty [HI.sql| AND (^{pfx}severity IS NULL OR ^{pfx}severity != 'low')|] f.hideLowSeverity
+          <> [HI.sql| AND COALESCE(^{pfx}issue_type = ^{enumLit RuntimeException} AND (SELECT bool_and(ep.synthetic) FROM apis.error_patterns ep WHERE ^{issuePattern pfx}), FALSE) = #{f.synthetic}|]
           <> arrF pfx [HI.sql|service|] f.services
           <> foldMap (\service -> [HI.sql| AND ^{pfx}service = #{service}|]) f.service
           <> foldMap (\environment -> [HI.sql| AND ^{pfx}environment = #{environment}|]) f.environment
           <> arrF pfx [HI.sql|issue_type::text|] f.types
       iFilters = mkFilters [HI.sql|i.|]
-      cFilters = mkFilters mempty
+      cFilters = mkFilters [HI.sql|apis.issues.|]
   issues <- case projection of
     PIssue ->
       Hasql.interp

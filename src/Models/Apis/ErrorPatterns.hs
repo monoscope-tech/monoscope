@@ -226,6 +226,8 @@ data ATError = ATError
   , mechanism :: Maybe CaptureMechanism
   , level :: Maybe Text
   , userAgent :: Maybe Text
+  , synthetic :: Maybe Text
+  -- ^ @user_agent.synthetic.type@ (@bot@ | @test@): automated traffic, kept out of the Inbox.
   , browser :: Maybe Text
   , os :: Maybe Text
   , device :: Maybe Text
@@ -542,12 +544,12 @@ batchUpsertErrorPatterns pid errors now =
       [HI.sql| INSERT INTO apis.error_patterns (
             project_id, error_type, message, stacktrace, hash, parent_hash, shape_hash, is_framework,
             environment, service, runtime, error_data, first_release, last_release, last_release_at, last_release_since,
-            first_trace_id, first_trace_at, recent_trace_id, recent_trace_at, last_event_at,
+            first_trace_id, first_trace_at, recent_trace_id, recent_trace_at, last_event_at, synthetic,
             occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h)
           SELECT #{pid}, u.error_type, u.message, u.stacktrace, u.hash, u.parent_hash, u.shape_hash, u.is_framework,
                  u.environment, u.service, u.runtime, u.error_data, u.release, u.release, CASE WHEN u.release IS NOT NULL THEN u.event_at END, CASE WHEN u.release IS NOT NULL THEN u.event_at END,
                  u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END,
-                 u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END, u.event_at, u.cnt, u.cnt, u.cnt, u.cnt
+                 u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END, u.event_at, u.synthetic, u.cnt, u.cnt, u.cnt, u.cnt
           FROM (SELECT unnest(#{V.map (.errorType) errs}::text[]) AS error_type, unnest(#{V.map (.message) errs}::text[]) AS message,
                        unnest(#{V.map (.stackTrace) errs}::text[]) AS stacktrace, unnest(#{V.map (.hash) errs}::text[]) AS hash,
                        unnest(#{V.map (.parentHash) errs}::text[]) AS parent_hash, unnest(#{V.map (.shapeHash) errs}::text[]) AS shape_hash,
@@ -555,7 +557,7 @@ batchUpsertErrorPatterns pid errors now =
                        unnest(#{V.map (.environment) errs}::text[]) AS environment, unnest(#{V.map (.serviceName) errs}::text[]) AS service,
                        unnest(#{V.map (.runtime) errs}::text[]) AS runtime, unnest(#{V.map HI.AsJsonb errs}::jsonb[]) AS error_data,
                        unnest(#{V.map (.release) errs}::text[]) AS release, unnest(#{traceIds}::text[]) AS trace_id,
-                       unnest(#{V.map (.when) errs}::timestamptz[]) AS event_at, unnest(#{counts}::bigint[]) AS cnt) u
+                       unnest(#{V.map (.when) errs}::timestamptz[]) AS event_at, unnest(#{counts}::bigint[]) AS cnt, unnest(#{synthetic}::bool[]) AS synthetic) u
           ON CONFLICT (project_id, hash) DO UPDATE SET
             updated_at = #{now},
             last_event_at = GREATEST(apis.error_patterns.last_event_at, EXCLUDED.last_event_at),
@@ -605,6 +607,7 @@ batchUpsertErrorPatterns pid errors now =
               THEN EXCLUDED.first_trace_at ELSE apis.error_patterns.first_trace_at END,
             first_trace_id = COALESCE(apis.error_patterns.first_trace_id, EXCLUDED.first_trace_id),
             is_framework = EXCLUDED.is_framework,
+            synthetic = apis.error_patterns.synthetic AND EXCLUDED.synthetic,
             occurrences_1m = apis.error_patterns.occurrences_1m + EXCLUDED.occurrences_1m,
             occurrences_5m = apis.error_patterns.occurrences_5m + EXCLUDED.occurrences_1m,
             occurrences_1h = apis.error_patterns.occurrences_1h + EXCLUDED.occurrences_1m,
@@ -623,9 +626,10 @@ batchUpsertErrorPatterns pid errors now =
   where
     -- Group by hash: keep the latest occurrence (by event time, not batch order — a batch
     -- is not time-ordered) + sum count (avoids ON CONFLICT duplicate-row error).
-    -- The bang keeps the running count forced: a hot hash otherwise accumulates one thunk per occurrence.
-    (errs, counts) =
-      V.unzip $ V.fromList $ HM.elems $ HM.fromListWith (\(a, n) (b, !k) -> (bool b a (a.when >= b.when), n + k)) [(e.hash, (bounded e, 1 :: Int)) | e <- V.toList errors]
+    -- The bangs keep the running count and flag forced: a hot hash otherwise accumulates one thunk per occurrence.
+    -- A group is synthetic only if every occurrence is.
+    (errs, counts, synthetic) =
+      V.unzip3 $ V.fromList $ HM.elems $ HM.fromListWith (\(a, n, s) (b, !k, !t) -> (bool b a (a.when >= b.when), n + k, s && t)) [(e.hash, (bounded e, 1 :: Int, isJust e.synthetic)) | e <- V.toList errors]
     -- error_data keeps one occurrence for display: a message embedding a whole SQL statement ran to
     -- 21 MB a row. The hash is already taken, so trimming changes no grouping.
     bounded e = e & field @"message" %~ T.take 4000 & field @"rootErrorMessage" %~ T.take 4000 & field @"stackTrace" %~ T.take 16000

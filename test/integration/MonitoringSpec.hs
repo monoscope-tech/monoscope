@@ -74,12 +74,12 @@ import Web.Routes qualified as Routes
 spec :: Spec
 spec = describe "Monitoring" do
   it "Slack error fallbacks stay concise and keep metadata subordinate to the exception" do
-    let err = def{Errors.errorType = "HttpException", Errors.message = T.replicate 50 "HttpExceptionRequest Request { host = \"api.example.com\" path = \"/oauth/token\" } ", Errors.serviceName = Just "monoscope-dev"}
+    let err = def{Errors.errorType = "HttpException", Errors.message = T.replicate 50 "HttpExceptionRequest Request { host = \"api.example.com\" path = \"/oauth/token\" } ", Errors.serviceName = Just "monoscope-dev", Errors.synthetic = Just "test"}
         impact = Mail.AlertImpact "Monoscope" (Just "Acme Corp") (Just "Ada Lovelace") (Just "ada@example.com")
         messages trend = Mail.errorIncidentMessages Mail.NewRuntimeError err frozenTime Nothing Nothing "https://example.com" "https://example.com/issues/1" trend (Just "1/hr") [] impact
         (root, reply) = messages (Just "https://example.com/error-trend.png")
         withoutTrend = jsonText $ fst $ messages Nothing
-    jsonText root `shouldContainAll` ["```HttpExceptionRequest", ":red_circle: *New error*  <https://example.com/issues/1|HTTP request failed · api.example.com/oauth/token>", "*monoscope-dev*  ·  *1/hr*", "Started Jan 1, 00:00 UTC  ·  User Ada Lovelace (ada@example.com)  ·  Tenant Acme Corp  ·  Project Monoscope", "https://example.com/error-trend.png", "#E5484D"]
+    jsonText root `shouldContainAll` ["```HttpExceptionRequest", ":red_circle: *New error*  <https://example.com/issues/1|HTTP request failed · api.example.com/oauth/token>", "*monoscope-dev*  ·  *1/hr*", "Started Jan 1, 00:00 UTC  ·  User Ada Lovelace (ada@example.com)  ·  Tenant Acme Corp  ·  Synthetic test  ·  Project Monoscope", "https://example.com/error-trend.png", "#E5484D"]
     jsonText root `shouldNotSatisfy` T.isInfixOf err.message
     (withoutTrend, jsonText reply) `shouldSatisfy` \(w, r) -> "Chart unavailable" `T.isInfixOf` w && not ("image_url" `T.isInfixOf` w) && ":red_circle: *New error*  ·  *1/hr*" `T.isInfixOf` r
     slackPayloadViolations (AE.toJSON root) <> slackPayloadViolations (AE.toJSON reply) `shouldBe` []
