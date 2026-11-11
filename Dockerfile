@@ -274,10 +274,11 @@ ENV IMPACT_REVIEW_AGENT=/opt/monoscope/impact-review-worker/pi-host.mjs \
     IMPACT_REVIEW_NATIVE_CLI=/usr/local/bin/monoscope \
     IMPACT_REVIEW_CACHE_DIR=/var/lib/monoscope/cache \
     IMPACT_REVIEW_PREPARE_SCRIPT=/opt/monoscope/impact-review-worker/prepare.sh \
+    IMPACT_REVIEW_VM_SLOTS=4,2,1 \
     IMPACT_REVIEW_USAGE_DIR=/var/lib/monoscope/usage \
     XDG_CACHE_HOME=/var/lib/monoscope/cache
 USER monoscope
-RUN monoscope --version && node --version && gh pr edit --help | grep -q -- --attach
+RUN monoscope --version && node --version && gh pr edit --help | grep -q -- --attach && bash -n /opt/monoscope/impact-review-worker/prepare.sh
 
 FROM impact-tools AS impact-worker
 COPY --from=server --chown=monoscope:monoscope /opt/monoscope /opt/monoscope

@@ -121,7 +121,7 @@ monoscope workspace prepare \
   --cache /private/agent-cache --bridge /path/to/impact-review-worker/sandbox.mjs
 ```
 
-Set `IMPACT_REVIEW_PREPARE_SCRIPT` and `IMPACT_REVIEW_CACHE_DIR` to those same inputs on the worker. The worker image sets both: `impact-review-worker/prepare.sh` detects the stack (Monoscope's frontend and server, other cabal projects, Cargo, Go) and builds what it can offline, so a stack it cannot build simply starts cold. Workspace builds and checks run in 4-CPU, 6 GB VMs.
+Set `IMPACT_REVIEW_PREPARE_SCRIPT` and `IMPACT_REVIEW_CACHE_DIR` to those same inputs on the worker. The worker image sets both: `impact-review-worker/prepare.sh` detects the stack (Monoscope's frontend and server, other cabal projects, Cargo, Go) and builds what it can offline, so a stack it cannot build simply starts cold. Workspace builds and checks run in 4-CPU, 6 GB VMs, so the worker image sets `IMPACT_REVIEW_VM_SLOTS=4,2,1` (about 22 GB of VMs) and its container gets 32 GB.
 For explicit dependencies, add `--dependencies /private/dependencies.tar` and set `IMPACT_REVIEW_DEPENDENCY_ARCHIVE`.
 A configured archive requires a matching prepared workspace; a miss stops before inference.
 Checkpoint identity binds the project, repository, base, image, script and dependency bytes.

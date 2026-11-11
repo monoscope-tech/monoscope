@@ -1182,7 +1182,8 @@ verifyArtifactRegression options request = do
               copy :: RPC -> FilePath -> Text -> IO ()
               copy rpc path destination = rpc @() $ CopyFile $ Copy path destination
           privateWrite logPath ""
-          outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox VerifierPool options.bridge \rpc -> do
+          -- A side's setup can build the head (a Haskell server relinks in about two minutes) before it runs.
+          outcome <- tryAny $ Timeout.timeout (300 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox VerifierPool options.bridge \rpc -> do
             image <- rpc @Image $ Resolve options.image
             ensure $ image.buildId == request.imageBuildId
             let sandbox = Sandbox image.assetDir checkResources.cpus checkResources.memoryMiB RegistryCow $ one ("/checkout", checkout)
@@ -1484,7 +1485,7 @@ lookupWorkspace options operation request = do
                 ensure $ checkpoint.guestAssetBuildId == image.buildId
                 measured <- fingerprint $ temporary </> "baseline.qcow2"
                 ended <- getMonotonicTimeNSec
-                let manifest = Manifest 1 identity image.assetDir checkpoint.createdAt measured.sha256 (fromIntegral (ended - started) / 1000000) measured.bytes 2 1024 Unpriced
+                let manifest = Manifest 1 identity image.assetDir checkpoint.createdAt measured.sha256 (fromIntegral (ended - started) / 1000000) measured.bytes checkResources.cpus checkResources.memoryMiB Unpriced
                 writeFileLBS (temporary </> "manifest.json") $ AE.encode manifest
                 Posix.setFileMode (temporary </> "manifest.json") 0o600
                 traverse_ sync [temporary </> "baseline.qcow2", temporary </> "manifest.json", temporary]

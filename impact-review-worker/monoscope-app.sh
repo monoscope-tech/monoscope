@@ -3,7 +3,6 @@
 # builds this checkout's server from the workspace's warm build and runs that instead of the guest's.
 set -euo pipefail
 trap 'tail -qn 30 /tmp/{tailwind,vite,cabal,postgres,monoscope,traffic}.log >&2 2>/dev/null' ERR
-export PATH=$(printf %s: /opt/ghc/*/bin /opt/cabal/*/bin)/usr/local/bin:/usr/bin:/bin
 app=/opt/monoscope
 ln -sfn /opt/proof/node_modules node_modules
 ln -sfn /opt/proof/web-components/node_modules web-components/node_modules
@@ -11,10 +10,8 @@ if [ "${1:-}" = --server ]; then
   ./node_modules/.bin/tailwindcss -i static/public/assets/css/tailwind.css -o static/public/assets/css/tailwind.min.css >/tmp/tailwind.log 2>&1
   (cd web-components && ./node_modules/.bin/vite build >/tmp/vite.log 2>&1)
   mkdir -p dist-newstyle/src && cp -Rn /opt/haskell/dist-src/. dist-newstyle/src/
-  # Cabal does not track the bundle manifest BodyWrapper splices in, so its warm object would keep the
-  # base's entry name; evicting it recompiles that one module.
-  find dist-newstyle/build -path '*/Pages/BodyWrapper.*' -delete 2>/dev/null || true
-  cabal build exe:monoscope-server --offline --ghc-options="-O0 -j4" >/tmp/cabal.log 2>&1
+  # The same flags as the workspace build, or cabal reconfigures and rebuilds from scratch.
+  cabal build exe:monoscope-server --offline --ghc-options="-O0 -j2" >/tmp/cabal.log 2>&1
   server=$(cabal list-bin exe:monoscope-server --offline | tail -n 1) root=$PWD migrate=True
 else
   cp -r static/public/. $app/static/public/

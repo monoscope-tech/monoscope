@@ -14,9 +14,10 @@ FROM ${DEPS_IMAGE} AS haskell
 WORKDIR /build
 RUN rm -f cabal.project.local
 COPY monoscope.cabal cabal.project cabal.project.freeze ./
-COPY shared shared
-COPY cli cli
-RUN cabal update && cabal build --only-dependencies exe:monoscope-server -j && mkdir -p /opt/haskell && cp -R dist-newstyle/src /opt/haskell/dist-src
+COPY shared/monoscope-shared.cabal shared/
+COPY cli/monoscope-cli.cabal cli/
+# Targeting the local library too builds only external dependencies, so source edits never rebuild this.
+RUN cabal update && cabal build --only-dependencies lib:monoscope-shared exe:monoscope-server -j && mkdir -p /opt/haskell && cp -R dist-newstyle/src /opt/haskell/dist-src
 
 FROM haskell:9.12.2
 RUN apt-get update && apt-get install -y --no-install-recommends bash git ripgrep ca-certificates asciinema curl udhcpc fonts-liberation fonts-noto-color-emoji \
@@ -26,7 +27,9 @@ COPY --from=haskell /root/.cabal /root/.cabal
 COPY --from=haskell /opt/haskell /opt/haskell
 COPY --from=go /usr/local/go /usr/local/go
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
-RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path && chmod -R a+rwX /opt/cargo /opt/rustup
+# Commands run with a reset environment, so the toolchains go on its default PATH.
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path \
+  && ln -s /opt/ghc/*/bin/* /opt/cabal/*/bin/* /usr/local/go/bin/* /opt/rustup/toolchains/*/bin/* /usr/local/bin/ 2>/dev/null; ls /usr/local/bin/ghc /usr/local/bin/cabal /usr/local/bin/cargo /usr/local/bin/go
 COPY --from=node /usr/local/bin/node /usr/local/bin/
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx

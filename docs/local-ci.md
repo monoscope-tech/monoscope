@@ -170,7 +170,7 @@ and `nestedVirtualization: true`, as described by the
 [Lima configuration](https://github.com/lima-vm/lima/blob/v2.2.1/templates/default.yaml).
 The outer VM has four CPUs, eight GiB of RAM, and a 64 GiB sparse disk.
 Project and home folders are not mounted. Rosetta shares only its runtime.
-The SDK's inner guest uses two CPUs and 1024 MiB.
+The SDK's agent guest uses two CPUs and 1024 MiB; check and workspace build guests use four CPUs and 6 GiB, so an outer VM running them needs more than eight GiB.
 Check the KVM API, actual QEMU accelerator, and open device descriptor;
 an existing device path alone does not prove that a guest uses KVM.
 The [workspace review](reviews/2026-11-01-agent-cross-module-review.md) records the current acceptance scope.

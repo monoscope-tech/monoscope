@@ -23,7 +23,8 @@ monoscope-app --server   # also src/ (Lucid pages, handlers, migrations): about 
 Plain `monoscope-app` swaps this checkout's frontend into a recent production build of the server.
 `--server` builds this checkout's server too, starting from the workspace's build of the base, so
 it compiles only what the pull request changed, and applies the pull request's new migrations. Use
-it whenever the change touches `src/`. Both start the app on `http://127.0.0.1:8080` against a
+it whenever the change touches `src/`, in record_proof's setup: building the server needs the check
+VM's memory, not the agent's. Both start the app on `http://127.0.0.1:8080` against a
 migrated Postgres and return once sample traffic is flowing: an hour of history from four services,
 then a few requests a second, so Live Tail streams. The demo project at
 `/p/00000000-0000-0000-0000-000000000000/` needs no login.
