@@ -17,3 +17,12 @@ describe('log worker fetch failures', () => {
     expect(posted).toHaveBeenCalledWith(expect.objectContaining({ type: 'error', expected: true, id: 7, error: expect.stringMatching(message) }));
   });
 });
+
+// Regression: a lapsed session answers 401 {error: "unauthenticated"}, which fetchJson passed
+// through as a query error, so the query box said "unauthenticated" instead of asking to refresh.
+test('a lapsed session reads as session expiry, not a query error', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: 'unauthenticated', login: '/login' }, { status: 401 })));
+  const { fetchJson } = await import('../src/fetch-failures');
+  await expect(fetchJson('/x')).rejects.toThrow('Session expired, please refresh');
+  vi.unstubAllGlobals();
+});
