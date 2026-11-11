@@ -98,9 +98,10 @@ agentResources :: (Word16, Word32)
 agentResources = (2, 1024)
 
 
--- | A check VM: a UI proof runs Chromium and a dev server in it, so it gets more than the agent's VM.
+-- | A check or workspace build VM. A proof compiles the head (GHC peaks near 4 GB building the server)
+-- and then runs Postgres, the app and Chromium, so it gets more than the agent's VM.
 checkResources :: Resources
-checkResources = Resources 4 4096
+checkResources = Resources 4 6144
 
 
 -- | A check's log carries a proof's recording, screenshots and video between markers.
@@ -1181,7 +1182,8 @@ verifyArtifactRegression options request = do
               copy :: RPC -> FilePath -> Text -> IO ()
               copy rpc path destination = rpc @() $ CopyFile $ Copy path destination
           privateWrite logPath ""
-          outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox VerifierPool options.bridge \rpc -> do
+          -- A side's setup can build the head (a Haskell server relinks in about two minutes) before it runs.
+          outcome <- tryAny $ Timeout.timeout (300 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox VerifierPool options.bridge \rpc -> do
             image <- rpc @Image $ Resolve options.image
             ensure $ image.buildId == request.imageBuildId
             let sandbox = Sandbox image.assetDir checkResources.cpus checkResources.memoryMiB RegistryCow $ one ("/checkout", checkout)
@@ -1446,7 +1448,7 @@ lookupWorkspace options operation request = do
                 void $ git ["-C", clean, "checkout", "--quiet", "--detach", toString baseText]
                 void $ git ["-C", clean, "remote", "add", "origin", toString repoText]
                 started <- getMonotonicTimeNSec
-                let sandbox = Sandbox image.assetDir 2 1024 RegistryCow (one ("/baseline", clean))
+                let sandbox = Sandbox image.assetDir checkResources.cpus checkResources.memoryMiB RegistryCow (one ("/baseline", clean))
                 ancestor <- ancestorSnapshot >>= maybe remoteAncestor (pure . Just)
                 case ancestor of
                   Nothing -> do
@@ -1483,7 +1485,7 @@ lookupWorkspace options operation request = do
                 ensure $ checkpoint.guestAssetBuildId == image.buildId
                 measured <- fingerprint $ temporary </> "baseline.qcow2"
                 ended <- getMonotonicTimeNSec
-                let manifest = Manifest 1 identity image.assetDir checkpoint.createdAt measured.sha256 (fromIntegral (ended - started) / 1000000) measured.bytes 2 1024 Unpriced
+                let manifest = Manifest 1 identity image.assetDir checkpoint.createdAt measured.sha256 (fromIntegral (ended - started) / 1000000) measured.bytes checkResources.cpus checkResources.memoryMiB Unpriced
                 writeFileLBS (temporary </> "manifest.json") $ AE.encode manifest
                 Posix.setFileMode (temporary </> "manifest.json") 0o600
                 traverse_ sync [temporary </> "baseline.qcow2", temporary </> "manifest.json", temporary]

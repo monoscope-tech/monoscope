@@ -44,14 +44,17 @@ dependency pre-bundling on first load, and the recording shows what users get.
 
 ### Haskell
 
-Never build the server in a proof. Copy the production binary into the guest, migrate its
-database at image build time, and swap in the checkout's frontend before starting it. Monoscope
-does this with `monoscope-app`: rebuilding the frontend, starting Postgres and the server, and
-ingesting an hour of sample traffic take 7 seconds together, against 25 seconds of migrations
-paid once per image. When the
-change is in Haskell, prove it with a focused test or doctest from a warm `dist-newstyle`
-checkpoint, at `-O0`, building one component, or through `cabal repl` with `:script`, which skips
-linking.
+Bake the compiled dependency store into the guest (built with network when the image is built),
+build the base once in the workspace checkpoint, and let a proof compile only the head's change.
+For a frontend-only change, skip the server build: copy the production binary into the guest,
+migrate its database at image build time, and swap in the checkout's frontend.
+
+Monoscope does both with `monoscope-app`. The frontend swap (rebuilding the frontend, starting
+Postgres and the server, ingesting an hour of sample traffic) takes 7 seconds. With `--server`, the
+workspace build compiles the base server once at `-O0` (23 minutes in a 4-CPU, 6 GB VM, measured
+under emulation), and a proof that edits a Lucid page recompiles one module and relinks in 90
+seconds. Build the frontend before the server when Template Haskell reads its output, and evict the
+splicing module's object, since cabal does not track files Template Haskell reads.
 
 ### Rust
 
