@@ -26,7 +26,7 @@ try {
     args.push('--build-arg', `${arg}=${pinned}`);
   };
   if (profile === 'browser') {
-    for (const path of ['package.json', 'package-lock.json', 'web-components/package.json', 'web-components/package-lock.json', 'proto/opentelemetry', 'monoscope.cabal', 'cabal.project', 'cabal.project.freeze', 'shared', 'cli']) await cp(resolve(cwd, '..', path), join(context, path), { recursive: true });
+    for (const path of ['package.json', 'package-lock.json', 'web-components/package.json', 'web-components/package-lock.json', 'proto/opentelemetry', 'monoscope.cabal', 'cabal.project', 'cabal.project.freeze', 'shared', 'cli/monoscope-cli.cabal']) await cp(resolve(cwd, '..', path), join(context, path), { recursive: true });
     for (const path of ['monoscope-app.sh', 'monoscope-traffic.mjs']) await cp(join(cwd, path), join(context, path));
     pin(process.env.IMPACT_REVIEW_SERVER_IMAGE ?? 'ghcr.io/monoscope-tech/monoscope:latest', 'server', 'SERVER_IMAGE');
     pin(process.env.IMPACT_REVIEW_DEPS_IMAGE ?? 'ghcr.io/monoscope-tech/monoscope-deps:latest', 'deps', 'DEPS_IMAGE');

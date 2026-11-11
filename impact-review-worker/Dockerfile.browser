@@ -14,10 +14,10 @@ FROM ${DEPS_IMAGE} AS haskell
 WORKDIR /build
 RUN rm -f cabal.project.local
 COPY monoscope.cabal cabal.project cabal.project.freeze ./
-COPY shared/monoscope-shared.cabal shared/
+# The server depends on the local shared library, which cabal builds from source here.
+COPY shared shared
 COPY cli/monoscope-cli.cabal cli/
-# Targeting the local library too builds only external dependencies, so source edits never rebuild this.
-RUN cabal update && cabal build --only-dependencies lib:monoscope-shared exe:monoscope-server -j && mkdir -p /opt/haskell && cp -R dist-newstyle/src /opt/haskell/dist-src
+RUN cabal update && cabal build --only-dependencies exe:monoscope-server -j && mkdir -p /opt/haskell && cp -R dist-newstyle/src /opt/haskell/dist-src
 
 FROM haskell:9.12.2
 RUN apt-get update && apt-get install -y --no-install-recommends bash git ripgrep ca-certificates asciinema curl udhcpc fonts-liberation fonts-noto-color-emoji \
