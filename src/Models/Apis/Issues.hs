@@ -1649,6 +1649,8 @@ data ConversationSummary = ConversationSummary
   , routineDestination :: Maybe RoutineDestination
   , routineKind :: Maybe RoutineScheduleKind
   , routinePolicy :: Maybe ExecutionPolicy
+  , routineLastRunAt :: Maybe UTCTime
+  , routineLastRunStatus :: Maybe RoutineRunStatus
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow)
@@ -2209,6 +2211,8 @@ data RoutineRun = RoutineRun
   , error :: Maybe Text
   , source :: RoutineRunSource
   , attempt :: Int
+  , summary :: Maybe Text
+  -- ^ Opening of the run's result, for one-line history rows.
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
@@ -2266,7 +2270,7 @@ conversationSummarySql fallback filters =
       c.conversation_type, c.updated_at, r.template_key,
       COALESCE(r.active, FALSE), r.interval_minutes, r.next_run_at,
       COALESCE(r.running_since, (SELECT min(started_at) FROM apis.ai_routine_runs WHERE routine_id = r.id AND status = 'running')),
-      r.destination, r.schedule_kind, r.policy
+      r.destination, r.schedule_kind, r.policy, last_run.started_at, last_run.status
       FROM apis.ai_conversations c
       LEFT JOIN apis.issues i ON i.project_id = c.project_id AND i.id = c.conversation_id
       LEFT JOIN apis.ai_routines r ON r.project_id = c.project_id AND r.conversation_id = c.conversation_id
@@ -2274,7 +2278,10 @@ conversationSummarySql fallback filters =
         SELECT LEFT(m.content, 100) AS content FROM apis.ai_chat_messages m
         WHERE m.project_id = c.project_id AND m.conversation_id = c.conversation_id AND m.role = 'user'
         ORDER BY m.created_at LIMIT 1
-      ) first_message ON TRUE |]
+      ) first_message ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT started_at, status FROM apis.ai_routine_runs WHERE routine_id = r.id ORDER BY scheduled_at DESC LIMIT 1
+      ) last_run ON TRUE |]
     <> filters
 
 
@@ -3142,7 +3149,8 @@ listConversationRuns pid convId limit =
 routineRunsSql :: Projects.ProjectId -> HI.Sql
 routineRunsSql pid =
   [HI.sql|SELECT run.id, run.conversation_id, COALESCE(conversation.title, installation.title), run.scheduled_at,
-      run.started_at, run.finished_at, run.status, run.error, run.source, run.attempt
+      run.started_at, run.finished_at, run.status, run.error, run.source, run.attempt,
+      (SELECT LEFT(a.content, 400) FROM apis.ai_routine_run_artifacts a WHERE a.run_id = run.id AND a.key = 'latest-result')
       FROM apis.ai_routine_runs run
       LEFT JOIN apis.ai_conversations conversation
         ON conversation.project_id = run.project_id AND conversation.conversation_id = run.conversation_id
