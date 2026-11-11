@@ -98,9 +98,10 @@ agentResources :: (Word16, Word32)
 agentResources = (2, 1024)
 
 
--- | A check VM: a UI proof runs Chromium and a dev server in it, so it gets more than the agent's VM.
+-- | A check or workspace build VM. A proof compiles the head (GHC peaks near 4 GB building the server)
+-- and then runs Postgres, the app and Chromium, so it gets more than the agent's VM.
 checkResources :: Resources
-checkResources = Resources 4 4096
+checkResources = Resources 4 6144
 
 
 -- | A check's log carries a proof's recording, screenshots and video between markers.
@@ -1446,7 +1447,7 @@ lookupWorkspace options operation request = do
                 void $ git ["-C", clean, "checkout", "--quiet", "--detach", toString baseText]
                 void $ git ["-C", clean, "remote", "add", "origin", toString repoText]
                 started <- getMonotonicTimeNSec
-                let sandbox = Sandbox image.assetDir 2 1024 RegistryCow (one ("/baseline", clean))
+                let sandbox = Sandbox image.assetDir checkResources.cpus checkResources.memoryMiB RegistryCow (one ("/baseline", clean))
                 ancestor <- ancestorSnapshot >>= maybe remoteAncestor (pure . Just)
                 case ancestor of
                   Nothing -> do

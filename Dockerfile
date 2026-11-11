@@ -148,7 +148,7 @@ FROM node:24-bookworm-slim AS impact-sdk
 WORKDIR /opt/monoscope/impact-review-worker
 COPY impact-review-worker/package.json impact-review-worker/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
-COPY impact-review-worker/pi-host.mjs impact-review-worker/jsonl.mjs impact-review-worker/review.mjs impact-review-worker/workspace.mjs impact-review-worker/sandbox.mjs ./
+COPY impact-review-worker/pi-host.mjs impact-review-worker/jsonl.mjs impact-review-worker/review.mjs impact-review-worker/workspace.mjs impact-review-worker/sandbox.mjs impact-review-worker/prepare.sh ./
 COPY impact-review-worker/skills ./skills
 RUN node --input-type=module -e "await import('./review.mjs'); await import('./pi-host.mjs')" && \
     node --check pi-host.mjs && node --check sandbox.mjs && \
@@ -273,6 +273,7 @@ COPY --from=impact-sdk /opt/monoscope/impact-review-worker ./impact-review-worke
 ENV IMPACT_REVIEW_AGENT=/opt/monoscope/impact-review-worker/pi-host.mjs \
     IMPACT_REVIEW_NATIVE_CLI=/usr/local/bin/monoscope \
     IMPACT_REVIEW_CACHE_DIR=/var/lib/monoscope/cache \
+    IMPACT_REVIEW_PREPARE_SCRIPT=/opt/monoscope/impact-review-worker/prepare.sh \
     IMPACT_REVIEW_USAGE_DIR=/var/lib/monoscope/usage \
     XDG_CACHE_HOME=/var/lib/monoscope/cache
 USER monoscope

@@ -1,13 +1,32 @@
-# The minimal guest plus what a UI proof needs offline: Node, the root (Tailwind) and web-components
-# dependencies at the base lockfiles, and Playwright's Chromium and ffmpeg. A proof links
+# The review guest: everything a proof or a warm workspace build needs offline. Node, the root
+# (Tailwind) and web-components dependencies at the base lockfiles, and Playwright's Chromium; GHC with
+# the server's compiled Haskell dependencies; Rust and Go toolchains. A proof links
 # /opt/proof/node_modules and /opt/proof/web-components/node_modules into its checkout; both are
 # gitignored, so tracked files stay untouched.
 ARG SERVER_IMAGE=ghcr.io/monoscope-tech/monoscope:latest
+ARG DEPS_IMAGE=ghcr.io/monoscope-tech/monoscope-deps:latest
 FROM ${SERVER_IMAGE} AS server
 FROM node:24-bookworm-slim AS node
+FROM golang:1.24-bookworm AS go
 
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends bash git ripgrep ca-certificates asciinema curl udhcpc fonts-liberation fonts-noto-color-emoji && rm -rf /var/lib/apt/lists/*
+# This checkout's Haskell dependencies, compiled with network here, so a VM builds the server offline.
+FROM ${DEPS_IMAGE} AS haskell
+WORKDIR /build
+RUN rm -f cabal.project.local
+COPY monoscope.cabal cabal.project cabal.project.freeze ./
+COPY shared shared
+COPY cli cli
+RUN cabal update && cabal build --only-dependencies exe:monoscope-server -j && mkdir -p /opt/haskell && cp -R dist-newstyle/src /opt/haskell/dist-src
+
+FROM haskell:9.12.2
+RUN apt-get update && apt-get install -y --no-install-recommends bash git ripgrep ca-certificates asciinema curl udhcpc fonts-liberation fonts-noto-color-emoji \
+    libssl-dev librdkafka-dev libsnappy-dev libgrpc-dev libpq-dev libldap2-dev libsasl2-dev liblz4-dev libzstd-dev pkg-config protobuf-compiler \
+  && rm -rf /var/lib/apt/lists/*
+COPY --from=haskell /root/.cabal /root/.cabal
+COPY --from=haskell /opt/haskell /opt/haskell
+COPY --from=go /usr/local/go /usr/local/go
+ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path && chmod -R a+rwX /opt/cargo /opt/rustup
 COPY --from=node /usr/local/bin/node /usr/local/bin/
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
@@ -22,7 +41,9 @@ RUN cd /opt/proof && npm ci --no-audit --no-fund && cd web-components && npm ci 
 
 # Proof commands run with a reset environment, so Playwright finds its browsers at its default path.
 RUN useradd --create-home --uid 1000 --user-group --shell /bin/bash review-agent \
-  && install -d -o review-agent -g review-agent /home/review-agent/.cache && ln -s /opt/proof/browsers /home/review-agent/.cache/ms-playwright
+  && install -d -o review-agent -g review-agent /home/review-agent/.cache && ln -s /opt/proof/browsers /home/review-agent/.cache/ms-playwright \
+  && chmod o+x /root && find /root/.cabal -type d -exec chown review-agent:review-agent {} + \
+  && find /root/.cabal/store -path '*/package.db/*' -type f -exec chown review-agent:review-agent {} + && ln -s /root/.cabal /home/review-agent/.cabal
 
 # The production server for app proofs (monoscope-app.sh): its runtime libraries, Postgres with
 # TimescaleDB migrated here once so a proof boots in seconds, and an OTLP traffic generator.

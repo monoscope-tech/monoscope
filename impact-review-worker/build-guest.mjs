@@ -26,9 +26,10 @@ try {
     args.push('--build-arg', `${arg}=${pinned}`);
   };
   if (profile === 'browser') {
-    for (const path of ['package.json', 'package-lock.json', 'web-components/package.json', 'web-components/package-lock.json', 'proto/opentelemetry']) await cp(resolve(cwd, '..', path), join(context, path), { recursive: true });
+    for (const path of ['package.json', 'package-lock.json', 'web-components/package.json', 'web-components/package-lock.json', 'proto/opentelemetry', 'monoscope.cabal', 'cabal.project', 'cabal.project.freeze', 'shared', 'cli']) await cp(resolve(cwd, '..', path), join(context, path), { recursive: true });
     for (const path of ['monoscope-app.sh', 'monoscope-traffic.mjs']) await cp(join(cwd, path), join(context, path));
     pin(process.env.IMPACT_REVIEW_SERVER_IMAGE ?? 'ghcr.io/monoscope-tech/monoscope:latest', 'server', 'SERVER_IMAGE');
+    pin(process.env.IMPACT_REVIEW_DEPS_IMAGE ?? 'ghcr.io/monoscope-tech/monoscope-deps:latest', 'deps', 'DEPS_IMAGE');
   }
   if (profile === 'monoscope') {
     pin(process.env.IMPACT_REVIEW_DEPS_IMAGE ?? 'ghcr.io/monoscope-tech/monoscope-deps:latest', 'deps', 'DEPS_IMAGE');
@@ -39,8 +40,8 @@ try {
   }
   execFileSync(engine, [...args, context], { stdio: 'inherit' });
   const config = getDefaultBuildConfig();
-  // The browser profile carries the production server and a migrated Postgres beside Chromium.
-  if (profile === 'browser') config.rootfs = { ...config.rootfs, sizeMb: 8192 };
+  // The browser profile carries GHC and its dependency store, Rust, Go, the production server and Postgres.
+  if (profile === 'browser') config.rootfs = { ...config.rootfs, sizeMb: 24576 };
   config.oci = { image: (await readFile(join(context, 'image-id'), 'utf8')).trim(), pullPolicy: 'never', runtime: engine };
   config.init = { rootfsInitExtra: join(cwd, 'guest-init.sh') };
   await buildAssets(config, { outputDir });

@@ -1,31 +1,32 @@
 # Proving changes in this repository
 
-Reviews run in a VM that can read package registries and nothing else, and the Haskell server
-cannot be rebuilt there within a review's budget. The guest ships a recent production build of it
-instead, so prove frontend changes in the real app, and CLI and script behaviour in the terminal.
+Reviews run in a VM that can read package registries and nothing else. Prove UI changes in the
+real app, and CLI and script behaviour in the terminal.
 
 ## Haskell changes
 
-A cold build of this repository takes over an hour, so do not install GHC to build it in a proof.
-`cabal` is on the PATH only when the review starts from a prepared workspace, whose
-`dist-newstyle` makes one focused test or doctest fast. Without it, mark the claim unverified and
-say which test would prove it.
+A cold build of this repository takes over an hour, so never build it from scratch in a proof. The
+review starts from a prepared workspace, whose `dist-newstyle` already holds the base's build, so
+one focused test, a doctest or `monoscope-app --server` compiles only what changed. If the workspace
+was not prepared (`dist-newstyle` is missing), mark the claim unverified and say which test would
+prove it.
 
-## Frontend changes (`web-components/`, `static/`)
+## UI changes
 
-Setup (unrecorded; it links and writes gitignored paths only):
+Setup (unrecorded; it links and writes gitignored paths only), once per VM:
 
 ```bash
-monoscope-app
+monoscope-app            # frontend only (web-components/, static/): about ten seconds
+monoscope-app --server   # also src/ (Lucid pages, handlers, migrations): about two minutes
 ```
 
-It swaps this checkout's frontend into the guest's server, starts it on `http://127.0.0.1:8080`
-against a migrated Postgres, and returns once sample traffic is flowing: an hour of history from
-four services, then a few requests a second, so Live Tail streams. The demo project at
-`/p/00000000-0000-0000-0000-000000000000/` needs no login. Server-rendered markup (`src/Pages`)
-stays the guest's build, so a change there is unverified, not disproved. The CSS is rebuilt from
-this checkout, so a class this pull request removes from `src/` can unstyle the guest's markup.
-Run it once per VM.
+Plain `monoscope-app` swaps this checkout's frontend into a recent production build of the server.
+`--server` builds this checkout's server too, starting from the workspace's build of the base, so
+it compiles only what the pull request changed, and applies the pull request's new migrations. Use
+it whenever the change touches `src/`. Both start the app on `http://127.0.0.1:8080` against a
+migrated Postgres and return once sample traffic is flowing: an hour of history from four services,
+then a few requests a second, so Live Tail streams. The demo project at
+`/p/00000000-0000-0000-0000-000000000000/` needs no login.
 
 Command: write the Playwright script into `web-components/` (so `playwright` resolves; the file is
 untracked) with a quoted heredoc, so nothing in it needs escaping, then run it. Record the whole
