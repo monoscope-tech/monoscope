@@ -133,6 +133,9 @@ description: Please see the README on GitHub at <https://github.com/githubuser/m
 library:
   ghc-options:
     - -fplugin AutoInstrument
+  # Only the production image builds profiled; its vanilla pass is -O0 (see Dockerfile).
+  ghc-prof-options:
+    - -O1
   source-dirs:
     - src
   generated-exposed-modules:
