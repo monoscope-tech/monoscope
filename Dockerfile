@@ -110,6 +110,8 @@ RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/publi
 # BuildKit `sharing=locked` mount made concurrent sessions' builds queue for up to 47 minutes.
 # Copies keep the /build/dist-newstyle path and mtimes, so cabal's incremental state holds;
 # a concurrent build's write-back can lose the other's progress, which only costs a recompile.
+# release.sh writes back only from builds containing master, so a stale base never regresses it.
+ARG CACHE_WRITE_BACK=false
 RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/.cabal/store \
     --mount=type=cache,id=monoscope-production-dist-v3,target=/cache \
     flock /cache/lock sh -c '[ ! -d /cache/dist ] || { rm -rf /build/dist-newstyle && cp -a /cache/dist /build/dist-newstyle; }' && \
@@ -127,7 +129,7 @@ RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/
         echo "binary embeds:" >&2; \
         grep -aoE '/public/assets/web-components/dist/[^"]{1,80}\.js' /build/dist/monoscope-server | sort -u >&2; \
         exit 1; }; } && \
-    flock /cache/lock sh -c 'rm -rf /cache/dist.tmp && cp -a /build/dist-newstyle /cache/dist.tmp && rm -rf /cache/dist && mv /cache/dist.tmp /cache/dist' && \
+    { [ "$CACHE_WRITE_BACK" != true ] || flock /cache/lock sh -c 'rm -rf /cache/dist.tmp && cp -a /build/dist-newstyle /cache/dist.tmp && rm -rf /cache/dist && mv /cache/dist.tmp /cache/dist'; } && \
     rm -rf /build/dist-newstyle
 
 # Native CLI objects use their own cache, separate from the profiled server.
