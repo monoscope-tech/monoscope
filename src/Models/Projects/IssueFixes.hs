@@ -178,7 +178,7 @@ createRun pid fid issue mapping base image =
 
 
 -- | Up to @n@ open issues from the last week that triage has had an hour with, each with a mapping
--- 'createRun' accepts and no fix run yet; newest first.
+-- 'createRun' accepts and no fix run in the last day (a failed one is retried a day later); newest first.
 autofixCandidates :: (DB es, Time :> es) => ProjectId -> Int -> Eff es [(IssueId, CodeMappingId)]
 autofixCandidates pid n =
   Time.currentTime >>= \now ->
@@ -189,7 +189,7 @@ autofixCandidates pid n =
     WHERE i.project_id = #{pid} AND i.archived_at IS NULL AND i.spam_at IS NULL AND i.issue_type <> 'api_change'
       AND i.created_at BETWEEN #{addUTCTime (-7 * nominalDay) now} AND #{addUTCTime (-3600) now}
       AND ^{appCredential}
-      AND NOT EXISTS (SELECT 1 FROM projects.issue_fix_runs f WHERE f.issue_id = i.id)
+      AND NOT EXISTS (SELECT 1 FROM projects.issue_fix_runs f WHERE f.issue_id = i.id AND f.created_at > #{addUTCTime (-nominalDay) now})
     ORDER BY i.created_at DESC, i.id, length(m.path_prefix) DESC LIMIT #{n}|]
 
 

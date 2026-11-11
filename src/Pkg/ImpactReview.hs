@@ -6,6 +6,7 @@ import BackgroundJobs.Types qualified as Jobs
 import Control.Monad.Trans.Except (throwE)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
 import Data.Default (def)
@@ -27,6 +28,7 @@ import Data.OpenApi.Schema.Validation qualified as Schema
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
+import Data.UUID.V5 qualified as UUID5
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (getAeson)
 import Deriving.Aeson qualified as DAE
@@ -1152,7 +1154,7 @@ agentThinking = \case
 
 
 -- | While the autofix routine is active, queues fix runs for its candidates, owned by its installer.
--- A run reuses its issue's id, so overlapping sweeps converge on one run.
+-- A run is named by its issue and base revision, so overlapping sweeps converge on one run.
 autofixIssues :: Projects.ProjectId -> ATBackgroundCtx ()
 autofixIssues pid = whenJustM (Issues.getEventRoutine pid Issues.EventIssueFix) \_ -> do
   cfg <- (.config) <$> ask @AuthContext
@@ -1164,7 +1166,7 @@ autofixIssues pid = whenJustM (Issues.getEventRoutine pid Issues.EventIssueFix) 
       queued <- runExceptT do
         (_, conn) <- ExceptT $ first RepositoryUnreachable <$> CodeContext.mappingConnection cfg pid mapping
         base <- ExceptT $ (first InvalidHead . Fixes.mkRevision <=< first HeadUnavailable) <$> Git.headRevision conn (Git.RepoRef mapping.owner mapping.repo mapping.ref)
-        let fid = UUIDId issue.unUUIDId
+        let fid = UUIDId $ UUID5.generateNamed issue.unUUIDId $ BS.unpack $ encodeUtf8 $ Fixes.revisionText base
         -- Image and head lookups take time; a routine paused meanwhile must not start this run.
         current <- ExceptT $ maybeToRight RoutineStopped <$> Issues.getEventRoutine pid Issues.EventIssueFix
         void $ ExceptT $ maybeToRight RunRefused <$> Fixes.createRun pid fid issue mid base image
@@ -1235,7 +1237,7 @@ fixIssue pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob)
             Right (Just (Left NativeSessionLost)) -> nativeSessionLostMessage
             _ -> "Issue fix failed; retry to collect current evidence"
       Fixes.failJob lease message
-      Log.logAttention "Issue-fix job failed" (pid, fid)
+      Log.logAttention "Issue-fix job failed" (pid, fid, either (toText . displayException) (maybe "Timed out" (either (show @Text) (const ""))) outcome)
       throwIO $ ReviewFailure message
   where
     require :: Error ReviewFailure :> es => Either Text a -> Eff es a
