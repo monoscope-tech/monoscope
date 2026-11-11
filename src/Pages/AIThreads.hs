@@ -571,8 +571,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                         p_ [class_ "text-xs text-textWeak"] "Restrictions apply immediately. Greater authority applies to future runs."
                         button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save policy"
                       else p_ [class_ "text-sm text-textWeak"] $ toHtml $ case policy of
-                        Issues.Observe -> "Execution policy: Observe"
-                        Issues.Autonomous -> "Execution policy: Autonomous"
+                        (Issues.Observe; Issues.Autonomous) -> "Execution policy: " <> policyLabel policy
                         Issues.ReviewSelected selected -> "Review selected actions: " <> T.intercalate ", " (map reviewClassLabel $ toList selected.classes) <> ". Reviewers: " <> reviewerLabel selected.approver <> "."
                   form_ [hxPost_ $ foldMap (urls.aiRoutineInstructionsPost projectId) activeConversationIdM, hxSwap_ "none", class_ "space-y-2", Aria.label_ "Routine instructions"] do
                     label_ [Lucid.for_ "routine-instructions", class_ "block text-sm font-medium text-textStrong"] "Instructions"

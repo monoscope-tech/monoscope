@@ -1415,34 +1415,32 @@ idSelector i = "[id='" <> T.replace "'" "\\'" (T.replace "\\" "\\\\" i) <> "']"
 -- >>> map (`T.isInfixOf` html) ["errors", "checkout-api", "data-table-fetch"]
 -- [True,True,False]
 renderTable :: Widget -> Html ()
-renderTable widget | Just (headers, rows) <- inlineRows = withCardFrame True widget (ctaAction widget) $ div_ [class_ "dashboard-table-wrap h-full overflow-auto rounded-[inherit] pb-2"] $ renderTableWithDataAndParams widget headers rows []
-  where
-    inlineRows = do
-      guard $ isNothing widget.query && isNothing widget.sql && isNothing widget.html
-      AE.Array (V.uncons -> Just (AE.Array header, rows)) <- (.source) <$> widget.dataset
-      (,) <$> traverse (\case AE.String t -> Just t; _ -> Nothing) header <*> traverse (\case AE.Array row -> Just $ cell <$> row; _ -> Nothing) rows
-    cell = \case AE.String t -> t; AE.Null -> ""; v -> decodeUtf8 $ AE.encode v
 renderTable widget = do
   let tableId = maybeToMonoid widget.id
       eagerWidget = widget & #eager ?~ True & #pngUrl .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
+      inline = do
+        guard $ isNothing widget.query && isNothing widget.sql && isNothing widget.html
+        AE.Array (V.uncons -> Just (AE.Array header, rows)) <- (.source) <$> widget.dataset
+        renderTableWithDataAndParams widget <$> traverse (\case AE.String t -> Just t; _ -> Nothing) header <*> traverse (\case AE.Array row -> Just $ (\case AE.String t -> t; AE.Null -> ""; v -> encodeText v) <$> row; _ -> Nothing) rows <*> pure []
   withCardFrame True widget (ctaAction widget)
     $ div_
-      [ -- No top padding: the sticky header pins to the scroll edge, so rows can't show above it.
+      ( -- No top padding: the sticky header pins to the scroll edge, so rows can't show above it.
         class_ "dashboard-table-wrap h-full overflow-auto rounded-[inherit] pb-2"
-      , hxGet_ $ widgetFetchUrl eagerWidget
-      , hxTrigger_ $ bool "intersect once, update-query from:window, table-sort" "update-query from:window, table-sort" (isJust widget.html) <> memptyIfFalse (or widget.searchable) ", input delay:250ms, search"
-      , hxTarget_ $ idSelector tableId
-      , hxSelect_ $ idSelector tableId
-      , hxSwap_ "outerHTML"
-      , term "hx-sync" "this:replace"
-      , term "hx-vals" "js:{...Object.fromEntries(new URLSearchParams(location.search)), ...JSON.parse(this.closest('[data-constants]')?.dataset.constants || '{}'), 'table-sort': this.dataset.tableSort || '', 'table-search': this.querySelector('input[type=search]')?.value || ''}"
-      , data_ "table-fetch" ""
-      ]
+          : memptyIfFalse
+            (isNothing inline)
+            [ hxGet_ $ widgetFetchUrl eagerWidget
+            , hxTrigger_ $ bool "intersect once, update-query from:window, table-sort" "update-query from:window, table-sort" (isJust widget.html) <> memptyIfFalse (or widget.searchable) ", input delay:250ms, search"
+            , hxTarget_ $ idSelector tableId
+            , hxSelect_ $ idSelector tableId
+            , hxSwap_ "outerHTML"
+            , term "hx-sync" "this:replace"
+            , term "hx-vals" "js:{...Object.fromEntries(new URLSearchParams(location.search)), ...JSON.parse(this.closest('[data-constants]')?.dataset.constants || '{}'), 'table-sort': this.dataset.tableSort || '', 'table-search': this.querySelector('input[type=search]')?.value || ''}"
+            , data_ "table-fetch" ""
+            ]
+      )
     $ do
       when (or widget.searchable) $ searchInput_ "" ("Search " <> fromMaybe "rows" widget.title) []
-      case widget.html of
-        Just html -> toHtmlRaw html
-        Nothing -> div_ [class_ "flex h-full min-h-32 items-center justify-center", id_ tableId] $ loadingIndicator_ LdSM LdSpinner
+      fromMaybe (maybe (div_ [class_ "flex h-full min-h-32 items-center justify-center", id_ tableId] $ loadingIndicator_ LdSM LdSpinner) toHtmlRaw widget.html) inline
 
 
 -- | Render stat widget content with HTMX lazy loading support
