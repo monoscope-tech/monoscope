@@ -23,7 +23,7 @@ jobs:
   image:
     name: Production image
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.wait_minutes + 30 }}
+    timeout-minutes: 180 # covers the longest wait_minutes; expressions cannot do arithmetic
     permissions:
       contents: read
       packages: write
