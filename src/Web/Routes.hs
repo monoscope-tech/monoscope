@@ -775,7 +775,10 @@ chartScopeParams pid params = case pid of
   Nothing -> pure params
   Just projectId -> do
     (session, _) <- Projects.sessionAndProject projectId
-    pure $ [("environment", session.environment)] <> [("service", session.service) | isNothing $ join $ L.lookup "dashboard_id" params] <> filter (\(k, _) -> k `notElem` ["environment", "service", "dashboard_id"]) params
+    let scope = case rightToMaybe . parseQueryParam @Widget.ChartScope =<< join (L.lookup "pinned_scope" params) of
+          Just pinned -> [("environment", pinned.environment), ("service", pinned.service)]
+          Nothing -> [("environment", session.environment)] <> [("service", session.service) | isNothing $ join $ L.lookup "dashboard_id" params]
+    pure $ scope <> filter (\(k, _) -> k `notElem` ["environment", "service", "dashboard_id", "pinned_scope"]) params
 
 
 widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders Widget.Widget)
@@ -788,8 +791,8 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
       & either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure
   Dashboards.authorizeClientSql pid widget.sql widget.rollupSql widget.sqlSig
   now <- Time.currentTime
-  let scopeMarker = ("dashboard_id",) . Just <$> widget._dashboardId
-  scopedParams <- chartScopeParams (Just pid) $ maybeToList scopeMarker <> allParams
+  let scopeMarkers = [("dashboard_id", Just d) | Just d <- [widget._dashboardId]] <> [("pinned_scope", Just $ decodeUtf8 $ AE.encode sc) | Just sc <- [widget.scope]]
+  scopedParams <- chartScopeParams (Just pid) $ scopeMarkers <> allParams
   -- The page's query filters the widget's own, as the browser composes them for /chart_data:
   -- the explorer's top list has no query but the page's.
   let pageQuery = Utils.nonEmptyT $ join $ L.lookup "query" allParams

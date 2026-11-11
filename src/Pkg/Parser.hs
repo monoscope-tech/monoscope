@@ -273,6 +273,8 @@ data SqlQueryCfg = SqlQueryCfg
   , -- Time window (minutes) the alert query should look back over.
     -- Monitors pass max(60, 2 * checkIntervalMins) so buckets aren't missed.
     alertLookbackMins :: Int
+  , -- A "below" monitor: the reading is the lowest measure and the lowest group, not the highest.
+    alertBelow :: Bool
   , -- The app-wide environment selection (prod/staging/…). Applied as a column predicate on
     -- every generated query rather than spliced into the user's KQL, so the query box keeps
     -- showing what the user typed. 'Nothing' is every environment.
@@ -578,12 +580,12 @@ sqlFromQueryComponents sqlCfg qc =
       groupByClause
         <> " "
         <> havingClause
-        <> if null qc.groupByClause then "" else " ORDER BY " <> alertAggregate <> " DESC LIMIT 1"
+        <> if null qc.groupByClause then "" else " ORDER BY " <> alertAggregate <> bool " DESC" " ASC" sqlCfg.alertBelow <> " LIMIT 1"
     -- Evaluate the requested measures, not the number of samples. Aliases are
     -- output labels and cannot appear inside GREATEST. The monitor decoder
     -- expects float8 even when an aggregate produces float4.
     alertAggregate =
-      "GREATEST(" <> T.intercalate ", " (if null qc.aggregations then ["count(*)"] else colsNoAsClause qc.aggregations) <> ")::float8"
+      bool "GREATEST(" "LEAST(" sqlCfg.alertBelow <> T.intercalate ", " (if null qc.aggregations then ["count(*)"] else colsNoAsClause qc.aggregations) <> ")::float8"
     alertWhere timeFilter = [fmt|project_id='{sqlCfg.pid.toText}' AND {timeFilter} {alertScopeFilters} AND ({whereCondition})|]
     alertQuery =
       [fmt|
@@ -625,7 +627,7 @@ intervalSeconds t = case words t of
     units = Map.fromList @Text @Rational [("nanosecond", 1e-9), ("microsecond", 1e-6), ("millisecond", 1e-3), ("second", 1), ("minute", 60), ("hour", 3600), ("day", 86400), ("week", 604800)]
 
 
--- | What a query returns, read off its last @summarize@ (each one consumes the rows before it):
+-- | What a query returns, read off its @summarize@ ('parseQueryToAST' admits at most one):
 -- the events themselves, one scalar row, a series binned by time, or a value per group.
 data ResultShape = Events | Scalar | TimeSeries | Categories
   deriving stock (Eq, Show)
@@ -635,12 +637,12 @@ data ResultShape = Events | Scalar | TimeSeries | Categories
 -- >>> map (fmap resultShape . parseQueryToAST) ["level == \"ERROR\"", "summarize count()", "summarize count() by bin_auto(timestamp), name", "name == \"GET\" | summarize count() by name"]
 -- [Right Events,Right Scalar,Right TimeSeries,Right Categories]
 --
--- Only the last summarize decides; a filter after it reads the aggregate, not the events:
+-- A filter after it reads the aggregate, not the events:
 --
--- >>> map (fmap resultShape . parseQueryToAST) ["summarize max(duration) by bin(timestamp, 60) | summarize min(max_duration)", "summarize count() by name | where count_ > 1"]
--- [Right Scalar,Right Categories]
+-- >>> fmap resultShape (parseQueryToAST "summarize count() by name | where count_ > 1")
+-- Right Categories
 resultShape :: [Section] -> ResultShape
-resultShape ast = case viaNonEmpty last [by | SummarizeCommand _ by <- ast] of
+resultShape ast = case listToMaybe [by | SummarizeCommand _ by <- ast] of
   Nothing -> Events
   Just Nothing -> Scalar
   Just (Just (SummarizeByClause items))
@@ -864,6 +866,7 @@ defSqlQueryCfg pid currentTime source spanT =
     , currentTime
     , defaultSelect = defaultSelectSqlQuery source
     , alertLookbackMins = 60
+    , alertBelow = False
     , environment = Nothing
     , service = Nothing
     }

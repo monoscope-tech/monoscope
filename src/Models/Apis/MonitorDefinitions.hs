@@ -142,65 +142,70 @@ defaultVisualizationType :: Text
 defaultVisualizationType = "timeseries"
 
 
--- | The compiled form of a monitor's KQL, which is what alert evaluation actually
--- runs. Shared by the create/PUT path and by PATCH: PATCH used to build its merged
--- monitor from the stored row, so it updated @log_query@ and inherited the previous
--- @log_query_as_sql@ — the monitor kept alerting on its old query. A query that doesn't
--- compile is a 'Left', so a bad edit cannot blank the compiled SQL.
-compileAlertSql :: Projects.ProjectId -> Int -> Maybe Text -> Maybe Text -> Text -> Either Text Text
-compileAlertSql pid windowMins environment service q =
-  let scope = Parser.mkScopedQuery pid (Nothing, Nothing) environment service
-      cfg = (Parser.applyScopedQuery scope $ Parser.defSqlQueryCfg pid Parser.fixedUTCTime Nothing Nothing){Parser.alertLookbackMins = windowMins}
-   in Parser.parseQueryToComponents cfg q >>= maybeToRight "The query produced no alert SQL" . (.finalAlertQuery) . snd
+-- | The SQL alert evaluation runs for a monitor's KQL: its window, direction and scope.
+-- Evaluation recompiles on every check (so parser fixes reach existing monitors), with
+-- @tf@ set; writes store the PG form for display. A query that doesn't compile is a 'Left'.
+compileAlertSql :: Bool -> Projects.ProjectId -> MonitorInput -> Either Text Text
+compileAlertSql tf pid inp =
+  let scope = Parser.mkScopedQuery pid (Nothing, Nothing) inp.environment inp.service
+      cfg = (Parser.applyScopedQuery scope $ Parser.defSqlQueryCfg pid Parser.fixedUTCTime Nothing Nothing){Parser.alertLookbackMins = inp.timeWindowMins, Parser.alertBelow = inp.triggerLessThan, Parser.targetsTimefusion = tf}
+      -- A widget's query keeps its dashboard placeholders; a monitor reads every variable as unset ("all").
+      query = Parser.fillQueryTemplate Parser.KqlTemplate (Parser.variablePresetsKQL def pid.toText Nothing Nothing [] Parser.fixedUTCTime) inp.query
+   in Parser.parseQueryToComponents cfg query >>= maybeToRight "The query produced no alert SQL" . (.finalAlertQuery) . snd
 
 
--- | Build a 'QueryMonitor' from a 'MonitorInput'. Shared by create/update.
-monitorFromInput :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorId -> Maybe Monitors.QueryMonitor -> MonitorInput -> Monitors.QueryMonitor
+-- | Build a 'QueryMonitor' from a 'MonitorInput', carrying over what an input can't supply
+-- (history, status, widget link) from @existingM@. Every write path goes through here:
+-- the API, monitors-as-code, the alert form and widget monitors.
+monitorFromInput :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorId -> Maybe Monitors.QueryMonitor -> MonitorInput -> Either Text Monitors.QueryMonitor
 monitorFromInput pid now mid existingM inp =
-  Monitors.QueryMonitor
-    { id = mid
-    , projectId = pid
-    , createdAt = maybe now (.createdAt) existingM
-    , updatedAt = now
-    , checkIntervalMins = inp.checkIntervalMins
-    , alertThreshold = inp.alertThreshold
-    , warningThreshold = inp.warningThreshold
-    , logQuery = inp.query
-    , logQueryAsSql = fromRight (foldMap (.logQueryAsSql) existingM) $ compileAlertSql pid inp.timeWindowMins inp.environment inp.service inp.query
-    , lastEvaluated = Just now
-    , warningLastTriggered = existingM >>= (.warningLastTriggered)
-    , alertLastTriggered = existingM >>= (.alertLastTriggered)
-    , triggerLessThan = inp.triggerLessThan
-    , thresholdSustainedForMins = fromMaybe 0 inp.thresholdSustainedForMins
-    , alertConfig =
-        Monitors.MonitorAlertConfig
-          { unit = mfilter (not . T.null) $ T.strip <$> inp.unit
-          , title = inp.title
-          , severity = fromMaybe "error" inp.severity
-          , subject = fromMaybe inp.title inp.subject
-          , message = fromMaybe "" inp.message
-          , emails = V.fromList $ CI.mk <$> inp.emails
-          , emailAll = fromMaybe False inp.emailAll
-          , slackChannels = V.fromList inp.slackChannels
-          }
-    , deactivatedAt = bool (Just now) Nothing (fromMaybe True inp.active)
-    , deletedAt = Nothing
-    , visualizationType = fromMaybe defaultVisualizationType inp.visualizationType
-    , teams = V.fromList inp.teams
-    , widgetId = existingM >>= (.widgetId)
-    , dashboardId = existingM >>= (.dashboardId)
-    , alertRecoveryThreshold = inp.alertRecoveryThreshold
-    , warningRecoveryThreshold = inp.warningRecoveryThreshold
-    , currentStatus = maybe Monitors.MSNormal (.currentStatus) existingM
-    , currentValue = maybe 0 (.currentValue) existingM
-    , mutedUntil = existingM >>= (.mutedUntil)
-    , renotifyIntervalMins = inp.notifyAfterMins
-    , stopAfterCount = inp.stopAfterCount
-    , notificationCount = maybe 0 (.notificationCount) existingM
-    , timeWindowMins = inp.timeWindowMins
-    , environment = inp.environment
-    , service = inp.service
-    }
+  compileAlertSql False pid inp <&> \sql ->
+    Monitors.QueryMonitor
+      { id = mid
+      , projectId = pid
+      , createdAt = maybe now (.createdAt) existingM
+      , updatedAt = now
+      , checkIntervalMins = inp.checkIntervalMins
+      , alertThreshold = inp.alertThreshold
+      , warningThreshold = inp.warningThreshold
+      , logQuery = inp.query
+      , logQueryAsSql = sql
+      , -- Never evaluated is due now.
+        lastEvaluated = existingM >>= (.lastEvaluated)
+      , warningLastTriggered = existingM >>= (.warningLastTriggered)
+      , alertLastTriggered = existingM >>= (.alertLastTriggered)
+      , triggerLessThan = inp.triggerLessThan
+      , thresholdSustainedForMins = fromMaybe 0 inp.thresholdSustainedForMins
+      , alertConfig =
+          Monitors.MonitorAlertConfig
+            { unit = mfilter (not . T.null) $ T.strip <$> inp.unit
+            , title = inp.title
+            , severity = fromMaybe "error" inp.severity
+            , subject = fromMaybe inp.title inp.subject
+            , message = fromMaybe "" inp.message
+            , emails = V.fromList $ CI.mk <$> inp.emails
+            , emailAll = fromMaybe False inp.emailAll
+            , slackChannels = V.fromList inp.slackChannels
+            }
+      , -- An omitted @active@ keeps the stored state, and a paused monitor keeps when it paused.
+        deactivatedAt = guard (not $ fromMaybe (all (isNothing . (.deactivatedAt)) existingM) inp.active) *> ((existingM >>= (.deactivatedAt)) <|> Just now)
+      , deletedAt = Nothing
+      , visualizationType = fromMaybe defaultVisualizationType inp.visualizationType
+      , teams = V.fromList inp.teams
+      , widgetId = existingM >>= (.widgetId)
+      , dashboardId = existingM >>= (.dashboardId)
+      , alertRecoveryThreshold = inp.alertRecoveryThreshold
+      , warningRecoveryThreshold = inp.warningRecoveryThreshold
+      , currentStatus = maybe Monitors.MSNormal (.currentStatus) existingM
+      , currentValue = maybe 0 (.currentValue) existingM
+      , mutedUntil = existingM >>= (.mutedUntil)
+      , renotifyIntervalMins = inp.notifyAfterMins
+      , stopAfterCount = inp.stopAfterCount
+      , notificationCount = maybe 0 (.notificationCount) existingM
+      , timeWindowMins = inp.timeWindowMins
+      , environment = inp.environment
+      , service = inp.service
+      }
 
 
 monitorToInput :: Monitors.QueryMonitor -> MonitorInput

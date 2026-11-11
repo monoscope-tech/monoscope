@@ -47,7 +47,8 @@ import Hasql.Interpolate qualified as HI
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers qualified as Containers
-import Pkg.DeriveUtils (AesonText (..), DB, unAesonText)
+import Pkg.DeriveUtils (AesonText (..), DB, rawSql, unAesonText)
+import Pkg.Parser.Expr (isErrorSql)
 import Relude
 
 
@@ -98,23 +99,22 @@ trendStats useTf pid start end = do
       let sliceEnd = min end (addUTCTime 86400 sliceStart)
        in Hasql.withHasqlTimefusion useTf
             $ Hasql.interp
-              -- Broader than 'Pkg.Parser.Expr.severityIsErrorSql', which is what the log
-              -- explorer's `errors` flag and `is_error` both mean: this also counts an
-              -- exception payload, and treats FATAL as an error. Whether that is intentional
-              -- or drift is unresolved — reconciling them moves published error counts, so it
-              -- wants a product decision rather than a refactor. Same shape again below.
               [HI.sql|
           SELECT extract(epoch from time_bucket('1 hour', timestamp))::bigint,
             COUNT(*)::bigint,
-            COUNT(*) FILTER (WHERE status_code = 'ERROR'
-              OR coalesce(attributes___exception___type,
-                jsonb_path_query_first(events, '$[*] ? (@.event_name == "exception").event_attributes.exception.type') #>> '{}') IS NOT NULL
-              OR severity___severity_number >= 17 OR lower(level) IN ('error', 'fatal'))::bigint
+            COUNT(*) FILTER (WHERE ^{isError})::bigint
           FROM otel_logs_and_spans
           WHERE project_id = #{pid.toText} AND timestamp >= #{sliceStart} AND timestamp < #{sliceEnd}
           GROUP BY time_bucket('1 hour', timestamp)
           ORDER BY time_bucket('1 hour', timestamp)
         |]
+
+
+-- | 'isErrorSql', plus an exception recorded only as a span event. Ingestion leaves the
+-- @errors@ column empty, so the event payload is the one place that signal lives; it is too
+-- costly a scan for interactive queries, so only these periodic counts read it.
+isError :: HI.Sql
+isError = rawSql $ "(" <> isErrorSql <> " OR jsonb_path_query_first(events, '$[*] ? (@.event_name == \"exception\")') IS NOT NULL)"
 
 
 -- | All events and server spans have deliberately separate denominators. Latency
@@ -165,12 +165,10 @@ serviceStats useTf pid start end =
       [HI.sql|
     SELECT NULLIF(resource___service___name, ''), NULLIF(resource___deployment___environment___name, ''),
       COUNT(*)::bigint,
-      COUNT(*) FILTER (WHERE status_code = 'ERROR' OR attributes___exception___type IS NOT NULL
-        OR lower(level) IN ('error', 'fatal') OR severity___severity_number >= 17)::bigint,
+      COUNT(*) FILTER (WHERE ^{isError})::bigint,
       COUNT(*) FILTER (WHERE kind = 'log')::bigint,
       COUNT(*) FILTER (WHERE kind = 'server')::bigint,
-      COUNT(*) FILTER (WHERE kind = 'server' AND (status_code = 'ERROR'
-        OR attributes___exception___type IS NOT NULL))::bigint,
+      COUNT(*) FILTER (WHERE kind = 'server' AND ^{isError})::bigint,
       COUNT(*) FILTER (WHERE timestamp >= #{dayStart})::bigint,
       (AVG(duration) FILTER (WHERE kind = 'server') / 1000000.0)::float8
     FROM otel_logs_and_spans

@@ -40,7 +40,7 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction.Sessions qualified as TxS
-import Models.Apis.MonitorDefinitions (MonitorInput (..), compileAlertSql, monitorConfig, monitorFromInput, monitorToInput)
+import Models.Apis.MonitorDefinitions (MonitorInput (..), monitorConfig, monitorFromInput, monitorToInput)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.Dashboards qualified as Dashboards
@@ -169,7 +169,7 @@ normalizeDefinition resource = \case
     pure $ DashboardDefinition $ GitSync.buildSchemaWithMeta (Just schema) title (fold schema.tags) handles
   QueryDefinition input -> do
     now <- Time.currentTime
-    pure $ QueryDefinition $ monitorToInput $ monitorFromInput resource.projectId now (Monitors.QueryMonitorId resource.localId) Nothing input
+    pure $ QueryDefinition $ either (const input) monitorToInput $ monitorFromInput resource.projectId now (Monitors.QueryMonitorId resource.localId) Nothing input
   value -> pure value
 
 
@@ -267,8 +267,7 @@ importDefinition resource observed definition = runExceptT do
           teams <- lift $ Members.getTeamsVM resource.projectId
           unless (all (`elem` map (.id) teams) input.teams) $ hoistEither $ Left "Monitor teams must belong to this project."
           existing <- lift $ Monitors.queryMonitorByProjectId resource.projectId (Monitors.QueryMonitorId resource.localId)
-          let monitor = (monitorFromInput resource.projectId now (Monitors.QueryMonitorId resource.localId) existing input){Monitors.lastEvaluated = existing >>= (.lastEvaluated)}
-          whenLeft_ (compileAlertSql resource.projectId input.timeWindowMins input.environment input.service input.query) $ const $ hoistEither $ Left "The monitor query could not be compiled."
+          monitor <- hoistEither $ first ("The monitor query could not be compiled: " <>) $ monitorFromInput resource.projectId now (Monitors.QueryMonitorId resource.localId) existing input
           pure (Monitors.queryMonitorUpsertSql monitor, QueryDefinition $ monitorToInput monitor)
         UptimeDefinitionConfig input -> do
           unless (PromCfg.safeScrapeUrl input.url && not (T.null $ T.strip input.name) && input.intervalSeconds >= 60 && input.expectedStatus >= 100 && input.expectedStatus <= 599) $ hoistEither $ Left "Uptime checks require a name, public HTTP URL, interval of at least 60 seconds, and HTTP status 100–599."

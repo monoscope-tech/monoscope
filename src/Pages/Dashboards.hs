@@ -112,7 +112,7 @@ import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxP
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
-import Models.Apis.MonitorDefinitions (compileAlertSql)
+import Models.Apis.MonitorDefinitions (MonitorInput (..), compileAlertSql, monitorFromInput, monitorToInput)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.DashboardTemplates (Editable, ReadOnly (..), askTemplates, detach, duplicate, editableIn, getDashboardTemplates, loadDashboardFromVM, templateList, updateSchema, updateTitle)
@@ -1280,7 +1280,7 @@ dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM w
         newSqlQuery <-
           if monitor.logQuery == newQuery
             then Right monitor.logQueryAsSql
-            else first MonitorQueryInvalid $ compileAlertSql pid monitor.timeWindowMins monitor.environment monitor.service newQuery
+            else first MonitorQueryInvalid $ compileAlertSql False pid (monitorToInput monitor & #query .~ newQuery)
         let updated =
               (monitor :: Monitors.QueryMonitor)
                 { Monitors.logQuery = newQuery
@@ -1657,10 +1657,6 @@ instance ToHtml WidgetEditor where
             form.querySelector('[name="query"]').value = document.querySelector('#filterElement').getValue();
             form.dataset.widgetSaved = 'true';
             setTimeout(() => form.requestSubmit(), 0);
-          } else {
-            const drawer = document.getElementById('${drawerStateCheckbox}');
-            drawer.checked = false;
-            drawer.dispatchEvent(new Event('change', {bubbles: true}));
           }
         |]
       ]
@@ -1883,7 +1879,7 @@ instance ToHtml WidgetEditor where
                 , hxVals_ $ "js:{teams: window.getTagValues('#" <> alertFormId <> "-teams')}"
                 , class_ "flex max-w-4xl flex-col gap-4 pb-6 [&>details]:bg-fillWeaker"
                 ]
-                  <> [term "hx-on:htmx:after:request" ("if (event.detail.ctx.response.status < 400) { const drawer = document.getElementById('page-data-drawer'); drawer.checked = false; drawer.dispatchEvent(new Event('change', {bubbles: true})); } else document.getElementById('" <> widPrefix <> "-add-monitor-button').textContent = 'Retry monitor';") | isNewWidget]
+                  <> [term "_" [text|on htmx:after:request[detail.ctx.response.status >= 400] put 'Retry monitor' into #${widPrefix}-add-monitor-button|] | isNewWidget]
               )
               do
                 input_ [type_ "hidden", name_ "widgetId", value_ sourceWid]
@@ -1908,7 +1904,7 @@ instance ToHtml WidgetEditor where
                 Alerts.notificationSettingsSection_ teams (maybe V.empty (.teams) monitorM) alertFormId monitorM
 
                 unless isNewWidget $ div_ [class_ "flex flex-wrap items-center justify-between gap-3 border-t border-strokeWeak pt-4"] do
-                  when hasAlert $ button_ [type_ "button", class_ "btn btn-ghost btn-sm text-textError", hxDelete_ (urls.widgetAlertDelete pid sourceWid (Just dashId)), hxSwap_ "none", term "_" [text|on htmx:after:request[detail.ctx.response.status < 400] set #${drawerStateCheckbox}.checked to false then trigger change on #${drawerStateCheckbox}|]] "Remove monitor"
+                  when hasAlert $ button_ [type_ "button", class_ "btn btn-ghost btn-sm text-textError", hxDelete_ (urls.widgetAlertDelete pid sourceWid (Just dashId)), hxSwap_ "none"] "Remove monitor"
                   button_ [type_ "submit", class_ "btn btn-primary btn-sm ml-auto max-md:min-h-11"] $ if hasAlert then "Save monitor" else "Create monitor"
 
 
@@ -1995,47 +1991,42 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = act do
         let monitorTitle = maybe (maybe "Widget monitor" (.alertConfig.title) existingMonitor) (\(_, dashboardTitle, _, _, widget) -> widgetMonitorTitle dashboardTitle widget.title) chartWidgetM
         monitor <-
           first MonitorQueryInvalid
-            $ Alerts.convertToQueryMonitor pid now queryMonitorId
-            $ Alerts.AlertUpsertForm
-              { unit = unitM
-              , alertId = Just $ Monitors.unQueryMonitorId queryMonitorId & UUID.toText
-              , alertThreshold = chartThreshold
-              , warningThreshold = show <$> warningThreshold
-              , recipientEmails = []
-              , recipientSlacks = []
-              , recipientEmailAll = Just $ null form.teams || maybe False (\team -> team.id `elem` form.teams) everyoneM
-              , direction = form.direction
-              , title = monitorTitle
-              , severity = fromMaybe "Warning" form.severity
-              , subject = fromMaybe monitorTitle form.subject
-              , message = fromMaybe "" form.message
-              , query = form.query
-              , since = "1h"
-              , from = ""
-              , to = ""
-              , frequency = form.frequency
-              , timeWindow = form.timeWindow
-              , conditionType = Just "threshold_exceeded"
-              , source = Just "widget"
-              , vizType = form.vizType
-              , teams = form.teams
-              , alertRecoveryThreshold = form.alertRecoveryThreshold
-              , warningRecoveryThreshold = form.warningRecoveryThreshold
-              , widgetId = Just form.widgetId
-              , dashboardId = (.toText) <$> dashboardIdM
-              , notifyAfterCheck = form.notifyAfterCheck
-              , notifyAfter = form.notifyAfter
-              , stopAfterCheck = form.stopAfterCheck
-              , stopAfter = form.stopAfter
-              , environment = session.environment
-              , service = session.service
-              }
+            $ fmap (\m -> m{Monitors.widgetId = Just form.widgetId, Monitors.dashboardId = dashboardIdM})
+            $ monitorFromInput pid now queryMonitorId existingMonitor
+            $ let (checkIntervalMins, timeWindowMins, notifyAfterMins, stopAfterCount) = Alerts.scheduleOf form
+               in MonitorInput
+                    { unit = unitM
+                    , title = monitorTitle
+                    , query = form.query
+                    , severity = form.severity
+                    , subject = form.subject
+                    , message = form.message
+                    , alertThreshold = chartThreshold
+                    , warningThreshold
+                    , triggerLessThan = form.direction == Issues.Below
+                    , checkIntervalMins
+                    , timeWindowMins
+                    , thresholdSustainedForMins = Nothing
+                    , notifyAfterMins
+                    , stopAfterCount
+                    , emails = []
+                    , emailAll = Just $ null form.teams || maybe False (\team -> team.id `elem` form.teams) everyoneM
+                    , slackChannels = []
+                    , teams = form.teams
+                    , visualizationType = form.vizType
+                    , alertRecoveryThreshold = readMaybe . toString =<< form.alertRecoveryThreshold
+                    , warningRecoveryThreshold = readMaybe . toString =<< form.warningRecoveryThreshold
+                    , active = Nothing
+                    , environment = session.environment
+                    , -- Scoped as its chart is: a dashboard widget ignores the session's service.
+                      service = session.service <* guard (isNothing dashboardIdM)
+                    }
         pure do
           whenJust chartWidgetM \((dashId, ed), _, dash, tabSlugM, widget) ->
             when ((widget.alertThreshold, widget.warningThreshold, widget.unit) /= (Just chartThreshold, warningThreshold, unitM)) do
               _ <- updateSchema ed (updateDashboardWidgets dash tabSlugM (Just form.widgetId) widget{Widget.alertThreshold = Just chartThreshold, Widget.warningThreshold = warningThreshold, Widget.unit = unitM}) Nothing
               syncDashboardAndQueuePush pid dashId
-          _ <- Monitors.queryMonitorUpsert monitor{Monitors.deactivatedAt = existingMonitor >>= (.deactivatedAt)}
+          _ <- Monitors.queryMonitorUpsert monitor
           WidgetMonitorSaved <$ addTriggerEvent "closeModal" ""
   sequence planE
 
@@ -2049,6 +2040,7 @@ widgetAlertDeleteH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId
 widgetAlertDeleteH pid widgetId dashboardIdM = do
   _ <- Projects.sessionAndProject pid
   _ <- Monitors.deleteMonitorsByWidgetIds pid dashboardIdM [widgetId]
+  addTriggerEvent "closeModal" ""
   done WidgetMonitorRemoved
 
 
@@ -2274,7 +2266,6 @@ dashboardsGet_ dg
                   , filterAttr
                   , class_ "group/pick flex w-full cursor-pointer items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-fillWeak active:bg-fillHover focus-visible:bg-fillWeak focus-visible:outline-none [&.active]:bg-fillWeak [&[hidden]]:hidden"
                   , hxSwap_ "none"
-                  , term "hx-on:htmx:after:request" "const s = event.detail.ctx.response.status; if (s >= 200 && s < 300) document.getElementById('dashboards-modal').checked = false"
                   ]
                     <> case sourceDashIdM of
                       -- The widget already exists server-side; copy it across.
@@ -2818,6 +2809,8 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = act do
 
         addWidgetJSON $ encodeText widgetCopy
         addToast "success" (maybe "Widget duplicated successfully" ("Copied to " <>) targetDashNameM) Nothing (dashboardUrl pid targetDashId ((.slug) <$> destinationTabM) [] <$ targetDashNameM)
+        -- A copy to another dashboard comes from the dashboard picker, which closes on it.
+        when isCrossDashboard $ addTriggerEvent "closeModal" ""
         pure $ WidgetCopied widgetCopy
 
 

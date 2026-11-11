@@ -195,6 +195,7 @@ data Config = Config
   , bulkActionsInHeader :: Maybe Int -- Column index (0-based) to place bulk actions in header; Nothing uses toolbar
   , noSurface :: Bool -- When True, removes surface-raised class from grid wrapper (for embedded tables)
   , noDividers :: Bool -- When True, removes divide-y separators between rows
+  , gridClasses :: Text -- The scroll box's y overflow; a height cap here keeps the sticky header in view
   }
 
 
@@ -354,6 +355,7 @@ instance Default Config where
       , bulkActionsInHeader = Nothing
       , noSurface = False
       , noDividers = False
+      , gridClasses = "overflow-y-hidden"
       }
 
 
@@ -482,7 +484,7 @@ renderTable tbl =
         -- Only the x axis changes: `overflow-hidden` already set overflow-y to hidden, so this
         -- box was a scroll container in both axes before and still is, and the sticky `thead`
         -- resolves against exactly what it did before (verified in-browser).
-        div_ [class_ $ "grid overflow-x-auto overflow-y-hidden my-0 group/grid" <> if tbl.config.noSurface then "" else " surface-table", id_ $ tbl.config.elemID <> "_grid"] do
+        div_ [class_ $ "grid overflow-x-auto " <> tbl.config.gridClasses <> " my-0 group/grid" <> if tbl.config.noSurface then "" else " surface-table", id_ $ tbl.config.elemID <> "_grid"] do
           let divCls = if tbl.config.noDividers then "" else " divide-y"
           form_ [class_ $ "flex flex-col w-full" <> divCls, id_ tbl.config.elemID, onkeydown_ "return event.key != 'Enter' || event.target.tagName != 'INPUT';"] do
             when ((isJust tbl.features.rowId || isJust tbl.features.sort) && isNothing tbl.config.bulkActionsInHeader) $ renderToolbar tbl

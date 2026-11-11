@@ -1,4 +1,4 @@
-module Pages.Components (codeContextUrl, drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (codeContextUrl, drawer_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -211,6 +211,7 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
             set my.checked to false
             trigger change on me
           end
+          on closeModal from body if my.checked set my.checked to false then trigger change on me end
       |]
            ]
     )
@@ -934,6 +935,36 @@ modalWith_ modalId cfg triggerM contentHtml = do
           div_ [class_ "space-y-2"] contentHtml
 
 
+-- | A native modal @<dialog>@: the browser traps focus, makes the page inert and handles
+-- Escape, which the checkbox 'modalWith_' cannot. A backdrop click, a successful form submit
+-- or a server @closeModal@ event closes it, and focus returns to its 'dialogTrigger_'. The title heads and names it.
+nativeDialog_ :: Monad m => Text -> Text -> Text -> HtmlT m () -> HtmlT m ()
+nativeDialog_ dialogId title boxClass body =
+  term
+    "dialog"
+    [ id_ dialogId
+    , Aria.labelledby_ (dialogId <> "-title")
+    , class_ "modal p-3 sm:p-8 overscroll-contain"
+    , -- A form the save re-renders is detached before closeModal bubbles, so a successful submit closes too.
+      [__|on closeModal from body or htmx:after:request
+    if my.open and (event.type is 'closeModal' or (event.target.tagName is 'FORM' and event.detail.ctx.response.status < 300 and event.detail.ctx.response.headers.get('HX-Reswap') is not 'none'))
+      call me.close()
+      wait 0ms
+      set opener to document.getElementById(my.id + '-trigger')
+      if opener call opener.focus() end
+    end|]
+    ]
+    do
+      div_ [class_ $ "modal-box " <> boxClass] do
+        h2_ [id_ (dialogId <> "-title"), class_ "text-lg font-semibold text-textStrong break-words"] $ toHtml title
+        body
+      form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ ("Close " <> title)] "Close"
+
+
+dialogTrigger_ :: Monad m => Text -> [Attribute] -> HtmlT m () -> HtmlT m ()
+dialogTrigger_ dialogId attrs = button_ $ [id_ (dialogId <> "-trigger"), type_ "button", onclick_ ("document.getElementById('" <> dialogId <> "').showModal()")] <> attrs
+
+
 -- | Red ghost trigger plus the confirmation modal it opens, e.g. a Remove/Disconnect action.
 dangerAction_ :: Text -> Text -> Text -> Text -> Text -> [Attribute] -> Text -> Html ()
 dangerAction_ modalId icon label title description confirmAttrs confirmText = do
@@ -1122,6 +1153,26 @@ filterInputAttr_ sel = term "_" [text|on input set v to my value.toLowerCase() t
 
 
 -- | Toned icon + label chip.
+-- | One configured resource that Monoscope checks on a schedule: an uptime check, a cron
+-- monitor, a scrape target. @health@ is (tone, icon, label), so state never rests on colour.
+data ResourceRow = ResourceRow {health :: (BadgeColor, Text, Text), title :: Html (), details :: [Html ()], actions :: Html ()}
+
+
+-- | The rows of a resource list, or @emptyHtml@ when there are none. @placeholderM@ is a filter box's
+-- placeholder; it matches the rows' text in the browser.
+resourceList_ :: Text -> Maybe Text -> Html () -> [ResourceRow] -> Html ()
+resourceList_ listId placeholderM emptyHtml = \case
+  [] -> emptyHtml
+  rows -> do
+    whenJust placeholderM \placeholder -> searchInput_ "w-full mb-3" placeholder [filterInputAttr_ ("#" <> listId <> " .itemsListItem")]
+    div_ [class_ "surface-raised rounded-xl divide-y divide-strokeWeak"] $ forM_ rows \r ->
+      div_ [class_ "itemsListItem flex flex-col gap-2 px-4 py-3 text-sm sm:flex-row sm:items-center"] do
+        div_ [class_ "min-w-0 flex-1 space-y-1"] do
+          div_ [class_ "flex flex-wrap items-center gap-2"] $ let (tone, icon, label) = r.health in colorChip_ tone icon label >> r.title
+          forM_ r.details $ div_ [class_ "text-xs text-textWeak truncate"]
+        div_ [class_ "flex flex-wrap items-center gap-1 shrink-0"] r.actions
+
+
 colorChip_ :: Monad m => BadgeColor -> Text -> Text -> HtmlT m ()
 colorChip_ tone icon label = span_ [class_ $ unwords ["inline-flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1", bg, txt]] do
   faSprite_ icon "regular" "h-3 w-3"

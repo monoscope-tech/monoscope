@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), VizType (..), vizWidget, widgetWith_, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
+module Pkg.Components.Widget (Widget (..), ChartScope (..), VizType (..), vizWidget, widgetWith_, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), monitorChartType, vizChart, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -311,6 +311,15 @@ data WidgetCta = WidgetCta
   deriving (FromHttpApiData) via JSONHttpApiData WidgetCta
 
 
+-- | The environment and service a chart is pinned to, a monitor's own, in place of the
+-- viewer's selection ('Web.Routes.chartScopeParams').
+data ChartScope = ChartScope {environment :: Maybe Text, service :: Maybe Text}
+  deriving stock (Eq, Generic, Show, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ChartScope
+  deriving (FromHttpApiData) via JSONHttpApiData ChartScope
+
+
 -- | A labelled instant drawn as a vertical line, e.g. the release an issue first appeared in.
 data WidgetMarker = WidgetMarker {label :: Text, at :: Text}
   deriving stock (Generic, Show, THS.Lift)
@@ -368,6 +377,7 @@ data Widget = Widget
   , _projectId :: Maybe Projects.ProjectId
   , _dashboardId :: Maybe Text -- Dashboard ID for context
   , _tabSlug :: Maybe Text -- Slug of the dashboard tab holding the widget
+  , scope :: Maybe ChartScope
   , _isNested :: Maybe Bool
   , _centerTitle :: Maybe Bool
   , expandBtnFn :: Maybe Text
@@ -481,10 +491,6 @@ data WidgetDataset = WidgetDataset
 -- (Just "summarize count(*) by bin_auto(timestamp)",DTMetric)
 -- >>> chartQuery (def & #query ?~ "metrics | summarize max(value)")
 -- (Just "metrics | summarize max(value) by bin_auto(timestamp)",DTMetric)
--- >>> chartQuery (def & #query ?~ "metrics | summarize max(value) | summarize min(value)")
--- (Just "metrics | summarize max(value) | summarize min(value) by bin_auto(timestamp)",DTMetric)
--- >>> chartQuery (def & #query ?~ "metrics | summarize max(value) by bin(timestamp, 60) | summarize min(value)")
--- (Just "metrics | summarize max(value) by bin(timestamp, 60) | summarize min(value) by bin_auto(timestamp)",DTMetric)
 -- >>> chartQuery (def & #wType .~ WTStat & #query ?~ "kind == \"server\"")
 -- (Just "kind == \"server\" | summarize count(*)",DTFloat)
 -- >>> chartQuery (def & #wType .~ WTStat & #query ?~ "name != null | summarize dcount(name)")
@@ -521,13 +527,13 @@ chartQuery w
     shape q = case parseQueryToAST q of
       -- Let the query handler report errors in the original malformed query.
       Left _ -> q
-      Right ast ->
-        let (summarized, binned) = mapAccumR addBin False ast
-         in if not summarized then foldMap (<> " | ") (nonEmptyT (Just (T.strip q))) <> summary else if binned == ast then q else toQText binned
-    addBin False section@(SummarizeCommand aggs by)
-      | isStat || resultShape [section] == TimeSeries = (True, section)
-      | otherwise = (True, SummarizeCommand aggs $ Just $ SummarizeByClause $ ByBinFunc (BinAuto $ Subject "timestamp" "timestamp" []) : foldMap coerce by)
-    addBin seen section = (seen, section)
+      Right ast
+        | resultShape ast == Events -> foldMap (<> " | ") (nonEmptyT (Just (T.strip q))) <> summary
+        | isStat || resultShape ast == TimeSeries -> q
+        | otherwise -> toQText (map addBin ast)
+    addBin = \case
+      SummarizeCommand aggs by -> SummarizeCommand aggs $ Just $ SummarizeByClause $ ByBinFunc (BinAuto $ Subject "timestamp" "timestamp" []) : foldMap coerce by
+      section -> section
 
 
 -- | Convert MetricsData to WidgetDataset (timestamps already in ms from queryMetrics). A grouped
@@ -1505,6 +1511,7 @@ renderChart actions widget = do
           , "highlightTo" AE..= widget.highlightTo
           , "markers" AE..= widget.markers
           , "dashboardId" AE..= widget._dashboardId
+          , "scope" AE..= widget.scope
           ]
       isStat = isStatWidget widget
       isMap = widget.wType == WTGeomap
@@ -1872,10 +1879,17 @@ mapWidgetTypeToChartType WTGeomap = "map" -- ECharts choropleth over static/publ
 mapWidgetTypeToChartType _ = "bar"
 
 
-mapChartTypeToWidgetType :: Text -> WidgetType
-mapChartTypeToWidgetType "line" = WTTimeseriesLine
-mapChartTypeToWidgetType "timeseries_line" = WTTimeseriesLine
-mapChartTypeToWidgetType _ = WTTimeseries
+-- | The chart for a monitor's query in its saved view, chosen as the explorer chooses ('vizFor').
+--
+-- >>> map (uncurry monitorChartType) [("summarize count() by name", "timeseries"), ("kind == \"server\"", "timeseries_line"), ("kind == \"server\"", "logs")]
+-- [WTTopList,WTTimeseriesLine,WTTimeseries]
+monitorChartType :: Text -> Text -> WidgetType
+monitorChartType query viz = vizChart $ vizFor (either (const Events) resultShape $ parseQueryToAST query) (rightToMaybe (parseQueryParam viz) <|> Just VizTimeseries)
+
+
+-- | A view's chart; a view the explorer draws as rows is counted over time instead.
+vizChart :: VizType -> WidgetType
+vizChart = fromMaybe WTTimeseries . mfilter (/= WTLogs) . vizWidget
 
 
 renderTableWithDataAndParams :: Widget -> V.Vector Text -> V.Vector (V.Vector Text) -> [(Text, Maybe Text)] -> Html ()

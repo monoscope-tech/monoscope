@@ -2860,13 +2860,13 @@ issueTypeChip_ compact issueType =
 -- 4xx/5xx status). Mirrors @isIssueWorthy@ in BackgroundJobs.
 logLevelChip_ :: Monad m => Maybe Text -> Text -> HtmlT m ()
 logLevelChip_ logLevel pat =
-  let effective = case T.toUpper <$> logLevel of
-        Just l
-          | l `elem` ["ERROR", "FATAL", "CRITICAL"] -> Just "ERROR"
-          | l `elem` ["WARN", "WARNING"] -> Just "WARN"
+  let effective = case logLevel of
+        Just (Telemetry.parseSeverity -> Just (_, sl))
+          | sl >= Telemetry.SLError -> Just "ERROR"
+          | sl == Telemetry.SLWarn -> Just "WARN"
         other
           | any (`T.isInfixOf` pat) ["status;badge-error⇒ERROR", "status_code;badge-4xx", "status_code;badge-5xx"] -> Just "ERROR"
-          | otherwise -> other
+          | otherwise -> T.toUpper <$> other
       (tone, icon, label) = case effective of
         Just "ERROR" -> (ErrorBadge, "triangle-alert", "ERROR")
         Just "WARN" -> (WarningBadge, "triangle-alert", "WARN")

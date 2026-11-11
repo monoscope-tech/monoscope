@@ -21,6 +21,7 @@ module Models.Telemetry.Telemetry (
   traceIdOf,
   Trace (..),
   SeverityLevel (..),
+  parseSeverity,
   SpanStatus (..),
   SpanKind (..),
   AggregationTemporality (..),
@@ -267,9 +268,20 @@ resourceServiceName = atMapText "service.name"
 
 
 data SeverityLevel = SLTrace | SLDebug | SLInfo | SLWarn | SLError | SLFatal
-  deriving (Bounded, Enum, Generic, Read, Show)
+  deriving (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "SL" SeverityLevel
+
+
+-- | Severity text, any case and SDK spelling, as (canonical text, level).
+--
+-- >>> map parseSeverity ["warning", "CRITICAL", "Error", "verbose"]
+-- [Just ("WARN",SLWarn),Just ("FATAL",SLFatal),Just ("ERROR",SLError),Nothing]
+parseSeverity :: Text -> Maybe (Text, SeverityLevel)
+parseSeverity = (`Map.lookup` table) . T.toUpper
+  where
+    base = Map.fromList [(t, (t, sl)) | sl <- universe, let t = T.toUpper (display sl)]
+    table = base <> Map.mapMaybe (`Map.lookup` base) (Map.fromList [("WARNING", "WARN" :: Text), ("INFORMATION", "INFO"), ("CRITICAL", "FATAL")])
 
 
 data SpanStatus = SSOk | SSError | SSUnset
@@ -2408,17 +2420,16 @@ traceIdOf :: OtelLogsAndSpans -> Maybe Text
 traceIdOf r = nonEmptyT (r.context >>= (.trace_id))
 
 
--- | Predicate mirroring the Sessions UI @is_error@ SQL
--- (@lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR'@).
--- Any record the UI flags as an error should also feed the Issues pipeline so teams
--- get notified — covers frontend @console.error@ logs and server spans marked ERROR
--- without a recorded exception event.
+-- | 'Pkg.Parser.Expr.isErrorSql' over a decoded row. Any record the UI flags as an error
+-- also feeds the Issues pipeline — frontend @console.error@ logs and server spans marked
+-- ERROR without a recorded exception event.
 isErrorRecord :: OtelLogsAndSpans -> Bool
 isErrorRecord s =
-  maybe False ((== "error") . T.toLower) s.level
-    || maybe False ((>= 17) . (.severity_number)) s.severity
+  any ((`elem` ["error", "fatal"]) . T.toLower) s.level
+    || any ((>= 17) . (.severity_number)) s.severity
     || s.status_code
     == Just "ERROR"
+    || isJust (Map.lookup "type" =<< jsonToMap =<< Map.lookup "exception" =<< unAesonTextMaybe s.attributes)
 
 
 -- | Extract all runtime errors from a collection of spans/logs.

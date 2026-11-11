@@ -56,6 +56,14 @@ describe('reading a query into the builder', () => {
     expect(q.builder.groupByFields).toEqual(['service_name']);
   });
 
+  test('a query that opens with summarize, with no leading pipe, is read too', async () => {
+    const q = await withQuery('summarize count() by service_name');
+    q.parse();
+
+    expect(q.builder.aggregations).toEqual([{ function: 'count', field: '' }]);
+    expect(q.builder.groupByFields).toEqual(['service_name']);
+  });
+
   test('a group-by list splits on top-level commas only, not inside a function call', async () => {
     const q = await withQuery('* | summarize count() by bin(timestamp, 5m), service_name');
     q.parse();

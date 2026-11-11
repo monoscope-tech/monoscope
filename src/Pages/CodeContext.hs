@@ -61,7 +61,7 @@ import Network.Wai qualified as Wai
 import Numeric (showFFloat)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx)
-import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), callout_, colorChip_, disclosure_, emptyState_, filterInputAttr_, formField_, formSelectField_, installationSettingsLink_, localTimeFmt_, options_, panel_, settingsH2_)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), callout_, colorChip_, dialogTrigger_, disclosure_, emptyState_, filterInputAttr_, formField_, formSelectField_, installationSettingsLink_, localTimeFmt_, nativeDialog_, options_, panel_, settingsH2_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
@@ -693,7 +693,7 @@ repositoriesPageH pid selection = do
                     )
                 , Table.col "Revision" (\run -> code_ [class_ "text-xs text-textWeak", title_ run.revision] $ toHtml $ T.take 8 run.revision)
                 , Table.col "Reviewed" (\run -> span_ [class_ "whitespace-nowrap text-xs text-textWeak tabular-nums"] $ localTimeFmt_ "MMM d, HH:mm" run.createdAt)
-                , Table.col "" (\run -> button_ [type_ "button", class_ "btn btn-sm btn-ghost btn-square -me-2", onclick_ $ "document.getElementById('review-" <> run.id.toText <> "').showModal()", Aria.label_ $ "View review for " <> run.owner <> "/" <> run.repo <> " #" <> show run.number] $ faSprite_ "chevron-right" "regular" "h-3.5 w-3.5")
+                , Table.col "" (\run -> dialogTrigger_ ("review-" <> run.id.toText) [class_ "btn btn-sm btn-ghost btn-square -me-2", Aria.label_ $ "View review for " <> run.owner <> "/" <> run.repo <> " #" <> show run.number] $ faSprite_ "chevron-right" "regular" "h-3.5 w-3.5")
                 ]
             , Table.rows = V.fromList runs
             , Table.features =
@@ -711,58 +711,54 @@ repositoriesPageH pid selection = do
                           }
                   }
             }
-        forM_ runs \run -> term "dialog" [id_ $ "review-" <> run.id.toText, Aria.labelledby_ $ "review-title-" <> run.id.toText, class_ "modal overscroll-contain"] do
-          div_ [class_ "modal-box w-full max-w-4xl space-y-5 p-6"] do
-            div_ [class_ "space-y-2"] do
-              h2_ [id_ $ "review-title-" <> run.id.toText, class_ "text-lg font-semibold text-textStrong break-words"] $ toHtml (run.owner <> "/" <> run.repo <> " #" <> show run.number)
-              div_ [class_ "flex flex-wrap items-center gap-3 text-xs text-textWeak"] do
-                toHtml @Text $ "Review " <> show run.state
-                code_ [title_ run.revision] $ toHtml $ T.take 8 run.revision
-            for_ (find ((== Just run.id) . (.runId)) usage) \total -> do
-              p_ [class_ "mt-2 text-sm text-textWeak"] $ toHtml $ usageText total.usage
-              p_ [class_ "text-sm text-textWeak"] $ toHtml $ resourceText total.resources
-            let executions = [receipt | execution <- checks, execution.runId == run.id, let Aeson receipt = execution.receipt]
-            unless (null executions) $ div_ [class_ "mt-3 space-y-2 text-sm"] do
-              p_ [class_ "font-medium text-textStrong"] "Local regression checks"
-              p_ [class_ "text-xs text-textWeak"] "Recorded execution results do not establish that a check covers the reported bug. Compute cost is unpriced."
-              for_ (NE.groupAllWith (.checkId) executions) \comparison@(representative :| _) -> div_ [class_ "space-y-1"] do
-                p_ [class_ "text-xs text-textWeak"] $ toHtml @Text $ "Check " <> T.take 8 representative.checkId.toText
-                ul_ [class_ "space-y-1 text-textWeak"] $ for_ comparison \receipt -> do
-                  let status = case receipt.status of
-                        Agent.Passed -> "passed"
-                        Agent.Failed -> "assertion failed"
-                        Agent.Blocked -> "setup blocked"
-                        Agent.Invalidated -> "source changed"
-                        Agent.TimedOut -> "timed out"
-                        Agent.OutputLimit -> "output limit reached"
-                        Agent.Cancelled -> "cancelled"
-                        Agent.CleanupFailed -> "cleanup failed"
-                  li_ [class_ "flex flex-wrap items-baseline gap-2"] do
-                    toHtml @Text $ (case receipt.side of Agent.Base -> "Base"; Agent.Head -> "Head") <> ": " <> status
-                    code_ [class_ "text-xs"] $ toHtml $ T.take 8 receipt.revision
-                    span_ [class_ "tabular-nums"] $ toHtml @Text $ show receipt.durationMs <> " ms · " <> show receipt.cpus <> " vCPUs · " <> show receipt.memoryMiB <> " MiB"
-            whenJust run.error $ p_ [class_ "text-sm text-textError break-words"] . toHtml
-            case run.result of
-              Nothing -> p_ [class_ "text-sm text-textWeak"] $ toHtml @Text case run.state of
-                ImpactReviews.Queued -> "This review is queued."
-                ImpactReviews.Reviewing -> "This review is in progress."
-                ImpactReviews.Superseded -> "A newer revision replaced this review."
-                ImpactReviews.Completed -> "No review result is available."
-                ImpactReviews.Incomplete -> "No review result is available."
-              Just value -> case AE.fromJSON value of
-                AE.Error _ -> p_ [class_ "text-sm text-textWeak"] "The saved review could not be displayed. Rerun the review."
-                AE.Success result -> do
-                  div_ [class_ "prose prose-sm max-w-none break-words [&_pre]:overflow-x-auto"] $ renderMarkdown (ImpactReview.renderReview cfg.hostUrl run ImpactReview.MonoscopeView result)
-                  for_ (nonEmpty =<< result.knowledge) \notes -> details_ [class_ "mt-3 text-sm text-textWeak"] do
-                    summary_ [class_ "cursor-pointer font-medium"] "Service knowledge from this review"
-                    p_ [class_ "mt-2 text-xs"] "Agent conclusions from the recorded evidence window. Recheck against current code and telemetry."
-                    ul_ [class_ "mt-2 space-y-2"] $ for_ notes \note -> li_ do
-                      span_ [class_ "font-medium"] $ toHtml note.service
-                      toHtml @Text $ ": " <> note.summary
-            div_ [class_ "flex flex-wrap justify-end gap-2 border-t border-strokeWeak pt-4"] do
-              form_ [method_ "dialog"] $ button_ [class_ "btn btn-sm btn-ghost", autofocus_] "Close"
-              when (canEdit && run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [type_ "button", class_ "btn btn-sm btn-primary", hxPost_ (urls.impactReviewRetry pid run.id), hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph", [__|on click call (closest <dialog/>).close()|]] "Rerun review"
-          form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close review"] "Close"
+        forM_ runs \run -> nativeDialog_ ("review-" <> run.id.toText) (run.owner <> "/" <> run.repo <> " #" <> show run.number) "w-full max-w-4xl space-y-5 p-6" do
+          div_ [class_ "flex flex-wrap items-center gap-3 text-xs text-textWeak -mt-3"] do
+            toHtml @Text $ "Review " <> show run.state
+            code_ [title_ run.revision] $ toHtml $ T.take 8 run.revision
+          for_ (find ((== Just run.id) . (.runId)) usage) \total -> do
+            p_ [class_ "mt-2 text-sm text-textWeak"] $ toHtml $ usageText total.usage
+            p_ [class_ "text-sm text-textWeak"] $ toHtml $ resourceText total.resources
+          let executions = [receipt | execution <- checks, execution.runId == run.id, let Aeson receipt = execution.receipt]
+          unless (null executions) $ div_ [class_ "mt-3 space-y-2 text-sm"] do
+            p_ [class_ "font-medium text-textStrong"] "Local regression checks"
+            p_ [class_ "text-xs text-textWeak"] "Recorded execution results do not establish that a check covers the reported bug. Compute cost is unpriced."
+            for_ (NE.groupAllWith (.checkId) executions) \comparison@(representative :| _) -> div_ [class_ "space-y-1"] do
+              p_ [class_ "text-xs text-textWeak"] $ toHtml @Text $ "Check " <> T.take 8 representative.checkId.toText
+              ul_ [class_ "space-y-1 text-textWeak"] $ for_ comparison \receipt -> do
+                let status = case receipt.status of
+                      Agent.Passed -> "passed"
+                      Agent.Failed -> "assertion failed"
+                      Agent.Blocked -> "setup blocked"
+                      Agent.Invalidated -> "source changed"
+                      Agent.TimedOut -> "timed out"
+                      Agent.OutputLimit -> "output limit reached"
+                      Agent.Cancelled -> "cancelled"
+                      Agent.CleanupFailed -> "cleanup failed"
+                li_ [class_ "flex flex-wrap items-baseline gap-2"] do
+                  toHtml @Text $ (case receipt.side of Agent.Base -> "Base"; Agent.Head -> "Head") <> ": " <> status
+                  code_ [class_ "text-xs"] $ toHtml $ T.take 8 receipt.revision
+                  span_ [class_ "tabular-nums"] $ toHtml @Text $ show receipt.durationMs <> " ms · " <> show receipt.cpus <> " vCPUs · " <> show receipt.memoryMiB <> " MiB"
+          whenJust run.error $ p_ [class_ "text-sm text-textError break-words"] . toHtml
+          case run.result of
+            Nothing -> p_ [class_ "text-sm text-textWeak"] $ toHtml @Text case run.state of
+              ImpactReviews.Queued -> "This review is queued."
+              ImpactReviews.Reviewing -> "This review is in progress."
+              ImpactReviews.Superseded -> "A newer revision replaced this review."
+              ImpactReviews.Completed -> "No review result is available."
+              ImpactReviews.Incomplete -> "No review result is available."
+            Just value -> case AE.fromJSON value of
+              AE.Error _ -> p_ [class_ "text-sm text-textWeak"] "The saved review could not be displayed. Rerun the review."
+              AE.Success result -> do
+                div_ [class_ "prose prose-sm max-w-none break-words [&_pre]:overflow-x-auto"] $ renderMarkdown (ImpactReview.renderReview cfg.hostUrl run ImpactReview.MonoscopeView result)
+                for_ (nonEmpty =<< result.knowledge) \notes -> details_ [class_ "mt-3 text-sm text-textWeak"] do
+                  summary_ [class_ "cursor-pointer font-medium"] "Service knowledge from this review"
+                  p_ [class_ "mt-2 text-xs"] "Agent conclusions from the recorded evidence window. Recheck against current code and telemetry."
+                  ul_ [class_ "mt-2 space-y-2"] $ for_ notes \note -> li_ do
+                    span_ [class_ "font-medium"] $ toHtml note.service
+                    toHtml @Text $ ": " <> note.summary
+          div_ [class_ "flex flex-wrap justify-end gap-2 border-t border-strokeWeak pt-4"] do
+            form_ [method_ "dialog"] $ button_ [class_ "btn btn-sm btn-ghost", autofocus_] "Close"
+            when (canEdit && run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [type_ "button", class_ "btn btn-sm btn-primary", hxPost_ (urls.impactReviewRetry pid run.id), hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph", [__|on click call (closest <dialog/>).close()|]] "Rerun review"
     FixesPage -> do
       runs <- if session.persistentSession.id == demoGuestSessionId then pure [] else IssueFixes.latestMediaForUser pid session.user.id
       pure $ section_ [class_ "space-y-4"] do
@@ -1140,18 +1136,15 @@ instance ToHtml RepositoryGet where
     when canEdit $ panel_ Raised def{icon = Just "link-slash"} "Remove connection" $ do
       div_ [class_ "space-y-3"] do
         p_ [class_ "max-w-[65ch] text-sm leading-relaxed text-textWeak"] "Stop using this repository for source context, pull request reviews, and configuration sync. Dashboards and monitors stay local and review history is retained. Shared repository accounts remain connected."
-        button_ [type_ "button", onclick_ "document.getElementById('remove-repository-dialog').showModal()", class_ "btn btn-sm btn-outline text-textError hover:bg-fillError-weak"] "Remove repository"
-      term "dialog" [id_ "remove-repository-dialog", Aria.labelledby_ "remove-repository-title", Aria.describedby_ "remove-repository-description", class_ "modal overscroll-contain"] do
-        div_ [class_ "modal-box space-y-4 p-6"] do
-          h2_ [id_ "remove-repository-title", class_ "text-lg font-semibold text-textStrong break-all"] $ toHtml $ "Remove " <> repository.owner <> "/" <> repository.repo <> "?"
-          p_ [id_ "remove-repository-description", class_ "text-sm text-textWeak"] "Source context, automatic reviews, and configuration sync will stop for this repository. Dashboards, monitors, and review history are retained. You can connect the repository again later."
-          div_ [id_ "remove-repository-feedback"] ""
-          div_ [class_ "flex flex-wrap justify-end gap-2"] do
-            form_ [method_ "dialog"] $ button_ [class_ "btn btn-sm btn-ghost", autofocus_] "Cancel"
-            button_ [type_ "button", hxDelete_ (urls.repositoryDelete pid rid), hxTarget_ "#remove-repository-feedback", hxSwap_ "innerHTML", term "hx-disable" "this", hxIndicator_ "#remove-repository-indicator", class_ "btn btn-sm bg-fillError-strong text-textInverse-strong hover:opacity-90 gap-2"] do
-              "Remove repository"
-              htmxIndicator_ "remove-repository-indicator" LdXS
-        form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Cancel removal"] "Close"
+        dialogTrigger_ "remove-repository-dialog" [class_ "btn btn-sm btn-outline text-textError hover:bg-fillError-weak"] "Remove repository"
+      nativeDialog_ "remove-repository-dialog" ("Remove " <> repository.owner <> "/" <> repository.repo <> "?") "space-y-4 p-6" do
+        p_ [class_ "text-sm text-textWeak"] "Source context, automatic reviews, and configuration sync will stop for this repository. Dashboards, monitors, and review history are retained. You can connect the repository again later."
+        div_ [id_ "remove-repository-feedback"] ""
+        div_ [class_ "flex flex-wrap justify-end gap-2"] do
+          form_ [method_ "dialog"] $ button_ [class_ "btn btn-sm btn-ghost", autofocus_] "Cancel"
+          button_ [type_ "button", hxDelete_ (urls.repositoryDelete pid rid), hxTarget_ "#remove-repository-feedback", hxSwap_ "innerHTML", term "hx-disable" "this", hxIndicator_ "#remove-repository-indicator", class_ "btn btn-sm bg-fillError-strong text-textInverse-strong hover:opacity-90 gap-2"] do
+            "Remove repository"
+            htmxIndicator_ "remove-repository-indicator" LdXS
   toHtmlRaw = toHtml
 
 
