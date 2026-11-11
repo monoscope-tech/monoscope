@@ -301,12 +301,25 @@ renderVideo page video = renderMedia video \directory run -> do
   probed <- readProcessStdout_ (proc "ffprobe" ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", directory </> "proof.mp4"])
   let total = max 1 $ fromMaybe 30 $ readMaybe @Double $ toString $ T.strip $ decodeUtf8 probed
       shown = min 30 total
-      seconds = round total :: Int
-  writeFileBS (directory </> "proof.label") $ encodeUtf8 $ "▶  Play full video  ·  " <> show (seconds `div` 60) <> ":" <> T.justifyRight 2 '0' (show (seconds `mod` 60))
+  let clock t = let n = round t :: Int in show (n `div` 60) <> ":" <> T.justifyRight 2 '0' (show (n `mod` 60))
+  for_ [("proof.start", "0:00"), ("proof.end", clock shown), ("proof.label", "▶  Watch full video  ·  " <> clock total)] \(name, label) -> writeFileBS (directory </> name) (encodeUtf8 label)
   let preview (fps, width, quality) = do
-        let timeline = "drawbox=x=0:y=ih-6:w=iw:h=6:color=white@0.3:t=fill,drawbox=x=0:y=ih-6:w=iw*" <> show (shown / total) <> ":h=6:color=0x2F6FED@0.5:t=fill"
-            label = text "textfile=proof.label:fontcolor=white:fontsize=20:box=1:boxcolor=0x0B1220@0.8:boxborderw=12:x=w-tw-26:y=h-th-30"
-        run "ffmpeg" (quiet <> ["-t", "30", "-i", "proof.mp4", "-f", "lavfi", "-i", "color=c=0x2F6FED:s=1920x6:r=" <> fps, "-filter_complex", "[0:v]fps=" <> fps <> ",scale='min(" <> width <> ",iw)':-2:flags=lanczos," <> timeline <> "," <> label <> "[v];[v][1:v]overlay=x=W*t/" <> show total <> "-w:y=H-6:shortest=1", "-c:v", "libwebp_anim", "-quality", quality, "-loop", "0", "-f", "webp", "proof.gif"])
+        -- A player bar: the clip's start and end times either side of a track of the whole video, with
+        -- the clip bracketed in blue and a playhead moving through it.
+        let clip = "(iw-420)*" <> show (shown / total)
+            timeline =
+              intercalate
+                ","
+                [ "drawbox=x=0:y=ih-46:w=iw:h=46:color=0x0B1220@0.82:t=fill"
+                , text "textfile=proof.start:fontcolor=white:fontsize=18:x=16:y=h-33"
+                , "drawbox=x=72:y=ih-27:w=iw-420:h=8:color=white@0.22:t=fill"
+                , "drawbox=x=72:y=ih-27:w=" <> clip <> ":h=8:color=0x2F6FED@0.55:t=fill"
+                , "drawbox=x=69:y=ih-35:w=3:h=24:color=0x2F6FED:t=fill"
+                , "drawbox=x=72+" <> clip <> ":y=ih-35:w=3:h=24:color=0x2F6FED:t=fill"
+                , text "textfile=proof.end:fontcolor=white:fontsize=18:x=w-334:y=h-33"
+                , text "textfile=proof.label:fontcolor=white:fontsize=17:box=1:boxcolor=white@0.16:boxborderw=8:x=w-tw-18:y=h-32"
+                ]
+        run "ffmpeg" (quiet <> ["-t", "30", "-i", "proof.mp4", "-f", "lavfi", "-i", "color=c=white:s=4x18:r=" <> fps, "-filter_complex", "[0:v]fps=" <> fps <> ",scale='min(" <> width <> ",iw)':-2:flags=lanczos," <> timeline <> "[v];[v][1:v]overlay=x=72+(W-420)*t/" <> show total <> ":y=H-32:shortest=1", "-c:v", "libwebp_anim", "-quality", quality, "-loop", "0", "-f", "webp", "proof.gif"])
         (<= 4718592) <$> getFileSize (directory </> "proof.gif")
   unlessM (anyM preview [("8", "1200", "60"), ("6", "960", "50"), ("4", "800", "40")]) $ throwIO $ userError "the preview exceeds GitHub's image size limit"
 

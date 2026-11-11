@@ -41,6 +41,8 @@ module Web.Links (
   explorerUrl,
   widgetPngPath,
   ProofMediaGet,
+  ProofRatingGet,
+  proofRatingPath,
   proofMediaPath,
 ) where
 
@@ -600,6 +602,13 @@ type WidgetPngGet = "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT 
 
 -- | Recorded proof media, signed per file so GitHub's image proxy can fetch it without a session.
 type ProofMediaGet = "p" :> ProjectId :> "reviews" :> Capture "review_id" (UUIDId "pr_review") :> "proofs" :> Capture "file" ImpactReviews.ProofFile :> QPT "sig" :> RawM
+
+
+type ProofRatingGet = "p" :> ProjectId :> "reviews" :> Capture "review_id" (UUIDId "pr_review") :> "rating" :> Capture "rating" ImpactReviews.Rating :> QPT "sig" :> Get '[HTML] (Html ())
+
+
+proofRatingPath :: Projects.ProjectId -> UUIDId "pr_review" -> ImpactReviews.Rating -> Text -> Text
+proofRatingPath pid rid rating sig = safeLink' (("/" <>) . toUrlPiece) (Proxy @ProofRatingGet) (Proxy @ProofRatingGet) pid rid rating (Just sig)
 
 
 proofMediaPath :: Projects.ProjectId -> UUIDId "pr_review" -> ImpactReviews.ProofFile -> Text -> Text

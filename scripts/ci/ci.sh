@@ -966,8 +966,15 @@ cmd_deploy_worker() { # [sha]
   caprover_env
   [ -n "${IMPACT_WORKER_HOST:-}" ] || { note "IMPACT_WORKER_HOST unset — proof worker not redeployed"; return 0; }
   scripts/ci/release.sh worker "$sha"
-  ssh -o BatchMode=yes "$IMPACT_WORKER_HOST" "sudo docker pull -q $worker:$sha && sudo docker tag $worker:$sha $worker:current && sudo systemctl restart monoscope-impact-worker"
-  note "proof worker restarted on $sha"
+  # A restart kills the reviews it interrupts, so the host restarts the worker once none is running,
+  # waiting at most a review's budget; ship does not wait for it.
+  ssh -o BatchMode=yes "$IMPACT_WORKER_HOST" sudo bash -s "$worker" "$sha" <<'REMOTE'
+set -e
+docker pull -q "$1:$2" >/dev/null && docker tag "$1:$2" "$1:current"
+systemd-run --quiet --collect --unit "monoscope-impact-worker-restart-${2:0:12}" sh -c \
+  'for _ in $(seq 160); do docker top monoscope-impact-worker -o pid,args | grep -qE "pi-host|sandbox.mjs" || break; sleep 15; done; systemctl restart monoscope-impact-worker'
+REMOTE
+  note "proof worker restarts on $sha once no review is running"
 }
 
 # ---------------------------------------------------------------- ship

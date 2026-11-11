@@ -201,6 +201,7 @@ data Routes mode = Routes
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> RawM
   , widgetPngGet :: mode :- WidgetPngGet
   , proofMediaGet :: mode :- ProofMediaGet
+  , proofRatingGet :: mode :- ProofRatingGet
   , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[HTML] (RespHeaders Onboarding.ProxiedPage)
   , deviceCode :: mode :- "api" :> "device" :> "code" :> Post '[JSON] Auth.DeviceCodeResponse
   , deviceToken :: mode :- "api" :> "device" :> "token" :> QPT "device_code" :> Post '[JSON] Auth.DeviceTokenResponse
@@ -255,6 +256,7 @@ server otlpTraces otlpLogs =
         , avatarGet = avatarGetH
         , widgetPngGet = widgetPngGetH
         , proofMediaGet = proofMediaGetH
+        , proofRatingGet = proofRatingGetH
         , proxyLanding = \path ->
             Onboarding.proxyLandingH path
               & State.evalState @TriggerEvents mempty
@@ -809,6 +811,15 @@ proofMediaGetH pid rid file sigM request send = do
   bytes <- maybe (Error.throwError err404) pure =<< ImpactReviews.proofFile pid rid file
   let mime = case file.asset of ImpactReviews.Recording ImpactReviews.Gif -> if "RIFF" `BS.isPrefixOf` bytes then "image/webp" else "image/gif"; ImpactReviews.Recording ImpactReviews.Mp4 -> "video/mp4"; ImpactReviews.Recording ImpactReviews.Cast -> "application/x-asciicast"; ImpactReviews.Screenshot _ -> "image/png"
   liftIO $ send $ PageCodeContext.rangedMedia request [(H.hContentType, mime), (H.hCacheControl, "public, max-age=31536000, immutable")] (toLazy bytes)
+
+
+-- | A PR author's Yes or No on a review's proofs, from the signed links in its comment.
+proofRatingGetH :: Projects.ProjectId -> UUIDId "pr_review" -> ImpactReviews.Rating -> Maybe Text -> ATBaseCtx (Html ())
+proofRatingGetH pid rid rating sigM = do
+  ctx <- ask @AuthContext
+  whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid (ImpactReviews.ratingSignedPath rid rating) sigM) \err -> Error.throwError err403{errBody = err}
+  unlessM (ImpactReviews.rateRun pid rid rating) $ Error.throwError err404
+  pure $ p_ $ "Thanks. Monoscope recorded that this proof " <> (case rating of ImpactReviews.Up -> "got it right"; ImpactReviews.Down -> "got it wrong") <> "."
 
 
 -- | Public endpoint for rendering widgets to PNG (for bot embeds). Requires valid HMAC signature.

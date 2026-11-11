@@ -54,7 +54,7 @@ toolDefinition role name = Tool name (toolDescription name) (schema role name) (
       ReadProjectMemory -> "Read the latest revision of a project wiki page. Recheck conclusions against current source and telemetry."
       WriteProjectMemory -> "Save concise reusable project context as a new wiki revision. Preserve useful existing content. Supply the last read version to avoid overwriting concurrent edits; a new UUID page starts at version 0. Exclude credentials, personal data, raw logs and source excerpts. This is an attributed agent observation, not verified evidence."
       PlanProofs -> "Before recording, list the claims you will prove, in the order you will prove them. The PR author watches each one go from planned to running to recorded in the review comment. Call it again if the plan changes."
-      RecordProof -> "Prove one claim of the pull request by running it. The host runs your setup, then records your bash command with asciinema, in fresh offline VMs at the pinned base and head, and shows both recordings to the PR author as video. Put app startup, migrations and seed data in setup so the recording only shows the behaviour: a CLI command and its output, a curl request against the app, or a test run. There is no network beyond the VM. Print a short heading before each step so the recording explains itself. Keep it under a minute. At most three attempts per review; cite the returned proof key in a claim. A setup whose head recording succeeds becomes the repository's saved setup for later reviews. For a UI change, prove it in a browser: when the guest has /opt/proof (Chromium, Playwright, Node), drive the page with a Playwright script and write into $PROOF_MEDIA one recordVideo .webm of the interaction, up to four .png screenshots cropped to what changed and named for what they show (\"Survey menu.png\"), chapters.tsv lines of seconds<TAB>step, and page.tsv with the page title<TAB>URL for the browser window drawn around the video. The PR author sees the video, chapters and screenshots side by side for base and head."
+      RecordProof -> "Prove one claim of the pull request by running it; one recording can also prove several related claims (covers). The host runs your setup, then records your bash command with asciinema, in fresh offline VMs at the pinned base and head, and shows both recordings to the PR author as video. Put app startup, migrations and seed data in setup so the recording only shows the behaviour: a CLI command and its output, a curl request against the app, or a test run. There is no network beyond the VM. Print a short heading before each step so the recording explains itself. Keep it under a minute. At most three attempts per review; cite the returned proof key in a claim. A setup whose head recording succeeds becomes the repository's saved setup for later reviews. For a UI change, prove it in a browser: when the guest has /opt/proof (Chromium, Playwright, Node), drive the page with a Playwright script and write into $PROOF_MEDIA one recordVideo .webm of the interaction, up to four .png screenshots cropped to what changed and named for what they show (\"Survey menu.png\"), chapters.tsv lines of seconds<TAB>step, and page.tsv with the page title<TAB>URL for the browser window drawn around the video. The PR author sees the video, chapters and screenshots side by side for base and head."
       SubmitReview | role == Source -> "Submit concrete source findings with valid file ranges at the pinned head. Repair rejected output; after acceptance, finish without further tools."
       SubmitReview -> "Submit structured findings and coverage for validation. Repair any validation error using repository or telemetry evidence. After acceptance, finish without further tool calls."
 
@@ -174,10 +174,11 @@ schema role = \case
       , ("command", bounded 1 (Just 16384) & O.description ?~ "Bash run from /workspace on each revision and recorded. Exit nonzero when the claimed behaviour is absent.")
       , ("setup", bounded 1 (Just 16384) & O.description ?~ "Optional bash run first and not recorded: build and start the app in the background, migrate and seed its data, and wait until it answers. Reuse the repository's saved setup unchanged when it still applies. It runs in its own shell, so exports do not reach the command; use fixed ports or write values to a file.")
       , ("highlight", bounded 1 (Just 200) & O.description ?~ "Optional text the command prints at the moment the claimed behaviour shows, such as a step heading. For a terminal proof, the comment's preview is an eight-second clip from there, with a timeline of the whole recording; without it, the clip is the recording's end.")
+      , ("covers", array 1 11 (bounded 1 $ Just 200) & O.description ?~ "Other planned claims this one recording also proves, as plan_proofs stated them. Script one case per claim, each behind its own chapter.")
       ]
       & O.required
       .~ ["claim", "command"]
-  PlanProofs -> object [("claims", array 1 3 $ bounded 1 (Just 200) & O.description ?~ "A claim as record_proof will state it.")]
+  PlanProofs -> object [("claims", array 1 12 $ bounded 1 (Just 200) & O.description ?~ "A claim as record_proof will state it.")]
   RecallKnowledge -> object [("service", bounded 1 Nothing)]
   RememberKnowledge -> object [("service", bounded 1 Nothing), ("summary", bounded 1 $ Just 600), ("evidenceKeys", array 1 3 text)]
   ListProjectMemory -> object [("query", bounded 1 $ Just 200)] & O.required .~ []
@@ -206,7 +207,7 @@ schema role = \case
       , ("coverage", array 0 10 (bounded 1 $ Just 400) & O.description ?~ "Missing evidence or verification only. Do not summarize completed investigation.")
       ,
         ( "claims"
-        , array 0 5 (object [("title", bounded 1 $ Just 200), ("status", enum ["matches", "differs", "unverified"]), ("summary", bounded 1 $ Just 600), ("proofKeys", array 0 3 text)])
+        , array 0 12 (object [("title", bounded 1 $ Just 200), ("status", enum ["matches", "differs", "unverified"]), ("summary", bounded 1 $ Just 600), ("proofKeys", array 0 3 text)])
             & O.description
             ?~ "What the PR says it does, checked. matches and differs must cite proof keys from record_proof; differs means the recording contradicts the PR description. unverified explains what could not be recorded. The title names the behaviour in a few words (\"End survey closes a live survey\"). The summary is one sentence about what a user now sees, then what they saw before: \"Clear sits beside Pause on one row at 1280px; before, it wrapped below the filters.\" Leave out how it was checked (recording, revision, base, head, passes, fails); the recording shows that."
         )
@@ -217,7 +218,15 @@ schema role = \case
             & O.description
             ?~ "Grade each dimension once; gaps say concretely what raises the risk, without production numbers. alignment: the code does what the title and description claim; undocumented drive-by changes lower it. impact: blast radius; auth, permissions, payments, personal data, secrets, data migrations, dependency bumps, infra or config, and heavily used production paths raise it (good = small, poor = large). verification: tests or recorded proof exercise the changed behaviour, before and after; user-facing changes without end-to-end proof are poor. rollback: good = easily reverted; poor = one-way door such as a destructive migration, a data rewrite or an external side effect. error_detection: if this breaks in production, telemetry or monitors show it before users do; swallowed errors and new paths without logs, spans or metrics lower it; not_applicable only when nothing changed runs in production."
         )
+      ,
+        ( "issues"
+        , array 0 3 (object [("title", bounded 1 $ Just 200), ("summary", bounded 1 $ Just 600), ("proofKeys", array 0 3 text)])
+            & O.description
+            ?~ "Something a recording showed broken that the PR does not say it changes, such as a layout that overflows or a control that stops working. Optional. Title it like a bug (\"Status pills overflow their column at 1280px\"); the summary says what a user sees, and cites the recording that shows it."
+        )
       ]
+      & O.required
+      .~ ["findings", "coverage", "claims", "summary", "assessments"]
   where
     enum values = text & O.enum_ ?~ map AE.String values
     uuid = text & O.format ?~ "uuid"
