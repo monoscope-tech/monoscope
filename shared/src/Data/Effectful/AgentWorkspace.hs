@@ -347,7 +347,7 @@ data Manifest = Manifest {version :: Word8, identity :: Identity, assetDir :: Fi
 instance AE.FromJSON Manifest where
   parseJSON value = do
     manifest <- AE.genericParseJSON AE.defaultOptions value
-    unless (manifest.version == 1 && manifest.bytes > 0 && manifest.durationMs >= 0 && not (isInfinite manifest.durationMs || isNaN manifest.durationMs) && manifest.cpus == 2 && manifest.memoryMiB == 1024 && manifest.resourceCostStatus == Unpriced) $ fail "Invalid checkpoint manifest"
+    unless (manifest.version == 1 && manifest.bytes > 0 && manifest.durationMs >= 0 && not (isInfinite manifest.durationMs || isNaN manifest.durationMs) && manifest.cpus == checkResources.cpus && manifest.memoryMiB == checkResources.memoryMiB && manifest.resourceCostStatus == Unpriced) $ fail "Invalid checkpoint manifest"
     pure manifest
 
 
