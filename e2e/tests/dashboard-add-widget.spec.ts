@@ -44,6 +44,9 @@ async function openWidgetDrawer(page: Page) {
   await page.locator('[aria-label="Add a new widget"]').first().click();
   await expect(page.locator("#visualizationTabs")).toBeVisible({ timeout: 20000 });
   await expect(page.getByRole("textbox", { name: "Query", exact: true })).toBeVisible();
+  // "Add widget" submits a form htmx turns into a PUT built from the drawer's widgetJSON. Clicked
+  // before htmx powered the swapped-in form, under load the click sent nothing and the save timed out.
+  await page.waitForFunction(() => !!document.querySelector('form[data-form-mode][data-htmx-powered]') && "widgetJSON" in window);
 }
 
 test("a slow avatar does not block dashboard initialization", async ({ page }) => {
@@ -528,6 +531,7 @@ test("a dashboard needing a variable asks for it instead of covering itself", as
 
 
 test("dashboard teams default to @everyone and support bulk add and removal", async ({ page }) => {
+  test.slow(); // Two dashboard lifecycles plus three bulk team changes; ran out of time under sign-off load.
   const title = `E2E Teams ${Date.now()}`;
   for (const suffix of ["A", "B"]) await makeDashboard(page, `${title} ${suffix}`);
   const team = `e2e-team-${Date.now()}`;
@@ -800,7 +804,9 @@ test("widget preview compacts when a desktop drawer has a short scroll range", a
 });
 
 test("widget monitors persist independently across dashboards and reopen with saved settings", async ({ page }) => {
-  test.slow(); // Two dashboard lifecycles, including repeated navigation to verify persistence.
+  // Two dashboard lifecycles with repeated navigation to verify persistence; exceeded even slow()'s
+  // 90s while sign-off compiled the image alongside.
+  test.setTimeout(180_000);
   const dashboards: Dash[] = [];
   for (const suffix of ["A", "B"]) {
     const title = `E2E Widget Monitor ${Date.now()} ${suffix}`;
