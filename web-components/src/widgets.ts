@@ -105,10 +105,16 @@ const ensureECharts = () => {
   if (window.echarts) return Promise.resolve();
   if (!echartsLoad) {
     const assets = echartsUrls();
-    echartsLoad = loadScript(assets.echarts).then(() => loadScript(assets.theme));
+    // A failed load is forgotten so the next chart retries it, and is a ShownFailure: the script
+    // tag failing (a dropped connection, a page tearing down) is not a bug to file.
+    echartsLoad = loadScript(assets.echarts).then(() => loadScript(assets.theme)).catch((e) => {
+      echartsLoad = undefined;
+      return asShown(e);
+    });
   }
   return echartsLoad;
 };
+const withECharts = (fn: () => void) => void ensureECharts().then(fn, (e) => logFailure('charts could not load:', e));
 
 // --- Concurrency limiter for response bodies (max 4 in flight) ---
 const MAX_CONCURRENT_FETCHES = 4;
@@ -198,13 +204,13 @@ const queueChartInit = (fn: () => void, chartId?: string) => {
   // Keep a small look-ahead window without instantiating the whole metric grid.
   const rect = el.getBoundingClientRect();
   if (isNearChartViewport(rect, window.innerHeight)) {
-    void ensureECharts().then(() => {
+    withECharts(() => {
       initQueue.push({ fn, el });
       visibilityObserver.observe(el);
       ensureScheduled();
     });
   } else {
-    deferredInits.set(el, () => void ensureECharts().then(fn));
+    deferredInits.set(el, () => withECharts(fn));
     deferredInitObserver.observe(el);
   }
 };
