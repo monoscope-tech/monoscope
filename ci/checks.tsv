@@ -31,6 +31,8 @@ cli-tests	ghc	@cli
 integration-tests	ghc node bun python3 pg pg-cli minio tf-real	@hs @fe impact-review-worker e2e/package.json e2e/package-lock.json scripts/cli-bin.sh scripts/package-cli.sh scripts/check-cli-linkage.sh scripts/baseline-agent-migrations*.py docs/slack/agent-manifest.json
 weeder	ghc	@hs @fe
 hlint	hlint	src shared/src cli .hlint.yaml
+# CI regenerates monoscope.cabal and never parses the workflows, so nothing else checks either.
+repo-lint	actionlint hpack	.github @hs monoscope.cabal auto-instrument-config.toml
 ui-tests	node	@fe @uisrc
 e2e	ghc node pg	@hs @fe e2e scripts/e2e.sh
 release-tests	node docker	scripts/ci/release.sh scripts/ci/release-test.mjs Dockerfile

@@ -32,6 +32,7 @@ jobs:
       skip_cli_tests: ${{ steps.checks.outputs.skip_cli_tests }}
       skip_integration_tests: ${{ steps.checks.outputs.skip_integration_tests }}
       skip_hlint: ${{ steps.checks.outputs.skip_hlint }}
+      skip_repo_lint: ${{ steps.checks.outputs.skip_repo_lint }}
       skip_ui_tests: ${{ steps.checks.outputs.skip_ui_tests }}
       skip_e2e: ${{ steps.checks.outputs.skip_e2e }}
       skip_haskell: ${{ steps.haskell.outputs.skip_all }}
@@ -322,6 +323,13 @@ jobs:
             export CI_NO_ATTEST=true
           fi
           scripts/ci/ci.sh run hlint
+      - name: Lint workflows and monoscope.cabal
+        if: needs.gate.outputs.skip_repo_lint != 'true'
+        run: |
+          mkdir -p "$HOME/.local/bin" && export PATH="$HOME/.local/bin:$PATH"
+          curl -sSfL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz | tar -xz -C "$HOME/.local/bin" actionlint
+          curl -sSfL https://github.com/sol/hpack/releases/download/0.39.6/hpack_linux.gz | gunzip > "$HOME/.local/bin/hpack" && chmod +x "$HOME/.local/bin/hpack"
+          scripts/ci/ci.sh run repo-lint
 
   ui-tests:
     name: UI Tests

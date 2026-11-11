@@ -176,6 +176,8 @@ detect_caps() {
   command -v psql >/dev/null 2>&1 && command -v createdb >/dev/null 2>&1 && command -v dropdb >/dev/null 2>&1 && caps="$caps pg-cli"
   command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1 && caps="$caps docker"
   command -v hlint >/dev/null 2>&1 && caps="$caps hlint"
+  command -v actionlint >/dev/null 2>&1 && caps="$caps actionlint"
+  command -v hpack >/dev/null 2>&1 && caps="$caps hpack"
   probe_tcp "${DB_HOST:-localhost}" "${DB_PORT:-5432}" && caps="$caps pg"
   # shellcheck disable=SC2086
   [ -n "${MINIO_ENDPOINT:-}" ] && probe_tcp $(url_hostport "$MINIO_ENDPOINT") && caps="$caps minio"
@@ -394,6 +396,7 @@ run_body() { # <check>
       ;;
     release-tests) node --test scripts/ci/release-test.mjs ;;
     hlint)   hlint -j src/ shared/src cli ;;
+    repo-lint) actionlint -shellcheck= -pyflakes= && make -s hpack-check ;;
     ui-tests) prepare_web_deps; (cd web-components && npm test) ;;
     # Drives the real server in a real browser. scripts/e2e.sh starts that server itself on
     # 8081 against a throwaway database, so this only has to supply the binary and chromium.
@@ -688,6 +691,9 @@ cmd_local() {
       release_pid=$!
     elif [ "$c" = hlint ] && command -v hlint >/dev/null 2>&1; then
       host_hlint=true
+    elif [ "$c" = repo-lint ] && caps_satisfy "$(detect_caps)" "$(check_requires repo-lint)"; then
+      # Seconds long, and the dependency image has neither tool.
+      CI_FINGERPRINTS_PATH=$(mktemp -t ci-repo-lint-fp.XXXXXX) "$0" run repo-lint || host_rc=$?
     else
       container_checks+=("$c")
     fi
