@@ -11,6 +11,7 @@ module Pkg.Metrics (
   gitApiErrors,
   gitWebhookRejections,
   gitSyncHist,
+  workspacePrepareHist,
   bump,
   recordMs,
   timed,
@@ -156,6 +157,15 @@ gitSyncHist =
   unsafePerformIO
     $ meterCreateHistogram monoscopeMeter "monoscope.git.sync.duration" (Just "ms") Nothing defaultAdvisoryParameters
 {-# NOINLINE gitSyncHist #-}
+
+
+-- | Wall-time of one review workspace build job, by @outcome@: cached, restored, warm, cold,
+-- cold_after_warm or failed. Its count by outcome is how often reviews start warm.
+workspacePrepareHist :: Histogram
+workspacePrepareHist =
+  unsafePerformIO
+    $ meterCreateHistogram monoscopeMeter "monoscope.impact_review.workspace.prepare.duration" (Just "ms") Nothing defaultAdvisoryParameters
+{-# NOINLINE workspacePrepareHist #-}
 
 
 -- | Add one to a counter. Attributes must be bounded-cardinality; see 'gitApiErrors'.

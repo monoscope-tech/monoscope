@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Outcome (..), Start (..), preparedOutcome, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), Slots (..), hostSlots, buildSeconds, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, checkLogLimit, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Outcome (..), Start (..), preparedOutcome, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), Slots (..), hostSlots, buildSeconds, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
 import Control.Exception qualified as Exception
@@ -391,7 +391,9 @@ data Image = Image {assetDir :: FilePath, buildId :: ImageId}
   deriving anyclass (AE.FromJSON)
 
 
-data Isolation = OfflineCow
+-- | A copy-on-write root whose only network is read access to package registries ('sandbox.mjs'
+-- holds the list), so a guest can install what a build or proof needs without reaching anything else.
+data Isolation = RegistryCow
   deriving stock (Generic, Read, Show)
   deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" Isolation
 
@@ -1182,7 +1184,7 @@ verifyArtifactRegression options request = do
           outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox VerifierPool options.bridge \rpc -> do
             image <- rpc @Image $ Resolve options.image
             ensure $ image.buildId == request.imageBuildId
-            let sandbox = Sandbox image.assetDir checkResources.cpus checkResources.memoryMiB OfflineCow $ one ("/checkout", checkout)
+            let sandbox = Sandbox image.assetDir checkResources.cpus checkResources.memoryMiB RegistryCow $ one ("/checkout", checkout)
             case request.workspace of
               Pristine -> rpc @() $ Create sandbox
               PreparedCheckpoint snapshot -> do
@@ -1289,7 +1291,7 @@ transfer root identity direction remoteFile action = do
       Identifier transferId = identifier
       save outcome = publish (records </> toString (UUID.toText transferId) <> ".json") (record :: TransferRecord){outcome}
       elapsed = (\ended -> fromIntegral (ended - started) / 1000000) <$> getMonotonicTimeNSec
-      prefix = "agent-workspaces/v1/" <> toText (projectText identity.projectId) <> "/" <> digestText (identityKey identity) <> "/"
+      prefix = projectPrefix identity.projectId <> digestText (identityKey identity) <> "/"
   save TransferStarted
   connection' <- connectStorage remote
   value <- action remote prefix connection' `onException` (elapsed >>= save . TransferFailed)
@@ -1314,9 +1316,24 @@ uploadCheckpoint remote prefix connection prepared = do
   uploaded <- storage connection $ Minio.statObject remote.bucket (diskKey prefix prepared.manifest) Minio.defaultGetObjectOptions
   ensure $ uploaded.oiSize == fromIntegral prepared.manifest.bytes
   let manifestBytes = AE.encode prepared.manifest
-  for_ [manifestKey prefix $ Just prepared.manifest.sha256, manifestKey prefix Nothing] \object ->
+  for_ [manifestKey prefix $ Just prepared.manifest.sha256, manifestKey prefix Nothing, lineagePointer prepared.manifest.identity] \object ->
     void $ storage connection $ Minio.putObject remote.bucket object (CC.sourceLazy manifestBytes) (Just $ LBS.length manifestBytes) Minio.defaultPutObjectOptions
   pure prepared
+
+
+projectPrefix :: ProjectId -> Text
+projectPrefix project = "agent-workspaces/v1/" <> toText (projectText project) <> "/"
+
+
+-- | One pointer per repository, image, script and dependency set names its latest build, whatever
+-- its base: locally beside the checkpoints, and in object storage as that build's manifest, so a
+-- fresh node's first build can start warm too.
+lineage :: Identity -> Text
+lineage identity = digestText $ sha $ toStrict $ AE.encode (identity.repository, identity.imageBuildId, identity.preparationSha256, identity.dependency)
+
+
+lineagePointer :: Identity -> Text
+lineagePointer identity = projectPrefix identity.projectId <> "latest-" <> lineage identity <> ".json"
 
 
 lookupWorkspace :: Options -> Operation -> Request -> IO (Maybe Prepared)
@@ -1352,15 +1369,17 @@ lookupWorkspace options operation request = do
             ensure $ manifest.identity.projectId == identity.projectId && lineage manifest.identity == lineage identity
             pure $ Snapshot (ancestorDirectory </> "baseline.qcow2") manifest.sha256
         remoteFile = maybe (throwIO $ userError "No object storage is configured for workspace checkpoints") pure options.remote
-        -- Downloads unlocked, so the tenant's reviews keep leasing; only publication takes the lock.
-        restoreFrom remote' = transfer root identity Download remote' \remote prefix connection -> withStage root (DownloadOperation identity) \temporary -> do
+        -- An archived checkpoint of @target@ (this request's, or an ancestor's), placed beside the local
+        -- ones. Downloads unlocked, so the tenant's reviews keep leasing; only publication takes the lock.
+        restoreFrom target expected remote' = transfer root target Download remote' \remote prefix connection -> withStage root (DownloadOperation target) \temporary -> do
+          let destination = parent </> toString (digestText (identityKey target))
           encoded <- storage connection do
-            response <- Minio.getObject remote.bucket (manifestKey prefix request.expectedCheckpoint) Minio.defaultGetObjectOptions
+            response <- Minio.getObject remote.bucket (manifestKey prefix expected) Minio.defaultGetObjectOptions
             runConduit $ response.gorObjectStream .| CC.takeE 65537 .| CC.sinkLazy
           ensure $ LBS.length encoded <= 65536
           archived <- decode @Manifest $ toStrict encoded
-          ensure $ archived.identity == identity && archived.bytes <= remote.maxBytes
-          for_ request.expectedCheckpoint $ ensure . (== archived.sha256)
+          ensure $ archived.identity == target && archived.bytes <= remote.maxBytes
+          for_ expected $ ensure . (== archived.sha256)
           let disk = temporary </> "baseline.qcow2"
           withBinaryFile disk WriteMode \handle -> storage connection do
             response <- Minio.getObject remote.bucket (diskKey prefix archived) Minio.defaultGetObjectOptions
@@ -1371,21 +1390,35 @@ lookupWorkspace options operation request = do
           ensure $ measured == FileFingerprint archived.sha256 archived.bytes
           writeFileLBS (temporary </> "manifest.json") $ AE.encode (archived :: Manifest){assetDir = image.assetDir}
           Posix.setFileMode (temporary </> "manifest.json") 0o600
-          restored <- maybe invalid pure =<< loadWorkspace identity image temporary (rpc . InspectCheckpoint)
+          restored <- maybe invalid pure =<< loadWorkspace target image temporary (rpc . InspectCheckpoint)
           traverse_ sync [disk, temporary </> "manifest.json", temporary]
-          locked $ load >>= \case
+          locked $ loadWorkspace target image destination (rpc . InspectCheckpoint) >>= \case
             Just published -> pure published
             Nothing -> do
-              renameDirectory temporary directory
+              renameDirectory temporary destination
               sync parent
-              pure $ Prepared restored.manifest (directory </> "baseline.qcow2") Restored
+              pure $ Prepared restored.manifest (destination </> "baseline.qcow2") Restored
+        -- With no local ancestor, the lineage's latest archived build, so a fresh node starts warm too.
+        remoteAncestor =
+          join <$> (`traverse` options.remote) \remote' ->
+            rightToMaybe <$> tryAny do
+              remote <- readRemote remote'
+              connection <- connectStorage remote
+              encoded <- storage connection do
+                response <- Minio.getObject remote.bucket (lineagePointer identity) Minio.defaultGetObjectOptions
+                runConduit $ response.gorObjectStream .| CC.takeE 65537 .| CC.sinkLazy
+              ensure $ LBS.length encoded <= 65536
+              latest <- decode @Manifest $ toStrict encoded
+              ensure $ latest.identity.projectId == identity.projectId && lineage latest.identity == lineage identity
+              ancestor <- maybe invalid pure =<< restoreFrom latest.identity (Just latest.sha256) remote'
+              pure $ Snapshot ancestor.path ancestor.manifest.sha256
     case operation of
       Lookup -> load
       Archive ->
         remoteFile >>= \remote' -> locked $ transfer root identity Upload remote' \remote prefix connection -> do
           prepared <- maybe invalid pure =<< load
           uploadCheckpoint remote prefix connection prepared
-      Restore -> locked load >>= maybe (restoreFrom =<< remoteFile) (pure . Just)
+      Restore -> locked load >>= maybe (restoreFrom identity request.expectedCheckpoint =<< remoteFile) (pure . Just)
       -- The build runs outside the project lock, so this tenant's other reviews keep looking up and
       -- leasing while it compiles; only publication is locked, and a build that lost the race is discarded.
       Prepare checkout -> do
@@ -1395,7 +1428,7 @@ lookupWorkspace options operation request = do
         case saved of
           Just _ -> pure saved
           Nothing ->
-            traverse (tryAny . restoreFrom) options.remote >>= \case
+            traverse (tryAny . restoreFrom identity request.expectedCheckpoint) options.remote >>= \case
               Just (Right (Just prepared)) -> pure $ Just prepared
               restored -> withSlot PreparePool $ withTempDirectory parent ".prepare-" \temporary -> withSystemTempDirectory "monoscope-native-baseline" \source -> do
                 let clean = source </> "checkout"
@@ -1413,8 +1446,8 @@ lookupWorkspace options operation request = do
                 void $ git ["-C", clean, "checkout", "--quiet", "--detach", toString baseText]
                 void $ git ["-C", clean, "remote", "add", "origin", toString repoText]
                 started <- getMonotonicTimeNSec
-                let sandbox = Sandbox image.assetDir 2 1024 OfflineCow (one ("/baseline", clean))
-                ancestor <- ancestorSnapshot
+                let sandbox = Sandbox image.assetDir 2 1024 RegistryCow (one ("/baseline", clean))
+                ancestor <- ancestorSnapshot >>= maybe remoteAncestor (pure . Just)
                 case ancestor of
                   Nothing -> do
                     rpc @() $ Create sandbox
@@ -1465,9 +1498,6 @@ lookupWorkspace options operation request = do
                       let miss = restored >>= either (Just . toText . displayException) (const Nothing)
                       fmap (\built -> Prepared built.manifest built.path (Built (maybe Cold (const Warm) ancestor) miss)) <$> load
   where
-    -- One pointer per repository, image, script and dependency set names its latest build, whatever its base.
-    lineage :: Identity -> Text
-    lineage identity = digestText $ sha $ toStrict $ AE.encode (identity.repository, identity.imageBuildId, identity.preparationSha256, identity.dependency)
     loadWorkspace :: Identity -> Image -> FilePath -> (FilePath -> IO CheckpointData) -> IO (Maybe Prepared)
     loadWorkspace identity image directory inspect = do
       loaded <- tryIOError $ readBounded (directory </> "manifest.json") 65536

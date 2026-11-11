@@ -63,7 +63,11 @@ Monoscope reacts with 👀 when it queues the ask. An ask for a head that is alr
 The GitHub App must subscribe to `issue_comment` events and hold `pull_requests: write` to react.
 Automatic runs skip pull requests that change only documentation, tests or CI. An ask always reviews.
 
-`record_proof {claim, command}` replays one bash command under asciinema in fresh offline verifier VMs, on the base and the head.
+`record_proof {claim, command}` replays one bash command under asciinema in fresh verifier VMs, on the base and the head.
+
+**Project reach.** Besides `query_telemetry` (logs, spans and metrics), review agents have `list_issues` and `list_monitors`, read-only and scoped to the review's mapped services, and `fetch_url` for public documentation. The host fetches the page (public `https://` only, the scrape-target SSRF guard, no redirects, 512 KB), so the guest never reaches the web for it.
+
+**Network.** Every guest (agent, proof, workspace build) can read package registries and reach nothing else: `sandbox.mjs` allows GET and HEAD to Debian apt, npm, PyPI, crates.io and rustup, the Go proxy, Hackage and ghcup, Maven and RubyGems, sets a fixed User-Agent, and blocks internal ranges. Guest commands run as uid 1000, so a missing toolchain comes from a user-space installer (ghcup, rustup, npm, `pip --user`, `go install`) in a proof's setup, and a workspace build caches it in the checkpoint. GitHub is excluded: a repository's traffic insights list visited paths, which pull request code could use to exfiltrate source.
 The host decodes each cast from the check log, renders a GIF with `agg` and an MP4 with `ffmpeg`, and stores them in `projects.pr_review_proofs`.
 Signed links at `/p/<project>/reviews/<review>/proofs/<file>` serve the media, so GitHub's image proxy can show the GIF without a session.
 A UI proof's browser recording is drawn inside a browser window, titled and addressed from the `page.tsv` the proof writes, and its preview is an animated WebP cut from that framed video.
@@ -94,7 +98,8 @@ Reviews, proofs and workspace builds can share a host with ingestion and the web
 Every queued review also queues `PrepareReviewWorkspace` in `background_jobs_long`. That table has its own runner: one job at a time, with a 61-minute timeout just above the build's own hour. The main queue's 10-minute timeout is also its stale-lock threshold, so it cannot hold builds. The job makes the workspace checkpoint at the pull request's base available, outside any review's budget. A review that starts before its build finishes runs cold.
 - **One build per base:** a run records its pull request's base when it is queued. A review queues a build only when none is waiting for the same project, repository and base, and the build needs no GitHub fetch beyond a token.
 - **Cache, then storage, then build:** the job looks for the checkpoint on this host before any checkout. On a miss it restores the archived checkpoint from object storage when `IMPACT_REVIEW_WORKSPACE_REMOTE` names the remote configuration (the same file the maintenance configuration uses). The download holds no lock; only publication does. Otherwise it builds.
-- **Outcome:** the job logs how the checkpoint arrived: cached, restored, or built cold, warm, or cold after a failed warm start. The last is logged for attention, with the warm start's error, and a build also notes why a configured restore did not supply the checkpoint. A deploy mid-build kills the job, and its retry waits for the hour-long lock timeout.
+- **Outcome:** the job logs how the checkpoint arrived: cached, restored, or built cold, warm, or cold after a failed warm start. The last is logged for attention, with the warm start's error, and a build also notes why a configured restore did not supply the checkpoint. Every job records its wall-time on `monoscope.impact_review.workspace.prepare.duration`, by `outcome` (`cached`, `restored`, `warm`, `cold`, `cold_after_warm`, `failed`), so its count by outcome is the warm-start rate.
+- **Fresh nodes:** archiving a checkpoint also writes the lineage's `latest-LINEAGE.json` to object storage. A build with no local ancestor restores that build first, so a new node's first build starts warm. A deploy mid-build kills the job, and its retry waits for the hour-long lock timeout.
 - **Warm starts:** a build at a new base starts from the repository's latest checkpoint (`latest-LINEAGE.json` under the project's workspaces). In the VM, `.git` is replaced with the host's checkout of the new base, because the build script could write the old one. Gitignored output (`target/`, `dist-newstyle/`, `node_modules/`) is kept, and the preparation script reruns, compiling incrementally. The result is stored under the exact key, and the same source fingerprint checks apply. If a warm start fails, the host forgets that checkpoint and retries cold.
 - **Cold starts:** only a repository's first build is cold. A tenant's concurrent pull requests share one checkpoint, each through its own copy-on-write overlay.
 - **Locking:** a build no longer holds the project lock while compiling. Only publication is locked, and a build that loses the race is discarded.
@@ -107,7 +112,7 @@ Every queued review also queues `PrepareReviewWorkspace` in `background_jobs_lon
 
 Use a private request containing `projectId`, a credential-free `repository` and its exact `base` revision.
 Keep the trusted preparation script outside customer checkouts.
-Dependencies come from the pinned guest image or an explicit host-owned archive; preparation has no network credentials.
+Dependencies come from the pinned guest image, an explicit host-owned archive, or the package registries guests can read; preparation has no network credentials.
 
 ```sh
 monoscope workspace prepare \

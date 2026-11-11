@@ -7,7 +7,7 @@ FROM ${SERVER_IMAGE} AS server
 FROM node:24-bookworm-slim AS node
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends bash git ripgrep ca-certificates asciinema curl fonts-liberation fonts-noto-color-emoji && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends bash git ripgrep ca-certificates asciinema curl udhcpc fonts-liberation fonts-noto-color-emoji && rm -rf /var/lib/apt/lists/*
 COPY --from=node /usr/local/bin/node /usr/local/bin/
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx

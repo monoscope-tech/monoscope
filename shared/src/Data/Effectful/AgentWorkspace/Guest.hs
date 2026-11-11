@@ -200,7 +200,7 @@ withGuest host expected checkout revision start lease attempt allocate retain ac
     prepared <- tryAny do
       image <- rpc $ Resolve host.image
       for_ expected \(UUIDId build) -> unless (image.buildId == ImageId build) $ failure "Configured guest image differs from the pinned image"
-      let sandbox = uncurry (Sandbox image.assetDir) agentResources OfflineCow $ Map.fromList [("/checkout", checkout), ("/run/monoscope-skills", skills)]
+      let sandbox = uncurry (Sandbox image.assetDir) agentResources RegistryCow $ Map.fromList [("/checkout", checkout), ("/run/monoscope-skills", skills)]
       case start of
         ResumeSession saved -> do
           unless (saved.revision == revision && saved.image == image.buildId && saved.baseline == (AgentWorkspace.checkpointSummary <$> leased)) $ failure "Suspended guest inputs differ from the current workspace"

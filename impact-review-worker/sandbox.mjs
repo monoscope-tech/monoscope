@@ -3,7 +3,16 @@
 import { jsonLines } from './jsonl.mjs';
 import { open } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { DEFAULT_GUEST_TMPFS, RealFSProvider, ReadonlyProvider, VM, VmCheckpoint, importImageFromDirectory, resolveImageSelector } from '@earendil-works/gondolin';
+import { DEFAULT_GUEST_TMPFS, RealFSProvider, ReadonlyProvider, VM, VmCheckpoint, createHttpHooks, importImageFromDirectory, resolveImageSelector } from '@earendil-works/gondolin';
+// Guests run pull request code, so they reach only package registries, only to read: GET and HEAD
+// with a fixed User-Agent. GitHub is left out on purpose: a repository's traffic insights list the
+// paths its visitors fetched, which would let that code exfiltrate source through crafted URLs.
+const { httpHooks } = createHttpHooks({
+  allowedHosts: ['deb.debian.org', 'security.debian.org', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org', 'index.crates.io', 'static.crates.io', 'static.rust-lang.org', 'proxy.golang.org', 'sum.golang.org', 'hackage.haskell.org', 'downloads.haskell.org', 'get-ghcup.haskell.org', 'nodejs.org', 'repo.maven.apache.org', 'repo1.maven.org', 'rubygems.org', 'index.rubygems.org', 'raw.githubusercontent.com'],
+  // ghcup's release metadata is the only GitHub content a guest may read.
+  isRequestAllowed: (request) => ['GET', 'HEAD'].includes(request.method) && (new URL(request.url).host !== 'raw.githubusercontent.com' || new URL(request.url).pathname.startsWith('/haskell/ghcup-metadata/')),
+  onRequest: (request) => { const headers = new Headers(request.headers); headers.set('user-agent', 'monoscope-sandbox'); return new Request(request, { headers }); },
+});
 let vm;
 const controller = new AbortController();
 const abort = () => { controller.abort(); void vm?.close().catch(() => {}); process.stdin.destroy(); };
@@ -25,9 +34,9 @@ try {
         case 'Create': {
           const snapshot = tag === 'Resume' ? contents[1] : undefined;
           const config = tag === 'Resume' ? contents[0] : contents;
-          if (vm || config.isolation !== 'offline_cow') throw new Error('Invalid sandbox transition');
+          if (vm || config.isolation !== 'registry_cow') throw new Error('Invalid sandbox transition');
           const options = { sessionLabel: 'monoscope-native-workspace', cpus: config.cpus, memory: `${config.memoryMiB}M`,
-            sandbox: { imagePath: config.imagePath, netEnabled: false }, rootfs: { mode: 'cow', size: '64G' },
+            sandbox: { imagePath: config.imagePath, netEnabled: true }, httpHooks, rootfs: { mode: 'cow', size: '64G' },
             tmpfs: Object.fromEntries(Object.entries(DEFAULT_GUEST_TMPFS).filter(([path]) => path !== '/root')),
             vfs: { mounts: Object.fromEntries(Object.entries(config.mounts).map(([guest, host]) => [guest, new ReadonlyProvider(new RealFSProvider(host))])) } };
           vm = snapshot ? await VmCheckpoint.load(snapshot).resume(options) : await VM.create(options);

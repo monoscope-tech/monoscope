@@ -1,7 +1,7 @@
 ARG DEPS_IMAGE
 FROM ${DEPS_IMAGE}
 
-RUN apt-get update && apt-get install -y --no-install-recommends bash git ripgrep make util-linux ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends bash git ripgrep make util-linux ca-certificates udhcpc && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home --uid 1000 --user-group --shell /bin/bash review-agent
 
 WORKDIR /build

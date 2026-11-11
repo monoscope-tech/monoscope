@@ -37,11 +37,13 @@ import Effectful.Reader.Static (Reader, ask)
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
 import Effectful.Timeout qualified as Timeout
+import GHC.Clock (getMonotonicTime)
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries (selectLogTable)
+import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.AgentUsage qualified as Usage
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
@@ -51,12 +53,14 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
 import OpenAI.V1.Chat.Completions qualified as OpenAI
+import OpenTelemetry.Attributes qualified as OA
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), rawSql)
 import Pkg.Git qualified as Git
 import Pkg.LiveTail (capRowValue)
+import Pkg.Metrics qualified as Metrics
 import Pkg.Parser.Expr (CmpOp (..), Expr (..), FieldKey (..), Subject (..), ToQueryText (..), Values (..), isErrorSql)
 import Pkg.Parser.Stats qualified as KQL
 import Relude hiding (Reader, ask)
@@ -413,6 +417,7 @@ reviewConnection run = runErrorNoCallStack @Text do
 -- repository is cold; later ones start from its latest build and compile incrementally.
 prepareReviewWorkspace :: Reviews.ReviewId -> ATBackgroundCtx ()
 prepareReviewWorkspace rid = whenJustM (Reviews.getRun rid) \run -> do
+  started <- liftIO getMonotonicTime
   outcome <- runErrorNoCallStack @Text do
     (_, _, _, conn) <- either throwError pure =<< reviewConnection run
     -- Runs queued before the base was recorded look it up.
@@ -420,6 +425,12 @@ prepareReviewWorkspace rid = whenJustM (Reviews.getRun rid) \run -> do
     either throwError pure
       =<< Agent.prepareRepository
         Checkout.Fetch{projectId = run.projectId, repository = "https://github.com/" <> run.owner <> "/" <> run.repo <> ".git", base, head = base, gitToken = conn.token.reveal}
+  ended <- liftIO getMonotonicTime
+  Metrics.recordMs Metrics.workspacePrepareHist ((ended - started) * 1000)
+    . one
+    . ("outcome",)
+    . OA.toAttribute @Text
+    $ either (const "failed") (\case Workspace.Cached -> "cached"; Workspace.Restored -> "restored"; Workspace.Built Workspace.Cold _ -> "cold"; Workspace.Built Workspace.Warm _ -> "warm"; Workspace.Built (Workspace.ColdAfterWarm _) _ -> "cold_after_warm") outcome
   case outcome of
     Left err -> Log.logAttention "Review workspace preparation failed" (run.id, err)
     Right (Workspace.Built (Workspace.ColdAfterWarm why) _) -> Log.logAttention "Review workspace built cold after its warm start failed" (run.id, why)
@@ -576,7 +587,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                             (Agent.ProjectMemory Memory.List; Agent.ProjectMemory Memory.Search{}) -> Catalog.localPolicy Catalog.ListProjectMemory
                             Agent.ProjectMemory Memory.Read{} -> Catalog.localPolicy Catalog.ReadProjectMemory
                             Agent.ProjectMemory Memory.Write{} -> Catalog.localPolicy Catalog.WriteProjectMemory
-                            Agent.Recall{} -> Catalog.ReadOnly ProjectMembers.PView
+                            (Agent.Recall{}; Agent.OpenIssues; Agent.ServiceMonitors) -> Catalog.ReadOnly ProjectMembers.PView
                             Agent.Remember{} -> Catalog.ConversationWrite
                       AI.authorizeRunOperation context capability >>= \case
                         Left denial -> pure $ Left $ AI.toolDenialMessage denial
@@ -591,7 +602,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                                     (AI.AtomicOperation $ writeWiki context write)
                                     (\original -> reconcileComment run conn original <* unlessM (not . null <$> authorizedServices run mappings) (throwError $ ReviewFailure "Project memory authorization is no longer available"))
                                 (Catalog.PublishPullRequestComment{}; Catalog.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
-                          (Agent.ProjectMemory Memory.List; Agent.ProjectMemory Memory.Search{}; Agent.ProjectMemory Memory.Read{}; Agent.Recall{}; Agent.Remember{}) ->
+                          (Agent.ProjectMemory Memory.List; Agent.ProjectMemory Memory.Search{}; Agent.ProjectMemory Memory.Read{}; Agent.Recall{}; Agent.Remember{}; Agent.OpenIssues; Agent.ServiceMonitors) ->
                             requestKnowledge context attemptId (Git.RepoRef run.owner run.repo run.revision) (requireActive run execution >> authorizedServices run mappings) evidence request
                   )
                   ( \call -> do
@@ -1056,6 +1067,8 @@ requestMemory context attempt authorized = \case
   Agent.ProjectMemory request -> projectMemory context attempt authorized request
   Agent.Recall _ -> pure $ Left "This agent role can use project memory tools"
   Agent.Remember _ -> pure $ Left "This agent role can use project memory tools"
+  Agent.OpenIssues -> pure $ Left "This agent role can use project memory tools"
+  Agent.ServiceMonitors -> pure $ Left "This agent role can use project memory tools"
 
 
 projectMemory :: (DB es, HTTP.HTTP :> es, IOE :> es, Time.Time :> es) => Issues.RunContext -> UUIDId "agent_attempt" -> Eff es Bool -> Memory.Request -> Eff es (Either Text AE.Value)
@@ -1110,7 +1123,18 @@ requestKnowledge context attempt ref currentServices initial = \case
       | otherwise -> do
           State.put memory{notes = memory.notes <> [note]}
           pure $ Right $ AE.String "Note staged for this investigation; completion retains it as an agent conclusion, not a verified fact."
+  Agent.OpenIssues -> scoped \services ->
+    AE.toJSON
+      . map (\issue -> AE.object ["id" AE..= issue.id, "title" AE..= issue.title, "type" AE..= issue.issueType, "service" AE..= issue.service, "severity" AE..= issue.severity, "critical" AE..= issue.critical, "updatedAt" AE..= issue.updatedAt])
+      . fst
+      <$> Issues.selectIssues context.projectId Issues.PIssue Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.spam = Issues.IsNull, Issues.services = services, Issues.limit = 20}
+  Agent.ServiceMonitors -> scoped \services ->
+    AE.toJSON
+      . map (\monitor -> AE.object ["title" AE..= monitor.alertConfig.title, "query" AE..= monitor.logQuery, "service" AE..= monitor.service, "status" AE..= monitor.currentStatus, "value" AE..= monitor.currentValue, "alertThreshold" AE..= monitor.alertThreshold, "lastAlert" AE..= monitor.alertLastTriggered])
+      . filter (\monitor -> isNothing monitor.deactivatedAt && all (`elem` services) monitor.service)
+      <$> Monitors.queryMonitorsAll context.projectId
   where
+    scoped action = currentServices >>= \services -> if null services then pure $ Left "Review authorization is no longer available" else Right <$> action services
     forService service action = do
       services <- currentServices
       if service `elem` services then action else pure $ Left "Service or review authorization is no longer available"
