@@ -11,10 +11,7 @@ module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), Wi
 
 import BackgroundJobs.Types qualified as Jobs
 import Commonmark qualified as Markdown
-import Commonmark.Blocks qualified as MarkdownBlocks
 import Commonmark.Extensions (HasWikilinks (..), TitlePosition (..), gfmExtensions, wikilinksSpec)
-import Commonmark.Tag qualified as MarkdownTag
-import Commonmark.TokParsers (symbol)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.Algorithm.Diff qualified as Diff
@@ -72,9 +69,8 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ActionResult, DB, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, Toast (..), ToastLevel (..), act, addErrorToast, addRespHeaders, addSuccessToast, done, redirectCS)
 import Text.HTML.SanitizeXSS (sanitizeBalance)
-import Text.Parsec qualified as Parsec
 import Text.Slugify (slugify)
-import Utils (LoadingSize (..), TabStrip (..), countNoun, faSprite_, htmxIndicator_, navTabStrip_, nonEmptyT, renderMarkdown)
+import Utils (LoadingSize (..), TabStrip (..), countNoun, faSprite_, htmxIndicator_, navTabStrip_, nonEmptyT, renderMarkdown, textOnlyHtml)
 import Web.ApiTypes (readOnlyMessage)
 import Web.Auth (demoGuestSessionId)
 import Web.FormUrlEncoded (FromForm)
@@ -386,12 +382,7 @@ instance ToHtml WikiGet where
           " · "
           localTimeFmt_ "MMM d, yyyy HH:mm" page.updatedAt
         baseSyntax = wikilinksSpec TitleAfterPipe <> gfmExtensions <> Markdown.defaultSyntaxSpec
-        -- Embedded HTML is text; only Markdown constructs may create markup.
-        syntax =
-          baseSyntax
-            { Markdown.syntaxBlockSpecs = filter ((/= (MarkdownBlocks.rawHtmlSpec @Identity @(Markdown.Html WikiDoc) @(Markdown.Html WikiDoc)).blockType) . (.blockType)) baseSyntax.syntaxBlockSpecs
-            , Markdown.syntaxInlineParsers = (Markdown.str . Markdown.untokenize <$> Parsec.try ((:) <$> symbol '<' <*> MarkdownTag.htmlTag)) : baseSyntax.syntaxInlineParsers
-            }
+        syntax = textOnlyHtml baseSyntax
         pageBody body = div_ [class_ "prose max-w-none break-words text-textStrong [&_pre]:overflow-x-auto"] $ case runIdentity $ Markdown.commonmarkWith syntax "" body of
           Left _ -> toHtml body
           Right (parsed :: Markdown.Html WikiDoc) -> toHtmlRaw $ sanitizeBalance $ T.replace "href=\"wiki:" ("href=\"" <> base <> "/") $ toStrict $ Markdown.renderHtml parsed

@@ -4478,10 +4478,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Usage.recordCall testPid (Usage.Fix lostId) $ Agent.ModelCall (uid 994) lostAttempt "fixture" "fixture") `shouldReturn` True
     void $ tryAny $ run lostId "--app-job-lost-session"
     readIORef lostSessionCalls `shouldReturn` 0
-    dbOne tr [sql|SELECT failure FROM projects.issue_fix_jobs WHERE run_id = ?|] (Only lostId) `shouldReturn` (Just "Native session data is missing. Restore its storage or start a new request." :: Maybe Text)
+    dbOne tr [sql|SELECT failure FROM projects.issue_fix_jobs WHERE run_id = ?|] (Only lostId) `shouldReturn` (Just "Saved progress was lost, so this run cannot resume. Start it again for a fresh run." :: Maybe Text)
     lostRuns <- filter ((== Issues.FixRun lostId) . (.source)) <$> runQueryEffect tr (Issues.listRoutineRuns testPid 12)
     map (.status) lostRuns `shouldBe` [Issues.RunFailed]
-    map (.error) lostRuns `shouldBe` [Just "Native session data is missing. Restore its storage or start a new request."]
+    map (.error) lostRuns `shouldBe` [Just "Saved progress was lost, so this run cannot resume. Start it again for a fresh run."]
     dbOne tr [sql|SELECT count(*)::int FROM projects.pr_review_attempts WHERE project_id = ? AND fix_run_id = ?|] (testPid, lostId) `shouldReturn` (1 :: Int)
     runQueryEffect tr (Fixes.completedResult testPid lostId) >>= (`shouldSatisfy` isNothing)
     (requests, ()) <- run fid "--app-job"
