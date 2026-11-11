@@ -43,7 +43,8 @@ RUN cd /opt/proof && npm ci --no-audit --no-fund && cd web-components && npm ci 
 RUN useradd --create-home --uid 1000 --user-group --shell /bin/bash review-agent \
   && install -d -o review-agent -g review-agent /home/review-agent/.cache && ln -s /opt/proof/browsers /home/review-agent/.cache/ms-playwright \
   && chmod o+x /root && find /root/.cabal -type d -exec chown review-agent:review-agent {} + \
-  && find /root/.cabal/store -path '*/package.db/*' -type f -exec chown review-agent:review-agent {} + && ln -s /root/.cabal /home/review-agent/.cabal
+  && find /root/.cabal/store -path '*/package.db/*' -type f -exec chown review-agent:review-agent {} + && ln -s /root/.cabal /home/review-agent/.cabal \
+  && mkdir -p /root/.cabal/logs && chown -R review-agent:review-agent /root/.cabal/logs
 
 # The production server for app proofs (monoscope-app.sh): its runtime libraries, Postgres with
 # TimescaleDB migrated here once so a proof boots in seconds, and an OTLP traffic generator.
