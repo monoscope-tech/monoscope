@@ -5,6 +5,18 @@ import type { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, ServerTraceEnt
 
 type Trace = { traceId: string; spans: APTEvent[]; startTime: number; duration: number; trace_start_time: Date | null };
 
+// The list page a /log_explorer body describes, for the worker, the early preload and the
+// main-thread fallback alike. The caller has already routed a body carrying `error`.
+export function toPage(data: any, expandedTraces: Record<string, boolean>, flipDirection: boolean) {
+  const { logsData, serviceColors, nextUrl, recentUrl, cols, count, traces, hasMore, queryResultCount, viz } = data;
+  const colIdxMap = data.colIdxMap ?? {};
+  const rows: any[][] = Array.isArray(logsData) ? logsData : [];
+  return {
+    tree: rows.length ? groupSpans(rows, colIdxMap, expandedTraces, flipDirection, traces || []) : [],
+    meta: { serviceColors, nextUrl: nextUrl ?? '', recentUrl, cols: cols ?? [], colIdxMap, count, traces: traces || [], hasMore: hasMore ?? rows.length > 0, queryResultCount: queryResultCount ?? rows.length, viz },
+  };
+}
+
 export function generateId() {
   return Math.random().toString(36).substring(2, 15);
 }

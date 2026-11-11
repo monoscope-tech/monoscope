@@ -257,17 +257,20 @@ describe('console reporting', () => {
   });
 });
 
-// Regression: a tab left open across a deploy loses its worker chunk, and the bare ErrorEvent was
-// filed as "[Worker] Error: undefined undefined undefined" on every load.
+// Regression: a log worker whose script never loads ("[Worker] Error: the log worker failed to load",
+// a chunk gone after a deploy or a page tearing down) was filed as an issue and left requests waiting.
 describe('a log worker that fails to load', () => {
-  test('reloads onto the current build instead of filing an issue', async () => {
+  test('falls back to fetching on the main thread, including requests already waiting', async () => {
     const el = await mountList();
-    const reload = vi.fn();
-    vi.stubGlobal('location', { ...window.location, reload });
-    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
-    sessionStorage.removeItem('monoscope:stale-chunk-reload');
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ logsData: [], cols: [], colIdxMap: {}, count: 0, hasMore: false })));
+    (el as any).initWorker();
+    const waiting = (el as any).workerFetch('/p/x/log_explorer/data');
     (el as any).worker.onerror(new ErrorEvent('error'));
-    expect([reload.mock.calls.length, logged.mock.calls.length]).toEqual([1, 0]);
+    await expect(waiting).resolves.toMatchObject({ tree: [], meta: { hasMore: false } });
+    expect((el as any).worker).toBeNull();
+    expect(errors).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 });
