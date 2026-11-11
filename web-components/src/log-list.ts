@@ -9,7 +9,7 @@ import debounce from 'lodash/debounce';
 import { LiveStream, tableRowToArray, traceEntriesFor } from './live-stream';
 // Import worker as URL instead of worker instance
 import LogWorkerUrl from './log-worker?worker&url';
-import { applySpanExpansion, groupSpans } from './log-worker-functions';
+import { applySpanExpansion, groupSpans, toPage } from './log-worker-functions';
 import { formatNumber, scaleDuration } from './stat-value';
 import { spriteUrl } from './assets';
 import clsx from 'clsx';
@@ -53,7 +53,6 @@ import {
 import { expandSince, expandFromToRange, parseChartZoom, copyParams, PAGE_CONTEXT_PARAMS, SCOPE_PARAMS, TIME_PARAMS } from './time-range-utils';
 import { toEChartsColor } from './widgets';
 import { asShown, fetchJson, logFailure, ShownFailure } from './fetch-failures';
-import { shouldReloadForStaleChunk } from './stale-chunk-reload';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { keyed } from 'lit/directives/keyed.js';
 
@@ -444,7 +443,7 @@ export class LogList extends LitElement {
   private scrollEndTimer: ReturnType<typeof setTimeout> | null = null;
   private worker: Worker | null = null;
   private workerReqId = 0;
-  private workerCallbacks = new Map<number, { resolve: (page: FetchPage) => void; reject: (error: Error) => void }>();
+  private workerCallbacks = new Map<number, { url: string; resolve: (page: FetchPage) => void; reject: (error: Error) => void }>();
   // Seam for tests: the fetch+group step. Defaults to the worker-backed path;
   // tests override it to feed canned {tree, meta} responses deterministically.
   transport: (url: string) => Promise<FetchPage> = (url) => this.workerFetch(url);
@@ -478,11 +477,17 @@ export class LogList extends LitElement {
     if (this.worker) return;
     this.worker = new Worker(LogWorkerUrl, { type: 'module' });
     this.worker.onmessage = (e) => this.handleWorkerMsg(e);
-    // No message means the worker script never loaded: a tab left open across a deploy whose chunk
-    // is gone ("[Worker] Error: undefined undefined undefined"). Reload once onto the current build.
+    // No message means the worker script never loaded (a chunk gone after a deploy, a page tearing
+    // down): fetch on the main thread instead, including the requests already waiting on it.
     this.worker.onerror = (e: ErrorEvent) => {
-      if (!e.message && shouldReloadForStaleChunk(Date.now(), sessionStorage)) return window.location.reload();
-      console.error('[Worker] Error:', e.message || 'the log worker failed to load', e.filename, e.lineno);
+      if (e.message) return console.error('[Worker] Error:', e.message, e.filename, e.lineno);
+      console.warn('[log-list] the log worker failed to load; fetching on the main thread');
+      this.worker?.terminate();
+      this.worker = null;
+      for (const [id, pending] of this.workerCallbacks) {
+        this.workerCallbacks.delete(id);
+        this.workerFetch(pending.url).then(pending.resolve, pending.reject);
+      }
     };
   }
 
@@ -588,38 +593,18 @@ export class LogList extends LitElement {
       };
     }
 
-    // Use early fetch promise if available (set by server-rendered script in head)
-    const earlyPromise = window.logDataPromise;
-    if (earlyPromise) {
+    // The early preload (set by the server-rendered head script), or the main thread when the
+    // worker could not load. A server error surfaces now rather than as a 2-minute "Worker timeout".
+    const early = window.logDataPromise;
+    if (early || !this.worker) {
       window.logDataPromise = null;
-      const data = await earlyPromise.catch(asShown);
-      // Propagate server errors instead of silently falling through to the worker —
-      // otherwise the user waits 2 min for "Worker timeout" masking the real cause.
+      const data = early ? await early.catch(asShown) : await fetchJson<any>(url);
       if (data.error) throw new ShownFailure(this.reportQueryError(data.error));
-      const { logsData, serviceColors, nextUrl, recentUrl, count, traces } = data;
-      const colIdxMap = data.colIdxMap ?? {};
-      const tree = logsData?.length ? groupSpans(logsData, colIdxMap, this.expandedTraces, this.flipDirection, traces || []) : [];
-      return {
-        tree,
-        meta: {
-          serviceColors,
-          nextUrl: nextUrl ?? '',
-          recentUrl,
-          cols: data.cols ?? [],
-          colIdxMap,
-          count,
-          traces: traces || [],
-          hasMore: data.hasMore ?? (logsData?.length ?? 0) > 0,
-          queryResultCount: data.queryResultCount ?? logsData?.length ?? 0,
-          viz: data.viz,
-        },
-      };
+      return toPage(data, this.expandedTraces, this.flipDirection);
     }
-    // Fallback to worker
-    if (!this.worker) throw new Error('Worker not initialized');
     const id = ++this.workerReqId;
     return new Promise((resolve, reject) => {
-      this.workerCallbacks.set(id, { resolve, reject });
+      this.workerCallbacks.set(id, { url, resolve, reject });
       this.worker!.postMessage({
         type: 'fetch',
         url,
