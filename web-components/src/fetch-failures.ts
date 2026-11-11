@@ -21,7 +21,8 @@ const httpFailure = (status: number) =>
 export async function fetchJson<T>(url: string): Promise<T> {
   const resp = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' }).catch(asShown);
   const body = await resp.json().catch(() => undefined);
-  if (!resp.ok && body?.error === undefined) throw new ShownFailure(httpFailure(resp.status));
+  // A lapsed session also answers {error: "unauthenticated"}; it is not a query error to route.
+  if (resp.status === 401 || (!resp.ok && body?.error === undefined)) throw new ShownFailure(httpFailure(resp.status));
   if (body == null) throw new ShownFailure(incompleteResponse(resp.status));
   return body;
 }
