@@ -55,3 +55,27 @@ describe('shouldReloadForStaleChunk', () => {
     expect(shouldReloadForStaleChunk(1_000_000, fakeStorage({ 'monoscope:stale-chunk-reload': 'nope' }))).toBe(true);
   });
 });
+
+// A tab open across a deploy kept running the old bundle; its errors (SDK 0.11.6 months later)
+// read as regressions of fixed code. Any htmx response naming a newer bundle reloads it once.
+describe('installStaleChunkReload', () => {
+  const respond = (build: string | null) =>
+    document.dispatchEvent(new CustomEvent('htmx:after:request', { detail: { ctx: { response: { headers: new Headers(build ? { 'X-Monoscope-Build': build } : {}) } } } }));
+
+  it('reloads once when the server serves a different bundle, never for the same one', async () => {
+    const { vi } = await import('vitest');
+    document.head.innerHTML = '<meta name="monoscope-build" content="/dist/js/index.old.js">';
+    sessionStorage.clear();
+    const reload = vi.fn();
+    vi.stubGlobal('location', { ...window.location, reload });
+    const { installStaleChunkReload } = await import('../src/stale-chunk-reload');
+    installStaleChunkReload();
+    respond('/dist/js/index.old.js');
+    respond(null);
+    expect(reload).not.toHaveBeenCalled();
+    respond('/dist/js/index.new.js');
+    respond('/dist/js/index.new.js');
+    expect(reload).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+});

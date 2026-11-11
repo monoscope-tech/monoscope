@@ -46,4 +46,11 @@ export function installStaleChunkReload(): void {
     event.preventDefault();
     if (shouldReloadForStaleChunk(Date.now(), sessionStorage)) window.location.reload();
   });
+  // A tab left open across a deploy keeps running the old bundle, and its errors read as
+  // regressions of fixed code. Every response names the bundle the server now serves.
+  const loaded = document.querySelector<HTMLMetaElement>('meta[name="monoscope-build"]')?.content;
+  document.addEventListener('htmx:after:request', (event: any) => {
+    const served = event.detail?.ctx?.response?.headers?.get?.('X-Monoscope-Build');
+    if (loaded && served && served !== loaded && shouldReloadForStaleChunk(Date.now(), sessionStorage)) window.location.reload();
+  });
 }
