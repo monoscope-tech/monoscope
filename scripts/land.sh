@@ -16,7 +16,9 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
   git push -q --force-with-lease origin "$BR"
   echo "land: attempt $attempt on $(git rev-parse --short HEAD), base $(git rev-parse --short origin/master)"
   make ci-signoff || true
-  if make ci-status 2>&1 | grep -q '^run '; then echo "land: checks still unproven after sign-off"; make ci-status 2>&1 | grep '^run '; exit 1; fi
+  # Captured, not piped into `grep -q`: under pipefail its early exit SIGPIPEs make and reads as "nothing pending".
+  status=$(make ci-status 2>&1) || { echo "land: ci-status failed"; exit 1; }
+  if grep '^run ' <<<"$status"; then echo "land: checks still unproven after sign-off"; exit 1; fi
   until docker buildx imagetools inspect "ghcr.io/monoscope-tech/monoscope:tree-$(git rev-parse 'HEAD^{tree}')" >/dev/null 2>&1; do
     make deploy-image || { echo "land: image build failed"; exit 1; }
   done
