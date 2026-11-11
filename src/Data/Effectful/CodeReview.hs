@@ -1,7 +1,7 @@
 {-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Data.Effectful.CodeReview (CodeReview (..), SessionIdentity (..), SessionSubject (..), NativePause, FixContext (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), readSessionContext, prepareRepository, resolveImage, Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), proofBudget, ProofHooks (..), ProofProgress (..), hoistHooks, DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), Revision, mkRevision, revisionText, reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, workerHost, runCodeReviewTest, validExplanation) where
+module Data.Effectful.CodeReview (CodeReview (..), SessionIdentity (..), SessionSubject (..), NativePause, FixContext (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), readSessionContext, prepareRepository, resolveImage, Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), proofBudget, ProofHooks (..), ProofProgress (..), hoistHooks, DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), Revision, mkRevision, revisionText, reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, workerHost, runCodeReviewTest, validExplanation, fetchDocument, pageText) where
 
 import Control.Concurrent.STM qualified as STM
 import Control.Monad.Trans.Except (except, throwE)
@@ -22,6 +22,9 @@ import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types
 import Data.OpenApi.Schema.Validation qualified as Schema
 import Data.Text qualified as T
+import Network.HTTP.Client qualified as HTTP
+import Network.HTTP.Client.TLS qualified as TLS
+import Network.HTTP.Types.Status qualified as HTTP
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID4
 import Deriving.Aeson qualified as DAE
@@ -30,6 +33,7 @@ import Effectful.Dispatch.Dynamic
 import Effectful.TH
 import Models.Projects.ProjectMemory qualified as Memory
 import Pkg.DeriveUtils (UUIDId (..))
+import Utils (safeScrapeUrl)
 import Relude
 import System.Directory (listDirectory, removeFile, removePathForcibly)
 import System.Environment (getEnvironment)
@@ -640,7 +644,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                   _ -> reject $ "Candidate verification did not establish a failing base and passing retained test.\n" <> decodeUtf8 (AE.encode result.report)
                                 advance $ Checked artifact captured baseline receipt
                                 pure $ describe "Frozen regression fails on base and passes on the candidate with its test retained." result
-                              (Policy.RunRegression; Policy.RecordProof; Policy.PlanProofs; Policy.QueryTelemetry; Policy.SubmitFix; Policy.SubmitAdmission; Policy.SubmitFixReview; Policy.RecallKnowledge; Policy.RememberKnowledge; Policy.ListProjectMemory; Policy.ReadProjectMemory; Policy.WriteProjectMemory; Policy.SubmitReview) -> reject "This tool is not a fix workflow operation"
+                              (Policy.RunRegression; Policy.RecordProof; Policy.PlanProofs; Policy.QueryTelemetry; Policy.FetchUrl; Policy.ListIssues; Policy.ListMonitors; Policy.SubmitFix; Policy.SubmitAdmission; Policy.SubmitFixReview; Policy.RecallKnowledge; Policy.RememberKnowledge; Policy.ListProjectMemory; Policy.ReadProjectMemory; Policy.WriteProjectMemory; Policy.SubmitReview) -> reject "This tool is not a fix workflow operation"
                           finish summary = do
                             (captured, receipt) <-
                               progress >>= \case
@@ -814,6 +818,9 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                   property key = parsed $ AE.withObject "Tool arguments" (AE..: key)
                                   request = case invocation.name of
                                     Policy.QueryTelemetry -> parsed AE.parseJSON callbacks.respond
+                                    Policy.FetchUrl -> property "url" fetchDocument
+                                    Policy.ListIssues -> callbacks.knowledge OpenIssues
+                                    Policy.ListMonitors -> callbacks.knowledge ServiceMonitors
                                     Policy.RecallKnowledge -> property "service" $ callbacks.knowledge . Recall
                                     Policy.RememberKnowledge -> parsed AE.parseJSON $ callbacks.knowledge . Remember
                                     Policy.ListProjectMemory -> parsed Memory.parsePageQuery $ callbacks.knowledge . ProjectMemory . maybe Memory.List Memory.Search
@@ -1015,6 +1022,37 @@ validReviewContext request verified =
         == (result.projectId, result.runId, result.issueId, revisionText result.base, request.artifacts.repository, request.artifacts.baseline.imageBuildId)
         && context.attemptId
         /= result.attemptId
+
+
+-- | A documentation page for the agent, fetched by the host so the guest stays off the web: public
+-- https:// only (the scrape-target SSRF guard), no redirects, the first 512 KB, HTML reduced to text.
+--
+-- >>> traverse fetchDocument ["https://127.0.0.1/admin", "http://example.com/docs", "https://169.254.169.254/latest"]
+-- [Left "Only public https:// URLs can be fetched",Left "Only public https:// URLs can be fetched",Left "Only public https:// URLs can be fetched"]
+fetchDocument :: Text -> IO (Either Text AE.Value)
+fetchDocument url
+  | not ("https://" `T.isPrefixOf` url && safeScrapeUrl url) = pure $ Left "Only public https:// URLs can be fetched"
+  | otherwise = first (const "The page could not be fetched") <$> tryAny do
+      manager <- HTTP.newManager TLS.tlsManagerSettings{HTTP.managerResponseTimeout = HTTP.responseTimeoutMicro 15000000}
+      request <- HTTP.parseRequest (toString url)
+      HTTP.withResponse request{HTTP.redirectCount = 0, HTTP.requestHeaders = [("User-Agent", "monoscope-review")]} manager \response -> do
+        body <- toStrict <$> HTTP.brReadSome (HTTP.responseBody response) 524288
+        let header name = decodeUtf8 @Text . snd <$> find ((== name) . fst) (HTTP.responseHeaders response)
+            text = decodeUtf8With lenientDecode body
+        pure $ AE.object ["url" AE..= url, "status" AE..= HTTP.statusCode (HTTP.responseStatus response), "location" AE..= header "Location", "text" AE..= T.take 60000 (if any ("html" `T.isInfixOf`) (header "Content-Type") then pageText text else text)]
+
+
+-- | A page's readable text: scripts and styles dropped, tags removed, common entities decoded.
+--
+-- >>> pageText "<html><style>p{}</style><p>Use <code>cabal&nbsp;run</code> &amp; wait</p><script>x()</script></html>"
+-- "Use cabal run & wait"
+pageText :: Text -> Text
+pageText = unwords . words . entities . foldMap (T.drop 1 . T.dropWhile (/= '>')) . T.splitOn "<" . ("<" <>) . dropBlock "style" . dropBlock "script"
+  where
+    dropBlock tag page = case T.breakOn ("<" <> tag) page of
+      (before, rest) | T.null rest -> before
+      (before, rest) -> before <> dropBlock tag (T.drop (T.length tag + 3) (snd (T.breakOn ("</" <> tag <> ">") rest)))
+    entities page = foldl' (\acc (entity, char) -> T.replace entity char acc) page ([("&nbsp;", " "), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"), ("&amp;", "&")] :: [(Text, Text)])
 
 
 reviewOutcome :: FixReviewRequest -> VerifiedFix -> FixReviewDecision -> Either Text FixReviewOutcome

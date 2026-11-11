@@ -1222,6 +1222,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                       Agent.ProjectMemory value -> modifyIORef' memories (<> [AE.toJSON value]) $> Right (AE.toJSON value)
                       Agent.Recall service -> pure $ if service == "test-service" then Right $ AE.toJSON $ V.singleton $ AE.object ["summary" AE..= ("Historical hypothesis; verify again." :: Text), "revision" AE..= base] else Left "Unexpected service"
                       Agent.Remember note -> pure $ if note.service == "test-service" && note.summary == "Recheck the retry hypothesis." && toList note.evidenceKeys == ["telemetry-1"] then Right $ AE.String "Note staged" else Left "Unexpected knowledge"
+                      (Agent.OpenIssues; Agent.ServiceMonitors) -> pure $ Left "Unexpected project signal query"
                   )
                   (const pass)
                   (const pass)
@@ -1496,6 +1497,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                       Agent.Recall service -> modifyIORef' knowledge (<> [AE.object ["tag" AE..= ("Recall" :: Text), "contents" AE..= service]]) $> Right (AE.toJSON ([] :: [AE.Value]))
                       Agent.Remember note -> modifyIORef' knowledge (<> [AE.object ["tag" AE..= ("Remember" :: Text), "contents" AE..= note]]) $> Right (AE.String "Note staged")
                       Agent.ProjectMemory _ -> fail "Unexpected wiki query"
+                      (Agent.OpenIssues; Agent.ServiceMonitors) -> fail "Unexpected project signal query"
                   )
                   (\receipt -> liftIO $ retained receipt.id.toText (AE.object ["tag" AE..= ("Call" :: Text), "contents" AE..= receipt]) >> modifyIORef' calls (<> [receipt]))
                   (\receipt -> liftIO $ retained receipt.id.toText (AE.toJSON receipt) >> modifyIORef' usage (<> [receipt]))
@@ -3420,6 +3422,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
                     saved `shouldSatisfy` isRight
                     write `shouldReturn` saved
                     unlift (knowledge $ Agent.ProjectMemory $ Memory.Read page) `shouldReturn` saved
+                    -- Open issues and monitors come back as lists, scoped to the review's mapped services.
+                    for_ [Agent.OpenIssues, Agent.ServiceMonitors] \signal -> unlift (knowledge signal) >>= (`shouldSatisfy` \case Right (AE.Array _) -> True; _ -> False)
                   let response = directory </> "result.json"
                   writeFileLBS response $ AE.encode result{Impact.coverage = ["Related test toolchain unavailable"]}
                   reply <- runEff $ scripted Nothing "test/fixtures/impact-review-agent.mjs" ([response, toString reviewPid.toText] <> arguments) $ Agent.reviewRepository Agent.Isolated request (liftIO . unlift . respond) (liftIO . unlift . knowledge) (liftIO . unlift . recordCall) (liftIO . unlift . recordUsage) (liftIO . unlift . recordAllocation) (liftIO . unlift . recordCheck) (Agent.hoistHooks (liftIO . unlift) hooks) (liftIO . unlift . check)

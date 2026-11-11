@@ -80,7 +80,9 @@ data FixContext = FixContext {attempt :: UUIDId "agent_attempt", issue :: Text, 
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data KnowledgeRequest = Recall Text | Remember KnowledgeNote | ProjectMemory Memory.Request
+-- | What the agent may read or stage about the project. 'OpenIssues' and 'ServiceMonitors' cover the
+-- review's mapped services only.
+data KnowledgeRequest = Recall Text | Remember KnowledgeNote | ProjectMemory Memory.Request | OpenIssues | ServiceMonitors
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
 
