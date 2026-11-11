@@ -65,6 +65,9 @@ upgrade. This limit does not apply to self-hosted Open Source projects.
 
 ## Quick Start
 
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/monoscope-1)
+
+
 ```bash
 git clone https://github.com/monoscope-tech/monoscope.git
 cd monoscope
@@ -408,4 +411,3 @@ For commercial licensing options, contact us at [hello@monoscope.tech](mailto:he
 <div align="center">
   <a href="https://github.com/monoscope-tech/monoscope"><img src="https://img.shields.io/github/stars/monoscope-tech/monoscope?style=social" alt="Star on GitHub" /></a>
 </div>
-
