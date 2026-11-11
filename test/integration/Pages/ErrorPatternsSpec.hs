@@ -66,7 +66,7 @@ spec = around withTestResources $ describe "Error patterns" do
     forM_ ["GET /api/users", "POST /api/orders", "GET /api/reports", "DELETE /api/sessions"] \sp -> exc sp "IOException" ioMsg "" (at 300)
     -- Log records carry no exception event: OTel's exception.* and the browser SDK's error.*.
     ingestErrorLog tr apiKey "user is not defined" [("exception.type", "ReferenceError"), ("exception.message", "user is not defined"), ("exception.stacktrace", "ReferenceError: user is not defined\n    at (/app.js:123:5)")] (at (-5))
-    ingestErrorLog tr apiKey "" [("error.name", "TypeError"), ("error.type", "uncaught_exception"), ("error.message", "Cannot read properties of null"), ("error.stack", "TypeError: Cannot read properties of null\n    at handleClick (app.bundle.js:42:11)")] (at (-4))
+    ingestErrorLog tr apiKey "" [("error.name", "TypeError"), ("error.type", "uncaught_exception"), ("error.message", "Cannot read properties of null"), ("error.stack", "TypeError: Cannot read properties of null\n    at handleClick (app.bundle.js:42:11)"), ("exception.escaped", "false")] (at (-4))
     contextEvent "26.3.1" (-15)
     ingestTraceWithException tr otherKey "GET /isolated" "IsolationError" "should not appear in testPid" "IsolationError\n    at test (/app/test.js:1:1)" (at (-30))
     extract tr
@@ -77,6 +77,8 @@ spec = around withTestResources $ describe "Error patterns" do
     map (.errorType) <$> patterns tr otherPid `shouldReturn` ["IsolationError"]
     sort [(p.message, "handleClick" `T.isInfixOf` p.stacktrace) | p <- pats, p.errorType `elem` ["ReferenceError", "TypeError"]]
       `shouldBe` [("Cannot read properties of null", True), (undefinedMsg, False), ("user is not defined", False)]
+    -- The browser SDK marks a console.error'd failure escaped=false: handled, not uncaught.
+    [(p.errorData.handled, p.errorData.mechanism) | p <- pats, p.message == "Cannot read properties of null"] `shouldBe` [(Just True, Just ErrorPatterns.CMLogRecord)]
     dbQuery @_ @(Text, Int) tr [sql| SELECT e.error_type, sum(h.event_count)::int FROM apis.error_hourly_stats h JOIN apis.error_patterns e ON e.id = h.error_id WHERE h.project_id = ? AND e.error_type IN ('TypeError', 'ConnectionRefusedError', 'ConnectionError') AND e.message NOT LIKE '%null%' GROUP BY 1 ORDER BY 1 |] (Only testPid)
       `shouldReturn` [("ConnectionError", 2), ("ConnectionRefusedError", 1), ("TypeError", 2)]
     bg tr (ErrorPatterns.getErrorPatternByHash testPid (EF.computeErrorFingerprint testPid.toText (Just "test-service") (Just "POST /api/data") EF.RNodejs "ConnectionError" "connect ECONNREFUSED 10.0.0.1:5432" dbStack)) >>= (`shouldSatisfy` isJust)

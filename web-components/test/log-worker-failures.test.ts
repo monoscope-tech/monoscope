@@ -10,7 +10,7 @@ describe('log worker fetch failures', () => {
     ['a server-reported error', () => Response.json({ error: 'Unknown field "ur"' }), /^Unknown field "ur"$/],
     ['a dropped connection', () => Promise.reject(new TypeError('Failed to fetch')), /^Failed to fetch$/],
   ])('%s is posted as an expected failure', async (_, respond, message) => {
-    vi.stubGlobal('fetch', vi.fn(respond));
+    vi.stubGlobal('fetch', vi.fn(async () => respond()));
     const posted = vi.spyOn(self, 'postMessage').mockImplementation(() => {});
     await import('../src/log-worker');
     await (self.onmessage as any)({ data: { type: 'fetch', url: '/x', id: 7 } });

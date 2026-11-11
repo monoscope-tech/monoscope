@@ -1,4 +1,5 @@
 'use strict';
+import { asShown, logFailure, ShownFailure } from './fetch-failures';
 import { getSeriesColor, invalidateLogLevelColors, isDarkTheme, otherBucketLabel } from './colorMapping';
 import { shouldReloadForStaleChunk } from './stale-chunk-reload';
 import { formatNumber, formatBytes, convertToNanoseconds, formatDuration, durationAxisFormatter, DURATION_UNITS, statScalar, formatStatValue, type StatAggregates } from './stat-value';
@@ -50,17 +51,12 @@ export const chartLayoutForSize = (options: any, width: number, height: number, 
   return { ...laid, series: laid.series.map((s: any) => ({ ...s, itemStyle: { ...s.itemStyle, borderWidth: gap } })) };
 };
 
-// A failure the reader is already shown (a rejected query, a lapsed session, an HTTP error, a
-// dropped connection). Warned, never console.error'd: the browser SDK files those as exceptions.
-export class ShownFailure extends Error {}
-export const logFailure = (...args: unknown[]) => (args.some((a) => a instanceof ShownFailure) ? console.warn : console.error)(...args);
-
 /** A query failure already sanitized by the chart endpoint. */
 export class ChartQueryError extends ShownFailure {}
 
 /** A stream always ends with complete or error; EOF alone is not success. */
 export async function readChartResponse<T>(response: Response, partial: (data: T) => void): Promise<T> {
-  if (!response.headers?.get('content-type')?.includes('application/x-ndjson')) return response.json();
+  if (!response.headers?.get('content-type')?.includes('application/x-ndjson')) return response.json().catch(() => asShown(new Error(`Unreadable chart response (HTTP ${response.status})`)));
   if (!response.body) throw new Error('Chart response has no body');
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -771,7 +767,7 @@ const checkChartResponse = async (res: Response) => {
     if (await sessionExpired(res.url) && shouldReloadForStaleChunk(Date.now(), sessionStorage, 60_000, 'monoscope:session-reload')) window.location.reload();
     throw new ChartSessionError('Session expired. Retry reloads the page.');
   }
-  if (!res.ok) throw new Error(`widget request failed: ${res.status} ${res.statusText}`);
+  if (!res.ok) throw new ShownFailure(`widget request failed: ${res.status} ${res.statusText}`);
   return res;
 };
 

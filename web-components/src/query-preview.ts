@@ -1,6 +1,6 @@
 import { EditorState } from '@codemirror/state';
 import { EditorView, lineNumbers } from '@codemirror/view';
-import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { defaultHighlightStyle, forceParsing, syntaxHighlighting } from '@codemirror/language';
 import { PostgreSQL, sql } from '@codemirror/lang-sql';
 import { darkHighlightStyle, language } from './query-editor/language';
 import { isDarkTheme } from './colorMapping';
@@ -36,6 +36,8 @@ class QueryPreview extends HTMLElement {
           ],
         }),
       });
+      // Parsing is time-sliced; a busy page painted the query unhighlighted. Previews are short and read-only.
+      forceParsing(this.view, this.view.state.doc.length, 1000);
       if (code) code.hidden = true;
     };
     panel?.addEventListener('beforetoggle', event => {

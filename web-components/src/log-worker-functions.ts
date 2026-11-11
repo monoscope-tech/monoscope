@@ -5,10 +5,6 @@ import type { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, ServerTraceEnt
 
 type Trace = { traceId: string; spans: APTEvent[]; startTime: number; duration: number; trace_start_time: Date | null };
 
-// One wording for an empty or truncated body (a dropped connection, a restarting server), which
-// response.json() reports as "Unexpected end of JSON input".
-export const incompleteResponse = (status: number) => `The server sent an incomplete response (HTTP ${status}). Retry to load events.`;
-
 export function generateId() {
   return Math.random().toString(36).substring(2, 15);
 }

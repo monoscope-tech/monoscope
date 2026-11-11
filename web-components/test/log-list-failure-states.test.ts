@@ -6,7 +6,7 @@
 // screen. Getting that split wrong during an incident either hides the cause or throws away
 // the evidence. None of these paths were tested.
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ShownFailure } from '../src/widgets';
+import { ShownFailure } from '../src/fetch-failures';
 import { serverTransport, logPage, deferredTransport, mountList, ids, treeFromLogs } from './log-list-harness';
 
 // The two channels the component reports on: a parse error routed to the query box, and a
@@ -254,5 +254,20 @@ describe('console reporting', () => {
     expect((el as any).fetchError).toBe(error.message);
     expect(spies[level]).toHaveBeenCalledWith(error);
     expect(spies[level === 'warn' ? 'error' : 'warn']).not.toHaveBeenCalledWith(error);
+  });
+});
+
+// Regression: a tab left open across a deploy loses its worker chunk, and the bare ErrorEvent was
+// filed as "[Worker] Error: undefined undefined undefined" on every load.
+describe('a log worker that fails to load', () => {
+  test('reloads onto the current build instead of filing an issue', async () => {
+    const el = await mountList();
+    const reload = vi.fn();
+    vi.stubGlobal('location', { ...window.location, reload });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    sessionStorage.removeItem('monoscope:stale-chunk-reload');
+    (el as any).worker.onerror(new ErrorEvent('error'));
+    expect([reload.mock.calls.length, logged.mock.calls.length]).toEqual([1, 0]);
+    vi.unstubAllGlobals();
   });
 });
