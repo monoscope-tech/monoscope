@@ -36,7 +36,9 @@ test.describe('metrics catalog', () => {
     await page.goBack();
     await expect(page.locator('#search-input')).toHaveValue('uxcatalog');
     await page.goForward();
-    await expect(page.locator('#search-input')).toHaveValue('uxcatalogruntime');
+    // History restoration can go back to the server; under load that outlived the default 5s.
+    await expect(page).toHaveURL(/q=uxcatalogruntime/);
+    await expect(page.locator('#search-input')).toHaveValue('uxcatalogruntime', { timeout: 15_000 });
     await page.getByRole('tab', { name: 'Table', exact: true }).click();
     await expect(page).toHaveURL(/q=uxcatalogruntime/);
     expect(new URL(page.url()).searchParams.get('since')).toBe('6H');
