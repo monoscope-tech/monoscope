@@ -56,11 +56,9 @@ COPY cli ./cli
 # AutoInstrument rules out -fexternal-interpreter, which would drop the vanilla pass entirely.
 RUN printf 'package *\n  profiling: True\n  profiling-detail: none\npackage monoscope\n  profiling-detail: late\n  optimization: False\n' >> cabal.project.local
 
-# GHC outputs are mutable. Use a fresh namespace to avoid legacy shared mounts,
-# and hold its lock through compilation and copying the executable.
-# Build Haskell dependencies (fast - already cached in deps image)
+# Build Haskell dependencies (fast - already cached in deps image; layer-cached until the
+# cabal files or shared/ change).
 RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/.cabal/store \
-    --mount=type=cache,id=monoscope-production-dist-locked-v2,target=/build/dist-newstyle,sharing=locked \
     cabal update && cabal build --only-dependencies exe:monoscope-server -j --semaphore
 
 # The dependency image is a cache, not the authority for npm versions. Install
@@ -108,8 +106,13 @@ RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/publi
 # BodyWrapper holds the viteAssetFile splice that embeds the entry path; its cached
 # object can survive with a stale entry (2026-09-08 incident), so evict it and let the
 # splice re-read the manifest this build just wrote. One module recompile is noise here.
+# The dist cache is locked only to copy it in and back out, never across compilation: a
+# BuildKit `sharing=locked` mount made concurrent sessions' builds queue for up to 47 minutes.
+# Copies keep the /build/dist-newstyle path and mtimes, so cabal's incremental state holds;
+# a concurrent build's write-back can lose the other's progress, which only costs a recompile.
 RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/.cabal/store \
-    --mount=type=cache,id=monoscope-production-dist-locked-v2,target=/build/dist-newstyle,sharing=locked \
+    --mount=type=cache,id=monoscope-production-dist-v3,target=/cache \
+    flock /cache/lock sh -c '[ ! -d /cache/dist ] || { rm -rf /build/dist-newstyle && cp -a /cache/dist /build/dist-newstyle; }' && \
     (command -v hpack >/dev/null && hpack || echo "hpack not installed, using committed monoscope.cabal") && \
     find /build/dist-newstyle -name 'BodyWrapper.*' -delete && \
     cabal build exe:monoscope-server -j --semaphore --ghc-options="+RTS -A64m -n2m -RTS" && \
@@ -123,7 +126,9 @@ RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/
         echo "manifest entry: $entry" >&2; \
         echo "binary embeds:" >&2; \
         grep -aoE '/public/assets/web-components/dist/[^"]{1,80}\.js' /build/dist/monoscope-server | sort -u >&2; \
-        exit 1; }; }
+        exit 1; }; } && \
+    flock /cache/lock sh -c 'rm -rf /cache/dist.tmp && cp -a /build/dist-newstyle /cache/dist.tmp && rm -rf /cache/dist && mv /cache/dist.tmp /cache/dist' && \
+    rm -rf /build/dist-newstyle
 
 # Native CLI objects use their own cache, separate from the profiled server.
 FROM dependencies AS impact-cli
