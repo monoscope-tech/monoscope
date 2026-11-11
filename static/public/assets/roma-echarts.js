@@ -50,6 +50,8 @@
       }
     })
     .catch(error => {
-      log('Failed to load theme JSON file: ' + error)
+      // A cut-off asset load, not a bug: charts keep echarts' default theme. console.error
+      // would be filed as a runtime exception by the browser SDK.
+      console.warn('Failed to load theme JSON file: ' + error)
     })
 })

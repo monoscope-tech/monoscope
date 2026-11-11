@@ -448,7 +448,7 @@ export const heatmapOptions = (opt: any, source: ChartRow[], unit: string, style
 let worldMapLoad: Promise<void> | null = null;
 const ensureWorldMap = () =>
   (worldMapLoad ??= fetch(echartsUrls().worldMap)
-    .then((r) => r.json())
+    .then((r) => r.json().catch(asShown))
     .then((geo) => registerWorld(window.echarts, geo))
     .catch((e) => { worldMapLoad = null; throw e; }));
 
@@ -1234,7 +1234,7 @@ export const chartWidget = (widgetData: WidGetData) => {
   }
   // A re-rendered widget whose chart element survived (morph swap) keeps its instance,
   // listeners and observers; only the option changes. A replaced element has no instance.
-  if (chartType === 'map' && !window.echarts.getMap('world')) return void ensureWorldMap().then(() => chartWidget(widgetData), (e) => console.error('world map failed to load', e));
+  if (chartType === 'map' && !window.echarts.getMap('world')) return void ensureWorldMap().then(() => chartWidget(widgetData), (e) => logFailure('world map failed to load', e));
   const existingChart = window.echarts.getInstanceByDom(chartEl);
   const update = chartUpdaters.get(chartId);
   if (existingChart && !existingChart.isDisposed() && update) return update(widgetData);
