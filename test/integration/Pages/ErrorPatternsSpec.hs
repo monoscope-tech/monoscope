@@ -27,9 +27,9 @@ import Pkg.Components.Table qualified as Table
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.TestUtils
 import Servant qualified
+import System.Config (AuthContext (..), EnvConfig (..))
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
-import System.Config (AuthContext (..), EnvConfig (..))
 
 
 spec :: Spec
@@ -197,6 +197,17 @@ spec = around withTestResources $ describe "Error patterns" do
     ((.state) &&& (.occurrences_1m)) <$> tick `shouldReturn` (ESOngoing, 0)
     dbExec tr [sql| UPDATE apis.error_patterns SET occurrences_1m = 10, occurrences_5m = 30, occurrences_1h = 100, occurrences_24h = 500, state = 'ongoing', quiet_minutes = 0 WHERE id = ? |] (Only p0.id)
     map counts <$> replicateM 2 tick `shouldReturn` [(ESOngoing, 0, 20, 70, 400, 0), (ESOngoing, 0, 20, 50, 330, 1)]
+
+  it "synthetic: an error seen only from automated browsers leaves the Inbox for its own tab until a real occurrence" \tr -> do
+    apiKey <- createTestAPIKey tr testPid "synthetic-key"
+    let emit res = ingestTraceWithExceptionAttrs tr apiKey ([], res, []) "GET /api/synthetic" "SyntheticError" "synthetic probe" "SyntheticError: probe\n    at probe (/app/src/synthetic.js:1:1)" (at (-10)) >> extract tr
+        tab t = fmap (\(PageCtx _ tb) -> [r.base.targetHash | Pages.Issues.IssueVM _ r <- V.toList tb.rows]) . tablePage =<< call tr (Pages.Issues.issueListGetH testPid (Just t) Nothing Nothing Nothing Nothing Nothing (Just "24h") [] [])
+    emit [("user_agent.synthetic.type", "test")]
+    h <- (.hash) <$> patternOf tr "SyntheticError"
+    let listed = (,) <$> (elem h <$> tab "Inbox") <*> (elem h <$> tab "Synthetic")
+    listed `shouldReturn` (False, True)
+    emit []
+    listed `shouldReturn` (True, False)
 
   it "spikes: robust baselines escalate once, wake archived issues, de-escalate, skip ignored and re-escalate after regression" \tr -> do
     let uid = (Servant.getResponse tr.trSessAndHeader).user.id

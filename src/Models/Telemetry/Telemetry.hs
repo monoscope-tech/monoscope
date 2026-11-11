@@ -2547,6 +2547,7 @@ atErrorFrom spanObj mechanism handled typ msg stack =
         , mechanism = Just mechanism
         , level = spanObj.level <|> (display <$> (spanObj.severity >>= (.severity_text))) <|> ("error" <$ guard (spanObj.status_code == Just "ERROR"))
         , userAgent = ua
+        , synthetic = attr "user_agent.synthetic.type"
         , browser = withVersion (attr "user_agent.name") (attr "user_agent.version") <|> uaBrowser
         , os = withVersion (attr "os.name" <|> attr "user_agent.os.name") (attr "os.version" <|> attr "user_agent.os.version") <|> uaOs
         , device = attr "device.model.name" <|> attr "device.model.identifier" <|> uaDevice

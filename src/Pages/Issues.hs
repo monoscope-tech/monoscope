@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Pages.Issues (
   issueListGetH,
   hourlyRollupSql,
@@ -2424,6 +2426,7 @@ issueListGetH pid filterTM sortM _since pageM perPageM loadM periodM serviceFilt
       TabArchived -> notSpam{Issues.archive = Issues.IsNotNull}
       TabInbox -> notSpam{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.hideLowSeverity = True}
       TabSpam -> Issues.defIssueFilters{Issues.spam = Issues.IsNotNull}
+      TabSynthetic -> notSpam{Issues.synthetic = True}
       where
         notSpam = Issues.defIssueFilters{Issues.spam = Issues.IsNull}
 
@@ -2440,8 +2443,8 @@ issueListGetH pid filterTM sortM _since pageM perPageM loadM periodM serviceFilt
 -- already carry (@?filter=Acknowledged@); 'tabParam' is the single source of it.
 --
 -- >>> map tabParam [minBound .. maxBound]
--- ["Inbox","Acknowledged","Archived","Spam"]
-data IssueTab = TabInbox | TabAcknowledged | TabArchived | TabSpam
+-- ["Inbox","Acknowledged","Archived","Spam","Synthetic"]
+data IssueTab = TabInbox | TabAcknowledged | TabArchived | TabSpam | TabSynthetic
   deriving stock (Bounded, Enum, Eq, Ord, Show)
 
 
@@ -2452,6 +2455,7 @@ tabParam = \case
   TabAcknowledged -> "Acknowledged"
   TabArchived -> "Archived"
   TabSpam -> "Spam"
+  TabSynthetic -> "Synthetic"
 
 
 -- | An absent or unrecognised @filter@ lands on Inbox: the tab is a navigation
@@ -2470,6 +2474,7 @@ tabBlurb = \case
   TabArchived -> "Not actionable. Hidden and never notified — unarchive to bring one back."
   TabInbox -> "Needs triage. Acknowledge to pause notifications, or archive if it isn't actionable."
   TabSpam -> "Marked as spam, mostly user feedback. Hidden from every other tab."
+  TabSynthetic -> "Errors only automated browsers (end-to-end tests, bots) have hit. Hidden from every other tab until a real user hits one."
 
 
 -- | Bulk actions offered on each tab: only transitions that make sense from the
@@ -2481,7 +2486,7 @@ issueBulkActions pid tab members =
       TabAcknowledged -> [("arrow-rotate-left", "Unacknowledge", BAUnacknowledge, []), ("archive", "Archive", BAArchive, [])] <> triage
       TabArchived -> [("arrow-rotate-left", "Unarchive", BAUnarchive, []), ("code-merge", "Unmerge", BAUnmerge, [])]
       TabSpam -> [("arrow-rotate-left", "Not spam", BAUnspam, [])]
-      TabInbox -> [("check", "Acknowledge", BAAcknowledge, []), ("archive", "Archive", BAArchive, [])] <> triage
+      (TabInbox; TabSynthetic) -> [("check", "Acknowledge", BAAcknowledge, []), ("archive", "Archive", BAArchive, [])] <> triage
   ]
   where
     url a = (urls.issues pid).bulkActionsPost a Nothing Nothing
@@ -2500,6 +2505,8 @@ issueZeroState pid = \case
     ZeroState "circle-check" "Nothing acknowledged" "Acknowledge an issue to pause its notifications while you work on it." (ESLink inboxUrl "Go to Inbox")
   TabSpam ->
     ZeroState "ban" "No spam" "Feedback or issues marked as spam land here, out of the Inbox." (ESLink inboxUrl "Go to Inbox")
+  TabSynthetic ->
+    ZeroState "robot" "No synthetic errors" "Errors seen only from automated browsers land here, out of the Inbox, as an early warning." (ESLink inboxUrl "Go to Inbox")
   TabArchived ->
     ZeroState "archive" "Nothing archived" "Archive the issues that aren't worth acting on. They stay hidden and never notify." (ESLink inboxUrl "Go to Inbox")
   TabInbox ->

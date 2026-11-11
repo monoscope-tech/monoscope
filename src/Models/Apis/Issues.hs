@@ -918,6 +918,8 @@ data IssueFilters = IssueFilters
   -- ^ activity-bucket granularity, 'PIssueL' only: @"24h"@ = 24 hourly buckets, else 7 daily.
   , hideLowSeverity :: Bool
   -- ^ Inbox behaviour: drop @severity = 'low'@ so demoted silent drops don't clutter the list.
+  , synthetic :: Bool
+  -- ^ List the errors only automated browsers have hit, instead of the rest.
   , limit :: Int
   , offset :: Int
   }
@@ -938,6 +940,7 @@ defIssueFilters =
     , order = Nothing
     , period = "7d"
     , hideLowSeverity = False
+    , synthetic = False
     , limit = 50
     , offset = 0
     }
@@ -1000,12 +1003,15 @@ selectIssues pid projection f = do
           <> sqlNullFilter pfx [HI.sql|archived_at|] f.archive
           <> sqlNullFilter pfx [HI.sql|spam_at|] f.spam
           <> bool mempty [HI.sql| AND (^{pfx}severity IS NULL OR ^{pfx}severity != 'low')|] f.hideLowSeverity
+          -- Framework issues group many patterns and are never synthetic; the partial index makes the usual probe free.
+          <> [HI.sql| AND (^{pfx}issue_type = ^{enumLit RuntimeException} AND NOT ^{pfx}is_framework
+                AND EXISTS (SELECT 1 FROM apis.error_patterns ep WHERE ep.synthetic AND ep.project_id = ^{pfx}project_id AND ep.hash = ^{pfx}target_hash)) = #{f.synthetic}|]
           <> arrF pfx [HI.sql|service|] f.services
           <> foldMap (\service -> [HI.sql| AND ^{pfx}service = #{service}|]) f.service
           <> foldMap (\environment -> [HI.sql| AND ^{pfx}environment = #{environment}|]) f.environment
           <> arrF pfx [HI.sql|issue_type::text|] f.types
       iFilters = mkFilters [HI.sql|i.|]
-      cFilters = mkFilters mempty
+      cFilters = mkFilters [HI.sql|apis.issues.|]
   issues <- case projection of
     PIssue ->
       Hasql.interp
