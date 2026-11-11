@@ -941,7 +941,7 @@ data FacetsView = FacetsPending | FacetTail Text FacetSummary | FacetGroupFacets
 instance ToHtml FacetsView where
   toHtml =
     toHtml . \case
-      FacetsPending -> div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project."
+      FacetsPending -> div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters appear here once this project has sent a few minutes of data."
       FacetTail field summary -> whenJust (find ((== field) . (.path)) facetDefs) \facet -> do
         let (FacetData facetMap) = summary.facetJson
         facetTail_ True $ map (facetChoice facet) $ drop facetHeadCount $ HM.lookupDefault [] field facetMap
