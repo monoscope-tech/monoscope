@@ -995,10 +995,11 @@ runDailyJobScheduling authCtx =
             sched 24 3600 Jobs.NotificationDigestJob
             sched 24 3600 Jobs.InfraHealthCheck
 
+      -- Analyses finish after the hour the daily run starts on, so a full day's cutoff skipped every other day.
       repositoryChecks <-
         Hasql.interp @[(Projects.ProjectId, GitSync.RepositoryId)]
           [HI.sql| SELECT r.project_id, r.id FROM projects.repositories r
-        LEFT JOIN projects.repository_analysis a ON a.repository_id = r.id WHERE a.analyzed_at IS NULL OR a.analyzed_at < #{addUTCTime (-86400) currentTime} ORDER BY a.analyzed_at NULLS FIRST LIMIT 1000 |]
+        LEFT JOIN projects.repository_analysis a ON a.repository_id = r.id WHERE a.analyzed_at IS NULL OR a.analyzed_at < #{addUTCTime (-82800) currentTime} ORDER BY a.analyzed_at NULLS FIRST LIMIT 1000 |]
       enqueueJobs authCtx [AnalyzeRepository pid rid | (pid, rid) <- repositoryChecks]
       projects <- Projects.recentlyActiveProjectIds currentTime
       Log.logInfo "Scheduling jobs for projects" ("project_count", length projects)

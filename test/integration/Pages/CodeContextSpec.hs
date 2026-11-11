@@ -1063,6 +1063,14 @@ spec = do
         length <$> runQueryEffect tr (GitSync.getGitSyncs testPid) `shouldReturn` 1
         runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= (`shouldSatisfy` null)
 
+      it "repositoryAnalysis_dailyRunReanalysesARepositoryAnalysedJustOverADayAgo" \tr -> do
+        account <- grantOf tr testPid Git.GitHub Nothing "team" Nothing (Just "fixture")
+        Just repository <- runQueryEffect tr $ GitSync.connectRepository testPid account.id (Git.GitRepo "team/daily" "daily" True "main")
+        -- Yesterday's run analysed it a minute past midnight; a strict 24h cutoff skipped it today (prod, 2026-11-10).
+        dbExec tr "INSERT INTO projects.repository_analysis (repository_id, analyzed_at) VALUES (?, ?)" (repository.id, addUTCTime (-86340) frozenTime)
+        void $ runTestBg frozenTime tr $ BackgroundJobs.processBackgroundJob tr.trATCtx{config = tr.trATCtx.config{enableDailyJobScheduling = True}} BackgroundJobs.DailyJob
+        dbOne tr "SELECT count(*)::int FROM background_jobs WHERE payload = ?::jsonb" (Only $ decodeUtf8 @Text $ AE.encode $ BackgroundJobs.AnalyzeRepository testPid repository.id) `shouldReturn` (1 :: Int)
+
       it "repositoryConnection_missingReviewRunnerIsNotReadyAndRetainsDetails" \tr -> do
         let configured = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = "fixture", githubAppId = "fixture", githubAppPrivateKey = "fixture", impactReviewAgent = Just "test/fixtures/impact-review-agent.mjs"}}}
             withConfig f r = r{trATCtx = r.trATCtx{config = f r.trATCtx.config}}
