@@ -22,9 +22,6 @@ import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types
 import Data.OpenApi.Schema.Validation qualified as Schema
 import Data.Text qualified as T
-import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Client.TLS qualified as TLS
-import Network.HTTP.Types.Status qualified as HTTP
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID4
 import Deriving.Aeson qualified as DAE
@@ -32,8 +29,10 @@ import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.TH
 import Models.Projects.ProjectMemory qualified as Memory
+import Network.HTTP.Client qualified as HTTP
+import Network.HTTP.Client.TLS qualified as TLS
+import Network.HTTP.Types.Status qualified as HTTP
 import Pkg.DeriveUtils (UUIDId (..))
-import Utils (safeScrapeUrl)
 import Relude
 import System.Directory (listDirectory, removeFile, removePathForcibly)
 import System.Environment (getEnvironment)
@@ -45,6 +44,7 @@ import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin,
 import UnliftIO.Async (forConcurrently)
 import UnliftIO.Exception (catch, finally, throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
+import Utils (safeScrapeUrl)
 
 
 -- JSON-lines protocol: queries, usage, execution receipts, validation, and result.
@@ -1032,14 +1032,15 @@ validReviewContext request verified =
 fetchDocument :: Text -> IO (Either Text AE.Value)
 fetchDocument url
   | not ("https://" `T.isPrefixOf` url && safeScrapeUrl url) = pure $ Left "Only public https:// URLs can be fetched"
-  | otherwise = first (const "The page could not be fetched") <$> tryAny do
-      manager <- HTTP.newManager TLS.tlsManagerSettings{HTTP.managerResponseTimeout = HTTP.responseTimeoutMicro 15000000}
-      request <- HTTP.parseRequest (toString url)
-      HTTP.withResponse request{HTTP.redirectCount = 0, HTTP.requestHeaders = [("User-Agent", "monoscope-review")]} manager \response -> do
-        body <- toStrict <$> HTTP.brReadSome (HTTP.responseBody response) 524288
-        let header name = decodeUtf8 @Text . snd <$> find ((== name) . fst) (HTTP.responseHeaders response)
-            text = decodeUtf8With lenientDecode body
-        pure $ AE.object ["url" AE..= url, "status" AE..= HTTP.statusCode (HTTP.responseStatus response), "location" AE..= header "Location", "text" AE..= T.take 60000 (if any ("html" `T.isInfixOf`) (header "Content-Type") then pageText text else text)]
+  | otherwise =
+      first (const "The page could not be fetched") <$> tryAny do
+        manager <- HTTP.newManager TLS.tlsManagerSettings{HTTP.managerResponseTimeout = HTTP.responseTimeoutMicro 15000000}
+        request <- HTTP.parseRequest (toString url)
+        HTTP.withResponse request{HTTP.redirectCount = 0, HTTP.requestHeaders = [("User-Agent", "monoscope-review")]} manager \response -> do
+          body <- toStrict <$> HTTP.brReadSome (HTTP.responseBody response) 524288
+          let header name = decodeUtf8 @Text . snd <$> find ((== name) . fst) (HTTP.responseHeaders response)
+              text = decodeUtf8With lenientDecode body
+          pure $ AE.object ["url" AE..= url, "status" AE..= HTTP.statusCode (HTTP.responseStatus response), "location" AE..= header "Location", "text" AE..= T.take 60000 (if any ("html" `T.isInfixOf`) (header "Content-Type") then pageText text else text)]
 
 
 -- | A page's readable text: scripts and styles dropped, tags removed, common entities decoded.

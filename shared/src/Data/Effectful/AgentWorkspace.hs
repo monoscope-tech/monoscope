@@ -1399,7 +1399,7 @@ lookupWorkspace options operation request = do
               sync parent
               pure $ Prepared restored.manifest (destination </> "baseline.qcow2") Restored
         -- With no local ancestor, the lineage's latest archived build, so a fresh node starts warm too.
-        remoteAncestor = fmap join $ (`traverse` options.remote) \remote' ->
+        remoteAncestor = join <$> (`traverse` options.remote) \remote' ->
           rightToMaybe <$> tryAny do
             remote <- readRemote remote'
             connection <- connectStorage remote

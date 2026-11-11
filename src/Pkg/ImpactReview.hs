@@ -42,8 +42,8 @@ import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.LogQueries (selectLogTable)
+import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.AgentUsage qualified as Usage
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
@@ -1124,10 +1124,14 @@ requestKnowledge context attempt ref currentServices initial = \case
           State.put memory{notes = memory.notes <> [note]}
           pure $ Right $ AE.String "Note staged for this investigation; completion retains it as an agent conclusion, not a verified fact."
   Agent.OpenIssues -> scoped \services ->
-    AE.toJSON . map (\issue -> AE.object ["id" AE..= issue.id, "title" AE..= issue.title, "type" AE..= issue.issueType, "service" AE..= issue.service, "severity" AE..= issue.severity, "critical" AE..= issue.critical, "updatedAt" AE..= issue.updatedAt]) . fst
+    AE.toJSON
+      . map (\issue -> AE.object ["id" AE..= issue.id, "title" AE..= issue.title, "type" AE..= issue.issueType, "service" AE..= issue.service, "severity" AE..= issue.severity, "critical" AE..= issue.critical, "updatedAt" AE..= issue.updatedAt])
+      . fst
       <$> Issues.selectIssues context.projectId Issues.PIssue Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.spam = Issues.IsNull, Issues.services = services, Issues.limit = 20}
   Agent.ServiceMonitors -> scoped \services ->
-    AE.toJSON . map (\monitor -> AE.object ["title" AE..= monitor.alertConfig.title, "query" AE..= monitor.logQuery, "service" AE..= monitor.service, "status" AE..= monitor.currentStatus, "value" AE..= monitor.currentValue, "alertThreshold" AE..= monitor.alertThreshold, "lastAlert" AE..= monitor.alertLastTriggered]) . filter (\monitor -> isNothing monitor.deactivatedAt && all (`elem` services) monitor.service)
+    AE.toJSON
+      . map (\monitor -> AE.object ["title" AE..= monitor.alertConfig.title, "query" AE..= monitor.logQuery, "service" AE..= monitor.service, "status" AE..= monitor.currentStatus, "value" AE..= monitor.currentValue, "alertThreshold" AE..= monitor.alertThreshold, "lastAlert" AE..= monitor.alertLastTriggered])
+      . filter (\monitor -> isNothing monitor.deactivatedAt && all (`elem` services) monitor.service)
       <$> Monitors.queryMonitorsAll context.projectId
   where
     scoped action = currentServices >>= \services -> if null services then pure $ Left "Review authorization is no longer available" else Right <$> action services

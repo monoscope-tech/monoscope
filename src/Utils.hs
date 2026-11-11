@@ -2112,4 +2112,3 @@ safeScrapeUrl u = case parseURI (toString (T.strip u)) of
       guard $ not (T.null o) && (T.length o == 1 || T.head o /= '0') -- reject leading-zero (octal) octets
       n <- readMaybe (toString o) :: Maybe Int
       n <$ guard (n >= 0 && n <= 255)
-

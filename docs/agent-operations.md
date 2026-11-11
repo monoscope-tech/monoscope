@@ -65,6 +65,8 @@ Automatic runs skip pull requests that change only documentation, tests or CI. A
 
 `record_proof {claim, command}` replays one bash command under asciinema in fresh verifier VMs, on the base and the head.
 
+**Project reach.** Besides `query_telemetry` (logs, spans and metrics), review agents have `list_issues` and `list_monitors`, read-only and scoped to the review's mapped services, and `fetch_url` for public documentation. The host fetches the page (public `https://` only, the scrape-target SSRF guard, no redirects, 512 KB), so the guest never reaches the web for it.
+
 **Network.** Every guest (agent, proof, workspace build) can read package registries and reach nothing else: `sandbox.mjs` allows GET and HEAD to Debian apt, npm, PyPI, crates.io and rustup, the Go proxy, Hackage and ghcup, Maven and RubyGems, sets a fixed User-Agent, and blocks internal ranges. Guest commands run as uid 1000, so a missing toolchain comes from a user-space installer (ghcup, rustup, npm, `pip --user`, `go install`) in a proof's setup, and a workspace build caches it in the checkpoint. GitHub is excluded: a repository's traffic insights list visited paths, which pull request code could use to exfiltrate source.
 The host decodes each cast from the check log, renders a GIF with `agg` and an MP4 with `ffmpeg`, and stores them in `projects.pr_review_proofs`.
 Signed links at `/p/<project>/reviews/<review>/proofs/<file>` serve the media, so GitHub's image proxy can show the GIF without a session.

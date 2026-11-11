@@ -49,10 +49,10 @@ import Network.Wreq (defaults, header)
 import Network.Wreq qualified as Wreq
 import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..), unUUIDId)
 import Pkg.Prometheus qualified as Prom
-import Utils (safeScrapeUrl)
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (DB)
+import Utils (safeScrapeUrl)
 
 
 type PrometheusScrapeConfigId = UUIDId "prometheus_scrape_config"
@@ -259,4 +259,3 @@ prometheusScrapeOpts authHeader =
       & Wreq.redirects
     .~ 0
       & maybe Relude.id (\h -> header "Authorization" .~ [encodeUtf8 h]) authHeader
-
