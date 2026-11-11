@@ -1399,18 +1399,19 @@ lookupWorkspace options operation request = do
               sync parent
               pure $ Prepared restored.manifest (destination </> "baseline.qcow2") Restored
         -- With no local ancestor, the lineage's latest archived build, so a fresh node starts warm too.
-        remoteAncestor = join <$> (`traverse` options.remote) \remote' ->
-          rightToMaybe <$> tryAny do
-            remote <- readRemote remote'
-            connection <- connectStorage remote
-            encoded <- storage connection do
-              response <- Minio.getObject remote.bucket (lineagePointer identity) Minio.defaultGetObjectOptions
-              runConduit $ response.gorObjectStream .| CC.takeE 65537 .| CC.sinkLazy
-            ensure $ LBS.length encoded <= 65536
-            latest <- decode @Manifest $ toStrict encoded
-            ensure $ latest.identity.projectId == identity.projectId && lineage latest.identity == lineage identity
-            ancestor <- maybe invalid pure =<< restoreFrom latest.identity (Just latest.sha256) remote'
-            pure $ Snapshot ancestor.path ancestor.manifest.sha256
+        remoteAncestor =
+          join <$> (`traverse` options.remote) \remote' ->
+            rightToMaybe <$> tryAny do
+              remote <- readRemote remote'
+              connection <- connectStorage remote
+              encoded <- storage connection do
+                response <- Minio.getObject remote.bucket (lineagePointer identity) Minio.defaultGetObjectOptions
+                runConduit $ response.gorObjectStream .| CC.takeE 65537 .| CC.sinkLazy
+              ensure $ LBS.length encoded <= 65536
+              latest <- decode @Manifest $ toStrict encoded
+              ensure $ latest.identity.projectId == identity.projectId && lineage latest.identity == lineage identity
+              ancestor <- maybe invalid pure =<< restoreFrom latest.identity (Just latest.sha256) remote'
+              pure $ Snapshot ancestor.path ancestor.manifest.sha256
     case operation of
       Lookup -> load
       Archive ->
