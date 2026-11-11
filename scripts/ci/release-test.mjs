@@ -127,6 +127,17 @@ test('source and toolchain changes both rebuild', () => {
   assert.ok(builds().at(-1).includes(`DEPS_IMAGE=ghcr.io/monoscope-tech/monoscope-deps@${deps}`));
 });
 
+test('only a build containing master writes back the shared compile cache', () => {
+  release(['build']);
+  git('commit', '--allow-empty', '-qm', 'newer master');
+  git('push', '-q', 'origin', 'HEAD:master');
+  git('checkout', '-q', '-b', 'stale', sha);
+  writeFileSync(join(repo, 'source'), 'stale branch');
+  git('commit', '-qam', 'stale');
+  release(['build']);
+  assert.deepEqual(builds().map(args => args.includes('CACHE_WRITE_BACK=true')), [true, false]);
+});
+
 test('stale commit cannot publish latest', () => {
   release(['build']);
   git('commit', '--allow-empty', '-qm', 'new master');

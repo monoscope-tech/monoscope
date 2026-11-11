@@ -86,9 +86,14 @@ build() {
       metadata=$(mktemp -t monoscope-image.XXXXXX)
       trap 'rm -f "$metadata"' EXIT
       set -- --builder "$MONOSCOPE_BUILDER"
+      # Only a build containing master may overwrite the shared compile cache; a stale base
+      # regresses it, and the next build then recompiles everything the base lacked.
+      writeback=false
+      ! git merge-base --is-ancestor "$(git ls-remote "$REMOTE" refs/heads/master | cut -f1)" "$sha" 2>/dev/null || writeback=true
       git archive "$sha" | docker buildx build "$@" --platform linux/amd64 -f Dockerfile \
         --build-arg "DEPS_IMAGE=$deps" --build-arg "RUNTIME_IMAGE=$runtime" \
         --build-arg "GIT_HASH=$sha" --build-arg "GIT_COMMIT_DATE=$(git show -s --format=%cI HEAD)" \
+        --build-arg "CACHE_WRITE_BACK=$writeback" \
         --label "org.opencontainers.image.revision=$sha" \
         --label "org.opencontainers.image.source=https://github.com/monoscope-tech/monoscope" \
         --label "io.monoscope.builder=${GITHUB_ACTOR:-$(git config user.name)}" \
