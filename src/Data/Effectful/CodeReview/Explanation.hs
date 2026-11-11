@@ -249,7 +249,7 @@ clipCast highlight cast = case BS8.lines cast of
             -- Plain output (colours at most, no cursor movement) only fills the rows it printed, so
             -- the clip drops the empty terminal below it; anything else keeps its full screen.
             plain = all (\escape -> "[" `T.isPrefixOf` escape && T.all (\c -> isDigit c || c == ';') (T.drop 1 (T.takeWhile (/= 'm') escape)) && "m" `T.isInfixOf` escape) (drop 1 (T.splitOn "\ESC" printed))
-            row = 1 + if plain then min (floor rows) (max 3 (length (T.lines printed) + 1)) else floor rows :: Int
+            row = 1 + if plain then min (floor rows) (max 3 (length (lines printed) + 1)) else floor rows :: Int
             clock seconds = let whole = floor seconds :: Int in show (whole `div` 60) <> ":" <> T.justifyRight 2 '0' (show (whole `mod` 60))
             timeline now =
               let cells = max 10 (width - 2 - T.length (clock now) - T.length (clock total))

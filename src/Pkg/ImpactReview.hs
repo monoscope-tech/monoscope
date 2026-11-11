@@ -11,9 +11,6 @@ import Data.Char (isDigit)
 import Data.Default (def)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.AgentWorkspace qualified as Workspace (Outcome (..), Start (..), hostSlots)
-import GHC.Clock (getMonotonicTime)
-import OpenTelemetry.Attributes qualified as OA
-import Pkg.Metrics qualified as Metrics
 import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Artifacts (sha256)
 import Data.Effectful.CodeReview.Checkout qualified as Checkout (Fetch (..))
@@ -40,6 +37,7 @@ import Effectful.Reader.Static (Reader, ask)
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
 import Effectful.Timeout qualified as Timeout
+import GHC.Clock (getMonotonicTime)
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Models.Apis.Investigations qualified as Investigations
@@ -54,12 +52,14 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
 import OpenAI.V1.Chat.Completions qualified as OpenAI
+import OpenTelemetry.Attributes qualified as OA
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), rawSql)
 import Pkg.Git qualified as Git
 import Pkg.LiveTail (capRowValue)
+import Pkg.Metrics qualified as Metrics
 import Pkg.Parser.Expr (CmpOp (..), Expr (..), FieldKey (..), Subject (..), ToQueryText (..), Values (..), isErrorSql)
 import Pkg.Parser.Stats qualified as KQL
 import Relude hiding (Reader, ask)
@@ -425,7 +425,10 @@ prepareReviewWorkspace rid = whenJustM (Reviews.getRun rid) \run -> do
       =<< Agent.prepareRepository
         Checkout.Fetch{projectId = run.projectId, repository = "https://github.com/" <> run.owner <> "/" <> run.repo <> ".git", base, head = base, gitToken = conn.token.reveal}
   ended <- liftIO getMonotonicTime
-  Metrics.recordMs Metrics.workspacePrepareHist ((ended - started) * 1000) . one . ("outcome",) . OA.toAttribute @Text
+  Metrics.recordMs Metrics.workspacePrepareHist ((ended - started) * 1000)
+    . one
+    . ("outcome",)
+    . OA.toAttribute @Text
     $ either (const "failed") (\case Workspace.Cached -> "cached"; Workspace.Restored -> "restored"; Workspace.Built Workspace.Cold _ -> "cold"; Workspace.Built Workspace.Warm _ -> "warm"; Workspace.Built (Workspace.ColdAfterWarm _) _ -> "cold_after_warm") outcome
   case outcome of
     Left err -> Log.logAttention "Review workspace preparation failed" (run.id, err)
