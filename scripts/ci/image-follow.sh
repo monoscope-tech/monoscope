@@ -30,10 +30,11 @@ while :; do
     [ -z "$pid" ] || echo "image-follow: $head supersedes $target; cancelling its build"
     cancel
     target=$head
-    if docker buildx imagetools inspect "$IMAGE:$head" >/dev/null 2>&1; then
-      echo "image-follow: $head already has an image"
+    git fetch -q origin master
+    if docker buildx imagetools inspect "$IMAGE:tree-$(git rev-parse "$head^{tree}")" >/dev/null 2>&1; then
+      echo "image-follow: $head already has an image" # make land builds the merged tree before merging
     else
-      git fetch -q origin master && git checkout -q --detach "$head" && git clean -qfdx
+      git checkout -q --detach "$head" && git clean -qfdx
       echo "image-follow: building $head"
       scripts/ci/ci.sh image "$head" &
       pid=$!
