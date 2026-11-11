@@ -302,10 +302,9 @@ renderVideo page video = renderMedia video \directory run -> do
   let total = max 1 $ fromMaybe 30 $ readMaybe @Double $ toString $ T.strip $ decodeUtf8 probed
       shown = min 30 total
   let clock t = let n = round t :: Int in show (n `div` 60) <> ":" <> T.justifyRight 2 '0' (show (n `mod` 60))
-  for_ [("proof.start", "0:00"), ("proof.end", clock shown), ("proof.label", "▶  Watch full video  ·  " <> clock total)] \(name, label) -> writeFileBS (directory </> name) (encodeUtf8 label)
+  for_ [("proof.start", "0:00"), ("proof.end", clock total), ("proof.label", "▶  Watch full video")] \(name, label) -> writeFileBS (directory </> name) (encodeUtf8 label)
   let preview (fps, width, quality) = do
-        -- A player bar: the clip's start and end times either side of a track of the whole video, with
-        -- the clip bracketed in blue and a playhead moving through it.
+        -- A player bar: the whole video's track, its clip bracketed in blue, and a moving playhead.
         let clip = "(iw-420)*" <> show (shown / total)
             timeline =
               intercalate

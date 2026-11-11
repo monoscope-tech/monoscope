@@ -739,9 +739,9 @@ getPullRequestFiles :: W.HTTP :> es => GitConn -> RepoRef -> Int -> Eff es (Eith
 getPullRequestFiles conn repo number = paginate 100 \page -> githubJson conn repo ("/pulls/" <> show number <> "/files?per_page=100&page=" <> show page)
 
 
--- | Paths changed between two revisions. GitHub lists at most 300 files, so a longer list may be partial.
+-- | Paths changed between two revisions; GitHub truncates at 300 files, so a list that long is an error.
 filesBetween :: W.HTTP :> es => GitConn -> RepoRef -> Text -> Text -> Eff es (Either Text [Text])
-filesBetween conn repo from to = fmap (map (.filename) . (.files)) <$> githubJson @CommitComparison conn repo ("/compare/" <> from <> "..." <> to)
+filesBetween conn repo from to = (>>= \c -> if length c.files >= 300 then Left "GitHub truncated the comparison" else Right (map (.filename) c.files)) <$> githubJson @CommitComparison conn repo ("/compare/" <> from <> "..." <> to)
 
 
 newtype CommitComparison = CommitComparison {files :: [PullRequestFile]}

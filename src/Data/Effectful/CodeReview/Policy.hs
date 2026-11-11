@@ -2,7 +2,7 @@
 
 module Data.Effectful.CodeReview.Policy (Role (..), ToolName (..), Tool (..), Invocation (..), Policy (..), policy, toolsForRole, toolDefinition, toolSchema, sourceReviewSchema) where
 
-import Control.Lens ((.~), (?~))
+import Control.Lens ((%~), (.~), (?~))
 import Data.Aeson qualified as AE
 import Data.HashMap.Strict.InsOrd qualified as InsOrd
 import Data.OpenApi qualified as O
@@ -220,13 +220,13 @@ schema role = \case
         )
       ,
         ( "issues"
-        , array 0 3 (object [("title", bounded 1 $ Just 200), ("summary", bounded 1 $ Just 600), ("proofKeys", array 0 3 text)])
+        , array 0 3 (object [("title", bounded 1 $ Just 200), ("summary", bounded 1 $ Just 600), ("proofKeys", array 1 3 text)])
             & O.description
             ?~ "Something a recording showed broken that the PR does not say it changes, such as a layout that overflows or a control that stops working. Optional. Title it like a bug (\"Status pills overflow their column at 1280px\"); the summary says what a user sees, and cites the recording that shows it."
         )
       ]
       & O.required
-      .~ ["findings", "coverage", "claims", "summary", "assessments"]
+      %~ filter (/= "issues")
   where
     enum values = text & O.enum_ ?~ map AE.String values
     uuid = text & O.format ?~ "uuid"

@@ -42,6 +42,7 @@ module Web.Links (
   widgetPngPath,
   ProofMediaGet,
   ProofRatingGet,
+  ProofRatingPost,
   proofRatingPath,
   proofMediaPath,
 ) where
@@ -605,6 +606,7 @@ type ProofMediaGet = "p" :> ProjectId :> "reviews" :> Capture "review_id" (UUIDI
 
 
 type ProofRatingGet = "p" :> ProjectId :> "reviews" :> Capture "review_id" (UUIDId "pr_review") :> "rating" :> Capture "rating" ImpactReviews.Rating :> QPT "sig" :> Get '[HTML] (Html ())
+type ProofRatingPost = "p" :> ProjectId :> "reviews" :> Capture "review_id" (UUIDId "pr_review") :> "rating" :> Capture "rating" ImpactReviews.Rating :> QPT "sig" :> Post '[HTML] (Html ())
 
 
 proofRatingPath :: Projects.ProjectId -> UUIDId "pr_review" -> ImpactReviews.Rating -> Text -> Text

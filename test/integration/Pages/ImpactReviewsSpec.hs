@@ -2895,7 +2895,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- proofRating_recordsTheAuthorsVerdict: the comment's signed Yes and No links rate the review; a forged one is refused.
     let rateUrl r = proofRatingPath testPid run.id r $ Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid (Reviews.ratingSignedPath run.id r)
     (H.statusCode . (.simpleStatus) <$> fetch (T.replace "sig=" "sig=0" $ rateUrl Reviews.Down)) `shouldReturn` 403
+    (H.statusCode . (.simpleStatus) <$> fetch (T.replace "/up?" "/down?" $ rateUrl Reviews.Up)) `shouldReturn` 403
+    -- Opening the link only asks: mail scanners and unfurlers open every link, so the button POSTs.
     (H.statusCode . (.simpleStatus) <$> fetch (rateUrl Reviews.Up)) `shouldReturn` 200
+    dbOne tr "SELECT rating IS NULL FROM projects.pr_review_runs WHERE id = ?" (Only run.id) `shouldReturn` True
+    posted <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest{Wai.requestMethod = "POST"} $ encodeUtf8 $ rateUrl Reviews.Up) app
+    H.statusCode posted.simpleStatus `shouldBe` 200
     dbOne tr "SELECT rating FROM projects.pr_review_runs WHERE id = ?" (Only run.id) `shouldReturn` ("up" :: Text)
 
   it "workspacePrepare_warmStartsFromTheRepositoryLatestBuild" \tr -> withTemp "native-ancestor" \directory -> do
@@ -2999,7 +3004,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     goldenText "impact-review/monoscope-view.md" $ render Impact.MonoscopeView
     -- A browser proof leads with its recording, chapters and the merge-base and pull-request stills.
     let uiProof = result{Impact.claims = Just [Impact.Claim "Shows the retry count in the receipt" Impact.Matches "The receipt shows Retried once under the charge; before, it showed only the amount." ["proof-1"], Impact.Claim "Retries a timed-out capture once" Impact.Matches "The capture command retries after the first timeout and succeeds." ["proof-2"]]}
-    goldenText "impact-review/github-comment-ui-proof.md" $ Impact.renderReview "https://app.monoscope.tech" run (Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y" (Just ("https://app.monoscope.tech/rate/up", "https://app.monoscope.tech/rate/down"))) uiProof{Impact.issues = Just [Impact.Issue "Receipt total overflows its card at 1280px" "The total runs 9px past the receipt card on the right; it fits at 1440px." ["proof-1"]]}
+    goldenText "impact-review/github-comment-ui-proof.md" $ Impact.renderReview "https://app.monoscope.tech" run (Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y" (Just \case Reviews.Up -> "https://app.monoscope.tech/rate/up"; Reviews.Down -> "https://app.monoscope.tech/rate/down")) uiProof{Impact.issues = Just [Impact.Issue "Receipt total overflows its card at 1280px" "The total runs 9px past the receipt card on the right; it fits at 1440px." ["proof-1"]]}
     -- While proofs run, the comment lists each planned claim and how far it has got.
     goldenText "impact-review/github-comment-progress.md" $ Impact.renderProgress "https://app.monoscope.tech" (T.replicate 40 "d") (T.replicate 40 "a") [Reviews.ClaimProgress "Shows the retry count in the receipt" (Reviews.Proved "proof-1"), Reviews.ClaimProgress "Retries a timed-out capture once" Reviews.Running, Reviews.ClaimProgress "Keeps the receipt link | after a retry" Reviews.Pending] (fold uiProof.proofs)
 

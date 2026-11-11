@@ -666,9 +666,10 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                         if taken >= proofBudget
                           then pure $ Left "Proof budget exhausted; cite the proofs already recorded"
                           else do
-                            hooks.progress $ Started $ proof.claim :| fold proof.covers
+                            let covered = proof.claim :| fold proof.covers
+                            hooks.progress $ Started covered
                             recorded <- recordSides request outbox identifier proof hooks
-                            recorded <$ whenLeft_ recorded (const $ hooks.progress $ Unproved $ proof.claim :| fold proof.covers)
+                            recorded <$ whenLeft_ recorded (const $ hooks.progress $ Unproved covered)
                     recordSides request outbox identifier proof hooks =
                       active \session -> runExceptT do
                         (result, logs) <- ExceptT $ regression request session.baseline identifier (AE.object ["script" AE..= Media.proofScript proof.setup proof.shellCommand, "failureMessage" AE..= Media.proofFailure]) [("base", request.base), ("head", request.head)] outbox

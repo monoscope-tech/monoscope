@@ -485,7 +485,7 @@ retryRun :: DB es => ProjectId -> ReviewId -> Eff es ()
 retryRun pid rid = do
   let payload = Aeson $ AE.toJSON $ Jobs.ReviewPullRequest rid
   Hasql.interpExecute_
-    [HI.sql|WITH retried AS (UPDATE projects.pr_review_runs r SET state = #{Queued}, result = NULL, error = NULL
+    [HI.sql|WITH retried AS (UPDATE projects.pr_review_runs r SET state = #{Queued}, result = NULL, error = NULL, rating = NULL, rated_at = NULL
       FROM projects.pr_review_threads t WHERE r.id = #{rid} AND r.thread_id = t.id AND t.project_id = #{pid}
         AND r.revision = t.latest_revision AND (t.lease_until IS NULL OR t.lease_until < now())
       RETURNING r.id)

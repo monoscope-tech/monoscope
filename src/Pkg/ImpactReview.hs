@@ -302,9 +302,7 @@ validateDraft changed evidence recorded value = do
   validateFindings changed evidence candidate.findings
   validateAssessments candidate
   validateClaims recorded candidate.claims
-  for_ (fold candidate.issues) \issue -> do
-    when (T.null (T.strip issue.title) || T.null (T.strip issue.summary)) $ Left "Each issue needs a title and a summary"
-    unless (all (`elem` map (.key) recorded) issue.proofKeys) $ Left "An issue cites a proof that was not recorded"
+  validateIssues recorded (fold candidate.issues)
   pure candidate
 
 
@@ -325,6 +323,18 @@ validateClaims recorded claims = do
     unless (all (\key -> sort (map (.side) $ cited key) == universe) claim.proofKeys) $ Left "Claim cites a proof that was not recorded on base and head"
     unless (claim.status /= Matches || all (any (\p -> p.side == Agent.Head && p.exitCode == Just 0) . cited) claim.proofKeys) $ Left "A matching claim needs a head recording that succeeded"
     unless (not (T.null $ T.strip claim.title) && not (T.null $ T.strip claim.summary)) $ Left "Each claim needs a title and a summary"
+
+
+-- | An issue is something a recording showed, so it cites at least one.
+--
+-- >>> let recorded = [ProofLink "proof-1" Agent.Head "r" (Just 0) "" "" "" Nothing Nothing Nothing]
+-- >>> map (either id (const "accepted") . validateIssues recorded . pure . Issue "Total overflows its card" "It runs past the edge.") [["proof-1"], [], ["proof-9"]]
+-- ["accepted","An issue must cite the recording that shows it","An issue cites a proof that was not recorded"]
+validateIssues :: [ProofLink] -> [Issue] -> Either Text ()
+validateIssues recorded = traverse_ \issue -> do
+  when (T.null (T.strip issue.title) || T.null (T.strip issue.summary)) $ Left "Each issue needs a title and a summary"
+  when (null issue.proofKeys) $ Left "An issue must cite the recording that shows it"
+  unless (all (`elem` map (.key) recorded) issue.proofKeys) $ Left "An issue cites a proof that was not recorded"
 
 
 -- | One grade per dimension; only error detection can be not applicable.
@@ -627,10 +637,12 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
       pure reviewed
       where
         freshInput cfg baseRevision headRevision = do
-          -- A saved setup follows the PROOF.md it was written for; a list of 300 or more may hide a change.
-          stored <- Reviews.proofRecipe run
-          current <- forM stored \r -> either (const False) (\changed -> length changed < 300 && ".monoscope/PROOF.md" `notElem` changed) <$> Git.filesBetween conn (Git.RepoRef run.owner run.repo run.revision) r.revision pr.base.revision
-          let recipe = guarded (const $ current == Just True) =<< stored
+          -- A saved setup follows the PROOF.md it was written for; one GitHub cannot compare is dropped.
+          recipe <-
+            fmap join $ Reviews.proofRecipe run >>= traverse \stored -> do
+              changed <- Git.filesBetween conn (Git.RepoRef run.owner run.repo run.revision) stored.revision pr.base.revision
+              whenLeft_ changed $ Log.logAttention "Saved proof setup could not be compared" . (run.id,)
+              pure $ stored <$ guard (either (const False) (".monoscope/PROOF.md" `notElem`) changed)
           until <- Time.currentTime
           let from = addUTCTime (negate $ nominalDay * 7) until
           collected <- tryAny $ collectEvidence run mappings from until
@@ -679,7 +691,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
               void $ require . first AI.toolDenialMessage =<< AI.authorizeRunOperation context Catalog.ExternalPublication
               secret <- (.env.apiKeyEncryptionSecretKey) <$> ask @AuthContext
               let rate r = hostPath cfg.hostUrl $ proofRatingPath run.projectId run.id r $ Widget.signWidgetUrl secret run.projectId (Reviews.ratingSignedPath run.id r)
-                  body = reviewMarker run <> "\n" <> renderReview cfg.hostUrl run GitHubComment{includeEvidence, runUrl = hostPath cfg.hostUrl (urls.aiRoutineRunGet run.projectId context.rootId Nothing), rating = Just (rate Reviews.Up, rate Reviews.Down)} result
+                  body = reviewMarker run <> "\n" <> renderReview cfg.hostUrl run GitHubComment{includeEvidence, runUrl = hostPath cfg.hostUrl (urls.aiRoutineRunGet run.projectId context.rootId Nothing), rate = Just rate} result
                   comment = Catalog.ReviewComment run.id body
               response <-
                 either (throwError . ReviewPublicationRefused) pure =<< AI.executeNativeOperation context (Catalog.PublishPullRequestComment comment) \case
@@ -842,9 +854,9 @@ proofLink ctx run proof =
        in hostPath ctx.config.hostUrl $ proofMediaPath run.projectId run.id file $ Widget.signWidgetUrl ctx.env.apiKeyEncryptionSecretKey run.projectId (Reviews.proofSignedPath run.id file)
 
 
--- | Where a review is read. GitHub shows production detail only when the repository opts in.
--- | @rating@ holds the signed Yes and No links that rate a review's proofs.
-data Audience = GitHubComment {includeEvidence :: Bool, runUrl :: Text, rating :: Maybe (Text, Text)} | MonoscopeView
+-- | Where a review is read. GitHub shows production detail only when the repository opts in, and
+-- links a rating of the proofs when @rate@ can sign one.
+data Audience = GitHubComment {includeEvidence :: Bool, runUrl :: Text, rate :: Maybe (Reviews.Rating -> Text)} | MonoscopeView
 
 
 -- | Model-authored text is escaped and defanged; only host-built links appear.
@@ -861,7 +873,7 @@ renderReview host run audience result =
     <> coverage
     <> [footer]
   where
-    (github, shown, runUrl, rating) = case audience of GitHubComment{includeEvidence, runUrl = url, rating = links} -> (True, includeEvidence, Just url, links); MonoscopeView -> (False, True, Nothing, Nothing)
+    (github, shown, runUrl, rate) = case audience of GitHubComment{includeEvidence, runUrl = url, rate = link} -> (True, includeEvidence, Just url, link); MonoscopeView -> (False, True, Nothing, Nothing)
     label = \case
       WorthChecking -> "Worth checking"
       CoverageUnknown -> "Coverage unknown"
@@ -883,10 +895,12 @@ renderReview host run audience result =
           : foldMap media (nonEmpty $ sidesOf lead)
             <> [ T.intercalate
                    (if github then "<br>" else "\n")
-                   (("**Also checked** · " <> T.intercalate " · " [show n <> " " <> bool plural singular (n == 1) | (status, singular, plural) <- [(Matches, "match", "match"), (Differs, "differs", "differ"), (Unverified, "not verified", "not verified")], let n = length (filter ((== status) . (.status)) rest), n > 0]) : [icon 16 c.status <> " " <> plain c.title <> foldMap (\p -> " · [Watch recording](" <> p.video <> ")") (find ((== Agent.Head) . (.side)) (sidesOf c)) | c <- rest])
+                   (("**Also checked** · " <> T.intercalate " · " [show n <> " " <> bool plural singular (n == 1) | (status, singular, plural) <- [(Matches, "match", "match"), (Differs, "differs", "differ"), (Unverified, "not verified", "not verified")], let n = length (filter ((== status) . (.status)) rest), n > 0]) : [icon 16 c.status <> " " <> plain c.title <> watch c.proofKeys | c <- rest])
                | not (null rest)
                ]
     sidesOf claim = [p | key <- take 1 claim.proofKeys, p <- fold result.proofs, p.key == key]
+    watch keys = foldMap (\p -> " · [Watch recording](" <> p.video <> ")") $ find (\p -> p.side == Agent.Head && p.key `elem` take 1 keys) (fold result.proofs)
+    callout tag = T.intercalate "\n" . map (\line -> if T.null line then ">" else "> " <> line) . (["[!" <> tag <> "]" | github] <>)
     media sides =
       let pr = find ((== Agent.Head) . (.side)) sides
           base = find ((== Agent.Base) . (.side)) sides
@@ -908,16 +922,10 @@ renderReview host run audience result =
     gradeText dimension grade =
       let (good, fair, poor) = case dimension of Impact -> ("small", "medium", "large"); Rollback -> ("low", "medium", "high"); (Alignment; Verification; ErrorDetection) -> ("good", "decent", "poor")
        in case grade of Good -> "✅ " <> good; NotApplicable -> "✅ n/a"; Fair -> "👀 " <> fair; Poor -> "⚠️ " <> poor
-    issueText issue =
-      T.intercalate "\n"
-        . map (\line -> if T.null line then ">" else "> " <> line)
-        $ ["[!CAUTION]" | github]
-        <> ["**New issue found while testing**", "", "**" <> plain issue.title <> "**", "", plain issue.summary <> foldMap (\p -> " · [Watch recording](" <> p.video <> ")") (listToMaybe [p | key <- take 1 issue.proofKeys, p <- fold result.proofs, p.key == key, p.side == Agent.Head])]
+    issueText issue = callout "CAUTION" ["**New issue found while testing**", "", "**" <> plain issue.title <> "**", "", plain issue.summary <> watch issue.proofKeys]
     findingText finding =
-      T.intercalate "\n"
-        . map (\line -> if T.null line then ">" else "> " <> line)
-        $ ["[!WARNING]" | github]
-        <> ["**[`" <> clean finding.location.path <> ":" <> show finding.location.line <> "`](" <> diffLink finding.location <> ")**" <> case finding.location.side of Base -> " (removed line)"; Head -> ""]
+      callout "WARNING"
+        $ ["**[`" <> clean finding.location.path <> ":" <> show finding.location.line <> "`](" <> diffLink finding.location <> ")**" <> case finding.location.side of Base -> " (removed line)"; Head -> ""]
         <> if shown
           then [plain finding.mechanism, "", "**Next check:** " <> plain finding.nextStep, ""] <> map evidenceText (filter (\e -> e.key `elem` finding.evidenceKeys) result.evidence)
           else ["The reasoning and production evidence are in the " <> fullReview <> "."]
@@ -941,7 +949,7 @@ renderReview host run audience result =
     fullReview = maybe "full review" (\url -> "[full review](" <> url <> ")") runUrl
     settings = hostPath host (urls.codeMappingsSettings run.projectId Nothing)
     footer =
-      (if github then \line -> "<sub>" <> line <> foldMap (\(yes, no) -> " · Did the proof get it right? [Yes](" <> yes <> ") · [No](" <> no <> ")") (guarded (const $ not $ null $ fold result.claims) =<< rating) <> " · Comment `@monoscope prove it` to prove again</sub>" else id)
+      (if github then \line -> "<sub>" <> line <> foldMap (\link -> " · Did the proof get it right? [Yes](" <> link Reviews.Up <> ") · [No](" <> link Reviews.Down <> ")") (guarded (const $ not $ null $ fold result.proofs) =<< rate) <> " · Comment `@monoscope prove it` to prove again</sub>" else id)
         $ "Reviewed [`"
         <> T.take 7 run.revision
         <> "`](https://github.com/"
