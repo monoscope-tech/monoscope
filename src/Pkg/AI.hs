@@ -73,6 +73,7 @@ module Pkg.AI (
   ReportHighlight (..),
   parseReportDigest,
   reportRunAnswer,
+  reportItems,
   reportComparison,
   reportConfig,
   digestMarkdown,
@@ -140,6 +141,7 @@ import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.TimePicker (TimePicker (..), parseTimeRange)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC, idFromText)
+import Pkg.EmailTemplates qualified as ET
 import Pkg.Parser (ResultShape (Events), parseQueryToAST, resultShape)
 import Pkg.SchemaLearning (FacetData (..), FacetSummary (..), FacetValue (..))
 import Pkg.Slack qualified as Slack
@@ -323,7 +325,7 @@ prepareRunAnswer ranAt answer = Issues.RunAnswer{content = msg, widgets = AE.toJ
     parsed = rightToMaybe $ parseAgenticResponse answer
     widgets = guarded (not . null) . take 10 . map pin . filter (all (isRight . parseQueryToAST) . (.query)) . responseWidgets =<< parsed
     pin w = case (ranAt, w.timeFrom) of
-      (Just at, Nothing) | (Just from, Just to, _) <- parseTimeRange at $ fromMaybe (TimePicker Nothing Nothing Nothing) $ (.timeRange) =<< parsed -> w{Widget.timeFrom = Just $ formatUTCMicros from, Widget.timeTo = Just $ formatUTCMicros to}
+      (Just at, Nothing) | (Just from, Just to, _) <- parseTimeRange at $ fromMaybe (TimePicker Nothing Nothing Nothing) $ (.timeRange) =<< parsed -> pinWidget (from, to) w
       _ -> w
     report = fromMaybe answer.response $ (.explanation) =<< parsed
     msg = fromMaybe (bool answer.response "Here are the requested visualizations:" $ isJust widgets) (nonEmptyT . (.explanation) =<< parsed)
@@ -392,10 +394,22 @@ parseReportDigest pid response = do
 reportRunAnswer :: Projects.ProjectId -> (UTCTime, UTCTime) -> AgenticChatResult -> Maybe (ReportDigest, Issues.RunAnswer)
 reportRunAnswer pid window answer =
   parseReportDigest pid answer.response <&> \digest ->
-    let (from, to) = reportComparison window
-        pinned = digest{highlights = [h{widget = (\w -> w{Widget.timeFrom = Just $ formatUTCMicros from, Widget.timeTo = Just $ formatUTCMicros to}) <$> h.widget} | h <- digest.highlights]}
+    let pinned = digest{highlights = [h{widget = pinWidget (reportComparison window) <$> h.widget} | h <- digest.highlights]}
         md = digestMarkdown pinned []
      in (pinned, Issues.RunAnswer{content = md, widgets = AE.toJSON <$> guarded (not . null) (mapMaybe (.widget) pinned.highlights), report = md, evidence = Issues.AgentEvidence answer})
+
+
+pinWidget :: (UTCTime, UTCTime) -> Widget.Widget -> Widget.Widget
+pinWidget (from, to) w = w{Widget.timeFrom = Just $ formatUTCMicros from, Widget.timeTo = Just $ formatUTCMicros to}
+
+
+-- | Each highlight as delivered outside the app: a chart PNG over both periods and an absolute link.
+reportItems :: Log.Log :> es => Text -> Text -> Projects.ProjectId -> (UTCTime, UTCTime) -> ReportDigest -> Eff es [ET.ReportItem]
+reportItems secret host pid window digest = forM digest.highlights \h ->
+  traverse (\w -> Widget.widgetPngUrl secret host pid w Nothing (Just $ formatUTCMicros from) (Just $ formatUTCMicros to)) h.widget
+    <&> \chart -> ET.ReportItem h.title h.detail (join chart) (hostPath host <$> h.link)
+  where
+    (from, to) = reportComparison window
 
 
 -- | A report compares its period with the one before, so its queries and charts span both.

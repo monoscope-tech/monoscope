@@ -962,16 +962,16 @@ reportPreviewH tools pid templateM = do
   guardDevOnly
   ctx <- ask @AuthContext
   now <- Time.currentTime
-  let template = fromMaybe Issues.weeklyReportTemplate $ find ((== templateM) . Just . (.key)) [Issues.weeklyReportTemplate, Issues.dailyReportTemplate]
-      (start, end) = fromMaybe (now, now) $ Issues.reportWindow template.key now
+  let (template, days) = fromMaybe (Issues.weeklyReportTemplate, 7) $ find ((== templateM) . Just . (.key) . fst) Issues.reportTemplates
+      (start, end) = Issues.reportWindow days now
       config = AI.reportConfig (start, end) (AI.defaultAgenticConfig pid){AI.projectTools = tools, AI.sourceConfig = Just ctx.config, AI.useTimefusion = ctx.env.enableTimefusionReads, AI.timezone = Just "UTC"}
   AI.runAgenticChatWithHistory config (template.prompt <> "\n\nRun this report now.") ctx.config.openaiModel ctx.config.openaiApiKey >>= \case
     Left err -> pure $ pre_ $ toHtml err
     Right answer -> case AI.reportRunAnswer pid (start, end) answer of
       Nothing -> pure $ pre_ [style_ "white-space:pre-wrap"] $ toHtml answer.response
       Just (digest, _) -> do
-        charts <- forM digest.highlights \h -> join <$> traverse (\w -> Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid w Nothing (Just $ Utils.formatUTCMicros $ fst $ AI.reportComparison (start, end)) (Just $ Utils.formatUTCMicros end)) h.widget
-        let (subject, html) = ET.routineReportEmail "Preview" (template.title <> " to now") digest.headline (urls.aiRoutinesGet pid) [(h.title, h.detail, chart, Utils.hostPath ctx.env.hostUrl <$> h.link) | (h, chart) <- zip digest.highlights charts]
+        items <- AI.reportItems ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid (start, end) digest
+        let (subject, html) = ET.routineReportEmail "Preview" (template.title <> " to now") digest.headline (urls.aiRoutinesGet pid) items
         pure $ ET.emailWrapper subject html >> details_ (summary_ "Raw answer" >> pre_ [style_ "white-space:pre-wrap"] (toHtml answer.response))
 
 

@@ -25,6 +25,7 @@ module Pkg.EmailTemplates (
   hostsUnarchivedEmail,
   issueAssignedEmail,
   routineReportEmail,
+  ReportItem (..),
   sampleRoutineReport,
   monitorAlertEmail,
   checkAlertEmail,
@@ -632,21 +633,24 @@ issueAssignedEmail userName projectName issueTitleRaw issueUrl errorType errorMe
 -- Report routine
 -- =============================================================================
 
+-- | A report highlight as delivered outside the app: its chart PNG and an absolute link.
+data ReportItem = ReportItem {title :: Text, detail :: Text, chart :: Maybe Text, link :: Maybe Text}
+
+
 -- | A report routine's result: headline, then each highlight with its chart and a way in.
--- Highlights are (title, detail, chart PNG, absolute link).
-routineReportEmail :: Text -> Text -> Text -> Text -> [(Text, Text, Maybe Text, Maybe Text)] -> (Text, Html ())
+routineReportEmail :: Text -> Text -> Text -> Text -> [ReportItem] -> (Text, Html ())
 routineReportEmail projectTitle period headline reportUrl highlights =
   ( headline <> " · " <> projectTitle
   , emailBody do
-      div_ [style_ "display:none;max-height:0;overflow:hidden;mso-hide:all;"] $ toHtml $ T.intercalate " · " $ map (\(title, _, _, _) -> title) highlights
+      div_ [style_ "display:none;max-height:0;overflow:hidden;mso-hide:all;"] $ toHtml $ T.intercalate " · " $ map (.title) highlights
       p_ [class_ "sub", style_ "margin:0 0 8px;"] $ toHtml $ projectTitle <> " · " <> period
       h1_ [style_ "margin:0 0 8px;"] $ toHtml headline
-      forM_ highlights \(title, detail, chart, link) -> do
+      forM_ highlights \h -> do
         hr_ [class_ "divider", style_ "margin:28px 0 24px;"]
-        h2_ [style_ "font-size:18px;margin:0 0 8px;"] $ toHtml title
-        unless (T.null detail) $ p_ $ toHtml detail
-        whenJust chart $ div_ [style_ "margin-top:12px;"] . chartImage_ title
-        whenJust link \url -> p_ [style_ "margin:10px 0 0;font-size:14px;"] $ a_ [href_ url, target_ "_blank"] "Explore in Monoscope \8594"
+        h2_ [style_ "font-size:18px;margin:0 0 8px;"] $ toHtml h.title
+        unless (T.null h.detail) $ p_ $ toHtml h.detail
+        whenJust h.chart $ div_ [style_ "margin-top:12px;"] . chartImage_ h.title
+        whenJust h.link \url -> p_ [style_ "margin:10px 0 0;font-size:14px;"] $ a_ [href_ url, target_ "_blank"] "Explore in Monoscope \8594"
       emailButton reportUrl "Open the report"
       p_ [class_ "sub"] "This report is an AI routine. Change its schedule, delivery or instructions from the report page."
   )
@@ -659,8 +663,8 @@ sampleRoutineReport errorsChart latencyChart =
     "9 – 16 Nov 2026"
     "Checkout errors rose 4.8x after Thursday's deploy"
     "https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/ai/routines"
-    [ ("Checkout 5xx up 4.8x", "Errors on POST /checkout rose from 412 to 1,980 against last week, all after Thursday 14:05 when payments v2.3.1 rolled out.", errorsChart, Just "https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/issues")
-    , ("Search p95 recovered", "p95 on GET /search fell from 1.8 s to 420 ms once the index rebuild finished on Tuesday.", latencyChart, Nothing)
+    [ ReportItem "Checkout 5xx up 4.8x" "Errors on POST /checkout rose from 412 to 1,980 against last week, all after Thursday 14:05 when payments v2.3.1 rolled out." errorsChart (Just "https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/issues")
+    , ReportItem "Search p95 recovered" "p95 on GET /search fell from 1.8 s to 420 ms once the index rebuild finished on Tuesday." latencyChart Nothing
     ]
 
 

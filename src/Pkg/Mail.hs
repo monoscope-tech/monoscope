@@ -27,7 +27,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Pkg.EmailTemplates (EndpointAlertRow (..), NewLogPattern (..), groupedByContext, stripSummaryBadges, traceExplorerUrl)
+import Pkg.EmailTemplates (EndpointAlertRow (..), NewLogPattern (..), ReportItem (..), groupedByContext, stripSummaryBadges, traceExplorerUrl)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (env))
 import System.Config qualified as Config
@@ -55,7 +55,7 @@ data NotificationAlerts
   | RuntimeErrorAlert {issueId :: Text, issueTitle :: Text, errorData :: ErrorPatterns.ATError, runtimeAlertType :: RuntimeAlertType, chartUrl :: Maybe Text, occurrenceText :: Maybe Text, firstSeenText :: Maybe Text, ongoingFor :: Maybe Text}
   | ShapeAlert
   | -- | A report routine's digest: highlights are (title, detail, chart PNG, absolute link).
-    RoutineReportAlert {headline :: Text, period :: Text, highlights :: [(Text, Text, Maybe Text, Maybe Text)], reportUrl :: Text}
+    RoutineReportAlert {headline :: Text, period :: Text, highlights :: [ReportItem], reportUrl :: Text}
   | MonitorsAlert
       { monitorTitle :: Text
       , monitorUrl :: Text
@@ -126,8 +126,8 @@ sendDiscordAlert replyToMsgIdM alert pid pTitle channelIdM' = do
               Just
                 $ discordEmbedMsg ("📊 **" <> headline <> "**")
                 $ AE.object
-                $ ["title" AE..= headline, "url" AE..= reportUrl, "color" AE..= (26879 :: Int), "description" AE..= T.intercalate "\n\n" (period : [("**" <> title <> "**\n" <> detail) <> foldMap (\l -> "\n[Explore](" <> l <> ")") link | (title, detail, _, link) <- highlights])]
-                <> maybeToList (listToMaybe [c | (_, _, Just c, _) <- highlights] <&> \c -> "image" AE..= AE.object ["url" AE..= c])
+                $ ["title" AE..= headline, "url" AE..= reportUrl, "color" AE..= (26879 :: Int), "description" AE..= T.intercalate "\n\n" (period : [("**" <> h.title <> "**\n" <> h.detail) <> foldMap (\l -> "\n[Explore](" <> l <> ")") h.link | h <- highlights])]
+                <> maybeToList (listToMaybe (mapMaybe (.chart) highlights) <&> \c -> "image" AE..= AE.object ["url" AE..= c])
             ShapeAlert -> Nothing
       join <$> forM (mkPayload alert) \payload -> Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid payload replyToMsgIdM
 
@@ -164,7 +164,7 @@ sendSlackAlert threadTsM alert pid pTitle channelM = do
                     [ "text" AE..= headline
                     , "blocks"
                         AE..= ( [slackHeader headline, slackContext [period]]
-                                  <> concat [slackSection ("*" <> title <> "*\n" <> detail <> foldMap (\l -> "\n<" <> l <> "|Explore>") link) : maybeToList (slackImage (title <> " chart") Nothing <$> chart) | (title, detail, chart, link) <- highlights]
+                                  <> concat [slackSection ("*" <> h.title <> "*\n" <> h.detail <> foldMap (\l -> "\n<" <> l <> "|Explore>") h.link) : maybeToList (slackImage (h.title <> " chart") Nothing <$> h.chart) | h <- highlights]
                                   <> [slackActions [AE.object ["type" AE..= ("button" :: Text), "text" AE..= plainTxt "Open the report", "url" AE..= reportUrl]]]
                               )
                     ]

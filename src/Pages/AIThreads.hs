@@ -370,11 +370,7 @@ routinesGetH pid = do
             h3_ [class_ "mb-3 text-sm font-semibold text-textStrong"] $ toHtml $ Issues.routineCategoryLabel category
             div_ [class_ "grid gap-4 md:grid-cols-2 xl:grid-cols-3"] $ for_ (filter ((== category) . (.category)) Issues.routineTemplates) templateCard_
       where
-        -- The last run is one sample; per-PR and per-issue routines fail between passes.
-        failedNote_ r =
-          let mine = filter (\run -> r.conversationId `elem` ([run.conversationId] <> toList run.routineConversation)) recentRuns
-              failed = length $ filter (Issues.runFailed . (.status)) mine
-           in when (failed > 0) $ span_ [class_ "text-textError"] $ toHtml $ show @Text failed <> " of the last " <> show @Text (length mine) <> " failed"
+        failedNote_ r = failedRuns_ $ filter (\run -> r.conversationId `elem` ([run.conversationId] <> toList run.routineConversation)) recentRuns
         categoryId = ("routine-category-" <>) . T.toLower . T.replace " " "-" . Issues.routineCategoryLabel
         templateCard_ template = do
           let added = template.key `elem` mapMaybe (.templateKey) installedRoutines
@@ -439,7 +435,7 @@ threadPageGetH pid convId docM runM hxTarget = do
   -- A report routine's latest result reads as its digest, each highlight beside its own chart.
   reportM <- case (find ((== Issues.RunSucceeded) . (.status)) runs, any ("#ai-document" `T.isSuffixOf`) hxTarget) of
     (Just run, False)
-      | Just window <- (`Issues.reportWindow` run.startedAt) =<< (.templateKey) =<< conversationM ->
+      | Just window <- (`Issues.reportWindow` run.startedAt) <$> (Issues.reportWindowDays =<< (.templateKey) =<< conversationM) ->
           Issues.getRunResponse pid run.id <&> (>>= \response -> fst <$> AI.reportRunAnswer pid window (AI.AgenticChatResult response []))
     _ -> pure Nothing
   runContent <- forM runM \run -> do
@@ -822,7 +818,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                   button (urls.aiRoutinePausePost projectId conversation.conversationId) "Pause" False
                 else button (urls.aiRoutineResumePost projectId conversation.conversationId False) "Resume" True
           -- An unedited catalog routine reads as its one-line ask; the full prompt stays under Settings.
-          let template = find ((== conversation.templateKey) . Just . (.key)) Issues.routineTemplates
+          let template = Issues.routineTemplate =<< conversation.templateKey
           whenJust (maybe instructions (\t -> if instructions == Just t.prompt then Just t.ask else instructions) template) $ blockquote_ [class_ "line-clamp-2 border-s-2 border-strokeWeak ps-3 text-sm text-textWeak text-pretty"] . toHtml
 
         routineFacts_ :: Issues.ConversationSummary -> Html ()
@@ -834,9 +830,7 @@ threadPageGetH pid convId docM runM hxTarget = do
             span_ [class_ "tabular-nums"] case (conversation.routineLastRunAt, conversation.routineLastRunStatus) of
               (Just at, Just status) -> span_ [class_ "inline-flex items-center gap-2 whitespace-nowrap"] $ "Last run " >> localTimeFmt_ "d MMM, HH:mm" at >> uncurry toneDot_ (runStatus status)
               _ -> "Not run yet"
-            -- The last run is one sample: a routine that keeps failing between passes must not read healthy.
-            let failed = length $ filter (Issues.runFailed . (.status)) runs
-            when (failed > 0) $ span_ [class_ "text-textError"] $ toHtml $ show @Text failed <> " of the last " <> show @Text (length runs) <> " runs failed"
+            failedRuns_ runs
             whenJust (conversation.routineNextRunAt <* guard conversation.routineActive) $ span_ [class_ "tabular-nums"] . ("Next run " >>) . localTimeFmt_ "d MMM, HH:mm"
             whenJust (mfilter (/= Issues.DestinationConversation) conversation.routineDestination) $ span_ . toHtml . destinationLabel
 
@@ -863,7 +857,7 @@ routineInstallPostH :: Projects.ProjectId -> RoutineTemplateForm -> ATAuthCtx (A
 routineInstallPostH pid form = act do
   (_, project, _) <- mkAIPageCtx pid
   (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
-  forM (maybeToRight UnknownTemplate $ find ((== form.templateKey) . (.key)) Issues.routineTemplates) \template ->
+  forM (maybeToRight UnknownTemplate $ Issues.routineTemplate form.templateKey) \template ->
     ThreadPage pid <$> do
       Issues.ensureRoutineTemplate sess.user.id pid project.timeZone template >>= \case
         Left convId -> convId <$ authorizeConversation pid convId
@@ -1044,6 +1038,13 @@ operationReviewPostH pid identifier form = do
   when (response == Investigations.ReviewUnavailable) $ throwError Servant.err403
   when (response == Investigations.ReviewExpired) $ addErrorToast "This action's review deadline has passed." Nothing
   done . OperationReviewed response . (.content) . Servant.getResponse =<< operationGetH pid identifier
+
+
+-- | The last run is one sample: a routine that keeps failing between passes (per PR, per issue) must not read healthy.
+failedRuns_ :: [Issues.RoutineRun] -> Html ()
+failedRuns_ runs =
+  let failed = length $ filter (Issues.runFailed . (.status)) runs
+   in when (failed > 0) $ span_ [class_ "text-textError"] $ toHtml $ show @Text failed <> " of the last " <> show @Text (length runs) <> " runs failed"
 
 
 -- | Bordered disclosure with a turning chevron, shared by routine settings and run evidence.

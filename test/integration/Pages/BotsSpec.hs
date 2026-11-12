@@ -1575,7 +1575,7 @@ spec = around withTestResources do
     it "routines: a titled thread schedules, pauses, resumes and deletes; templates install at local time and reschedule as intervals" \tr -> do
       let interval = fromRightShow $ Issues.mkRoutineInterval 15
       -- Any catalog routine that may act; report templates install read-only.
-      template <- maybe (fail "routine catalog must not be empty") pure $ find ((== "telemetry-quality-check") . (.key)) Issues.routineTemplates
+      template <- maybe (fail "routine catalog must not be empty") pure $ Issues.routineTemplate "telemetry-quality-check"
       length Issues.routineTemplates `shouldSatisfy` (>= 15)
       (needsTitle, summary, listed, scheduled, paused, resumed, deleted) <- runTestBg frozenTime tr do
         startConversation (conversation 1) Issues.CTWeb
@@ -1643,7 +1643,7 @@ spec = around withTestResources do
       record `shouldBe` Just ("succeeded", True, True, Nothing)
       map (\run -> (run.conversationId, run.status)) recentRuns `shouldBe` [(conversation 1, Issues.RunSucceeded)]
       for_ recentRuns \run -> runQueryEffect tr (Issues.getRoutineRunEvidence testPid run.id) >>= (`shouldBe` (Just "Send a daily reliability brief to Slack", Just "Send a daily reliability brief to Slack")) . \e -> (e >>= (.input), e >>= (.instructions))
-      findingsOnly <- maybe (fail "missing findings-only template") pure $ find ((== "error-regression-radar") . (.key)) Issues.routineTemplates
+      findingsOnly <- maybe (fail "missing findings-only template") pure $ Issues.routineTemplate "error-regression-radar"
       (quiet, cancelled, timedOut) <- runTestBg frozenTime tr do
         quiet <- scheduleRun 2 (Just findingsOnly.prompt) (\c -> Issues.installRoutineTemplate (uid tr) testPid c "UTC" findingsOnly) \s ->
           Jobs.runAIRoutineWith 1_000_000 (\_ -> answer "{\"explanation\":\"Nothing material changed\",\"has_findings\":false,\"widgets\":[]}") (\_ _ -> pass) tr.trATCtx s.id s.scheduledAt
@@ -1670,7 +1670,9 @@ spec = around withTestResources do
     it "report routines: weekly on by email, daily paused, provisioned once; a run keeps a dated document and mails each highlight with its chart" \tr -> do
       pid <- createTestProject tr "Report routines"
       project <- runTestBg frozenTime tr (Projects.projectById pid) >>= maybe (fail "project missing") pure
-      let digest = "{\"headline\":\"Checkout errors rose 4.8x\",\"highlights\":[{\"title\":\"Checkout 5xx up 4.8x\",\"detail\":\"412 to 1,980 against last week.\",\"widget\":{\"type\":\"timeseries\",\"query\":\"summarize count() by bin_auto(timestamp)\",\"title\":\"Errors\"},\"link\":\"/p/" <> pid.toText <> "/issues\"},{\"title\":\"Search recovered\",\"detail\":\"p95 back to 420 ms.\",\"widget\":null,\"link\":\"https://evil.example/p/\"}],\"explanation\":\"fallback\",\"has_findings\":true}"
+      let runReport s = Jobs.runAIRoutineWith 1_000_000 (\_ -> pure $ Right $ AI.AgenticChatResult digest []) (\_ _ -> pass) tr.trATCtx s.id s.scheduledAt
+          scheduled = maybe (fail "run now did not schedule") pure
+          digest = "{\"headline\":\"Checkout errors rose 4.8x\",\"highlights\":[{\"title\":\"Checkout 5xx up 4.8x\",\"detail\":\"412 to 1,980 against last week.\",\"widget\":{\"type\":\"timeseries\",\"query\":\"summarize count() by bin_auto(timestamp)\",\"title\":\"Errors\"},\"link\":\"/p/" <> pid.toText <> "/issues\"},{\"title\":\"Search recovered\",\"detail\":\"p95 back to 420 ms.\",\"widget\":null,\"link\":\"https://evil.example/p/\"}],\"explanation\":\"fallback\",\"has_findings\":true}"
       freePid <- createTestProject tr "Free reports"
       dbExec tr [sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE id = ?|] (Only freePid)
       (weekly, again, installed, freeWeekly) <- runTestBg frozenTime tr do
@@ -1682,12 +1684,13 @@ spec = around withTestResources do
         pure (weekly, again, installed, freeWeekly)
       isNothing again `shouldBe` True
       freeSlot <- maybe (fail "a Free project's weekly report was not scheduled") pure freeWeekly
-      void $ runTestBg frozenTime tr $ Jobs.runAIRoutineWith 1_000_000 (\_ -> pure $ Right AI.AgenticChatResult{AI.response = digest, AI.toolCalls = []}) (\_ _ -> pass) tr.trATCtx freeSlot.id freeSlot.scheduledAt
+      void $ runTestBg frozenTime tr $ runReport freeSlot
       freeRuns <- runQueryEffect tr (Issues.listConversations freePid) >>= traverse (\c -> runQueryEffect tr $ Issues.listConversationRuns freePid c.conversationId 5)
       map (.status) (concat freeRuns) `shouldBe` [Issues.RunSucceeded]
       sortOn (\(k, _, _, _) -> k) [(templateKey, r.routineActive, r.routineDestination, r.routinePolicy) | r <- installed, Just templateKey <- [r.templateKey]] `shouldBe` [("daily-report", False, Just Issues.DestinationConversation, Just Issues.Observe), ("weekly-report", True, Just Issues.DestinationEmail, Just Issues.Observe)]
-      reportConv <- maybe (fail "weekly report missing") (pure . (.conversationId)) $ find ((== Just "weekly-report") . (.templateKey)) installed
-      dailyConv <- maybe (fail "daily report missing") (pure . (.conversationId)) $ find ((== Just "daily-report") . (.templateKey)) installed
+      let convOf k = maybe (fail $ toString k <> " missing") (pure . (.conversationId)) $ find ((== Just k) . (.templateKey)) installed
+      reportConv <- convOf "weekly-report"
+      dailyConv <- convOf "daily-report"
       -- emailDestination_reportsOnly: a routine with no digest to mail keeps its delivery when asked to email.
       destinations <- runTestBg frozenTime tr do
         triage <- either id fst <$> Issues.ensureRoutineTemplate (uid tr) pid "UTC" Issues.issueTriageTemplate
@@ -1698,9 +1701,9 @@ spec = around withTestResources do
       -- Run now starts an active routine at once and leaves a paused one paused.
       (scheduledFirst, slotNow, pausedNow) <- runTestBg frozenTime tr $ (fmap (.scheduledAt) weekly,,) <$> Issues.resumeRoutine Issues.RunNow (uid tr) pid reportConv <*> Issues.resumeRoutine Issues.RunNow (uid tr) pid dailyConv
       (scheduledFirst > Just frozenTime, (.scheduledAt) <$> slotNow, isNothing pausedNow) `shouldBe` (True, Just frozenTime, True)
-      slot <- maybe (fail "run now did not schedule") pure slotNow
+      slot <- scheduled slotNow
       void $ runQueryEffect tr $ PM.createEveryoneTeam pid (uid tr)
-      (notifs, _) <- captureNotifs tr $ Jobs.runAIRoutineWith 1_000_000 (\_ -> pure $ Right AI.AgenticChatResult{AI.response = digest, AI.toolCalls = []}) (\_ _ -> pass) tr.trATCtx slot.id slot.scheduledAt
+      (notifs, _) <- captureNotifs tr $ runReport slot
       let emails = [email | Notify.EmailNotification email <- notifs]
       emails `shouldSatisfy` (not . null)
       for_ emails \email -> do
@@ -1721,8 +1724,8 @@ spec = around withTestResources do
       -- team's chat channels always and to members by email only when email is the chosen delivery.
       setupSlackData tr pid "T_REPORTS"
       let deliver destination at = do
-            next <- runTestBg at tr (Issues.setRoutineDestination pid reportConv destination >> Issues.resumeRoutine Issues.RunNow (uid tr) pid reportConv) >>= maybe (fail "run now did not schedule") pure
-            (sent, _) <- captureNotifs tr $ Jobs.runAIRoutineWith 1_000_000 (\_ -> pure $ Right AI.AgenticChatResult{AI.response = digest, AI.toolCalls = []}) (\_ _ -> pass) tr.trATCtx next.id next.scheduledAt
+            next <- runTestBg at tr (Issues.setRoutineDestination pid reportConv destination >> Issues.resumeRoutine Issues.RunNow (uid tr) pid reportConv) >>= scheduled
+            (sent, _) <- captureNotifs tr $ runReport next
             pure (length [() | Notify.EmailNotification _ <- sent], [decodeUtf8 @Text $ AE.encode slack.payload | Notify.SlackNotification slack <- sent])
       (emailed, emailChat) <- deliver Issues.DestinationEmail (addUTCTime 3600 frozenTime)
       (chatEmailed, chatOnly) <- deliver Issues.DestinationSlack (addUTCTime 7200 frozenTime)
@@ -3493,7 +3496,7 @@ spec = around withTestResources do
       let status :: ATAuthCtx a -> IO Int
           status handler = runAuthHandler tr $ statusOf handler
           policyFor run conv = runQueryEffect tr $ Issues.routineRunPolicyFor testPid run (uid tr) conv
-          template name = maybe (fail $ "Missing template " <> toString name) pure $ find ((== name) . (.key)) Issues.routineTemplates
+          template name = maybe (fail $ "Missing template " <> toString name) pure $ Issues.routineTemplate name
           completeNoFindings slot context = runTestBg slot.scheduledAt tr (Issues.completeRun context $ Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer $ AI.prepareRunAnswer Nothing $ AI.AgenticChatResult "No findings" []) >>= \case
             Issues.RunCompleted Issues.CompletedNoFindings (Just next) -> pure next
             _ -> fail "Expected a completed run and the next schedule"
@@ -3774,7 +3777,7 @@ spec = around withTestResources do
           run <- case fixture of
             DeletedRequester -> Issues.startInteractiveRun testPid (conversation 1) actor (UUIDId $ UUID.fromWords 0 0 113 4) "Retain abandoned work" Issues.Autonomous Issues.WebConversation $> UUIDId (UUID.fromWords 0 0 113 4)
             DetachedEvent -> do
-              template <- maybe (liftIO $ fail "Missing Slack routine") pure $ find ((== "slack-investigation") . (.key)) Issues.routineTemplates
+              template <- maybe (liftIO $ fail "Missing Slack routine") pure $ Issues.routineTemplate "slack-investigation"
               void $ Issues.installRoutineTemplate (uid tr) testPid (conversation 1) "UTC" template
               routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (liftIO $ fail "Missing event installation") pure
               started <- Issues.startEventRun routine (Issues.SlackCommandRequest (conversation 1) actor) Issues.StartRun (conversation 1) "Retain abandoned event"
@@ -3839,7 +3842,7 @@ spec = around withTestResources do
         unless unowned $ dbExec tr [sql|UPDATE apis.ai_routines SET requested_by = ?, authority_version = authority_version + 1 WHERE id = ?|] (uid tr, slot.id)
         dbExec tr [sql|DELETE FROM users.users WHERE id = ?|] (Only previousOwner)
         setRole tr testPid PM.PEdit
-        briefing <- maybe (fail "Missing routine template") pure $ find ((== "daily-report") . (.key)) Issues.routineTemplates
+        briefing <- maybe (fail "Missing routine template") pure $ Issues.routineTemplate "daily-report"
         let activate = runTestBg slot.scheduledAt tr case activation of
               "resume" -> Issues.resumeRoutine Issues.ResumeSchedule (uid tr) testPid (conversation 1)
               "interval" -> Issues.upsertRoutine (uid tr) testPid (conversation 1) interval

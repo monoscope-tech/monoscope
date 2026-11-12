@@ -236,6 +236,8 @@ module Models.Apis.Issues (
   weeklyReportTemplate,
   dailyReportTemplate,
   reportWindowDays,
+  reportTemplates,
+  routineTemplate,
   reportWindow,
   issueTriageTemplate,
   issueAutofixTemplate,
@@ -2115,20 +2117,26 @@ weeklyReportTemplate = RoutineTemplate "weekly-report" 7 CategoryReliability "We
 dailyReportTemplate = RoutineTemplate "daily-report" 7 CategoryReliability "Daily report" "Tell me what changed since yesterday, only when something did." (reportPrompt "daily" "24 hours" "the 24 hours before" "1d") (Daily $ TimeOfDay 9 0 0) ReportFindings [SignalLogs, SignalTraces, SignalIssues, SignalMonitors]
 
 
--- | The report window a report template covers, in days.
+-- | Report templates and the window each covers, in days.
+reportTemplates :: [(RoutineTemplate, Integer)]
+reportTemplates = [(weeklyReportTemplate, 7), (dailyReportTemplate, 1)]
+
+
 reportWindowDays :: Text -> Maybe Integer
-reportWindowDays key = snd <$> find ((== key) . fst) [(weeklyReportTemplate.key, 7), (dailyReportTemplate.key, 1)]
+reportWindowDays key = snd <$> find ((== key) . (.key) . fst) reportTemplates
 
 
--- | The period a report template's run covers: its window, ending at the run's start.
+-- | The period a report run covers: its window in days, ending at the run's start.
 --
 -- >>> import Data.Time (UTCTime (..), fromGregorian)
--- >>> reportWindow "weekly-report" (UTCTime (fromGregorian 2026 11 16) 32400)
--- Just (2026-11-09 09:00:00 UTC,2026-11-16 09:00:00 UTC)
--- >>> reportWindow "issue-triage" (UTCTime (fromGregorian 2026 11 16) 0)
--- Nothing
-reportWindow :: Text -> UTCTime -> Maybe (UTCTime, UTCTime)
-reportWindow key end = reportWindowDays key <&> \days -> (addUTCTime (fromInteger $ negate days * 86400) end, end)
+-- >>> reportWindow 7 (UTCTime (fromGregorian 2026 11 16) 32400)
+-- (2026-11-09 09:00:00 UTC,2026-11-16 09:00:00 UTC)
+reportWindow :: Integer -> UTCTime -> (UTCTime, UTCTime)
+reportWindow days end = (addUTCTime (fromInteger $ negate days * 86400) end, end)
+
+
+routineTemplate :: Text -> Maybe RoutineTemplate
+routineTemplate key = find ((== key) . (.key)) routineTemplates
 
 
 reportPrompt :: Text -> Text -> Text -> Text -> Text
@@ -2434,9 +2442,9 @@ provisionRoutineTemplate project template = do
   if seen || project.id == Projects.demoProjectId
     then pure Nothing
     else
-      ProjectMembers.selectActiveProjectMembers project.id >>= \members -> case find ((== ProjectMembers.PAdmin) . (.permission)) members of
-        Just owner -> either (const Nothing) snd <$> ensureRoutineTemplate owner.userId project.id project.timeZone template
-        Nothing -> pure Nothing
+      ProjectMembers.selectActiveProjectMembers project.id
+        >>= maybe (pure Nothing) (\owner -> either (const Nothing) snd <$> ensureRoutineTemplate owner.userId project.id project.timeZone template)
+        . find ((== ProjectMembers.PAdmin) . (.permission))
 
 
 -- | Moves installed catalog routines whose instructions still match the template text they opened
@@ -3436,7 +3444,7 @@ deleteRoutine pid convId =
 -- | Only report routines email: no other routine has a digest to mail, so email would deliver nothing.
 setRoutineDestination :: DB es => Projects.ProjectId -> UUIDId "conversation" -> RoutineDestination -> Eff es ()
 setRoutineDestination pid convId destination =
-  let reports = V.fromList $ filter (isJust . reportWindowDays) $ map (.key) routineTemplates
+  let reports = V.fromList $ map ((.key) . fst) reportTemplates
    in Hasql.interpExecute_
         [HI.sql|UPDATE apis.ai_routines SET destination = #{destination}
           WHERE project_id = #{pid} AND conversation_id = #{convId} AND (#{destination} <> #{DestinationEmail} OR template_key = ANY(#{reports}))|]

@@ -143,7 +143,7 @@ import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
 import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny, withException)
-import Utils (FreeTierStatus (..), calculateCycleStartDate, formatUTC, formatUTCMicros, formatWithCommas, freeTierUsageStatus, hostPath, nonEmptyT, prettyPrintCount, toXXHash, truncateHour, usageWindowStart)
+import Utils (FreeTierStatus (..), calculateCycleStartDate, formatUTC, formatWithCommas, freeTierUsageStatus, hostPath, nonEmptyT, prettyPrintCount, toXXHash, truncateHour, usageWindowStart)
 import Web.Links
 
 
@@ -517,7 +517,7 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
         (Issues.DestinationSlack; Issues.DestinationConversation; Issues.DestinationEmail) -> Nothing
       templateKey = (.templateKey) =<< conversationM
       -- Report templates cover a fixed window ending at the claim; their answers are digests.
-      reportWindow = templateKey >>= (`Issues.reportWindow` routine.claimedAt)
+      reportWindow = templateKey >>= Issues.reportWindowDays <&> (`Issues.reportWindow` routine.claimedAt)
       report answer = reportWindow >>= \window -> AI.reportRunAnswer routine.projectId window answer
       config = maybe identity AI.reportConfig reportWindow (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.ProjectMember routine.requestedBy, AI.invocationMode = AI.DurableRun context}
   outcome <- Timeout.timeout timeoutMicros $ tryAny do
@@ -561,11 +561,9 @@ deliverReport authCtx routine templateKey (from, to) digest = do
       tz = fromMaybe TZ.utcTZ $ TZ.tzByName $ encodeUtf8 routine.timezone
       day fmt = toText . formatTime defaultTimeLocale fmt . TZ.utcToLocalTimeTZ tz
       period = (if diffUTCTime to from <= nominalDay then day "%a %-d %b %Y" to else day "%-d %b" from <> " – " <> day "%-d %b %Y" to) <> " · " <> routine.timezone
-      (chartFrom, chartTo) = AI.reportComparison (from, to)
-      png w = Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid w Nothing (Just $ formatUTCMicros chartFrom) (Just $ formatUTCMicros chartTo)
-  charts <- traverse (fmap join . traverse png . (.widget)) digest.highlights
+  items <- AI.reportItems authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid (from, to) digest
   let key = Issues.mkArtifactKey $ templateKey <> "-" <> day "%Y-%m-%d" to
-      body = "*" <> period <> "*\n\n" <> AI.digestMarkdown digest charts
+      body = "*" <> period <> "*\n\n" <> AI.digestMarkdown digest (map (.chart) items)
       reportUrl = hostPath authCtx.env.hostUrl $ urls.aiThreadGet pid routine.conversationId (rightToMaybe key)
   for_ (rightToMaybe key) \k ->
     whenLeftM_ (Issues.saveArtifact pid routine.conversationId k (Just digest.headline) body Issues.ArtifactReplace) \rejection ->
@@ -575,10 +573,9 @@ deliverReport authCtx routine templateKey (from, to) digest = do
   unless (routine.destination == Issues.DestinationConversation) $ whenJustM (Projects.activeProjectById pid) \project ->
     whenJustM (ProjectMembers.getEveryoneTeam pid) \team -> do
       users <- Projects.usersByProjectId pid
-      let highlights = [(h.title, h.detail, chart, hostPath authCtx.env.hostUrl <$> h.link) | (h, chart) <- zip digest.highlights charts]
-          (subject, html) = ET.routineReportEmail project.title period digest.headline reportUrl highlights
+      let (subject, html) = ET.routineReportEmail project.title period digest.headline reportUrl items
           email = FanoutEmail{recipients = map (CI.original . (.email)) users, subject, body = ET.renderEmail subject html} <$ guard (routine.destination == Issues.DestinationEmail)
-      void $ fanOutToTeam team Fanout{slack = InlineSlack, threads = Nothing, email} (RoutineReportAlert digest.headline period highlights reportUrl) pid project.title reportUrl
+      void $ fanOutToTeam team Fanout{slack = InlineSlack, threads = Nothing, email} (RoutineReportAlert digest.headline period items reportUrl) pid project.title reportUrl
 
 
 -- | Post the daily internal admin digest (usage, new projects, issues, alerts, job health) to Discord.
