@@ -2249,6 +2249,8 @@ data RoutineRun = RoutineRun
   , attempt :: Int
   , summary :: Maybe Text
   -- ^ Opening of the run's result, for one-line history rows.
+  , routine :: Maybe Text
+  -- ^ The installed routine's title: event runs are titled by their subject (a pull request, an issue).
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
@@ -3195,7 +3197,8 @@ routineRunsSql pid =
   -- A NULL title means the conversation is gone: the list files those runs under deleted routines.
   [HI.sql|SELECT run.id, run.conversation_id, COALESCE(conversation.title, installation.title, CASE WHEN conversation.conversation_id IS NOT NULL THEN 'Untitled routine' END), run.scheduled_at,
       run.started_at, run.finished_at, run.status, run.error, run.source, run.attempt,
-      (SELECT LEFT(a.content, 400) FROM apis.ai_routine_run_artifacts a WHERE a.run_id = run.id AND a.key = 'latest-result')
+      (SELECT LEFT(a.content, 400) FROM apis.ai_routine_run_artifacts a WHERE a.run_id = run.id AND a.key = 'latest-result'),
+      installation.title
       FROM apis.ai_routine_runs run
       LEFT JOIN apis.ai_conversations conversation
         ON conversation.project_id = run.project_id AND conversation.conversation_id = run.conversation_id

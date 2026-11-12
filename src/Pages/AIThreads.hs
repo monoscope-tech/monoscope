@@ -293,7 +293,7 @@ routinesGetH pid = do
                           )
                           -- Takes the leftover width and truncates, so the narrow columns stay visible on phones.
                           & withAttrs [class_ "w-full max-w-0"]
-                      , col "Status" (uncurry tonePill_ . routineStatus) & withAttrs [class_ "w-28 whitespace-nowrap"]
+                      , col "Status" (\r -> (if r.routineActive && isNothing r.routineRunningSince then uncurry toneDot_ else uncurry tonePill_) $ routineStatus r) & withAttrs [class_ "w-28 whitespace-nowrap"]
                       , col
                           "Last run"
                           ( \r -> span_ [class_ "flex items-center gap-2 whitespace-nowrap text-xs tabular-nums text-textWeak"] case (r.routineLastRunAt, r.routineLastRunStatus) of
@@ -348,7 +348,9 @@ routinesGetH pid = do
                       [ col
                           "Run"
                           ( \run -> div_ [class_ "min-w-0"] do
-                              a_ [href_ $ runUrl pid run.id, class_ "block truncate text-sm font-medium text-textStrong hover:text-textBrand"] $ toHtml $ fromMaybe "Deleted routine" run.title
+                              a_ [href_ $ runUrl pid run.id, class_ "block truncate text-sm font-medium text-textStrong hover:text-textBrand"] do
+                                whenJust (mfilter ((/= run.title) . Just) run.routine) \routine -> span_ [class_ "font-normal text-textWeak"] $ toHtml $ routine <> " · "
+                                toHtml $ fromMaybe "Deleted routine" run.title
                               runSummary_ "mt-0.5" run
                           )
                           & withAttrs [class_ "w-full max-w-0"]
@@ -832,6 +834,9 @@ threadPageGetH pid convId docM runM hxTarget = do
             span_ [class_ "tabular-nums"] case (conversation.routineLastRunAt, conversation.routineLastRunStatus) of
               (Just at, Just status) -> span_ [class_ "inline-flex items-center gap-2"] $ "Last run " >> localTimeFmt_ "d MMM, HH:mm" at >> uncurry toneDot_ (runStatus status)
               _ -> "Not run yet"
+            -- The last run is one sample: a routine that keeps failing between passes must not read healthy.
+            let failed = length $ filter ((`elem` [Issues.RunFailed, Issues.RunTimedOut]) . (.status)) runs
+            when (failed > 0) $ span_ [class_ "text-textError"] $ toHtml $ show @Text failed <> " of the last " <> show @Text (length runs) <> " runs failed"
             whenJust (conversation.routineNextRunAt <* guard conversation.routineActive) $ span_ [class_ "tabular-nums"] . ("Next run " >>) . localTimeFmt_ "d MMM, HH:mm"
             whenJust (mfilter (/= Issues.DestinationConversation) conversation.routineDestination) $ span_ . toHtml . destinationLabel
 

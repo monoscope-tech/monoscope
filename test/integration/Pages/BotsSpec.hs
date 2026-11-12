@@ -1664,6 +1664,8 @@ spec = around withTestResources do
       retry <- runTestBg frozenTime tr (Issues.resumeRoutine Issues.RunNow (uid tr) testPid (conversation 4)) >>= maybe (fail "run now did not schedule") pure
       void $ runTestBg frozenTime tr $ Jobs.runAIRoutineWith 1_000_000 (\_ -> answer "{\"explanation\":\"Recovered\"}") (\_ _ -> pass) tr.trATCtx retry.id retry.scheduledAt
       attention `shouldReturn` 0
+      -- The routine's own page still counts the failure its last run recovered from.
+      renderT <$> call tr (AIThreads.threadGetH testPid (conversation 4) Nothing Nothing) >>= (`shouldContainAll` ["1 of the last 2 runs failed"])
 
     it "report routines: weekly on by email, daily paused, provisioned once; a run keeps a dated document and mails each highlight with its chart" \tr -> do
       pid <- createTestProject tr "Report routines"
