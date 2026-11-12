@@ -22,7 +22,7 @@ import Effectful.Reader.Static (ask)
 import Lucid hiding (for_)
 import Lucid qualified
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
@@ -41,7 +41,7 @@ import Relude hiding (ask)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, done)
-import Utils (encodeText, faSprite_, popoverPanel_, popoverTrigger_, renderMarkdownTocWithPrefix)
+import Utils (faSprite_, popoverPanel_, popoverTrigger_, renderMarkdownTocWithPrefix)
 import Web.FormUrlEncoded (FromForm (..), parseAll, parseUnique)
 import Web.HttpApiData (FromHttpApiData (..))
 import Web.Links
@@ -318,7 +318,7 @@ routinesGetH pid = do
                                        li_ [class_ "menu-title"] "Deliver results"
                                        -- Only report routines email; the rest deliver in app or to Slack.
                                        for_ ([Issues.DestinationConversation] <> [Issues.DestinationEmail | isJust (Issues.reportWindowDays =<< r.templateKey)] <> [Issues.DestinationSlack]) \destination ->
-                                         li_ $ button_ [hxPost_ $ urls.aiRoutineDestinationPost pid r.conversationId, hxSwap_ "none", hxVals_ $ encodeText $ AE.object ["destination" AE..= toText (encodeEnumSC @"Destination" destination)], term "aria-pressed" $ bool "false" "true" (r.routineDestination == Just destination)] do
+                                         li_ $ form_ [hxPost_ $ urls.aiRoutineDestinationPost pid r.conversationId, hxSwap_ "none"] $ button_ [type_ "submit", name_ "destination", value_ $ toText (encodeEnumSC @"Destination" destination), term "aria-pressed" $ bool "false" "true" (r.routineDestination == Just destination)] do
                                            span_ [class_ "w-3"] $ when (r.routineDestination == Just destination) $ faSprite_ "check" "solid" "h-3 w-3"
                                            toHtml $ destinationLabel destination
                                      li_ [class_ "my-1 h-px bg-strokeWeak", role_ "separator"] pass
@@ -1048,7 +1048,7 @@ operationReviewPostH pid identifier form = do
 
 -- | Bordered disclosure with a turning chevron, shared by routine settings and run evidence.
 disclosure_ :: [Attribute] -> Html () -> Html () -> Html ()
-disclosure_ attrs summary body = details_ ([class_ " group/disclosure rounded-xl border border-strokeWeak bg-bgRaised"] <> attrs) do
+disclosure_ attrs summary body = details_ ([class_ "group/disclosure rounded-xl border border-strokeWeak bg-bgRaised"] <> attrs) do
   summary_ [class_ "flex cursor-pointer list-none items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:-outline-offset-2 [&::-webkit-details-marker]:hidden"] do
     faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-iconNeutral transition-transform duration-150 group-open/disclosure:rotate-90 rtl:-scale-x-100"
     summary
