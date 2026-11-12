@@ -293,7 +293,7 @@ routinesGetH pid = do
                           )
                           -- Takes the leftover width and truncates, so the narrow columns stay visible on phones.
                           & withAttrs [class_ "w-full max-w-0"]
-                      , col "Status" (\r -> uncurry (bool tonePill_ toneDot_ (r.routineActive && isNothing r.routineRunningSince)) (routineStatus r)) & withAttrs [class_ "w-28 whitespace-nowrap"]
+                      , col "Status" (\r -> uncurry (bool tonePill_ toneDot_ (r.routineActive && isNothing r.routineRunningSince)) (routineStatus r)) & withAttrs [class_ $ "w-28 whitespace-nowrap" <> bool "" " max-md:hidden" canEdit] -- an editor's Pause/Resume already says it
                       , col
                           "Last run"
                           ( \r -> span_ [class_ "flex items-center gap-2 whitespace-nowrap text-xs tabular-nums text-textWeak"] case (r.routineLastRunAt, r.routineLastRunStatus) of
@@ -348,7 +348,7 @@ routinesGetH pid = do
                           "Run"
                           ( \run -> div_ [class_ "min-w-0"] do
                               a_ [href_ $ runUrl pid run.id, class_ "block truncate text-sm font-medium text-textStrong hover:text-textBrand"] do
-                                whenJust (mfilter ((/= run.title) . Just) run.routine) \routine -> span_ [class_ "font-normal text-textWeak"] $ toHtml $ routine <> " · "
+                                whenJust (mfilter ((/= run.title) . Just) run.routine) \routine -> span_ [class_ "font-normal text-textWeak max-md:block max-md:text-xs"] $ toHtml routine >> span_ [class_ "max-md:hidden"] " · "
                                 toHtml $ fromMaybe "Deleted routine" run.title
                               runSummary_ "mt-0.5" run
                           )
