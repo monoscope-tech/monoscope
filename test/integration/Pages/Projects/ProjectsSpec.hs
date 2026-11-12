@@ -51,10 +51,10 @@ payloadText = decodeUtf8 . AE.encode
 
 spec :: Spec
 spec = around withTestResources do
-  it "projects: listed, updated (the demo only by sudo), role-gated, members-only, deleted - stopping ingest, reports and alerts" \tr -> do
+  it "projects: listed, updated (the demo only by sudo), role-gated, members-only, deleted - stopping ingest and alerts" \tr -> do
     let ownPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0 -- the session's own project (testSessionHeader)
         listed = call tr Pages.listProjectsGetH <&> \pg -> let (ps, _, _) = pg.unwrap.content in V.toList ps
-        form t = Pages.CreateProjectForm{title = t, description = "Test Description2", emails = ["test@monoscope.tech"], permissions = [PAdmin], timeZone = "Africa/Accra", weeklyNotifs = Nothing, dailyNotifs = Nothing, endpointAlerts = Nothing, errorAlerts = Nothing}
+        form t = Pages.CreateProjectForm{title = t, description = "Test Description2", emails = ["test@monoscope.tech"], permissions = [PAdmin], timeZone = "Africa/Accra", endpointAlerts = Nothing, errorAlerts = Nothing}
         nonSudo = tr{trSessAndHeader = tr.trSessAndHeader <&> field @"user" . field @"isSudo" .~ False}
         title = (.title) <$> projectOf tr testPid
     map (.id) <$> listed >>= (`shouldMatchList` [testPid, ownPid])
@@ -89,10 +89,9 @@ spec = around withTestResources do
     isJust <$> runQueryEffect tr (Projects.activeProjectById victim) `shouldReturn` True
     renderT <$> call tr (CommandPalette.commandPaletteItemsH victim) >>= (`shouldNotSatisfy` T.isInfixOf "/evil")
 
-    -- Deleting the project stops its ingest, its reports and its alerts.
+    -- Deleting the project stops its ingest and its alerts.
     let monitorId = Monitors.QueryMonitorId $ fromMaybe (error "invalid test UUID") $ UUID.fromText "de1e7ed0-0000-0000-0000-000000000001"
         countLogs marker = dbOne @_ @Int tr [sql| SELECT COUNT(*)::INT FROM otel_logs_and_spans WHERE project_id = ? AND body::text LIKE '%' || ? || '%' |] (testPid, marker :: Text)
-        countReports = dbOne @_ @Int tr [sql|SELECT COUNT(*)::INT FROM apis.reports WHERE project_id = ?|] (Only testPid)
         monitor =
           def
             { Monitors.id = monitorId
@@ -117,9 +116,6 @@ spec = around withTestResources do
     void $ try @SomeException $ ingestLog tr apiKey "after project deletion" (addUTCTime 1 frozenTime)
     countLogs "after project deletion" `shouldReturn` 0
     isNothing <$> runTestBgNoReset tr (Projects.activeProjectById testPid) `shouldReturn` True
-    reportsBefore <- countReports
-    fst <$> captureNotifs tr (BackgroundJobs.processBackgroundJob tr.trATCtx $ BackgroundJobs.DailyReports testPid) `shouldReturn` []
-    countReports `shouldReturn` reportsBefore
     dbExec tr [sql|UPDATE monitors.query_monitors SET current_status = 'normal', alert_last_triggered = NULL, notification_count = 0, last_evaluated = '2020-01-01' WHERE id = ?|] (Only monitorId)
     fst <$> captureNotifs tr BackgroundJobs.checkTriggeredQueryMonitors `shouldReturn` []
 
@@ -260,7 +256,7 @@ spec = around withTestResources do
     bg $ ProjectMembers.deactivateNonOwnerMembers testPid
     emails `shouldReturn` ["oncall@example.com"]
 
-  it "notification channels: a test send per channel with history, trend fallback, team routing, report, disabled gating" \tr -> do
+  it "notification channels: a test send per channel with history, trend fallback, team routing, disabled gating" \tr -> do
     -- History rows are stamped on the wall clock, so the 60s test-send rate limit (read on the
     -- test clock) needs a clean slate.
     let send ty ch teamM = do
@@ -309,9 +305,6 @@ spec = around withTestResources do
     Right (Pages.TeamsDeleted _ _) <- call tr $ Pages.manageTeamBulkActionH testPid "delete" (Pages.TBulkActionForm [team.id.unwrap]) Nothing
     V.any ((== team.id) . (.id)) <$> teams `shouldReturn` False
     slackTo <$> send "runtime_exception" TCSlack (Just team.id) `shouldReturn` []
-
-    -- A test weekly report goes to Slack.
-    send "report" TCSlack Nothing >>= \ns -> [payloadText d.payload | SlackNotification d <- ns] `shouldSatisfy` any (T.isInfixOf "Weekly report")
 
     -- A disabled channel is skipped and recorded so; re-enabled, it fans out to every channel.
     setEveryone tr "disabled_channels" ["slack"]

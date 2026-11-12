@@ -194,6 +194,7 @@ tabs:
         query: &by_country |
           {{const-endpointFilter}} AND attributes.geo.country.iso_code != null
           | summarize count() by attributes.geo.country.iso_code
+          | order by count_ desc
         unit: reqs
         layout: { w: 8, h: 5 }
 

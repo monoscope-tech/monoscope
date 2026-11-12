@@ -325,10 +325,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , apiCatalogSpecJson :: mode :- "p" :> ProjectId :> "api_catalog" :> "openapi.json" :> QPT "host" :> QPT "request_type" :> QPT "endpoint" :> Get '[JSON] (RespHeaders AE.Value)
   , apiCatalogSpecYaml :: mode :- "p" :> ProjectId :> "api_catalog" :> "openapi.yaml" :> QPT "host" :> QPT "request_type" :> QPT "endpoint" :> Get '[YAML] (RespHeaders Text)
   , -- Slack/Discord integration
-    reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders (Opaque "Reports.ReportsGet"))
-  , reportsLiveGet :: mode :- "p" :> ProjectId :> "reports" :> "live" :> HXRequest :> Get '[HTML] (RespHeaders (Opaque "Reports.ReportsGet"))
-  , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" Issues.ReportId :> HXRequest :> Get '[HTML] (RespHeaders (Opaque "Reports.ReportsGet"))
-  , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Projects.ReportType :> Unrefusable 'POST (Opaque "Reports.ReportsPost")
+    -- Reports are AI routines now; old report links land on them.
+    reportsRedirect :: mode :- "p" :> ProjectId :> "reports" :> CaptureAll "rest" Text :> LocationRedirect NoContent
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QueryParam "event_type" ShareEvents.ShareKind :> Post '[HTML] (RespHeaders (Opaque "Share.ShareLinkPost"))
   , -- Billing
     manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> Get '[HTML] (RespHeaders (Opaque "Settings.BillingGet"))
@@ -405,9 +403,9 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , aiRoutinePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> ReqBody '[FormUrlEncoded] (Opaque "AIThreads.RoutineForm") :> Unrefusable 'POST (Opaque "AIThreads.AIPage")
   , aiRoutinePausePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "pause" :> Unrefusable 'POST (Opaque "AIThreads.AIPage")
   , aiRoutineCancelPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "cancel" :> Unrefusable 'POST (Opaque "AIThreads.AIPage")
-  , aiRoutineResumePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "resume" :> Unrefusable 'POST (Opaque "AIThreads.AIPage")
+  , aiRoutineResumePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "resume" :> QueryFlag "now" :> Unrefusable 'POST (Opaque "AIThreads.AIPage")
   , aiRoutinePolicyPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "policy" :> ReqBody '[FormUrlEncoded] (Opaque "AIThreads.RoutinePolicyForm") :> Action 'POST (Opaque "AIThreads.NoReviewClasses") (Opaque "AIThreads.PolicySaved")
-  , aiRoutineDestinationPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "destination" :> ReqBody '[FormUrlEncoded] (Opaque "AIThreads.RoutineDestinationForm") :> Unrefusable 'POST (Opaque "AIThreads.AIPage")
+  , aiRoutineDestinationPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "destination" :> ReqBody '[FormUrlEncoded] (Opaque "AIThreads.RoutineDestinationForm") :> Action 'POST (Opaque "AIThreads.EmailOnlyForReports") (Opaque "AIThreads.AIPage")
   , aiRoutineDelete :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> Unrefusable 'DELETE (Opaque "AIThreads.AIPage")
   , -- Device auth
     deviceApprove :: mode :- "device" :> QPT "code" :> Get '[HTML] (RespHeaders (Html ()))

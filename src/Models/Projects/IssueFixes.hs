@@ -31,6 +31,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId)
 import Relude
 import System.Types (DB)
+import Utils (truncateText)
 import Web.HttpApiData (toUrlPiece)
 
 
@@ -284,7 +285,7 @@ queueJob pid uid fid = Hasql.transaction TxS.ReadCommitted TxS.Write do
         Just owner -> pure $ owner == uid
         Nothing -> do
           (identifier, conversation) <- Hasql.oneTx @(UUIDId "ai_routine_run", UUIDId "conversation") [HI.sql|SELECT gen_random_uuid(), gen_random_uuid()|]
-          let title = T.take 100 $ "Fix: " <> subject
+          let title = truncateText 99 $ "Fix: " <> subject
               input = "Fix reported issue: " <> subject
           Hasql.executeTx
             [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, title, context)

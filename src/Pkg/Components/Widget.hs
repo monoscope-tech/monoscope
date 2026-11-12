@@ -1928,7 +1928,8 @@ renderTableWithDataAndParams widget headers dataRows params = do
       -- coloured on a chart; a configured table's rows are records, not series, and stay plain.
       breakdown = isNothing widget.columns || widget.wType == WTTopList
       -- @summarize … by a, b@ on a top list: the first column heads a section of its rows.
-      grouped = widget.wType == WTTopList && length (takeWhile (not . isNumericCol) columns) >= 2
+      -- With no rows nothing types the count column, so it would read as a second label.
+      grouped = widget.wType == WTTopList && not (V.null dataRows) && length (takeWhile (not . isNumericCol) columns) >= 2
       visible = filter (not . or . (.hidden)) $ drop labelIdx columns
       labelIdx = bool 0 1 grouped
       maxValues = M.fromList [(col.field, V.foldl' max 0 $ V.mapMaybe (readMaybe . toString . getRowValue idx) dataRows) | V.length dataRows > 1, (col, idx) <- zip columns [0 ..], col.progress == Just ColumnPercent]

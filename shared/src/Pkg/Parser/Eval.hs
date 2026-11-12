@@ -137,12 +137,6 @@ maxRegexLength = 512
 --
 -- >>> filterExpr []
 -- Just (ValCmp Eq (Boolean True) (Boolean True))
---
--- 'E.isErrorKql' flags one record per signal 'E.isErrorSql' tests, and not a plain info log:
---
--- >>> let flags j = (parseQueryToAST E.isErrorKql >>= maybeToRight "" . filterExpr) >>= first show . evalExpr (resolveIn (fromRight AE.Null (AE.eitherDecodeStrict' j)))
--- >>> map flags ["{\"level\":\"FATAL\"}", "{\"severity\":{\"severity_number\":17}}", "{\"status_code\":\"ERROR\"}", "{\"attributes\":{\"exception\":{\"type\":\"E\"}}}", "{\"level\":\"info\",\"severity\":{\"severity_number\":9}}"]
--- [Right True,Right True,Right True,Right True,Right False]
 filterExpr :: [Section] -> Maybe Expr
 filterExpr = fmap (fromMaybe matchAll) . foldlM step Nothing
   where

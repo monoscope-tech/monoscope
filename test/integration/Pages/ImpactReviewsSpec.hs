@@ -4323,10 +4323,16 @@ spec = around withTestResources $ describe "Production impact reviews" do
     cfg <- githubApp tr
     let sweep = void $ runTestBgRecordingHTTP sweepAt tr $ Reader.local (\ctx -> ctx{config = cfg}) $ githubResponses (\url -> pure $ AE.object ["sha" AE..= revision] <$ guard ("/commits/" `T.isInfixOf` url)) $ BackgroundJobs.processBackgroundJob tr.trATCtx $ Jobs.AutofixIssues testPid
         fixed = dbQuery tr "SELECT run.issue_id FROM projects.issue_fix_runs run JOIN projects.issue_fix_jobs job ON job.run_id = run.id ORDER BY run.created_at" ()
+    dbExec tr [sql|UPDATE apis.issues SET title = ? WHERE id = ?|] (T.replicate 20 "Vacuum failed ", issue)
     -- API changes and issues triage has not had an hour with are skipped; a second sweep adds nothing.
     sweep >> sweep
     fixed `shouldReturn` [Only issue]
+    -- fixTitle_marksTheCut: a long issue title is cut with an ellipsis, not mid-word without one.
+    dbOne tr "SELECT title FROM apis.ai_conversations WHERE title LIKE 'Fix: %'" () >>= (`shouldSatisfy` T.isSuffixOf "…")
     dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'FixIssue'" () `shouldReturn` (1 :: Int)
+    -- The routine's page lists the fix run it started, though fix runs carry no routine_id.
+    fixId <- dbOne tr "SELECT run_id FROM projects.issue_fix_jobs" ()
+    map ((.source) &&& (.routine)) <$> runQueryEffect tr (Issues.listConversationRuns testPid routine 5) `shouldReturn` [(Issues.FixRun fixId, Just "Issue autofix")]
     void $ seed Issues.RuntimeException "autofix-paused" frozenTime
     runQueryEffect tr $ Issues.pauseRoutine testPid routine
     sweep

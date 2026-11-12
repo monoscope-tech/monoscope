@@ -8,6 +8,7 @@ import Control.Concurrent.STM (check)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.ByteString.Char8 qualified as BS
+import Data.CaseInsensitive qualified as CI
 import Data.HashMap.Strict qualified as HM
 import Data.Pool as Pool (destroyAllResources)
 import Data.Text qualified as T
@@ -33,8 +34,10 @@ import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Cors
 import Network.Wai.Middleware.Gzip (GzipFiles (..), GzipSettings (..), defaultGzipSettings, gzip)
 import OpenTelemetry.Attributes qualified as OA
-import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware)
+import OpenTelemetry.Context qualified as Context
+import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware, requestContext)
 import OpenTelemetry.Trace (TracerProvider)
+import OpenTelemetry.Trace.Core (addAttributes)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (frontendBuild)
 import Pages.Replay (processReplayEvents)
@@ -386,6 +389,8 @@ runServer appLogger env tp = do
           . heartbeatMiddleware
           . gzip compressionSettings
           . otelWaiMw
+          -- Behind the proxy the span's peer is the proxy; ingest reads the client from these ('deriveClientAddress').
+          . (\app req respond -> traverse_ (\sp -> addAttributes sp $ HM.fromList [("http.request.header." <> decodeUtf8 (CI.foldedCase k), OA.toAttribute ([decodeUtf8 v] :: [Text])) | (k, v) <- requestHeaders req, k `elem` ["x-forwarded-for", "x-real-ip", "cf-connecting-ip"]]) (Context.lookupSpan =<< requestContext req) >> app req respond)
           -- . loggingMiddleware
           . AdConversions.attributionMiddleware
           . hashedAssetMiddleware

@@ -1,21 +1,20 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithTools, processAIQueryWithMode, buildIssuePrompt, verifyWidgetSignature, freshWebhookTimestamp, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQueryWithTools, slackResponse, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
+module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithTools, processAIQueryWithMode, buildIssuePrompt, verifyWidgetSignature, freshWebhookTimestamp, BotErrorType (..), formatBotError, botEmoji, runBotQueryWithTools, slackResponse, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
 
-import Control.Lens ((.~), (^?))
+import Control.Lens ((.~))
 import Data.Aeson qualified as AE
-import Data.Aeson.Lens (key, _Number)
 import Data.ByteArray qualified as BA
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
-import Data.Char (isAlphaNum, isDigit, isSpace)
+import Data.Char (isDigit, isSpace)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq (Options, header)
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX qualified as POSIX
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Time.LocalTime (zonedTimeToUTC)
@@ -50,7 +49,6 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import Pkg.Mail (arr, dcGallery, plainTxt, slackActions, slackContext, slackEscape, slackHeader, slackImage, slackSection)
 import Pkg.Parser (parseQueryToAST)
-import Pkg.Parser.Expr (isErrorKql)
 import Pkg.SchemaLearning (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude hiding (Reader, ask)
 import Servant.API (Header)
@@ -62,7 +60,6 @@ import System.Tracing (Tracing)
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (onException, throwIO)
 import Utils (faSprite_, formatUTC, hostPath, prettyPrintCount, toUriStr)
-import Web.HttpApiData (parseUrlPiece)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), ProjectsRoutes' (..), logExplorerLinks, urls)
 
 
@@ -98,12 +95,6 @@ formatBotError target err = case target of
       QueryParseError snippet -> botEmoji EmojiWarning <> " Couldn't parse query\n`" <> T.take 50 snippet <> "`\nTry: 'show errors in last hour'"
       NoDataError -> botEmoji EmojiSearch <> " No data found for your query\nTry expanding the time range or adjusting filters."
       ServiceError -> botEmoji EmojiError <> " Something went wrong\nPlease try again in a moment."
-
-
-getLoadingMessage :: QueryIntent -> Text
-getLoadingMessage = \case
-  ReportIntent _ -> botEmoji EmojiChart <> " Fetching your report..."
-  GeneralQueryIntent -> botEmoji EmojiSearch <> " Analyzing your query..."
 
 
 data BotResponse
@@ -482,43 +473,6 @@ verifyWidgetSignature secret pid widgetJson = maybe (Left "Missing signature") \
   unless (BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 (Widget.signWidgetUrl secret pid widgetJson) :: ByteString)) $ Left "Invalid signature"
 
 
-data QueryIntent = ReportIntent Projects.ReportType | GeneralQueryIntent deriving (Eq, Show)
-
-
--- | Recognize complete saved-report requests; other instructions use the agent.
---
--- >>> detectReportIntent "send daily report"
--- ReportIntent RTDaily
--- >>> detectReportIntent "get weekly summary"
--- ReportIntent RTWeekly
--- >>> detectReportIntent "show me the report"
--- ReportIntent RTDaily
--- >>> detectReportIntent "show errors"
--- GeneralQueryIntent
--- >>> detectReportIntent "what's my error rate"
--- GeneralQueryIntent
--- >>> detectReportIntent "report"
--- GeneralQueryIntent
--- >>> detectReportIntent "daily"
--- GeneralQueryIntent
--- >>> detectReportIntent "forget the report"
--- GeneralQueryIntent
--- >>> detectReportIntent "show me how to send an incident summary"
--- GeneralQueryIntent
--- >>> detectReportIntent "Please show me the weekly report!"
--- ReportIntent RTWeekly
-detectReportIntent :: Text -> QueryIntent
-detectReportIntent query = fromMaybe GeneralQueryIntent do
-  action :| request <- nonEmpty $ filter (`notElem` ["please", "me", "my", "the", "a", "an"]) $ words $ T.map (\c -> if isAlphaNum c then c else ' ') $ T.toCaseFold query
-  guard $ action `elem` ["send", "get", "show", "give", "fetch", "retrieve"]
-  (kind, reportType) <- case request of
-    [kind] -> Just (kind, Projects.RTDaily)
-    [period, kind] -> (kind,) <$> rightToMaybe (parseUrlPiece period)
-    _ -> Nothing
-  guard $ kind `elem` ["report", "summary"]
-  pure $ ReportIntent reportType
-
-
 -- | A rendered bot reply. The payload is already platform-shaped; the constructor
 -- records which outbound /form/ it is, because WhatsApp must select a different
 -- Twilio content template for each. The pipeline knows this at every send site, so
@@ -531,7 +485,7 @@ botReplyPayload :: BotReply -> AE.Value
 botReplyPayload r = r.payload
 
 
--- | The shared bot ask pipeline: intent detection → report or agentic query →
+-- | The shared bot ask pipeline: agentic query →
 -- per-platform rendering → the supplied reply sink. Slack collects replies for
 -- durable publication; other adapters can send them directly.
 runBotQueryWithTools
@@ -547,22 +501,10 @@ runBotQueryWithTools
   -> Eff es (Maybe (UUIDId "conversation"))
   -> Eff es (Either Text ())
 runBotQueryWithTools projectTools invocationMode target deliver envCfg access pid userQuery resolveThread =
-  AI.requireAgentAccess access pid >> case detectReportIntent userQuery of
-    ReportIntent reportType ->
-      fmap Right
-        $ Issues.getLatestReportByType pid reportType
-        >>= \case
-          Nothing -> sendText $ "No " <> display reportType <> " report found. Reports are generated automatically on schedule."
-          Just report -> do
-            let stamp = toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ"
-                png q theme = Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just q, Widget.theme = theme} Nothing (Just $ stamp report.startTime) (Just $ stamp report.endTime)
-            eventsUrl <- png "summarize count(*) by bin_auto(timestamp), status_code" Nothing
-            errorsUrl <- png (isErrorKql <> " | summarize count(*) by bin_auto(timestamp), status_code") (Just "roma")
-            send $ ReplyText $ formatReport report eventsUrl errorsUrl
-    GeneralQueryIntent -> do
-      threadM <- resolveThread
-      processAIQueryWithMode (Just envCfg) envCfg.enableTimefusionReads projectTools invocationMode access pid userQuery threadM envCfg.openaiModel envCfg.openaiApiKey
-        >>= either (\err -> send (ReplyText $ formatBotError target ServiceError) $> Left err) (\response -> dispatchAIResponse threadM response $> Right ())
+  AI.requireAgentAccess access pid >> do
+    threadM <- resolveThread
+    processAIQueryWithMode (Just envCfg) envCfg.enableTimefusionReads projectTools invocationMode access pid userQuery threadM envCfg.openaiModel envCfg.openaiApiKey
+      >>= either (\err -> send (ReplyText $ formatBotError target ServiceError) $> Left err) (\response -> dispatchAIResponse threadM response $> Right ())
   where
     send reply = AI.requireAgentAccess access pid >> deliver reply
     explore links viz q = links.logExplorerGet (Just q) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing viz Nothing Nothing Nothing
@@ -584,36 +526,6 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
       let (prefix, remainder) = T.splitAt 12000 txt
           (whole, suffix) = runIdentity $ T.spanEndM (pure . not . isSpace) prefix
       pure $ if T.null remainder || T.null whole then (prefix, remainder) else (whole, suffix <> remainder)
-
-    -- WhatsApp goes out as a plain-text template body (Twilio has no rich-message
-    -- equivalent), so it reuses the text envelope rather than embedding the chart PNGs.
-    formatReport report eventsUrl errorsUrl = case target of
-      Slack ->
-        slackResponse
-          $ [ slackHeader $ title " Report"
-            , slackContext ["*Period:* " <> period " → "]
-            , slackSection $ "Total Events: *" <> show totalEvents <> "*  •  Total Errors: *" <> show totalErrors <> "*"
-            , AE.object ["type" AE..= ("divider" :: Text)]
-            ]
-          <> catMaybes [slackImage (chartAlt "Events" " showing " totalEvents) Nothing <$> eventsUrl, slackImage (chartAlt "Errors" " showing " totalErrors) Nothing <$> errorsUrl]
-          <> [slackActions [linkButton "view-full-report" (botEmoji EmojiSearch <> " View Full Report") reportUrl]]
-      Discord ->
-        dcContainer 26879
-          $ [ dcText $ botEmoji EmojiChart <> " **" <> T.toTitle (display report.reportType) <> " Report**"
-            , dcText $ "**Period:** " <> period " → "
-            , dcText $ "Total Events: **" <> show totalEvents <> "**  •  Total Errors: **" <> show totalErrors <> "**"
-            ]
-          <> dcGallery [(eventsUrl, chartAlt "Events" ": " totalEvents), (errorsUrl, chartAlt "Errors" ": " totalErrors)]
-          <> [dcLinkButton (botEmoji EmojiSearch <> " View Full Report") reportUrl]
-      WhatsApp -> textReply $ title " Report\nPeriod: " <> period " - " <> "\nTotal Events: " <> show totalEvents <> "\nTotal Errors: " <> show totalErrors <> "\nView: " <> reportUrl
-      where
-        reportUrl = hostPath envCfg.hostUrl $ urls.reportsSingleGet pid report.id
-        day = toText . formatTime defaultTimeLocale "%Y-%m-%d"
-        period sep = day report.startTime <> sep <> day report.endTime
-        title suffix = botEmoji EmojiChart <> " " <> T.toTitle (display report.reportType) <> suffix
-        chartAlt what sep n = what <> " chart for " <> display report.reportType <> " report" <> sep <> show @Text n <> " total " <> T.toLower what
-        total k = maybe (0 :: Int) round (report.reportJson ^? key k . key "total" . _Number)
-        (totalEvents, totalErrors) = (total "events", total "errors")
 
     -- Use each widget's declared row/chart shape on every bot surface.
     dispatchAIResponse conversation resp = do

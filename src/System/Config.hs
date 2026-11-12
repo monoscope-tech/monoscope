@@ -170,8 +170,6 @@ data EnvConfig = EnvConfig
   , whatsappFromNumber :: Text
   , whatsappErrorTemplate :: Text
   , whatsappEndpointTemplate :: Text
-  , whatsappAllReportTemplate :: Text
-  , whatsappErrorReportTemplate :: Text
   , whatsappMonitorTemplate :: Maybe TwilioContentSid
   , whatsappBotChart :: Text
   , whatsappBotText :: Text

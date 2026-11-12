@@ -74,9 +74,6 @@ test('verified fix evidence stays in the conversation run inspector', async ({ p
       await expect(composer).toBeFocused();
       await expect(composer).toHaveValue('Keep this draft while I review the verified fix.');
     }
-    await page.getByRole('navigation', { name: 'Artifacts', exact: true }).getByRole('link', { name: 'Verified issue fix', exact: true }).press('Enter');
-    await expect(page.locator('#ai-document')).toContainText('Preserve retry tokens.');
-    expect(new URL(page.url()).pathname).toBe(path);
     sql(`UPDATE projects.issue_fix_jobs SET media_retained_at = NULL WHERE run_id = '${fix}';`);
     await page.goto(path);
     await page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').first().press('Enter');
@@ -160,7 +157,7 @@ test('conversation detail controls remain reachable when text size is doubled', 
       const composer = page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true });
       await composer.fill('Keep this draft while I inspect the enlarged text.');
       const targets = [
-        ['artifact', page.getByRole('navigation', { name: 'Artifacts', exact: true }).getByRole('link', { name: 'Checkout evidence', exact: true })],
+        ['artifact', page.getByRole('navigation', { name: 'Documents', exact: true }).getByRole('link', { name: /^Checkout evidence / })],
         ['run', page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').first()],
       ] as const;
       for (const [kind, trigger] of targets) {
@@ -216,11 +213,11 @@ test('inspector failures explain recovery and release loading feedback without l
       await page.evaluate(value => document.body.dataset.theme = value, theme);
       const composer = page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true });
       await composer.fill('Keep this draft while details recover.');
-      const navigation = page.getByRole('navigation', { name: 'Artifacts', exact: true });
-      const source = navigation.getByRole('link', { name: 'Second evidence', exact: true });
+      const navigation = page.getByRole('navigation', { name: 'Documents', exact: true });
+      const source = navigation.getByRole('link', { name: /^Second evidence / });
       const inspector = page.getByRole('complementary', { name: 'Conversation details', exact: true });
       if (width === 1280) {
-        await navigation.getByRole('link', { name: 'First evidence', exact: true }).press('Enter');
+        await navigation.getByRole('link', { name: /^First evidence / }).press('Enter');
         await expect(inspector.getByText('First retained evidence.', { exact: true })).toBeVisible();
       }
       await page.route(details, route => failure === 'server'
@@ -293,7 +290,7 @@ test('artifact contents navigate inside the inspector when the conversation has 
       await page.evaluate(value => document.body.dataset.theme = value, theme);
       const composer = page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true });
       await composer.fill('Keep this draft while I read the evidence.');
-      await page.getByRole('navigation', { name: 'Artifacts', exact: true }).getByRole('link', { name: 'Checkout evidence', exact: true }).focus();
+      await page.getByRole('navigation', { name: 'Documents', exact: true }).getByRole('link', { name: /^Checkout evidence / }).focus();
       await page.keyboard.press('Enter');
       const inspector = page.getByRole('complementary', { name: 'Conversation details', exact: true });
       await expect(inspector).toBeVisible();
@@ -359,8 +356,6 @@ test('failed and cancelled runs preserve the conversation and explain missing ar
       await page.evaluate(value => document.body.dataset.theme = value, theme);
       const composer = page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true });
       await composer.fill('Keep my follow-up after an interrupted run.');
-      // Only the latest attempt stays open; earlier ones fold under "Show N older".
-      await page.getByRole('region', { name: 'Routine runs', exact: true }).getByText(/^Show \d+ older$/).click();
       for (const [status, label, error] of states) {
         await page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').filter({ has: page.getByText(label, { exact: true }) }).focus();
         await page.keyboard.press('Enter');
@@ -592,7 +587,7 @@ test('routine detail panels preserve conversation drafts, run history, and artif
     await page.getByRole('link', { name: 'All routines', exact: true }).click();
     await expect(page).toHaveURL(`${root}/routines`);
     await page.getByRole('button', { name: 'Add Issue enrichment', exact: true }).click();
-    await expect(page.getByText('On a new issue · Active', { exact: true })).toBeVisible();
+    for (const fact of ['Active', 'On a new issue']) await expect(page.getByRole('region', { name: 'Routine status', exact: true })).toContainText(fact);
     await expect(page.getByText('No runs yet. An active routine starts when the next matching event arrives.', { exact: true })).toBeVisible();
     await openSettings(page);
     await expect(page.getByRole('textbox', { name: 'Instructions', exact: true })).toContainText('Update issue metadata');

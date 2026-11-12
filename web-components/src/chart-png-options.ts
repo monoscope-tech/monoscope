@@ -78,6 +78,8 @@ export function preparePngOptions(finalOptions: any, width: number, height: numb
     item.symbolSize = 5;
     item.lineStyle = { ...item.lineStyle, width: 2 };
   }
+  // A one-series legend only repeats the query's column alias; the title names the series.
+  if (series.length === 1) finalOptions.legend = { ...finalOptions.legend, show: false };
 
   if (profile === "slack") {
     // Slack's own dark surface, so the chart sits in the message rather than on a navy slab.
@@ -88,7 +90,6 @@ export function preparePngOptions(finalOptions: any, width: number, height: numb
     finalOptions.grid.top = Math.max(finalOptions.grid.top, 16);
     finalOptions.grid.bottom = Math.max(finalOptions.grid.bottom, 24);
     finalOptions.grid.containLabel = true;
-    if (series.length === 1) finalOptions.legend = { ...finalOptions.legend, show: false };
     for (const key of ["xAxis", "yAxis"] as const) {
       const axes = Array.isArray(finalOptions[key]) ? finalOptions[key] : [finalOptions[key]];
       for (const axis of axes) {

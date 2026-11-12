@@ -126,7 +126,6 @@ menu lang pid =
   , (I18n.t lang "nav.infrastructure", (urls.traces pid).hostsGetH Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing, "server")
   , (I18n.t lang "nav.api_catalog", apiCatalogUrl pid Nothing, "swap")
   , ("Repositories", urls.repositoriesGet pid Nothing Nothing, "code-branch")
-  , (I18n.t lang "nav.reports", urls.reportsGet pid Nothing, "chart-simple")
   ]
 
 

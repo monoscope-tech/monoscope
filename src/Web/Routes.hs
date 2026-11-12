@@ -64,7 +64,6 @@ import Pages.Projects qualified as Integrations
 import Pages.Projects qualified as ListProjects
 import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
-import Pages.Reports qualified as Reports
 import Pages.ServiceMap qualified as ServiceMap
 import Pages.Settings qualified as Settings
 import Pages.Share qualified as Share
@@ -210,6 +209,7 @@ data Routes mode = Routes
   , deviceToken :: mode :- "api" :> "device" :> "token" :> QPT "device_code" :> Post '[JSON] Auth.DeviceTokenResponse
   , emailPreviewList :: mode :- "dev" :> "emails" :> Get '[HTML] (Html ())
   , emailPreview :: mode :- "dev" :> "emails" :> Capture "template" Text :> Get '[HTML] (Html ())
+  , reportPreview :: mode :- "dev" :> "reports" :> Capture "project_id" Projects.ProjectId :> QPT "template" :> Get '[HTML] (Html ())
   , apiV1 :: mode :- "api" :> "v1" :> AuthProtect "api-key-auth" :> NamedRoutes ApiV1Routes
   , apiV1OpenApi :: mode :- "api" :> "v1" :> "openapi.json" :> Get '[JSON] OpenApi
   }
@@ -272,6 +272,7 @@ server otlpTraces otlpLogs =
         , deviceToken = Auth.deviceTokenH
         , emailPreviewList = emailPreviewListH
         , emailPreview = emailPreviewH
+        , reportPreview = reportPreviewH projectTools
         , apiV1 = apiV1Server
         , apiV1OpenApi = pure apiV1OpenApiSpec
         , cookieProtected = \sessionWithCookies ->
@@ -379,10 +380,7 @@ cookieProtectedServer projectTools =
     , widgetSqlPreview = Dashboards.widgetSqlPreviewGetH
     , widgetSqlText = Dashboards.widgetSqlTextGetH
     , -- Slack/Discord handlers
-      reportsGet = Reports.reportsGetH
-    , reportsLiveGet = Reports.reportsLiveGetH
-    , reportsSingleGet = Reports.singleReportGetH
-    , reportsPost = Reports.reportsPostH
+      reportsRedirect = \pid _ -> pure $ addHeader (urls.aiRoutinesGet pid) NoContent
     , shareLinkPost = Share.shareLinkPostH
     , replaySessionGet = Replay.replaySessionGetH
     , replaySessionManifestGet = Replay.replaySessionManifestGetH
@@ -920,7 +918,13 @@ emailTemplates =
   [ ("project-invite", pure ET.sampleProjectInvite)
   , ("project-created", pure ET.sampleProjectCreated)
   , ("project-deleted", pure ET.sampleProjectDeleted)
-  , ("weekly-report", pure $ ET.sampleWeeklyReport (Just "https://placehold.co/600x200?text=Events+Chart") (Just "https://placehold.co/600x200?text=Errors+Chart"))
+  ,
+    ( "routine-report"
+    , do
+        ctx <- ask @AuthContext
+        let chart wType unit query = Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl (UUIDId UUID.nil) def{Widget.wType = wType, Widget.query = Just query, Widget.unit = unit} (Just "7D") Nothing Nothing
+        ET.sampleRoutineReport <$> chart Widget.WTTimeseries Nothing "level == \"ERROR\" | summarize count(*) by bin_auto(timestamp)" <*> chart Widget.WTTimeseriesLine (Just "ns") "kind == \"server\" | summarize percentile(duration, 95) by bin_auto(timestamp)"
+    )
   ,
     ( "runtime-errors"
     , do
@@ -951,6 +955,26 @@ emailPreviewListH = do
       li_ [class_ "my-2"] $ a_ [href_ $ "/dev/emails/" <> name] $ toHtml name
 
 
+-- | Dev only: runs a report template's agent read-only on a project's live data (nothing is saved or
+-- sent) and shows the email it would produce, or the raw answer when it is not a valid digest.
+reportPreviewH :: Maybe AI.ProjectTools -> Projects.ProjectId -> Maybe Text -> ATBaseCtx (Html ())
+reportPreviewH tools pid templateM = do
+  guardDevOnly
+  ctx <- ask @AuthContext
+  now <- Time.currentTime
+  let (template, days) = fromMaybe (Issues.weeklyReportTemplate, 7) $ Issues.reportTemplate =<< templateM
+      (start, end) = Issues.reportWindow days now
+      config = AI.reportConfig (start, end) (AI.defaultAgenticConfig pid){AI.projectTools = tools, AI.sourceConfig = Just ctx.config, AI.useTimefusion = ctx.env.enableTimefusionReads, AI.timezone = Just "UTC"}
+  AI.runAgenticChatWithHistory config (template.prompt <> "\n\nRun this report now.") ctx.config.openaiModel ctx.config.openaiApiKey >>= \case
+    Left err -> pure $ pre_ $ toHtml err
+    Right answer -> case AI.reportRunAnswer pid (start, end) answer of
+      Nothing -> pure $ pre_ [style_ "white-space:pre-wrap"] $ toHtml answer.response
+      Just (digest, _) -> do
+        items <- AI.reportItems ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid digest
+        let (subject, html) = ET.routineReportEmail "Preview" (template.title <> " to now") digest.headline (urls.aiRoutinesGet pid) items
+        pure $ ET.emailWrapper subject html >> details_ (summary_ "Raw answer" >> pre_ [style_ "white-space:pre-wrap"] (toHtml answer.response))
+
+
 emailPreviewH :: Text -> ATBaseCtx (Html ())
 emailPreviewH templateName = do
   guardDevOnly
@@ -979,6 +1003,7 @@ type instance Opaque "AIThreads.AIPage" = AIThreads.AIPage
 type instance Opaque "AIThreads.EmptyTitle" = AIThreads.EmptyTitle
 type instance Opaque "AIThreads.NewThreadError" = AIThreads.NewThreadError
 type instance Opaque "AIThreads.NoReviewClasses" = AIThreads.NoReviewClasses
+type instance Opaque "AIThreads.EmailOnlyForReports" = AIThreads.EmailOnlyForReports
 type instance Opaque "AIThreads.OperationReviewForm" = AIThreads.OperationReviewForm
 type instance Opaque "AIThreads.OperationReviewed" = AIThreads.OperationReviewed
 type instance Opaque "AIThreads.PolicySaved" = AIThreads.PolicySaved
@@ -1151,8 +1176,6 @@ type instance Opaque "PageCodeContext.WikiGet" = PageCodeContext.WikiGet
 type instance Opaque1 "PageCtx" = PageCtx
 type instance Opaque "QueryLibrary.QueryLibraryView" = QueryLibrary.QueryLibraryView
 type instance Opaque "QueryLibrary.SaveQueryForm" = QueryLibrary.SaveQueryForm
-type instance Opaque "Reports.ReportsGet" = Reports.ReportsGet
-type instance Opaque "Reports.ReportsPost" = Reports.ReportsPost
 type instance Opaque "ServiceMap.ServiceMapGet" = ServiceMap.ServiceMapGet
 type instance Opaque "Settings.ApiGet" = Settings.ApiGet
 type instance Opaque "Settings.ApiKeyNotFound" = Settings.ApiKeyNotFound

@@ -110,6 +110,14 @@ describe('PNG chart layout', () => {
   });
 });
 
+describe('PNG one-series legend', () => {
+  it.each([[['p95'], false], [['p95', 'p99'], true]])('shows a legend for %j only when it names more than one series', (names, shown) => {
+    const options: any = { legend: { show: true }, xAxis: { type: 'time' }, yAxis: { type: 'value' }, series: names.map((name) => ({ type: 'line', name, data: [] })) };
+    preparePngOptions(options, 960, 320, false);
+    expect(options.legend.show !== false).toBe(shown);
+  });
+});
+
 describe('Slack PNG profile', () => {
   it.each(['bar', 'line'])('keeps the full window and readable labels for %s measurements', (type) => {
     const rows = [['timestamp', 'Events'], [0, 3], [900000, 8]];

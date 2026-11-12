@@ -230,7 +230,7 @@ discordInteractionsH projectTools rawBody signatureM timestampM = do
           5763719 -- Green accent
           [ dcText $ botEmoji EmojiSuccess <> " **Notification channel set**"
           , dcText "This channel will now receive:"
-          , dcText $ "• " <> botEmoji EmojiError <> " Error alerts\n• " <> botEmoji EmojiChart <> " Daily & weekly reports\n• " <> botEmoji EmojiWarning <> " Anomaly detections"
+          , dcText $ "• " <> botEmoji EmojiError <> " Error alerts\n• " <> botEmoji EmojiChart <> " AI routine results\n• " <> botEmoji EmojiWarning <> " Anomaly detections"
           ]
     sharedWidgetContent widgetTitle chartUrl dashboardUrl =
       dcContainer 26879

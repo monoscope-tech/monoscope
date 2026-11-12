@@ -55,7 +55,6 @@ module Models.Projects.Projects (
   projectBySubId,
   updateSubItemIdBySubId,
   projectCacheById,
-  dailyUsageOfDay,
   samplingTallies,
   recordSampling,
   SampleCounts (..),
@@ -64,8 +63,6 @@ module Models.Projects.Projects (
   freeTierDailyLimit,
   claimFreeTierNotice,
   FreeTierNotice (..),
-  updateProjectReportNotif,
-  ReportType (..),
   ProjectCache (..),
   ProjectCacheRow (..),
   defaultProjectCache,
@@ -476,11 +473,6 @@ dailyUsageOfDaySql pid now =
             WHERE project_id = #{pid} AND window_end > date_trunc('day', #{now}::timestamptz, 'UTC') |]
 
 
--- | The meter for the UTC day containing @t@.
-dailyUsageOfDay :: DB es => ProjectId -> UTCTime -> Eff es Int
-dailyUsageOfDay pid t = fromMaybe 0 <$> EHasql.interpOne (dailyUsageOfDaySql pid t)
-
-
 -- | One pool of a capped project ('IngestBudget.Tally' plus its key), for the UTC hour containing @now@.
 data SamplingTally = SamplingTally {projectId :: ProjectId, isError :: Bool, keptToday, seenYesterdayAhead, seenLastHour, seenThisHour :: Int}
   deriving stock (Generic)
@@ -776,7 +768,7 @@ updateProject cp =
     [HI.sql|
        UPDATE projects.projects SET title=#{cp.title}, description=#{cp.description},
         payment_plan=#{cp.paymentPlan}, sub_id=#{cp.subId}, first_sub_item_id=#{cp.firstSubItemId}, order_id=#{cp.orderId},
-        time_zone=#{cp.timeZone}, weekly_notif=#{cp.weeklyNotif}, daily_notif=#{cp.dailyNotif}, endpoint_alerts=#{cp.endpointAlerts}, error_alerts=#{cp.errorAlerts} where id=#{cp.id};
+        time_zone=#{cp.timeZone}, endpoint_alerts=#{cp.endpointAlerts}, error_alerts=#{cp.errorAlerts} where id=#{cp.id};
         |]
 
 
@@ -877,28 +869,6 @@ completeOnboardingStep pid step =
 updateProjectBilling :: DB es => ProjectId -> PlanName -> SubId -> SubItemId -> OrderId -> Eff es Int64
 updateProjectBilling pid paymentPlan subId firstSubItemId orderId =
   EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, billing_provider=#{LemonSqueezyProvider}, active=TRUE WHERE id=#{pid} AND (first_sub_item_id IS NULL OR first_sub_item_id = '');|]
-
-
--- | Which periodic report a row/notification belongs to. Encodes to exactly
--- @daily@/@weekly@ — the value stored in @apis.reports.report_type@ and used in
--- the @reports_notif@ route capture.
---
--- >>> map (display @ReportType) [RTDaily, RTWeekly]
--- ["daily","weekly"]
--- >>> map parseUrlPiece ["daily", "weekly"] :: [Either Text ReportType]
--- [Right RTDaily,Right RTWeekly]
--- >>> parseUrlPiece "bogus" :: Either Text ReportType
--- Left "Invalid value: bogus"
-data ReportType = RTDaily | RTWeekly
-  deriving (Eq, Generic, NFData, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToHttpApiData) via WrappedEnumSC 'Nothing "RT" ReportType
-
-
-updateProjectReportNotif :: DB es => ProjectId -> ReportType -> Eff es Int64
-updateProjectReportNotif pid reportType =
-  EHasql.interpExecute case reportType of
-    RTDaily -> [HI.sql| UPDATE projects.projects SET daily_notif=(not daily_notif) WHERE id=#{pid};|]
-    RTWeekly -> [HI.sql| UPDATE projects.projects SET weekly_notif=(not weekly_notif) WHERE id=#{pid};|]
 
 
 deleteProject :: (DB es, Time :> es) => ProjectId -> Eff es Int64

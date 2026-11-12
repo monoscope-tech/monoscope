@@ -48,6 +48,7 @@ module Pkg.Components.Table (
   withSort,
   withAttrs,
   withColHeaderExtra,
+  headerHint_,
 ) where
 
 import Data.Default (Default (..))
@@ -342,7 +343,8 @@ instance Default Config where
   def =
     Config
       { tableClasses = "table table-sm w-full relative"
-      , thClasses = "text-left bg-bgAlternate sticky top-0 overflow-hidden"
+      , -- Headers never wrap: a wide table scrolls (the grid is overflow-x-auto) instead of squeezing labels.
+        thClasses = "text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap"
       , tdClasses = "px-4 py-4"
       , containerClasses = "w-full mx-auto space-y-2"
       , showHeader = True
@@ -495,7 +497,8 @@ renderTable tbl =
                 whenJust tbl.features.search \_ -> span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
                 div_ [id_ "rowsContainer", class_ divCls] do
                   renderRows tbl
-      tableContent = div_ ([class_ $ tbl.config.containerClasses <> bool " pb-24" "" isEmpty, id_ $ tbl.config.elemID <> "_page"] <> [data_ "table-columns" tbl.config.elemID | tbl.features.customizeColumns]) do
+      -- Room for the floating bulk-action bar; only selectable tables raise it.
+      tableContent = div_ ([class_ $ tbl.config.containerClasses <> bool "" " pb-24" (not isEmpty && isJust tbl.features.rowId), id_ $ tbl.config.elemID <> "_page"] <> [data_ "table-columns" tbl.config.elemID | tbl.features.customizeColumns]) do
         unless isEmpty $ whenJust tbl.features.search $ renderSearch tbl.config.elemID (fromMaybe "Search" tbl.features.searchPlaceholder)
         case tbl.features.facets of
           Just facets -> div_ [class_ "flex items-start gap-4 max-lg:flex-col"] do
@@ -539,7 +542,7 @@ renderRows tbl
                     sortOrder = sortable >>= \(field, cfg) -> lookup cfg.currentSort [("-" <> field, Desc), ("+" <> field, Asc)]
                 th_ (c.attrs <> thAttrs <> sortAttrs <> [data_ "column-key" c.name]) do
                   span_ [class_ $ "flex items-center gap-2 min-w-0" <> bool "" " flex-wrap" (tbl.config.bulkActionsInHeader == Just idx)] do
-                    span_ [class_ $ bool "max-md:hidden" "" (idx > 0)] $ toHtml c.name
+                    span_ [class_ $ bool "max-md:hidden" "" (idx > 0 || isNothing tbl.features.rowId)] $ toHtml c.name
                     sequence_ c.headerExtra
                     whenJust sortOrder \case
                       Asc -> faSprite_ "arrow-up" "regular" "w-3 h-3"
@@ -936,6 +939,13 @@ withAttrs as column = column{attrs = as}
 
 withColHeaderExtra :: Html () -> Column a -> Column a
 withColHeaderExtra h column = column{headerExtra = Just h}
+
+
+-- | An info icon beside a header, so the label stays short and the meaning a hover or focus away.
+headerHint_ :: Text -> Html ()
+headerHint_ explanation =
+  span_ [class_ "inline-flex cursor-help rounded-sm text-iconNeutral focus-visible:outline-2 focus-visible:outline-offset-2", tabindex_ "0", role_ "note", term "aria-label" explanation, data_ "tippy-content" explanation]
+    $ faSprite_ "circle-info" "regular" "h-3 w-3"
 
 
 -- Sorting Utilities

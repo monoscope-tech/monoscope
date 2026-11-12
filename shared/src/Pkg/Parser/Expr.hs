@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CmpOp (..), MatchOp (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, FreeTextMatch (..), freeTextMatch, freeTextRegex, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, isErrorSql, isErrorKql, sqlStringLit) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CmpOp (..), MatchOp (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, FreeTextMatch (..), freeTextMatch, freeTextRegex, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, isErrorSql, sqlStringLit) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -1081,15 +1081,13 @@ outputFieldAliases =
 
 -- | When a record counts as an error. The signals are alternatives because SDKs populate
 -- different ones: a bare @level@, an OTel @severity_number@ (17 is ERROR, 21 FATAL), a
--- span's @status_code@, or a recorded exception. 'isErrorKql' is the same rule for
--- surfaces that take a query ('Pkg.Parser.Eval' pins their agreement), and
--- 'Models.Telemetry.Telemetry.isErrorRecord' the same rule over a decoded row.
+-- span's @status_code@, or a recorded exception.
+-- 'Models.Telemetry.Telemetry.isErrorRecord' is the same rule over a decoded row.
 --
 -- Two predicates deliberately stay separate: RUM's @errorSql@ and the HTTP-error filters
 -- in dashboard templates, whose text TimeFusion's rollups match verbatim.
-isErrorSql, isErrorKql :: T.Text
+isErrorSql :: T.Text
 isErrorSql = "(lower(level) IN ('error', 'fatal') OR severity___severity_number >= 17 OR status_code = 'ERROR' OR attributes___exception___type IS NOT NULL)"
-isErrorKql = "(level =~ /^(error|fatal)$/ or severity.severity_number >= 17 or status_code == \"ERROR\" or attributes.exception.type != null)"
 
 
 -- | The @errors@ flag as the event tables project it: structured error data for a span, or

@@ -146,12 +146,12 @@ spec = around withTestResources do
     (tr, pid) <- onboarded tr0
     let settings = do
           CreateProject.CreateProject (PageCtx _ (_, _, _, _, _, form, _, project)) <- call tr (CreateProject.projectSettingsGetH pid)
-          pure (project.title, project.description, form.timeZone, (form.weeklyNotifs, form.dailyNotifs, form.errorAlerts, form.endpointAlerts))
+          pure (project.title, project.description, form.timeZone, (form.errorAlerts, form.endpointAlerts))
         yes = Just "on"
     (title, description, timeZone, toggles) <- settings
-    (title /= "", description, timeZone, toggles) `shouldBe` (True, "", "", (yes, yes, yes, yes))
-    _ <- testServant tr $ CreateProject.createProjectPostH pid CreateProject.CreateProjectForm{title = "ACME Corp", description = "", emails = [], permissions = [], timeZone = "America/New_York", errorAlerts = yes, endpointAlerts = yes, weeklyNotifs = yes, dailyNotifs = Nothing}
-    settings `shouldReturn` ("ACME Corp", "", "America/New_York", (yes, Nothing, yes, yes))
+    (title /= "", description, timeZone, toggles) `shouldBe` (True, "", "", (yes, yes))
+    _ <- testServant tr $ CreateProject.createProjectPostH pid CreateProject.CreateProjectForm{title = "ACME Corp", description = "", emails = [], permissions = [], timeZone = "America/New_York", errorAlerts = yes, endpointAlerts = yes}
+    settings `shouldReturn` ("ACME Corp", "", "America/New_York", (yes, yes))
     CreateProject.ManageMembersGet (PageCtx _ (_, members, _, _, _)) <- call tr $ CreateProject.manageMembersGetH pid
     V.length members `shouldBe` 1
 

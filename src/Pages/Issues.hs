@@ -142,7 +142,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), assetUrl)
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.Mail qualified as Mail
-import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery)
+import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery, parseQueryToAST)
 import Pkg.Parser.Expr (sqlStringLit)
 import Pkg.SchemaLearning (FieldStruct (..))
 import Pkg.SchemaLearning qualified as SchemaLearning
@@ -2136,7 +2136,7 @@ aiChatResponse_ artifactLinkAttrs pid userQuery explanation widgetsM toolCallsM 
     -- Collapsed debug info (tool calls + system prompt)
     let toolCalls = fromMaybe [] toolCallsM
     unless (null toolCalls && isNothing systemPromptM)
-      $ disclosure_ [class_ "mt-2 ml-[2.125rem] border border-strokeWeak rounded-lg text-xs"] "px-2.5 py-1.5 text-textWeak hover:bg-fillWeaker" (toHtml @Text $ bool "System context" (show (length toolCalls) <> " tool calls") (not (null toolCalls)))
+      $ disclosure_ [class_ "mt-2 ml-[2.125rem] border border-strokeWeak rounded-lg text-xs", data_ "chat-indent" ""] "px-2.5 py-1.5 text-textWeak hover:bg-fillWeaker" (toHtml @Text $ bool "System context" (show (length toolCalls) <> " tool calls") (not (null toolCalls)))
       $ div_ [class_ "px-2.5 py-2 border-t border-strokeWeak bg-fillWeaker/50"] do
         forM_ toolCalls toolCallView_
         whenJust systemPromptM
@@ -2151,14 +2151,14 @@ aiChatResponse_ artifactLinkAttrs pid userQuery explanation widgetsM toolCallsM 
           span_ [class_ "font-mono text-xs px-2 py-0.5 bg-fillWeak rounded"] $ toHtml tc.name
           whenJust (Map.lookup "query" tc.args) $ span_ [class_ "text-xs text-textWeak break-all"] . toHtml . show
         unless (T.null tc.resultPreview) $ div_ [class_ "text-xs text-textWeak font-mono pl-4 whitespace-pre-wrap break-all"] $ toHtml $ "→ " <> tc.resultPreview
-    chatAvatar_ bg icon color = div_ [class_ $ "shrink-0 w-6 h-6 rounded-full flex items-center justify-center " <> bg] $ faSprite_ icon "regular" ("w-3 h-3 " <> color)
+    chatAvatar_ bg icon color = div_ [class_ $ "shrink-0 w-6 h-6 rounded-full flex items-center justify-center " <> bg, data_ "chat-avatar" ""] $ faSprite_ icon "regular" ("w-3 h-3 " <> color)
 
 
 aiChatWidgets_ :: Projects.ProjectId -> Text -> [Widget.Widget] -> Maybe [AI.ToolCallInfo] -> Html ()
 aiChatWidgets_ pid prefix widgets toolCallsM =
   let processedWidgets = maybe widgets (`processWidgetsWithToolData` widgets) toolCallsM
    in div_ [class_ "grid grid-cols-1 gap-3 mt-3"] $ forM_ (zip [0 ..] processedWidgets) $ \(i, widget) ->
-        div_ [class_ $ "w-full aspect-[3/1] " <> if widget.wType == Widget.WTStat then "min-h-24" else "min-h-48"] $ Widget.widget_ widget{Widget._projectId = Just pid, Widget.id = Just (prefix <> show @Text @Int i)}
+        div_ [class_ $ "w-full " <> if widget.wType == Widget.WTStat then "h-28" else "aspect-[3/1] min-h-48"] $ Widget.widget_ widget{Widget._projectId = Just pid, Widget.id = Just (prefix <> show @Text @Int i)}
   where
     -- A widget whose query matches a cached run_query tool call renders from that data
     -- rather than re-querying.
@@ -2231,14 +2231,16 @@ aiChatHistoryView_ artifactLinkAttrs pid = render
     -- Stored content is JSON (code blocks stripped) where the LLM produced it, plain text otherwise.
     parseStoredContent content storedWidgets = case AI.parseLLMResponse content of
       Right aiResp ->
-        let widgets = AI.responseWidgets aiResp
+        let widgets = filter validQuery $ AI.responseWidgets aiResp
             structured = isJust aiResp.query || isJust aiResp.visualization || not (null widgets)
          in ( fromMaybe (bool content "Here are the requested visualizations:" structured) aiResp.explanation
             , guarded (not . null) widgets <|> parseStoredWidgets storedWidgets
             )
       Left _ -> (content, parseStoredWidgets storedWidgets)
 
-    parseStoredWidgets = fmap (mapMaybe $ fmap Widget.modelWidget . parseMaybe AE.parseJSON) . parseStoredJSON @[AE.Value]
+    -- A chart whose query is not KQL (an agent wrote prose there) would only draw "nothing in this range".
+    validQuery = all (isRight . parseQueryToAST) . (.query)
+    parseStoredWidgets = fmap (filter validQuery . mapMaybe (fmap Widget.modelWidget . parseMaybe AE.parseJSON)) . parseStoredJSON @[AE.Value]
 
 
 -- | Decode a stored JSONB value (anomaly metadata, widget lists) into a typed payload.

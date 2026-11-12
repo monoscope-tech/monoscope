@@ -42,7 +42,7 @@ import Pages.ServiceMap qualified as ServiceMap
 import Pages.Settings (PrometheusForm (..))
 import Pages.Settings qualified as Settings
 import Pages.Telemetry qualified as Trace
-import Pkg.Components.Table (Features (customizeColumns, exportName, resultSummary), Table (..))
+import Pkg.Components.Table (Features (customizeColumns, exportName, resultSummary), Column (..), Table (..))
 import Pkg.Components.Widget qualified as Widget
 import Data.Effectful.Hasql (setTestTime)
 import Pkg.TestUtils
@@ -113,6 +113,14 @@ spec = do
       containersPage@(Containers.ContainersPage (PageCtx _ body)) <- call tr allContainers
       table <- deferredBody body
       V.length table.rows `shouldBe` 8
+      -- Columns follow what the inventory reports: all of them for this mix; under Docker alone, no pod,
+      -- namespace, readiness or restarts column of dashes (nor limits it never sent).
+      let columnNames = map \Column{name} -> name
+      columnNames table.columns `shouldBe` ["Container", "Pod", "Namespace", "Node", "CPU cores", "CPU limit", "Memory", "Memory limit", "Restarts", "Ready" :: Text]
+      dockerPid <- createTestProject tr "docker only"
+      dockerKey <- createTestAPIKey tr dockerPid "docker-key"
+      ingestMetric tr dockerKey (dockerResource "solo") [] "container.cpu.utilization" 40 frozenTime
+      columnNames . (.columns) <$> tableOf (Containers.containersGetH dockerPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")) `shouldReturn` ["Container", "Node", "CPU cores", "Memory" :: Text]
       (V.length <<$>> Cache.lookup tr.trATCtx.infrastructureCache ((pid, Nothing, Nothing, Just "5M") :: ContainerSnapshotKey)) `shouldReturn` Just 8
       let html = renderT containersPage
           render features = renderT table{features}
@@ -125,7 +133,7 @@ spec = do
       -- "Not ready" wrapped across the badge border; the export icon is the correctly framed symbol.
       goldenParts "infrastructure-containers"
         . ordNub
-        $ tagsWith ["data-header-actions", "data-live-mode=", "data-component=\"facet-rail\"", "value=\"otel-demo\"", "facet-count", "w-72 max-w-72 overflow-hidden max-md:w-auto", "hidden max-md:inline-flex", "bg-fillWarning-strong", "badge-error", "M288 32c0-17.7", "Runtime: kubernetes", "Container: checkout", "Image: demo:2.2.0", "Workload: checkout", "CPU limit used: 25%", "Memory limit used: 50%", "Latest reported readiness: Ready"] html
+        $ tagsWith ["data-header-actions", "data-live-mode=", "data-component=\"facet-rail\"", "value=\"otel-demo\"", "facet-count", "w-full max-w-0 min-w-64 overflow-hidden", "hidden max-md:inline-flex", "bg-fillWarning-strong", "badge-error", "M288 32c0-17.7", "Runtime: kubernetes", "Container: checkout", "Image: demo:2.2.0", "Workload: checkout", "CPU limit used: 25%", "Memory limit used: 50%", "Latest reported readiness: Ready"] html
         <> tagsWith ["popovertarget=\"containersForm-columns\""] customizeOnly
         <> tagsWith ["containers.csv"] exportOnly
 
@@ -169,9 +177,10 @@ spec = do
                        , ("frontend-544d9b6f4-2xk7z", KubeUnknown, Just clusterUid, Just "shop", Just "vps-d6d7e318", Just "frontend")
                        , ("postgres-0", KubeUnknown, Just clusterUid, Just "data", Just "vps-d6d7e318", Just "postgres")
                        ]
-      renderT images `shouldContainAll` ["Images", "SBOM unavailable"]
+      -- No scanner is connected, so the list has no security column; the image drawer says so instead.
+      (T.isInfixOf "Images" &&& T.isInfixOf "SBOM unavailable") (renderT images) `shouldBe` (True, False)
       -- A cluster known only by uid renders a compact label; the full uid stays in the tooltip.
-      renderT kubernetes `shouldContainAll` ["Pods", "Clusters", "Namespaces", "Workloads", "Nodes", "CPU limit used", "Memory limit used", "Showing ", " resources", "cluster-9b1deb4d"]
+      renderT kubernetes `shouldContainAll` ["Pods", "Clusters", "Namespaces", "Workloads", "Nodes", "CPU limit", "Memory limit", "Showing ", " resources", "cluster-9b1deb4d"]
       renderT hostMap `shouldContainAll` ["Host Map", "Fill by", "Group by", "vps-bare-01", "Provider", "Region", "OS"]
       goldenParts "infrastructure-views"
         . ordNub

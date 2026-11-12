@@ -22,7 +22,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, freshnessWindow, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), RefreshingDeferred (..), callout_, detailSection_, emDash_, emptyState_, entityHeader_, factGrid_, infrastructureNavTabs_, metaChip_, pivotLinks_, tableSkeleton_, withDeferredBody)
-import Pkg.Components.Table (Column, Features (..), Table (..), ZeroState (..), col, countedFilter, facetActions, inventoryTable, withAttrs, withColHeaderExtra)
+import Pkg.Components.Table (Column, Features (..), Table (..), ZeroState (..), col, countedFilter, facetActions, headerHint_, inventoryTable, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Relude
@@ -138,7 +138,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
     let table = inventoryTable "containers" deferredUrl
     pure
       table
-        { columns = containerColumns
+        { columns = containerColumns allRows
         , rows = V.fromList $ map (ContainerVM pid window) rows
         , features =
             table.features
@@ -169,31 +169,31 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
         }
   addRespHeaders $ ContainersPage $ PageCtx (infrastructureBW pid "Containers" window bw) body
   where
-    containerColumns :: [Column ContainerVM]
-    containerColumns =
-      [ col "Container" renderNameCol & withAttrs [class_ "w-72 max-w-72 overflow-hidden max-md:w-auto max-md:max-w-none"]
-      , col "Pod" (textCell (.podName)) & withAttrs [class_ "w-72 max-w-72 overflow-hidden max-2xl:hidden"]
-      , col "Namespace" (textCell (.namespace)) & withAttrs [class_ "w-32 max-2xl:hidden"]
-      , col "Node" (textCell (.nodeName)) & withAttrs [class_ "w-36 max-md:hidden"]
-      , col "CPU (cores)" (numCell (showFFloat' 3) (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
-      , col "CPU limit used" (pctCell "CPU limit used" cpuPctOfLimit) & withAttrs [class_ "w-32 whitespace-normal max-md:hidden"]
-      , col "Memory" (numCell formatBytes (.memBytes)) & withAttrs [class_ "w-28 text-right max-md:hidden"]
-      , col "Memory limit used" (pctCell "Memory limit used" memPctOfLimit) & withAttrs [class_ "w-32 whitespace-normal max-md:hidden"]
-      , col "Restarts" (numCell (showFFloat' 0) (.restarts))
-          & withColHeaderExtra
-            ( let explanation = "Latest cumulative restart count reported within the selected time range. This is not the number of restarts during the range."
-               in span_
-                    [ class_ "inline-flex cursor-help rounded-sm text-iconNeutral focus-visible:outline-2 focus-visible:outline-offset-2"
-                    , tabindex_ "0"
-                    , role_ "note"
-                    , term "aria-label" explanation
-                    , data_ "tippy-content" explanation
-                    ]
-                    $ faSprite_ "circle-info" "regular" "h-3 w-3"
+    -- A column no container reports (pods and readiness under Docker) is dropped, so its width goes to the name.
+    containerColumns :: V.Vector ContainerRow -> [Column ContainerVM]
+    containerColumns inventory =
+      [ column
+      | (True, column) <-
+          [ (True, col "Container" renderNameCol & withAttrs [class_ "w-full max-w-0 min-w-64 overflow-hidden max-md:min-w-0"])
+          , (has (.podName), col "Pod" (textCell (.podName)) & withAttrs [class_ "w-64 max-w-64 overflow-hidden max-[1800px]:hidden"])
+          , (has (.namespace), col "Namespace" (textCell (.namespace)) & withAttrs [class_ "w-32 max-w-32 overflow-hidden max-[1800px]:hidden"])
+          , (has (.nodeName), col "Node" (textCell (.nodeName)) & withAttrs [class_ "w-36 max-w-36 overflow-hidden max-[1400px]:hidden"])
+          , (True, col "CPU cores" (numCell (showFFloat' 3) (.cpuCores)) & withAttrs [class_ "w-20 text-right"])
+          , (has cpuPctOfLimit, col "CPU limit" (pctCell "CPU limit used" cpuPctOfLimit) & withColHeaderExtra (headerHint_ "Share of the CPU limit in use") & withAttrs [class_ "min-w-28 max-md:hidden"])
+          , (True, col "Memory" (numCell formatBytes (.memBytes)) & withAttrs [class_ "w-24 text-right max-md:hidden"])
+          , (has memPctOfLimit, col "Memory limit" (pctCell "Memory limit used" memPctOfLimit) & withColHeaderExtra (headerHint_ "Share of the memory limit in use") & withAttrs [class_ "min-w-28 max-md:hidden"])
+          ,
+            ( has (.restarts)
+            , col "Restarts" (numCell (showFFloat' 0) (.restarts))
+                & withColHeaderExtra (headerHint_ "Latest cumulative restart count reported within the selected time range. This is not the number of restarts during the range.")
+                & withAttrs [class_ "w-20 text-right max-md:hidden"]
             )
-          & withAttrs [class_ "w-20 text-right max-md:hidden"]
-      , col "Ready" (readyCell . (.row)) & withAttrs [class_ "w-16 max-md:hidden"]
+          , (has (.ready), col "Ready" (readyCell . (.row)) & withAttrs [class_ "w-16 max-md:hidden"])
+          ]
       ]
+      where
+        has :: (ContainerRow -> Maybe a) -> Bool
+        has f = any (isJust . f) inventory
 
     -- A cell is its accessor plus how to draw a present value; absence is always the em dash.
     cell :: (ContainerRow -> Maybe a) -> (a -> Html ()) -> ContainerVM -> Html ()
@@ -226,10 +226,13 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
       div_ [class_ "flex items-center gap-2 min-w-0 overflow-hidden text-xs text-textWeak max-md:flex-wrap"] do
         whenJust vm.row.image \img ->
           let image = shortImage img <> maybe "" (":" <>) vm.row.imageTag
-           in span_ [class_ "min-w-0 flex-1 truncate", data_ "tippy-content" $ "Image: " <> image] $ toHtml image
+           in span_ [class_ $ "min-w-0 truncate" <> bool "" " max-[1800px]:hidden" (isJust vm.row.workload), data_ "tippy-content" $ "Image: " <> image] $ toHtml image
         -- The badge is a flex box, so the ellipsis has to live on an inner block or the name clips at its start.
-        whenJust vm.row.workload \workload -> span_ [class_ "badge badge-xs badge-ghost min-w-0 max-w-36 truncate", data_ "tippy-content" $ "Workload: " <> workload] $ span_ [class_ "min-w-0 truncate"] $ toHtml workload
-      div_ [class_ "hidden max-2xl:flex flex-col gap-0.5 text-xs leading-normal text-textWeak"]
+        -- Below 1800px the badge takes the image's place; the namespace stays in its tooltip and the facets.
+        whenJust vm.row.workload \workload -> span_ [class_ "badge badge-xs badge-ghost min-w-0 max-w-full truncate min-[1800px]:ms-auto min-[1800px]:max-w-[55%]", data_ "tippy-content" $ "Workload: " <> foldMap (<> "/") vm.row.namespace <> workload] $ span_ [class_ "min-w-0 truncate"] do
+          toHtml workload
+      -- Where the Pod and Namespace columns are hidden, the identity stays on the row so duplicate names can be told apart.
+      div_ [class_ "hidden max-[1800px]:flex flex-col gap-0.5 text-xs leading-normal text-textWeak"]
         $ forM_ ([("Pod", vm.row.podName), ("Namespace", vm.row.namespace), ("Cluster", vm.row.cluster), ("Node / host", vm.row.nodeName)] :: [(Text, Maybe Text)]) \(label, value) ->
           whenJust value \v -> span_ [class_ "whitespace-normal break-all"] $ toHtml $ label <> ": " <> v
 

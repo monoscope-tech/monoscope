@@ -136,7 +136,6 @@ spec = describe "Monitoring" do
           , entry "new log pattern" (Mail.card $ Mail.logPatternCard logPattern "Acme API") []
           , entry "log spike" (fst spike) [snd spike]
           , entry "new endpoints" (Mail.slackNewEndpointsAlert "Acme API" endpoints issue "https://example.com") []
-          , entry "weekly report" (Mail.slackReportAlert Projects.RTWeekly "2025-01-01T00:00:00Z" "2025-01-08T00:00:00Z" 42 125000 (V.fromList [("orders-api", 30, 90000), ("payments", 12, 35000)]) "Acme API" "https://example.com/reports/1" chart chart) []
           ]
     goldenText "slack/alert-gallery.json" $ decodeUtf8 $ AEP.encodePretty gallery
     concatMap slackPayloadViolations gallery `shouldBe` []

@@ -69,6 +69,14 @@ module Pkg.AI (
   completeAgenticResponse,
   ensureConversationTitle,
   prepareRunAnswer,
+  ReportDigest (..),
+  ReportHighlight (..),
+  parseReportDigest,
+  reportRunAnswer,
+  reportItems,
+  reportComparison,
+  reportConfig,
+  digestMarkdown,
   callRoutineLLM,
 ) where
 
@@ -81,6 +89,7 @@ import Data.Aeson.Lens (key, values, _Bool, _Number, _Object, _String)
 import Data.Aeson.Types (parseEither, parseMaybe)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Char (isAlphaNum, isHexDigit)
+import Data.Containers.ListUtils (nubOrdOn)
 import Data.Default (def)
 import Data.Effectful.CodeReview.Types (AgentAwaitingReview (..))
 import Data.Effectful.Hasql qualified as Hasql
@@ -88,9 +97,10 @@ import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Effectful.Wreq qualified as W
 import Data.HashMap.Strict qualified as HM
+import Data.List qualified as L
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, diffUTCTime, formatTime)
 import Data.Time.Zones (utcTZ, utcToLocalTimeTZ)
 import Data.Time.Zones.All qualified as TZ
 import Data.Traversable (for)
@@ -129,9 +139,10 @@ import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Tool qualified as OAITool
 import Pkg.AgentCatalog (LocalOperation (..))
 import Pkg.AgentCatalog qualified as Catalog
-import Pkg.Components.TimePicker (TimePicker)
+import Pkg.Components.TimePicker (TimePicker (..), parseTimeRange)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC, idFromText)
+import Pkg.EmailTemplates qualified as ET
 import Pkg.Parser (ResultShape (Events), parseQueryToAST, resultShape)
 import Pkg.SchemaLearning (FacetData (..), FacetSummary (..), FacetValue (..))
 import Pkg.Slack qualified as Slack
@@ -139,7 +150,7 @@ import Relude
 import System.Config qualified as Config
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (throwIO, withException)
-import Utils (encodeText, hostPath, nonEmptyT, unwrapJsonPrimValue)
+import Utils (encodeText, formatUTCMicros, hostPath, nonEmptyT, unwrapJsonPrimValue)
 import Web.ApiTypes (ApiActor (..))
 import Web.HttpApiData (parseQueryParam)
 import Web.Links (CookieProtectedRoutes (..), urls)
@@ -259,7 +270,7 @@ completeAgenticResponse config userQuery model apiKey answer = do
     (SlackInvestigationAccess{}, _) -> pass -- Recorded by the replayable Slack turn.
     (_, Nothing) -> pass
     (_, Just convId) -> do
-      let message = prepareRunAnswer answer
+      let message = prepareRunAnswer Nothing answer
           persist = Issues.insertChatMessage config.projectId convId Issues.ChatAssistant message.content message.widgets (Just $ AE.toJSON answer.toolCalls)
       case config.invocationMode of
         InteractiveReadOnly -> persist
@@ -302,13 +313,126 @@ ensureConversationTitle config userQuery model apiKey answer = do
   pure $ join title
 
 
-prepareRunAnswer :: AgenticChatResult -> Issues.RunAnswer
-prepareRunAnswer answer = Issues.RunAnswer{content = msg, widgets = AE.toJSON <$> widgets, report, evidence = Issues.AgentEvidence answer}
+-- | A run's answer. Given the time it ran, charts without their own window are pinned to the answer's
+-- range ending then, so a kept result keeps its numbers instead of re-querying today. A chart whose
+-- query is not KQL (agents sometimes write prose there) is dropped rather than drawn empty.
+--
+-- >>> let ws r = isJust (prepareRunAnswer Nothing (AgenticChatResult r [])).widgets
+-- >>> map ws ["{\"explanation\":\"x\",\"widgets\":[{\"type\":\"table\",\"query\":\"No telemetry query: issue operations were used.\"}]}", "{\"explanation\":\"x\",\"widgets\":[{\"type\":\"stat\",\"query\":\"summarize count()\"}]}"]
+-- [False,True]
+prepareRunAnswer :: Maybe UTCTime -> AgenticChatResult -> Issues.RunAnswer
+prepareRunAnswer ranAt answer = Issues.RunAnswer{content = msg, widgets = AE.toJSON <$> widgets, report, evidence = Issues.AgentEvidence answer}
   where
-    parsed = parseAgenticResponse answer
-    widgets = guarded (not . null) . take 10 . responseWidgets =<< rightToMaybe parsed
-    report = fromMaybe answer.response $ (.explanation) =<< rightToMaybe parsed
-    msg = fromMaybe (bool answer.response "Here are the requested visualizations:" $ isJust widgets) (nonEmptyT . (.explanation) =<< rightToMaybe parsed)
+    parsed = rightToMaybe $ parseAgenticResponse answer
+    widgets = guarded (not . null) . take 10 . map pin . filter (all (isRight . parseQueryToAST) . (.query)) . responseWidgets =<< parsed
+    pin w = case (ranAt, w.timeFrom) of
+      (Just at, Nothing) | (Just from, Just to, _) <- parseTimeRange at $ fromMaybe (TimePicker Nothing Nothing Nothing) $ (.timeRange) =<< parsed -> pinWidget (from, to) w
+      _ -> w
+    report = fromMaybe answer.response $ (.explanation) =<< parsed
+    msg = fromMaybe (bool answer.response "Here are the requested visualizations:" $ isJust widgets) (nonEmptyT . (.explanation) =<< parsed)
+
+
+-- | A report routine's answer: a headline, then at most five highlights, each with the chart that
+-- makes its point. One malformed highlight, chart query or link drops alone.
+data ReportDigest = ReportDigest {headline :: Text, highlights :: [ReportHighlight]}
+  deriving stock (Show)
+
+
+data ReportHighlight = ReportHighlight {title :: Text, detail :: Text, widget :: Maybe Widget.Widget, link :: Maybe Text}
+  deriving stock (Show)
+
+
+-- | Charts must parse as KQL; links must stay inside the project.
+--
+-- >>> import Models.Projects.Projects qualified as Projects
+-- >>> let raw = "{\"headline\":\"Checkout errors up 4.8x\",\"highlights\":[{\"title\":\"Checkout 5xx\",\"detail\":\"412 to 1,980.\",\"widget\":{\"type\":\"stat\",\"query\":\"summarize count()\"},\"link\":\"/p/00000000-0000-0000-0000-000000000000/issues\"},{\"title\":\"Bad chart\",\"detail\":\"d\",\"widget\":{\"type\":\"stat\",\"query\":\"where >\"},\"link\":\"javascript:alert(1)\"},{\"detail\":\"untitled\"}]}"
+-- >>> fmap (\d -> (d.headline, map (\h -> (h.title, isJust h.widget, h.link)) d.highlights)) (parseReportDigest Projects.demoProjectId raw)
+-- Just ("Checkout errors up 4.8x",[("Checkout 5xx",True,Just "/p/00000000-0000-0000-0000-000000000000/issues"),("Bad chart",False,Nothing)])
+-- >>> let linked l = (.link) <$> (listToMaybe . (.highlights) =<< parseReportDigest Projects.demoProjectId ("{\"headline\":\"h\",\"highlights\":[{\"title\":\"t\",\"link\":\"" <> l <> "\"}]}"))
+-- >>> map linked ["/issues/42", "//evil.example/x", "/p/11111111-1111-1111-1111-111111111111/issues"]
+-- [Just (Just "/p/00000000-0000-0000-0000-000000000000/issues/42"),Just Nothing,Just Nothing]
+-- >>> let titles hs = map (.title) . (.highlights) <$> parseReportDigest Projects.demoProjectId ("{\"headline\":\"h\",\"highlights\":" <> hs <> "}")
+-- >>> titles "[{\"title\":\"noise\",\"previous\":1,\"current\":3,\"unit\":\"events\"},{\"title\":\"flat\",\"previous\":100,\"current\":105,\"unit\":\"ms\"},{\"title\":\"real\",\"previous\":1777,\"current\":835,\"unit\":\"events\"},{\"title\":\"same events again\",\"previous\":1777,\"current\":835,\"unit\":\"events\"}]"
+-- Just ["real"]
+-- >>> let unitOf q = ((.unit) <=< (.widget) <=< listToMaybe . (.highlights)) =<< parseReportDigest Projects.demoProjectId ("{\"headline\":\"h\",\"highlights\":[{\"title\":\"t\",\"widget\":{\"type\":\"timeseries_line\",\"query\":\"" <> q <> "\"}}]}")
+-- >>> map unitOf ["summarize percentile(duration, 95) by bin_auto(timestamp)", "summarize percentile(duration, 95) / 1000000.0 by bin_auto(timestamp)", "url_path == \\\"/api\\\" | summarize percentile(duration, 95) by bin_auto(timestamp)"]
+-- [Just "ns",Nothing,Just "ns"]
+-- >>> isNothing $ parseReportDigest Projects.demoProjectId "{\"explanation\":\"plain\"}"
+-- True
+parseReportDigest :: Projects.ProjectId -> Text -> Maybe ReportDigest
+parseReportDigest pid response = do
+  val <- AE.decodeStrict' @AE.Value $ encodeUtf8 $ fixTrailingCommas $ ELLM.stripCodeBlock response
+  headline <- nonEmptyT $ T.strip <$> val ^? key "headline" . _String
+  let highlight h = do
+        title <- nonEmptyT $ T.strip <$> h ^? key "title" . _String
+        let change = liftA2 (,) (h ^? key "previous" . _Number) (h ^? key "current" . _Number)
+        guard $ all (material $ h ^? key "unit" . _String) change
+        pure
+          ( maybeToRight title change
+          , ReportHighlight
+              { title
+              , detail = foldMap T.strip $ h ^? key "detail" . _String
+              , widget = mfilter (all (\q -> isRight (parseQueryToAST q) && not ("ago(" `T.isInfixOf` q)) . (.query)) $ durationUnit . Widget.modelWidget <$> (parseMaybe AE.parseJSON =<< h ^? key "widget")
+              , link = projectLink =<< h ^? key "link" . _String
+              }
+          )
+  pure $ ReportDigest headline $ take 5 $ map snd $ nubOrdOn fst $ mapMaybe highlight $ val ^.. key "highlights" . values
+  where
+    -- The prompt's materiality rules, enforced: under 20% is no change, and event counts under 50 are noise.
+    material unit (previous, current) = abs (current - previous) >= 0.2 * max (abs previous) 1 && (unit /= Just "events" || max previous current >= 50)
+    -- duration is stored in nanoseconds; the unit lets charts show ms/s instead of raw counts. A query that
+    -- already divides it has converted it itself.
+    durationUnit (w :: Widget.Widget) = (w :: Widget.Widget){Widget.unit = w.unit <|> ("ns" <$ guard (any (\q -> "duration" `T.isInfixOf` q && not ("/" `T.isInfixOf` snd (T.breakOn "summarize" q))) w.query))}
+    -- The agent writes project-relative paths; anything leaving the project is dropped.
+    projectLink l
+      | ("/p/" <> pid.toText <> "/") `T.isPrefixOf` l = Just l
+      | "/" `T.isPrefixOf` l && not (any (`T.isPrefixOf` l) ["//", "/p/"]) = Just $ "/p/" <> pid.toText <> l
+      | otherwise = Nothing
+
+
+-- | A report run's answer: the digest as markdown with each chart pinned to the report window,
+-- so in-app charts show the period the report describes.
+reportRunAnswer :: Projects.ProjectId -> (UTCTime, UTCTime) -> AgenticChatResult -> Maybe (ReportDigest, Issues.RunAnswer)
+reportRunAnswer pid window answer =
+  parseReportDigest pid answer.response <&> \digest ->
+    let pinned = digest{highlights = [h{widget = pinWidget (reportComparison window) <$> h.widget} | h <- digest.highlights]}
+        md = digestMarkdown pinned []
+     in (pinned, Issues.RunAnswer{content = md, widgets = AE.toJSON <$> guarded (not . null) (mapMaybe (.widget) pinned.highlights), report = md, evidence = Issues.AgentEvidence answer})
+
+
+pinWidget :: (UTCTime, UTCTime) -> Widget.Widget -> Widget.Widget
+pinWidget (from, to) w = w{Widget.timeFrom = Just $ formatUTCMicros from, Widget.timeTo = Just $ formatUTCMicros to}
+
+
+-- | Charts span the window 'reportRunAnswer' pinned each widget to.
+reportItems :: Log.Log :> es => Text -> Text -> Projects.ProjectId -> ReportDigest -> Eff es [ET.ReportItem]
+reportItems secret host pid digest = forM digest.highlights \h ->
+  traverse (\w -> Widget.widgetPngUrl secret host pid w Nothing w.timeFrom w.timeTo) h.widget
+    <&> \chart -> ET.ReportItem h.title h.detail (join chart) (hostPath host <$> h.link)
+
+
+-- | A report compares its period with the one before, so its queries and charts span both.
+--
+-- >>> import Data.Time (UTCTime (..), fromGregorian)
+-- >>> reportComparison (UTCTime (fromGregorian 2026 11 9) 0, UTCTime (fromGregorian 2026 11 16) 0)
+-- (2026-11-02 00:00:00 UTC,2026-11-16 00:00:00 UTC)
+reportComparison :: (UTCTime, UTCTime) -> (UTCTime, UTCTime)
+reportComparison (from, to) = (addUTCTime (diffUTCTime from to) from, to)
+
+
+-- | A report run's agent: its queries see both periods, with room to query each signal it compares.
+reportConfig :: (UTCTime, UTCTime) -> AgenticConfig -> AgenticConfig
+reportConfig window config = config{timeRange = bimap Just Just (reportComparison window), maxIterations = 12}
+
+
+-- | The digest as markdown, each highlight followed by its chart image when one is given.
+digestMarkdown :: ReportDigest -> [Maybe Text] -> Text
+digestMarkdown digest images =
+  T.intercalate "\n\n"
+    $ ("## " <> digest.headline)
+    : [ T.intercalate "\n\n" $ ("### " <> h.title) : filter (not . T.null) [h.detail, foldMap (\url -> "![" <> h.title <> "](" <> url <> ")") image, foldMap (\l -> "[Explore in Monoscope](" <> l <> ")") h.link]
+      | (h, image) <- zip digest.highlights (images <> repeat Nothing)
+      ]
 
 
 -- | Fix trailing commas in JSON (common LLM output issue)
@@ -1283,8 +1407,10 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
         Just (updated, next) -> continue updated next
         Nothing -> do
           record $ Investigations.ModelStarted step.iteration
+          -- The last round may still keep its document, so a run that spent every round reading can record its result;
+          -- that write costs one more model call, after which no tools are offered.
           let finalRound = step.iteration >= config.maxIterations
-              request = if finalRound then step.request{OpenAIV1.tools = Nothing} else step.request
+              request = if finalRound then step.request{OpenAIV1.tools = mfilter (not . V.null) $ V.filter ((== Just (toText $ encodeEnumSC @"" SaveArtifact)) . toolName) <$> step.request.tools <* guard (step.iteration == config.maxIterations)} else step.request
           Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= step.iteration, "historySize" AE..= length step.history, "finalRound" AE..= finalRound])
           response <- ELLM.callAgenticChat step.history request apiKey
           void $ requireConfigAccess config
@@ -1303,10 +1429,16 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
                       (Issues.ScheduledRun; Issues.TriggeredRun{}) -> Projects.UsageRoutine
                       (Issues.InteractiveRun{}; Issues.ConversationRun{}; Issues.FixRun{}) -> interactive
               Projects.recordAIUsage config.projectId (show request.model) source $ pricedUsage config.sourceConfig (estimatedTokens (step.history, request)) (estimatedTokens message)
-              let next = case LLM.toolCalls $ LLM.messageData message of
-                    Just tools | not finalRound -> Investigations.ToolsPending step message [] tools
-                    _ -> Investigations.AnswerReady $ AgenticChatResult message.content step.toolCalls
-              updated <- Investigations.commitProgress turn journal next $ Just $ Investigations.ModelReturned step.iteration $ Investigations.ModelAnswered message
+              -- Calls the round did not offer are dropped from the message too: a call left without a result is rejected by the provider.
+              let requested = fromMaybe [] $ LLM.toolCalls $ LLM.messageData message
+                  offered t = not finalRound || any (V.elem (Just $ LLM.toolFunctionName $ LLM.toolCallFunction t) . V.map toolName) request.tools
+                  (kept, dropped) = L.partition offered requested
+                  acted = message{LLM.messageData = (LLM.messageData message){LLM.toolCalls = kept <$ nonEmpty kept}}
+                  next = case kept of
+                    _ : _ -> Investigations.ToolsPending step acted [] kept
+                    [] -> Investigations.AnswerReady $ AgenticChatResult message.content step.toolCalls
+              unless (null dropped) $ Log.logAttention "Final agent round asked for tools it was not offered" (AE.object ["tools" AE..= map (LLM.toolFunctionName . LLM.toolCallFunction) dropped])
+              updated <- Investigations.commitProgress turn journal next $ Just $ Investigations.ModelReturned step.iteration $ Investigations.ModelAnswered acted
               case next of
                 Investigations.AnswerReady{} -> do
                   steeredAnswer <- acceptFollowupsWith updated step

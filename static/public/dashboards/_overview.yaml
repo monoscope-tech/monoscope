@@ -282,12 +282,14 @@ tabs:
         layout: { w: 6, h: 4 }
 
       # Placed at ingest from each request's client address; requests behind a private proxy stay unplaced.
+      # Page loads count too, so a project whose servers sit behind a private proxy still has a map.
       - type: geomap
-        title: 'Requests by country'
-        description: 'Where incoming requests come from, located from the client IP address. Shades are log-scaled.'
+        title: 'Traffic by country'
+        description: 'Server requests and browser page loads, located from the client IP address. Shades are log-scaled.'
         query: &by_country |
-          kind == "server" and attributes.geo.country.iso_code != null
+          (kind == "server" or name == "documentLoad" or name startswith "Pageview ") and attributes.geo.country.iso_code != null
           | summarize count() by attributes.geo.country.iso_code
+          | order by count_ desc
         unit: reqs
         layout: { w: 8, h: 5 }
 
