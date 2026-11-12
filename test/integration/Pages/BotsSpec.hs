@@ -1766,16 +1766,17 @@ spec = around withTestResources do
       runQueryEffect tr (Issues.listArtifacts testPid (conversation 4) Nothing) >>= (`shouldSatisfy` null)
       -- finalRound_keepsSaveArtifact: runs used every round reading, then found no way to keep the day's document.
       -- The last round runs only that write, whatever else the model asks for.
-      rounds <- newIORef ([] :: [[Text]])
+      -- Each round's offered tools, and the calls its history holds (every call there needs a result).
+      rounds <- newIORef ([] :: [([Text], [Text])])
       let readMemory = fn "list_project_memory" []
           wrapUp = agent \history params ->
-            modifyIORef' rounds (<> [toolNames params]) $> case toolResults history of
+            modifyIORef' rounds (<> [(toolNames params, [Chat.toolFunctionName (Chat.toolCallFunction c) | m <- toList history, Chat.role m == Chat.Assistant, c <- fold (Chat.toolCalls (Chat.messageData m))])]) $> case toolResults history of
               [] -> invoking [readMemory]
               [_] -> invoking [readMemory, fn "save_artifact" [("key", "2026-01-01"), ("title", "Triage"), ("content", "Nothing new.")]]
               _ -> said "Done"
       executed <- runTestBg frozenTime tr (wrapUp $ chat (tooled $ durable tr (conversation 3) autonomous){AI.maxIterations = 1} "Run the routine") >>= either (fail . toString) (pure . map (.name) . (.toolCalls))
       readIORef rounds >>= \case
-        [_, final, answer] -> (final, answer, executed) `shouldBe` (["save_artifact"], [], ["list_project_memory", "save_artifact"])
+        [_, (final, _), (answer, called)] -> (final, answer, called, executed) `shouldBe` (["save_artifact"], [], ["list_project_memory", "save_artifact"], ["list_project_memory", "save_artifact"])
         other -> expectationFailure $ "Expected three model rounds, got " <> show other
       map (.key) <$> runQueryEffect tr (Issues.listArtifacts testPid (conversation 3) Nothing) >>= (`shouldSatisfy` any ((== "2026-01-01") . toText))
       contract <- interactiveInvocation tr testPid (conversation 5) "Inspect tool recovery" Issues.Autonomous

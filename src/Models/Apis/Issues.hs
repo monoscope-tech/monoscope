@@ -3442,6 +3442,7 @@ deleteRoutine pid convId =
 
 
 -- | Only report routines email: no other routine has a digest to mail, so email would deliver nothing.
+-- True when the routine took the destination.
 setRoutineDestination :: DB es => Projects.ProjectId -> UUIDId "conversation" -> RoutineDestination -> Eff es Bool
 setRoutineDestination pid convId destination =
   let reports = V.fromList $ map ((.key) . fst) reportTemplates

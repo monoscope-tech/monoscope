@@ -97,6 +97,7 @@ import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Effectful.Wreq qualified as W
 import Data.HashMap.Strict qualified as HM
+import Data.List qualified as L
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, diffUTCTime, formatTime)
@@ -1429,10 +1430,16 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
                       (Issues.ScheduledRun; Issues.TriggeredRun{}) -> Projects.UsageRoutine
                       (Issues.InteractiveRun{}; Issues.ConversationRun{}; Issues.FixRun{}) -> interactive
               Projects.recordAIUsage config.projectId (show request.model) source $ pricedUsage config.sourceConfig (estimatedTokens (step.history, request)) (estimatedTokens message)
-              let next = case LLM.toolCalls $ LLM.messageData message of
-                    Just tools | Just offered <- request.tools, kept@(_ : _) <- filter (\t -> not finalRound || V.elem (Just $ LLM.toolFunctionName $ LLM.toolCallFunction t) (V.map toolName offered)) tools -> Investigations.ToolsPending step message [] kept
+              -- Calls the round did not offer are dropped from the message too: a call left without a result is rejected by the provider.
+              let requested = fromMaybe [] $ LLM.toolCalls $ LLM.messageData message
+                  offered t = not finalRound || any (V.elem (Just $ LLM.toolFunctionName $ LLM.toolCallFunction t) . V.map toolName) request.tools
+                  (kept, dropped) = L.partition offered requested
+                  acted = message{LLM.messageData = (LLM.messageData message){LLM.toolCalls = kept <$ guard (not $ null kept)}}
+                  next = case (kept, request.tools) of
+                    (_ : _, Just _) -> Investigations.ToolsPending step acted [] kept
                     _ -> Investigations.AnswerReady $ AgenticChatResult message.content step.toolCalls
-              updated <- Investigations.commitProgress turn journal next $ Just $ Investigations.ModelReturned step.iteration $ Investigations.ModelAnswered message
+              unless (null dropped) $ Log.logAttention "Final agent round asked for tools it was not offered" (AE.object ["tools" AE..= map (LLM.toolFunctionName . LLM.toolCallFunction) dropped])
+              updated <- Investigations.commitProgress turn journal next $ Just $ Investigations.ModelReturned step.iteration $ Investigations.ModelAnswered acted
               case next of
                 Investigations.AnswerReady{} -> do
                   steeredAnswer <- acceptFollowupsWith updated step
