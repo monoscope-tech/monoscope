@@ -805,7 +805,7 @@ threadPageGetH pid convId docM runM hxTarget = do
               (Just at, Just status) -> "Last run " >> localTimeFmt_ "d MMM, HH:mm" at >> toHtml (" — " <> snd (runStatus status))
               _ -> "Not run yet"
             whenJust (conversation.routineNextRunAt <* guard conversation.routineActive) $ span_ [class_ "tabular-nums"] . ("Next run " >>) . localTimeFmt_ "d MMM, HH:mm"
-            whenJust conversation.routinePolicy \policy -> span_ [title_ "Execution policy"] $ toHtml $ policyLabel policy
+            whenJust conversation.routinePolicy $ span_ [title_ "Execution policy"] . toHtml . policyLabel
             whenJust (mfilter (/= Issues.DestinationConversation) conversation.routineDestination) $ span_ . toHtml . destinationLabel
 
         reportView_ :: AI.ReportDigest -> Html ()

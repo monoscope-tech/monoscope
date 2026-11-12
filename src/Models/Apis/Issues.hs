@@ -2408,7 +2408,7 @@ provisionRoutineTemplate project template = do
   if seen || project.id == Projects.demoProjectId
     then pure Nothing
     else
-      find ((== ProjectMembers.PAdmin) . (.permission)) <$> ProjectMembers.selectActiveProjectMembers project.id >>= \case
+      ProjectMembers.selectActiveProjectMembers project.id >>= \members -> case find ((== ProjectMembers.PAdmin) . (.permission)) members of
         Just owner -> either (const Nothing) snd <$> ensureRoutineTemplate owner.userId project.id project.timeZone template
         Nothing -> pure Nothing
 
