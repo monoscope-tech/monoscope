@@ -1434,7 +1434,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
               let requested = fromMaybe [] $ LLM.toolCalls $ LLM.messageData message
                   offered t = not finalRound || any (V.elem (Just $ LLM.toolFunctionName $ LLM.toolCallFunction t) . V.map toolName) request.tools
                   (kept, dropped) = L.partition offered requested
-                  acted = message{LLM.messageData = (LLM.messageData message){LLM.toolCalls = kept <$ guard (not $ null kept)}}
+                  acted = message{LLM.messageData = (LLM.messageData message){LLM.toolCalls = kept <$ nonEmpty kept}}
                   next = case (kept, request.tools) of
                     (_ : _, Just _) -> Investigations.ToolsPending step acted [] kept
                     _ -> Investigations.AnswerReady $ AgenticChatResult message.content step.toolCalls
