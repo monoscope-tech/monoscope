@@ -404,13 +404,11 @@ pinWidget :: (UTCTime, UTCTime) -> Widget.Widget -> Widget.Widget
 pinWidget (from, to) w = w{Widget.timeFrom = Just $ formatUTCMicros from, Widget.timeTo = Just $ formatUTCMicros to}
 
 
--- | Charts span both periods ('reportComparison').
-reportItems :: Log.Log :> es => Text -> Text -> Projects.ProjectId -> (UTCTime, UTCTime) -> ReportDigest -> Eff es [ET.ReportItem]
-reportItems secret host pid window digest = forM digest.highlights \h ->
-  traverse (\w -> Widget.widgetPngUrl secret host pid w Nothing (Just $ formatUTCMicros from) (Just $ formatUTCMicros to)) h.widget
+-- | Charts span the window 'reportRunAnswer' pinned each widget to.
+reportItems :: Log.Log :> es => Text -> Text -> Projects.ProjectId -> ReportDigest -> Eff es [ET.ReportItem]
+reportItems secret host pid digest = forM digest.highlights \h ->
+  traverse (\w -> Widget.widgetPngUrl secret host pid w Nothing w.timeFrom w.timeTo) h.widget
     <&> \chart -> ET.ReportItem h.title h.detail (join chart) (hostPath host <$> h.link)
-  where
-    (from, to) = reportComparison window
 
 
 -- | A report compares its period with the one before, so its queries and charts span both.
@@ -1409,7 +1407,8 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
         Just (updated, next) -> continue updated next
         Nothing -> do
           record $ Investigations.ModelStarted step.iteration
-          -- The last round may still keep its document, so a run that spent every round reading can record its result.
+          -- The last round may still keep its document, so a run that spent every round reading can record its result;
+          -- that write costs one more model call, after which no tools are offered.
           let finalRound = step.iteration >= config.maxIterations
               request = if finalRound then step.request{OpenAIV1.tools = mfilter (not . V.null) $ V.filter ((== Just (toText $ encodeEnumSC @"" SaveArtifact)) . toolName) <$> step.request.tools <* guard (step.iteration == config.maxIterations)} else step.request
           Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= step.iteration, "historySize" AE..= length step.history, "finalRound" AE..= finalRound])
@@ -1435,9 +1434,9 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
                   offered t = not finalRound || any (V.elem (Just $ LLM.toolFunctionName $ LLM.toolCallFunction t) . V.map toolName) request.tools
                   (kept, dropped) = L.partition offered requested
                   acted = message{LLM.messageData = (LLM.messageData message){LLM.toolCalls = kept <$ nonEmpty kept}}
-                  next = case (kept, request.tools) of
-                    (_ : _, Just _) -> Investigations.ToolsPending step acted [] kept
-                    _ -> Investigations.AnswerReady $ AgenticChatResult message.content step.toolCalls
+                  next = case kept of
+                    _ : _ -> Investigations.ToolsPending step acted [] kept
+                    [] -> Investigations.AnswerReady $ AgenticChatResult message.content step.toolCalls
               unless (null dropped) $ Log.logAttention "Final agent round asked for tools it was not offered" (AE.object ["tools" AE..= map (LLM.toolFunctionName . LLM.toolCallFunction) dropped])
               updated <- Investigations.commitProgress turn journal next $ Just $ Investigations.ModelReturned step.iteration $ Investigations.ModelAnswered acted
               case next of

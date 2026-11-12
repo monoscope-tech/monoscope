@@ -234,9 +234,8 @@ module Models.Apis.Issues (
   upgradeRoutineTemplates,
   provisionReportRoutines,
   weeklyReportTemplate,
-  dailyReportTemplate,
   reportWindowDays,
-  reportTemplates,
+  reportTemplate,
   routineTemplate,
   reportWindow,
   issueTriageTemplate,
@@ -351,7 +350,7 @@ import Servant (FromHttpApiData (..), ToHttpApiData (..))
 import System.Logging (logAttention)
 import System.Types (DB)
 import Text.Slugify (slugify)
-import Utils (toXXHash, truncateMiddle)
+import Utils (toXXHash, truncateMiddle, truncateText)
 
 
 type IssueId = UUIDId "issue"
@@ -2122,8 +2121,12 @@ reportTemplates :: [(RoutineTemplate, Integer)]
 reportTemplates = [(weeklyReportTemplate, 7), (dailyReportTemplate, 1)]
 
 
+reportTemplate :: Text -> Maybe (RoutineTemplate, Integer)
+reportTemplate key = find ((== key) . (.key) . fst) reportTemplates
+
+
 reportWindowDays :: Text -> Maybe Integer
-reportWindowDays key = snd <$> find ((== key) . (.key) . fst) reportTemplates
+reportWindowDays = fmap snd . reportTemplate
 
 
 -- | The period a report run covers: its window in days, ending at the run's start.
@@ -2360,7 +2363,7 @@ isPersonConversation c =
 setConversationTitle :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Text -> Eff es ()
 setConversationTitle pid convId title =
   Hasql.interpExecute_
-    [HI.sql|UPDATE apis.ai_conversations SET title = #{T.take 100 $ T.strip title}
+    [HI.sql|UPDATE apis.ai_conversations SET title = #{truncateText 99 $ T.strip title}
       WHERE project_id = #{pid} AND conversation_id = #{convId} AND title IS NULL|]
 
 
@@ -2376,7 +2379,7 @@ renameConversation pid convId title = Hasql.transaction TxS.ReadCommitted TxS.Wr
 renameConversationTx :: Projects.ProjectId -> UUIDId "conversation" -> Text -> Tx.Transaction ()
 renameConversationTx pid convId title =
   Hasql.executeTx
-    [HI.sql|UPDATE apis.ai_conversations SET title = #{T.take 100 $ T.strip title}
+    [HI.sql|UPDATE apis.ai_conversations SET title = #{truncateText 99 $ T.strip title}
       WHERE project_id = #{pid} AND conversation_id = #{convId}|]
 
 
@@ -3205,7 +3208,10 @@ listConversationRuns :: DB es => Projects.ProjectId -> UUIDId "conversation" -> 
 listConversationRuns pid convId limit =
   Hasql.interp
     $ routineRunsSql pid
-    <> [HI.sql|AND #{convId} IN (run.conversation_id, owner.conversation_id)
+    -- Spelled out rather than filtered on the lateral owner, so the conversation and routine_id indexes apply.
+    <> [HI.sql|AND (run.conversation_id = #{convId} OR run.routine_id IN (SELECT id FROM apis.ai_routines WHERE project_id = #{pid} AND conversation_id = #{convId})
+      OR (run.routine_id IS NULL AND run.source->>'tag' = 'FixRun' AND EXISTS (SELECT 1 FROM apis.ai_routines a
+        WHERE a.project_id = #{pid} AND a.conversation_id = #{convId} AND a.template_key = #{issueAutofixTemplate.key})))
     ORDER BY run.started_at DESC, run.attempt DESC LIMIT #{max 1 $ min 100 limit}|]
 
 
@@ -3745,7 +3751,7 @@ sanitizeLogPatternTitle raw sampleM serviceM =
       -- printable-ASCII ratio > 0.7, as integer arithmetic
       usable = not (T.null stripped) && 10 * T.length (T.filter (\c -> isPrint c && isAscii c) stripped) > 7 * T.length stripped
       fallback = fromMaybe "log event" $ ((\svc s -> svc <> ": " <> T.take 80 s) <$> serviceM <*> sampleM) <|> sampleM <|> serviceM
-   in T.take 100 $ if usable then stripped else fallback
+   in truncateText 99 $ if usable then stripped else fallback
 
 
 -- | Create an issue for a new log pattern

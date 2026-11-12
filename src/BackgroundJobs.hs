@@ -559,7 +559,7 @@ deliverReport authCtx routine templateKey (from, to) digest = do
       tz = fromMaybe TZ.utcTZ $ TZ.tzByName $ encodeUtf8 routine.timezone
       day fmt = toText . formatTime defaultTimeLocale fmt . TZ.utcToLocalTimeTZ tz
       period = (if diffUTCTime to from <= nominalDay then day "%a %-d %b %Y" to else day "%-d %b" from <> " – " <> day "%-d %b %Y" to) <> " · " <> routine.timezone
-  items <- AI.reportItems authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid (from, to) digest
+  items <- AI.reportItems authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid digest
   let key = Issues.mkArtifactKey $ templateKey <> "-" <> day "%Y-%m-%d" to
       body = "*" <> period <> "*\n\n" <> AI.digestMarkdown digest (map (.chart) items)
       reportUrl = hostPath authCtx.env.hostUrl $ urls.aiThreadGet pid routine.conversationId (rightToMaybe key)
