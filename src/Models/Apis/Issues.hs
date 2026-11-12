@@ -3192,7 +3192,8 @@ listConversationRuns pid convId limit =
 
 routineRunsSql :: Projects.ProjectId -> HI.Sql
 routineRunsSql pid =
-  [HI.sql|SELECT run.id, run.conversation_id, COALESCE(conversation.title, installation.title), run.scheduled_at,
+  -- A NULL title means the conversation is gone: the list files those runs under deleted routines.
+  [HI.sql|SELECT run.id, run.conversation_id, COALESCE(conversation.title, installation.title, CASE WHEN conversation.conversation_id IS NOT NULL THEN 'Untitled routine' END), run.scheduled_at,
       run.started_at, run.finished_at, run.status, run.error, run.source, run.attempt,
       (SELECT LEFT(a.content, 400) FROM apis.ai_routine_run_artifacts a WHERE a.run_id = run.id AND a.key = 'latest-result')
       FROM apis.ai_routine_runs run

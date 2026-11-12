@@ -1658,6 +1658,12 @@ spec = around withTestResources do
       timeoutHistory `shouldSatisfy` all (isNothing . AI.dbMessageToLLMMessage)
       ((.routineRunningSince) =<< timeoutRoutine) `shouldBe` Nothing
       length <$> readIORef successors `shouldReturn` 2
+      -- Needs attention lists a routine whose newest run failed, and a later success clears it.
+      let attention = T.count "Timed out" . fst . T.breakOn "Built-in routines" . snd . T.breakOn "Needs attention" . renderT <$> call tr (AIThreads.routinesGetH testPid)
+      attention `shouldReturn` 1
+      retry <- runTestBg frozenTime tr (Issues.resumeRoutine Issues.RunNow (uid tr) testPid (conversation 4)) >>= maybe (fail "run now did not schedule") pure
+      void $ runTestBg frozenTime tr $ Jobs.runAIRoutineWith 1_000_000 (\_ -> answer "{\"explanation\":\"Recovered\"}") (\_ _ -> pass) tr.trATCtx retry.id retry.scheduledAt
+      attention `shouldReturn` 0
 
     it "report routines: weekly on by email, daily paused, provisioned once; a run keeps a dated document and mails each highlight with its chart" \tr -> do
       pid <- createTestProject tr "Report routines"

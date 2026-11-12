@@ -9,6 +9,7 @@ import Data.Aeson.Encode.Pretty qualified as AEP
 import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
 import Data.CaseInsensitive qualified as CI
+import Data.Containers.ListUtils (nubOrdOn)
 import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
 import Data.List qualified as L
@@ -332,12 +333,20 @@ routinesGetH pid = do
         let runsSection_ :: Text -> Text -> [Issues.RoutineRun] -> Html ()
             runsSection_ sectionId heading sectionRuns = unless (null sectionRuns) $ section_ [Aria.label_ heading] do
               h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] $ toHtml heading
+              let (shown, more) = splitAt (bool 5 6 (length sectionRuns == 6)) sectionRuns
+              runsTable_ sectionId shown
+              unless (null more) $ details_ [class_ "group/more mt-1"] do
+                summary_ [class_ "cursor-pointer list-none px-1 py-1 text-xs font-medium text-textBrand hover:underline [&::-webkit-details-marker]:hidden"] do
+                  span_ [class_ "group-open/more:hidden"] $ toHtml $ "Show " <> show @Text (length more) <> " more"
+                  span_ [class_ "hidden group-open/more:inline"] "Show fewer"
+                div_ [class_ "mt-1"] $ runsTable_ (sectionId <> "-more") more
+            runsTable_ tableId sectionRuns =
               toHtml
                 Table
-                  { config = def{elemID = sectionId, renderAsTable = True, tdClasses = "px-4 py-2.5"}
+                  { config = def{elemID = tableId, renderAsTable = True, tdClasses = "px-4 py-2.5"}
                   , columns =
                       [ col
-                          "Routine"
+                          "Run"
                           ( \run -> div_ [class_ "min-w-0"] do
                               a_ [href_ $ runUrl pid run.id, class_ "block truncate text-sm font-medium text-textStrong hover:text-textBrand"] $ toHtml $ fromMaybe "Deleted routine" run.title
                               runSummary_ "mt-0.5" run
@@ -350,7 +359,8 @@ routinesGetH pid = do
                   , features = def{rowLink = Just $ runUrl pid . (.id)}
                   }
             (deleted, current) = L.partition (isNothing . (.title)) recentRuns
-        runsSection_ "ai-routines-attention" "Needs attention" $ filter ((`elem` [Issues.RunFailed, Issues.RunTimedOut]) . (.status)) current
+        -- A conversation's newest run decides: a retry that succeeded clears it, repeated failures show once.
+        runsSection_ "ai-routines-attention" "Needs attention" $ filter ((`elem` [Issues.RunFailed, Issues.RunTimedOut]) . (.status)) $ nubOrdOn (.conversationId) current
         runsSection_ "ai-routines-deleted" "From deleted routines" deleted
         section_ [Aria.label_ "Routine catalog"] do
           h2_ [class_ "text-sm font-semibold text-textStrong"] "Built-in routines"
