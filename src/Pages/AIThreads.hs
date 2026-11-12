@@ -617,7 +617,10 @@ threadPageGetH pid convId docM runM hxTarget = do
                     unless (null asked') $ IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId asked'
                   Nothing
                     | hasVisibleHistory shown -> section_ [Aria.label_ "Results"] do
-                        when isRoutine $ h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Latest result"
+                        -- Most runs of a findings-only routine publish nothing, so the result's own time says how fresh it is.
+                        when isRoutine $ h2_ [class_ "mb-2 flex items-baseline gap-2 text-sm font-semibold text-textStrong"] do
+                          "Latest result"
+                          whenJust (listToMaybe fromLatest) $ span_ [class_ "text-xs font-normal tabular-nums text-textWeak"] . localTimeFmt_ "d MMM, HH:mm" . (.createdAt)
                         IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId shown
                     | otherwise -> foldMap routineEmpty_ routineM
                 when (isRoutine && not (null docs)) documentsNav_
