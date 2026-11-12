@@ -793,7 +793,7 @@ threadPageGetH pid convId docM runM hxTarget = do
 
         routineOverview_ :: Issues.ConversationSummary -> Html ()
         routineOverview_ conversation = section_ [class_ "space-y-2", Aria.label_ "Routine status"] do
-          div_ [class_ "flex flex-wrap items-start justify-between gap-3"] do
+          div_ [class_ "flex items-start justify-between gap-3"] do
             routineFacts_ conversation
             when (canEdit && isJust conversation.routineInterval) $ div_ [class_ "flex shrink-0 items-center gap-1"] do
               let button url label primary = form_ [hxPost_ url, hxSwap_ "none", term "hx-disable" "find button"] $ button_ [type_ "submit", class_ $ "btn btn-xs active:scale-[0.96] transition-transform " <> bool "btn-ghost" "btn-primary" primary] label
