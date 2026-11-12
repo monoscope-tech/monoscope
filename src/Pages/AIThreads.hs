@@ -644,7 +644,9 @@ threadPageGetH pid convId docM runM hxTarget = do
                         span_ [class_ "flex min-w-0 items-baseline gap-2 text-sm text-textStrong"] do
                           span_ [class_ "shrink-0 tabular-nums"] $ localTimeFmt_ "d MMM, HH:mm" run.startedAt
                           unless (ownRun run) $ span_ [class_ "truncate text-textWeak"] $ toHtml $ fromMaybe "Run" run.title
-                          when (run.attempt > 1) $ span_ [class_ "shrink-0 text-xs text-textWeak"] $ toHtml $ "retry " <> show @Text run.attempt
+                          -- A pull request's next push is a new attempt too; only one after a failed attempt is a retry.
+                          let previous = find (\r -> r.conversationId == run.conversationId && r.attempt == run.attempt - 1) runs
+                          when (run.attempt > 1) $ span_ [class_ "shrink-0 text-xs text-textWeak"] $ toHtml $ bool "retry " "run " (any ((== Issues.RunSucceeded) . (.status)) previous) <> show @Text run.attempt
                         span_ [id_ $ runStatusId run, class_ "row-span-2"] $ uncurry tonePill_ $ runStatus run.status
                         -- The newest published result is already shown in full above.
                         unless (isRoutine && Just run.id == ((.id) <$> find (\r -> ownRun r && r.status == Issues.RunSucceeded) runs)) $ runSummary_ "" run
