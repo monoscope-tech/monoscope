@@ -121,7 +121,7 @@ data RevisionSide = Base | Head
 -- | A pull-request review's wall-clock budget. Slow repositories build inside it, so it is long; the
 -- review lease and the agent's own limit derive from it.
 reviewSeconds :: Int
-reviewSeconds = 30 * 60
+reviewSeconds = 45 * 60
 
 
 -- | One side of a recorded proof: the claim's command replayed under asciinema in a fresh VM,

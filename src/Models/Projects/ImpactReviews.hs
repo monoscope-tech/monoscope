@@ -382,10 +382,19 @@ claimRun slots run = Hasql.transaction TxS.ReadCommitted TxS.Write do
     [HI.sql|WITH busy AS (
     SELECT count(*) FILTER (WHERE o.project_id = #{run.projectId}) >= 2 OR count(*) FILTER (WHERE o.lease_node = #{slots.node}) >= #{fromIntegral @Int @Int64 slots.agents} AS saturated
     FROM projects.pr_review_threads o WHERE o.id <> #{run.threadId} AND o.lease_until > now()
+  ), building AS (
+    -- Proofs run in the base's prepared workspace, so a review waits while that build is pending.
+    SELECT #{slots.prepares} AND EXISTS (
+      SELECT 1 FROM background_jobs_long j
+      JOIN projects.pr_review_runs b ON b.id::text = j.payload->>'contents'
+      JOIN projects.pr_review_threads bt ON bt.id = b.thread_id
+      JOIN projects.pr_review_threads t ON t.id = #{run.threadId}
+      WHERE j.payload->>'tag' = 'PrepareReviewWorkspace' AND j.status IN ('queued', 'retry', 'locked')
+        AND bt.project_id = t.project_id AND bt.owner = t.owner AND bt.repo = t.repo AND b.base = #{run.base}) AS pending
   ), leased AS (
     UPDATE projects.pr_review_threads t SET lease_owner = #{run.id}, lease_node = #{slots.node}, lease_until = now() + make_interval(secs => #{fromIntegral @Int @Int32 (Agent.reviewSeconds + 300)})
     WHERE t.id = #{run.threadId} AND t.latest_revision = #{run.revision}
-      AND (t.lease_until IS NULL OR t.lease_until < now()) AND NOT (SELECT saturated FROM busy)
+      AND (t.lease_until IS NULL OR t.lease_until < now()) AND NOT (SELECT saturated FROM busy) AND NOT (SELECT pending FROM building)
       AND EXISTS (SELECT 1 FROM projects.pr_review_runs r WHERE r.id = #{run.id} AND r.state IN (#{Queued}, #{Reviewing}, #{Incomplete}))
     RETURNING t.id
   ), claimed AS (
@@ -394,9 +403,10 @@ claimRun slots run = Hasql.transaction TxS.ReadCommitted TxS.Write do
   ), deferred AS (
     INSERT INTO background_jobs_long (run_at, status, payload)
     SELECT CASE WHEN t.lease_until > now() AND t.lease_owner <> r.id THEN t.lease_until + interval '1 second'
-      WHEN t.lease_until > now() THEN now() + interval '1 second' ELSE now() + interval '15 seconds' END, 'queued', #{payload}
+      WHEN t.lease_until > now() THEN now() + interval '1 second' WHEN (SELECT pending FROM building) THEN now() + interval '30 seconds'
+      ELSE now() + interval '15 seconds' END, 'queued', #{payload}
     FROM projects.pr_review_threads t JOIN projects.pr_review_runs r ON r.thread_id = t.id
-    WHERE r.id = #{run.id} AND t.latest_revision = r.revision AND (t.lease_until > now() OR (SELECT saturated FROM busy))
+    WHERE r.id = #{run.id} AND t.latest_revision = r.revision AND (t.lease_until > now() OR (SELECT saturated FROM busy) OR (SELECT pending FROM building))
       AND r.state IN (#{Queued}, #{Reviewing}, #{Incomplete}) AND NOT EXISTS (SELECT 1 FROM claimed)
     RETURNING id
   ) SELECT EXISTS (SELECT 1 FROM claimed)|]
