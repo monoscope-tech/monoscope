@@ -784,7 +784,7 @@ threadPageGetH pid convId docM runM hxTarget = do
           div_ [class_ "flex flex-wrap items-start justify-between gap-3"] do
             routineFacts_ conversation
             when (canEdit && isJust conversation.routineInterval) $ div_ [class_ "flex shrink-0 items-center gap-1"] do
-              let button url label primary = form_ [hxPost_ url, hxSwap_ "none"] $ button_ [type_ "submit", class_ $ "btn btn-xs active:scale-[0.96] transition-transform " <> bool "btn-ghost" "btn-primary" primary] label
+              let button url label primary = form_ [hxPost_ url, hxSwap_ "none", term "hx-disable" "find button"] $ button_ [type_ "submit", class_ $ "btn btn-xs active:scale-[0.96] transition-transform " <> bool "btn-ghost" "btn-primary" primary] label
               if conversation.routineActive
                 then do
                   unless (isJust conversation.routineRunningSince) $ button (urls.aiRoutineResumePost projectId conversation.conversationId True) (faSprite_ "play" "solid" "h-3 w-3" >> "Run now") True
