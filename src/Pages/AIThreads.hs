@@ -728,10 +728,10 @@ threadPageGetH pid convId docM runM hxTarget = do
               button_ [type_ "submit", Aria.label_ "Send message", class_ "group/send w-9 h-9 shrink-0 rounded-lg bg-fillBrand-strong text-white flex items-center justify-center cursor-pointer active:scale-[0.96] transition-transform"] do
                 span_ [id_ "ai-thread-loader", class_ "htmx-indicator"] $ faSprite_ "spinner" "regular" "w-3.5 h-3.5 animate-spin"
                 span_ [class_ "inline-flex group-has-[.htmx-request]/send:hidden"] $ faSprite_ "arrow-up" "regular" "w-3.5 h-3.5"
-            when allowActionUi $ label_ [class_ "max-w-3xl mx-auto mt-2 max-md:hidden max-md:group-focus-within/composer:flex flex cursor-pointer items-center justify-center gap-2 text-xs text-textWeak"] do
+            when allowActionUi $ label_ [class_ "max-w-3xl mx-auto mt-2 max-md:hidden max-md:group-has-[textarea:not(:placeholder-shown)]/composer:flex flex cursor-pointer items-center justify-center gap-2 text-xs text-textWeak"] do
               input_ [type_ "checkbox", name_ "allowActions", value_ "true", class_ "checkbox checkbox-xs"]
               span_ "Allow the project changes I request in this message"
-            p_ [class_ "max-w-3xl mx-auto mt-2 max-md:hidden max-md:group-focus-within/composer:block text-xs text-textWeak text-center"] "AI can use your project data and connected integrations. Review actions before relying on them."
+            p_ [class_ "max-w-3xl mx-auto mt-2 max-md:hidden max-md:group-has-[textarea:not(:placeholder-shown)]/composer:block text-xs text-textWeak text-center"] "AI can use your project data and connected integrations. Review actions before relying on them."
       aside_
         ( [ id_ "ai-inspector"
           , Aria.label_ "Conversation details"
