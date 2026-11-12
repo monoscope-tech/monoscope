@@ -31,7 +31,7 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkAIPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
 import Pages.CodeContext qualified as CodeContext
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), emptyState_, iconBadge_, localTimeFmt_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), emptyState_, iconBadge_, localTimeFmt_, toneDot_, tonePill_)
 import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
@@ -294,7 +294,7 @@ routinesGetH pid = do
                       , col
                           "Last run"
                           ( \r -> span_ [class_ "flex items-center gap-2 whitespace-nowrap text-xs tabular-nums text-textWeak"] case (r.routineLastRunAt, r.routineLastRunStatus) of
-                              (Just at, Just status) -> localTimeFmt_ "d MMM, HH:mm" at >> uncurry tonePill_ (runStatus status)
+                              (Just at, Just status) -> localTimeFmt_ "d MMM, HH:mm" at >> uncurry toneDot_ (runStatus status)
                               _ -> "Not run yet"
                           )
                           & withAttrs [class_ "w-56 max-md:hidden"]
@@ -675,7 +675,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                     when canEdit $ button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save instructions"
               when (null runs && isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] "No runs yet. An active routine starts when the next matching event arrives."
         unless (isJust runContent && isNothing conversationM) $ form_
-          [ class_ "shrink-0 border-t border-strokeWeak bg-bgBase p-4"
+          [ class_ "group/composer shrink-0 border-t border-strokeWeak bg-bgBase p-4"
           , hxPost_ $ maybe (urls.aiThreadsPost projectId) (urls.aiThreadPost projectId) activeConversationIdM
           , hxTarget_ "this"
           , hxSwap_ "none"
@@ -684,35 +684,37 @@ threadPageGetH pid convId docM runM hxTarget = do
           do
             div_ [class_ "max-w-3xl mx-auto flex items-end gap-2 rounded-xl bg-bgRaised p-2 shadow-[0_0_0_1px_var(--color-strokeWeak),0_4px_12px_oklch(0_0_0/0.05)] focus-within:shadow-[0_0_0_2px_var(--color-strokeFocus)]"] do
               textarea_
-                [ name_ "query"
-                , id_ "ai-thread-input"
-                , rows_ "1"
-                , maxlength_ "4000"
-                , required_ "required"
-                , autofocus_
-                , placeholder_ $ bool "Ask or delegate a task…" "Ask about these results…" (isJust routineM)
-                , Aria.label_ "Message Monoscope AI"
-                , class_ "min-h-9 max-h-40 grow resize-none bg-transparent border-0 px-2 py-2 text-base leading-6 placeholder:text-textWeak sm:text-sm sm:leading-5 focus:outline-none"
-                , [__|on keydown[key=='Enter' and not shiftKey]
-                      halt the event then call my form.requestSubmit()
-                    end|]
-                ]
+                ( [ name_ "query"
+                  , id_ "ai-thread-input"
+                  , rows_ "1"
+                  , maxlength_ "4000"
+                  , required_ "required"
+                  , placeholder_ $ bool "Ask or delegate a task…" "Ask about these results…" (isJust routineM)
+                  , Aria.label_ "Message Monoscope AI"
+                  , class_ "min-h-9 max-h-40 grow resize-none bg-transparent border-0 px-2 py-2 text-base leading-6 placeholder:text-textWeak sm:text-sm sm:leading-5 focus:outline-none"
+                  , [__|on keydown[key=='Enter' and not shiftKey]
+                        halt the event then call my form.requestSubmit()
+                      end|]
+                  ]
+                    -- On a routine the result is the point; focusing the composer would raise a phone keyboard over it.
+                    <> [autofocus_ | isNothing routineM]
+                )
                 ""
               input_ [type_ "hidden", name_ "mode", value_ "chat"]
               input_ [type_ "hidden", name_ "requestId", value_ requestId.toText]
               button_ [type_ "submit", Aria.label_ "Send message", class_ "group/send w-9 h-9 shrink-0 rounded-lg bg-fillBrand-strong text-white flex items-center justify-center cursor-pointer active:scale-[0.96] transition-transform"] do
                 span_ [id_ "ai-thread-loader", class_ "htmx-indicator"] $ faSprite_ "spinner" "regular" "w-3.5 h-3.5 animate-spin"
                 span_ [class_ "inline-flex group-has-[.htmx-request]/send:hidden"] $ faSprite_ "arrow-up" "regular" "w-3.5 h-3.5"
-            when allowActionUi $ label_ [class_ "max-w-3xl mx-auto mt-2 flex cursor-pointer items-center justify-center gap-2 text-xs text-textWeak"] do
+            when allowActionUi $ label_ [class_ "max-w-3xl mx-auto mt-2 max-md:hidden max-md:group-focus-within/composer:flex flex cursor-pointer items-center justify-center gap-2 text-xs text-textWeak"] do
               input_ [type_ "checkbox", name_ "allowActions", value_ "true", class_ "checkbox checkbox-xs"]
               span_ "Allow the project changes I request in this message"
-            p_ [class_ "max-w-3xl mx-auto mt-2 text-xs text-textWeak text-center"] "AI can use your project data and connected integrations. Review actions before relying on them."
+            p_ [class_ "max-w-3xl mx-auto mt-2 max-md:hidden max-md:group-focus-within/composer:block text-xs text-textWeak text-center"] "AI can use your project data and connected integrations. Review actions before relying on them."
       aside_
         ( [ id_ "ai-inspector"
           , Aria.label_ "Conversation details"
           , class_ $ "min-w-0 border-s border-strokeWeak bg-bgRaised focus:outline-none " <> bool "hidden" "absolute inset-0 z-20 flex flex-col lg:static lg:z-auto lg:w-1/2 lg:max-w-2xl lg:shrink-0" (isJust runContent || isJust openDoc)
           ]
-            <> [[__|init if #ai-thread-input call #ai-thread-input.focus() end end|] | isNothing runContent && isNothing openDoc]
+            <> [[__|init if #ai-thread-input call #ai-thread-input.focus() end end|] | isNothing runContent && isNothing openDoc && isNothing routineM]
             <> [attribute | isJust runContent || isJust openDoc, attribute <- [term "data-open" "", tabindex_ "-1", [__|init call me.focus() end on keydown[key == 'Escape'] halt the event then send click to #ai-inspector-close end|]]]
         )
         do
@@ -811,10 +813,9 @@ threadPageGetH pid convId docM runM hxTarget = do
             span_ $ uncurry tonePill_ $ routineStatus conversation
             span_ $ toHtml $ routineSchedule conversation
             span_ [class_ "tabular-nums"] case (conversation.routineLastRunAt, conversation.routineLastRunStatus) of
-              (Just at, Just status) -> "Last run " >> localTimeFmt_ "d MMM, HH:mm" at >> toHtml (" — " <> snd (runStatus status))
+              (Just at, Just status) -> span_ [class_ "inline-flex items-center gap-2"] $ "Last run " >> localTimeFmt_ "d MMM, HH:mm" at >> uncurry toneDot_ (runStatus status)
               _ -> "Not run yet"
             whenJust (conversation.routineNextRunAt <* guard conversation.routineActive) $ span_ [class_ "tabular-nums"] . ("Next run " >>) . localTimeFmt_ "d MMM, HH:mm"
-            whenJust conversation.routinePolicy $ span_ [title_ "Execution policy"] . toHtml . policyLabel
             whenJust (mfilter (/= Issues.DestinationConversation) conversation.routineDestination) $ span_ . toHtml . destinationLabel
 
         reportView_ :: AI.ReportDigest -> Html ()

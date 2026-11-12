@@ -137,7 +137,7 @@ import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Tool qualified as OAITool
 import Pkg.AgentCatalog (LocalOperation (..))
 import Pkg.AgentCatalog qualified as Catalog
-import Pkg.Components.TimePicker (TimePicker)
+import Pkg.Components.TimePicker (TimePicker (..), parseTimeRange)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC, idFromText)
 import Pkg.Parser (ResultShape (Events), parseQueryToAST, resultShape)
@@ -267,7 +267,7 @@ completeAgenticResponse config userQuery model apiKey answer = do
     (SlackInvestigationAccess{}, _) -> pass -- Recorded by the replayable Slack turn.
     (_, Nothing) -> pass
     (_, Just convId) -> do
-      let message = prepareRunAnswer answer
+      let message = prepareRunAnswer Nothing answer
           persist = Issues.insertChatMessage config.projectId convId Issues.ChatAssistant message.content message.widgets (Just $ AE.toJSON answer.toolCalls)
       case config.invocationMode of
         InteractiveReadOnly -> persist
@@ -310,11 +310,16 @@ ensureConversationTitle config userQuery model apiKey answer = do
   pure $ join title
 
 
-prepareRunAnswer :: AgenticChatResult -> Issues.RunAnswer
-prepareRunAnswer answer = Issues.RunAnswer{content = msg, widgets = AE.toJSON <$> widgets, report, evidence = Issues.AgentEvidence answer}
+-- | A run's answer. Given the time it ran, charts without their own window are pinned to the answer's
+-- range ending then, so a kept result keeps its numbers instead of re-querying today.
+prepareRunAnswer :: Maybe UTCTime -> AgenticChatResult -> Issues.RunAnswer
+prepareRunAnswer ranAt answer = Issues.RunAnswer{content = msg, widgets = AE.toJSON <$> widgets, report, evidence = Issues.AgentEvidence answer}
   where
     parsed = parseAgenticResponse answer
-    widgets = guarded (not . null) . take 10 . responseWidgets =<< rightToMaybe parsed
+    widgets = guarded (not . null) . take 10 . map pin . responseWidgets =<< rightToMaybe parsed
+    pin w = case (ranAt, w.timeFrom) of
+      (Just at, Nothing) | (Just from, Just to, _) <- parseTimeRange at $ fromMaybe (TimePicker Nothing Nothing Nothing) $ (.timeRange) =<< rightToMaybe parsed -> w{Widget.timeFrom = Just $ formatUTCMicros from, Widget.timeTo = Just $ formatUTCMicros to}
+      _ -> w
     report = fromMaybe answer.response $ (.explanation) =<< rightToMaybe parsed
     msg = fromMaybe (bool answer.response "Here are the requested visualizations:" $ isJust widgets) (nonEmptyT . (.explanation) =<< rightToMaybe parsed)
 

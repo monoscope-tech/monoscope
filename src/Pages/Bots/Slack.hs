@@ -1278,7 +1278,7 @@ processSlackEventWithTools projectTools receiptId =
               answer <- Investigations.loadAnswer turn
               case answer of
                 Just result -> do
-                  finish $ Issues.CompletedResult Issues.ResultSucceeded Issues.RetainAnswer $ AI.prepareRunAnswer result
+                  finish $ Issues.CompletedResult Issues.ResultSucceeded Issues.RetainAnswer $ AI.prepareRunAnswer Nothing result
                 Nothing -> finish $ Issues.FailedResult $ Issues.RunFailure "The agent did not produce an answer." Issues.RunOnly
 
 
@@ -1347,7 +1347,7 @@ runCommandWithTools projectTools context = do
   requireAccess
   checkpoint <- Investigations.loadCheckpointFor target
   answer <- case checkpoint of
-    Just Investigations.SavedCheckpoint{checkpoint = Investigations.AnswerReady result} -> pure $ AI.prepareRunAnswer result
+    Just Investigations.SavedCheckpoint{checkpoint = Investigations.AnswerReady result} -> pure $ AI.prepareRunAnswer Nothing result
     Nothing -> pure $ Issues.reportAnswer (slackReplyReport batch.replies) $ Just $ AE.toJSON batch.replies
     Just _ -> throwIO AI.AgentStopped
   void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer answer

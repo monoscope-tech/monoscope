@@ -417,7 +417,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
                           | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> Jobs.deferOperationReview pid identifier deadline
                           | otherwise -> failRun Issues.FailedResult "Incident investigation was interrupted before completion."
                         Just (Right (Left _)) -> failRun Issues.FailedResult "Incident investigation did not return a report."
-                        Just (Right (Right answer)) -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer answer
+                        Just (Right (Right answer)) -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer Nothing answer
                     )
                     `withException` \(_ :: SomeException) -> void (Issues.completeRun context $ Issues.FailedResult $ Issues.RunFailure "Incident investigation worker stopped before recording its result." Issues.RunOnly)
                 now <- Time.currentTime
@@ -526,7 +526,7 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
     AI.requireAgentAccess config.access routine.projectId
     pure $ case result of
       Left err -> Issues.FailedResult $ Issues.RunFailure err (Issues.ConversationNotice $ "Routine failed: " <> err)
-      Right answer -> (if routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer) then Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer else Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer) $ maybe (AI.prepareRunAnswer answer) snd (report answer)
+      Right answer -> (if routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer) then Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer else Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer) $ maybe (AI.prepareRunAnswer (Just routine.claimedAt) answer) snd (report answer)
   case outcome of
     Just (Left err)
       | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> do
