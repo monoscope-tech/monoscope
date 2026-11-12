@@ -1754,6 +1754,14 @@ spec = around withTestResources do
         (elem "save_artifact" names, T.isInfixOf "save_artifact" system) `shouldBe` (writable, writable)
         (.formatted) <$> runTestBg frozenTime tr (AI.executeToolCall config $ toolCall "save_artifact" [("key", "must-not-exist"), ("content", "This write has no retained operation.")]) `shouldReturn` "This change requires a durable checkpoint."
       runQueryEffect tr (Issues.listArtifacts testPid (conversation 4) Nothing) >>= (`shouldSatisfy` null)
+      -- finalRound_keepsSaveArtifact: runs used every round reading, then found no way to keep the day's document.
+      rounds <- newIORef ([] :: [[Text]])
+      let wrapUp = agent \history params -> modifyIORef' rounds (<> [toolNames params]) $> nextStep (toolResults history) [fn "list_project_memory" [], fn "save_artifact" [("key", "2026-01-01"), ("title", "Triage"), ("content", "Nothing new.")]] "Done"
+      runTestBg frozenTime tr (wrapUp $ chat (tooled $ durable tr (conversation 3) autonomous){AI.maxIterations = 1} "Run the routine") >>= (`shouldSatisfy` isRight)
+      readIORef rounds >>= \case
+        [_, final, answer] -> (final, answer) `shouldBe` (["save_artifact"], [])
+        other -> expectationFailure $ "Expected three model rounds, got " <> show other
+      map (.key) <$> runQueryEffect tr (Issues.listArtifacts testPid (conversation 3) Nothing) >>= (`shouldSatisfy` any ((== "2026-01-01") . toText))
       contract <- interactiveInvocation tr testPid (conversation 5) "Inspect tool recovery" Issues.Autonomous
       for_ ([("get_project", "replay_reads", PM.PView, PM.PView), ("save_artifact", "atomic_in_run", PM.PView, PM.PView), ("write_project_memory", "atomic_in_run", PM.PEdit, PM.PView), ("send_to_slack", "retain_in_run", PM.PEdit, PM.PView), ("delete_dashboard", "retain_in_run", PM.PAdmin, PM.PView), ("create_api_key", "retain_in_run", PM.PAdmin, PM.PAdmin)] :: [(Text, Text, PM.Permissions, PM.Permissions)]) \(name, recovery, role, audience) -> do
         schema <- runTestBg frozenTime tr $ AI.executeToolCall (tooled $ durable tr (conversation 5) contract) $ toolCall "get_project_tool_schema" [("name", AE.String name)]

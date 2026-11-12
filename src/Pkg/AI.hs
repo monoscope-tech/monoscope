@@ -1394,8 +1394,9 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
         Just (updated, next) -> continue updated next
         Nothing -> do
           record $ Investigations.ModelStarted step.iteration
+          -- The last round may still keep its document, so a run that spent every round reading can record its result.
           let finalRound = step.iteration >= config.maxIterations
-              request = if finalRound then step.request{OpenAIV1.tools = Nothing} else step.request
+              request = if finalRound then step.request{OpenAIV1.tools = mfilter (not . V.null) $ V.filter ((== Just (toText $ encodeEnumSC @"" SaveArtifact)) . toolName) <$> step.request.tools <* guard (step.iteration == config.maxIterations)} else step.request
           Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= step.iteration, "historySize" AE..= length step.history, "finalRound" AE..= finalRound])
           response <- ELLM.callAgenticChat step.history request apiKey
           void $ requireConfigAccess config
@@ -1415,7 +1416,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
                       (Issues.InteractiveRun{}; Issues.ConversationRun{}; Issues.FixRun{}) -> interactive
               Projects.recordAIUsage config.projectId (show request.model) source $ pricedUsage config.sourceConfig (estimatedTokens (step.history, request)) (estimatedTokens message)
               let next = case LLM.toolCalls $ LLM.messageData message of
-                    Just tools | not finalRound -> Investigations.ToolsPending step message [] tools
+                    Just tools | isJust request.tools -> Investigations.ToolsPending step message [] tools
                     _ -> Investigations.AnswerReady $ AgenticChatResult message.content step.toolCalls
               updated <- Investigations.commitProgress turn journal next $ Just $ Investigations.ModelReturned step.iteration $ Investigations.ModelAnswered message
               case next of
