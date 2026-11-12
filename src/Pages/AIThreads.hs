@@ -473,6 +473,10 @@ threadPageGetH pid convId docM runM hxTarget = do
           }
   addRespHeaders $ PageCtx pageConfig $ threadPage_ requestId canEdit instructions runs reportM runContent conversationM pid activeId routineM (maybe True (isNothing . Issues.conversationIssueId) conversationM) messages docs openDoc
   where
+    runErrorTone = \case
+      Issues.RunFailed -> "text-textError"
+      Issues.RunTimedOut -> "text-textWarning"
+      (Issues.RunRunning; Issues.RunSucceeded; Issues.RunNoFindings; Issues.RunCancelled) -> "text-textWeak"
     runStatusId :: Issues.RoutineRun -> Text
     runStatusId run = "routine-run-status-" <> run.id.toText
 
@@ -640,7 +644,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                             span_ [class_ "text-xs font-normal tabular-nums text-textWeak"] $ localTimeFmt_ "d MMM, HH:mm" latest.createdAt
                             -- Runs that found nothing publish no result, so say why the newest run is not shown here.
                             let quiet = length $ takeWhile ((> latest.createdAt) . (.startedAt)) $ filter ((== Issues.RunNoFindings) . (.status)) runs
-                            when (quiet > 0) $ span_ [class_ "basis-full text-xs font-normal text-textWeak sm:basis-auto sm:before:me-2 sm:before:content-['·']"] $ toHtml $ show @Text quiet <> bool " later runs" " later run" (quiet == 1) <> " had no findings"
+                            when (quiet > 0) $ span_ [class_ "basis-full text-xs font-normal text-textWeak sm:basis-auto sm:before:me-2 sm:before:text-textDisabled sm:before:content-['·']"] $ toHtml $ show @Text quiet <> bool " later runs" " later run" (quiet == 1) <> " had no findings"
                         IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId shown
                     | otherwise -> foldMap routineEmpty_ routineM
                 when (isRoutine && not (null docs)) documentsNav_
@@ -1097,13 +1101,6 @@ destinationLabel = \case
   Issues.DestinationConversation -> "In app only"
   Issues.DestinationEmail -> "Email and team chat"
   Issues.DestinationSlack -> "Post to Slack"
-
-
-runErrorTone :: Issues.RoutineRunStatus -> Text
-runErrorTone = \case
-  Issues.RunFailed -> "text-textError"
-  Issues.RunTimedOut -> "text-textWarning"
-  (Issues.RunRunning; Issues.RunSucceeded; Issues.RunNoFindings; Issues.RunCancelled) -> "text-textWeak"
 
 
 -- | First prose line of a markdown result, for one-line history rows.
