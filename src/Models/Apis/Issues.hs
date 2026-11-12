@@ -2318,7 +2318,9 @@ conversationSummarySql fallback filters =
         ORDER BY m.created_at LIMIT 1
       ) first_message ON TRUE
       LEFT JOIN LATERAL (
-        SELECT started_at, status FROM apis.ai_routine_runs WHERE routine_id = r.id ORDER BY scheduled_at DESC LIMIT 1
+        SELECT started_at, status FROM apis.ai_routine_runs
+        WHERE routine_id = r.id OR (r.template_key = #{issueAutofixTemplate.key} AND project_id = r.project_id AND source->>'tag' = 'FixRun')
+        ORDER BY scheduled_at DESC LIMIT 1
       ) last_run ON TRUE |]
     <> filters
 
@@ -3187,8 +3189,11 @@ listConversationRuns :: DB es => Projects.ProjectId -> UUIDId "conversation" -> 
 listConversationRuns pid convId limit =
   Hasql.interp
     $ routineRunsSql pid
+    -- Fix runs carry no routine_id, but only the autofix sweep starts them (ImpactReview.autofixIssues), so they are its runs.
     <> [HI.sql|AND (run.conversation_id = #{convId} OR run.routine_id IN
-    (SELECT id FROM apis.ai_routines WHERE project_id = #{pid} AND conversation_id = #{convId}))
+    (SELECT id FROM apis.ai_routines WHERE project_id = #{pid} AND conversation_id = #{convId})
+    OR (run.source->>'tag' = 'FixRun' AND EXISTS (SELECT 1 FROM apis.ai_routines a
+      WHERE a.project_id = #{pid} AND a.conversation_id = #{convId} AND a.template_key = #{issueAutofixTemplate.key})))
     ORDER BY run.started_at DESC, run.attempt DESC LIMIT #{max 1 $ min 100 limit}|]
 
 
