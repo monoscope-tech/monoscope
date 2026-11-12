@@ -55,7 +55,6 @@ module Models.Projects.Projects (
   projectBySubId,
   updateSubItemIdBySubId,
   projectCacheById,
-  dailyUsageOfDay,
   samplingTallies,
   recordSampling,
   SampleCounts (..),
@@ -472,11 +471,6 @@ dailyUsageOfDaySql :: ProjectId -> UTCTime -> HI.Sql
 dailyUsageOfDaySql pid now =
   [HI.sql| SELECT COALESCE(SUM(total_requests), 0)::bigint FROM apis.daily_usage
             WHERE project_id = #{pid} AND window_end > date_trunc('day', #{now}::timestamptz, 'UTC') |]
-
-
--- | The meter for the UTC day containing @t@.
-dailyUsageOfDay :: DB es => ProjectId -> UTCTime -> Eff es Int
-dailyUsageOfDay pid t = fromMaybe 0 <$> EHasql.interpOne (dailyUsageOfDaySql pid t)
 
 
 -- | One pool of a capped project ('IngestBudget.Tally' plus its key), for the UTC hour containing @now@.

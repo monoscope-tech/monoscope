@@ -38,7 +38,6 @@ module Models.Telemetry.Containers (
   ContainerSnapshotKey,
   containersInWindowCached,
   containersInWindow,
-  containersForReport,
   freshnessWindow,
 ) where
 
@@ -346,14 +345,6 @@ containersInWindow
   :: (DB es, Labeled "timefusion" Hasql :> es)
   => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector ContainerRow)
 containersInWindow = containersWithLimit (Just containerListLimit)
-
-
--- | Reports compute inventory totals before choosing their own priority rows. Reuse
--- the same identities and latest-sample normalization without the explorer's row cap.
-containersForReport
-  :: (DB es, Labeled "timefusion" Hasql :> es)
-  => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector ContainerRow)
-containersForReport = containersWithLimit Nothing
 
 
 containersWithLimit

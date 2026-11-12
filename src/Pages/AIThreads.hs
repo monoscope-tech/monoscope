@@ -737,7 +737,8 @@ threadPageGetH pid convId docM runM hxTarget = do
           , Aria.label_ "Conversation details"
           , class_ $ "min-w-0 border-s border-strokeWeak bg-bgRaised focus:outline-none " <> bool "hidden" "absolute inset-0 z-20 flex flex-col lg:static lg:z-auto lg:w-1/2 lg:max-w-2xl lg:shrink-0" (isJust runContent || isJust openDoc)
           ]
-            <> [[__|init if #ai-thread-input call #ai-thread-input.focus() end end|] | isNothing runContent && isNothing openDoc && not isRoutine]
+            -- Focus returns to the composer when details close; a routine page only takes it back for a draft, so phones keep the keyboard down.
+            <> [bool [__|init if #ai-thread-input call #ai-thread-input.focus() end end|] [__|init if #ai-thread-input and #ai-thread-input.value is not '' call #ai-thread-input.focus() end end|] isRoutine | isNothing runContent && isNothing openDoc]
             <> [attribute | isJust runContent || isJust openDoc, attribute <- [term "data-open" "", tabindex_ "-1", [__|init call me.focus() end on keydown[key == 'Escape'] halt the event then send click to #ai-inspector-close end|]]]
         )
         do
