@@ -11,6 +11,10 @@ one focused test, a doctest or `monoscope-app --server` compiles only what chang
 was not prepared (`dist-newstyle` is missing), mark the claim unverified and say which test would
 prove it.
 
+Build with the prepared workspace's flags, `cabal build --offline --ghc-options="-O0 -j2" <target>`.
+Without `-O0`, cabal builds at `-O1`, every module recompiles ("Optimisation flags changed"), and the
+check runs out of time. Warning flags such as `-Werror=unused-imports` do not force a rebuild.
+
 ## UI changes
 
 Setup (unrecorded; it links and writes gitignored paths only), once per VM:
