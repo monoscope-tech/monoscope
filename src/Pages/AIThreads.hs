@@ -253,7 +253,7 @@ routinesGetH pid = do
   canEdit <- canEditRoutines pid
   (session, _, bw) <- mkAIPageCtx pid
   role <- currentViewerPermission pid
-  (conversations, runs) <- concurrently (visibleConversations pid) (Issues.listVisibleRoutineRuns pid role (Investigations.MemberViewer session.user.id) 12)
+  (conversations, runs) <- concurrently (visibleConversations pid) (Issues.listVisibleRoutineRuns pid role (Investigations.MemberViewer session.user.id) 50)
   let installed = filter (isJust . (.routineKind)) conversations
       pageConfig =
         bw
@@ -324,8 +324,10 @@ routinesGetH pid = do
                   , rows = fromList installedRoutines
                   , features = def
                   }
-        unless (null recentRuns) $ section_ [Aria.label_ "Recent routine runs"] do
-          h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Recent runs"
+        -- Each routine row already shows its last run; only runs that went wrong need their own list.
+        let failedRuns = filter ((`elem` [Issues.RunFailed, Issues.RunTimedOut]) . (.status)) recentRuns
+        unless (null failedRuns) $ section_ [Aria.label_ "Runs that need attention"] do
+          h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Needs attention"
           toHtml
             Table
               { config = def{elemID = "ai-routines-runs", renderAsTable = True, tdClasses = "px-4 py-2.5"}
@@ -340,7 +342,7 @@ routinesGetH pid = do
                   , col "Outcome" (uncurry tonePill_ . runStatus . (.status)) & withAttrs [class_ "w-32"]
                   , col "Started" (\run -> span_ [class_ "whitespace-nowrap text-xs tabular-nums text-textWeak"] $ localTimeFmt_ "d MMM, HH:mm" run.startedAt) & withAttrs [class_ "w-40 max-sm:hidden"]
                   ]
-              , rows = fromList recentRuns
+              , rows = fromList failedRuns
               , features = def{rowLink = Just $ runUrl pid . (.id)}
               }
         section_ [Aria.label_ "Routine catalog"] do
@@ -589,29 +591,12 @@ threadPageGetH pid convId docM runM hxTarget = do
         div_ [id_ "ai-thread-messages", class_ "min-h-0 grow overflow-y-auto"] do
           div_ [class_ "max-w-3xl mx-auto px-5 py-6 space-y-8"] do
             for_ conversationM \conversation -> when (isJust conversation.routineKind) $ routineOverview_ conversation
-            unless (null docs) documentsNav_
+            -- A chat lists its documents first; a routine leads with its result, then its history.
+            unless (null docs || isRoutine) documentsNav_
             div_
               ([id_ "ai-thread-results", class_ "space-y-8"] <> if any ((== Issues.RunRunning) . (.status)) runs then [hxGet_ threadHref, hxTrigger_ "every 2s", hxSelect_ "#ai-thread-results", term "hx-select-oob" "#pageTitleText:outerHTML", hxSwap_ "outerMorph"] else [])
               do
-                unless (null runs) $ section_ [Aria.label_ "Routine runs"] do
-                  let (recent, older) = splitAt 5 runs
-                      ownRun run = Just run.conversationId == activeConversationIdM
-                      runRow run = a_ ([href_ $ runUrl projectId run.id, class_ "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-3 py-2.5 hover:bg-fillHover focus-visible:outline-2 focus-visible:-outline-offset-2"] <> inspectorAttrs (urls.aiRoutineRunGet projectId run.id activeConversationIdM) <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) do
-                        span_ [class_ "flex min-w-0 items-baseline gap-2 text-sm text-textStrong"] do
-                          span_ [class_ "shrink-0 tabular-nums"] $ localTimeFmt_ "d MMM, HH:mm" run.startedAt
-                          unless (ownRun run) $ span_ [class_ "truncate text-textWeak"] $ toHtml $ fromMaybe "Run" run.title
-                          when (run.attempt > 1) $ span_ [class_ "shrink-0 text-xs text-textWeak"] $ toHtml $ "retry " <> show @Text run.attempt
-                        span_ [id_ $ runStatusId run, class_ "row-span-2"] $ uncurry tonePill_ $ runStatus run.status
-                        runSummary_ "" run
-                      runList = div_ [class_ "divide-y divide-strokeWeak overflow-hidden rounded-lg border border-strokeWeak bg-bgRaised"] . mapM_ runRow
-                  h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Runs"
-                  runList recent
-                  unless (null older) $ details_ [class_ "group/older mt-2", term "hx-morph-skip" ""] do
-                    summary_ [class_ "cursor-pointer list-none rounded-md px-1 py-1 text-xs font-medium text-textBrand hover:underline [&::-webkit-details-marker]:hidden"] do
-                      span_ [class_ "group-open/older:hidden"] $ toHtml $ "Show " <> show @Text (length older) <> " older"
-                      span_ [class_ "hidden group-open/older:inline"] "Show fewer"
-                    div_ [class_ "mt-2"] $ runList older
-                -- A routine reads as its latest result (plus the question that prompted it); older ones live under Runs.
+                -- A routine reads as its latest result (plus the question that prompted it); older ones live under Runs below.
                 let definingPrompt m = m.role == Issues.ChatUser && Just (T.strip m.content) == (T.strip <$> instructions)
                     (afterLatest, fromLatest) = break ((== Issues.ChatAssistant) . (.role)) $ reverse $ filter (not . definingPrompt) messages
                     asked = takeWhile ((== Issues.ChatUser) . (.role)) $ drop 1 fromLatest
@@ -628,6 +613,25 @@ threadPageGetH pid convId docM runM hxTarget = do
                         when isRoutine $ h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Latest result"
                         IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId shown
                     | otherwise -> foldMap routineEmpty_ routineM
+                unless (null runs) $ section_ [Aria.label_ "Routine runs"] do
+                  let (recent, older) = splitAt 3 runs
+                      ownRun run = Just run.conversationId == activeConversationIdM
+                      runRow run = a_ ([href_ $ runUrl projectId run.id, class_ "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-3 py-2.5 hover:bg-fillHover focus-visible:outline-2 focus-visible:-outline-offset-2"] <> inspectorAttrs (urls.aiRoutineRunGet projectId run.id activeConversationIdM) <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) do
+                        span_ [class_ "flex min-w-0 items-baseline gap-2 text-sm text-textStrong"] do
+                          span_ [class_ "shrink-0 tabular-nums"] $ localTimeFmt_ "d MMM, HH:mm" run.startedAt
+                          unless (ownRun run) $ span_ [class_ "truncate text-textWeak"] $ toHtml $ fromMaybe "Run" run.title
+                          when (run.attempt > 1) $ span_ [class_ "shrink-0 text-xs text-textWeak"] $ toHtml $ "retry " <> show @Text run.attempt
+                        span_ [id_ $ runStatusId run, class_ "row-span-2"] $ uncurry tonePill_ $ runStatus run.status
+                        runSummary_ "" run
+                      runList = div_ [class_ "divide-y divide-strokeWeak overflow-hidden rounded-lg border border-strokeWeak bg-bgRaised"] . mapM_ runRow
+                  h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Runs"
+                  runList recent
+                  unless (null older) $ details_ [class_ "group/older mt-2", term "hx-morph-skip" ""] do
+                    summary_ [class_ "cursor-pointer list-none rounded-md px-1 py-1 text-xs font-medium text-textBrand hover:underline [&::-webkit-details-marker]:hidden"] do
+                      span_ [class_ "group-open/older:hidden"] $ toHtml $ "Show " <> show @Text (length older) <> " older"
+                      span_ [class_ "hidden group-open/older:inline"] "Show fewer"
+                    div_ [class_ "mt-2"] $ runList older
+            when (isRoutine && not (null docs)) documentsNav_
             when isRoutine do
               -- Setup, not daily reading: collapsed below the results.
               disclosure_ [Aria.label_ "Routine configuration"] ("Settings" >> whenJust (conversationM >>= (.routinePolicy)) (span_ [class_ "ms-auto text-xs font-normal text-textWeak"] . toHtml . policyLabel))

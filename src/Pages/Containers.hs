@@ -171,14 +171,14 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
   where
     containerColumns :: [Column ContainerVM]
     containerColumns =
-      [ col "Container" renderNameCol & withAttrs [class_ "w-72 max-w-72 overflow-hidden max-md:w-auto max-md:max-w-none"]
+      [ col "Container" renderNameCol & withAttrs [class_ "w-64 max-w-64 overflow-hidden max-md:w-auto max-md:max-w-none"]
       , col "Pod" (textCell (.podName)) & withAttrs [class_ "w-64 max-w-64 overflow-hidden max-2xl:hidden"]
       , col "Namespace" (textCell (.namespace)) & withAttrs [class_ "w-32 max-w-32 overflow-hidden max-2xl:hidden"]
-      , col "Node" (textCell (.nodeName)) & withAttrs [class_ "w-36 max-w-36 overflow-hidden max-md:hidden"]
+      , col "Node" (textCell (.nodeName)) & withAttrs [class_ "w-36 max-w-36 overflow-hidden max-[1400px]:hidden"]
       , col "CPU cores" (numCell (showFFloat' 3) (.cpuCores)) & withAttrs [class_ "w-20 text-right"]
-      , col "CPU limit" (pctCell "CPU limit used" cpuPctOfLimit) & withColHeaderExtra (headerHint_ "Share of the CPU limit in use") & withAttrs [class_ "min-w-32 max-md:hidden"]
+      , col "CPU limit" (pctCell "CPU limit used" cpuPctOfLimit) & withColHeaderExtra (headerHint_ "Share of the CPU limit in use") & withAttrs [class_ "min-w-28 max-md:hidden"]
       , col "Memory" (numCell formatBytes (.memBytes)) & withAttrs [class_ "w-24 text-right max-md:hidden"]
-      , col "Memory limit" (pctCell "Memory limit used" memPctOfLimit) & withColHeaderExtra (headerHint_ "Share of the memory limit in use") & withAttrs [class_ "min-w-32 max-md:hidden"]
+      , col "Memory limit" (pctCell "Memory limit used" memPctOfLimit) & withColHeaderExtra (headerHint_ "Share of the memory limit in use") & withAttrs [class_ "min-w-28 max-md:hidden"]
       , col "Restarts" (numCell (showFFloat' 0) (.restarts))
           & withColHeaderExtra (headerHint_ "Latest cumulative restart count reported within the selected time range. This is not the number of restarts during the range.")
           & withAttrs [class_ "w-20 text-right max-md:hidden"]
