@@ -12,6 +12,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
 import Data.Text qualified as T
+import Data.Time (addUTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID.V5 qualified as UUID5
 import Effectful.Concurrent.Async (concurrently)
@@ -412,6 +413,12 @@ threadPageGetH pid convId docM runM hxTarget = do
       $ concurrently (unlessRefresh $ Issues.selectChatHistory pid convId) (Issues.listArtifacts pid convId docM)
   instructions <- Issues.getRoutineInstructions pid convId
   runs <- Issues.listConversationRuns pid convId 20
+  -- A report routine's latest result reads as its digest, each highlight beside its own chart.
+  reportM <- case (conversationM >>= (.templateKey) >>= Issues.reportWindowDays, find ((== Issues.RunSucceeded) . (.status)) runs) of
+    (Just days, Just run) ->
+      Issues.getRoutineRunEvidence pid run.id <&> \evidence ->
+        (evidence >>= (.findings) >>= AET.parseMaybe AE.parseJSON) >>= fmap fst . AI.reportRunAnswer pid (addUTCTime (fromInteger $ negate days * 86400) run.startedAt, run.startedAt)
+    _ -> pure Nothing
   runContent <- forM runM \run -> do
     evidence <- Issues.getRoutineRunEvidence pid run.id >>= maybe (throwError Servant.err404) pure
     requestedBy <- maybe (pure Nothing) Projects.userById evidence.requestedBy
@@ -440,7 +447,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                   span_ [class_ "max-md:hidden"] "View issue"
                 Nothing -> scheduleControl_ conversation.conversationId routineM <$ guard (canEdit && conversation.conversationType == Issues.CTWeb && (isNothing conversation.routineKind || isJust conversation.routineInterval))
           }
-  addRespHeaders $ PageCtx pageConfig $ threadPage_ requestId canEdit instructions runs runContent conversationM pid activeId routineM (maybe True (isNothing . Issues.conversationIssueId) conversationM) messages docs openDoc
+  addRespHeaders $ PageCtx pageConfig $ threadPage_ requestId canEdit instructions runs reportM runContent conversationM pid activeId routineM (maybe True (isNothing . Issues.conversationIssueId) conversationM) messages docs openDoc
   where
     runStatusId :: Issues.RoutineRun -> Text
     runStatusId run = "routine-run-status-" <> run.id.toText
@@ -575,8 +582,8 @@ threadPageGetH pid convId docM runM hxTarget = do
           button_ [type_ "submit", class_ "btn btn-sm btn-primary w-full active:scale-[0.96] transition-transform"] "Save routine"
         when (any ((.routineActive) . fst) routineState) $ form_ [class_ "mt-3 border-t border-strokeWeak pt-2", hxPost_ $ urls.aiRoutinePausePost pid conversationId, hxSwap_ "none"] $ button_ [type_ "submit", class_ "btn btn-sm btn-ghost w-full active:scale-[0.96] transition-transform"] "Pause routine"
 
-    threadPage_ :: UUIDId "ai_routine_run" -> Bool -> Maybe Text -> [Issues.RoutineRun] -> Maybe (Html ()) -> Maybe Issues.ConversationSummary -> Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> Bool -> [Issues.AIChatMessage] -> [Issues.AIArtifact] -> Maybe Issues.AIArtifact -> Html ()
-    threadPage_ requestId canEdit instructions runs runContent conversationM projectId activeConversationIdM routineM allowActionUi messages docs openDoc = div_ [id_ "ai-conversation", class_ "group/conversation relative h-full min-h-0 flex bg-bgBase"] do
+    threadPage_ :: UUIDId "ai_routine_run" -> Bool -> Maybe Text -> [Issues.RoutineRun] -> Maybe AI.ReportDigest -> Maybe (Html ()) -> Maybe Issues.ConversationSummary -> Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> Bool -> [Issues.AIChatMessage] -> [Issues.AIArtifact] -> Maybe Issues.AIArtifact -> Html ()
+    threadPage_ requestId canEdit instructions runs reportM runContent conversationM projectId activeConversationIdM routineM allowActionUi messages docs openDoc = div_ [id_ "ai-conversation", class_ "group/conversation relative h-full min-h-0 flex bg-bgBase"] do
       div_ [class_ "min-w-0 grow flex flex-col max-lg:group-has-[[data-open]]/conversation:hidden"] do
         div_ [id_ "ai-thread-messages", class_ "min-h-0 grow overflow-y-auto"] do
           div_ [class_ "max-w-3xl mx-auto px-5 py-6 space-y-8"] do
@@ -609,11 +616,17 @@ threadPageGetH pid convId docM runM hxTarget = do
                     (afterLatest, fromLatest) = break ((== Issues.ChatAssistant) . (.role)) $ reverse $ filter (not . definingPrompt) messages
                     asked = takeWhile ((== Issues.ChatUser) . (.role)) $ drop 1 fromLatest
                     shown = if isRoutine then reverse (afterLatest <> take 1 fromLatest <> asked) else messages
-                if hasVisibleHistory shown
-                  then section_ [Aria.label_ "Results"] do
-                    when isRoutine $ h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Latest result"
-                    IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId shown
-                  else foldMap routineEmpty_ routineM
+                    -- A report replaces its own result message; questions asked after it still show.
+                    followUps digest = reverse $ takeWhile ((/= AI.digestMarkdown digest []) . (.content)) $ reverse messages
+                case reportM of
+                  Just digest -> do
+                    reportView_ digest
+                    unless (null $ followUps digest) $ IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId (followUps digest)
+                  Nothing
+                    | hasVisibleHistory shown -> section_ [Aria.label_ "Results"] do
+                        when isRoutine $ h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Latest result"
+                        IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId shown
+                    | otherwise -> foldMap routineEmpty_ routineM
             when (any (isJust . (.routineKind)) conversationM) do
               -- Setup, not daily reading: collapsed below the results.
               disclosure_ [Aria.label_ "Routine configuration"] ("Settings" >> whenJust (conversationM >>= (.routinePolicy)) (span_ [class_ "ms-auto text-xs font-normal text-textWeak"] . toHtml . policyLabel))
@@ -624,8 +637,8 @@ threadPageGetH pid convId docM runM hxTarget = do
                       then form_ [hxPost_ $ foldMap (urls.aiRoutinePolicyPost projectId) activeConversationIdM, hxSwap_ "none", class_ "group/policy space-y-2"] do
                         label_ [Lucid.for_ "routine-policy", class_ "block text-sm font-medium text-textStrong"] "Execution policy"
                         select_ [id_ "routine-policy", name_ "policy", class_ "select select-sm w-full text-base sm:text-xs"] do
-                          option_ ([value_ "observe"] <> [selected_ "selected" | policy == Issues.Observe]) "Observe"
-                          option_ ([value_ "autonomous"] <> [selected_ "selected" | policy == Issues.Autonomous]) "Autonomous"
+                          option_ ([value_ "observe"] <> [selected_ "selected" | policy == Issues.Observe]) "Read-only"
+                          option_ ([value_ "autonomous"] <> [selected_ "selected" | policy == Issues.Autonomous]) "Can make changes"
                           option_ ([value_ "review"] <> [selected_ "selected" | isJust selection]) "Review selected actions"
                         fieldset_ [class_ "hidden space-y-3 group-has-[option[value=review]:checked]/policy:block"] do
                           legend_ [class_ "text-sm font-medium text-textStrong"] "Actions requiring review"
@@ -639,7 +652,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                                 option_ ([value_ $ toText $ encodeEnumSC @"Review" approver] <> [selected_ "selected" | approver == maybe Catalog.ReviewEditors (.approver) selection]) $ toHtml $ reviewerLabel approver
                           p_ [class_ "text-xs text-textWeak"] "Only checked action classes require review. Unchecked actions stay automatic. Choose at least one class."
 
-                        p_ [class_ "text-sm text-textWeak"] "Observe reads evidence and saves results. Autonomous also changes project resources, updates project knowledge, and publishes requested results within the authorizing member's current role, without per-action approval."
+                        p_ [class_ "text-sm text-textWeak"] "Read-only reads evidence and saves results. Can make changes also changes project resources, updates project knowledge, and publishes requested results within the authorizing member's current role, without per-action approval."
                         p_ [class_ "text-xs text-textWeak"] "Restrictions apply immediately. Greater authority applies to future runs."
                         button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save policy"
                       else p_ [class_ "text-sm text-textWeak"] $ toHtml $ case policy of
@@ -706,9 +719,9 @@ threadPageGetH pid convId docM runM hxTarget = do
             div_ [class_ "min-h-0 grow overflow-y-auto px-5 py-5"] $ maybe (foldMap documentView_ openDoc) identity runContent
       where
         policyLabel = \case
-          Issues.Observe -> "Observe" :: Text
-          Issues.Autonomous -> "Autonomous"
-          Issues.ReviewSelected _ -> "Review selected actions"
+          Issues.Observe -> "Read-only" :: Text
+          Issues.Autonomous -> "Can make changes"
+          Issues.ReviewSelected _ -> "Changes need review"
         reviewClassLabel = \case
           Catalog.KnowledgeChanges -> "Project knowledge"
           Catalog.ProjectChanges -> "Project resources"
@@ -777,7 +790,9 @@ threadPageGetH pid convId docM runM hxTarget = do
                   unless (isJust conversation.routineRunningSince) $ button (urls.aiRoutineResumePost projectId conversation.conversationId True) (faSprite_ "play" "solid" "h-3 w-3" >> "Run now") True
                   button (urls.aiRoutinePausePost projectId conversation.conversationId) "Pause" False
                 else button (urls.aiRoutineResumePost projectId conversation.conversationId False) "Resume" True
-          whenJust instructions $ p_ [class_ "line-clamp-2 text-sm text-textStrong text-pretty"] . toHtml
+          -- An unedited catalog routine reads as its one-line ask; the full prompt stays under Settings.
+          let template = find ((== conversation.templateKey) . Just . (.key)) Issues.routineTemplates
+          whenJust (maybe instructions (\t -> if instructions == Just t.prompt then Just t.ask else instructions) template) $ p_ [class_ "line-clamp-2 text-sm text-textStrong text-pretty"] . toHtml
 
         routineFacts_ :: Issues.ConversationSummary -> Html ()
         routineFacts_ conversation =
@@ -788,11 +803,19 @@ threadPageGetH pid convId docM runM hxTarget = do
               (Just at, Just status) -> toHtml $ toText (formatTime defaultTimeLocale "Last run %-d %b, %H:%M UTC" at) <> " — " <> snd (runStatus status)
               _ -> "Not run yet"
             whenJust (conversation.routineNextRunAt <* guard conversation.routineActive) $ span_ [class_ "tabular-nums"] . toHtml . formatTime defaultTimeLocale "Next run %-d %b, %H:%M UTC"
-            whenJust conversation.routinePolicy \policy -> span_ [title_ $ "Execution policy: " <> policyLabel policy] $ case policy of
-              Issues.Observe -> "Read-only"
-              Issues.Autonomous -> "Can make changes"
-              Issues.ReviewSelected _ -> "Changes need review"
+            whenJust conversation.routinePolicy \policy -> span_ [title_ "Execution policy"] $ toHtml $ policyLabel policy
             whenJust (mfilter (/= Issues.DestinationConversation) conversation.routineDestination) $ span_ . toHtml . destinationLabel
+
+        reportView_ :: AI.ReportDigest -> Html ()
+        reportView_ digest = section_ [Aria.label_ "Latest report", class_ "space-y-6"] do
+          div_ do
+            h2_ [class_ "mb-1 text-xs font-medium text-textWeak"] "Latest report"
+            p_ [class_ "text-lg font-semibold text-textStrong text-pretty"] $ toHtml digest.headline
+          forM_ (zip [0 :: Int ..] digest.highlights) \(i, h) -> article_ [class_ "space-y-2 border-t border-strokeWeak pt-5"] do
+            h3_ [class_ "text-sm font-semibold text-textStrong"] $ toHtml h.title
+            unless (T.null h.detail) $ p_ [class_ "text-sm text-textStrong text-pretty"] $ toHtml h.detail
+            whenJust h.widget \w -> IssuePage.aiChatWidgets_ projectId ("ai-report-" <> show i <> "-") [w] Nothing
+            whenJust h.link \l -> a_ [href_ l, class_ "inline-flex items-center gap-1 text-sm text-textBrand hover:underline"] $ "Explore" >> faSprite_ "arrow-right" "regular" "h-3 w-3 rtl:-scale-x-100"
 
         routineEmpty_ :: (Issues.ConversationSummary, Issues.RoutineInterval) -> Html ()
         routineEmpty_ (conversation, _) =

@@ -1690,6 +1690,9 @@ spec = around withTestResources do
       -- The chat result is the digest too, its chart a live widget pinned to the report week.
       history <- runQueryEffect tr $ Issues.selectChatHistory pid reportConv
       [foldMap (\(Aeson w) -> decodeUtf8 @Text $ AE.encode w) m.widgets | m <- history, m.role == Issues.ChatAssistant] `shouldSatisfy` \case [widgets] -> all (`T.isInfixOf` widgets) ["\"time_from\"", "\"time_to\"", "Errors"]; _ -> False
+      -- The routine page leads with the report: headline, then each highlight beside its own chart.
+      page <- renderT <$> call tr (AIThreads.threadGetH pid reportConv Nothing Nothing)
+      page `shouldContainAll` ["Latest report", "Checkout errors rose 4.8x", "Checkout 5xx up 4.8x", "ai-report-0-0", "Explore", "Documents"]
 
     it "answers recorded agent queries" \tr -> do
       let askAgent query apiKey = runTestBg frozenTime tr $ Bot.processAIQuery Nothing False AI.ServiceAccess testPid query Nothing tr.trATCtx.env.openaiModel apiKey

@@ -2158,7 +2158,7 @@ aiChatWidgets_ :: Projects.ProjectId -> Text -> [Widget.Widget] -> Maybe [AI.Too
 aiChatWidgets_ pid prefix widgets toolCallsM =
   let processedWidgets = maybe widgets (`processWidgetsWithToolData` widgets) toolCallsM
    in div_ [class_ "grid grid-cols-1 gap-3 mt-3"] $ forM_ (zip [0 ..] processedWidgets) $ \(i, widget) ->
-        div_ [class_ $ "w-full aspect-[3/1] " <> if widget.wType == Widget.WTStat then "min-h-24" else "min-h-48"] $ Widget.widget_ widget{Widget._projectId = Just pid, Widget.id = Just (prefix <> show @Text @Int i)}
+        div_ [class_ $ "w-full " <> if widget.wType == Widget.WTStat then "h-28" else "aspect-[3/1] min-h-48"] $ Widget.widget_ widget{Widget._projectId = Just pid, Widget.id = Just (prefix <> show @Text @Int i)}
   where
     -- A widget whose query matches a cached run_query tool call renders from that data
     -- rather than re-querying.
