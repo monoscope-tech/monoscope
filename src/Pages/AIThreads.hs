@@ -13,7 +13,6 @@ import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
 import Data.List qualified as L
 import Data.Text qualified as T
-import Data.Time (addUTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID.V5 qualified as UUID5
 import Effectful.Concurrent.Async (concurrently)
