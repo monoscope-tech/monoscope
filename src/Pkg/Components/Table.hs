@@ -542,7 +542,7 @@ renderRows tbl
                     sortOrder = sortable >>= \(field, cfg) -> lookup cfg.currentSort [("-" <> field, Desc), ("+" <> field, Asc)]
                 th_ (c.attrs <> thAttrs <> sortAttrs <> [data_ "column-key" c.name]) do
                   span_ [class_ $ "flex items-center gap-2 min-w-0" <> bool "" " flex-wrap" (tbl.config.bulkActionsInHeader == Just idx)] do
-                    span_ [class_ $ bool "max-md:hidden" "" (idx > 0)] $ toHtml c.name
+                    span_ [class_ $ bool "max-md:hidden" "" (idx > 0 || isNothing tbl.features.rowId)] $ toHtml c.name
                     sequence_ c.headerExtra
                     whenJust sortOrder \case
                       Asc -> faSprite_ "arrow-up" "regular" "w-3 h-3"

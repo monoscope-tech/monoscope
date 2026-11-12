@@ -803,7 +803,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                 else button (urls.aiRoutineResumePost projectId conversation.conversationId False) "Resume" True
           -- An unedited catalog routine reads as its one-line ask; the full prompt stays under Settings.
           let template = find ((== conversation.templateKey) . Just . (.key)) Issues.routineTemplates
-          whenJust (maybe instructions (\t -> if instructions == Just t.prompt then Just t.ask else instructions) template) $ p_ [class_ "line-clamp-2 text-sm text-textStrong text-pretty"] . toHtml
+          whenJust (maybe instructions (\t -> if instructions == Just t.prompt then Just t.ask else instructions) template) $ blockquote_ [class_ "line-clamp-2 border-s-2 border-strokeWeak ps-3 text-sm text-textWeak text-pretty"] . toHtml
 
         routineFacts_ :: Issues.ConversationSummary -> Html ()
         routineFacts_ conversation =
