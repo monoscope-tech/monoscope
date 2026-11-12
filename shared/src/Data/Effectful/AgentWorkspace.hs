@@ -1489,7 +1489,7 @@ lookupWorkspace options operation request = do
                 writeFileLBS (temporary </> "manifest.json") $ AE.encode manifest
                 Posix.setFileMode (temporary </> "manifest.json") 0o600
                 traverse_ sync [temporary </> "baseline.qcow2", temporary </> "manifest.json", temporary]
-                locked do
+                result <- locked do
                   published <- load
                   case published of
                     Just _ -> pure published
@@ -1499,6 +1499,11 @@ lookupWorkspace options operation request = do
                       publish latestPointer $ takeFileName directory
                       let miss = restored >>= either (Just . toText . displayException) (const Nothing)
                       fmap (\built -> Prepared built.manifest built.path (Built (maybe Cold (const Warm) ancestor) miss)) <$> load
+                -- A fresh build is archived where storage is configured, so another node restores it or starts warm from it.
+                for_ ((,) <$> options.remote <*> result) \(remote', prepared) -> case prepared.outcome of
+                  Built{} -> void $ locked $ transfer root identity Upload remote' \remote prefix connection -> uploadCheckpoint remote prefix connection prepared
+                  (Cached; Restored) -> pass
+                pure result
   where
     loadWorkspace :: Identity -> Image -> FilePath -> (FilePath -> IO CheckpointData) -> IO (Maybe Prepared)
     loadWorkspace identity image directory inspect = do

@@ -2979,7 +2979,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
           run operation = runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir (toText image) bridge scriptFile Nothing (Just remote)) operation requestFile) >>= either (fail . toString) (maybe (fail "Workspace missing") (pure . AE.toJSON))
       writeFileLBS remote $ AE.encode $ AE.object ["endpoint" AE..= config.s3Endpoint, "bucket" AE..= config.s3Bucket, "region" AE..= config.s3Region, "accessKey" AE..= config.s3AccessKey, "secretKey" AE..= config.s3SecretKey, "maxBytes" AE..= (1073741824 :: Int)]
       Posix.setFileMode remote 0o600
-      void $ run Workspace.Archive
+      -- A build archives itself where storage is configured; nothing calls Archive in production.
+      archived <- commit repository [("app.sh", "v3b\n")]
+      writeFileLBS requestFile $ AE.encode $ AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= archived]
+      void $ run (Workspace.Prepare repository)
       removePathForcibly $ store.cacheDir </> toString testPid.toText </> "workspaces"
       run (Workspace.Prepare repository) >>= parse (field "outcome") >>= (`shouldBe` AE.toJSON Workspace.Restored)
       -- A fresh node has no local ancestor: it restores the lineage's latest archived build and starts warm.
