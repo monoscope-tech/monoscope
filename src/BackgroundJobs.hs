@@ -546,10 +546,8 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
           let answer = case completion of
                 Issues.CompletedResult _ _ Issues.RunAnswer{evidence = Issues.AgentEvidence a} | termination == Issues.CompletedSucceeded -> Just a
                 (Issues.CompletedResult{}; Issues.FailedResult{}; Issues.TimedOutResult{}; Issues.CancelledResult{}) -> Nothing
-              digest = fst <$> (report =<< answer)
-          when (isJust reportWindow && isJust answer && isNothing digest)
-            $ Log.logAttention "Report routine answer was not a report digest; nothing was delivered" (AE.object ["routine_id" AE..= routineId, "project_id" AE..= routine.projectId])
-          sequence_ $ deliverReport authCtx routine <$> templateKey <*> reportWindow <*> digest
+          for_ ((,) <$> templateKey <*> reportWindow) \(key, window) -> for_ answer \a ->
+            maybe (Log.logAttention "Report routine answer was not a report digest; nothing was delivered" (AE.object ["routine_id" AE..= routineId, "project_id" AE..= routine.projectId])) (deliverReport authCtx routine key window . fst) (report a)
           for_ next $ \slot -> enqueueNext slot.id slot.scheduledAt
 
 

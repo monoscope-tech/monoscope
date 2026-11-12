@@ -3442,11 +3442,12 @@ deleteRoutine pid convId =
 
 
 -- | Only report routines email: no other routine has a digest to mail, so email would deliver nothing.
-setRoutineDestination :: DB es => Projects.ProjectId -> UUIDId "conversation" -> RoutineDestination -> Eff es ()
+setRoutineDestination :: DB es => Projects.ProjectId -> UUIDId "conversation" -> RoutineDestination -> Eff es Bool
 setRoutineDestination pid convId destination =
   let reports = V.fromList $ map ((.key) . fst) reportTemplates
-   in Hasql.interpExecute_
-        [HI.sql|UPDATE apis.ai_routines SET destination = #{destination}
+   in (> 0)
+        <$> Hasql.interpExecute
+          [HI.sql|UPDATE apis.ai_routines SET destination = #{destination}
           WHERE project_id = #{pid} AND conversation_id = #{convId} AND (#{destination} <> #{DestinationEmail} OR template_key = ANY(#{reports}))|]
 
 

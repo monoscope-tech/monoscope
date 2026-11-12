@@ -1602,7 +1602,7 @@ spec = around withTestResources do
         installedAt <- Issues.installRoutineTemplate (uid tr) testPid (conversation 2) "Europe/Berlin" template
         let routineCanAct = maybe (pure False) (\slot -> Hasql.interpScalar @Bool [HI.sql|SELECT policy = #{Issues.Autonomous} FROM apis.ai_routines WHERE id = #{slot.id}|]) installedAt
         canAct <- routineCanAct
-        Issues.setRoutineDestination testPid (conversation 2) Issues.DestinationSlack
+        void $ Issues.setRoutineDestination testPid (conversation 2) Issues.DestinationSlack
         installed <- Issues.getConversation testPid (conversation 2)
         slackEnabled <- routineCanAct
         void $ Issues.upsertRoutine (uid tr) testPid (conversation 2) interval
@@ -1692,12 +1692,12 @@ spec = around withTestResources do
       reportConv <- convOf "weekly-report"
       dailyConv <- convOf "daily-report"
       -- emailDestination_reportsOnly: a routine with no digest to mail keeps its delivery when asked to email.
-      destinations <- runTestBg frozenTime tr do
+      (accepted, destinations) <- runTestBg frozenTime tr do
         triage <- either id fst <$> Issues.ensureRoutineTemplate (uid tr) pid "UTC" Issues.issueTriageTemplate
-        traverse_ (\c -> Issues.setRoutineDestination pid c Issues.DestinationEmail) [triage, dailyConv]
-        Issues.listConversations pid <&> \cs -> [(c.templateKey, c.routineDestination) | c <- cs, c.conversationId `elem` [triage, dailyConv]]
-      sortOn fst destinations `shouldBe` [(Just "daily-report", Just Issues.DestinationEmail), (Just "issue-triage", Just Issues.DestinationConversation)]
-      runTestBg frozenTime tr $ Issues.setRoutineDestination pid dailyConv Issues.DestinationConversation
+        accepted <- traverse (\c -> Issues.setRoutineDestination pid c Issues.DestinationEmail) [triage, dailyConv]
+        (accepted,) <$> (Issues.listConversations pid <&> \cs -> [(c.templateKey, c.routineDestination) | c <- cs, c.conversationId `elem` [triage, dailyConv]])
+      (accepted, sortOn fst destinations) `shouldBe` ([False, True], [(Just "daily-report", Just Issues.DestinationEmail), (Just "issue-triage", Just Issues.DestinationConversation)])
+      void $ runTestBg frozenTime tr $ Issues.setRoutineDestination pid dailyConv Issues.DestinationConversation
       -- Run now starts an active routine at once and leaves a paused one paused.
       (scheduledFirst, slotNow, pausedNow) <- runTestBg frozenTime tr $ (fmap (.scheduledAt) weekly,,) <$> Issues.resumeRoutine Issues.RunNow (uid tr) pid reportConv <*> Issues.resumeRoutine Issues.RunNow (uid tr) pid dailyConv
       (scheduledFirst > Just frozenTime, (.scheduledAt) <$> slotNow, isNothing pausedNow) `shouldBe` (True, Just frozenTime, True)
@@ -1765,11 +1765,17 @@ spec = around withTestResources do
         (.formatted) <$> runTestBg frozenTime tr (AI.executeToolCall config $ toolCall "save_artifact" [("key", "must-not-exist"), ("content", "This write has no retained operation.")]) `shouldReturn` "This change requires a durable checkpoint."
       runQueryEffect tr (Issues.listArtifacts testPid (conversation 4) Nothing) >>= (`shouldSatisfy` null)
       -- finalRound_keepsSaveArtifact: runs used every round reading, then found no way to keep the day's document.
+      -- The last round runs only that write, whatever else the model asks for.
       rounds <- newIORef ([] :: [[Text]])
-      let wrapUp = agent \history params -> modifyIORef' rounds (<> [toolNames params]) $> nextStep (toolResults history) [fn "list_project_memory" [], fn "save_artifact" [("key", "2026-01-01"), ("title", "Triage"), ("content", "Nothing new.")]] "Done"
-      runTestBg frozenTime tr (wrapUp $ chat (tooled $ durable tr (conversation 3) autonomous){AI.maxIterations = 1} "Run the routine") >>= (`shouldSatisfy` isRight)
+      let readMemory = fn "list_project_memory" []
+          wrapUp = agent \history params ->
+            modifyIORef' rounds (<> [toolNames params]) $> case toolResults history of
+              [] -> invoking [readMemory]
+              [_] -> invoking [readMemory, fn "save_artifact" [("key", "2026-01-01"), ("title", "Triage"), ("content", "Nothing new.")]]
+              _ -> said "Done"
+      executed <- runTestBg frozenTime tr (wrapUp $ chat (tooled $ durable tr (conversation 3) autonomous){AI.maxIterations = 1} "Run the routine") >>= either (fail . toString) (pure . map (.name) . (.toolCalls))
       readIORef rounds >>= \case
-        [_, final, answer] -> (final, answer) `shouldBe` (["save_artifact"], [])
+        [_, final, answer] -> (final, answer, executed) `shouldBe` (["save_artifact"], [], ["list_project_memory", "save_artifact"])
         other -> expectationFailure $ "Expected three model rounds, got " <> show other
       map (.key) <$> runQueryEffect tr (Issues.listArtifacts testPid (conversation 3) Nothing) >>= (`shouldSatisfy` any ((== "2026-01-01") . toText))
       contract <- interactiveInvocation tr testPid (conversation 5) "Inspect tool recovery" Issues.Autonomous
@@ -2067,7 +2073,7 @@ spec = around withTestResources do
         traverse_ (openConversation tr) [conv, conversation (n + 100)]
         Just slot <- runTestBg frozenTime tr do
           scheduled <- Issues.upsertRoutine (uid tr) testPid conv $ fromRightShow $ Issues.mkRoutineInterval 15
-          Issues.setRoutineDestination testPid conv Issues.DestinationSlack
+          void $ Issues.setRoutineDestination testPid conv Issues.DestinationSlack
           when (scenario == "observe") $ Issues.setRoutinePolicy (uid tr) testPid conv Issues.Observe
           pure scheduled
         claimed <- runQueryEffect tr (Issues.claimRoutine slot.id slot.scheduledAt) >>= maybe (fail "Expected a claimed routine run") pure
@@ -3557,7 +3563,7 @@ spec = around withTestResources do
       run3 <- runQueryEffect tr (Issues.claimRoutine slot3.id slot3.scheduledAt) >>= maybe (fail "Expected the initial scheduled run") pure
       policyFor run3.runId (conversation 3) `shouldReturn` Just Issues.Observe
       runQueryEffect tr do
-        Issues.setRoutineDestination testPid (conversation 3) Issues.DestinationSlack
+        void $ Issues.setRoutineDestination testPid (conversation 3) Issues.DestinationSlack
         Issues.setRoutinePolicy (uid tr) testPid (conversation 3) Issues.Autonomous
       policyFor run3.runId (conversation 3) `shouldReturn` Just Issues.Observe
       installed <- runQueryEffect tr $ Issues.getConversation testPid (conversation 3)
@@ -3872,7 +3878,7 @@ spec = around withTestResources do
         scheduled <- schedule conv
         runTestBg frozenTime tr do
           Issues.insertChatMessage testPid conv Issues.ChatUser "Summarize the project" Nothing Nothing
-          Issues.setRoutineDestination testPid conv Issues.DestinationConversation
+          void $ Issues.setRoutineDestination testPid conv Issues.DestinationConversation
           Issues.setRoutinePolicy (uid tr) testPid conv Issues.Observe
         grants <- newIORef ([] :: [Issues.ExecutionPolicy])
         models <- newIORef (0 :: Int)
@@ -3892,7 +3898,7 @@ spec = around withTestResources do
           readIORef successors `shouldReturn` []
         replacement <- addMember tr PM.PEdit ("replacement-owner-" <> show n <> "@example.test")
         runQueryEffect tr do
-          Issues.setRoutineDestination testPid conv Issues.DestinationSlack
+          void $ Issues.setRoutineDestination testPid conv Issues.DestinationSlack
           Issues.setRoutinePolicy replacement testPid conv Issues.Autonomous
         retained <- runQueryEffect tr $ Issues.listConversationRuns testPid conv 10
         for_ retained \r -> runQueryEffect tr (Issues.routineRunPolicyFor testPid r.id (uid tr) conv) `shouldReturn` Just Issues.Observe

@@ -1003,6 +1003,7 @@ type instance Opaque "AIThreads.AIPage" = AIThreads.AIPage
 type instance Opaque "AIThreads.EmptyTitle" = AIThreads.EmptyTitle
 type instance Opaque "AIThreads.NewThreadError" = AIThreads.NewThreadError
 type instance Opaque "AIThreads.NoReviewClasses" = AIThreads.NoReviewClasses
+type instance Opaque "AIThreads.EmailOnlyForReports" = AIThreads.EmailOnlyForReports
 type instance Opaque "AIThreads.OperationReviewForm" = AIThreads.OperationReviewForm
 type instance Opaque "AIThreads.OperationReviewed" = AIThreads.OperationReviewed
 type instance Opaque "AIThreads.PolicySaved" = AIThreads.PolicySaved

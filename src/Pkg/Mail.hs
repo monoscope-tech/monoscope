@@ -54,8 +54,7 @@ data NotificationAlerts
   = EndpointAlert {project :: Text, endpoints :: V.Vector EndpointAlertRow, endpointHash :: Text}
   | RuntimeErrorAlert {issueId :: Text, issueTitle :: Text, errorData :: ErrorPatterns.ATError, runtimeAlertType :: RuntimeAlertType, chartUrl :: Maybe Text, occurrenceText :: Maybe Text, firstSeenText :: Maybe Text, ongoingFor :: Maybe Text}
   | ShapeAlert
-  | -- | A report routine's digest: highlights are (title, detail, chart PNG, absolute link).
-    RoutineReportAlert {headline :: Text, period :: Text, highlights :: [ReportItem], reportUrl :: Text}
+  | RoutineReportAlert {headline :: Text, period :: Text, highlights :: [ReportItem], reportUrl :: Text}
   | MonitorsAlert
       { monitorTitle :: Text
       , monitorUrl :: Text

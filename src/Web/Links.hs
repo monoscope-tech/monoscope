@@ -405,7 +405,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , aiRoutineCancelPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "cancel" :> Unrefusable 'POST (Opaque "AIThreads.AIPage")
   , aiRoutineResumePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "resume" :> QueryFlag "now" :> Unrefusable 'POST (Opaque "AIThreads.AIPage")
   , aiRoutinePolicyPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "policy" :> ReqBody '[FormUrlEncoded] (Opaque "AIThreads.RoutinePolicyForm") :> Action 'POST (Opaque "AIThreads.NoReviewClasses") (Opaque "AIThreads.PolicySaved")
-  , aiRoutineDestinationPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "destination" :> ReqBody '[FormUrlEncoded] (Opaque "AIThreads.RoutineDestinationForm") :> Unrefusable 'POST (Opaque "AIThreads.AIPage")
+  , aiRoutineDestinationPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "destination" :> ReqBody '[FormUrlEncoded] (Opaque "AIThreads.RoutineDestinationForm") :> Action 'POST (Opaque "AIThreads.EmailOnlyForReports") (Opaque "AIThreads.AIPage")
   , aiRoutineDelete :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> Unrefusable 'DELETE (Opaque "AIThreads.AIPage")
   , -- Device auth
     deviceApprove :: mode :- "device" :> QPT "code" :> Get '[HTML] (RespHeaders (Html ()))

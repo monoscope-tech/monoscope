@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pages.AIThreads (AIPage (..), PolicySaved (..), PromptError (..), NewThreadError (..), TurnError (..), EmptyTitle (..), UnknownTemplate (..), NoReviewClasses (..), OperationReviewed (..), AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), OperationReviewForm (..), operationReviewPostH, operationGetH, RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH) where
+module Pages.AIThreads (AIPage (..), PolicySaved (..), PromptError (..), NewThreadError (..), TurnError (..), EmptyTitle (..), UnknownTemplate (..), NoReviewClasses (..), EmailOnlyForReports (..), OperationReviewed (..), AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), OperationReviewForm (..), operationReviewPostH, operationGetH, RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH) where
 
 import BackgroundJobs qualified
 import BackgroundJobs.Types qualified as Jobs
@@ -22,7 +22,7 @@ import Effectful.Reader.Static (ask)
 import Lucid hiding (for_)
 import Lucid qualified
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
@@ -41,7 +41,7 @@ import Relude hiding (ask)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, done)
-import Utils (faSprite_, popoverPanel_, popoverTrigger_, renderMarkdownTocWithPrefix)
+import Utils (encodeText, faSprite_, popoverPanel_, popoverTrigger_, renderMarkdownTocWithPrefix)
 import Web.FormUrlEncoded (FromForm (..), parseAll, parseUnique)
 import Web.HttpApiData (FromHttpApiData (..))
 import Web.Links
@@ -212,6 +212,11 @@ data NoReviewClasses = NoReviewClasses
   deriving (Refusal) via Says "Choose at least one action class for review." NoReviewClasses
 
 
+data EmailOnlyForReports = EmailOnlyForReports
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "Only report routines can deliver by email." EmailOnlyForReports
+
+
 newtype TitleForm = TitleForm {conversationTitle :: Text}
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -310,7 +315,7 @@ routinesGetH pid = do
                                ( \r -> div_ [class_ "flex items-center justify-end gap-1"] do
                                    let (toggle, toggleLabel) = bool (\p c -> urls.aiRoutineResumePost p c False, "Resume") (urls.aiRoutinePausePost, "Pause") r.routineActive
                                        menuId = "routine-menu-" <> r.conversationId.toText
-                                   form_ [hxPost_ $ toggle pid r.conversationId, hxSwap_ "none"] $ button_ [class_ "btn btn-xs btn-ghost active:scale-[0.96] transition-transform", type_ "submit"] $ toHtml @Text toggleLabel
+                                   button_ [hxPost_ $ toggle pid r.conversationId, hxSwap_ "none", type_ "button", class_ "btn btn-xs btn-ghost active:scale-[0.96] transition-transform"] $ toHtml @Text toggleLabel
                                    button_ ([type_ "button", class_ "btn btn-xs btn-ghost btn-square", Aria.label_ $ "More actions for " <> r.title] <> popoverTrigger_ menuId) $ faSprite_ "ellipsis" "regular" "h-3.5 w-3.5"
                                    ul_ ([class_ "dropdown dropdown-end menu menu-sm w-52 rounded-box border border-strokeWeak bg-bgRaised p-1 text-start shadow-lg"] <> popoverPanel_ menuId) do
                                      when (isJust r.routineRunningSince) $ li_ $ button_ [hxPost_ $ urls.aiRoutineCancelPost pid r.conversationId, hxSwap_ "none", class_ "text-textWarning"] "Stop active runs"
@@ -318,7 +323,7 @@ routinesGetH pid = do
                                        li_ [class_ "menu-title"] "Deliver results"
                                        -- Only report routines email; the rest deliver in app or to Slack.
                                        for_ ([Issues.DestinationConversation] <> [Issues.DestinationEmail | isJust (Issues.reportWindowDays =<< r.templateKey)] <> [Issues.DestinationSlack]) \destination ->
-                                         li_ $ form_ [hxPost_ $ urls.aiRoutineDestinationPost pid r.conversationId, hxSwap_ "none"] $ button_ [type_ "submit", name_ "destination", value_ $ toText (encodeEnumSC @"Destination" destination), term "aria-pressed" $ bool "false" "true" (r.routineDestination == Just destination)] do
+                                         li_ $ button_ [hxPost_ $ urls.aiRoutineDestinationPost pid r.conversationId, hxSwap_ "none", type_ "button", hxVals_ $ encodeText $ AE.object ["destination" AE..= toText (encodeEnumSC @"Destination" destination)], term "aria-pressed" $ bool "false" "true" (r.routineDestination == Just destination)] do
                                            span_ [class_ "w-3"] $ when (r.routineDestination == Just destination) $ faSprite_ "check" "solid" "h-3 w-3"
                                            toHtml $ destinationLabel destination
                                      li_ [class_ "my-1 h-px bg-strokeWeak", role_ "separator"] pass
@@ -370,7 +375,7 @@ routinesGetH pid = do
             h3_ [class_ "mb-3 text-sm font-semibold text-textStrong"] $ toHtml $ Issues.routineCategoryLabel category
             div_ [class_ "grid gap-4 md:grid-cols-2 xl:grid-cols-3"] $ for_ (filter ((== category) . (.category)) Issues.routineTemplates) templateCard_
       where
-        failedNote_ r = failedRuns_ $ filter (\run -> r.conversationId `elem` ([run.conversationId] <> toList run.routineConversation)) recentRuns
+        failedNote_ r = failedRuns_ $ filter (\run -> r.conversationId `elem` (run.conversationId : toList run.routineConversation)) recentRuns
         categoryId = ("routine-category-" <>) . T.toLower . T.replace " " "-" . Issues.routineCategoryLabel
         templateCard_ template = do
           let added = template.key `elem` mapMaybe (.templateKey) installedRoutines
@@ -985,12 +990,11 @@ routineResumePostH pid convId now = do
 routineDeleteH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.pauseRoutine pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> Issues.deleteRoutine pid convId >> done (RoutinesPage pid)
 
 
-routineDestinationPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineDestinationForm -> ATAuthCtx (RespHeaders (Done AIPage))
-routineDestinationPostH pid convId form = do
+routineDestinationPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineDestinationForm -> ATAuthCtx (ActionResult EmailOnlyForReports AIPage)
+routineDestinationPostH pid convId form = act do
   authorizeConversation pid convId
   void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid)
-  Issues.setRoutineDestination pid convId form.destination
-  done (RoutinesPage pid)
+  bool (Left EmailOnlyForReports) (Right $ RoutinesPage pid) <$> Issues.setRoutineDestination pid convId form.destination
 
 
 routinePolicyPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutinePolicyForm -> ATAuthCtx (ActionResult NoReviewClasses PolicySaved)

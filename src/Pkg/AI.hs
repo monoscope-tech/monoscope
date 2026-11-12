@@ -403,7 +403,7 @@ pinWidget :: (UTCTime, UTCTime) -> Widget.Widget -> Widget.Widget
 pinWidget (from, to) w = w{Widget.timeFrom = Just $ formatUTCMicros from, Widget.timeTo = Just $ formatUTCMicros to}
 
 
--- | Each highlight as delivered outside the app: a chart PNG over both periods and an absolute link.
+-- | Charts span both periods ('reportComparison').
 reportItems :: Log.Log :> es => Text -> Text -> Projects.ProjectId -> (UTCTime, UTCTime) -> ReportDigest -> Eff es [ET.ReportItem]
 reportItems secret host pid window digest = forM digest.highlights \h ->
   traverse (\w -> Widget.widgetPngUrl secret host pid w Nothing (Just $ formatUTCMicros from) (Just $ formatUTCMicros to)) h.widget
@@ -1430,7 +1430,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
                       (Issues.InteractiveRun{}; Issues.ConversationRun{}; Issues.FixRun{}) -> interactive
               Projects.recordAIUsage config.projectId (show request.model) source $ pricedUsage config.sourceConfig (estimatedTokens (step.history, request)) (estimatedTokens message)
               let next = case LLM.toolCalls $ LLM.messageData message of
-                    Just tools | isJust request.tools -> Investigations.ToolsPending step message [] tools
+                    Just tools | Just offered <- request.tools, kept@(_ : _) <- filter (\t -> not finalRound || V.elem (Just $ LLM.toolFunctionName $ LLM.toolCallFunction t) (V.map toolName offered)) tools -> Investigations.ToolsPending step message [] kept
                     _ -> Investigations.AnswerReady $ AgenticChatResult message.content step.toolCalls
               updated <- Investigations.commitProgress turn journal next $ Just $ Investigations.ModelReturned step.iteration $ Investigations.ModelAnswered message
               case next of
