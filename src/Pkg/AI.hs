@@ -346,6 +346,9 @@ data ReportHighlight = ReportHighlight {title :: Text, detail :: Text, widget ::
 -- >>> let titles hs = map (.title) . (.highlights) <$> parseReportDigest Projects.demoProjectId ("{\"headline\":\"h\",\"highlights\":" <> hs <> "}")
 -- >>> titles "[{\"title\":\"noise\",\"previous\":1,\"current\":3,\"unit\":\"events\"},{\"title\":\"flat\",\"previous\":100,\"current\":105,\"unit\":\"ms\"},{\"title\":\"real\",\"previous\":1777,\"current\":835,\"unit\":\"events\"},{\"title\":\"same events again\",\"previous\":1777,\"current\":835,\"unit\":\"events\"}]"
 -- Just ["real"]
+-- >>> let unitOf q = ((.unit) <=< (.widget) <=< listToMaybe . (.highlights)) =<< parseReportDigest Projects.demoProjectId ("{\"headline\":\"h\",\"highlights\":[{\"title\":\"t\",\"widget\":{\"type\":\"timeseries_line\",\"query\":\"" <> q <> "\"}}]}")
+-- >>> map unitOf ["summarize percentile(duration, 95) by bin_auto(timestamp)", "summarize percentile(duration, 95) / 1000000.0 by bin_auto(timestamp)"]
+-- [Just "ns",Nothing]
 -- >>> isNothing $ parseReportDigest Projects.demoProjectId "{\"explanation\":\"plain\"}"
 -- True
 parseReportDigest :: Projects.ProjectId -> Text -> Maybe ReportDigest
@@ -369,8 +372,9 @@ parseReportDigest pid response = do
   where
     -- The prompt's materiality rules, enforced: under 20% is no change, and event counts under 50 are noise.
     material unit (previous, current) = abs (current - previous) >= 0.2 * max (abs previous) 1 && (unit /= Just "events" || max previous current >= 50)
-    -- duration is stored in nanoseconds; the unit lets charts show ms/s instead of raw counts.
-    durationUnit (w :: Widget.Widget) = (w :: Widget.Widget){Widget.unit = w.unit <|> ("ns" <$ guard ("duration" `T.isInfixOf` fold w.query))}
+    -- duration is stored in nanoseconds; the unit lets charts show ms/s instead of raw counts. A query that
+    -- already divides it has converted it itself.
+    durationUnit (w :: Widget.Widget) = (w :: Widget.Widget){Widget.unit = w.unit <|> ("ns" <$ guard (any (\q -> "duration" `T.isInfixOf` q && not ("/" `T.isInfixOf` q)) w.query))}
     -- The agent writes project-relative paths; anything leaving the project is dropped.
     projectLink l
       | ("/p/" <> pid.toText <> "/") `T.isPrefixOf` l = Just l
