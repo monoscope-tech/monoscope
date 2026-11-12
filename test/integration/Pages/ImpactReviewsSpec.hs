@@ -490,7 +490,7 @@ fixtureExplanation result =
 
 -- | A node with this many agent slots, for admission.
 slots :: Int -> Workspace.Slots
-slots agents = Workspace.Slots{node = "test-node", agents, verifiers = 2, builds = 1}
+slots agents = Workspace.Slots{node = "test-node", agents, verifiers = 2, builds = 1, prepares = False}
 
 
 spec :: Spec
@@ -3002,6 +3002,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let builds = dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'PrepareReviewWorkspace'" ()
     builds `shouldReturn` (1 :: Int)
     [early, middle, late] <- sortOn (\(run :: Reviews.ReviewRun) -> run.number) <$> runQueryEffect tr (Reviews.latestRuns testPid)
+    -- Proofs run in the base's prepared workspace, so no review of that base starts while its build is pending.
+    runQueryEffect tr (Reviews.claimRun (slots 100){Workspace.prepares = True} early) `shouldReturn` False
+    dbExec tr "DELETE FROM background_jobs_long WHERE payload->>'tag' = 'PrepareReviewWorkspace'" ()
     -- Two reviews per project run at once; the third waits in the queue rather than for a VM.
     traverse (\run -> runQueryEffect tr $ Reviews.claimRun (slots 100) run) [early, middle, late] `shouldReturn` [True, True, False]
     deferred late.id `shouldReturn` (1 :: Int)
@@ -3016,7 +3019,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     traverse (const saveProof) [1 .. 4 :: Int] `shouldReturn` ([Right ("proof-1", Reviews.Changed), Right ("proof-2", Reviews.Reused), Right ("proof-3", Reviews.Reused), Left "Proof budget exhausted; cite the proofs already recorded"] :: [Either Text (Text, Reviews.SetupReuse)])
     fmap (.setup) <$> runQueryEffect tr (Reviews.proofRecipe middle) `shouldReturn` Just "make serve &"
     void $ runQueryEffect tr $ Reviews.receiveEvent Nothing $ eventAt (T.replicate 40 "c") 4
-    builds `shouldReturn` 2
+    builds `shouldReturn` 1 -- the first base's build finished above; this base queues its own
     -- askOnReviewedHead_answersInANewComment: an ask on a head that already has a progress comment answers below itself.
     dbExec tr "UPDATE projects.pr_review_runs SET state = 'completed', progress_comment_id = 55 WHERE revision = ?" (Only $ T.replicate 40 "7")
     void $ runQueryEffect tr $ Reviews.receiveEvent (Just Reviews.Ask{login = "ada", commentId = 78, command = Reviews.Prove, focus = Nothing}) (event 7)

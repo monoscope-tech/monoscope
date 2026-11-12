@@ -1182,8 +1182,9 @@ verifyArtifactRegression options request = do
               copy :: RPC -> FilePath -> Text -> IO ()
               copy rpc path destination = rpc @() $ CopyFile $ Copy path destination
           privateWrite logPath ""
-          -- A side's setup can build the head (a Haskell server relinks in about two minutes) before it runs.
-          outcome <- tryAny $ Timeout.timeout (300 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox VerifierPool options.bridge \rpc -> do
+          -- A side's setup can build the head before it runs; a change to a widely imported Haskell module
+          -- rebuilds much of the project even from a warm workspace.
+          outcome <- tryAny $ Timeout.timeout (15 * 60 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox VerifierPool options.bridge \rpc -> do
             image <- rpc @Image $ Resolve options.image
             ensure $ image.buildId == request.imageBuildId
             let sandbox = Sandbox image.assetDir checkResources.cpus checkResources.memoryMiB RegistryCow $ one ("/checkout", checkout)
@@ -1737,7 +1738,9 @@ data Pool = AgentPool | VerifierPool | PreparePool | NoVm
 -- | This node's VM slots per pool. @IMPACT_REVIEW_VM_SLOTS=agents,verifiers,builds@ overrides the
 -- default: a quarter of the cores for agents, two verifiers and one build. The agent count is also
 -- the node's review admission capacity, so the queue never admits a review the node has no VM for.
-data Slots = Slots {node :: Text, agents :: Int, verifiers :: Int, builds :: Int}
+-- | @prepares@: this node builds review workspaces (a preparation script is configured), so its
+-- reviews wait for their base's build instead of proving on a bare checkout.
+data Slots = Slots {node :: Text, agents :: Int, verifiers :: Int, builds :: Int, prepares :: Bool}
 
 
 hostSlots :: IO Slots
@@ -1745,6 +1748,7 @@ hostSlots = do
   configured <- lookupEnv "IMPACT_REVIEW_VM_SLOTS"
   cores <- getNumProcessors
   node <- toText . nodeName <$> getSystemID
+  prepares <- isJust <$> lookupEnv "IMPACT_REVIEW_PREPARE_SCRIPT"
   let (agents, verifiers, builds) = fromMaybe (max 1 (cores `div` 4), 2, 1) $ configured >>= \text -> case mapM (readMaybe . toString) (T.splitOn "," (toText text)) of Just [a, v, b] -> Just (a, v, b); _ -> Nothing
   pure Slots{..}
 
