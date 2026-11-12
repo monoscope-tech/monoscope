@@ -268,7 +268,7 @@ routinesGetH pid = do
     routinesPage_ :: Bool -> [Issues.ConversationSummary] -> [Issues.RoutineRun] -> Html ()
     routinesPage_ canEdit installedRoutines recentRuns = div_ [class_ "h-full overflow-y-auto bg-bgBase"] do
       main_ [class_ "mx-auto max-w-6xl space-y-10 px-4 py-6 sm:px-6 sm:py-8"] do
-        p_ [class_ "max-w-2xl text-sm text-textWeak"] "AI work triggered by a schedule or project event. Inspect each run and its artifacts."
+        p_ [class_ "max-w-2xl text-sm text-textWeak"] "AI tasks that run on a schedule or when something happens in your project. Each run keeps its result here, and reports keep a dated copy."
         section_ [Aria.label_ "Installed routines"] do
           div_ [class_ "mb-2 flex items-baseline justify-between"] do
             h2_ [class_ "text-sm font-semibold text-textStrong"] "Installed"
@@ -310,7 +310,7 @@ routinesGetH pid = do
                                      when (isJust r.routineInterval) do
                                        li_ [class_ "menu-title"] "Deliver results"
                                        for_ [Issues.DestinationConversation, Issues.DestinationEmail, Issues.DestinationSlack] \destination ->
-                                         li_ $ button_ [hxPost_ $ urls.aiRoutineDestinationPost pid r.conversationId, hxSwap_ "none", hxVals_ $ "{\"destination\":\"" <> toText (encodeEnumSC @"Destination" destination) <> "\"}", Aria.checked_ $ bool "false" "true" (r.routineDestination == Just destination), role_ "menuitemradio"] do
+                                         li_ $ button_ [hxPost_ $ urls.aiRoutineDestinationPost pid r.conversationId, hxSwap_ "none", hxVals_ $ "{\"destination\":\"" <> toText (encodeEnumSC @"Destination" destination) <> "\"}", term "aria-pressed" $ bool "false" "true" (r.routineDestination == Just destination)] do
                                            span_ [class_ "w-3"] $ when (r.routineDestination == Just destination) $ faSprite_ "check" "solid" "h-3 w-3"
                                            toHtml $ destinationLabel destination
                                      li_ $ button_ [hxDelete_ $ urls.aiRoutineDelete pid r.conversationId, hxConfirm_ "Delete this routine? Its conversation and past results will be kept.", hxSwap_ "none", class_ "text-textError"] "Delete"
@@ -781,14 +781,17 @@ threadPageGetH pid convId docM runM hxTarget = do
 
         routineFacts_ :: Issues.ConversationSummary -> Html ()
         routineFacts_ conversation =
-          div_ [class_ "flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-textWeak [&>*+*]:before:me-2 [&>*+*]:before:text-textDisabled [&>*+*]:before:content-['·']"] do
+          div_ [class_ "flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm text-textWeak sm:gap-x-2 sm:[&>*+*]:before:me-2 sm:[&>*+*]:before:text-textDisabled sm:[&>*+*]:before:content-['·']"] do
             span_ $ uncurry tonePill_ $ routineStatus conversation
             span_ $ toHtml $ maybe (foldMap Issues.routineKindLabel conversation.routineKind) Issues.routineCadence conversation.routineInterval
             span_ [class_ "tabular-nums"] case (conversation.routineLastRunAt, conversation.routineLastRunStatus) of
               (Just at, Just status) -> toHtml $ toText (formatTime defaultTimeLocale "Last run %-d %b, %H:%M UTC" at) <> " — " <> snd (runStatus status)
               _ -> "Not run yet"
             whenJust (conversation.routineNextRunAt <* guard conversation.routineActive) $ span_ [class_ "tabular-nums"] . toHtml . formatTime defaultTimeLocale "Next run %-d %b, %H:%M UTC"
-            whenJust conversation.routinePolicy $ span_ . toHtml . policyLabel
+            whenJust conversation.routinePolicy \policy -> span_ [title_ $ "Execution policy: " <> policyLabel policy] $ case policy of
+              Issues.Observe -> "Read-only"
+              Issues.Autonomous -> "Can make changes"
+              Issues.ReviewSelected _ -> "Changes need review"
             whenJust (mfilter (/= Issues.DestinationConversation) conversation.routineDestination) $ span_ . toHtml . destinationLabel
 
         routineEmpty_ :: (Issues.ConversationSummary, Issues.RoutineInterval) -> Html ()
