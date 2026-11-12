@@ -294,7 +294,7 @@ routinesGetH pid = do
                               div_ [class_ "truncate text-xs text-textWeak"] do
                                 toHtml $ routineSchedule r
                                 -- Phones drop the Last run column; the outcome is what the list is read for.
-                                whenJust ((,) <$> r.routineLastRunAt <*> r.routineLastRunStatus) \(at, status) -> span_ [class_ "mt-0.5 flex items-center gap-2 md:hidden"] $ localTimeFmt_ "d MMM" at >> uncurry toneDot_ (runStatus status) >> failedNote_ r
+                                whenJust ((,) <$> r.routineLastRunAt <*> r.routineLastRunStatus) \(at, status) -> span_ [class_ "mt-0.5 flex flex-wrap items-center gap-x-2 md:hidden"] $ localTimeFmt_ "d MMM" at >> uncurry toneDot_ (runStatus status) >> failedNote_ r
                           )
                           -- Takes the leftover width and truncates, so the narrow columns stay visible on phones.
                           & withAttrs [class_ "w-full max-w-0"]
@@ -315,7 +315,7 @@ routinesGetH pid = do
                                ( \r -> div_ [class_ "flex items-center justify-end gap-1"] do
                                    let (toggle, toggleLabel) = bool (\p c -> urls.aiRoutineResumePost p c False, "Resume") (urls.aiRoutinePausePost, "Pause") r.routineActive
                                        menuId = "routine-menu-" <> r.conversationId.toText
-                                   button_ [hxPost_ $ toggle pid r.conversationId, hxSwap_ "none", type_ "button", class_ "btn btn-xs btn-ghost active:scale-[0.96] transition-transform"] $ toHtml @Text toggleLabel
+                                   button_ [hxPost_ $ toggle pid r.conversationId, hxSwap_ "none", type_ "button", class_ "btn btn-xs btn-outline active:scale-[0.96] transition-transform"] $ toHtml @Text toggleLabel
                                    button_ ([type_ "button", class_ "btn btn-xs btn-ghost btn-square", Aria.label_ $ "More actions for " <> r.title] <> popoverTrigger_ menuId) $ faSprite_ "ellipsis" "regular" "h-3.5 w-3.5"
                                    ul_ ([class_ "dropdown dropdown-end menu menu-sm w-52 rounded-box border border-strokeWeak bg-bgRaised p-1 text-start shadow-lg"] <> popoverPanel_ menuId) do
                                      when (isJust r.routineRunningSince) $ li_ $ button_ [type_ "button", hxPost_ $ urls.aiRoutineCancelPost pid r.conversationId, hxSwap_ "none", class_ "text-textWarning"] "Stop active runs"
@@ -473,6 +473,10 @@ threadPageGetH pid convId docM runM hxTarget = do
           }
   addRespHeaders $ PageCtx pageConfig $ threadPage_ requestId canEdit instructions runs reportM runContent conversationM pid activeId routineM (maybe True (isNothing . Issues.conversationIssueId) conversationM) messages docs openDoc
   where
+    runErrorTone = \case
+      Issues.RunFailed -> "text-textError"
+      Issues.RunTimedOut -> "text-textWarning"
+      (Issues.RunRunning; Issues.RunSucceeded; Issues.RunNoFindings; Issues.RunCancelled) -> "text-textWeak"
     runStatusId :: Issues.RoutineRun -> Text
     runStatusId run = "routine-run-status-" <> run.id.toText
 
@@ -634,13 +638,13 @@ threadPageGetH pid convId docM runM hxTarget = do
                     -- A routine's result is a record, not a chat turn: no avatar gutter.
                     | hasVisibleHistory shown -> section_ ([Aria.label_ "Results"] <> [class_ "[&_[data-chat-avatar]]:hidden [&_[data-chat-indent]]:ml-0" | isRoutine]) do
                         -- Most runs of a findings-only routine publish nothing, so the result's own time says how fresh it is.
-                        when isRoutine $ h2_ [class_ "mb-2 flex items-baseline gap-2 text-sm font-semibold text-textStrong"] do
+                        when isRoutine $ h2_ [class_ "mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm font-semibold text-textStrong"] do
                           "Latest result"
                           whenJust (listToMaybe fromLatest) \latest -> do
                             span_ [class_ "text-xs font-normal tabular-nums text-textWeak"] $ localTimeFmt_ "d MMM, HH:mm" latest.createdAt
                             -- Runs that found nothing publish no result, so say why the newest run is not shown here.
                             let quiet = length $ takeWhile ((> latest.createdAt) . (.startedAt)) $ filter ((== Issues.RunNoFindings) . (.status)) runs
-                            when (quiet > 0) $ span_ [class_ "text-xs font-normal text-textWeak"] $ toHtml $ "· " <> show @Text quiet <> bool " later runs" " later run" (quiet == 1) <> " found nothing new"
+                            when (quiet > 0) $ span_ [class_ "basis-full text-xs font-normal text-textWeak sm:basis-auto sm:before:me-2 sm:before:text-textDisabled sm:before:content-['·']"] $ toHtml $ show @Text quiet <> bool " later runs" " later run" (quiet == 1) <> " had no findings"
                         IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId shown
                     | otherwise -> foldMap routineEmpty_ routineM
                 when (isRoutine && not (null docs)) documentsNav_
@@ -813,11 +817,11 @@ threadPageGetH pid convId docM runM hxTarget = do
         hasVisibleHistory = any ((`elem` [Issues.ChatAssistant, Issues.ChatExecutionEvent]) . (.role))
 
         routineOverview_ :: Issues.ConversationSummary -> Html ()
-        routineOverview_ conversation = section_ [class_ "space-y-2", Aria.label_ "Routine status"] do
+        routineOverview_ conversation = section_ [class_ "space-y-3", Aria.label_ "Routine status"] do
           div_ [class_ "flex items-start justify-between gap-3"] do
             routineFacts_ conversation
             when (canEdit && isJust conversation.routineInterval) $ div_ [class_ "flex shrink-0 items-center gap-1"] do
-              let button url label primary = form_ [hxPost_ url, hxSwap_ "none", term "hx-disable" "find button"] $ button_ [type_ "submit", class_ $ "btn btn-xs active:scale-[0.96] transition-transform " <> bool "btn-ghost" "btn-primary" primary] label
+              let button url label primary = form_ [hxPost_ url, hxSwap_ "none", term "hx-disable" "find button"] $ button_ [type_ "submit", class_ $ "btn btn-xs active:scale-[0.96] transition-transform " <> bool "btn-outline" "btn-primary" primary] label
               if conversation.routineActive
                 then do
                   unless (isJust conversation.routineRunningSince) $ button (urls.aiRoutineResumePost projectId conversation.conversationId True) (faSprite_ "play" "solid" "h-3 w-3" >> "Run now") True
@@ -1086,10 +1090,10 @@ routineSchedule :: Issues.ConversationSummary -> Text
 routineSchedule r = maybe (foldMap Issues.routineKindLabel r.routineKind) Issues.routineCadence r.routineInterval
 
 
--- | A run's one-line outcome: its error in the status tone, else the opening of its result.
+-- | A run's one-line outcome: its error, else the opening of its result. The status pill beside it carries the colour.
 runSummary_ :: Text -> Issues.RoutineRun -> Html ()
 runSummary_ extra run = whenJust (run.error <|> (summaryLine =<< run.summary)) \line ->
-  span_ [class_ $ "block truncate text-xs " <> extra <> " " <> maybe "text-textWeak" (const $ runErrorTone run.status) run.error, title_ line] $ toHtml line
+  span_ [class_ $ "block truncate text-xs text-textWeak " <> extra, title_ line] $ toHtml line
 
 
 destinationLabel :: Issues.RoutineDestination -> Text
@@ -1097,13 +1101,6 @@ destinationLabel = \case
   Issues.DestinationConversation -> "In app only"
   Issues.DestinationEmail -> "Email and team chat"
   Issues.DestinationSlack -> "Post to Slack"
-
-
-runErrorTone :: Issues.RoutineRunStatus -> Text
-runErrorTone = \case
-  Issues.RunFailed -> "text-textError"
-  Issues.RunTimedOut -> "text-textWarning"
-  (Issues.RunRunning; Issues.RunSucceeded; Issues.RunNoFindings; Issues.RunCancelled) -> "text-textWeak"
 
 
 -- | First prose line of a markdown result, for one-line history rows.
