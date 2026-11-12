@@ -1061,7 +1061,7 @@ spec = do
         [unedited, edited] <- forM ["upgrade", "edited"] (createTestProject tr)
         convs <- forM [unedited, edited] \pid -> runTestBg frozenTime tr (Issues.ensureRoutineTemplate user pid "UTC" older) >>= either (fail . show) (pure . fst)
         for_ (drop 1 convs) \conv -> runQueryEffect tr $ Issues.setRoutineInstructions edited conv "Our own triage instructions"
-        forM_ [unedited, edited] \pid -> runQueryEffect tr (Projects.projectById pid) >>= traverse_ (runTestBg frozenTime tr . (`Issues.provisionRoutineTemplate` Issues.issueTriageTemplate))
+        runQueryEffect tr Issues.upgradeRoutineTemplates `shouldReturn` 1
         stored unedited `shouldReturn` [(Issues.issueTriageTemplate.prompt, 2 :: Int, Issues.issueTriageTemplate.prompt)]
         stored edited `shouldReturn` [("Our own triage instructions" :: Text, 1 :: Int, "Older triage instructions" :: Text)]
         (.syncEnabled) <$> syncById tr sync `shouldReturn` False
