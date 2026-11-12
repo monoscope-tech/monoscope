@@ -138,7 +138,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
     let table = inventoryTable "containers" deferredUrl
     pure
       table
-        { columns = containerColumns
+        { columns = containerColumns allRows
         , rows = V.fromList $ map (ContainerVM pid window) rows
         , features =
             table.features
@@ -169,21 +169,31 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
         }
   addRespHeaders $ ContainersPage $ PageCtx (infrastructureBW pid "Containers" window bw) body
   where
-    containerColumns :: [Column ContainerVM]
-    containerColumns =
-      [ col "Container" renderNameCol & withAttrs [class_ "w-64 max-w-64 overflow-hidden max-md:w-auto max-md:max-w-none"]
-      , col "Pod" (textCell (.podName)) & withAttrs [class_ "w-64 max-w-64 overflow-hidden max-[1800px]:hidden"]
-      , col "Namespace" (textCell (.namespace)) & withAttrs [class_ "w-32 max-w-32 overflow-hidden max-[1800px]:hidden"]
-      , col "Node" (textCell (.nodeName)) & withAttrs [class_ "w-36 max-w-36 overflow-hidden max-[1400px]:hidden"]
-      , col "CPU cores" (numCell (showFFloat' 3) (.cpuCores)) & withAttrs [class_ "w-20 text-right"]
-      , col "CPU limit" (pctCell "CPU limit used" cpuPctOfLimit) & withColHeaderExtra (headerHint_ "Share of the CPU limit in use") & withAttrs [class_ "min-w-28 max-md:hidden"]
-      , col "Memory" (numCell formatBytes (.memBytes)) & withAttrs [class_ "w-24 text-right max-md:hidden"]
-      , col "Memory limit" (pctCell "Memory limit used" memPctOfLimit) & withColHeaderExtra (headerHint_ "Share of the memory limit in use") & withAttrs [class_ "min-w-28 max-md:hidden"]
-      , col "Restarts" (numCell (showFFloat' 0) (.restarts))
-          & withColHeaderExtra (headerHint_ "Latest cumulative restart count reported within the selected time range. This is not the number of restarts during the range.")
-          & withAttrs [class_ "w-20 text-right max-md:hidden"]
-      , col "Ready" (readyCell . (.row)) & withAttrs [class_ "w-16 max-md:hidden"]
+    -- A column no container reports (pods and readiness under Docker) is dropped, so its width goes to the name.
+    containerColumns :: V.Vector ContainerRow -> [Column ContainerVM]
+    containerColumns inventory =
+      [ column
+      | (True, column) <-
+          [ (True, col "Container" renderNameCol & withAttrs [class_ "w-full max-w-0 min-w-64 overflow-hidden max-md:min-w-0"])
+          , (has (.podName), col "Pod" (textCell (.podName)) & withAttrs [class_ "w-64 max-w-64 overflow-hidden max-[1800px]:hidden"])
+          , (has (.namespace), col "Namespace" (textCell (.namespace)) & withAttrs [class_ "w-32 max-w-32 overflow-hidden max-[1800px]:hidden"])
+          , (has (.nodeName), col "Node" (textCell (.nodeName)) & withAttrs [class_ "w-36 max-w-36 overflow-hidden max-[1400px]:hidden"])
+          , (True, col "CPU cores" (numCell (showFFloat' 3) (.cpuCores)) & withAttrs [class_ "w-20 text-right"])
+          , (has cpuPctOfLimit, col "CPU limit" (pctCell "CPU limit used" cpuPctOfLimit) & withColHeaderExtra (headerHint_ "Share of the CPU limit in use") & withAttrs [class_ "min-w-28 max-md:hidden"])
+          , (True, col "Memory" (numCell formatBytes (.memBytes)) & withAttrs [class_ "w-24 text-right max-md:hidden"])
+          , (has memPctOfLimit, col "Memory limit" (pctCell "Memory limit used" memPctOfLimit) & withColHeaderExtra (headerHint_ "Share of the memory limit in use") & withAttrs [class_ "min-w-28 max-md:hidden"])
+          ,
+            ( has (.restarts)
+            , col "Restarts" (numCell (showFFloat' 0) (.restarts))
+                & withColHeaderExtra (headerHint_ "Latest cumulative restart count reported within the selected time range. This is not the number of restarts during the range.")
+                & withAttrs [class_ "w-20 text-right max-md:hidden"]
+            )
+          , (has (.ready), col "Ready" (readyCell . (.row)) & withAttrs [class_ "w-16 max-md:hidden"])
+          ]
       ]
+      where
+        has :: (ContainerRow -> Maybe a) -> Bool
+        has f = any (isJust . f) inventory
 
     -- A cell is its accessor plus how to draw a present value; absence is always the em dash.
     cell :: (ContainerRow -> Maybe a) -> (a -> Html ()) -> ContainerVM -> Html ()
