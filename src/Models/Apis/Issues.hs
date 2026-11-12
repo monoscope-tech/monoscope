@@ -3203,7 +3203,9 @@ routineRunsSql pid =
   [HI.sql|SELECT run.id, run.conversation_id, COALESCE(conversation.title, installation.title, CASE WHEN conversation.conversation_id IS NOT NULL THEN 'Untitled routine' END), run.scheduled_at,
       run.started_at, run.finished_at, run.status, run.error, run.source, run.attempt,
       (SELECT LEFT(a.content, 400) FROM apis.ai_routine_run_artifacts a WHERE a.run_id = run.id AND a.key = 'latest-result'),
-      installation.title
+      COALESCE(installation.title, CASE WHEN run.source->>'tag' = 'FixRun' THEN (SELECT c.title FROM apis.ai_routines a
+        JOIN apis.ai_conversations c ON c.project_id = a.project_id AND c.conversation_id = a.conversation_id
+        WHERE a.project_id = run.project_id AND a.template_key = #{issueAutofixTemplate.key}) END)
       FROM apis.ai_routine_runs run
       LEFT JOIN apis.ai_conversations conversation
         ON conversation.project_id = run.project_id AND conversation.conversation_id = run.conversation_id

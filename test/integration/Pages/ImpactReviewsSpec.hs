@@ -4329,7 +4329,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'FixIssue'" () `shouldReturn` (1 :: Int)
     -- The routine's page lists the fix run it started, though fix runs carry no routine_id.
     fixId <- dbOne tr "SELECT run_id FROM projects.issue_fix_jobs" ()
-    map (.source) <$> runQueryEffect tr (Issues.listConversationRuns testPid routine 5) `shouldReturn` [Issues.FixRun fixId]
+    map ((.source) &&& (.routine)) <$> runQueryEffect tr (Issues.listConversationRuns testPid routine 5) `shouldReturn` [(Issues.FixRun fixId, Just "Issue autofix")]
     void $ seed Issues.RuntimeException "autofix-paused" frozenTime
     runQueryEffect tr $ Issues.pauseRoutine testPid routine
     sweep
