@@ -374,7 +374,7 @@ routinesGetH pid = do
         failedNote_ r =
           let mine = filter (\run -> run.conversationId == r.conversationId || run.routine == Just r.title) recentRuns
               failed = length $ filter (Issues.runFailed . (.status)) mine
-           in when (failed > 0) $ span_ [class_ "text-textError"] $ toHtml $ show @Text failed <> " of " <> show @Text (length mine) <> " failed"
+           in when (failed > 0) $ span_ [class_ "text-textError"] $ toHtml $ show @Text failed <> " of the last " <> show @Text (length mine) <> " failed"
         categoryId = ("routine-category-" <>) . T.toLower . T.replace " " "-" . Issues.routineCategoryLabel
         templateCard_ template = do
           let added = template.key `elem` mapMaybe (.templateKey) installedRoutines
