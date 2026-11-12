@@ -1658,12 +1658,17 @@ spec = around withTestResources do
       pid <- createTestProject tr "Report routines"
       project <- runTestBg frozenTime tr (Projects.projectById pid) >>= maybe (fail "project missing") pure
       let digest = "{\"headline\":\"Checkout errors rose 4.8x\",\"highlights\":[{\"title\":\"Checkout 5xx up 4.8x\",\"detail\":\"412 to 1,980 against last week.\",\"widget\":{\"type\":\"timeseries\",\"query\":\"summarize count() by bin_auto(timestamp)\",\"title\":\"Errors\"},\"link\":\"/p/" <> pid.toText <> "/issues\"},{\"title\":\"Search recovered\",\"detail\":\"p95 back to 420 ms.\",\"widget\":null,\"link\":\"https://evil.example/p/\"}],\"explanation\":\"fallback\",\"has_findings\":true}"
-      (weekly, again, installed) <- runTestBg frozenTime tr do
+      (weekly, again, installed, onFree) <- runTestBg frozenTime tr do
         weekly <- Issues.provisionReportRoutines project
         again <- Issues.provisionReportRoutines project
-        (weekly,again,) <$> Issues.listConversations pid
-      isNothing again `shouldBe` True
-      sortOn (\(k, _, _) -> k) [(templateKey, r.routineActive, r.routineDestination) | r <- installed, Just templateKey <- [r.templateKey]] `shouldBe` [("daily-report", False, Just Issues.DestinationConversation), ("weekly-report", True, Just Issues.DestinationEmail)]
+        installed <- Issues.listConversations pid
+        -- Agents do not run on Free, so a Free project gets no report routines.
+        freePid <- liftIO $ createTestProject tr "Free reports"
+        liftIO $ dbExec tr [sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE id = ?|] (Only freePid)
+        free <- Projects.projectById freePid
+        (weekly,again,installed,) <$> (traverse Issues.provisionReportRoutines free >> Issues.listConversations freePid)
+      (isNothing again, onFree) `shouldSatisfy` \(none, conversations) -> none && null conversations
+      sortOn (\(k, _, _, _) -> k) [(templateKey, r.routineActive, r.routineDestination, r.routinePolicy) | r <- installed, Just templateKey <- [r.templateKey]] `shouldBe` [("daily-report", False, Just Issues.DestinationConversation, Just Issues.Observe), ("weekly-report", True, Just Issues.DestinationEmail, Just Issues.Observe)]
       slot <- maybe (fail "weekly report was not scheduled") pure weekly
       reportConv <- maybe (fail "weekly report missing") (pure . (.conversationId)) $ find ((== Just "weekly-report") . (.templateKey)) installed
       void $ runQueryEffect tr $ PM.createEveryoneTeam pid (uid tr)

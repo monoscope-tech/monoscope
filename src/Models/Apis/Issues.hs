@@ -2143,15 +2143,18 @@ reportPrompt cadence window baseline =
     \Return raw JSON only: {\"headline\": \"one sentence, at most 120 characters, leading with the most important change\", \"highlights\": [{\"title\": \"at most 60 characters\", \"detail\": \"2-3 sentences: what changed, by how much against the baseline, and why it matters\", \"widget\": {\"type\": \"timeseries|top_list|stat|pie_chart\", \"query\": \"KQL\", \"title\": \"chart title\"} or null, \"link\": \"/p/... or null\"}], \"explanation\": \"the headline and highlights as short markdown\", \"has_findings\": true or false}"
 
 
--- | Installs the report routines once per project: weekly active (emailed when the project kept its
--- weekly report email on), daily paused. Returns the weekly run to schedule.
+-- | Installs the report routines once per paid project (agents do not run on Free): weekly active
+-- (emailed when the project kept its weekly report email on), daily paused. Reports only read, so
+-- both start in Observe. Returns the weekly run to schedule.
 provisionReportRoutines :: (DB es, Time :> es, UUIDEff :> es) => Projects.Project -> Eff es (Maybe ScheduledRoutine)
-provisionReportRoutines project = do
-  weekly <- provisionRoutineTemplate project weeklyReportTemplate
-  daily <- provisionRoutineTemplate project dailyReportTemplate
-  for_ daily \routine -> Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET active = FALSE, next_run_at = NULL WHERE id = #{routine.id}|]
-  for_ weekly \routine -> when project.weeklyNotif $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET destination = #{DestinationEmail} WHERE id = #{routine.id}|]
-  pure weekly
+provisionReportRoutines project
+  | not $ Projects.isPaidPlan $ Projects.parsePlan project.paymentPlan = pure Nothing
+  | otherwise = do
+      weekly <- provisionRoutineTemplate project weeklyReportTemplate
+      daily <- provisionRoutineTemplate project dailyReportTemplate
+      for_ daily \routine -> Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET active = FALSE, next_run_at = NULL, policy = #{Observe} WHERE id = #{routine.id}|]
+      for_ weekly \routine -> Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET policy = #{Observe}, destination = #{bool DestinationConversation DestinationEmail project.weeklyNotif} WHERE id = #{routine.id}|]
+      pure weekly
 
 
 routineTemplates :: [RoutineTemplate]
