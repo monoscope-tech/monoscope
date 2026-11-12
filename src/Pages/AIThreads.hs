@@ -705,7 +705,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                   , rows_ "1"
                   , maxlength_ "4000"
                   , required_ "required"
-                  , placeholder_ $ bool "Ask or delegate a task…" "Ask about these results…" (isJust routineM)
+                  , placeholder_ $ bool "Ask or delegate a task…" "Ask about these results…" isRoutine
                   , Aria.label_ "Message Monoscope AI"
                   , class_ "min-h-9 max-h-40 grow resize-none bg-transparent border-0 px-2 py-2 text-base leading-6 placeholder:text-textWeak sm:text-sm sm:leading-5 focus:outline-none"
                   , [__|on keydown[key=='Enter' and not shiftKey]
@@ -713,7 +713,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                       end|]
                   ]
                     -- On a routine the result is the point; focusing the composer would raise a phone keyboard over it.
-                    <> [autofocus_ | isNothing routineM]
+                    <> [autofocus_ | not isRoutine]
                 )
                 ""
               input_ [type_ "hidden", name_ "mode", value_ "chat"]
@@ -730,7 +730,7 @@ threadPageGetH pid convId docM runM hxTarget = do
           , Aria.label_ "Conversation details"
           , class_ $ "min-w-0 border-s border-strokeWeak bg-bgRaised focus:outline-none " <> bool "hidden" "absolute inset-0 z-20 flex flex-col lg:static lg:z-auto lg:w-1/2 lg:max-w-2xl lg:shrink-0" (isJust runContent || isJust openDoc)
           ]
-            <> [[__|init if #ai-thread-input call #ai-thread-input.focus() end end|] | isNothing runContent && isNothing openDoc && isNothing routineM]
+            <> [[__|init if #ai-thread-input call #ai-thread-input.focus() end end|] | isNothing runContent && isNothing openDoc && not isRoutine]
             <> [attribute | isJust runContent || isJust openDoc, attribute <- [term "data-open" "", tabindex_ "-1", [__|init call me.focus() end on keydown[key == 'Escape'] halt the event then send click to #ai-inspector-close end|]]]
         )
         do
