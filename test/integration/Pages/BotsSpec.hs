@@ -1678,9 +1678,9 @@ spec = around withTestResources do
       [(T.isPrefixOf "weekly-report-20" $ toText doc.key, doc.title) | doc <- docs, toText doc.key /= "latest-result"] `shouldBe` [(True, "Checkout errors rose 4.8x")]
       opened <- runQueryEffect tr $ Issues.listArtifacts pid reportConv ((.key) <$> find ((/= "latest-result") . toText . (.key)) docs)
       foldMap (fold . (.content)) opened `shouldContainAll` ["## Checkout errors rose 4.8x", "### Checkout 5xx up 4.8x", "](http", "[Explore in Monoscope](/p/" <> pid.toText <> "/issues)"]
-      -- The chat result is the digest too, with the highlight's chart as a live widget.
+      -- The chat result is the digest too, its chart a live widget pinned to the report week.
       history <- runQueryEffect tr $ Issues.selectChatHistory pid reportConv
-      map (\m -> (m.role, isJust m.widgets)) (filter ((== Issues.ChatAssistant) . (.role)) history) `shouldBe` [(Issues.ChatAssistant, True)]
+      [foldMap (\(Aeson w) -> decodeUtf8 @Text $ AE.encode w) m.widgets | m <- history, m.role == Issues.ChatAssistant] `shouldSatisfy` \case [widgets] -> all (`T.isInfixOf` widgets) ["\"time_from\"", "\"time_to\"", "Errors"]; _ -> False
 
     it "answers recorded agent queries" \tr -> do
       let askAgent query apiKey = runTestBg frozenTime tr $ Bot.processAIQuery Nothing False AI.ServiceAccess testPid query Nothing tr.trATCtx.env.openaiModel apiKey
@@ -3291,7 +3291,7 @@ spec = around withTestResources do
             _ -> Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{uid tr}|] $> said "private-inflight-answer"
       tryAny (runTestBg frozenTime tr $ downgradeOnAnswer $ chat (webConfig (conv 3) inflight) "Inspect restricted evidence") >>= (`shouldSatisfy` denied)
       inflightContext <- contextOf inflight
-      runQueryEffect tr (Issues.completeRun inflightContext $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer testPid $ AI.AgenticChatResult "private-inflight-answer" []) >>= (`shouldSatisfy` \case Issues.RunCompleted Issues.CompletedCancelled Nothing -> True; _ -> False)
+      runQueryEffect tr (Issues.completeRun inflightContext $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer $ AI.AgenticChatResult "private-inflight-answer" []) >>= (`shouldSatisfy` \case Issues.RunCompleted Issues.CompletedCancelled Nothing -> True; _ -> False)
       fmap (.status) <$> runQueryEffect tr (Issues.getRoutineRun testPid inflightContext.id) `shouldReturn` Just Issues.RunCancelled
       runQueryEffect tr (Issues.listRunArtifacts testPid inflightContext.id) >>= (`shouldSatisfy` null)
       assistantReplies tr (conv 3) `shouldReturn` []
@@ -3437,7 +3437,7 @@ spec = around withTestResources do
           status handler = runAuthHandler tr $ statusOf handler
           policyFor run conv = runQueryEffect tr $ Issues.routineRunPolicyFor testPid run (uid tr) conv
           template name = maybe (fail $ "Missing template " <> toString name) pure $ find ((== name) . (.key)) Issues.routineTemplates
-          completeNoFindings slot context = runTestBg slot.scheduledAt tr (Issues.completeRun context $ Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer $ AI.prepareRunAnswer testPid $ AI.AgenticChatResult "No findings" []) >>= \case
+          completeNoFindings slot context = runTestBg slot.scheduledAt tr (Issues.completeRun context $ Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer $ AI.prepareRunAnswer $ AI.AgenticChatResult "No findings" []) >>= \case
             Issues.RunCompleted Issues.CompletedNoFindings (Just next) -> pure next
             _ -> fail "Expected a completed run and the next schedule"
       -- An installed event routine is listed and editable but keeps its event schedule; a reader only inspects it.
@@ -3659,7 +3659,7 @@ spec = around withTestResources do
       routine <- runQueryEffect tr (Issues.getEventRoutine project Issues.EventSlackMessage) >>= maybe (fail "Expected a Slack routine") pure
       let answer = AI.AgenticChatResult "{\"explanation\":\"Retained chart evidence.\",\"widgets\":[{\"type\":\"timeseries_line\",\"id\":\"reused-model-id\",\"title\":\"Retained error volume\",\"query\":\"summarize count() by bin_auto(timestamp)\"},{\"type\":\"stat\",\"id\":\"reused-model-id\",\"title\":\"Retained request count\",\"query\":\"summarize count()\"},{\"type\":\"table\",\"title\":\"Unsafe model link\",\"columns\":[{\"field\":\"name\",\"title\":\"Name\",\"link\":\"javascript:alert(1)\"}]}]}" []
       Just execution <- runTestBg frozenTime tr $ Issues.startEventRun routine (Issues.SlackCommandRequest routine.conversationId (uid tr)) Issues.StartRun routine.conversationId "Show retained charts"
-      runTestBg frozenTime tr $ completeTestRun project (Issues.EventClaim (Issues.SlackCommand routine.conversationId) execution.id execution.startedAt) $ Issues.CompletedResult Issues.ResultSucceeded Issues.RetainAnswer $ AI.prepareRunAnswer testPid answer
+      runTestBg frozenTime tr $ completeTestRun project (Issues.EventClaim (Issues.SlackCommand routine.conversationId) execution.id execution.startedAt) $ Issues.CompletedResult Issues.ResultSucceeded Issues.RetainAnswer $ AI.prepareRunAnswer answer
       runQueryEffect tr (Issues.selectChatHistory project routine.conversationId) >>= (`shouldSatisfy` all ((/= Issues.ChatAssistant) . (.role)))
       inspector <- renderT <$> call tr (AIThreads.routineRunGetH project execution.id $ Just routine.conversationId)
       inspector `shouldContainAll` (["Visualizations", "Retained error volume", "Retained request count", "data-chart-widget", "ai-run-" <> execution.id.toText, "id=\"ai-conversation\""] <> ["id=\"ai-run-" <> execution.id.toText <> "-" <> show i <> "_widgetEl\"" | i <- [0, 1 :: Int]])
@@ -3805,7 +3805,7 @@ spec = around withTestResources do
       let schedule conv = runTestBg frozenTime tr do
             startConversation conv Issues.CTWeb
             Issues.upsertRoutine (uid tr) testPid conv (fromRightShow $ Issues.mkRoutineInterval 15) >>= maybe (liftIO $ fail "Missing routine") pure
-          completeWith context text = runTestBg frozenTime tr $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer testPid $ AI.AgenticChatResult text []
+          completeWith context text = runTestBg frozenTime tr $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer $ AI.AgenticChatResult text []
       -- Saving the answer and advancing the schedule commit together; a retry under a new owner keeps the original grant and model answer.
       for_ (zip [1 ..] ([("apis.ai_routine_runs", "status <> 'succeeded'"), ("apis.ai_routines", "running_since IS NOT NULL")] :: [(Text, Text)])) \(n, (table, check)) -> do
         let conv = conversation n

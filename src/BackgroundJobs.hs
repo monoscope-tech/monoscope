@@ -417,7 +417,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
                           | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> Jobs.deferOperationReview pid identifier deadline
                           | otherwise -> failRun Issues.FailedResult "Incident investigation was interrupted before completion."
                         Just (Right (Left _)) -> failRun Issues.FailedResult "Incident investigation did not return a report."
-                        Just (Right (Right answer)) -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer pid answer
+                        Just (Right (Right answer)) -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer answer
                     )
                     `withException` \(_ :: SomeException) -> void (Issues.completeRun context $ Issues.FailedResult $ Issues.RunFailure "Incident investigation worker stopped before recording its result." Issues.RunOnly)
                 now <- Time.currentTime
@@ -516,13 +516,17 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
       deliveryContext = case routine.destination of
         Issues.DestinationSlack -> Just "\nROUTINE DELIVERY\nSend a concise copy of reportable findings to the project's configured Slack channel. Do not send a message when there are no findings.\n"
         (Issues.DestinationConversation; Issues.DestinationEmail) -> Nothing
+      templateKey = (.templateKey) =<< conversationM
+      -- Report templates cover a fixed window ending at the claim; their answers are digests.
+      reportWindow = templateKey >>= Issues.reportWindowDays <&> \days -> (addUTCTime (fromInteger $ negate days * 86400) routine.claimedAt, routine.claimedAt)
+      report answer = reportWindow >>= \window -> AI.reportRunAnswer routine.projectId window answer
       config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.ProjectMember routine.requestedBy, AI.invocationMode = AI.DurableRun context}
   outcome <- Timeout.timeout timeoutMicros $ tryAny do
     result <- execute config
     AI.requireAgentAccess config.access routine.projectId
     pure $ case result of
       Left err -> Issues.FailedResult $ Issues.RunFailure err (Issues.ConversationNotice $ "Routine failed: " <> err)
-      Right answer -> (if routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer) then Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer else Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer) $ AI.prepareRunAnswer routine.projectId answer
+      Right answer -> (if routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer) then Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer else Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer) $ maybe (AI.prepareRunAnswer answer) snd (report answer)
   case outcome of
     Just (Left err)
       | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> do
@@ -540,23 +544,21 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
       Issues.completeRun context completion >>= \case
         Issues.CompletionRejected -> pass
         Issues.RunCompleted termination next -> do
-          case (termination, completion, (.templateKey) =<< conversationM) of
-            (Issues.CompletedSucceeded, Issues.CompletedResult _ _ Issues.RunAnswer{evidence = Issues.AgentEvidence answer}, Just templateKey) ->
-              sequence_ $ deliverReport authCtx routine templateKey <$> Issues.reportWindowDays templateKey <*> AI.parseReportDigest routine.projectId answer.response
+          case (termination, completion) of
+            (Issues.CompletedSucceeded, Issues.CompletedResult _ _ Issues.RunAnswer{evidence = Issues.AgentEvidence answer}) ->
+              sequence_ $ deliverReport authCtx routine <$> templateKey <*> reportWindow <*> (fst <$> report answer)
             _ -> pass
           for_ next $ \slot -> enqueueNext slot.id slot.scheduledAt
 
 
 -- | A report run keeps a dated document in its routine (the report history) and, when the
 -- routine delivers by email, mails it to members while the everyone team has email enabled.
-deliverReport :: Config.AuthContext -> Issues.ClaimedRoutine -> Text -> Integer -> AI.ReportDigest -> ATBackgroundCtx ()
-deliverReport authCtx routine templateKey days digest = do
+deliverReport :: Config.AuthContext -> Issues.ClaimedRoutine -> Text -> (UTCTime, UTCTime) -> AI.ReportDigest -> ATBackgroundCtx ()
+deliverReport authCtx routine templateKey (from, to) digest = do
   let pid = routine.projectId
-      to = routine.claimedAt
-      from = addUTCTime (fromInteger $ negate days * 86400) to
       tz = fromMaybe TZ.utcTZ $ TZ.tzByName $ encodeUtf8 routine.timezone
       day fmt = toText . formatTime defaultTimeLocale fmt . TZ.utcToLocalTimeTZ tz
-      period = (if days == 1 then day "%a %-d %b %Y" to else day "%-d %b" from <> " – " <> day "%-d %b %Y" to) <> " · " <> routine.timezone
+      period = (if diffUTCTime to from <= nominalDay then day "%a %-d %b %Y" to else day "%-d %b" from <> " – " <> day "%-d %b %Y" to) <> " · " <> routine.timezone
       png w = Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid w Nothing (Just $ formatUTCMicros from) (Just $ formatUTCMicros to)
   charts <- traverse (fmap join . traverse png . (.widget)) digest.highlights
   let key = Issues.mkArtifactKey $ templateKey <> "-" <> day "%Y-%m-%d" to

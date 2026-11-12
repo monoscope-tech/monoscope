@@ -72,6 +72,7 @@ module Pkg.AI (
   ReportDigest (..),
   ReportHighlight (..),
   parseReportDigest,
+  reportRunAnswer,
   digestMarkdown,
   callRoutineLLM,
 ) where
@@ -143,7 +144,7 @@ import Relude
 import System.Config qualified as Config
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (throwIO, withException)
-import Utils (encodeText, hostPath, nonEmptyT, unwrapJsonPrimValue)
+import Utils (encodeText, formatUTCMicros, hostPath, nonEmptyT, unwrapJsonPrimValue)
 import Web.ApiTypes (ApiActor (..))
 import Web.HttpApiData (parseQueryParam)
 import Web.Links (CookieProtectedRoutes (..), urls)
@@ -263,7 +264,7 @@ completeAgenticResponse config userQuery model apiKey answer = do
     (SlackInvestigationAccess{}, _) -> pass -- Recorded by the replayable Slack turn.
     (_, Nothing) -> pass
     (_, Just convId) -> do
-      let message = prepareRunAnswer config.projectId answer
+      let message = prepareRunAnswer answer
           persist = Issues.insertChatMessage config.projectId convId Issues.ChatAssistant message.content message.widgets (Just $ AE.toJSON answer.toolCalls)
       case config.invocationMode of
         InteractiveReadOnly -> persist
@@ -306,10 +307,8 @@ ensureConversationTitle config userQuery model apiKey answer = do
   pure $ join title
 
 
-prepareRunAnswer :: Projects.ProjectId -> AgenticChatResult -> Issues.RunAnswer
-prepareRunAnswer pid answer = case parseReportDigest pid answer.response of
-  Just digest -> let md = digestMarkdown digest [] in Issues.RunAnswer{content = md, widgets = AE.toJSON <$> guarded (not . null) (mapMaybe (.widget) digest.highlights), report = md, evidence = Issues.AgentEvidence answer}
-  Nothing -> Issues.RunAnswer{content = msg, widgets = AE.toJSON <$> widgets, report, evidence = Issues.AgentEvidence answer}
+prepareRunAnswer :: AgenticChatResult -> Issues.RunAnswer
+prepareRunAnswer answer = Issues.RunAnswer{content = msg, widgets = AE.toJSON <$> widgets, report, evidence = Issues.AgentEvidence answer}
   where
     parsed = parseAgenticResponse answer
     widgets = guarded (not . null) . take 10 . responseWidgets =<< rightToMaybe parsed
@@ -349,6 +348,16 @@ parseReportDigest pid response = do
             , link = mfilter (("/p/" <> pid.toText <> "/") `T.isPrefixOf`) $ h ^? key "link" . _String
             }
   pure $ ReportDigest headline $ take 5 $ mapMaybe highlight $ val ^.. key "highlights" . values
+
+
+-- | A report run's answer: the digest as markdown with each chart pinned to the report window,
+-- so in-app charts show the period the report describes.
+reportRunAnswer :: Projects.ProjectId -> (UTCTime, UTCTime) -> AgenticChatResult -> Maybe (ReportDigest, Issues.RunAnswer)
+reportRunAnswer pid (from, to) answer =
+  parseReportDigest pid answer.response <&> \digest ->
+    let pinned = digest{highlights = [h{widget = (\w -> w{Widget.timeFrom = Just $ formatUTCMicros from, Widget.timeTo = Just $ formatUTCMicros to}) <$> h.widget} | h <- digest.highlights]}
+        md = digestMarkdown pinned []
+     in (pinned, Issues.RunAnswer{content = md, widgets = AE.toJSON <$> guarded (not . null) (mapMaybe (.widget) pinned.highlights), report = md, evidence = Issues.AgentEvidence answer})
 
 
 -- | The digest as markdown, each highlight followed by its chart image when one is given.
