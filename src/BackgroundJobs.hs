@@ -520,7 +520,7 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
       -- Report templates cover a fixed window ending at the claim; their answers are digests.
       reportWindow = templateKey >>= Issues.reportWindowDays <&> \days -> (addUTCTime (fromInteger $ negate days * 86400) routine.claimedAt, routine.claimedAt)
       report answer = reportWindow >>= \window -> AI.reportRunAnswer routine.projectId window answer
-      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.ProjectMember routine.requestedBy, AI.invocationMode = AI.DurableRun context}
+      config = maybe identity AI.reportConfig reportWindow (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.ProjectMember routine.requestedBy, AI.invocationMode = AI.DurableRun context}
   outcome <- Timeout.timeout timeoutMicros $ tryAny do
     result <- execute config
     AI.requireAgentAccess config.access routine.projectId
@@ -559,7 +559,8 @@ deliverReport authCtx routine templateKey (from, to) digest = do
       tz = fromMaybe TZ.utcTZ $ TZ.tzByName $ encodeUtf8 routine.timezone
       day fmt = toText . formatTime defaultTimeLocale fmt . TZ.utcToLocalTimeTZ tz
       period = (if diffUTCTime to from <= nominalDay then day "%a %-d %b %Y" to else day "%-d %b" from <> " – " <> day "%-d %b %Y" to) <> " · " <> routine.timezone
-      png w = Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid w Nothing (Just $ formatUTCMicros from) (Just $ formatUTCMicros to)
+      (chartFrom, chartTo) = AI.reportComparison (from, to)
+      png w = Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid w Nothing (Just $ formatUTCMicros chartFrom) (Just $ formatUTCMicros chartTo)
   charts <- traverse (fmap join . traverse png . (.widget)) digest.highlights
   let key = Issues.mkArtifactKey $ templateKey <> "-" <> day "%Y-%m-%d" to
       body = "*" <> period <> "*\n\n" <> AI.digestMarkdown digest charts

@@ -16,7 +16,7 @@ import Data.Map.Strict qualified as Map
 import Data.OpenApi (OpenApi)
 import Data.Ord (clamp)
 import Data.Text qualified as T
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Deriving.Aeson.Stock qualified as DAE
@@ -209,6 +209,7 @@ data Routes mode = Routes
   , deviceToken :: mode :- "api" :> "device" :> "token" :> QPT "device_code" :> Post '[JSON] Auth.DeviceTokenResponse
   , emailPreviewList :: mode :- "dev" :> "emails" :> Get '[HTML] (Html ())
   , emailPreview :: mode :- "dev" :> "emails" :> Capture "template" Text :> Get '[HTML] (Html ())
+  , reportPreview :: mode :- "dev" :> "reports" :> Capture "project_id" Projects.ProjectId :> QPT "template" :> Get '[HTML] (Html ())
   , apiV1 :: mode :- "api" :> "v1" :> AuthProtect "api-key-auth" :> NamedRoutes ApiV1Routes
   , apiV1OpenApi :: mode :- "api" :> "v1" :> "openapi.json" :> Get '[JSON] OpenApi
   }
@@ -271,6 +272,7 @@ server otlpTraces otlpLogs =
         , deviceToken = Auth.deviceTokenH
         , emailPreviewList = emailPreviewListH
         , emailPreview = emailPreviewH
+        , reportPreview = reportPreviewH projectTools
         , apiV1 = apiV1Server
         , apiV1OpenApi = pure apiV1OpenApiSpec
         , cookieProtected = \sessionWithCookies ->
@@ -951,6 +953,27 @@ emailPreviewListH = do
     p_ "Click a template to preview:"
     ul_ $ forM_ emailTemplates \(name, _) ->
       li_ [class_ "my-2"] $ a_ [href_ $ "/dev/emails/" <> name] $ toHtml name
+
+
+-- | Dev only: runs a report template's agent read-only on a project's live data (nothing is saved or
+-- sent) and shows the email it would produce, or the raw answer when it is not a valid digest.
+reportPreviewH :: Maybe AI.ProjectTools -> Projects.ProjectId -> Maybe Text -> ATBaseCtx (Html ())
+reportPreviewH tools pid templateM = do
+  guardDevOnly
+  ctx <- ask @AuthContext
+  now <- Time.currentTime
+  let template = fromMaybe Issues.weeklyReportTemplate $ find ((== templateM) . Just . (.key)) [Issues.weeklyReportTemplate, Issues.dailyReportTemplate]
+      days = fromMaybe 7 $ Issues.reportWindowDays template.key
+      (start, end) = (addUTCTime (fromInteger $ negate days * 86400) now, now)
+      config = AI.reportConfig (start, end) (AI.defaultAgenticConfig pid){AI.projectTools = tools, AI.sourceConfig = Just ctx.config, AI.useTimefusion = ctx.env.enableTimefusionReads, AI.timezone = Just "UTC"}
+  AI.runAgenticChatWithHistory config (template.prompt <> "\n\nRun this report now.") ctx.config.openaiModel ctx.config.openaiApiKey >>= \case
+    Left err -> pure $ pre_ $ toHtml err
+    Right answer -> case AI.reportRunAnswer pid (start, end) answer of
+      Nothing -> pure $ pre_ [style_ "white-space:pre-wrap"] $ toHtml answer.response
+      Just (digest, _) -> do
+        charts <- forM digest.highlights \h -> join <$> traverse (\w -> Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid w Nothing (Just $ Utils.formatUTCMicros $ fst $ AI.reportComparison (start, end)) (Just $ Utils.formatUTCMicros end)) h.widget
+        let (subject, html) = ET.routineReportEmail "Preview" (show days <> " days to now") digest.headline (urls.aiRoutinesGet pid) [(h.title, h.detail, chart, Utils.hostPath ctx.env.hostUrl <$> h.link) | (h, chart) <- zip digest.highlights charts]
+        pure $ ET.emailWrapper subject html >> details_ (summary_ "Raw answer" >> pre_ [style_ "white-space:pre-wrap"] (toHtml answer.response))
 
 
 emailPreviewH :: Text -> ATBaseCtx (Html ())

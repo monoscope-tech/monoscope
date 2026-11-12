@@ -73,6 +73,8 @@ module Pkg.AI (
   ReportHighlight (..),
   parseReportDigest,
   reportRunAnswer,
+  reportComparison,
+  reportConfig,
   digestMarkdown,
   callRoutineLLM,
 ) where
@@ -86,6 +88,7 @@ import Data.Aeson.Lens (key, values, _Bool, _Number, _Object, _String)
 import Data.Aeson.Types (parseEither, parseMaybe)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Char (isAlphaNum, isHexDigit)
+import Data.Containers.ListUtils (nubOrdOn)
 import Data.Default (def)
 import Data.Effectful.CodeReview.Types (AgentAwaitingReview (..))
 import Data.Effectful.Hasql qualified as Hasql
@@ -95,7 +98,7 @@ import Data.Effectful.Wreq qualified as W
 import Data.HashMap.Strict qualified as HM
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, diffUTCTime, formatTime)
 import Data.Time.Zones (utcTZ, utcToLocalTimeTZ)
 import Data.Time.Zones.All qualified as TZ
 import Data.Traversable (for)
@@ -332,6 +335,12 @@ data ReportHighlight = ReportHighlight {title :: Text, detail :: Text, widget ::
 -- >>> let raw = "{\"headline\":\"Checkout errors up 4.8x\",\"highlights\":[{\"title\":\"Checkout 5xx\",\"detail\":\"412 to 1,980.\",\"widget\":{\"type\":\"stat\",\"query\":\"summarize count()\"},\"link\":\"/p/00000000-0000-0000-0000-000000000000/issues\"},{\"title\":\"Bad chart\",\"detail\":\"d\",\"widget\":{\"type\":\"stat\",\"query\":\"where >\"},\"link\":\"javascript:alert(1)\"},{\"detail\":\"untitled\"}]}"
 -- >>> fmap (\d -> (d.headline, map (\h -> (h.title, isJust h.widget, h.link)) d.highlights)) (parseReportDigest Projects.demoProjectId raw)
 -- Just ("Checkout errors up 4.8x",[("Checkout 5xx",True,Just "/p/00000000-0000-0000-0000-000000000000/issues"),("Bad chart",False,Nothing)])
+-- >>> let linked l = (.link) <$> (listToMaybe . (.highlights) =<< parseReportDigest Projects.demoProjectId ("{\"headline\":\"h\",\"highlights\":[{\"title\":\"t\",\"link\":\"" <> l <> "\"}]}"))
+-- >>> map linked ["/issues/42", "//evil.example/x", "/p/11111111-1111-1111-1111-111111111111/issues"]
+-- [Just (Just "/p/00000000-0000-0000-0000-000000000000/issues/42"),Just Nothing,Just Nothing]
+-- >>> let titles hs = map (.title) . (.highlights) <$> parseReportDigest Projects.demoProjectId ("{\"headline\":\"h\",\"highlights\":" <> hs <> "}")
+-- >>> titles "[{\"title\":\"noise\",\"previous\":1,\"current\":3,\"unit\":\"events\"},{\"title\":\"flat\",\"previous\":100,\"current\":105,\"unit\":\"ms\"},{\"title\":\"real\",\"previous\":1777,\"current\":835,\"unit\":\"events\"},{\"title\":\"same events again\",\"previous\":1777,\"current\":835,\"unit\":\"events\"}]"
+-- Just ["real"]
 -- >>> isNothing $ parseReportDigest Projects.demoProjectId "{\"explanation\":\"plain\"}"
 -- True
 parseReportDigest :: Projects.ProjectId -> Text -> Maybe ReportDigest
@@ -340,24 +349,52 @@ parseReportDigest pid response = do
   headline <- nonEmptyT $ T.strip <$> val ^? key "headline" . _String
   let highlight h = do
         title <- nonEmptyT $ T.strip <$> h ^? key "title" . _String
+        let change = liftA2 (,) (h ^? key "previous" . _Number) (h ^? key "current" . _Number)
+        guard $ all (material $ h ^? key "unit" . _String) change
         pure
-          ReportHighlight
+          . (maybe (Left title) Right change,)
+          $ ReportHighlight
             { title
             , detail = foldMap T.strip $ h ^? key "detail" . _String
-            , widget = mfilter (all (isRight . parseQueryToAST) . (.query)) $ Widget.modelWidget <$> (parseMaybe AE.parseJSON =<< h ^? key "widget")
-            , link = mfilter (("/p/" <> pid.toText <> "/") `T.isPrefixOf`) $ h ^? key "link" . _String
+            , widget = mfilter (all (\q -> isRight (parseQueryToAST q) && not ("ago(" `T.isInfixOf` q)) . (.query)) $ durationUnit . Widget.modelWidget <$> (parseMaybe AE.parseJSON =<< h ^? key "widget")
+            , link = projectLink =<< h ^? key "link" . _String
             }
-  pure $ ReportDigest headline $ take 5 $ mapMaybe highlight $ val ^.. key "highlights" . values
+  pure $ ReportDigest headline $ take 5 $ map snd $ nubOrdOn fst $ mapMaybe highlight $ val ^.. key "highlights" . values
+  where
+    -- The prompt's materiality rules, enforced: under 20% is no change, and event counts under 50 are noise.
+    material unit (previous, current) = abs (current - previous) >= 0.2 * max (abs previous) 1 && (unit /= Just "events" || max previous current >= 50)
+    -- duration is stored in nanoseconds; the unit lets charts show ms/s instead of raw counts.
+    durationUnit (w :: Widget.Widget) = (w :: Widget.Widget){Widget.unit = w.unit <|> ("ns" <$ guard ("duration" `T.isInfixOf` fold w.query))}
+    -- The agent writes project-relative paths; anything leaving the project is dropped.
+    projectLink l
+      | ("/p/" <> pid.toText <> "/") `T.isPrefixOf` l = Just l
+      | "/" `T.isPrefixOf` l && not (any (`T.isPrefixOf` l) ["//", "/p/"]) = Just $ "/p/" <> pid.toText <> l
+      | otherwise = Nothing
 
 
 -- | A report run's answer: the digest as markdown with each chart pinned to the report window,
 -- so in-app charts show the period the report describes.
 reportRunAnswer :: Projects.ProjectId -> (UTCTime, UTCTime) -> AgenticChatResult -> Maybe (ReportDigest, Issues.RunAnswer)
-reportRunAnswer pid (from, to) answer =
+reportRunAnswer pid window answer =
   parseReportDigest pid answer.response <&> \digest ->
-    let pinned = digest{highlights = [h{widget = (\w -> w{Widget.timeFrom = Just $ formatUTCMicros from, Widget.timeTo = Just $ formatUTCMicros to}) <$> h.widget} | h <- digest.highlights]}
+    let (from, to) = reportComparison window
+        pinned = digest{highlights = [h{widget = (\w -> w{Widget.timeFrom = Just $ formatUTCMicros from, Widget.timeTo = Just $ formatUTCMicros to}) <$> h.widget} | h <- digest.highlights]}
         md = digestMarkdown pinned []
      in (pinned, Issues.RunAnswer{content = md, widgets = AE.toJSON <$> guarded (not . null) (mapMaybe (.widget) pinned.highlights), report = md, evidence = Issues.AgentEvidence answer})
+
+
+-- | A report compares its period with the one before, so its queries and charts span both.
+--
+-- >>> import Data.Time (UTCTime (..), fromGregorian)
+-- >>> reportComparison (UTCTime (fromGregorian 2026 11 9) 0, UTCTime (fromGregorian 2026 11 16) 0)
+-- (2026-11-02 00:00:00 UTC,2026-11-16 00:00:00 UTC)
+reportComparison :: (UTCTime, UTCTime) -> (UTCTime, UTCTime)
+reportComparison (from, to) = (addUTCTime (diffUTCTime from to) from, to)
+
+
+-- | A report run's agent: its queries see both periods, with room to query each signal it compares.
+reportConfig :: (UTCTime, UTCTime) -> AgenticConfig -> AgenticConfig
+reportConfig window config = config{timeRange = bimap Just Just (reportComparison window), maxIterations = 12}
 
 
 -- | The digest as markdown, each highlight followed by its chart image when one is given.
