@@ -1,3 +1,13 @@
+<a class="cmd-item flex [&amp;[hidden]]:hidden items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors" role="option" data-search="routines and reports" hx-live:hidden="((c, s, t, d) =&gt; !!c || !(i =&gt; [...s].every(ch =&gt; (i = t.indexOf(ch, i) + 1)))(0))(closest(&#39;.cmd-palette&#39;).data.currentCategory, q(&#39;#cmd-palette-input&#39;).value.toLowerCase(), this.dataset.search, this.dataset)" href="/p/<uuid>/ai/routines" data-recent-url="/p/<uuid>/command-palette/recents" data-recent-label="Routines and reports" data-recent-type="page" _="on click
+          fetch `${my.dataset.recentUrl}` {method:&#39;POST&#39;, headers:{&#39;Content-Type&#39;:&#39;application/x-www-form-urlencoded&#39;}, body: `label=${encodeURIComponent(my.dataset.recentLabel)}&amp;url=${encodeURIComponent(my.getAttribute(&#39;href&#39;))}&amp;itemType=${encodeURIComponent(my.dataset.recentType)}`}">
+<svg class="icon w-3.5 h-3.5 text-textWeak shrink-0" width="1em" height="1em" viewBox="0 0 512 512">
+<g>
+<path d="M464 256A208 208 0 1 1 48 256a208 208 0 1 1 416 0zM0 256a256 256 0 1 0 512 0A256 256 0 1 0 0 256zM232 120V256c0 8 4 15.5 10.7 20l96 64c11 7.4 25.9 4.4 33.3-6.7s4.4-25.9-6.7-33.3L280 243.2V120c0-13.3-10.7-24-24-24s-24 10.7-24 24z" />
+</g>
+</svg>
+<span class="truncate flex-1">Routines and reports</span>
+<span class="badge badge-ghost badge-xs text-2xs">Page</span>
+</a>
 <a href="/p/<uuid>/ai/routines" class="hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center justify-between rounded-md px-2 py-1.5 text-2xs font-medium text-textWeak hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-1 transition-colors">
 <span>Routines</span>
 <span class="text-2xs tabular-nums text-textDisabled">0</span>

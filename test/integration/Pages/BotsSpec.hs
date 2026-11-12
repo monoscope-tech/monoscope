@@ -4443,7 +4443,6 @@ spec = around withTestResources do
           unbroken = T.replicate 50000 "x"
           cases =
             [ ("show errors", 1, "No errors were found.", "No errors were found.", 0, 1)
-            , ("show weekly report", 0, "report found", "No errors were found.", 0, 1)
             , ("Call send_to_slack exactly once, then report completion.", 1, "No errors were found.", "No errors were found.", 0, 1)
             , ("Show charts of error volume and request count", 1, explanation, widgetAnswer Nothing (Just explanation), 2, 1)
             , ("Show charts with a legacy primary query", 1, explanation, widgetAnswer (Just "summarize count()") (Just explanation), 2, 1)

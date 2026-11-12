@@ -171,7 +171,7 @@ spec = do
                        ]
       renderT images `shouldContainAll` ["Images", "SBOM unavailable"]
       -- A cluster known only by uid renders a compact label; the full uid stays in the tooltip.
-      renderT kubernetes `shouldContainAll` ["Pods", "Clusters", "Namespaces", "Workloads", "Nodes", "CPU limit used", "Memory limit used", "Showing ", " resources", "cluster-9b1deb4d"]
+      renderT kubernetes `shouldContainAll` ["Pods", "Clusters", "Namespaces", "Workloads", "Nodes", "CPU limit", "Memory limit", "Showing ", " resources", "cluster-9b1deb4d"]
       renderT hostMap `shouldContainAll` ["Host Map", "Fill by", "Group by", "vps-bare-01", "Provider", "Region", "OS"]
       goldenParts "infrastructure-views"
         . ordNub

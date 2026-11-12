@@ -542,7 +542,7 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
         Issues.RunCompleted termination next -> do
           case (termination, completion, (.templateKey) =<< conversationM) of
             (Issues.CompletedSucceeded, Issues.CompletedResult _ _ Issues.RunAnswer{evidence = Issues.AgentEvidence answer}, Just templateKey) ->
-              for_ (liftA2 (,) (Issues.reportWindowDays templateKey) (AI.parseReportDigest routine.projectId answer.response)) $ uncurry (deliverReport authCtx routine templateKey)
+              sequence_ $ deliverReport authCtx routine templateKey <$> Issues.reportWindowDays templateKey <*> AI.parseReportDigest routine.projectId answer.response
             _ -> pass
           for_ next $ \slot -> enqueueNext slot.id slot.scheduledAt
 

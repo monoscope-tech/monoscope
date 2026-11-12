@@ -736,7 +736,7 @@ threadPageGetH pid convId docM runM hxTarget = do
             do
               h2_ [class_ "text-base font-semibold text-textStrong text-balance break-words"] $ toHtml doc.title
               p_ [class_ "mt-1 text-xs text-textWeak"] $ "Updated " >> localTimeFmt_ "MMM d, HH:mm" doc.updatedAt
-              when (length openToc > 2) $ details_ [class_ "mt-4 text-sm text-textWeak"] do
+              when (length openToc > 1) $ details_ [class_ "mt-4 text-sm text-textWeak"] do
                 summary_ [class_ "cursor-pointer"] "On this page"
                 ul_ [class_ "mt-2 space-y-1"] $ for_ openToc \(anchor, heading) ->
                   li_ $ a_ [href_ $ "#" <> anchor, class_ "block truncate text-textBrand hover:underline"] $ toHtml heading
