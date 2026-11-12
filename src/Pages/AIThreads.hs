@@ -659,6 +659,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                       span_ [class_ "hidden group-open/older:inline"] "Show fewer"
                     div_ [class_ "mt-2"] $ runList older
             when isRoutine do
+              when (null runs && isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] "No runs yet. An active routine starts when the next matching event arrives."
               -- Setup, not daily reading: collapsed below the results.
               disclosure_ [Aria.label_ "Routine configuration"] ("Settings" >> whenJust (conversationM >>= (.routinePolicy)) (span_ [class_ "ms-auto text-xs font-normal text-textWeak"] . toHtml . policyLabel))
                 $ div_ [class_ "space-y-5"] do
@@ -694,7 +695,6 @@ threadPageGetH pid convId docM runM hxTarget = do
                     textarea_ ([id_ "routine-instructions", name_ "instructions", required_ "required", maxlength_ "4000", rows_ "8", class_ "textarea w-full text-base sm:text-sm"] <> [readonly_ "" | not canEdit]) $ toHtml $ fromMaybe "" instructions
                     p_ [class_ "text-xs text-textWeak"] "Changes apply to future runs. Past runs keep the instructions they used."
                     when canEdit $ button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save instructions"
-              when (null runs && isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] "No runs yet. An active routine starts when the next matching event arrives."
         unless (isJust runContent && isNothing conversationM) $ form_
           [ class_ "group/composer shrink-0 border-t border-strokeWeak bg-bgBase p-4"
           , hxPost_ $ maybe (urls.aiThreadsPost projectId) (urls.aiThreadPost projectId) activeConversationIdM
