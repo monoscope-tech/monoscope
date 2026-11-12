@@ -483,7 +483,7 @@ threadPageGetH pid convId docM runM hxTarget = do
               when (run.conversationId /= convId) $ a_ [href_ $ threadUrl pid run.conversationId, class_ "shrink-0 text-xs font-medium text-textBrand hover:underline"] "Open thread"
             div_ [class_ "flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak [&>*+*]:before:me-2 [&>*+*]:before:text-textDisabled [&>*+*]:before:content-['·']"] do
               span_ [role_ "status"] $ uncurry tonePill_ $ runStatus run.status
-              time_ [datetime_ $ show run.startedAt, class_ "tabular-nums"] $ toHtml $ formatTime defaultTimeLocale "%e %b %Y, %H:%M UTC" run.startedAt
+              span_ [class_ "tabular-nums"] $ localTimeFmt_ "d MMM yyyy, HH:mm" run.startedAt
               span_ $ toHtml $ case run.source of
                 (Issues.InteractiveRun _; Issues.ConversationRun _) -> "Web request"
                 Issues.FixRun{} -> "Code fix"
@@ -493,14 +493,15 @@ threadPageGetH pid convId docM runM hxTarget = do
                 Issues.TriggeredRun (Issues.PullRequestReview _) -> "Pull request"
                 Issues.TriggeredRun (Issues.IssueEnrichment _) -> "New issue"
                 Issues.TriggeredRun (Issues.IncidentEvent _ _) -> "Incident event"
-              span_ $ toHtml $ "Attempt " <> show @Text run.attempt
+              when (run.attempt > 1) $ span_ $ toHtml $ "Attempt " <> show @Text run.attempt
               span_ [title_ "Role upgrades apply to new requests. Current access can restrict this run further."] $ toHtml $ "Role limit: " <> toText (encodeEnumSC @"P" evidence.permissionCeiling)
               whenJust requestedBy $ \user -> do
                 let name = T.strip $ user.firstName <> " " <> user.lastName
                 span_ [class_ "min-w-0 break-words"] $ toHtml $ "Requested by " <> if T.null name then CI.original user.email else name
           sequence_ fixEvidence
           whenJust run.error $ p_ [class_ $ "rounded-lg border border-strokeWeak p-4 text-sm break-words " <> runErrorTone run.status, role_ "status"] . toHtml
-          whenJust evidence.input $ \input -> section_ [Aria.label_ "Run request"] do
+          -- A scheduled run's request is its instructions, already one disclosure below.
+          whenJust (mfilter ((/= evidence.instructions) . Just) evidence.input) $ \input -> section_ [Aria.label_ "Run request"] do
             h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Request"
             p_ [class_ "whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml input
           disclosure_ [term "hx-morph-skip" ""] (case run.source of Issues.FixRun{} -> "Fix workflow"; (Issues.ScheduledRun; Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}) -> "Instructions used for this run") do
