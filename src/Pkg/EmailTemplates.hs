@@ -643,7 +643,7 @@ routineReportEmail projectTitle period headline reportUrl highlights =
       forM_ highlights \(title, detail, chart, link) -> do
         h2_ [style_ "font-size:18px;margin:32px 0 8px;"] $ toHtml title
         unless (T.null detail) $ p_ $ toHtml detail
-        whenJust chart \url -> themedImages (pngAppearance "light" url) (pngAppearance "dark" url) [class_ "report-chart", alt_ $ title <> " chart", width_ "560", style_ "width:100%;max-width:560px;box-sizing:border-box;height:auto;display:block;margin:12px 0 0;border:1px solid #dee2e7;border-radius:8px;"]
+        whenJust chart $ div_ [style_ "margin-top:12px;"] . chartImage_ title
         whenJust link \url -> p_ [style_ "margin:10px 0 0;font-size:14px;"] $ a_ [href_ url, target_ "_blank"] "Explore in Monoscope \8594"
       emailButton reportUrl "Open the report"
       p_ [class_ "sub"] "This report is an AI routine. Change its schedule, delivery or instructions from the report page."
@@ -665,14 +665,15 @@ sampleRoutineReport errorsChart latencyChart =
 chartBlock :: Text -> Text -> Html ()
 chartBlock label url = do
   p_ [style_ "margin: 20px 0 8px; font-size: 14px; font-weight: 600; color: #57606a;"] $ toHtml label
-  themedImages (appearance "light") (appearance "dark") [class_ "report-chart", alt_ $ label <> " chart", width_ "600", style_ "width:100%;max-width:600px;box-sizing:border-box;height:auto;display:block;border:1px solid #dee2e7; border-radius: 8px;"]
+  chartImage_ label url
+
+
+-- | A chart PNG in both appearances. PNG responses are immutable in the CDN, so a renderer
+-- revision needs fresh URLs (@render@).
+chartImage_ :: Text -> Text -> Html ()
+chartImage_ label url = themedImages (appearance "light") (appearance "dark") [class_ "report-chart", alt_ $ label <> " chart", width_ "600", style_ "width:100%;max-width:600px;box-sizing:border-box;height:auto;display:block;border:1px solid #dee2e7; border-radius: 8px;"]
   where
-    appearance mode = pngAppearance mode url
-
-
--- PNG responses are immutable in the CDN; a renderer revision needs fresh URLs.
-pngAppearance :: Text -> Text -> Text
-pngAppearance mode url = url <> (if "?" `T.isInfixOf` url then "&" else "?") <> "appearance=" <> mode <> "&render=2"
+    appearance mode = url <> (if "?" `T.isInfixOf` url then "&" else "?") <> "appearance=" <> mode <> "&render=2"
 
 
 -- Separate wrappers keep Outlook's inline fallback and dark-mode CSS predictable.

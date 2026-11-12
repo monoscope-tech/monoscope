@@ -572,7 +572,8 @@ deliverReport authCtx routine templateKey (from, to) digest = do
       users <- Projects.usersByProjectId pid
       let reportUrl = hostPath authCtx.env.hostUrl $ urls.aiThreadGet pid routine.conversationId (rightToMaybe key)
           (subject, html) = ET.routineReportEmail project.title period digest.headline reportUrl [(h.title, h.detail, chart, hostPath authCtx.env.hostUrl <$> h.link) | (h, chart) <- zip digest.highlights charts]
-      forM_ users \user -> sendRenderedEmail (CI.original user.email) subject (ET.renderEmail subject html)
+          rendered = ET.renderEmail subject html
+      forM_ users \user -> sendRenderedEmail (CI.original user.email) subject rendered
 
 
 -- | Post the daily internal admin digest (usage, new projects, issues, alerts, job health) to Discord.

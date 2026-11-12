@@ -194,6 +194,7 @@ module Models.Apis.Issues (
   getRoutineRun,
   RoutineRunEvidence (..),
   getRoutineRunEvidence,
+  getRunResponse,
   getEventRun,
   setRoutineInstructions,
   getRoutineInstructions,
@@ -287,9 +288,6 @@ module Models.Apis.Issues (
   recordIssueView,
   selectLatestStateEvent,
   selectIssueActivity,
-
-  -- * Issue Summary (for reports/emails)
-  IssueSummary (..),
 ) where
 
 import Control.Lens (view)
@@ -528,18 +526,6 @@ data IssueSeverity = Critical | Warning | Info | Low
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "" IssueSeverity
-
-
-data IssueSummary = IssueSummary
-  { id :: IssueId
-  , title :: Text
-  , critical :: Bool
-  , severity :: IssueSeverity
-  , issueType :: IssueType
-  , activityBuckets :: Maybe [Int]
-  }
-  deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] IssueSummary
 
 
 -- | Rounded-to-integer number with a unit suffix — the only numeric formatting
@@ -2123,10 +2109,7 @@ dailyReportTemplate = RoutineTemplate "daily-report" 1 CategoryReliability "Dail
 
 -- | The report window a report template covers, in days.
 reportWindowDays :: Text -> Maybe Integer
-reportWindowDays = \case
-  "weekly-report" -> Just 7
-  "daily-report" -> Just 1
-  _ -> Nothing
+reportWindowDays key = snd <$> find ((== key) . fst) [(weeklyReportTemplate.key, 7), (dailyReportTemplate.key, 1)]
 
 
 reportPrompt :: Text -> Text -> Text -> Text
@@ -2422,10 +2405,12 @@ ensureRoutineTemplate requestedBy pid timezone template =
 provisionRoutineTemplate :: (DB es, Time :> es, UUIDEff :> es) => Projects.Project -> RoutineTemplate -> Eff es (Maybe ScheduledRoutine)
 provisionRoutineTemplate project template = do
   seen <- Hasql.interpScalar [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.ai_conversations WHERE project_id = #{project.id} AND context->>'routine_template' = #{template.key})|]
-  admin <- find ((== ProjectMembers.PAdmin) . (.permission)) <$> ProjectMembers.selectActiveProjectMembers project.id
-  case admin of
-    Just owner | not seen && project.id /= Projects.demoProjectId -> either (const Nothing) snd <$> ensureRoutineTemplate owner.userId project.id project.timeZone template
-    _ -> pure Nothing
+  if seen || project.id == Projects.demoProjectId
+    then pure Nothing
+    else
+      find ((== ProjectMembers.PAdmin) . (.permission)) <$> ProjectMembers.selectActiveProjectMembers project.id >>= \case
+        Just owner -> either (const Nothing) snd <$> ensureRoutineTemplate owner.userId project.id project.timeZone template
+        Nothing -> pure Nothing
 
 
 -- | Moves installed catalog routines whose instructions still match the template text they opened
@@ -3115,6 +3100,11 @@ listRunArtifacts pid runId =
 
 getRoutineRun :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es (Maybe RoutineRun)
 getRoutineRun pid runId = Hasql.interpOne $ routineRunsSql pid <> [HI.sql|AND run.id = #{runId}|]
+
+
+-- | A run's raw model answer, without the tool results its evidence also carries.
+getRunResponse :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es (Maybe Text)
+getRunResponse pid runId = join <$> Hasql.interpOne [HI.sql|SELECT findings->>'response' FROM apis.ai_routine_runs WHERE project_id = #{pid} AND id = #{runId}|]
 
 
 getRoutineRunEvidence :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es (Maybe RoutineRunEvidence)

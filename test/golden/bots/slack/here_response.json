@@ -17,7 +17,7 @@
         },
         {
             "text": {
-                "text": "• 🔴 Error alerts\n• 📊 Weekly AI reports\n• 🟡 Anomaly detections\n\nYou can also configure channels on the web dashboard.",
+                "text": "• 🔴 Error alerts\n• 📊 AI routine results\n• 🟡 Anomaly detections\n\nYou can also configure channels on the web dashboard.",
                 "type": "mrkdwn"
             },
             "type": "section"

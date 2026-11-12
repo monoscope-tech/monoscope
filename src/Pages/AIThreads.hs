@@ -40,7 +40,7 @@ import Relude hiding (ask)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, done)
-import Utils (faSprite_, popoverPanel_, popoverTrigger_, renderMarkdownTocWithPrefix)
+import Utils (encodeText, faSprite_, popoverPanel_, popoverTrigger_, renderMarkdownTocWithPrefix)
 import Web.FormUrlEncoded (FromForm (..), parseAll, parseUnique)
 import Web.HttpApiData (FromHttpApiData (..))
 import Web.Links
@@ -285,7 +285,7 @@ routinesGetH pid = do
                           "Routine"
                           ( \r -> a_ [href_ $ threadUrl pid r.conversationId, class_ "block min-w-0 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2"] do
                               div_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml r.title
-                              div_ [class_ "truncate text-xs text-textWeak"] $ toHtml $ maybe (foldMap Issues.routineKindLabel r.routineKind) Issues.routineCadence r.routineInterval
+                              div_ [class_ "truncate text-xs text-textWeak"] $ toHtml $ routineSchedule r
                           )
                           -- Takes the leftover width and truncates, so the narrow columns stay visible on phones.
                           & withAttrs [class_ "w-full max-w-0"]
@@ -293,11 +293,11 @@ routinesGetH pid = do
                       , col
                           "Last run"
                           ( \r -> span_ [class_ "flex items-center gap-2 whitespace-nowrap text-xs tabular-nums text-textWeak"] case (r.routineLastRunAt, r.routineLastRunStatus) of
-                              (Just at, Just status) -> toHtml (formatTime defaultTimeLocale "%e %b, %H:%M" at) >> uncurry tonePill_ (runStatus status)
+                              (Just at, Just status) -> localTimeFmt_ "d MMM, HH:mm" at >> uncurry tonePill_ (runStatus status)
                               _ -> "Not run yet"
                           )
                           & withAttrs [class_ "w-56 max-md:hidden"]
-                      , col "Next run" (\r -> span_ [class_ "whitespace-nowrap text-xs tabular-nums text-textWeak"] $ maybe "—" (toHtml . formatTime defaultTimeLocale "%e %b, %H:%M") (r.routineNextRunAt <* guard r.routineActive)) & withAttrs [class_ "w-36 max-lg:hidden"]
+                      , col "Next run" (\r -> span_ [class_ "whitespace-nowrap text-xs tabular-nums text-textWeak"] $ maybe "—" (localTimeFmt_ "d MMM, HH:mm") (r.routineNextRunAt <* guard r.routineActive)) & withAttrs [class_ "w-36 max-lg:hidden"]
                       ]
                         <> [ col
                                ""
@@ -310,8 +310,9 @@ routinesGetH pid = do
                                      when (isJust r.routineRunningSince) $ li_ $ button_ [hxPost_ $ urls.aiRoutineCancelPost pid r.conversationId, hxSwap_ "none", class_ "text-textWarning"] "Stop active runs"
                                      when (isJust r.routineInterval) do
                                        li_ [class_ "menu-title"] "Deliver results"
-                                       for_ [Issues.DestinationConversation, Issues.DestinationEmail, Issues.DestinationSlack] \destination ->
-                                         li_ $ button_ [hxPost_ $ urls.aiRoutineDestinationPost pid r.conversationId, hxSwap_ "none", hxVals_ $ "{\"destination\":\"" <> toText (encodeEnumSC @"Destination" destination) <> "\"}", term "aria-pressed" $ bool "false" "true" (r.routineDestination == Just destination)] do
+                                       -- Only report routines email; the rest deliver in app or to Slack.
+                                       for_ ([Issues.DestinationConversation] <> [Issues.DestinationEmail | isJust (Issues.reportWindowDays =<< r.templateKey)] <> [Issues.DestinationSlack]) \destination ->
+                                         li_ $ button_ [hxPost_ $ urls.aiRoutineDestinationPost pid r.conversationId, hxSwap_ "none", hxVals_ $ encodeText $ AE.object ["destination" AE..= toText (encodeEnumSC @"Destination" destination)], term "aria-pressed" $ bool "false" "true" (r.routineDestination == Just destination)] do
                                            span_ [class_ "w-3"] $ when (r.routineDestination == Just destination) $ faSprite_ "check" "solid" "h-3 w-3"
                                            toHtml $ destinationLabel destination
                                      li_ [class_ "my-1 h-px bg-strokeWeak", role_ "separator"] pass
@@ -333,11 +334,11 @@ routinesGetH pid = do
                       "Routine"
                       ( \run -> div_ [class_ "min-w-0"] do
                           a_ [href_ $ runUrl pid run.id, class_ "block truncate text-sm font-medium text-textStrong hover:text-textBrand"] $ toHtml $ fromMaybe "Deleted routine" run.title
-                          whenJust (run.error <|> (summaryLine =<< run.summary)) \line -> p_ [class_ $ "mt-0.5 truncate text-xs " <> maybe "text-textWeak" (const $ runErrorTone run.status) run.error, title_ line] $ toHtml line
+                          runSummary_ "mt-0.5" run
                       )
                       & withAttrs [class_ "w-full max-w-0"]
                   , col "Outcome" (uncurry tonePill_ . runStatus . (.status)) & withAttrs [class_ "w-32"]
-                  , col "Started" (\run -> time_ [datetime_ $ show run.startedAt, class_ "whitespace-nowrap text-xs tabular-nums text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt) & withAttrs [class_ "w-40 max-sm:hidden"]
+                  , col "Started" (\run -> span_ [class_ "whitespace-nowrap text-xs tabular-nums text-textWeak"] $ localTimeFmt_ "d MMM, HH:mm" run.startedAt) & withAttrs [class_ "w-40 max-sm:hidden"]
                   ]
               , rows = fromList recentRuns
               , features = def{rowLink = Just $ runUrl pid . (.id)}
@@ -415,10 +416,9 @@ threadPageGetH pid convId docM runM hxTarget = do
   instructions <- Issues.getRoutineInstructions pid convId
   runs <- Issues.listConversationRuns pid convId 20
   -- A report routine's latest result reads as its digest, each highlight beside its own chart.
-  reportM <- case (conversationM >>= (.templateKey) >>= Issues.reportWindowDays, find ((== Issues.RunSucceeded) . (.status)) runs) of
-    (Just days, Just run) ->
-      Issues.getRoutineRunEvidence pid run.id <&> \evidence ->
-        (evidence >>= (.findings) >>= AET.parseMaybe AE.parseJSON) >>= fmap fst . AI.reportRunAnswer pid (addUTCTime (fromInteger $ negate days * 86400) run.startedAt, run.startedAt)
+  reportM <- case (conversationM >>= (.templateKey) >>= Issues.reportWindowDays, find ((== Issues.RunSucceeded) . (.status)) runs, any ("#ai-document" `T.isSuffixOf`) hxTarget) of
+    (Just days, Just run, False) ->
+      Issues.getRunResponse pid run.id <&> (>>= \response -> fst <$> AI.reportRunAnswer pid (addUTCTime (fromInteger $ negate days * 86400) run.startedAt, run.startedAt) (AI.AgenticChatResult response []))
     _ -> pure Nothing
   runContent <- forM runM \run -> do
     evidence <- Issues.getRoutineRunEvidence pid run.id >>= maybe (throwError Servant.err404) pure
@@ -598,11 +598,11 @@ threadPageGetH pid convId docM runM hxTarget = do
                       ownRun run = Just run.conversationId == activeConversationIdM
                       runRow run = a_ ([href_ $ runUrl projectId run.id, class_ "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-3 py-2.5 hover:bg-fillHover focus-visible:outline-2 focus-visible:-outline-offset-2"] <> inspectorAttrs (urls.aiRoutineRunGet projectId run.id activeConversationIdM) <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) do
                         span_ [class_ "flex min-w-0 items-baseline gap-2 text-sm text-textStrong"] do
-                          time_ [datetime_ $ show run.startedAt, class_ "shrink-0 tabular-nums"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt
+                          span_ [class_ "shrink-0 tabular-nums"] $ localTimeFmt_ "d MMM, HH:mm" run.startedAt
                           unless (ownRun run) $ span_ [class_ "truncate text-textWeak"] $ toHtml $ fromMaybe "Run" run.title
                           when (run.attempt > 1) $ span_ [class_ "shrink-0 text-xs text-textWeak"] $ toHtml $ "retry " <> show @Text run.attempt
                         span_ [id_ $ runStatusId run, class_ "row-span-2"] $ uncurry tonePill_ $ runStatus run.status
-                        whenJust (run.error <|> (summaryLine =<< run.summary)) \line -> span_ [class_ $ "truncate text-xs " <> maybe "text-textWeak" (const $ runErrorTone run.status) run.error, title_ line] $ toHtml line
+                        runSummary_ "" run
                       runList = div_ [class_ "divide-y divide-strokeWeak overflow-hidden rounded-lg border border-strokeWeak bg-bgRaised"] . mapM_ runRow
                   h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Runs"
                   runList recent
@@ -612,23 +612,23 @@ threadPageGetH pid convId docM runM hxTarget = do
                       span_ [class_ "hidden group-open/older:inline"] "Show fewer"
                     div_ [class_ "mt-2"] $ runList older
                 -- A routine reads as its latest result (plus the question that prompted it); older ones live under Runs.
-                let isRoutine = any (isJust . (.routineKind)) conversationM
-                    definingPrompt m = m.role == Issues.ChatUser && Just (T.strip m.content) == (T.strip <$> instructions)
+                let definingPrompt m = m.role == Issues.ChatUser && Just (T.strip m.content) == (T.strip <$> instructions)
                     (afterLatest, fromLatest) = break ((== Issues.ChatAssistant) . (.role)) $ reverse $ filter (not . definingPrompt) messages
                     asked = takeWhile ((== Issues.ChatUser) . (.role)) $ drop 1 fromLatest
                     shown = if isRoutine then reverse (afterLatest <> take 1 fromLatest <> asked) else messages
                     -- A report replaces its own result message; questions asked after it still show.
-                    followUps digest = reverse $ takeWhile ((/= AI.digestMarkdown digest []) . (.content)) $ reverse messages
+                    followUps digest = let md = AI.digestMarkdown digest [] in reverse $ takeWhile ((/= md) . (.content)) $ reverse messages
                 case reportM of
                   Just digest -> do
                     reportView_ digest
-                    unless (null $ followUps digest) $ IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId (followUps digest)
+                    let asked' = followUps digest
+                    unless (null asked') $ IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId asked'
                   Nothing
                     | hasVisibleHistory shown -> section_ [Aria.label_ "Results"] do
                         when isRoutine $ h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Latest result"
                         IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId shown
                     | otherwise -> foldMap routineEmpty_ routineM
-            when (any (isJust . (.routineKind)) conversationM) do
+            when isRoutine do
               -- Setup, not daily reading: collapsed below the results.
               disclosure_ [Aria.label_ "Routine configuration"] ("Settings" >> whenJust (conversationM >>= (.routinePolicy)) (span_ [class_ "ms-auto text-xs font-normal text-textWeak"] . toHtml . policyLabel))
                 $ div_ [class_ "space-y-5"] do
@@ -719,6 +719,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                   span_ "All routines"
             div_ [class_ "min-h-0 grow overflow-y-auto px-5 py-5"] $ maybe (foldMap documentView_ openDoc) identity runContent
       where
+        isRoutine = any (isJust . (.routineKind)) conversationM
         policyLabel = \case
           Issues.Observe -> "Read-only" :: Text
           Issues.Autonomous -> "Can make changes"
@@ -753,7 +754,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                 div_ [class_ "-mx-2 grid grid-cols-1 gap-0.5"] . mapM_ \doc -> navLink_ (docHref doc) do
                   faSprite_ "file-lines" "regular" "h-3.5 w-3.5 shrink-0 text-iconBrand"
                   span_ [class_ "min-w-0 grow truncate"] $ toHtml doc.title
-                  time_ [datetime_ $ show doc.updatedAt, class_ "shrink-0 text-xs tabular-nums text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%e %b" doc.updatedAt
+                  span_ [class_ "shrink-0 text-xs tabular-nums text-textWeak"] $ localTimeFmt_ "d MMM" doc.updatedAt
           docList recent
           unless (null older) $ details_ [class_ "group/olderdocs mt-1"] do
             summary_ [class_ "cursor-pointer list-none rounded-md px-1 py-1 text-xs font-medium text-textBrand hover:underline [&::-webkit-details-marker]:hidden"] do
@@ -799,11 +800,11 @@ threadPageGetH pid convId docM runM hxTarget = do
         routineFacts_ conversation =
           div_ [class_ "flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm text-textWeak sm:gap-x-2 sm:[&>*+*]:before:me-2 sm:[&>*+*]:before:text-textDisabled sm:[&>*+*]:before:content-['·']"] do
             span_ $ uncurry tonePill_ $ routineStatus conversation
-            span_ $ toHtml $ maybe (foldMap Issues.routineKindLabel conversation.routineKind) Issues.routineCadence conversation.routineInterval
+            span_ $ toHtml $ routineSchedule conversation
             span_ [class_ "tabular-nums"] case (conversation.routineLastRunAt, conversation.routineLastRunStatus) of
-              (Just at, Just status) -> toHtml $ toText (formatTime defaultTimeLocale "Last run %-d %b, %H:%M UTC" at) <> " — " <> snd (runStatus status)
+              (Just at, Just status) -> "Last run " >> localTimeFmt_ "d MMM, HH:mm" at >> toHtml (" — " <> snd (runStatus status))
               _ -> "Not run yet"
-            whenJust (conversation.routineNextRunAt <* guard conversation.routineActive) $ span_ [class_ "tabular-nums"] . toHtml . formatTime defaultTimeLocale "Next run %-d %b, %H:%M UTC"
+            whenJust (conversation.routineNextRunAt <* guard conversation.routineActive) $ span_ [class_ "tabular-nums"] . ("Next run " >>) . localTimeFmt_ "d MMM, HH:mm"
             whenJust conversation.routinePolicy \policy -> span_ [title_ "Execution policy"] $ toHtml $ policyLabel policy
             whenJust (mfilter (/= Issues.DestinationConversation) conversation.routineDestination) $ span_ . toHtml . destinationLabel
 
@@ -1027,6 +1028,16 @@ routineStatus conversation
   | isJust conversation.routineRunningSince = (BrandBadge, "Running now")
   | conversation.routineActive = (SuccessBadge, "Active")
   | otherwise = (NeutralBadge, "Paused")
+
+
+routineSchedule :: Issues.ConversationSummary -> Text
+routineSchedule r = maybe (foldMap Issues.routineKindLabel r.routineKind) Issues.routineCadence r.routineInterval
+
+
+-- | A run's one-line outcome: its error in the status tone, else the opening of its result.
+runSummary_ :: Text -> Issues.RoutineRun -> Html ()
+runSummary_ extra run = whenJust (run.error <|> (summaryLine =<< run.summary)) \line ->
+  span_ [class_ $ "block truncate text-xs " <> extra <> " " <> maybe "text-textWeak" (const $ runErrorTone run.status) run.error, title_ line] $ toHtml line
 
 
 destinationLabel :: Issues.RoutineDestination -> Text

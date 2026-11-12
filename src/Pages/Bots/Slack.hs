@@ -403,7 +403,7 @@ slackInteractionsHWithTools projectTools interaction = do
         $ slackResponse
           [ slackHeader (botEmoji EmojiSuccess <> " Notification channel set")
           , slackSection ("*" <> channelDisplay <> "* will now receive:")
-          , slackSection ("• " <> botEmoji EmojiError <> " Error alerts\n• " <> botEmoji EmojiChart <> " Weekly AI reports\n• " <> botEmoji EmojiWarning <> " Anomaly detections\n\nYou can also configure channels on the web dashboard.")
+          , slackSection ("• " <> botEmoji EmojiError <> " Error alerts\n• " <> botEmoji EmojiChart <> " AI routine results\n• " <> botEmoji EmojiWarning <> " Anomaly detections\n\nYou can also configure channels on the web dashboard.")
           ]
 
 
