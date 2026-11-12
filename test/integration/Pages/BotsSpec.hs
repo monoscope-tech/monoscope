@@ -1573,7 +1573,8 @@ spec = around withTestResources do
 
     it "routines: a titled thread schedules, pauses, resumes and deletes; templates install at local time and reschedule as intervals" \tr -> do
       let interval = fromRightShow $ Issues.mkRoutineInterval 15
-      template <- maybe (fail "routine catalog must not be empty") pure $ find ((== "daily-report") . (.key)) Issues.routineTemplates
+      -- Any catalog routine that may act; report templates install read-only.
+      template <- maybe (fail "routine catalog must not be empty") pure $ find ((== "telemetry-quality-check") . (.key)) Issues.routineTemplates
       length Issues.routineTemplates `shouldSatisfy` (>= 15)
       (needsTitle, summary, listed, scheduled, paused, resumed, deleted) <- runTestBg frozenTime tr do
         startConversation (conversation 1) Issues.CTWeb
@@ -1606,7 +1607,7 @@ spec = around withTestResources do
         void $ Issues.upsertRoutine (uid tr) testPid (conversation 2) interval
         Issues.pauseRoutine testPid (conversation 2)
         (installedAt,installed,canAct,slackEnabled,) <$> Issues.resumeRoutine Issues.ResumeSchedule (uid tr) testPid (conversation 2)
-      (.scheduledAt) <$> installedAt `shouldBe` Just (addUTCTime (8 * 3600) frozenTime)
+      (.scheduledAt) <$> installedAt `shouldBe` Just (addUTCTime (9 * 3600) frozenTime)
       ((.templateKey) =<< installed, (.routineDestination) =<< installed) `shouldBe` (Just template.key, Just Issues.DestinationSlack)
       (canAct, slackEnabled) `shouldBe` (True, True)
       -- Rescheduling a template as an interval keeps that schedule after resume.
@@ -1693,6 +1694,16 @@ spec = around withTestResources do
       -- The routine page leads with the report: headline, then each highlight beside its own chart.
       page <- renderT <$> call tr (AIThreads.threadGetH pid reportConv Nothing Nothing)
       page `shouldContainAll` ["Latest report", "Checkout errors rose 4.8x", "Checkout 5xx up 4.8x", "ai-report-0-0", "Explore", "Documents"]
+      -- Slack delivery is done by code too (a read-only report cannot post): one message, headline, highlights and chart.
+      setupSlackData tr pid "T_REPORTS"
+      later <- runTestBg (addUTCTime 3600 frozenTime) tr do
+        Issues.setRoutineDestination pid reportConv Issues.DestinationSlack
+        Issues.resumeRoutine Issues.RunNow (uid tr) pid reportConv
+      slackSlot <- maybe (fail "run now did not schedule") pure later
+      (slackNotifs, _) <- captureNotifs tr $ Jobs.runAIRoutineWith 1_000_000 (\_ -> pure $ Right AI.AgenticChatResult{AI.response = digest, AI.toolCalls = []}) (\_ _ -> pass) tr.trATCtx slackSlot.id slackSlot.scheduledAt
+      [decodeUtf8 @Text $ AE.encode slack.payload | Notify.SlackNotification slack <- slackNotifs] `shouldSatisfy` \case
+        [message] -> all (`T.isInfixOf` message) ["Checkout errors rose 4.8x", "*Checkout 5xx up 4.8x*", "image_url", "Open the report"]
+        _ -> False
 
     it "answers recorded agent queries" \tr -> do
       let askAgent query apiKey = runTestBg frozenTime tr $ Bot.processAIQuery Nothing False AI.ServiceAccess testPid query Nothing tr.trATCtx.env.openaiModel apiKey
@@ -3486,7 +3497,7 @@ spec = around withTestResources do
       void $ call tr $ AIThreads.routineDestinationPostH testPid (conversation 1) $ AIThreads.RoutineDestinationForm Issues.DestinationSlack
       policyFor first1.runId (conversation 1) `shouldReturn` Just Issues.Autonomous
       -- A new activation is autonomous; later policy changes apply only to future runs.
-      briefing <- template "daily-report"
+      briefing <- template "telemetry-quality-check"
       Just slot2 <- runTestBg frozenTime tr $ startConversation (conversation 2) Issues.CTWeb >> Issues.installRoutineTemplate (uid tr) testPid (conversation 2) "UTC" briefing
       run2 <- runQueryEffect tr (Issues.claimRoutine slot2.id slot2.scheduledAt) >>= maybe (fail "Expected a claimed run") pure
       run2.policy `shouldBe` Issues.Autonomous
@@ -3504,7 +3515,7 @@ spec = around withTestResources do
       -- An Observe installation keeps Observe on its active run even after a Slack destination and an Autonomous grant.
       runQueryEffect tr $ Issues.deleteRoutine testPid (conversation 2)
       Just slot3 <- runTestBg frozenTime tr $ startConversation (conversation 3) Issues.CTWeb >> Issues.installRoutineTemplate (uid tr) testPid (conversation 3) "Europe/Berlin" briefing
-      slot3.scheduledAt `shouldBe` addUTCTime (8 * 3600) frozenTime
+      slot3.scheduledAt `shouldBe` addUTCTime (9 * 3600) frozenTime
       runQueryEffect tr $ Issues.setRoutinePolicy (uid tr) testPid (conversation 3) Issues.Observe
       run3 <- runQueryEffect tr (Issues.claimRoutine slot3.id slot3.scheduledAt) >>= maybe (fail "Expected the initial scheduled run") pure
       policyFor run3.runId (conversation 3) `shouldReturn` Just Issues.Observe

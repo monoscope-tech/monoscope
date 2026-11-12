@@ -2135,8 +2135,8 @@ provisionReportRoutines project
   | otherwise = do
       weekly <- provisionRoutineTemplate project weeklyReportTemplate
       daily <- provisionRoutineTemplate project dailyReportTemplate
-      for_ daily \routine -> Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET active = FALSE, next_run_at = NULL, policy = #{Observe} WHERE id = #{routine.id}|]
-      for_ weekly \routine -> Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET policy = #{Observe}, destination = #{bool DestinationConversation DestinationEmail project.weeklyNotif} WHERE id = #{routine.id}|]
+      for_ daily \routine -> Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET active = FALSE, next_run_at = NULL WHERE id = #{routine.id}|]
+      for_ weekly \routine -> when project.weeklyNotif $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET destination = #{DestinationEmail} WHERE id = #{routine.id}|]
       pure weekly
 
 
@@ -2465,7 +2465,8 @@ installRoutine :: (DB es, Time :> es) => Projects.UserId -> Projects.ProjectId -
 installRoutine requestedBy pid convId timezone installation = do
   now <- Time.currentTime
   let (template, templateKey, channel, policy, destination) = case installation of
-        CatalogRoutine value -> (value, Just value.key, Nothing, Autonomous, DestinationConversation)
+        -- Reports only read, so they start read-only wherever they are installed from.
+        CatalogRoutine value -> (value, Just value.key, Nothing, bool Autonomous Observe (isJust $ reportWindowDays value.key), DestinationConversation)
         ChannelIncidentRoutine target ->
           ( RoutineTemplate
               "incident-investigation"

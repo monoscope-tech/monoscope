@@ -122,7 +122,7 @@ import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Git qualified as Git
 import Pkg.ImpactReview qualified as ImpactReview
-import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), addConvertKitUserOrganization, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
+import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), addConvertKitUserOrganization, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert, slackActions, slackContext, slackHeader, slackImage, slackSection)
 import Pkg.Mail qualified as Mail
 import Pkg.Metrics qualified as Metrics
 import Pkg.QueryCache qualified as QueryCache
@@ -514,8 +514,8 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
   conversationM <- Issues.getConversation routine.projectId routine.conversationId
   let conversationType = maybe Issues.CTWeb (.conversationType) conversationM
       deliveryContext = case routine.destination of
-        Issues.DestinationSlack -> Just "\nROUTINE DELIVERY\nSend a concise copy of reportable findings to the project's configured Slack channel. Do not send a message when there are no findings.\n"
-        (Issues.DestinationConversation; Issues.DestinationEmail) -> Nothing
+        Issues.DestinationSlack | isNothing reportWindow -> Just "\nROUTINE DELIVERY\nSend a concise copy of reportable findings to the project's configured Slack channel. Do not send a message when there are no findings.\n"
+        (Issues.DestinationSlack; Issues.DestinationConversation; Issues.DestinationEmail) -> Nothing
       templateKey = (.templateKey) =<< conversationM
       -- Report templates cover a fixed window ending at the claim; their answers are digests.
       reportWindow = templateKey >>= Issues.reportWindowDays <&> \days -> (addUTCTime (fromInteger $ negate days * 86400) routine.claimedAt, routine.claimedAt)
@@ -563,17 +563,25 @@ deliverReport authCtx routine templateKey (from, to) digest = do
   charts <- traverse (fmap join . traverse png . (.widget)) digest.highlights
   let key = Issues.mkArtifactKey $ templateKey <> "-" <> day "%Y-%m-%d" to
       body = "*" <> period <> "*\n\n" <> AI.digestMarkdown digest charts
+      reportUrl = hostPath authCtx.env.hostUrl $ urls.aiThreadGet pid routine.conversationId (rightToMaybe key)
   for_ (rightToMaybe key) \k ->
     whenLeftM_ (Issues.saveArtifact pid routine.conversationId k (Just digest.headline) body Issues.ArtifactReplace) \_ ->
       Log.logAttention "Report document was not saved" $ AE.object ["conversation_id" AE..= routine.conversationId, "project_id" AE..= pid]
-  when (routine.destination == Issues.DestinationEmail) $ whenJustM (Projects.activeProjectById pid) \project -> do
-    team <- ProjectMembers.getEveryoneTeam pid
-    when (any (ProjectMembers.isChannelEnabled ProjectMembers.Email) team) do
-      users <- Projects.usersByProjectId pid
-      let reportUrl = hostPath authCtx.env.hostUrl $ urls.aiThreadGet pid routine.conversationId (rightToMaybe key)
-          (subject, html) = ET.routineReportEmail project.title period digest.headline reportUrl [(h.title, h.detail, chart, hostPath authCtx.env.hostUrl <$> h.link) | (h, chart) <- zip digest.highlights charts]
-          rendered = ET.renderEmail subject html
-      forM_ users \user -> sendRenderedEmail (CI.original user.email) subject rendered
+  -- Delivered by code, not the agent: a read-only report cannot post, and every channel gets the same digest.
+  case routine.destination of
+    Issues.DestinationConversation -> pass
+    Issues.DestinationSlack -> whenJustM (Integrations.getProjectSlackData pid) \slack -> do
+      slackCharts <- traverse (fmap join . traverse (\w -> png w{Widget.pngProfile = Just Widget.PngSlack}) . (.widget)) digest.highlights
+      let highlight h chart = slackSection ("*" <> h.title <> "*\n" <> h.detail) : maybeToList (slackImage (h.title <> " chart") Nothing <$> chart)
+          blocks = [slackHeader digest.headline, slackContext [period]] <> concat (zipWith highlight digest.highlights slackCharts) <> [slackActions [Bots.linkButton "open-report" "Open the report" reportUrl]]
+      Notify.sendNotification $ Notify.slackNotification slack.channelId slack.botToken $ AE.object ["text" AE..= digest.headline, "blocks" AE..= blocks]
+    Issues.DestinationEmail -> whenJustM (Projects.activeProjectById pid) \project -> do
+      team <- ProjectMembers.getEveryoneTeam pid
+      when (any (ProjectMembers.isChannelEnabled ProjectMembers.Email) team) do
+        users <- Projects.usersByProjectId pid
+        let (subject, html) = ET.routineReportEmail project.title period digest.headline reportUrl [(h.title, h.detail, chart, hostPath authCtx.env.hostUrl <$> h.link) | (h, chart) <- zip digest.highlights charts]
+            rendered = ET.renderEmail subject html
+        forM_ users \user -> sendRenderedEmail (CI.original user.email) subject rendered
 
 
 -- | Post the daily internal admin digest (usage, new projects, issues, alerts, job health) to Discord.
