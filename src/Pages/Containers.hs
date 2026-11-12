@@ -172,8 +172,8 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
     containerColumns :: [Column ContainerVM]
     containerColumns =
       [ col "Container" renderNameCol & withAttrs [class_ "w-64 max-w-64 overflow-hidden max-md:w-auto max-md:max-w-none"]
-      , col "Pod" (textCell (.podName)) & withAttrs [class_ "w-64 max-w-64 overflow-hidden max-2xl:hidden"]
-      , col "Namespace" (textCell (.namespace)) & withAttrs [class_ "w-32 max-w-32 overflow-hidden max-2xl:hidden"]
+      , col "Pod" (textCell (.podName)) & withAttrs [class_ "w-64 max-w-64 overflow-hidden max-[1800px]:hidden"]
+      , col "Namespace" (textCell (.namespace)) & withAttrs [class_ "w-32 max-w-32 overflow-hidden max-[1800px]:hidden"]
       , col "Node" (textCell (.nodeName)) & withAttrs [class_ "w-36 max-w-36 overflow-hidden max-[1400px]:hidden"]
       , col "CPU cores" (numCell (showFFloat' 3) (.cpuCores)) & withAttrs [class_ "w-20 text-right"]
       , col "CPU limit" (pctCell "CPU limit used" cpuPctOfLimit) & withColHeaderExtra (headerHint_ "Share of the CPU limit in use") & withAttrs [class_ "min-w-28 max-md:hidden"]
@@ -216,10 +216,10 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
       div_ [class_ "flex items-center gap-2 min-w-0 overflow-hidden text-xs text-textWeak max-md:flex-wrap"] do
         whenJust vm.row.image \img ->
           let image = shortImage img <> maybe "" (":" <>) vm.row.imageTag
-           in span_ [class_ $ "min-w-0 truncate" <> bool "" " max-2xl:hidden" (isJust vm.row.workload), data_ "tippy-content" $ "Image: " <> image] $ toHtml image
+           in span_ [class_ $ "min-w-0 truncate" <> bool "" " max-[1800px]:hidden" (isJust vm.row.workload), data_ "tippy-content" $ "Image: " <> image] $ toHtml image
         -- The badge is a flex box, so the ellipsis has to live on an inner block or the name clips at its start.
-        -- Below 2xl the badge takes the image's place; the namespace stays in its tooltip and the facets.
-        whenJust vm.row.workload \workload -> span_ [class_ "badge badge-xs badge-ghost min-w-0 max-w-full truncate 2xl:ms-auto 2xl:max-w-[55%]", data_ "tippy-content" $ "Workload: " <> foldMap (<> "/") vm.row.namespace <> workload] $ span_ [class_ "min-w-0 truncate"] do
+        -- Below 1800px the badge takes the image's place; the namespace stays in its tooltip and the facets.
+        whenJust vm.row.workload \workload -> span_ [class_ "badge badge-xs badge-ghost min-w-0 max-w-full truncate min-[1800px]:ms-auto min-[1800px]:max-w-[55%]", data_ "tippy-content" $ "Workload: " <> foldMap (<> "/") vm.row.namespace <> workload] $ span_ [class_ "min-w-0 truncate"] do
           toHtml workload
 
     -- The drawer reads the window the row was rendered from, so it shows the same numbers the
