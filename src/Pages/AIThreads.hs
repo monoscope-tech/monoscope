@@ -289,7 +289,7 @@ routinesGetH pid = do
                               div_ [class_ "truncate text-xs text-textWeak"] do
                                 toHtml $ routineSchedule r
                                 -- Phones drop the Last run column; the outcome is what the list is read for.
-                                whenJust ((,) <$> r.routineLastRunAt <*> r.routineLastRunStatus) \(at, status) -> span_ [class_ "md:hidden"] $ " · " >> localTimeFmt_ "d MMM" at >> " " >> uncurry toneDot_ (runStatus status)
+                                whenJust ((,) <$> r.routineLastRunAt <*> r.routineLastRunStatus) \(at, status) -> span_ [class_ "mt-0.5 flex items-center gap-2 md:hidden"] $ localTimeFmt_ "d MMM" at >> uncurry toneDot_ (runStatus status) >> failedNote_ r
                           )
                           -- Takes the leftover width and truncates, so the narrow columns stay visible on phones.
                           & withAttrs [class_ "w-full max-w-0"]
@@ -299,10 +299,7 @@ routinesGetH pid = do
                           ( \r -> span_ [class_ "flex items-center gap-2 whitespace-nowrap text-xs tabular-nums text-textWeak"] case (r.routineLastRunAt, r.routineLastRunStatus) of
                               (Just at, Just status) -> do
                                 localTimeFmt_ "d MMM, HH:mm" at >> uncurry toneDot_ (runStatus status)
-                                -- The last run is one sample; per-PR and per-issue routines fail between passes.
-                                let mine = filter (\run -> run.conversationId == r.conversationId || run.routine == Just r.title) recentRuns
-                                    failed = length $ filter (Issues.runFailed . (.status)) mine
-                                when (failed > 0) $ span_ [class_ "text-textError"] $ toHtml $ show @Text failed <> " of " <> show @Text (length mine) <> " failed"
+                                failedNote_ r
                               _ -> "Not run yet"
                           )
                           & withAttrs [class_ "w-56 max-md:hidden"]
@@ -373,6 +370,11 @@ routinesGetH pid = do
             h3_ [class_ "mb-3 text-sm font-semibold text-textStrong"] $ toHtml $ Issues.routineCategoryLabel category
             div_ [class_ "grid gap-4 md:grid-cols-2 xl:grid-cols-3"] $ for_ (filter ((== category) . (.category)) Issues.routineTemplates) templateCard_
       where
+        -- The last run is one sample; per-PR and per-issue routines fail between passes.
+        failedNote_ r =
+          let mine = filter (\run -> run.conversationId == r.conversationId || run.routine == Just r.title) recentRuns
+              failed = length $ filter (Issues.runFailed . (.status)) mine
+           in when (failed > 0) $ span_ [class_ "text-textError"] $ toHtml $ show @Text failed <> " of " <> show @Text (length mine) <> " failed"
         categoryId = ("routine-category-" <>) . T.toLower . T.replace " " "-" . Issues.routineCategoryLabel
         templateCard_ template = do
           let added = template.key `elem` mapMaybe (.templateKey) installedRoutines
