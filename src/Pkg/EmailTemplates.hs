@@ -192,6 +192,7 @@ emailCss =
     .monoscope-email a { color: #93b4ff !important; }
     .monoscope-email p, .monoscope-email ul, .monoscope-email ol, .monoscope-email li, .monoscope-email h1, .monoscope-email h2, .monoscope-email h3 { color: #ffffff !important; }
     .monoscope-email .divider { border-top-color: #333333 !important; }
+    .monoscope-email .button { background-color: #ffffff !important; color: #1d1e20 !important; border-color: #ffffff !important; }
     .monoscope-email .monoscope-code { background-color: #1a1a1a !important; border-color: #333333 !important; color: #ffffff !important; }
     .monoscope-email .highlight-box { background-color: #1a1a1a !important; }
     .monoscope-email .highlight-box p { color: #aaaaaa !important; }

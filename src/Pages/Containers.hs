@@ -218,9 +218,8 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
           let image = shortImage img <> maybe "" (":" <>) vm.row.imageTag
            in span_ [class_ $ "min-w-0 truncate" <> bool "" " max-2xl:hidden" (isJust vm.row.workload), data_ "tippy-content" $ "Image: " <> image] $ toHtml image
         -- The badge is a flex box, so the ellipsis has to live on an inner block or the name clips at its start.
-        -- Below 2xl the Namespace column is hidden, so the badge carries it and takes the image's place.
+        -- Below 2xl the badge takes the image's place; the namespace stays in its tooltip and the facets.
         whenJust vm.row.workload \workload -> span_ [class_ "badge badge-xs badge-ghost min-w-0 max-w-full truncate 2xl:ms-auto 2xl:max-w-[55%]", data_ "tippy-content" $ "Workload: " <> foldMap (<> "/") vm.row.namespace <> workload] $ span_ [class_ "min-w-0 truncate"] do
-          whenJust vm.row.namespace \ns -> span_ [class_ "2xl:hidden"] $ toHtml $ ns <> "/"
           toHtml workload
 
     -- The drawer reads the window the row was rendered from, so it shows the same numbers the

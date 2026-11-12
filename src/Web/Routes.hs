@@ -16,7 +16,7 @@ import Data.Map.Strict qualified as Map
 import Data.OpenApi (OpenApi)
 import Data.Ord (clamp)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Deriving.Aeson.Stock qualified as DAE

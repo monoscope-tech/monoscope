@@ -285,7 +285,10 @@ routinesGetH pid = do
                           "Routine"
                           ( \r -> a_ [href_ $ threadUrl pid r.conversationId, class_ "block min-w-0 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2"] do
                               div_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml r.title
-                              div_ [class_ "truncate text-xs text-textWeak"] $ toHtml $ routineSchedule r
+                              div_ [class_ "truncate text-xs text-textWeak"] do
+                                toHtml $ routineSchedule r
+                                -- Phones drop the Last run column; the outcome is what the list is read for.
+                                whenJust ((,) <$> r.routineLastRunAt <*> r.routineLastRunStatus) \(at, status) -> span_ [class_ "md:hidden"] $ " · " >> localTimeFmt_ "d MMM" at >> " " >> uncurry toneDot_ (runStatus status)
                           )
                           -- Takes the leftover width and truncates, so the narrow columns stay visible on phones.
                           & withAttrs [class_ "w-full max-w-0"]
@@ -353,7 +356,7 @@ routinesGetH pid = do
           h2_ [class_ "text-sm font-semibold text-textStrong"] "Built-in routines"
           p_ [class_ "mt-1 max-w-3xl text-sm text-textWeak"] "Times use the project’s time zone. New routines act within your role without per-action approval; change that under a routine’s Settings. AI usage is billed at your project rate."
           let categories = [minBound .. maxBound]
-          nav_ [Aria.label_ "Routine categories", class_ "mt-4 flex gap-2 overflow-x-auto pb-1"] $ for_ categories \category ->
+          nav_ [Aria.label_ "Routine categories", class_ "mt-4 flex flex-wrap gap-2"] $ for_ categories \category ->
             a_ [href_ $ "#" <> categoryId category, class_ "shrink-0 rounded-md border border-strokeWeak bg-bgRaised px-3 py-1.5 text-xs font-medium text-textWeak hover:bg-fillHover hover:text-textStrong"] $ toHtml $ Issues.routineCategoryLabel category
           div_ [class_ "mt-6 space-y-8"] $ for_ categories \category -> section_ [id_ $ categoryId category, class_ "scroll-mt-16"] do
             h3_ [class_ "mb-3 text-sm font-semibold text-textStrong"] $ toHtml $ Issues.routineCategoryLabel category
@@ -619,7 +622,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                     | otherwise -> foldMap routineEmpty_ routineM
                 when (isRoutine && not (null docs)) documentsNav_
                 unless (null runs) $ section_ [Aria.label_ "Routine runs"] do
-                  let (recent, older) = splitAt 3 runs
+                  let (recent, older) = splitAt (bool 3 4 (length runs == 4)) runs
                       ownRun run = Just run.conversationId == activeConversationIdM
                       runRow run = a_ ([href_ $ runUrl projectId run.id, class_ "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-3 py-2.5 hover:bg-fillHover focus-visible:outline-2 focus-visible:-outline-offset-2"] <> inspectorAttrs (urls.aiRoutineRunGet projectId run.id activeConversationIdM) <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) do
                         span_ [class_ "flex min-w-0 items-baseline gap-2 text-sm text-textStrong"] do
@@ -759,7 +762,7 @@ threadPageGetH pid convId docM runM hxTarget = do
         documentsNav_ :: Html ()
         documentsNav_ = nav_ [Aria.label_ "Documents"] do
           h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Documents"
-          let (recent, older) = splitAt 3 docs
+          let (recent, older) = splitAt (bool 3 4 (length docs == 4)) docs
               docList =
                 div_ [class_ "-mx-2 grid grid-cols-1 gap-0.5"] . mapM_ \doc -> navLink_ (docHref doc) do
                   faSprite_ "file-lines" "regular" "h-3.5 w-3.5 shrink-0 text-iconBrand"
