@@ -1688,6 +1688,13 @@ spec = around withTestResources do
       sortOn (\(k, _, _, _) -> k) [(templateKey, r.routineActive, r.routineDestination, r.routinePolicy) | r <- installed, Just templateKey <- [r.templateKey]] `shouldBe` [("daily-report", False, Just Issues.DestinationConversation, Just Issues.Observe), ("weekly-report", True, Just Issues.DestinationEmail, Just Issues.Observe)]
       reportConv <- maybe (fail "weekly report missing") (pure . (.conversationId)) $ find ((== Just "weekly-report") . (.templateKey)) installed
       dailyConv <- maybe (fail "daily report missing") (pure . (.conversationId)) $ find ((== Just "daily-report") . (.templateKey)) installed
+      -- emailDestination_reportsOnly: a routine with no digest to mail keeps its delivery when asked to email.
+      destinations <- runTestBg frozenTime tr do
+        triage <- either id fst <$> Issues.ensureRoutineTemplate (uid tr) pid "UTC" Issues.issueTriageTemplate
+        traverse_ (\c -> Issues.setRoutineDestination pid c Issues.DestinationEmail) [triage, dailyConv]
+        Issues.listConversations pid <&> \cs -> [(c.templateKey, c.routineDestination) | c <- cs, c.conversationId `elem` [triage, dailyConv]]
+      sortOn fst destinations `shouldBe` [(Just "daily-report", Just Issues.DestinationEmail), (Just "issue-triage", Just Issues.DestinationConversation)]
+      runTestBg frozenTime tr $ Issues.setRoutineDestination pid dailyConv Issues.DestinationConversation
       -- Run now starts an active routine at once and leaves a paused one paused.
       (scheduledFirst, slotNow, pausedNow) <- runTestBg frozenTime tr $ (fmap (.scheduledAt) weekly,,) <$> Issues.resumeRoutine Issues.RunNow (uid tr) pid reportConv <*> Issues.resumeRoutine Issues.RunNow (uid tr) pid dailyConv
       (scheduledFirst > Just frozenTime, (.scheduledAt) <$> slotNow, isNothing pausedNow) `shouldBe` (True, Just frozenTime, True)

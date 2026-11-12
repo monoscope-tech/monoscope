@@ -290,8 +290,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
     DailyJob -> runDailyJobScheduling authCtx
     HourlyJob scheduledTime hour -> unlessStale scheduledTime (2 * 3600) $ runHourlyJob scheduledTime hour
     -- Retired: reports are routines. Kept so rows queued before the switch still decode.
-    DailyReports _ -> pass
-    WeeklyReports _ -> pass
+    (DailyReports _; WeeklyReports _) -> Log.logInfo "Skipped a retired report job" (jobTypeName bgJob)
     -- Hourly and daily ticks both enqueue this at 00:00; two concurrent runs would read the same
     -- watermark and record (and bill) the window twice, so one run per project at a time.
     ReportUsage pid ->
@@ -544,9 +543,12 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
       Issues.completeRun context completion >>= \case
         Issues.CompletionRejected -> pass
         Issues.RunCompleted termination next -> do
-          let digest = case completion of
-                Issues.CompletedResult _ _ Issues.RunAnswer{evidence = Issues.AgentEvidence answer} | termination == Issues.CompletedSucceeded -> fst <$> report answer
+          let answer = case completion of
+                Issues.CompletedResult _ _ Issues.RunAnswer{evidence = Issues.AgentEvidence a} | termination == Issues.CompletedSucceeded -> Just a
                 (Issues.CompletedResult{}; Issues.FailedResult{}; Issues.TimedOutResult{}; Issues.CancelledResult{}) -> Nothing
+              digest = fst <$> (report =<< answer)
+          when (isJust reportWindow && isJust answer && isNothing digest)
+            $ Log.logAttention "Report routine answer was not a report digest; nothing was delivered" (AE.object ["routine_id" AE..= routineId, "project_id" AE..= routine.projectId])
           sequence_ $ deliverReport authCtx routine <$> templateKey <*> reportWindow <*> digest
           for_ next $ \slot -> enqueueNext slot.id slot.scheduledAt
 
@@ -566,8 +568,8 @@ deliverReport authCtx routine templateKey (from, to) digest = do
       body = "*" <> period <> "*\n\n" <> AI.digestMarkdown digest charts
       reportUrl = hostPath authCtx.env.hostUrl $ urls.aiThreadGet pid routine.conversationId (rightToMaybe key)
   for_ (rightToMaybe key) \k ->
-    whenLeftM_ (Issues.saveArtifact pid routine.conversationId k (Just digest.headline) body Issues.ArtifactReplace) \_ ->
-      Log.logAttention "Report document was not saved" $ AE.object ["conversation_id" AE..= routine.conversationId, "project_id" AE..= pid]
+    whenLeftM_ (Issues.saveArtifact pid routine.conversationId k (Just digest.headline) body Issues.ArtifactReplace) \rejection ->
+      Log.logAttention "Report document was not saved" $ AE.object ["conversation_id" AE..= routine.conversationId, "project_id" AE..= pid, "reason" AE..= show @Text rejection]
   -- Delivered by code (a read-only report cannot post) through the team fan-out alerts use, so a
   -- report reaches the same channels and recipients an alert would: email when chosen, team chat always.
   unless (routine.destination == Issues.DestinationConversation) $ whenJustM (Projects.activeProjectById pid) \project ->

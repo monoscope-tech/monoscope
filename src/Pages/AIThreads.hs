@@ -372,7 +372,7 @@ routinesGetH pid = do
       where
         -- The last run is one sample; per-PR and per-issue routines fail between passes.
         failedNote_ r =
-          let mine = filter (\run -> run.conversationId == r.conversationId || run.routine == Just r.title) recentRuns
+          let mine = filter (\run -> r.conversationId `elem` ([run.conversationId] <> toList run.routineConversation)) recentRuns
               failed = length $ filter (Issues.runFailed . (.status)) mine
            in when (failed > 0) $ span_ [class_ "text-textError"] $ toHtml $ show @Text failed <> " of the last " <> show @Text (length mine) <> " failed"
         categoryId = ("routine-category-" <>) . T.toLower . T.replace " " "-" . Issues.routineCategoryLabel

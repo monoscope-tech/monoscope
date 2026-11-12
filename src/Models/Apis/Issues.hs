@@ -2258,6 +2258,7 @@ data RoutineRun = RoutineRun
   -- ^ Opening of the run's result, for one-line history rows.
   , routine :: Maybe Text
   -- ^ The installed routine's title: event runs are titled by their subject (a pull request, an issue).
+  , routineConversation :: Maybe (UUIDId "conversation")
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
@@ -3196,11 +3197,7 @@ listConversationRuns :: DB es => Projects.ProjectId -> UUIDId "conversation" -> 
 listConversationRuns pid convId limit =
   Hasql.interp
     $ routineRunsSql pid
-    -- Fix runs carry no routine_id, but only the autofix sweep starts them (ImpactReview.autofixIssues), so they are its runs.
-    <> [HI.sql|AND (run.conversation_id = #{convId} OR run.routine_id IN
-    (SELECT id FROM apis.ai_routines WHERE project_id = #{pid} AND conversation_id = #{convId})
-    OR (run.source->>'tag' = 'FixRun' AND EXISTS (SELECT 1 FROM apis.ai_routines a
-      WHERE a.project_id = #{pid} AND a.conversation_id = #{convId} AND a.template_key = #{issueAutofixTemplate.key})))
+    <> [HI.sql|AND #{convId} IN (run.conversation_id, owner.conversation_id)
     ORDER BY run.started_at DESC, run.attempt DESC LIMIT #{max 1 $ min 100 limit}|]
 
 
@@ -3210,14 +3207,14 @@ routineRunsSql pid =
   [HI.sql|SELECT run.id, run.conversation_id, COALESCE(conversation.title, installation.title, CASE WHEN conversation.conversation_id IS NOT NULL THEN 'Untitled routine' END), run.scheduled_at,
       run.started_at, run.finished_at, run.status, run.error, run.source, run.attempt,
       (SELECT LEFT(a.content, 400) FROM apis.ai_routine_run_artifacts a WHERE a.run_id = run.id AND a.key = 'latest-result'),
-      COALESCE(installation.title, CASE WHEN run.source->>'tag' = 'FixRun' THEN (SELECT c.title FROM apis.ai_routines a
-        JOIN apis.ai_conversations c ON c.project_id = a.project_id AND c.conversation_id = a.conversation_id
-        WHERE a.project_id = run.project_id AND a.template_key = #{issueAutofixTemplate.key}) END)
+      installation.title, owner.conversation_id
       FROM apis.ai_routine_runs run
       LEFT JOIN apis.ai_conversations conversation
         ON conversation.project_id = run.project_id AND conversation.conversation_id = run.conversation_id
-      LEFT JOIN apis.ai_routines routine ON routine.id = run.routine_id
-      LEFT JOIN apis.ai_conversations installation ON installation.project_id = routine.project_id AND installation.conversation_id = routine.conversation_id
+      -- Fix runs carry no routine_id, but only the autofix sweep starts them (ImpactReview.autofixIssues), so they are its runs.
+      LEFT JOIN LATERAL (SELECT a.conversation_id FROM apis.ai_routines a WHERE a.project_id = run.project_id
+        AND (a.id = run.routine_id OR (run.routine_id IS NULL AND run.source->>'tag' = 'FixRun' AND a.template_key = #{issueAutofixTemplate.key})) LIMIT 1) owner ON TRUE
+      LEFT JOIN apis.ai_conversations installation ON installation.project_id = run.project_id AND installation.conversation_id = owner.conversation_id
       WHERE run.project_id = #{pid} |]
 
 
@@ -3436,11 +3433,13 @@ deleteRoutine pid convId =
     [HI.sql|DELETE FROM apis.ai_routines WHERE project_id = #{pid} AND conversation_id = #{convId}|]
 
 
+-- | Only report routines email: no other routine has a digest to mail, so email would deliver nothing.
 setRoutineDestination :: DB es => Projects.ProjectId -> UUIDId "conversation" -> RoutineDestination -> Eff es ()
 setRoutineDestination pid convId destination =
-  Hasql.interpExecute_
-    [HI.sql|UPDATE apis.ai_routines SET destination = #{destination}
-      WHERE project_id = #{pid} AND conversation_id = #{convId}|]
+  let reports = V.fromList $ filter (isJust . reportWindowDays) $ map (.key) routineTemplates
+   in Hasql.interpExecute_
+        [HI.sql|UPDATE apis.ai_routines SET destination = #{destination}
+          WHERE project_id = #{pid} AND conversation_id = #{convId} AND (#{destination} <> #{DestinationEmail} OR template_key = ANY(#{reports}))|]
 
 
 setRoutinePolicy :: DB es => Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> ExecutionPolicy -> Eff es ()
