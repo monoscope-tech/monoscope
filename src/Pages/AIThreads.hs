@@ -816,7 +816,8 @@ threadPageGetH pid convId docM runM hxTarget = do
         routineFacts_ conversation =
           div_ [class_ "flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm text-textWeak sm:gap-x-2 sm:[&>*+*]:before:me-2 sm:[&>*+*]:before:text-textDisabled sm:[&>*+*]:before:content-['·']"] do
             span_ $ uncurry tonePill_ $ routineStatus conversation
-            span_ $ toHtml $ routineSchedule conversation
+            -- Editors see the cadence on the header's schedule control (labelled from md up).
+            span_ [class_ "md:hidden" | canEdit && isJust conversation.routineInterval] $ toHtml $ routineSchedule conversation
             span_ [class_ "tabular-nums"] case (conversation.routineLastRunAt, conversation.routineLastRunStatus) of
               (Just at, Just status) -> span_ [class_ "inline-flex items-center gap-2"] $ "Last run " >> localTimeFmt_ "d MMM, HH:mm" at >> uncurry toneDot_ (runStatus status)
               _ -> "Not run yet"
