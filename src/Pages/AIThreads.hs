@@ -832,7 +832,7 @@ threadPageGetH pid convId docM runM hxTarget = do
             -- Editors see the cadence on the header's schedule control (labelled from md up).
             span_ [class_ "md:hidden" | canEdit && isJust conversation.routineInterval] $ toHtml $ routineSchedule conversation
             span_ [class_ "tabular-nums"] case (conversation.routineLastRunAt, conversation.routineLastRunStatus) of
-              (Just at, Just status) -> span_ [class_ "inline-flex items-center gap-2"] $ "Last run " >> localTimeFmt_ "d MMM, HH:mm" at >> uncurry toneDot_ (runStatus status)
+              (Just at, Just status) -> span_ [class_ "inline-flex items-center gap-2 whitespace-nowrap"] $ "Last run " >> localTimeFmt_ "d MMM, HH:mm" at >> uncurry toneDot_ (runStatus status)
               _ -> "Not run yet"
             -- The last run is one sample: a routine that keeps failing between passes must not read healthy.
             let failed = length $ filter (Issues.runFailed . (.status)) runs
