@@ -641,7 +641,8 @@ routineReportEmail projectTitle period headline reportUrl highlights =
       p_ [class_ "sub", style_ "margin:0 0 8px;"] $ toHtml $ projectTitle <> " · " <> period
       h1_ [style_ "margin:0 0 8px;"] $ toHtml headline
       forM_ highlights \(title, detail, chart, link) -> do
-        h2_ [style_ "font-size:18px;margin:32px 0 8px;"] $ toHtml title
+        hr_ [class_ "divider", style_ "margin:28px 0 24px;"]
+        h2_ [style_ "font-size:18px;margin:0 0 8px;"] $ toHtml title
         unless (T.null detail) $ p_ $ toHtml detail
         whenJust chart $ div_ [style_ "margin-top:12px;"] . chartImage_ title
         whenJust link \url -> p_ [style_ "margin:10px 0 0;font-size:14px;"] $ a_ [href_ url, target_ "_blank"] "Explore in Monoscope \8594"
