@@ -20,7 +20,7 @@ import Effectful.Reader.Static (ask)
 import Lucid hiding (for_)
 import Lucid qualified
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
@@ -299,8 +299,11 @@ routinesGetH pid = do
                           ul_ ([class_ "dropdown dropdown-end menu menu-sm w-52 rounded-box border border-strokeWeak bg-bgRaised p-1 shadow-lg"] <> popoverPanel_ menuId) do
                             when (isJust r.routineRunningSince) $ li_ $ button_ [hxPost_ $ urls.aiRoutineCancelPost pid r.conversationId, hxSwap_ "none", class_ "text-textWarning"] "Stop active runs"
                             when (isJust r.routineInterval) do
-                              let slackEnabled = r.routineDestination == Just Issues.DestinationSlack
-                              li_ $ button_ [hxPost_ $ urls.aiRoutineDestinationPost pid r.conversationId, hxSwap_ "none", term "hx-vals" $ "{\"destination\":\"" <> bool "slack" "conversation" slackEnabled <> "\"}"] $ bool "Send results to Slack" "Stop Slack delivery" slackEnabled
+                              li_ [class_ "menu-title"] "Deliver results"
+                              for_ [Issues.DestinationConversation, Issues.DestinationEmail, Issues.DestinationSlack] \destination ->
+                                li_ $ button_ [hxPost_ $ urls.aiRoutineDestinationPost pid r.conversationId, hxSwap_ "none", hxVals_ $ "{\"destination\":\"" <> toText (encodeEnumSC @"Destination" destination) <> "\"}", Aria.checked_ $ bool "false" "true" (r.routineDestination == Just destination), role_ "menuitemradio"] do
+                                  span_ [class_ "w-3"] $ when (r.routineDestination == Just destination) $ faSprite_ "check" "solid" "h-3 w-3"
+                                  toHtml $ destinationLabel destination
                             li_ $ button_ [hxDelete_ $ urls.aiRoutineDelete pid r.conversationId, hxConfirm_ "Delete this routine? Its conversation and past results will be kept.", hxSwap_ "none", class_ "text-textError"] "Delete") & withAttrs [class_ "w-28 text-end", Aria.label_ "Actions"]
                            | canEdit
                            ]
@@ -771,6 +774,7 @@ threadPageGetH pid convId docM runM hxTarget = do
               _ -> "Not run yet"
             whenJust (conversation.routineNextRunAt <* guard conversation.routineActive) $ span_ [class_ "tabular-nums"] . toHtml . formatTime defaultTimeLocale "Next run %-d %b, %H:%M UTC"
             whenJust conversation.routinePolicy $ span_ . toHtml . policyLabel
+            whenJust (mfilter (/= Issues.DestinationConversation) conversation.routineDestination) $ span_ . toHtml . destinationLabel
 
         routineEmpty_ :: (Issues.ConversationSummary, Issues.RoutineInterval) -> Html ()
         routineEmpty_ (conversation, _) =
@@ -977,6 +981,13 @@ routineStatus conversation
   | isJust conversation.routineRunningSince = (BrandBadge, "Running now")
   | conversation.routineActive = (SuccessBadge, "Active")
   | otherwise = (NeutralBadge, "Paused")
+
+
+destinationLabel :: Issues.RoutineDestination -> Text
+destinationLabel = \case
+  Issues.DestinationConversation -> "In app only"
+  Issues.DestinationEmail -> "Email to members"
+  Issues.DestinationSlack -> "Post to Slack"
 
 
 runErrorTone :: Issues.RoutineRunStatus -> Text
