@@ -280,31 +280,42 @@ routinesGetH pid = do
                 Table
                   { config = def{elemID = "ai-routines-installed", renderAsTable = True, tdClasses = "px-4 py-2.5"}
                   , columns =
-                      [ col "Routine" (\r -> a_ [href_ $ threadUrl pid r.conversationId, class_ "block min-w-0 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2"] do
-                          div_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml r.title
-                          div_ [class_ "truncate text-xs text-textWeak"] $ toHtml $ maybe (foldMap Issues.routineKindLabel r.routineKind) Issues.routineCadence r.routineInterval)
+                      [ col
+                          "Routine"
+                          ( \r -> a_ [href_ $ threadUrl pid r.conversationId, class_ "block min-w-0 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2"] do
+                              div_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml r.title
+                              div_ [class_ "truncate text-xs text-textWeak"] $ toHtml $ maybe (foldMap Issues.routineKindLabel r.routineKind) Issues.routineCadence r.routineInterval
+                          )
                           -- Takes the leftover width and truncates, so the narrow columns stay visible on phones.
                           & withAttrs [class_ "w-full max-w-0"]
                       , col "Status" (uncurry tonePill_ . routineStatus) & withAttrs [class_ "w-28 whitespace-nowrap"]
-                      , col "Last run" (\r -> span_ [class_ "flex items-center gap-2 whitespace-nowrap text-xs tabular-nums text-textWeak"] case (r.routineLastRunAt, r.routineLastRunStatus) of
-                          (Just at, Just status) -> toHtml (formatTime defaultTimeLocale "%e %b, %H:%M" at) >> uncurry tonePill_ (runStatus status)
-                          _ -> "Not run yet") & withAttrs [class_ "w-56 max-md:hidden"]
+                      , col
+                          "Last run"
+                          ( \r -> span_ [class_ "flex items-center gap-2 whitespace-nowrap text-xs tabular-nums text-textWeak"] case (r.routineLastRunAt, r.routineLastRunStatus) of
+                              (Just at, Just status) -> toHtml (formatTime defaultTimeLocale "%e %b, %H:%M" at) >> uncurry tonePill_ (runStatus status)
+                              _ -> "Not run yet"
+                          )
+                          & withAttrs [class_ "w-56 max-md:hidden"]
                       , col "Next run" (\r -> span_ [class_ "whitespace-nowrap text-xs tabular-nums text-textWeak"] $ maybe "—" (toHtml . formatTime defaultTimeLocale "%e %b, %H:%M") (r.routineNextRunAt <* guard r.routineActive)) & withAttrs [class_ "w-36 max-lg:hidden"]
                       ]
-                        <> [ col "" (\r -> div_ [class_ "flex items-center justify-end gap-1"] do
-                          let (toggle, toggleLabel) = bool (\p c -> urls.aiRoutineResumePost p c False, "Resume") (urls.aiRoutinePausePost, "Pause") r.routineActive
-                              menuId = "routine-menu-" <> r.conversationId.toText
-                          form_ [hxPost_ $ toggle pid r.conversationId, hxSwap_ "none"] $ button_ [class_ "btn btn-xs btn-ghost active:scale-[0.96] transition-transform", type_ "submit"] $ toHtml @Text toggleLabel
-                          button_ ([type_ "button", class_ "btn btn-xs btn-ghost btn-square", Aria.label_ $ "More actions for " <> r.title] <> popoverTrigger_ menuId) $ faSprite_ "ellipsis" "regular" "h-3.5 w-3.5"
-                          ul_ ([class_ "dropdown dropdown-end menu menu-sm w-52 rounded-box border border-strokeWeak bg-bgRaised p-1 shadow-lg"] <> popoverPanel_ menuId) do
-                            when (isJust r.routineRunningSince) $ li_ $ button_ [hxPost_ $ urls.aiRoutineCancelPost pid r.conversationId, hxSwap_ "none", class_ "text-textWarning"] "Stop active runs"
-                            when (isJust r.routineInterval) do
-                              li_ [class_ "menu-title"] "Deliver results"
-                              for_ [Issues.DestinationConversation, Issues.DestinationEmail, Issues.DestinationSlack] \destination ->
-                                li_ $ button_ [hxPost_ $ urls.aiRoutineDestinationPost pid r.conversationId, hxSwap_ "none", hxVals_ $ "{\"destination\":\"" <> toText (encodeEnumSC @"Destination" destination) <> "\"}", Aria.checked_ $ bool "false" "true" (r.routineDestination == Just destination), role_ "menuitemradio"] do
-                                  span_ [class_ "w-3"] $ when (r.routineDestination == Just destination) $ faSprite_ "check" "solid" "h-3 w-3"
-                                  toHtml $ destinationLabel destination
-                            li_ $ button_ [hxDelete_ $ urls.aiRoutineDelete pid r.conversationId, hxConfirm_ "Delete this routine? Its conversation and past results will be kept.", hxSwap_ "none", class_ "text-textError"] "Delete") & withAttrs [class_ "w-28 text-end", Aria.label_ "Actions"]
+                        <> [ col
+                               ""
+                               ( \r -> div_ [class_ "flex items-center justify-end gap-1"] do
+                                   let (toggle, toggleLabel) = bool (\p c -> urls.aiRoutineResumePost p c False, "Resume") (urls.aiRoutinePausePost, "Pause") r.routineActive
+                                       menuId = "routine-menu-" <> r.conversationId.toText
+                                   form_ [hxPost_ $ toggle pid r.conversationId, hxSwap_ "none"] $ button_ [class_ "btn btn-xs btn-ghost active:scale-[0.96] transition-transform", type_ "submit"] $ toHtml @Text toggleLabel
+                                   button_ ([type_ "button", class_ "btn btn-xs btn-ghost btn-square", Aria.label_ $ "More actions for " <> r.title] <> popoverTrigger_ menuId) $ faSprite_ "ellipsis" "regular" "h-3.5 w-3.5"
+                                   ul_ ([class_ "dropdown dropdown-end menu menu-sm w-52 rounded-box border border-strokeWeak bg-bgRaised p-1 shadow-lg"] <> popoverPanel_ menuId) do
+                                     when (isJust r.routineRunningSince) $ li_ $ button_ [hxPost_ $ urls.aiRoutineCancelPost pid r.conversationId, hxSwap_ "none", class_ "text-textWarning"] "Stop active runs"
+                                     when (isJust r.routineInterval) do
+                                       li_ [class_ "menu-title"] "Deliver results"
+                                       for_ [Issues.DestinationConversation, Issues.DestinationEmail, Issues.DestinationSlack] \destination ->
+                                         li_ $ button_ [hxPost_ $ urls.aiRoutineDestinationPost pid r.conversationId, hxSwap_ "none", hxVals_ $ "{\"destination\":\"" <> toText (encodeEnumSC @"Destination" destination) <> "\"}", Aria.checked_ $ bool "false" "true" (r.routineDestination == Just destination), role_ "menuitemradio"] do
+                                           span_ [class_ "w-3"] $ when (r.routineDestination == Just destination) $ faSprite_ "check" "solid" "h-3 w-3"
+                                           toHtml $ destinationLabel destination
+                                     li_ $ button_ [hxDelete_ $ urls.aiRoutineDelete pid r.conversationId, hxConfirm_ "Delete this routine? Its conversation and past results will be kept.", hxSwap_ "none", class_ "text-textError"] "Delete"
+                               )
+                               & withAttrs [class_ "w-28 text-end", Aria.label_ "Actions"]
                            | canEdit
                            ]
                   , rows = fromList installedRoutines
@@ -316,9 +327,12 @@ routinesGetH pid = do
             Table
               { config = def{elemID = "ai-routines-runs", renderAsTable = True, tdClasses = "px-4 py-2.5"}
               , columns =
-                  [ col "Routine" (\run -> div_ [class_ "min-w-0"] do
-                      a_ [href_ $ runUrl pid run.id, class_ "block truncate text-sm font-medium text-textStrong hover:text-textBrand"] $ toHtml $ fromMaybe "Deleted routine" run.title
-                      whenJust (run.error <|> (summaryLine =<< run.summary)) \line -> p_ [class_ $ "mt-0.5 truncate text-xs " <> maybe "text-textWeak" (const $ runErrorTone run.status) run.error, title_ line] $ toHtml line)
+                  [ col
+                      "Routine"
+                      ( \run -> div_ [class_ "min-w-0"] do
+                          a_ [href_ $ runUrl pid run.id, class_ "block truncate text-sm font-medium text-textStrong hover:text-textBrand"] $ toHtml $ fromMaybe "Deleted routine" run.title
+                          whenJust (run.error <|> (summaryLine =<< run.summary)) \line -> p_ [class_ $ "mt-0.5 truncate text-xs " <> maybe "text-textWeak" (const $ runErrorTone run.status) run.error, title_ line] $ toHtml line
+                      )
                       & withAttrs [class_ "w-full max-w-0"]
                   , col "Outcome" (uncurry tonePill_ . runStatus . (.status)) & withAttrs [class_ "w-32"]
                   , col "Started" (\run -> time_ [datetime_ $ show run.startedAt, class_ "whitespace-nowrap text-xs tabular-nums text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt) & withAttrs [class_ "w-40 max-sm:hidden"]
@@ -721,10 +735,11 @@ threadPageGetH pid convId docM runM hxTarget = do
         documentsNav_ = nav_ [Aria.label_ "Documents"] do
           h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Documents"
           let (recent, older) = splitAt 3 docs
-              docList = div_ [class_ "-mx-2 grid grid-cols-1 gap-0.5"] . mapM_ \doc -> navLink_ (docHref doc) do
-                faSprite_ "file-lines" "regular" "h-3.5 w-3.5 shrink-0 text-iconBrand"
-                span_ [class_ "min-w-0 grow truncate"] $ toHtml doc.title
-                time_ [datetime_ $ show doc.updatedAt, class_ "shrink-0 text-xs tabular-nums text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%e %b" doc.updatedAt
+              docList =
+                div_ [class_ "-mx-2 grid grid-cols-1 gap-0.5"] . mapM_ \doc -> navLink_ (docHref doc) do
+                  faSprite_ "file-lines" "regular" "h-3.5 w-3.5 shrink-0 text-iconBrand"
+                  span_ [class_ "min-w-0 grow truncate"] $ toHtml doc.title
+                  time_ [datetime_ $ show doc.updatedAt, class_ "shrink-0 text-xs tabular-nums text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%e %b" doc.updatedAt
           docList recent
           unless (null older) $ details_ [class_ "group/olderdocs mt-1"] do
             summary_ [class_ "cursor-pointer list-none rounded-md px-1 py-1 text-xs font-medium text-textBrand hover:underline [&::-webkit-details-marker]:hidden"] do
@@ -901,6 +916,8 @@ routinePausePostH pid convId = authorizeConversation pid convId >> void (Project
 
 routineCancelPostH, routineDeleteH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespHeaders (Done AIPage))
 routineCancelPostH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.cancelRoutineRun pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> done (RoutinesPage pid)
+
+
 -- | Resume a paused routine on its schedule, or (@now@) start an active one immediately.
 routineResumePostH :: Projects.ProjectId -> UUIDId "conversation" -> Bool -> ATAuthCtx (RespHeaders (Done AIPage))
 routineResumePostH pid convId now = do
@@ -909,6 +926,8 @@ routineResumePostH pid convId now = do
   (sess, _) <- Projects.sessionAndProject pid
   enqueue (Issues.resumeRoutine (bool Issues.ResumeSchedule Issues.RunNow now) sess.user.id pid convId)
   done $ bool (RoutinesPage pid) (ThreadPage pid convId) now
+
+
 routineDeleteH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.pauseRoutine pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> Issues.deleteRoutine pid convId >> done (RoutinesPage pid)
 
 
