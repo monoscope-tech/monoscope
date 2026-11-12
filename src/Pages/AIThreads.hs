@@ -293,7 +293,7 @@ routinesGetH pid = do
                           )
                           -- Takes the leftover width and truncates, so the narrow columns stay visible on phones.
                           & withAttrs [class_ "w-full max-w-0"]
-                      , col "Status" (\r -> (if r.routineActive && isNothing r.routineRunningSince then uncurry toneDot_ else uncurry tonePill_) $ routineStatus r) & withAttrs [class_ "w-28 whitespace-nowrap"]
+                      , col "Status" (\r -> uncurry (bool tonePill_ toneDot_ (r.routineActive && isNothing r.routineRunningSince)) (routineStatus r)) & withAttrs [class_ "w-28 whitespace-nowrap"]
                       , col
                           "Last run"
                           ( \r -> span_ [class_ "flex items-center gap-2 whitespace-nowrap text-xs tabular-nums text-textWeak"] case (r.routineLastRunAt, r.routineLastRunStatus) of
@@ -333,13 +333,7 @@ routinesGetH pid = do
         let runsSection_ :: Text -> Text -> [Issues.RoutineRun] -> Html ()
             runsSection_ sectionId heading sectionRuns = unless (null sectionRuns) $ section_ [Aria.label_ heading] do
               h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] $ toHtml heading
-              let (shown, more) = splitAt (bool 5 6 (length sectionRuns == 6)) sectionRuns
-              runsTable_ sectionId shown
-              unless (null more) $ details_ [class_ "group/more mt-1"] do
-                summary_ [class_ "cursor-pointer list-none px-1 py-1 text-xs font-medium text-textBrand hover:underline [&::-webkit-details-marker]:hidden"] do
-                  span_ [class_ "group-open/more:hidden"] $ toHtml $ "Show " <> show @Text (length more) <> " more"
-                  span_ [class_ "hidden group-open/more:inline"] "Show fewer"
-                div_ [class_ "mt-1"] $ runsTable_ (sectionId <> "-more") more
+              showMore_ 5 (runsTable_ . (sectionId <>) . bool "" "-more") sectionRuns
             runsTable_ tableId sectionRuns =
               toHtml
                 Table
@@ -362,7 +356,7 @@ routinesGetH pid = do
                   }
             (deleted, current) = L.partition (isNothing . (.title)) recentRuns
         -- A conversation's newest run decides: a retry that succeeded clears it, repeated failures show once.
-        runsSection_ "ai-routines-attention" "Needs attention" $ filter ((`elem` [Issues.RunFailed, Issues.RunTimedOut]) . (.status)) $ nubOrdOn (.conversationId) current
+        runsSection_ "ai-routines-attention" "Needs attention" $ filter (Issues.runFailed . (.status)) $ nubOrdOn (.conversationId) current
         runsSection_ "ai-routines-deleted" "From deleted routines" deleted
         section_ [Aria.label_ "Routine catalog"] do
           h2_ [class_ "text-sm font-semibold text-textStrong"] "Built-in routines"
@@ -639,8 +633,8 @@ threadPageGetH pid convId docM runM hxTarget = do
                     | otherwise -> foldMap routineEmpty_ routineM
                 when (isRoutine && not (null docs)) documentsNav_
                 unless (null runs) $ section_ [Aria.label_ "Routine runs"] do
-                  let (recent, older) = splitAt (bool 3 4 (length runs == 4)) runs
-                      ownRun run = Just run.conversationId == activeConversationIdM
+                  let ownRun run = Just run.conversationId == activeConversationIdM
+                      latestShown = (.id) <$> find (\r -> ownRun r && r.status == Issues.RunSucceeded) runs
                       runRow run = a_ ([href_ $ runUrl projectId run.id, class_ "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-3 py-2.5 hover:bg-fillHover focus-visible:outline-2 focus-visible:-outline-offset-2"] <> inspectorAttrs (urls.aiRoutineRunGet projectId run.id activeConversationIdM) <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) do
                         span_ [class_ "flex min-w-0 items-baseline gap-2 text-sm text-textStrong"] do
                           span_ [class_ "shrink-0 tabular-nums"] $ localTimeFmt_ "d MMM, HH:mm" run.startedAt
@@ -650,15 +644,10 @@ threadPageGetH pid convId docM runM hxTarget = do
                           when (run.attempt > 1) $ span_ [class_ "shrink-0 text-xs text-textWeak"] $ toHtml $ bool "retry " "run " (any ((== Issues.RunSucceeded) . (.status)) previous) <> show @Text run.attempt
                         span_ [id_ $ runStatusId run, class_ "row-span-2"] $ uncurry tonePill_ $ runStatus run.status
                         -- The newest published result is already shown in full above.
-                        unless (isRoutine && Just run.id == ((.id) <$> find (\r -> ownRun r && r.status == Issues.RunSucceeded) runs)) $ runSummary_ "" run
+                        unless (isRoutine && Just run.id == latestShown) $ runSummary_ "" run
                       runList = div_ [class_ "divide-y divide-strokeWeak overflow-hidden rounded-lg border border-strokeWeak bg-bgRaised"] . mapM_ runRow
                   h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Runs"
-                  runList recent
-                  unless (null older) $ details_ [class_ "group/older mt-2", term "hx-morph-skip" ""] do
-                    summary_ [class_ "cursor-pointer list-none rounded-md px-1 py-1 text-xs font-medium text-textBrand hover:underline [&::-webkit-details-marker]:hidden"] do
-                      span_ [class_ "group-open/older:hidden"] $ toHtml $ "Show " <> show @Text (length older) <> " older"
-                      span_ [class_ "hidden group-open/older:inline"] "Show fewer"
-                    div_ [class_ "mt-2"] $ runList older
+                  showMore_ 3 (const runList) runs
             when isRoutine do
               when (null runs && isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] "No runs yet. An active routine starts when the next matching event arrives."
               -- Setup, not daily reading: collapsed below the results.
@@ -782,18 +771,14 @@ threadPageGetH pid convId docM runM hxTarget = do
         documentsNav_ :: Html ()
         documentsNav_ = nav_ [Aria.label_ "Documents"] do
           h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Documents"
-          let (recent, older) = splitAt (bool 3 4 (length docs == 4)) docs
-              docList =
-                div_ [class_ "-mx-2 grid grid-cols-1 gap-0.5"] . mapM_ \doc -> navLink_ (docHref doc) do
-                  faSprite_ "file-lines" "regular" "h-3.5 w-3.5 shrink-0 text-iconBrand"
-                  span_ [class_ "min-w-0 grow truncate"] $ toHtml doc.title
-                  span_ [class_ "shrink-0 text-xs tabular-nums text-textWeak"] $ localTimeFmt_ "d MMM" doc.updatedAt
-          docList recent
-          unless (null older) $ details_ [class_ "group/olderdocs mt-1"] do
-            summary_ [class_ "cursor-pointer list-none rounded-md px-1 py-1 text-xs font-medium text-textBrand hover:underline [&::-webkit-details-marker]:hidden"] do
-              span_ [class_ "group-open/olderdocs:hidden"] $ toHtml $ "Show all " <> show @Text (length docs)
-              span_ [class_ "hidden group-open/olderdocs:inline"] "Show fewer"
-            div_ [class_ "mt-1"] $ docList older
+          showMore_
+            3
+            ( const $ div_ [class_ "-mx-2 grid grid-cols-1 gap-0.5"] . mapM_ \doc -> navLink_ (docHref doc) do
+                faSprite_ "file-lines" "regular" "h-3.5 w-3.5 shrink-0 text-iconBrand"
+                span_ [class_ "min-w-0 grow truncate"] $ toHtml doc.title
+                span_ [class_ "shrink-0 text-xs tabular-nums text-textWeak"] $ localTimeFmt_ "d MMM" doc.updatedAt
+            )
+            docs
 
         documentView_ :: Issues.AIArtifact -> Html ()
         documentView_ doc =
@@ -839,7 +824,7 @@ threadPageGetH pid convId docM runM hxTarget = do
               (Just at, Just status) -> span_ [class_ "inline-flex items-center gap-2"] $ "Last run " >> localTimeFmt_ "d MMM, HH:mm" at >> uncurry toneDot_ (runStatus status)
               _ -> "Not run yet"
             -- The last run is one sample: a routine that keeps failing between passes must not read healthy.
-            let failed = length $ filter ((`elem` [Issues.RunFailed, Issues.RunTimedOut]) . (.status)) runs
+            let failed = length $ filter (Issues.runFailed . (.status)) runs
             when (failed > 0) $ span_ [class_ "text-textError"] $ toHtml $ show @Text failed <> " of the last " <> show @Text (length runs) <> " runs failed"
             whenJust (conversation.routineNextRunAt <* guard conversation.routineActive) $ span_ [class_ "tabular-nums"] . ("Next run " >>) . localTimeFmt_ "d MMM, HH:mm"
             whenJust (mfilter (/= Issues.DestinationConversation) conversation.routineDestination) $ span_ . toHtml . destinationLabel
@@ -1057,6 +1042,19 @@ disclosure_ attrs summary body = details_ ([class_ " group/disclosure rounded-xl
     faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-iconNeutral transition-transform duration-150 group-open/disclosure:rotate-90 rtl:-scale-x-100"
     summary
   div_ [class_ "border-t border-strokeWeak p-4"] body
+
+
+-- | A list that shows its first @n@ (or all of @n + 1@, rather than hide a single one) and folds the rest
+-- under "Show N more". The renderer learns whether it draws the folded part.
+showMore_ :: Int -> (Bool -> [a] -> Html ()) -> [a] -> Html ()
+showMore_ n render xs = do
+  let (shown, more) = splitAt (bool n (n + 1) (length xs == n + 1)) xs
+  render False shown
+  unless (null more) $ details_ [class_ "group/more mt-1", term "hx-morph-skip" ""] do
+    summary_ [class_ "cursor-pointer list-none rounded-md px-1 py-1 text-xs font-medium text-textBrand hover:underline [&::-webkit-details-marker]:hidden"] do
+      span_ [class_ "group-open/more:hidden"] $ toHtml $ "Show " <> show @Text (length more) <> " more"
+      span_ [class_ "hidden group-open/more:inline"] "Show fewer"
+    div_ [class_ "mt-1"] $ render True more
 
 
 routineStatus :: Issues.ConversationSummary -> (BadgeColor, Text)

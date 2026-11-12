@@ -315,13 +315,13 @@ ensureConversationTitle config userQuery model apiKey answer = do
 prepareRunAnswer :: Maybe UTCTime -> AgenticChatResult -> Issues.RunAnswer
 prepareRunAnswer ranAt answer = Issues.RunAnswer{content = msg, widgets = AE.toJSON <$> widgets, report, evidence = Issues.AgentEvidence answer}
   where
-    parsed = parseAgenticResponse answer
-    widgets = guarded (not . null) . take 10 . map pin . responseWidgets =<< rightToMaybe parsed
+    parsed = rightToMaybe $ parseAgenticResponse answer
+    widgets = guarded (not . null) . take 10 . map pin . responseWidgets =<< parsed
     pin w = case (ranAt, w.timeFrom) of
-      (Just at, Nothing) | (Just from, Just to, _) <- parseTimeRange at $ fromMaybe (TimePicker Nothing Nothing Nothing) $ (.timeRange) =<< rightToMaybe parsed -> w{Widget.timeFrom = Just $ formatUTCMicros from, Widget.timeTo = Just $ formatUTCMicros to}
+      (Just at, Nothing) | (Just from, Just to, _) <- parseTimeRange at $ fromMaybe (TimePicker Nothing Nothing Nothing) $ (.timeRange) =<< parsed -> w{Widget.timeFrom = Just $ formatUTCMicros from, Widget.timeTo = Just $ formatUTCMicros to}
       _ -> w
-    report = fromMaybe answer.response $ (.explanation) =<< rightToMaybe parsed
-    msg = fromMaybe (bool answer.response "Here are the requested visualizations:" $ isJust widgets) (nonEmptyT . (.explanation) =<< rightToMaybe parsed)
+    report = fromMaybe answer.response $ (.explanation) =<< parsed
+    msg = fromMaybe (bool answer.response "Here are the requested visualizations:" $ isJust widgets) (nonEmptyT . (.explanation) =<< parsed)
 
 
 -- | A report routine's answer: a headline, then at most five highlights, each with the chart that
@@ -347,8 +347,8 @@ data ReportHighlight = ReportHighlight {title :: Text, detail :: Text, widget ::
 -- >>> titles "[{\"title\":\"noise\",\"previous\":1,\"current\":3,\"unit\":\"events\"},{\"title\":\"flat\",\"previous\":100,\"current\":105,\"unit\":\"ms\"},{\"title\":\"real\",\"previous\":1777,\"current\":835,\"unit\":\"events\"},{\"title\":\"same events again\",\"previous\":1777,\"current\":835,\"unit\":\"events\"}]"
 -- Just ["real"]
 -- >>> let unitOf q = ((.unit) <=< (.widget) <=< listToMaybe . (.highlights)) =<< parseReportDigest Projects.demoProjectId ("{\"headline\":\"h\",\"highlights\":[{\"title\":\"t\",\"widget\":{\"type\":\"timeseries_line\",\"query\":\"" <> q <> "\"}}]}")
--- >>> map unitOf ["summarize percentile(duration, 95) by bin_auto(timestamp)", "summarize percentile(duration, 95) / 1000000.0 by bin_auto(timestamp)"]
--- [Just "ns",Nothing]
+-- >>> map unitOf ["summarize percentile(duration, 95) by bin_auto(timestamp)", "summarize percentile(duration, 95) / 1000000.0 by bin_auto(timestamp)", "url_path == \\\"/api\\\" | summarize percentile(duration, 95) by bin_auto(timestamp)"]
+-- [Just "ns",Nothing,Just "ns"]
 -- >>> isNothing $ parseReportDigest Projects.demoProjectId "{\"explanation\":\"plain\"}"
 -- True
 parseReportDigest :: Projects.ProjectId -> Text -> Maybe ReportDigest
@@ -374,7 +374,7 @@ parseReportDigest pid response = do
     material unit (previous, current) = abs (current - previous) >= 0.2 * max (abs previous) 1 && (unit /= Just "events" || max previous current >= 50)
     -- duration is stored in nanoseconds; the unit lets charts show ms/s instead of raw counts. A query that
     -- already divides it has converted it itself.
-    durationUnit (w :: Widget.Widget) = (w :: Widget.Widget){Widget.unit = w.unit <|> ("ns" <$ guard (any (\q -> "duration" `T.isInfixOf` q && not ("/" `T.isInfixOf` q)) w.query))}
+    durationUnit (w :: Widget.Widget) = (w :: Widget.Widget){Widget.unit = w.unit <|> ("ns" <$ guard (any (\q -> "duration" `T.isInfixOf` q && not ("/" `T.isInfixOf` snd (T.breakOn "summarize" q))) w.query))}
     -- The agent writes project-relative paths; anything leaving the project is dropped.
     projectLink l
       | ("/p/" <> pid.toText <> "/") `T.isPrefixOf` l = Just l

@@ -203,6 +203,7 @@ module Models.Apis.Issues (
   RoutineReport (..),
   RoutineDestination (..),
   RoutineRunStatus (..),
+  runFailed,
   routineTemplates,
   slackInvestigationTemplate,
   routineIntervalMinutes,
@@ -2026,6 +2027,12 @@ data RoutineDestination = DestinationConversation | DestinationSlack | Destinati
 data RoutineRunStatus = RunRunning | RunSucceeded | RunNoFindings | RunFailed | RunTimedOut | RunCancelled
   deriving stock (Eq, Generic, Read, Show)
   deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Run" RoutineRunStatus
+
+
+runFailed :: RoutineRunStatus -> Bool
+runFailed = \case
+  (RunFailed; RunTimedOut) -> True
+  (RunRunning; RunSucceeded; RunNoFindings; RunCancelled) -> False
 
 
 data RunTermination = CompletedSucceeded | CompletedNoFindings | CompletedFailed | CompletedTimedOut | CompletedCancelled
