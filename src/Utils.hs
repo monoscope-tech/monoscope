@@ -137,7 +137,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.HTTP.Types (urlEncode)
 import Network.HTTP.Types.URI qualified as URI
-import Network.URI (escapeURIString, isUnescapedInURI, parseURI, uriAuthority, uriRegName, uriScheme)
+import Network.URI (escapeURIString, isUnescapedInURI, parseURI, uriRegName)
 import Numeric (showFFloat, showHex)
 import Pkg.DeriveUtils (embedIconEntries)
 import Pkg.IngestBudget qualified as IngestBudget
