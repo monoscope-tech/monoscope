@@ -646,7 +646,8 @@ threadPageGetH pid convId docM runM hxTarget = do
                           unless (ownRun run) $ span_ [class_ "truncate text-textWeak"] $ toHtml $ fromMaybe "Run" run.title
                           when (run.attempt > 1) $ span_ [class_ "shrink-0 text-xs text-textWeak"] $ toHtml $ "retry " <> show @Text run.attempt
                         span_ [id_ $ runStatusId run, class_ "row-span-2"] $ uncurry tonePill_ $ runStatus run.status
-                        runSummary_ "" run
+                        -- The newest published result is already shown in full above.
+                        unless (isRoutine && Just run.id == ((.id) <$> find (\r -> ownRun r && r.status == Issues.RunSucceeded) runs)) $ runSummary_ "" run
                       runList = div_ [class_ "divide-y divide-strokeWeak overflow-hidden rounded-lg border border-strokeWeak bg-bgRaised"] . mapM_ runRow
                   h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Runs"
                   runList recent
