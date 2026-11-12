@@ -1669,8 +1669,12 @@ spec = around withTestResources do
         (weekly,again,installed,) <$> (traverse Issues.provisionReportRoutines free >> Issues.listConversations freePid)
       (isNothing again, onFree) `shouldSatisfy` \(none, conversations) -> none && null conversations
       sortOn (\(k, _, _, _) -> k) [(templateKey, r.routineActive, r.routineDestination, r.routinePolicy) | r <- installed, Just templateKey <- [r.templateKey]] `shouldBe` [("daily-report", False, Just Issues.DestinationConversation, Just Issues.Observe), ("weekly-report", True, Just Issues.DestinationEmail, Just Issues.Observe)]
-      slot <- maybe (fail "weekly report was not scheduled") pure weekly
       reportConv <- maybe (fail "weekly report missing") (pure . (.conversationId)) $ find ((== Just "weekly-report") . (.templateKey)) installed
+      dailyConv <- maybe (fail "daily report missing") (pure . (.conversationId)) $ find ((== Just "daily-report") . (.templateKey)) installed
+      -- Run now starts an active routine at once and leaves a paused one paused.
+      (scheduledFirst, slotNow, pausedNow) <- runTestBg frozenTime tr $ (fmap (.scheduledAt) weekly,,) <$> Issues.resumeRoutine Issues.RunNow (uid tr) pid reportConv <*> Issues.resumeRoutine Issues.RunNow (uid tr) pid dailyConv
+      (scheduledFirst > Just frozenTime, (.scheduledAt) <$> slotNow, isNothing pausedNow) `shouldBe` (True, Just frozenTime, True)
+      slot <- maybe (fail "run now did not schedule") pure slotNow
       void $ runQueryEffect tr $ PM.createEveryoneTeam pid (uid tr)
       (notifs, _) <- captureNotifs tr $ Jobs.runAIRoutineWith 1_000_000 (\_ -> pure $ Right AI.AgenticChatResult{AI.response = digest, AI.toolCalls = []}) (\_ _ -> pass) tr.trATCtx slot.id slot.scheduledAt
       let emails = [email | Notify.EmailNotification email <- notifs]
