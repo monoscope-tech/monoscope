@@ -934,7 +934,7 @@ notificationsTestPostH pid TestForm{..} = do
       let errHash = (errorData :: ErrorPatterns.ATError).hash
       chartUrlM <- errorTrendChartUrl appCtx pid errHash (addUTCTime (-3600) now) now
       pure baseAlert{chartUrl = chartUrlM}
-    (EndpointAlert{}; ShapeAlert; MonitorsAlert{}; LogPatternAlert{}; LogPatternRateChangeAlert{}; MonitorsRecoveryAlert{}) -> pure baseAlert
+    (EndpointAlert{}; ShapeAlert; RoutineReportAlert{}; MonitorsAlert{}; LogPatternAlert{}; LogPatternRateChangeAlert{}; MonitorsRecoveryAlert{}) -> pure baseAlert
 
   Log.logTrace "Sending test notification" (channel, pid, issueType)
 

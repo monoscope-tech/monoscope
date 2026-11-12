@@ -54,6 +54,8 @@ data NotificationAlerts
   = EndpointAlert {project :: Text, endpoints :: V.Vector EndpointAlertRow, endpointHash :: Text}
   | RuntimeErrorAlert {issueId :: Text, issueTitle :: Text, errorData :: ErrorPatterns.ATError, runtimeAlertType :: RuntimeAlertType, chartUrl :: Maybe Text, occurrenceText :: Maybe Text, firstSeenText :: Maybe Text, ongoingFor :: Maybe Text}
   | ShapeAlert
+  | -- | A report routine's digest: highlights are (title, detail, chart PNG, absolute link).
+    RoutineReportAlert {headline :: Text, period :: Text, highlights :: [(Text, Text, Maybe Text, Maybe Text)], reportUrl :: Text}
   | MonitorsAlert
       { monitorTitle :: Text
       , monitorUrl :: Text
@@ -120,6 +122,12 @@ sendDiscordAlert replyToMsgIdM alert pid pTitle channelIdM' = do
             MonitorsRecoveryAlert{..} -> Just $ AE.object ["text" AE..= ("✅ *Alert resolved for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")]
             LogPatternAlert lp -> Just $ mkDiscordLogPatternPayload lp pTitle
             LogPatternRateChangeAlert rc -> Just $ mkDiscordLogPatternRateChangePayload rc pTitle
+            RoutineReportAlert{..} ->
+              Just
+                $ discordEmbedMsg ("📊 **" <> headline <> "**")
+                $ AE.object
+                $ ["title" AE..= headline, "url" AE..= reportUrl, "color" AE..= (26879 :: Int), "description" AE..= T.intercalate "\n\n" (period : [("**" <> title <> "**\n" <> detail) <> foldMap (\l -> "\n[Explore](" <> l <> ")") link | (title, detail, _, link) <- highlights])]
+                <> maybeToList (listToMaybe [c | (_, _, Just c, _) <- highlights] <&> \c -> "image" AE..= AE.object ["url" AE..= c])
             ShapeAlert -> Nothing
       join <$> forM (mkPayload alert) \payload -> Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid payload replyToMsgIdM
 
@@ -150,6 +158,16 @@ sendSlackAlert threadTsM alert pid pTitle channelM = do
               MonitorsRecoveryAlert{..} -> Just $ slackMonitorAlert sRecovered monitorTitle monitorUrl Nothing
               LogPatternAlert lp -> Just $ card $ logPatternCard lp pTitle
               LogPatternRateChangeAlert rc -> Just $ card $ rateChangeCard rc pTitle
+              RoutineReportAlert{..} ->
+                Incidents.slackPayload
+                  $ AE.object
+                    [ "text" AE..= headline
+                    , "blocks"
+                        AE..= ( [slackHeader headline, slackContext [period]]
+                                  <> concat [slackSection ("*" <> title <> "*\n" <> detail <> foldMap (\l -> "\n<" <> l <> "|Explore>") link) : maybeToList (slackImage (title <> " chart") Nothing <$> chart) | (title, detail, chart, link) <- highlights]
+                                  <> [slackActions [AE.object ["type" AE..= ("button" :: Text), "text" AE..= plainTxt "Open the report", "url" AE..= reportUrl]]]
+                              )
+                    ]
               ShapeAlert -> Nothing
           isDefaultChannel = cid == sd.channelId
       join <$> forM (mkPayload alert) \payload -> do
@@ -176,6 +194,8 @@ sendWhatsAppAlert alert pid pTitle tos = do
       sendAlert appCtx.config.whatsappEndpointTemplate
         $ AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= T.intercalate "." ((\x -> "`" <> x.label <> "`") <$> V.toList endpoints), "3" AE..= (pid.toText <> "/issues/by_hash/" <> endpointHash)]
     ShapeAlert -> pass
+    -- No WhatsApp template carries a digest; reports reach email and team chat instead.
+    RoutineReportAlert{} -> pass
     MonitorsAlert{..} -> sendMonitor appCtx.config.whatsappMonitorTemplate "Alerting" monitorTitle monitorUrl
     MonitorsRecoveryAlert{..} -> sendMonitor appCtx.config.whatsappMonitorTemplate "Recovered" monitorTitle monitorUrl
     LogPatternAlert{} -> pass
@@ -780,6 +800,8 @@ mkDiscordLogPatternRateChangePayload RateChange{..} project =
 
 
 sendPagerdutyAlertToService :: Notify.Notify :> es => Text -> NotificationAlerts -> Text -> Text -> Eff es ()
+-- A digest is not an incident: reports never page.
+sendPagerdutyAlertToService _ RoutineReportAlert{} _ _ = pass
 sendPagerdutyAlertToService integrationKey MonitorsAlert{monitorTitle, monitorUrl, chartUrl} projectTitle _ =
   Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-alert-" <> monitorTitle) (projectTitle <> ": " <> monitorTitle) Notify.PDCritical (AE.object $ ["url" AE..= monitorUrl] <> maybeToList (("chart_url" AE..=) <$> chartUrl)) monitorUrl
 sendPagerdutyAlertToService integrationKey (MonitorsRecoveryAlert monitorTitle monitorUrl) projectTitle _ =

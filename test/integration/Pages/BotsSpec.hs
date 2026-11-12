@@ -1694,16 +1694,17 @@ spec = around withTestResources do
       -- The routine page leads with the report: headline, then each highlight beside its own chart.
       page <- renderT <$> call tr (AIThreads.threadGetH pid reportConv Nothing Nothing)
       page `shouldContainAll` ["Latest report", "Checkout errors rose 4.8x", "Checkout 5xx up 4.8x", "ai-report-0-0", "Explore", "Documents"]
-      -- Slack delivery is done by code too (a read-only report cannot post): one message, headline, highlights and chart.
+      -- Reports go out through the team fan-out alerts use: by code (a read-only report cannot post), to the
+      -- team's chat channels always and to members by email only when email is the chosen delivery.
       setupSlackData tr pid "T_REPORTS"
-      later <- runTestBg (addUTCTime 3600 frozenTime) tr do
-        Issues.setRoutineDestination pid reportConv Issues.DestinationSlack
-        Issues.resumeRoutine Issues.RunNow (uid tr) pid reportConv
-      slackSlot <- maybe (fail "run now did not schedule") pure later
-      (slackNotifs, _) <- captureNotifs tr $ Jobs.runAIRoutineWith 1_000_000 (\_ -> pure $ Right AI.AgenticChatResult{AI.response = digest, AI.toolCalls = []}) (\_ _ -> pass) tr.trATCtx slackSlot.id slackSlot.scheduledAt
-      [decodeUtf8 @Text $ AE.encode slack.payload | Notify.SlackNotification slack <- slackNotifs] `shouldSatisfy` \case
-        [message] -> all (`T.isInfixOf` message) ["Checkout errors rose 4.8x", "*Checkout 5xx up 4.8x*", "image_url", "Open the report"]
-        _ -> False
+      let deliver destination at = do
+            next <- runTestBg at tr (Issues.setRoutineDestination pid reportConv destination >> Issues.resumeRoutine Issues.RunNow (uid tr) pid reportConv) >>= maybe (fail "run now did not schedule") pure
+            (sent, _) <- captureNotifs tr $ Jobs.runAIRoutineWith 1_000_000 (\_ -> pure $ Right AI.AgenticChatResult{AI.response = digest, AI.toolCalls = []}) (\_ _ -> pass) tr.trATCtx next.id next.scheduledAt
+            pure (length [() | Notify.EmailNotification _ <- sent], [decodeUtf8 @Text $ AE.encode slack.payload | Notify.SlackNotification slack <- sent])
+      (emailed, emailChat) <- deliver Issues.DestinationEmail (addUTCTime 3600 frozenTime)
+      (chatEmailed, chatOnly) <- deliver Issues.DestinationSlack (addUTCTime 7200 frozenTime)
+      (emailed > 0, length emailChat, chatEmailed, length chatOnly) `shouldBe` (True, 1, 0, 1)
+      chatOnly `shouldSatisfy` all (\message -> all (`T.isInfixOf` message) ["Checkout errors rose 4.8x", "*Checkout 5xx up 4.8x*", "image_url", "Open the report"])
 
     it "answers recorded agent queries" \tr -> do
       let askAgent query apiKey = runTestBg frozenTime tr $ Bot.processAIQuery Nothing False AI.ServiceAccess testPid query Nothing tr.trATCtx.env.openaiModel apiKey

@@ -963,8 +963,7 @@ reportPreviewH tools pid templateM = do
   ctx <- ask @AuthContext
   now <- Time.currentTime
   let template = fromMaybe Issues.weeklyReportTemplate $ find ((== templateM) . Just . (.key)) [Issues.weeklyReportTemplate, Issues.dailyReportTemplate]
-      days = fromMaybe 7 $ Issues.reportWindowDays template.key
-      (start, end) = (addUTCTime (fromInteger $ negate days * 86400) now, now)
+      (start, end) = fromMaybe (now, now) $ Issues.reportWindow template.key now
       config = AI.reportConfig (start, end) (AI.defaultAgenticConfig pid){AI.projectTools = tools, AI.sourceConfig = Just ctx.config, AI.useTimefusion = ctx.env.enableTimefusionReads, AI.timezone = Just "UTC"}
   AI.runAgenticChatWithHistory config (template.prompt <> "\n\nRun this report now.") ctx.config.openaiModel ctx.config.openaiApiKey >>= \case
     Left err -> pure $ pre_ $ toHtml err
@@ -972,7 +971,7 @@ reportPreviewH tools pid templateM = do
       Nothing -> pure $ pre_ [style_ "white-space:pre-wrap"] $ toHtml answer.response
       Just (digest, _) -> do
         charts <- forM digest.highlights \h -> join <$> traverse (\w -> Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid w Nothing (Just $ Utils.formatUTCMicros $ fst $ AI.reportComparison (start, end)) (Just $ Utils.formatUTCMicros end)) h.widget
-        let (subject, html) = ET.routineReportEmail "Preview" (show days <> " days to now") digest.headline (urls.aiRoutinesGet pid) [(h.title, h.detail, chart, Utils.hostPath ctx.env.hostUrl <$> h.link) | (h, chart) <- zip digest.highlights charts]
+        let (subject, html) = ET.routineReportEmail "Preview" (template.title <> " to now") digest.headline (urls.aiRoutinesGet pid) [(h.title, h.detail, chart, Utils.hostPath ctx.env.hostUrl <$> h.link) | (h, chart) <- zip digest.highlights charts]
         pure $ ET.emailWrapper subject html >> details_ (summary_ "Raw answer" >> pre_ [style_ "white-space:pre-wrap"] (toHtml answer.response))
 
 

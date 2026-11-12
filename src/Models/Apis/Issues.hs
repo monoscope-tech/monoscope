@@ -235,6 +235,7 @@ module Models.Apis.Issues (
   weeklyReportTemplate,
   dailyReportTemplate,
   reportWindowDays,
+  reportWindow,
   issueTriageTemplate,
   issueAutofixTemplate,
   IncidentChannel,
@@ -2110,6 +2111,17 @@ dailyReportTemplate = RoutineTemplate "daily-report" 7 CategoryReliability "Dail
 -- | The report window a report template covers, in days.
 reportWindowDays :: Text -> Maybe Integer
 reportWindowDays key = snd <$> find ((== key) . fst) [(weeklyReportTemplate.key, 7), (dailyReportTemplate.key, 1)]
+
+
+-- | The period a report template's run covers: its window, ending at the run's start.
+--
+-- >>> import Data.Time (UTCTime (..), fromGregorian)
+-- >>> reportWindow "weekly-report" (UTCTime (fromGregorian 2026 11 16) 32400)
+-- Just (2026-11-09 09:00:00 UTC,2026-11-16 09:00:00 UTC)
+-- >>> reportWindow "issue-triage" (UTCTime (fromGregorian 2026 11 16) 0)
+-- Nothing
+reportWindow :: Text -> UTCTime -> Maybe (UTCTime, UTCTime)
+reportWindow key end = reportWindowDays key <&> \days -> (addUTCTime (fromInteger $ negate days * 86400) end, end)
 
 
 reportPrompt :: Text -> Text -> Text -> Text -> Text

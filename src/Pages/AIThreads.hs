@@ -423,9 +423,10 @@ threadPageGetH pid convId docM runM hxTarget = do
   instructions <- Issues.getRoutineInstructions pid convId
   runs <- Issues.listConversationRuns pid convId 20
   -- A report routine's latest result reads as its digest, each highlight beside its own chart.
-  reportM <- case (conversationM >>= (.templateKey) >>= Issues.reportWindowDays, find ((== Issues.RunSucceeded) . (.status)) runs, any ("#ai-document" `T.isSuffixOf`) hxTarget) of
-    (Just days, Just run, False) ->
-      Issues.getRunResponse pid run.id <&> (>>= \response -> fst <$> AI.reportRunAnswer pid (addUTCTime (fromInteger $ negate days * 86400) run.startedAt, run.startedAt) (AI.AgenticChatResult response []))
+  reportM <- case (find ((== Issues.RunSucceeded) . (.status)) runs, any ("#ai-document" `T.isSuffixOf`) hxTarget) of
+    (Just run, False)
+      | Just window <- (`Issues.reportWindow` run.startedAt) =<< (.templateKey) =<< conversationM ->
+          Issues.getRunResponse pid run.id <&> (>>= \response -> fst <$> AI.reportRunAnswer pid window (AI.AgenticChatResult response []))
     _ -> pure Nothing
   runContent <- forM runM \run -> do
     evidence <- Issues.getRoutineRunEvidence pid run.id >>= maybe (throwError Servant.err404) pure
@@ -618,6 +619,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                         when isRoutine $ h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Latest result"
                         IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId shown
                     | otherwise -> foldMap routineEmpty_ routineM
+                when (isRoutine && not (null docs)) documentsNav_
                 unless (null runs) $ section_ [Aria.label_ "Routine runs"] do
                   let (recent, older) = splitAt 3 runs
                       ownRun run = Just run.conversationId == activeConversationIdM
@@ -636,7 +638,6 @@ threadPageGetH pid convId docM runM hxTarget = do
                       span_ [class_ "group-open/older:hidden"] $ toHtml $ "Show " <> show @Text (length older) <> " older"
                       span_ [class_ "hidden group-open/older:inline"] "Show fewer"
                     div_ [class_ "mt-2"] $ runList older
-            when (isRoutine && not (null docs)) documentsNav_
             when isRoutine do
               -- Setup, not daily reading: collapsed below the results.
               disclosure_ [Aria.label_ "Routine configuration"] ("Settings" >> whenJust (conversationM >>= (.routinePolicy)) (span_ [class_ "ms-auto text-xs font-normal text-textWeak"] . toHtml . policyLabel))
@@ -1052,7 +1053,7 @@ runSummary_ extra run = whenJust (run.error <|> (summaryLine =<< run.summary)) \
 destinationLabel :: Issues.RoutineDestination -> Text
 destinationLabel = \case
   Issues.DestinationConversation -> "In app only"
-  Issues.DestinationEmail -> "Email to members"
+  Issues.DestinationEmail -> "Email and team chat"
   Issues.DestinationSlack -> "Post to Slack"
 
 

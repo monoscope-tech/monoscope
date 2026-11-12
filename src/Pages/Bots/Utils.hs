@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pages.Bots.Utils (BotEmoji (..), linkButton, BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithTools, processAIQueryWithMode, buildIssuePrompt, verifyWidgetSignature, freshWebhookTimestamp, BotErrorType (..), formatBotError, botEmoji, runBotQueryWithTools, slackResponse, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
+module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithTools, processAIQueryWithMode, buildIssuePrompt, verifyWidgetSignature, freshWebhookTimestamp, BotErrorType (..), formatBotError, botEmoji, runBotQueryWithTools, slackResponse, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
