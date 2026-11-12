@@ -2142,18 +2142,16 @@ reportPrompt cadence window baseline bucket =
        \Return raw JSON only: {\"headline\": \"one sentence, at most 120 characters, leading with the most important change\", \"highlights\": [{\"title\": \"at most 60 characters\", \"detail\": \"2-3 sentences: what changed, by how much against the baseline, and why it matters\", \"previous\": number, \"current\": number, \"unit\": \"events|ms|s|percent\", \"widget\": {\"type\": \"timeseries|timeseries_line|top_list|stat|pie_chart\", \"query\": \"KQL\", \"title\": \"chart title\"} or null, \"link\": \"/issues/... or null\"}], \"explanation\": \"the headline and highlights as short markdown\", \"has_findings\": true or false}"
 
 
--- | Installs the report routines once per paid project (agents do not run on Free): weekly active
--- (emailed when the project kept its weekly report email on), daily paused. Reports only read, so
--- both start in Observe. Returns the weekly run to schedule.
+-- | Installs the report routines once per project: weekly active (emailed when the project kept its
+-- weekly report email on), daily paused. On Free the owner is the only member, so they own the runs.
+-- Returns the weekly run to schedule.
 provisionReportRoutines :: (DB es, Time :> es, UUIDEff :> es) => Projects.Project -> Eff es (Maybe ScheduledRoutine)
-provisionReportRoutines project
-  | not $ Projects.isPaidPlan $ Projects.parsePlan project.paymentPlan = pure Nothing
-  | otherwise = do
-      weekly <- provisionRoutineTemplate project weeklyReportTemplate
-      daily <- provisionRoutineTemplate project dailyReportTemplate
-      for_ daily \routine -> Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET active = FALSE, next_run_at = NULL WHERE id = #{routine.id}|]
-      for_ weekly \routine -> when project.weeklyNotif $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET destination = #{DestinationEmail} WHERE id = #{routine.id}|]
-      pure weekly
+provisionReportRoutines project = do
+  weekly <- provisionRoutineTemplate project weeklyReportTemplate
+  daily <- provisionRoutineTemplate project dailyReportTemplate
+  for_ daily \routine -> Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET active = FALSE, next_run_at = NULL WHERE id = #{routine.id}|]
+  for_ weekly \routine -> when project.weeklyNotif $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET destination = #{DestinationEmail} WHERE id = #{routine.id}|]
+  pure weekly
 
 
 routineTemplates :: [RoutineTemplate]
@@ -3263,7 +3261,13 @@ finishRunRowsTx finalization =
     ) INSERT INTO apis.ai_routine_run_artifacts (run_id, key, title, content)
       SELECT run.id, a.key, a.title, a.content FROM finished run
       JOIN apis.ai_artifacts a ON a.project_id = run.project_id AND a.conversation_id = run.conversation_id
-      WHERE a.key <> 'latest-result' ON CONFLICT (run_id, key) DO NOTHING|]
+      WHERE a.key <> 'latest-result'
+        -- Only versions no earlier run of this conversation holds: each document is kept once per change,
+        -- so a routine's history grows with what it writes, not with every run times every document.
+        AND NOT EXISTS (SELECT 1 FROM apis.ai_routine_run_artifacts kept JOIN apis.ai_routine_runs earlier ON earlier.id = kept.run_id
+          WHERE earlier.project_id = run.project_id AND earlier.conversation_id = run.conversation_id AND earlier.id <> run.id
+            AND kept.key = a.key AND md5(kept.content) = md5(a.content))
+      ON CONFLICT (run_id, key) DO NOTHING|]
   where
     finished = case finalization of
       FinishRun context status findings actions reason ->

@@ -1659,16 +1659,20 @@ spec = around withTestResources do
       pid <- createTestProject tr "Report routines"
       project <- runTestBg frozenTime tr (Projects.projectById pid) >>= maybe (fail "project missing") pure
       let digest = "{\"headline\":\"Checkout errors rose 4.8x\",\"highlights\":[{\"title\":\"Checkout 5xx up 4.8x\",\"detail\":\"412 to 1,980 against last week.\",\"widget\":{\"type\":\"timeseries\",\"query\":\"summarize count() by bin_auto(timestamp)\",\"title\":\"Errors\"},\"link\":\"/p/" <> pid.toText <> "/issues\"},{\"title\":\"Search recovered\",\"detail\":\"p95 back to 420 ms.\",\"widget\":null,\"link\":\"https://evil.example/p/\"}],\"explanation\":\"fallback\",\"has_findings\":true}"
-      (weekly, again, installed, onFree) <- runTestBg frozenTime tr do
+      freePid <- createTestProject tr "Free reports"
+      dbExec tr [sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE id = ?|] (Only freePid)
+      (weekly, again, installed, freeWeekly) <- runTestBg frozenTime tr do
         weekly <- Issues.provisionReportRoutines project
         again <- Issues.provisionReportRoutines project
         installed <- Issues.listConversations pid
-        -- Agents do not run on Free, so a Free project gets no report routines.
-        freePid <- liftIO $ createTestProject tr "Free reports"
-        liftIO $ dbExec tr [sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE id = ?|] (Only freePid)
-        free <- Projects.projectById freePid
-        (weekly,again,installed,) <$> (traverse Issues.provisionReportRoutines free >> Issues.listConversations freePid)
-      (isNothing again, onFree) `shouldSatisfy` \(none, conversations) -> none && null conversations
+        -- Free projects get reports too: on Free the owner is the only member, and owns the runs.
+        freeWeekly <- Projects.projectById freePid >>= fmap join . traverse Issues.provisionReportRoutines
+        pure (weekly, again, installed, freeWeekly)
+      isNothing again `shouldBe` True
+      freeSlot <- maybe (fail "a Free project's weekly report was not scheduled") pure freeWeekly
+      void $ runTestBg frozenTime tr $ Jobs.runAIRoutineWith 1_000_000 (\_ -> pure $ Right AI.AgenticChatResult{AI.response = digest, AI.toolCalls = []}) (\_ _ -> pass) tr.trATCtx freeSlot.id freeSlot.scheduledAt
+      freeRuns <- runQueryEffect tr (Issues.listConversations freePid) >>= traverse (\c -> runQueryEffect tr $ Issues.listConversationRuns freePid c.conversationId 5)
+      map (.status) (concat freeRuns) `shouldBe` [Issues.RunSucceeded]
       sortOn (\(k, _, _, _) -> k) [(templateKey, r.routineActive, r.routineDestination, r.routinePolicy) | r <- installed, Just templateKey <- [r.templateKey]] `shouldBe` [("daily-report", False, Just Issues.DestinationConversation, Just Issues.Observe), ("weekly-report", True, Just Issues.DestinationEmail, Just Issues.Observe)]
       reportConv <- maybe (fail "weekly report missing") (pure . (.conversationId)) $ find ((== Just "weekly-report") . (.templateKey)) installed
       dailyConv <- maybe (fail "daily report missing") (pure . (.conversationId)) $ find ((== Just "daily-report") . (.templateKey)) installed
@@ -1705,6 +1709,8 @@ spec = around withTestResources do
       (chatEmailed, chatOnly) <- deliver Issues.DestinationSlack (addUTCTime 7200 frozenTime)
       (emailed > 0, length emailChat, chatEmailed, length chatOnly) `shouldBe` (True, 1, 0, 1)
       chatOnly `shouldSatisfy` all (\message -> all (`T.isInfixOf` message) ["Checkout errors rose 4.8x", "*Checkout 5xx up 4.8x*", "image_url", "Open the report"])
+      -- A run keeps only the versions it wrote: three runs of one dated report keep each distinct version once.
+      dbOne @_ @Bool tr [sql|SELECT count(*) = count(DISTINCT md5(kept.content)) AND count(*) < 3 FROM apis.ai_routine_run_artifacts kept JOIN apis.ai_routine_runs run ON run.id = kept.run_id WHERE run.conversation_id = ? AND kept.key LIKE 'weekly-report-%'|] (Only reportConv) `shouldReturn` True
 
     it "answers recorded agent queries" \tr -> do
       let askAgent query apiKey = runTestBg frozenTime tr $ Bot.processAIQuery Nothing False AI.ServiceAccess testPid query Nothing tr.trATCtx.env.openaiModel apiKey
