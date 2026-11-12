@@ -952,7 +952,7 @@ routineResumePostH pid convId now = do
   void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid)
   (sess, _) <- Projects.sessionAndProject pid
   enqueue (Issues.resumeRoutine (bool Issues.ResumeSchedule Issues.RunNow now) sess.user.id pid convId)
-  done $ bool (RoutinesPage pid) (ThreadPage pid convId) now
+  done $ ThreadPage pid convId
 
 
 routineDeleteH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.pauseRoutine pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> Issues.deleteRoutine pid convId >> done (RoutinesPage pid)
