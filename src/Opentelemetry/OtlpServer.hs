@@ -881,7 +881,9 @@ placeRecords geoM recs = place <$> adopted
     adopted = adoptSender <$> recs
     attrsOf r = unAesonTextMaybe r.attributes
     merge k v r = r{attributes = Just $ AesonText $ Map.insertWith lodashMerge k v $ maybeToMonoid (attrsOf r)}
-    clientIp r = Telemetry.atMapText "client.address" (attrsOf r)
+    -- Without client.address, a server span's peer is its client (older and socket-level conventions
+    -- name only the peer); a client span's peer is the server it called, so it is not used.
+    clientIp r = asum [Telemetry.atMapText k (attrsOf r) | k <- "client.address" : bool [] ["net.peer.ip", "network.peer.address"] (r.kind == Just "server")]
     places = HM.fromList [(ip, g) | db <- toList geoM, ip <- ordNub (mapMaybe clientIp (V.toList adopted)), Just g <- [lookupGeo db ip]]
     place r = case (`HM.lookup` places) =<< clientIp r of
       Just g | isNothing (Telemetry.atMapText "geo.country.iso_code" (attrsOf r)) -> merge "geo" g r

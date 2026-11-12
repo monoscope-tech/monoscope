@@ -466,6 +466,14 @@ spec = do
             ingestSpanReq tr $ mkSpanRequest trId spanId' Nothing name [] Nothing attrs (mkResource apiKey resource) frozenTime
           sender = mkAttr "monoscope.sender_ip" "89.160.20.112"
       export "geo-server" [mkAttr "client.address" "81.2.69.142:4711"] []
+      -- Older and socket-level conventions name only the peer; on a server span that peer is the client,
+      -- on a client span it is the server it called.
+      let peer kind name attr = do
+            trId <- show <$> UUIDV4.nextRandom
+            spanId' <- show <$> UUIDV4.nextRandom
+            ingestSpanReq tr $ withSpanKind kind $ mkSpanRequest trId spanId' Nothing name [] Nothing [mkAttr attr "81.2.69.142"] (mkResource apiKey []) frozenTime
+      peer PT.Span'SPAN_KIND_SERVER "geo-peer-server" "net.peer.ip"
+      peer PT.Span'SPAN_KIND_CLIENT "geo-peer-client" "network.peer.address"
       export "geo-browser" [] [mkAttr "telemetry.sdk.language" "webjs", sender]
       export "geo-sdk" [mkAttr "client.address" "81.2.69.142", mkAttr "geo.country.iso_code" "NG"] []
       export "geo-proxied" [] [mkAttr "telemetry.sdk.language" "nodejs", sender]
@@ -479,6 +487,8 @@ spec = do
         `shouldReturn` ( [ ("Pageview geo-otelweb", Just "89.160.20.112", Just "SE", Just "Linköping", False)
                          , ("geo-browser", Just "89.160.20.112", Just "SE", Just "Linköping", False)
                          , ("geo-direct", Just "81.2.69.142", Just "GB", Just "London", False)
+                         , ("geo-peer-client", Nothing, Nothing, Nothing, False)
+                         , ("geo-peer-server", Nothing, Just "GB", Just "London", False)
                          , ("geo-proxied", Nothing, Nothing, Nothing, False)
                          , ("geo-sdk", Just "81.2.69.142", Just "NG", Nothing, False)
                          , ("geo-server", Just "81.2.69.142:4711", Just "GB", Just "London", False)

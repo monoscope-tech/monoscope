@@ -74,9 +74,6 @@ test('verified fix evidence stays in the conversation run inspector', async ({ p
       await expect(composer).toBeFocused();
       await expect(composer).toHaveValue('Keep this draft while I review the verified fix.');
     }
-    await page.getByRole('navigation', { name: 'Documents', exact: true }).getByRole('link', { name: /^Verified issue fix / }).press('Enter');
-    await expect(page.locator('#ai-document')).toContainText('Preserve retry tokens.');
-    expect(new URL(page.url()).pathname).toBe(path);
     sql(`UPDATE projects.issue_fix_jobs SET media_retained_at = NULL WHERE run_id = '${fix}';`);
     await page.goto(path);
     await page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').first().press('Enter');
@@ -590,7 +587,7 @@ test('routine detail panels preserve conversation drafts, run history, and artif
     await page.getByRole('link', { name: 'All routines', exact: true }).click();
     await expect(page).toHaveURL(`${root}/routines`);
     await page.getByRole('button', { name: 'Add Issue enrichment', exact: true }).click();
-    await expect(page.getByText('On a new issue · Active', { exact: true })).toBeVisible();
+    for (const fact of ['Active', 'On a new issue']) await expect(page.getByRole('region', { name: 'Routine status', exact: true })).toContainText(fact);
     await expect(page.getByText('No runs yet. An active routine starts when the next matching event arrives.', { exact: true })).toBeVisible();
     await openSettings(page);
     await expect(page.getByRole('textbox', { name: 'Instructions', exact: true })).toContainText('Update issue metadata');

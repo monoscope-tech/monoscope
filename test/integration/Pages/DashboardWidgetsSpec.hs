@@ -392,6 +392,8 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     goldenHtml "dashboard-breakdown-tables" do
       breakdown Widget.WTTable (V.fromList ["name", "count_"]) (textRows [["GET", "12"], ["POST", "3"]]) []
       breakdown Widget.WTTopList (V.fromList ["kind", "service", "count_"]) (textRows [["client", "web", "8"], ["client", "api", "2"], ["server", "api", "16"]]) []
+    -- emptyTopList_saysSo: with no rows nothing types the count column, so the list read as grouped and rendered no rows at all.
+    renderT (breakdown Widget.WTTopList (V.fromList ["attributes.geo.country.iso_code", "count"]) V.empty []) `shouldSatisfy` T.isInfixOf "Nothing in this time range"
 
     -- The wire tag is in every stored dashboard YAML; renaming a constructor orphans them.
     map (fmap (show @Text) . AE.eitherDecode @Widget.WidgetType . AE.encode) allWidgetTypes `shouldBe` map (Right . show) allWidgetTypes
