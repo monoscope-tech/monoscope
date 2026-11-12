@@ -363,23 +363,22 @@ routinesGetH pid = do
         categoryId = ("routine-category-" <>) . T.toLower . T.replace " " "-" . Issues.routineCategoryLabel
         templateCard_ template = do
           let added = template.key `elem` mapMaybe (.templateKey) installedRoutines
-          article_ [id_ $ "routine-" <> template.key, class_ "scroll-mt-16 flex flex-col rounded-xl border border-strokeWeak bg-bgRaised p-5 transition-[border-color,box-shadow] duration-150 hover:border-strokeStrong hover:shadow-md"] do
+          article_ [id_ $ "routine-" <> template.key, class_ "scroll-mt-16 flex flex-col rounded-xl border border-strokeWeak bg-bgRaised p-4 transition-[border-color,box-shadow] duration-150 hover:border-strokeStrong hover:shadow-md"] do
             div_ [class_ "flex min-h-8 items-center justify-between gap-3"] do
-              span_ [class_ "whitespace-nowrap rounded-md bg-fillWeak px-2 py-0.5 font-mono text-xs text-textStrong"] $ toHtml $ Issues.routineScheduleLabel template.schedule
+              div_ [class_ "flex min-w-0 items-center gap-2"] do
+                let (tone, icon) = categoryBadge template.category
+                iconBadge_ IconXs tone icon
+                h4_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml template.title
               if added
                 then span_ [class_ "inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-textSuccess"] $ faSprite_ "check" "solid" "h-3 w-3" >> "Added"
                 else when canEdit $ form_ [hxPost_ $ urls.aiRoutineInstallPost pid, hxSwap_ "none", class_ "shrink-0"] do
                   input_ [type_ "hidden", name_ "templateKey", value_ template.key]
-                  button_ [type_ "submit", Aria.label_ $ "Add " <> template.title, class_ "btn btn-sm gap-1.5 hover:border-strokeBrand-strong hover:text-textBrand active:scale-[0.96] transition-[color,border-color,scale]"] $ faSprite_ "plus" "regular" "h-3 w-3" >> "Add routine"
-            div_ [class_ "mt-4 flex items-center gap-2"] do
-              let (tone, icon) = categoryBadge template.category
-              iconBadge_ IconXs tone icon
-              h4_ [class_ "text-sm font-medium text-textStrong"] $ toHtml template.title
-            p_ [class_ "mt-3 -indent-[0.4em] text-[0.9375rem] leading-6 text-textStrong text-pretty"] $ toHtml $ "“" <> template.ask <> "”"
-            p_ [class_ "mt-2 mb-5 text-sm text-textWeak"] case template.reportWhen of
-              Issues.ReportAlways -> "Then posts a report every run"
-              Issues.ReportFindings -> "Then reports only when it finds something"
-            ul_ [Aria.label_ "Uses", class_ "mt-auto flex flex-wrap gap-1.5 border-t border-strokeWeak pt-4"] $ for_ template.signals \signal -> do
+                  button_ [type_ "submit", Aria.label_ $ "Add " <> template.title, class_ "btn btn-sm gap-1.5 hover:border-strokeBrand-strong hover:text-textBrand active:scale-[0.96] transition-[color,border-color,scale]"] $ faSprite_ "plus" "regular" "h-3 w-3" >> "Add"
+            p_ [class_ "mt-3 -indent-[0.4em] text-sm leading-6 text-textStrong text-pretty"] $ toHtml $ "“" <> template.ask <> "”"
+            p_ [class_ "mt-2 mb-4 text-xs text-textWeak"] $ toHtml $ Issues.routineScheduleLabel template.schedule <> " · " <> case template.reportWhen of
+              Issues.ReportAlways -> "reports every run"
+              Issues.ReportFindings -> "reports only when it finds something"
+            ul_ [Aria.label_ "Uses", class_ "mt-auto flex flex-wrap gap-1.5 border-t border-strokeWeak pt-3"] $ for_ template.signals \signal -> do
               let (icon, label, color) = signalChip signal
               li_ [class_ "inline-flex items-center gap-1.5 rounded-md bg-fillWeak px-2 py-1 text-xs text-textWeak"] $ faSprite_ icon "regular" ("h-3 w-3 shrink-0 " <> color) >> label
         signalChip = \case

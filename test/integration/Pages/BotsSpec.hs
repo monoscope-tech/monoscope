@@ -3493,7 +3493,7 @@ spec = around withTestResources do
       setRole tr testPid PM.PView
       readerRoutines <- renderT <$> call tr (AIThreads.routinesGetH testPid)
       readerThread <- renderT <$> call tr (AIThreads.threadGetH testPid slackRoutine.conversationId Nothing Nothing)
-      (T.isInfixOf "1 routine" readerRoutines, T.isInfixOf "Add routine" readerRoutines, T.isInfixOf "Routine instructions" readerThread, T.isInfixOf "Save instructions" readerThread) `shouldBe` (True, False, True, False)
+      (T.isInfixOf "1 routine" readerRoutines, T.isInfixOf "routines/install" readerRoutines, T.isInfixOf "Routine instructions" readerThread, T.isInfixOf "Save instructions" readerThread) `shouldBe` (True, False, True, False)
       traverse status [void $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review"), void $ AIThreads.routineInstructionsPostH testPid slackRoutine.conversationId (AIThreads.RoutineInstructionsForm "Overwrite"), void $ AIThreads.routineResumePostH testPid slackRoutine.conversationId False] `shouldReturn` [403, 403, 403]
       runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= (`shouldSatisfy` isNothing)
       setRole tr testPid PM.PAdmin
