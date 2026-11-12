@@ -1455,6 +1455,7 @@ runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
   tryStep "ai-routine-recovery" $ Issues.recoverDueRoutines 100 >>= traverse_ (\routine -> enqueueAIRoutine ctx routine.id routine.scheduledAt)
   tryStep "ai-conversation-recovery" recoverFailedConversations
+  tryStep "routine-template-upgrades" $ Issues.upgradeRoutineTemplates >>= \moved -> when (moved > 0) $ Log.logInfo "Upgraded routines to their templates' current versions" moved
   tryStep "metric-catalog-flush" $ Telemetry.flushMetricCatalog ctx.metricCatalogBuffer
   tryStep "metric-catalog-reconcile" Telemetry.reconcileMetricCatalog
   tryStep "endpoint-shape-report" reportUnwrittenIdRules

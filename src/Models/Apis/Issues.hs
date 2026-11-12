@@ -229,6 +229,7 @@ module Models.Apis.Issues (
   installRoutineTemplate,
   ensureRoutineTemplate,
   provisionRoutineTemplate,
+  upgradeRoutineTemplates,
   issueTriageTemplate,
   issueAutofixTemplate,
   IncidentChannel,
@@ -2374,23 +2375,31 @@ ensureRoutineTemplate requestedBy pid timezone template =
 -- had it (including one whose routine was since deleted) is left as its members set it.
 provisionRoutineTemplate :: (DB es, Time :> es, UUIDEff :> es) => Projects.Project -> RoutineTemplate -> Eff es (Maybe ScheduledRoutine)
 provisionRoutineTemplate project template = do
-  -- An installation whose instructions still match the template text it opened with follows newer
-  -- versions; that opening message moves with it, so a person's edit is what stops the upgrades.
-  Hasql.interpExecute_
-    [HI.sql|WITH opening AS (
-      SELECT DISTINCT ON (r.id) r.id AS routine, m.id AS message, m.content FROM apis.ai_routines r
-      JOIN apis.ai_chat_messages m ON m.project_id = r.project_id AND m.conversation_id = r.conversation_id
-      WHERE r.project_id = #{project.id} AND r.template_key = #{template.key} AND r.template_version < #{template.version}
-      ORDER BY r.id, m.created_at, m.id
-    ), upgraded AS (
-      UPDATE apis.ai_routines r SET instructions = #{template.prompt}, template_version = #{template.version}
-      FROM opening o WHERE r.id = o.routine AND r.instructions = o.content RETURNING o.message
-    ) UPDATE apis.ai_chat_messages SET content = #{template.prompt} WHERE id IN (SELECT message FROM upgraded)|]
   seen <- Hasql.interpScalar [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.ai_conversations WHERE project_id = #{project.id} AND context->>'routine_template' = #{template.key})|]
   admin <- find ((== ProjectMembers.PAdmin) . (.permission)) <$> ProjectMembers.selectActiveProjectMembers project.id
   case admin of
     Just owner | not seen && project.id /= Projects.demoProjectId -> either (const Nothing) snd <$> ensureRoutineTemplate owner.userId project.id project.timeZone template
     _ -> pure Nothing
+
+
+-- | Moves installed catalog routines whose instructions still match the template text they opened
+-- with to the template's current version; that opening message moves too, so only a person's edit
+-- stops upgrades. Returns how many routines moved.
+upgradeRoutineTemplates :: DB es => Eff es Int64
+upgradeRoutineTemplates =
+  sum <$> forM routineTemplates \template ->
+    Hasql.interpScalar
+      [HI.sql|WITH opening AS (
+      SELECT DISTINCT ON (r.id) r.id AS routine, m.id AS message, m.content FROM apis.ai_routines r
+      JOIN apis.ai_chat_messages m ON m.project_id = r.project_id AND m.conversation_id = r.conversation_id
+      WHERE r.template_key = #{template.key} AND r.template_version < #{template.version}
+      ORDER BY r.id, m.created_at, m.id
+    ), upgraded AS (
+      UPDATE apis.ai_routines r SET instructions = #{template.prompt}, template_version = #{template.version}
+      FROM opening o WHERE r.id = o.routine AND r.instructions = o.content RETURNING o.message
+    ), moved AS (
+      UPDATE apis.ai_chat_messages SET content = #{template.prompt} WHERE id IN (SELECT message FROM upgraded)
+    ) SELECT count(*)::int8 FROM upgraded|]
 
 
 type IncidentChannel = Integrations.SlackChannel
