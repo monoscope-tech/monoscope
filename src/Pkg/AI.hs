@@ -352,13 +352,14 @@ parseReportDigest pid response = do
         let change = liftA2 (,) (h ^? key "previous" . _Number) (h ^? key "current" . _Number)
         guard $ all (material $ h ^? key "unit" . _String) change
         pure
-          . (maybe (Left title) Right change,)
-          $ ReportHighlight
-            { title
-            , detail = foldMap T.strip $ h ^? key "detail" . _String
-            , widget = mfilter (all (\q -> isRight (parseQueryToAST q) && not ("ago(" `T.isInfixOf` q)) . (.query)) $ durationUnit . Widget.modelWidget <$> (parseMaybe AE.parseJSON =<< h ^? key "widget")
-            , link = projectLink =<< h ^? key "link" . _String
-            }
+          ( maybeToRight title change
+          , ReportHighlight
+              { title
+              , detail = foldMap T.strip $ h ^? key "detail" . _String
+              , widget = mfilter (all (\q -> isRight (parseQueryToAST q) && not ("ago(" `T.isInfixOf` q)) . (.query)) $ durationUnit . Widget.modelWidget <$> (parseMaybe AE.parseJSON =<< h ^? key "widget")
+              , link = projectLink =<< h ^? key "link" . _String
+              }
+          )
   pure $ ReportDigest headline $ take 5 $ map snd $ nubOrdOn fst $ mapMaybe highlight $ val ^.. key "highlights" . values
   where
     -- The prompt's materiality rules, enforced: under 20% is no change, and event counts under 50 are noise.
