@@ -629,7 +629,8 @@ threadPageGetH pid convId docM runM hxTarget = do
                     let asked' = followUps digest
                     unless (null asked') $ IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId asked'
                   Nothing
-                    | hasVisibleHistory shown -> section_ [Aria.label_ "Results"] do
+                    -- A routine's result is a record, not a chat turn: no avatar gutter.
+                    | hasVisibleHistory shown -> section_ ([Aria.label_ "Results"] <> [class_ "[&_[data-chat-avatar]]:hidden [&_[data-chat-indent]]:ml-0" | isRoutine]) do
                         -- Most runs of a findings-only routine publish nothing, so the result's own time says how fresh it is.
                         when isRoutine $ h2_ [class_ "mb-2 flex items-baseline gap-2 text-sm font-semibold text-textStrong"] do
                           "Latest result"
