@@ -290,7 +290,7 @@ routinesGetH pid = do
                       , col "Next run" (\r -> span_ [class_ "whitespace-nowrap text-xs tabular-nums text-textWeak"] $ maybe "—" (toHtml . formatTime defaultTimeLocale "%e %b, %H:%M") (r.routineNextRunAt <* guard r.routineActive)) & withAttrs [class_ "w-36 max-lg:hidden"]
                       ]
                         <> [ col "" (\r -> div_ [class_ "flex items-center justify-end gap-1"] do
-                          let (toggle, toggleLabel) = bool (urls.aiRoutineResumePost, "Resume") (urls.aiRoutinePausePost, "Pause") r.routineActive
+                          let (toggle, toggleLabel) = bool (\p c -> urls.aiRoutineResumePost p c False, "Resume") (urls.aiRoutinePausePost, "Pause") r.routineActive
                               menuId = "routine-menu-" <> r.conversationId.toText
                           form_ [hxPost_ $ toggle pid r.conversationId, hxSwap_ "none"] $ button_ [class_ "btn btn-xs btn-ghost active:scale-[0.96] transition-transform", type_ "submit"] $ toHtml @Text toggleLabel
                           button_ ([type_ "button", class_ "btn btn-xs btn-ghost btn-square", Aria.label_ $ "More actions for " <> r.title] <> popoverTrigger_ menuId) $ faSprite_ "ellipsis" "regular" "h-3.5 w-3.5"
@@ -747,7 +747,20 @@ threadPageGetH pid convId docM runM hxTarget = do
 
         routineOverview_ :: Issues.ConversationSummary -> Html ()
         routineOverview_ conversation = section_ [class_ "space-y-2", Aria.label_ "Routine status"] do
-          div_ [class_ "flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-textWeak [&>*+*]:before:me-2 [&>*+*]:before:text-textDisabled [&>*+*]:before:content-['·']"] do
+          div_ [class_ "flex flex-wrap items-start justify-between gap-3"] do
+            routineFacts_ conversation
+            when (canEdit && isJust conversation.routineInterval) $ div_ [class_ "flex shrink-0 items-center gap-1"] do
+              let button url label primary = form_ [hxPost_ url, hxSwap_ "none"] $ button_ [type_ "submit", class_ $ "btn btn-xs active:scale-[0.96] transition-transform " <> bool "btn-ghost" "btn-primary" primary] label
+              if conversation.routineActive
+                then do
+                  unless (isJust conversation.routineRunningSince) $ button (urls.aiRoutineResumePost projectId conversation.conversationId True) (faSprite_ "play" "solid" "h-3 w-3" >> "Run now") True
+                  button (urls.aiRoutinePausePost projectId conversation.conversationId) "Pause" False
+                else button (urls.aiRoutineResumePost projectId conversation.conversationId False) "Resume" True
+          whenJust instructions $ p_ [class_ "line-clamp-2 text-sm text-textStrong text-pretty"] . toHtml
+
+        routineFacts_ :: Issues.ConversationSummary -> Html ()
+        routineFacts_ conversation =
+          div_ [class_ "flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-textWeak [&>*+*]:before:me-2 [&>*+*]:before:text-textDisabled [&>*+*]:before:content-['·']"] do
             span_ $ uncurry tonePill_ $ routineStatus conversation
             span_ $ toHtml $ maybe (foldMap Issues.routineKindLabel conversation.routineKind) Issues.routineCadence conversation.routineInterval
             span_ [class_ "tabular-nums"] case (conversation.routineLastRunAt, conversation.routineLastRunStatus) of
@@ -755,7 +768,6 @@ threadPageGetH pid convId docM runM hxTarget = do
               _ -> "Not run yet"
             whenJust (conversation.routineNextRunAt <* guard conversation.routineActive) $ span_ [class_ "tabular-nums"] . toHtml . formatTime defaultTimeLocale "Next run %-d %b, %H:%M UTC"
             whenJust conversation.routinePolicy $ span_ . toHtml . policyLabel
-          whenJust instructions $ p_ [class_ "line-clamp-2 text-sm text-textStrong text-pretty"] . toHtml
 
         routineEmpty_ :: (Issues.ConversationSummary, Issues.RoutineInterval) -> Html ()
         routineEmpty_ (conversation, _) =
@@ -880,14 +892,16 @@ routinePausePostH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (R
 routinePausePostH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.pauseRoutine pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> done (ThreadPage pid convId)
 
 
-routineCancelPostH, routineResumePostH, routineDeleteH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespHeaders (Done AIPage))
+routineCancelPostH, routineDeleteH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespHeaders (Done AIPage))
 routineCancelPostH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.cancelRoutineRun pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> done (RoutinesPage pid)
-routineResumePostH pid convId = do
+-- | Resume a paused routine on its schedule, or (@now@) start an active one immediately.
+routineResumePostH :: Projects.ProjectId -> UUIDId "conversation" -> Bool -> ATAuthCtx (RespHeaders (Done AIPage))
+routineResumePostH pid convId now = do
   authorizeConversation pid convId
   void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid)
   (sess, _) <- Projects.sessionAndProject pid
-  enqueue (Issues.resumeRoutine sess.user.id pid convId)
-  done (RoutinesPage pid)
+  enqueue (Issues.resumeRoutine (bool Issues.ResumeSchedule Issues.RunNow now) sess.user.id pid convId)
+  done $ bool (RoutinesPage pid) (ThreadPage pid convId) now
 routineDeleteH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.pauseRoutine pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> Issues.deleteRoutine pid convId >> done (RoutinesPage pid)
 
 

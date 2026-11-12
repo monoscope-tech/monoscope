@@ -249,6 +249,7 @@ module Models.Apis.Issues (
   pauseRoutine,
   cancelRoutineRun,
   resumeRoutine,
+  RoutineStart (..),
   deleteRoutine,
   setRoutineDestination,
   routineRunPolicyFor,
@@ -3371,22 +3372,28 @@ cancelRoutineRun pid convId = Hasql.transaction TxS.ReadCommitted TxS.Write do
   stopRunsTx $ StopRoutine pid convId
 
 
-resumeRoutine :: (DB es, Time :> es) => Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> Eff es (Maybe ScheduledRoutine)
-resumeRoutine requestedBy pid convId = do
+-- | 'RunNow' starts an active routine immediately; its schedule continues from that run.
+data RoutineStart = ResumeSchedule | RunNow
+  deriving stock (Eq, Show)
+
+
+resumeRoutine :: (DB es, Time :> es) => RoutineStart -> Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> Eff es (Maybe ScheduledRoutine)
+resumeRoutine start requestedBy pid convId = do
   now <- Time.currentTime
   Hasql.transaction TxS.ReadCommitted TxS.Write
     $ prepareRoutineGrantTx pid convId
     >>= \case
       Nothing -> pure Nothing
       Just (schedule, timezone) -> do
-        let nextRunAt = nextRoutineAt schedule timezone now now
+        let nextRunAt = if start == RunNow then Just now else nextRoutineAt schedule timezone now now
+            resume = start == ResumeSchedule
         Hasql.queryTx
           [HI.sql|WITH resumed AS (
             UPDATE apis.ai_routines SET
               authority_version = authority_version + CASE WHEN requested_by IS DISTINCT FROM #{requestedBy} THEN 1 ELSE 0 END,
               requested_by = #{requestedBy}, active = TRUE, cancelled_at = NULL,
               next_run_at = CASE WHEN running_since IS NULL THEN #{nextRunAt} ELSE next_run_at END
-            WHERE project_id = #{pid} AND conversation_id = #{convId}
+            WHERE project_id = #{pid} AND conversation_id = #{convId} AND (active OR #{resume})
             RETURNING id, next_run_at, running_since
           ) SELECT id, next_run_at FROM resumed WHERE running_since IS NULL AND next_run_at IS NOT NULL|]
 

@@ -14,7 +14,7 @@ import Data.Effectful.Wreq (Options, header)
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX qualified as POSIX
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Time.LocalTime (zonedTimeToUTC)
@@ -49,7 +49,6 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import Pkg.Mail (arr, dcGallery, plainTxt, slackActions, slackContext, slackEscape, slackHeader, slackImage, slackSection)
 import Pkg.Parser (parseQueryToAST)
-import Pkg.Parser.Expr (isErrorKql)
 import Pkg.SchemaLearning (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude hiding (Reader, ask)
 import Servant.API (Header)
@@ -61,7 +60,6 @@ import System.Tracing (Tracing)
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (onException, throwIO)
 import Utils (faSprite_, formatUTC, hostPath, prettyPrintCount, toUriStr)
-import Web.HttpApiData (parseUrlPiece)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), ProjectsRoutes' (..), logExplorerLinks, urls)
 
 

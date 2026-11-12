@@ -1585,7 +1585,7 @@ spec = around withTestResources do
         scheduled <- Issues.upsertRoutine (uid tr) testPid (conversation 1) interval
         Issues.pauseRoutine testPid (conversation 1)
         paused <- Issues.getConversation testPid (conversation 1)
-        resumed <- Issues.resumeRoutine (uid tr) testPid (conversation 1)
+        resumed <- Issues.resumeRoutine Issues.ResumeSchedule (uid tr) testPid (conversation 1)
         Issues.deleteRoutine testPid (conversation 1)
         (needsTitle,summary,listed,scheduled,paused,resumed,) <$> Issues.getConversation testPid (conversation 1)
       needsTitle `shouldBe` True
@@ -1605,7 +1605,7 @@ spec = around withTestResources do
         slackEnabled <- routineCanAct
         void $ Issues.upsertRoutine (uid tr) testPid (conversation 2) interval
         Issues.pauseRoutine testPid (conversation 2)
-        (installedAt,installed,canAct,slackEnabled,) <$> Issues.resumeRoutine (uid tr) testPid (conversation 2)
+        (installedAt,installed,canAct,slackEnabled,) <$> Issues.resumeRoutine Issues.ResumeSchedule (uid tr) testPid (conversation 2)
       (.scheduledAt) <$> installedAt `shouldBe` Just (addUTCTime (8 * 3600) frozenTime)
       ((.templateKey) =<< installed, (.routineDestination) =<< installed) `shouldBe` (Just template.key, Just Issues.DestinationSlack)
       (canAct, slackEnabled) `shouldBe` (True, True)
@@ -2487,7 +2487,7 @@ spec = around withTestResources do
           (Investigations.ReviewUnavailable, Investigations.ReviewPending{}) -> True
           (Investigations.ReviewAlreadyDecided receipt, Investigations.ReviewResolved _ original) -> receipt == original
           _ -> False
-        void $ call tr $ AIThreads.routineResumePostH testPid installation
+        void $ call tr $ AIThreads.routineResumePostH testPid installation False
         runQueryEffect tr (Issues.routineRunActive testPid context.id) `shouldReturn` False
         runTestBgNoReset tr (chat (tooled $ durable tr context.conversationId $ AI.DurableRun context) "Create a dashboard") `shouldThrow` (isJust . fromException @AI.AgentStopped)
         dashboards tr "Stopped dashboard" `shouldReturn` 0
@@ -2677,7 +2677,7 @@ spec = around withTestResources do
         (,) <$> readIORef calls <*> readIORef posts `shouldReturn` if cancelled then (1, 0) else (2, 1)
         dashboards tr title `shouldReturn` bool 0 1 (scenario == "approve")
         case scenario of
-          "pause" -> runTestBg frozenTime tr $ void (Issues.resumeRoutine (uid tr) testPid slashRoutine.conversationId) >> Issues.setRoutinePolicy (uid tr) testPid slashRoutine.conversationId reviewChanges
+          "pause" -> runTestBg frozenTime tr $ void (Issues.resumeRoutine Issues.ResumeSchedule (uid tr) testPid slashRoutine.conversationId) >> Issues.setRoutinePolicy (uid tr) testPid slashRoutine.conversationId reviewChanges
           "unlink" -> dbExec tr [sql|INSERT INTO apis.slack_identities (team_id, slack_user_id, user_id, project_id) VALUES ('T_REVIEW_RESUME', 'U0123ABCDEF', ?, ?)|] (uid tr, testPid)
           _ -> pass
     for_ [minBound .. maxBound] \reviewCase ->
@@ -3464,7 +3464,7 @@ spec = around withTestResources do
       readerRoutines <- renderT <$> call tr (AIThreads.routinesGetH testPid)
       readerThread <- renderT <$> call tr (AIThreads.threadGetH testPid slackRoutine.conversationId Nothing Nothing)
       (T.isInfixOf "1 routine" readerRoutines, T.isInfixOf "Add routine" readerRoutines, T.isInfixOf "Routine instructions" readerThread, T.isInfixOf "Save instructions" readerThread) `shouldBe` (True, False, True, False)
-      traverse status [void $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review"), void $ AIThreads.routineInstructionsPostH testPid slackRoutine.conversationId (AIThreads.RoutineInstructionsForm "Overwrite"), void $ AIThreads.routineResumePostH testPid slackRoutine.conversationId] `shouldReturn` [403, 403, 403]
+      traverse status [void $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review"), void $ AIThreads.routineInstructionsPostH testPid slackRoutine.conversationId (AIThreads.RoutineInstructionsForm "Overwrite"), void $ AIThreads.routineResumePostH testPid slackRoutine.conversationId False] `shouldReturn` [403, 403, 403]
       runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= (`shouldSatisfy` isNothing)
       setRole tr testPid PM.PAdmin
       -- A destination neither grants nor revokes a run's writes; a revoked editor cannot change settings.
@@ -3483,7 +3483,7 @@ spec = around withTestResources do
       dashboards tr "Autonomous activation" `shouldReturn` 1
       for_ [Issues.DestinationSlack, Issues.DestinationConversation] \destination -> runQueryEffect tr (Issues.setRoutineDestination testPid (conversation 2) destination) >> (policyFor run2.runId (conversation 2) `shouldReturn` Just Issues.Autonomous)
       for_ [Issues.Observe, Issues.Autonomous] \policy -> call tr (AIThreads.routinePolicyPostH testPid (conversation 2) $ AIThreads.RoutinePolicyForm policy) >> (policyFor run2.runId (conversation 2) `shouldReturn` Just Issues.Observe)
-      for_ [void $ Issues.upsertRoutine (uid tr) testPid (conversation 2) $ fromRightShow $ Issues.mkRoutineInterval 15, void $ Issues.resumeRoutine (uid tr) testPid (conversation 2)] \reschedule -> runTestBg frozenTime tr reschedule >> (policyFor run2.runId (conversation 2) `shouldReturn` Just Issues.Observe)
+      for_ [void $ Issues.upsertRoutine (uid tr) testPid (conversation 2) $ fromRightShow $ Issues.mkRoutineInterval 15, void $ Issues.resumeRoutine Issues.ResumeSchedule (uid tr) testPid (conversation 2)] \reschedule -> runTestBg frozenTime tr reschedule >> (policyFor run2.runId (conversation 2) `shouldReturn` Just Issues.Observe)
       next2 <- completeNoFindings slot2 context2
       future2 <- runQueryEffect tr (Issues.claimRoutine next2.id next2.scheduledAt) >>= maybe (fail "Expected a future run") pure
       future2.policy `shouldBe` Issues.Autonomous
@@ -3514,7 +3514,7 @@ spec = around withTestResources do
           void $ Issues.getOrCreateConversation testPid (conversation 4) Issues.CTWeb (AE.object [])
           void $ Issues.installRoutineTemplate (uid tr) testPid (conversation 4) "America/New_York" weekly
           Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET schedule_weekday = #{weekday}, schedule_hour = #{hour}, schedule_minute = #{minute} WHERE project_id = #{testPid} AND conversation_id = #{conversation 4}|]
-          Issues.resumeRoutine (uid tr) testPid (conversation 4)) >>= (`shouldBe` Just expected) . fmap (.scheduledAt)
+          Issues.resumeRoutine Issues.ResumeSchedule (uid tr) testPid (conversation 4)) >>= (`shouldBe` Just expected) . fmap (.scheduledAt)
       -- A view role cannot change a routine's destination or policy, and its run loses its policy.
       setRole tr testPid PM.PView
       traverse (\d -> runAuthHandler tr (statusOf $ AIThreads.routineDestinationPostH testPid (conversation 1) $ AIThreads.RoutineDestinationForm d)) [Issues.DestinationConversation, Issues.DestinationSlack] `shouldReturn` [403, 403]
@@ -3549,7 +3549,7 @@ spec = around withTestResources do
         original <- startNative installed Issues.StartRun "Original event input"
         replacement <- addMember tr PM.PEdit ("native-replacement-" <> show n <> "@example.test")
         runTestBg frozenTime tr do
-          void $ Issues.resumeRoutine replacement testPid conv
+          void $ Issues.resumeRoutine Issues.ResumeSchedule replacement testPid conv
           Issues.setRoutineInstructions testPid conv "Instructions for future events."
         current <- runQueryEffect tr (Issues.getEventRoutine testPid kind) >>= maybe (fail "Missing current routine") pure
         current.requestedBy `shouldBe` replacement
@@ -3585,7 +3585,7 @@ spec = around withTestResources do
       runQueryEffect tr (Issues.routineRunActive testPid run.id) `shouldReturn` False
       finish run $ Issues.CancelledResult $ Just "Cancelled by member"
       void $ call tr $ AIThreads.routineInstructionsPostH testPid conv (AIThreads.RoutineInstructionsForm "Check the new deployment first.")
-      void $ call tr $ AIThreads.routineResumePostH testPid conv
+      void $ call tr $ AIThreads.routineResumePostH testPid conv False
       retry <- attempt Issues.RestartRun "Investigate checkout again"
       finish retry $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Issues.reportAnswer "Revised evidence" Nothing
       traverse artifactsOf [run.id, retry.id] `shouldReturn` ([[Just "Original evidence"], [Just "Revised evidence"]] :: [[Maybe Text]])
@@ -3728,7 +3728,7 @@ spec = around withTestResources do
               claimed <- Issues.claimRoutine slot.id slot.scheduledAt >>= maybe (liftIO $ fail "Missing scheduled run") pure
               case fixture of
                 DetachedSchedule -> Issues.deleteRoutine testPid (conversation 1)
-                ReauthorizedRequester -> void $ Issues.resumeRoutine (uid tr) testPid (conversation 1)
+                ReauthorizedRequester -> void $ Issues.resumeRoutine Issues.ResumeSchedule (uid tr) testPid (conversation 1)
                 _ -> Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET requested_by = #{uid tr}, authority_version = authority_version + 1, running_since = NULL, next_run_at = #{slot.scheduledAt} + interval '15 minutes' WHERE id = #{slot.id}|]
               pure claimed.runId
           when removed $ Hasql.interpExecute_ [HI.sql|DELETE FROM users.users WHERE id = #{actor}|]
@@ -3784,7 +3784,7 @@ spec = around withTestResources do
         setRole tr testPid PM.PEdit
         briefing <- maybe (fail "Missing routine template") pure $ find ((== "daily-report") . (.key)) Issues.routineTemplates
         let activate = runTestBg slot.scheduledAt tr case activation of
-              "resume" -> Issues.resumeRoutine (uid tr) testPid (conversation 1)
+              "resume" -> Issues.resumeRoutine Issues.ResumeSchedule (uid tr) testPid (conversation 1)
               "interval" -> Issues.upsertRoutine (uid tr) testPid (conversation 1) interval
               _ -> Issues.installRoutineTemplate (uid tr) testPid (conversation 1) "UTC" briefing
         when (activation == "resume" && unowned) $ rejecting tr "apis.ai_routines" "NOT active" do
@@ -4029,7 +4029,7 @@ spec = around withTestResources do
         fmap (.status) <$> runQueryEffect tr (Issues.getRoutineRun testPid execution.id) `shouldReturn` Just Issues.RunCancelled
         runQueryEffect tr (Issues.listRunArtifacts testPid execution.id) >>= (`shouldSatisfy` null)
         titleOf issue `shouldReturn` Just "Original title"
-        when (stop == "pause") $ void $ call tr $ AIThreads.routineResumePostH testPid routine.conversationId
+        when (stop == "pause") $ void $ call tr $ AIThreads.routineResumePostH testPid routine.conversationId False
 
   describe "Agent documents" do
     it "documents are saved, appended and listed beside the conversation, bounded per document, conversation and read, and run evidence survives a full conversation" \tr -> do
