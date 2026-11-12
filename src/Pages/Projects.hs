@@ -248,8 +248,6 @@ data CreateProjectForm = CreateProjectForm
   , timeZone :: Text
   , errorAlerts :: Maybe Text
   , endpointAlerts :: Maybe Text
-  , weeklyNotifs :: Maybe Text
-  , dailyNotifs :: Maybe Text
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (Default, FromForm)
@@ -1388,8 +1386,9 @@ createProjectFormToModel :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Ma
 createProjectFormToModel pid subId firstSubItemId orderId paymentPlan CreateProjectForm{..} =
   Projects.CreateProject
     { id = pid
-    , weeklyNotif = isJust weeklyNotifs
-    , dailyNotif = isJust dailyNotifs
+    , -- Read once, when the weekly report routine is provisioned ('Issues.provisionReportRoutines').
+      weeklyNotif = True
+    , dailyNotif = False
     , endpointAlerts = isJust endpointAlerts
     , errorAlerts = isJust errorAlerts
     , ..
@@ -1466,8 +1465,6 @@ projectSettingsGetH pid = do
           , emails = []
           , permissions = []
           , timeZone = project.timeZone
-          , weeklyNotifs = onFlag project.weeklyNotif
-          , dailyNotifs = onFlag project.dailyNotif
           , errorAlerts = onFlag project.errorAlerts
           , endpointAlerts = onFlag project.endpointAlerts
           }
@@ -1650,7 +1647,7 @@ createProjectBody pid cp = do
 
         -- Alert configuration
         div_ [class_ "border-t border-strokeWeak pt-1"]
-          $ alertConfiguration cp
+          $ alertConfiguration pid cp
 
         -- Save button: muted until form is dirty
         div_ [class_ "flex justify-end pt-2"] do
@@ -1669,8 +1666,8 @@ createProjectBody pid cp = do
       dangerAction_ "delete-project-modal" "trash" "Delete Project" "Delete project?" "This permanently removes the project and all associated data. This action cannot be undone." [hxDelete_ $ Links.urls.projects.deleteGet pid] "Delete project"
 
 
-alertConfiguration :: CreateProjectForm -> Html ()
-alertConfiguration cp =
+alertConfiguration :: Projects.ProjectId -> CreateProjectForm -> Html ()
+alertConfiguration pid cp =
   div_ do
     div_ [class_ "flex items-center gap-2 mb-3"] do
       iconBadge_ IconXs NeutralBadge "bell"
@@ -1679,12 +1676,13 @@ alertConfiguration cp =
       $ forM_
         ( [ ("New endpoint alerts", "endpointAlerts", "Get notified when new API endpoints are detected", isJust cp.endpointAlerts)
           , ("Runtime error alerts", "errorAlerts", "Receive immediate notifications for system errors", isJust cp.errorAlerts)
-          , ("Weekly reports", "weeklyNotifs", "Get a summary of your project activity every week", isJust cp.weeklyNotifs)
-          , ("Daily reports", "dailyNotifs", "Receive daily summaries of your project metrics", isJust cp.dailyNotifs)
           ]
             :: [(Text, Text, Text, Bool)]
         )
         \(lbl, forId, descr, checked) -> div_ [class_ "py-3 first:pt-0 last:pb-0"] $ toggleRow_ forId lbl descr $ name_ forId : [checked_ | checked]
+    p_ [class_ "mt-3 text-sm text-textWeak"] do
+      "Weekly and daily reports are AI routines. "
+      a_ [href_ $ Links.urls.aiRoutinesGet pid, class_ "text-textBrand hover:underline"] "Manage report routines"
 
 
 -- Main Modal Component

@@ -288,7 +288,8 @@ routinesGetH pid = do
                           (Just at, Just status) -> toHtml (formatTime defaultTimeLocale "%e %b, %H:%M" at) >> uncurry tonePill_ (runStatus status)
                           _ -> "Not run yet") & withAttrs [class_ "w-56 max-md:hidden"]
                       , col "Next run" (\r -> span_ [class_ "whitespace-nowrap text-xs tabular-nums text-textWeak"] $ maybe "—" (toHtml . formatTime defaultTimeLocale "%e %b, %H:%M") (r.routineNextRunAt <* guard r.routineActive)) & withAttrs [class_ "w-36 max-lg:hidden"]
-                      , col "" (\r -> when canEdit $ div_ [class_ "flex items-center justify-end gap-1"] do
+                      ]
+                        <> [ col "" (\r -> div_ [class_ "flex items-center justify-end gap-1"] do
                           let (toggle, toggleLabel) = bool (urls.aiRoutineResumePost, "Resume") (urls.aiRoutinePausePost, "Pause") r.routineActive
                               menuId = "routine-menu-" <> r.conversationId.toText
                           form_ [hxPost_ $ toggle pid r.conversationId, hxSwap_ "none"] $ button_ [class_ "btn btn-xs btn-ghost active:scale-[0.96] transition-transform", type_ "submit"] $ toHtml @Text toggleLabel
@@ -299,7 +300,8 @@ routinesGetH pid = do
                               let slackEnabled = r.routineDestination == Just Issues.DestinationSlack
                               li_ $ button_ [hxPost_ $ urls.aiRoutineDestinationPost pid r.conversationId, hxSwap_ "none", term "hx-vals" $ "{\"destination\":\"" <> bool "slack" "conversation" slackEnabled <> "\"}"] $ bool "Send results to Slack" "Stop Slack delivery" slackEnabled
                             li_ $ button_ [hxDelete_ $ urls.aiRoutineDelete pid r.conversationId, hxConfirm_ "Delete this routine? Its conversation and past results will be kept.", hxSwap_ "none", class_ "text-textError"] "Delete") & withAttrs [class_ "w-28 text-end", Aria.label_ "Actions"]
-                      ]
+                           | canEdit
+                           ]
                   , rows = fromList installedRoutines
                   , features = def
                   }
@@ -313,7 +315,7 @@ routinesGetH pid = do
                       a_ [href_ $ runUrl pid run.id, class_ "block truncate text-sm font-medium text-textStrong hover:text-textBrand"] $ toHtml $ fromMaybe "Deleted routine" run.title
                       whenJust (run.error <|> (summaryLine =<< run.summary)) \line -> p_ [class_ $ "mt-0.5 truncate text-xs " <> maybe "text-textWeak" (const $ runErrorTone run.status) run.error, title_ line] $ toHtml line
                   , col "Outcome" (uncurry tonePill_ . runStatus . (.status)) & withAttrs [class_ "w-32"]
-                  , col "Started" (\run -> time_ [datetime_ $ show run.startedAt, class_ "whitespace-nowrap text-xs tabular-nums text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt) & withAttrs [class_ "w-40 text-end"]
+                  , col "Started" (\run -> time_ [datetime_ $ show run.startedAt, class_ "whitespace-nowrap text-xs tabular-nums text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt) & withAttrs [class_ "w-40"]
                   ]
               , rows = fromList recentRuns
               , features = def{rowLink = Just $ runUrl pid . (.id)}
@@ -401,7 +403,8 @@ threadPageGetH pid convId docM runM hxTarget = do
     pure $ runView_ (isNothing conversationM) run evidence requestedBy runArtifacts viewerPermission operations fixEvidence
   let activeId = (.conversationId) <$> conversationM
       messages = bool [] selectedMessages (isJust conversationM)
-      docs = bool [] artifacts (isJust conversationM)
+      -- 'latest-result' mirrors the newest run, already shown as the latest result and under Runs.
+      docs = filter ((/= "latest-result") . toText . (.key)) $ bool [] artifacts (isJust conversationM)
       openDoc = find (isJust . (.content)) docs
       routineM = conversationM >>= \conversation -> (conversation,) <$> conversation.routineInterval
       pageConfig =

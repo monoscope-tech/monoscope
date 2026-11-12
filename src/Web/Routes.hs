@@ -64,7 +64,6 @@ import Pages.Projects qualified as Integrations
 import Pages.Projects qualified as ListProjects
 import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
-import Pages.Reports qualified as Reports
 import Pages.ServiceMap qualified as ServiceMap
 import Pages.Settings qualified as Settings
 import Pages.Share qualified as Share
@@ -379,10 +378,7 @@ cookieProtectedServer projectTools =
     , widgetSqlPreview = Dashboards.widgetSqlPreviewGetH
     , widgetSqlText = Dashboards.widgetSqlTextGetH
     , -- Slack/Discord handlers
-      reportsGet = Reports.reportsGetH
-    , reportsLiveGet = Reports.reportsLiveGetH
-    , reportsSingleGet = Reports.singleReportGetH
-    , reportsPost = Reports.reportsPostH
+      reportsRedirect = \pid _ -> pure $ addHeader (urls.aiRoutinesGet pid) NoContent
     , shareLinkPost = Share.shareLinkPostH
     , replaySessionGet = Replay.replaySessionGetH
     , replaySessionManifestGet = Replay.replaySessionManifestGetH
@@ -920,7 +916,7 @@ emailTemplates =
   [ ("project-invite", pure ET.sampleProjectInvite)
   , ("project-created", pure ET.sampleProjectCreated)
   , ("project-deleted", pure ET.sampleProjectDeleted)
-  , ("weekly-report", pure $ ET.sampleWeeklyReport (Just "https://placehold.co/600x200?text=Events+Chart") (Just "https://placehold.co/600x200?text=Errors+Chart"))
+  , ("routine-report", pure ET.sampleRoutineReport)
   ,
     ( "runtime-errors"
     , do
@@ -1151,8 +1147,6 @@ type instance Opaque "PageCodeContext.WikiGet" = PageCodeContext.WikiGet
 type instance Opaque1 "PageCtx" = PageCtx
 type instance Opaque "QueryLibrary.QueryLibraryView" = QueryLibrary.QueryLibraryView
 type instance Opaque "QueryLibrary.SaveQueryForm" = QueryLibrary.SaveQueryForm
-type instance Opaque "Reports.ReportsGet" = Reports.ReportsGet
-type instance Opaque "Reports.ReportsPost" = Reports.ReportsPost
 type instance Opaque "ServiceMap.ServiceMapGet" = ServiceMap.ServiceMapGet
 type instance Opaque "Settings.ApiGet" = Settings.ApiGet
 type instance Opaque "Settings.ApiKeyNotFound" = Settings.ApiKeyNotFound

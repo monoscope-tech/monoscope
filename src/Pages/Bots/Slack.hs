@@ -64,7 +64,7 @@ import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, pageTitle, sessM)
 import Pages.Bots.SlackProgress qualified as Progress
-import Pages.Bots.Utils (BotEmoji (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, freshWebhookTimestamp, getLoadingMessage, installedResponse, runBotQueryWithTools, slackResponse, withBotThread)
+import Pages.Bots.Utils (BotEmoji (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, freshWebhookTimestamp, installedResponse, runBotQueryWithTools, slackResponse, withBotThread)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
@@ -382,7 +382,7 @@ slackInteractionsHWithTools projectTools interaction = do
               let convId = Issues.slackCommandConversationId principal.projectId interaction.team_id interaction.channel_id interaction.trigger_id
               origin <- either (refuse . CommandOriginInvalid) pure $ Issues.commandOrigin interaction.team_id interaction.channel_id interaction.user_id
               execution <- BgJobs.startCommand routine origin convId principal.userId interaction.text >>= maybe (refuse CommandNotAdmitted) pure
-              let status = if execution.status == Issues.RunRunning then getLoadingMessage (detectReportIntent interaction.text) else "This request has ended. Its result and history are retained."
+              let status = if execution.status == Issues.RunRunning then botEmoji EmojiSearch <> " Analyzing your query..." else "This request has ended. Its result and history are retained."
               traceResp $ textResp $ status <> "\n<" <> hostPath authCtx.env.hostUrl (urls.aiRoutineRunGet principal.projectId execution.id Nothing) <> "|View run and review actions>"
   where
     traceResp resp = resp <$ Log.logTrace ("Slack interaction response" :: Text) resp
@@ -403,7 +403,7 @@ slackInteractionsHWithTools projectTools interaction = do
         $ slackResponse
           [ slackHeader (botEmoji EmojiSuccess <> " Notification channel set")
           , slackSection ("*" <> channelDisplay <> "* will now receive:")
-          , slackSection ("• " <> botEmoji EmojiError <> " Error alerts\n• " <> botEmoji EmojiChart <> " Daily & weekly reports\n• " <> botEmoji EmojiWarning <> " Anomaly detections\n\nYou can also configure channels on the web dashboard.")
+          , slackSection ("• " <> botEmoji EmojiError <> " Error alerts\n• " <> botEmoji EmojiChart <> " Weekly AI reports\n• " <> botEmoji EmojiWarning <> " Anomaly detections\n\nYou can also configure channels on the web dashboard.")
           ]
 
 
@@ -1232,17 +1232,13 @@ processSlackEventWithTools projectTools receiptId =
                     requireRunAccess
                     whenJustM (Integrations.slackThreadTitle slackData.projectId workspaceId event.channel threadTs) $ \title ->
                       Issues.setConversationTitle slackData.projectId convId $ Integrations.slackSessionTitleText title
-                    initialTitle <- case detectReportIntent requestText of
-                      GeneralQueryIntent ->
-                        AI.ensureConversationTitle
-                          (AI.defaultAgenticConfig slackData.projectId){AI.access = access, AI.conversationId = Just convId, AI.sourceConfig = Just envCfg, AI.invocationMode = AI.DurableRun context}
-                          requestText
-                          envCfg.openaiModel
-                          envCfg.openaiApiKey
-                          Nothing
-                      ReportIntent{} -> do
-                        Issues.setConversationTitle slackData.projectId convId requestText
-                        Issues.getConversationTitle slackData.projectId convId
+                    initialTitle <-
+                      AI.ensureConversationTitle
+                        (AI.defaultAgenticConfig slackData.projectId){AI.access = access, AI.conversationId = Just convId, AI.sourceConfig = Just envCfg, AI.invocationMode = AI.DurableRun context}
+                        requestText
+                        envCfg.openaiModel
+                        envCfg.openaiApiKey
+                        Nothing
                     let resetJob = BgJobs.ResetSlackSession slackData.projectId principal.userId receiptId
                     slackRetryTime 60 >>= scheduleSessionReset receiptId resetJob
                     bracket
@@ -1282,13 +1278,8 @@ processSlackEventWithTools projectTools receiptId =
               answer <- Investigations.loadAnswer turn
               case answer of
                 Just result -> do
-                  finish $ Issues.CompletedResult Issues.ResultSucceeded Issues.RetainAnswer $ AI.prepareRunAnswer result
-                Nothing -> case detectReportIntent requestText of
-                  GeneralQueryIntent -> finish $ Issues.FailedResult $ Issues.RunFailure "The agent did not produce an answer." Issues.RunOnly
-                  ReportIntent{} -> do
-                    batch <- Investigations.loadReplyBatch (Investigations.SlackCheckpoint turn)
-                    let report = slackReplyReport $ foldMap (toList . (.replies)) batch
-                    finish $ Issues.CompletedResult Issues.ResultSucceeded Issues.RetainAnswer $ Issues.reportAnswer report $ AE.toJSON <$> batch
+                  finish $ Issues.CompletedResult Issues.ResultSucceeded Issues.RetainAnswer $ AI.prepareRunAnswer slackData.projectId result
+                Nothing -> finish $ Issues.FailedResult $ Issues.RunFailure "The agent did not produce an answer." Issues.RunOnly
 
 
 renderSlackReplies :: ProjectToolCtx es => Maybe AI.ProjectTools -> Issues.RunContext -> EnvConfig -> AI.AgentAccess -> Eff es (Maybe (UUIDId "conversation")) -> Eff es (Either Text (), NonEmpty AE.Value)
@@ -1356,7 +1347,7 @@ runCommandWithTools projectTools context = do
   requireAccess
   checkpoint <- Investigations.loadCheckpointFor target
   answer <- case checkpoint of
-    Just Investigations.SavedCheckpoint{checkpoint = Investigations.AnswerReady result} -> pure $ AI.prepareRunAnswer result
+    Just Investigations.SavedCheckpoint{checkpoint = Investigations.AnswerReady result} -> pure $ AI.prepareRunAnswer slackData.projectId result
     Nothing -> pure $ Issues.reportAnswer (slackReplyReport batch.replies) $ Just $ AE.toJSON batch.replies
     Just _ -> throwIO AI.AgentStopped
   void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer answer

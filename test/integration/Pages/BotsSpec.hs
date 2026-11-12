@@ -18,6 +18,7 @@ import Data.ByteString.Base64 qualified as B64
 import Data.Cache qualified as Cache
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
+import Data.Effectful.Notify qualified as Notify
 import Data.Effectful.UUID qualified as UUIDEff
 import Data.Effectful.Wreq qualified as HTTP
 import Data.List (lookup)
@@ -1572,7 +1573,7 @@ spec = around withTestResources do
 
     it "routines: a titled thread schedules, pauses, resumes and deletes; templates install at local time and reschedule as intervals" \tr -> do
       let interval = fromRightShow $ Issues.mkRoutineInterval 15
-      template <- maybe (fail "routine catalog must not be empty") pure $ find ((== "daily-operations-briefing") . (.key)) Issues.routineTemplates
+      template <- maybe (fail "routine catalog must not be empty") pure $ find ((== "daily-report") . (.key)) Issues.routineTemplates
       length Issues.routineTemplates `shouldSatisfy` (>= 15)
       (needsTitle, summary, listed, scheduled, paused, resumed, deleted) <- runTestBg frozenTime tr do
         startConversation (conversation 1) Issues.CTWeb
@@ -1652,6 +1653,34 @@ spec = around withTestResources do
       timeoutHistory `shouldSatisfy` all (isNothing . AI.dbMessageToLLMMessage)
       ((.routineRunningSince) =<< timeoutRoutine) `shouldBe` Nothing
       length <$> readIORef successors `shouldReturn` 2
+
+    it "report routines: weekly on by email, daily paused, provisioned once; a run keeps a dated document and mails each highlight with its chart" \tr -> do
+      pid <- createTestProject tr "Report routines"
+      project <- runTestBg frozenTime tr (Projects.projectById pid) >>= maybe (fail "project missing") pure
+      let digest = "{\"headline\":\"Checkout errors rose 4.8x\",\"highlights\":[{\"title\":\"Checkout 5xx up 4.8x\",\"detail\":\"412 to 1,980 against last week.\",\"widget\":{\"type\":\"timeseries\",\"query\":\"summarize count() by bin_auto(timestamp)\",\"title\":\"Errors\"},\"link\":\"/p/" <> pid.toText <> "/issues\"},{\"title\":\"Search recovered\",\"detail\":\"p95 back to 420 ms.\",\"widget\":null,\"link\":\"https://evil.example/p/\"}],\"explanation\":\"fallback\",\"has_findings\":true}"
+      (weekly, again, installed) <- runTestBg frozenTime tr do
+        weekly <- Issues.provisionReportRoutines project
+        again <- Issues.provisionReportRoutines project
+        (weekly,again,) <$> Issues.listConversations pid
+      isNothing again `shouldBe` True
+      sortOn (\(k, _, _) -> k) [(templateKey, r.routineActive, r.routineDestination) | r <- installed, Just templateKey <- [r.templateKey]] `shouldBe` [("daily-report", False, Just Issues.DestinationConversation), ("weekly-report", True, Just Issues.DestinationEmail)]
+      slot <- maybe (fail "weekly report was not scheduled") pure weekly
+      reportConv <- maybe (fail "weekly report missing") (pure . (.conversationId)) $ find ((== Just "weekly-report") . (.templateKey)) installed
+      void $ runQueryEffect tr $ PM.createEveryoneTeam pid (uid tr)
+      (notifs, _) <- captureNotifs tr $ Jobs.runAIRoutineWith 1_000_000 (\_ -> pure $ Right AI.AgenticChatResult{AI.response = digest, AI.toolCalls = []}) (\_ _ -> pass) tr.trATCtx slot.id slot.scheduledAt
+      let emails = [email | Notify.EmailNotification email <- notifs]
+      emails `shouldSatisfy` (not . null)
+      for_ emails \email -> do
+        email.subject `shouldBe` "Checkout errors rose 4.8x · Report routines"
+        email.htmlBody `shouldContainAll` ["Checkout 5xx up 4.8x", "Search recovered", "/widget.png?", "/p/" <> pid.toText <> "/issues", "Open the report"]
+        email.htmlBody `shouldNotSatisfy` T.isInfixOf "evil.example"
+      docs <- runQueryEffect tr $ Issues.listArtifacts pid reportConv Nothing
+      [(T.isPrefixOf "weekly-report-20" $ toText doc.key, doc.title) | doc <- docs, toText doc.key /= "latest-result"] `shouldBe` [(True, "Checkout errors rose 4.8x")]
+      opened <- runQueryEffect tr $ Issues.listArtifacts pid reportConv ((.key) <$> find ((/= "latest-result") . toText . (.key)) docs)
+      foldMap (fold . (.content)) opened `shouldContainAll` ["## Checkout errors rose 4.8x", "### Checkout 5xx up 4.8x", "](http", "[Explore in Monoscope](/p/" <> pid.toText <> "/issues)"]
+      -- The chat result is the digest too, with the highlight's chart as a live widget.
+      history <- runQueryEffect tr $ Issues.selectChatHistory pid reportConv
+      map (\m -> (m.role, isJust m.widgets)) (filter ((== Issues.ChatAssistant) . (.role)) history) `shouldBe` [(Issues.ChatAssistant, True)]
 
     it "answers recorded agent queries" \tr -> do
       let askAgent query apiKey = runTestBg frozenTime tr $ Bot.processAIQuery Nothing False AI.ServiceAccess testPid query Nothing tr.trATCtx.env.openaiModel apiKey
@@ -3262,7 +3291,7 @@ spec = around withTestResources do
             _ -> Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{uid tr}|] $> said "private-inflight-answer"
       tryAny (runTestBg frozenTime tr $ downgradeOnAnswer $ chat (webConfig (conv 3) inflight) "Inspect restricted evidence") >>= (`shouldSatisfy` denied)
       inflightContext <- contextOf inflight
-      runQueryEffect tr (Issues.completeRun inflightContext $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer $ AI.AgenticChatResult "private-inflight-answer" []) >>= (`shouldSatisfy` \case Issues.RunCompleted Issues.CompletedCancelled Nothing -> True; _ -> False)
+      runQueryEffect tr (Issues.completeRun inflightContext $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer testPid $ AI.AgenticChatResult "private-inflight-answer" []) >>= (`shouldSatisfy` \case Issues.RunCompleted Issues.CompletedCancelled Nothing -> True; _ -> False)
       fmap (.status) <$> runQueryEffect tr (Issues.getRoutineRun testPid inflightContext.id) `shouldReturn` Just Issues.RunCancelled
       runQueryEffect tr (Issues.listRunArtifacts testPid inflightContext.id) >>= (`shouldSatisfy` null)
       assistantReplies tr (conv 3) `shouldReturn` []
@@ -3408,7 +3437,7 @@ spec = around withTestResources do
           status handler = runAuthHandler tr $ statusOf handler
           policyFor run conv = runQueryEffect tr $ Issues.routineRunPolicyFor testPid run (uid tr) conv
           template name = maybe (fail $ "Missing template " <> toString name) pure $ find ((== name) . (.key)) Issues.routineTemplates
-          completeNoFindings slot context = runTestBg slot.scheduledAt tr (Issues.completeRun context $ Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer $ AI.prepareRunAnswer $ AI.AgenticChatResult "No findings" []) >>= \case
+          completeNoFindings slot context = runTestBg slot.scheduledAt tr (Issues.completeRun context $ Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer $ AI.prepareRunAnswer testPid $ AI.AgenticChatResult "No findings" []) >>= \case
             Issues.RunCompleted Issues.CompletedNoFindings (Just next) -> pure next
             _ -> fail "Expected a completed run and the next schedule"
       -- An installed event routine is listed and editable but keeps its event schedule; a reader only inspects it.
@@ -3445,7 +3474,7 @@ spec = around withTestResources do
       void $ call tr $ AIThreads.routineDestinationPostH testPid (conversation 1) $ AIThreads.RoutineDestinationForm Issues.DestinationSlack
       policyFor first1.runId (conversation 1) `shouldReturn` Just Issues.Autonomous
       -- A new activation is autonomous; later policy changes apply only to future runs.
-      briefing <- template "daily-operations-briefing"
+      briefing <- template "daily-report"
       Just slot2 <- runTestBg frozenTime tr $ startConversation (conversation 2) Issues.CTWeb >> Issues.installRoutineTemplate (uid tr) testPid (conversation 2) "UTC" briefing
       run2 <- runQueryEffect tr (Issues.claimRoutine slot2.id slot2.scheduledAt) >>= maybe (fail "Expected a claimed run") pure
       run2.policy `shouldBe` Issues.Autonomous
@@ -3478,7 +3507,7 @@ spec = around withTestResources do
       future3.policy `shouldBe` Issues.Autonomous
       policyFor future3.runId (conversation 3) `shouldReturn` Just Issues.Autonomous
       -- A weekly routine keeps its local time across daylight-saving transitions.
-      weekly <- template "weekly-reliability-review"
+      weekly <- template "weekly-report"
       let clock day hour minute = UTCTime day (fromIntegral $ hour * 3600 + minute * 60)
       for_ ([(clock (fromGregorian 2026 10 26) 13 0, clock (fromGregorian 2026 11 2) 14 0, 1, 9, 0), (clock (fromGregorian 2026 3 1) 7 30, clock (fromGregorian 2026 3 15) 6 30, 7, 2, 30)] :: [(UTCTime, UTCTime, Int, Int, Int)]) \(now, expected, weekday, hour, minute) ->
         runTestBg now tr (do
@@ -3630,7 +3659,7 @@ spec = around withTestResources do
       routine <- runQueryEffect tr (Issues.getEventRoutine project Issues.EventSlackMessage) >>= maybe (fail "Expected a Slack routine") pure
       let answer = AI.AgenticChatResult "{\"explanation\":\"Retained chart evidence.\",\"widgets\":[{\"type\":\"timeseries_line\",\"id\":\"reused-model-id\",\"title\":\"Retained error volume\",\"query\":\"summarize count() by bin_auto(timestamp)\"},{\"type\":\"stat\",\"id\":\"reused-model-id\",\"title\":\"Retained request count\",\"query\":\"summarize count()\"},{\"type\":\"table\",\"title\":\"Unsafe model link\",\"columns\":[{\"field\":\"name\",\"title\":\"Name\",\"link\":\"javascript:alert(1)\"}]}]}" []
       Just execution <- runTestBg frozenTime tr $ Issues.startEventRun routine (Issues.SlackCommandRequest routine.conversationId (uid tr)) Issues.StartRun routine.conversationId "Show retained charts"
-      runTestBg frozenTime tr $ completeTestRun project (Issues.EventClaim (Issues.SlackCommand routine.conversationId) execution.id execution.startedAt) $ Issues.CompletedResult Issues.ResultSucceeded Issues.RetainAnswer $ AI.prepareRunAnswer answer
+      runTestBg frozenTime tr $ completeTestRun project (Issues.EventClaim (Issues.SlackCommand routine.conversationId) execution.id execution.startedAt) $ Issues.CompletedResult Issues.ResultSucceeded Issues.RetainAnswer $ AI.prepareRunAnswer testPid answer
       runQueryEffect tr (Issues.selectChatHistory project routine.conversationId) >>= (`shouldSatisfy` all ((/= Issues.ChatAssistant) . (.role)))
       inspector <- renderT <$> call tr (AIThreads.routineRunGetH project execution.id $ Just routine.conversationId)
       inspector `shouldContainAll` (["Visualizations", "Retained error volume", "Retained request count", "data-chart-widget", "ai-run-" <> execution.id.toText, "id=\"ai-conversation\""] <> ["id=\"ai-run-" <> execution.id.toText <> "-" <> show i <> "_widgetEl\"" | i <- [0, 1 :: Int]])
@@ -3753,7 +3782,7 @@ spec = around withTestResources do
         unless unowned $ dbExec tr [sql|UPDATE apis.ai_routines SET requested_by = ?, authority_version = authority_version + 1 WHERE id = ?|] (uid tr, slot.id)
         dbExec tr [sql|DELETE FROM users.users WHERE id = ?|] (Only previousOwner)
         setRole tr testPid PM.PEdit
-        briefing <- maybe (fail "Missing routine template") pure $ find ((== "daily-operations-briefing") . (.key)) Issues.routineTemplates
+        briefing <- maybe (fail "Missing routine template") pure $ find ((== "daily-report") . (.key)) Issues.routineTemplates
         let activate = runTestBg slot.scheduledAt tr case activation of
               "resume" -> Issues.resumeRoutine (uid tr) testPid (conversation 1)
               "interval" -> Issues.upsertRoutine (uid tr) testPid (conversation 1) interval
@@ -3776,7 +3805,7 @@ spec = around withTestResources do
       let schedule conv = runTestBg frozenTime tr do
             startConversation conv Issues.CTWeb
             Issues.upsertRoutine (uid tr) testPid conv (fromRightShow $ Issues.mkRoutineInterval 15) >>= maybe (liftIO $ fail "Missing routine") pure
-          completeWith context text = runTestBg frozenTime tr $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer $ AI.AgenticChatResult text []
+          completeWith context text = runTestBg frozenTime tr $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer testPid $ AI.AgenticChatResult text []
       -- Saving the answer and advancing the schedule commit together; a retry under a new owner keeps the original grant and model answer.
       for_ (zip [1 ..] ([("apis.ai_routine_runs", "status <> 'succeeded'"), ("apis.ai_routines", "running_since IS NOT NULL")] :: [(Text, Text)])) \(n, (table, check)) -> do
         let conv = conversation n

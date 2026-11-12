@@ -495,7 +495,8 @@ renderTable tbl =
                 whenJust tbl.features.search \_ -> span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
                 div_ [id_ "rowsContainer", class_ divCls] do
                   renderRows tbl
-      tableContent = div_ ([class_ $ tbl.config.containerClasses <> bool " pb-24" "" isEmpty, id_ $ tbl.config.elemID <> "_page"] <> [data_ "table-columns" tbl.config.elemID | tbl.features.customizeColumns]) do
+      -- Room for the floating bulk-action bar; only selectable tables raise it.
+      tableContent = div_ ([class_ $ tbl.config.containerClasses <> bool "" " pb-24" (not isEmpty && isJust tbl.features.rowId), id_ $ tbl.config.elemID <> "_page"] <> [data_ "table-columns" tbl.config.elemID | tbl.features.customizeColumns]) do
         unless isEmpty $ whenJust tbl.features.search $ renderSearch tbl.config.elemID (fromMaybe "Search" tbl.features.searchPlaceholder)
         case tbl.features.facets of
           Just facets -> div_ [class_ "flex items-start gap-4 max-lg:flex-col"] do

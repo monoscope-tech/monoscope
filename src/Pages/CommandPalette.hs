@@ -123,7 +123,7 @@ paletteShell_ pid = do
           -- Lazy-loaded dynamic items placeholder
           div_ [id_ "cmd-palette-dynamic", hxGet_ (urls.commandPaletteGet pid), hxTrigger_ "palette:open from:body", hxSwap_ "outerHTML", class_ "text-center text-xs text-textWeak py-2"] "Loading..."
           -- Direct page links (static, always present)
-          forM_ @[] @_ @(Text, Text, Text) [(logExplorerUrl pid, "explore", "Log Explorer"), (urls.apiCatalogGet pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing, "swap", "API Catalog"), (urls.reportsGet pid Nothing, "chart-simple", "Reports"), (urls.repositoriesGet pid Nothing Nothing, "code-branch", "Repositories"), (urls.projects.settingsGet pid, "gear", "Settings")] \(href, icon, label) ->
+          forM_ @[] @_ @(Text, Text, Text) [(logExplorerUrl pid, "explore", "Log Explorer"), (urls.apiCatalogGet pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing, "swap", "API Catalog"), (urls.aiRoutinesGet pid, "clock", "Routines and reports"), (urls.repositoriesGet pid Nothing Nothing, "code-branch", "Repositories"), (urls.projects.settingsGet pid, "gear", "Settings")] \(href, icon, label) ->
             cmdItem pid CKDirect href [] icon label "Page"
           -- Logs shortcut
           cmdLink_ "search logs" CKLogShortcut [href_ $ logExplorerUrl pid, term "hx-live:href" "'/p/' + closest('.cmd-palette').dataset.pid + '/log_explorer?query=' + encodeURIComponent(q('#cmd-palette-input').value)"]

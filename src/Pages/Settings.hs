@@ -117,7 +117,7 @@ import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
-import Pkg.Mail (NotificationAlerts (..), sampleAlertByIssueTypeText, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
+import Pkg.Mail (NotificationAlerts (..), sampleAlertByIssueTypeText, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
 import Pkg.Prometheus qualified as Prom
 import Relude hiding (ask, asks)
 import Servant (FromHttpApiData (..), err400, err503, errBody)
@@ -923,7 +923,7 @@ notificationsTestPostH pid TestForm{..} = do
     $ throwError err400{errBody = "Rate limit: Please wait 60 seconds between test notifications"}
 
   (_, project) <- Projects.sessionAndProject pid
-  let baseAlert = bool (sampleAlertByIssueTypeText issueType project.title) sampleReport (issueType == "report")
+  let baseAlert = sampleAlertByIssueTypeText issueType project.title
   -- Build a real signed widget URL so the test exercises the same image path
   -- as production alerts (webhook transport lifts it into attachments.image_url).
   -- The chart may be empty for the sample hash; what matters is that signing,
@@ -934,7 +934,7 @@ notificationsTestPostH pid TestForm{..} = do
       let errHash = (errorData :: ErrorPatterns.ATError).hash
       chartUrlM <- errorTrendChartUrl appCtx pid errHash (addUTCTime (-3600) now) now
       pure baseAlert{chartUrl = chartUrlM}
-    (EndpointAlert{}; ShapeAlert; ReportAlert{}; MonitorsAlert{}; LogPatternAlert{}; LogPatternRateChangeAlert{}; MonitorsRecoveryAlert{}) -> pure baseAlert
+    (EndpointAlert{}; ShapeAlert; MonitorsAlert{}; LogPatternAlert{}; LogPatternRateChangeAlert{}; MonitorsRecoveryAlert{}) -> pure baseAlert
 
   Log.logTrace "Sending test notification" (channel, pid, issueType)
 
@@ -943,7 +943,6 @@ notificationsTestPostH pid TestForm{..} = do
       testTemplate
         | Just mk <- lookup issueType [("runtime_exception", ET.runtimeErrorsEmail), ("escalating_errors", ET.escalatingErrorsEmail), ("regressed_errors", ET.regressedErrorsEmail), ("error_spike", ET.errorSpikesEmail)] =
             mk project.title (hostPath appCtx.env.hostUrl projectUrl) issuesUrl [] Nothing Nothing Nothing
-        | issueType == "report" = ET.sampleWeeklyReport Nothing Nothing
         | otherwise = ET.anomalyEndpointEmail "Test User" project.title issuesUrl [ET.EndpointAlertRow "GET /api/v1/test" (Just "api.example.com") (Just "api-service") (Just "production")]
       sendTestEmail email = let (subj, html) = testTemplate; subj' = "[Test] " <> subj in sendRenderedEmail email subj' (ET.renderEmail subj' html)
 

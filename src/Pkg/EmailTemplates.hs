@@ -24,10 +24,8 @@ module Pkg.EmailTemplates (
   anomalyEndpointEmail,
   hostsUnarchivedEmail,
   issueAssignedEmail,
-  weeklyReportEmail,
-  WeeklyReportData (..),
-  ReportEvidence (..),
-  HistoricalReportEvidence (..),
+  routineReportEmail,
+  sampleRoutineReport,
   monitorAlertEmail,
   checkAlertEmail,
   monitorRecoveryEmail,
@@ -49,7 +47,6 @@ module Pkg.EmailTemplates (
   sampleRuntimeErrors,
   sampleAnomalyEndpoint,
   sampleIssueAssigned,
-  sampleWeeklyReport,
 ) where
 
 import Data.Default (def)
@@ -63,7 +60,6 @@ import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ContainerTypes (Scope (..))
-import Models.Telemetry.Report qualified as Report
 import Relude
 import Utils (fmtDate, formatWithCommas, isoT, kqlQuoted, nonEmptyT, showFFloat', toUriStr, truncateText)
 import Web.Links (LogExplorerRoutes' (..), logExplorerLinks)
@@ -134,12 +130,9 @@ emailCss =
   """
   .monoscope-email { width: 100% !important; height: 100%; margin: 0; -webkit-text-size-adjust: 100%; color: #24292f; background-color: #ffffff; }
   .monoscope-email table { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
-  .monoscope-email .system-report { max-width: 720px; }
-  .monoscope-email .report-attention a { color: #b42318 !important; }
   .monoscope-email a { color: #1d4ed8; text-decoration: none; }
   .monoscope-email a:hover { text-decoration: underline; }
   .monoscope-email a img { border: none; }
-  .monoscope-email .report-muted { color: #57606a; }
   .monoscope-email td { word-break: break-word; }
   .monoscope-email, .monoscope-email td, .monoscope-email th { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif; }
   .monoscope-email h1 { color: #24292f; font-size: 24px; font-weight: 600; line-height: 1.25; margin: 0 0 16px; letter-spacing: -0.02em; }
@@ -193,7 +186,6 @@ emailCss =
     .monoscope-email .footer-col-left, .monoscope-email .footer-col-right { display: block !important; width: 100% !important; text-align: left !important; padding: 0 !important; }
     .monoscope-email .footer-col-right { padding-top: 16px !important; }
     .monoscope-email .footer-icons { float: none !important; }
-    .monoscope-email .report-metric { display: inline-block !important; width: 50% !important; box-sizing: border-box; }
   }
   .monoscope-email .email-image-dark { display:none !important; max-height:0; overflow:hidden; mso-hide:all; }
   @media (prefers-color-scheme: dark) {
@@ -201,10 +193,6 @@ emailCss =
     .monoscope-email .email-image-dark { display:block !important; max-height:none !important; overflow:visible !important; }
     .monoscope-email .report-chart { border-color:#374151 !important; }
     .monoscope-email { background-color: #111827 !important; color: #f3f4f6 !important; }
-    .monoscope-email .report-attention a { color: #fda29b !important; }
-    .monoscope-email .report-muted { color: #cbd5e1 !important; }
-    .monoscope-email .report-item { border-color: #374151 !important; }
-    .monoscope-email .report-notice { background-color: #1f2937 !important; border-color: #374151 !important; }
     .monoscope-email a { color: #93b4ff !important; }
     .monoscope-email p, .monoscope-email ul, .monoscope-email ol, .monoscope-email li, .monoscope-email h1, .monoscope-email h2, .monoscope-email h3 { color: #ffffff !important; }
     .monoscope-email .divider { border-top-color: #333333 !important; }
@@ -644,314 +632,38 @@ issueAssignedEmail userName projectName issueTitleRaw issueUrl errorType errorMe
 
 
 -- =============================================================================
--- Weekly Report Template
+-- Report routine
 -- =============================================================================
 
--- | Historical evidence retains the frozen pre-snapshot wire representation.
--- Current reports have a complete typed snapshot and cannot carry conflicting legacy totals.
-data ReportEvidence = SystemEvidence Report.ReportSnapshot | HistoricalEvidence HistoricalReportEvidence
-  deriving stock (Generic)
-
-
-data HistoricalReportEvidence = HistoricalReportEvidence
-  { totalEvents :: Int
-  , totalErrors :: Int
-  , anomalies :: V.Vector Issues.IssueSummary
-  , performance :: V.Vector (Text, Text, Text, Int64, Double, Int64, Double)
-  , slowQueries :: V.Vector (Text, Int, Int)
-  }
-  deriving stock (Generic)
-
-
-data WeeklyReportData = WeeklyReportData
-  { reportType :: Projects.ReportType
-  , userName :: Text
-  , projectName :: Text
-  , reportUrl :: Text
-  , projectUrl :: Text
-  , startDate :: Text
-  , endDate :: Text
-  , eventsChartUrl :: Maybe Text
-  , errorsChartUrl :: Maybe Text
-  , evidence :: ReportEvidence
-  , fullReport :: Bool
-  , timeZone :: Text
-  , fromTime :: Text
-  , toTime :: Text
-  }
-  deriving stock (Generic)
-
-
-weeklyReportEmail :: WeeklyReportData -> (Text, Html ())
-weeklyReportEmail d =
-  ( reportTitle <> " · " <> d.projectName <> " · " <> d.endDate
-  , table_ [class_ "email-body_inner system-report", align_ "center", width_ "720", cellpadding_ "0", cellspacing_ "0", role_ "presentation", style_ "width:100%;max-width:720px;table-layout:fixed;margin:0 auto;"]
-      $ tr_
-      $ td_ [class_ "content-cell", style_ "padding:0 24px 32px;"] do
-        div_ [style_ "display:none;max-height:0;overflow:hidden;mso-hide:all;"] $ toHtml $ d.projectName <> ": " <> reportCount events <> " events, " <> reportCount errors <> " error events. Your services, infrastructure and issues for this period."
-        h1_ [style_ "margin:0 0 6px;font-size:26px;line-height:1.2;"] $ toHtml d.projectName
-        reportNote $ reportTitle <> " · " <> d.startDate <> " – " <> d.endDate <> " · " <> d.timeZone
-        p_ [style_ "margin:10px 0 24px;font-size:14px;"] $ a_ [target_ "_top", href_ d.reportUrl] "View full report"
-        when freeTierExceeded $ reportNotice "Daily ingestion cap reached" "The project reached its daily ingestion cap at report generation. Activity dropped after the cap is not included."
-        reportSection (if daily then "This day" else "This week") "Observed activity and the items that need review." do
-          p_ [style_ "font-size:16px;line-height:1.5;margin:0 0 14px;"]
-            $ toHtml
-            $ if events == 0
-              then "No telemetry events were observed in this period. Check collection before drawing conclusions about system health."
-              else reportCount errors <> " error events across " <> reportCount events <> " telemetry events (" <> reportRatio errors events <> ")."
-          reportMetrics
-            [ ("Telemetry events", reportCount events, "Logs and spans")
-            , ("Error events", reportCount errors, reportRatio errors events <> " of events")
-            , ("Services", maybe "Not recorded" (const $ show serviceCount) systemSnapshot, "Named services observed")
-            , ("Server requests", maybe "Not recorded" (const $ reportCount requests) systemSnapshot, "Server spans only")
-            ]
-          forM_ systemSnapshot $ \snapshot -> case snapshot.issues of
-            Report.Available issues -> p_ [style_ "margin:12px 0 0;font-size:14px;"] do
-              a_ [target_ "_top", href_ $ d.projectUrl <> "/issues"] $ toHtml $ reportCount issues.openIssues <> " unacknowledged issues"
-              toHtml $ "; " <> reportCount issues.criticalOpen <> " critical. " <> reportCount issues.newIssues <> " issues created in this period."
-            Report.Unavailable -> reportNote "Issue status is unavailable for this report."
-        forM_ systemSnapshot $ \snapshot -> do
-          forM_ snapshot.issues \issues -> when (issues.criticalOpen > 0) $ reportFinding (d.projectUrl <> "/issues") $ reportCount issues.criticalOpen <> " critical issues need review"
-          forM_ snapshot.monitors \monitors -> when (monitors.alerting > 0) $ reportFinding (d.projectUrl <> "/monitors") $ show monitors.alerting <> " monitors are alerting"
-          forM_ snapshot.infrastructure \infra -> when (infra.unready > 0) $ reportFinding (d.projectUrl <> "/infrastructure/containers" <> windowQuery) $ show infra.unready <> " infrastructure resources report not ready"
-        case systemSnapshot of
-          Nothing -> reportNotice "Historical report" "Service, infrastructure and monitor snapshots were not recorded for this report. The original metrics and issue list are shown below."
-          Just snapshot -> do
-            reportSection "Services" "Ordered by error events, then activity. Compare with the preceding equal-length period." do
-              when (null snapshot.services) $ reportNote "No services observed in either period."
-              forM_ (reportRows 5 snapshot.services) $ \s -> do
-                let current = s.current
-                    previous = s.previous
-                    label = fromMaybe "Unnamed service" s.service
-                    detail = T.intercalate " · " $ catMaybes [s.environment, Just $ if isNothing current then "No events this period" else if isNothing previous then "First observed in this comparison" else "Compared with previous period"]
-                reportItem
-                  (serviceUrl s.service s.environment)
-                  label
-                  detail
-                  [ ("Events", maybe "0" (reportCount . (.events)) current, reportChange (fromIntegral . (.events) <$> current) (fromIntegral . (.events) <$> previous))
-                  , ("Error events", maybe "0" (reportCount . (.errorEvents)) current, maybe "No observations" (\v -> reportRatio v.errorEvents v.events <> " of events") current)
-                  , ("Requests", maybe "0" (reportCount . (.serverRequests)) current, "Server spans")
-                  , ("Avg request", maybe "Not measured" reportMs (current >>= (.serverLatencyMs)), reportChange (current >>= (.serverLatencyMs)) (previous >>= (.serverLatencyMs)))
-                  ]
-              when (not d.fullReport && length snapshot.services > 5) $ reportMore d.reportUrl (length snapshot.services - 5) "service comparisons"
-            reportSection "Infrastructure" "Latest resource usage and readiness at the period end." $ case snapshot.infrastructure of
-              Report.Unavailable -> reportNote "Infrastructure metrics could not be loaded. Open infrastructure to check the latest observations."
-              Report.Available infra -> do
-                reportNote $ "Observation window: " <> reportTime infra.observedFrom <> " to " <> reportTime infra.observedUntil <> " UTC."
-                reportMetrics [("Hosts", show infra.hosts, "Host metrics observed"), ("Containers", show infra.containers, "Container metrics observed"), ("Pod rollups", show infra.pods, "Pods without container detail")]
-                when (null infra.resources) $ reportNote "No infrastructure metrics observed. Configure an OpenTelemetry host, Docker or Kubernetes receiver to include resource usage."
-                forM_ (reportRows 4 infra.resources) $ \r ->
-                  reportItem
-                    (d.projectUrl <> (if r.scope == ScopeHost then "/infrastructure/hosts" else "/infrastructure/containers") <> "?from=" <> toUriStr (isoT infra.observedFrom) <> "&to=" <> toUriStr (isoT infra.observedUntil))
-                    r.name
-                    (T.intercalate " · " $ T.toTitle (display r.scope) : catMaybes [r.host, r.cluster, r.namespace])
-                    [("CPU / capacity", maybe "Not measured" (\x -> reportDecimal (100 * x) <> "%") r.cpuRatio, "Latest sample"), ("Memory / capacity", maybe "Not measured" (\x -> reportDecimal (100 * x) <> "%") r.memoryRatio, "Latest sample"), ("Storage used", maybe "Not measured" (\x -> reportDecimal (100 * x) <> "%") r.storageRatio, "Latest sample"), ("Readiness", maybe "Not reported" (\ready -> if ready then "Ready" else "Not ready") r.ready, maybe "" (\n -> "Restart counter: " <> reportDecimal n) r.restartCounter)]
-                let remaining = infra.hosts + infra.containers + infra.pods - length (reportRows 4 infra.resources)
-                when (remaining > 0) $ reportMore (d.projectUrl <> "/infrastructure/containers" <> windowQuery) remaining "infrastructure resources"
-            reportSection "Issues to review" "Issue state at report generation, with new and archived groups for the period." $ case snapshot.issues of
-              Report.Unavailable -> reportNote "Issue data could not be loaded."
-              Report.Available issues -> do
-                reportMetrics [("New in period", reportCount issues.newIssues, "Issue groups"), ("Unacknowledged", reportCount issues.openIssues, reportCount issues.criticalOpen <> " critical"), ("Acknowledged", reportCount issues.acknowledged, "Not archived"), ("Archived", reportCount issues.archivedInPeriod, "During this period")]
-                when (null issues.priorities) $ reportNote "No unacknowledged issues at generation time."
-                forM_ (reportRows 5 issues.priorities) $ \i ->
-                  reportItem
-                    (d.projectUrl <> "/issues/" <> i.id)
-                    (truncateText 180 $ stripSummaryBadges i.title)
-                    (T.intercalate " · " $ i.severity : maybeToList i.service)
-                    [("Category", T.replace "_" " " i.issueType, ""), ("Affected requests", reportCount i.affectedRequests, "Recorded issue total")]
-                when (issues.openIssues > fromIntegral (length $ reportRows 5 issues.priorities)) $ reportMore (d.projectUrl <> "/issues") (fromIntegral issues.openIssues - length (reportRows 5 issues.priorities)) "unacknowledged issues"
-            reportSection "Monitors" ("Status at " <> reportTime snapshot.generatedAt <> " UTC.") $ case snapshot.monitors of
-              Report.Unavailable -> reportNote "Monitor status could not be loaded."
-              Report.Available monitors -> do
-                reportMetrics [("Alerting", show monitors.alerting, show monitors.warning <> " warning"), ("Normal", show monitors.normal, "Evaluated monitors"), ("Paused", show monitors.paused, "Not evaluating"), ("Not evaluated", show monitors.unevaluated, "No result yet")]
-                when (null monitors.observations) $ reportNote "No monitors configured. Create a monitor to evaluate the signals that matter to your system."
-                forM_ (reportRows 4 monitors.observations) $ \m ->
-                  reportItem
-                    (d.projectUrl <> "/monitors/" <> m.id <> "/overview")
-                    (truncateText 120 m.title)
-                    m.status
-                    [("Last value", maybe "Not evaluated" reportDecimal m.value, maybe "No evaluation recorded" (\t -> "Evaluated " <> reportTime t <> " UTC") m.lastEvaluated)]
-                when (not d.fullReport && length monitors.observations > 4) $ reportMore (d.projectUrl <> "/monitors") (length monitors.observations - 4) "monitors"
-        forM_ historicalEvidence $ \historical ->
-          unless (V.null historical.anomalies)
-            $ reportSection "Recorded issues" "Issues retained in this historical report."
-            $ do
-              forM_ (reportRows 10 $ V.toList historical.anomalies) $ \i -> reportItem (d.projectUrl <> "/issues/" <> i.id.toText) (truncateText 180 $ stripSummaryBadges i.title) "" []
-              reportViewAll (d.projectUrl <> "/issues") "issues"
-        case d.evidence of
-          SystemEvidence snapshot -> do
-            reportSection "HTTP endpoint performance" "Highest-volume server HTTP requests, with the preceding period for comparison."
-              $ reportObserved snapshot.performance
-              $ \rows -> do
-                when (null rows) $ reportNote "No HTTP server spans recorded in this period."
-                forM_ (reportRows 5 rows) $ \comparison -> do
-                  let e = comparison.current
-                  reportItem
-                    (queryUrl $ serviceFilter e.service e.environment <> endpointHostFilter e.host <> " and kind == \"server\" and attributes.http.request.method == " <> kqlQuoted e.method <> " and attributes.url.path == " <> kqlQuoted e.path)
-                    (e.method <> " " <> truncateText 140 e.path)
-                    (T.intercalate " · " $ catMaybes [e.service, e.environment, Just e.host])
-                    [("Requests", reportCount e.requests, "Server spans"), ("Avg duration", maybe "Not measured" reportMs e.averageMs, reportChange e.averageMs (comparison.previous >>= (.averageMs)))]
-                when (not d.fullReport && length rows > 5) $ reportMore d.reportUrl (length rows - 5) "endpoints"
-            reportSection "Slow database operations" "Queries averaging more than 500 ms, ordered by average duration."
-              $ reportObserved snapshot.databases
-              $ \rows -> do
-                when (null rows) $ reportNote "No database queries above this threshold were recorded."
-                forM_ (reportRows 4 rows) $ \q ->
-                  reportItem
-                    (queryUrl $ servicePredicate q.service <> if T.length q.statement <= 512 then " and attributes.db.query.text == " <> kqlQuoted q.statement else " and duration > 500000000")
-                    (truncateText 180 q.statement)
-                    (fromMaybe "Unnamed service" q.service)
-                    [("Avg duration", reportMs q.averageMs, ""), ("Operations", reportCount q.operations, "Recorded spans")]
-                when (not d.fullReport && length rows > 4) $ reportMore d.reportUrl (length rows - 4) "slow queries"
-            reportSection "Workload composition" "Recorded span kinds separate incoming requests, dependencies, and background work."
-              $ reportObserved snapshot.workloads
-              $ \rows -> do
-                when (null rows) $ reportNote "No spans recorded in this period."
-                reportMetrics [("Logs", reportCount $ sum $ map (.logs) currentServices, "Log records"), ("Spans", reportCount $ events - sum (map (.logs) currentServices), "Traced operations")]
-                unless (null rows) $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0", style_ "font-size:13px;table-layout:fixed;text-align:left;"] do
-                  thead_ $ tr_ $ forM_ (["Kind", "Events", "Avg duration"] :: [Text]) $ \label -> th_ [scope_ "col", style_ "padding:8px 0;"] $ toHtml label
-                  tbody_ $ forM_ (reportRows 10 rows) $ \w -> tr_ do
-                    td_ [style_ "padding:6px 0;"] $ a_ [target_ "_top", href_ $ queryUrl $ "kind == " <> kqlQuoted w.kind] $ toHtml $ T.toTitle w.kind
-                    td_ [style_ "padding:6px 0;"] $ toHtml $ reportCount w.events
-                    td_ [style_ "padding:6px 0;"] $ toHtml $ maybe "—" reportMs w.averageMs
-                reportViewAll (d.projectUrl <> "/log_explorer" <> windowQuery) "span kinds"
-          HistoricalEvidence historical -> do
-            reportSection "HTTP endpoint performance" "Highest-volume HTTP operations. Latency is the average recorded span duration." do
-              when (V.null historical.performance) $ reportNote "No HTTP endpoint spans recorded in this period."
-              forM_ (reportRows 8 $ V.toList historical.performance) $ \(host, method, path, durationNs, change, count, _) ->
-                reportItem
-                  (d.projectUrl <> "/log_explorer" <> windowQuery)
-                  (method <> " " <> truncateText 140 path)
-                  host
-                  [("Operations", reportCount count, "HTTP spans"), ("Avg duration", reportMs (fromIntegral durationNs / 1000000), ""), ("Change", reportDecimal change <> "%", "Versus previous period")]
-              reportViewAll (queryUrl "attributes.http.request.method != null") "endpoints"
-            reportSection "Slow database operations" "Queries averaging more than 500 ms, ordered by average duration." do
-              when (V.null historical.slowQueries) $ reportNote "No database queries above this threshold were recorded."
-              forM_ (reportRows 4 $ V.toList historical.slowQueries) $ \(statement, durationNs, count) ->
-                reportItem
-                  (d.projectUrl <> "/log_explorer" <> windowQuery)
-                  (truncateText 180 statement)
-                  ""
-                  [("Avg duration", reportMs (fromIntegral durationNs / 1000000), ""), ("Operations", reportCount $ fromIntegral count, "Recorded spans")]
-              reportViewAll (queryUrl "attributes.db.query.text != null and duration > 500000000") "slow queries"
-        forM_ systemSnapshot $ \snapshot -> when (snapshot.topPatterns == Report.Unavailable) $ reportNotice "Log patterns unavailable" "This section could not be loaded for the report."
-        unless (null topPatterns)
-          $ reportSection "Log patterns" "Most frequent stored patterns. Counts are lifetime totals, not limited to this reporting period."
-          $ do
-            forM_ (reportRows 5 topPatterns) $ \(patternText, count, source) -> reportItem (d.projectUrl <> "/log_explorer" <> windowQuery) (truncateText 180 $ stripSummaryBadges patternText) source [("Occurrences", reportCount count, "Lifetime total")]
-            reportViewAll (d.projectUrl <> "/log_explorer" <> windowQuery) "log patterns"
-        reportSection "Activity trends" "Charts are supplemental; the measured totals are above." do
-          forM_ systemSnapshot $ \snapshot -> when (snapshot.trends == Just Report.Unavailable) $ reportNotice "Activity trends unavailable" "This section could not be loaded for the report."
-          whenJust d.eventsChartUrl $ chartBlock "Telemetry events"
-          whenJust d.errorsChartUrl $ chartBlock "Error events"
-        reportSection "Coverage and next steps" "This report describes the telemetry Monoscope received." do
-          reportNote "Missing telemetry does not mean a service was healthy. Server request metrics require server spans; infrastructure usage requires metrics and a reported capacity."
-          p_ [style_ "font-size:14px;line-height:1.7;"] do
-            a_ [target_ "_top", href_ d.reportUrl] "Open full report"
-            " · "
-            a_ [target_ "_top", href_ $ d.projectUrl <> "/reports"] "Manage report notifications"
-            " · "
-            a_ [target_ "_top", href_ "https://monoscopehq.com/docs"] "Instrumentation guide"
+-- | A report routine's result: headline, then each highlight with its chart and a way in.
+-- Highlights are (title, detail, chart PNG, absolute link).
+routineReportEmail :: Text -> Text -> Text -> Text -> [(Text, Text, Maybe Text, Maybe Text)] -> (Text, Html ())
+routineReportEmail projectTitle period headline reportUrl highlights =
+  ( headline <> " · " <> projectTitle
+  , emailBody do
+      div_ [style_ "display:none;max-height:0;overflow:hidden;mso-hide:all;"] $ toHtml $ T.intercalate " · " $ map (\(title, _, _, _) -> title) highlights
+      p_ [class_ "sub", style_ "margin:0 0 8px;"] $ toHtml $ projectTitle <> " · " <> period
+      h1_ [style_ "margin:0 0 8px;"] $ toHtml headline
+      forM_ highlights \(title, detail, chart, link) -> do
+        h2_ [style_ "font-size:18px;margin:32px 0 8px;"] $ toHtml title
+        unless (T.null detail) $ p_ $ toHtml detail
+        whenJust chart \url -> themedImages (pngAppearance "light" url) (pngAppearance "dark" url) [class_ "report-chart", alt_ $ title <> " chart", width_ "560", style_ "width:100%;max-width:560px;box-sizing:border-box;height:auto;display:block;margin:12px 0 0;border:1px solid #dee2e7;border-radius:8px;"]
+        whenJust link \url -> p_ [style_ "margin:10px 0 0;font-size:14px;"] $ a_ [href_ url, target_ "_blank"] "Explore in Monoscope \8594"
+      emailButton reportUrl "Open the report"
+      p_ [class_ "sub"] "This report is an AI routine. Change its schedule, delivery or instructions from the report page."
   )
-  where
-    daily = d.reportType == Projects.RTDaily
-    reportTitle = if daily then "Daily system report" else "Weekly system report"
-    reportRows :: Int -> [a] -> [a]
-    reportRows n rows = if d.fullReport then rows else take (min 10 n) rows
-    reportViewAll :: Text -> Text -> Html ()
-    reportViewAll url label = p_ [style_ "margin:10px 0 0;font-size:14px;"] $ a_ [target_ "_top", href_ url] $ toHtml $ "View all " <> label
-    systemSnapshot = case d.evidence of SystemEvidence snapshot -> Just snapshot; HistoricalEvidence _ -> Nothing
-    historicalEvidence = case d.evidence of HistoricalEvidence historical -> Just historical; SystemEvidence _ -> Nothing
-    freeTierExceeded = any ((== Just True) . (.ingestionCapped)) systemSnapshot
-    topPatterns = foldMap (fold . (.topPatterns)) systemSnapshot
-    currentServices = maybe [] (mapMaybe (.current) . (.services)) systemSnapshot
-    events = case d.evidence of SystemEvidence _ -> sum $ map (.events) currentServices; HistoricalEvidence historical -> fromIntegral historical.totalEvents
-    errors = case d.evidence of SystemEvidence _ -> sum $ map (.errorEvents) currentServices; HistoricalEvidence historical -> fromIntegral historical.totalErrors
-    requests = sum $ map (.serverRequests) currentServices
-    serviceCount = length $ ordNub $ mapMaybe (.service) currentServices
-    windowQuery = "?from=" <> toUriStr d.fromTime <> "&to=" <> toUriStr d.toTime
-    queryUrl query = if T.length query > 2000 then d.reportUrl else d.projectUrl <> "/log_explorer" <> windowQuery <> "&query=" <> toUriStr query
-    serviceUrl service environment = queryUrl $ serviceFilter service environment
-    servicePredicate = maybe "(resource.service.name == null or resource.service.name == \"\")" (\name -> "resource.service.name == " <> kqlQuoted name)
-    serviceFilter service environment = servicePredicate service <> " and " <> maybe "(resource.deployment.environment.name == null or resource.deployment.environment.name == \"\")" (\e -> "resource.deployment.environment.name == " <> kqlQuoted e) environment
-    endpointHostFilter host = " and (attributes.server.address == " <> kqlQuoted host <> " or (attributes.server.address == null and " <> servicePredicate (if T.null host then Nothing else Just host) <> "))"
 
 
-reportFinding :: Text -> Text -> Html ()
-reportFinding url label = p_ [class_ "report-attention", style_ "font-size:14px;font-weight:600;line-height:1.5;margin:6px 0;color:#b42318;"] $ a_ [target_ "_top", href_ url, style_ "color:#b42318;text-decoration:underline;"] $ toHtml label
-
-
-reportObserved :: Report.ReportSection a -> (a -> Html ()) -> Html ()
-reportObserved section render = case section of
-  Report.Available a -> render a
-  Report.Unavailable -> reportNote "This section could not be loaded for the report. Open the linked workspace to investigate."
-
-
-reportSection :: Text -> Text -> Html () -> Html ()
-reportSection title detail content = do
-  h2_ [style_ "font-size:18px;font-weight:600;line-height:1.35;margin:28px 0 6px;"] $ toHtml title
-  reportNote detail
-  content
-
-
-reportNote :: Text -> Html ()
-reportNote = p_ [class_ "report-muted", style_ "font-size:13px;line-height:1.5;margin:0 0 12px;overflow-wrap:anywhere;"] . toHtml
-
-
-reportNotice :: Text -> Text -> Html ()
-reportNotice title detail = table_ [width_ "100%", role_ "presentation", cellpadding_ "0", cellspacing_ "0", class_ "report-notice", style_ "background:#f6f8fa;border:1px solid #dee2e7;margin:16px 0;"] $ tr_ $ td_ [style_ "padding:12px 16px;"] do
-  p_ [style_ "font-size:14px;font-weight:600;margin:0 0 4px;"] $ toHtml title
-  reportNote detail
-
-
-reportMetrics :: [(Text, Text, Text)] -> Html ()
-reportMetrics metrics = unless (null metrics)
-  $ table_ [width_ "100%", role_ "presentation", cellpadding_ "0", cellspacing_ "0", style_ "table-layout:fixed;"]
-  $ tr_
-  $ forM_ metrics
-  $ \(label, value, context) -> td_ [class_ "report-metric", style_ "vertical-align:top;padding:8px 8px 8px 0;font-size:12px;overflow-wrap:anywhere;"] do
-    span_ $ toHtml label
-    strong_ [style_ "display:block;font-size:16px;"] $ toHtml value
-    unless (T.null context) $ span_ $ toHtml context
-
-
-reportItem :: Text -> Text -> Text -> [(Text, Text, Text)] -> Html ()
-reportItem url title detail metrics = table_ [width_ "100%", role_ "presentation", cellpadding_ "0", cellspacing_ "0", class_ "report-item", style_ "border-bottom:1px solid #dee2e7;"] $ tr_ $ td_ [style_ "padding:12px 0;"] do
-  p_ [style_ "font-size:14px;font-weight:600;line-height:1.5;margin:0 0 3px;overflow-wrap:anywhere;word-break:break-word;"] $ a_ [target_ "_top", href_ url] $ toHtml $ truncateText 240 title
-  unless (T.null detail) $ reportNote $ truncateText 320 detail
-  reportMetrics metrics
-
-
-reportMore :: Text -> Int -> Text -> Html ()
-reportMore url remaining noun = p_ [style_ "font-size:13px;margin:12px 0;"] $ a_ [target_ "_top", href_ url] $ toHtml $ "View " <> show remaining <> " more " <> noun
-
-
-reportCount :: Int64 -> Text
-reportCount = formatWithCommas . fromIntegral
-
-
-reportDecimal :: Double -> Text
-reportDecimal = showFFloat' 1
-
-
-reportMs :: Double -> Text
-reportMs value = reportDecimal value <> " ms"
-
-
-reportRatio :: Int64 -> Int64 -> Text
-reportRatio errorCount eventCount = if eventCount == 0 then "Not measured" else showFFloat' 2 (100 * fromIntegral errorCount / fromIntegral eventCount) <> "%"
-
-
-reportChange :: Maybe Double -> Maybe Double -> Text
-reportChange current previous = case (current, previous) of
-  (_, Nothing) -> "No previous data"
-  (Nothing, _) -> "No current data"
-  (Just _, Just 0) -> "No positive baseline"
-  (Just c, Just p) -> let change = 100 * (c - p) / p in (if change > 0 then "+" else "") <> reportDecimal change <> "% vs previous"
-
-
-reportTime :: UTCTime -> Text
-reportTime = fmtDate "%d %b %H:%M"
+sampleRoutineReport :: (Text, Html ())
+sampleRoutineReport =
+  routineReportEmail
+    "Acme"
+    "9 – 16 Nov 2026"
+    "Checkout errors rose 4.8x after Thursday's deploy"
+    "https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/ai/routines"
+    [ ("Checkout 5xx up 4.8x", "Errors on POST /checkout rose from 412 to 1,980 against last week, all after Thursday 14:05 when payments v2.3.1 rolled out.", Nothing, Just "https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/issues")
+    , ("Search p95 recovered", "p95 on GET /search fell from 1.8 s to 420 ms once the index rebuild finished on Tuesday.", Nothing, Nothing)
+    ]
 
 
 chartBlock :: Text -> Text -> Html ()
@@ -959,8 +671,12 @@ chartBlock label url = do
   p_ [style_ "margin: 20px 0 8px; font-size: 14px; font-weight: 600; color: #57606a;"] $ toHtml label
   themedImages (appearance "light") (appearance "dark") [class_ "report-chart", alt_ $ label <> " chart", width_ "600", style_ "width:100%;max-width:600px;box-sizing:border-box;height:auto;display:block;border:1px solid #dee2e7; border-radius: 8px;"]
   where
-    -- PNG responses are immutable in the CDN; a renderer revision needs fresh URLs.
-    appearance mode = url <> (if "?" `T.isInfixOf` url then "&" else "?") <> "appearance=" <> mode <> "&render=2"
+    appearance mode = pngAppearance mode url
+
+
+-- PNG responses are immutable in the CDN; a renderer revision needs fresh URLs.
+pngAppearance :: Text -> Text -> Text
+pngAppearance mode url = url <> (if "?" `T.isInfixOf` url then "&" else "?") <> "appearance=" <> mode <> "&render=2"
 
 
 -- Separate wrappers keep Outlook's inline fallback and dark-mode CSS predictable.
@@ -1052,77 +768,6 @@ sampleAnomalyEndpoint =
 
 sampleIssueAssigned :: (Text, Html ())
 sampleIssueAssigned = issueAssignedEmail "Jane Doe" "My API Project" "TypeError: Cannot read property 'map' of undefined" "https://app.monoscope.tech/p/sample-id/issues/by_hash/abc123" "TypeError" "Cannot read property 'map' of undefined"
-
-
-sampleWeeklyReport :: Maybe Text -> Maybe Text -> (Text, Html ())
-sampleWeeklyReport eventsChart errorsChart =
-  weeklyReportEmail
-    WeeklyReportData
-      { reportType = Projects.RTWeekly
-      , userName = "Jane Doe"
-      , projectName = "My API Project"
-      , reportUrl = "https://app.monoscope.tech/p/sample-id/reports/sample-report"
-      , projectUrl = "https://app.monoscope.tech/p/sample-id"
-      , startDate = "2025-01-01"
-      , endDate = "2025-01-08"
-      , eventsChartUrl = eventsChart
-      , errorsChartUrl = errorsChart
-      , evidence = SystemEvidence sampleSystemSnapshot
-      , fullReport = False
-      , timeZone = "UTC"
-      , fromTime = "2025-01-01T00:00:00Z"
-      , toTime = "2025-01-08T00:00:00Z"
-      }
-
-
--- Synthetic preview evidence; values deliberately exercise different signal families.
-sampleSystemSnapshot :: Report.ReportSnapshot
-sampleSystemSnapshot =
-  Report.ReportSnapshot
-    { services =
-        Report.compareServices
-          [Report.ServiceStats (Just "checkout-api") (Just "production") 100000 280 20000 80000 220 1000 (Just 245), Report.ServiceStats (Just "payment-worker") (Just "production") 20000 50 18000 0 0 500 Nothing, Report.ServiceStats (Just "storefront") (Just "production") 5000 12 0 0 0 700 Nothing]
-          [Report.ServiceStats (Just "checkout-api") (Just "production") 85000 320 17000 68000 250 1000 (Just 220), Report.ServiceStats (Just "payment-worker") (Just "production") 18000 30 16000 0 0 300 Nothing]
-    , infrastructure =
-        Report.Available
-          $ Report.InfrastructureStats
-            3
-            12
-            2
-            [Report.InfrastructureResource "worker-node-2" ScopeHost Nothing (Just "production-eu") Nothing (Just 0.87) (Just 0.92) (Just 0.62) Nothing Nothing, Report.InfrastructureResource "payments-7fdc9" ScopeContainer (Just "worker-node-2") (Just "production-eu") (Just "payments") (Just 0.72) (Just 0.84) Nothing (Just False) (Just 4), Report.InfrastructureResource "api-6bcfd" ScopeContainer (Just "worker-node-1") (Just "production-eu") (Just "api") (Just 0.24) (Just 0.48) Nothing (Just True) (Just 0)]
-            1
-            (addUTCTime (-900) end)
-            end
-    , monitors =
-        Report.Available
-          $ Report.MonitorStats
-            0
-            1
-            1
-            0
-            1
-            [Report.MonitorObservation "sample-latency" "Checkout latency" "Alerting" (Just 842) (Just end), Report.MonitorObservation "sample-errors" "Payment error rate" "Warning" (Just 2.4) (Just end), Report.MonitorObservation "sample-queue" "Queue depth" "Not evaluated" Nothing Nothing]
-    , issues =
-        Report.Available
-          $ Report.IssueStats
-            7
-            12
-            2
-            8
-            4
-            [Report.IssueObservation "sample-issue" "Payment authorization failed: upstream timeout" (Just "checkout-api") "critical" "runtime_exception" 220, Report.IssueObservation "sample-db" "Database connection pool exhausted" (Just "payment-worker") "warning" "runtime_exception" 50]
-    , generatedAt = end
-    , topPatterns = Report.Available [("GET /api/v1/users/<*>", 4500, "URL path"), ("severity_text;badge-error⇒ERROR Failed to connect to database: connection refused at <*>", 1230, "Event summary"), ("Request timeout after <*> ms for endpoint <*>", 890, "Log body")]
-    , performance = Report.Available [Report.EndpointComparison (Report.EndpointStats (Just "checkout-api") (Just "production") "api.example.com" "POST" "/api/v1/orders" (Just 890) 1200) (Just $ Report.EndpointStats (Just "checkout-api") (Just "production") "api.example.com" "POST" "/api/v1/orders" (Just 613) 1238)]
-    , databases = Report.Available [Report.DatabaseStats (Just "checkout-api") "SELECT * FROM users WHERE email = $1" 1250 3400]
-    , workloads = Report.Available [Report.WorkloadStats "server" 80000 (Just 245), Report.WorkloadStats "consumer" 2000 (Just 70), Report.WorkloadStats "client" 5000 (Just 80)]
-    , ingestionCapped = Just False
-    , trends = Nothing
-    , startTime = addUTCTime (-(7 * 86400)) end
-    , endTime = end
-    }
-  where
-    end = UTCTime (fromGregorian 2025 1 8) 0
 
 
 -- =============================================================================

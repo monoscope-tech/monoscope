@@ -44,7 +44,8 @@ import Data.Time (DayOfWeek (Monday), UTCTime (..), addDays, addUTCTime, dayOfWe
 import Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime, nominalDay)
 import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale)
-import Data.Time.LocalTime (utc, utcToZonedTime)
+import Data.Time.Zones qualified as TZ
+import Data.Time.Zones.All qualified as TZ
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple qualified as SimplePG
@@ -97,7 +98,6 @@ import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.RepositorySync qualified as RepositorySync
-import Models.Telemetry.Report qualified as Report
 import Models.Telemetry.ServiceGraph qualified as ServiceGraph
 import Models.Telemetry.Telemetry (SeverityLevel (..), generateSummary, insertSystemLog, mkSystemLog)
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -111,7 +111,6 @@ import OpenTelemetry.Trace (TracerProvider)
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils qualified as Bots
 import Pages.Replay qualified as Replay
-import Pages.Reports qualified as RP
 import Pkg.AI qualified as AI
 import Pkg.AdConversions qualified as AdConversions
 import Pkg.AgentCatalog qualified as Catalog
@@ -290,8 +289,9 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
             (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= show @Text errId.unErrorPatternId, "has_project" AE..= isJust projectM, "has_error" AE..= isJust errM, "has_user" AE..= isJust userM])
     DailyJob -> runDailyJobScheduling authCtx
     HourlyJob scheduledTime hour -> unlessStale scheduledTime (2 * 3600) $ runHourlyJob scheduledTime hour
-    DailyReports pid -> sendReportForProject pid Projects.RTDaily
-    WeeklyReports pid -> sendReportForProject pid Projects.RTWeekly
+    -- Retired: reports are routines. Kept so rows queued before the switch still decode.
+    DailyReports _ -> pass
+    WeeklyReports _ -> pass
     -- Hourly and daily ticks both enqueue this at 00:00; two concurrent runs would read the same
     -- watermark and record (and bill) the window twice, so one run per project at a time.
     ReportUsage pid ->
@@ -417,7 +417,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
                           | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> Jobs.deferOperationReview pid identifier deadline
                           | otherwise -> failRun Issues.FailedResult "Incident investigation was interrupted before completion."
                         Just (Right (Left _)) -> failRun Issues.FailedResult "Incident investigation did not return a report."
-                        Just (Right (Right answer)) -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer answer
+                        Just (Right (Right answer)) -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer pid answer
                     )
                     `withException` \(_ :: SomeException) -> void (Issues.completeRun context $ Issues.FailedResult $ Issues.RunFailure "Incident investigation worker stopped before recording its result." Issues.RunOnly)
                 now <- Time.currentTime
@@ -515,14 +515,14 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
   let conversationType = maybe Issues.CTWeb (.conversationType) conversationM
       deliveryContext = case routine.destination of
         Issues.DestinationSlack -> Just "\nROUTINE DELIVERY\nSend a concise copy of reportable findings to the project's configured Slack channel. Do not send a message when there are no findings.\n"
-        Issues.DestinationConversation -> Nothing
+        (Issues.DestinationConversation; Issues.DestinationEmail) -> Nothing
       config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.ProjectMember routine.requestedBy, AI.invocationMode = AI.DurableRun context}
   outcome <- Timeout.timeout timeoutMicros $ tryAny do
     result <- execute config
     AI.requireAgentAccess config.access routine.projectId
     pure $ case result of
       Left err -> Issues.FailedResult $ Issues.RunFailure err (Issues.ConversationNotice $ "Routine failed: " <> err)
-      Right answer -> (if routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer) then Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer else Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer) $ AI.prepareRunAnswer answer
+      Right answer -> (if routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer) then Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer else Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer) $ AI.prepareRunAnswer routine.projectId answer
   case outcome of
     Just (Left err)
       | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> do
@@ -539,7 +539,38 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
         Just (Right result) -> pure result
       Issues.completeRun context completion >>= \case
         Issues.CompletionRejected -> pass
-        Issues.RunCompleted _ next -> for_ next $ \slot -> enqueueNext slot.id slot.scheduledAt
+        Issues.RunCompleted termination next -> do
+          case (termination, completion, (.templateKey) =<< conversationM) of
+            (Issues.CompletedSucceeded, Issues.CompletedResult _ _ Issues.RunAnswer{evidence = Issues.AgentEvidence answer}, Just templateKey) ->
+              for_ (liftA2 (,) (Issues.reportWindowDays templateKey) (AI.parseReportDigest routine.projectId answer.response)) $ uncurry (deliverReport authCtx routine templateKey)
+            _ -> pass
+          for_ next $ \slot -> enqueueNext slot.id slot.scheduledAt
+
+
+-- | A report run keeps a dated document in its routine (the report history) and, when the
+-- routine delivers by email, mails it to members while the everyone team has email enabled.
+deliverReport :: Config.AuthContext -> Issues.ClaimedRoutine -> Text -> Integer -> AI.ReportDigest -> ATBackgroundCtx ()
+deliverReport authCtx routine templateKey days digest = do
+  let pid = routine.projectId
+      to = routine.claimedAt
+      from = addUTCTime (fromInteger $ negate days * 86400) to
+      tz = fromMaybe TZ.utcTZ $ TZ.tzByName $ encodeUtf8 routine.timezone
+      day fmt = toText . formatTime defaultTimeLocale fmt . TZ.utcToLocalTimeTZ tz
+      period = (if days == 1 then day "%a %-d %b %Y" to else day "%-d %b" from <> " – " <> day "%-d %b %Y" to) <> " · " <> routine.timezone
+      png w = Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid w Nothing (Just $ formatUTCMicros from) (Just $ formatUTCMicros to)
+  charts <- traverse (fmap join . traverse png . (.widget)) digest.highlights
+  let key = Issues.mkArtifactKey $ templateKey <> "-" <> day "%Y-%m-%d" to
+      body = "*" <> period <> "*\n\n" <> AI.digestMarkdown digest charts
+  for_ (rightToMaybe key) \k ->
+    whenLeftM_ (Issues.saveArtifact pid routine.conversationId k (Just digest.headline) body Issues.ArtifactReplace) \_ ->
+      Log.logAttention "Report document was not saved" $ AE.object ["conversation_id" AE..= routine.conversationId, "project_id" AE..= pid]
+  when (routine.destination == Issues.DestinationEmail) $ whenJustM (Projects.activeProjectById pid) \project -> do
+    team <- ProjectMembers.getEveryoneTeam pid
+    when (any (ProjectMembers.isChannelEnabled ProjectMembers.Email) team) do
+      users <- Projects.usersByProjectId pid
+      let reportUrl = hostPath authCtx.env.hostUrl $ urls.aiThreadGet pid routine.conversationId (rightToMaybe key)
+          (subject, html) = ET.routineReportEmail project.title period digest.headline reportUrl [(h.title, h.detail, chart, hostPath authCtx.env.hostUrl <$> h.link) | (h, chart) <- zip digest.highlights charts]
+      forM_ users \user -> sendRenderedEmail (CI.original user.email) subject (ET.renderEmail subject html)
 
 
 -- | Post the daily internal admin digest (usage, new projects, issues, alerts, job health) to Discord.
@@ -1040,16 +1071,8 @@ runDailyJobScheduling authCtx =
               -- `processed_at IS NULL` rows (near-empty steady state).
               sched 24 3600 (\_ -> SafetyNetReprocess p)
 
-        -- Weekly reports scheduled independently of per-project idempotency guard,
-        -- so they aren't skipped when periodic jobs were already scheduled earlier.
-        when (dayOfWeek currentDay == Monday) do
-          weekly :: Int64 <-
-            Hasql.interpScalar
-              [HI.sql|SELECT COUNT(*)::int8 FROM background_jobs
-                   WHERE payload->>'tag' = 'WeeklyReports' AND payload->>'projectId' = #{p.toText}
-                     AND run_at >= date_trunc('day', #{currentTime}::timestamptz)
-                     AND status IN ('queued', 'locked', 'retry')|]
-          when (weekly == 0) $ enqueueJobs authCtx [Jobs.WeeklyReports p]
+        -- Reports are routines now; installing them is idempotent and outside the guard above.
+        whenJustM (Projects.projectById p) $ Issues.provisionReportRoutines >=> traverse_ \routine -> enqueueAIRoutine authCtx routine.id routine.scheduledAt
 
 
 -- | Announce a newly created project to the team Discord channel, once per project member.
@@ -3431,57 +3454,6 @@ ensureDailyJobScheduled appCtx = withResource appCtx.jobsPool \conn -> do
              RETURNING 1
            ) SELECT COUNT(*)::bigint FROM ins|]
   when (inserted > 0) $ putTextLn "Scheduled DailyJob for today"
-
-
-sendReportForProject :: Projects.ProjectId -> Projects.ReportType -> ATBackgroundCtx ()
-sendReportForProject pid rType = do
-  Log.logInfo "Generating report for project" pid
-  ctx <- ask @Config.AuthContext
-  users <- Projects.usersByProjectId pid
-  currentTime <- Time.currentTime
-  let startTime = addUTCTime (negate $ case rType of Projects.RTWeekly -> 7 * 86400; Projects.RTDaily -> 86400) currentTime
-  whenJustM (Projects.activeProjectById pid) \pr -> do
-    systemSnapshot <- RP.collectSystemReport pid startTime currentTime
-    let (totalEvents, totalErrors, _, _) = RP.snapshotTotals systemSnapshot
-        stats = mapMaybe (\s -> s.current <&> \r -> (fromMaybe "Unnamed service" r.service, fromIntegral r.errorEvents, fromIntegral r.events)) systemSnapshot.services
-    reportId <- UUIDId <$> UUID.genUUID
-    let report =
-          Issues.Report
-            { id = reportId
-            , reportJson = RP.buildReportJson' systemSnapshot
-            , createdAt = utcToZonedTime utc currentTime
-            , updatedAt = utcToZonedTime utc currentTime
-            , projectId = pid
-            , startTime = startTime
-            , endTime = currentTime
-            , reportType = rType
-            }
-    res <- Issues.addReport report
-    Log.logInfo "Completed report generation for" pid
-    when (case rType of Projects.RTDaily -> pr.dailyNotif; Projects.RTWeekly -> pr.weeklyNotif) do
-      Log.logInfo "Sending report notifications for" pid
-      let stmTxt = formatUTCMicros startTime
-          currentTimeTxt = formatUTCMicros currentTime
-          reportUrl = hostPath ctx.env.hostUrl $ urls.reportsSingleGet pid report.id
-          png w = Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid w Nothing (Just stmTxt) (Just currentTimeTxt)
-      allQ <- png RP.eventsWidget
-      errQ <- png RP.errorsWidget
-      let alert = ReportAlert rType stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
-
-      teamM <- ProjectMembers.getEveryoneTeam pid
-      broadcastToEveryone teamM alert pid pr.title (projectUrl ctx pid)
-      when (rType == Projects.RTWeekly && any (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM)
-        $ forM_ users \user -> do
-          (_, subj, rendered) <-
-            RP.renderSystemEmail
-              rType
-              (urls.reportsSingleGet pid report.id)
-              pr
-              user.firstName
-              False
-              systemSnapshot
-          sendRenderedEmail (CI.original user.email) subj rendered
-      Log.logInfo "Completed sending report notifications for" pid
 
 
 -- | Process new anomalies raised by the apis.new_anomaly_proc() trigger. Only API

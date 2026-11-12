@@ -69,6 +69,10 @@ module Pkg.AI (
   completeAgenticResponse,
   ensureConversationTitle,
   prepareRunAnswer,
+  ReportDigest (..),
+  ReportHighlight (..),
+  parseReportDigest,
+  digestMarkdown,
   callRoutineLLM,
 ) where
 
@@ -259,7 +263,7 @@ completeAgenticResponse config userQuery model apiKey answer = do
     (SlackInvestigationAccess{}, _) -> pass -- Recorded by the replayable Slack turn.
     (_, Nothing) -> pass
     (_, Just convId) -> do
-      let message = prepareRunAnswer answer
+      let message = prepareRunAnswer config.projectId answer
           persist = Issues.insertChatMessage config.projectId convId Issues.ChatAssistant message.content message.widgets (Just $ AE.toJSON answer.toolCalls)
       case config.invocationMode of
         InteractiveReadOnly -> persist
@@ -302,13 +306,59 @@ ensureConversationTitle config userQuery model apiKey answer = do
   pure $ join title
 
 
-prepareRunAnswer :: AgenticChatResult -> Issues.RunAnswer
-prepareRunAnswer answer = Issues.RunAnswer{content = msg, widgets = AE.toJSON <$> widgets, report, evidence = Issues.AgentEvidence answer}
+prepareRunAnswer :: Projects.ProjectId -> AgenticChatResult -> Issues.RunAnswer
+prepareRunAnswer pid answer = case parseReportDigest pid answer.response of
+  Just digest -> let md = digestMarkdown digest [] in Issues.RunAnswer{content = md, widgets = AE.toJSON <$> guarded (not . null) (mapMaybe (.widget) digest.highlights), report = md, evidence = Issues.AgentEvidence answer}
+  Nothing -> Issues.RunAnswer{content = msg, widgets = AE.toJSON <$> widgets, report, evidence = Issues.AgentEvidence answer}
   where
     parsed = parseAgenticResponse answer
     widgets = guarded (not . null) . take 10 . responseWidgets =<< rightToMaybe parsed
     report = fromMaybe answer.response $ (.explanation) =<< rightToMaybe parsed
     msg = fromMaybe (bool answer.response "Here are the requested visualizations:" $ isJust widgets) (nonEmptyT . (.explanation) =<< rightToMaybe parsed)
+
+
+-- | A report routine's answer: a headline, then at most five highlights, each with the chart that
+-- makes its point. One malformed highlight, chart query or link drops alone.
+data ReportDigest = ReportDigest {headline :: Text, highlights :: [ReportHighlight]}
+  deriving stock (Show)
+
+
+data ReportHighlight = ReportHighlight {title :: Text, detail :: Text, widget :: Maybe Widget.Widget, link :: Maybe Text}
+  deriving stock (Show)
+
+
+-- | Charts must parse as KQL; links must stay inside the project.
+--
+-- >>> import Models.Projects.Projects qualified as Projects
+-- >>> let raw = "{\"headline\":\"Checkout errors up 4.8x\",\"highlights\":[{\"title\":\"Checkout 5xx\",\"detail\":\"412 to 1,980.\",\"widget\":{\"type\":\"stat\",\"query\":\"summarize count()\"},\"link\":\"/p/00000000-0000-0000-0000-000000000000/issues\"},{\"title\":\"Bad chart\",\"detail\":\"d\",\"widget\":{\"type\":\"stat\",\"query\":\"where >\"},\"link\":\"javascript:alert(1)\"},{\"detail\":\"untitled\"}]}"
+-- >>> fmap (\d -> (d.headline, map (\h -> (h.title, isJust h.widget, h.link)) d.highlights)) (parseReportDigest Projects.demoProjectId raw)
+-- Just ("Checkout errors up 4.8x",[("Checkout 5xx",True,Just "/p/00000000-0000-0000-0000-000000000000/issues"),("Bad chart",False,Nothing)])
+-- >>> isNothing $ parseReportDigest Projects.demoProjectId "{\"explanation\":\"plain\"}"
+-- True
+parseReportDigest :: Projects.ProjectId -> Text -> Maybe ReportDigest
+parseReportDigest pid response = do
+  val <- AE.decodeStrict' @AE.Value $ encodeUtf8 $ fixTrailingCommas $ ELLM.stripCodeBlock response
+  headline <- nonEmptyT $ T.strip <$> val ^? key "headline" . _String
+  let highlight h = do
+        title <- nonEmptyT $ T.strip <$> h ^? key "title" . _String
+        pure
+          ReportHighlight
+            { title
+            , detail = foldMap T.strip $ h ^? key "detail" . _String
+            , widget = mfilter (all (isRight . parseQueryToAST) . (.query)) $ Widget.modelWidget <$> (parseMaybe AE.parseJSON =<< h ^? key "widget")
+            , link = mfilter (("/p/" <> pid.toText <> "/") `T.isPrefixOf`) $ h ^? key "link" . _String
+            }
+  pure $ ReportDigest headline $ take 5 $ mapMaybe highlight $ val ^.. key "highlights" . values
+
+
+-- | The digest as markdown, each highlight followed by its chart image when one is given.
+digestMarkdown :: ReportDigest -> [Maybe Text] -> Text
+digestMarkdown digest images =
+  T.intercalate "\n\n"
+    $ ("## " <> digest.headline)
+    : [ T.intercalate "\n\n" $ ("### " <> h.title) : filter (not . T.null) [h.detail, foldMap (\url -> "![" <> h.title <> "](" <> url <> ")") image, foldMap (\l -> "[Explore in Monoscope](" <> l <> ")") h.link]
+      | (h, image) <- zip digest.highlights (images <> repeat Nothing)
+      ]
 
 
 -- | Fix trailing commas in JSON (common LLM output issue)

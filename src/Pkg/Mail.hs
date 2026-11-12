@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, activityReply, withOwner, Card, card, logPatternCard, rateChangeCard, cardMessages, uptimeMessages, cronMessages, recoveredMessages, uptimeName, cronName, RateChange (..), slackNewEndpointsAlert, slackReportAlert, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization, arr, mrkdwn, plainTxt, slackEscape, slackSection, slackHeader, slackContext, slackImage, dcGallery, slackActions) where
+module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, activityReply, withOwner, Card, card, logPatternCard, rateChangeCard, cardMessages, uptimeMessages, cronMessages, recoveredMessages, uptimeName, cronName, RateChange (..), slackNewEndpointsAlert, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, addConvertKitUser, addConvertKitUserOrganization, arr, mrkdwn, plainTxt, slackEscape, slackSection, slackHeader, slackContext, slackImage, dcGallery, slackActions) where
 
 import Control.Lens (Traversal', ix, (%~), (.~), (^..), (^?))
 import Data.Aeson qualified as AE
@@ -54,17 +54,6 @@ data NotificationAlerts
   = EndpointAlert {project :: Text, endpoints :: V.Vector EndpointAlertRow, endpointHash :: Text}
   | RuntimeErrorAlert {issueId :: Text, issueTitle :: Text, errorData :: ErrorPatterns.ATError, runtimeAlertType :: RuntimeAlertType, chartUrl :: Maybe Text, occurrenceText :: Maybe Text, firstSeenText :: Maybe Text, ongoingFor :: Maybe Text}
   | ShapeAlert
-  | ReportAlert
-      { reportType :: Projects.ReportType
-      , startTime :: Text
-      , endTime :: Text
-      , totalErrors :: Int
-      , totalEvents :: Int
-      , breakDown :: V.Vector (Text, Int, Int)
-      , reportUrl :: Text
-      , allChartUrl :: Maybe Text
-      , errorChartUrl :: Maybe Text
-      }
   | MonitorsAlert
       { monitorTitle :: Text
       , monitorUrl :: Text
@@ -127,7 +116,6 @@ sendDiscordAlert replyToMsgIdM alert pid pTitle channelIdM' = do
           mkPayload = \case
             RuntimeErrorAlert{..} -> Just $ discordErrorAlert runtimeAlertType errorData pTitle projectUrl (byHash errorData.hash) chartUrl occurrenceText firstSeenText ongoingFor
             EndpointAlert{..} -> Just $ discordNewEndpointAlert project endpoints (byHash endpointHash) projectUrl
-            ReportAlert{..} -> Just $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ discordMonitorAlert monitorTitle monitorUrl chartUrl
             MonitorsRecoveryAlert{..} -> Just $ AE.object ["text" AE..= ("✅ *Alert resolved for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")]
             LogPatternAlert lp -> Just $ mkDiscordLogPatternPayload lp pTitle
@@ -158,7 +146,6 @@ sendSlackAlert threadTsM alert pid pTitle channelM = do
             fmap AE.toJSON . \case
               RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData pTitle projectUrl (byHash errorData.hash) chartUrl occurrenceText firstSeenText ongoingFor
               EndpointAlert{..} -> Just $ slackNewEndpointsAlert project endpoints (byHash endpointHash) projectUrl
-              ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
               MonitorsAlert{..} -> Just $ slackMonitorAlert sAlerting monitorTitle monitorUrl chartUrl
               MonitorsRecoveryAlert{..} -> Just $ slackMonitorAlert sRecovered monitorTitle monitorUrl Nothing
               LogPatternAlert lp -> Just $ card $ logPatternCard lp pTitle
@@ -188,22 +175,6 @@ sendWhatsAppAlert alert pid pTitle tos = do
     EndpointAlert{..} ->
       sendAlert appCtx.config.whatsappEndpointTemplate
         $ AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= T.intercalate "." ((\x -> "`" <> x.label <> "`") <$> V.toList endpoints), "3" AE..= (pid.toText <> "/issues/by_hash/" <> endpointHash)]
-    ReportAlert{..} -> do
-      let template = appCtx.config.whatsappAllReportTemplate
-          templateErr = appCtx.config.whatsappErrorReportTemplate
-          urlVar = fromMaybe "" $ viaNonEmpty last $ T.splitOn "/p/" reportUrl
-          cUrl = fromMaybe "" $ viaNonEmpty last . T.splitOn "?" =<< allChartUrl
-          eUrl = fromMaybe "" $ viaNonEmpty last . T.splitOn "?" =<< errorChartUrl
-          contentVars =
-            KEM.fromList
-              [ "1" AE..= display reportType
-              , "2" AE..= ("*" <> pTitle <> "*")
-              , "4" AE..= ("`" <> T.take 10 startTime <> "`")
-              , "5" AE..= ("`" <> T.take 10 endTime <> "`")
-              , "7" AE..= urlVar
-              ]
-      sendAlert template (AE.Object $ contentVars <> KEM.fromList ["3" AE..= ("*" <> show totalEvents <> "*"), "6" AE..= cUrl])
-      sendAlert templateErr (AE.Object $ contentVars <> KEM.fromList ["3" AE..= ("*" <> show totalErrors <> "*"), "6" AE..= eUrl])
     ShapeAlert -> pass
     MonitorsAlert{..} -> sendMonitor appCtx.config.whatsappMonitorTemplate "Alerting" monitorTitle monitorUrl
     MonitorsRecoveryAlert{..} -> sendMonitor appCtx.config.whatsappMonitorTemplate "Recovered" monitorTitle monitorUrl
@@ -573,19 +544,6 @@ recoveredMessages :: Text -> Text -> NominalDiffTime -> (Incidents.SlackPayload,
 recoveredMessages title issueUrl down = cardMessages (statusCard sRecovered title issueUrl){facts = ["back after " <> lasted down]}
 
 
-slackReportAlert :: Projects.ReportType -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Maybe Text -> Maybe Text -> Incidents.SlackPayload
-slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown project url allUrl errUrl =
-  card
-    (statusCard (Status ":white_circle:" (T.toTitle (display reportType) <> " report") Neutral) project url)
-      { facts = ["*" <> prettyPrintCount totalEvents <> "* events", "*" <> prettyPrintCount totalErrors <> "* errors", day startTime <> " – " <> day endTime]
-      , body = catMaybes [slackImage "Events over the period" (Just "Events") <$> allUrl, slackImage "Errors over the period" (Just "Errors") <$> errUrl]
-      , footer = take 5 (V.toList breakDown) <&> \(name, errCount, evCount) -> bold name <> " " <> prettyPrintCount evCount <> " events, " <> prettyPrintCount errCount <> " errors"
-      , actions = [("Open report", url)]
-      }
-  where
-    day t = maybe (T.take 10 t) (fmtDate "%b %-e") (iso8601ParseM @Maybe @UTCTime (toString t))
-
-
 slackErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Incidents.SlackPayload
 slackErrorAlert alertType err project projectUrl targetUrl chartUrlM occTextM firstSeenM ongoingForM =
   card $ errorCard status err projectUrl targetUrl chartUrlM occTextM ["First seen " <> fromMaybe (errFirstSeen err) firstSeenM, "Project " <> slackEscape project]
@@ -718,28 +676,6 @@ newEndpointsExplorerUrl projectUrl endpoints =
     expr = "(" <> clause "attributes.http.route" <> " OR " <> clause "attributes.url.path" <> ")"
 
 
-discordReportAlert :: Projects.ReportType -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Maybe Text -> Maybe Text -> AE.Value
-discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown project url allUrl errUrl =
-  AE.object
-    [ "flags" AE..= 32768
-    , "components"
-        AE..= arr
-          ( [ text ("## 📊 " <> T.toTitle (display reportType) <> " Report for " <> project)
-            , text ("**From:** " <> T.take 10 startTime <> "  **To:** " <> T.take 10 endTime)
-            , text ("Total Events: **" <> show totalEvents <> "**" <> T.replicate 28 "  " <> " Total Errors: **" <> show totalErrors <> "**")
-            ]
-              <> dcGallery [(allUrl, "Total events"), (errUrl, "Total errors")]
-              <> [ text servicesStat
-                 , AE.object ["type" AE..= 1, "components" AE..= arr [AE.object ["type" AE..= 2, "label" AE..= "Open report", "url" AE..= url, "style" AE..= 5]]]
-                 ]
-          )
-    ]
-  where
-    text t = AE.object ["type" AE..= 10, "content" AE..= (t :: Text)]
-    servicesStat =
-      T.intercalate "\n" $ take 10 $ V.toList breakDown <&> \(name, errCount, evCount) -> "* **" <> name <> "**: Total errors-" <> show errCount <> ", Total events-" <> show evCount
-
-
 discordErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
 discordErrorAlert alertType err project projectUrl url chartUrlM occTextM firstSeenM ongoingForM =
   discordEmbedMsg (maybe msgs.discordContent (\d -> "⏳ **Still firing · " <> d <> "**") ongoingForM)
@@ -866,7 +802,6 @@ sendPagerdutyAlertToService integrationKey (LogPatternRateChangeAlert RateChange
       kind = if isError then "Error Log Pattern" else "Log Pattern" :: Text
       sev = if isError || direction == Spike then Notify.PDCritical else Notify.PDWarning
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-rate-" <> T.take 40 pat) (projectTitle <> ": " <> kind <> " " <> T.toTitle (display direction) <> " - " <> T.take 60 pat <> " (" <> show (round changePercent :: Int) <> "%)") sev (AE.object ["pattern" AE..= pat, "direction" AE..= direction, "current_rate" AE..= currentRate, "baseline_mean" AE..= baselineMean, "service" AE..= serviceName, "is_error" AE..= isError]) issueUrl
-sendPagerdutyAlertToService _ ReportAlert{} _ _ = pass
 sendPagerdutyAlertToService _ ShapeAlert _ _ = pass
 
 
@@ -924,11 +859,6 @@ sampleAlertByIssueTypeText issueTypeText title = case issueTypeText of
   "regressed_errors" -> sampleRuntimeAlert RegressedErrors title
   "error_spike" -> sampleRuntimeAlert ErrorSpike title
   _ -> sampleAlert (fromMaybe ApiChange $ parseIssueType issueTypeText) title
-
-
--- | The project title is supplied by the sender, not the alert, so this takes none.
-sampleReport :: NotificationAlerts
-sampleReport = ReportAlert Projects.RTWeekly "2025-01-01" "2025-01-02" 42 1250 (V.singleton ("api", 42, 1250)) "https://example.com" (Just "https://example.com/chart.png") (Just "https://example.com/errors.png")
 
 
 data AlertMessages = AlertMessages {discordContent :: Text, discordColor :: Int}
