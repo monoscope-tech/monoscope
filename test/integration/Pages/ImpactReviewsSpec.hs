@@ -3587,7 +3587,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           tr.trATCtx.env.apiKeyEncryptionSecretKey
           cfg.hostUrl
           reviewPid
-          (def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "Observed service events", Widget.query = Just "resource.service.name == \"test-service\" and timestamp >= \"2024-12-25T00:00:00Z\" AND timestamp <= \"2025-01-01T00:00:00Z\" | summarize events = count() by bin_auto(timestamp)", Widget.pngProfile = Just Widget.PngSlack})
+          (def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "Observed service events", Widget.query = Just "resource.service.name == \"test-service\" and timestamp >= \"2024-12-25T00:00:00Z\" AND timestamp <= \"2025-01-01T00:00:00Z\" | summarize events = count() by bin_auto(timestamp)", Widget.timeFrom = Just "2024-12-25T00:00:00Z", Widget.timeTo = Just "2025-01-01T00:00:00Z", Widget.pngProfile = Just Widget.PngSlack})
           Nothing
           (Just "2024-12-25T00:00:00Z")
           (Just "2025-01-01T00:00:00Z")
