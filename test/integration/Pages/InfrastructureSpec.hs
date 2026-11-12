@@ -177,7 +177,8 @@ spec = do
                        , ("frontend-544d9b6f4-2xk7z", KubeUnknown, Just clusterUid, Just "shop", Just "vps-d6d7e318", Just "frontend")
                        , ("postgres-0", KubeUnknown, Just clusterUid, Just "data", Just "vps-d6d7e318", Just "postgres")
                        ]
-      renderT images `shouldContainAll` ["Images", "SBOM unavailable"]
+      -- No scanner is connected, so the list has no security column; the image drawer says so instead.
+      (T.isInfixOf "Images" &&& T.isInfixOf "SBOM unavailable") (renderT images) `shouldBe` (True, False)
       -- A cluster known only by uid renders a compact label; the full uid stays in the tooltip.
       renderT kubernetes `shouldContainAll` ["Pods", "Clusters", "Namespaces", "Workloads", "Nodes", "CPU limit", "Memory limit", "Showing ", " resources", "cluster-9b1deb4d"]
       renderT hostMap `shouldContainAll` ["Host Map", "Fill by", "Group by", "vps-bare-01", "Provider", "Region", "OS"]

@@ -405,7 +405,6 @@ imagesTable pid window url runtimeM registryM images allImages =
         , col "Runtime" (\image -> span_ [class_ "text-textWeak"] $ toHtml $ T.intercalate ", " $ map Containers.runtimeLabel image.runtimes) & withAttrs [class_ "w-28 max-xl:hidden"]
         , col "CPU cores" (plainCell . fmap (showFFloat' 3) . (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
         , col "Memory" (plainCell . fmap formatBytes . (.memoryBytes)) & withAttrs [class_ "w-24 text-right"]
-        , col "Security" (const $ span_ [class_ "inline-flex whitespace-nowrap rounded-md border border-strokeWeak bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak", term "data-tippy-content" "Connect an SBOM and vulnerability scanner to populate security findings"] "SBOM unavailable") & withAttrs [class_ "w-36 max-2xl:hidden"]
         ]
     , rows = images
     , features =
@@ -427,8 +426,8 @@ imagesTable pid window url runtimeM registryM images allImages =
   where
     table = inventoryTable "images" url
     -- Two tags and a "+N" pill wrap rather than clip: a long tag used to cut the pill to "(".
-    renderTags image = div_ [class_ "flex max-w-72 flex-wrap gap-1"] do
-      forM_ (take 2 image.tags) $ \tag -> span_ [class_ "badge badge-xs badge-ghost shrink-0"] $ toHtml tag
+    renderTags image = div_ [class_ "flex min-w-0 max-w-56 flex-wrap gap-1"] do
+      forM_ (take 2 image.tags) $ \tag -> span_ [class_ "badge badge-xs badge-ghost max-w-full justify-start", data_ "tippy-content" tag] $ span_ [class_ "truncate"] $ toHtml tag
       when (length image.tags > 2) $ span_ [class_ "badge badge-xs badge-outline shrink-0"] $ toHtml $ "+" <> show (length image.tags - 2)
 
 
