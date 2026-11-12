@@ -11,6 +11,7 @@ import Data.ByteString qualified as BS
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
+import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
@@ -324,27 +325,31 @@ routinesGetH pid = do
                   , rows = fromList installedRoutines
                   , features = def
                   }
-        -- Each routine row already shows its last run; only runs that went wrong need their own list.
-        let failedRuns = filter ((`elem` [Issues.RunFailed, Issues.RunTimedOut]) . (.status)) recentRuns
-        unless (null failedRuns) $ section_ [Aria.label_ "Runs that need attention"] do
-          h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Needs attention"
-          toHtml
-            Table
-              { config = def{elemID = "ai-routines-runs", renderAsTable = True, tdClasses = "px-4 py-2.5"}
-              , columns =
-                  [ col
-                      "Routine"
-                      ( \run -> div_ [class_ "min-w-0"] do
-                          a_ [href_ $ runUrl pid run.id, class_ "block truncate text-sm font-medium text-textStrong hover:text-textBrand"] $ toHtml $ fromMaybe "Deleted routine" run.title
-                          runSummary_ "mt-0.5" run
-                      )
-                      & withAttrs [class_ "w-full max-w-0"]
-                  , col "Outcome" (uncurry tonePill_ . runStatus . (.status)) & withAttrs [class_ "w-32"]
-                  , col "Started" (\run -> span_ [class_ "whitespace-nowrap text-xs tabular-nums text-textWeak"] $ localTimeFmt_ "d MMM, HH:mm" run.startedAt) & withAttrs [class_ "w-40 max-sm:hidden"]
-                  ]
-              , rows = fromList failedRuns
-              , features = def{rowLink = Just $ runUrl pid . (.id)}
-              }
+        -- Each routine row already shows its last run. Runs that went wrong, and runs kept after their
+        -- routine was deleted (only reachable from here), get their own lists.
+        let runsSection_ :: Text -> Text -> [Issues.RoutineRun] -> Html ()
+            runsSection_ sectionId heading sectionRuns = unless (null sectionRuns) $ section_ [Aria.label_ heading] do
+              h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] $ toHtml heading
+              toHtml
+                Table
+                  { config = def{elemID = sectionId, renderAsTable = True, tdClasses = "px-4 py-2.5"}
+                  , columns =
+                      [ col
+                          "Routine"
+                          ( \run -> div_ [class_ "min-w-0"] do
+                              a_ [href_ $ runUrl pid run.id, class_ "block truncate text-sm font-medium text-textStrong hover:text-textBrand"] $ toHtml $ fromMaybe "Deleted routine" run.title
+                              runSummary_ "mt-0.5" run
+                          )
+                          & withAttrs [class_ "w-full max-w-0"]
+                      , col "Outcome" (uncurry tonePill_ . runStatus . (.status)) & withAttrs [class_ "w-32"]
+                      , col "Started" (\run -> span_ [class_ "whitespace-nowrap text-xs tabular-nums text-textWeak"] $ localTimeFmt_ "d MMM, HH:mm" run.startedAt) & withAttrs [class_ "w-40 max-sm:hidden"]
+                      ]
+                  , rows = fromList sectionRuns
+                  , features = def{rowLink = Just $ runUrl pid . (.id)}
+                  }
+            (deleted, current) = L.partition (isNothing . (.title)) recentRuns
+        runsSection_ "ai-routines-attention" "Needs attention" $ filter ((`elem` [Issues.RunFailed, Issues.RunTimedOut]) . (.status)) current
+        runsSection_ "ai-routines-deleted" "From deleted routines" deleted
         section_ [Aria.label_ "Routine catalog"] do
           h2_ [class_ "text-sm font-semibold text-textStrong"] "Built-in routines"
           p_ [class_ "mt-1 max-w-3xl text-sm text-textWeak"] "Times use the project’s time zone. New routines act within your role without per-action approval; change that under a routine’s Settings. AI usage is billed at your project rate."
