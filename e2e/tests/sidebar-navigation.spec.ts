@@ -18,7 +18,6 @@ const cases = [
   ['/issues', '/issues'],
   ['/rum', '/dashboards'],
   ['/monitors', '/monitors'],
-  ['/reports', '/reports'],
 ];
 
 // These pages must identify the active section without application JavaScript.

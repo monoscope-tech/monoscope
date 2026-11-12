@@ -280,10 +280,12 @@ routinesGetH pid = do
                 Table
                   { config = def{elemID = "ai-routines-installed", renderAsTable = True, tdClasses = "px-4 py-2.5"}
                   , columns =
-                      [ col "Routine" \r -> a_ [href_ $ threadUrl pid r.conversationId, class_ "block min-w-0 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2"] do
+                      [ col "Routine" (\r -> a_ [href_ $ threadUrl pid r.conversationId, class_ "block min-w-0 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2"] do
                           div_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml r.title
-                          div_ [class_ "text-xs text-textWeak"] $ toHtml $ maybe (foldMap Issues.routineKindLabel r.routineKind) Issues.routineCadence r.routineInterval
-                      , col "Status" (uncurry tonePill_ . routineStatus) & withAttrs [class_ "w-28"]
+                          div_ [class_ "truncate text-xs text-textWeak"] $ toHtml $ maybe (foldMap Issues.routineKindLabel r.routineKind) Issues.routineCadence r.routineInterval)
+                          -- Takes the leftover width and truncates, so the narrow columns stay visible on phones.
+                          & withAttrs [class_ "w-full max-w-0"]
+                      , col "Status" (uncurry tonePill_ . routineStatus) & withAttrs [class_ "w-28 whitespace-nowrap"]
                       , col "Last run" (\r -> span_ [class_ "flex items-center gap-2 whitespace-nowrap text-xs tabular-nums text-textWeak"] case (r.routineLastRunAt, r.routineLastRunStatus) of
                           (Just at, Just status) -> toHtml (formatTime defaultTimeLocale "%e %b, %H:%M" at) >> uncurry tonePill_ (runStatus status)
                           _ -> "Not run yet") & withAttrs [class_ "w-56 max-md:hidden"]
@@ -311,11 +313,12 @@ routinesGetH pid = do
             Table
               { config = def{elemID = "ai-routines-runs", renderAsTable = True, tdClasses = "px-4 py-2.5"}
               , columns =
-                  [ col "Routine" \run -> div_ [class_ "min-w-0"] do
+                  [ col "Routine" (\run -> div_ [class_ "min-w-0"] do
                       a_ [href_ $ runUrl pid run.id, class_ "block truncate text-sm font-medium text-textStrong hover:text-textBrand"] $ toHtml $ fromMaybe "Deleted routine" run.title
-                      whenJust (run.error <|> (summaryLine =<< run.summary)) \line -> p_ [class_ $ "mt-0.5 truncate text-xs " <> maybe "text-textWeak" (const $ runErrorTone run.status) run.error, title_ line] $ toHtml line
+                      whenJust (run.error <|> (summaryLine =<< run.summary)) \line -> p_ [class_ $ "mt-0.5 truncate text-xs " <> maybe "text-textWeak" (const $ runErrorTone run.status) run.error, title_ line] $ toHtml line)
+                      & withAttrs [class_ "w-full max-w-0"]
                   , col "Outcome" (uncurry tonePill_ . runStatus . (.status)) & withAttrs [class_ "w-32"]
-                  , col "Started" (\run -> time_ [datetime_ $ show run.startedAt, class_ "whitespace-nowrap text-xs tabular-nums text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt) & withAttrs [class_ "w-40"]
+                  , col "Started" (\run -> time_ [datetime_ $ show run.startedAt, class_ "whitespace-nowrap text-xs tabular-nums text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt) & withAttrs [class_ "w-40 max-sm:hidden"]
                   ]
               , rows = fromList recentRuns
               , features = def{rowLink = Just $ runUrl pid . (.id)}
@@ -647,7 +650,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                 , maxlength_ "4000"
                 , required_ "required"
                 , autofocus_
-                , placeholder_ $ bool "Ask or delegate a task…" "Ask about these results or give this routine a one-off task…" (isJust routineM)
+                , placeholder_ $ bool "Ask or delegate a task…" "Ask about these results…" (isJust routineM)
                 , Aria.label_ "Message Monoscope AI"
                 , class_ "min-h-9 max-h-40 grow resize-none bg-transparent border-0 px-2 py-2 text-base leading-6 placeholder:text-textWeak sm:text-sm sm:leading-5 focus:outline-none"
                 , [__|on keydown[key=='Enter' and not shiftKey]
@@ -715,7 +718,7 @@ threadPageGetH pid convId docM runM hxTarget = do
         documentsNav_ = nav_ [Aria.label_ "Documents"] do
           h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Documents"
           let (recent, older) = splitAt 3 docs
-              docList = div_ [class_ "-mx-2 grid gap-0.5"] . mapM_ \doc -> navLink_ (docHref doc) do
+              docList = div_ [class_ "-mx-2 grid grid-cols-1 gap-0.5"] . mapM_ \doc -> navLink_ (docHref doc) do
                 faSprite_ "file-lines" "regular" "h-3.5 w-3.5 shrink-0 text-iconBrand"
                 span_ [class_ "min-w-0 grow truncate"] $ toHtml doc.title
                 time_ [datetime_ $ show doc.updatedAt, class_ "shrink-0 text-xs tabular-nums text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%e %b" doc.updatedAt

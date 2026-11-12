@@ -61,32 +61,14 @@ The AI anomaly detection system continuously monitors your:
 
 The system needs approximately 24-48 hours of data to establish baseline patterns.
 
-## Daily and Weekly Reports
+## Weekly and Daily Reports
 
-Monoscope can send automated summary reports to keep your team informed:
+Reports are AI routines under **AI → Routines**. Each run compares the period with the one before and writes a short report: a headline, then at most five highlights, each with the chart that makes its point and a link to explore it.
 
-### Configuration
+- **Weekly report**: on for every project. Runs Mondays at 09:00 in the project's time zone and is emailed to project members while email notifications are enabled.
+- **Daily report**: installed paused. Resume it to get a report each morning, sent only when something changed.
 
-Enable automated reports in your environment:
-
-```env
-ENABLE_DAILY_JOB_SCHEDULING=True
-```
-
-### Report Contents
-
-Reports include:
-- Summary of anomalies detected
-- System health overview
-- Key metrics and trends
-- Notable events and errors
-
-### Setting Up Reports
-
-Configure report preferences in your project settings:
-- Choose daily or weekly frequency
-- Select email recipients
-- Set preferred delivery time
+Every run is saved as a dated document in the routine, so past reports stay readable. Change a report's schedule, delivery or instructions from its routine page; **Run now** produces one immediately.
 
 ## Alert Management
 
@@ -112,7 +94,7 @@ Anomalies can be in different states:
 
 1. **Trust the AI**: Let the anomaly detection learn your patterns
 2. **Review regularly**: Check anomalies daily rather than reacting to each one
-3. **Use reports**: Weekly reports provide better context than individual alerts
+3. **Use reports**: The weekly report gives better context than individual alerts
 4. **Mark false positives**: Help train the system by providing feedback
 
 ### Effective Response
