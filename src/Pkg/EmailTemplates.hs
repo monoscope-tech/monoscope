@@ -52,16 +52,12 @@ module Pkg.EmailTemplates (
 import Data.Default (def)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
-import Data.Text.Display (display)
-import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
-import Data.Vector qualified as V
+import Data.Time (UTCTime (..), addUTCTime)
 import Lucid
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
-import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.ContainerTypes (Scope (..))
 import Relude
-import Utils (fmtDate, formatWithCommas, isoT, kqlQuoted, nonEmptyT, showFFloat', toUriStr, truncateText)
+import Utils (fmtDate, formatWithCommas, isoT, nonEmptyT, truncateText)
 import Web.Links (LogExplorerRoutes' (..), logExplorerLinks)
 
 
@@ -654,15 +650,15 @@ routineReportEmail projectTitle period headline reportUrl highlights =
   )
 
 
-sampleRoutineReport :: (Text, Html ())
-sampleRoutineReport =
+sampleRoutineReport :: Maybe Text -> Maybe Text -> (Text, Html ())
+sampleRoutineReport errorsChart latencyChart =
   routineReportEmail
     "Acme"
     "9 – 16 Nov 2026"
     "Checkout errors rose 4.8x after Thursday's deploy"
     "https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/ai/routines"
-    [ ("Checkout 5xx up 4.8x", "Errors on POST /checkout rose from 412 to 1,980 against last week, all after Thursday 14:05 when payments v2.3.1 rolled out.", Nothing, Just "https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/issues")
-    , ("Search p95 recovered", "p95 on GET /search fell from 1.8 s to 420 ms once the index rebuild finished on Tuesday.", Nothing, Nothing)
+    [ ("Checkout 5xx up 4.8x", "Errors on POST /checkout rose from 412 to 1,980 against last week, all after Thursday 14:05 when payments v2.3.1 rolled out.", errorsChart, Just "https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/issues")
+    , ("Search p95 recovered", "p95 on GET /search fell from 1.8 s to 420 ms once the index rebuild finished on Tuesday.", latencyChart, Nothing)
     ]
 
 

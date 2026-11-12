@@ -675,7 +675,7 @@ threadPageGetH pid convId docM runM hxTarget = do
         do
           when (isJust runContent || isJust openDoc) do
             header_ [class_ "flex shrink-0 items-center justify-between gap-3 border-b border-strokeWeak px-4 py-3"] do
-              span_ [class_ "text-sm font-medium text-textWeak"] $ bool "Run details" "Artifact" (isJust openDoc)
+              span_ [class_ "text-sm font-medium text-textWeak"] $ bool "Run details" "Document" (isJust openDoc)
               case activeConversationIdM of
                 Just _ ->
                   a_ ([id_ "ai-inspector-close", href_ threadHref, Aria.label_ "Close details", title_ "Close (Esc)", class_ "btn btn-sm btn-square btn-ghost text-iconNeutral transition-[color,background-color,scale] hover:bg-fillWeak hover:text-iconBrand active:scale-[0.96] max-md:min-h-11 max-md:min-w-11"] <> inspectorAttrs threadHref)
@@ -734,10 +734,9 @@ threadPageGetH pid convId docM runM hxTarget = do
                 <> bool [] [hxGet_ $ docHref doc, hxTrigger_ "every 60s", hxSelect_ "#ai-document", hxTarget_ "this", hxSwap_ "outerMorph"] (any ((.routineActive) . fst) routineM)
             )
             do
-              p_ [class_ "font-mono text-xs text-textWeak"] $ toHtml $ toText doc.key
-              h2_ [class_ "mt-1 text-base font-semibold text-textStrong text-balance break-words"] $ toHtml doc.title
+              h2_ [class_ "text-base font-semibold text-textStrong text-balance break-words"] $ toHtml doc.title
               p_ [class_ "mt-1 text-xs text-textWeak"] $ "Updated " >> localTimeFmt_ "MMM d, HH:mm" doc.updatedAt
-              unless (null openToc) $ details_ [class_ "mt-4 text-sm text-textWeak"] do
+              when (length openToc > 2) $ details_ [class_ "mt-4 text-sm text-textWeak"] do
                 summary_ [class_ "cursor-pointer"] "On this page"
                 ul_ [class_ "mt-2 space-y-1"] $ for_ openToc \(anchor, heading) ->
                   li_ $ a_ [href_ $ "#" <> anchor, class_ "block truncate text-textBrand hover:underline"] $ toHtml heading

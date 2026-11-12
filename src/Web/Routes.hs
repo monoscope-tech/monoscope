@@ -916,7 +916,13 @@ emailTemplates =
   [ ("project-invite", pure ET.sampleProjectInvite)
   , ("project-created", pure ET.sampleProjectCreated)
   , ("project-deleted", pure ET.sampleProjectDeleted)
-  , ("routine-report", pure ET.sampleRoutineReport)
+  ,
+    ( "routine-report"
+    , do
+        ctx <- ask @AuthContext
+        let chart wType query = Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl (UUIDId UUID.nil) def{Widget.wType = wType, Widget.query = Just query} (Just "7D") Nothing Nothing
+        ET.sampleRoutineReport <$> chart Widget.WTTimeseries "level == \"ERROR\" | summarize count(*) by bin_auto(timestamp)" <*> chart Widget.WTTimeseriesLine "kind == \"server\" | summarize percentile(duration, 95) by bin_auto(timestamp)"
+    )
   ,
     ( "runtime-errors"
     , do

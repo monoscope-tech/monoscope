@@ -39,7 +39,7 @@ import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), 
 import Pages.Containers (infraSnapshot, infrastructureBW, matchesAny, matchesFilter, mkWindow, pctText, utilizationClass, windowed)
 import Pages.Containers qualified as Containers
 import Pages.LogExplorer.Log qualified as Log
-import Pkg.Components.Table (Features (..), SelectControl (..), Table (..), TableTabs (..), ZeroState (..), col, countedFilter, facetActions, facetsConfig, inventoryTable, selectControl_, sidebar_, withAttrs)
+import Pkg.Components.Table (Features (..), SelectControl (..), Table (..), TableTabs (..), ZeroState (..), col, countedFilter, facetActions, facetsConfig, headerHint_, inventoryTable, selectControl_, sidebar_, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (WrappedEnumSC (..))
@@ -403,7 +403,7 @@ imagesTable pid window url runtimeM registryM images allImages =
         , col "Source" (\image -> span_ [class_ "whitespace-nowrap text-textWeak"] $ toHtml image.registry) & withAttrs [class_ "w-36"]
         , col "Tags" renderTags & withAttrs [class_ "w-56 max-lg:hidden"]
         , col "Runtime" (\image -> span_ [class_ "text-textWeak"] $ toHtml $ T.intercalate ", " $ map Containers.runtimeLabel image.runtimes) & withAttrs [class_ "w-28 max-xl:hidden"]
-        , col "CPU (cores)" (plainCell . fmap (showFFloat' 3) . (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
+        , col "CPU cores" (plainCell . fmap (showFFloat' 3) . (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
         , col "Memory" (plainCell . fmap formatBytes . (.memoryBytes)) & withAttrs [class_ "w-24 text-right"]
         , col "Security" (const $ span_ [class_ "inline-flex whitespace-nowrap rounded-md border border-strokeWeak bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak", term "data-tippy-content" "Connect an SBOM and vulnerability scanner to populate security findings"] "SBOM unavailable") & withAttrs [class_ "w-36 max-2xl:hidden"]
         ]
@@ -571,10 +571,10 @@ kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows
         , col "Namespace" (plainCell . (.namespace)) & withAttrs [class_ "w-32 max-lg:hidden"]
         , col "Node" (plainCell . (.node)) & withAttrs [class_ "w-36 max-2xl:hidden"]
         , col "Containers" (\row -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ show row.containers) & withAttrs [class_ "w-24 text-right max-2xl:hidden"]
-        , col "CPU (cores)" (plainCell . fmap (showFFloat' 3) . (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
-        , col "CPU limit used" (utilizationCell . (.cpuPct)) & withAttrs [class_ "w-32 whitespace-normal max-md:hidden"]
+        , col "CPU cores" (plainCell . fmap (showFFloat' 3) . (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
+        , col "CPU limit" (utilizationCell . (.cpuPct)) & withColHeaderExtra (headerHint_ "Share of the CPU limit in use") & withAttrs [class_ "min-w-32 max-md:hidden"]
         , col "Memory" (plainCell . fmap formatBytes . (.memoryBytes)) & withAttrs [class_ "w-24 text-right"]
-        , col "Memory limit used" (utilizationCell . (.memoryPct)) & withAttrs [class_ "w-32 whitespace-normal max-md:hidden"]
+        , col "Memory limit" (utilizationCell . (.memoryPct)) & withColHeaderExtra (headerHint_ "Share of the memory limit in use") & withAttrs [class_ "min-w-32 max-md:hidden"]
         , col "Restarts" (plainCell . fmap (showFFloat' 0) . (.restarts)) & withAttrs [class_ "w-20 text-right max-md:hidden"]
         ]
     , rows

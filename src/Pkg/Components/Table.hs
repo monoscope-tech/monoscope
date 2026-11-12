@@ -48,6 +48,7 @@ module Pkg.Components.Table (
   withSort,
   withAttrs,
   withColHeaderExtra,
+  headerHint_,
 ) where
 
 import Data.Default (Default (..))
@@ -342,7 +343,8 @@ instance Default Config where
   def =
     Config
       { tableClasses = "table table-sm w-full relative"
-      , thClasses = "text-left bg-bgAlternate sticky top-0 overflow-hidden"
+      , -- Headers never wrap: a wide table scrolls (the grid is overflow-x-auto) instead of squeezing labels.
+        thClasses = "text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap"
       , tdClasses = "px-4 py-4"
       , containerClasses = "w-full mx-auto space-y-2"
       , showHeader = True
@@ -937,6 +939,13 @@ withAttrs as column = column{attrs = as}
 
 withColHeaderExtra :: Html () -> Column a -> Column a
 withColHeaderExtra h column = column{headerExtra = Just h}
+
+
+-- | An info icon beside a header, so the label stays short and the meaning a hover or focus away.
+headerHint_ :: Text -> Html ()
+headerHint_ explanation =
+  span_ [class_ "inline-flex cursor-help rounded-sm text-iconNeutral focus-visible:outline-2 focus-visible:outline-offset-2", tabindex_ "0", role_ "note", term "aria-label" explanation, data_ "tippy-content" explanation]
+    $ faSprite_ "circle-info" "regular" "h-3 w-3"
 
 
 -- Sorting Utilities
