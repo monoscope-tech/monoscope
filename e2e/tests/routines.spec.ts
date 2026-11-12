@@ -1,6 +1,12 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { sql } from './helpers';
+
+// A routine's policy and instructions sit in its collapsed Settings disclosure.
+const openSettings = async (page: Page) => {
+  const settings = page.locator('details[aria-label="Routine configuration"]');
+  if (!(await settings.evaluate(element => (element as HTMLDetailsElement).open))) await settings.locator('summary').first().click();
+};
 
 test('verified fix evidence stays in the conversation run inspector', async ({ page, baseURL }, testInfo) => {
   const [uid, sid, pid, conversation, run, fix, issue, credential, mapping, attempt, candidate, check, image] = Array.from({ length: 13 }, () => randomUUID());
@@ -163,7 +169,7 @@ test('conversation detail controls remain reachable when text size is doubled', 
         const inspector = page.getByRole('complementary', { name: 'Conversation details', exact: true });
         await expect(inspector).toBeVisible();
         await expect(inspector).toBeFocused();
-        const close = inspector.getByRole('link', { name: 'Back to conversation', exact: true });
+        const close = inspector.getByRole('link', { name: 'Close details', exact: true });
         const originalSize = await close.evaluate(element => parseFloat(getComputedStyle(element).fontSize));
         await page.evaluate(() => document.documentElement.style.fontSize = '200%');
         const enlargedSize = await close.evaluate(element => parseFloat(getComputedStyle(element).fontSize));
@@ -353,6 +359,8 @@ test('failed and cancelled runs preserve the conversation and explain missing ar
       await page.evaluate(value => document.body.dataset.theme = value, theme);
       const composer = page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true });
       await composer.fill('Keep my follow-up after an interrupted run.');
+      // Only the latest attempt stays open; earlier ones fold under "Show N older".
+      await page.getByRole('region', { name: 'Routine runs', exact: true }).getByText(/^Show \d+ older$/).click();
       for (const [status, label, error] of states) {
         await page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').filter({ has: page.getByText(label, { exact: true }) }).focus();
         await page.keyboard.press('Enter');
@@ -421,8 +429,8 @@ test('routine text controls stay legible on mobile without enlarging desktop con
     await modal.getByRole('textbox', { name: 'Instructions', exact: true }).fill('Compare checkout latency each day.');
     await modal.getByRole('button', { name: 'Start routine', exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/p/${pid}/ai/[0-9a-f-]+$`));
+    await openSettings(page);
     await page.getByRole('combobox', { name: 'Execution policy', exact: true }).selectOption('review');
-    await page.getByText('Routine instructions', { exact: true }).click();
     await page.locator('details').filter({ has: page.locator('input[name="intervalMinutes"]') }).locator('summary').click();
     const controls = [
       ['Message Monoscope AI', page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true }), 14],
@@ -471,7 +479,7 @@ test('routine detail panels preserve conversation drafts, run history, and artif
     await page.goto(`${root}/routines`);
     await expect(page.getByText('No routines installed', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Add Slack investigation', exact: true }).click();
-    await page.getByText('Routine instructions', { exact: true }).click();
+    await openSettings(page);
     await page.getByRole('textbox', { name: 'Instructions', exact: true }).fill('Compare the deployment with checkout latency.');
     // Saving redirects to this same conversation; a goto racing that reload was interrupted by it.
     await Promise.all([
@@ -525,20 +533,20 @@ test('routine detail panels preserve conversation drafts, run history, and artif
     await expect(inspector).not.toContainText('I saved the checkout evidence. Continue the investigation here.');
     await expect(page.getByText('Later conversation edit.', { exact: true })).toHaveCount(0);
     await expect.poll(() => instructions.evaluate(el => (el.parentElement as HTMLDetailsElement).open)).toBe(true);
-    await page.getByRole('link', { name: 'Back to conversation', exact: true }).click();
+    await page.getByRole('link', { name: 'Close details', exact: true }).click();
     await expect(inspector).toBeHidden();
     await page.getByRole('link', { name: 'checkout', exact: true }).click();
     await expect(inspector.getByText('Later conversation edit.', { exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('conversation-artifact-desktop.png') });
     await expect(page).toHaveURL(`${root}/${conversation}`);
     await expect(composer).toHaveValue('Keep this follow-up while I inspect the run.');
-    await page.getByRole('link', { name: 'Back to conversation', exact: true }).click();
+    await page.getByRole('link', { name: 'Close details', exact: true }).click();
     await expect(inspector).toBeHidden();
     await expect(composer).toHaveValue('Keep this follow-up while I inspect the run.');
     await page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').last().click();
     await expect(inspector.getByText('Retained evidence from a deleted source conversation.', { exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: 'All routines', exact: true })).toHaveCount(0);
-    await page.getByRole('link', { name: 'Back to conversation', exact: true }).click();
+    await page.getByRole('link', { name: 'Close details', exact: true }).click();
     await expect(inspector).toBeHidden();
     await expect(page).toHaveURL(`${root}/${conversation}`);
     await expect(composer).toHaveValue('Keep this follow-up while I inspect the run.');
@@ -566,7 +574,7 @@ test('routine detail panels preserve conversation drafts, run history, and artif
       await page.getByRole('link', { name: 'checkout', exact: true }).click();
       await expect(inspector.getByText('Later conversation edit.', { exact: true })).toBeVisible();
       await page.screenshot({ path: testInfo.outputPath(`conversation-artifact-${theme}.png`) });
-      await page.getByRole('link', { name: 'Back to conversation', exact: true }).click();
+      await page.getByRole('link', { name: 'Close details', exact: true }).click();
       await expect(composer).toBeFocused();
       await expect(composer).toHaveValue('Mobile follow-up stays in the conversation.');
       await page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').first().click();
@@ -575,7 +583,7 @@ test('routine detail panels preserve conversation drafts, run history, and artif
     await page.goto(`${root}/runs/${run}`);
     await expect(page.getByText('Original checkout evidence.', { exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Open conversation and follow up', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('link', { name: 'Back to conversation', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'Close details', exact: true })).toHaveCount(0);
     await expect(page.getByRole('link', { name: 'All routines', exact: true })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page).toHaveURL(`${root}/routines`);
@@ -586,7 +594,7 @@ test('routine detail panels preserve conversation drafts, run history, and artif
     await page.getByRole('button', { name: 'Add Issue enrichment', exact: true }).click();
     await expect(page.getByText('On a new issue · Active', { exact: true })).toBeVisible();
     await expect(page.getByText('No runs yet. An active routine starts when the next matching event arrives.', { exact: true })).toBeVisible();
-    await page.getByText('Routine instructions', { exact: true }).click();
+    await openSettings(page);
     await expect(page.getByRole('textbox', { name: 'Instructions', exact: true })).toContainText('Update issue metadata');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath('issue-enrichment-narrow.png') });
@@ -630,6 +638,7 @@ test('action history and policy controls preserve drafts and check current roles
     await page.goto(`/p/${pid}/ai/${conversation}`);
     const composer = page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true });
     await composer.fill('Keep this follow-up draft.');
+    await openSettings(page);
     const policy = page.getByRole('combobox', { name: 'Execution policy', exact: true });
     await expect(policy).toHaveValue('autonomous');
     for (const value of ['observe', 'autonomous']) {
