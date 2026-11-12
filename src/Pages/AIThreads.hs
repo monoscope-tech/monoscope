@@ -306,7 +306,7 @@ routinesGetH pid = do
                                        menuId = "routine-menu-" <> r.conversationId.toText
                                    form_ [hxPost_ $ toggle pid r.conversationId, hxSwap_ "none"] $ button_ [class_ "btn btn-xs btn-ghost active:scale-[0.96] transition-transform", type_ "submit"] $ toHtml @Text toggleLabel
                                    button_ ([type_ "button", class_ "btn btn-xs btn-ghost btn-square", Aria.label_ $ "More actions for " <> r.title] <> popoverTrigger_ menuId) $ faSprite_ "ellipsis" "regular" "h-3.5 w-3.5"
-                                   ul_ ([class_ "dropdown dropdown-end menu menu-sm w-52 rounded-box border border-strokeWeak bg-bgRaised p-1 shadow-lg"] <> popoverPanel_ menuId) do
+                                   ul_ ([class_ "dropdown dropdown-end menu menu-sm w-52 rounded-box border border-strokeWeak bg-bgRaised p-1 text-start shadow-lg"] <> popoverPanel_ menuId) do
                                      when (isJust r.routineRunningSince) $ li_ $ button_ [hxPost_ $ urls.aiRoutineCancelPost pid r.conversationId, hxSwap_ "none", class_ "text-textWarning"] "Stop active runs"
                                      when (isJust r.routineInterval) do
                                        li_ [class_ "menu-title"] "Deliver results"
@@ -314,6 +314,7 @@ routinesGetH pid = do
                                          li_ $ button_ [hxPost_ $ urls.aiRoutineDestinationPost pid r.conversationId, hxSwap_ "none", hxVals_ $ "{\"destination\":\"" <> toText (encodeEnumSC @"Destination" destination) <> "\"}", term "aria-pressed" $ bool "false" "true" (r.routineDestination == Just destination)] do
                                            span_ [class_ "w-3"] $ when (r.routineDestination == Just destination) $ faSprite_ "check" "solid" "h-3 w-3"
                                            toHtml $ destinationLabel destination
+                                     li_ [class_ "my-1 h-px bg-strokeWeak", role_ "separator"] pass
                                      li_ $ button_ [hxDelete_ $ urls.aiRoutineDelete pid r.conversationId, hxConfirm_ "Delete this routine? Its conversation and past results will be kept.", hxSwap_ "none", class_ "text-textError"] "Delete"
                                )
                                & withAttrs [class_ "w-28 text-end", Aria.label_ "Actions"]

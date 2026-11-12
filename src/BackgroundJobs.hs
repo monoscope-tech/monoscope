@@ -544,10 +544,10 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
       Issues.completeRun context completion >>= \case
         Issues.CompletionRejected -> pass
         Issues.RunCompleted termination next -> do
-          case (termination, completion) of
-            (Issues.CompletedSucceeded, Issues.CompletedResult _ _ Issues.RunAnswer{evidence = Issues.AgentEvidence answer}) ->
-              sequence_ $ deliverReport authCtx routine <$> templateKey <*> reportWindow <*> (fst <$> report answer)
-            _ -> pass
+          let digest = case completion of
+                Issues.CompletedResult _ _ Issues.RunAnswer{evidence = Issues.AgentEvidence answer} | termination == Issues.CompletedSucceeded -> fst <$> report answer
+                (Issues.CompletedResult{}; Issues.FailedResult{}; Issues.TimedOutResult{}; Issues.CancelledResult{}) -> Nothing
+          sequence_ $ deliverReport authCtx routine <$> templateKey <*> reportWindow <*> digest
           for_ next $ \slot -> enqueueNext slot.id slot.scheduledAt
 
 
