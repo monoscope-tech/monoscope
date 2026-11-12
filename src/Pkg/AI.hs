@@ -311,12 +311,17 @@ ensureConversationTitle config userQuery model apiKey answer = do
 
 
 -- | A run's answer. Given the time it ran, charts without their own window are pinned to the answer's
--- range ending then, so a kept result keeps its numbers instead of re-querying today.
+-- range ending then, so a kept result keeps its numbers instead of re-querying today. A chart whose
+-- query is not KQL (agents sometimes write prose there) is dropped rather than drawn empty.
+--
+-- >>> let ws r = isJust (prepareRunAnswer Nothing (AgenticChatResult r [])).widgets
+-- >>> map ws ["{\"explanation\":\"x\",\"widgets\":[{\"type\":\"table\",\"query\":\"No telemetry query: issue operations were used.\"}]}", "{\"explanation\":\"x\",\"widgets\":[{\"type\":\"stat\",\"query\":\"summarize count()\"}]}"]
+-- [False,True]
 prepareRunAnswer :: Maybe UTCTime -> AgenticChatResult -> Issues.RunAnswer
 prepareRunAnswer ranAt answer = Issues.RunAnswer{content = msg, widgets = AE.toJSON <$> widgets, report, evidence = Issues.AgentEvidence answer}
   where
     parsed = rightToMaybe $ parseAgenticResponse answer
-    widgets = guarded (not . null) . take 10 . map pin . responseWidgets =<< parsed
+    widgets = guarded (not . null) . take 10 . map pin . filter (all (isRight . parseQueryToAST) . (.query)) . responseWidgets =<< parsed
     pin w = case (ranAt, w.timeFrom) of
       (Just at, Nothing) | (Just from, Just to, _) <- parseTimeRange at $ fromMaybe (TimePicker Nothing Nothing Nothing) $ (.timeRange) =<< parsed -> w{Widget.timeFrom = Just $ formatUTCMicros from, Widget.timeTo = Just $ formatUTCMicros to}
       _ -> w

@@ -297,7 +297,12 @@ routinesGetH pid = do
                       , col
                           "Last run"
                           ( \r -> span_ [class_ "flex items-center gap-2 whitespace-nowrap text-xs tabular-nums text-textWeak"] case (r.routineLastRunAt, r.routineLastRunStatus) of
-                              (Just at, Just status) -> localTimeFmt_ "d MMM, HH:mm" at >> uncurry toneDot_ (runStatus status)
+                              (Just at, Just status) -> do
+                                localTimeFmt_ "d MMM, HH:mm" at >> uncurry toneDot_ (runStatus status)
+                                -- The last run is one sample; per-PR and per-issue routines fail between passes.
+                                let mine = filter (\run -> run.conversationId == r.conversationId || run.routine == Just r.title) recentRuns
+                                    failed = length $ filter (Issues.runFailed . (.status)) mine
+                                when (failed > 0) $ span_ [class_ "text-textError"] $ toHtml $ show @Text failed <> " of " <> show @Text (length mine) <> " failed"
                               _ -> "Not run yet"
                           )
                           & withAttrs [class_ "w-56 max-md:hidden"]
@@ -628,7 +633,11 @@ threadPageGetH pid convId docM runM hxTarget = do
                         -- Most runs of a findings-only routine publish nothing, so the result's own time says how fresh it is.
                         when isRoutine $ h2_ [class_ "mb-2 flex items-baseline gap-2 text-sm font-semibold text-textStrong"] do
                           "Latest result"
-                          whenJust (listToMaybe fromLatest) $ span_ [class_ "text-xs font-normal tabular-nums text-textWeak"] . localTimeFmt_ "d MMM, HH:mm" . (.createdAt)
+                          whenJust (listToMaybe fromLatest) \latest -> do
+                            span_ [class_ "text-xs font-normal tabular-nums text-textWeak"] $ localTimeFmt_ "d MMM, HH:mm" latest.createdAt
+                            -- Runs that found nothing publish no result, so say why the newest run is not shown here.
+                            let quiet = length $ takeWhile ((> latest.createdAt) . (.startedAt)) $ filter ((== Issues.RunNoFindings) . (.status)) runs
+                            when (quiet > 0) $ span_ [class_ "text-xs font-normal text-textWeak"] $ toHtml $ "· " <> show @Text quiet <> bool " later runs" " later run" (quiet == 1) <> " found nothing new"
                         IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId shown
                     | otherwise -> foldMap routineEmpty_ routineM
                 when (isRoutine && not (null docs)) documentsNav_
@@ -644,7 +653,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                           when (run.attempt > 1) $ span_ [class_ "shrink-0 text-xs text-textWeak"] $ toHtml $ bool "retry " "run " (any ((== Issues.RunSucceeded) . (.status)) previous) <> show @Text run.attempt
                         span_ [id_ $ runStatusId run, class_ "row-span-2"] $ uncurry tonePill_ $ runStatus run.status
                         -- The newest published result is already shown in full above.
-                        unless (isRoutine && Just run.id == latestShown) $ runSummary_ "" run
+                        if isRoutine && Just run.id == latestShown then span_ [class_ "text-xs text-textWeak"] "Result shown above" else runSummary_ "" run
                       runList = div_ [class_ "divide-y divide-strokeWeak overflow-hidden rounded-lg border border-strokeWeak bg-bgRaised"] . mapM_ runRow
                   h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Runs"
                   showMore_ 3 (const runList) runs
