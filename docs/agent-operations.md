@@ -88,6 +88,7 @@ Monoscope skills (`investigate`, `kql-reference`) can be mounted for the agent t
 ## Sharing one host fairly
 
 Reviews, proofs and workspace builds can share a host with ingestion and the web server.
+
 - **Host slots:** every VM takes a lock-file slot under `IMPACT_REVIEW_VM_SLOT_DIR` (default `/tmp/monoscope-vm-slots`), shared by every process on the node. There are three pools, so nested VMs cannot deadlock: agents (a quarter of the cores), verifiers (2) and builds (1). `IMPACT_REVIEW_VM_SLOTS=agents,verifiers,builds` overrides the defaults. Under k3s, each node counts its own slots.
 - **Admission in the queue:** `claimRun` admits at most 2 reviews per project across nodes, and no more on a node than its agent slots; each lease records its node. Claims take turns under an advisory lock, so concurrent workers cannot overshoot. The rest wait in the job queue and retry every 15 s, so waiting never spends a review's 30-minute budget, and a busy agent or verifier slot fails within 45 s.
 - **CPU priority:** sandbox bridges, their VMs, `agg` and `ffmpeg` run under `nice -n 19` (plus `ionice -c2 -n7` where it exists), so ingestion and web requests preempt a guest's compile.
@@ -96,6 +97,7 @@ Reviews, proofs and workspace builds can share a host with ingestion and the web
 ## Warm workspaces
 
 Every queued review also queues `PrepareReviewWorkspace` in `background_jobs_long`. That table has its own runner: one job at a time, with a 61-minute timeout just above the build's own hour. The main queue's 10-minute timeout is also its stale-lock threshold, so it cannot hold builds. The job makes the workspace checkpoint at the pull request's base available, outside any review's budget. A review waits while its base's build is queued or running, so its proofs run in the prepared workspace; a failed build releases it to run cold.
+
 - **One build per base:** a run records its pull request's base when it is queued. A review queues a build only when none is waiting for the same project, repository and base, and the build needs no GitHub fetch beyond a token.
 - **Cache, then storage, then build:** the job looks for the checkpoint on this host before any checkout. On a miss it restores the archived checkpoint from object storage when `IMPACT_REVIEW_WORKSPACE_REMOTE` names the remote configuration (the same file the maintenance configuration uses). The download holds no lock; only publication does. Otherwise it builds.
 - **Outcome:** the job logs how the checkpoint arrived: cached, restored, or built cold, warm, or cold after a failed warm start. The last is logged for attention, with the warm start's error, and a build also notes why a configured restore did not supply the checkpoint. Every job records its wall-time on `monoscope.impact_review.workspace.prepare.duration`, by `outcome` (`cached`, `restored`, `warm`, `cold`, `cold_after_warm`, `failed`), so its count by outcome is the warm-start rate.
@@ -153,7 +155,6 @@ Restore verifies bounded metadata and the exact identity before downloading. It 
 
 Transfers retain private project-scoped records in `CACHE/PROJECT/transfers/`. Each records identity, direction, start time, and started/completed/failed outcome. Completion includes checkpoint bytes/digest and elapsed time; failed or interrupted transfers have unknown transferred bytes. All are explicitly unpriced. These records are not yet ingested into customer usage summaries and do not establish storage byte-time, total network traffic or charges. SIGKILL can leave a started record and temporary files; orphan reconciliation and automatic cleanup remain pending. Remote blob/multipart retention is also not configured by this command.
 
-
 ## Native checkpoint eviction
 
 Run `monoscope workspace prune --request /private/prune.json --cache /srv/monoscope/cache --remote /etc/monoscope/workspace-store.json`. The request is `{"projectId":"PROJECT_UUID","maxBytes":536870912}`; zero is allowed when all idle archived entries should be considered. This is an explicit operator command, not an automatic job scheduler or an agent tool.
@@ -167,7 +168,6 @@ Live immutable lease references pin their canonical entry. Lookup, lease acquisi
 The JSON report includes `beforeBytes`, `afterBytes`, `leaseBytes`, `targetBytes`, typed entry outcomes and unrecognized names. If retained entries or lease allocation leave the cache above target, the command prints the report and exits unsuccessfully. It does not claim the budget was met or delete active/unverified state to force it. Unknown names, directory symlinks, unexpected entry contents, other projects, Git mirrors and toolchain images are preserved.
 
 Private journals in `CACHE/PROJECT/prunes/` retain started, running and finished states, the partial/final report and elapsed time. Elapsed time includes the initial inventory; a journal starts before scanning entries. A stopped run can leave an incomplete journal. Resource costs remain unpriced, and these maintenance records are not yet customer usage or charges. SIGKILL can also leave `.prepare-*`, `.restore-*`, `.evict-*` or lease directories. They remain visible in allocated usage; safe orphan reconciliation, remote retention and automatic admission control remain unfinished. Host maintenance below automates verified archive and eviction.
-
 
 ### Automatic host cache maintenance
 
@@ -185,7 +185,6 @@ Unknown entries, invalid checkpoints, unavailable archives and active leases rem
 
 This is a periodic reclamation budget, not an allocation quota: active workloads can grow between passes. Maintenance never deletes from object storage; a bucket lifecycle rule bounds it (production expires `agent-workspaces/` after 30 days). An expired checkpoint costs a cold build on nodes without it, and a pass that prunes re-uploads it first. SIGKILL lease/VM orphan reconciliation remains separate work. Transfer and prune records retain explicit unpriced status; customer billing ingestion and storage byte-time pricing remain unfinished.
 
-
 ### Recover interrupted checkpoint staging
 
 New restore and eviction operations write a private project-scoped record under `stages/` before creating scratch data. The record binds a UUID directory to its operation, identity, phase and timestamps. Recovery runs before budget eviction, including when the cache is under budget, and skips projects whose native lock is busy.
@@ -193,7 +192,6 @@ New restore and eviction operations write a private project-scoped record under 
 Only registered restore and eviction directories are eligible. Recovery preserves unknown names, symlinks, hard links, invalid metadata and mismatched project identities. Partial downloads can be discarded after the native writer releases the project lock. Completed staged checkpoints and interrupted evictions require a fresh streamed SHA-256 check of the archived bytes before deletion. A durable reclaiming phase supports retry after a crash during deletion. Records retain unpriced status.
 
 Unregistered legacy scratch directories, preparation directories and leases remain protected. This does not recover orphaned VMs or establish allocation admission. Gondolin 0.13.0's installed `vm/core.js` stops the VM before materializing a checkpoint; the restore bridge only reads checkpoint metadata. Preparation and lease recovery still need their own lifetime proof.
-
 
 ## Optional Linux agent image
 
