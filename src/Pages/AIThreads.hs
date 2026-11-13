@@ -290,13 +290,13 @@ routinesGetH pid = do
                       [ col
                           "Routine"
                           ( \r -> a_ [href_ $ threadUrl pid r.conversationId, class_ "block min-w-0 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2"] do
-                              div_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml r.title
+                              div_ [class_ "line-clamp-2 break-words text-sm font-medium text-textStrong", title_ r.title] $ toHtml r.title
                               div_ [class_ "truncate text-xs text-textWeak"] do
                                 toHtml $ routineSchedule r
                                 -- Phones drop the Last run column; the outcome is what the list is read for.
                                 whenJust ((,) <$> r.routineLastRunAt <*> r.routineLastRunStatus) \(at, status) -> span_ [class_ "mt-0.5 flex flex-wrap items-center gap-x-2 md:hidden"] $ localTimeFmt_ "d MMM" at >> uncurry toneDot_ (runStatus status) >> failedNote_ r
                           )
-                          -- Takes the leftover width and truncates, so the narrow columns stay visible on phones.
+                          -- Takes the leftover width and clamps, so the narrow columns stay visible on phones.
                           & withAttrs [class_ "w-full max-w-0"]
                       , col "Status" (\r -> uncurry (bool tonePill_ toneDot_ (r.routineActive && isNothing r.routineRunningSince)) (routineStatus r)) & withAttrs [class_ $ "w-28 whitespace-nowrap" <> bool "" " max-md:hidden" canEdit] -- an editor's Pause/Resume already says it
                       , col
