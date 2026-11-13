@@ -922,7 +922,7 @@ emailTemplates =
     ( "routine-report"
     , do
         ctx <- ask @AuthContext
-        let chart wType unit query = Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl (UUIDId UUID.nil) def{Widget.wType = wType, Widget.query = Just query, Widget.unit = unit} (Just "7D") Nothing Nothing
+        let chart wType unit query = Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl (UUIDId UUID.nil) def{Widget.wType = wType, Widget.query = Just query, Widget.unit = unit, Widget.pngProfile = Just Widget.PngEmail} (Just "7D") Nothing Nothing
         ET.sampleRoutineReport <$> chart Widget.WTTimeseries Nothing "level == \"ERROR\" | summarize count(*) by bin_auto(timestamp)" <*> chart Widget.WTTimeseriesLine (Just "ns") "kind == \"server\" | summarize percentile(duration, 95) by bin_auto(timestamp)"
     )
   ,

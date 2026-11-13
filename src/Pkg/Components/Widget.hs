@@ -231,7 +231,7 @@ summarizeByPrefix SBRate = ""
 summarizeByPrefix SBLast = ""
 
 
-data PngProfile = PngStandard | PngSlack
+data PngProfile = PngStandard | PngSlack | PngEmail
   deriving stock (Eq, Generic, Read, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "Png" PngProfile
@@ -269,10 +269,14 @@ data ProgressScale = ColumnPercent | ValuePercent
 -- (900,300)
 -- >>> pngExportSize (Just PngSlack)
 -- (960,280)
+-- >>> pngExportSize (Just PngEmail)
+-- (600,240)
 pngExportSize :: Maybe PngProfile -> (Int, Int)
 pngExportSize profile = case fromMaybe PngStandard profile of
   PngStandard -> (900, 300)
   PngSlack -> (960, 280)
+  -- An email column is 600px wide, so its charts render at the size they are read.
+  PngEmail -> (600, 240)
 
 
 -- | A trusted SQL ORDER BY expression from dashboard configuration.
