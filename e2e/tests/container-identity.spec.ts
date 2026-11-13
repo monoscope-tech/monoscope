@@ -203,6 +203,8 @@ test("mobile container search remains reachable and preserves drawer identity", 
   const cpu = rows.filter({ hasText: "Node / host: identity-node-b" }).locator("td").nth(4).locator("span");
   await expect(cpu).toHaveText("4.000");
   await expect(cpu).toBeInViewport({ ratio: 0.95 });
+  // The active tab names the page on a phone; a title squeezed beside the tabs read "I…".
+  await expect(page.locator("#pageTitleText")).toBeHidden();
   const search = page.getByPlaceholder("Search containers", { exact: true });
   await expect(search).toBeVisible();
   expect(await search.evaluate(input => parseFloat(getComputedStyle(input).fontSize))).toBeGreaterThanOrEqual(16);
