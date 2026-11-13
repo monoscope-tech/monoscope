@@ -81,6 +81,19 @@ for (const width of [390, 1280, 1920]) {
   });
 }
 
+test("the container name stays pinned while a wide table scrolls", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?from=2024-12-31T23:00:00Z&to=2025-01-01T00:00:00Z`, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("[data-deferred-shell]")).toHaveCount(0);
+  const grid = page.locator("#containersForm_grid");
+  const name = page.locator(`tr[role="button"][data-hx-get*="container=${CONTAINER}"]`).first().locator("td").first();
+  await grid.evaluate(element => { element.style.width = "360px"; });
+  expect(await grid.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+  const before = (await name.boundingBox())!.x;
+  await grid.evaluate(element => { element.scrollLeft = element.scrollWidth; });
+  expect((await name.boundingBox())!.x).toBe(before);
+});
+
 test("a Kubernetes namespace drilldown keeps containers within its cluster", async ({ page }) => {
   await page.goto(`/p/${DEMO_PROJECT}/infrastructure/kubernetes?resource=namespaces&from=2024-12-31T23:00:00Z&to=2025-01-01T00:00:00Z`, { waitUntil: "domcontentloaded" });
   await expect(page.locator("[data-deferred-shell]")).toHaveCount(0);

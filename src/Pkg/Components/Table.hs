@@ -97,7 +97,16 @@ data Table a = Table
 inventoryTable :: Text -> Text -> Table a
 inventoryTable name url =
   Table
-    { config = def{elemID = name <> "Form", containerId = Just target, addPadding = True, renderAsTable = True}
+    { -- These tables outgrow most screens, so the name column stays put while the metrics scroll past it.
+      -- The pinned cell is opaque; a row's hover tint is layered on as an image so it still shows.
+      config =
+        def
+          { elemID = name <> "Form"
+          , containerId = Just target
+          , addPadding = True
+          , renderAsTable = True
+          , tableClasses = (def :: Config).tableClasses <> " [&_tr>:first-child]:sticky [&_tr>:first-child]:left-0 [&_tr>:first-child]:shadow-[inset_-1px_0_0_var(--color-strokeWeak)] [&_th:first-child]:z-[2] [&_td:first-child]:z-[1] [&_td:first-child]:bg-bgRaised [&_tr:hover>td:first-child]:bg-[linear-gradient(var(--color-fillWeak),var(--color-fillWeak))]"
+          }
     , columns = []
     , rows = V.empty
     , features = def{header = Just $ timeRefreshListener_ target url, search = Just ClientSide, searchPlaceholder = Just $ "Search " <> name, customizeColumns = True, exportName = Just name}
