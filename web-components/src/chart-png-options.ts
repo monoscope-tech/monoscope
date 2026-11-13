@@ -1,5 +1,5 @@
 import { legendLayout } from "./chart-legend";
-export type PngProfile = "standard" | "slack";
+export type PngProfile = "standard" | "slack" | "email";
 export type PngMode = "chart" | "table";
 
 // PNG layout uses ECharts pixel/percentage units and the email color scheme.
@@ -85,9 +85,10 @@ export function preparePngOptions(finalOptions: any, width: number, height: numb
   // A one-series legend only repeats the query's column alias; the title names the series.
   if (series.length === 1) finalOptions.legend = { ...finalOptions.legend, show: false };
 
-  if (profile === "slack") {
+  // Slack and email show these at or below their export width, so the text is sized to stay legible there.
+  if (profile !== "standard") {
     // Slack's own dark surface, so the chart sits in the message rather than on a navy slab.
-    finalOptions.backgroundColor = darkMode ? "#1a1d21" : "#ffffff";
+    if (profile === "slack") finalOptions.backgroundColor = darkMode ? "#1a1d21" : "#ffffff";
     finalOptions.textStyle.fontSize = 14;
     finalOptions.grid.left = Math.max(finalOptions.grid.left, 24);
     finalOptions.grid.right = Math.max(finalOptions.grid.right, 24);
@@ -108,7 +109,8 @@ export function preparePngOptions(finalOptions: any, width: number, height: numb
     // Sparse count buckets alone do not establish missing telemetry or zero events.
     const source = finalOptions.dataset?.source;
     const axis = xAxes.length === 1 ? xAxes[0] : undefined;
-    if (axis?.type === 'time' && Array.isArray(source)) {
+    // Alerts explain a sparse chart; a report's prose already says what the chart shows.
+    if (profile === 'slack' && axis?.type === 'time' && Array.isArray(source)) {
       const rows = source.slice(1);
       const column = series.length === 1 ? series[0].encode?.y : undefined;
       const values = typeof column === 'number' ? rows.map((row: any) => row[column]) : undefined;

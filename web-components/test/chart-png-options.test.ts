@@ -274,3 +274,15 @@ describe('PNG time axis over days', () => {
     } finally { chart.dispose(); }
   });
 });
+
+describe('Email PNG profile', () => {
+  it('reads at the width an email shows it, on the email surface rather than Slack’s', () => {
+    const options: any = { textStyle: {}, xAxis: { type: 'time' }, yAxis: { type: 'value' }, series: [{ type: 'line', data: [] }] };
+    preparePngOptions(options, 600, 240, true, 'email');
+    expect([options.xAxis.axisLabel.fontSize, options.yAxis.axisLabel.fontSize]).toEqual([14, 14]);
+    expect(options.backgroundColor).not.toBe('#1a1d21');
+    const sparse: any = { textStyle: {}, dataset: { source: [['timestamp', 'p95'], [60_000, 3], [120_000, 4]] }, xAxis: { type: 'time', min: 0, max: 120_000 }, yAxis: { type: 'value' }, series: [{ type: 'line', encode: { x: 0, y: 1 } }] };
+    preparePngOptions(sparse, 600, 240, false, 'email');
+    expect(sparse.graphic).toBeUndefined();
+  });
+});

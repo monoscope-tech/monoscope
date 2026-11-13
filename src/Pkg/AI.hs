@@ -414,7 +414,7 @@ pinWidget (from, to) w = w{Widget.timeFrom = Just $ formatUTCMicros from, Widget
 -- | Charts span the window 'reportRunAnswer' pinned each widget to.
 reportItems :: Log.Log :> es => Text -> Text -> Projects.ProjectId -> ReportDigest -> Eff es [ET.ReportItem]
 reportItems secret host pid digest = forM digest.highlights \h ->
-  traverse (\w -> Widget.widgetPngUrl secret host pid w Nothing w.timeFrom w.timeTo) h.widget
+  traverse (\w -> Widget.widgetPngUrl secret host pid w{Widget.pngProfile = Just Widget.PngEmail} Nothing w.timeFrom w.timeTo) h.widget
     <&> \chart -> ET.ReportItem h.title h.detail (join chart) (hostPath host <$> h.link)
 
 
