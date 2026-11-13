@@ -67,7 +67,11 @@ export function preparePngOptions(finalOptions: any, width: number, height: numb
     // The supplied window is authoritative, including periods without samples.
     // Boundary ticks must be visible even when the automatic ticks land inside it.
     axis.boundaryGap = [0, 0];
-    axis.axisLabel = { ...axis.axisLabel, showMinLabel: true, showMaxLabel: true, hideOverlap: true };
+    // Over days the daily ticks mark the window; a boundary tick falls mid-day and would read
+    // "15:33:20", or repeat its day, beside them.
+    const day = '{MMM} {d}', days = Number(axis.max) - Number(axis.min) >= 2 * 86_400_000;
+    const formatter = days ? { year: '{yyyy}', month: '{MMM}', day, hour: day, minute: day, second: day, millisecond: day } : axis.axisLabel?.formatter;
+    axis.axisLabel = { ...axis.axisLabel, formatter, showMinLabel: !days, showMaxLabel: !days, hideOverlap: true };
   }
   const series = Array.isArray(finalOptions.series) ? finalOptions.series : [];
   for (const item of series) {

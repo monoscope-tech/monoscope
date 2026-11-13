@@ -253,3 +253,24 @@ it('never cuts the widest name when the row has room for it', async () => {
   expect(names.map(legend.formatter)).toEqual(names.map((n) => `{n|${n}}`));
   vi.unstubAllGlobals();
 });
+
+describe('PNG time axis over days', () => {
+  it('labels a multi-day window, edges included, as dates rather than times of day', () => {
+    const to = Date.UTC(2026, 10, 13, 15, 33, 20), from = to - 7 * 86400000;
+    const options: any = {
+      dataset: { source: [['timestamp', 'Errors'], [from, 3], [to, 8]] },
+      xAxis: { type: 'time', min: from, max: to }, yAxis: { type: 'value' },
+      series: [{ type: 'bar', encode: { x: 0, y: 1 } }],
+    };
+    preparePngOptions(options, 560, 200, false);
+    const chart = echarts.init(null, undefined, { renderer: 'svg', ssr: true, width: 560, height: 200 });
+    try {
+      chart.setOption(options);
+      const texts = [...chart.renderToSVGString().matchAll(/<text[^>]*>([^<]+)<\/text>/g)].map((m) => m[1]);
+      const dates = texts.filter((t) => /^[A-Z][a-z]{2} \d{1,2}$/.test(t));
+      expect(texts.filter((t) => /\d:\d\d/.test(t))).toEqual([]);
+      expect(dates.length).toBeGreaterThanOrEqual(2);
+      expect(new Set(dates).size).toBe(dates.length);
+    } finally { chart.dispose(); }
+  });
+});
