@@ -696,11 +696,16 @@ threadPageGetH pid convId docM runM hxTarget = do
                       else p_ [class_ "text-sm text-textWeak"] $ toHtml $ case policy of
                         (Issues.Observe; Issues.Autonomous) -> "Execution policy: " <> policyLabel policy
                         Issues.ReviewSelected selected -> "Review selected actions: " <> T.intercalate ", " (map reviewClassLabel $ toList selected.classes) <> ". Reviewers: " <> reviewerLabel selected.approver <> "."
-                  form_ [hxPost_ $ foldMap (urls.aiRoutineInstructionsPost projectId) activeConversationIdM, hxSwap_ "none", class_ "space-y-2", Aria.label_ "Routine instructions"] do
-                    label_ [Lucid.for_ "routine-instructions", class_ "block text-sm font-medium text-textStrong"] "Instructions"
-                    textarea_ ([id_ "routine-instructions", name_ "instructions", required_ "required", maxlength_ "4000", rows_ "8", class_ "textarea w-full text-base sm:text-sm"] <> [readonly_ "" | not canEdit]) $ toHtml $ fromMaybe "" instructions
-                    p_ [class_ "text-xs text-textWeak"] "Changes apply to future runs. Past runs keep the instructions they used."
-                    when canEdit $ button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save instructions"
+                  if canEdit
+                    then form_ [hxPost_ $ foldMap (urls.aiRoutineInstructionsPost projectId) activeConversationIdM, hxSwap_ "none", class_ "space-y-2", Aria.label_ "Routine instructions"] do
+                      label_ [Lucid.for_ "routine-instructions", class_ "block text-sm font-medium text-textStrong"] "Instructions"
+                      textarea_ [id_ "routine-instructions", name_ "instructions", required_ "required", maxlength_ "4000", rows_ "8", class_ "textarea w-full text-base sm:text-sm"] $ toHtml $ fromMaybe "" instructions
+                      p_ [class_ "text-xs text-textWeak"] "Changes apply to future runs. Past runs keep the instructions they used."
+                      button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save instructions"
+                    -- A viewer reads them; an inert text box beside no Save button looked editable.
+                    else section_ [Aria.label_ "Routine instructions", class_ "space-y-1"] do
+                      h3_ [class_ "text-sm font-medium text-textStrong"] "Instructions"
+                      p_ [class_ "whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml $ fromMaybe "" instructions
         unless (isJust runContent && isNothing conversationM) $ form_
           [ class_ "group/composer shrink-0 border-t border-strokeWeak bg-bgBase p-4"
           , hxPost_ $ maybe (urls.aiThreadsPost projectId) (urls.aiThreadPost projectId) activeConversationIdM
