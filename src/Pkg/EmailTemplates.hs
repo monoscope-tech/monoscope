@@ -238,7 +238,7 @@ emailWrapper subject content = doctypehtml_ do
         -- Footer
         tr_ $ td_ $ table_ [class_ "email-footer", style_ "width:100%;max-width:600px;table-layout:fixed;", align_ "center", width_ "600", cellpadding_ "0", cellspacing_ "0", role_ "presentation"] do
           -- Divider
-          tr_ $ td_ [style_ "padding: 0 20px;"] $ p_ [style_ "border-top: 1px solid #dee2e7; font-size: 1px; margin: 0 0 19px; width: 100%;"] ""
+          tr_ $ td_ [style_ "padding: 0 20px;"] $ p_ [class_ "divider", style_ "border-top: 1px solid #dee2e7; font-size: 1px; margin: 0 0 19px; width: 100%;"] ""
           -- Description + social icons
           tr_
             $ td_ [style_ "padding: 0 20px 20px;"]
