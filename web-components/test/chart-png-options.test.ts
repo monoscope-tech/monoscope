@@ -44,7 +44,7 @@ describe('PNG chart layout', () => {
       legend: { bottom: 2 },
       xAxis: { type: 'category', data: ['Mon', 'Tue'] },
       yAxis: { type: 'value' },
-      series: [{ name: 'Events', type: 'bar', data: [80, 100] }],
+      series: [{ name: 'Events', type: 'bar', data: [80, 100] }, { name: 'Errors', type: 'bar', data: [5, 8] }],
     };
     preparePngOptions(options, 900, 300, darkMode);
     const chart = echarts.init(null, darkMode ? 'dark' : undefined, { renderer: 'svg', ssr: true, width: 900, height: 300 });
@@ -236,7 +236,7 @@ it('measures each legend in its own font, whatever the last legend set', async (
     getContext() { const c = { font: '', measureText: (t: string) => ({ width: t.length * parseFloat(c.font) * 0.6 }) }; return c; }
   });
   const fresh = (await import('../src/chart-legend')).legendLayout;
-  const at = (fontSize: number) => fresh({ legend: { data: ['p50'], textStyle: { fontSize } }, series: [{ name: 'p50' }] }, 900, 300).legend;
+  const at = (fontSize: number) => fresh({ legend: { data: ['p50', 'p95'], textStyle: { fontSize } }, series: [{ name: 'p50' }, { name: 'p95' }] }, 900, 300).legend;
   const small = at(10);
   at(20);
   expect(small.formatter('p50')).toBe('{n|p50}');
@@ -284,5 +284,13 @@ describe('Email PNG profile', () => {
     const sparse: any = { textStyle: {}, dataset: { source: [['timestamp', 'p95'], [60_000, 3], [120_000, 4]] }, xAxis: { type: 'time', min: 0, max: 120_000 }, yAxis: { type: 'value' }, series: [{ type: 'line', encode: { x: 0, y: 1 } }] };
     preparePngOptions(sparse, 600, 240, false, 'email');
     expect(sparse.graphic).toBeUndefined();
+  });
+});
+
+describe('one-series legend', () => {
+  it('drops a legend that would only repeat the lone series name, but keeps a value table', () => {
+    const chart = (names: string[], orient?: string) => legendLayout({ legend: { show: true, orient, bottom: 0 }, series: names.map((name) => ({ name })) }, 600, 240).legend.show !== false;
+    expect([chart(['count_']), chart(['p95', 'p99']), chart(['count_'], 'vertical')]).toEqual([false, true, true]);
+    expect(legendLayout({ grid: { bottom: 36 }, legend: { show: true, bottom: 2 }, series: [{ name: 'count_' }] }, 600, 240).grid.bottom).toBe(8);
   });
 });

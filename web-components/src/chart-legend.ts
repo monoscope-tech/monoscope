@@ -12,6 +12,12 @@ export const legendLayout = (options: any, width: number, height: number, format
   const legend = options.legend;
   const names: string[] = (legend?.data ?? (options.series ?? []).map((s: any) => s?.name) ?? []).filter(Boolean);
   if (!legend || legend.show === false || !names.length || !width) return options;
+  // One entry only repeats the query's column alias (count_); the widget title already names it.
+  // Its row goes too, back to the inset the server gives a chart without a legend.
+  if (names.length === 1 && legend.orient !== 'vertical') {
+    const at = legend.top !== undefined ? 'top' : 'bottom';
+    return { ...options, grid: { ...options.grid, [at]: (legend[at] ?? 0) + 6 }, legend: { ...legend, show: false } };
+  }
   const fontSize = legend.textStyle?.fontSize ?? 12, charPx = fontSize * 0.62;
   const font = `${fontSize}px ${legend.textStyle?.fontFamily ?? options.textStyle?.fontFamily ?? 'sans-serif'}`;
   // The canvas is shared and the formatter measures at draw time, after other charts set their own font.
