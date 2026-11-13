@@ -1987,14 +1987,17 @@ renderTableWithDataAndParams widget headers dataRows params = do
 -- | A query's own result as columns: the names it returned, numbers right-aligned with a bar
 -- against the column's largest value. Sorting needs configured columns, so these don't offer it.
 --
--- >>> map (\c -> (c.field, c.columnType, c.progress)) $ inferColumns (V.fromList ["name", "count_"]) (V.fromList [V.fromList ["GET", "12"], V.fromList ["POST", "3.5"]])
--- [("name",Nothing,Nothing),("count_",Just CTNumber,Just ColumnPercent)]
+-- Titles read as the fields were written: @___@ is a flattened dot and KQL names an unaliased
+-- @count()@ @count_@.
+--
+-- >>> map (\c -> (c.field, c.title, c.columnType, c.progress)) $ inferColumns (V.fromList ["resource___service___name", "count_"]) (V.fromList [V.fromList ["GET", "12"], V.fromList ["POST", "3.5"]])
+-- [("resource___service___name","resource.service.name",Nothing,Nothing),("count_","count",Just CTNumber,Just ColumnPercent)]
 inferColumns :: V.Vector Text -> V.Vector (V.Vector Text) -> [TableColumn]
 inferColumns headers rows = zipWith column [0 ..] (toList headers)
   where
     numeric i = not (V.null rows) && all (isJust . readMaybe @Double . toString . getRowValue i) rows
     column i h =
-      (def :: TableColumn){field = h, title = h, sortable = Just False}
+      (def :: TableColumn){field = h, title = let t = T.replace "___" "." h in fromMaybe t (T.stripSuffix "_" t), sortable = Just False}
         & bool Relude.id (\c -> c{columnType = Just CTNumber, align = Just "text-right", progress = Just ColumnPercent}) (numeric i)
 
 
