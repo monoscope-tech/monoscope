@@ -83,6 +83,7 @@ with tracer.start_as_current_span("test-operation") as span:
 ```
 
 Run it:
+
 ```bash
 pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
 python send_telemetry.py
@@ -153,6 +154,7 @@ Key environment variables in `docker-compose.yml`:
 If you prefer to use an existing PostgreSQL/TimescaleDB instance:
 
 1. Update `DATABASE_URL` in docker-compose.yml:
+
    ```yaml
    environment:
      DATABASE_URL: postgresql://user:pass@your-db-host:5432/monoscope?sslmode=require
@@ -167,6 +169,7 @@ If you prefer to use an existing PostgreSQL/TimescaleDB instance:
 For production environments:
 
 1. **Use .env file for secrets**
+
    ```bash
    # Create .env file
    cp .env.example .env
@@ -174,6 +177,7 @@ For production environments:
    ```
 
 2. **Enable Auth0 for SSO**
+
    ```yaml
    BASIC_AUTH_ENABLED: False
    AUTH0_DOMAIN: your-domain.auth0.com
@@ -183,6 +187,7 @@ For production environments:
    ```
 
 3. **Set resource limits**
+
    ```yaml
    services:
      monoscope:
@@ -195,6 +200,7 @@ For production environments:
    ```
 
 4. **Persist data volumes**
+
    ```yaml
    volumes:
      timescale_data:
@@ -264,6 +270,7 @@ trace.get_tracer_provider().add_span_processor(
 ### Java Applications
 
 Add to your JVM options:
+
 ```bash
 -javaagent:/path/to/opentelemetry-javaagent.jar
 -Dotel.exporter.otlp.endpoint=http://localhost:4317
@@ -321,16 +328,19 @@ docker-compose logs monoscope
 ### Not seeing data?
 
 1. Check Monoscope logs:
+
    ```bash
    docker-compose logs -f monoscope
    ```
 
 2. Verify the endpoint is accessible:
+
    ```bash
    telnet localhost 4317
    ```
 
 3. Check your API key is correct:
+
    ```bash
    curl http://localhost:8080/api/v1/health \
      -H "X-API-Key: YOUR_API_KEY"
@@ -339,6 +349,7 @@ docker-compose logs monoscope
 ### Port already in use?
 
 Change ports in docker-compose.yml:
+
 ```yaml
 ports:
   - "8081:8080"  # Use 8081 instead
