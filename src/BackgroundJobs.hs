@@ -289,8 +289,6 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
             (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= show @Text errId.unErrorPatternId, "has_project" AE..= isJust projectM, "has_error" AE..= isJust errM, "has_user" AE..= isJust userM])
     DailyJob -> runDailyJobScheduling authCtx
     HourlyJob scheduledTime hour -> unlessStale scheduledTime (2 * 3600) $ runHourlyJob scheduledTime hour
-    -- Retired: reports are routines. Kept so rows queued before the switch still decode.
-    (DailyReports _; WeeklyReports _) -> Log.logInfo "Skipped a retired report job" (jobTypeName bgJob)
     -- Hourly and daily ticks both enqueue this at 00:00; two concurrent runs would read the same
     -- watermark and record (and bill) the window twice, so one run per project at a time.
     ReportUsage pid ->

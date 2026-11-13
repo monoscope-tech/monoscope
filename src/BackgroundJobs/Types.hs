@@ -34,8 +34,6 @@ data BgJobs
       , anomalyAction :: Text
       , targetHashes :: [Text]
       }
-  | DailyReports Projects.ProjectId
-  | WeeklyReports Projects.ProjectId
   | DailyJob
   | HourlyJob UTCTime Int
   | ReportUsage Projects.ProjectId
