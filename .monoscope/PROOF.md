@@ -3,6 +3,12 @@
 Reviews run in a VM that can read package registries and nothing else. Prove UI changes in the
 real app, and CLI and script behaviour in the terminal.
 
+## When not to prove
+
+Record nothing when the diff shows the whole change: docs and the README, comments, formatting,
+`.github/` workflows, `docker-compose.yml` and other deployment config the VM never runs, and test-only
+changes the test run already checks. A recording that only prints the changed lines proves nothing.
+
 ## Haskell changes
 
 A cold build of this repository takes over an hour, so never build it from scratch in a proof. The
