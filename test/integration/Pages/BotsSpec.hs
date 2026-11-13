@@ -1718,6 +1718,11 @@ spec = around withTestResources do
       history <- runQueryEffect tr $ Issues.selectChatHistory pid reportConv
       [foldMap (\(Aeson w) -> decodeUtf8 @Text $ AE.encode w) m.widgets | m <- history, m.role == Issues.ChatAssistant] `shouldSatisfy` \case [widgets] -> all (`T.isInfixOf` widgets) ["\"time_from\"", "\"time_to\"", "Errors"]; _ -> False
       -- The routine page leads with the report: headline, then each highlight beside its own chart.
+      -- runningRoutine_saysWhenItStarted: the facts read the same lease as the pill, not the last run's status.
+      dbExec tr [sql|UPDATE apis.ai_routines SET running_since = now() WHERE project_id = ? AND conversation_id = ?|] (pid, reportConv)
+      running <- renderT <$> call tr (AIThreads.threadGetH pid reportConv Nothing Nothing)
+      (T.isInfixOf "Running now" running, T.isInfixOf "Started " running, T.isInfixOf "Last run " running) `shouldBe` (True, True, False)
+      dbExec tr [sql|UPDATE apis.ai_routines SET running_since = NULL WHERE project_id = ? AND conversation_id = ?|] (pid, reportConv)
       page <- renderT <$> call tr (AIThreads.threadGetH pid reportConv Nothing Nothing)
       page `shouldContainAll` ["Latest report", "Checkout errors rose 4.8x", "Checkout 5xx up 4.8x", "ai-report-0-0", "Explore", "Documents"]
       -- Reports go out through the team fan-out alerts use: by code (a read-only report cannot post), to the
