@@ -838,6 +838,8 @@ threadPageGetH pid convId docM runM hxTarget = do
             -- Editors see the cadence on the header's schedule control (labelled from md up).
             span_ [class_ "md:hidden" | canEdit && isJust conversation.routineInterval] $ toHtml $ routineSchedule conversation
             span_ [class_ "tabular-nums"] case (conversation.routineLastRunAt, conversation.routineLastRunStatus) of
+              -- The status pill already says a run is under way.
+              (Just at, Just Issues.RunRunning) -> span_ [class_ "whitespace-nowrap"] $ "Started " >> localTimeFmt_ "d MMM, HH:mm" at
               (Just at, Just status) -> span_ [class_ "inline-flex items-center gap-2 whitespace-nowrap"] $ "Last run " >> localTimeFmt_ "d MMM, HH:mm" at >> uncurry toneDot_ (runStatus status)
               _ -> "Not run yet"
             failedRuns_ runs

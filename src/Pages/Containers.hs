@@ -38,6 +38,8 @@ data ContainerVM = ContainerVM
   { pid :: Projects.ProjectId
   , window :: TimePicker.TimeWindow
   , row :: ContainerRow
+  , duplicate :: Bool
+  -- ^ Another listed container has this name, so the row spells out where it runs.
   }
 
 
@@ -135,11 +137,12 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
       -- Facet values come from the unfiltered result, so choosing a namespace never empties
       -- the node or image menus — the way a facet bar is expected to behave.
       menu label param selected fromRow = countedFilter label param selected (maybeToList . fromRow) allRows
+      duplicates = [name | name : _ : _ <- group (Relude.sort $ map (.containerName) rows)]
     let table = inventoryTable "containers" deferredUrl
     pure
       table
         { columns = containerColumns allRows
-        , rows = V.fromList $ map (ContainerVM pid window) rows
+        , rows = V.fromList [ContainerVM pid window r (r.containerName `elem` duplicates) | r <- rows]
         , features =
             table.features
               { rowAttrs = Just $ drawerRowAttrs_ . detailUrl
@@ -231,8 +234,9 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
         -- Below 1800px the badge takes the image's place; the namespace stays in its tooltip and the facets.
         whenJust vm.row.workload \workload -> span_ [class_ "badge badge-xs badge-ghost min-w-0 max-w-full truncate min-[1800px]:ms-auto min-[1800px]:max-w-[55%]", data_ "tippy-content" $ "Workload: " <> foldMap (<> "/") vm.row.namespace <> workload] $ span_ [class_ "min-w-0 truncate"] do
           toHtml workload
-      -- Where the Pod and Namespace columns are hidden, the identity stays on the row so duplicate names can be told apart.
-      div_ [class_ "hidden max-[1800px]:flex flex-col gap-0.5 text-xs leading-normal text-textWeak"]
+      -- Where the Pod and Namespace columns are hidden, a repeated name keeps its identity on the row.
+      when vm.duplicate
+        $ div_ [class_ "hidden max-[1800px]:flex flex-col gap-0.5 text-xs leading-normal text-textWeak"]
         $ forM_ ([("Pod", vm.row.podName), ("Namespace", vm.row.namespace), ("Cluster", vm.row.cluster), ("Node / host", vm.row.nodeName)] :: [(Text, Maybe Text)]) \(label, value) ->
           whenJust value \v -> span_ [class_ "whitespace-normal break-all"] $ toHtml $ label <> ": " <> v
 
