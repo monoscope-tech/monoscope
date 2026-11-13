@@ -809,7 +809,11 @@ with open(sys.argv[1], "w") as lock:
   # Publish whatever passed even if a later check failed — a green check is green.
   cmd_publish .ci/attest.tsv
   collect_host "$release_pid" "$release_log" || host_rc=$?
-  [ "$rc" -eq 0 ] || note "local CI failed (exit $rc); services left up for debugging — \`make ci-down\` to clean up"
+  # A retry starts with `make ci-down`, which takes the services' logs with it; keep them first.
+  if [ "$rc" -ne 0 ]; then
+    compose logs --no-color --timestamps --tail 2000 postgres minio timefusion > .ci/services-failed.log 2>&1 || true
+    note "local CI failed (exit $rc); service logs saved to .ci/services-failed.log; services left up for debugging — \`make ci-down\` to clean up"
+  fi
   [ "$host_rc" -eq 0 ] || return "$host_rc"
   return "$rc"
 }
