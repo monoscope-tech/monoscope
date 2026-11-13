@@ -2942,7 +2942,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     base <- commit repository [("app.sh", "v1\n")]
     -- A build or proof may fetch packages, so a missing toolchain is installable; it cannot write
     -- to a registry or reach any other host, GitHub included.
-    writeFileBS scriptFile "set -eu\ncurl -sSfI https://registry.npmjs.org/ >/dev/null\n! curl -sf -o /dev/null https://github.com/\ncurl -sSfI https://raw.githubusercontent.com/haskell/ghcup-metadata/master/ghcup-0.0.8.yaml >/dev/null\n! curl -sf -o /dev/null https://raw.githubusercontent.com/torvalds/linux/master/README\n! curl -sf -o /dev/null -X POST https://registry.npmjs.org/-/v1/search\n"
+    writeFileBS scriptFile "set -eu\ncurl -sSfI https://registry.npmjs.org/ >/dev/null\n# Node, pip and uv read their CA from the environment, which --reset-env clears; it must still trust the egress proxy.\ncurl -sSfI --cacert \"$NODE_EXTRA_CA_CERTS\" https://registry.npmjs.org/ >/dev/null\n! curl -sf -o /dev/null https://github.com/\ncurl -sSfI https://raw.githubusercontent.com/haskell/ghcup-metadata/master/ghcup-0.0.8.yaml >/dev/null\n! curl -sf -o /dev/null https://raw.githubusercontent.com/torvalds/linux/master/README\n! curl -sf -o /dev/null -X POST https://registry.npmjs.org/-/v1/search\n"
     writeFileLBS requestFile $ AE.encode $ AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= (base :: Text)]
     runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir (toText image) bridge scriptFile Nothing Nothing) (Workspace.Prepare repository) requestFile) >>= either (fail . toString) (const pass)
 

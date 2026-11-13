@@ -425,9 +425,11 @@ data LoggedCommand = LoggedCommand {command :: GuestCommand, path :: FilePath, l
   deriving anyclass (AE.ToJSON)
 
 
--- Runs as the unprivileged review account with a reset environment and fixed UTF-8 locale.
+-- Runs as the unprivileged review account with a reset environment and fixed UTF-8 locale. The
+-- guest's egress proxy re-signs HTTPS with its own CA, which the system bundle includes; Node, pip,
+-- uv and curl find it only through these variables, which @--reset-env@ clears.
 agentCommand :: [Text] -> NonEmpty Text
-agentCommand command = "/usr/bin/setpriv" :| ["--reuid=1000", "--regid=1000", "--clear-groups", "--no-new-privs", "--reset-env", "--", "/usr/bin/env", "LANG=C.UTF-8", "LC_ALL=C.UTF-8"] <> command
+agentCommand command = "/usr/bin/setpriv" :| ["--reuid=1000", "--regid=1000", "--clear-groups", "--no-new-privs", "--reset-env", "--", "/usr/bin/env", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "UV_SYSTEM_CERTS=true"] <> map (<> "=/etc/ssl/certs/ca-certificates.crt") ["NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"] <> command
 
 
 checkoutGit :: [Text] -> NonEmpty Text
