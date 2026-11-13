@@ -73,7 +73,7 @@ describe('Log Explorer chart auto-refresh', () => {
       clientWidth: { value: 1000 }, clientHeight: { value: 180 },
     });
     globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
-      ...chartData, headers: ['timestamp', 'count'], dataset: [[0, 1]],
+      ...chartData, headers: ['timestamp', 'GET', 'POST'], dataset: [[0, 1, 2]],
     }), { headers: { 'Content-Type': 'application/json' } })) as any;
     const config = widget('marker-series');
     chartWidget({ ...config, opt: { ...config.opt, grid: { top: 8, bottom: 36 }, legend: { show: true, bottom: 2 }, xAxis: { axisLabel: { margin: 8 } } }, markers: [{ label: '1.0', at: '2026-09-25T10:00:00Z' }, { label: 'bad', at: 'nope' }] });
