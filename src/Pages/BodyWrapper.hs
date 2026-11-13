@@ -1094,7 +1094,9 @@ navbar bcfg menuL =
             toHtml pt
           faSprite_ "chevron-right" "regular" "w-3 h-3 max-md:hidden"
         h1_ [class_ "flex min-w-0 items-center text-textStrong"] do
-          let targetPageM = bcfg.pageTitleUrl <|> ((\p link -> link p.id) <$> bcfg.currProject <*> (Components.getTargetPage bcfg.pageTitle <* bcfg.pageTitleSuffix))
+          -- On phones the title yields to nav tabs; without tabs it takes the row.
+          let cap = bool "" " max-md:max-w-24" (isJust bcfg.navTabs)
+              targetPageM = bcfg.pageTitleUrl <|> ((\p link -> link p.id) <$> bcfg.currProject <*> (Components.getTargetPage bcfg.pageTitle <* bcfg.pageTitleSuffix))
           case bcfg.pageTitleSwitcherUrl of
             Just switcherUrl -> do
               button_
@@ -1107,16 +1109,16 @@ navbar bcfg menuL =
                     <> popoverTrigger_ "page-title-switcher"
                 )
                 do
-                  span_ [id_ "pageTitleText", class_ "max-w-[40ch] truncate max-md:max-w-24"] $ toHtml bcfg.pageTitle
+                  span_ [id_ "pageTitleText", class_ $ "max-w-[40ch] truncate" <> cap] $ toHtml bcfg.pageTitle
                   faSprite_ "chevron-down" "regular" "size-3.5 shrink-0 text-iconNeutral"
               div_ ([class_ "dropdown z-50 mt-1 w-[20rem] rounded-xl border border-strokeWeak bg-bgRaised p-2 shadow-lg", role_ "dialog", Aria.label_ (fromMaybe "Page" bcfg.prePageTitle <> " switcher"), hxGet_ switcherUrl, hxTrigger_ "toggle once", hxSwap_ "innerHTML"] <> popoverPanel_ "page-title-switcher")
                 $ div_ [class_ "flex justify-center py-6"]
                 $ loadingIndicatorWith_ LdSM LdDots ""
             Nothing -> case targetPageM of
-              Just targetPage -> a_ ([class_ "max-w-[40ch] truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong hover:bg-fillWeak max-md:max-w-24 max-md:text-sm", href_ targetPage, id_ "pageTitleText", title_ bcfg.pageTitle] <> navTabAttrs) $ toHtml bcfg.pageTitle
+              Just targetPage -> a_ ([class_ $ "max-w-[40ch] truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong hover:bg-fillWeak max-md:text-sm" <> cap, href_ targetPage, id_ "pageTitleText", title_ bcfg.pageTitle] <> navTabAttrs) $ toHtml bcfg.pageTitle
               Nothing -> case bcfg.pageTitleModalId of
-                Just modalId -> label_ [class_ "max-w-[40ch] truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 max-md:max-w-24 max-md:text-sm", Lucid.for_ modalId, id_ "pageTitleText", title_ bcfg.pageTitle, role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> bcfg.pageTitle, Components.keyboardActivateAttr_] $ toHtml bcfg.pageTitle
-                Nothing -> span_ [class_ "max-w-[40ch] truncate p-1 py-2 text-xl font-semibold leading-none text-textStrong max-md:max-w-24 max-md:text-sm", id_ "pageTitleText", title_ bcfg.pageTitle] $ toHtml bcfg.pageTitle
+                Just modalId -> label_ [class_ $ "max-w-[40ch] truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 max-md:text-sm" <> cap, Lucid.for_ modalId, id_ "pageTitleText", title_ bcfg.pageTitle, role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> bcfg.pageTitle, Components.keyboardActivateAttr_] $ toHtml bcfg.pageTitle
+                Nothing -> span_ [class_ $ "max-w-[40ch] truncate p-1 py-2 text-xl font-semibold leading-none text-textStrong max-md:text-sm" <> cap, id_ "pageTitleText", title_ bcfg.pageTitle] $ toHtml bcfg.pageTitle
           -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
           span_ [id_ "pageTitleSuffix", class_ "max-md:hidden flex items-center gap-1"] $ whenJust bcfg.pageTitleSuffix \suffix -> do
             faSprite_ "chevron-right" "regular" "w-3 h-3"

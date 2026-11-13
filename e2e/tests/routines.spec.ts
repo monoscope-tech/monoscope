@@ -337,6 +337,9 @@ test('failed and cancelled runs preserve the conversation and explain missing ar
     // Installing redirects to the new conversation; reading the row before then raced the insert.
     await page.waitForURL(new RegExp(`/p/${pid}/ai/[0-9a-f-]{36}$`));
     const [routine, conversation] = sql(`SELECT id, conversation_id FROM apis.ai_routines WHERE project_id = '${pid}';`).toString().trim().split('|');
+    // A page without nav tabs gives its title the whole header on a phone.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect.poll(() => page.locator('#pageTitleText').evaluate(title => title.scrollWidth <= title.clientWidth)).toBe(true);
     const states = [
       ['failed', 'Failed', 'The provider did not return a response. Retry this request.'],
       ['timed_out', 'Timed out', 'The investigation exceeded its time budget. Retry this request.'],
