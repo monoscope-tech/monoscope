@@ -69,6 +69,7 @@ module Pkg.AI (
   completeAgenticResponse,
   ensureConversationTitle,
   prepareRunAnswer,
+  runWidgets,
   ReportDigest (..),
   ReportHighlight (..),
   parseReportDigest,
@@ -324,12 +325,18 @@ prepareRunAnswer :: Maybe UTCTime -> AgenticChatResult -> Issues.RunAnswer
 prepareRunAnswer ranAt answer = Issues.RunAnswer{content = msg, widgets = AE.toJSON <$> widgets, report, evidence = Issues.AgentEvidence answer}
   where
     parsed = rightToMaybe $ parseAgenticResponse answer
-    widgets = guarded (not . null) . take 10 . map pin . filter (all (isRight . parseQueryToAST) . (.query)) . responseWidgets =<< parsed
-    pin w = case (ranAt, w.timeFrom) of
-      (Just at, Nothing) | (Just from, Just to, _) <- parseTimeRange at $ fromMaybe (TimePicker Nothing Nothing Nothing) $ (.timeRange) =<< parsed -> pinWidget (from, to) w
-      _ -> w
+    widgets = guarded (not . null) . runWidgets ranAt =<< parsed
     report = fromMaybe answer.response $ (.explanation) =<< parsed
     msg = fromMaybe (bool answer.response "Here are the requested visualizations:" $ isJust widgets) (nonEmptyT . (.explanation) =<< parsed)
+
+
+-- | The charts a run keeps, pinned to the range it saw when it ran.
+runWidgets :: Maybe UTCTime -> LLMResponse -> [Widget.Widget]
+runWidgets ranAt response = take 10 . map pin . filter (all (isRight . parseQueryToAST) . (.query)) $ responseWidgets response
+  where
+    pin w = case (ranAt, w.timeFrom) of
+      (Just at, Nothing) | (Just from, Just to, _) <- parseTimeRange at $ fromMaybe (TimePicker Nothing Nothing Nothing) response.timeRange -> pinWidget (from, to) w
+      _ -> w
 
 
 -- | A report routine's answer: a headline, then at most five highlights, each with the chart that

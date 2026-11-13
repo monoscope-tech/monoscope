@@ -578,7 +578,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                 $ a_ [href_ $ runUrl pid operation.runId, class_ "ms-3 text-xs text-textBrand hover:underline"] "View original attempt"
           for_ (evidence.findings >>= AET.parseMaybe (AE.parseJSON @AI.AgenticChatResult)) $ \answer ->
             for_ (rightToMaybe $ AI.parseAgenticResponse answer) $ \response -> do
-              let widgets = take 10 $ AI.responseWidgets response
+              let widgets = AI.runWidgets (Just run.startedAt) response
               unless (null widgets) $ section_ [Aria.label_ "Run visualizations", class_ "space-y-3"] do
                 h2_ [class_ "text-sm font-semibold text-textStrong"] "Visualizations"
                 IssuePage.aiChatWidgets_ pid ("ai-run-" <> run.id.toText <> "-") widgets (Just answer.toolCalls)

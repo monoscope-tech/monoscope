@@ -12,6 +12,8 @@
 module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, matchesAny, matchesFilter, mkWindow, windowed, infraSnapshot, infrastructureBW, pctText, runtimeLabel, formatBytes, coresText, utilizationClass, freshnessLabel, emDash_, readyBadge_, kqlFilter, nodeField, clusterField) where
 
 import Data.Default (def)
+import Data.Map.Strict qualified as Map
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, diffUTCTime)
 import Data.Vector qualified as V
@@ -38,8 +40,8 @@ data ContainerVM = ContainerVM
   { pid :: Projects.ProjectId
   , window :: TimePicker.TimeWindow
   , row :: ContainerRow
-  , duplicate :: Bool
-  -- ^ Another listed container has this name, so the row spells out where it runs.
+  , identity :: [(Text, Text)]
+  -- ^ The pod, namespace, node or cluster that tells this row apart from listed containers sharing its name.
   }
 
 
@@ -137,12 +139,14 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
       -- Facet values come from the unfiltered result, so choosing a namespace never empties
       -- the node or image menus — the way a facet bar is expected to behave.
       menu label param selected fromRow = countedFilter label param selected (maybeToList . fromRow) allRows
-      duplicates = [name | name : _ : _ <- group (Relude.sort $ map (.containerName) rows)]
+      place r = [("Pod", r.podName), ("Namespace", r.namespace), ("Node / host", r.nodeName), ("Cluster", r.cluster)] :: [(Text, Maybe Text)]
+      values = Map.fromListWith (<>) [((r.containerName, label), one v) | r <- rows, (label, v) <- place r]
+      distinct r = [(label, v) | (label, Just v) <- place r, maybe False ((> 1) . S.size) $ Map.lookup (r.containerName, label) values]
     let table = inventoryTable "containers" deferredUrl
     pure
       table
         { columns = containerColumns allRows
-        , rows = V.fromList [ContainerVM pid window r (r.containerName `elem` duplicates) | r <- rows]
+        , rows = V.fromList [ContainerVM pid window r (distinct r) | r <- rows]
         , features =
             table.features
               { rowAttrs = Just $ drawerRowAttrs_ . detailUrl
@@ -235,10 +239,9 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
         whenJust vm.row.workload \workload -> span_ [class_ "badge badge-xs badge-ghost min-w-0 max-w-full truncate min-[1800px]:ms-auto min-[1800px]:max-w-[55%]", data_ "tippy-content" $ "Workload: " <> foldMap (<> "/") vm.row.namespace <> workload] $ span_ [class_ "min-w-0 truncate"] do
           toHtml workload
       -- Where the Pod and Namespace columns are hidden, a repeated name keeps its identity on the row.
-      when vm.duplicate
-        $ div_ [class_ "hidden max-[1800px]:flex flex-col gap-0.5 text-xs leading-normal text-textWeak"]
-        $ forM_ ([("Pod", vm.row.podName), ("Namespace", vm.row.namespace), ("Cluster", vm.row.cluster), ("Node / host", vm.row.nodeName)] :: [(Text, Maybe Text)]) \(label, value) ->
-          whenJust value \v -> span_ [class_ "whitespace-normal break-all"] $ toHtml $ label <> ": " <> v
+      unless (null vm.identity)
+        $ div_ [class_ "hidden max-[1800px]:flex flex-wrap gap-x-3 gap-y-0.5 text-xs leading-normal text-textWeak"]
+        $ forM_ vm.identity \(label, v) -> let t = label <> ": " <> v in span_ [class_ "min-w-0 max-w-full truncate", data_ "tippy-content" t] $ toHtml t
 
     -- The drawer reads the window the row was rendered from, so it shows the same numbers the
     -- row does and hits the same cached snapshot the list already fetched.
