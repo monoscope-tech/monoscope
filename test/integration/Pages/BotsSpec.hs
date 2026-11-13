@@ -3736,6 +3736,8 @@ spec = around withTestResources do
       inspector <- renderT <$> call tr (AIThreads.routineRunGetH project execution.id $ Just routine.conversationId)
       inspector `shouldContainAll` (["Visualizations", "Retained error volume", "Retained request count", "data-chart-widget", "ai-run-" <> execution.id.toText, "id=\"ai-conversation\""] <> ["id=\"ai-run-" <> execution.id.toText <> "-" <> show i <> "_widgetEl\"" | i <- [0, 1 :: Int]])
       T.isInfixOf ("id=\"ai-run-" <> execution.id.toText <> "-2_widgetEl\"") inspector `shouldBe` False
+      -- runPage_chartsRequeryToday: the run page draws its charts over the window the run saw, not today's.
+      filter (`T.isInfixOf` inspector) ["\"timeTo\":null", "timeTo&quot;:null"] `shouldBe` []
       runQueryEffect tr $ Issues.insertChatMessage project routine.conversationId Issues.ChatAssistant "Legacy retained charts" (AE.decodeStrict' @AE.Value (encodeUtf8 answer.response) >>= (^? key "widgets")) Nothing
       chatPage <- renderT <$> call tr (AIThreads.threadGetH project routine.conversationId Nothing Nothing)
       chatPage `shouldContainAll` ["Retained error volume", "Retained request count"]

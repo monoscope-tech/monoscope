@@ -311,8 +311,8 @@ spec = do
 
       allRows <- rowsOf $ Containers.containersGetH pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "4H") (Just "1")
       (sort [r.row.cpuCores | r <- allRows, r.row.containerName == "duplicate-api"], length [() | r <- allRows, r.row.containerName == "shared-pod"]) `shouldBe` (map Just [1, 3, 5, 7, 13], 1)
-      -- Only a repeated name spells out where each copy runs; a unique one stays a single line.
-      ordNub [(r.row.containerName, r.duplicate) | r <- allRows, r.row.containerName `elem` ["duplicate-api", "shared-pod"]] `shouldMatchList` [("duplicate-api", True), ("shared-pod", False)]
+      -- Only a repeated name spells out what sets each copy apart; a unique one stays a single line.
+      ordNub [(r.row.containerName, not (null r.identity)) | r <- allRows, r.row.containerName `elem` ["duplicate-api", "shared-pod"]] `shouldMatchList` [("duplicate-api", True), ("shared-pod", False)]
       html <- shellHtml tr $ Containers.containersGetH pid (Just "kubernetes") Nothing (Just "scope-node-a") Nothing (Just clusterUid) Nothing Nothing (Just "4H") (Just "1")
       forM_ ([(Just "scope-a", 1), (Nothing, 13)] :: [(Maybe Text, Double)]) \(namespace, expected) -> do
         ps <- maybe (fail "container row has no scoped drawer link") pure $ find (\ps -> lookup "container" ps == Just "duplicate-api" && lookup "namespace" ps == namespace) $ linkParams "/infrastructure/containers/detail" html
