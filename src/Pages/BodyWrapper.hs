@@ -1094,8 +1094,8 @@ navbar bcfg menuL =
             toHtml pt
           faSprite_ "chevron-right" "regular" "w-3 h-3 max-md:hidden"
         h1_ [class_ "flex min-w-0 items-center text-textStrong"] do
-          -- On phones the title yields to nav tabs; without tabs it takes the row.
-          let cap = bool "" " max-md:max-w-24" (isJust bcfg.navTabs)
+          -- On phones the active nav tab names the page, so the title gives the row to the tabs.
+          let cap = bool "" " max-md:hidden" (isJust bcfg.navTabs)
               targetPageM = bcfg.pageTitleUrl <|> ((\p link -> link p.id) <$> bcfg.currProject <*> (Components.getTargetPage bcfg.pageTitle <* bcfg.pageTitleSuffix))
           case bcfg.pageTitleSwitcherUrl of
             Just switcherUrl -> do
