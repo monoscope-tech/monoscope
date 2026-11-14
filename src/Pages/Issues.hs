@@ -2058,7 +2058,7 @@ aiChatPostHWithTools projectTools pid issueId form = do
   retained <- Issues.getRoutineRun pid requestId
   let browserOnly = case (.source) <$> retained of Just Issues.InteractiveRun{} -> True; _ -> False
       admit = if browserOnly then Issues.startInteractiveRun else Jobs.startConversation
-  admit pid convId sess.user.id requestId form.query Issues.Observe (Issues.WebIssue issueId) >>= \case
+  admit Nothing pid convId sess.user.id requestId form.query Issues.Observe (Issues.WebIssue issueId) >>= \case
     Issues.ConflictingRequest -> throwError err409{errBody = "Request ID already belongs to another request"}
     Issues.AcceptedRequest _ -> pass
   fullSystemPrompt <- Bots.buildIssuePrompt pid issue now

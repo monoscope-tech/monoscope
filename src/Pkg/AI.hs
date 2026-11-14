@@ -79,6 +79,7 @@ module Pkg.AI (
   reportConfig,
   digestMarkdown,
   callRoutineLLM,
+  projectPagePath,
 ) where
 
 import Control.Lens ((%~), (.~), (^.), (^..), (^?))
@@ -1169,8 +1170,32 @@ initialLocalOperations config =
     <> [operation | isJust config.sourceConfig, operation <- [GetCodeContext, ListRunbooks, ReadRunbook, GetLinkedRepositories, GetDeployments]]
     <> [SaveArtifact | isJust $ documentConversation config, isJust $ invocationContext config.invocationMode]
     <> [ReadArtifact | isJust $ documentConversation config]
+    <> [OpenPage | isJust $ pageContext config]
   where
     writes = Issues.permitsActions (invocationPolicy config.invocationMode) && isJust (accessMember config.access)
+
+
+pageContext :: AgenticConfig -> Maybe Issues.PageContext
+pageContext config = invocationContext config.invocationMode >>= (.pageContext)
+
+
+-- | A page of this project that @open_page@ may show; anything else stays put.
+--
+-- >>> import Data.UUID qualified as UUID
+-- >>> let page = projectPagePath (UUIDId UUID.nil)
+-- >>> page " /p/00000000-0000-0000-0000-000000000000/log_explorer?query=url%3D%22https%3A//x%22 "
+-- Just "/p/00000000-0000-0000-0000-000000000000/log_explorer?query=url%3D%22https%3A//x%22"
+-- >>> page "/p/00000000-0000-0000-0000-000000000000"
+-- Just "/p/00000000-0000-0000-0000-000000000000"
+-- >>> map page ["https://evil.test/p/00000000-0000-0000-0000-000000000000/", "/p/00000000-0000-0000-0000-000000000001/issues", "/p/00000000-0000-0000-0000-0000000000001", "/p/00000000-0000-0000-0000-000000000000//evil.test", "/p/00000000-0000-0000-0000-000000000000/../x"]
+-- [Nothing,Nothing,Nothing,Nothing,Nothing]
+projectPagePath :: Projects.ProjectId -> Text -> Maybe Text
+projectPagePath pid raw = path <$ guard (inProject && not (any (`T.isInfixOf` route) ["//", "..", "\\"]))
+  where
+    path = T.strip raw
+    route = T.takeWhile (/= '?') path
+    root = "/p/" <> pid.toText
+    inProject = route == root || (root <> "/") `T.isPrefixOf` route
 
 
 discoverableCatalog :: AgenticConfig -> Map.Map Text (MCP.Tool AgentOperation)
@@ -1252,8 +1277,17 @@ buildSystemPrompt config now =
                   ]
             InteractiveReadOnly -> []
             DurableRun{} -> []
+      copilotSection = flip foldMap (pageContext config) \page ->
+        let root = "/p/" <> config.projectId.toText
+         in unlines
+              [ "\nIN-APP ASSISTANT"
+              , "The user asks from Monoscope's floating assistant while viewing \"" <> page.title <> "\" at " <> page.path <> ". Resolve \"this page\", \"this dashboard\" and similar from that path."
+              , "When they ask to create or change something (dashboards, widgets, monitors, issues), do it with project operations, then call open_page with the resource's page so they see the result. The page they are on reloads by itself after a change."
+              , "Call open_page when they ask to go somewhere or to see something. Answer in one or two sentences: they are looking at the page, not reading a report."
+              , "Pages: " <> T.intercalate ", " (map (root <>) ["/log_explorer?query=<KQL>&since=1H", "/dashboards", "/dashboards/<dashboard id>", "/issues", "/issues/<issue id>", "/monitors", "/endpoints", "/metrics", "/service_map", "/infrastructure/hosts", "/settings"])
+              ]
       actionsSection = bool "" "\nEXTERNAL ACTIONS\nUse action tools only when the user or the routine's defining conversation explicitly requests that action. Report the tool result accurately.\n" $ Issues.permitsActions (invocationPolicy config.invocationMode)
-   in basePrompt <> timezoneSection <> facetSection <> customSection <> slackSection <> projectSection <> investigationSection <> documentsSection <> actionsSection <> slackFormat
+   in basePrompt <> timezoneSection <> facetSection <> customSection <> slackSection <> projectSection <> investigationSection <> documentsSection <> copilotSection <> actionsSection <> slackFormat
 
 
 runAgenticQuery :: ProjectToolCtx es => AgenticConfig -> Text -> Text -> Text -> Eff es (Either Text LLMResponse)
@@ -1876,6 +1910,7 @@ executeToolAt cursor config tc = do
         noRaw <$> case getTextArg "key" args of
           Nothing -> Issues.listArtifacts config.projectId convId Nothing <&> \docs -> encodeText [AE.object ["key" AE..= d.key, "title" AE..= d.title, "updated_at" AE..= d.updatedAt, "characters" AE..= d.characters] | d <- docs]
           Just k -> maybe ("No document with key '" <> k <> "' in this conversation.") readable . asum . map (.content) <$> Issues.listArtifacts config.projectId convId (rightToMaybe $ Issues.mkArtifactKey k)
+      OpenPage -> EffectfulOperation $ required "path" \path -> pure $ noRaw $ maybe ("Only pages under /p/" <> config.projectId.toText <> " can be opened.") ("Opened " <>) (projectPagePath config.projectId path)
       SendToSlack -> EffectfulOperation $ case getTextArg "message" args of
         Just message
           | not (T.null $ T.strip message) && T.length message <= 4000 ->

@@ -220,6 +220,7 @@ data LocalOperation
   | ListProjectMemory
   | ReadProjectMemory
   | WriteProjectMemory
+  | OpenPage
   deriving stock (Bounded, Enum, Eq, Show)
 
 
@@ -232,7 +233,7 @@ localPolicy = \case
   SendToSlack -> ExternalPublication
   SaveArtifact -> ConversationWrite
   WriteProjectMemory -> ProjectMemoryWrite
-  (GetFieldValues; GetServices; CountQuery; SampleLogs; GetFacets; RunQuery; RunSqlQuery; GetInvestigationHistory; GetRelatedIncidents; GetIncidentContext; ReadArtifact; SearchProjectTools; GetProjectToolSchema; GetCodeContext; ListRunbooks; ReadRunbook; GetLinkedRepositories; GetDeployments; ListProjectMemory; ReadProjectMemory) -> ReadOnly ProjectMembers.PView
+  (GetFieldValues; GetServices; CountQuery; SampleLogs; GetFacets; RunQuery; RunSqlQuery; GetInvestigationHistory; GetRelatedIncidents; GetIncidentContext; ReadArtifact; SearchProjectTools; GetProjectToolSchema; GetCodeContext; ListRunbooks; ReadRunbook; GetLinkedRepositories; GetDeployments; ListProjectMemory; ReadProjectMemory; OpenPage) -> ReadOnly ProjectMembers.PView
 
 
 operationName :: OperationCall -> Text
@@ -277,6 +278,7 @@ localTools = Map.fromList [(tool.name, tool) | operation <- [minBound .. maxBoun
       ListProjectMemory -> memoryTool Policy.ListProjectMemory
       ReadProjectMemory -> memoryTool Policy.ReadProjectMemory
       WriteProjectMemory -> memoryTool Policy.WriteProjectMemory
+      OpenPage -> readTool "Show the user a page of this project in their browser. Use after creating or changing a resource so they see it, or when they ask to go somewhere." [("path", "string", "Page path starting with /p/<project id>/, with any query string")]
       where
         name = toText $ encodeEnumSC @"" operation
         readTool = definition True

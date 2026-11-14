@@ -455,6 +455,8 @@ cookieProtectedServer projectTools =
     , aiOperationReviewPost = AIThreads.operationReviewPostH
     , aiRoutineRunGet = AIThreads.routineRunGetH
     , aiRoutineInstructionsPost = AIThreads.routineInstructionsPostH
+    , aiDockGet = AIThreads.copilotDockGetH
+    , aiDockPost = AIThreads.copilotPostH projectTools
     , aiThreadGet = AIThreads.threadGetH
     , aiThreadsPost = AIThreads.startThreadPostHWithTools projectTools
     , aiThreadPost = AIThreads.threadPostHWithTools projectTools
@@ -1001,6 +1003,8 @@ errorFormatters env =
 -- The page-defined types "Web.Links" names but cannot import.
 type instance Opaque "AIThreads.AIChatForm" = AIThreads.AIChatForm
 type instance Opaque "AIThreads.AIPage" = AIThreads.AIPage
+type instance Opaque "AIThreads.CopilotDock" = AIThreads.CopilotDock
+type instance Opaque "AIThreads.CopilotForm" = AIThreads.CopilotForm
 type instance Opaque "AIThreads.EmptyTitle" = AIThreads.EmptyTitle
 type instance Opaque "AIThreads.NewThreadError" = AIThreads.NewThreadError
 type instance Opaque "AIThreads.NoReviewClasses" = AIThreads.NoReviewClasses

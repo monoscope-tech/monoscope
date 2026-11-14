@@ -1979,7 +1979,7 @@ spec = around withTestResources do
               readIORef calls `shouldReturn` []
         denied initial
         recovered <- case origin of
-          "interactive" -> runTestBg frozenTime tr $ Issues.startInteractiveRun testPid (conversation n) (uid tr) initial.id "Retain the original role" Issues.Autonomous Issues.WebConversation >>= \case
+          "interactive" -> runTestBg frozenTime tr $ Issues.startInteractiveRun Nothing testPid (conversation n) (uid tr) initial.id "Retain the original role" Issues.Autonomous Issues.WebConversation >>= \case
             Issues.AcceptedRequest{} -> AI.requireRunContext testPid $ Issues.InteractiveClaim (uid tr) (conversation n) initial.id
             _ -> liftIO $ fail "Expected replay admission"
           "scheduled" -> runQueryEffect tr (Hasql.interpOne @Issues.ScheduledRoutine [HI.sql|UPDATE apis.ai_routines SET running_since = now() - interval '31 minutes' WHERE project_id = #{testPid} AND conversation_id = #{conversation n} RETURNING id, next_run_at|]) >>= maybe (fail "Expected scheduled lease") (claimSlot $ conversation n)
@@ -2624,7 +2624,7 @@ spec = around withTestResources do
         let request = UUIDId $ UUID.fromWords 0 0 93 n
             title = "Queued reviewed dashboard " <> show n
             execute = runTestBgNoReset tr $ titled "Queued review" $ counting calls "Queued review outcome recorded." title $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ Jobs.RunConversation testPid request
-        void $ runTestBgNoReset tr $ JobQueue.startConversation testPid (conversation n) (uid tr) request "Create a dashboard" reviewChanges Issues.WebConversation
+        void $ runTestBgNoReset tr $ JobQueue.startConversation Nothing testPid (conversation n) (uid tr) request "Create a dashboard" reviewChanges Issues.WebConversation
         execute
         Just waiting <- runQueryEffect tr $ Issues.getRoutineRun testPid request
         (waiting.status, waiting.error) `shouldBe` (Issues.RunRunning, Nothing)
@@ -2889,6 +2889,23 @@ spec = around withTestResources do
       call tr (AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "no-such-template")) `shouldReturn` Left AIThreads.UnknownTemplate
       map (.conversationId) <$> runQueryEffect tr (Issues.listConversations testPid) `shouldReturn` map (.conversationId) before
 
+    it "dock: a request from a page runs in the background, sees that page, opens what it asked to and reloads after writes" \tr -> do
+      prompts <- newIORef []
+      let request = UUIDId $ UUID.fromWords 0 0 94 1
+          page = "/p/" <> testPid.toText <> "/dashboards"
+          current = "http://localhost:8080/p/" <> testPid.toText <> "/log_explorer"
+          model :: Stub
+          model = agent (\h params -> modifyIORef' prompts ((unlines [Chat.content m | m <- toList h], toolNames params) :) $> nextStep (toolResults h) [fn "open_page" [("path", AE.String page)], newDashboard "Dock dashboard"] "Created it.") . titled "Dock dashboard"
+      started <- call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) testPid $ formOf @AIThreads.CopilotForm $ "query=Make+a+dashboard&allowActions=true&title=Dashboards&path=" <> page <> "&requestId=" <> request.toText) >>= either (fail . show) pure
+      Just run <- runQueryEffect tr $ Issues.getRoutineRun testPid request
+      renderT started `shouldContainAll` ["Make a dashboard", "Working…", "every 1500ms", "name=\"conversation\" value=\"" <> run.conversationId.toText]
+      runTestBgNoReset tr $ model $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ Jobs.RunConversation testPid request
+      dashboards tr "Dock dashboard" `shouldReturn` 1
+      readIORef prompts >>= \ps -> (any (T.isInfixOf ("viewing \"Dashboards\" at " <> page) . fst) ps, any (elem "open_page" . snd) ps) `shouldBe` (True, True)
+      let effects seen = renderT <$> call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) seen (Just current))
+          anchors html = [href | href <- [page, current], ("href=\"" <> href <> "\" class=\"hidden\"") `T.isInfixOf` html]
+      traverse (fmap anchors . effects) ([Just 0, Just 1, Just 2, Nothing] :: [Maybe Int]) `shouldReturn` [[page], [current], [], []]
+
     it "web and issue requests commit with a queued run, publish once, roll back on queue failure and cancel when revoked" \tr -> do
       let request n = UUIDId $ UUID.fromWords 0 0 93 n
           chatForm r = formOf @AIThreads.AIChatForm $ "query=Inspect+queued+conversation+evidence&mode=chat&requestId=" <> r.toText
@@ -3119,7 +3136,7 @@ spec = around withTestResources do
               then do
                 routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (liftIO $ fail "Missing Slack routine") pure
                 (.id) <$> (JobQueue.startCommand routine (fromRightShow $ Issues.commandOrigin "T_EXHAUSTED" "CEXHAUSTED" "U0123ABCDEF") conv (uid tr) "Retain this request" >>= maybe (liftIO $ fail "Missing queued request") pure)
-              else JobQueue.startConversation testPid conv (uid tr) (UUIDId $ UUID.fromWords 0 0 46 2) "Retain this request" Issues.Autonomous Issues.WebConversation $> UUIDId (UUID.fromWords 0 0 46 2)
+              else JobQueue.startConversation Nothing testPid conv (uid tr) (UUIDId $ UUID.fromWords 0 0 46 2) "Retain this request" Issues.Autonomous Issues.WebConversation $> UUIDId (UUID.fromWords 0 0 46 2)
           AI.requireRunContext testPid $ Issues.ConversationClaim identifier
         runQueryEffect tr $ Issues.saveRunResult context "Retained evidence" "The completed investigation survives delivery failure."
         threads <- newIORef mempty
@@ -3378,7 +3395,7 @@ spec = around withTestResources do
         pure actor.id
       demoRun <- runTestBg frozenTime tr do
         request <- UUIDId <$> UUIDEff.genUUID
-        void $ Issues.startInteractiveRun testPid (conv 5) visitor request "Read public demo evidence" Issues.Observe Issues.WebConversation
+        void $ Issues.startInteractiveRun Nothing testPid (conv 5) visitor request "Read public demo evidence" Issues.Observe Issues.WebConversation
         AI.DurableRun <$> AI.requireRunContext testPid (Issues.InteractiveClaim visitor (conv 5) request)
       let demoConfig = (durable tr (conv 5) demoRun){AI.access = AI.MemberAccess AI.WebSession visitor}
       runTestBg frozenTime tr $ agent (\_ _ -> pure $ said "Public demo evidence") do
@@ -3790,9 +3807,9 @@ spec = around withTestResources do
         actor <- addMember tr PM.PEdit "abandoned-requester@example.test"
         abandoned <- runTestBg frozenTime tr do
           for_ [conversation 1, conversation 2] \conv -> startConversation conv Issues.CTWeb
-          void $ Issues.startInteractiveRun testPid (conversation 2) (uid tr) (UUIDId $ UUID.fromWords 0 0 113 3) "Keep healthy work" Issues.Observe Issues.WebConversation
+          void $ Issues.startInteractiveRun Nothing testPid (conversation 2) (uid tr) (UUIDId $ UUID.fromWords 0 0 113 3) "Keep healthy work" Issues.Observe Issues.WebConversation
           run <- case fixture of
-            DeletedRequester -> Issues.startInteractiveRun testPid (conversation 1) actor (UUIDId $ UUID.fromWords 0 0 113 4) "Retain abandoned work" Issues.Autonomous Issues.WebConversation $> UUIDId (UUID.fromWords 0 0 113 4)
+            DeletedRequester -> Issues.startInteractiveRun Nothing testPid (conversation 1) actor (UUIDId $ UUID.fromWords 0 0 113 4) "Retain abandoned work" Issues.Autonomous Issues.WebConversation $> UUIDId (UUID.fromWords 0 0 113 4)
             DetachedEvent -> do
               template <- maybe (liftIO $ fail "Missing Slack routine") pure $ Issues.routineTemplate "slack-investigation"
               void $ Issues.installRoutineTemplate (uid tr) testPid (conversation 1) "UTC" template
@@ -5340,7 +5357,7 @@ contextOf = \case
 interactiveInvocation :: TestResources -> Projects.ProjectId -> UUIDId "conversation" -> Text -> Issues.ExecutionPolicy -> IO AI.InvocationMode
 interactiveInvocation tr project conv input policy = runTestBg frozenTime tr do
   request <- UUIDId <$> UUIDEff.genUUID
-  Issues.startInteractiveRun project conv (uid tr) request input policy Issues.WebConversation >>= \case
+  Issues.startInteractiveRun Nothing project conv (uid tr) request input policy Issues.WebConversation >>= \case
     Issues.ConflictingRequest -> liftIO $ fail "Expected a fresh interactive request"
     Issues.AcceptedRequest{} -> AI.DurableRun <$> AI.requireRunContext project (Issues.InteractiveClaim (uid tr) conv request)
 

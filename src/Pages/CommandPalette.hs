@@ -120,14 +120,25 @@ paletteShell_ pid = do
           span_ [term "hx-live:text" "(c => c.charAt(0).toUpperCase() + c.slice(1))(closest('.cmd-palette').data.currentCategory || '')"] ""
         -- Results container
         div_ [id_ "cmd-palette-results", role_ "listbox", class_ "max-h-80 overflow-y-auto p-1"] do
+          -- Any query leads with the assistant, so typing then Enter asks it; ↓ reaches logs and pages.
+          cmdLink_
+            ""
+            CKAiAction
+            [ hxPost_ $ urls.aiDockPost pid
+            , hxVals_ "js:{query: document.getElementById('cmd-palette-input').value, allowActions: true, path: location.pathname + location.search, title: document.title}"
+            , hxTarget_ "#ai-dock"
+            , hxSwap_ "outerMorph"
+            , [__|on htmx:after:request set #ai-dock-open.checked to true then call #ai-dock-input.focus()|]
+            ]
+            $ itemBody_ "sparkles" [term "hx-live:text" "'Ask AI: \"' + q('#cmd-palette-input').value + '\"'"] "Ask AI: \"\"" "AI"
+          -- Logs shortcut
+          cmdLink_ "search logs" CKLogShortcut [href_ $ logExplorerUrl pid, term "hx-live:href" "'/p/' + closest('.cmd-palette').dataset.pid + '/log_explorer?query=' + encodeURIComponent(q('#cmd-palette-input').value)"]
+            $ itemBody_ "explore" [term "hx-live:text" "'Search logs for: \"' + q('#cmd-palette-input').value + '\"'"] "Search logs for: \"\"" "Logs"
           -- Lazy-loaded dynamic items placeholder
           div_ [id_ "cmd-palette-dynamic", hxGet_ (urls.commandPaletteGet pid), hxTrigger_ "palette:open from:body", hxSwap_ "outerHTML", class_ "text-center text-xs text-textWeak py-2"] "Loading..."
           -- Direct page links (static, always present)
           forM_ @[] @_ @(Text, Text, Text) [(logExplorerUrl pid, "explore", "Log Explorer"), (urls.apiCatalogGet pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing, "swap", "API Catalog"), (urls.aiRoutinesGet pid, "clock", "Routines and reports"), (urls.repositoriesGet pid Nothing Nothing, "code-branch", "Repositories"), (urls.projects.settingsGet pid, "gear", "Settings")] \(href, icon, label) ->
             cmdItem pid CKDirect href [] icon label "Page"
-          -- Logs shortcut
-          cmdLink_ "search logs" CKLogShortcut [href_ $ logExplorerUrl pid, term "hx-live:href" "'/p/' + closest('.cmd-palette').dataset.pid + '/log_explorer?query=' + encodeURIComponent(q('#cmd-palette-input').value)"]
-            $ itemBody_ "explore" [term "hx-live:text" "'Search logs for: \"' + q('#cmd-palette-input').value + '\"'"] "Search logs for: \"\"" "Logs"
           -- Actions
           cmdItem pid CKDirect (logExplorerUrl pid <> "#create-alert-toggle") [] "plus" "Create monitor" "Action"
           cmdItem pid CKDirect (urls.dashboardsGetList pid Nothing Nothing Nothing Nothing Nothing (Just "true") def) [] "plus" "Create dashboard" "Action"
@@ -139,30 +150,26 @@ paletteShell_ pid = do
             , [__|on click call navigator.clipboard.writeText(window.location.href) then add .hidden to #cmd-palette-backdrop|]
             ]
             $ itemBody_ "copy" [] "Copy current URL" "Action"
-          cmdLink_
-            ""
-            CKAiAction
-            [ data_ "ai-action" "true"
-            , [__|on click
-                set :q to #cmd-palette-input.value
-                fetch `/p/${me.closest('.cmd-palette').dataset.pid}/log_explorer/ai_search` {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({input: :q, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})} as json
-                then set :r to it
-                then set tr to :r.time_range
-                then set window.location to `/p/${me.closest('.cmd-palette').dataset.pid}/log_explorer?query=${encodeURIComponent(:r.query or '')}&since=${tr.since or ''}&from=${encodeURIComponent(tr.from or '')}&to=${encodeURIComponent(tr.to or '')}`
-             |]
-            ]
-            $ itemBody_ "sparkles" [term "hx-live:text" "'Ask AI: \"' + q('#cmd-palette-input').value + '\"'"] "Ask AI: \"\"" "AI"
           -- Empty state
           div_
             [class_ "px-3 py-8 text-center text-sm text-base-content/40", hidden_ "", term "hx-live:hidden" "!q('#cmd-palette-input').value || q('#cmd-palette-results a.cmd-item:not([hidden])').count > 0"]
             "No matching results"
       kbdHints_ [("Navigate", ["\x2191", "\x2193"]), ("Open", ["\x21B5", "\x2192"]), ("Back", ["\x2190"]), ("Close", ["esc"])]
   where
-    -- Global Cmd+K listener — on a visible element so it is processed
+    -- Global Cmd+K listener — on a visible element so it is processed. A letter typed where
+    -- no field or player takes it opens the palette with that letter.
     paletteGlobalScript =
       [__|on keydown[key=='k' and (metaKey or ctrlKey)] from window
           halt the event
           send paletteToggle to me
+        end
+        on keydown[key.length == 1 and key.toLowerCase() != key.toUpperCase() and not (metaKey or ctrlKey or altKey or defaultPrevented or target.isContentEditable) and not target.closest('input, textarea, select, .monaco-editor') and not document.querySelector('dialog[open]')] from window
+          if #cmd-palette-backdrop.classList.contains('hidden')
+            halt the event
+            send paletteToggle to me
+            set #cmd-palette-input.value to event.key
+            send input to #cmd-palette-input
+          end
         end
         on paletteToggle
           if #cmd-palette-backdrop.classList.contains('hidden')
@@ -277,7 +284,7 @@ cmdLink_ search kind attrs =
       CKChild -> ("(c ? d.cmdCategory != c : !s) || !t.includes(s)", False)
       CKRecent -> ("!!(c || s)", False)
       CKLogShortcut -> ("!!c", False)
-      CKAiAction -> ("!!c || s.length <= 10", False)
+      CKAiAction -> ("!!c || !s.trim()", False)
 
 
 itemBody_ :: Text -> [Attribute] -> Html () -> Text -> Html ()
