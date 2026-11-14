@@ -489,7 +489,7 @@ threadPageGetH pid convId docM runM hxTarget = do
             div_ [class_ "flex items-baseline justify-between gap-3"] do
               h2_ [class_ "min-w-0 text-base font-semibold text-textStrong break-words"] $ toHtml $ fromMaybe "Run" run.title
               when (run.conversationId /= convId) $ a_ [href_ $ threadUrl pid run.conversationId, class_ "shrink-0 text-xs font-medium text-textBrand hover:underline"] "Open thread"
-            div_ [class_ "flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak [&>*+*]:before:me-2 [&>*+*]:before:text-textDisabled [&>*+*]:before:content-['·']"] do
+            div_ [class_ "flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-textWeak sm:gap-x-2 sm:[&>*+*]:before:me-2 sm:[&>*+*]:before:text-textDisabled sm:[&>*+*]:before:content-['·']"] do
               span_ [role_ "status"] $ uncurry tonePill_ $ runStatus run.status
               span_ [class_ "tabular-nums"] $ localTimeFmt_ "d MMM yyyy, HH:mm" run.startedAt
               span_ $ toHtml $ case run.source of
