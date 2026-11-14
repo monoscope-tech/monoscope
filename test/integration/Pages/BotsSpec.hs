@@ -2911,8 +2911,12 @@ spec = around withTestResources do
       dashboards tr "Dock dashboard" `shouldReturn` 1
       readIORef prompts >>= \ps -> (any (T.isInfixOf ("viewing \"Dashboards\" at " <> page) . fst) ps, any (elem "open_page" . snd) ps) `shouldBe` (True, True)
       let effects seen = renderT <$> call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) seen (Just current))
-          anchors html = [href | href <- [page, current], ("href=\"" <> href <> "\" class=\"hidden\"") `T.isInfixOf` html]
-      traverse (fmap anchors . effects) ([Just 0, Just 1, Just 2, Nothing] :: [Maybe Int]) `shouldReturn` [[page], [current], [], []]
+          here = "/p/" <> testPid.toText <> "/log_explorer"
+          anchors html = [href | href <- [page, here], ("href=\"" <> href <> "\" class=\"hidden\"") `T.isInfixOf` html]
+      traverse (fmap anchors . effects) ([Just 0, Just 1, Just 2, Nothing] :: [Maybe Int]) `shouldReturn` [[page], [here], [], []]
+      -- Opening the page they are on swaps it whole: morphing a page onto itself kept stale widget state.
+      renderT <$> call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) (Just 0) (Just $ "http://localhost:8080" <> page))
+        >>= (`shouldContainAll` ["href=\"" <> page <> "\" class=\"hidden\" data-hx-get=\"" <> page <> "\" data-hx-target=\"#main-content\" data-hx-select=\"#main-content\" data-hx-swap=\"outerHTML\""])
       let followUp = UUIDId $ UUID.fromWords 0 0 94 2
           later = "/p/" <> testPid.toText <> "/issues"
       void $ call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) (\_ _ -> pass) testPid $ formOf @AIThreads.CopilotForm $ "query=Now+the+issues&title=Issues&path=" <> later <> "&conversation=" <> run.conversationId.toText <> "&requestId=" <> followUp.toText)

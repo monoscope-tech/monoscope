@@ -1224,15 +1224,19 @@ data CopilotForm = CopilotForm
 
 
 -- | The floating assistant on every project page: recent sessions as bubbles, the selected one's
--- transcript and composer, and the page its newest tool calls ask the browser to show next (one
--- it opened, or the current one again after a write).
+-- transcript and composer, and the page change its newest tool calls ask the browser for.
 data CopilotDock = CopilotDock
   { projectId :: Projects.ProjectId
   , requestId :: UUIDId "ai_routine_run"
   , sessions :: [Issues.CopilotSession]
   , selected :: Maybe OpenSession
-  , navigate :: Maybe Text
+  , pageChange :: Maybe PageChange
   }
+
+
+-- | Another page arrives by the usual morphing navigation; the current one is swapped whole, since
+-- morphing a page onto itself keeps stale widget state (a dashboard's grid rendered empty).
+data PageChange = Visit Text | Reload Text
 
 
 -- | @answer@ is the finished reply, which counts as one step after the tool calls.
@@ -1292,7 +1296,9 @@ copilotDock pid convM seen currentUrl = do
         guard $ maybe False (<= length open.calls) seen && not (any (isJust . openedPath) open.calls)
         reply <- rightToMaybe . AI.parseLLMResponse =<< open.answer
         logExplorerUrl pid <> "?query=" <> toUriStr (foldMap AI.modelQueryText reply.query) <> foldMap TimePicker.rangeQuery reply.timeRange <$ guard (reply.visualization == Just "logs")
-  pure CopilotDock{projectId = pid, requestId, sessions, selected, navigate = viaNonEmpty last (mapMaybe (AI.projectPagePath pid <=< openedPath) fresh) <|> answered <|> (currentUrl <* guard wrote)}
+  let current = snd . T.breakOn "/p/" <$> currentUrl
+      visit page = bool Visit Reload (Just page == current) page
+  pure CopilotDock{projectId = pid, requestId, sessions, selected, pageChange = visit <$> (viaNonEmpty last (mapMaybe (AI.projectPagePath pid <=< openedPath) fresh) <|> answered) <|> (Reload <$> current <* guard wrote)}
 
 
 openedPath :: AI.ToolCallInfo -> Maybe Text
@@ -1324,8 +1330,10 @@ copilotDock_ dock =
       -- The tab executes a paused browser call once (morph keeps the element) and posts its answer.
       for_ ((,) <$> dock.selected <*> pending) \(open, call) ->
         term "ai-browser-call" [id_ $ "ai-browser-call-" <> LLM.toolCallId call, data_ "tool" $ LLM.toolFunctionName $ LLM.toolCallFunction call, data_ "args" $ encodeText $ LLM.toolFunctionArguments $ LLM.toolCallFunction call, data_ "call" $ LLM.toolCallId call, data_ "answer" $ urls.aiDockBrowserPost pid open.session.runId] ""
-      -- The child clicks it: navTabAttrs already owns the anchor's hyperscript attribute.
-      whenJust dock.navigate \href -> a_ ([href_ href, class_ "hidden"] <> navTabAttrs) $ span_ [[__|init call my parentElement.click()|]] ""
+      whenJust dock.pageChange \case
+        -- The child clicks it: navTabAttrs already owns the anchor's hyperscript attribute.
+        Visit href -> a_ ([href_ href, class_ "hidden"] <> navTabAttrs) $ span_ [[__|init call my parentElement.click()|]] ""
+        Reload href -> a_ [href_ href, class_ "hidden", hxGet_ href, hxTarget_ "#main-content", hxSelect_ "#main-content", hxSwap_ "outerHTML", [__|init call me.click()|]] ""
   where
     selectedId = (.session.conversationId) <$> dock.selected
     seen = maybe 0 (\open -> length open.calls + length open.answer) dock.selected
