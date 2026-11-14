@@ -216,8 +216,8 @@ data Routes mode = Routes
   deriving stock (Generic)
 
 
-server :: OtlpHttpHandler -> OtlpHttpHandler -> Routes (AsServerT ATBaseCtx)
-server otlpTraces otlpLogs =
+server :: OtlpHttpHandler -> OtlpHttpHandler -> AIThreads.RunNow -> Routes (AsServerT ATBaseCtx)
+server otlpTraces otlpLogs runNow =
   let projectTools = Just mcpProjectTools
       -- The proxy's X-Real-IP (nginx overwrites whatever a client sent), else the connecting socket.
       sender realIp peer = realIp <|> show . fst <$> IP.fromSockAddr peer
@@ -280,7 +280,7 @@ server otlpTraces otlpLogs =
               (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
               (Proxy @'[APItoolkitAuthContext])
               (atAuthToBase sessionWithCookies)
-              (cookieProtectedServer projectTools)
+              (cookieProtectedServer projectTools runNow)
         }
 
 
@@ -326,8 +326,8 @@ mcpProjectTools =
 
 
 -- Cookie Protected server
-cookieProtectedServer :: Maybe AI.ProjectTools -> Servant.ServerT (Servant.NamedRoutes CookieProtectedRoutes) ATAuthCtx
-cookieProtectedServer projectTools =
+cookieProtectedServer :: Maybe AI.ProjectTools -> AIThreads.RunNow -> Servant.ServerT (Servant.NamedRoutes CookieProtectedRoutes) ATAuthCtx
+cookieProtectedServer projectTools runNow =
   CookieProtectedRoutes
     { -- Dashboard handlers
       dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml"
@@ -456,7 +456,7 @@ cookieProtectedServer projectTools =
     , aiRoutineRunGet = AIThreads.routineRunGetH
     , aiRoutineInstructionsPost = AIThreads.routineInstructionsPostH
     , aiDockGet = AIThreads.copilotDockGetH
-    , aiDockPost = AIThreads.copilotPostH projectTools
+    , aiDockPost = AIThreads.copilotPostH projectTools runNow
     , aiThreadGet = AIThreads.threadGetH
     , aiThreadsPost = AIThreads.startThreadPostHWithTools projectTools
     , aiThreadPost = AIThreads.threadPostHWithTools projectTools

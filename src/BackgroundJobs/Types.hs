@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module BackgroundJobs.Types (BgJobs (..), Conversion (..), insertJob, wakeJob, longJob, reviewOperation, deferOperationReview, wakeStoppedReviews, startConversation, startCommand) where
+module BackgroundJobs.Types (BgJobs (..), Conversion (..), JobTiming (..), insertJob, wakeJob, longJob, reviewOperation, deferOperationReview, wakeStoppedReviews, startConversation, startCommand) where
 
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
@@ -182,11 +182,11 @@ wakeStoppedReviews scope = Hasql.transaction TxS.ReadCommitted TxS.Write do
   for_ operations $ \(project, identifier) -> queueReviewTx project FinishCancelledReview identifier
 
 
-startConversation :: (DB es, Time.Time :> es) => Maybe Issues.PageContext -> Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> Issues.ExecutionPolicy -> Issues.InteractiveOrigin -> Eff es Issues.InteractiveStart
-startConversation pageContext project conversation user request =
+startConversation :: (DB es, Time.Time :> es) => JobTiming -> Maybe Issues.PageContext -> Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> Issues.ExecutionPolicy -> Issues.InteractiveOrigin -> Eff es Issues.InteractiveStart
+startConversation timing pageContext project conversation user request =
   Issues.startMemberConversationRunWith
     ( \scheduled -> do
-        queueJobTx WakeNow $ RunConversation project request
+        queueJobTx timing $ RunConversation project request
         for_ scheduled $ \routine -> queueJobTx (DeferUntil routine.scheduledAt) $ AIRoutineRun routine.id routine.scheduledAt
     )
     pageContext

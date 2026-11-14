@@ -2058,7 +2058,7 @@ aiChatPostHWithTools projectTools pid issueId form = do
   unlessM (AI.canReadEvidence (AI.MemberAccess AI.WebSession sess.user.id) pid convId) $ throwError err403
   retained <- Issues.getRoutineRun pid requestId
   let browserOnly = case (.source) <$> retained of Just Issues.InteractiveRun{} -> True; _ -> False
-      admit = if browserOnly then Issues.startInteractiveRun else Jobs.startConversation
+      admit = if browserOnly then Issues.startInteractiveRun else Jobs.startConversation Jobs.WakeNow
   admit Nothing pid convId sess.user.id requestId form.query Issues.Observe (Issues.WebIssue issueId) >>= \case
     Issues.ConflictingRequest -> throwError err409{errBody = "Request ID already belongs to another request"}
     Issues.AcceptedRequest _ -> pass

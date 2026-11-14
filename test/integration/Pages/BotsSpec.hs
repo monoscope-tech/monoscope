@@ -2624,7 +2624,7 @@ spec = around withTestResources do
         let request = UUIDId $ UUID.fromWords 0 0 93 n
             title = "Queued reviewed dashboard " <> show n
             execute = runTestBgNoReset tr $ titled "Queued review" $ counting calls "Queued review outcome recorded." title $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ Jobs.RunConversation testPid request
-        void $ runTestBgNoReset tr $ JobQueue.startConversation Nothing testPid (conversation n) (uid tr) request "Create a dashboard" reviewChanges Issues.WebConversation
+        void $ runTestBgNoReset tr $ JobQueue.startConversation JobQueue.WakeNow Nothing testPid (conversation n) (uid tr) request "Create a dashboard" reviewChanges Issues.WebConversation
         execute
         Just waiting <- runQueryEffect tr $ Issues.getRoutineRun testPid request
         (waiting.status, waiting.error) `shouldBe` (Issues.RunRunning, Nothing)
@@ -2896,11 +2896,18 @@ spec = around withTestResources do
           current = "http://localhost:8080/p/" <> testPid.toText <> "/log_explorer"
           model :: Stub
           model = agent (\h params -> modifyIORef' prompts ((unlines [Chat.content m | m <- toList h], toolNames params) :) $> nextStep (toolResults h) [fn "open_page" [("path", AE.String page)], newDashboard "Dock dashboard"] "Created it.") . titled "Dock dashboard"
-      started <- call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) testPid $ formOf @AIThreads.CopilotForm $ "query=Make+a+dashboard&allowActions=true&title=Dashboards&path=" <> page <> "&requestId=" <> request.toText) >>= either (fail . show) pure
+      gate <- newEmptyMVar
+      -- The request runs on this server right away; the queued job is only a deferred fallback.
+      let runNow pid r = takeMVar gate >> runTestBgNoReset tr (model $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ Jobs.RunConversation pid r)
+          execute = runTestBgNoReset tr $ model $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ Jobs.RunConversation testPid request
+      started <- call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) runNow testPid $ formOf @AIThreads.CopilotForm $ "query=Make+a+dashboard&allowActions=true&title=Dashboards&path=" <> page <> "&requestId=" <> request.toText) >>= either (fail . show) pure
       Just run <- runQueryEffect tr $ Issues.getRoutineRun testPid request
       renderT started `shouldContainAll` ["Make a dashboard", "Working…", "every 2s", "name=\"conversation\" value=\"" <> run.conversationId.toText]
+      dbOne tr [sql|SELECT job.run_at >= run.started_at + interval '10 minutes' FROM background_jobs job JOIN apis.ai_routine_runs run ON run.id::text = job.payload->'contents'->>1 WHERE job.payload->>'tag' = 'RunConversation' AND run.id = ?|] (Only request) `shouldReturn` True
+      putMVar gate ()
+      timeout 30_000_000 (fix \settle -> runQueryEffect tr (Issues.getRoutineRun testPid request) >>= \case Just r | r.status /= Issues.RunRunning -> pure r.status; _ -> threadDelay 50_000 >> settle) `shouldReturn` Just Issues.RunSucceeded
+      execute
       goldenHtml "ai-dock-running" started
-      runTestBgNoReset tr $ model $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ Jobs.RunConversation testPid request
       dashboards tr "Dock dashboard" `shouldReturn` 1
       readIORef prompts >>= \ps -> (any (T.isInfixOf ("viewing \"Dashboards\" at " <> page) . fst) ps, any (elem "open_page" . snd) ps) `shouldBe` (True, True)
       let effects seen = renderT <$> call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) seen (Just current))
@@ -2908,7 +2915,7 @@ spec = around withTestResources do
       traverse (fmap anchors . effects) ([Just 0, Just 1, Just 2, Nothing] :: [Maybe Int]) `shouldReturn` [[page], [current], [], []]
       let followUp = UUIDId $ UUID.fromWords 0 0 94 2
           later = "/p/" <> testPid.toText <> "/issues"
-      void $ call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) testPid $ formOf @AIThreads.CopilotForm $ "query=Now+the+issues&title=Issues&path=" <> later <> "&conversation=" <> run.conversationId.toText <> "&requestId=" <> followUp.toText)
+      void $ call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) (\_ _ -> pass) testPid $ formOf @AIThreads.CopilotForm $ "query=Now+the+issues&title=Issues&path=" <> later <> "&conversation=" <> run.conversationId.toText <> "&requestId=" <> followUp.toText)
       fmap (\r -> (r.conversationId, r.pageContext)) <$> runQueryEffect tr (Issues.runContextFor testPid $ Issues.ConversationClaim followUp) `shouldReturn` Just (run.conversationId, Just $ Issues.PageContext later "Issues")
       goldenHtml "ai-dock-answered" =<< call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) Nothing (Just current))
 
@@ -2917,7 +2924,7 @@ spec = around withTestResources do
     it "dock: an answer asking for a log view opens the explorer with its query" \tr -> do
       let request = UUIDId $ UUID.fromWords 0 0 94 3
           answer = "{\"explanation\":\"Showing errors.\",\"visualization\":\"logs\",\"query\":\"level == \\\"ERROR\\\"\",\"time_range\":{\"since\":\"1H\"}}"
-      void $ call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) testPid $ formOf @AIThreads.CopilotForm $ "query=Load+the+log+explorer&title=Overview&path=/p/" <> testPid.toText <> "/dashboards&requestId=" <> request.toText)
+      void $ call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) (\_ _ -> pass) testPid $ formOf @AIThreads.CopilotForm $ "query=Load+the+log+explorer&title=Overview&path=/p/" <> testPid.toText <> "/dashboards&requestId=" <> request.toText)
       runTestBgNoReset tr $ agent (\_ _ -> pure $ said answer) . titled "Errors" $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ Jobs.RunConversation testPid request
       Just run <- runQueryEffect tr $ Issues.getRoutineRun testPid request
       let dock seen = renderT <$> call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) seen Nothing)
@@ -3154,7 +3161,7 @@ spec = around withTestResources do
               then do
                 routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (liftIO $ fail "Missing Slack routine") pure
                 (.id) <$> (JobQueue.startCommand routine (fromRightShow $ Issues.commandOrigin "T_EXHAUSTED" "CEXHAUSTED" "U0123ABCDEF") conv (uid tr) "Retain this request" >>= maybe (liftIO $ fail "Missing queued request") pure)
-              else JobQueue.startConversation Nothing testPid conv (uid tr) (UUIDId $ UUID.fromWords 0 0 46 2) "Retain this request" Issues.Autonomous Issues.WebConversation $> UUIDId (UUID.fromWords 0 0 46 2)
+              else JobQueue.startConversation JobQueue.WakeNow Nothing testPid conv (uid tr) (UUIDId $ UUID.fromWords 0 0 46 2) "Retain this request" Issues.Autonomous Issues.WebConversation $> UUIDId (UUID.fromWords 0 0 46 2)
           AI.requireRunContext testPid $ Issues.ConversationClaim identifier
         runQueryEffect tr $ Issues.saveRunResult context "Retained evidence" "The completed investigation survives delivery failure."
         threads <- newIORef mempty

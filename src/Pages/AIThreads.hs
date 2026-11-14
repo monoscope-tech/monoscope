@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pages.AIThreads (AIPage (..), PolicySaved (..), PromptError (..), NewThreadError (..), TurnError (..), EmptyTitle (..), UnknownTemplate (..), NoReviewClasses (..), EmailOnlyForReports (..), OperationReviewed (..), AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), OperationReviewForm (..), operationReviewPostH, operationGetH, RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH, CopilotForm, CopilotDock (..), copilotDockGetH, copilotPostH) where
+module Pages.AIThreads (AIPage (..), PolicySaved (..), PromptError (..), NewThreadError (..), TurnError (..), EmptyTitle (..), UnknownTemplate (..), NoReviewClasses (..), EmailOnlyForReports (..), OperationReviewed (..), AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), OperationReviewForm (..), operationReviewPostH, operationGetH, RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH, CopilotForm, CopilotDock (..), RunNow, copilotDockGetH, copilotPostH) where
 
 import BackgroundJobs qualified
 import BackgroundJobs.Types qualified as Jobs
@@ -15,11 +15,13 @@ import Data.Effectful.UUID qualified as UUID
 import Data.List qualified as L
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (addUTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID.V5 qualified as UUID5
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
+import Effectful.Time qualified as Time
 import Lucid hiding (for_)
 import Lucid qualified
 import Lucid.Aria qualified as Aria
@@ -42,6 +44,7 @@ import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC)
 import Relude hiding (ask)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Tracing (forkBackgroundFor)
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, done)
 import Utils (encodeText, faSprite_, popoverPanel_, popoverTrigger_, renderMarkdownTocWithPrefix, toUriStr)
 import Web.FormUrlEncoded (FromForm (..), parseAll, parseUnique)
@@ -892,7 +895,7 @@ startThreadPostHWithTools projectTools pid form = act do
       NewRoutine _ interval -> Issues.WebRoutine interval <$ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
     requestId <- maybe (UUIDId <$> UUID.genUUID) pure form.requestId
     let convId = requestConversation requestId
-    ThreadPage pid convId <$ submitTurn projectTools origin requestId (form.allowActions == Just True) Nothing pid convId (case request of NewChat p -> p; NewRoutine p _ -> p)
+    ThreadPage pid convId <$ submitTurn projectTools origin requestId (form.allowActions == Just True) QueuedTurn pid convId (case request of NewChat p -> p; NewRoutine p _ -> p)
   where
     newThread = do
       prompt <- first NewThreadPrompt $ normalizeQuery form.query
@@ -915,7 +918,7 @@ threadPostHWithTools projectTools pid convId form = act do
         Issues.getConversation pid convId >>= traverse \conversation -> do
           case Issues.conversationIssueId conversation of
             Just issueId -> void $ IssuePage.aiChatPostHWithTools projectTools pid issueId (IssuePage.AIChatForm prompt $ Just requestId)
-            Nothing -> submitTurn projectTools Issues.WebMessage requestId (form.allowActions == Just True) Nothing pid convId prompt
+            Nothing -> submitTurn projectTools Issues.WebMessage requestId (form.allowActions == Just True) QueuedTurn pid convId prompt
           pure $ ThreadPage pid convId
         <&> maybeToRight ConversationGone
 
@@ -939,8 +942,17 @@ requestConversation :: UUIDId "ai_routine_run" -> UUIDId "conversation"
 requestConversation requestId = UUIDId $ UUID5.generateNamed requestId.unUUIDId $ BS.unpack "web-conversation"
 
 
-submitTurn :: Maybe AI.ProjectTools -> Issues.InteractiveOrigin -> UUIDId "ai_routine_run" -> Bool -> Maybe Issues.PageContext -> Projects.ProjectId -> UUIDId "conversation" -> Text -> ATAuthCtx ()
-submitTurn projectTools origin requestId allowActions pageContext pid convId prompt = do
+-- | Runs a queued conversation request on this server's own background stack.
+type RunNow = Projects.ProjectId -> UUIDId "ai_routine_run" -> IO ()
+
+
+-- | Where a member's turn runs: the shared job queue, or (from the dock) this server right away,
+-- with the queued job deferred as the fallback should this process die mid-run.
+data TurnRunner = QueuedTurn | DockTurn Issues.PageContext RunNow
+
+
+submitTurn :: Maybe AI.ProjectTools -> Issues.InteractiveOrigin -> UUIDId "ai_routine_run" -> Bool -> TurnRunner -> Projects.ProjectId -> UUIDId "conversation" -> Text -> ATAuthCtx ()
+submitTurn projectTools origin requestId allowActions runner pid convId prompt = do
   appCtx <- ask @AuthContext
   (sess, _) <- Projects.sessionAndProject pid
   let policy = if allowActions then Issues.Autonomous else Issues.Observe
@@ -949,10 +961,17 @@ submitTurn projectTools origin requestId allowActions pageContext pid convId pro
   let browserOnly = case (.source) <$> retained of
         Just Issues.InteractiveRun{} -> True
         (Nothing; Just Issues.ScheduledRun; Just Issues.TriggeredRun{}; Just Issues.ConversationRun{}; Just Issues.FixRun{}) -> isNothing member
-      admit = if browserOnly then Issues.startInteractiveRun else Jobs.startConversation
+  now <- Time.currentTime
+  let (pageContext, timing) = case runner of
+        QueuedTurn -> (Nothing, Jobs.WakeNow)
+        DockTurn page _ -> (Just page, Jobs.DeferUntil $ addUTCTime 600 now)
+      admit = if browserOnly then Issues.startInteractiveRun else Jobs.startConversation timing
   admit pageContext pid convId sess.user.id requestId prompt policy origin >>= \case
     Issues.ConflictingRequest -> throwError Servant.err409{Servant.errBody = "Request ID already belongs to another request"}
     Issues.AcceptedRequest scheduled -> when browserOnly $ for_ scheduled $ \routine -> BackgroundJobs.enqueueAIRoutine appCtx routine.id routine.scheduledAt
+  case runner of
+    DockTurn _ runNow | not browserOnly -> forkBackgroundFor (20 * 60 * 1_000_000) appCtx.backgroundScope "Dock request" $ liftIO $ runNow pid requestId
+    (QueuedTurn; DockTurn{}) -> pass
   when browserOnly do
     mode <- fmap AI.DurableRun $ AI.requireRunContext pid $ Issues.InteractiveClaim sess.user.id convId requestId
     result <- Bots.processAIQueryWithMode (Just appCtx.config) appCtx.env.enableTimefusionReads projectTools mode (AI.MemberAccess AI.WebSession sess.user.id) pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
@@ -1222,15 +1241,15 @@ copilotDockGetH :: Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe 
 copilotDockGetH pid convM seen = addRespHeaders <=< copilotDock pid convM seen
 
 
-copilotPostH :: Maybe AI.ProjectTools -> Projects.ProjectId -> CopilotForm -> ATAuthCtx (ActionResult TurnError CopilotDock)
-copilotPostH projectTools pid form = act do
+copilotPostH :: Maybe AI.ProjectTools -> RunNow -> Projects.ProjectId -> CopilotForm -> ATAuthCtx (ActionResult TurnError CopilotDock)
+copilotPostH projectTools runNow pid form = act do
   authorizeProject pid
   forM (first TurnPrompt $ normalizeQuery form.query) \prompt -> do
     requestId <- maybe (UUIDId <$> UUID.genUUID) pure form.requestId
     (convId, origin) <- case form.conversation of
       Just convId -> (convId, Issues.WebMessage) <$ authorizeConversation pid convId
       Nothing -> pure (requestConversation requestId, Issues.WebConversation)
-    submitTurn projectTools origin requestId (form.allowActions == Just True) (Just $ Issues.PageContext form.path form.title) pid convId prompt
+    submitTurn projectTools origin requestId (form.allowActions == Just True) (DockTurn (Issues.PageContext form.path form.title) runNow) pid convId prompt
     copilotDock pid (Just convId) (Just 0) Nothing
 
 
