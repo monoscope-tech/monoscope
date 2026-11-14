@@ -1985,6 +1985,8 @@ renderTableWithDataAndParams widget headers dataRows params = do
                 | otherwise -> renderLongTextOr widget cellLinkSubs col (getRowValue idx row)
       when (V.null dataRows) $ tr_ [] $ td_ [colspan_ (show $ max 1 $ length visible), class_ "py-10"] case param "table-search" of
         Just q | not (T.null q) -> emptyState_ def{size = ESCompact, icon = Just "magnifying-glass"} ("No rows match “" <> q <> "”") "Try a different search, or widen the time range."
+        -- A widget carrying its own window (a run's chart) can't be widened from the page.
+        _ | isJust widget.timeFrom -> emptyState_ def{size = ESCompact, icon = Just "table"} "Nothing in this window" "This table covers the fixed time range it was saved with."
         _ -> emptyState_ def{size = ESCompact, icon = Just "table", action = widen} "Nothing in this time range" "Widen the time range or loosen the dashboard filters to look further."
 
 
