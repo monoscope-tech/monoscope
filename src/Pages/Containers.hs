@@ -241,7 +241,8 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
       -- Where the Pod and Namespace columns are hidden, a repeated name keeps its identity on the row.
       unless (null vm.identity)
         $ div_ [class_ "hidden max-[1800px]:flex flex-wrap gap-x-3 gap-y-0.5 text-xs leading-normal text-textWeak"]
-        $ forM_ vm.identity \(label, v) -> let t = label <> ": " <> v in span_ [class_ "min-w-0 max-w-full truncate", data_ "tippy-content" t] $ toHtml t
+        -- The Node column appears at 1400px, so the node gives way there rather than show twice.
+        $ forM_ vm.identity \(label, v) -> let t = label <> ": " <> v in span_ [class_ $ "min-w-0 max-w-full truncate" <> bool "" " min-[1400px]:hidden" (label == "Node / host"), data_ "tippy-content" t] $ toHtml t
 
     -- The drawer reads the window the row was rendered from, so it shows the same numbers the
     -- row does and hits the same cached snapshot the list already fetched.

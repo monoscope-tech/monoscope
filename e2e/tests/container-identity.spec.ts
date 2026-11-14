@@ -61,7 +61,7 @@ test("navbar refresh menu applies Off and interval options", async ({ page }) =>
   }
 });
 
-for (const width of [390, 1280, 1920]) {
+for (const width of [390, 1280, 1440, 1920]) {
   test(`duplicate containers expose their identity before opening a drawer at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?from=2024-12-31T23:00:00Z&to=2025-01-01T00:00:00Z`, { waitUntil: "domcontentloaded" });
@@ -76,7 +76,8 @@ for (const width of [390, 1280, 1920]) {
         return value ? value.getClientRects().length > 0 : null;
       });
     }));
-    expect(visible).toEqual(Array(identities.length * 4).fill(width < 1536));
+    // The Node column takes over at 1400px; Pod, Namespace and Cluster columns only at 1800px.
+    expect(visible).toEqual(Array.from({ length: identities.length }, () => [width < 1800, width < 1800, width < 1800, width < 1400]).flat());
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 }
