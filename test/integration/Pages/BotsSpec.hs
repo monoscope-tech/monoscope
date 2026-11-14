@@ -2899,12 +2899,14 @@ spec = around withTestResources do
       started <- call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) testPid $ formOf @AIThreads.CopilotForm $ "query=Make+a+dashboard&allowActions=true&title=Dashboards&path=" <> page <> "&requestId=" <> request.toText) >>= either (fail . show) pure
       Just run <- runQueryEffect tr $ Issues.getRoutineRun testPid request
       renderT started `shouldContainAll` ["Make a dashboard", "Working…", "every 1500ms", "name=\"conversation\" value=\"" <> run.conversationId.toText]
+      goldenHtml "ai-dock-running" started
       runTestBgNoReset tr $ model $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ Jobs.RunConversation testPid request
       dashboards tr "Dock dashboard" `shouldReturn` 1
       readIORef prompts >>= \ps -> (any (T.isInfixOf ("viewing \"Dashboards\" at " <> page) . fst) ps, any (elem "open_page" . snd) ps) `shouldBe` (True, True)
       let effects seen = renderT <$> call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) seen (Just current))
           anchors html = [href | href <- [page, current], ("href=\"" <> href <> "\" class=\"hidden\"") `T.isInfixOf` html]
       traverse (fmap anchors . effects) ([Just 0, Just 1, Just 2, Nothing] :: [Maybe Int]) `shouldReturn` [[page], [current], [], []]
+      goldenHtml "ai-dock-answered" =<< call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) Nothing (Just current))
 
     it "web and issue requests commit with a queued run, publish once, roll back on queue failure and cancel when revoked" \tr -> do
       let request n = UUIDId $ UUID.fromWords 0 0 93 n

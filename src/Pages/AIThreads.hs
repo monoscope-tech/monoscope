@@ -1259,8 +1259,11 @@ copilotDock_ dock =
     do
       input_ [type_ "checkbox", id_ "ai-dock-open", class_ "hidden", term "hx-morph-skip" "", Aria.hidden_ "true"]
       for_ dock.selected panel_
-      unless (null dock.sessions) $ div_ [class_ "pointer-events-auto flex max-w-full items-center gap-1 overflow-x-auto rounded-full border border-strokeWeak bg-bgRaised p-1 shadow-lg"] do
-        button_ [type_ "button", class_ "btn btn-ghost btn-sm btn-circle text-iconBrand", Aria.label_ "Ask AI", title_ "Ask AI (⌘K)", [__|on click send paletteToggle to #cmd-palette-global|]] $ faSprite_ "sparkles" "regular" "size-4"
+      unless (null dock.sessions) $ div_ [class_ "pointer-events-auto flex max-w-full items-center gap-0.5 overflow-x-auto rounded-full border border-strokeWeak bg-bgRaised p-1 shadow-[0_8px_24px_-8px_oklch(0_0_0/0.3)]"] do
+        button_ [type_ "button", class_ "flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs text-textWeak transition-[scale,background-color] hover:bg-fillHover active:scale-[0.97]", title_ "New request (⌘K)", [__|on click send paletteToggle to #cmd-palette-global|]] do
+          faSprite_ "sparkles" "regular" "size-3.5 text-iconBrand"
+          span_ [class_ "max-sm:sr-only"] "Ask AI"
+          kbd_ [class_ "font-sans text-textDisabled max-sm:hidden"] "⌘K"
         for_ dock.sessions bubble_
       whenJust dock.effect \href -> a_ ([href_ href, class_ "hidden"] <> navTabAttrs) $ span_ [[__|init call my parentElement.click()|]] ""
   where
@@ -1271,7 +1274,7 @@ copilotDock_ dock =
     bubble_ :: Issues.CopilotSession -> Html ()
     bubble_ session =
       let content = statusIcon_ session.status >> span_ [class_ "max-w-40 truncate"] (toHtml session.title)
-          look = "flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs cursor-pointer transition-colors hover:bg-fillHover "
+          look = "flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-xs transition-[scale,opacity,background-color] duration-200 ease-(--ease-out-quint) hover:bg-fillHover active:scale-[0.97] starting:scale-95 starting:opacity-0 "
        in if Just session.conversationId == selectedId
             then label_ [Lucid.for_ "ai-dock-open", class_ $ look <> "bg-fillWeak font-medium text-textStrong", title_ session.title] content
             else button_ [type_ "button", class_ $ look <> "text-textWeak", title_ session.title, hxGet_ $ urls.aiDockGet pid (Just session.conversationId) Nothing, hxTarget_ "#ai-dock", hxSwap_ "outerMorph", [__|on htmx:after:request set #ai-dock-open.checked to true|]] content
@@ -1289,7 +1292,7 @@ copilotDock_ dock =
         [ id_ "ai-dock-panel"
         , role_ "dialog"
         , Aria.label_ "AI session"
-        , class_ "pointer-events-auto hidden w-full max-w-[32rem] max-h-[min(36rem,calc(100dvh-6rem))] flex-col overflow-hidden rounded-2xl border border-strokeWeak bg-bgRaised shadow-xl group-has-[#ai-dock-open:checked]/dock:flex"
+        , class_ "pointer-events-auto hidden w-full max-w-[32rem] max-h-[min(36rem,calc(100dvh-6rem))] origin-bottom flex-col overflow-hidden rounded-2xl border border-strokeWeak bg-bgRaised shadow-[0_24px_48px_-16px_oklch(0_0_0/0.35)] transition-[opacity,translate,scale,display] transition-discrete duration-200 ease-(--ease-out-quint) group-has-[#ai-dock-open:checked]/dock:flex starting:translate-y-2 starting:scale-[0.98] starting:opacity-0 motion-reduce:transition-none"
         , [__|on keydown[key=='Escape'] set #ai-dock-open.checked to false|]
         ]
         do
@@ -1301,15 +1304,20 @@ copilotDock_ dock =
           -- Reversed, the log stays pinned to its newest line as it grows, without script.
           div_ [id_ "ai-dock-log", class_ "flex min-h-0 grow flex-col-reverse overflow-y-auto px-4"] $ div_ do
             IssuePage.aiChatHistoryView_ (\href -> href_ (threadUrl pid session.conversationId <> href) : navTabAttrs) pid messages
-            unless (any ((== Issues.ChatAssistant) . (.role)) (take 1 $ reverse messages) && session.status /= Issues.RunRunning) do
-              whenJust session.input $ p_ [class_ "mt-3 ms-auto w-fit max-w-[85%] whitespace-pre-wrap break-words rounded-xl bg-fillWeak px-3 py-2 text-sm text-textStrong"] . toHtml
-              ol_ [class_ "space-y-1 py-3 text-xs text-textWeak", Aria.label_ "Progress"] do
-                for_ (reverse $ take 6 $ reverse calls) \call -> li_ [class_ "flex items-center gap-2"] do
-                  faSprite_ "check" "regular" "size-3 shrink-0 text-iconSuccess"
-                  span_ [class_ "truncate"] $ toHtml $ stepLabel call
-                li_ [class_ "flex items-center gap-2 text-textStrong", role_ "status"] case session.status of
-                  Issues.RunRunning -> faSprite_ "spinner" "regular" "size-3 shrink-0 animate-spin text-iconBrand" >> "Working…"
-                  status -> statusIcon_ status >> toHtml (snd $ runStatus status)
+            -- The history pairs a question with its answer; a request still running (or that ended unanswered) shows its steps instead.
+            unless (any ((== Issues.ChatAssistant) . (.role)) (take 1 $ reverse messages) && session.status /= Issues.RunRunning) $ div_ [class_ "space-y-3 py-3"] do
+              whenJust session.input \question -> div_ [class_ "flex items-start gap-2.5"] do
+                IssuePage.chatAvatar_ "bg-fillWeak" "user" "text-textWeak"
+                p_ [class_ "mt-0.5 whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml question
+              div_ [class_ "flex items-start gap-2.5"] do
+                IssuePage.chatAvatar_ "bg-fillBrand-weak" "sparkles" "text-fillBrand-strong"
+                ol_ [class_ "mt-1 min-w-0 flex-1 space-y-1.5 text-xs text-textWeak", Aria.label_ "Progress"] do
+                  for_ (reverse $ take 6 $ reverse calls) \call -> li_ [class_ "flex items-center gap-2"] do
+                    faSprite_ "check" "regular" "size-3 shrink-0 text-iconSuccess"
+                    span_ [class_ "truncate"] $ toHtml $ stepLabel call
+                  li_ [class_ "flex items-center gap-2 text-textStrong", role_ "status"] case session.status of
+                    Issues.RunRunning -> faSprite_ "spinner" "regular" "size-3 shrink-0 animate-spin text-iconBrand" >> "Working…"
+                    status -> statusIcon_ status >> toHtml (snd $ runStatus status)
           form_
             [ id_ "ai-dock-form"
             , class_ "border-t border-strokeWeak p-2"
