@@ -2830,15 +2830,13 @@ copilotSessions :: (DB es, Time :> es) => Projects.ProjectId -> Projects.UserId 
 copilotSessions pid user = do
   since <- addUTCTime (-12 * 3600) <$> Time.currentTime
   Hasql.interp
-    [HI.sql|SELECT conversation_id, title, id, status, input, policy FROM (
-      SELECT DISTINCT ON (run.conversation_id) run.conversation_id, COALESCE(NULLIF(c.title, ''), LEFT(first_run.input, 100), 'New chat') AS title,
-        run.id, run.status, run.input, run.policy, run.started_at
-      FROM apis.ai_routine_runs run
-      JOIN apis.ai_conversations c ON c.project_id = run.project_id AND c.conversation_id = run.conversation_id
-      LEFT JOIN LATERAL (SELECT input FROM apis.ai_routine_runs f WHERE f.project_id = run.project_id AND f.conversation_id = run.conversation_id ORDER BY f.started_at LIMIT 1) first_run ON TRUE
-      WHERE run.project_id = #{pid} AND run.requested_by = #{user} AND run.page_context IS NOT NULL AND run.started_at > #{since}
-      ORDER BY run.conversation_id, run.started_at DESC) latest
-    ORDER BY started_at DESC LIMIT 6|]
+    [HI.sql|SELECT latest.conversation_id, COALESCE(NULLIF(c.title, ''), (SELECT LEFT(f.input, 100) FROM apis.ai_routine_runs f WHERE f.project_id = #{pid} AND f.conversation_id = latest.conversation_id ORDER BY f.scheduled_at LIMIT 1), 'New chat'),
+        latest.id, latest.status, latest.input, latest.policy
+      FROM (SELECT * FROM (SELECT DISTINCT ON (conversation_id) conversation_id, id, status, input, policy, scheduled_at FROM apis.ai_routine_runs
+          WHERE project_id = #{pid} AND scheduled_at > #{since} AND requested_by = #{user} AND page_context IS NOT NULL
+          ORDER BY conversation_id, scheduled_at DESC) runs ORDER BY scheduled_at DESC LIMIT 6) latest
+      JOIN apis.ai_conversations c ON c.project_id = #{pid} AND c.conversation_id = latest.conversation_id
+      ORDER BY latest.scheduled_at DESC|]
 
 
 data InteractiveStart = ConflictingRequest | AcceptedRequest (Maybe ScheduledRoutine)

@@ -2898,7 +2898,7 @@ spec = around withTestResources do
           model = agent (\h params -> modifyIORef' prompts ((unlines [Chat.content m | m <- toList h], toolNames params) :) $> nextStep (toolResults h) [fn "open_page" [("path", AE.String page)], newDashboard "Dock dashboard"] "Created it.") . titled "Dock dashboard"
       started <- call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) testPid $ formOf @AIThreads.CopilotForm $ "query=Make+a+dashboard&allowActions=true&title=Dashboards&path=" <> page <> "&requestId=" <> request.toText) >>= either (fail . show) pure
       Just run <- runQueryEffect tr $ Issues.getRoutineRun testPid request
-      renderT started `shouldContainAll` ["Make a dashboard", "Working…", "every 1500ms", "name=\"conversation\" value=\"" <> run.conversationId.toText]
+      renderT started `shouldContainAll` ["Make a dashboard", "Working…", "every 2s", "name=\"conversation\" value=\"" <> run.conversationId.toText]
       goldenHtml "ai-dock-running" started
       runTestBgNoReset tr $ model $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ Jobs.RunConversation testPid request
       dashboards tr "Dock dashboard" `shouldReturn` 1

@@ -47,7 +47,6 @@ import Web.FormUrlEncoded (FromForm (..), parseAll, parseUnique)
 import Web.HttpApiData (FromHttpApiData (..))
 import Web.Links
 import Web.MCP qualified as MCP
-import Web.Operations qualified as Ops
 
 
 -- | Refusals of the JSON search endpoint; status and body are what the query box reads.
@@ -1239,13 +1238,17 @@ copilotDock pid convM seen currentUrl = do
   requestId <- UUIDId <$> UUID.genUUID
   sessions <- Issues.copilotSessions pid sess.user.id
   selected <- forM (convM >>= \convId -> find ((== convId) . (.conversationId)) sessions) \session -> do
-    messages <- Issues.selectChatHistory pid session.conversationId
-    checkpoint <- Investigations.loadCheckpointFor $ Investigations.RunCheckpoint $ Investigations.RunTurn pid session.conversationId sess.user.id session.runId
+    (messages, checkpoint) <- concurrently (Issues.selectChatHistory pid session.conversationId) (Investigations.loadCheckpointFor $ Investigations.RunCheckpoint $ Investigations.RunTurn pid session.conversationId sess.user.id session.runId)
     pure $ OpenSession session messages $ foldMap (Investigations.checkpointToolCalls . (.checkpoint)) checkpoint
   let fresh = foldMap (\open -> foldMap (`drop` open.calls) seen) selected
-      opened = [path | call <- fresh, call.name == "open_page", Just (AE.String raw) <- [Map.lookup "path" call.args], Just path <- [AI.projectPagePath pid raw]]
-      wrote = any (\call -> any (\o -> o.name == call.name && o.access `elem` map Just [Ops.Edit, Ops.Admin, Ops.PrivateAdmin]) Ops.operations) fresh
-  pure CopilotDock{projectId = pid, requestId, sessions, selected, navigate = viaNonEmpty last opened <|> (currentUrl <* guard wrote)}
+      wrote = any (\call -> any Catalog.requiresAutonomy (join $ Map.lookup call.name Catalog.policiesByName)) fresh
+  pure CopilotDock{projectId = pid, requestId, sessions, selected, navigate = viaNonEmpty last (mapMaybe (AI.projectPagePath pid <=< openedPath) fresh) <|> (currentUrl <* guard wrote)}
+
+
+openedPath :: AI.ToolCallInfo -> Maybe Text
+openedPath call = case (call.name, Map.lookup "path" call.args) of
+  ("open_page", Just (AE.String path)) -> Just path
+  _ -> Nothing
 
 
 instance ToHtml CopilotDock where
@@ -1257,7 +1260,7 @@ copilotDock_ :: CopilotDock -> Html ()
 copilotDock_ dock =
   div_
     ( [id_ "ai-dock", class_ "group/dock pointer-events-none fixed inset-x-0 bottom-3 z-[60] flex flex-col items-center gap-2 px-3"]
-        <> [attribute | any ((== Issues.RunRunning) . (.status)) dock.sessions, attribute <- [hxGet_ $ urls.aiDockGet dock.projectId selectedId (Just seen), hxTrigger_ "every 1500ms", hxSwap_ "outerMorph"]]
+        <> [attribute | any ((== Issues.RunRunning) . (.status)) dock.sessions, attribute <- [hxGet_ $ urls.aiDockGet dock.projectId selectedId (Just seen), hxTrigger_ "every 2s", hxSwap_ "outerMorph"]]
     )
     do
       input_ [type_ "checkbox", id_ "ai-dock-open", class_ "hidden", term "hx-morph-skip" "", Aria.hidden_ "true"]
@@ -1286,7 +1289,8 @@ copilotDock_ dock =
     statusIcon_ = \case
       Issues.RunRunning -> faSprite_ "spinner" "regular" "size-3 animate-spin text-iconBrand"
       (Issues.RunSucceeded; Issues.RunNoFindings) -> faSprite_ "circle-check" "regular" "size-3 text-iconSuccess"
-      (Issues.RunFailed; Issues.RunTimedOut) -> faSprite_ "triangle-exclamation" "regular" "size-3 text-iconError"
+      Issues.RunFailed -> faSprite_ "triangle-exclamation" "regular" "size-3 text-iconError"
+      Issues.RunTimedOut -> faSprite_ "triangle-exclamation" "regular" "size-3 text-iconWarning"
       Issues.RunCancelled -> faSprite_ "circle-xmark" "regular" "size-3 text-iconNeutral"
 
     panel_ :: OpenSession -> Html ()
@@ -1309,16 +1313,16 @@ copilotDock_ dock =
           div_ [id_ "ai-dock-log", class_ "flex min-h-0 grow flex-col-reverse overflow-y-auto px-4"] $ div_ do
             IssuePage.aiChatHistoryView_ (\href -> href_ (threadUrl pid session.conversationId <> href) : navTabAttrs) pid messages
             -- The history pairs a question with its answer; a request still running (or that ended unanswered) shows its steps instead.
-            unless (any ((== Issues.ChatAssistant) . (.role)) (take 1 $ reverse messages) && session.status /= Issues.RunRunning) $ div_ [class_ "space-y-3 py-3"] do
+            unless (((.role) <$> viaNonEmpty last messages) == Just Issues.ChatAssistant && session.status /= Issues.RunRunning) $ div_ [class_ "space-y-3 py-3"] do
               whenJust session.input \question -> div_ [class_ "flex items-start gap-2.5"] do
                 IssuePage.chatAvatar_ "bg-fillWeak" "user" "text-textWeak"
                 p_ [class_ "mt-0.5 whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml question
               div_ [class_ "flex items-start gap-2.5"] do
                 IssuePage.chatAvatar_ "bg-fillBrand-weak" "sparkles" "text-fillBrand-strong"
                 ol_ [class_ "mt-1 min-w-0 flex-1 space-y-1.5 text-xs text-textWeak", Aria.label_ "Progress"] do
-                  for_ (reverse $ take 6 $ reverse calls) \call -> li_ [class_ "flex items-center gap-2"] do
+                  for_ (drop (length calls - 6) calls) \call -> li_ [class_ "flex items-center gap-2"] do
                     faSprite_ "check" "regular" "size-3 shrink-0 text-iconSuccess"
-                    span_ [class_ "truncate"] $ toHtml $ stepLabel call
+                    span_ [class_ "truncate"] $ toHtml $ maybe (T.replace "_" " " call.name) ("Opened " <>) (openedPath call)
                   li_ [class_ "flex items-center gap-2 text-textStrong", role_ "status"] case session.status of
                     Issues.RunRunning -> faSprite_ "spinner" "regular" "size-3 shrink-0 animate-spin text-iconBrand" >> "Working…"
                     status -> statusIcon_ status >> toHtml (snd $ runStatus status)
@@ -1352,8 +1356,3 @@ copilotDock_ dock =
               label_ [class_ "mt-1.5 flex w-fit cursor-pointer items-center gap-1.5 px-1 text-xs text-textWeak"] do
                 input_ $ [type_ "checkbox", name_ "allowActions", value_ "true", class_ "checkbox checkbox-xs", term "hx-morph-skip" ""] <> [checked_ | session.policy /= Issues.Observe]
                 "Can make changes in this project"
-
-    stepLabel :: AI.ToolCallInfo -> Text
-    stepLabel call = case (call.name, Map.lookup "path" call.args) of
-      ("open_page", Just (AE.String path)) -> "Opened " <> path
-      (name, _) -> T.toTitle (T.take 1 name) <> T.replace "_" " " (T.drop 1 name)
