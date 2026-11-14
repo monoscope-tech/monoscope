@@ -182,13 +182,14 @@ wakeStoppedReviews scope = Hasql.transaction TxS.ReadCommitted TxS.Write do
   for_ operations $ \(project, identifier) -> queueReviewTx project FinishCancelledReview identifier
 
 
-startConversation :: (DB es, Time.Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> Issues.ExecutionPolicy -> Issues.InteractiveOrigin -> Eff es Issues.InteractiveStart
-startConversation project conversation user request =
+startConversation :: (DB es, Time.Time :> es) => Maybe Issues.PageContext -> Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> Issues.ExecutionPolicy -> Issues.InteractiveOrigin -> Eff es Issues.InteractiveStart
+startConversation pageContext project conversation user request =
   Issues.startMemberConversationRunWith
     ( \scheduled -> do
         queueJobTx WakeNow $ RunConversation project request
         for_ scheduled $ \routine -> queueJobTx (DeferUntil routine.scheduledAt) $ AIRoutineRun routine.id routine.scheduledAt
     )
+    pageContext
     project
     conversation
     user

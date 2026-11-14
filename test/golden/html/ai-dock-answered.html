@@ -1,0 +1,115 @@
+<div id="ai-dock" class="group/dock pointer-events-none fixed inset-x-0 bottom-3 z-[60] flex flex-col items-center gap-2 px-3">
+<input type="checkbox" id="ai-dock-open" class="hidden" hx-morph-skip aria-hidden="true">
+<section id="ai-dock-panel" role="dialog" aria-label="AI session" class="pointer-events-auto hidden w-full max-w-[32rem] max-h-[min(36rem,calc(100dvh-6rem))] origin-bottom flex-col overflow-hidden rounded-2xl border border-strokeWeak bg-bgRaised shadow-[0_24px_48px_-16px_oklch(0_0_0/0.35)] transition-[opacity,translate,scale,display] transition-discrete duration-200 ease-(--ease-out-quint) group-has-[#ai-dock-open:checked]/dock:flex starting:translate-y-2 starting:scale-[0.98] starting:opacity-0 motion-reduce:transition-none" _="init set #ai-dock-open.checked to true then call #ai-dock-input.focus() end
+              on keydown[key==&#39;Escape&#39;] set #ai-dock-open.checked to false">
+<header class="flex items-center gap-2 border-b border-strokeWeak py-2 ps-3 pe-2">
+<svg class="icon size-3 text-iconSuccess" width="1em" height="1em" viewBox="0 0 512 512">
+<g>
+<path d="M256 48a208 208 0 1 1 0 416 208 208 0 1 1 0-416zm0 464A256 256 0 1 0 256 0a256 256 0 1 0 0 512zM369 209c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-111 111-47-47c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9l64 64c9.4 9.4 24.6 9.4 33.9 0L369 209z" />
+</g>
+</svg>
+<h2 class="min-w-0 flex-1 truncate text-sm font-medium text-textStrong">Dock dashboard</h2>
+<a href="/p/<uuid>/ai/<uuid>" class="btn btn-ghost btn-xs gap-1 text-textWeak" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">Open thread<svg class="icon size-3" width="1em" height="1em" viewBox="0 0 512 512">
+<g>
+<path d="M304 24c0 13.3 10.7 24 24 24l102.1 0L207 271c-9.4 9.4-9.4 24.6 0 33.9s24.6 9.4 33.9 0l223-223L464 184c0 13.3 10.7 24 24 24s24-10.7 24-24l0-160c0-13.3-10.7-24-24-24L328 0c-13.3 0-24 10.7-24 24zM72 32C32.2 32 0 64.2 0 104L0 440c0 39.8 32.2 72 72 72l336 0c39.8 0 72-32.2 72-72l0-128c0-13.3-10.7-24-24-24s-24 10.7-24 24l0 128c0 13.3-10.7 24-24 24L72 464c-13.3 0-24-10.7-24-24l0-336c0-13.3 10.7-24 24-24l128 0c13.3 0 24-10.7 24-24s-10.7-24-24-24L72 32z"/>
+</g>
+</svg>
+</a>
+<label for="ai-dock-open" class="btn btn-ghost btn-xs btn-square text-iconNeutral" aria-label="Minimize" title="Minimize (Esc)">
+<svg class="icon size-3.5" width="1em" height="1em" viewBox="0 0 512 512">
+<g>
+<path d="M239 401c9.4 9.4 24.6 9.4 33.9 0L465 209c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-175 175L81 175c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9L239 401z" fill="currentColor" />
+</g>
+</svg>
+</label>
+</header>
+<div id="ai-dock-log" class="flex min-h-0 grow flex-col-reverse overflow-y-auto px-4">
+<div>
+<div class="animate-fade-in py-3 border-b border-strokeWeak last:border-b-0">
+<div class="flex items-start gap-2.5 mb-3">
+<div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center bg-fillWeak" data-chat-avatar>
+<svg class="icon w-3 h-3 text-textWeak" width="1em" height="1em" viewBox="0 0 640 640">
+<g>
+<path fill="currentColor" d="M240 192C240 147.8 275.8 112 320 112C364.2 112 400 147.8 400 192C400 236.2 364.2 272 320 272C275.8 272 240 236.2 240 192zM448 192C448 121.3 390.7 64 320 64C249.3 64 192 121.3 192 192C192 262.7 249.3 320 320 320C390.7 320 448 262.7 448 192zM144 544C144 473.3 201.3 416 272 416L368 416C438.7 416 496 473.3 496 544L496 552C496 565.3 506.7 576 520 576C533.3 576 544 565.3 544 552L544 544C544 446.8 465.2 368 368 368L272 368C174.8 368 96 446.8 96 544L96 552C96 565.3 106.7 576 120 576C133.3 576 144 565.3 144 552L144 544z" />
+</g>
+</svg>
+</div>
+<p class="text-sm text-textStrong mt-0.5">Make a dashboard</p>
+</div>
+<div class="flex items-start gap-2.5">
+<div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center bg-fillBrand-weak" data-chat-avatar>
+<svg class="icon w-3 h-3 text-fillBrand-strong" width="1em" height="1em" viewBox="0 0 512 512">
+<g>
+<path d="M327.5 85.2c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L384 128l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L448 128l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L448 64 426.8 7.5C425.1 3 420.8 0 416 0s-9.1 3-10.8 7.5L384 64 327.5 85.2zM9.3 240C3.6 242.6 0 248.3 0 254.6s3.6 11.9 9.3 14.5L26.3 277l8.1 3.7 .6 .3 88.3 40.8L164.1 410l.3 .6 3.7 8.1 7.9 17.1c2.6 5.7 8.3 9.3 14.5 9.3s11.9-3.6 14.5-9.3l7.9-17.1 3.7-8.1 .3-.6 40.8-88.3L346 281l.6-.3 8.1-3.7 17.1-7.9c5.7-2.6 9.3-8.3 9.3-14.5s-3.6-11.9-9.3-14.5l-17.1-7.9-8.1-3.7-.6-.3-88.3-40.8L217 99.1l-.3-.6L213 90.3l-7.9-17.1c-2.6-5.7-8.3-9.3-14.5-9.3s-11.9 3.6-14.5 9.3l-7.9 17.1-3.7 8.1-.3 .6-40.8 88.3L35.1 228.1l-.6 .3-8.1 3.7L9.3 240zm83 14.5l51.2-23.6c10.4-4.8 18.7-13.1 23.5-23.5l23.6-51.2 23.6 51.2c4.8 10.4 13.1 18.7 23.5 23.5l51.2 23.6-51.2 23.6c-10.4 4.8-18.7 13.1-23.5 23.5l-23.6 51.2-23.6-51.2c-4.8-10.4-13.1-18.7-23.5-23.5L92.3 254.6zM384 384l-56.5 21.2c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L384 448l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L448 448l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L448 384l-21.2-56.5c-1.7-4.5-6-7.5-10.8-7.5s-9.1 3-10.8 7.5L384 384z" />
+</g>
+</svg>
+</div>
+<div class="flex-1 min-w-0 mt-0.5">
+<div class="prose prose-sm text-textStrong max-w-none leading-relaxed">
+<p>Created it.</p>
+</div>
+</div>
+</div>
+<details class="mt-2 ml-[2.125rem] border border-strokeWeak rounded-lg text-xs" data-chat-indent>
+<summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&amp;::-webkit-details-marker]:hidden px-2.5 py-1.5 text-textWeak hover:bg-fillWeaker">
+<svg class="icon w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]&gt;summary&gt;&amp;]:rotate-90" width="1em" height="1em" viewBox="0 0 320 512">
+<g>
+<path d="M305 239c9.4 9.4 9.4 24.6 0 33.9L113 465c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l175-175L79 81c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L305 239z" stroke="currentColor" />
+</g>
+</svg>2 tool calls</summary>
+<div class="px-2.5 py-2 border-t border-strokeWeak bg-fillWeaker/50">
+<div class="flex flex-col gap-1 py-2 border-b border-strokeWeak last:border-0">
+<div class="flex items-center gap-2 flex-wrap">
+<span class="font-mono text-xs px-2 py-0.5 bg-fillWeak rounded">open_page</span>
+</div>
+<div class="text-xs text-textWeak font-mono pl-4 whitespace-pre-wrap break-all">→ Opened /p/<uuid>/dashboards</div>
+</div>
+<div class="flex flex-col gap-1 py-2 border-b border-strokeWeak last:border-0">
+<div class="flex items-center gap-2 flex-wrap">
+<span class="font-mono text-xs px-2 py-0.5 bg-fillWeak rounded">create_dashboard</span>
+</div>
+<div class="text-xs text-textWeak font-mono pl-4 whitespace-pre-wrap break-all">→ {&quot;summary&quot;:{&quot;id&quot;:&quot;<uuid>&quot;,&quot;title&quot;:&quot;Dock dashboard&quot;,&quot;tags&quot;:[],&quot;teams&quot;:[&quot;<uuid>&quot;],&quot;starred&quot;:false,&quot;created_at&quot;:&quot;2025-01-01T00:00:00Z&quot;,&quot;updated_at&quot;:&quot;2025-01-01T00:00:00Z&quot;,&quot;file_path&quot;:null},&quot;file_sha&quot;:null,&quot;schema&quot;:null}</div>
+</div>
+</div>
+</details>
+</div>
+</div>
+</div>
+<form id="ai-dock-form" class="border-t border-strokeWeak p-2" data-hx-post="/p/<uuid>/ai/dock" data-hx-target="#ai-dock" data-hx-swap="outerMorph" data-hx-vals="js:{path: location.pathname + location.search, title: document.title}" _="on htmx:after:request if event.detail.ctx.response.status &lt; 400 set #ai-dock-input.value to &#39;&#39; end">
+<input type="hidden" name="conversation" value="<uuid>">
+<input type="hidden" name="requestId" value="<uuid>">
+<div class="flex items-end gap-2 rounded-xl bg-fillWeaker px-2 py-1.5 focus-within:ring-2 focus-within:ring-strokeFocus">
+<textarea id="ai-dock-input" name="query" rows="1" maxlength="4000" required="required" placeholder="Ask a follow-up…" aria-label="Message the AI assistant" hx-morph-skip class="max-h-32 min-h-8 grow resize-none bg-transparent px-1 py-1.5 text-base leading-5 [field-sizing:content] placeholder:text-textWeak focus:outline-none sm:text-sm" _="on keydown[key==&#39;Enter&#39; and not shiftKey] halt the event then call my form.requestSubmit() end">
+</textarea>
+<button type="submit" aria-label="Send" class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg bg-fillBrand-strong text-white transition-transform active:scale-[0.96]">
+<svg class="icon size-3.5" width="1em" height="1em" viewBox="0 0 384 512">
+<g>
+<path d="M209.4 39.4C204.8 34.7 198.6 32 192 32s-12.8 2.7-17.4 7.4l-168 176c-9.2 9.6-8.8 24.8 .8 33.9s24.8 8.8 33.9-.8L168 115.9 168 456c0 13.3 10.7 24 24 24s24-10.7 24-24l0-340.1L342.6 248.6c9.2 9.6 24.3 9.9 33.9 .8s9.9-24.3 .8-33.9l-168-176z"/>
+</g>
+</svg>
+</button>
+</div>
+<label class="mt-1.5 flex w-fit cursor-pointer items-center gap-1.5 px-1 text-xs text-textWeak">
+<input type="checkbox" name="allowActions" value="true" class="checkbox checkbox-xs" hx-morph-skip checked>Can make changes in this project</label>
+</form>
+</section>
+<div class="pointer-events-auto flex max-w-full items-center gap-0.5 overflow-x-auto rounded-full border border-strokeWeak bg-bgRaised p-1 shadow-[0_8px_24px_-8px_oklch(0_0_0/0.3)]">
+<button type="button" class="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs text-textWeak transition-[scale,background-color] hover:bg-fillHover active:scale-[0.97]" title="New request (⌘K)" _="on click send paletteToggle to #cmd-palette-global">
+<svg class="icon size-3.5 text-iconBrand" width="1em" height="1em" viewBox="0 0 512 512">
+<g>
+<path d="M327.5 85.2c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L384 128l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L448 128l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L448 64 426.8 7.5C425.1 3 420.8 0 416 0s-9.1 3-10.8 7.5L384 64 327.5 85.2zM9.3 240C3.6 242.6 0 248.3 0 254.6s3.6 11.9 9.3 14.5L26.3 277l8.1 3.7 .6 .3 88.3 40.8L164.1 410l.3 .6 3.7 8.1 7.9 17.1c2.6 5.7 8.3 9.3 14.5 9.3s11.9-3.6 14.5-9.3l7.9-17.1 3.7-8.1 .3-.6 40.8-88.3L346 281l.6-.3 8.1-3.7 17.1-7.9c5.7-2.6 9.3-8.3 9.3-14.5s-3.6-11.9-9.3-14.5l-17.1-7.9-8.1-3.7-.6-.3-88.3-40.8L217 99.1l-.3-.6L213 90.3l-7.9-17.1c-2.6-5.7-8.3-9.3-14.5-9.3s-11.9 3.6-14.5 9.3l-7.9 17.1-3.7 8.1-.3 .6-40.8 88.3L35.1 228.1l-.6 .3-8.1 3.7L9.3 240zm83 14.5l51.2-23.6c10.4-4.8 18.7-13.1 23.5-23.5l23.6-51.2 23.6 51.2c4.8 10.4 13.1 18.7 23.5 23.5l51.2 23.6-51.2 23.6c-10.4 4.8-18.7 13.1-23.5 23.5l-23.6 51.2-23.6-51.2c-4.8-10.4-13.1-18.7-23.5-23.5L92.3 254.6zM384 384l-56.5 21.2c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L384 448l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L448 448l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L448 384l-21.2-56.5c-1.7-4.5-6-7.5-10.8-7.5s-9.1 3-10.8 7.5L384 384z" />
+</g>
+</svg>
+<span class="max-sm:sr-only">Ask AI</span>
+<kbd class="font-sans text-textDisabled max-sm:hidden">⌘K</kbd>
+</button>
+<label for="ai-dock-open" class="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-fillWeak px-3 py-1.5 text-xs font-medium text-textStrong transition-[scale,opacity,background-color] duration-200 ease-(--ease-out-quint) hover:bg-fillHover active:scale-[0.97] starting:scale-95 starting:opacity-0" title="Dock dashboard">
+<svg class="icon size-3 text-iconSuccess" width="1em" height="1em" viewBox="0 0 512 512">
+<g>
+<path d="M256 48a208 208 0 1 1 0 416 208 208 0 1 1 0-416zm0 464A256 256 0 1 0 256 0a256 256 0 1 0 0 512zM369 209c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-111 111-47-47c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9l64 64c9.4 9.4 24.6 9.4 33.9 0L369 209z" />
+</g>
+</svg>
+<span class="max-w-40 truncate">Dock dashboard</span>
+</label>
+</div>
+</div>

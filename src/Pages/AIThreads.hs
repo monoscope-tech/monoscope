@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pages.AIThreads (AIPage (..), PolicySaved (..), PromptError (..), NewThreadError (..), TurnError (..), EmptyTitle (..), UnknownTemplate (..), NoReviewClasses (..), EmailOnlyForReports (..), OperationReviewed (..), AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), OperationReviewForm (..), operationReviewPostH, operationGetH, RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH) where
+module Pages.AIThreads (AIPage (..), PolicySaved (..), PromptError (..), NewThreadError (..), TurnError (..), EmptyTitle (..), UnknownTemplate (..), NoReviewClasses (..), EmailOnlyForReports (..), OperationReviewed (..), AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), OperationReviewForm (..), operationReviewPostH, operationGetH, RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH, CopilotForm, CopilotDock (..), copilotDockGetH, copilotPostH) where
 
 import BackgroundJobs qualified
 import BackgroundJobs.Types qualified as Jobs
@@ -13,6 +13,7 @@ import Data.Containers.ListUtils (nubOrdOn)
 import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
 import Data.List qualified as L
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID.V5 qualified as UUID5
@@ -889,8 +890,8 @@ startThreadPostHWithTools projectTools pid form = act do
       NewChat _ -> pure Issues.WebConversation
       NewRoutine _ interval -> Issues.WebRoutine interval <$ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
     requestId <- maybe (UUIDId <$> UUID.genUUID) pure form.requestId
-    let convId = UUIDId $ UUID5.generateNamed requestId.unUUIDId $ BS.unpack "web-conversation"
-    ThreadPage pid convId <$ submitTurn projectTools origin requestId (form.allowActions == Just True) pid convId (case request of NewChat p -> p; NewRoutine p _ -> p)
+    let convId = requestConversation requestId
+    ThreadPage pid convId <$ submitTurn projectTools origin requestId (form.allowActions == Just True) Nothing pid convId (case request of NewChat p -> p; NewRoutine p _ -> p)
   where
     newThread = do
       prompt <- first NewThreadPrompt $ normalizeQuery form.query
@@ -913,7 +914,7 @@ threadPostHWithTools projectTools pid convId form = act do
         Issues.getConversation pid convId >>= traverse \conversation -> do
           case Issues.conversationIssueId conversation of
             Just issueId -> void $ IssuePage.aiChatPostHWithTools projectTools pid issueId (IssuePage.AIChatForm prompt $ Just requestId)
-            Nothing -> submitTurn projectTools Issues.WebMessage requestId (form.allowActions == Just True) pid convId prompt
+            Nothing -> submitTurn projectTools Issues.WebMessage requestId (form.allowActions == Just True) Nothing pid convId prompt
           pure $ ThreadPage pid convId
         <&> maybeToRight ConversationGone
 
@@ -932,8 +933,13 @@ threadDeleteH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespH
 threadDeleteH pid convId = authorizeConversation pid convId >> authorizeProject pid >> Issues.deleteConversation pid convId >> done (ThreadsPage pid)
 
 
-submitTurn :: Maybe AI.ProjectTools -> Issues.InteractiveOrigin -> UUIDId "ai_routine_run" -> Bool -> Projects.ProjectId -> UUIDId "conversation" -> Text -> ATAuthCtx ()
-submitTurn projectTools origin requestId allowActions pid convId prompt = do
+-- | A new conversation's id derives from its first request, so a resubmitted request finds it again.
+requestConversation :: UUIDId "ai_routine_run" -> UUIDId "conversation"
+requestConversation requestId = UUIDId $ UUID5.generateNamed requestId.unUUIDId $ BS.unpack "web-conversation"
+
+
+submitTurn :: Maybe AI.ProjectTools -> Issues.InteractiveOrigin -> UUIDId "ai_routine_run" -> Bool -> Maybe Issues.PageContext -> Projects.ProjectId -> UUIDId "conversation" -> Text -> ATAuthCtx ()
+submitTurn projectTools origin requestId allowActions pageContext pid convId prompt = do
   appCtx <- ask @AuthContext
   (sess, _) <- Projects.sessionAndProject pid
   let policy = if allowActions then Issues.Autonomous else Issues.Observe
@@ -943,7 +949,7 @@ submitTurn projectTools origin requestId allowActions pid convId prompt = do
         Just Issues.InteractiveRun{} -> True
         (Nothing; Just Issues.ScheduledRun; Just Issues.TriggeredRun{}; Just Issues.ConversationRun{}; Just Issues.FixRun{}) -> isNothing member
       admit = if browserOnly then Issues.startInteractiveRun else Jobs.startConversation
-  admit pid convId sess.user.id requestId prompt policy origin >>= \case
+  admit pageContext pid convId sess.user.id requestId prompt policy origin >>= \case
     Issues.ConflictingRequest -> throwError Servant.err409{Servant.errBody = "Request ID already belongs to another request"}
     Issues.AcceptedRequest scheduled -> when browserOnly $ for_ scheduled $ \routine -> BackgroundJobs.enqueueAIRoutine appCtx routine.id routine.scheduledAt
   when browserOnly do
@@ -1176,3 +1182,178 @@ threadUrl pid conv = urls.aiThreadGet pid conv Nothing
 
 runUrl :: Projects.ProjectId -> UUIDId "ai_routine_run" -> Text
 runUrl pid run = urls.aiRoutineRunGet pid run Nothing
+
+
+data CopilotForm = CopilotForm
+  { query :: Text
+  , conversation :: Maybe (UUIDId "conversation")
+  , allowActions :: Maybe Bool
+  , requestId :: Maybe (UUIDId "ai_routine_run")
+  , path :: Text
+  , title :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+-- | The floating assistant on every project page: recent sessions as bubbles, the selected one's
+-- transcript and composer, and the page its newest tool calls ask the browser to show next (one
+-- it opened, or the current one again after a write).
+data CopilotDock = CopilotDock
+  { projectId :: Projects.ProjectId
+  , requestId :: UUIDId "ai_routine_run"
+  , sessions :: [Issues.CopilotSession]
+  , selected :: Maybe OpenSession
+  , navigate :: Maybe Text
+  }
+
+
+data OpenSession = OpenSession {session :: Issues.CopilotSession, messages :: [Issues.AIChatMessage], calls :: [AI.ToolCallInfo]}
+
+
+instance Outcome CopilotDock where
+  outcomeBody = toHtml
+
+
+-- | @seen@ counts the selected run's tool calls the page already acted on; without it nothing replays.
+copilotDockGetH :: Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders CopilotDock)
+copilotDockGetH pid convM seen = addRespHeaders <=< copilotDock pid convM seen
+
+
+copilotPostH :: Maybe AI.ProjectTools -> Projects.ProjectId -> CopilotForm -> ATAuthCtx (ActionResult TurnError CopilotDock)
+copilotPostH projectTools pid form = act do
+  authorizeProject pid
+  forM (first TurnPrompt $ normalizeQuery form.query) \prompt -> do
+    requestId <- maybe (UUIDId <$> UUID.genUUID) pure form.requestId
+    (convId, origin) <- case form.conversation of
+      Just convId -> (convId, Issues.WebMessage) <$ authorizeConversation pid convId
+      Nothing -> pure (requestConversation requestId, Issues.WebConversation)
+    submitTurn projectTools origin requestId (form.allowActions == Just True) (Just $ Issues.PageContext form.path form.title) pid convId prompt
+    copilotDock pid (Just convId) (Just 0) Nothing
+
+
+copilotDock :: Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe Int -> Maybe Text -> ATAuthCtx CopilotDock
+copilotDock pid convM seen currentUrl = do
+  (sess, _) <- Projects.sessionAndProject pid
+  requestId <- UUIDId <$> UUID.genUUID
+  sessions <- Issues.copilotSessions pid sess.user.id
+  selected <- forM (convM >>= \convId -> find ((== convId) . (.conversationId)) sessions) \session -> do
+    (messages, checkpoint) <- concurrently (Issues.selectChatHistory pid session.conversationId) (Investigations.loadCheckpointFor $ Investigations.RunCheckpoint $ Investigations.RunTurn pid session.conversationId sess.user.id session.runId)
+    pure $ OpenSession session messages $ foldMap (Investigations.checkpointToolCalls . (.checkpoint)) checkpoint
+  let fresh = foldMap (\open -> foldMap (`drop` open.calls) seen) selected
+      wrote = any (\call -> any Catalog.requiresAutonomy (join $ Map.lookup call.name Catalog.policiesByName)) fresh
+  pure CopilotDock{projectId = pid, requestId, sessions, selected, navigate = viaNonEmpty last (mapMaybe (AI.projectPagePath pid <=< openedPath) fresh) <|> (currentUrl <* guard wrote)}
+
+
+openedPath :: AI.ToolCallInfo -> Maybe Text
+openedPath call = case (call.name, Map.lookup "path" call.args) of
+  ("open_page", Just (AE.String path)) -> Just path
+  _ -> Nothing
+
+
+instance ToHtml CopilotDock where
+  toHtmlRaw = toHtml
+  toHtml = toHtml . copilotDock_
+
+
+copilotDock_ :: CopilotDock -> Html ()
+copilotDock_ dock =
+  div_
+    ( [id_ "ai-dock", class_ "group/dock pointer-events-none fixed inset-x-0 bottom-3 z-[60] flex flex-col items-center gap-2 px-3"]
+        <> [attribute | any ((== Issues.RunRunning) . (.status)) dock.sessions, attribute <- [hxGet_ $ urls.aiDockGet dock.projectId selectedId (Just seen), hxTrigger_ "every 2s", hxSwap_ "outerMorph"]]
+    )
+    do
+      input_ [type_ "checkbox", id_ "ai-dock-open", class_ "hidden", term "hx-morph-skip" "", Aria.hidden_ "true"]
+      for_ dock.selected panel_
+      unless (null dock.sessions) $ div_ [class_ "pointer-events-auto flex max-w-full items-center gap-0.5 overflow-x-auto rounded-full border border-strokeWeak bg-bgRaised p-1 shadow-[0_8px_24px_-8px_oklch(0_0_0/0.3)]"] do
+        button_ [type_ "button", class_ "flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs text-textWeak transition-[scale,background-color] hover:bg-fillHover active:scale-[0.97]", title_ "New request (⌘K)", [__|on click send paletteToggle to #cmd-palette-global|]] do
+          faSprite_ "sparkles" "regular" "size-3.5 text-iconBrand"
+          span_ [class_ "max-sm:sr-only"] "Ask AI"
+          kbd_ [class_ "font-sans text-textDisabled max-sm:hidden"] "⌘K"
+        for_ dock.sessions bubble_
+      -- The child clicks it: navTabAttrs already owns the anchor's hyperscript attribute.
+      whenJust dock.navigate \href -> a_ ([href_ href, class_ "hidden"] <> navTabAttrs) $ span_ [[__|init call my parentElement.click()|]] ""
+  where
+    selectedId = (.session.conversationId) <$> dock.selected
+    seen = maybe 0 (length . (.calls)) dock.selected
+    pid = dock.projectId
+
+    bubble_ :: Issues.CopilotSession -> Html ()
+    bubble_ session =
+      let content = statusIcon_ session.status >> span_ [class_ "max-w-40 truncate"] (toHtml session.title)
+       in if Just session.conversationId == selectedId
+            then label_ [Lucid.for_ "ai-dock-open", class_ "flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-fillWeak px-3 py-1.5 text-xs font-medium text-textStrong transition-[scale,opacity,background-color] duration-200 ease-(--ease-out-quint) hover:bg-fillHover active:scale-[0.97] starting:scale-95 starting:opacity-0", title_ session.title] content
+            else button_ [type_ "button", class_ "flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-xs text-textWeak transition-[scale,opacity,background-color] duration-200 ease-(--ease-out-quint) hover:bg-fillHover active:scale-[0.97] starting:scale-95 starting:opacity-0", title_ session.title, hxGet_ $ urls.aiDockGet pid (Just session.conversationId) Nothing, hxTarget_ "#ai-dock", hxSwap_ "outerMorph", [__|on htmx:after:request set #ai-dock-open.checked to true|]] content
+
+    statusIcon_ :: Issues.RoutineRunStatus -> Html ()
+    statusIcon_ = \case
+      Issues.RunRunning -> faSprite_ "spinner" "regular" "size-3 animate-spin text-iconBrand"
+      (Issues.RunSucceeded; Issues.RunNoFindings) -> faSprite_ "circle-check" "regular" "size-3 text-iconSuccess"
+      Issues.RunFailed -> faSprite_ "triangle-exclamation" "regular" "size-3 text-iconError"
+      Issues.RunTimedOut -> faSprite_ "triangle-exclamation" "regular" "size-3 text-iconWarning"
+      Issues.RunCancelled -> faSprite_ "circle-xmark" "regular" "size-3 text-iconNeutral"
+
+    panel_ :: OpenSession -> Html ()
+    panel_ OpenSession{session, messages, calls} =
+      section_
+        [ id_ "ai-dock-panel"
+        , role_ "dialog"
+        , Aria.label_ "AI session"
+        , class_ "pointer-events-auto hidden w-full max-w-[32rem] max-h-[min(36rem,calc(100dvh-6rem))] origin-bottom flex-col overflow-hidden rounded-2xl border border-strokeWeak bg-bgRaised shadow-[0_24px_48px_-16px_oklch(0_0_0/0.35)] transition-[opacity,translate,scale,display] transition-discrete duration-200 ease-(--ease-out-quint) group-has-[#ai-dock-open:checked]/dock:flex starting:translate-y-2 starting:scale-[0.98] starting:opacity-0 motion-reduce:transition-none"
+        , [__|init set #ai-dock-open.checked to true then call #ai-dock-input.focus() end
+              on keydown[key=='Escape'] set #ai-dock-open.checked to false|]
+        ]
+        do
+          header_ [class_ "flex items-center gap-2 border-b border-strokeWeak py-2 ps-3 pe-2"] do
+            statusIcon_ session.status
+            h2_ [class_ "min-w-0 flex-1 truncate text-sm font-medium text-textStrong"] $ toHtml session.title
+            a_ ([href_ $ threadUrl pid session.conversationId, class_ "btn btn-ghost btn-xs gap-1 text-textWeak"] <> navTabAttrs) $ "Open thread" >> faSprite_ "arrow-up-right-from-square" "regular" "size-3"
+            label_ [Lucid.for_ "ai-dock-open", class_ "btn btn-ghost btn-xs btn-square text-iconNeutral", Aria.label_ "Minimize", title_ "Minimize (Esc)"] $ faSprite_ "chevron-down" "regular" "size-3.5"
+          -- Reversed, the log stays pinned to its newest line as it grows, without script.
+          div_ [id_ "ai-dock-log", class_ "flex min-h-0 grow flex-col-reverse overflow-y-auto px-4"] $ div_ do
+            IssuePage.aiChatHistoryView_ (\href -> href_ (threadUrl pid session.conversationId <> href) : navTabAttrs) pid messages
+            -- The history pairs a question with its answer; a request still running (or that ended unanswered) shows its steps instead.
+            unless (((.role) <$> viaNonEmpty last messages) == Just Issues.ChatAssistant && session.status /= Issues.RunRunning) $ div_ [class_ "space-y-3 py-3"] do
+              whenJust session.input \question -> div_ [class_ "flex items-start gap-2.5"] do
+                IssuePage.chatAvatar_ "bg-fillWeak" "user" "text-textWeak"
+                p_ [class_ "mt-0.5 whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml question
+              div_ [class_ "flex items-start gap-2.5"] do
+                IssuePage.chatAvatar_ "bg-fillBrand-weak" "sparkles" "text-fillBrand-strong"
+                ol_ [class_ "mt-1 min-w-0 flex-1 space-y-1.5 text-xs text-textWeak", Aria.label_ "Progress"] do
+                  for_ (drop (length calls - 6) calls) \call -> li_ [class_ "flex items-center gap-2"] do
+                    faSprite_ "check" "regular" "size-3 shrink-0 text-iconSuccess"
+                    span_ [class_ "truncate"] $ toHtml $ maybe (T.replace "_" " " call.name) ("Opened " <>) (openedPath call)
+                  li_ [class_ "flex items-center gap-2 text-textStrong", role_ "status"] case session.status of
+                    Issues.RunRunning -> faSprite_ "spinner" "regular" "size-3 shrink-0 animate-spin text-iconBrand" >> "Working…"
+                    status -> statusIcon_ status >> toHtml (snd $ runStatus status)
+          form_
+            [ id_ "ai-dock-form"
+            , class_ "border-t border-strokeWeak p-2"
+            , hxPost_ $ urls.aiDockPost pid
+            , hxTarget_ "#ai-dock"
+            , hxSwap_ "outerMorph"
+            , hxVals_ "js:{path: location.pathname + location.search, title: document.title}"
+            , -- Only the draft clears: a whole-form reset would re-check "Can make changes" after a read-only send.
+              [__|on htmx:after:request if event.detail.ctx.response.status < 400 set #ai-dock-input.value to '' end|]
+            ]
+            do
+              input_ [type_ "hidden", name_ "conversation", value_ session.conversationId.toText]
+              input_ [type_ "hidden", name_ "requestId", value_ dock.requestId.toText]
+              div_ [class_ "flex items-end gap-2 rounded-xl bg-fillWeaker px-2 py-1.5 focus-within:ring-2 focus-within:ring-strokeFocus"] do
+                textarea_
+                  [ id_ "ai-dock-input"
+                  , name_ "query"
+                  , rows_ "1"
+                  , maxlength_ "4000"
+                  , required_ "required"
+                  , placeholder_ "Ask a follow-up…"
+                  , Aria.label_ "Message the AI assistant"
+                  , term "hx-morph-skip" ""
+                  , class_ "max-h-32 min-h-8 grow resize-none bg-transparent px-1 py-1.5 text-base leading-5 [field-sizing:content] placeholder:text-textWeak focus:outline-none sm:text-sm"
+                  , [__|on keydown[key=='Enter' and not shiftKey] halt the event then call my form.requestSubmit() end|]
+                  ]
+                  ""
+                button_ [type_ "submit", Aria.label_ "Send", class_ "grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg bg-fillBrand-strong text-white transition-transform active:scale-[0.96]"] $ faSprite_ "arrow-up" "regular" "size-3.5"
+              label_ [class_ "mt-1.5 flex w-fit cursor-pointer items-center gap-1.5 px-1 text-xs text-textWeak"] do
+                input_ $ [type_ "checkbox", name_ "allowActions", value_ "true", class_ "checkbox checkbox-xs", term "hx-morph-skip" ""] <> [checked_ | session.policy /= Issues.Observe]
+                "Can make changes in this project"

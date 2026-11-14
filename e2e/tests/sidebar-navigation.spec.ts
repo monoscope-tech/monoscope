@@ -53,17 +53,29 @@ test('Explorer stays highlighted through tab navigation and browser history', as
   await expect(explorer).toHaveAttribute('aria-current', 'page');
 });
 
-// Regressions: the palette's own lazy fetch closed it on the first Cmd+K, the fuzzy filter
-// hid the Ask AI row, and Ask AI navigated with the query alone, dropping its time range.
-test('command palette Ask AI opens the explorer with the AI time range', async ({ page }) => {
-  await page.route('**/log_explorer/ai_search', (route) =>
-    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ query: 'level == "ERROR"', time_range: { since: '1H' } }) }));
+// A letter typed on the page opens the palette; any query leads with Ask AI, so Enter hands it to
+// the floating assistant with the page it was asked from, while ↓ still reaches the log search.
+test('command palette asks the assistant by default and keeps logs one step down', async ({ page }) => {
+  let posted = '';
+  await page.route('**/ai/dock', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    posted = route.request().postData() ?? '';
+    await route.fulfill({ contentType: 'text/html', body: '<div id="ai-dock"><input type="checkbox" id="ai-dock-open" hx-morph-skip></div>' });
+  });
   await page.goto(project + '/dashboards');
-  await page.locator('body').press('Control+k');
-  await page.locator('#cmd-palette-input').fill('errors from checkout in the last hour');
-  await page.locator('[data-ai-action]').click();
-  await expect(page).toHaveURL(/\/log_explorer\?.*since=1H/);
-  expect(new URL(page.url()).searchParams.get('query')).toBe('level == "ERROR"');
+  await page.locator('body').press('m');
+  const input = page.locator('#cmd-palette-input');
+  await expect(input).toHaveValue('m');
+  await input.pressSequentially('ake a dashboard');
+  const active = page.locator('#cmd-palette-results [role=option].active');
+  await expect(active).toContainText('Ask AI');
+  await input.press('ArrowDown');
+  await expect(active).toContainText('Search logs for');
+  await input.press('ArrowUp');
+  await input.press('Enter');
+  await expect(page.locator('#ai-dock-open')).toBeChecked();
+  const form = new URLSearchParams(posted);
+  expect([form.get('query'), form.get('allowActions'), form.get('path')]).toEqual(['make a dashboard', 'true', new URL(page.url()).pathname + new URL(page.url()).search]);
 });
 
 // Regression: morphing a dashboard's deeper-nested navbar into Explorer's showed the closed time-range list inline.

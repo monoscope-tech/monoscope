@@ -7,6 +7,7 @@ module Models.Apis.Investigations (
   Checkpoint (..),
   loadCheckpoint,
   loadCheckpointFor,
+  checkpointToolCalls,
   CheckpointTarget (..),
   RunTurn (..),
   RunLease (..),
@@ -614,6 +615,16 @@ data Checkpoint
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
   deriving (HI.DecodeValue) via Aeson Checkpoint
+
+
+-- | Every tool call so far, oldest first; each checkpoint extends its predecessor's list.
+checkpointToolCalls :: Checkpoint -> [ToolCallInfo]
+checkpointToolCalls = \case
+  ModelPending step -> step.toolCalls
+  ToolsPending step _ completed _ -> step.toolCalls <> map (uncurry mkToolCallInfo) completed
+  AnswerReady answer -> answer.toolCalls
+  LegacyUncertain answer _ -> answer.toolCalls
+  (NativePending{}; NativeReady) -> []
 
 
 data SavedCheckpoint = SavedCheckpoint {revision :: Int64, checkpoint :: Checkpoint}

@@ -65,6 +65,7 @@ module Pages.Issues (
   -- Shared rendering helpers
   issueCardCompact_,
   aiChatHistoryView_,
+  chatAvatar_,
   aiChatWidgets_,
 )
 where
@@ -2058,7 +2059,7 @@ aiChatPostHWithTools projectTools pid issueId form = do
   retained <- Issues.getRoutineRun pid requestId
   let browserOnly = case (.source) <$> retained of Just Issues.InteractiveRun{} -> True; _ -> False
       admit = if browserOnly then Issues.startInteractiveRun else Jobs.startConversation
-  admit pid convId sess.user.id requestId form.query Issues.Observe (Issues.WebIssue issueId) >>= \case
+  admit Nothing pid convId sess.user.id requestId form.query Issues.Observe (Issues.WebIssue issueId) >>= \case
     Issues.ConflictingRequest -> throwError err409{errBody = "Request ID already belongs to another request"}
     Issues.AcceptedRequest _ -> pass
   fullSystemPrompt <- Bots.buildIssuePrompt pid issue now
@@ -2151,7 +2152,10 @@ aiChatResponse_ artifactLinkAttrs pid userQuery explanation widgetsM toolCallsM 
           span_ [class_ "font-mono text-xs px-2 py-0.5 bg-fillWeak rounded"] $ toHtml tc.name
           whenJust (Map.lookup "query" tc.args) $ span_ [class_ "text-xs text-textWeak break-all"] . toHtml . show
         unless (T.null tc.resultPreview) $ div_ [class_ "text-xs text-textWeak font-mono pl-4 whitespace-pre-wrap break-all"] $ toHtml $ "→ " <> tc.resultPreview
-    chatAvatar_ bg icon color = div_ [class_ $ "shrink-0 w-6 h-6 rounded-full flex items-center justify-center " <> bg, data_ "chat-avatar" ""] $ faSprite_ icon "regular" ("w-3 h-3 " <> color)
+
+
+chatAvatar_ :: Text -> Text -> Text -> Html ()
+chatAvatar_ bg icon color = div_ [class_ $ "shrink-0 w-6 h-6 rounded-full flex items-center justify-center " <> bg, data_ "chat-avatar" ""] $ faSprite_ icon "regular" ("w-3 h-3 " <> color)
 
 
 aiChatWidgets_ :: Projects.ProjectId -> Text -> [Widget.Widget] -> Maybe [AI.ToolCallInfo] -> Html ()
