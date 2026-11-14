@@ -844,6 +844,12 @@ gridStackAttrs widgets =
 -- >>> map coordinates (normalizeWidgetLayouts [lower, golden])
 -- [Just (Just 0,Just 0,Just 12,Just 2),Just (Just 0,Just 2,Just 6,Just 2)]
 --
+-- A chart saved without a height, as the API and the assistant create them, gets a readable one;
+-- a stat card stays one row:
+--
+-- >>> map coordinates (normalizeWidgetLayouts [testWidget WTTimeseries def, testWidget WTStat def])
+-- [Just (Just 0,Just 0,Just 3,Just 3),Just (Just 3,Just 0,Just 3,Just 1)]
+--
 -- Nested group children are normalized recursively:
 --
 -- >>> let child position = testWidget WTList position
@@ -934,8 +940,8 @@ widgetHeightForWidth width widget = case widget.wType of
   WTGroup ->
     let requiredHeight = 1 + max 1 (layoutRows $ fold widget.children)
      in if width == 12 then requiredHeight else maybe requiredHeight (max requiredHeight) (widget.layout >>= (.h))
-  WTTimeseriesLine -> max 3 $ fromMaybe 1 $ widget.layout >>= (.h)
-  _ -> max 1 $ fromMaybe 1 $ widget.layout >>= (.h)
+  WTTimeseriesLine -> max 3 $ fromMaybe 3 $ widget.layout >>= (.h)
+  _ -> max 1 $ fromMaybe (bool 3 1 $ isStatWidget widget) $ widget.layout >>= (.h)
 
 
 gridRem :: Int -> Text
