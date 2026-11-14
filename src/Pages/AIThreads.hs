@@ -1296,7 +1296,8 @@ copilotDock_ dock =
         , role_ "dialog"
         , Aria.label_ "AI session"
         , class_ "pointer-events-auto hidden w-full max-w-[32rem] max-h-[min(36rem,calc(100dvh-6rem))] origin-bottom flex-col overflow-hidden rounded-2xl border border-strokeWeak bg-bgRaised shadow-[0_24px_48px_-16px_oklch(0_0_0/0.35)] transition-[opacity,translate,scale,display] transition-discrete duration-200 ease-(--ease-out-quint) group-has-[#ai-dock-open:checked]/dock:flex starting:translate-y-2 starting:scale-[0.98] starting:opacity-0 motion-reduce:transition-none"
-        , [__|on keydown[key=='Escape'] set #ai-dock-open.checked to false|]
+        , [__|init set #ai-dock-open.checked to true then call #ai-dock-input.focus() end
+              on keydown[key=='Escape'] set #ai-dock-open.checked to false|]
         ]
         do
           header_ [class_ "flex items-center gap-2 border-b border-strokeWeak py-2 ps-3 pe-2"] do

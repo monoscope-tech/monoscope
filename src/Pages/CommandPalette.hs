@@ -128,7 +128,7 @@ paletteShell_ pid = do
             , hxVals_ "js:{query: document.getElementById('cmd-palette-input').value, allowActions: true, path: location.pathname + location.search, title: document.title}"
             , hxTarget_ "#ai-dock"
             , hxSwap_ "outerMorph"
-            , [__|on htmx:after:request set #ai-dock-open.checked to true then call #ai-dock-input.focus()|]
+            , [__|on htmx:after:request set #ai-dock-open.checked to true then if #ai-dock-input exists call #ai-dock-input.focus() end|]
             ]
             $ itemBody_ "sparkles" [term "hx-live:text" "'Ask AI: \"' + q('#cmd-palette-input').value + '\"'"] "Ask AI: \"\"" "AI"
           -- Logs shortcut

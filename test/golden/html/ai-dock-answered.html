@@ -1,6 +1,7 @@
 <div id="ai-dock" class="group/dock pointer-events-none fixed inset-x-0 bottom-3 z-[60] flex flex-col items-center gap-2 px-3">
 <input type="checkbox" id="ai-dock-open" class="hidden" hx-morph-skip aria-hidden="true">
-<section id="ai-dock-panel" role="dialog" aria-label="AI session" class="pointer-events-auto hidden w-full max-w-[32rem] max-h-[min(36rem,calc(100dvh-6rem))] origin-bottom flex-col overflow-hidden rounded-2xl border border-strokeWeak bg-bgRaised shadow-[0_24px_48px_-16px_oklch(0_0_0/0.35)] transition-[opacity,translate,scale,display] transition-discrete duration-200 ease-(--ease-out-quint) group-has-[#ai-dock-open:checked]/dock:flex starting:translate-y-2 starting:scale-[0.98] starting:opacity-0 motion-reduce:transition-none" _="on keydown[key==&#39;Escape&#39;] set #ai-dock-open.checked to false">
+<section id="ai-dock-panel" role="dialog" aria-label="AI session" class="pointer-events-auto hidden w-full max-w-[32rem] max-h-[min(36rem,calc(100dvh-6rem))] origin-bottom flex-col overflow-hidden rounded-2xl border border-strokeWeak bg-bgRaised shadow-[0_24px_48px_-16px_oklch(0_0_0/0.35)] transition-[opacity,translate,scale,display] transition-discrete duration-200 ease-(--ease-out-quint) group-has-[#ai-dock-open:checked]/dock:flex starting:translate-y-2 starting:scale-[0.98] starting:opacity-0 motion-reduce:transition-none" _="init set #ai-dock-open.checked to true then call #ai-dock-input.focus() end
+              on keydown[key==&#39;Escape&#39;] set #ai-dock-open.checked to false">
 <header class="flex items-center gap-2 border-b border-strokeWeak py-2 ps-3 pe-2">
 <svg class="icon size-3 text-iconSuccess" width="1em" height="1em" viewBox="0 0 512 512">
 <g>
