@@ -412,6 +412,16 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     (got.sql, got.title) `shouldBe` (bigSqlWidget.sql, bigSqlWidget.title)
     Widget.decodeWidgetZ "not-a-gzip-blob" `shouldReturn` Nothing
 
+    -- pinnedWidget_readsItsOwnWindow: a run's tables re-queried the page's default window ending
+    -- now, so a fixed past hour read 45, 64, 0, 1 and 72 on successive loads of a live project.
+    pinnedPid <- createTestProject tr "pinned-window"
+    pinnedKey <- createTestAPIKey tr pinnedPid "pinned-window"
+    let past = addUTCTime (-48 * 3600) frozenTime
+    traverse_ (ingestTrace tr pinnedKey "pinned-span") [past, frozenTime, frozenTime]
+    let pinnedStat = (def :: Widget.Widget){Widget.wType = Widget.WTStat, Widget.query = Just "name == \"pinned-span\" | summarize count()", Widget.timeFrom = Just $ Utils.formatUTCMicros (addUTCTime (-60) past), Widget.timeTo = Just $ Utils.formatUTCMicros (addUTCTime 60 past)}
+    pinnedGot <- call tr $ Routes.widgetGetH pinnedPid (Just $ Utils.encodeText pinnedStat) Nothing Nothing Nothing Nothing []
+    (pinnedGot.dataset >>= (.value)) `shouldBe` Just 1
+
     -- statPng_rendersTheScalarInsteadOfAnEmptyChart: missing data, zero and a scalar differ.
     for_ [(profile, appearance) | profile <- [Nothing, Just Widget.PngSlack], appearance <- ["light", "dark"]] \(profile, appearance) -> do
       pngs <- forM [Nothing, Just 0, Just 44] \value -> do
