@@ -222,9 +222,9 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     map (show @Text . (.wType)) added `shouldBe` replicate 5 "WTTimeseries" <> map show allWidgetTypes
     numbered@(w1 : _) <- maybe (fail "a stored widget has no id") pure $ traverse (.id) (take 5 added)
     let typed = mapMaybe (.id) (drop 5 added)
-    -- Widthless widgets default to four per row.
+    -- Sizeless charts default to four per row, three rows tall.
     map (\(_, x, y, w, _) -> (x, y, w)) (geometry <$> Widget.normalizeWidgetLayouts (take 5 added))
-      `shouldBe` [(Just 0, Just 0, Just 3), (Just 3, Just 0, Just 3), (Just 6, Just 0, Just 3), (Just 9, Just 0, Just 3), (Just 0, Just 1, Just 3)]
+      `shouldBe` [(Just 0, Just 0, Just 3), (Just 3, Just 0, Just 3), (Just 6, Just 0, Just 3), (Just 9, Just 0, Just 3), (Just 0, Just 3, Just 3)]
 
     -- Edit in place: an omitted query is retained, and the render-time tab slug is not stored.
     let edited = (widgetOf Widget.WTStat "renamed"){Widget.query = Nothing, Widget.rawQuery = Nothing, Widget._tabSlug = Just "stale-tab", Widget.layout = Just def{Widget.x = Just 6, Widget.y = Just 6, Widget.w = Just 3, Widget.h = Just 3}}
