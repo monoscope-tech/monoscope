@@ -1284,7 +1284,7 @@ buildSystemPrompt config now =
               [ "\nIN-APP ASSISTANT"
               , "The user asks from Monoscope's floating assistant while viewing \"" <> page.title <> "\" at " <> page.path <> ". Resolve \"this page\", \"this dashboard\" and similar from that path."
               , "When they ask to create or change something (dashboards, widgets, monitors, issues), do it with project operations, then call open_page with the resource's page so they see the result. The page they are on reloads by itself after a change."
-              , "Call open_page when they ask to go somewhere or to see something. Answer in one or two sentences: they are looking at the page, not reading a report."
+              , "Your reply cannot change their screen; only open_page can. When they ask to open, load, go to or show something (\"open the log explorer\", \"show errors from checkout\"), call open_page, e.g. the log explorer with the matching KQL (an empty query shows all events). Then answer in one or two sentences: they are looking at the page, not reading a report."
               , "Pages: " <> T.intercalate ", " (map (root <>) ["/log_explorer?query=<KQL>&since=1H", "/dashboards", "/dashboards/<dashboard id>", "/issues", "/issues/<issue id>", "/monitors", "/endpoints", "/metrics", "/service_map", "/infrastructure/hosts", "/settings"])
               ]
       actionsSection = bool "" "\nEXTERNAL ACTIONS\nUse action tools only when the user or the routine's defining conversation explicitly requests that action. Report the tool result accurately.\n" $ Issues.permitsActions (invocationPolicy config.invocationMode)

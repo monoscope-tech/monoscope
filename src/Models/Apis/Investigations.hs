@@ -8,6 +8,7 @@ module Models.Apis.Investigations (
   loadCheckpoint,
   loadCheckpointFor,
   checkpointToolCalls,
+  checkpointAnswer,
   CheckpointTarget (..),
   RunTurn (..),
   RunLease (..),
@@ -625,6 +626,13 @@ checkpointToolCalls = \case
   AnswerReady answer -> answer.toolCalls
   LegacyUncertain answer _ -> answer.toolCalls
   (NativePending{}; NativeReady) -> []
+
+
+checkpointAnswer :: Checkpoint -> Maybe AgenticChatResult
+checkpointAnswer = \case
+  AnswerReady answer -> Just answer
+  LegacyUncertain answer _ -> Just answer
+  (ModelPending{}; ToolsPending{}; NativePending{}; NativeReady) -> Nothing
 
 
 data SavedCheckpoint = SavedCheckpoint {revision :: Int64, checkpoint :: Checkpoint}

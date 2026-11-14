@@ -32,17 +32,18 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkAIPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
 import Pages.CodeContext qualified as CodeContext
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), emptyState_, iconBadge_, localTimeFmt_, toneDot_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), emptyState_, iconBadge_, localTimeFmt_, logExplorerUrl, toneDot_, tonePill_)
 import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Table (Config (..), EmptyStateAction (..), Features (..), Table (..), ZeroState (ZeroState), col, withAttrs)
+import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC)
 import Relude hiding (ask)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, done)
-import Utils (encodeText, faSprite_, popoverPanel_, popoverTrigger_, renderMarkdownTocWithPrefix)
+import Utils (encodeText, faSprite_, popoverPanel_, popoverTrigger_, renderMarkdownTocWithPrefix, toUriStr)
 import Web.FormUrlEncoded (FromForm (..), parseAll, parseUnique)
 import Web.HttpApiData (FromHttpApiData (..))
 import Web.Links
@@ -1208,7 +1209,8 @@ data CopilotDock = CopilotDock
   }
 
 
-data OpenSession = OpenSession {session :: Issues.CopilotSession, messages :: [Issues.AIChatMessage], calls :: [AI.ToolCallInfo]}
+-- | @answer@ is the finished reply, which counts as one step after the tool calls.
+data OpenSession = OpenSession {session :: Issues.CopilotSession, messages :: [Issues.AIChatMessage], calls :: [AI.ToolCallInfo], answer :: Maybe Text}
 
 
 instance Outcome CopilotDock where
@@ -1239,10 +1241,17 @@ copilotDock pid convM seen currentUrl = do
   sessions <- Issues.copilotSessions pid sess.user.id
   selected <- forM (convM >>= \convId -> find ((== convId) . (.conversationId)) sessions) \session -> do
     (messages, checkpoint) <- concurrently (Issues.selectChatHistory pid session.conversationId) (Investigations.loadCheckpointFor $ Investigations.RunCheckpoint $ Investigations.RunTurn pid session.conversationId sess.user.id session.runId)
-    pure $ OpenSession session messages $ foldMap (Investigations.checkpointToolCalls . (.checkpoint)) checkpoint
+    let saved = (.checkpoint) <$> checkpoint
+    pure $ OpenSession session messages (foldMap Investigations.checkpointToolCalls saved) ((.response) <$> (Investigations.checkpointAnswer =<< saved))
   let fresh = foldMap (\open -> foldMap (`drop` open.calls) seen) selected
       wrote = any (\call -> any Catalog.requiresAutonomy (join $ Map.lookup call.name Catalog.policiesByName)) fresh
-  pure CopilotDock{projectId = pid, requestId, sessions, selected, navigate = viaNonEmpty last (mapMaybe (AI.projectPagePath pid <=< openedPath) fresh) <|> (currentUrl <* guard wrote)}
+      -- An answer in the explorer's own reply shape (a log view) is shown there, unless the run opened a page itself.
+      answered = do
+        open <- selected
+        guard $ maybe False (<= length open.calls) seen && not (any (isJust . openedPath) open.calls)
+        reply <- rightToMaybe . AI.parseLLMResponse =<< open.answer
+        logExplorerUrl pid <> "?query=" <> toUriStr (foldMap AI.modelQueryText reply.query) <> foldMap TimePicker.rangeQuery reply.timeRange <$ guard (reply.visualization == Just "logs")
+  pure CopilotDock{projectId = pid, requestId, sessions, selected, navigate = viaNonEmpty last (mapMaybe (AI.projectPagePath pid <=< openedPath) fresh) <|> answered <|> (currentUrl <* guard wrote)}
 
 
 openedPath :: AI.ToolCallInfo -> Maybe Text
@@ -1275,7 +1284,7 @@ copilotDock_ dock =
       whenJust dock.navigate \href -> a_ ([href_ href, class_ "hidden"] <> navTabAttrs) $ span_ [[__|init call my parentElement.click()|]] ""
   where
     selectedId = (.session.conversationId) <$> dock.selected
-    seen = maybe 0 (length . (.calls)) dock.selected
+    seen = maybe 0 (\open -> length open.calls + length open.answer) dock.selected
     pid = dock.projectId
 
     bubble_ :: Issues.CopilotSession -> Html ()

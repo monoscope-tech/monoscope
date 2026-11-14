@@ -2912,6 +2912,18 @@ spec = around withTestResources do
       fmap (\r -> (r.conversationId, r.pageContext)) <$> runQueryEffect tr (Issues.runContextFor testPid $ Issues.ConversationClaim followUp) `shouldReturn` Just (run.conversationId, Just $ Issues.PageContext later "Issues")
       goldenHtml "ai-dock-answered" =<< call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) Nothing (Just current))
 
+    -- Regression 2026-11-14: "load the log explorer" was answered in the explorer's own reply shape
+    -- (visualization "logs", no tool call), so the dock said it was ready and showed nothing.
+    it "dock: an answer asking for a log view opens the explorer with its query" \tr -> do
+      let request = UUIDId $ UUID.fromWords 0 0 94 3
+          answer = "{\"explanation\":\"Showing errors.\",\"visualization\":\"logs\",\"query\":\"level == \\\"ERROR\\\"\",\"time_range\":{\"since\":\"1H\"}}"
+      void $ call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) testPid $ formOf @AIThreads.CopilotForm $ "query=Load+the+log+explorer&title=Overview&path=/p/" <> testPid.toText <> "/dashboards&requestId=" <> request.toText)
+      runTestBgNoReset tr $ agent (\_ _ -> pure $ said answer) . titled "Errors" $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ Jobs.RunConversation testPid request
+      Just run <- runQueryEffect tr $ Issues.getRoutineRun testPid request
+      let dock seen = renderT <$> call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) seen Nothing)
+          explorer = "href=\"/p/" <> testPid.toText <> "/log_explorer?query=level%20%3D%3D%20%22ERROR%22&amp;since=1H\" class=\"hidden\""
+      traverse (fmap (T.isInfixOf explorer) . dock) ([Just 0, Just 1, Nothing] :: [Maybe Int]) `shouldReturn` [True, False, False]
+
     it "web and issue requests commit with a queued run, publish once, roll back on queue failure and cancel when revoked" \tr -> do
       let request n = UUIDId $ UUID.fromWords 0 0 93 n
           chatForm r = formOf @AIThreads.AIChatForm $ "query=Inspect+queued+conversation+evidence&mode=chat&requestId=" <> r.toText
