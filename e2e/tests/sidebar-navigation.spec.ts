@@ -69,6 +69,8 @@ test('command palette asks the assistant by default and keeps logs one step down
   await input.pressSequentially('ake a dashboard');
   const active = page.locator('#cmd-palette-results [role=option].active');
   await expect(active).toContainText('Ask AI');
+  // The lazily loaded items re-run the filter when they land, which re-selects the first row.
+  await expect(page.locator('#cmd-palette-results')).not.toContainText('Loading...');
   await input.press('ArrowDown');
   await expect(active).toContainText('Search logs for');
   await input.press('ArrowUp');
