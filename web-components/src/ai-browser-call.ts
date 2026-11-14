@@ -17,7 +17,7 @@ const label = (el: HTMLElement) =>
 export function snapshot(): string {
   document.querySelectorAll('[data-ai-ref]').forEach(el => el.removeAttribute('data-ai-ref'));
   const lines = [`URL: ${location.pathname}${location.search}`, `Title: ${document.title}`];
-  document.querySelectorAll<HTMLElement>('h1, h2, h3').forEach(h => visible(h) && lines.push(`${h.tagName.toLowerCase()} ${label(h)}`));
+  document.querySelectorAll<HTMLElement>('h1, h2, h3').forEach(h => visible(h) && label(h) && lines.push(`${h.tagName.toLowerCase()} ${label(h)}`));
   let n = 0;
   document.querySelectorAll<HTMLElement>(CONTROLS).forEach(el => {
     if (!visible(el) || (el as HTMLButtonElement).disabled) return;
