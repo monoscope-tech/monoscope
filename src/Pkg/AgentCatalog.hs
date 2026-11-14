@@ -231,6 +231,9 @@ data LocalOperation
 --
 -- >>> map localPolicy [ReadProjectMemory, WriteProjectMemory, SaveArtifact, SendToSlack]
 -- [ReadOnly PView,ProjectMemoryWrite,ConversationWrite,ExternalPublication]
+--
+-- Click and Fill change nothing on this server: the requester's own tab acts with their own
+-- session, and the agent is offered them only when the turn permits changes.
 localPolicy :: LocalOperation -> AgentPolicy
 localPolicy = \case
   SendToSlack -> ExternalPublication
