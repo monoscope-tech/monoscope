@@ -32,7 +32,7 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkAIPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
 import Pages.CodeContext qualified as CodeContext
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), emptyState_, iconBadge_, localTimeFmt_, resetFormOnSuccessAttr_, toneDot_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), emptyState_, iconBadge_, localTimeFmt_, toneDot_, tonePill_)
 import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
@@ -1333,7 +1333,8 @@ copilotDock_ dock =
             , hxTarget_ "#ai-dock"
             , hxSwap_ "outerMorph"
             , hxVals_ "js:{path: location.pathname + location.search, title: document.title}"
-            , resetFormOnSuccessAttr_
+            , -- Only the draft clears: a whole-form reset would re-check "Can make changes" after a read-only send.
+              [__|on htmx:after:request if event.detail.ctx.response.status < 400 set #ai-dock-input.value to '' end|]
             ]
             do
               input_ [type_ "hidden", name_ "conversation", value_ session.conversationId.toText]

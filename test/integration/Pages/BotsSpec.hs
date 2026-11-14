@@ -2906,6 +2906,10 @@ spec = around withTestResources do
       let effects seen = renderT <$> call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) seen (Just current))
           anchors html = [href | href <- [page, current], ("href=\"" <> href <> "\" class=\"hidden\"") `T.isInfixOf` html]
       traverse (fmap anchors . effects) ([Just 0, Just 1, Just 2, Nothing] :: [Maybe Int]) `shouldReturn` [[page], [current], [], []]
+      let followUp = UUIDId $ UUID.fromWords 0 0 94 2
+          later = "/p/" <> testPid.toText <> "/issues"
+      void $ call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) testPid $ formOf @AIThreads.CopilotForm $ "query=Now+the+issues&title=Issues&path=" <> later <> "&conversation=" <> run.conversationId.toText <> "&requestId=" <> followUp.toText)
+      fmap (\r -> (r.conversationId, r.pageContext)) <$> runQueryEffect tr (Issues.runContextFor testPid $ Issues.ConversationClaim followUp) `shouldReturn` Just (run.conversationId, Just $ Issues.PageContext later "Issues")
       goldenHtml "ai-dock-answered" =<< call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) Nothing (Just current))
 
     it "web and issue requests commit with a queued run, publish once, roll back on queue failure and cancel when revoked" \tr -> do

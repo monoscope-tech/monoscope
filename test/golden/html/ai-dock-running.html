@@ -56,7 +56,7 @@
 </div>
 </div>
 </div>
-<form id="ai-dock-form" class="border-t border-strokeWeak p-2" data-hx-post="/p/<uuid>/ai/dock" data-hx-target="#ai-dock" data-hx-swap="outerMorph" data-hx-vals="js:{path: location.pathname + location.search, title: document.title}" hx-on:htmx:after:request="if (event.detail.ctx.response.status &lt; 400) this.reset()">
+<form id="ai-dock-form" class="border-t border-strokeWeak p-2" data-hx-post="/p/<uuid>/ai/dock" data-hx-target="#ai-dock" data-hx-swap="outerMorph" data-hx-vals="js:{path: location.pathname + location.search, title: document.title}" _="on htmx:after:request if event.detail.ctx.response.status &lt; 400 set #ai-dock-input.value to &#39;&#39; end">
 <input type="hidden" name="conversation" value="<uuid>">
 <input type="hidden" name="requestId" value="<uuid>">
 <div class="flex items-end gap-2 rounded-xl bg-fillWeaker px-2 py-1.5 focus-within:ring-2 focus-within:ring-strokeFocus">

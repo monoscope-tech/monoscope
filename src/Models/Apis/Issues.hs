@@ -2828,7 +2828,7 @@ data CopilotSession = CopilotSession
 -- | The requester's assistant sessions of the last twelve hours, newest first.
 copilotSessions :: (DB es, Time :> es) => Projects.ProjectId -> Projects.UserId -> Eff es [CopilotSession]
 copilotSessions pid user = do
-  since <- addUTCTime (-12 * 3600) <$> Time.currentTime
+  since <- addUTCTime (-(12 * 3600)) <$> Time.currentTime
   Hasql.interp
     [HI.sql|SELECT latest.conversation_id, COALESCE(NULLIF(c.title, ''), (SELECT LEFT(f.input, 100) FROM apis.ai_routine_runs f WHERE f.project_id = #{pid} AND f.conversation_id = latest.conversation_id ORDER BY f.scheduled_at LIMIT 1), 'New chat'),
         latest.id, latest.status, latest.input, latest.policy

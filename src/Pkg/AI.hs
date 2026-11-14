@@ -1182,6 +1182,7 @@ pageContext config = invocationContext config.invocationMode >>= (.pageContext)
 -- | A page of this project that @open_page@ may show; anything else stays put.
 --
 -- >>> import Data.UUID qualified as UUID
+-- >>> import Pkg.DeriveUtils (UUIDId (..))
 -- >>> let page = projectPagePath (UUIDId UUID.nil)
 -- >>> page " /p/00000000-0000-0000-0000-000000000000/log_explorer?query=url%3D%22https%3A//x%22 "
 -- Just "/p/00000000-0000-0000-0000-000000000000/log_explorer?query=url%3D%22https%3A//x%22"
@@ -1910,7 +1911,7 @@ executeToolAt cursor config tc = do
         noRaw <$> case getTextArg "key" args of
           Nothing -> Issues.listArtifacts config.projectId convId Nothing <&> \docs -> encodeText [AE.object ["key" AE..= d.key, "title" AE..= d.title, "updated_at" AE..= d.updatedAt, "characters" AE..= d.characters] | d <- docs]
           Just k -> maybe ("No document with key '" <> k <> "' in this conversation.") readable . asum . map (.content) <$> Issues.listArtifacts config.projectId convId (rightToMaybe $ Issues.mkArtifactKey k)
-      OpenPage -> EffectfulOperation $ required "path" \path -> pure $ noRaw $ maybe ("Only pages under /p/" <> config.projectId.toText <> " can be opened.") ("Opened " <>) (projectPagePath config.projectId path)
+      OpenPage -> EffectfulOperation $ required "path" $ pure . noRaw . maybe ("Only pages under /p/" <> config.projectId.toText <> " can be opened.") ("Opened " <>) . projectPagePath config.projectId
       SendToSlack -> EffectfulOperation $ case getTextArg "message" args of
         Just message
           | not (T.null $ T.strip message) && T.length message <= 4000 ->
