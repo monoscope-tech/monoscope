@@ -636,7 +636,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                     unless (null asked') $ IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId asked'
                   Nothing
                     -- A routine's result is a record, not a chat turn: no avatar gutter.
-                    | hasVisibleHistory shown -> section_ ([Aria.label_ "Results"] <> [class_ "[&_[data-chat-avatar]]:hidden [&_[data-chat-indent]]:ml-0" | isRoutine]) do
+                    | hasVisibleHistory shown -> section_ ([Aria.label_ "Results"] <> [class_ "[&_[data-chat-avatar]]:hidden [&_[data-chat-indent]]:ml-0 [&>h2+div]:pt-0" | isRoutine]) do
                         -- Most runs of a findings-only routine publish nothing, so the result's own time says how fresh it is.
                         when isRoutine $ h2_ [class_ "mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm font-semibold text-textStrong"] do
                           "Latest result"
