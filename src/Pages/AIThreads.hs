@@ -1198,15 +1198,18 @@ data CopilotForm = CopilotForm
 
 
 -- | The floating assistant on every project page: recent sessions as bubbles, the selected one's
--- transcript and composer, and the page change its newest tool calls ask for (visit a page it
--- opened, or reload this one after a write).
+-- transcript and composer, and the page its newest tool calls ask the browser to show next (one
+-- it opened, or the current one again after a write).
 data CopilotDock = CopilotDock
   { projectId :: Projects.ProjectId
   , requestId :: UUIDId "ai_routine_run"
   , sessions :: [Issues.CopilotSession]
-  , selected :: Maybe (Issues.CopilotSession, [Issues.AIChatMessage], [AI.ToolCallInfo])
-  , effect :: Maybe Text
+  , selected :: Maybe OpenSession
+  , navigate :: Maybe Text
   }
+
+
+data OpenSession = OpenSession {session :: Issues.CopilotSession, messages :: [Issues.AIChatMessage], calls :: [AI.ToolCallInfo]}
 
 
 instance Outcome CopilotDock where
@@ -1215,7 +1218,7 @@ instance Outcome CopilotDock where
 
 -- | @seen@ counts the selected run's tool calls the page already acted on; without it nothing replays.
 copilotDockGetH :: Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders CopilotDock)
-copilotDockGetH pid convM seen currentUrl = addRespHeaders =<< copilotDock pid convM seen currentUrl
+copilotDockGetH pid convM seen = addRespHeaders <=< copilotDock pid convM seen
 
 
 copilotPostH :: Maybe AI.ProjectTools -> Projects.ProjectId -> CopilotForm -> ATAuthCtx (ActionResult TurnError CopilotDock)
@@ -1238,11 +1241,11 @@ copilotDock pid convM seen currentUrl = do
   selected <- forM (convM >>= \convId -> find ((== convId) . (.conversationId)) sessions) \session -> do
     messages <- Issues.selectChatHistory pid session.conversationId
     checkpoint <- Investigations.loadCheckpointFor $ Investigations.RunCheckpoint $ Investigations.RunTurn pid session.conversationId sess.user.id session.runId
-    pure (session, messages, foldMap (Investigations.checkpointToolCalls . (.checkpoint)) checkpoint)
-  let fresh = foldMap (\(_, _, calls) -> foldMap (`drop` calls) seen) selected
+    pure $ OpenSession session messages $ foldMap (Investigations.checkpointToolCalls . (.checkpoint)) checkpoint
+  let fresh = foldMap (\open -> foldMap (`drop` open.calls) seen) selected
       opened = [path | call <- fresh, call.name == "open_page", Just (AE.String raw) <- [Map.lookup "path" call.args], Just path <- [AI.projectPagePath pid raw]]
       wrote = any (\call -> any (\o -> o.name == call.name && o.access `elem` map Just [Ops.Edit, Ops.Admin, Ops.PrivateAdmin]) Ops.operations) fresh
-  pure CopilotDock{projectId = pid, requestId, sessions, selected, effect = viaNonEmpty last opened <|> (currentUrl <* guard wrote)}
+  pure CopilotDock{projectId = pid, requestId, sessions, selected, navigate = viaNonEmpty last opened <|> (currentUrl <* guard wrote)}
 
 
 instance ToHtml CopilotDock where
@@ -1265,19 +1268,19 @@ copilotDock_ dock =
           span_ [class_ "max-sm:sr-only"] "Ask AI"
           kbd_ [class_ "font-sans text-textDisabled max-sm:hidden"] "⌘K"
         for_ dock.sessions bubble_
-      whenJust dock.effect \href -> a_ ([href_ href, class_ "hidden"] <> navTabAttrs) $ span_ [[__|init call my parentElement.click()|]] ""
+      -- The child clicks it: navTabAttrs already owns the anchor's hyperscript attribute.
+      whenJust dock.navigate \href -> a_ ([href_ href, class_ "hidden"] <> navTabAttrs) $ span_ [[__|init call my parentElement.click()|]] ""
   where
-    selectedId = (\(session, _, _) -> session.conversationId) <$> dock.selected
-    seen = maybe 0 (\(_, _, calls) -> length calls) dock.selected
+    selectedId = (.session.conversationId) <$> dock.selected
+    seen = maybe 0 (length . (.calls)) dock.selected
     pid = dock.projectId
 
     bubble_ :: Issues.CopilotSession -> Html ()
     bubble_ session =
       let content = statusIcon_ session.status >> span_ [class_ "max-w-40 truncate"] (toHtml session.title)
-          look = "flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-xs transition-[scale,opacity,background-color] duration-200 ease-(--ease-out-quint) hover:bg-fillHover active:scale-[0.97] starting:scale-95 starting:opacity-0 "
        in if Just session.conversationId == selectedId
-            then label_ [Lucid.for_ "ai-dock-open", class_ $ look <> "bg-fillWeak font-medium text-textStrong", title_ session.title] content
-            else button_ [type_ "button", class_ $ look <> "text-textWeak", title_ session.title, hxGet_ $ urls.aiDockGet pid (Just session.conversationId) Nothing, hxTarget_ "#ai-dock", hxSwap_ "outerMorph", [__|on htmx:after:request set #ai-dock-open.checked to true|]] content
+            then label_ [Lucid.for_ "ai-dock-open", class_ "flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-fillWeak px-3 py-1.5 text-xs font-medium text-textStrong transition-[scale,opacity,background-color] duration-200 ease-(--ease-out-quint) hover:bg-fillHover active:scale-[0.97] starting:scale-95 starting:opacity-0", title_ session.title] content
+            else button_ [type_ "button", class_ "flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-xs text-textWeak transition-[scale,opacity,background-color] duration-200 ease-(--ease-out-quint) hover:bg-fillHover active:scale-[0.97] starting:scale-95 starting:opacity-0", title_ session.title, hxGet_ $ urls.aiDockGet pid (Just session.conversationId) Nothing, hxTarget_ "#ai-dock", hxSwap_ "outerMorph", [__|on htmx:after:request set #ai-dock-open.checked to true|]] content
 
     statusIcon_ :: Issues.RoutineRunStatus -> Html ()
     statusIcon_ = \case
@@ -1286,8 +1289,8 @@ copilotDock_ dock =
       (Issues.RunFailed; Issues.RunTimedOut) -> faSprite_ "triangle-exclamation" "regular" "size-3 text-iconError"
       Issues.RunCancelled -> faSprite_ "circle-xmark" "regular" "size-3 text-iconNeutral"
 
-    panel_ :: (Issues.CopilotSession, [Issues.AIChatMessage], [AI.ToolCallInfo]) -> Html ()
-    panel_ (session, messages, calls) =
+    panel_ :: OpenSession -> Html ()
+    panel_ OpenSession{session, messages, calls} =
       section_
         [ id_ "ai-dock-panel"
         , role_ "dialog"
