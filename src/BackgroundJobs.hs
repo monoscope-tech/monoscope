@@ -474,6 +474,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
               Right _ -> pass
               Left err
                 | Just (AI.AgentAwaitingReview operation deadline) <- fromException err -> Jobs.deferOperationReview project operation deadline
+                | Just (AI.AgentAwaitingBrowser deadline) <- fromException err -> Jobs.scheduleJob (Jobs.DeferUntil deadline) $ RunConversation project identifier
                 | isJust (fromException @AI.AgentStopped err) || isJust (fromException @AI.AgentAccessDenied err) -> void $ Issues.completeRun context $ Issues.CancelledResult Nothing
                 | otherwise -> throwIO err
         when (isNothing acquired) $ throwIO $ CE.ErrorCall "Conversation is already executing; retry queued request"
@@ -3989,7 +3990,7 @@ enhanceIssuesWithLLM pid issueIds = do
                 saved <- lift $ Investigations.loadCheckpointFor target
                 enrichment <- case saved of
                   Just Investigations.SavedCheckpoint{checkpoint = Investigations.NativePending (Catalog.EnrichIssue retained)} -> pure retained
-                  Just Investigations.SavedCheckpoint{checkpoint = (Investigations.ModelPending{}; Investigations.ToolsPending{}; Investigations.AnswerReady{}; Investigations.LegacyUncertain{}; Investigations.NativePending{}; Investigations.NativeReady)} -> throwError "Issue enrichment checkpoint has another operation"
+                  Just Investigations.SavedCheckpoint{checkpoint = (Investigations.ModelPending{}; Investigations.ToolsPending{}; Investigations.BrowserPending{}; Investigations.AnswerReady{}; Investigations.LegacyUncertain{}; Investigations.NativePending{}; Investigations.NativeReady)} -> throwError "Issue enrichment checkpoint has another operation"
                   Nothing -> do
                     let complete = AI.callRoutineLLM ctx.config ctx.config.openaiSmallModel context
                     enhancement <- ExceptT $ Enhancement.enhanceIssueWithLLM complete issue

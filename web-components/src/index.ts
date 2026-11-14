@@ -21,6 +21,7 @@ const components: Array<[string, () => Promise<unknown>]> = [
   ['log-list', () => import('./log-list')],
   ['live-tail', () => import('./live-tail')],
   ['wiki-editor', () => import('./wiki-editor')],
+  ['ai-browser-call', () => import('./ai-browser-call')],
   // Only the instances that play something on arrival: the anomaly/share pages carry
   // `initialSession`, and a ?session_replay= deep link auto-opens the log explorer's
   // floating player. The log explorer's own idle player is handled below.

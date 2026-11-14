@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module BackgroundJobs.Types (BgJobs (..), Conversion (..), JobTiming (..), insertJob, wakeJob, longJob, reviewOperation, deferOperationReview, wakeStoppedReviews, startConversation, startCommand) where
+module BackgroundJobs.Types (BgJobs (..), Conversion (..), JobTiming (..), insertJob, scheduleJob, longJob, reviewOperation, deferOperationReview, wakeStoppedReviews, startConversation, startCommand) where
 
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
@@ -155,8 +155,8 @@ insertJob :: DB es => BgJobs -> Eff es ()
 insertJob job = Hasql.interpExecute_ [HI.sql| INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued', #{HI.AsJsonb job}) |]
 
 
-wakeJob :: DB es => BgJobs -> Eff es ()
-wakeJob = Hasql.transaction TxS.ReadCommitted TxS.Write . queueJobTx WakeNow
+scheduleJob :: DB es => JobTiming -> BgJobs -> Eff es ()
+scheduleJob timing = Hasql.transaction TxS.ReadCommitted TxS.Write . queueJobTx timing
 
 
 -- Retain the human decision and its continuation in one transaction.

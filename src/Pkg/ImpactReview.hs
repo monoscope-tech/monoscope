@@ -1234,7 +1234,7 @@ fixIssue :: Projects.ProjectId -> Fixes.FixId -> ATBackgroundCtx ()
 fixIssue pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob) \claimed -> for_ claimed \lease -> do
   outcome <- tryAny $ Timeout.timeout (540 * 1000000) $ runErrorNoCallStack $ execute lease
   case outcome of
-    Right (Just (Right ())) -> Jobs.wakeJob $ Jobs.PublishFix pid fid
+    Right (Just (Right ())) -> Jobs.scheduleJob Jobs.WakeNow $ Jobs.PublishFix pid fid
     _ -> do
       let message = case outcome of
             Right (Just (Left NativeSessionLost)) -> nativeSessionLostMessage

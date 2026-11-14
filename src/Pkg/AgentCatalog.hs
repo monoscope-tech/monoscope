@@ -221,6 +221,9 @@ data LocalOperation
   | ReadProjectMemory
   | WriteProjectMemory
   | OpenPage
+  | ReadPage
+  | Click
+  | Fill
   deriving stock (Bounded, Enum, Eq, Show)
 
 
@@ -233,7 +236,7 @@ localPolicy = \case
   SendToSlack -> ExternalPublication
   SaveArtifact -> ConversationWrite
   WriteProjectMemory -> ProjectMemoryWrite
-  (GetFieldValues; GetServices; CountQuery; SampleLogs; GetFacets; RunQuery; RunSqlQuery; GetInvestigationHistory; GetRelatedIncidents; GetIncidentContext; ReadArtifact; SearchProjectTools; GetProjectToolSchema; GetCodeContext; ListRunbooks; ReadRunbook; GetLinkedRepositories; GetDeployments; ListProjectMemory; ReadProjectMemory; OpenPage) -> ReadOnly ProjectMembers.PView
+  (GetFieldValues; GetServices; CountQuery; SampleLogs; GetFacets; RunQuery; RunSqlQuery; GetInvestigationHistory; GetRelatedIncidents; GetIncidentContext; ReadArtifact; SearchProjectTools; GetProjectToolSchema; GetCodeContext; ListRunbooks; ReadRunbook; GetLinkedRepositories; GetDeployments; ListProjectMemory; ReadProjectMemory; OpenPage; ReadPage; Click; Fill) -> ReadOnly ProjectMembers.PView
 
 
 operationName :: OperationCall -> Text
@@ -279,6 +282,9 @@ localTools = Map.fromList [(tool.name, tool) | operation <- [minBound .. maxBoun
       ReadProjectMemory -> memoryTool Policy.ReadProjectMemory
       WriteProjectMemory -> memoryTool Policy.WriteProjectMemory
       OpenPage -> readTool "Show the user a page of this project in their browser. Use after creating or changing a resource so they see it, or when they ask to go somewhere." [("path", "string", "Page path starting with /p/<project id>/, with any query string")]
+      ReadPage -> optionalReadTool "Read the page open in the user's tab: its URL, headings and visible controls, one per line as [ref] kind \"label\". Refs are valid until the page changes." []
+      Click -> readTool "Click a control on the page open in the user's tab, by the ref read_page gave it. Returns the page afterwards." [("ref", "string", "Ref from read_page, e.g. r12")]
+      Fill -> readTool "Type into a field on the page open in the user's tab, replacing its value. Returns the page afterwards." [("ref", "string", "Ref from read_page"), ("value", "string", "Text to enter")]
       where
         name = toText $ encodeEnumSC @"" operation
         readTool = definition True

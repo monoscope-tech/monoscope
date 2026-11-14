@@ -34,6 +34,7 @@ module Pkg.AI (
   AgentAccessDenied (..),
   SlackInvestigation (..),
   AgentStopped (..),
+  AgentAwaitingBrowser (..),
   AgentAwaitingReview (..),
   requireAgentAccess,
   requireEvidenceAccess,
@@ -727,6 +728,17 @@ data AgentStopped = AgentStopped
   deriving anyclass (Exception)
 
 
+-- | The run paused on a call the user's tab must answer; resume it by the deadline at the latest.
+newtype AgentAwaitingBrowser = AgentAwaitingBrowser UTCTime
+  deriving stock (Generic, Show)
+  deriving anyclass (Exception)
+
+
+-- | Tools the user's open tab executes rather than this server.
+browserOperations :: [LocalOperation]
+browserOperations = [ReadPage, Click, Fill]
+
+
 data AgentAccessDenied = AgentAccessDenied
   deriving stock (Generic, Show)
   deriving anyclass (Exception)
@@ -1170,7 +1182,8 @@ initialLocalOperations config =
     <> [operation | isJust config.sourceConfig, operation <- [GetCodeContext, ListRunbooks, ReadRunbook, GetLinkedRepositories, GetDeployments]]
     <> [SaveArtifact | isJust $ documentConversation config, isJust $ invocationContext config.invocationMode]
     <> [ReadArtifact | isJust $ documentConversation config]
-    <> [OpenPage | isJust $ pageContext config]
+    <> [operation | isJust $ pageContext config, operation <- [OpenPage, ReadPage]]
+    <> [operation | isJust $ pageContext config, writes, operation <- [Click, Fill]]
   where
     writes = Issues.permitsActions (invocationPolicy config.invocationMode) && isJust (accessMember config.access)
 
@@ -1285,6 +1298,7 @@ buildSystemPrompt config now =
               , "The user asks from Monoscope's floating assistant while viewing \"" <> page.title <> "\" at " <> page.path <> ". Resolve \"this page\", \"this dashboard\" and similar from that path."
               , "When they ask to create or change something (dashboards, widgets, monitors, issues), do it with project operations, then call open_page with the resource's page so they see the result. The page they are on reloads by itself after a change."
               , "Your reply cannot change their screen; only open_page can. When they ask to open, load, go to or show something (\"open the log explorer\", \"show errors from checkout\"), call open_page, e.g. the log explorer with the matching KQL (an empty query shows all events). Then answer in one or two sentences: they are looking at the page, not reading a report."
+              , "read_page shows you their tab: its URL, headings and controls as [ref] lines. click and fill (offered when changes are allowed) operate those controls in their tab and return the page afterwards; refs end when the page changes, so read it again after navigating. Use project operations for things that have one (dashboards, widgets, monitors) and the page for the rest, like filters, toggles and a page's own forms."
               , "Pages: " <> T.intercalate ", " (map (root <>) ["/log_explorer?query=<KQL>&since=1H", "/dashboards", "/dashboards/<dashboard id>", "/issues", "/issues/<issue id>", "/monitors", "/endpoints", "/metrics", "/service_map", "/infrastructure/hosts", "/settings"])
               ]
       actionsSection = bool "" "\nEXTERNAL ACTIONS\nUse action tools only when the user or the routine's defining conversation explicitly requests that action. Report the tool result accurately.\n" $ Issues.permitsActions (invocationPolicy config.invocationMode)
@@ -1485,7 +1499,11 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
                 Investigations.AnswerReady{} -> do
                   steeredAnswer <- acceptFollowupsWith updated step
                   maybe (continue updated next) (uncurry continue) steeredAnswer
-                (Investigations.ModelPending{}; Investigations.ToolsPending{}; Investigations.LegacyUncertain{}; Investigations.NativePending{}; Investigations.NativeReady) -> continue updated next
+                (Investigations.ModelPending{}; Investigations.ToolsPending{}; Investigations.BrowserPending{}; Investigations.LegacyUncertain{}; Investigations.NativePending{}; Investigations.NativeReady) -> continue updated next
+    Investigations.BrowserPending step message completed tool remaining deadline -> do
+      now <- Time.currentTime
+      when (now < deadline) $ throwIO $ AgentAwaitingBrowser deadline
+      advance $ Investigations.ToolsPending step message (completed <> [(tool, ToolResult "No browser tab answered: the user may have closed or left the page." Nothing)]) remaining
     Investigations.ToolsPending step message completed pending -> case pending of
       [] -> do
         let (calls, results) = unzip completed
@@ -1494,6 +1512,11 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
             tools = fromMaybe V.empty step.request.tools
             newTools = foldl' (\defs tool -> if any ((== toolName tool) . toolName) defs then defs else V.snoc defs tool) tools loaded
         advance $ Investigations.ModelPending step{Investigations.history = history, Investigations.request = step.request{OpenAIV1.tools = Just newTools}, Investigations.iteration = step.iteration + 1, Investigations.toolCalls = step.toolCalls <> zipWith Investigations.mkToolCallInfo calls results}
+      tool : remaining
+        | LLM.toolFunctionName (LLM.toolCallFunction tool) `elem` map (toText . encodeEnumSC @"") browserOperations -> do
+            deadline <- addUTCTime 90 <$> Time.currentTime
+            void $ Investigations.commitProgress turn journal (Investigations.BrowserPending step message completed tool remaining deadline) $ Just $ Investigations.ToolStarted step.iteration tool
+            throwIO $ AgentAwaitingBrowser deadline
       tool : remaining -> do
         Log.logTrace "AI requesting tool" (AE.object ["iteration" AE..= step.iteration, "tool" AE..= LLM.toolFunctionName (LLM.toolCallFunction tool)])
         record $ Investigations.ToolStarted step.iteration tool
@@ -1911,6 +1934,8 @@ executeToolAt cursor config tc = do
         noRaw <$> case getTextArg "key" args of
           Nothing -> Issues.listArtifacts config.projectId convId Nothing <&> \docs -> encodeText [AE.object ["key" AE..= d.key, "title" AE..= d.title, "updated_at" AE..= d.updatedAt, "characters" AE..= d.characters] | d <- docs]
           Just k -> maybe ("No document with key '" <> k <> "' in this conversation.") readable . asum . map (.content) <$> Issues.listArtifacts config.projectId convId (rightToMaybe $ Issues.mkArtifactKey k)
+      -- The loop hands these to the user's tab before execution reaches the server.
+      (ReadPage; Click; Fill) -> EffectfulOperation $ pure $ noRaw "Browser tools run in the user's tab."
       OpenPage -> EffectfulOperation $ required "path" $ pure . noRaw . maybe ("Only pages under /p/" <> config.projectId.toText <> " can be opened.") ("Opened " <>) . projectPagePath config.projectId
       SendToSlack -> EffectfulOperation $ case getTextArg "message" args of
         Just message

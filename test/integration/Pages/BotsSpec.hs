@@ -2931,6 +2931,35 @@ spec = around withTestResources do
           explorer = "href=\"/p/" <> testPid.toText <> "/log_explorer?query=level%20%3D%3D%20%22ERROR%22&amp;since=1H\" class=\"hidden\""
       traverse (fmap (T.isInfixOf explorer) . dock) ([Just 0, Just 1, Nothing] :: [Maybe Int]) `shouldReturn` [True, False, False]
 
+    it "dock: a browser tool pauses the run until the user's tab answers, or until no tab does" \tr -> do
+      prompts <- newIORef []
+      let page = "/p/" <> testPid.toText <> "/dashboards"
+          model :: Stub
+          model = agent (\h _ -> modifyIORef' prompts (toolResults h <>) $> nextStep (toolResults h) [fn "read_page" []] "Read it.") . titled "Read page"
+          execute request = runTestBgNoReset tr $ model $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ Jobs.RunConversation testPid request
+          runStatus request = (.status) <<$>> runQueryEffect tr (Issues.getRoutineRun testPid request)
+          settled request = timeout 30_000_000 $ fix \loop -> runStatus request >>= \case Just Issues.RunRunning -> threadDelay 50_000 >> loop; status -> pure status
+          start n = do
+            let request = UUIDId $ UUID.fromWords 0 0 94 n
+            void $ call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) (\_ _ -> pass) testPid $ formOf @AIThreads.CopilotForm $ "query=What+is+here&allowActions=true&title=Overview&path=" <> page <> "&requestId=" <> request.toText)
+            request <$ execute request
+          answer request = call tr . AIThreads.copilotBrowserPostH (\_ _ -> execute request) testPid request . formOf @AIThreads.BrowserAnswer
+      answered <- start 4
+      runStatus answered `shouldReturn` Just Issues.RunRunning
+      Just run <- runQueryEffect tr $ Issues.getRoutineRun testPid answered
+      renderT <$> call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) Nothing Nothing)
+        >>= (`shouldContainAll` ["<ai-browser-call", "data-tool=\"read_page\"", "data-call=\"0\"", "/ai/dock/browser/" <> answered.toText, "every 1s", "Using this tab: read page"])
+      void $ answer answered "call=0&result=%5Br1%5D+button+%22Save%22"
+      settled answered `shouldReturn` Just (Just Issues.RunSucceeded)
+      void $ answer answered "call=0&result=again"
+      readIORef prompts >>= (`shouldSatisfy` any (T.isInfixOf "[r1] button \"Save\""))
+      readIORef prompts >>= (`shouldSatisfy` not . any (T.isInfixOf "again"))
+      abandoned <- start 5
+      advanceTestTime tr 91
+      execute abandoned
+      runStatus abandoned `shouldReturn` Just Issues.RunSucceeded
+      readIORef prompts >>= (`shouldSatisfy` any (T.isInfixOf "No browser tab answered"))
+
     it "web and issue requests commit with a queued run, publish once, roll back on queue failure and cancel when revoked" \tr -> do
       let request n = UUIDId $ UUID.fromWords 0 0 93 n
           chatForm r = formOf @AIThreads.AIChatForm $ "query=Inspect+queued+conversation+evidence&mode=chat&requestId=" <> r.toText
@@ -3187,7 +3216,7 @@ spec = around withTestResources do
           runStatus context `shouldReturn` "running"
           modelCalls <- newIORef (0 :: Int)
           let recover = runTestBgRecordingHTTP frozenTime tr (interpose @ELLM.LLM (\_ _ -> modifyIORef' modelCalls (+ 1) >> liftIO (throwIO $ ErrorCall "Recovery must not run the model")) $ Jobs.runHourlyJob frozenTime 0) >>= (`shouldBe` []) . fst
-          runQueryEffect tr $ JobQueue.wakeJob $ Jobs.RunConversation testPid context.id
+          runQueryEffect tr $ JobQueue.scheduleJob JobQueue.WakeNow $ Jobs.RunConversation testPid context.id
           recover
           runStatus context `shouldReturn` "running"
           dbExec tr [sql|UPDATE background_jobs SET status = 'failed' WHERE payload = ? AND status = 'queued'|] (Only $ payload context)

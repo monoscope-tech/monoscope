@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pages.AIThreads (AIPage (..), PolicySaved (..), PromptError (..), NewThreadError (..), TurnError (..), EmptyTitle (..), UnknownTemplate (..), NoReviewClasses (..), EmailOnlyForReports (..), OperationReviewed (..), AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), OperationReviewForm (..), operationReviewPostH, operationGetH, RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH, CopilotForm, CopilotDock (..), RunNow, copilotDockGetH, copilotPostH) where
+module Pages.AIThreads (AIPage (..), PolicySaved (..), PromptError (..), NewThreadError (..), TurnError (..), EmptyTitle (..), UnknownTemplate (..), NoReviewClasses (..), EmailOnlyForReports (..), OperationReviewed (..), AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), OperationReviewForm (..), operationReviewPostH, operationGetH, RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH, CopilotForm, CopilotDock (..), RunNow, BrowserAnswer, copilotDockGetH, copilotPostH, copilotBrowserPostH) where
 
 import BackgroundJobs qualified
 import BackgroundJobs.Types qualified as Jobs
@@ -22,6 +22,7 @@ import Effectful.Concurrent.Async (concurrently)
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
+import Langchain.LLM.Core qualified as LLM
 import Lucid hiding (for_)
 import Lucid qualified
 import Lucid.Aria qualified as Aria
@@ -946,6 +947,12 @@ requestConversation requestId = UUIDId $ UUID5.generateNamed requestId.unUUIDId 
 type RunNow = Projects.ProjectId -> UUIDId "ai_routine_run" -> IO ()
 
 
+resumeNow :: RunNow -> Projects.ProjectId -> UUIDId "ai_routine_run" -> ATAuthCtx ()
+resumeNow runNow pid run = do
+  appCtx <- ask @AuthContext
+  forkBackgroundFor (20 * 60 * 1_000_000) appCtx.backgroundScope "Dock request" $ liftIO $ runNow pid run
+
+
 -- | Where a member's turn runs: the shared job queue, or (from the dock) this server right away,
 -- with the queued job deferred as the fallback should this process die mid-run.
 data TurnRunner = QueuedTurn | DockTurn Issues.PageContext RunNow
@@ -970,7 +977,7 @@ submitTurn projectTools origin requestId allowActions runner pid convId prompt =
     Issues.ConflictingRequest -> throwError Servant.err409{Servant.errBody = "Request ID already belongs to another request"}
     Issues.AcceptedRequest scheduled -> when browserOnly $ for_ scheduled $ \routine -> BackgroundJobs.enqueueAIRoutine appCtx routine.id routine.scheduledAt
   case runner of
-    DockTurn _ runNow | not browserOnly -> forkBackgroundFor (20 * 60 * 1_000_000) appCtx.backgroundScope "Dock request" $ liftIO $ runNow pid requestId
+    DockTurn _ runNow | not browserOnly -> resumeNow runNow pid requestId
     (QueuedTurn; DockTurn{}) -> pass
   when browserOnly do
     mode <- fmap AI.DurableRun $ AI.requireRunContext pid $ Issues.InteractiveClaim sess.user.id convId requestId
@@ -1229,11 +1236,26 @@ data CopilotDock = CopilotDock
 
 
 -- | @answer@ is the finished reply, which counts as one step after the tool calls.
-data OpenSession = OpenSession {session :: Issues.CopilotSession, messages :: [Issues.AIChatMessage], calls :: [AI.ToolCallInfo], answer :: Maybe Text}
+data OpenSession = OpenSession {session :: Issues.CopilotSession, messages :: [Issues.AIChatMessage], calls :: [AI.ToolCallInfo], answer :: Maybe Text, browserCall :: Maybe LLM.ToolCall}
 
 
 instance Outcome CopilotDock where
   outcomeBody = toHtml
+
+
+data BrowserAnswer = BrowserAnswer {call :: Text, result :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+-- | The tab's answer to a paused browser call. Only the requester's own tab can answer, and a
+-- repeated or stale answer changes nothing.
+copilotBrowserPostH :: RunNow -> Projects.ProjectId -> UUIDId "ai_routine_run" -> BrowserAnswer -> ATAuthCtx (RespHeaders Servant.NoContent)
+copilotBrowserPostH runNow pid runId answer = do
+  (sess, _) <- Projects.sessionAndProject pid
+  run <- Issues.getRoutineRun pid runId >>= maybe (throwError Servant.err404) pure
+  whenM (Investigations.answerBrowserCall (Investigations.RunTurn pid run.conversationId sess.user.id runId) answer.call (T.take 20000 answer.result)) $ resumeNow runNow pid runId
+  addRespHeaders Servant.NoContent
 
 
 -- | @seen@ counts the selected run's tool calls the page already acted on; without it nothing replays.
@@ -1261,7 +1283,7 @@ copilotDock pid convM seen currentUrl = do
   selected <- forM (convM >>= \convId -> find ((== convId) . (.conversationId)) sessions) \session -> do
     (messages, checkpoint) <- concurrently (Issues.selectChatHistory pid session.conversationId) (Investigations.loadCheckpointFor $ Investigations.RunCheckpoint $ Investigations.RunTurn pid session.conversationId sess.user.id session.runId)
     let saved = (.checkpoint) <$> checkpoint
-    pure $ OpenSession session messages (foldMap Investigations.checkpointToolCalls saved) ((.response) <$> (Investigations.checkpointAnswer =<< saved))
+    pure $ OpenSession session messages (foldMap Investigations.checkpointToolCalls saved) ((.response) <$> (Investigations.checkpointAnswer =<< saved)) (Investigations.checkpointBrowserCall =<< saved)
   let fresh = foldMap (\open -> foldMap (`drop` open.calls) seen) selected
       wrote = any (\call -> any Catalog.requiresAutonomy (join $ Map.lookup call.name Catalog.policiesByName)) fresh
       -- An answer in the explorer's own reply shape (a log view) is shown there, unless the run opened a page itself.
@@ -1288,7 +1310,7 @@ copilotDock_ :: CopilotDock -> Html ()
 copilotDock_ dock =
   div_
     ( [id_ "ai-dock", class_ "group/dock pointer-events-none fixed inset-x-0 bottom-3 z-[60] flex flex-col items-center gap-2 px-3"]
-        <> [attribute | any ((== Issues.RunRunning) . (.status)) dock.sessions, attribute <- [hxGet_ $ urls.aiDockGet dock.projectId selectedId (Just seen), hxTrigger_ "every 2s", hxSwap_ "outerMorph"]]
+        <> [attribute | any ((== Issues.RunRunning) . (.status)) dock.sessions, attribute <- [hxGet_ $ urls.aiDockGet dock.projectId selectedId (Just seen), hxTrigger_ $ if isJust pending then "every 1s" else "every 2s", hxSwap_ "outerMorph"]]
     )
     do
       input_ [type_ "checkbox", id_ "ai-dock-open", class_ "hidden", term "hx-morph-skip" "", Aria.hidden_ "true"]
@@ -1299,11 +1321,15 @@ copilotDock_ dock =
           span_ [class_ "max-sm:sr-only"] "Ask AI"
           kbd_ [class_ "font-sans text-textDisabled max-sm:hidden"] "⌘K"
         for_ dock.sessions bubble_
+      -- The tab executes a paused browser call once (morph keeps the element) and posts its answer.
+      for_ ((,) <$> dock.selected <*> pending) \(open, call) ->
+        term "ai-browser-call" [id_ $ "ai-browser-call-" <> LLM.toolCallId call, data_ "tool" $ LLM.toolFunctionName $ LLM.toolCallFunction call, data_ "args" $ encodeText $ LLM.toolFunctionArguments $ LLM.toolCallFunction call, data_ "call" $ LLM.toolCallId call, data_ "answer" $ urls.aiDockBrowserPost pid open.session.runId] ""
       -- The child clicks it: navTabAttrs already owns the anchor's hyperscript attribute.
       whenJust dock.navigate \href -> a_ ([href_ href, class_ "hidden"] <> navTabAttrs) $ span_ [[__|init call my parentElement.click()|]] ""
   where
     selectedId = (.session.conversationId) <$> dock.selected
     seen = maybe 0 (\open -> length open.calls + length open.answer) dock.selected
+    pending = (.browserCall) =<< dock.selected
     pid = dock.projectId
 
     bubble_ :: Issues.CopilotSession -> Html ()
@@ -1352,7 +1378,7 @@ copilotDock_ dock =
                     faSprite_ "check" "regular" "size-3 shrink-0 text-iconSuccess"
                     span_ [class_ "truncate"] $ toHtml $ maybe (T.replace "_" " " call.name) ("Opened " <>) (openedPath call)
                   li_ [class_ "flex items-center gap-2 text-textStrong", role_ "status"] case session.status of
-                    Issues.RunRunning -> faSprite_ "spinner" "regular" "size-3 shrink-0 animate-spin text-iconBrand" >> "Working…"
+                    Issues.RunRunning -> faSprite_ "spinner" "regular" "size-3 shrink-0 animate-spin text-iconBrand" >> maybe "Working…" (\call -> toHtml $ "Using this tab: " <> T.replace "_" " " (LLM.toolFunctionName $ LLM.toolCallFunction call) <> "…") pending
                     status -> statusIcon_ status >> toHtml (snd $ runStatus status)
           form_
             [ id_ "ai-dock-form"

@@ -1661,7 +1661,7 @@ data SlackPublishedMessage = SlackPublishedMessage
 queueCancelledProgress :: DB es => Investigations.ProgressTarget -> Eff es ()
 queueCancelledProgress target = do
   publication <- Investigations.loadProgress target
-  for_ publication $ \saved -> BgJobs.wakeJob $ BgJobs.RefreshSlackProgress saved.publicationId
+  for_ publication $ \saved -> BgJobs.scheduleJob BgJobs.WakeNow $ BgJobs.RefreshSlackProgress saved.publicationId
 
 
 -- A suspended worker has no terminal journal event. Read its authoritative run state.
