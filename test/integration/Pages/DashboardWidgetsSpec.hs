@@ -354,6 +354,9 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     -- The empty state offers the next wider standard window, and none once the range is already 30 days.
     map (T.isInfixOf "updateTimePicker({since: &#39;24H&#39;})" . emptyTable) [[], [("since", Just "1H")]] `shouldBe` [True, True]
     emptyTable [("since", Just "30D")] `shouldNotSatisfy` T.isInfixOf "updateTimePicker"
+    -- A run's table is pinned to the window it read; widening the page's range would show other data.
+    let pinned = renderT $ table [column{Widget.field = "error_message", Widget.title = "Error"}] (\w -> w{Widget.timeFrom = Just "2026-10-31T14:24:07Z", Widget.timeTo = Just "2026-10-31T15:24:07Z"}) V.empty []
+    (T.isInfixOf "Nothing in this window" pinned, T.isInfixOf "updateTimePicker" pinned) `shouldBe` (True, False)
     -- A missing value was a blue "null" link with a copy button.
     renderT (table [column{Widget.field = "q", Widget.link = Just "/x", Widget.copyable = Just True}] id (V.singleton $ V.singleton "null") []) `shouldSatisfy` \h -> T.isInfixOf "No value" h && not (T.isInfixOf "href=\"/x\"" h)
     emptyTable [("table-search", Just "timeout")] `shouldSatisfy` T.isInfixOf "No rows match “timeout”"
