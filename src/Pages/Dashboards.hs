@@ -45,6 +45,7 @@ module Pages.Dashboards (
   dashboardWidgetExpandGetH,
   WidgetEditor (..),
   processEagerWidget,
+  ownWindow,
   lazyWidget,
   widgetMetrics,
   getDashAndVM,
@@ -1182,13 +1183,20 @@ lazyWidget w = w & #eager .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
 type WidgetData es = (Concurrent :> es, DB es, Effectful.Labeled.Labeled "timefusion" Data.Effectful.Hasql.Hasql :> es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es)
 
 
+-- | The window a widget reads: its own when it carries one (a run's or report's chart, pinned to
+-- the range it was saved with), else the page's. The browser's chartDataUrl applies the same rule.
+ownWindow :: Widget.Widget -> (Maybe Text, Maybe Text, Maybe Text) -> (Maybe Text, Maybe Text, Maybe Text)
+ownWindow widget pageRange = maybe pageRange (\(f, t) -> (Nothing, Just f, Just t)) $ (,) <$> widget.timeFrom <*> widget.timeTo
+
+
 -- | Resolve table sorting and run the query with its widget's decoder.
 widgetMetrics :: WidgetData es => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Charts.MetricsData
-widgetMetrics pid (sinceStr, fromDStr, toDStr) allParams widget =
+widgetMetrics pid pageRange allParams widget =
   -- Bin at the density the widget renders at, so a server-prefilled chart and the
   -- browser's later /chart_data refetch agree on bucket width (and on cache key).
   Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) query sql sinceStr fromDStr toDStr Nothing (Just $ binDensityFor $ Just $ Widget.mapWidgetTypeToChartType widget.wType) allParams
   where
+    (sinceStr, fromDStr, toDStr) = ownWindow widget pageRange
     (shapedQuery, dataType) = Widget.chartQuery widget
     (query, sql)
       | widget.wType `elem` [Widget.WTTable, Widget.WTTopList] = Widget.tableQuery widget (join $ lookup "table-sort" allParams)
@@ -1196,7 +1204,7 @@ widgetMetrics pid (sinceStr, fromDStr, toDStr) allParams widget =
 
 
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
-processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
+processEagerWidget pid now pageRange allParams widget = case widget.wType of
   Widget.WTAnomalies -> do
     (issues, _) <- Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.period = "24h", Issues.hideLowSeverity = True, Issues.limit = 2}
     pure
@@ -1225,6 +1233,7 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
     widgetMetrics pid timeRange allParams widget <&> \md ->
       widget & #dataset ?~ if widget.wType == Widget.WTStat then def{Widget.source = AE.Null, Widget.value = md.dataFloat} else Widget.toWidgetDataset md
   where
+    timeRange@(sinceStr, fromDStr, toDStr) = ownWindow widget pageRange
     tableWidget = do
       let (query, sql) = Widget.tableQuery widget (join $ lookup "table-sort" allParams)
       tableData <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) query sql sinceStr fromDStr toDStr Nothing Nothing allParams

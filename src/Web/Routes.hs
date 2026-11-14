@@ -804,8 +804,9 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
     if isEager
       then Dashboards.processEagerWidget pid now (sinceStr, fromDStr, toDStr) scopedParams widgetWithPid
       else
-        Charts.queryMetrics widgetWithPid.dbSource (Just Charts.DTMetric) (Just pid) widgetWithPid.query widgetWithPid.sql sinceStr fromDStr toDStr Nothing (Just $ Parser.binDensityFor $ Just $ Widget.mapWidgetTypeToChartType widgetWithPid.wType) scopedParams
-          <&> \m -> widgetWithPid & #dataset ?~ Widget.toWidgetDataset m
+        let (since, fromD, toD) = Dashboards.ownWindow widgetWithPid (sinceStr, fromDStr, toDStr)
+         in Charts.queryMetrics widgetWithPid.dbSource (Just Charts.DTMetric) (Just pid) widgetWithPid.query widgetWithPid.sql since fromD toD Nothing (Just $ Parser.binDensityFor $ Just $ Widget.mapWidgetTypeToChartType widgetWithPid.wType) scopedParams
+              <&> \m -> widgetWithPid & #dataset ?~ Widget.toWidgetDataset m
   addRespHeaders processedWidget
 
 
