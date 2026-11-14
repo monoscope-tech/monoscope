@@ -3743,6 +3743,8 @@ spec = around withTestResources do
       chatPage <- renderT <$> call tr (AIThreads.threadGetH project routine.conversationId Nothing Nothing)
       chatPage `shouldContainAll` ["Retained error volume", "Retained request count"]
       T.isInfixOf "javascript:" chatPage `shouldBe` False
+      -- storedAnswer_chartsRequeryToday: a saved answer's charts read the window it was written about.
+      filter (`T.isInfixOf` chatPage) ["\"timeTo\":null", "timeTo&quot;:null"] `shouldBe` []
       assertNonMemberDenied tr project $ AIThreads.routineRunGetH project execution.id $ Just routine.conversationId
 
     for_ ([(Issues.RunRunning, Nothing)] <> [(status, Just $ addUTCTime 1200 frozenTime) | status <- [Issues.RunSucceeded, Issues.RunNoFindings, Issues.RunFailed, Issues.RunTimedOut, Issues.RunCancelled]] <> [(Issues.RunCancelled, Nothing)]) \(status, finishedAt) ->

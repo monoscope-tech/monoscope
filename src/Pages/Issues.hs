@@ -142,7 +142,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), assetUrl)
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.Mail qualified as Mail
-import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery, parseQueryToAST)
+import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery)
 import Pkg.Parser.Expr (sqlStringLit)
 import Pkg.SchemaLearning (FieldStruct (..))
 import Pkg.SchemaLearning qualified as SchemaLearning
@@ -2227,20 +2227,19 @@ aiChatHistoryView_ artifactLinkAttrs pid = render
       render rest
     render (_ : rest) = render rest
     render [] = pass
-    answer q a = let (explanation, widgets) = parseStoredContent a.content a.widgets in aiChatResponse_ artifactLinkAttrs pid q explanation widgets (parseStoredJSON @[AI.ToolCallInfo] a.metadata) Nothing
+    answer q a = let (explanation, widgets) = parseStoredContent a in aiChatResponse_ artifactLinkAttrs pid q explanation widgets (parseStoredJSON @[AI.ToolCallInfo] a.metadata) Nothing
     -- Stored content is JSON (code blocks stripped) where the LLM produced it, plain text otherwise.
-    parseStoredContent content storedWidgets = case AI.parseLLMResponse content of
+    -- Its charts read the window the answer was written about, not the window ending now.
+    parseStoredContent a = case AI.parseLLMResponse a.content of
       Right aiResp ->
-        let widgets = filter validQuery $ AI.responseWidgets aiResp
+        let widgets = AI.runWidgets (Just a.createdAt) aiResp
             structured = isJust aiResp.query || isJust aiResp.visualization || not (null widgets)
-         in ( fromMaybe (bool content "Here are the requested visualizations:" structured) aiResp.explanation
-            , guarded (not . null) widgets <|> parseStoredWidgets storedWidgets
+         in ( fromMaybe (bool a.content "Here are the requested visualizations:" structured) aiResp.explanation
+            , guarded (not . null) widgets <|> stored
             )
-      Left _ -> (content, parseStoredWidgets storedWidgets)
-
-    -- A chart whose query is not KQL (an agent wrote prose there) would only draw "nothing in this range".
-    validQuery = all (isRight . parseQueryToAST) . (.query)
-    parseStoredWidgets = fmap (filter validQuery . mapMaybe (fmap Widget.modelWidget . parseMaybe AE.parseJSON)) . parseStoredJSON @[AE.Value]
+      Left _ -> (a.content, stored)
+      where
+        stored = AI.runWidgets (Just a.createdAt) . (\ws -> AI.LLMResponse Nothing Nothing Nothing ws Nothing Nothing) . mapMaybe (parseMaybe AE.parseJSON) <$> parseStoredJSON @[AE.Value] a.widgets
 
 
 -- | Decode a stored JSONB value (anomaly metadata, widget lists) into a typed payload.
