@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import * as echarts from 'echarts';
-import { chartLayoutForSize, isNearChartViewport, registerChartDisposer } from '../src/widgets';
+import { chartLayoutForSize, drawSized, isNearChartViewport, registerChartDisposer } from '../src/widgets';
 
 test('disposes a chart removed by an HTMX morph navigation', () => {
   const chart = document.createElement('div');
@@ -70,4 +70,13 @@ describe('legend layout', () => {
     expect(short.layout.legend.orient).toBe('horizontal');
     expect(short.legend.y).toBeGreaterThanOrEqual(short.axis.y + short.axis.height);
   });
+});
+
+// Regression 2026-11-14: a resize redrew a chart whose data had not landed (the server shell's null
+// source means "fetch me"), and echarts threw "Bind must be called on a function".
+test('redrawing a chart before its data lands leaves it as it is', () => {
+  const chart = echarts.init(null, undefined, { renderer: 'svg', ssr: true, width: 400, height: 200 });
+  const shell = { xAxis: { type: 'time' }, yAxis: { type: 'value' }, dataset: { source: null }, series: [{ type: 'line', encode: { x: 0, y: 1 } }] };
+  expect(() => drawSized(chart, null, shell)).not.toThrow();
+  chart.dispose();
 });
