@@ -608,6 +608,15 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     result `shouldSatisfy` maybe False isLeft
     dbOne tr "SELECT 42::bigint" () `shouldReturn` (42 :: Int64)
 
+    -- A pooled connection that died while idle is replaced and the read retried, on the buffered
+    -- route too: dev saw a chart fail outright after its connection went bad (2026-11-15).
+    -- A row wider than its decoder is a stream out of step with its query; the error names what arrived.
+    E.try (withResource tr.trPool \conn -> Charts.streamQuery_ conn "SELECT 1::bigint AS bucket, 'a'::text AS series, 2.0::float8 AS value, 'x'::text AS stray" \(_ :: (Int64, Text, Double)) -> pass)
+      `shouldReturn` Left Charts.StreamDesynced{Charts.expected = 3, Charts.columns = ["bucket", "series", "value", "stray"]}
+    withResource tr.trPool PG.close
+    numericAgain <- plot numericQ
+    (numericAgain.error, numericAgain.dataset) `shouldBe` (Nothing, numeric.dataset)
+
     -- A scalar monitor plots its max per bucket instead of counting the aggregate.
     now <- getTestTime tr.trTestClock
     dbExec tr [sql| INSERT INTO otel_metrics (project_id, timestamp, id, series_id, metric_name, metric_type, value) VALUES (?, ?, gen_random_uuid(), 'monitor-chart', 'timefusion.mem_buffer.oldest_bucket_age_seconds', 'GAUGE', 42) |] (testPid, now)

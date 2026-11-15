@@ -1,6 +1,6 @@
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Pages.Charts.Charts (queryMetrics, queryProjectMetrics, queryMetricsStream, queryMetricsWithCacheUsing, ChartStream, streamQuery_, MetricsData (..), MetricsStats (..), DataType (..), convertTimestampsToMs) where
+module Pages.Charts.Charts (queryMetrics, queryProjectMetrics, queryMetricsStream, queryMetricsWithCacheUsing, ChartStream, streamQuery_, StreamDesynced (..), MetricsData (..), MetricsStats (..), DataType (..), convertTimestampsToMs) where
 
 import Control.Concurrent (threadWaitRead)
 import Control.Concurrent.STM qualified as STM
@@ -566,49 +566,54 @@ metricsPool authCtx dbSource = bool authCtx.pool authCtx.timefusionPgPool $ uses
 
 
 fetchMetricsDataWithProgress :: Maybe (MetricsData -> IO ()) -> DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe SqlSource -> IO (Either SomePostgreSqlException MetricsData)
-fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCtx dbSource = do
-  let pool = metricsPool authCtx dbSource
-  let baseMetricsData = emptyMetricsFor now fromD toD
-  let runQ :: FromRow r => IO [r]
-      runQ = withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
-
-  retryOnPoolExhaustion $ try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
-    DTFloat -> do
-      chartData <- runQ :: IO [Only (Maybe ChartNumber)]
-      pure
-        baseMetricsData
-          { dataFloat = coerce (listToMaybe chartData >>= fromOnly)
-          , rowsCount = 1
-          }
-    DTMetric -> do
-      -- Rows arrive as 'BucketEpoch' so a hand-written bucket column may be a timestamptz;
-      -- coerce back to the epoch Int the pivot works in.
-      let metrics :: V.Vector (BucketEpoch, Text, ChartNumber) -> MetricsData
-          metrics (coerce -> rows) =
-            let (hdrs, groupedData, rowsCount, rpm) = pivot' rows
-             in baseMetricsData{dataset = groupedData, headers = V.cons "timestamp" hdrs, rowsCount, rowsPerMin = Just rpm, stats = Just $ statsTriple rows}
-      -- Always streamed, so an abandoned read cancels its SQL; @progress@ only reports.
-      rowsRef <- newIORef []
-      lastEmit <- newIORef 0
-      withResource pool \conn -> streamQuery_ conn (Query $ encodeUtf8 sqlQuery) \row -> do
-        modifyIORef' rowsRef (row :)
-        forM_ progress \emit -> do
-          tick <- getMonotonicTimeNSec
-          previous <- readIORef lastEmit
-          when (previous == 0 || tick - previous >= 100000000) do
-            readIORef rowsRef >>= emit . metrics . V.fromList . reverse
-            writeIORef lastEmit tick
-      metrics . V.fromList . reverse <$> readIORef rowsRef
-    DTText -> do
-      -- Decoded through 'AnyText', not 'Text': a raw-SQL widget selects whatever its author
-      -- wrote, and demanding `text` for every column failed the *whole* widget on one
-      -- uncast value. Explicitly annotated because 'runQ' is polymorphic in the row type.
-      rows <- runQ :: IO [V.Vector AnyText]
-      let chartData = coerce (V.fromList rows) :: V.Vector (V.Vector Text)
-      pure baseMetricsData{dataText = chartData, rowsCount = fromIntegral $ V.length chartData}
-    DTJson -> do
-      chartData <- V.fromList <$> runQ
-      pure baseMetricsData{dataJSON = chartData, rowsCount = fromIntegral $ V.length chartData}
+fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCtx dbSource =
+  -- A connection that died idle, or a stream out of step with its query, fails at once; drop the
+  -- idle connections and retry once. Queries still checked out and the query cache are unaffected.
+  attempt >>= \case
+    Left err | isChartConnectionError err -> destroyAllResources pool >> attempt
+    result -> pure result
+  where
+    pool = metricsPool authCtx dbSource
+    baseMetricsData = emptyMetricsFor now fromD toD
+    runQ :: FromRow r => IO [r]
+    runQ = withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
+    attempt = retryOnPoolExhaustion $ try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
+      DTFloat -> do
+        chartData <- runQ :: IO [Only (Maybe ChartNumber)]
+        pure
+          baseMetricsData
+            { dataFloat = coerce (listToMaybe chartData >>= fromOnly)
+            , rowsCount = 1
+            }
+      DTMetric -> do
+        -- Rows arrive as 'BucketEpoch' so a hand-written bucket column may be a timestamptz;
+        -- coerce back to the epoch Int the pivot works in.
+        let metrics :: V.Vector (BucketEpoch, Text, ChartNumber) -> MetricsData
+            metrics (coerce -> rows) =
+              let (hdrs, groupedData, rowsCount, rpm) = pivot' rows
+               in baseMetricsData{dataset = groupedData, headers = V.cons "timestamp" hdrs, rowsCount, rowsPerMin = Just rpm, stats = Just $ statsTriple rows}
+        -- Always streamed, so an abandoned read cancels its SQL; @progress@ only reports.
+        rowsRef <- newIORef []
+        lastEmit <- newIORef 0
+        withResource pool \conn -> streamQuery_ conn (Query $ encodeUtf8 sqlQuery) \row -> do
+          modifyIORef' rowsRef (row :)
+          forM_ progress \emit -> do
+            tick <- getMonotonicTimeNSec
+            previous <- readIORef lastEmit
+            when (previous == 0 || tick - previous >= 100000000) do
+              readIORef rowsRef >>= emit . metrics . V.fromList . reverse
+              writeIORef lastEmit tick
+        metrics . V.fromList . reverse <$> readIORef rowsRef
+      DTText -> do
+        -- Decoded through 'AnyText', not 'Text': a raw-SQL widget selects whatever its author
+        -- wrote, and demanding `text` for every column failed the *whole* widget on one
+        -- uncast value. Explicitly annotated because 'runQ' is polymorphic in the row type.
+        rows <- runQ :: IO [V.Vector AnyText]
+        let chartData = coerce (V.fromList rows) :: V.Vector (V.Vector Text)
+        pure baseMetricsData{dataText = chartData, rowsCount = fromIntegral $ V.length chartData}
+      DTJson -> do
+        chartData <- V.fromList <$> runQ
+        pure baseMetricsData{dataJSON = chartData, rowsCount = fromIntegral $ V.length chartData}
 
 
 -- | Any column, as the text Postgres already sent for it.
@@ -680,7 +685,18 @@ convertTimestampsToMs md = md{dataset = V.map convertRow md.dataset, from = (* 1
 isChartConnectionError :: SomePostgreSqlException -> Bool
 isChartConnectionError err = case fromException @SqlError (toException err) of
   Just failure -> BS.null failure.sqlState || "08" `BS.isPrefixOf` failure.sqlState || failure.sqlState `elem` ["57P01", "57P02", "57P03"]
-  Nothing -> False
+  Nothing -> isJust $ fromException @StreamDesynced (toException err)
+
+
+-- | A streamed row wider than its decoder: the connection is out of step with the query it was
+-- sent (seen on dev, cause unproven), so the read is retried on a fresh one. It names what arrived.
+data StreamDesynced = StreamDesynced {expected :: Int, columns :: [Text]}
+  deriving stock (Eq, Show)
+
+
+instance Exception StreamDesynced where
+  toException = PGI.postgresqlExceptionToException
+  fromException = PGI.postgresqlExceptionFromException
 
 
 -- | Receive one libpq result at a time, keeping the existing typed row decoders.
@@ -721,7 +737,7 @@ streamQuery_ conn (Query sql) emit = run `E.onException` cancel
               decoded <- PGI.runConversion (runStateT (runReaderT (PGI.unRP fromRow) (PGI.Row 0 result)) 0) conn
               case decoded of
                 Ok (value, consumed) | consumed == columns -> emit value
-                Ok _ -> throwIO $ ConversionFailed "" Nothing "" "" "Chart result column count does not match its decoder"
+                Ok (_, PQ.Col consumed) -> throwIO . StreamDesynced (fromIntegral consumed) . map (maybe "?" decodeUtf8) =<< traverse (PQ.fname result) [0 .. columns - 1]
                 Errors [] -> throwIO $ ConversionFailed "" Nothing "" "" "Chart row decoder failed without an error"
                 Errors [err] -> throwIO err
                 Errors errors -> throwIO $ PGI.SomePostgreSqlException $ ManyErrors errors
@@ -750,16 +766,7 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
                     (start, end) = cfg'.dateRange
                     key = QC.generateCacheKey pid source ast' cfg'
                     fixed = QC.rewriteBinAutoToFixed key.binInterval ast'
-                    readMetrics callback statement lower upper = liftIO do
-                      let attempt = fetchMetricsDataWithProgress callback actual statement now lower upper authCtx dbSource
-                      attempt >>= \case
-                        Left err | isChartConnectionError err -> do
-                          -- A proxy expiry can leave several idle connections dead.
-                          -- Discard idle handles before retrying; checked-out queries
-                          -- stay in use, and the query cache is unaffected.
-                          destroyAllResources $ metricsPool authCtx dbSource
-                          attempt
-                        result -> pure result
+                    readMetrics callback statement lower upper = liftIO $ fetchMetricsDataWithProgress callback actual statement now lower upper authCtx dbSource
                     runChunk chunkCfg = do
                       let (_, chunkParts) = queryASTToComponents chunkCfg fixed
                           (chunkFrom, chunkTo) = chunkCfg.dateRange
