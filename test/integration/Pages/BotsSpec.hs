@@ -2891,78 +2891,64 @@ spec = around withTestResources do
 
     it "dock: a request from a page runs in the background, sees that page, opens what it asked to and reloads after writes" \tr -> do
       prompts <- newIORef []
+      gate <- newEmptyMVar
       let request = UUIDId $ UUID.fromWords 0 0 94 1
           page = "/p/" <> testPid.toText <> "/dashboards"
-          current = "http://localhost:8080/p/" <> testPid.toText <> "/log_explorer"
+          here = "/p/" <> testPid.toText <> "/log_explorer"
           model :: Stub
           model = agent (\h params -> modifyIORef' prompts ((unlines [Chat.content m | m <- toList h], toolNames params) :) $> nextStep (toolResults h) [fn "open_page" [("path", AE.String page)], newDashboard "Dock dashboard"] "Created it.") . titled "Dock dashboard"
-      gate <- newEmptyMVar
       -- The request runs on this server right away; the queued job is only a deferred fallback.
-      let runNow pid r = takeMVar gate >> runTestBgNoReset tr (model $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ Jobs.RunConversation pid r)
-          execute = runTestBgNoReset tr $ model $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ Jobs.RunConversation testPid request
-      started <- call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) runNow testPid $ formOf @AIThreads.CopilotForm $ "query=Make+a+dashboard&allowActions=true&title=Dashboards&path=" <> page <> "&requestId=" <> request.toText) >>= either (fail . show) pure
+      started <- dockAsk tr (\_ r -> takeMVar gate >> dockRun tr model r) request ("query=Make+a+dashboard&allowActions=true&title=Dashboards&path=" <> page) >>= either (fail . show) pure
       Just run <- runQueryEffect tr $ Issues.getRoutineRun testPid request
       renderT started `shouldContainAll` ["Make a dashboard", "Working…", "every 2s", "name=\"conversation\" value=\"" <> run.conversationId.toText]
       dbOne tr [sql|SELECT job.run_at >= run.started_at + interval '10 minutes' FROM background_jobs job JOIN apis.ai_routine_runs run ON run.id::text = job.payload->'contents'->>1 WHERE job.payload->>'tag' = 'RunConversation' AND run.id = ?|] (Only request) `shouldReturn` True
       putMVar gate ()
-      timeout 30_000_000 (fix \settle -> runQueryEffect tr (Issues.getRoutineRun testPid request) >>= \case Just r | r.status /= Issues.RunRunning -> pure r.status; _ -> threadDelay 50_000 >> settle) `shouldReturn` Just Issues.RunSucceeded
-      execute
+      settledStatus tr request `shouldReturn` Just Issues.RunSucceeded
+      dockRun tr model request
       goldenHtml "ai-dock-running" started
       dashboards tr "Dock dashboard" `shouldReturn` 1
       readIORef prompts >>= \ps -> (any (T.isInfixOf ("viewing \"Dashboards\" at " <> page) . fst) ps, any (elem "open_page" . snd) ps) `shouldBe` (True, True)
-      let effects seen = renderT <$> call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) seen (Just current))
-          here = "/p/" <> testPid.toText <> "/log_explorer"
-          anchors html = [href | href <- [page, here], ("href=\"" <> href <> "\" class=\"hidden\"") `T.isInfixOf` html]
-      traverse (fmap anchors . effects) ([Just 0, Just 1, Just 2, Nothing] :: [Maybe Int]) `shouldReturn` [[page], [here], [], []]
+      let anchors html = [href | href <- [page, here], ("href=\"" <> href <> "\" class=\"hidden\"") `T.isInfixOf` html]
+      traverse (fmap anchors . dockView tr run.conversationId (Just $ "http://localhost:8080" <> here)) ([Just 0, Just 1, Just 2, Nothing] :: [Maybe Int]) `shouldReturn` [[page], [here], [], []]
       -- Opening the page they are on swaps it whole: morphing a page onto itself kept stale widget state.
-      renderT <$> call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) (Just 0) (Just $ "http://localhost:8080" <> page))
+      dockView tr run.conversationId (Just $ "http://localhost:8080" <> page) (Just 0)
         >>= (`shouldContainAll` ["href=\"" <> page <> "\" class=\"hidden\" data-hx-get=\"" <> page <> "\" data-hx-target=\"#main-content\" data-hx-select=\"#main-content\" data-hx-swap=\"outerHTML\""])
       let followUp = UUIDId $ UUID.fromWords 0 0 94 2
           later = "/p/" <> testPid.toText <> "/issues"
-      void $ call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) (\_ _ -> pass) testPid $ formOf @AIThreads.CopilotForm $ "query=Now+the+issues&title=Issues&path=" <> later <> "&conversation=" <> run.conversationId.toText <> "&requestId=" <> followUp.toText)
+      void $ dockAsk tr (\_ _ -> pass) followUp ("query=Now+the+issues&title=Issues&path=" <> later <> "&conversation=" <> run.conversationId.toText)
       fmap (\r -> (r.conversationId, r.pageContext)) <$> runQueryEffect tr (Issues.runContextFor testPid $ Issues.ConversationClaim followUp) `shouldReturn` Just (run.conversationId, Just $ Issues.PageContext later "Issues")
-      goldenHtml "ai-dock-answered" =<< call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) Nothing (Just current))
+      goldenHtml "ai-dock-answered" =<< call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) Nothing (Just $ "http://localhost:8080" <> here))
 
     -- Regression 2026-11-14: "load the log explorer" was answered in the explorer's own reply shape
     -- (visualization "logs", no tool call), so the dock said it was ready and showed nothing.
     it "dock: an answer asking for a log view opens the explorer with its query" \tr -> do
       let request = UUIDId $ UUID.fromWords 0 0 94 3
           answer = "{\"explanation\":\"Showing errors.\",\"visualization\":\"logs\",\"query\":\"level == \\\"ERROR\\\"\",\"time_range\":{\"since\":\"1H\"}}"
-      void $ call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) (\_ _ -> pass) testPid $ formOf @AIThreads.CopilotForm $ "query=Load+the+log+explorer&title=Overview&path=/p/" <> testPid.toText <> "/dashboards&requestId=" <> request.toText)
-      runTestBgNoReset tr $ agent (\_ _ -> pure $ said answer) . titled "Errors" $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ Jobs.RunConversation testPid request
-      Just run <- runQueryEffect tr $ Issues.getRoutineRun testPid request
-      let dock seen = renderT <$> call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) seen Nothing)
           explorer = "href=\"/p/" <> testPid.toText <> "/log_explorer?query=level%20%3D%3D%20%22ERROR%22&amp;since=1H\" class=\"hidden\""
-      traverse (fmap (T.isInfixOf explorer) . dock) ([Just 0, Just 1, Nothing] :: [Maybe Int]) `shouldReturn` [True, False, False]
+      void $ dockAsk tr (\_ _ -> pass) request ("query=Load+the+log+explorer&title=Overview&path=/p/" <> testPid.toText <> "/dashboards")
+      dockRun tr (agent (\_ _ -> pure $ said answer) . titled "Errors") request
+      Just run <- runQueryEffect tr $ Issues.getRoutineRun testPid request
+      traverse (fmap (T.isInfixOf explorer) . dockView tr run.conversationId Nothing) ([Just 0, Just 1, Nothing] :: [Maybe Int]) `shouldReturn` [True, False, False]
 
     it "dock: a browser tool pauses the run until the user's tab answers, or until no tab does" \tr -> do
       prompts <- newIORef []
-      let page = "/p/" <> testPid.toText <> "/dashboards"
-          model :: Stub
+      let model :: Stub
           model = agent (\h _ -> modifyIORef' prompts (toolResults h <>) $> nextStep (toolResults h) [fn "read_page" []] "Read it.") . titled "Read page"
-          execute request = runTestBgNoReset tr $ model $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ Jobs.RunConversation testPid request
-          runStatus request = (.status) <<$>> runQueryEffect tr (Issues.getRoutineRun testPid request)
-          settled request = timeout 30_000_000 $ fix \loop -> runStatus request >>= \case Just Issues.RunRunning -> threadDelay 50_000 >> loop; status -> pure status
-          start n = do
-            let request = UUIDId $ UUID.fromWords 0 0 94 n
-            void $ call tr (AIThreads.copilotPostH (Just Routes.mcpProjectTools) (\_ _ -> pass) testPid $ formOf @AIThreads.CopilotForm $ "query=What+is+here&allowActions=true&title=Overview&path=" <> page <> "&requestId=" <> request.toText)
-            request <$ execute request
-          answer request = call tr . AIThreads.copilotBrowserPostH (\_ _ -> execute request) testPid request . formOf @AIThreads.BrowserAnswer
+          start n = let request = UUIDId $ UUID.fromWords 0 0 94 n in request <$ (dockAsk tr (\_ _ -> pass) request ("query=What+is+here&allowActions=true&title=Overview&path=/p/" <> testPid.toText <> "/dashboards") >> dockRun tr model request)
+          answer request = call tr . AIThreads.copilotBrowserPostH (\_ _ -> dockRun tr model request) testPid request . formOf @AIThreads.BrowserAnswer
       answered <- start 4
-      runStatus answered `shouldReturn` Just Issues.RunRunning
       Just run <- runQueryEffect tr $ Issues.getRoutineRun testPid answered
-      renderT <$> call tr (AIThreads.copilotDockGetH testPid (Just run.conversationId) Nothing Nothing)
+      run.status `shouldBe` Issues.RunRunning
+      dockView tr run.conversationId Nothing Nothing
         >>= (`shouldContainAll` ["<ai-browser-call", "data-tool=\"read_page\"", "data-call=\"0\"", "/ai/dock/browser/" <> answered.toText, "every 1s", "Using this tab: read page"])
       void $ answer answered "call=0&result=%5Br1%5D+button+%22Save%22"
-      settled answered `shouldReturn` Just (Just Issues.RunSucceeded)
+      settledStatus tr answered `shouldReturn` Just Issues.RunSucceeded
       void $ answer answered "call=0&result=again"
-      readIORef prompts >>= (`shouldSatisfy` any (T.isInfixOf "[r1] button \"Save\""))
-      readIORef prompts >>= (`shouldSatisfy` not . any (T.isInfixOf "again"))
       abandoned <- start 5
       advanceTestTime tr 91
-      execute abandoned
-      runStatus abandoned `shouldReturn` Just Issues.RunSucceeded
-      readIORef prompts >>= (`shouldSatisfy` any (T.isInfixOf "No browser tab answered"))
+      dockRun tr model abandoned
+      settledStatus tr abandoned `shouldReturn` Just Issues.RunSucceeded
+      readIORef prompts >>= (`shouldSatisfy` \ps -> any (T.isInfixOf "[r1] button \"Save\"") ps && not (any (T.isInfixOf "again") ps) && any (T.isInfixOf "No browser tab answered") ps)
 
     it "web and issue requests commit with a queued run, publish once, roll back on queue failure and cancel when revoked" \tr -> do
       let request n = UUIDId $ UUID.fromWords 0 0 93 n
@@ -5450,6 +5436,23 @@ assertDeferredJobRunnable conn payload = PGS.withTransaction conn do
 
 -- | Model and transport stubs that wrap a handler and its queued job alike.
 type Stub = forall es a. (ELLM.LLM :> es, HTTP.HTTP :> es, Eff.IOE :> es) => Eff es a -> Eff es a
+
+
+-- | The floating assistant's request, its background run, its view, and the status a run settles on.
+dockAsk :: TestResources -> AIThreads.RunNow -> UUIDId "ai_routine_run" -> Text -> IO (Either AIThreads.TurnError AIThreads.CopilotDock)
+dockAsk tr runNow request fields = call tr $ AIThreads.copilotPostH (Just Routes.mcpProjectTools) runNow testPid $ formOf @AIThreads.CopilotForm $ fields <> "&requestId=" <> request.toText
+
+
+dockRun :: TestResources -> Stub -> UUIDId "ai_routine_run" -> IO ()
+dockRun tr model = runTestBgNoReset tr . model . Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx . Jobs.RunConversation testPid
+
+
+dockView :: TestResources -> UUIDId "conversation" -> Maybe Text -> Maybe Int -> IO Text
+dockView tr conv currentUrl seen = renderT <$> call tr (AIThreads.copilotDockGetH testPid (Just conv) seen currentUrl)
+
+
+settledStatus :: TestResources -> UUIDId "ai_routine_run" -> IO (Maybe Issues.RoutineRunStatus)
+settledStatus tr request = join <$> timeout 30_000_000 (fix \loop -> runQueryEffect tr (Issues.getRoutineRun testPid request) >>= \case Just r | r.status == Issues.RunRunning -> threadDelay 50_000 >> loop; r -> pure $ (.status) <$> r)
 
 
 -- | Answer title requests with @title@, passing every other model call on.

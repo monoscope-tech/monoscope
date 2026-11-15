@@ -16,14 +16,13 @@ import Data.List (findIndex, lookup)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as M
 import Data.OpenApi (ToSchema)
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, defaultTimeLocale, diffUTCTime, parseTimeM, zonedTimeToUTC)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
-import Data.Traversable (mapAccumL)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
@@ -830,14 +829,14 @@ gridStackAttrs widgets =
 -- >>> map (.id) $ assignWidgetIds [titled "Errors", titled "errors", (titled "x"){id = Just "errors-2"}, titled ""]
 -- [Just "errors",Just "errors-3",Just "errors-2",Just "widget"]
 assignWidgetIds :: [Widget] -> [Widget]
-assignWidgetIds widgets = snd $ mapAccumL claim (Set.fromList $ mapMaybe (.id) widgets) widgets
+assignWidgetIds widgets = snd $ mapAccumL claim (S.fromList $ mapMaybe (.id) widgets) widgets
   where
-    claim :: Set.Set Text -> Widget -> (Set.Set Text, Widget)
+    claim :: S.Set Text -> Widget -> (S.Set Text, Widget)
     claim taken widget =
       let base = fromMaybe "widget" $ mfilter (not . T.null) $ slugify <$> widget.title
-          fresh = fromMaybe base $ find (`Set.notMember` taken) $ base : [base <> "-" <> show n | n <- [2 :: Int ..]]
+          fresh = fromMaybe base $ find (`S.notMember` taken) $ base : [base <> "-" <> show n | n <- [2 :: Int ..]]
           nested = widget & #children . _Just %~ assignWidgetIds
-       in maybe (Set.insert fresh taken, nested{id = Just fresh}) (const (taken, nested)) widget.id
+       in maybe (S.insert fresh taken, nested{id = Just fresh}) (const (taken, nested)) widget.id
 
 
 -- $setup
@@ -959,8 +958,7 @@ widgetHeightForWidth width widget = case widget.wType of
   WTGroup ->
     let requiredHeight = 1 + max 1 (layoutRows $ fold widget.children)
      in if width == 12 then requiredHeight else maybe requiredHeight (max requiredHeight) (widget.layout >>= (.h))
-  WTTimeseriesLine -> max 3 $ fromMaybe 3 $ widget.layout >>= (.h)
-  _ -> max 1 $ fromMaybe (bool 3 2 $ isStatWidget widget) $ widget.layout >>= (.h)
+  _ -> max (bool 1 3 $ widget.wType == WTTimeseriesLine) $ fromMaybe (bool 3 2 $ isStatWidget widget) $ widget.layout >>= (.h)
 
 
 gridRem :: Int -> Text

@@ -728,11 +728,6 @@ newtype AgentAwaitingBrowser = AgentAwaitingBrowser UTCTime
   deriving anyclass (Exception)
 
 
--- | Tools the user's open tab executes rather than this server.
-browserOperations :: [LocalOperation]
-browserOperations = [ReadPage, Click, Fill]
-
-
 data AgentAccessDenied = AgentAccessDenied
   deriving stock (Generic, Show)
   deriving anyclass (Exception)
@@ -1176,8 +1171,7 @@ initialLocalOperations config =
     <> [operation | isJust config.sourceConfig, operation <- [GetCodeContext, ListRunbooks, ReadRunbook, GetLinkedRepositories, GetDeployments]]
     <> [SaveArtifact | isJust $ documentConversation config, isJust $ invocationContext config.invocationMode]
     <> [ReadArtifact | isJust $ documentConversation config]
-    <> [operation | isJust $ pageContext config, operation <- [OpenPage, ReadPage]]
-    <> [operation | isJust $ pageContext config, writes, operation <- [Click, Fill]]
+    <> [operation | isJust $ pageContext config, operation <- [OpenPage, ReadPage] <> [operation' | writes, operation' <- [Click, Fill]]]
   where
     writes = Issues.permitsActions (invocationPolicy config.invocationMode) && isJust (accessMember config.access)
 
@@ -1507,7 +1501,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
             newTools = foldl' (\defs tool -> if any ((== toolName tool) . toolName) defs then defs else V.snoc defs tool) tools loaded
         advance $ Investigations.ModelPending step{Investigations.history = history, Investigations.request = step.request{OpenAIV1.tools = Just newTools}, Investigations.iteration = step.iteration + 1, Investigations.toolCalls = step.toolCalls <> zipWith Investigations.mkToolCallInfo calls results}
       tool : remaining
-        | LLM.toolFunctionName (LLM.toolCallFunction tool) `elem` map Catalog.localToolName browserOperations -> do
+        | LLM.toolFunctionName (LLM.toolCallFunction tool) `elem` map Catalog.localToolName [ReadPage, Click, Fill] -> do
             deadline <- addUTCTime 90 <$> Time.currentTime
             void $ Investigations.commitProgress turn journal (Investigations.BrowserPending step message completed tool remaining deadline) $ Just $ Investigations.ToolStarted step.iteration tool
             throwIO $ AgentAwaitingBrowser deadline
