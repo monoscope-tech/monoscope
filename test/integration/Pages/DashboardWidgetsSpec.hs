@@ -1160,6 +1160,13 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     for_ ["Dashboard C", "Dashboard A"] \t -> titled t >>= testServant tr . Dashboards.dashboardStarPostH testPid . (.id)
     map (isJust . (.starredSince)) <$> listed `shouldReturn` [True, True, False, False]
 
+  -- Regression 2026-11-14: the assistant added "Top 10 endpoints" twice through the API; with no ids
+  -- both fell back to the same title slug, one DOM id and one edit key, so the second never loaded.
+  it "widgets saved without an id get distinct ids, even when their titles slug alike" \tr -> do
+    dashId <- newDashboard tr "" "Same titles"
+    for_ ["Errors", "errors", "Errors"] \title -> void $ toBaseServantResponse tr $ Api.apiDashboardWidgetUpsert testPid dashId (widgetOf Widget.WTTimeseries title)
+    map (.id) <$> storedWidgets tr dashId `shouldReturn` [Just "errors", Just "errors-2", Just "errors-3"]
+
   it "dashboard switcher: the title lists the project's dashboards, starred first, linking each and marking the current one" \tr -> do
     alpha <- newDashboard tr "" "Alpha"
     _ <- testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Beta", Dashboards.file = "", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}

@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), ChartScope (..), VizType (..), vizWidget, widgetWith_, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), monitorChartType, vizChart, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
+module Pkg.Components.Widget (Widget (..), ChartScope (..), VizType (..), vizWidget, widgetWith_, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, assignWidgetIds, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), monitorChartType, vizChart, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -16,12 +16,14 @@ import Data.List (findIndex, lookup)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as M
 import Data.OpenApi (ToSchema)
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, defaultTimeLocale, diffUTCTime, parseTimeM, zonedTimeToUTC)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
+import Data.Traversable (mapAccumL)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
@@ -819,6 +821,23 @@ gridStackAttrs widgets =
   where
     minWidth = foldl' max 0 [pixels * 12 `div` max 1 (fromMaybe defaultWidgetWidth layout.w) | widget <- widgets, layout <- toList widget.layout, pixels <- toList layout.minWidth]
     rows = if null widgets then 2 else layoutRows widgets
+
+
+-- | Give each id-less widget its title's slug, suffixed until no sibling has it, so widgets whose
+-- titles slug alike stop sharing one identity (DOM id, data target, edit key). Ids already set stay.
+--
+-- >>> let titled t = (def :: Widget){title = Just t}
+-- >>> map (.id) $ assignWidgetIds [titled "Errors", titled "errors", (titled "x"){id = Just "errors-2"}, titled ""]
+-- [Just "errors",Just "errors-3",Just "errors-2",Just "widget"]
+assignWidgetIds :: [Widget] -> [Widget]
+assignWidgetIds widgets = snd $ mapAccumL claim (Set.fromList $ mapMaybe (.id) widgets) widgets
+  where
+    claim :: Set.Set Text -> Widget -> (Set.Set Text, Widget)
+    claim taken widget =
+      let base = fromMaybe "widget" $ mfilter (not . T.null) $ slugify <$> widget.title
+          fresh = fromMaybe base $ find (`Set.notMember` taken) $ base : [base <> "-" <> show n | n <- [2 :: Int ..]]
+          nested = widget & #children . _Just %~ assignWidgetIds
+       in maybe (Set.insert fresh taken, nested{id = Just fresh}) (const (taken, nested)) widget.id
 
 
 -- $setup

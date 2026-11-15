@@ -1,5 +1,6 @@
 module Models.Projects.Dashboards (
   Dashboard (..),
+  withWidgetIds,
   DashboardVM (..),
   DashboardView (..),
   variablesForTab,
@@ -238,7 +239,7 @@ getOrInsertByBaseTemplate d = do
 insertSql :: DashboardVM -> HI.Sql
 insertSql d =
   [HI.sql| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha, git_sync_id, saved_views)
-             VALUES (#{d.id}, #{d.projectId}, #{d.createdAt}, #{d.updatedAt}, #{d.createdBy}, #{d.baseTemplate}, #{d.schema}, #{d.starredSince}, #{d.homepageSince}, #{d.tags}, #{d.title},
+             VALUES (#{d.id}, #{d.projectId}, #{d.createdAt}, #{d.updatedAt}, #{d.createdBy}, #{d.baseTemplate}, #{withWidgetIds <$> d.schema}, #{d.starredSince}, #{d.homepageSince}, #{d.tags}, #{d.title},
                CASE WHEN cardinality(#{d.teams}::uuid[]) = 0
                  THEN ARRAY(SELECT id FROM projects.teams WHERE project_id = #{d.projectId} AND is_everyone AND deleted_at IS NULL)
                  ELSE #{d.teams}::uuid[] END,
@@ -277,6 +278,11 @@ readDashboardEndpoint uri = do
 
 
 -- | Every widget across root and tabs, group children included.
+-- | Every widget list gets distinct ids before the schema is stored.
+withWidgetIds :: Dashboard -> Dashboard
+withWidgetIds dashboard = dashboard & #widgets %~ Widget.assignWidgetIds & #tabs . _Just . traversed . #widgets %~ Widget.assignWidgetIds
+
+
 allWidgets :: Dashboard -> [Widget.Widget]
 allWidgets dashboard = foldMap (universeOf (#children . _Just . folded)) $ dashboard.widgets <> foldMap (concatMap (.widgets)) dashboard.tabs
 
