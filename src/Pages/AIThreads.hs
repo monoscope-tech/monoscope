@@ -1296,10 +1296,10 @@ copilotDock pid convM seen currentUrl = do
       -- An answer in the explorer's own reply shape (a log view) is shown there, unless the run opened a page itself.
       answered = do
         open <- selected
-        guard $ maybe False (<= length open.calls) seen && not (any (isJust . openedPath) open.calls)
+        guard $ any (<= length open.calls) seen && not (any (isJust . openedPath) open.calls)
         reply <- rightToMaybe . AI.parseLLMResponse =<< open.answer
         logExplorerUrl pid <> "?query=" <> toUriStr (foldMap AI.modelQueryText reply.query) <> foldMap TimePicker.rangeQuery reply.timeRange <$ guard (reply.visualization == Just "logs")
-  let current = snd . T.breakOn "/p/" <$> currentUrl
+      current = snd . T.breakOn "/p/" <$> currentUrl
       visit page = bool Visit Reload (Just page == current) page
   pure CopilotDock{projectId = pid, requestId, sessions, selected, pageChange = visit <$> (viaNonEmpty last (mapMaybe (AI.projectPagePath pid <=< openedPath) fresh) <|> answered) <|> (Reload <$> current <* guard wrote)}
 
