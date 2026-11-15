@@ -1226,7 +1226,7 @@ globalTemplates_ = do
             button_ [type_ "button", Aria.label_ "Dismiss notification", class_ "grid size-10 max-md:size-11 shrink-0 place-items-center rounded-lg text-iconNeutral hover:bg-fillHover hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-textBrand transition-colors", [__|on click remove closest .toast-animate|]] $ faSprite_ "xmark" "regular" "size-3"
   toastTmpl "successToastTmpl" False "circle-check" "Something succeeded"
   toastTmpl "errorToastTmpl" True "circle-exclamation" "Something failed"
-  section_ [class_ "fixed bottom-0 right-0 z-50 p-4 max-md:left-0 space-y-2 pointer-events-none [&>*]:pointer-events-auto", id_ "toastsParent", Aria.live_ "polite", term "aria-relevant" "additions"] ""
+  section_ [class_ "fixed bottom-0 right-0 z-[70] p-4 max-md:left-0 space-y-2 pointer-events-none [&>*]:pointer-events-auto", id_ "toastsParent", Aria.live_ "polite", term "aria-relevant" "additions"] ""
   script_
     [type_ "text/javascript"]
     [text|
