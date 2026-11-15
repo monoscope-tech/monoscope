@@ -717,32 +717,12 @@ threadPageGetH pid convId docM runM hxTarget = do
           , hxPost_ $ maybe (urls.aiThreadsPost projectId) (urls.aiThreadPost projectId) activeConversationIdM
           , hxTarget_ "this"
           , hxSwap_ "none"
-          , hxIndicator_ "#ai-thread-loader"
+          , hxIndicator_ "#ai-thread-input-loader"
           ]
           do
-            div_ [class_ "max-w-3xl mx-auto flex items-end gap-2 rounded-xl bg-bgRaised p-2 shadow-[0_0_0_1px_var(--color-strokeWeak),0_4px_12px_oklch(0_0_0/0.05)] focus-within:shadow-[0_0_0_2px_var(--color-strokeFocus)]"] do
-              textarea_
-                ( [ name_ "query"
-                  , id_ "ai-thread-input"
-                  , rows_ "1"
-                  , maxlength_ "4000"
-                  , required_ "required"
-                  , placeholder_ $ bool "Ask or delegate a task…" "Ask about these results…" isRoutine
-                  , Aria.label_ "Message Monoscope AI"
-                  , class_ "min-h-9 max-h-40 grow resize-none bg-transparent border-0 px-2 py-2 text-base leading-6 placeholder:text-textWeak sm:text-sm sm:leading-5 focus:outline-none"
-                  , [__|on keydown[key=='Enter' and not shiftKey]
-                        halt the event then call my form.requestSubmit()
-                      end|]
-                  ]
-                    -- On a routine the result is the point; focusing the composer would raise a phone keyboard over it.
-                    <> [autofocus_ | not isRoutine]
-                )
-                ""
-              input_ [type_ "hidden", name_ "mode", value_ "chat"]
-              input_ [type_ "hidden", name_ "requestId", value_ requestId.toText]
-              button_ [type_ "submit", Aria.label_ "Send message", class_ "group/send w-9 h-9 shrink-0 rounded-lg bg-fillBrand-strong text-white flex items-center justify-center cursor-pointer active:scale-[0.96] transition-transform"] do
-                span_ [id_ "ai-thread-loader", class_ "htmx-indicator"] $ faSprite_ "spinner" "regular" "w-3.5 h-3.5 animate-spin"
-                span_ [class_ "inline-flex group-has-[.htmx-request]/send:hidden"] $ faSprite_ "arrow-up" "regular" "w-3.5 h-3.5"
+            div_ [class_ "max-w-3xl mx-auto"] $ promptField_ "ai-thread-input" (bool "Ask or delegate a task…" "Ask about these results…" isRoutine) $ [autofocus_ | not isRoutine]
+            input_ [type_ "hidden", name_ "mode", value_ "chat"]
+            input_ [type_ "hidden", name_ "requestId", value_ requestId.toText]
             when allowActionUi $ label_ [class_ "max-w-3xl mx-auto mt-2 max-md:hidden max-md:group-has-[textarea:not(:placeholder-shown)]/composer:flex flex cursor-pointer items-center justify-center gap-2 text-xs text-textWeak"] do
               input_ [type_ "checkbox", name_ "allowActions", value_ "true", class_ "checkbox checkbox-xs"]
               span_ "Allow the project changes I request in this message"
@@ -985,6 +965,29 @@ submitTurn projectTools origin requestId allowActions runner pid convId prompt =
     case result of
       Left err -> throwError Servant.err502{Servant.errBody = encodeUtf8 err}
       Right _ -> pass
+
+
+-- | The composer's prompt: it grows with its text, Enter sends it, and the send button spins while
+-- the form (whose @hx-indicator@ names @<id>-loader@) is in flight.
+promptField_ :: Text -> Text -> [Attribute] -> Html ()
+promptField_ inputId placeholder attrs = div_ [class_ "flex items-end gap-2 rounded-xl bg-bgRaised p-2 shadow-[0_0_0_1px_var(--color-strokeWeak),0_4px_12px_oklch(0_0_0/0.05)] focus-within:shadow-[0_0_0_2px_var(--color-strokeFocus)]"] do
+  textarea_
+    ( [ name_ "query"
+      , id_ inputId
+      , rows_ "1"
+      , maxlength_ "4000"
+      , required_ "required"
+      , placeholder_ placeholder
+      , Aria.label_ "Message Monoscope AI"
+      , class_ "min-h-9 max-h-40 grow resize-none border-0 bg-transparent px-2 py-2 text-base leading-6 [field-sizing:content] placeholder:text-textWeak focus:outline-none sm:text-sm sm:leading-5"
+      , [__|on keydown[key=='Enter' and not shiftKey] halt the event then call my form.requestSubmit() end|]
+      ]
+        <> attrs
+    )
+    ""
+  button_ [type_ "submit", Aria.label_ "Send message", class_ "group/send flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-fillBrand-strong text-white transition-transform active:scale-[0.96]"] do
+    span_ [id_ $ inputId <> "-loader", class_ "htmx-indicator"] $ faSprite_ "spinner" "regular" "size-3.5 animate-spin"
+    span_ [class_ "inline-flex group-has-[.htmx-request]/send:hidden"] $ faSprite_ "arrow-up" "regular" "size-3.5"
 
 
 normalizeQuery :: Text -> Either PromptError Text
@@ -1302,8 +1305,8 @@ copilotDock pid convM seen currentUrl = do
 
 
 openedPath :: AI.ToolCallInfo -> Maybe Text
-openedPath call = case (call.name, Map.lookup "path" call.args) of
-  ("open_page", Just (AE.String path)) -> Just path
+openedPath call = case Map.lookup "path" call.args of
+  Just (AE.String path) | call.name == Catalog.localToolName Catalog.OpenPage -> Just path
   _ -> Nothing
 
 
@@ -1395,27 +1398,14 @@ copilotDock_ dock =
             , hxTarget_ "#ai-dock"
             , hxSwap_ "outerMorph"
             , hxVals_ "js:{path: location.pathname + location.search, title: document.title}"
+            , hxIndicator_ "#ai-dock-input-loader"
             , -- Only the draft clears: a whole-form reset would re-check "Can make changes" after a read-only send.
               [__|on htmx:after:request if event.detail.ctx.response.status < 400 set #ai-dock-input.value to '' end|]
             ]
             do
               input_ [type_ "hidden", name_ "conversation", value_ session.conversationId.toText]
               input_ [type_ "hidden", name_ "requestId", value_ dock.requestId.toText]
-              div_ [class_ "flex items-end gap-2 rounded-xl bg-fillWeaker px-2 py-1.5 focus-within:ring-2 focus-within:ring-strokeFocus"] do
-                textarea_
-                  [ id_ "ai-dock-input"
-                  , name_ "query"
-                  , rows_ "1"
-                  , maxlength_ "4000"
-                  , required_ "required"
-                  , placeholder_ "Ask a follow-up…"
-                  , Aria.label_ "Message the AI assistant"
-                  , term "hx-morph-skip" ""
-                  , class_ "max-h-32 min-h-8 grow resize-none bg-transparent px-1 py-1.5 text-base leading-5 [field-sizing:content] placeholder:text-textWeak focus:outline-none sm:text-sm"
-                  , [__|on keydown[key=='Enter' and not shiftKey] halt the event then call my form.requestSubmit() end|]
-                  ]
-                  ""
-                button_ [type_ "submit", Aria.label_ "Send", class_ "grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg bg-fillBrand-strong text-white transition-transform active:scale-[0.96]"] $ faSprite_ "arrow-up" "regular" "size-3.5"
+              promptField_ "ai-dock-input" "Ask a follow-up…" [term "hx-morph-skip" ""]
               label_ [class_ "mt-1.5 flex w-fit cursor-pointer items-center gap-1.5 px-1 text-xs text-textWeak"] do
                 input_ $ [type_ "checkbox", name_ "allowActions", value_ "true", class_ "checkbox checkbox-xs", term "hx-morph-skip" ""] <> [checked_ | session.policy /= Issues.Observe]
                 "Can make changes in this project"

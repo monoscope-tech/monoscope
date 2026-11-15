@@ -23,6 +23,7 @@ module Pkg.AgentCatalog (
   operationName,
   nativePolicy,
   localTools,
+  localToolName,
   CompositeOperation (..),
   compositeTools,
   policiesByName,
@@ -256,6 +257,10 @@ nativePolicy = \case
   EnrichIssue _ -> ProjectWrite
 
 
+localToolName :: LocalOperation -> Text
+localToolName = toText . encodeEnumSC @""
+
+
 localTools :: Map Text (Tool LocalOperation)
 localTools = Map.fromList [(tool.name, tool) | operation <- [minBound .. maxBound], let tool = localToolDefinition operation]
   where
@@ -289,7 +294,7 @@ localTools = Map.fromList [(tool.name, tool) | operation <- [minBound .. maxBoun
       Click -> readTool "Click a control on the page open in the user's tab, by the ref read_page gave it. Returns the page afterwards." [("ref", "string", "Ref from read_page, e.g. r12")]
       Fill -> readTool "Type into a field on the page open in the user's tab, replacing its value. Returns the page afterwards." [("ref", "string", "Ref from read_page"), ("value", "string", "Text to enter")]
       where
-        name = toText $ encodeEnumSC @"" operation
+        name = localToolName operation
         readTool = definition True
         optionalReadTool = definition False
         definition firstRequired description props = fromSchema description (propsSchema props [key' | firstRequired, (key', _, _) <- take 1 props])

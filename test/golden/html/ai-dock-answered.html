@@ -75,18 +75,27 @@
 </div>
 </div>
 </div>
-<form id="ai-dock-form" class="border-t border-strokeWeak p-2" data-hx-post="/p/<uuid>/ai/dock" data-hx-target="#ai-dock" data-hx-swap="outerMorph" data-hx-vals="js:{path: location.pathname + location.search, title: document.title}" _="on htmx:after:request if event.detail.ctx.response.status &lt; 400 set #ai-dock-input.value to &#39;&#39; end">
+<form id="ai-dock-form" class="border-t border-strokeWeak p-2" data-hx-post="/p/<uuid>/ai/dock" data-hx-target="#ai-dock" data-hx-swap="outerMorph" data-hx-vals="js:{path: location.pathname + location.search, title: document.title}" data-hx-indicator="#ai-dock-input-loader" _="on htmx:after:request if event.detail.ctx.response.status &lt; 400 set #ai-dock-input.value to &#39;&#39; end">
 <input type="hidden" name="conversation" value="<uuid>">
 <input type="hidden" name="requestId" value="<uuid>">
-<div class="flex items-end gap-2 rounded-xl bg-fillWeaker px-2 py-1.5 focus-within:ring-2 focus-within:ring-strokeFocus">
-<textarea id="ai-dock-input" name="query" rows="1" maxlength="4000" required="required" placeholder="Ask a follow-up…" aria-label="Message the AI assistant" hx-morph-skip class="max-h-32 min-h-8 grow resize-none bg-transparent px-1 py-1.5 text-base leading-5 [field-sizing:content] placeholder:text-textWeak focus:outline-none sm:text-sm" _="on keydown[key==&#39;Enter&#39; and not shiftKey] halt the event then call my form.requestSubmit() end">
+<div class="flex items-end gap-2 rounded-xl bg-bgRaised p-2 shadow-[0_0_0_1px_var(--color-strokeWeak),0_4px_12px_oklch(0_0_0/0.05)] focus-within:shadow-[0_0_0_2px_var(--color-strokeFocus)]">
+<textarea name="query" id="ai-dock-input" rows="1" maxlength="4000" required="required" placeholder="Ask a follow-up…" aria-label="Message Monoscope AI" class="min-h-9 max-h-40 grow resize-none border-0 bg-transparent px-2 py-2 text-base leading-6 [field-sizing:content] placeholder:text-textWeak focus:outline-none sm:text-sm sm:leading-5" _="on keydown[key==&#39;Enter&#39; and not shiftKey] halt the event then call my form.requestSubmit() end" hx-morph-skip>
 </textarea>
-<button type="submit" aria-label="Send" class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg bg-fillBrand-strong text-white transition-transform active:scale-[0.96]">
+<button type="submit" aria-label="Send message" class="group/send flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-fillBrand-strong text-white transition-transform active:scale-[0.96]">
+<span id="ai-dock-input-loader" class="htmx-indicator">
+<svg class="icon size-3.5 animate-spin" width="1em" height="1em" viewBox="0 0 16 16">
+<g fill="none">
+<g id="regular-spinner-Loader" clip-path="url(#regular-spinner-clip0_6882_4605)"> <path id="regular-spinner-Icon" d="M7.99967 1.3335V4.00016M7.99967 12.0002V14.6668M3.28634 3.28682L5.173 5.17349M10.8263 10.8268L12.713 12.7135M1.33301 8.00016H3.99967M11.9997 8.00016H14.6663M3.28634 12.7135L5.173 10.8268M10.8263 5.17349L12.713 3.28682" stroke="currentColor" stroke-opacity="0.7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /> </g> <defs> <clipPath id="regular-spinner-clip0_6882_4605"> <rect width="16" height="16" fill="white" /> </clipPath> </defs>
+</g>
+</svg>
+</span>
+<span class="inline-flex group-has-[.htmx-request]/send:hidden">
 <svg class="icon size-3.5" width="1em" height="1em" viewBox="0 0 384 512">
 <g>
 <path d="M209.4 39.4C204.8 34.7 198.6 32 192 32s-12.8 2.7-17.4 7.4l-168 176c-9.2 9.6-8.8 24.8 .8 33.9s24.8 8.8 33.9-.8L168 115.9 168 456c0 13.3 10.7 24 24 24s24-10.7 24-24l0-340.1L342.6 248.6c9.2 9.6 24.3 9.9 33.9 .8s9.9-24.3 .8-33.9l-168-176z"/>
 </g>
 </svg>
+</span>
 </button>
 </div>
 <label class="mt-1.5 flex w-fit cursor-pointer items-center gap-1.5 px-1 text-xs text-textWeak">
