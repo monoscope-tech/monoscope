@@ -7,6 +7,10 @@ module Models.Apis.Investigations (
   Checkpoint (..),
   loadCheckpoint,
   loadCheckpointFor,
+  checkpointToolCalls,
+  checkpointAnswer,
+  answerBrowserCall,
+  checkpointBrowserCall,
   CheckpointTarget (..),
   RunTurn (..),
   RunLease (..),
@@ -125,7 +129,7 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson qualified as JSON
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, type (:>))
-import Effectful.Exception (throwIO)
+import Effectful.Exception (throwIO, try)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
@@ -429,7 +433,7 @@ loadAnswer turn = do
   maybe (loadCheckpoint turn) (pure . Just) canonical >>= \case
     Just SavedCheckpoint{checkpoint = AnswerReady answer} -> pure $ Just answer
     Just SavedCheckpoint{checkpoint = LegacyUncertain answer _} -> pure $ Just answer
-    (Nothing; Just SavedCheckpoint{checkpoint = ModelPending{}}; Just SavedCheckpoint{checkpoint = ToolsPending{}}; Just SavedCheckpoint{checkpoint = NativePending{}}; Just SavedCheckpoint{checkpoint = NativeReady}) ->
+    (Nothing; Just SavedCheckpoint{checkpoint = ModelPending{}}; Just SavedCheckpoint{checkpoint = ToolsPending{}}; Just SavedCheckpoint{checkpoint = BrowserPending{}}; Just SavedCheckpoint{checkpoint = NativePending{}}; Just SavedCheckpoint{checkpoint = NativeReady}) ->
       Hasql.interpOneJson
         [HI.sql|SELECT answer FROM apis.slack_turn_answers
       WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
@@ -607,6 +611,8 @@ data Step = Step
 data Checkpoint
   = ModelPending Step
   | ToolsPending Step LLM.Message [(LLM.ToolCall, ToolResult)] [LLM.ToolCall]
+  | -- | A call the user's open tab executes; the run pauses until it answers or the deadline passes.
+    BrowserPending Step LLM.Message [(LLM.ToolCall, ToolResult)] LLM.ToolCall [LLM.ToolCall] UTCTime
   | AnswerReady AgenticChatResult
   | LegacyUncertain AgenticChatResult Checkpoint
   | NativePending Catalog.NativeOperation
@@ -614,6 +620,40 @@ data Checkpoint
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
   deriving (HI.DecodeValue) via Aeson Checkpoint
+
+
+-- | Every tool call so far, oldest first; each checkpoint extends its predecessor's list.
+checkpointToolCalls :: Checkpoint -> [ToolCallInfo]
+checkpointToolCalls = \case
+  ModelPending step -> step.toolCalls
+  ToolsPending step _ completed _ -> step.toolCalls <> map (uncurry mkToolCallInfo) completed
+  BrowserPending step _ completed _ _ _ -> step.toolCalls <> map (uncurry mkToolCallInfo) completed
+  AnswerReady answer -> answer.toolCalls
+  LegacyUncertain answer _ -> answer.toolCalls
+  (NativePending{}; NativeReady) -> []
+
+
+checkpointAnswer :: Checkpoint -> Maybe AgenticChatResult
+checkpointAnswer = \case
+  AnswerReady answer -> Just answer
+  LegacyUncertain answer _ -> Just answer
+  (ModelPending{}; ToolsPending{}; BrowserPending{}; NativePending{}; NativeReady) -> Nothing
+
+
+checkpointBrowserCall :: Checkpoint -> Maybe LLM.ToolCall
+checkpointBrowserCall = \case
+  BrowserPending _ _ _ call _ _ -> Just call
+  (ModelPending{}; ToolsPending{}; AnswerReady{}; LegacyUncertain{}; NativePending{}; NativeReady) -> Nothing
+
+
+-- | Save the tab's answer to the paused call; False when the run is no longer waiting on that call.
+answerBrowserCall :: DB es => RunTurn -> Text -> Text -> Eff es Bool
+answerBrowserCall turn callId result =
+  loadCheckpointFor (RunCheckpoint turn) >>= \case
+    Just SavedCheckpoint{revision, checkpoint = BrowserPending step message completed call remaining _}
+      | LLM.toolCallId call == callId ->
+          isRight <$> try @CheckpointConflict (commitProgress (Just $ CheckpointCursor (RunCheckpoint turn) revision) Nothing (ToolsPending step message (completed <> [(call, ToolResult result Nothing)]) remaining) Nothing)
+    _ -> pure False
 
 
 data SavedCheckpoint = SavedCheckpoint {revision :: Int64, checkpoint :: Checkpoint}
@@ -930,7 +970,7 @@ prepareNativeOperation turn proposed = do
     NativeReady -> do
       next <- commitProgress (Just cursor) Nothing (NativePending proposed) Nothing
       maybe (throwIO CheckpointAccessDenied) (\position -> pure (position, proposed)) next
-    (ModelPending{}; ToolsPending{}; AnswerReady{}; LegacyUncertain{}) -> throwIO CheckpointAccessDenied
+    (ModelPending{}; ToolsPending{}; BrowserPending{}; AnswerReady{}; LegacyUncertain{}) -> throwIO CheckpointAccessDenied
 
 
 operationIdentity :: CheckpointCursor -> UUIDId "agent_operation"
@@ -1001,7 +1041,7 @@ adoptSlackCheckpoint lease turn policy = do
                         [HI.sql|INSERT INTO apis.ai_agent_operations (id, project_id, run_id, requested_by, checkpoint_revision, proposal, outcome)
                     VALUES (#{identifier}, #{turn.projectId}, #{lease.turn.runId}, #{turn.userId}, #{cursor.revision}, #{Aeson proposal}, #{Aeson OperationUnknown})|]
                     pure $ uncertain identifier lease.turn.runId
-          (ModelPending{}; ToolsPending{}; AnswerReady{}; LegacyUncertain{}) -> pure original.checkpoint
+          (ModelPending{}; ToolsPending{}; BrowserPending{}; AnswerReady{}; LegacyUncertain{}) -> pure original.checkpoint
           (NativePending{}; NativeReady) -> hoistEither $ Left CheckpointAccessDenied
         created <-
           lift
@@ -1052,7 +1092,7 @@ startCheckpointFor target checkpoint = do
               DO UPDATE SET checkpoint = slack_turn_checkpoints.checkpoint RETURNING revision, checkpoint|]
             case checkpoint of
               (NativePending{}; NativeReady) -> pass
-              (ModelPending{}; ToolsPending{}; AnswerReady{}; LegacyUncertain{}) -> for_ run $ \identifier ->
+              (ModelPending{}; ToolsPending{}; BrowserPending{}; AnswerReady{}; LegacyUncertain{}) -> for_ run $ \identifier ->
                 Hasql.executeTx
                   [HI.sql|INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, slack_message_ts, created_at)
               SELECT run.project_id, run.conversation_id, 'user', run.input, receipt.payload #>> '{event,ts}', clock_timestamp()
@@ -1594,6 +1634,7 @@ classifyLegacyEvidence project selected = do
       AnswerReady answer -> map (.name) answer.toolCalls
       ModelPending step -> map (.name) step.toolCalls
       ToolsPending step _ completed pending -> map (.name) step.toolCalls <> map (LLM.toolFunctionName . LLM.toolCallFunction) (map fst completed <> pending)
+      BrowserPending step _ completed call pending _ -> map (.name) step.toolCalls <> map (LLM.toolFunctionName . LLM.toolCallFunction) (map fst completed <> (call : pending))
       NativePending operation -> [Catalog.operationName $ Catalog.NativeCall operation]
       NativeReady -> []
       LegacyUncertain _ original -> checkpointNames original

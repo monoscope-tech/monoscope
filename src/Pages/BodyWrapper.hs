@@ -488,7 +488,10 @@ bodyWrapper bcfg child = do
             $ section_ [class_ "flex-1 overflow-y-auto"] child
         Just sess -> do
           -- Command palette (shell rendered inline, dynamic items lazy-loaded)
-          whenJust bcfg.currProject \p -> CommandPalette.paletteShell_ p.id >> aiComposerShell_ p.id >> aiThreadRenameShell_
+          whenJust bcfg.currProject \p -> do
+            CommandPalette.paletteShell_ p.id >> aiComposerShell_ p.id >> aiThreadRenameShell_
+            -- Outside #main-content, so the assistant and its running sessions survive navigation.
+            div_ [id_ "ai-dock", hxGet_ $ urls.aiDockGet p.id Nothing Nothing, hxTrigger_ "load", hxSwap_ "outerMorph"] ""
           -- Mobile nav toggle (CSS-only sidebar control, only rendered when sidebar exists)
           when (isJust bcfg.currProject)
             $ input_ [type_ "checkbox", class_ "hidden", id_ "mobile-nav-toggle", [__|on load if window.innerWidth < 768 then set #sidenav-toggle.checked to true|]]

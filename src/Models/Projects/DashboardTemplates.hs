@@ -86,7 +86,7 @@ requireEditable vm = askTemplates >>= either (const $ ApiT.refuse ApiT.Dashboard
 updateSchema :: DB es => Editable -> Dashboards.Dashboard -> Maybe UTCTime -> Eff es Int64
 updateSchema (Editable dashId) dashboard updatedAt =
   Hasql.interpExecute
-    $ [HI.sql| UPDATE projects.dashboards SET schema = #{dashboard} |]
+    $ [HI.sql| UPDATE projects.dashboards SET schema = #{Dashboards.withWidgetIds dashboard} |]
     <> foldMap (\t -> [HI.sql| , updated_at = #{t} |]) updatedAt
     <> [HI.sql| WHERE id = #{dashId} |]
 

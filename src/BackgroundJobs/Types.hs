@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module BackgroundJobs.Types (BgJobs (..), Conversion (..), insertJob, wakeJob, longJob, reviewOperation, deferOperationReview, wakeStoppedReviews, startConversation, startCommand) where
+module BackgroundJobs.Types (BgJobs (..), Conversion (..), JobTiming (..), insertJob, scheduleJob, longJob, reviewOperation, deferOperationReview, wakeStoppedReviews, startConversation, startCommand) where
 
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
@@ -155,8 +155,8 @@ insertJob :: DB es => BgJobs -> Eff es ()
 insertJob job = Hasql.interpExecute_ [HI.sql| INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued', #{HI.AsJsonb job}) |]
 
 
-wakeJob :: DB es => BgJobs -> Eff es ()
-wakeJob = Hasql.transaction TxS.ReadCommitted TxS.Write . queueJobTx WakeNow
+scheduleJob :: DB es => JobTiming -> BgJobs -> Eff es ()
+scheduleJob timing = Hasql.transaction TxS.ReadCommitted TxS.Write . queueJobTx timing
 
 
 -- Retain the human decision and its continuation in one transaction.
@@ -182,13 +182,14 @@ wakeStoppedReviews scope = Hasql.transaction TxS.ReadCommitted TxS.Write do
   for_ operations $ \(project, identifier) -> queueReviewTx project FinishCancelledReview identifier
 
 
-startConversation :: (DB es, Time.Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> Issues.ExecutionPolicy -> Issues.InteractiveOrigin -> Eff es Issues.InteractiveStart
-startConversation project conversation user request =
+startConversation :: (DB es, Time.Time :> es) => JobTiming -> Maybe Issues.PageContext -> Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> Issues.ExecutionPolicy -> Issues.InteractiveOrigin -> Eff es Issues.InteractiveStart
+startConversation timing pageContext project conversation user request =
   Issues.startMemberConversationRunWith
     ( \scheduled -> do
-        queueJobTx WakeNow $ RunConversation project request
+        queueJobTx timing $ RunConversation project request
         for_ scheduled $ \routine -> queueJobTx (DeferUntil routine.scheduledAt) $ AIRoutineRun routine.id routine.scheduledAt
     )
+    pageContext
     project
     conversation
     user

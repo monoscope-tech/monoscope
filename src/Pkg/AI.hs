@@ -34,6 +34,7 @@ module Pkg.AI (
   AgentAccessDenied (..),
   SlackInvestigation (..),
   AgentStopped (..),
+  AgentAwaitingBrowser (..),
   AgentAwaitingReview (..),
   requireAgentAccess,
   requireEvidenceAccess,
@@ -79,6 +80,7 @@ module Pkg.AI (
   reportConfig,
   digestMarkdown,
   callRoutineLLM,
+  projectPagePath,
 ) where
 
 import Control.Lens ((%~), (.~), (^.), (^..), (^?))
@@ -361,9 +363,6 @@ data ReportHighlight = ReportHighlight {title :: Text, detail :: Text, widget ::
 -- >>> let titles hs = map (.title) . (.highlights) <$> parseReportDigest Projects.demoProjectId ("{\"headline\":\"h\",\"highlights\":" <> hs <> "}")
 -- >>> titles "[{\"title\":\"noise\",\"previous\":1,\"current\":3,\"unit\":\"events\"},{\"title\":\"flat\",\"previous\":100,\"current\":105,\"unit\":\"ms\"},{\"title\":\"real\",\"previous\":1777,\"current\":835,\"unit\":\"events\"},{\"title\":\"same events again\",\"previous\":1777,\"current\":835,\"unit\":\"events\"}]"
 -- Just ["real"]
--- >>> let unitOf q = ((.unit) <=< (.widget) <=< listToMaybe . (.highlights)) =<< parseReportDigest Projects.demoProjectId ("{\"headline\":\"h\",\"highlights\":[{\"title\":\"t\",\"widget\":{\"type\":\"timeseries_line\",\"query\":\"" <> q <> "\"}}]}")
--- >>> map unitOf ["summarize percentile(duration, 95) by bin_auto(timestamp)", "summarize percentile(duration, 95) / 1000000.0 by bin_auto(timestamp)", "url_path == \\\"/api\\\" | summarize percentile(duration, 95) by bin_auto(timestamp)"]
--- [Just "ns",Nothing,Just "ns"]
 -- >>> isNothing $ parseReportDigest Projects.demoProjectId "{\"explanation\":\"plain\"}"
 -- True
 parseReportDigest :: Projects.ProjectId -> Text -> Maybe ReportDigest
@@ -379,7 +378,7 @@ parseReportDigest pid response = do
           , ReportHighlight
               { title
               , detail = foldMap T.strip $ h ^? key "detail" . _String
-              , widget = mfilter (all (\q -> isRight (parseQueryToAST q) && not ("ago(" `T.isInfixOf` q)) . (.query)) $ durationUnit . Widget.modelWidget <$> (parseMaybe AE.parseJSON =<< h ^? key "widget")
+              , widget = mfilter (all (\q -> isRight (parseQueryToAST q) && not ("ago(" `T.isInfixOf` q)) . (.query)) $ Widget.modelWidget <$> (parseMaybe AE.parseJSON =<< h ^? key "widget")
               , link = projectLink =<< h ^? key "link" . _String
               }
           )
@@ -387,9 +386,6 @@ parseReportDigest pid response = do
   where
     -- The prompt's materiality rules, enforced: under 20% is no change, and event counts under 50 are noise.
     material unit (previous, current) = abs (current - previous) >= 0.2 * max (abs previous) 1 && (unit /= Just "events" || max previous current >= 50)
-    -- duration is stored in nanoseconds; the unit lets charts show ms/s instead of raw counts. A query that
-    -- already divides it has converted it itself.
-    durationUnit (w :: Widget.Widget) = (w :: Widget.Widget){Widget.unit = w.unit <|> ("ns" <$ guard (any (\q -> "duration" `T.isInfixOf` q && not ("/" `T.isInfixOf` snd (T.breakOn "summarize" q))) w.query))}
     -- The agent writes project-relative paths; anything leaving the project is dropped.
     projectLink l
       | ("/p/" <> pid.toText <> "/") `T.isPrefixOf` l = Just l
@@ -722,6 +718,12 @@ data SlackInvestigation = SlackInvestigation
 
 
 data AgentStopped = AgentStopped
+  deriving stock (Generic, Show)
+  deriving anyclass (Exception)
+
+
+-- | The run paused on a call the user's tab must answer; resume it by the deadline at the latest.
+newtype AgentAwaitingBrowser = AgentAwaitingBrowser UTCTime
   deriving stock (Generic, Show)
   deriving anyclass (Exception)
 
@@ -1169,8 +1171,33 @@ initialLocalOperations config =
     <> [operation | isJust config.sourceConfig, operation <- [GetCodeContext, ListRunbooks, ReadRunbook, GetLinkedRepositories, GetDeployments]]
     <> [SaveArtifact | isJust $ documentConversation config, isJust $ invocationContext config.invocationMode]
     <> [ReadArtifact | isJust $ documentConversation config]
+    <> [operation | isJust $ pageContext config, operation <- [OpenPage, ReadPage] <> [operation' | writes, operation' <- [Click, Fill]]]
   where
     writes = Issues.permitsActions (invocationPolicy config.invocationMode) && isJust (accessMember config.access)
+
+
+pageContext :: AgenticConfig -> Maybe Issues.PageContext
+pageContext config = invocationContext config.invocationMode >>= (.pageContext)
+
+
+-- | A page of this project that @open_page@ may show; anything else stays put.
+--
+-- >>> import Data.UUID qualified as UUID
+-- >>> import Pkg.DeriveUtils (UUIDId (..))
+-- >>> let page = projectPagePath (UUIDId UUID.nil)
+-- >>> page " /p/00000000-0000-0000-0000-000000000000/log_explorer?query=url%3D%22https%3A//x%22 "
+-- Just "/p/00000000-0000-0000-0000-000000000000/log_explorer?query=url%3D%22https%3A//x%22"
+-- >>> page "/p/00000000-0000-0000-0000-000000000000"
+-- Just "/p/00000000-0000-0000-0000-000000000000"
+-- >>> map page ["https://evil.test/p/00000000-0000-0000-0000-000000000000/", "/p/00000000-0000-0000-0000-000000000001/issues", "/p/00000000-0000-0000-0000-0000000000001", "/p/00000000-0000-0000-0000-000000000000//evil.test", "/p/00000000-0000-0000-0000-000000000000/../x"]
+-- [Nothing,Nothing,Nothing,Nothing,Nothing]
+projectPagePath :: Projects.ProjectId -> Text -> Maybe Text
+projectPagePath pid raw = path <$ guard (inProject && not (any (`T.isInfixOf` route) ["//", "..", "\\"]))
+  where
+    path = T.strip raw
+    route = T.takeWhile (/= '?') path
+    root = "/p/" <> pid.toText
+    inProject = route == root || (root <> "/") `T.isPrefixOf` route
 
 
 discoverableCatalog :: AgenticConfig -> Map.Map Text (MCP.Tool AgentOperation)
@@ -1252,8 +1279,18 @@ buildSystemPrompt config now =
                   ]
             InteractiveReadOnly -> []
             DurableRun{} -> []
+      copilotSection = flip foldMap (pageContext config) \page ->
+        let root = "/p/" <> config.projectId.toText
+         in unlines
+              [ "\nIN-APP ASSISTANT"
+              , "The user asks from Monoscope's floating assistant while viewing \"" <> page.title <> "\" at " <> page.path <> ". Resolve \"this page\", \"this dashboard\" and similar from that path."
+              , "When they ask to create or change something (dashboards, widgets, monitors, issues), do it with project operations, then call open_page with the resource's page so they see the result. The page they are on reloads by itself after a change, so never open the page they are already on."
+              , "Your reply cannot change their screen; only open_page can. When they ask to open, load, go to or show something (\"open the log explorer\", \"show errors from checkout\"), call open_page, e.g. the log explorer with the matching KQL (an empty query shows all events). Then answer in one or two sentences: they are looking at the page, not reading a report."
+              , "read_page shows you their tab: its URL, headings and controls as [ref] lines. click and fill (offered when changes are allowed) operate those controls in their tab and return the page afterwards; refs end when the page changes, so read it again after navigating. Use project operations for things that have one (dashboards, widgets, monitors) and the page for the rest: when part of a request is on the page (its time range, filters, tabs, toggles, forms), do that part with read_page and click or fill. Never say a change was made unless a tool result shows it."
+              , "Pages: " <> T.intercalate ", " (map (root <>) ["/log_explorer?query=<KQL>&since=1H", "/dashboards", "/dashboards/<dashboard id>", "/issues", "/issues/<issue id>", "/monitors", "/monitors/<monitor id>/overview", "/endpoints", "/metrics", "/service_map", "/infrastructure/hosts", "/settings"])
+              ]
       actionsSection = bool "" "\nEXTERNAL ACTIONS\nUse action tools only when the user or the routine's defining conversation explicitly requests that action. Report the tool result accurately.\n" $ Issues.permitsActions (invocationPolicy config.invocationMode)
-   in basePrompt <> timezoneSection <> facetSection <> customSection <> slackSection <> projectSection <> investigationSection <> documentsSection <> actionsSection <> slackFormat
+   in basePrompt <> timezoneSection <> facetSection <> customSection <> slackSection <> projectSection <> investigationSection <> documentsSection <> copilotSection <> actionsSection <> slackFormat
 
 
 runAgenticQuery :: ProjectToolCtx es => AgenticConfig -> Text -> Text -> Text -> Eff es (Either Text LLMResponse)
@@ -1450,7 +1487,11 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
                 Investigations.AnswerReady{} -> do
                   steeredAnswer <- acceptFollowupsWith updated step
                   maybe (continue updated next) (uncurry continue) steeredAnswer
-                (Investigations.ModelPending{}; Investigations.ToolsPending{}; Investigations.LegacyUncertain{}; Investigations.NativePending{}; Investigations.NativeReady) -> continue updated next
+                (Investigations.ModelPending{}; Investigations.ToolsPending{}; Investigations.BrowserPending{}; Investigations.LegacyUncertain{}; Investigations.NativePending{}; Investigations.NativeReady) -> continue updated next
+    Investigations.BrowserPending step message completed tool remaining deadline -> do
+      now <- Time.currentTime
+      when (now < deadline) $ throwIO $ AgentAwaitingBrowser deadline
+      advance $ Investigations.ToolsPending step message (completed <> [(tool, ToolResult "No browser tab answered: the user may have closed or left the page." Nothing)]) remaining
     Investigations.ToolsPending step message completed pending -> case pending of
       [] -> do
         let (calls, results) = unzip completed
@@ -1459,6 +1500,11 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
             tools = fromMaybe V.empty step.request.tools
             newTools = foldl' (\defs tool -> if any ((== toolName tool) . toolName) defs then defs else V.snoc defs tool) tools loaded
         advance $ Investigations.ModelPending step{Investigations.history = history, Investigations.request = step.request{OpenAIV1.tools = Just newTools}, Investigations.iteration = step.iteration + 1, Investigations.toolCalls = step.toolCalls <> zipWith Investigations.mkToolCallInfo calls results}
+      tool : remaining
+        | LLM.toolFunctionName (LLM.toolCallFunction tool) `elem` map Catalog.localToolName [ReadPage, Click, Fill] -> do
+            deadline <- addUTCTime 90 <$> Time.currentTime
+            void $ Investigations.commitProgress turn journal (Investigations.BrowserPending step message completed tool remaining deadline) $ Just $ Investigations.ToolStarted step.iteration tool
+            throwIO $ AgentAwaitingBrowser deadline
       tool : remaining -> do
         Log.logTrace "AI requesting tool" (AE.object ["iteration" AE..= step.iteration, "tool" AE..= LLM.toolFunctionName (LLM.toolCallFunction tool)])
         record $ Investigations.ToolStarted step.iteration tool
@@ -1876,6 +1922,9 @@ executeToolAt cursor config tc = do
         noRaw <$> case getTextArg "key" args of
           Nothing -> Issues.listArtifacts config.projectId convId Nothing <&> \docs -> encodeText [AE.object ["key" AE..= d.key, "title" AE..= d.title, "updated_at" AE..= d.updatedAt, "characters" AE..= d.characters] | d <- docs]
           Just k -> maybe ("No document with key '" <> k <> "' in this conversation.") readable . asum . map (.content) <$> Issues.listArtifacts config.projectId convId (rightToMaybe $ Issues.mkArtifactKey k)
+      -- The loop hands these to the user's tab before execution reaches the server.
+      (ReadPage; Click; Fill) -> EffectfulOperation $ pure $ noRaw "Browser tools run in the user's tab."
+      OpenPage -> EffectfulOperation $ required "path" $ pure . noRaw . maybe ("Only pages under /p/" <> config.projectId.toText <> " can be opened.") ("Opened " <>) . projectPagePath config.projectId
       SendToSlack -> EffectfulOperation $ case getTextArg "message" args of
         Just message
           | not (T.null $ T.strip message) && T.length message <= 4000 ->

@@ -119,8 +119,8 @@ operations =
   , -- Dashboards
     op "list_dashboards" GET "/dashboards" (Just View) "List dashboards" [list "dashboards list" [] "id" [self "title" Brand, col "updated" "updated_at" Muted]]
   , op "get_dashboard" GET "/dashboards/{dashboard_id}" (Just View) "Get a single dashboard" [at "dashboards get" []]
-  , op "create_dashboard" (Write POST) "/dashboards" (Just Edit) "Create dashboard from YAML/JSON file" [at "dashboards create" [file]]
-  , op "update_dashboard" (Write PUT) "/dashboards/{dashboard_id}" (Just Edit) "Replace (PUT) dashboard from file" [at "dashboards update" [file]]
+  , op "create_dashboard" (Write POST) "/dashboards" (Just Edit) "Create dashboard from YAML/JSON file: {title, schema: {widgets: [{type, title, query}]}}" [at "dashboards create" [file]]
+  , op "update_dashboard" (Write PUT) "/dashboards/{dashboard_id}" (Just Edit) "Replace (PUT) dashboard from file: {title, schema: {widgets: [{type, title, query}]}}" [at "dashboards update" [file]]
   , op "patch_dashboard" (Write PATCH) "/dashboards/{dashboard_id}" (Just Edit) "Patch dashboard fields from file" [at "dashboards patch" [file]]
   , op "delete_dashboard" DELETE "/dashboards/{dashboard_id}" (Just Admin) "Delete a dashboard" [at "dashboards delete" []]
   , op "star_dashboard" (Write POST) "/dashboards/{dashboard_id}/star" (Just Edit) "Star a dashboard" [at "dashboards star" []]

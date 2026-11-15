@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), ChartScope (..), VizType (..), vizWidget, widgetWith_, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), monitorChartType, vizChart, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
+module Pkg.Components.Widget (Widget (..), ChartScope (..), VizType (..), vizWidget, widgetWith_, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, assignWidgetIds, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), monitorChartType, vizChart, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -16,6 +16,7 @@ import Data.List (findIndex, lookup)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as M
 import Data.OpenApi (ToSchema)
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, defaultTimeLocale, diffUTCTime, parseTimeM, zonedTimeToUTC)
@@ -773,7 +774,7 @@ widgetWith_ actions w' = case w.wType of
   _ -> gridItem_ $ div_ [class_ " w-full h-full group/wgt "] $ renderChart actions w
   where
     normalizedChildren = fold $ listToMaybe (normalizeWidgetLayouts [w']) >>= (.children)
-    w = (w' & #children .~ (normalizedChildren <$ w'.children)) & #id %~ (<|> (slugify <$> w'.title))
+    w = (w' & #children .~ (normalizedChildren <$ w'.children)) & #id %~ (<|> (slugify <$> w'.title)) & #unit %~ (<|> (queryDurationUnit =<< w'.query))
     effectiveWidth = min 12 $ max 1 $ fromMaybe defaultWidgetWidth $ w.layout >>= (.w)
     isFullWidth = effectiveWidth == 12
     effectiveHeight = case w.wType of
@@ -821,6 +822,23 @@ gridStackAttrs widgets =
     rows = if null widgets then 2 else layoutRows widgets
 
 
+-- | Give each id-less widget its title's slug, suffixed until no sibling has it, so widgets whose
+-- titles slug alike stop sharing one identity (DOM id, data target, edit key). Ids already set stay.
+--
+-- >>> let titled t = (def :: Widget){title = Just t}
+-- >>> map (.id) $ assignWidgetIds [titled "Errors", titled "errors", (titled "x"){id = Just "errors-2"}, titled ""]
+-- [Just "errors",Just "errors-3",Just "errors-2",Just "widget"]
+assignWidgetIds :: [Widget] -> [Widget]
+assignWidgetIds widgets = snd $ mapAccumL claim (S.fromList $ mapMaybe (.id) widgets) widgets
+  where
+    claim :: S.Set Text -> Widget -> (S.Set Text, Widget)
+    claim taken widget =
+      let base = fromMaybe "widget" $ mfilter (not . T.null) $ slugify <$> widget.title
+          fresh = fromMaybe base $ find (`S.notMember` taken) $ base : [base <> "-" <> show n | n <- [2 :: Int ..]]
+          nested = widget & #children . _Just %~ assignWidgetIds
+       in maybe (S.insert fresh taken, nested{id = Just fresh}) (const (taken, nested)) widget.id
+
+
 -- $setup
 -- >>> import Data.Default (def)
 -- >>> let testWidget kind position = (def :: Widget){wType = kind, layout = Just position}
@@ -843,6 +861,12 @@ gridStackAttrs widgets =
 -- >>> let golden = (testWidget WTGroup (def :: Layout){x = Just 0, y = Just 0, w = Just 20, h = Just 10}){children = Just []}
 -- >>> map coordinates (normalizeWidgetLayouts [lower, golden])
 -- [Just (Just 0,Just 0,Just 12,Just 2),Just (Just 0,Just 2,Just 6,Just 2)]
+--
+-- A chart saved without a height, as the API and the assistant create them, gets a readable one;
+-- a stat card gets two rows:
+--
+-- >>> map coordinates (normalizeWidgetLayouts [testWidget WTTimeseries def, testWidget WTStat def])
+-- [Just (Just 0,Just 0,Just 3,Just 3),Just (Just 3,Just 0,Just 3,Just 2)]
 --
 -- Nested group children are normalized recursively:
 --
@@ -934,8 +958,7 @@ widgetHeightForWidth width widget = case widget.wType of
   WTGroup ->
     let requiredHeight = 1 + max 1 (layoutRows $ fold widget.children)
      in if width == 12 then requiredHeight else maybe requiredHeight (max requiredHeight) (widget.layout >>= (.h))
-  WTTimeseriesLine -> max 3 $ fromMaybe 1 $ widget.layout >>= (.h)
-  _ -> max 1 $ fromMaybe 1 $ widget.layout >>= (.h)
+  _ -> max (bool 1 3 $ widget.wType == WTTimeseriesLine) $ fromMaybe (bool 3 2 $ isStatWidget widget) $ widget.layout >>= (.h)
 
 
 gridRem :: Int -> Text
@@ -1626,6 +1649,20 @@ renderChart actions widget = do
 -- there the suffix is the number's own magnitude (@10.0m@, @1 GiB@), not a label.
 data UnitWord = KeepUnitWord | DropUnitWord
   deriving stock (Eq)
+
+
+-- | Spans store @duration@ in nanoseconds, so a query aggregating it is in nanoseconds unless it
+-- divides the result itself. A widget without a unit takes this one, so a p95 chart reads 1.2s,
+-- not 1.2B.
+--
+-- >>> map queryDurationUnit ["summarize percentile(duration, 95) by bin_auto(timestamp)", "summarize percentile(duration, 95) / 1000000.0 by bin_auto(timestamp)", "url_path == \"/api\" | summarize avg(duration) by bin_auto(timestamp)", "duration > 1000 | summarize count() by bin_auto(timestamp)", "summarize count()"]
+-- [Just "ns",Nothing,Just "ns",Nothing,Nothing]
+-- >>> "formatDuration" `T.isInfixOf` toStrict (renderText $ widget_ (def :: Widget){wType = WTTimeseriesLine, query = Just "| summarize percentile(duration, 95) by bin_auto(timestamp)"})
+-- True
+queryDurationUnit :: Text -> Maybe Text
+queryDurationUnit query = "ns" <$ guard ("(duration" `T.isInfixOf` aggregates && not ("/" `T.isInfixOf` aggregates))
+  where
+    aggregates = fst $ T.breakOn " by " $ snd $ T.breakOn "summarize" query
 
 
 -- | JS expression formatting a numeric @value@ for a widget's unit: duration

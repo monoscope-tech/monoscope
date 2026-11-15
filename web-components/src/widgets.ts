@@ -835,7 +835,9 @@ const baseYFormatters = new WeakMap<object, unknown>();
 const drawnLayouts = new WeakMap<object, string>();
 // Legend toggles, which a notMerge redraw would otherwise reset on every live tick.
 const legendSelections = new WeakMap<object, Record<string, boolean>>();
-const drawSized = (chart: any, el: HTMLElement | null, options: any, unit = '', notMerge = false, onlyIfChanged = false) => {
+export const drawSized = (chart: any, el: HTMLElement | null, options: any, unit = '', notMerge = false, onlyIfChanged = false) => {
+  // A null source is the server's "fetch me": there is nothing to draw until the data lands.
+  if (options.dataset && options.dataset.source == null) return;
   const layout = chartLayoutForSize(options, el?.clientWidth ?? 0, el?.clientHeight ?? 0, (v) => formatStatValue(v, unit));
   const key = JSON.stringify([layout.grid, layout.legend, layout.xAxis?.axisLabel]);
   if (onlyIfChanged && drawnLayouts.get(chart) === key) return;

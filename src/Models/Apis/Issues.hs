@@ -173,6 +173,9 @@ module Models.Apis.Issues (
   retireFixRunTx,
   slackTurnForRun,
   InteractiveOrigin (..),
+  PageContext (..),
+  CopilotSession (..),
+  copilotSessions,
   startInteractiveRun,
   startMemberConversationRunWith,
   InteractiveStart (..),
@@ -1716,6 +1719,13 @@ data InteractiveOrigin = WebMessage | WebConversation | WebRoutine RoutineInterv
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
+-- | The page a copilot request was asked from.
+data PageContext = PageContext {path :: Text, title :: Text}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb PageContext
+
+
 data RoutineRunSource = ScheduledRun | TriggeredRun RoutineEventSource | InteractiveRun InteractiveOrigin | ConversationRun InteractiveOrigin | FixRun (UUIDId "issue_fix")
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -1802,6 +1812,7 @@ data RunContextRow = RunContextRow
   , input :: Maybe Text
   , instructions :: Maybe Text
   , origin :: Maybe CommandOrigin
+  , pageContext :: Maybe PageContext
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (HI.DecodeRow)
@@ -1822,7 +1833,7 @@ runContextFor pid claim =
       wrap = case claim of FixClaim _ _ owner -> (`FixContext` owner); (ConversationClaim{}; InteractiveClaim{}; BackgroundClaim{}; EventClaim{}) -> RunContext
    in fmap wrap
         <$> Hasql.interpOne
-          ( [HI.sql|SELECT id, root_run_id, project_id, conversation_id, requested_by, started_at, source, policy, permission_ceiling, input, instructions, command_origin
+          ( [HI.sql|SELECT id, root_run_id, project_id, conversation_id, requested_by, started_at, source, policy, permission_ceiling, input, instructions, command_origin, page_context
       FROM apis.ai_routine_runs WHERE id = #{run} AND project_id = #{pid} AND requested_by IS NOT NULL|]
               <> scope
           )
@@ -2801,15 +2812,42 @@ startEventRunWith enqueue routine admissionContext continuation convId input = d
         pure execution
 
 
+-- | A conversation started from the floating assistant, by its newest page-bound run.
+data CopilotSession = CopilotSession
+  { conversationId :: UUIDId "conversation"
+  , title :: Text
+  , runId :: UUIDId "ai_routine_run"
+  , status :: RoutineRunStatus
+  , input :: Maybe Text
+  , policy :: ExecutionPolicy
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | The requester's assistant sessions of the last twelve hours, newest first.
+copilotSessions :: (DB es, Time :> es) => Projects.ProjectId -> Projects.UserId -> Eff es [CopilotSession]
+copilotSessions pid user = do
+  since <- addUTCTime (-(12 * 3600)) <$> Time.currentTime
+  Hasql.interp
+    [HI.sql|SELECT latest.conversation_id, COALESCE(NULLIF(c.title, ''), (SELECT LEFT(f.input, 100) FROM apis.ai_routine_runs f WHERE f.project_id = #{pid} AND f.conversation_id = latest.conversation_id ORDER BY f.scheduled_at LIMIT 1), 'New chat'),
+        latest.id, latest.status, latest.input, latest.policy
+      FROM (SELECT * FROM (SELECT DISTINCT ON (conversation_id) conversation_id, id, status, input, policy, scheduled_at FROM apis.ai_routine_runs
+          WHERE project_id = #{pid} AND scheduled_at > #{since} AND requested_by = #{user} AND page_context IS NOT NULL
+          ORDER BY conversation_id, scheduled_at DESC) runs ORDER BY scheduled_at DESC LIMIT 6) latest
+      JOIN apis.ai_conversations c ON c.project_id = #{pid} AND c.conversation_id = latest.conversation_id
+      ORDER BY latest.scheduled_at DESC|]
+
+
 data InteractiveStart = ConflictingRequest | AcceptedRequest (Maybe ScheduledRoutine)
 
 
 -- | Initialize a request and its optional routine together. Replays never change the routine.
-startInteractiveRun :: (DB es, Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> ExecutionPolicy -> InteractiveOrigin -> Eff es InteractiveStart
+startInteractiveRun :: (DB es, Time :> es) => Maybe PageContext -> Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> ExecutionPolicy -> InteractiveOrigin -> Eff es InteractiveStart
 startInteractiveRun = startConversationRunWith SessionConversation (const pass)
 
 
-startMemberConversationRunWith :: (DB es, Time :> es) => (Maybe ScheduledRoutine -> Tx.Transaction ()) -> Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> ExecutionPolicy -> InteractiveOrigin -> Eff es InteractiveStart
+startMemberConversationRunWith :: (DB es, Time :> es) => (Maybe ScheduledRoutine -> Tx.Transaction ()) -> Maybe PageContext -> Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> ExecutionPolicy -> InteractiveOrigin -> Eff es InteractiveStart
 startMemberConversationRunWith = startConversationRunWith MemberConversation
 
 
@@ -2825,8 +2863,8 @@ conversationPermissionSql MemberConversation = \project user ->
     <> [HI.sql|) eligible|]
 
 
-startConversationRunWith :: (DB es, Time :> es) => ConversationGrant -> (Maybe ScheduledRoutine -> Tx.Transaction ()) -> Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> ExecutionPolicy -> InteractiveOrigin -> Eff es InteractiveStart
-startConversationRunWith grant enqueue pid conversation user runId input policy origin = do
+startConversationRunWith :: (DB es, Time :> es) => ConversationGrant -> (Maybe ScheduledRoutine -> Tx.Transaction ()) -> Maybe PageContext -> Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> ExecutionPolicy -> InteractiveOrigin -> Eff es InteractiveStart
+startConversationRunWith grant enqueue pageContext pid conversation user runId input policy origin = do
   now <- Time.currentTime
   let source = case grant of SessionConversation -> InteractiveRun origin; MemberConversation -> ConversationRun origin
       initialConversation = case origin of
@@ -2838,8 +2876,8 @@ startConversationRunWith grant enqueue pid conversation user runId input policy 
     inserted <-
       Hasql.queryTx @[UUIDId "ai_routine_run"]
         ( [HI.sql|INSERT INTO apis.ai_routine_runs
-        (id, root_run_id, project_id, conversation_id, requested_by, input, policy, source, scheduled_at, started_at, status, permission_ceiling)
-        SELECT #{runId}, #{runId}, #{pid}, #{conversation}, #{user}, #{input}, #{policy}, #{source}, #{now}, #{now}, 'running', COALESCE(actor.permission, #{ProjectMembers.PView})
+        (id, root_run_id, project_id, conversation_id, requested_by, input, policy, source, scheduled_at, started_at, status, permission_ceiling, page_context)
+        SELECT #{runId}, #{runId}, #{pid}, #{conversation}, #{user}, #{input}, #{policy}, #{source}, #{now}, #{now}, 'running', COALESCE(actor.permission, #{ProjectMembers.PView}), #{pageContext}
         FROM (SELECT 1) invocation LEFT JOIN LATERAL (|]
             <> conversationPermissionSql grant pid user
             <> [HI.sql|) actor ON TRUE

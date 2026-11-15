@@ -222,9 +222,9 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     map (show @Text . (.wType)) added `shouldBe` replicate 5 "WTTimeseries" <> map show allWidgetTypes
     numbered@(w1 : _) <- maybe (fail "a stored widget has no id") pure $ traverse (.id) (take 5 added)
     let typed = mapMaybe (.id) (drop 5 added)
-    -- Widthless widgets default to four per row.
+    -- Sizeless charts default to four per row, three rows tall.
     map (\(_, x, y, w, _) -> (x, y, w)) (geometry <$> Widget.normalizeWidgetLayouts (take 5 added))
-      `shouldBe` [(Just 0, Just 0, Just 3), (Just 3, Just 0, Just 3), (Just 6, Just 0, Just 3), (Just 9, Just 0, Just 3), (Just 0, Just 1, Just 3)]
+      `shouldBe` [(Just 0, Just 0, Just 3), (Just 3, Just 0, Just 3), (Just 6, Just 0, Just 3), (Just 9, Just 0, Just 3), (Just 0, Just 3, Just 3)]
 
     -- Edit in place: an omitted query is retained, and the render-time tab slug is not stored.
     let edited = (widgetOf Widget.WTStat "renamed"){Widget.query = Nothing, Widget.rawQuery = Nothing, Widget._tabSlug = Just "stale-tab", Widget.layout = Just def{Widget.x = Just 6, Widget.y = Just 6, Widget.w = Just 3, Widget.h = Just 3}}
@@ -1159,6 +1159,13 @@ spec = around withTestResources $ describe "Dashboard widgets" do
       (.starredSince) <$> titled "Star Test Dashboard" >>= (`shouldSatisfy` starred)
     for_ ["Dashboard C", "Dashboard A"] \t -> titled t >>= testServant tr . Dashboards.dashboardStarPostH testPid . (.id)
     map (isJust . (.starredSince)) <$> listed `shouldReturn` [True, True, False, False]
+
+  -- Regression 2026-11-14: the assistant added "Top 10 endpoints" twice through the API; with no ids
+  -- both fell back to the same title slug, one DOM id and one edit key, so the second never loaded.
+  it "widgets saved without an id get distinct ids, even when their titles slug alike" \tr -> do
+    dashId <- newDashboard tr "" "Same titles"
+    for_ ["Errors", "errors", "Errors"] \title -> void $ toBaseServantResponse tr $ Api.apiDashboardWidgetUpsert testPid dashId (widgetOf Widget.WTTimeseries title)
+    map (.id) <$> storedWidgets tr dashId `shouldReturn` [Just "errors", Just "errors-2", Just "errors-3"]
 
   it "dashboard switcher: the title lists the project's dashboards, starred first, linking each and marking the current one" \tr -> do
     alpha <- newDashboard tr "" "Alpha"

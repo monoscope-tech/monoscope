@@ -12,6 +12,7 @@ module System.Tracing (
   -- * Cross-thread context propagation
   forkWithCtx,
   forkBackground,
+  forkBackgroundFor,
 
   -- * Common attribute builders
   batchSpanAttrs,
@@ -137,7 +138,14 @@ forkWithCtx scope action = do
 forkBackground
   :: (Concurrent :> es, IOE :> es, Ki.StructuredConcurrency :> es, Log :> es)
   => Maybe Ki.Scope -> Text -> Eff es () -> Eff es ()
-forkBackground scopeM label action =
+forkBackground = forkBackgroundFor backgroundTaskTimeoutMicros
+
+
+-- | 'forkBackground' with its own wall-clock cap, for work known to run longer.
+forkBackgroundFor
+  :: (Concurrent :> es, IOE :> es, Ki.StructuredConcurrency :> es, Log :> es)
+  => Int -> Maybe Ki.Scope -> Text -> Eff es () -> Eff es ()
+forkBackgroundFor capMicros scopeM label action =
   case scopeM of
     Just scope -> void $ forkWithCtx scope guardedAction
     Nothing -> void $ forkIO guardedAction
@@ -149,9 +157,9 @@ forkBackground scopeM label action =
     -- with no response timeout) otherwise keeps its ki fiber alive, blocking the
     -- app-lifetime scope's reap on shutdown → zombie process (2026-07-06 incident).
     runWithTimeout =
-      UnliftIO.timeout backgroundTaskTimeoutMicros action >>= \case
+      UnliftIO.timeout capMicros action >>= \case
         Just () -> pass
-        Nothing -> Log.logAttention (label <> " background task timed out") (AE.object ["timeout_secs" AE..= (backgroundTaskTimeoutMicros `div` 1_000_000 :: Int)])
+        Nothing -> Log.logAttention (label <> " background task timed out") (AE.object ["timeout_secs" AE..= (capMicros `div` 1_000_000 :: Int)])
 
 
 -- | Wall-clock cap for a single 'forkBackground' task (Slack/Twilio/WhatsApp).
