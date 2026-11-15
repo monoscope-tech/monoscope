@@ -775,7 +775,7 @@ widgetWith_ actions w' = case w.wType of
   _ -> gridItem_ $ div_ [class_ " w-full h-full group/wgt "] $ renderChart actions w
   where
     normalizedChildren = fold $ listToMaybe (normalizeWidgetLayouts [w']) >>= (.children)
-    w = (w' & #children .~ (normalizedChildren <$ w'.children)) & #id %~ (<|> (slugify <$> w'.title))
+    w = (w' & #children .~ (normalizedChildren <$ w'.children)) & #id %~ (<|> (slugify <$> w'.title)) & #unit %~ (<|> (queryDurationUnit =<< w'.query))
     effectiveWidth = min 12 $ max 1 $ fromMaybe defaultWidgetWidth $ w.layout >>= (.w)
     isFullWidth = effectiveWidth == 12
     effectiveHeight = case w.wType of
@@ -1651,6 +1651,20 @@ renderChart actions widget = do
 -- there the suffix is the number's own magnitude (@10.0m@, @1 GiB@), not a label.
 data UnitWord = KeepUnitWord | DropUnitWord
   deriving stock (Eq)
+
+
+-- | Spans store @duration@ in nanoseconds, so a query aggregating it is in nanoseconds unless it
+-- divides the result itself. A widget without a unit takes this one, so a p95 chart reads 1.2s,
+-- not 1.2B.
+--
+-- >>> map queryDurationUnit ["summarize percentile(duration, 95) by bin_auto(timestamp)", "summarize percentile(duration, 95) / 1000000.0 by bin_auto(timestamp)", "url_path == \"/api\" | summarize avg(duration) by bin_auto(timestamp)", "duration > 1000 | summarize count() by bin_auto(timestamp)", "summarize count()"]
+-- [Just "ns",Nothing,Just "ns",Nothing,Nothing]
+-- >>> "formatDuration" `T.isInfixOf` toStrict (renderText $ widget_ (def :: Widget){wType = WTTimeseriesLine, query = Just "| summarize percentile(duration, 95) by bin_auto(timestamp)"})
+-- True
+queryDurationUnit :: Text -> Maybe Text
+queryDurationUnit query = "ns" <$ guard ("(duration" `T.isInfixOf` aggregates && not ("/" `T.isInfixOf` aggregates))
+  where
+    aggregates = fst $ T.breakOn " by " $ snd $ T.breakOn "summarize" query
 
 
 -- | JS expression formatting a numeric @value@ for a widget's unit: duration
