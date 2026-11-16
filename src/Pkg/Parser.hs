@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, TemplateLang (..), fillQueryTemplate, browserKql, requestKql, isBrowserRecord, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds, AudienceFilters (..), audienceFilters, audienceKql, ResultShape (..), resultShape) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, TemplateLang (..), fillQueryTemplate, browserKql, requestKql, kqlConstants, isBrowserRecord, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds, AudienceFilters (..), audienceFilters, audienceKql, ResultShape (..), resultShape) where
 
 import Control.Error (hush)
 import Data.Aeson qualified as AE
@@ -1016,6 +1016,12 @@ browserKql = "(resource.telemetry.sdk.language in (\"webjs\", \"javascript\", \"
 -- | HTTP traffic: server spans plus the SDK payload span, which also carries outbound calls the SDK
 -- captured. TimeFusion's dashboard rollups declare its compiled SQL verbatim, so an edit here must be
 -- mirrored in TimeFusion's @schemas/otel_logs_and_spans.yaml@.
+-- | Request-independent KQL presets, so a query is resolvable before any fetch (e.g. a heatmap
+-- cell opening the Explorer on its widget's query).
+kqlConstants :: Map.Map Text Text
+kqlConstants = Map.fromList [("browser_kql", browserKql), ("request_kql", requestKql)]
+
+
 requestKql :: Text
 requestKql = "(kind == \"server\" or name == \"apitoolkit-http-span\" or name == \"monoscope.http\")"
 
@@ -1047,6 +1053,7 @@ variablePresets density pid mf mt allParams currentTime =
         -- Request params first: fromList keeps the last duplicate, so a request can never
         -- re-point a server preset such as @project_id@ or @time_filter@.
         $ (allParams <&> second maybeToMonoid)
+        <> Map.toList kqlConstants
         <> [ ("project_id", pid)
            , ("from", andPrefix $ fmtUTC mf)
            , ("to", andPrefix $ fmtUTC mt)
@@ -1058,8 +1065,6 @@ variablePresets density pid mf mt allParams currentTime =
            , ("pageview_filter", pageViewSql)
            , ("error_filter", errorSql)
            , ("client_request_filter", clientRequestSql)
-           , ("browser_kql", browserKql)
-           , ("request_kql", requestKql)
            , ("audience_sessions", audienceSessions)
            , ("audience_kql_literal", sqlStringLit $ audienceKql audience)
            , ("table_search", sqlStringLit $ maybeToMonoid $ join $ Map.lookup "table-search" $ Map.fromList allParams)

@@ -524,6 +524,9 @@ spec = around withTestResources $ describe "Dashboard widgets" do
       (slug, map (.key) $ DashboardModel.variablesForTab ov (find ((== slug) . slugify . (.name)) (fold ov.tabs))) `shouldBe` (slug, keys)
       (T.isInfixOf "Clear filters" &&& T.isInfixOf "All services") (renderT tab) `shouldBe` (True, False)
       pure $ tagsWith ["id=\"dash-vars-toggle\"", "class=\"dash-variable-input"] (renderT tab)
+    -- A heatmap click opens the Explorer on the widget's query; `{{request_kql}}` reached it unresolved.
+    ovTab <- getTab tr ovId "overview" Nothing []
+    ordNub [T.isInfixOf "{{request_kql}}" <$> w.query | w <- renderedWidgets (tabDashboard ovTab), w.wType == Widget.WTHeatmap] `shouldBe` [Just False]
     ovSaved <- fmap fromRightShow . call tr . Dashboards.dashboardViewPostH testPid ovId =<< form "name=API&var-service=api&since=7D&activeTabSlug=logs"
     goldenParts "dashboard-saved-views" $ map renderT [saved, deleted] <> swapParts overview <> swapParts errorsHtml <> map renderT [overridden, revealed] <> swapParts reloaded <> [renderT ovSaved] <> fold ovBars
 
