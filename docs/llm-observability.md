@@ -169,7 +169,10 @@ the self-telemetry project shows tokens, cost, models and tools there, and trans
   replay its spans through ingest, and assert the AI page shows the conversation.
 
 ## Follow-ups (not in this change)
-- Promote `gen_ai.usage.*`, model and conversation id to TimeFusion columns.
+- Once rows from before 2026-11-16 age out of retention, move `selectUnits`, `selectCalls` and
+  `conversationScope` from the `kind;neutral⇒ai` summary marker and attribute-blob reads to the
+  promoted columns. Until then a window crossing that date counts older conversations in the
+  table but not in the overview widgets or LLM calls, which read the columns.
 - Signal matches as issues/alerts (route a signal through the issues pipeline).
 - Resolve `gen_ai.*_ref` content URIs.
 - Normalise per dialect in a pre-pass (detector + alias table + fixups) so new dialects do not

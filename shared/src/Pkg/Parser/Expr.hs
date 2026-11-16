@@ -636,6 +636,9 @@ subjectHasWildcard (Subject _ _ keys) = any (\case ArrayWildcard _ -> True; _ ->
 -- to introspect (@monoscope validate@ turned away @attributes.error.type@ for exactly
 -- that reason), and a name here that no column backs is worse — it passes validation
 -- and then fails at the database, which is the failure validation exists to prevent.
+--
+-- >>> map (`S.member` flattenedOtelAttributesBuiltin) ["attributes.gen_ai.operation.name", "attributes.gen_ai.usage.cost"]
+-- [True,True]
 flattenedOtelAttributesBuiltin :: Set T.Text
 flattenedOtelAttributesBuiltin =
   fromList
@@ -658,6 +661,14 @@ flattenedOtelAttributesBuiltin =
     , "attributes.exception.message"
     , "attributes.exception.stacktrace"
     , "attributes.exception.type"
+    , "attributes.gen_ai.agent.name"
+    , "attributes.gen_ai.conversation.id"
+    , "attributes.gen_ai.operation.name"
+    , "attributes.gen_ai.request.model"
+    , "attributes.gen_ai.tool.name"
+    , "attributes.gen_ai.usage.cost"
+    , "attributes.gen_ai.usage.input_tokens"
+    , "attributes.gen_ai.usage.output_tokens"
     , "attributes.geo.country.iso_code"
     , "attributes.http.request.body.size"
     , "attributes.http.request.method"
