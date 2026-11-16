@@ -587,6 +587,9 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     (stamped.error, stamped.dataset V.!? 0 >>= (V.!? 0)) `shouldBe` (Nothing, Just (Just 1767323045000))
     (.dataset) <$> plot "SELECT 1767323045::int4 AS timestamp, 'value'::text, 7::double precision" `shouldReturn` stamped.dataset
     (.error) <$> plot "SELECT 'not a bucket'::text, 'value'::text, 7::double precision" >>= (`shouldSatisfy` isJust)
+    -- A bucket whose sum has no non-null input (agent spans without token usage) is a gap, not a failed widget.
+    gapped <- plot "SELECT i::bigint, 'value'::text, NULLIF(i, 2)::double precision FROM generate_series(1, 3) i"
+    (gapped.error, V.length gapped.dataset) `shouldBe` (Nothing, 2)
 
     -- Streaming: partial frames, then the JSON endpoint's result; decoder failures end in an error frame.
     let series = "SELECT i::bigint, 'value'::text, i::double precision FROM generate_series(1, 3) i"
