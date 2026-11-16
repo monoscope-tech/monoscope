@@ -148,6 +148,7 @@ import Pkg.Components.TimePicker (TimePicker (..), parseTimeRange)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC, idFromText)
 import Pkg.EmailTemplates qualified as ET
+import Pkg.GenAI qualified as GenAI
 import Pkg.Parser (ResultShape (Events), parseQueryToAST, resultShape)
 import Pkg.SchemaLearning (FacetData (..), FacetSummary (..), FacetValue (..))
 import Pkg.Slack qualified as Slack
@@ -1470,7 +1471,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
               record $ Investigations.ModelReturned step.iteration Investigations.ModelRequestFailed
               Log.logAttention "LLM API error" (AE.object ["error" AE..= show @Text err])
               pure $ Left "LLM service temporarily unavailable"
-            Right message -> do
+            Right (ELLM.Reply message usage) -> do
               let interactive = case config.access of
                     SlackInvestigationAccess{} -> Projects.UsageSlackInvestigation
                     (ServiceAccess; MemberAccess{}; SlackAccess{}; SlackCommandAccess{}) -> Projects.UsageInteractive
@@ -1479,7 +1480,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
                     DurableRun context -> case context.source of
                       (Issues.ScheduledRun; Issues.TriggeredRun{}) -> Projects.UsageRoutine
                       (Issues.InteractiveRun{}; Issues.ConversationRun{}; Issues.FixRun{}) -> interactive
-              Projects.recordAIUsage config.projectId (show request.model) source $ pricedUsage config.sourceConfig (estimatedTokens (step.history, request)) (estimatedTokens message)
+              Projects.recordAIUsage config.projectId (show request.model) source $ pricedUsage config.sourceConfig (maybe (estimatedTokens (step.history, request)) (round . (.input)) usage) (maybe (estimatedTokens message) (round . (.output)) usage)
               -- Calls the round did not offer are dropped from the message too: a call left without a result is rejected by the provider.
               let requested = fromMaybe [] $ LLM.toolCalls $ LLM.messageData message
                   offered t = not finalRound || any (V.elem (Just $ LLM.toolFunctionName $ LLM.toolCallFunction t) . V.map toolName) request.tools

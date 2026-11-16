@@ -5,12 +5,15 @@ module Opentelemetry.GenAISpec (spec) where
 import Control.Lens ((^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, values, _Number, _String)
+import Data.Effectful.LLM qualified as ELLM
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Effectful.Dispatch.Dynamic (interpose)
+import Langchain.LLM.Core qualified as Chat
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Utils qualified as Bot
@@ -21,6 +24,7 @@ import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Telemetry qualified as TelemetryPage
 import Pkg.AI qualified as AI
 import Pkg.Components.Table (Table (..))
+import Pkg.GenAI qualified as GenAI
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Logs.V1.Logs qualified as PL
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -87,6 +91,14 @@ spec = around withTestResources do
       LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       map (\c -> (c.key, c.title, c.llmCalls, c.tokens, c.cost)) (toList table.rows) `shouldBe` [("sess-b", Just "Write the tests", 1, 1000, Just 0.5), ("sess-a", Just "Fix the failing build", 1, 5030, Just 0.0021)]
       renderT <$> call tr (LLM.conversationGetH pid "sess-a" from to Nothing) >>= (`shouldContainAll` ["Fix the failing build", "$0.0021"])
+
+    it "bills the assistant from the provider's reported usage, not an estimate" \tr -> do
+      let provider = interpose @ELLM.LLM \_ -> \case
+            ELLM.CallAgenticChat{} -> pure $ Right $ ELLM.Reply (Chat.Message Chat.Assistant "The pool is exhausted." Chat.defaultMessageData) (Just $ GenAI.Usage 1200 340 800 0)
+            ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+            ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+      runTestBg frozenTime tr (provider $ AI.runAgenticChatWithHistory (AI.defaultAgenticConfig testPid) "Why is checkout slow?" "model" "key") >>= (`shouldSatisfy` isRight)
+      dbQuery @_ @(Int64, Int64) tr [sql| SELECT input_tokens, output_tokens FROM projects.ai_usage WHERE project_id = ? |] (Only testPid) `shouldReturn` [(1200, 340)]
 
     it "observes Monoscope's own assistant: an agent run, its model calls in order, and its tools" \tr -> do
       apiKey <- createTestAPIKey tr testPid "self-telemetry"
