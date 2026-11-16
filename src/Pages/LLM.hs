@@ -275,7 +275,7 @@ llmGetH pid viewM agentM modelM signalM fromP toP sinceP deferredM = do
                 , rows = shown
                 , features =
                     t.features
-                      { rowAttrs = Just \c -> maybe [] (\u -> drawerRowAttrs_ $ (urls.logExplorer pid).logExplorerItemDetailedGet u c.timestamp Nothing (Just "tab-genai") Nothing True) (UUID.fromText c.id)
+                      { rowAttrs = Just \c -> maybe [] (\u -> drawerRowAttrs_ $ (urls.logExplorer pid).logExplorerItemDetailedGet u c.timestamp Nothing (Just "tab-genai") Nothing False) (UUID.fromText c.id)
                       , resultSummary = Just $ show (V.length shown) <> " of " <> show (V.length all') <> " model calls" <> capped
                       , facets = Just $ facetActions reset "llmContainer" [countedFilter "Agent" "agent" agentM (maybeToList . (.agent)) all', countedFilter "Model" "model" modelM (maybeToList . (.model)) all']
                       }
@@ -492,7 +492,7 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-6xl flex-col gap
       tbody_ $ forM_ (zip d.steps running) \(c, total) -> do
         let offset = pct (diffUTCTime c.timestamp start)
             width = max 0.5 $ pct (fromIntegral c.duration / 1e9)
-        tr_ ([class_ "border-t border-strokeWeak hover:bg-fillHover"] <> maybe [] (\u -> drawerRowAttrs_ $ (urls.logExplorer d.pid).logExplorerItemDetailedGet u c.timestamp Nothing (Just "tab-genai") Nothing True) (UUID.fromText c.id)) do
+        tr_ ([class_ "border-t border-strokeWeak hover:bg-fillHover"] <> maybe [] (\u -> drawerRowAttrs_ $ (urls.logExplorer d.pid).logExplorerItemDetailedGet u c.timestamp Nothing (Just "tab-genai") Nothing False) (UUID.fromText c.id)) do
           td_ [class_ "px-3 py-1.5"] $ div_ [class_ "flex min-w-0 items-center gap-2"] do
             faSprite_ (opIcon c.operation) "regular" "h-3 w-3 shrink-0 text-iconNeutral"
             span_ [class_ "truncate text-textStrong"] $ toHtml c.name

@@ -6,6 +6,7 @@ import Control.Lens ((^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, values, _Number, _String)
 import Data.List (lookup)
+import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
@@ -57,6 +58,8 @@ spec = around withTestResources do
       map (\c -> (c.key, c.llmCalls, c.toolCalls, c.title, c.signals)) (toList table.rows) `shouldBe` [("conv-1", 2, 1, Just "Why is checkout slow?", [LLM.Truncated])]
       calls <- call tr $ LLM.llmGetH pid (Just "calls") Nothing (Just "claude-sonnet-4-5") Nothing from to Nothing (Just "1")
       renderT calls `shouldContainAll` ["openllmetry chat", "$0.0027", "2K → 50"]
+      -- Rows open the full span view in the drawer: a partial response is a lone hidden tab panel.
+      T.isInfixOf "partial" (renderT calls) `shouldBe` False
       -- The trace view prices each step and totals the trace: $0.0035 + $0.000057 for gpt-4o-mini.
       [(trId, ts)] <- dbQuery tr [sql| SELECT context___trace_id, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND name = 'openinference llm' |] (Only pid)
       renderT <$> call tr (TelemetryPage.traceH pid trId (Just ts) Nothing Nothing Nothing Nothing) >>= (`shouldContainAll` ["1K → 100 tok · $0.0035", "LLM cost", "$0.0036"])
