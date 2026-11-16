@@ -181,6 +181,7 @@ import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as EW
 import Pkg.GenAI qualified as GenAI
 import Pkg.Metrics qualified as Metrics
+import Pkg.Parser.Expr qualified as Expr
 import Relude hiding (ask)
 import Relude.Extra.Bifunctor (bimapF)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
@@ -2647,10 +2648,13 @@ generateSummary otel =
     _ -> generateSpanSummary otel
 
 
--- | The summary element every GenAI span and log carries. Lists filter on it because a
--- summary-array match is ~20x cheaper on TimeFusion than reading the attributes blob.
+-- | The summary element every GenAI span and log carries; KQL's @gen_ai == true@ filters on it,
+-- ~20x cheaper on TimeFusion than reading the attributes blob. The parser holds the literal.
+--
+-- >>> genAIMarker == tag "kind" "neutral" "ai"
+-- True
 genAIMarker :: T.Text
-genAIMarker = tag "kind" "neutral" "ai"
+genAIMarker = Expr.genAIMarker
 
 
 -- | The summary element of a reply that stopped early, so lists can count truncations in SQL.

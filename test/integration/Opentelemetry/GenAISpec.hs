@@ -14,7 +14,6 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful.Dispatch.Dynamic (interpose)
 import Langchain.LLM.Core qualified as Chat
-import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Utils qualified as Bot
 import Pages.Components (Deferred (..))
@@ -63,12 +62,12 @@ spec = around withTestResources do
       let (from, to) = around' now
       LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       map (\c -> (c.key, c.llmCalls, c.toolCalls, c.title, c.signals)) (toList table.rows) `shouldBe` [("conv-1", 2, 1, Just "Why is checkout slow?", [LLM.Detected LLM.Truncated])]
-      -- "LLM calls" is the Explorer over the kind=ai summary element, on both read paths.
-      let llmCalls = def{Log.query = Just ("summary[*] == \"" <> Telemetry.genAIMarker <> "\""), Log.from = from, Log.to = to}
+      -- "LLM calls" is the Explorer filtered on `gen_ai`, on both read paths; every span here is an AI span.
+      let llmCalls aiOnly = def{Log.query = Just $ "gen_ai == " <> bool "false" "true" aiOnly, Log.from = from, Log.to = to}
           viaTf' = tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}}}
       -- The TimeFusion lowering (array_has) only runs where CI provides a real TimeFusion.
       realTf <- isJust <$> lookupEnv "TIMEFUSION_PG_TEST_URL"
-      forM_ (tr : [viaTf' | realTf]) \t -> call t (Log.logExplorerDataH pid llmCalls) >>= (`shouldBe` 5) . V.length . (.logsData)
+      forM_ (tr : [viaTf' | realTf]) \t -> forM_ ([(True, 5), (False, 0)] :: [(Bool, Int)]) \(aiOnly, n) -> call t (Log.logExplorerDataH pid (llmCalls aiOnly)) >>= (`shouldBe` n) . V.length . (.logsData)
       LLM.LLMPage (PageCtx _ (DeferredBody (LLM.TopicsBody topics))) <- call tr $ LLM.llmGetH pid (Just "topics") Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       map (\t -> (t.template, length t.conversations)) (toList topics.rows) `shouldBe` [("Why is checkout slow?", 1)]
       -- A plain-language signal: one judge call over the day's conversations, matches shown as pills and a facet.

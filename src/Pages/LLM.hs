@@ -468,7 +468,7 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
       body
   where
     overview :: Html ()
-    overview = div_ [class_ "grid grid-cols-4 gap-3 px-4 pt-3 max-lg:grid-cols-2"] $ forM_ (overviewWidgets pid) \w ->
+    overview = div_ [class_ "grid grid-cols-4 gap-3 pt-3 max-lg:grid-cols-2"] $ forM_ (overviewWidgets pid) \w ->
       div_ [class_ $ if w.wType `elem` [Widget.WTStat, Widget.WTTimeseriesStat] then "h-28" else "col-span-2 min-h-56"] $ Widget.widget_ w
 
     conversationColumns :: [Column Conversation]

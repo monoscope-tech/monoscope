@@ -82,9 +82,12 @@ Unknown models carry tokens but no cost; the UI says "unpriced" rather than `$0`
 - **Overview:** the first widgets of `llm-observability.yaml` (model calls, cost, error rate,
   tokens), rendered by the shared `Widget`, so the page and the dashboard cannot disagree.
 - **Tabs.** *Conversations*; *Topics* (opening messages clustered with `Pkg.Drain`);
-  *Signals* (plain-language signals); *LLM calls* is the Log Explorer filtered on the
-  ingest-stamped `kind;neutral⇒ai` summary element (`array_has` on TimeFusion), so calls get
-  every Explorer feature for free.
+  *Signals* (plain-language signals); *LLM calls* is the Log Explorer with `gen_ai == true`,
+  so calls get every Explorer feature for free.
+- **`gen_ai` in KQL** is a boolean flag over the summary element ingest stamps on every record
+  with a `gen_ai.operation.name` (`Pkg.Parser.Expr.genAIMarker`), like `errors == true`. On
+  TimeFusion it lowers to `array_has(summary, …)`, ~20x cheaper than reading the attributes
+  blob; `gen_ai == false` negates it. The dashboard template's queries all start with it.
 - **Totals** are aggregated in SQL per conversation key (GROUP BY over the window), not over a
   capped span sample.
 - **Conversations table** (shared `Table`): title (first user message), agent, models,

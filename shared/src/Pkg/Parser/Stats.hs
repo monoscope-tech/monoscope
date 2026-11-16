@@ -73,7 +73,7 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Deriving (WrappedEnumSC (..))
-import Pkg.Parser.Expr (CmpOp (..), Expr (..), FieldKey (..), Parser, Subject (..), ToQueryText (..), Values (..), arrayColumns, defaultBinWidth, knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, searchExpr, suggestFieldRoot, unsupportedTimespan)
+import Pkg.Parser.Expr (CmpOp (..), Expr (..), FieldKey (..), Parser, Subject (..), ToQueryText (..), Values (..), arrayColumns, defaultBinWidth, genAIMarker, knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, searchExpr, suggestFieldRoot, unsupportedTimespan)
 import Relude hiding (GT, LT, Last, Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, hspace, space, string)
@@ -489,6 +489,12 @@ data Sources = SSpans | SMetrics
 --
 -- >>> all (\q -> isRight (parseQueryToAST q) && tf q == parseQueryToAST q) ["hashes[*] != \"x\"", "hashes[*] in (\"x\")", "hashes[*].k == \"x\"", "events[*] == \"x\"", "hashes[*] == 1"]
 -- True
+-- @gen_ai == true@ takes the same fast path; the negation keeps the generic predicate:
+--
+-- >>> fmap (rewriteSectionsForSource True Nothing) (parseQueryToAST "gen_ai == true and name == \"chat\"")
+-- Right [Search (And (ArrayHas "summary" "kind;neutral\8658ai") (Cmp Eq (Subject "name" "name" []) (Str "chat")))]
+-- >>> fmap (rewriteSectionsForSource True Nothing) (parseQueryToAST "gen_ai == false")
+-- Right [Search (Cmp Eq (Subject "gen_ai" "gen_ai" []) (Boolean False))]
 -- >>> fmap (rewriteSectionsForSource False Nothing) (parseQueryToAST "hashes[*]==\"x\"")
 -- Right [Search (Cmp Eq (Subject "hashes[*]" "hashes" [ArrayWildcard ""]) (Str "x"))]
 rewriteSectionsForSource :: Bool -> Maybe Sources -> [Section] -> [Section]
@@ -496,6 +502,7 @@ rewriteSectionsForSource False _ = id
 rewriteSectionsForSource True src =
   runIdentity . traverseAst (Identity . subject) \case
     Cmp Eq (Subject _ col [ArrayWildcard ""]) (Str v) | S.member col arrayColumns -> ArrayHas col v
+    Cmp c (Subject _ "gen_ai" []) (Boolean b) | lookup c [(Eq, b), (NotEq, not b)] == Just True -> ArrayHas "summary" genAIMarker
     e -> e
   where
     subject = case src of

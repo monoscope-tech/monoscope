@@ -26,7 +26,6 @@ import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (OnboardingStep (..))
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
@@ -134,7 +133,7 @@ menu lang pid =
 -- | Every GenAI span in the Explorer: charts, facets, columns and the span drawer, filtered on the
 -- summary element ingest stamps on them.
 llmCallsUrl :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Text
-llmCallsUrl pid since from to = (urls.logExplorer pid).logExplorerGet (Just $ "summary[*] == \"" <> Telemetry.genAIMarker <> "\"") Nothing since from to Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+llmCallsUrl pid since from to = (urls.logExplorer pid).logExplorerGet (Just "gen_ai == true") Nothing since from to Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 
 dashboardsUrl :: Projects.ProjectId -> Text
