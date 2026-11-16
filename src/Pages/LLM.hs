@@ -322,7 +322,7 @@ data Topic = Topic {template :: Text, conversations :: [Conversation]}
 --
 -- >>> import Relude.Unsafe qualified as Unsafe
 -- >>> let t = Unsafe.read @UTCTime "2026-01-01 00:00:00 UTC"
--- >>> let c k title = Conversation k (Just title) t t [] [] [] [] 1 1 0 10 Nothing 0 0 []
+-- >>> let c k title = Conversation k (Just title) t t [] [] [] [] 1 1 0 10 Nothing 0 0 [] []
 -- >>> map (\x -> (x.template, map (.key) x.conversations)) $ topicsOf t [c "a" "refund order 1234 failed", c "b" "refund order 98 failed", c "c" "why is checkout slow"]
 -- [("refund order <*> failed",["a","b"]),("why is checkout slow",["c"])]
 topicsOf :: UTCTime -> [Conversation] -> [Topic]
