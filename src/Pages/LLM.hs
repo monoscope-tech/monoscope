@@ -29,6 +29,7 @@ import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Ids qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), RefreshingDeferred (..), callout_, localTimeFmt_, metaChip_, tableSkeleton_, tonePill_, withDeferredBody)
 import Pages.Containers (mkWindow, windowed)
@@ -169,26 +170,31 @@ selectCalls pid window bodies scope = do
   Hasql.withHasqlTimefusion tf
     $ Hasql.interp
     $ [HI.sql|
-      SELECT id::text, COALESCE(context___trace_id, ''), timestamp, COALESCE(duration, 0), COALESCE(status_code = 'ERROR', false), COALESCE(name, ''), resource___service___name,
-        attributes -> 'gen_ai' -> 'operation' ->> 'name',
-        attributes -> 'gen_ai' -> 'conversation' ->> 'id',
-        attributes -> 'gen_ai' -> 'agent' ->> 'name',
-        COALESCE(attributes -> 'gen_ai' -> 'response' ->> 'model', attributes -> 'gen_ai' -> 'request' ->> 'model'),
-        (attributes -> 'gen_ai' -> 'usage' ->> 'input_tokens')::float8,
-        (attributes -> 'gen_ai' -> 'usage' ->> 'output_tokens')::float8,
-        (attributes -> 'gen_ai' -> 'usage' ->> 'cost')::float8,
-        attributes -> 'gen_ai' -> 'tool' ->> 'name',
-        left(attributes -> 'gen_ai' -> 'tool' -> 'call' ->> 'arguments', 300),
-        attributes -> 'gen_ai' -> 'input' ->> 'preview',
-        attributes -> 'gen_ai' -> 'response' -> 'finish_reasons',
+      SELECT id::text, COALESCE(context___trace_id, ''), timestamp, COALESCE(duration, 0), COALESCE(status_code = 'ERROR', false), COALESCE(name, '') AS span_name, resource___service___name,
+        attributes -> 'gen_ai' -> 'operation' ->> 'name' AS operation,
+        attributes -> 'gen_ai' -> 'conversation' ->> 'id' AS conversation,
+        attributes -> 'gen_ai' -> 'agent' ->> 'name' AS agent,
+        COALESCE(attributes -> 'gen_ai' -> 'response' ->> 'model', attributes -> 'gen_ai' -> 'request' ->> 'model') AS model,
+        (attributes -> 'gen_ai' -> 'usage' ->> 'input_tokens')::float8 AS input_tokens,
+        (attributes -> 'gen_ai' -> 'usage' ->> 'output_tokens')::float8 AS output_tokens,
+        (attributes -> 'gen_ai' -> 'usage' ->> 'cost')::float8 AS cost,
+        attributes -> 'gen_ai' -> 'tool' ->> 'name' AS tool,
+        left(attributes -> 'gen_ai' -> 'tool' -> 'call' ->> 'arguments', 300) AS tool_args,
+        attributes -> 'gen_ai' -> 'input' ->> 'preview' AS preview,
+        attributes -> 'gen_ai' -> 'response' -> 'finish_reasons' AS finish,
         attributes___user___id, |]
-    <> bool [HI.sql|CASE WHEN false THEN attributes END|] [HI.sql|attributes|] bodies
+    <> bool [HI.sql|CASE WHEN false THEN attributes END AS attributes|] [HI.sql|attributes|] bodies
     <> [HI.sql|
       FROM otel_logs_and_spans
       WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{window.fromTime} AND #{window.toTime}
-        AND attributes -> 'gen_ai' -> 'operation' ->> 'name' IS NOT NULL |]
+        AND #{Telemetry.genAIMarker} = ANY(summary) |]
     <> scope
     <> [HI.sql| ORDER BY timestamp DESC LIMIT 5000|]
+
+
+-- | Conversations span hours, so these pages open on a day rather than the app-wide five minutes.
+llmWindow :: Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx TimePicker.TimeWindow
+llmWindow fromP toP sinceP = mkWindow fromP toP (sinceP <|> ("24H" <$ guard (all isNothing [fromP, toP])))
 
 
 data View = ConversationsView | CallsView
@@ -218,7 +224,7 @@ newtype LLMGet = LLMPage (PageCtx (Deferred LLMBody))
 llmGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LLMGet)
 llmGetH pid viewM agentM modelM signalM fromP toP sinceP deferredM = do
   (_, _, bw) <- mkPageCtx pid
-  window <- mkWindow fromP toP sinceP
+  window <- llmWindow fromP toP sinceP
   let view = fromMaybe ConversationsView $ find ((== viewM) . Just . viewParam) universe
       link v a m s = windowed window ((urls.traces pid).llmGetH (Just $ viewParam v) a m s)
       url = link view agentM modelM signalM (Just "1")
@@ -379,7 +385,7 @@ newtype ConversationGet = ConversationPage (PageCtx ConversationDetail)
 conversationGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ConversationGet)
 conversationGetH pid key fromP toP sinceP = do
   (_, _, bw) <- mkPageCtx pid
-  window <- mkWindow fromP toP sinceP
+  window <- llmWindow fromP toP sinceP
   steps <-
     reverse
       <$> selectCalls
@@ -389,7 +395,7 @@ conversationGetH pid key fromP toP sinceP = do
         [HI.sql| AND (context___trace_id = #{key} OR attributes -> 'gen_ai' -> 'conversation' ->> 'id' = #{key} OR context___trace_id IN (
             SELECT context___trace_id FROM otel_logs_and_spans
             WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{window.fromTime} AND #{window.toTime} AND context___trace_id <> ''
-              AND attributes -> 'gen_ai' -> 'conversation' ->> 'id' = #{key})) |]
+              AND #{Telemetry.genAIMarker} = ANY(summary) AND attributes -> 'gen_ai' -> 'conversation' ->> 'id' = #{key})) |]
   let summary = viaNonEmpty head $ groupConversations $ V.fromList steps
   addRespHeaders
     $ ConversationPage

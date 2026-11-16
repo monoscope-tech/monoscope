@@ -101,6 +101,7 @@ module Models.Telemetry.Telemetry (
   atMapText,
   atMapInt,
   getNestedValue,
+  genAIMarker,
   spanServiceName,
   spanAttr,
   mkSystemLog,
@@ -2641,8 +2642,14 @@ insertSystemLog target tfPgTypes otelLog = do
 generateSummary :: OtelLogsAndSpans -> V.Vector T.Text
 generateSummary otel =
   case otel.kind of
-    Just "log" -> generateLogSummary otel
+    Just "log" -> V.fromList [genAIMarker | isJust (atMapText "gen_ai.operation.name" $ unAesonTextMaybe otel.attributes)] <> generateLogSummary otel
     _ -> generateSpanSummary otel
+
+
+-- | The summary element every GenAI span and log carries. Lists filter on it because a
+-- summary-array match is ~20x cheaper on TimeFusion than reading the attributes blob.
+genAIMarker :: T.Text
+genAIMarker = tag "kind" "neutral" "ai"
 
 
 -- | Who a telemetry row is *about*: the session it belonged to, the user it was served for,
@@ -2926,7 +2933,7 @@ generateSpanSummary otel =
           <$> requestType
           <|> tag "kind" "neutral" "database"
           <$ guard (isJust dbSys)
-          <|> tag "kind" "neutral" "ai"
+          <|> genAIMarker
           <$ genAIOp
           <|> tag "kind" "neutral" "internal"
           <$ guard (otel.kind == Just "internal")
