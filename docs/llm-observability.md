@@ -95,8 +95,13 @@ Unknown models carry tokens but no cost; the UI says "unpriced" rather than `$0`
 - **Conversation detail:**
   - *Transcript*: each new message once (LLM inputs repeat the history; we diff), with
     per-step model, latency, tokens, cost chips, tool calls inline with their results.
-  - *Timeline*: AI spans in execution order with duration bars and a cumulative-cost
-    line; each row opens the existing span drawer / trace.
+  - *KPI tiles*: cost (and unpriced calls), tokens in/out/cached, model calls with average
+    latency, tool calls and failures, errors, wall and active time.
+  - *Timeline* (default): the AI spans as a waterfall nested under their parent span, on the
+    conversation's own time axis, coloured by kind (agent, model call, tool; errors red), with
+    tokens, cost and the running total per step; each row opens the span drawer.
+  - *Cost by model* and *Tools* cards beside it; "Open trace" goes to the full trace, whose
+    header links back with "View conversation".
   - *Signals*: deterministic findings with the step that caused them.
   - *Ask AI*: opens the assistant dock seeded with this conversation.
 - **Dashboard** (`llm-observability.yaml`, read-only template): cost by model, tokens by
@@ -109,11 +114,13 @@ Unknown models carry tokens but no cost; the UI says "unpriced" rather than `$0`
 
 ### Plain-language signals (Raindrop-style)
 A signal is a name plus a description ("The user repeats a request or gives up"), stored in
-`apis.llm_signals`. `EvaluateLLMSignal` (on creation, on "Judge new conversations", and hourly
-for active projects) sends up to 20 of the day's not-yet-judged conversations to the small
-model in one call (opening request, latest message history, failed tools) and stores a
-verdict with a one-sentence reason per conversation in `apis.llm_signal_matches`. Matches
-show as pills (reason on hover) and in the Signal facet next to the built-in ones. Names are unique per
+`apis.llm_signals`. `EvaluateLLMSignals pid` (on creation, on "Judge new conversations now", and
+hourly for active projects) scans the day once, fetches each unjudged conversation's spans in
+one query, and asks the small model once per signal about up to 20 conversations (opening
+request, latest message history, failed tools). A key the judge answers twice is dropped
+(`Drain.answeredOnce`: transcripts are user-written). Verdicts land in
+`apis.llm_signal_matches` with a one-sentence reason. Judged and built-in signals are one
+`Flag` list on a conversation, so matches show as pills (reason on hover) and in the Signal facet next to the built-in ones. Names are unique per
 project, built-in labels included. A conversation is judged once; one that keeps growing
 afterwards is not re-judged (follow-up: re-judge on new turns).
 
