@@ -74,8 +74,7 @@ spec = around withTestResources do
       -- A plain-language signal: one judge call over the day's conversations, matches shown as pills and a facet.
       Right (LLM.SignalCreated _ sid) <- call tr $ LLM.llmSignalPostH pid (LLM.SignalForm "Slow checkout" "The user asks why checkout is slow.")
       traverse (call tr . LLM.llmSignalPostH pid) [LLM.SignalForm " slow CHECKOUT " "again", LLM.SignalForm "Tool error" "clashes with a built-in", LLM.SignalForm "  " "blank"]
-        >>= (`shouldBe` [Left (LLM.SignalNameTaken "slow CHECKOUT"), Left (LLM.SignalNameTaken "Tool error"), Left LLM.SignalIncomplete])
-        . map (fmap (const ()))
+        `shouldReturn` [Left (LLM.SignalNameTaken "slow CHECKOUT"), Left (LLM.SignalNameTaken "Tool error"), Left LLM.SignalIncomplete]
       prompts <- newIORef []
       let judge = interpose @ELLM.LLM \_ -> \case
             ELLM.CallLLM _ prompt _ -> modifyIORef prompts (prompt :) $> Right "```json\n[{\"key\":\"conv-1\",\"match\":true,\"reason\":\"Asks about checkout latency.\"}]\n```"

@@ -359,9 +359,10 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
     case view of
       ConversationsView -> do
         (conversations, capped) <- conversationsIn
-        custom <- M.fromListWith (<>) . map (\(k, name, reason) -> (k, [(name, reason)])) <$> selectMatches pid
-        let labels c = map signalLabel c.signals <> map fst (M.findWithDefault [] c.key custom)
-            inTopic c = maybe True (\t -> any (\tp -> tp.template == t && any ((== c.key) . (.key)) tp.conversations) (topicsOf now conversations)) topicM
+        custom <- M.fromListWith (<>) . map (\(k, name, reason) -> (k, [(name, reason)])) <$> selectMatches pid (V.fromList $ map (.key) conversations)
+        let topics = topicsOf now conversations
+            labels c = map signalLabel c.signals <> map fst (M.findWithDefault [] c.key custom)
+            inTopic c = maybe True (\t -> any (\tp -> tp.template == t && any ((== c.key) . (.key)) tp.conversations) topics) topicM
             all' = V.fromList conversations
             shown = V.filter (\c -> want agentM c.agents && want modelM c.models && want signalM (labels c) && inTopic c) all'
         pure
@@ -638,12 +639,12 @@ selectSignals pid =
       WHERE s.project_id = #{pid} GROUP BY s.id ORDER BY s.created_at |]
 
 
--- | (conversation key, signal name, reason) for every match in the project.
-selectMatches :: DB es => Projects.ProjectId -> Eff es [(Text, Text, Text)]
-selectMatches pid =
+-- | (conversation key, signal name, reason) for the matches among these conversations.
+selectMatches :: DB es => Projects.ProjectId -> V.Vector Text -> Eff es [(Text, Text, Text)]
+selectMatches pid keys =
   Hasql.interp
     [HI.sql| SELECT m.conversation_key, s.name, m.reason FROM apis.llm_signal_matches m JOIN apis.llm_signals s ON s.id = m.signal_id
-      WHERE s.project_id = #{pid} AND m.matched |]
+      WHERE s.project_id = #{pid} AND m.matched AND m.conversation_key = ANY(#{keys}) |]
 
 
 data Verdict = Verdict {key :: Text, match :: Bool, reason :: Text}
@@ -663,23 +664,6 @@ data JudgeError = JudgeCallFailed Text | JudgeUnparseable Text
 -- True
 parseVerdicts :: Text -> Either Text [Verdict]
 parseVerdicts = first toText . AE.eitherDecodeStrict . encodeUtf8 . ELLM.stripCodeBlock
-
-
--- | What the judge reads: the opening request, the latest call's messages, and failed tools.
-conversationText :: Maybe Text -> [Call] -> Text
-conversationText title calls = T.take 6000 $ unlines $ maybe [] (\t -> ["Opening request: " <> t]) title <> map line history <> ["Failed tool: " <> fromMaybe c.name c.tool | c <- calls, c.failed, c.operation == "execute_tool"]
-  where
-    msgs c dir = toList <$> (genAIAt (unAesonTextMaybe c.attributes) [dir, "messages"] >>= (^? AL._Array))
-    history = maybe [] (\c -> fold (msgs c "input") <> fold (msgs c "output")) $ viaNonEmpty last [c | c <- calls, isJust (msgs c "input")]
-    line m = fromMaybe "message" (m ^? AL.key "role" . AL._String) <> ": " <> unwords (mapMaybe part (m ^.. AL.key "parts" . AL.values))
-    part p = case p ^? AL.key "type" . AL._String of
-      Just "text" -> p ^? AL.key "content" . AL._String
-      Just "tool_call" -> (\n -> "[calls " <> n <> "]") <$> p ^? AL.key "name" . AL._String
-      Just "tool_call_response" -> Just $ "[result " <> T.take 200 (maybe "" renderJson (p ^? AL.key "response")) <> "]"
-      _ -> Nothing
-    renderJson = \case
-      AE.String t -> t
-      v -> decodeUtf8 (AE.encode v)
 
 
 -- | Judges the day's not-yet-judged conversations (at most 20 per run) against one signal, in one call.
@@ -710,6 +694,22 @@ evaluateSignal pid sid = do
             [HI.sql| INSERT INTO apis.llm_signal_matches (signal_id, conversation_key, matched, reason)
               SELECT #{sid}, k, m, r FROM unnest(#{V.fromList $ map (.key) vs}::text[], #{V.fromList $ map (.match) vs}::bool[], #{V.fromList $ map (.reason) vs}::text[]) AS v(k, m, r)
               ON CONFLICT (signal_id, conversation_key) DO UPDATE SET matched = EXCLUDED.matched, reason = EXCLUDED.reason, evaluated_at = now() |]
+  where
+    -- What the judge reads: the opening request, the latest call's messages, and failed tools.
+    conversationText :: Maybe Text -> [Call] -> Text
+    conversationText title calls = T.take 6000 $ unlines $ maybe [] (\t -> ["Opening request: " <> t]) title <> map line history <> ["Failed tool: " <> fromMaybe c.name c.tool | c <- calls, c.failed, c.operation == "execute_tool"]
+      where
+        msgs c dir = toList <$> (genAIAt (unAesonTextMaybe c.attributes) [dir, "messages"] >>= (^? AL._Array))
+        history = maybe [] (\c -> fold (msgs c "input") <> fold (msgs c "output")) $ viaNonEmpty last [c | c <- calls, isJust (msgs c "input")]
+        line m = fromMaybe "message" (m ^? AL.key "role" . AL._String) <> ": " <> unwords (mapMaybe part (m ^.. AL.key "parts" . AL.values))
+        part p = case p ^? AL.key "type" . AL._String of
+          Just "text" -> p ^? AL.key "content" . AL._String
+          Just "tool_call" -> (\n -> "[calls " <> n <> "]") <$> p ^? AL.key "name" . AL._String
+          Just "tool_call_response" -> Just $ "[result " <> T.take 200 (maybe "" renderJson (p ^? AL.key "response")) <> "]"
+          _ -> Nothing
+        renderJson = \case
+          AE.String t -> t
+          v -> decodeUtf8 (AE.encode v)
 
 
 data SignalForm = SignalForm {name :: Text, description :: Text}
@@ -723,7 +723,7 @@ data SignalRejection = SignalIncomplete | SignalNameTaken Text | SignalGone
 
 instance Refusal SignalRejection where
   refusalMessage = \case
-    SignalIncomplete -> "A signal needs a name and a description"
+    SignalIncomplete -> "A signal needs a name (up to 80 characters) and a description (up to 2,000)"
     SignalNameTaken name -> "A signal named “" <> name <> "” already exists"
     SignalGone -> "That signal no longer exists"
 
