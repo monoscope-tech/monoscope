@@ -447,7 +447,9 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
                               button_
                                 [ type_ "button"
                                 , class_ "flex flex-col gap-0.5 rounded-lg border border-strokeWeak px-3 py-2 text-start transition-[background-color,scale] hover:bg-fillHover active:scale-[0.96]"
-                                , term "_" $ "on click set #signal-name.value to " <> show name <> " then set #signal-description.value to " <> show description <> " then call #signal-description.focus()"
+                                , data_ "name" name
+                                , data_ "description" description
+                                , [__|on click set #signal-name.value to @data-name then set #signal-description.value to @data-description then call #signal-description.focus()|]
                                 ]
                                 do
                                   span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml name
