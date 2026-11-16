@@ -158,7 +158,7 @@ import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), 
 import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, faSprite_, fmtDate, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, kqlQuoted, loadingIndicator_, lookupValueText, navTabStrip_, nonEmptyT, popoverPanel_, popoverTrigger_, renderMarkdown, summaryWords)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseQueryParamMaybe)
-import Web.Links (CookieProtectedRoutes (..), IssuesRoutes' (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), TelemetryRoutes' (..), explorerUrl, urls)
+import Web.Links (CookieProtectedRoutes (..), IssuesRoutes' (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), explorerUrl, urls)
 
 
 newtype IssueBulkForm = IssueBulk
@@ -674,7 +674,7 @@ issueSampleCard_ pid snapshot result = case result of
       span_ "Latest event in range"
       time_ [datetime_ $ formatUTC at] $ toHtml $ fmtDate "%F %T UTC" at
       whenJust (mfilter (not . T.null) sampleTraceId) \tid ->
-        a_ [href_ $ traceOverlayUrl pid tid at, class_ "text-textBrand underline underline-offset-2"] "View trace"
+        a_ [href_ $ traceOverlayUrl pid tid at, data_ "trace-url" (traceFragmentUrl pid tid (Just at) False Nothing Nothing), [__|on click if #trace_expanded_view exists halt the event's default then send loadTrace(url: @data-trace-url) to #trace_expanded_view end|], class_ "text-textBrand underline underline-offset-2"] "View trace"
     div_ [class_ "flex flex-wrap items-center gap-1 p-4 max-h-80 overflow-y-auto"] $ V.mapM_ (summaryToken_ True) summary
   SampleLoading -> withSnapshot "Looking for an event in the selected range…"
   SampleEmpty -> withSnapshot "No occurrences in this range. Try another range; older raw events may no longer be retained."

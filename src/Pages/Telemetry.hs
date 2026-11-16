@@ -1233,7 +1233,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
       div_ [class_ "flex flex-wrap justify-between items-center gap-y-1 [.investigation-content_&]:hidden"] do
         div_ [class_ "flex items-center gap-3"] $ do
           button_
-            [ class_ "cursor-pointer hidden [#apiLogsPage_&]:flex items-center gap-1.5 text-sm font-medium text-textBrand"
+            [ class_ "cursor-pointer hidden [#apiLogsPage_&]:flex [.page-trace-overlay_&]:flex items-center gap-1.5 text-sm font-medium text-textBrand"
             , term "data-share-hide" ""
             , term "aria-label" "Back to event details"
             , -- Same guard as the fallback panel's Back button above: CSS only hides this
