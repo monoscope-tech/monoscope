@@ -36,7 +36,7 @@ import Data.Effectful.LLM qualified as ELLM
 import Data.Foldable1 qualified as F1
 import Data.HashSet qualified as HS
 import Data.Map.Strict qualified as M
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
@@ -715,7 +715,7 @@ evaluateSignals pid = do
           [HI.sql| SELECT signal_id, conversation_key FROM apis.llm_signal_matches
             WHERE signal_id = ANY(#{V.fromList $ map (.id) signals}) AND conversation_key = ANY(#{V.fromList $ map (.key) convs}) |]
     let pending :: LLMSignal -> [Conversation]
-        pending sig = take 20 [c | c <- convs, not $ (sig.id, c.key) `Set.member` judged]
+        pending sig = take 20 [c | c <- convs, not $ (sig.id, c.key) `S.member` judged]
         wanted = ordNubOn (.key) $ concatMap pending signals
     calls <- if null wanted then pure [] else selectCalls pid window 5000 (unitsScope $ concatMap (.units) wanted)
     let byUnit = M.fromListWith (flip (<>)) [(bool c.traceId c.id (T.null c.traceId), [c]) | c <- calls]
