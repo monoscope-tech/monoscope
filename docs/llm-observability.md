@@ -78,7 +78,7 @@ Unknown models carry tokens but no cost; the UI says "unpriced" rather than `$0`
   (system collapsed, tool calls with arguments, tool results), usage/cost header.
 - **Trace header:** total LLM cost and tokens when the trace has gen_ai spans.
 
-### AI page
+### LLM & Agents page (`/p/:pid/llm`, `/llm/conversations/:key`, `/llm/dashboard`)
 - **KPI strip:** conversations, LLM calls, tokens, cost, error rate, p95 LLM latency, each
   with the previous-window delta.
 - **Two lists.** *Conversations* are groups with a `gen_ai.conversation.id` or an
