@@ -481,7 +481,7 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
     overviewWidgets =
       [ w{Widget._projectId = Just pid, Widget.standalone = Just True}
       | d <- take 1 [d | d <- DashboardTemplates.dashboardTemplatesCompiled, d.file == Just "llm-observability.yaml"]
-      , w <- concatMap (\g -> fromMaybe [g] g.children) (take 3 d.widgets)
+      , w <- concatMap (\g -> fromMaybe [g] g.children) (take 3 $ d.widgets <> foldMap (concatMap (.widgets) . take 1) d.tabs)
       ]
 
     chips :: [Text] -> Html ()

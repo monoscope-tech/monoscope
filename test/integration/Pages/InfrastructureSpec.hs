@@ -9,6 +9,7 @@ import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.ByteString.Base16 qualified as B16
 import Data.Cache qualified as Cache
+import Data.Effectful.Hasql (setTestTime)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List (lookup)
 import Data.List qualified as L
@@ -42,9 +43,8 @@ import Pages.ServiceMap qualified as ServiceMap
 import Pages.Settings (PrometheusForm (..))
 import Pages.Settings qualified as Settings
 import Pages.Telemetry qualified as Trace
-import Pkg.Components.Table (Features (customizeColumns, exportName, resultSummary), Column (..), Table (..))
+import Pkg.Components.Table (Column (..), Features (customizeColumns, exportName, resultSummary), Table (..))
 import Pkg.Components.Widget qualified as Widget
-import Data.Effectful.Hasql (setTestTime)
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
@@ -476,7 +476,8 @@ spec = do
 
       -- The dispatcher fans out over projects that sent spans in the bucket, never all active ones (1726 in prod).
       runTestBg frozenTime tr (traverse (uncurry (projectsWithSpansInRange False)) [(addUTCTime (-300) frozenTime, addUTCTime 300 frozenTime), (addUTCTime (-3600) frozenTime, addUTCTime (-3300) frozenTime)])
-        >>= (`shouldBe` [L.sort [main', errs, envs], []]) . map L.sort
+        >>= (`shouldBe` [L.sort [main', errs, envs], []])
+        . map L.sort
 
       -- What a user meets: the dependency table is legible without JavaScript, and the canvas
       -- hydrates from the embedded payload.
@@ -537,7 +538,7 @@ spec = do
       spans <- runTestBg frozenTime tr (Telemetry.getTraceDetailsForView False pid trId (Just frozenTime) frozenTime Nothing) >>= maybe (fail "trace not found") (\(_, sps, _) -> pure sps)
       sortOn (\(n, _, _) -> n) [(s.spanName, show @Text s.kind, s.status) | s <- V.toList spans]
         `shouldBe` [("GET /checkout", "Just SKServer", Just Telemetry.SSUnset), ("POST /checkout", "Just SKServer", Just Telemetry.SSUnset), ("POST checkout", "Just SKClient", Just Telemetry.SSUnset), ("pg.query", "Just SKClient", Just Telemetry.SSError)]
-      html <- renderT <$> call tr (Trace.traceH pid trId (Just frozenTime) Nothing Nothing Nothing Nothing)
+      html <- renderT <$> call tr (Trace.traceH pid trId (Just frozenTime) Nothing Nothing Nothing Nothing (Just "true"))
       html `shouldContainAll` ["Waterfall", "Timeline", "Services", ">Map<", "GET /checkout", "pg.query", ">Errors</", ">1<", "<template data-trace-tooltip", "Span information", "Error span", "No error message available in this preview."]
       -- The graph is serialised into the page (a shared link needs no fetch): both services, the
       -- inferred database, and each service's share of execution time.
@@ -555,7 +556,7 @@ spec = do
       let rootSid = "00000000000000f0"
           spanSid i = T.takeEnd 16 $ "000000000000000" <> toText (showHex i "")
       ingestSpanReq tr $ mergeSpanRequests [mkSpanRequest paged (if i == 0 then rootSid else spanSid i) (if i == 0 then Nothing else Just rootSid) ("span-" <> show i) [] Nothing [] (mkResource apiKey []) (addUTCTime (fromIntegral i / 1000) frozenTime) | i <- [0 .. 59 :: Int]]
-      let traceAt sid nav embedded limit = call tr $ Trace.traceH pid paged (Just frozenTime) sid nav embedded limit
+      let traceAt sid nav embedded limit = call tr $ Trace.traceH pid paged (Just frozenTime) sid nav embedded limit (Just "true")
           loaded = \case
             Trace.TraceDetails _ _ sps _ moreUrl -> pure (V.length sps, moreUrl)
             _ -> fail "expected a paged trace view"
@@ -662,8 +663,11 @@ spec = do
       -- A histogram card averages sum/count over non-empty buckets, scoped to its service, and groups by
       -- the most useful dimension available unless one is chosen ("all" turns grouping off).
       cards <- createTestProject tr "metric-cards"
-      dbExec tr [sql| INSERT INTO otel_metrics_meta (project_id,metric_name,metric_type,metric_unit,metric_description,service_name,scope_name,metric_labels,first_seen_at,last_seen_at,first_timestamp,last_timestamp)
-                      VALUES (?,'request.duration','HISTOGRAM','s','latency','checkout','test','{}',now(),now(),now(),now()) |] (Only cards)
+      dbExec
+        tr
+        [sql| INSERT INTO otel_metrics_meta (project_id,metric_name,metric_type,metric_unit,metric_description,service_name,scope_name,metric_labels,first_seen_at,last_seen_at,first_timestamp,last_timestamp)
+                      VALUES (?,'request.duration','HISTOGRAM','s','latency','checkout','test','{}',now(),now(),now(),now()) |]
+        (Only cards)
       let dimensions = ["name", "resource.host.name", "resource.service.name", "attributes.zone", "attributes.region"] :: [Text]
       for_
         ( [ (dimensions, Nothing, Just "attributes.region")
@@ -777,7 +781,7 @@ spec = do
         , void $ Settings.prometheusTestH viewer replacement
         ]
         \mutation -> runAuthHandler tr $ withHTTPResponses (\_ _ -> modifyIORef' requests (+ 1) $> Just promBody) $ catchError @ServerError (mutation $> 200) (\_ err -> pure err.errHTTPCode)
-      (statuses, ) <$> readIORef requests `shouldReturn` (replicate 5 403, 0)
+      (statuses,) <$> readIORef requests `shouldReturn` (replicate 5 403, 0)
       ((\c -> (c.name, c.url, c.enabled, c.authHeader)) <<$>> configs viewer) `shouldReturn` [(saved.name, saved.url, saved.enabled, saved.authHeader)]
       viewerHtml <- shellHtml tr $ Settings.prometheusGetH viewer
       (T.isInfixOf "Saved target" viewerHtml, filter (`T.isInfixOf` viewerHtml) ["Add target", "Edit Prometheus target", "hx-patch", "hx-delete", "saved-secret"]) `shouldBe` (True, [])
@@ -957,4 +961,3 @@ promBody =
   "# HELP http_requests_total Total requests\n# TYPE http_requests_total counter\n\
   \http_requests_total{method=\"get\",code=\"200\"} 42\nhttp_requests_total{method=\"post\",code=\"500\"} 7\n\
   \# TYPE temperature_celsius gauge\ntemperature_celsius 21.5\nbroken_metric +Inf\n"
-

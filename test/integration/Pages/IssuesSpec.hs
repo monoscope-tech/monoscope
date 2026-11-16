@@ -118,7 +118,7 @@ spec = around withTestResources $ describe "Issues" do
     ingestSpanLinked tr apiKey spanTrace "5d0e000000000001" Nothing "GET /checkout" [] frozenTime
     traced <- errorIssue "SyntaxError" "JSON parse failed" "at parse (a.js:1)" Nothing (Just spanTrace) (Just "checkout") Nothing
     fmap fst . (.traceRef) <$> viewOf tr (IssuesPage.issueDetailGetH testPid traced (Just "true") Nothing Nothing Nothing Nothing) `shouldReturn` Just spanTrace
-    let fetchTrace tr' t = call tr' $ Trace.traceH testPid t (Just frozenTime) Nothing Nothing (Just "true") Nothing
+    let fetchTrace tr' t = call tr' $ Trace.traceH testPid t (Just frozenTime) Nothing Nothing (Just "true") Nothing (Just "true")
         starved = tr{trATCtx = (tr.trATCtx){env = (tr.trATCtx.env){traceViewTimeoutSecs = 0}}}
     fetchTrace tr spanTrace >>= \case Trace.TraceDetails{} -> pass; _ -> expectationFailure "default budget renders the trace"
     timedOut <- fetchTrace starved spanTrace
@@ -363,7 +363,9 @@ spec = around withTestResources $ describe "Issues" do
 
     [prod, _, _] <- forM ([("scope-checkout", "production"), ("scope-catalog", "production"), ("scope-checkout", "staging")] :: [(Text, Text)]) \(svc, env) ->
       seedIssue tr (issueSeed Issues.RuntimeException (svc <> "-" <> env)){service = Just svc, environment = Just env}
-    map (.id) . fst <$> runHasqlEffect tr (Issues.selectIssues testPid Issues.PIssue Issues.defIssueFilters{Issues.service = Just "scope-checkout", Issues.environment = Just "production", Issues.limit = 100})
+    map (.id)
+      . fst
+      <$> runHasqlEffect tr (Issues.selectIssues testPid Issues.PIssue Issues.defIssueFilters{Issues.service = Just "scope-checkout", Issues.environment = Just "production", Issues.limit = 100})
       `shouldReturn` [prod]
     let scoped = tr{trSessAndHeader = (\s -> s{Projects.service = Just "scope-checkout", Projects.environment = Just "production"}) <$> tr.trSessAndHeader}
     list scoped "Inbox" Nothing (Just "100") (Just "24h") ["scope-catalog"] [] >>= rowsOf >>= (`shouldSatisfy` V.null)

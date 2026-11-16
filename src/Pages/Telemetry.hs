@@ -72,6 +72,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.GenAI qualified as GenAI
 import Relude hiding (ask)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
+import Servant (getResponse)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
@@ -241,6 +242,8 @@ data TraceDetailsGet
     -- whatever container it landed in — the overlay's @loadTrace@ event only exists
     -- in the log explorer, and reached nothing anywhere else.
     TraceDetailsUnavailable Text Text Bool TraceUnavailableReason
+  | -- | The same view as a page of its own, for a plain navigation to the trace URL.
+    TracePage (PageCtx TraceDetailsGet)
 
 
 data TraceUnavailableReason = TraceEmpty | TraceTimedOut | TraceReadFailed
@@ -364,6 +367,7 @@ instance ToHtml TraceDetailsGet where
       -- skeleton, so a re-fired preload can't wipe rendered details back to a loader.
       div_ (spanDetailAttrs_ KeepCurrent pid sr.uSpanId sr.timestamp <> [hxTrigger_ "load[document.getElementById('trace_span_container').clientWidth >= 64 * parseFloat(getComputedStyle(document.documentElement).fontSize)]", term "hx-sync" "this:replace"]) pass
   toHtml (SpanDetails pid s aptSpn) = toHtml $ LogItem.expandedItemView pid s aptSpn Nothing
+  toHtml (TracePage page) = toHtml page
   toHtml (TraceDetailsUnavailable selfUrl explorerUrl embedded reason) =
     -- The id is what Retry swaps: `closest div` would only replace the button row.
     div_ [id_ "trace-fallback", class_ $ bool "min-h-screen" "min-h-48" embedded <> " flex items-center justify-center bg-bgBase p-6"]
@@ -644,8 +648,20 @@ metricBreakdownGetH pid metricName label = metricFragmentH pid metricName Nothin
 
 
 -- Trace handler
-traceH :: Projects.ProjectId -> Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders TraceDetailsGet)
-traceH pid trId timestamp spanIdM nav embedM spansM = do
+
+-- | The trace view. htmx pulls it into the explorer overlay or an issue panel as a fragment; a plain
+-- navigation (an "Open trace" link) gets it inside the page shell, which a bare fragment lacks.
+traceH :: Projects.ProjectId -> Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
+traceH pid trId timestamp spanIdM nav embedM spansM = \case
+  Just _ -> traceFragmentH pid trId timestamp spanIdM nav embedM spansM
+  Nothing -> do
+    (_, _, bw) <- mkPageCtx pid
+    view <- getResponse <$> traceFragmentH pid trId timestamp spanIdM nav (embedM <|> Just "true") spansM
+    addRespHeaders $ TracePage $ PageCtx bw{pageTitle = "Trace", menuItem = Just "Explorer"} view
+
+
+traceFragmentH :: Projects.ProjectId -> Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders TraceDetailsGet)
+traceFragmentH pid trId timestamp spanIdM nav embedM spansM = do
   env <- (.env) <$> Reader.ask @AuthContext
   let useTf = env.enableTimefusionReads
       embedded = isJust embedM

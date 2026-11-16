@@ -96,10 +96,12 @@ spec = around withTestResources do
       -- A trace that only ran a workflow is a conversation, so its trace page links to it.
       emitIn "9c3d" 7 "pipeline" [("traceloop.span.kind", "workflow"), ("traceloop.entity.name", "pipeline")]
       [(wfTrace, wfTs)] <- dbQuery tr [sql| SELECT context___trace_id, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND name = 'pipeline' |] (Only pid)
-      renderT <$> call tr (TelemetryPage.traceH pid wfTrace (Just wfTs) Nothing Nothing Nothing Nothing) >>= (`shouldContainAll` ["View conversation"])
+      renderT <$> call tr (TelemetryPage.traceH pid wfTrace (Just wfTs) Nothing Nothing Nothing Nothing (Just "true")) >>= (`shouldContainAll` ["View conversation"])
+      -- "Open trace" is a plain navigation: it gets the page shell and its stylesheet, not a bare fragment.
+      renderT <$> call tr (TelemetryPage.traceH pid wfTrace (Just wfTs) Nothing Nothing Nothing Nothing Nothing) >>= (`shouldContainAll` ["<html", "tailwind.min", "Trace Breakdown", "View conversation"])
       -- The trace view prices each step and totals the model calls only: $0.0035 + $0.000057 for gpt-4o-mini.
       [(trId, ts)] <- dbQuery tr [sql| SELECT context___trace_id, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND name = 'openinference llm' |] (Only pid)
-      renderT <$> call tr (TelemetryPage.traceH pid trId (Just ts) Nothing Nothing Nothing Nothing) >>= (`shouldContainAll` ["1K → 100 tok · $0.0035", "LLM cost", "$0.0036", "View conversation", "/llm/conversations/conv-1"])
+      renderT <$> call tr (TelemetryPage.traceH pid trId (Just ts) Nothing Nothing Nothing Nothing (Just "true")) >>= (`shouldContainAll` ["1K → 100 tok · $0.0035", "LLM cost", "$0.0036", "View conversation", "/llm/conversations/conv-1"])
 
     it "keeps each trace-less Claude Code session its own conversation, and leaves look-alike app logs alone" \tr -> do
       pid <- createTestProject tr "Claude Code"
