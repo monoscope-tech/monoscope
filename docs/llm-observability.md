@@ -145,4 +145,12 @@ the self-telemetry project shows tokens, cost, models and tools there, and trans
 - NL-defined signals compiled to classifiers (Raindrop-style) on the issues pipeline.
 - Topic clustering of first user messages via Drain.
 - Resolve `gen_ai.*_ref` content URIs.
-- Replace the byte/4 token estimate in `projects.ai_usage` with real usage.
+- Bill `projects.ai_usage` from the provider's real usage: return it from the `LLM` effect
+  (spans already carry it) and delete `estimatedTokens`.
+- Aggregate list totals in SQL (GROUP BY the conversation key) instead of over the newest
+  5,000 spans; the pages say when they hit that cap.
+- Normalise per dialect in a pre-pass (detector + alias table + fixups) so new dialects do not
+  touch the shared derivation; stamp an `inference` marker so KQL filters stop listing operations.
+- Interpret `LLM` above `Tracing` so inference spans use the `Tracing` effect, and share one
+  TLS client across calls.
+- Signals defined in natural language (Raindrop-style), topic clusters of first messages.
