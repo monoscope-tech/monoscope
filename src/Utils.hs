@@ -53,6 +53,7 @@ module Utils (
   getSeriesColorHex,
   nestedJsonFromDotNotation,
   prettyPrintCount,
+  tokenFlow,
   formatWithCommas,
   formatBytes,
   showFFloat',
@@ -916,6 +917,14 @@ prettyPrintCount n
     scaled unit suffix =
       let (whole, tenth) = (n `div` unit, (n `mod` unit) `div` (unit `div` 10))
        in T.show whole <> memptyIfFalse (tenth /= 0) ("." <> T.show tenth) <> suffix
+
+
+-- | A model call's input and output tokens, as every LLM surface prints them.
+--
+-- >>> tokenFlow (Just 1200) (Just 340)
+-- Just "1.2K \8594 340 tok"
+tokenFlow :: Maybe Double -> Maybe Double -> Maybe Text
+tokenFlow i o = (\a b -> prettyPrintCount (round a) <> " → " <> prettyPrintCount (round b) <> " tok") <$> i <*> o
 
 
 -- | Map a raw backend (Postgres / TimeFusion) error message to a short, safe

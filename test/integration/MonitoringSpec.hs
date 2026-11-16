@@ -1215,10 +1215,11 @@ spec = describe "Monitoring" do
         calls <- newIORef (0 :: Int)
         let model :: ATBackgroundCtx a -> ATBackgroundCtx a
             model = interpose @ELLM.LLM \_ -> \case
-              ELLM.CallAgenticChat history _ _ -> do
-                modifyIORef' calls (+ 1)
-                let recovered = any (\message -> T.isInfixOf "\"phase\":\"recovered\"" message.content || T.isInfixOf "\"phase\":\"resolved\"" message.content) $ toList history
-                pure $ Right $ Chat.Message Chat.Assistant (if recovered then "Recorded closing summary." else "Recorded alert analysis.") Chat.defaultMessageData
+              ELLM.CallAgenticChat history _ _ ->
+                fmap ELLM.unmetered <$> do
+                  modifyIORef' calls (+ 1)
+                  let recovered = any (\message -> T.isInfixOf "\"phase\":\"recovered\"" message.content || T.isInfixOf "\"phase\":\"resolved\"" message.content) $ toList history
+                  pure $ Right $ Chat.Message Chat.Assistant (if recovered then "Recorded closing summary." else "Recorded alert analysis.") Chat.defaultMessageData
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
             drain = do
@@ -1274,26 +1275,27 @@ spec = describe "Monitoring" do
             backend = original{AI.invoke = \actor pid tool arguments -> modifyIORef' invoked (<> [tool]) >> AI.invoke original actor pid tool arguments}
             model :: ATBackgroundCtx a -> ATBackgroundCtx a
             model = interpose @ELLM.LLM \_ -> \case
-              ELLM.CallAgenticChat history _ _ -> do
-                let hasTools = any ((== Chat.Tool) . (.role)) history
-                when hasTools do
-                  stop <- atomicModifyIORef' interrupt (\once -> (False, once))
-                  when stop $ throwIO $ ErrorCall "Interrupted after the durable mutation"
-                pure
-                  $ Right
-                  $ if hasTools
-                    then Chat.Message Chat.Assistant "Incident evidence and permitted changes are retained." Chat.defaultMessageData
-                    else
-                      Chat.Message
-                        Chat.Assistant
-                        ""
-                        Chat.defaultMessageData
-                          { Chat.toolCalls =
-                              Just
-                                [ Chat.ToolCall "private" "function" $ Chat.ToolFunction "list_api_keys" mempty
-                                , Chat.ToolCall "remediate" "function" $ Chat.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Incident remediation dashboard" :: Text)])
-                                ]
-                          }
+              ELLM.CallAgenticChat history _ _ ->
+                fmap ELLM.unmetered <$> do
+                  let hasTools = any ((== Chat.Tool) . (.role)) history
+                  when hasTools do
+                    stop <- atomicModifyIORef' interrupt (\once -> (False, once))
+                    when stop $ throwIO $ ErrorCall "Interrupted after the durable mutation"
+                  pure
+                    $ Right
+                    $ if hasTools
+                      then Chat.Message Chat.Assistant "Incident evidence and permitted changes are retained." Chat.defaultMessageData
+                      else
+                        Chat.Message
+                          Chat.Assistant
+                          ""
+                          Chat.defaultMessageData
+                            { Chat.toolCalls =
+                                Just
+                                  [ Chat.ToolCall "private" "function" $ Chat.ToolFunction "list_api_keys" mempty
+                                  , Chat.ToolCall "remediate" "function" $ Chat.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Incident remediation dashboard" :: Text)])
+                                  ]
+                            }
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
             execute = runTestBgNoReset tr $ model $ Jobs.processBackgroundJobWithTools (Just backend) tr.trATCtx $ Jobs.InvestigateIncident testPid event root
@@ -1328,13 +1330,14 @@ spec = describe "Monitoring" do
             backend = original{AI.invoke = \actor pid tool arguments -> modifyIORef' invoked (<> [tool]) >> AI.invoke original actor pid tool arguments}
             model :: ATBackgroundCtx a -> ATBackgroundCtx a
             model = interpose @ELLM.LLM \_ -> \case
-              ELLM.CallAgenticChat history _ _ -> do
-                modifyIORef' calls (+ 1)
-                pure
-                  $ Right
-                  $ if any ((== Chat.Tool) . (.role)) history
-                    then Chat.Message Chat.Assistant "The incident decision and evidence are retained." Chat.defaultMessageData
-                    else Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "review-remediation" "function" $ Chat.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Reviewed incident remediation" :: Text)])]}
+              ELLM.CallAgenticChat history _ _ ->
+                fmap ELLM.unmetered <$> do
+                  modifyIORef' calls (+ 1)
+                  pure
+                    $ Right
+                    $ if any ((== Chat.Tool) . (.role)) history
+                      then Chat.Message Chat.Assistant "The incident decision and evidence are retained." Chat.defaultMessageData
+                      else Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "review-remediation" "function" $ Chat.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Reviewed incident remediation" :: Text)])]}
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
             work = captureNotifs tr $ model $ Jobs.processBackgroundJobWithTools (Just backend) tr.trATCtx job >> runSlackIncidentDeliveries
@@ -1383,12 +1386,13 @@ spec = describe "Monitoring" do
         calls <- newIORef (0 :: Int)
         let model :: ATBackgroundCtx a -> ATBackgroundCtx a
             model = interpose @ELLM.LLM \_ -> \case
-              ELLM.CallAgenticChat{} -> do
-                modifyIORef' calls (+ 1)
-                when (interruption == PauseDuringIncidentModel) $ Issues.pauseRoutine testPid installation
-                when (interruption == RevokeDuringIncidentModel) revoke
-                when (interruption == RestrictDuringIncidentModel) $ Investigations.retainEvidencePermission testPid [UUIDId issue.unUUIDId] PM.PAdmin
-                pure $ Right $ Chat.Message Chat.Assistant "This result must stay in the run history." Chat.defaultMessageData
+              ELLM.CallAgenticChat{} ->
+                fmap ELLM.unmetered <$> do
+                  modifyIORef' calls (+ 1)
+                  when (interruption == PauseDuringIncidentModel) $ Issues.pauseRoutine testPid installation
+                  when (interruption == RevokeDuringIncidentModel) revoke
+                  when (interruption == RestrictDuringIncidentModel) $ Investigations.retainEvidencePermission testPid [UUIDId issue.unUUIDId] PM.PAdmin
+                  pure $ Right $ Chat.Message Chat.Assistant "This result must stay in the run history." Chat.defaultMessageData
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
         when (interruption == PauseBeforeIncidentRun) $ runTestBgNoReset tr $ Issues.pauseRoutine testPid installation
@@ -1446,7 +1450,7 @@ spec = describe "Monitoring" do
       let report = T.replicate 5000 "r"
           model :: ATBackgroundCtx a -> ATBackgroundCtx a
           model = interpose @ELLM.LLM \_ -> \case
-            ELLM.CallAgenticChat{} -> modifyIORef' calls (+ 1) $> Right (Chat.Message Chat.Assistant report Chat.defaultMessageData)
+            ELLM.CallAgenticChat{} -> fmap ELLM.unmetered <$> (modifyIORef' calls (+ 1) $> Right (Chat.Message Chat.Assistant report Chat.defaultMessageData))
             ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
             ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
           work = run $ model $ Jobs.processBackgroundJob resources.trATCtx $ Jobs.InvestigateIncident testPid event root

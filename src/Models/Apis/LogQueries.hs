@@ -1,4 +1,5 @@
 module Models.Apis.LogQueries (
+  percentile,
   errHashPrefix,
   patHashPrefix,
   cursorEpsilon,

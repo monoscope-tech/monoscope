@@ -6,6 +6,7 @@ import Data.Base64.Types qualified as B64
 import Data.Cache (Cache, newCache)
 import Data.Char (isHexDigit)
 import Data.Default (Default (..))
+import Data.Effectful.LLM (GenAIContentCapture)
 import Data.GeoIP2 qualified as GeoIP2
 import Data.Map.Strict qualified as M
 import Data.Pool as Pool (Pool, defaultPoolConfig, newPool, setNumStripes)
@@ -129,6 +130,7 @@ data EnvConfig = EnvConfig
   , lsWebhookSigEnforce :: Bool
   , openaiApiKey :: Text
   , openaiModel :: Text
+  , otelInstrumentationGenaiCaptureContent :: GenAIContentCapture
   , impactReviewUsageDir :: Maybe FilePath
   , impactReviewCacheDir :: Maybe FilePath
   , impactReviewWorkspaceMaintenance :: Maybe FilePath

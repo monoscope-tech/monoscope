@@ -41,6 +41,7 @@ extra-source-files:
   - static/public/assets/web-components/dist/manifest.json
   # Dashboard templates are spliced by TH the same way.
   - static/public/dashboards/*.yaml
+  - static/model_prices.json
   # The frozen proof check is spliced into Data.Effectful.CodeReview.Explanation.
   - src/Data/Effectful/CodeReview/proof.sh
   # - static/public/**/*.png

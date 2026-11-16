@@ -100,9 +100,11 @@ module Pkg.TestUtils (
   ingestLog,
   ingestLogWithResource,
   ingestErrorLog,
+  ingestLogRecord,
   ingestTrace,
   ingestSpanLinked,
   ingestSpanReq,
+  withOwnTelemetry,
   withSpanKind,
   withSpanStatus,
   withTraceId,
@@ -167,7 +169,7 @@ import Data.Generics.Product.Fields (field)
 import Data.GeoIP2 qualified as GeoIP2
 import Data.HashMap.Strict qualified as HM
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, setNumStripes, withResource)
-import Data.ProtoLens (defMessage)
+import Data.ProtoLens (decodeMessage, defMessage, encodeMessage)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, ZonedTime, getCurrentTime, zonedTimeToUTC)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -219,8 +221,11 @@ import Network.Minio qualified as Minio
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wreq qualified as W
 import OddJobs.Job (Job (..))
+import OpenTelemetry.Exporter.InMemory.Span (inMemoryListExporter)
+import OpenTelemetry.Exporter.OTLP.Span (immutableSpansToProtobuf)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
+import OpenTelemetry.Trace.Core (ImmutableSpan (spanTracer), Tracer (tracerName), createTracerProvider, emptyTracerProviderOptions)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Slack qualified as SlackBot
@@ -650,13 +655,14 @@ runTestBackground t authCtx action = withSharedLogger \logger ->
 runTestBackgroundWithNotifications :: UTCTime -> Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
 runTestBackgroundWithNotifications t logger appCtx process = do
   clock <- newTestClock t
-  runTestBackgroundWithClock clock logger appCtx process
+  tp <- getGlobalTracerProvider
+  runTestBackgroundWithClock tp clock logger appCtx process
 
 
 -- | Like 'runTestBackgroundWithNotifications' but takes an externally-managed
 -- 'TestClock' so callers can advance time across multiple runs in the same
 -- spec.
-runTestBackgroundWithClock :: TestClock -> Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
+runTestBackgroundWithClock :: TracerProvider -> TestClock -> Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
 runTestBackgroundWithClock = runTestBackgroundWithHTTP (runHTTPGolden "./test/golden/")
 
 
@@ -666,13 +672,13 @@ runTestBackgroundWithClock = runTestBackgroundWithHTTP (runHTTPGolden "./test/go
 -- Squeezy with whatever key the config carries.
 runTestBackgroundWithHTTP
   :: (forall x hes. IOE :> hes => Eff (HTTP ': hes) x -> Eff hes x)
+  -> TracerProvider
   -> TestClock
   -> Log.Logger
   -> Config.AuthContext
   -> ATBackgroundCtx a
   -> IO ([Data.Effectful.Notify.Notification], a)
-runTestBackgroundWithHTTP http clock logger appCtx process = do
-  tp <- getGlobalTracerProvider
+runTestBackgroundWithHTTP http tp clock logger appCtx process = do
   notifRef <- newIORef []
   result <-
     process
@@ -686,7 +692,7 @@ runTestBackgroundWithHTTP http clock logger appCtx process = do
       & runUUID
       & runNoSleep
       & http
-      & ELLM.runLLMGolden "./test/golden/"
+      & ELLM.runLLMGolden (ELLM.LLMTelemetry tp ELLM.SpanOnly) "./test/golden/"
       & CodeReview.runCodeReviewTest (const $ Left "No review agent fixture configured") (const $ Left "No fix agent fixture configured") (const $ Left "No admission agent fixture configured") (const $ Left "No artifact verification fixture configured") (const $ Left "No explanation fixture configured") (const $ Left "No independent fix review fixture configured")
       & Workspace.runWorkspaceTest (\_ _ _ -> Left "No workspace fixture") (\_ _ -> Left Workspace.RegressionUnavailable) (\_ _ -> Left "No prune fixture") (const $ Left "No maintenance fixture")
       & Artifacts.runAgentArtifactsTest (const $ Left Artifacts.StorageUnavailable) (\_ _ -> Left Artifacts.ArtifactUnavailable)
@@ -706,7 +712,7 @@ runTestBgRecordingHTTP :: UTCTime -> TestResources -> ATBackgroundCtx a -> IO ([
 runTestBgRecordingHTTP t TestResources{..} action = do
   setTestTime trTestClock t
   reqsRef <- newIORef []
-  (notifications, result) <- runTestBackgroundWithHTTP (runHTTPRecord reqsRef) trTestClock trLogger trATCtx action
+  (notifications, result) <- runTestBackgroundWithHTTP (runHTTPRecord reqsRef) trTracerProvider trTestClock trLogger trATCtx action
   logNotifications trATCtx trLogger notifications
   reqs <- reverse <$> readIORef reqsRef
   pure (reqs, result)
@@ -744,7 +750,7 @@ runTestEffect pool hpool logger tp action = do
 runTestBg :: UTCTime -> TestResources -> ATBackgroundCtx a -> IO a
 runTestBg t TestResources{..} action = do
   setTestTime trTestClock t
-  (notifications, result) <- runTestBackgroundWithClock trTestClock trLogger trATCtx action
+  (notifications, result) <- runTestBackgroundWithClock trTracerProvider trTestClock trLogger trATCtx action
   logNotifications trATCtx trLogger notifications
   pure result
 
@@ -754,14 +760,14 @@ runTestBg t TestResources{..} action = do
 -- between job runs — otherwise 'runTestBg' would snap the clock back.
 runTestBgNoReset :: TestResources -> ATBackgroundCtx a -> IO a
 runTestBgNoReset TestResources{..} action = do
-  (notifications, result) <- runTestBackgroundWithClock trTestClock trLogger trATCtx action
+  (notifications, result) <- runTestBackgroundWithClock trTracerProvider trTestClock trLogger trATCtx action
   logNotifications trATCtx trLogger notifications
   pure result
 
 
 -- | Capture notifications without resetting the test clock.
 captureNotifs :: TestResources -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
-captureNotifs TestResources{..} = runTestBackgroundWithClock trTestClock trLogger trATCtx
+captureNotifs TestResources{..} = runTestBackgroundWithClock trTracerProvider trTestClock trLogger trATCtx
 
 
 -- | Log out notifications gathered during a background run. Lifted out
@@ -1687,7 +1693,12 @@ ingestLogWithResource tr apiKey attributes bodyText timestamp =
 -- records never carry span events, so error extraction relies on severity +
 -- attributes rather than event_attributes.exception.
 ingestErrorLog :: TestResources -> Text -> Text -> [(Text, Text)] -> UTCTime -> IO ()
-ingestErrorLog tr apiKey bodyText extras timestamp =
+ingestErrorLog tr apiKey = ingestLogRecord tr apiKey ("ERROR", PL.SEVERITY_NUMBER_ERROR)
+
+
+-- | One log record with the given severity, body and string attributes.
+ingestLogRecord :: TestResources -> Text -> (Text, PL.SeverityNumber) -> Text -> [(Text, Text)] -> UTCTime -> IO ()
+ingestLogRecord tr apiKey (severityText, severityNumber) bodyText extras timestamp =
   let attrs = [mkAttr k v | (k, v) <- extras]
       logRecord =
         defMessage
@@ -1696,9 +1707,9 @@ ingestErrorLog tr apiKey bodyText extras timestamp =
             & PLF.body
           .~ (defMessage & PCF.stringValue .~ bodyText)
             & PLF.severityText
-          .~ "ERROR"
+          .~ severityText
             & PLF.severityNumber
-          .~ PL.SEVERITY_NUMBER_ERROR
+          .~ severityNumber
             & PLF.attributes
           .~ attrs
       scopeLog = defMessage & PLF.logRecords .~ [logRecord]
@@ -1763,6 +1774,20 @@ ingestSpanLinked tr apiKey trId spanId parentM name extras ts =
 -- every 'mkSpanRequest' call site growing two more positional arguments.
 ingestSpanReq :: TestResources -> TS.ExportTraceServiceRequest -> IO ()
 ingestSpanReq tr = void . OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider . Proto
+
+
+-- | Monoscope observing itself: run @act@ with a tracer that keeps every span it ends, then
+-- export those spans through OTLP ingest into the project that @apiKey@ belongs to.
+withOwnTelemetry :: TestResources -> Text -> (TestResources -> IO a) -> IO a
+withOwnTelemetry tr apiKey act = do
+  (processor, ended) <- inMemoryListExporter
+  tp <- createTracerProvider [processor] emptyTracerProviderOptions
+  result <- act tr{trTracerProvider = tp}
+  spans <- readIORef ended
+  exported <- immutableSpansToProtobuf $ HM.fromListWith (<>) [(tracerName (spanTracer imm), V.singleton imm) | imm <- spans]
+  req <- either (fail . ("re-decoding exported spans: " <>)) pure $ decodeMessage $ encodeMessage exported
+  ingestSpanReq tr $ req & TSF.resourceSpans . traverse . PTF.resource .~ mkResource apiKey []
+  pure result
 
 
 withSpanKind :: PT.Span'SpanKind -> TS.ExportTraceServiceRequest -> TS.ExportTraceServiceRequest

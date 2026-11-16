@@ -112,6 +112,7 @@ import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception qualified as Exception
 import Effectful.Log qualified as Log
+import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
@@ -140,17 +141,20 @@ import Network.URI qualified as URI
 import Network.Wreq qualified as Wreq
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Tool qualified as OAITool
+import OpenTelemetry.Attributes qualified as OA
 import Pkg.AgentCatalog (LocalOperation (..))
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.TimePicker (TimePicker (..), parseTimeRange)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC, idFromText)
 import Pkg.EmailTemplates qualified as ET
+import Pkg.GenAI qualified as GenAI
 import Pkg.Parser (ResultShape (Events), parseQueryToAST, resultShape)
 import Pkg.SchemaLearning (FacetData (..), FacetSummary (..), FacetValue (..))
 import Pkg.Slack qualified as Slack
 import Relude
 import System.Config qualified as Config
+import System.Tracing (SpanKind (Internal), SpanStatus (Error), Tracing, setStatus, withSpanKind)
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (throwIO, withException)
 import Utils (encodeText, formatUTCMicros, hostPath, nonEmptyT, unwrapJsonPrimValue)
@@ -1416,8 +1420,8 @@ runAgenticChatWithHistory suppliedConfig requestedInput model apiKey = do
 
 -- | Each attempt gets its own journal; a retry never overwrites partial evidence.
 -- Persisted Slack turns resume their checkpoint while each worker attempt retains its own activity log.
-withInvestigationJournal :: (DB es, IOE :> es, UUIDEff :> es, W.HTTP :> es) => AgenticConfig -> Text -> Text -> (Maybe Investigations.Scope -> Eff es (Either Text a)) -> Eff es (Either Text a)
-withInvestigationJournal config userQuery model action = do
+withInvestigationJournal :: (DB es, IOE :> es, Tracing :> es, UUIDEff :> es, W.HTTP :> es) => AgenticConfig -> Text -> Text -> (Maybe Investigations.Scope -> Eff es (Either Text a)) -> Eff es (Either Text a)
+withInvestigationJournal config userQuery model action = withSpanKind Internal "invoke_agent monoscope" agentAttrs \_ -> do
   void $ requireConfigAccess config
   case config.access of
     SlackInvestigationAccess run -> do
@@ -1432,6 +1436,10 @@ withInvestigationJournal config userQuery model action = do
       Investigations.recordEvent scope $ either (const Investigations.InvestigationFailed) (const Investigations.InvestigationFinished) result
       pure result
     (MemberAccess{}; ServiceAccess; SlackAccess{}; SlackCommandAccess{}) -> action Nothing
+  where
+    agentAttrs =
+      [("gen_ai.operation.name", "invoke_agent"), ("gen_ai.agent.name", "monoscope"), ("gen_ai.provider.name", "openai"), ("gen_ai.request.model", OA.toAttribute model), ("monoscope.project_id", OA.toAttribute config.projectId.toText)]
+        <> [("gen_ai.conversation.id", OA.toAttribute convId.toText) | Just convId <- [config.conversationId]]
 
 
 -- | Save each completed decision/read before advancing. Pending read tools may
@@ -1463,7 +1471,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
               record $ Investigations.ModelReturned step.iteration Investigations.ModelRequestFailed
               Log.logAttention "LLM API error" (AE.object ["error" AE..= show @Text err])
               pure $ Left "LLM service temporarily unavailable"
-            Right message -> do
+            Right (ELLM.Reply message usage) -> do
               let interactive = case config.access of
                     SlackInvestigationAccess{} -> Projects.UsageSlackInvestigation
                     (ServiceAccess; MemberAccess{}; SlackAccess{}; SlackCommandAccess{}) -> Projects.UsageInteractive
@@ -1472,7 +1480,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
                     DurableRun context -> case context.source of
                       (Issues.ScheduledRun; Issues.TriggeredRun{}) -> Projects.UsageRoutine
                       (Issues.InteractiveRun{}; Issues.ConversationRun{}; Issues.FixRun{}) -> interactive
-              Projects.recordAIUsage config.projectId (show request.model) source $ pricedUsage config.sourceConfig (estimatedTokens (step.history, request)) (estimatedTokens message)
+              Projects.recordAIUsage config.projectId (show request.model) source $ pricedUsage config.sourceConfig (maybe (estimatedTokens (step.history, request)) (round . (.input)) usage) (maybe (estimatedTokens message) (round . (.output)) usage)
               -- Calls the round did not offer are dropped from the message too: a call left without a result is rejected by the provider.
               let requested = fromMaybe [] $ LLM.toolCalls $ LLM.messageData message
                   offered t = not finalRound || any (V.elem (Just $ LLM.toolFunctionName $ LLM.toolCallFunction t) . V.map toolName) request.tools
@@ -1508,7 +1516,13 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
       tool : remaining -> do
         Log.logTrace "AI requesting tool" (AE.object ["iteration" AE..= step.iteration, "tool" AE..= LLM.toolFunctionName (LLM.toolCallFunction tool)])
         record $ Investigations.ToolStarted step.iteration tool
-        outcome <- executeToolAt turn config{timeRange = step.timeRange} tool
+        let callFunction = LLM.toolCallFunction tool
+        capture <- ELLM.capturesContent . (.env.otelInstrumentationGenaiCaptureContent) <$> Reader.ask @Config.AuthContext
+        outcome <- withSpanKind Internal ("execute_tool " <> LLM.toolFunctionName callFunction) ([("gen_ai.operation.name", "execute_tool"), ("gen_ai.tool.name", OA.toAttribute $ LLM.toolFunctionName callFunction), ("gen_ai.tool.call.id", OA.toAttribute $ LLM.toolCallId tool)] <> [("gen_ai.tool.call.arguments", OA.toAttribute $ encodeText $ LLM.toolFunctionArguments callFunction) | capture]) \sp -> do
+          outcome <- executeToolAt turn config{timeRange = step.timeRange} tool
+          outcome <$ case outcome of
+            Investigations.RefusedResult{} -> setStatus sp (Error "refused by review")
+            (Investigations.RecordedResult{}; Investigations.UncertainResult{}; Investigations.WaitingResult{}) -> pass
         let result = Investigations.operationResponse config.projectId outcome
             attempted = completed <> [(tool, result)]
         next <- case outcome of

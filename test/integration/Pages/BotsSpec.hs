@@ -4,7 +4,7 @@ import BackgroundJobs qualified as Jobs
 import BackgroundJobs.Types qualified as JobQueue
 import Control.Concurrent (threadDelay)
 import Control.Exception (ErrorCall (..), bracket_, finally, throwIO)
-import Control.Lens (ix, to, toListOf, _2, _Just, (.~), (?~), (^.), (^..), (^?))
+import Control.Lens (ix, to, toListOf, (.~), (?~), (^.), (^..), (^?), _2, _Just)
 import Control.Lens qualified as Lens
 import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
@@ -16,11 +16,13 @@ import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Cache qualified as Cache
+import Data.Effectful.Hasql (advanceTime)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified as Notify
 import Data.Effectful.UUID qualified as UUIDEff
 import Data.Effectful.Wreq qualified as HTTP
+import Data.Generics.Product.Fields qualified as Generic
 import Data.List (lookup)
 import Data.Map qualified as Map
 import Data.Pool (withResource)
@@ -44,8 +46,8 @@ import Hasql.Interpolate qualified as HI
 import Langchain.LLM.Core qualified as Chat
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Slack
-import Models.Apis.IssueEnhancement.Types qualified as Enhancement
 import Models.Apis.Investigations qualified as Investigations
+import Models.Apis.IssueEnhancement.Types qualified as Enhancement
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
@@ -53,30 +55,27 @@ import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (Status, parseSimpleQuery, renderSimpleQuery, status202, status204, status401, status403, status429, status503)
 import Network.HTTP.Client (RequestBody (..), defaultRequest, requestBody)
+import Network.HTTP.Types (Status, parseSimpleQuery, renderSimpleQuery, status202, status204, status401, status403, status429, status503)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types qualified as WreqTypes
-import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OddJobs.Job qualified as OddJobs
+import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (PageCtx (..))
-import Pages.CodeContext qualified as CodeContextPage
-import Pages.Issues qualified as IssuePage
-import Web.Routes qualified as Routes
 import Pages.Bots.Discord (discordInteractionsH)
 import Pages.Bots.Slack (processSlackEvent, slackEventsPostH, slackInteractionsH)
 import Pages.Bots.Slack qualified as SlackPage
 import Pages.Bots.Utils qualified as Bot
 import Pages.Bots.Whatsapp (BodyType (..), TwilioWhatsAppMessage (TwilioWhatsAppMessage), getWhatsappList, parseWhatsappBody, whatsappIncomingPostH)
+import Pages.CodeContext qualified as CodeContextPage
+import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
 import Pkg.Git qualified as Git
 import Pkg.Slack qualified as Slack
-import Data.Generics.Product.Fields qualified as Generic
-import Data.Effectful.Hasql (advanceTime)
 import Pkg.TestUtils
 import Servant.API.ResponseHeaders (getHeaders, getResponse)
 import Servant.Server (ServerError (errHTTPCode))
@@ -90,6 +89,7 @@ import UnliftIO.Exception (tryAny)
 import Web.ApiTypes (ApiActor (..))
 import Web.FormUrlEncoded (FromForm, urlDecodeAsForm)
 import Web.MCP qualified as MCP
+import Web.Routes qualified as Routes
 
 
 data AbandonedRun = DeletedRequester | DetachedSchedule | DetachedEvent | HistoricalRequester | ReauthorizedRequester
@@ -206,13 +206,16 @@ spec = around withTestResources do
           firstOption request = maybe (fail "Missing widget option") pure $ request ^? key "view" . key "blocks" . _Array . ix 0 . key "accessory" . key "options" . _Array . ix 0 . key "value" . _String
           selectedWidget option = AE.object ["values" .= AE.object ["widget-select" .= AE.object ["widget-select" .= AE.object ["selected_option" .= AE.object ["value" .= option]]]]]
           payload context kind selected viewState =
-            SlackPage.SlackActionForm $ decodeUtf8 $ AE.encode $ AE.object
-              [ "type" .= (kind :: Text)
-              , "team" .= AE.object ["id" .= ("T_ACTIONS" :: Text)]
-              , "user" .= AE.object ["id" .= ("U0123ABCDEF" :: Text)]
-              , "view" .= AE.object ["id" .= ("V_ACTIONS" :: Text), "private_metadata" .= (context :: Text), "state" .= (viewState :: AE.Value)]
-              , "actions" .= (selected :: [AE.Value])
-              ]
+            SlackPage.SlackActionForm
+              $ decodeUtf8
+              $ AE.encode
+              $ AE.object
+                [ "type" .= (kind :: Text)
+                , "team" .= AE.object ["id" .= ("T_ACTIONS" :: Text)]
+                , "user" .= AE.object ["id" .= ("U0123ABCDEF" :: Text)]
+                , "view" .= AE.object ["id" .= ("V_ACTIONS" :: Text), "private_metadata" .= (context :: Text), "state" .= (viewState :: AE.Value)]
+                , "actions" .= (selected :: [AE.Value])
+                ]
           select actionId value = [AE.object ["action_id" .= (actionId :: Text), "selected_option" .= AE.object ["text" .= ("Untrusted title" :: Text), "value" .= (value :: Text)]]]
           run = runAsBaseRecordingHTTP tr . statusOf . SlackPage.slackActionsH
           denied code form = run form `shouldReturn` ([], code)
@@ -324,10 +327,11 @@ spec = around withTestResources do
         revoked <- newIORef False
         queriesAfterRevocation <- newIORef (0 :: Int)
         let provider = interpose @ELLM.LLM \_ -> \case
-              ELLM.CallAgenticChat{} -> do
-                liftIO $ setActive tr False
-                writeIORef revoked True
-                pure $ Right $ Chat.Message Chat.Assistant "A result that must not be released" Chat.defaultMessageData{Chat.toolCalls = toolCalls}
+              ELLM.CallAgenticChat{} ->
+                fmap ELLM.unmetered <$> do
+                  liftIO $ setActive tr False
+                  writeIORef revoked True
+                  pure $ Right $ Chat.Message Chat.Assistant "A result that must not be released" Chat.defaultMessageData{Chat.toolCalls = toolCalls}
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
             database = interpose @Hasql.Hasql \_ effect -> do
@@ -532,10 +536,11 @@ spec = around withTestResources do
       posts <- newIORef (0 :: Int)
       modelCalls <- newIORef (0 :: Int)
       let provider = interpose @ELLM.LLM \_ -> \case
-            ELLM.CallAgenticChat{} -> do
-              modifyIORef' modelCalls (+ 1)
-              liftIO $ putMVar entered () >> takeMVar release
-              pure $ Right $ Chat.Message Chat.Assistant "The investigation answer is ready." Chat.defaultMessageData
+            ELLM.CallAgenticChat{} ->
+              fmap ELLM.unmetered <$> do
+                modifyIORef' modelCalls (+ 1)
+                liftIO $ putMVar entered () >> takeMVar release
+                pure $ Right $ Chat.Message Chat.Assistant "The investigation answer is ready." Chat.defaultMessageData
             ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
             ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
           responses = withHTTPResponses $ \_ _ -> pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\",\"members\":[\"U0123ABCDEF\"]}"
@@ -604,15 +609,16 @@ spec = around withTestResources do
               pure $ Just $ if number == 0 then "{\"ok\":false,\"error\":\"ratelimited\"}" else "{\"ok\":true,\"ts\":\"1735689611.000001\"}"
             _ -> pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\",\"members\":[\"U0123ABCDEF\"]}"
           provider = interpose @ELLM.LLM \_ -> \case
-            ELLM.CallAgenticChat history _ _ -> do
-              modifyIORef' modelCalls (+ 1)
-              let tools = [message | message <- toList history, Chat.role message == Chat.Tool]
-              liftIO $ timeout 10_000_000 (takeMVar $ if null tools then started else updated) >>= (`shouldBe` Just ())
-              pure
-                $ Right
-                $ if null tools
-                  then Chat.Message Chat.Assistant "private model narration" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "schema" "function" (Chat.ToolFunction "get_schema" mempty)]}
-                  else Chat.Message Chat.Assistant "Evidence check complete; cause remains unconfirmed." Chat.defaultMessageData
+            ELLM.CallAgenticChat history _ _ ->
+              fmap ELLM.unmetered <$> do
+                modifyIORef' modelCalls (+ 1)
+                let tools = [message | message <- toList history, Chat.role message == Chat.Tool]
+                liftIO $ timeout 10_000_000 (takeMVar $ if null tools then started else updated) >>= (`shouldBe` Just ())
+                pure
+                  $ Right
+                  $ if null tools
+                    then Chat.Message Chat.Assistant "private model narration" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "schema" "function" (Chat.ToolFunction "get_schema" mempty)]}
+                    else Chat.Message Chat.Assistant "Evidence check complete; cause remains unconfirmed." Chat.defaultMessageData
             ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
             ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
           work receipt = runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ tryAny $ processSlackEvent receipt
@@ -673,18 +679,19 @@ spec = around withTestResources do
                         pure $ Just $ source "poolSize = 5\n"
                       else fail "Unexpected repository request"
           provider = interpose @ELLM.LLM \_ -> \case
-            ELLM.CallAgenticChat history params _ -> do
-              let systemMessage :| _ = history
-                  evidence = [Chat.content message | message <- toList history, Chat.role message == Chat.Tool]
-              modifyIORef' modelContexts (<> [(systemMessage.content, AE.toJSON params)])
-              case evidence of
-                [] -> pure $ Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [sourceCall "old" oldRevision, sourceCall "new" newRevision]}
-                [before, after] -> do
-                  liftIO $ T.isInfixOf "poolSize = 50" before `shouldBe` True
-                  liftIO $ T.isInfixOf "poolSize = 5" after `shouldBe` True
-                  liftIO $ isNothing (AE.toJSON params ^? key "tools" . _Array) `shouldBe` True
-                  pure $ Right $ Chat.Message Chat.Assistant "The source setting changed; incident impact remains unconfirmed." Chat.defaultMessageData
-                _ -> liftIO $ fail "Unexpected tool history"
+            ELLM.CallAgenticChat history params _ ->
+              fmap ELLM.unmetered <$> do
+                let systemMessage :| _ = history
+                    evidence = [Chat.content message | message <- toList history, Chat.role message == Chat.Tool]
+                modifyIORef' modelContexts (<> [(systemMessage.content, AE.toJSON params)])
+                case evidence of
+                  [] -> pure $ Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [sourceCall "old" oldRevision, sourceCall "new" newRevision]}
+                  [before, after] -> do
+                    liftIO $ T.isInfixOf "poolSize = 50" before `shouldBe` True
+                    liftIO $ T.isInfixOf "poolSize = 5" after `shouldBe` True
+                    liftIO $ isNothing (AE.toJSON params ^? key "tools" . _Array) `shouldBe` True
+                    pure $ Right $ Chat.Message Chat.Assistant "The source setting changed; incident impact remains unconfirmed." Chat.defaultMessageData
+                  _ -> liftIO $ fail "Unexpected tool history"
             ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
             ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
           run model = snd <$> (runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ tryAny $ AI.runAgenticChatWithHistory config "Compare the source revisions" model "api-key-never-store")
@@ -786,9 +793,10 @@ spec = around withTestResources do
       modelCalls <- newIORef (0 :: Int)
       posts <- newIORef (0 :: Int)
       let provider = interpose @ELLM.LLM \_ -> \case
-            ELLM.CallAgenticChat{} -> do
-              modifyIORef' modelCalls (+ 1)
-              pure $ Right $ Chat.Message Chat.Assistant "Recorded evidence." Chat.defaultMessageData
+            ELLM.CallAgenticChat{} ->
+              fmap ELLM.unmetered <$> do
+                modifyIORef' modelCalls (+ 1)
+                pure $ Right $ Chat.Message Chat.Assistant "Recorded evidence." Chat.defaultMessageData
             ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
             ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
           transport = withHTTPResponses \opts endpoint ->
@@ -1027,9 +1035,10 @@ spec = around withTestResources do
           map (\body -> decoded body >>= (^? key "Left" . key "tag" . _String)) [traversal, outOfRange, mutableRef] `shouldBe` map Just ["RunbookPathInvalid", "RunbookLineOutOfRange", "RunbookRevisionInvalid"]
           evidence `shouldSatisfy` not . any (T.isInfixOf "ghp_runbook_fixture")
         _ -> fail "Expected every runbook evidence round to complete"
-      mappingId <- runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \case
-        [mapping] -> pure mapping.id
-        _ -> fail "Expected one linked repository mapping"
+      mappingId <-
+        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \case
+          [mapping] -> pure mapping.id
+          _ -> fail "Expected one linked repository mapping"
       writeIORef listing ["docs/runbooks/service-" <> show n <> ".md" | n <- [1 .. 21 :: Int]]
       (_, capped) <- runTestBgRecordingHTTP frozenTime tr $ transport $ CodeContext.listRunbooks cfg testPid (CodeContext.RunbookQuery mappingId revision)
       rightToMaybe (fmap (\page -> (length page.entries, page.limitReached)) capped) `shouldBe` Just (20, True)
@@ -1047,8 +1056,11 @@ spec = around withTestResources do
       otherPid <- createTestProject tr "Other agent tools project"
       ownIssue <- seedIssue tr (issueSeed Issues.RuntimeException "Checkout failure"){service = Just "checkout", environment = Just "production"}
       foreignIssue <- seedIssue tr (issueSeed Issues.RuntimeException "Foreign project failure"){pid = otherPid, service = Just "checkout", environment = Just "production"}
-      dbExec tr [sql|INSERT INTO apis.issues (project_id, issue_type, target_hash, title, service, environment, acknowledged_at, archived_at)
-        VALUES (?, 'runtime_exception', 'acked-open', 'Acked and open', 'checkout', 'production', now(), NULL), (?, 'runtime_exception', 'acked-archived', 'Acked then archived', 'checkout', 'production', now(), now())|] (testPid, testPid)
+      dbExec
+        tr
+        [sql|INSERT INTO apis.issues (project_id, issue_type, target_hash, title, service, environment, acknowledged_at, archived_at)
+        VALUES (?, 'runtime_exception', 'acked-open', 'Acked and open', 'checkout', 'production', now(), NULL), (?, 'runtime_exception', 'acked-archived', 'Acked then archived', 'checkout', 'production', now(), now())|]
+        (testPid, testPid)
       Incidents.Recorded ownIncident _ <- recordIncident tr testPid (Incidents.IssueIncident ownIssue) (Just ownIssue) frozenTime Incidents.IncidentAlert [] observedFailures
       void $ recordIncident tr otherPid (Incidents.IssueIncident foreignIssue) (Just foreignIssue) frozenTime Incidents.IncidentAlert [] observedFailures
       observed <- newIORef ([] :: [Text])
@@ -1065,8 +1077,15 @@ spec = around withTestResources do
     it "finds earlier related episodes with explicit match evidence and recorded outcomes inside the authorized project" \tr -> do
       setupSlackAgent tr testPid "T_RELATED"
       otherPid <- createTestProject tr "Unrelated history"
-      let createIssue pid service environment issueType = seedIssue tr (issueSeed issueType "")
-            {pid, service = Just service, environment = Just environment, hash = service <> environment <> show issueType <> pid.toText}
+      let createIssue pid service environment issueType =
+            seedIssue
+              tr
+              (issueSeed issueType "")
+                { pid
+                , service = Just service
+                , environment = Just environment
+                , hash = service <> environment <> show issueType <> pid.toText
+                }
           notification change = AE.object ["text" .= ("Observed checkout errors; cause unconfirmed: " <> show change :: Text)]
           record pid iid at change destinations = recordIncident tr pid (Incidents.IssueIncident iid) (Just iid) at change destinations (notification change)
           past pid iid seconds duration change = do
@@ -1138,14 +1157,15 @@ spec = around withTestResources do
         toBaseServantResponse tr (Incidents.slackInvestigationContext pid team channel thread) >>= (`shouldSatisfy` isNothing)
       observed <- newIORef []
       let provider = interpose @ELLM.LLM \_ -> \case
-            ELLM.CallAgenticChat history _ _ -> do
-              let toolMessages = filter ((== Chat.Tool) . Chat.role) $ toList history
-              modifyIORef' observed (<> [toList history])
-              pure
-                $ Right
-                $ if null toolMessages
-                  then Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "incident-context" "function" (Chat.ToolFunction "get_incident_context" $ one ("project_id", AE.toJSON otherPid))]}
-                  else Chat.Message Chat.Assistant "The alert records 84 s. Deployment evidence is unavailable; the proposed cause remains unconfirmed." Chat.defaultMessageData
+            ELLM.CallAgenticChat history _ _ ->
+              fmap ELLM.unmetered <$> do
+                let toolMessages = filter ((== Chat.Tool) . Chat.role) $ toList history
+                modifyIORef' observed (<> [toList history])
+                pure
+                  $ Right
+                  $ if null toolMessages
+                    then Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "incident-context" "function" (Chat.ToolFunction "get_incident_context" $ one ("project_id", AE.toJSON otherPid))]}
+                    else Chat.Message Chat.Assistant "The alert records 84 s. Deployment evidence is unavailable; the proposed cause remains unconfirmed." Chat.defaultMessageData
             ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
             ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
       receipt <- receiveSlackEvent tr $ threadEvent "T_INCIDENT" "CINCIDENT" "Could tonight's deployment explain this?" "1735689602.000001" "1735689600.000001"
@@ -1230,9 +1250,10 @@ spec = around withTestResources do
           firstPage = page (take 2 historyMessages) "page2"
           lastPage = page (drop 2 historyMessages) ""
           provider = interpose @ELLM.LLM \_ -> \case
-            ELLM.CallAgenticChat history _ _ -> do
-              modifyIORef' observed (<> [map (\message -> (Chat.role message, Chat.content message)) $ toList history])
-              pure $ Right $ Chat.Message Chat.Assistant answer Chat.defaultMessageData
+            ELLM.CallAgenticChat history _ _ ->
+              fmap ELLM.unmetered <$> do
+                modifyIORef' observed (<> [map (\message -> (Chat.role message, Chat.content message)) $ toList history])
+                pure $ Right $ Chat.Message Chat.Assistant answer Chat.defaultMessageData
             ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
             ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
           transport secondPage = withHTTPResponses \opts url -> case url of
@@ -1255,7 +1276,7 @@ spec = around withTestResources do
               tr
               [sql|UPDATE projects.project_members SET active = FALSE WHERE project_id = ?|]
               (PGS.Only testPid)
-          failures = [pure $ AE.object ["ok" AE..= False], pure firstPage, pure $ AE.object ["ok" AE..= True, "messages" AE..= ([] :: [AE.Value]), "has_more" AE..= True], revoke $> lastPage]
+          failures = [pure $ AE.object ["ok" AE..= False], pure firstPage, pure $ AE.object ["ok" AE..= True, "messages" AE..= ([] :: [AE.Value]), "has_more" AE..= True], revoke $> lastPage] :: [IO AE.Value]
       (rejectedRequests, rejected) <-
         runTestBgRecordingHTTP frozenTime resources
           $ withHTTPResponses (\_ url -> pure $ Just $ if url == "https://slack.com/api/conversations.members" then "{\"ok\":true,\"members\":[\"U0123ABCDEF\"]}" else "{\"ok\":false,\"error\":\"missing_scope\"}")
@@ -1327,8 +1348,11 @@ spec = around withTestResources do
           steer ts = event ts & key "event" . key "text" . _String .~ "Check tonight's deployment"
           provider = agent \history _ -> do
             modifyIORef' histories (<> [map Chat.content $ toList history])
-            when (any (T.isInfixOf "Check tonight's deployment" . Chat.content) history) $
-              whenM (atomicModifyIORef' interruptSteering (False,)) $ liftIO $ throwIO $ ErrorCall "Interrupted after accepting the follow-up"
+            when (any (T.isInfixOf "Check tonight's deployment" . Chat.content) history)
+              $ whenM (atomicModifyIORef' interruptSteering (False,))
+              $ liftIO
+              $ throwIO
+              $ ErrorCall "Interrupted after accepting the follow-up"
             whenM (atomicModifyIORef' pause (False,)) $ liftIO $ putMVar entered () >> takeMVar release
             pure $ said "Investigation evidence"
           work = processWith tr Nothing (slackOk . provider)
@@ -1396,7 +1420,7 @@ spec = around withTestResources do
               _ -> pure False
             pure $ Just $ if reject then "{\"ok\":false,\"error\":\"ratelimited\"}" else "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\",\"members\":[\"U0123ABCDEF\"]}"
           provider = interpose @ELLM.LLM \_ -> \case
-            ELLM.CallAgenticChat{} -> liftIO $ bracket_ (putMVar entered ()) (writeIORef interrupted True) (takeMVar blocked)
+            ELLM.CallAgenticChat{} -> fmap ELLM.unmetered <$> liftIO (bracket_ (putMVar entered ()) (writeIORef interrupted True) (takeMVar blocked))
             ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
             ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
           stopped ts = toBaseServantResponse tr $ Slack.slackInvestigationStopped testPid "T_STOP" "CSTOP" "1735689600.000001" ts
@@ -1522,7 +1546,8 @@ spec = around withTestResources do
     it "plumbing: answers parse leniently and widget image URLs are signed and bounded" \tr -> do
       let parse response toolCalls = (\p -> (isJust p.explanation, length p.widgets, length (fromMaybe [] p.toolCalls))) <$> AI.parseAgenticResponse AI.AgenticChatResult{AI.response = response, AI.toolCalls = toolCalls}
           runQuery = AI.ToolCallInfo{AI.name = "run_query", AI.args = mempty, AI.resultPreview = "10 rows", AI.rawData = Nothing}
-      map (uncurry parse)
+      map
+        (uncurry parse)
         [ ("""{"explanation": "Here are the errors", "widgets": [{"type": "timeseries", "query": "level == ERROR", "title": "Error Trend"}], "suggested_query": "level == ERROR"}""", [])
         , ("""{"explanation": "Your error rate is 5%", "widgets": []}""", [])
         , ("""{"explanation": "done"}""", [runQuery])
@@ -1563,14 +1588,17 @@ spec = around withTestResources do
       doc `shouldContainAll` ["All good.", "Latency recovered."]
       thread `shouldContainAll` ["First run result", "Second run result"]
       (T.isInfixOf "acme/api #7" threads, T.isInfixOf "acme/api #7" thread) `shouldBe` (False, False)
-      goldenParts "ai-conversation-pages" $ concat (
-        [ elementsWith ["href=\"/p/" <> pidText <> "/ai/routines\"", "href=\"/p/" <> pidText <> "/ai\""] threads
-        , tagsWith ["id=\"ai-composer-modal\"", "data-header-actions"] threads
-        , tagsWith ["data-header-actions"] routines
-        , tagsWith ["id=\"nav-view-ai\"", "data-header-actions", "href=\"/p/" <> pidText <> "/ai/" <> convId.toText <> "?doc=checkout-review\""] thread
-        , tagsWith ["/issues/" <> issueId.toText] issueThread
-        , elementsWith ["id=\"ai-document-" <> convId.toText <> "-followup\"", "href=\"#ai-document-" <> convId.toText <> "-followup\""] doc
-        ] :: [[Text]])
+      goldenParts "ai-conversation-pages"
+        $ concat
+          ( [ elementsWith ["href=\"/p/" <> pidText <> "/ai/routines\"", "href=\"/p/" <> pidText <> "/ai\""] threads
+            , tagsWith ["id=\"ai-composer-modal\"", "data-header-actions"] threads
+            , tagsWith ["data-header-actions"] routines
+            , tagsWith ["id=\"nav-view-ai\"", "data-header-actions", "href=\"/p/" <> pidText <> "/ai/" <> convId.toText <> "?doc=checkout-review\""] thread
+            , tagsWith ["/issues/" <> issueId.toText] issueThread
+            , elementsWith ["id=\"ai-document-" <> convId.toText <> "-followup\"", "href=\"#ai-document-" <> convId.toText <> "-followup\""] doc
+            ]
+              :: [[Text]]
+          )
 
     it "routines: a titled thread schedules, pauses, resumes and deletes; templates install at local time and reschedule as intervals" \tr -> do
       let interval = fromRightShow $ Issues.mkRoutineInterval 15
@@ -1979,9 +2007,10 @@ spec = around withTestResources do
               readIORef calls `shouldReturn` []
         denied initial
         recovered <- case origin of
-          "interactive" -> runTestBg frozenTime tr $ Issues.startInteractiveRun Nothing testPid (conversation n) (uid tr) initial.id "Retain the original role" Issues.Autonomous Issues.WebConversation >>= \case
-            Issues.AcceptedRequest{} -> AI.requireRunContext testPid $ Issues.InteractiveClaim (uid tr) (conversation n) initial.id
-            _ -> liftIO $ fail "Expected replay admission"
+          "interactive" ->
+            runTestBg frozenTime tr $ Issues.startInteractiveRun Nothing testPid (conversation n) (uid tr) initial.id "Retain the original role" Issues.Autonomous Issues.WebConversation >>= \case
+              Issues.AcceptedRequest{} -> AI.requireRunContext testPid $ Issues.InteractiveClaim (uid tr) (conversation n) initial.id
+              _ -> liftIO $ fail "Expected replay admission"
           "scheduled" -> runQueryEffect tr (Hasql.interpOne @Issues.ScheduledRoutine [HI.sql|UPDATE apis.ai_routines SET running_since = now() - interval '31 minutes' WHERE project_id = #{testPid} AND conversation_id = #{conversation n} RETURNING id, next_run_at|]) >>= maybe (fail "Expected scheduled lease") (claimSlot $ conversation n)
           _ -> runQueryEffect tr (void $ Issues.completeRun initial $ Issues.FailedResult $ Issues.RunFailure "Interrupted before privilege upgrade" Issues.RunOnly) >> eventRun (conversation n) Issues.ContinueRun "Retain the original role"
         denied recovered
@@ -2115,16 +2144,23 @@ spec = around withTestResources do
             title = "Durable action " <> show n
             administrative = operation == "delete_dashboard"
             mutation = fn operation $ if administrative then [("dashboard_id", AE.toJSON dashboard)] else [("body", AE.object ["title" .= title])]
-            backend = Routes.mcpProjectTools{AI.invoke = \principal pid name args -> do
-                                                liftIO $ modifyIORef' calls (+ 1)
-                                                result <- AI.invoke Routes.mcpProjectTools principal pid name args
-                                                when (boundary == "uncertain") $ whenM (atomicModifyIORef' interrupt (False,)) $ liftIO $ throwIO $ ErrorCall "Worker interrupted after dashboard mutation"
-                                                pure result}
+            backend =
+              Routes.mcpProjectTools
+                { AI.invoke = \principal pid name args -> do
+                    liftIO $ modifyIORef' calls (+ 1)
+                    result <- AI.invoke Routes.mcpProjectTools principal pid name args
+                    when (boundary == "uncertain") $ whenM (atomicModifyIORef' interrupt (False,)) $ liftIO $ throwIO $ ErrorCall "Worker interrupted after dashboard mutation"
+                    pure result
+                }
             model :: Stub
-            model = agent (\h _ -> pure $ case toolResults h of
-              [] -> Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall i "function" mutation | i <- "create" : ["duplicate" | boundary == "repeat"]]}
-              [_] | boundary == "uncertain" -> Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "try-again" "function" mutation]}
-              _ -> said "The dashboard operation completed.") . titled "Durable dashboard request"
+            model =
+              agent
+                ( \h _ -> pure $ case toolResults h of
+                    [] -> Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall i "function" mutation | i <- "create" : ["duplicate" | boundary == "repeat"]]}
+                    [_] | boundary == "uncertain" -> Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "try-again" "function" mutation]}
+                    _ -> said "The dashboard operation completed."
+                )
+                . titled "Durable dashboard request"
             execute = queued backend model (form "Apply+a+durable+dashboard+operation" request "") request
             expected = if administrative then 0 else 1
             firstAttempt = execute >>= (`shouldSatisfy` if boundary == "repeat" then isRight else isLeft)
@@ -2385,12 +2421,12 @@ spec = around withTestResources do
       renderT <$> call tr (AIThreads.threadGetH testPid (conversation 1) Nothing Nothing) >>= (`shouldContainAll` ["value=\"review\" selected=\"selected\""])
       for_
         ( [ ("policy=review&reviewClass=project_changes&reviewApprover=editors", reviewChanges)
-        , ("policy=review&reviewClass=knowledge_changes&reviewClass=external_posts&reviewClass=administrative_changes&reviewApprover=administrators", Issues.ReviewSelected $ Catalog.ReviewSelection (Catalog.KnowledgeChanges :| [Catalog.ExternalPosts, Catalog.AdministrativeChanges]) Catalog.ReviewAdministrators)
-        , ("policy=observe&reviewClass=project_changes&reviewApprover=editors", Issues.Observe)
-        , ("policy=autonomous", Issues.Autonomous)
-        , ("policy=review&reviewApprover=editors", Issues.Autonomous)
+          , ("policy=review&reviewClass=knowledge_changes&reviewClass=external_posts&reviewClass=administrative_changes&reviewApprover=administrators", Issues.ReviewSelected $ Catalog.ReviewSelection (Catalog.KnowledgeChanges :| [Catalog.ExternalPosts, Catalog.AdministrativeChanges]) Catalog.ReviewAdministrators)
+          , ("policy=observe&reviewClass=project_changes&reviewApprover=editors", Issues.Observe)
+          , ("policy=autonomous", Issues.Autonomous)
+          , ("policy=review&reviewApprover=editors", Issues.Autonomous)
           ]
-          :: [(LByteString, Issues.ExecutionPolicy)]
+            :: [(LByteString, Issues.ExecutionPolicy)]
         )
         \(body, expected) -> setPolicy (conversation 1) (fromRightShow $ urlDecodeAsForm body) >> (stored (conversation 1) `shouldReturn` Just expected)
       invalid <- scheduledInvocation tr (conversation 2) Issues.Autonomous >>= contextOf
@@ -2447,10 +2483,11 @@ spec = around withTestResources do
               pure $ Right $ Investigations.ToolResult (either show (const "Finding saved.") result) Nothing
             execute = executeWith $ Just review
         when (scenario == ExpiredProposal) $ advanceTestTime tr 60
-        identifier <- execute >>= \case
-          Investigations.WaitingResult identifier request -> (request `shouldBe` review) $> identifier
-          Investigations.RefusedResult{} | scenario == ExpiredProposal -> operationsOf tr context.id >>= \case [entry] -> pure entry.id; _ -> fail "Expected one expired proposal"
-          _ -> fail "Expected a retained waiting operation"
+        identifier <-
+          execute >>= \case
+            Investigations.WaitingResult identifier request -> (request `shouldBe` review) $> identifier
+            Investigations.RefusedResult{} | scenario == ExpiredProposal -> operationsOf tr context.id >>= \case [entry] -> pure entry.id; _ -> fail "Expected one expired proposal"
+            _ -> fail "Expected a retained waiting operation"
         artifacts >>= (`shouldSatisfy` null)
         for_ [Nothing, Just review{Investigations.expiresAt = addUTCTime 3600 frozenTime}, Just review{Investigations.approver = Investigations.ReviewEditors}] \requested ->
           runQueryEffect tr (Investigations.beginOperation (pure $ Right ()) lease cursor proposal requested) >>= \case
@@ -2468,10 +2505,11 @@ spec = around withTestResources do
         decision <-
           if scenario /= ConcurrentDecisions
             then runTestBgNoReset tr decide
-            else runTestBgNoReset tr (EffAsync.concurrently decide decide) >>= \case
-              (Investigations.ReviewSaved receipt, Investigations.ReviewAlreadyDecided other) -> (receipt `shouldBe` other) $> Investigations.ReviewSaved receipt
-              (Investigations.ReviewAlreadyDecided other, Investigations.ReviewSaved receipt) -> (receipt `shouldBe` other) $> Investigations.ReviewSaved receipt
-              _ -> fail "Concurrent decisions must retain one review receipt"
+            else
+              runTestBgNoReset tr (EffAsync.concurrently decide decide) >>= \case
+                (Investigations.ReviewSaved receipt, Investigations.ReviewAlreadyDecided other) -> (receipt `shouldBe` other) $> Investigations.ReviewSaved receipt
+                (Investigations.ReviewAlreadyDecided other, Investigations.ReviewSaved receipt) -> (receipt `shouldBe` other) $> Investigations.ReviewSaved receipt
+                _ -> fail "Concurrent decisions must retain one review receipt"
         case decision of
           _ | scenario == ExpireBeforeReview -> decision `shouldBe` Investigations.ReviewExpired
           _ | scenario `elem` [RevokeReviewer, AdministratorRequired, PrivateReview, ExpiredProposal] -> decision `shouldBe` Investigations.ReviewUnavailable
@@ -2488,10 +2526,11 @@ spec = around withTestResources do
         for_ outcomes \case
           Investigations.RefusedResult retainedId reason -> do
             retainedId `shouldBe` identifier
-            reason `shouldBe` if
-              | scenario == DeclineReview -> Investigations.ReviewDeclined
-              | scenario `elem` [RevokeApprovedReviewer, RaisedApproverRequirement] -> Investigations.ReviewAuthorityWithdrawn
-              | otherwise -> Investigations.ReviewTimedOut
+            reason
+              `shouldBe` if
+                | scenario == DeclineReview -> Investigations.ReviewDeclined
+                | scenario `elem` [RevokeApprovedReviewer, RaisedApproverRequirement] -> Investigations.ReviewAuthorityWithdrawn
+                | otherwise -> Investigations.ReviewTimedOut
             scenario `shouldSatisfy` (`elem` [DeclineReview, ExpireBeforeReview, ExpireAfterReview, ExpiredProposal, RevokeApprovedReviewer, RaisedApproverRequirement])
           Investigations.WaitingResult retainedId request -> (retainedId, request) `shouldBe` (identifier, review)
           Investigations.RecordedResult{} -> scenario `shouldSatisfy` (`elem` [ApproveReview, ConcurrentDecisions])
@@ -2555,10 +2594,11 @@ spec = around withTestResources do
         fmap (.status) <$> runQueryEffect tr (Issues.getRoutineRun testPid context.id) `shouldReturn` Just Issues.RunCancelled
         [closed] <- operationsOf tr context.id
         (AE.toJSON closed.proposal, closed.review, outcomeLabel closed) `shouldBe` (AE.toJSON before.proposal, before.review, if progress == ActionStarted then "OperationUnknown" else "Refused ReviewRequestEnded")
-        runTestBgNoReset tr (Investigations.decideOperationReview testPid (uid tr) identifier Investigations.ReviewApproved) >>= \response -> (response, before.review) `shouldSatisfy` \case
-          (Investigations.ReviewUnavailable, Investigations.ReviewPending{}) -> True
-          (Investigations.ReviewAlreadyDecided receipt, Investigations.ReviewResolved _ original) -> receipt == original
-          _ -> False
+        runTestBgNoReset tr (Investigations.decideOperationReview testPid (uid tr) identifier Investigations.ReviewApproved) >>= \response ->
+          (response, before.review) `shouldSatisfy` \case
+            (Investigations.ReviewUnavailable, Investigations.ReviewPending{}) -> True
+            (Investigations.ReviewAlreadyDecided receipt, Investigations.ReviewResolved _ original) -> receipt == original
+            _ -> False
         void $ call tr $ AIThreads.routineResumePostH testPid installation False
         runQueryEffect tr (Issues.routineRunActive testPid context.id) `shouldReturn` False
         runTestBgNoReset tr (chat (tooled $ durable tr context.conversationId $ AI.DurableRun context) "Create a dashboard") `shouldThrow` (isJust . fromException @AI.AgentStopped)
@@ -2700,9 +2740,10 @@ spec = around withTestResources do
             proposal = Investigations.OperationProposal (Catalog.NativeCall native) $ AI.OperationPolicy Catalog.ProjectWrite Issues.Autonomous PM.PAdmin
             reason = if scenario == DeclineReview then Investigations.ReviewDeclined else Investigations.ReviewTimedOut
         (cursor, _) <- runQueryEffect tr $ Investigations.prepareNativeOperation turn native
-        identifier <- runQueryEffect tr (Investigations.beginOperation (pure $ Right ()) (Investigations.RunLease turn context.startedAt) cursor proposal $ Just $ Investigations.ReviewRequest (addUTCTime 60 frozenTime) Investigations.ReviewEditors) >>= \case
-          Investigations.AwaitOperationReview identifier _ -> pure identifier
-          _ -> fail "Expected the native action to wait"
+        identifier <-
+          runQueryEffect tr (Investigations.beginOperation (pure $ Right ()) (Investigations.RunLease turn context.startedAt) cursor proposal $ Just $ Investigations.ReviewRequest (addUTCTime 60 frozenTime) Investigations.ReviewEditors) >>= \case
+            Investigations.AwaitOperationReview identifier _ -> pure identifier
+            _ -> fail "Expected the native action to wait"
         runTestBgNoReset tr (Investigations.decideOperationReview testPid context.requestedBy identifier $ decisionOf scenario) >>= (`shouldSatisfy` \case Investigations.ReviewSaved{} -> True; _ -> False)
         when (scenario == ExpireAfterReview) $ advanceTestTime tr 60
         replicateM_ 2 $ runTestBgNoReset tr (AI.executeNativeOperation context native \_ -> AI.AtomicOperation $ Issues.updateIssueEnhancement frozenTime issueId "Reviewed title" "" "" $> Right AE.Null) `shouldReturn` if scenario == ApproveReview then Right AE.Null else Left (Investigations.reviewRefusalMessage reason)
@@ -2820,10 +2861,11 @@ spec = around withTestResources do
                 void $ stop "U_UNKNOWN" "ReviewStopUnknown"
                 ready `shouldReturn` False
                 (.status) <$> eventRun receipt `shouldReturn` Issues.RunRunning
-                throwsMentioning "reject_stop_wake" $ bracket_
-                  (dbExec tr [sql|ALTER TABLE background_jobs ADD CONSTRAINT reject_stop_wake CHECK (payload <> ? OR run_at > ?) NOT VALID|] (Aeson $ AE.toJSON $ Jobs.ProcessSlackEvent receipt, addUTCTime 1 now))
-                  (dbExec tr [sql|ALTER TABLE background_jobs DROP CONSTRAINT reject_stop_wake|] ())
-                  (stop "U0123ABCDEF" "ReviewStopAccepted")
+                throwsMentioning "reject_stop_wake"
+                  $ bracket_
+                    (dbExec tr [sql|ALTER TABLE background_jobs ADD CONSTRAINT reject_stop_wake CHECK (payload <> ? OR run_at > ?) NOT VALID|] (Aeson $ AE.toJSON $ Jobs.ProcessSlackEvent receipt, addUTCTime 1 now))
+                    (dbExec tr [sql|ALTER TABLE background_jobs DROP CONSTRAINT reject_stop_wake|] ())
+                    (stop "U0123ABCDEF" "ReviewStopAccepted")
                 (.status) <$> eventRun receipt `shouldReturn` Issues.RunCancelled
                 runQueryEffect tr (Slack.slackInvestigationStopped testPid "T_REVIEW" "CREVIEW" "1735689600.000001" "1735689602.000001") `shouldReturn` True
                 runTestBgNoReset tr (Investigations.decideOperationReview testPid routine.requestedBy operation.id Investigations.ReviewApproved) `shouldReturn` Investigations.ReviewUnavailable
@@ -2981,7 +3023,7 @@ spec = around withTestResources do
       titleStatuses <- newIORef ([] :: [Maybe Issues.RoutineRunStatus])
       let model :: Stub
           model = interpose @ELLM.LLM \_ -> \case
-            ELLM.CallAgenticChat{} -> modifyIORef' calls (+ 1) $> said "Queued execution completed."
+            ELLM.CallAgenticChat{} -> modifyIORef' calls (+ 1) $> fmap ELLM.unmetered (said "Queued execution completed.")
             ELLM.CallLLM{} -> do
               current <- liftIO $ runQueryEffect tr $ Issues.getRoutineRun testPid (request 1)
               modifyIORef' titleStatuses (<> [(.status) <$> current])
@@ -3010,11 +3052,15 @@ spec = around withTestResources do
       issue <- newIssue tr "queued-issue" "Queued issue evidence"
       issueCalls <- newIORef (0 :: Int)
       let issueModel :: Stub
-          issueModel = agent (\h _ -> do
-            modifyIORef' issueCalls (+ 1)
-            let context = unlines [m.content | m <- toList h, m.role == Chat.System]
-            liftIO $ (T.isInfixOf "Queued issue evidence" context, T.count "You are Monoscope's issue-investigation assistant" context) `shouldBe` (True, 1)
-            pure $ said "The issue context was retained.") . titled "Queued issue"
+          issueModel =
+            agent
+              ( \h _ -> do
+                  modifyIORef' issueCalls (+ 1)
+                  let context = unlines [m.content | m <- toList h, m.role == Chat.System]
+                  liftIO $ (T.isInfixOf "Queued issue evidence" context, T.count "You are Monoscope's issue-investigation assistant" context) `shouldBe` (True, 1)
+                  pure $ said "The issue context was retained."
+              )
+              . titled "Queued issue"
       response <- runAuthHandler tr $ issueModel $ IssuePage.aiChatPostHWithTools (Just Routes.mcpProjectTools) testPid issue $ formOf $ "query=Explain+this+issue&requestId=" <> (request 6).toText
       renderT (getResponse response) `shouldContainAll` ["hx-select=\"#issue-ai-results\""]
       readIORef issueCalls `shouldReturn` 0
@@ -3047,10 +3093,13 @@ spec = around withTestResources do
             existing = if isIssue then UUIDId issueId.unUUIDId else conversation n
             request = UUIDId $ UUID.fromWords 0 0 92 n
             form = formOf @AIThreads.AIChatForm $ "query=Inspect+the+project&requestId=" <> request.toText <> if origin == "routine" then "&mode=routine&intervalMinutes=15" else "&mode=chat"
-            backend = Routes.mcpProjectTools{AI.invoke = \principal pid name args -> do
-                                                modifyIORef' calls (<> [name])
-                                                when (name == "get_schema") $ whenM (atomicModifyIORef' interrupt (False,)) $ liftIO $ throwIO $ ErrorCall "Worker interrupted after a completed web read"
-                                                AI.invoke Routes.mcpProjectTools principal pid name args}
+            backend =
+              Routes.mcpProjectTools
+                { AI.invoke = \principal pid name args -> do
+                    modifyIORef' calls (<> [name])
+                    when (name == "get_schema") $ whenM (atomicModifyIORef' interrupt (False,)) $ liftIO $ throwIO $ ErrorCall "Worker interrupted after a completed web read"
+                    AI.invoke Routes.mcpProjectTools principal pid name args
+                }
             model :: Stub
             model = agent \h _ -> do
               when isIssue $ liftIO $ unlines [m.content | m <- toList h, m.role == Chat.System] `shouldSatisfy` T.isInfixOf "Checkout checkpoint context"
@@ -3135,10 +3184,13 @@ spec = around withTestResources do
               -- The run keeps the Observe policy it started under.
               when (origin == "event") $ runTestBg frozenTime tr (AI.executeToolCall (tooled $ durable tr conv invocation) $ Chat.ToolCall "legacy-event-write" "function" $ newDashboard "Must remain Observe") >>= (`shouldSatisfy` T.isInfixOf "execution policy" . (.formatted))
               pure (execution.id, invocation)
-        let backend = Routes.mcpProjectTools{AI.invoke = \principal pid name args -> do
-                                              modifyIORef' calls (<> [name])
-                                              when (name == "get_schema") $ whenM (atomicModifyIORef' interrupt (False,)) $ liftIO $ throwIO $ ErrorCall "Worker interrupted after the completed project read"
-                                              AI.invoke Routes.mcpProjectTools principal pid name args}
+        let backend =
+              Routes.mcpProjectTools
+                { AI.invoke = \principal pid name args -> do
+                    modifyIORef' calls (<> [name])
+                    when (name == "get_schema") $ whenM (atomicModifyIORef' interrupt (False,)) $ liftIO $ throwIO $ ErrorCall "Worker interrupted after the completed project read"
+                    AI.invoke Routes.mcpProjectTools principal pid name args
+                }
             firstRead = if artifact then fn "save_artifact" [("key", "event-evidence"), ("mode", "append"), ("content", "Retained finding")] else fn "get_project" []
             model = agent \h request -> do
               liftIO $ viaNonEmpty last [m.content | m <- toList h, m.role == Chat.User] `shouldBe` Just "Inspect the project"
@@ -3270,7 +3322,7 @@ spec = around withTestResources do
             model = agent \h _ -> modifyIORef' replyCalls (+ 1) $> nextStep (toolResults h) [newDashboard title] "Created a latency dashboard."
             members act = withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true,\"members\":[\"U0123ABCDEF\",\"U123OTHER\"]}") act
             ownerOnly act = withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true,\"members\":[\"U0123ABCDEF\"]}") act
-            transport :: (HTTP.HTTP :> es, Eff.IOE :> es) => Eff es a -> Eff es a
+            transport :: (Eff.IOE :> es, HTTP.HTTP :> es) => Eff es a -> Eff es a
             transport =
               withHTTPResponses
                 ( \options url -> case url of
@@ -3428,9 +3480,12 @@ spec = around withTestResources do
       let downgradeOnTitle = interpose @ELLM.LLM \_ -> \case
             ELLM.CallLLM{} -> Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{uid tr}|] $> Right "Private title"
             request -> send @ELLM.LLM $ coerce request
-      tryAny (runTestBg frozenTime tr $ agent (\h _ -> pure $ nextStep (toolResults h) [fn "list_api_keys" []] "Private credential findings") $ downgradeOnTitle do
-        answer <- chat (webConfig (conv 9) titleRun) "Inspect project credentials" >>= either (liftIO . fail . toString) pure
-        AI.completeAgenticResponse (webConfig (conv 9) titleRun) "Inspect project credentials" "model" "key" answer) >>= (`shouldSatisfy` denied)
+      tryAny
+        ( runTestBg frozenTime tr $ agent (\h _ -> pure $ nextStep (toolResults h) [fn "list_api_keys" []] "Private credential findings") $ downgradeOnTitle do
+            answer <- chat (webConfig (conv 9) titleRun) "Inspect project credentials" >>= either (liftIO . fail . toString) pure
+            AI.completeAgenticResponse (webConfig (conv 9) titleRun) "Inspect project credentials" "model" "key" answer
+        )
+        >>= (`shouldSatisfy` denied)
       setRole tr testPid PM.PAdmin
       -- A role change during inference cancels the request without publishing or touching another conversation.
       inflight <- interactiveInvocation tr testPid (conv 3) "Inspect restricted evidence" Issues.Observe
@@ -3585,9 +3640,10 @@ spec = around withTestResources do
           status handler = runAuthHandler tr $ statusOf handler
           policyFor run conv = runQueryEffect tr $ Issues.routineRunPolicyFor testPid run (uid tr) conv
           template name = maybe (fail $ "Missing template " <> toString name) pure $ Issues.routineTemplate name
-          completeNoFindings slot context = runTestBg slot.scheduledAt tr (Issues.completeRun context $ Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer $ AI.prepareRunAnswer Nothing $ AI.AgenticChatResult "No findings" []) >>= \case
-            Issues.RunCompleted Issues.CompletedNoFindings (Just next) -> pure next
-            _ -> fail "Expected a completed run and the next schedule"
+          completeNoFindings slot context =
+            runTestBg slot.scheduledAt tr (Issues.completeRun context $ Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer $ AI.prepareRunAnswer Nothing $ AI.AgenticChatResult "No findings" []) >>= \case
+              Issues.RunCompleted Issues.CompletedNoFindings (Just next) -> pure next
+              _ -> fail "Expected a completed run and the next schedule"
       -- An installed event routine is listed and editable but keeps its event schedule; a reader only inspects it.
       void $ call tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "slack-investigation")
       slackRoutine <- runQueryEffect tr (Issues.listConversations testPid) >>= maybe (fail "Missing Slack routine") pure . find ((== Just "slack-investigation") . (.templateKey))
@@ -3659,11 +3715,17 @@ spec = around withTestResources do
       weekly <- template "weekly-report"
       let clock day hour minute = UTCTime day (fromIntegral $ hour * 3600 + minute * 60)
       for_ ([(clock (fromGregorian 2026 10 26) 13 0, clock (fromGregorian 2026 11 2) 14 0, 1, 9, 0), (clock (fromGregorian 2026 3 1) 7 30, clock (fromGregorian 2026 3 15) 6 30, 7, 2, 30)] :: [(UTCTime, UTCTime, Int, Int, Int)]) \(now, expected, weekday, hour, minute) ->
-        runTestBg now tr (do
-          void $ Issues.getOrCreateConversation testPid (conversation 4) Issues.CTWeb (AE.object [])
-          void $ Issues.installRoutineTemplate (uid tr) testPid (conversation 4) "America/New_York" weekly
-          Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET schedule_weekday = #{weekday}, schedule_hour = #{hour}, schedule_minute = #{minute} WHERE project_id = #{testPid} AND conversation_id = #{conversation 4}|]
-          Issues.resumeRoutine Issues.ResumeSchedule (uid tr) testPid (conversation 4)) >>= (`shouldBe` Just expected) . fmap (.scheduledAt)
+        runTestBg
+          now
+          tr
+          ( do
+              void $ Issues.getOrCreateConversation testPid (conversation 4) Issues.CTWeb (AE.object [])
+              void $ Issues.installRoutineTemplate (uid tr) testPid (conversation 4) "America/New_York" weekly
+              Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET schedule_weekday = #{weekday}, schedule_hour = #{hour}, schedule_minute = #{minute} WHERE project_id = #{testPid} AND conversation_id = #{conversation 4}|]
+              Issues.resumeRoutine Issues.ResumeSchedule (uid tr) testPid (conversation 4)
+          )
+          >>= (`shouldBe` Just expected)
+          . fmap (.scheduledAt)
       -- A view role cannot change a routine's destination or policy, and its run loses its policy.
       setRole tr testPid PM.PView
       traverse (\d -> runAuthHandler tr (statusOf $ AIThreads.routineDestinationPostH testPid (conversation 1) $ AIThreads.RoutineDestinationForm d)) [Issues.DestinationConversation, Issues.DestinationSlack] `shouldReturn` [403, 403]
@@ -4043,10 +4105,12 @@ spec = around withTestResources do
           model activated = interpose @ELLM.LLM \_ -> \case
             ELLM.CallLLM _ prompt _ -> do
               liftIO $ (activated, T.isInfixOf "Prefer checkout evidence." prompt) `shouldBe` (True, True)
-              pure $ Right if
-                | "issue titler" `T.isInfixOf` prompt -> "Checkout latency exceeds its threshold"
-                | "issue describer" `T.isInfixOf` prompt -> "Checkout latency is twice the threshold.\nCompare the checkout traces.\nlow"
-                | otherwise -> "critical\n0\n0"
+              pure
+                $ Right
+                  if
+                    | "issue titler" `T.isInfixOf` prompt -> "Checkout latency exceeds its threshold"
+                    | "issue describer" `T.isInfixOf` prompt -> "Checkout latency is twice the threshold.\nCompare the checkout traces.\nlow"
+                    | otherwise -> "critical\n0\n0"
             request -> send @ELLM.LLM $ coerce request
           runsNow = runQueryEffect tr $ Issues.listRoutineRuns testPid 12
       -- Unactivated automation spends no tokens and changes no metadata.
@@ -4068,10 +4132,12 @@ spec = around withTestResources do
           failing reply = interpose @ELLM.LLM \_ -> \case
             ELLM.CallLLM _ prompt _ -> pure $ reply prompt
             request -> send @ELLM.LLM $ coerce request
-          staged stage invalid prompt = Right if
-            | stage `T.isInfixOf` prompt -> invalid
-            | "issue describer" `T.isInfixOf` prompt -> "Observed latency.\nCompare traces.\nlow"
-            | otherwise -> "critical\n0\n0"
+          staged stage invalid prompt =
+            Right
+              if
+                | stage `T.isInfixOf` prompt -> invalid
+                | "issue describer" `T.isInfixOf` prompt -> "Observed latency.\nCompare traces.\nlow"
+                | otherwise -> "critical\n0\n0"
       for_ ([const (Left "Provider unavailable"), staged "issue describer" "Truncated description", staged "issue-severity" "ambiguous\n-1\n0"] :: [Text -> Either Text Text]) \reply ->
         tryAny (runTestBg frozenTime tr $ failing reply $ enrich retryIssue) >>= (`shouldSatisfy` isLeft)
       map (.status) <$> runsNow >>= (`shouldSatisfy` elem Issues.RunFailed)
@@ -4222,10 +4288,16 @@ spec = around withTestResources do
       save [("key", "log"), ("content", "rewritten")] >>= (`shouldSatisfy` T.isPrefixOf "Saved document 'log'")
       -- An issue follow-up reads the retained investigation document as the signed-in member.
       let issueConversation = conversation 2
-      (.formatted) <$> runTestBg frozenTime tr (do
-        void $ Issues.getOrCreateConversation testPid issueConversation Issues.CTAnomaly (AE.object [])
-        void $ Issues.saveArtifact testPid issueConversation (fromRightShow $ Issues.mkArtifactKey "issue-evidence") (Just "Investigation evidence") "Checkout recovered after the deployment." Issues.ArtifactReplace
-        AI.executeToolCall (AI.defaultAgenticConfig testPid){AI.access = member tr, AI.conversationId = Just issueConversation, AI.conversationType = Just Issues.CTAnomaly} $ toolCall "read_artifact" [("key", "issue-evidence")]) `shouldReturn` "Checkout recovered after the deployment."
+      (.formatted)
+        <$> runTestBg
+          frozenTime
+          tr
+          ( do
+              void $ Issues.getOrCreateConversation testPid issueConversation Issues.CTAnomaly (AE.object [])
+              void $ Issues.saveArtifact testPid issueConversation (fromRightShow $ Issues.mkArtifactKey "issue-evidence") (Just "Investigation evidence") "Checkout recovered after the deployment." Issues.ArtifactReplace
+              AI.executeToolCall (AI.defaultAgenticConfig testPid){AI.access = member tr, AI.conversationId = Just issueConversation, AI.conversationType = Just Issues.CTAnomaly} $ toolCall "read_artifact" [("key", "issue-evidence")]
+          )
+        `shouldReturn` "Checkout recovered after the deployment."
       -- A routine result keeps its run evidence when its conversation's document limit is reached.
       void $ call tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "slack-investigation")
       (routineConv, execution) <- runTestBg frozenTime tr do
@@ -4526,11 +4598,15 @@ spec = around withTestResources do
                 pure $ Just $ AE.encode case scenario of
                   ThreadCitationCredentialRejected -> AE.object ["ok" .= False, "error" .= ("invalid_auth" :: Text)]
                   ThreadCitationRejected -> AE.object ["ok" .= False, "error" .= ("message_not_found" :: Text)]
-                  _ -> AE.object ["ok" .= True, "permalink" .= case scenario of
-                    ThreadCitationWrongTarget -> "https://monoscope-test.slack.com/archives/G_OTHER/p1735689600000001"
-                    ThreadCitationWrongQuery -> source <> "&cid=G_OTHER"
-                    ThreadCitationUntrustedHost -> "https://example.invalid/archives/G123MCP/p1735689600000001"
-                    _ -> source]
+                  _ ->
+                    AE.object
+                      [ "ok" .= True
+                      , "permalink" .= case scenario of
+                          ThreadCitationWrongTarget -> "https://monoscope-test.slack.com/archives/G_OTHER/p1735689600000001"
+                          ThreadCitationWrongQuery -> source <> "&cid=G_OTHER"
+                          ThreadCitationUntrustedHost -> "https://example.invalid/archives/G123MCP/p1735689600000001"
+                          _ -> source
+                      ]
               _ -> pure Nothing
             statusFault :: ATBackgroundCtx a -> ATBackgroundCtx a
             statusFault = interpose @HTTP.HTTP \_ request -> case request of
@@ -4557,17 +4633,19 @@ spec = around withTestResources do
             model = agent \h _ -> pure $ case toolResults h of
               [] -> invoking [fn "search_project_tools" [("query", "slack search")]]
               results -> said if all (\r -> not (T.isInfixOf "slack_search_public" r || T.isInfixOf canary r)) results then "Slack unavailable without private diagnostics." else "Unsafe Slack catalog."
-            reply request = let response = slackMCPReply request tools AE.Null in case (request ^? key "method" . _String == Just "initialize", scenario) of
-              (True, WrongRpcIdentity) -> response & key "id" .~ AE.toJSON UUID.nil
-              (True, UnsupportedProtocol) -> response & key "result" . key "protocolVersion" .~ AE.String "2024-11-05"
-              (True, MissingToolsCapability) -> response & key "result" . key "capabilities" .~ AE.object []
-              (True, RpcFailureEnvelope) -> AE.object ["jsonrpc" .= ("2.0" :: Text), "id" .= (request ^? key "id"), "error" .= AE.object ["code" .= (-32603 :: Int), "message" .= canary]]
-              (True, OversizedEnvelope) -> response & key "result" . _Object . Lens.at "instructions" ?~ AE.String (T.replicate 1_048_577 "x")
-              (False, RepeatedPageCursor) -> response & key "result" . _Object . Lens.at "nextCursor" ?~ AE.String "again"
-              (False, DuplicateReadName) -> response & key "result" . key "tools" .~ AE.toJSON (tools <> tools)
-              (False, ChangedReadContract) -> response & key "result" . key "tools" . _Array . traverse . key "annotations" . key "readOnlyHint" .~ AE.Bool False
-              (False, InvalidInputSchema) -> slackMCPReply request (slackMCPTools $ AE.object ["type" .= ("string" :: Text)]) AE.Null
-              _ -> response
+            reply request =
+              let response = slackMCPReply request tools AE.Null
+               in case (request ^? key "method" . _String == Just "initialize", scenario) of
+                    (True, WrongRpcIdentity) -> response & key "id" .~ AE.toJSON UUID.nil
+                    (True, UnsupportedProtocol) -> response & key "result" . key "protocolVersion" .~ AE.String "2024-11-05"
+                    (True, MissingToolsCapability) -> response & key "result" . key "capabilities" .~ AE.object []
+                    (True, RpcFailureEnvelope) -> AE.object ["jsonrpc" .= ("2.0" :: Text), "id" .= (request ^? key "id"), "error" .= AE.object ["code" .= (-32603 :: Int), "message" .= canary]]
+                    (True, OversizedEnvelope) -> response & key "result" . _Object . Lens.at "instructions" ?~ AE.String (T.replicate 1_048_577 "x")
+                    (False, RepeatedPageCursor) -> response & key "result" . _Object . Lens.at "nextCursor" ?~ AE.String "again"
+                    (False, DuplicateReadName) -> response & key "result" . key "tools" .~ AE.toJSON (tools <> tools)
+                    (False, ChangedReadContract) -> response & key "result" . key "tools" . _Array . traverse . key "annotations" . key "readOnlyHint" .~ AE.Bool False
+                    (False, InvalidInputSchema) -> slackMCPReply request (slackMCPTools $ AE.object ["type" .= ("string" :: Text)]) AE.Null
+                    _ -> response
         (requests, answer) <- runTestBgRecordingHTTP frozenTime tr $ withSlackMCPResponses (\_ request -> pure $ reply request) $ model $ chat config "Discover Slack"
         (scenario, fmap (.response) answer, length requests, snd <$> viaNonEmpty last requests) `shouldBe` (scenario, Right "Slack unavailable without private diagnostics.", if scenario `elem` [DuplicateReadName, ChangedReadContract, InvalidInputSchema] then 4 else if scenario == RepeatedPageCursor then 5 else 2, Just "")
       -- An unavailable provider never blocks core work; only a rate limit cools further calls down.
@@ -4580,7 +4658,7 @@ spec = around withTestResources do
         when (status == status429) do
           pendingConfig <- slackConfig dm (investigationIn "D123MCP") "Resume Slack read"
           let pendingRead = interpose @ELLM.LLM \_ -> \case
-                ELLM.CallAgenticChat{} -> pure $ invoking [fn "slack_read_channel" []]
+                ELLM.CallAgenticChat{} -> pure $ ELLM.unmetered <$> invoking [fn "slack_read_channel" []]
                 request -> send @ELLM.LLM $ coerce request
           runTestBgRecordingHTTP frozenTime tr (limited $ model $ pendingRead $ tryAny $ chat pendingConfig "Resume Slack read") >>= (`shouldBe` (0, True)) . bimap length (either (isJust . fromException @Slack.SlackRateLimited) (const False))
         cleanup
@@ -4610,7 +4688,9 @@ spec = around withTestResources do
               ("Quote a broadcast", 1, "<\8203!channel> was mentioned in a log line, not by us", "<!channel> was mentioned in a log line, not by us", 0, 1)
             ]
               <> [ ("Show " <> shape <> bool " from a primary query: " " from a widget: " modern <> query, 1, expected, decodeUtf8 $ AE.encode $ if modern then AE.object ["widgets" .= ([AE.object ["type" .= shape, "query" .= query]] :: [AE.Value])] else AE.object ["query" .= query, "visualization" .= shape], 0, 1)
-                 | shape <- ["logs", "table", "top_list"], modern <- [False, True], (query, expected) <- [("name == \"qa-missing-event\"", "No data found"), ("summarize matches=count()", "matches\n0")]
+                 | shape <- ["logs", "table", "top_list"]
+                 , modern <- [False, True]
+                 , (query, expected) <- [("name == \"qa-missing-event\"", "No data found"), ("summarize matches=count()", "matches\n0")]
                  ]
               :: [(Text, Int, Text, Text, Int, Int)]
           blockTexts = toListOf (key "blocks" . _Array . traverse . key "text" . Lens.failing _String (key "text" . _String))
@@ -4822,10 +4902,11 @@ spec = around withTestResources do
             model :: ATBackgroundCtx a -> ATBackgroundCtx a
             model = interpose @ELLM.LLM \_ -> \case
               ELLM.CallLLM{} -> liftIO (modifyIORef' calls (+ 1) >> when (scenario == RacingTitle) rename) $> Right "\"Checkout retries\""
-              ELLM.CallAgenticChat{} -> do
-                title <- Issues.getConversation testPid conv
-                liftIO $ fmap (.title) title `shouldBe` Just expected
-                pure $ said "Checkout evidence retained."
+              ELLM.CallAgenticChat{} ->
+                fmap ELLM.unmetered <$> do
+                  title <- Issues.getConversation testPid conv
+                  liftIO $ fmap (.title) title `shouldBe` Just expected
+                  pure $ said "Checkout evidence retained."
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
         when (scenario == ExistingTitle) do
           principal <- runQueryEffect tr (Slack.resolveSlackPrincipal "T_TITLE" "U0123ABCDEF" $ Just testPid) >>= maybe (fail "Missing linked principal") pure
@@ -4878,9 +4959,10 @@ spec = around withTestResources do
             "https://slack.com/api/conversations.replies" | opts ^. Wreq.param "include_all_metadata" == ["true"] -> Just . AE.encode . (\messages -> AE.object ["ok" .= True, "messages" .= messages]) <$> readIORef history
             "https://slack.com/api/chat.postMessage" -> pure $ Just "{\"ok\":true,\"ts\":\"1735689611.000001\"}"
             _ -> pure $ Just slackOkBody
-          model = agent \_ _ -> atomicModifyIORef' modelCalls (\n -> (n + 1, n)) >>= \case
-            0 -> liftIO $ (timeout 10_000_000 (takeMVar sent) `shouldReturn` Just ()) >> throwIO (ErrorCall "Worker interrupted after Slack accepted stream start")
-            _ -> pure $ said "The investigation resumed."
+          model = agent \_ _ ->
+            atomicModifyIORef' modelCalls (\n -> (n + 1, n)) >>= \case
+              0 -> liftIO $ (timeout 10_000_000 (takeMVar sent) `shouldReturn` Just ()) >> throwIO (ErrorCall "Worker interrupted after Slack accepted stream start")
+              _ -> pure $ said "The investigation resumed."
           work = runTestBgRecordingHTTP frozenTime resources . transport . model . tryAny
       receipt <- receiveSlackEvent resources $ mention "T_STREAM" "CSTREAM" "Investigate checkout" "1735689602.000001"
       (requests, interrupted) <- work $ processSlackEvent receipt
@@ -4922,10 +5004,12 @@ spec = around withTestResources do
               when (endpoint == "https://slack.com/api/chat.stopStream") $ void $ tryPutMVar stopped ()
               pure $ Just slackOkBody
             answerAfterStop answer = (liftIO (timeout 10_000_000 $ takeMVar stopped) >>= writeIORef stoppedBeforeAnswer . isJust) $> said answer
-            model = agent \_ _ -> atomicModifyIORef' rounds (\n -> (n + 1, n)) >>= \roundNumber -> if
-              | not journal -> liftIO ((timeout 10_000_000 (takeMVar started) `shouldReturn` Just ()) >> advanceTime resources.trTestClock (9 * 60)) >> answerAfterStop "The investigation finished after the idle interval."
-              | roundNumber == 0 -> liftIO (timeout 10_000_000 (takeMVar started) `shouldReturn` Just ()) $> Right (Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall ("schema-" <> show n) "function" $ fn "get_schema" [] | n <- [0 .. 25 :: Int]]})
-              | otherwise -> answerAfterStop "The investigation continued beyond the journal window."
+            model = agent \_ _ ->
+              atomicModifyIORef' rounds (\n -> (n + 1, n)) >>= \roundNumber ->
+                if
+                  | not journal -> liftIO ((timeout 10_000_000 (takeMVar started) `shouldReturn` Just ()) >> advanceTime resources.trTestClock (9 * 60)) >> answerAfterStop "The investigation finished after the idle interval."
+                  | roundNumber == 0 -> liftIO (timeout 10_000_000 (takeMVar started) `shouldReturn` Just ()) $> Right (Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall ("schema-" <> show n) "function" $ fn "get_schema" [] | n <- [0 .. 25 :: Int]]})
+                  | otherwise -> answerAfterStop "The investigation continued beyond the journal window."
         receipt <- receiveSlackEvent resources $ mention "T_STREAM_PACE" channel "Investigate checkout" "1735689602.000001" & key "event_id" . _String .~ channel
         (requests, outcome) <- runTestBgRecordingHTTP frozenTime resources $ transport $ model $ tryAny $ processSlackEvent receipt
         outcome `shouldSatisfy` isRight
@@ -4952,10 +5036,15 @@ spec = around withTestResources do
         Just publication <- runQueryEffect resources $ Investigations.claimProgress target $ Just (frozenTime, previous)
         runQueryEffect resources (Investigations.commitStream publication.publicationId (Investigations.StreamPending $ Investigations.StartStream frozenTime previous) $ Investigations.StreamPending $ request (Investigations.StreamSession timestamp frozenTime) previous final) `shouldReturn` True
         runTestBg frozenTime resources $ for_ [Investigations.ModelStarted 0, Investigations.ModelReturned 0 $ Investigations.ModelAnswered $ Chat.Message Chat.Assistant "Done." Chat.defaultMessageData, Investigations.InvestigationFinished] $ Investigations.recordEvent $ Investigations.Scope (UUIDId UUID.nil) testPid target.userId target.teamId target.channelId target.threadTs target.messageTs
-        let refresh = runTestBgRecordingHTTP frozenTime resources $ withHTTPResponses (\_ endpoint -> pure $ Just case endpoint of
-              "https://slack.com/api/conversations.replies" -> AE.encode $ AE.object ["ok" .= True, "messages" .= ([plan publication previous "in_progress"] :: [AE.Value])]
-              "https://slack.com/api/chat.stopStream" -> AE.encode $ AE.object ["ok" .= True, "ts" .= timestamp]
-              _ -> "{\"ok\":true}") $ SlackPage.refreshSlackProgress publication.publicationId
+        let refresh =
+              runTestBgRecordingHTTP frozenTime resources
+                $ withHTTPResponses
+                  ( \_ endpoint -> pure $ Just case endpoint of
+                      "https://slack.com/api/conversations.replies" -> AE.encode $ AE.object ["ok" .= True, "messages" .= ([plan publication previous "in_progress"] :: [AE.Value])]
+                      "https://slack.com/api/chat.stopStream" -> AE.encode $ AE.object ["ok" .= True, "ts" .= timestamp]
+                      _ -> "{\"ok\":true}"
+                  )
+                $ SlackPage.refreshSlackProgress publication.publicationId
         (requests, _) <- refresh
         delivery target >>= \case
           Investigations.StreamDelivery (Investigations.StreamClosed actual) -> actual `shouldBe` timestamp
@@ -5031,9 +5120,10 @@ spec = around withTestResources do
                 pure $ Just $ AE.encode body
               "https://slack.com/api/chat.postMessage" -> modifyIORef' posts (+ 1) $> Just "{\"ok\":true,\"ts\":\"1735689611.000001\",\"members\":[\"U0123ABCDEF\"]}"
               _ -> pure $ Just slackOkBody
-            model = agent \_ _ -> atomicModifyIORef' modelCalls (\n -> (n + 1, n)) >>= \case
-              0 -> liftIO $ throwIO $ ErrorCall "Interrupted while adopting an unacknowledged legacy progress message"
-              _ -> pure $ said "The investigation resumed."
+            model = agent \_ _ ->
+              atomicModifyIORef' modelCalls (\n -> (n + 1, n)) >>= \case
+                0 -> liftIO $ throwIO $ ErrorCall "Interrupted while adopting an unacknowledged legacy progress message"
+                _ -> pure $ said "The investigation resumed."
             work receipt = runTestBgRecordingHTTP frozenTime resources $ transport $ model $ tryAny $ processSlackEvent receipt
         receipt <- receiveSlackEvent resources $ mention "T_RECONCILE" channel "Investigate checkout" "1735689602.000001" & key "event_id" . _String .~ channel
         runQueryEffect resources (Investigations.claimProgress target Nothing) >>= (`shouldSatisfy` isJust)
@@ -5126,10 +5216,12 @@ spec = around withTestResources do
     interact (command "here" "" AE.Null) >>= goldenJson "discord/here_response.json"
     interact (command "monoscope" "show errors" AE.Null) `shouldReturn` AE.object []
     histories <- newIORef ([] :: [[(Chat.Role, Text)]])
-    let threadHistory = withHTTPResponses \_ url -> pure $ if
-          | "/channels/thread_123/messages" `T.isInfixOf` toText url -> Just "[{\"content\":\"Checkout is failing\",\"author\":{\"username\":\"alice\"}}]"
-          | "/messages/thread_123" `T.isInfixOf` toText url -> Just "{\"content\":\"Checkout alert\",\"author\":{\"username\":\"Monoscope\"}}"
-          | otherwise -> Nothing
+    let threadHistory = withHTTPResponses \_ url ->
+          pure
+            $ if
+              | "/channels/thread_123/messages" `T.isInfixOf` toText url -> Just "[{\"content\":\"Checkout is failing\",\"author\":{\"username\":\"alice\"}}]"
+              | "/messages/thread_123" `T.isInfixOf` toText url -> Just "{\"content\":\"Checkout alert\",\"author\":{\"username\":\"Monoscope\"}}"
+              | otherwise -> Nothing
         model history _ = modifyIORef' histories (<> [map (\m -> (Chat.role m, Chat.content m)) $ toList history]) $> said "Thread answer"
         followedUpWith text = any (\(url, body) -> "/webhooks/" `T.isInfixOf` url && text `T.isInfixOf` decodeUtf8 body)
     (threadRequests, deferred) <- runAsBaseRecordingHTTP tr $ agent model $ threadHistory $ handler $ command "monoscope" "show errors" thread & key "channel_id" . _String .~ "thread_123"
@@ -5139,7 +5231,6 @@ spec = around withTestResources do
     threadRequests `shouldSatisfy` followedUpWith "Thread answer"
     dbExec tr [sql|INSERT INTO projects.dashboards (project_id, created_by, title) VALUES (?, ?, 'Requests')|] (testPid, uid tr)
     runAsBaseRecordingHTTP tr (handler $ command "dashboard" "" AE.Null) >>= (`shouldSatisfy` \(requests, response) -> response == AE.object [] && followedUpWith "Requests" requests)
-
 
   it "WhatsApp: unknown senders are ignored; a linked number pages its dashboards and forwards prompts" \tr -> do
     let shape = \case
@@ -5208,17 +5299,21 @@ mention teamId channelId text ts = threadEvent teamId channelId text ts "1735689
 botEcho :: Text -> Text -> Text -> Text -> AE.Value -> AE.Value
 botEcho teamId channelId app eventType publication =
   slackCallbackEnvelope teamId "echo" (AE.object ["type" .= ("message" :: Text), "subtype" .= ("bot_message" :: Text), "app_id" .= app, "bot_id" .= ("B_" <> app), "channel" .= channelId, "thread_ts" .= ("1735689600.000001" :: Text), "ts" .= ("1735689610.000001" :: Text), "text" .= ("Recorded" :: Text), "metadata" .= AE.object ["event_type" .= eventType, "event_payload" .= AE.object ["publication_id" .= publication]]])
-    & key "api_app_id" . _String .~ app
+    & key "api_app_id"
+    . _String
+    .~ app
 
 
 -- | @echo@ altered in each field that evidence must match: app, api app, team, channel and thread.
 spoofs :: AE.Value -> [AE.Value]
 spoofs echo =
-  zipWith (\n v -> v & key "event_id" . _String .~ ("spoof-" <> show n)) [1 :: Int ..]
+  zipWith
+    (\n v -> v & key "event_id" . _String .~ ("spoof-" <> show n))
+    [1 :: Int ..]
     [echo & key "event" . key "app_id" . _String .~ "A_OTHER", echo & key "api_app_id" . _String .~ "A_OTHER", echo & key "team_id" . _String .~ "T_OTHER", echo & key "event" . key "channel" . _String .~ "COTHER", echo & key "event" . key "thread_ts" . _String .~ "1735689600.000002"]
 
 
-slackOk :: (HTTP.HTTP :> es, Eff.IOE :> es) => Eff es a -> Eff es a
+slackOk :: (Eff.IOE :> es, HTTP.HTTP :> es) => Eff es a -> Eff es a
 slackOk = withHTTPResponses \_ _ -> pure $ Just slackOkBody
 
 
@@ -5227,7 +5322,7 @@ slackOkBody = "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\",\"membe
 
 
 -- | Fault only answer posts, letting progress publish normally; requests are still recorded.
-withSlackReplyResponses :: (HTTP.HTTP :> es, Eff.IOE :> es) => IO LByteString -> Eff es a -> Eff es a
+withSlackReplyResponses :: (Eff.IOE :> es, HTTP.HTTP :> es) => IO LByteString -> Eff es a -> Eff es a
 withSlackReplyResponses fixture =
   withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689609.000001\",\"members\":[\"U0123ABCDEF\"]}") . interpose @HTTP.HTTP \_ -> \case
     HTTP.PostWith opts "https://slack.com/api/chat.postMessage" value -> do
@@ -5258,7 +5353,7 @@ processWith tr tools stubs receipt = runTestBgRecordingHTTP frozenTime tr $ stub
 -- | Answer agent turns with @reply@; any other model call fails.
 agent :: ELLM.LLM :> es => (Chat.ChatHistory -> OpenAIV1.CreateChatCompletion -> Eff es (Either Text Chat.Message)) -> Eff es a -> Eff es a
 agent reply = interpose @ELLM.LLM \_ -> \case
-  ELLM.CallAgenticChat history params _ -> reply history params
+  ELLM.CallAgenticChat history params _ -> fmap ELLM.unmetered <$> reply history params
   ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
   ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
 
@@ -5342,6 +5437,7 @@ goldenJson path actual = do
 
 agentConfig :: Projects.ProjectId -> AI.AgenticConfig
 agentConfig pid = (AI.defaultAgenticConfig pid){AI.projectTools = Just Routes.mcpProjectTools}
+
 
 -- | A linked requester with the Slack investigation template activated.
 setupSlackAgent :: TestResources -> Projects.ProjectId -> Text -> IO ()
@@ -5450,7 +5546,7 @@ assertDeferredJobRunnable conn payload = PGS.withTransaction conn do
 
 
 -- | Model and transport stubs that wrap a handler and its queued job alike.
-type Stub = forall es a. (ELLM.LLM :> es, HTTP.HTTP :> es, Eff.IOE :> es) => Eff es a -> Eff es a
+type Stub = forall es a. (ELLM.LLM :> es, Eff.IOE :> es, HTTP.HTTP :> es) => Eff es a -> Eff es a
 
 
 -- | The floating assistant's request, its background run, its view, and the status a run settles on.
@@ -5579,10 +5675,12 @@ enriching :: (ELLM.LLM :> es, Eff.IOE :> es) => Maybe (IORef Int) -> Text -> Tex
 enriching calls title description = interpose @ELLM.LLM \_ -> \case
   ELLM.CallLLM _ prompt _ -> do
     traverse_ (`modifyIORef'` (+ 1)) calls
-    pure $ Right if
-      | "issue titler" `T.isInfixOf` prompt -> title
-      | "issue describer" `T.isInfixOf` prompt -> description
-      | otherwise -> "critical\n0\n0"
+    pure
+      $ Right
+        if
+          | "issue titler" `T.isInfixOf` prompt -> title
+          | "issue describer" `T.isInfixOf` prompt -> description
+          | otherwise -> "critical\n0\n0"
   ELLM.CallAgenticChat{} -> pure $ Left "Unexpected agentic request"
   ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding request"
 
@@ -5665,7 +5763,7 @@ slackMCPReply request tools result = AE.object ["jsonrpc" .= ("2.0" :: Text), "i
 
 
 -- | Answer Slack MCP JSON-RPC requests with @fixture@, acknowledging notifications and session deletes; requests stay recorded.
-withSlackMCPResponses :: (HTTP.HTTP :> es, Eff.IOE :> es) => (HTTP.Options -> AE.Value -> IO AE.Value) -> Eff es a -> Eff es a
+withSlackMCPResponses :: (Eff.IOE :> es, HTTP.HTTP :> es) => (HTTP.Options -> AE.Value -> IO AE.Value) -> Eff es a -> Eff es a
 withSlackMCPResponses fixture = interpose @HTTP.HTTP \_ -> \case
   HTTP.PostWith options url@"https://mcp.slack.com/mcp" payload -> do
     body <- liftIO $ requestBody <$> WreqTypes.postPayload payload defaultRequest

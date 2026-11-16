@@ -588,8 +588,10 @@ fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCt
       DTMetric -> do
         -- Rows arrive as 'BucketEpoch' so a hand-written bucket column may be a timestamptz;
         -- coerce back to the epoch Int the pivot works in.
-        let metrics :: V.Vector (BucketEpoch, Text, ChartNumber) -> MetricsData
-            metrics (coerce -> rows) =
+        -- A NULL aggregate (a bucket with no non-null input, e.g. sum over spans without that
+        -- attribute) is a gap in the series, not a reason to fail the widget.
+        let metrics :: V.Vector (BucketEpoch, Text, Maybe ChartNumber) -> MetricsData
+            metrics (coerce . V.mapMaybe (\(t, k, v) -> (t,k,) <$> v) -> rows) =
               let (hdrs, groupedData, rowsCount, rpm) = pivot' rows
                in baseMetricsData{dataset = groupedData, headers = V.cons "timestamp" hdrs, rowsCount, rowsPerMin = Just rpm, stats = Just $ statsTriple rows}
         -- Always streamed, so an abandoned read cancels its SQL; @progress@ only reports.

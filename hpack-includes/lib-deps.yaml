@@ -150,6 +150,8 @@
 - yaml
 - indexed-traversable
 - hs-opentelemetry-sdk
+- hs-opentelemetry-exporter-in-memory
+- hs-opentelemetry-exporter-otlp
 - hs-opentelemetry-api
 - hs-opentelemetry-instrumentation-wai
 - hs-opentelemetry-instrumentation-auto

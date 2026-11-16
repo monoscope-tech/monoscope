@@ -1,0 +1,108 @@
+title: LLM & Agents
+tags: [llm, ai, agents, genai, opentelemetry]
+read_only: true
+icon: sparkles
+preview: /public/assets/svgs/screens/http-stats.svg
+description: Model calls, tokens, cost, latency and tool use from OpenTelemetry GenAI spans, whichever SDK or framework sent them
+refresh_interval: 60s
+# Queries filter on the promoted attributes.gen_ai.* columns. Token, cost and latency figures read
+# inference spans only: an agent span may carry its run's aggregate usage, which would count every call twice.
+widgets:
+  - type: group
+    title: Overview
+    layout: { w: 12, h: 3 }
+    children:
+      - type: 'timeseries_stat'
+        title: 'Model calls'
+        icon: sparkles
+        query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") | summarize count() by bin_auto(timestamp)
+        unit: calls
+        eager: true
+        layout: { w: 3, h: 2 }
+
+      - type: 'timeseries_stat'
+        title: 'Cost'
+        icon: dollar
+        query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") and attributes.gen_ai.usage.cost != null | summarize sum(attributes.gen_ai.usage.cost) by bin_auto(timestamp)
+        unit: $
+        eager: true
+        layout: { w: 3, h: 2 }
+
+      - type: 'stat'
+        title: 'Model error rate'
+        icon: bug
+        query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") | summarize countif(status_code == "ERROR") * 100.0 / count()
+        unit: '%'
+        eager: true
+        layout: { w: 3, h: 2 }
+
+      - type: 'timeseries_stat'
+        title: 'Tokens'
+        icon: comment
+        query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") | summarize sum(attributes.gen_ai.usage.input_tokens) + sum(attributes.gen_ai.usage.output_tokens) by bin_auto(timestamp)
+        unit: tokens
+        eager: true
+        layout: { w: 3, h: 2 }
+
+  - type: 'timeseries'
+    title: 'Cost by model'
+    query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") and attributes.gen_ai.usage.cost != null | summarize sum(attributes.gen_ai.usage.cost) by bin_auto(timestamp), attributes.gen_ai.request.model
+    unit: $
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Model calls by model'
+    query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") | summarize count() by bin_auto(timestamp), attributes.gen_ai.request.model
+    unit: calls
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Input tokens by model'
+    query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") | summarize sum(attributes.gen_ai.usage.input_tokens) by bin_auto(timestamp), attributes.gen_ai.request.model
+    unit: tokens
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Output tokens by model'
+    query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") | summarize sum(attributes.gen_ai.usage.output_tokens) by bin_auto(timestamp), attributes.gen_ai.request.model
+    unit: tokens
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Model latency percentiles'
+    hide_subtitle: true
+    summarize_by: max
+    query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") and duration != null | summarize percentiles(duration / 1000000, 50, 95, 99) by bin_auto(timestamp)
+    unit: ms
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Model errors by model'
+    theme: 'roma'
+    query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") and status_code == "ERROR" | summarize count() by bin_auto(timestamp), attributes.gen_ai.request.model
+    unit: errors
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Tool calls by tool'
+    query: attributes.gen_ai.operation.name == "execute_tool" | summarize count() by bin_auto(timestamp), attributes.gen_ai.tool.name
+    unit: calls
+    layout: { w: 6, h: 4 }
+
+  - type: top_list
+    title: 'Failing tools'
+    query: attributes.gen_ai.operation.name == "execute_tool" and status_code == "ERROR" | summarize count() by attributes.gen_ai.tool.name | order by count_ desc
+    unit: errors
+    layout: { w: 3, h: 4 }
+
+  - type: top_list
+    title: 'Cost by agent'
+    query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") and attributes.gen_ai.usage.cost != null and attributes.gen_ai.agent.name != null | summarize sum(attributes.gen_ai.usage.cost) by attributes.gen_ai.agent.name
+    unit: $
+    layout: { w: 3, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Cost by service'
+    query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") and attributes.gen_ai.usage.cost != null | summarize sum(attributes.gen_ai.usage.cost) by bin_auto(timestamp), resource.service.name
+    unit: $
+    layout: { w: 6, h: 4 }

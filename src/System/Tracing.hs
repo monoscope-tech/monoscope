@@ -2,11 +2,13 @@ module System.Tracing (
   Tracing,
   runTracing,
   withSpan,
+  withSpanKind,
   withSpan_,
   addEvent,
   addAttribute,
   setStatus,
   SpanStatus (..),
+  SpanKind (..),
   isExpectedClientErrorText,
 
   -- * Cross-thread context propagation
@@ -46,7 +48,7 @@ import UnliftIO.Exception (bracket, finally, tryAny, withException)
 
 
 data Tracing :: Effect where
-  WithSpan :: Text -> [(Text, Attribute)] -> (Span -> m a) -> Tracing m a
+  WithSpanKind :: SpanKind -> Text -> [(Text, Attribute)] -> (Span -> m a) -> Tracing m a
   AddEvent :: Span -> Text -> [(Text, Attribute)] -> Tracing m ()
   AddAttribute :: Span -> Text -> Attribute -> Tracing m ()
   SetStatus :: Span -> SpanStatus -> Tracing m ()
@@ -60,13 +62,13 @@ makeEffect ''Tracing
 
 runTracing :: IOE :> es => TracerProvider -> Eff (Tracing ': es) a -> Eff es a
 runTracing tp = interpret $ \env -> \case
-  WithSpan name attrs f -> do
+  WithSpanKind kind name attrs f -> do
     let tracer = Trace.makeTracer tp "monoscope" Trace.tracerOptions
         attrMap = HM.fromList attrs
     -- Properly propagate context through the span lifecycle
     localSeqUnliftIO env $ \unlift -> liftIO $ do
       ctx <- Context.getContext
-      sp <- Trace.createSpan tracer ctx name (defaultSpanArguments{Trace.kind = Server, Trace.attributes = attrMap})
+      sp <- Trace.createSpan tracer ctx name (defaultSpanArguments{Trace.kind = kind, Trace.attributes = attrMap})
       Context.adjustContext (Context.insertSpan sp)
       -- Mark the span Error on exception, then always close it + restore
       -- context (otherwise failed operations show as green spans and we
@@ -107,6 +109,10 @@ runTracing tp = interpret $ \env -> \case
 -- [False,False,False]
 isExpectedClientErrorText :: Text -> Bool
 isExpectedClientErrorText = T.isInfixOf "errHTTPCode = 4"
+
+
+withSpan :: Tracing :> es => Text -> [(Text, Attribute)] -> (Span -> Eff es a) -> Eff es a
+withSpan = withSpanKind Server
 
 
 withSpan_ :: Tracing :> es => Text -> [(Text, Attribute)] -> Eff es a -> Eff es a

@@ -110,6 +110,7 @@ import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils qualified as Bots
+import Pages.LLM qualified as LLM
 import Pages.Replay qualified as Replay
 import Pkg.AI qualified as AI
 import Pkg.AdConversions qualified as AdConversions
@@ -323,6 +324,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
       github <- liftIO $ findExecutable "gh"
       Publication.runGitPublicationReal (CodeReview.ArtifactStore <$> authCtx.config.impactReviewUsageDir <*> authCtx.config.impactReviewCacheDir) github $ ImpactReview.publishIssueFix pid fid
     AnalyzeRepository pid rid -> analyzeRepository pid rid
+    EvaluateLLMSignals pid -> LLM.evaluateSignals pid
     RepositorySyncTick scheduled -> unlessStale scheduled 300 do
       syncs <- Hasql.interp @[GitSync.GitHubSync] [HI.sql| SELECT * FROM projects.git_sync WHERE sync_enabled |]
       enqueueAt authCtx scheduled [GitSyncRepository sync.projectId sync.id | sync <- syncs]
@@ -1519,6 +1521,7 @@ runHourlyJob scheduledTime hour = do
   Hasql.interpExecute [HI.sql| DELETE FROM projects.ingest_sampling WHERE hour < now() - interval '3 days' |] >>= logDeleted "Cleaned up old free-tier sampling counters"
 
   enqueueJobs ctx [Jobs.CompressReplaySessions, Jobs.DashboardsAutoProvision scheduledTime]
+  tryStep "llm-signals" $ Hasql.interp @[Projects.ProjectId] [HI.sql| SELECT DISTINCT project_id FROM apis.llm_signals WHERE project_id = ANY(#{V.fromList activeProjects}) |] >>= enqueueJobs ctx . map Jobs.EvaluateLLMSignals
 
   checkFreeTierUsageNotifications activeProjects scheduledTime
 

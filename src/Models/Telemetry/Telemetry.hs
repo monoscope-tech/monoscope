@@ -100,6 +100,9 @@ module Models.Telemetry.Telemetry (
   SpanEvent (..),
   atMapText,
   atMapInt,
+  getNestedValue,
+  genAIMarker,
+  genAIFinishMarker,
   spanServiceName,
   spanAttr,
   mkSystemLog,
@@ -176,6 +179,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), idFromText, unAesonTextMaybe)
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as EW
+import Pkg.GenAI qualified as GenAI
 import Pkg.Metrics qualified as Metrics
 import Relude hiding (ask)
 import Relude.Extra.Bifunctor (bimapF)
@@ -183,7 +187,7 @@ import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
 import Text.Casing (fromAny, toKebab)
-import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
+import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue, tokenFlow)
 import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 import "cryptonite" Crypto.Hash qualified as Crypto
 
@@ -2269,6 +2273,16 @@ otelColumns =
       , -- Stamped at ingest by OtlpServer.placeRecords; geomap widgets group on it. TF storage was
         -- widened first (2026-11-08) and TF #450 declares it; 0272 is the Postgres half.
         attrText "attributes___geo___country___iso_code" "geo.country.iso_code"
+      , -- OpenTelemetry GenAI identity and usage, normalised from every SDK dialect by Pkg.GenAI. TF
+        -- storage was widened first (2026-11-16) and TF #457 declares them; 0286 is the Postgres half.
+        attrText "attributes___gen_ai___operation___name" "gen_ai.operation.name"
+      , attrText "attributes___gen_ai___request___model" "gen_ai.request.model"
+      , attrText "attributes___gen_ai___conversation___id" "gen_ai.conversation.id"
+      , attrText "attributes___gen_ai___agent___name" "gen_ai.agent.name"
+      , attrText "attributes___gen_ai___tool___name" "gen_ai.tool.name"
+      , attrBigInt "attributes___gen_ai___usage___input_tokens" "gen_ai.usage.input_tokens"
+      , attrBigInt "attributes___gen_ai___usage___output_tokens" "gen_ai.usage.output_tokens"
+      , column "attributes___gen_ai___usage___cost" (\r -> r.attrs >>= getNestedValue ["gen_ai", "usage", "cost"] >>= GenAI.num)
       , attrInt "attributes___http___response___status_code" "http.response.status_code"
       , attrInt "attributes___http___request___resend_count" "http.request.resend_count"
       , attrBigInt "attributes___http___request___body___size" "http.request.body.size"
@@ -2368,7 +2382,7 @@ data Context = Context
 -- are queried by KQL, never read back through 'otelSpanColsSql'.)
 --
 -- >>> length otelColumns
--- 92
+-- 100
 data OtelLogsAndSpans = OtelLogsAndSpans
   { project_id :: Text
   , id :: Text -- UUID
@@ -2639,8 +2653,19 @@ insertSystemLog target tfPgTypes otelLog = do
 generateSummary :: OtelLogsAndSpans -> V.Vector T.Text
 generateSummary otel =
   case otel.kind of
-    Just "log" -> generateLogSummary otel
+    Just "log" -> V.fromList [genAIMarker | isJust (atMapText "gen_ai.operation.name" $ unAesonTextMaybe otel.attributes)] <> generateLogSummary otel
     _ -> generateSpanSummary otel
+
+
+-- | The summary element every GenAI span and log carries. Lists filter on it because a
+-- summary-array match is ~20x cheaper on TimeFusion than reading the attributes blob.
+genAIMarker :: T.Text
+genAIMarker = tag "kind" "neutral" "ai"
+
+
+-- | The summary element of a reply that stopped early, so lists can count truncations in SQL.
+genAIFinishMarker :: GenAI.Abnormal -> T.Text
+genAIFinishMarker = tag "gen_ai.response.finish_reasons" "badge-warning" . show
 
 
 -- | Who a telemetry row is *about*: the session it belonged to, the user it was served for,
@@ -2856,6 +2881,10 @@ generateSpanSummary otel =
     httpStatus = atMapInt "http.response.status_code" attrsM
     httpMethod = atMapText "http.request.method" attrsM
     hasHttp = isJust httpMethod || isJust httpStatus
+    genAIOp = atMapText "gen_ai.operation.name" attrsM
+    tokens = (,) <$> atMapInt "gen_ai.usage.input_tokens" attrsM <*> atMapInt "gen_ai.usage.output_tokens" attrsM
+    abnormalFinish =
+      attrsM >>= getNestedValue ["gen_ai", "response", "finish_reasons"] >>= AET.parseMaybe AE.parseJSON >>= \(GenAI.FinishReasons rs) -> asum (map GenAI.abnormalFinish rs)
 
     durMs d = toText (getDurationNSMS (fromIntegral d))
     statusCodeStyle code
@@ -2916,6 +2945,8 @@ generateSpanSummary otel =
           <$> requestType
           <|> tag "kind" "neutral" "database"
           <$ guard (isJust dbSys)
+          <|> genAIMarker
+          <$ genAIOp
           <|> tag "kind" "neutral" "internal"
           <$ guard (otel.kind == Just "internal")
 
@@ -2943,12 +2974,15 @@ generateSpanSummary otel =
         , tag "rpc.service" "neutral" <$> atMapText "rpc.service" attrsM
         , spanNameFallback
         , errorStatus "badge-error"
+        , genAIFinishMarker <$> abnormalFinish
         , tag "attributes" "text-textWeak" . encTrunc 500 <$> mfilter (not . Map.null) attrsM
         , errorStatus "right-badge-error"
         , dbBadge <$> dbSys
         , (atMapInt "http.response.body.size" attrsM <|> atMapInt "http.response_content_length" attrsM) >>= \n -> guard (n > 0) $> tag "size" "right-badge-neutral" (formatBytes n)
         , tag "protocol" "right-badge-neutral" "http" <$ guard hasHttp
         , tag "protocol" "right-badge-neutral" "rpc" <$ rpcMethod
+        , tag "gen_ai.usage" "right-badge-neutral" <$> (tokens >>= \(i, o) -> tokenFlow (Just $ fromIntegral i) (Just $ fromIntegral o))
+        , tag "gen_ai.usage.cost" "right-badge-neutral" . GenAI.formatUsd <$> (attrsM >>= getNestedValue ["gen_ai", "usage", "cost"] >>= GenAI.num)
         , tag "duration" "right-badge-neutral" . durMs <$> otel.duration
         ]
         <> identitySummary attrsM
