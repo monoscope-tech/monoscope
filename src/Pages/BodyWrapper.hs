@@ -532,8 +532,9 @@ bodyWrapper bcfg child = do
                   if bcfg.isSettingsPage
                     then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
                     else child
-                  unless bcfg.pageProvidesLogDetails $ forM_ bcfg.currProject \p ->
+                  unless bcfg.pageProvidesLogDetails $ forM_ bcfg.currProject \p -> do
                     LogItem.detailsPanel_ p.id Nothing LogItem.DrawerPanel
+                    LogItem.traceOverlay_ p.id.toText LogItem.DrawerPanel Nothing
                 div_ [class_ "h-0 shrink"] do
                   Components.drawer_ "global-data-drawer" (isJust bcfg.globalDrawerContent) Nothing bcfg.globalDrawerContent ""
                   -- Picks the dashboard a widget is added (from the explorer) or copied (from a dashboard) to.

@@ -238,8 +238,7 @@ data TraceDetailsGet
     TraceDetails Projects.ProjectId Telemetry.Trace (V.Vector Telemetry.SpanRecord) Bool (Maybe Text)
   | SpanDetails Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Telemetry.OtelLogsAndSpans)
   | -- | Carries the URL that produced it, so Retry re-issues the same request from
-    -- whatever container it landed in — the overlay's @loadTrace@ event only exists
-    -- in the log explorer, and reached nothing anywhere else.
+    -- whatever container it landed in (the trace overlay, or an issue's panel).
     TraceDetailsUnavailable Text Text Bool TraceUnavailableReason
 
 
@@ -380,10 +379,8 @@ instance ToHtml TraceDetailsGet where
                 unless embedded
                   $ button_
                     [ class_ "btn btn-sm border-0 bg-fillWeaker text-textStrong hover:bg-fillWeak"
-                    , -- Only the log explorer renders #trace_expanded_view (Log.hs). Reached
-                      -- standalone (/p/<pid>/traces/<tid>) this panel still renders, and the
-                      -- unguarded send threw "'#trace_expanded_view' is null"; there the browser's
-                      -- own history is the way back.
+                    , -- 'LogItem.traceOverlay_' is on every project page; fetched bare (/p/<pid>/traces/<tid>)
+                      -- there is none, so the browser's history is the way back.
                       [__|on click if #trace_expanded_view exists then send closeTraceView to #trace_expanded_view else call history.back() end|]
                     ]
                     "Back to search results"
@@ -514,19 +511,6 @@ metricRelatedGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (Resp
 metricRelatedGetH pid metricName sourceM = metricFragmentH pid metricName sourceM Nothing $ Related . V.fromList <$> Telemetry.getMetricChartListData pid (mfilter (/= "all") sourceM) Nothing
 
 
--- | Deep link that opens a trace in the log explorer's trace overlay. @Log.hs@'s
--- @traceOverlay@ reads @?showTrace=<traceId>/?timestamp=<ts>@ on load and fires
--- @loadTrace@, so a plain anchor from anywhere in the product lands in the
--- waterfall — no second overlay container to host, and no new page.
---
--- The timestamp is not decoration: 'traceH' without one widens from a +/-5min
--- window to a 3-day scan, which is what OOM-killed TimeFusion on 2026-07-21. For
--- an exemplar it must be the exemplar's own timestamp, which a cumulative
--- histogram can place weeks before the row that carried it.
-traceOverlayUrl :: Projects.ProjectId -> Text -> UTCTime -> Text
-traceOverlayUrl pid trId ts = (urls.logExplorer pid).logExplorerGet Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just $ trId <> "/?timestamp=" <> formatUTC ts) Nothing Nothing Nothing Nothing
-
-
 -- | Representative traces for one metric. Rendered as a list for the Exemplars tab
 -- and served as JSON to the chart overlay from the same handler — one query, two
 -- representations, so the diamonds on the chart and the rows under it can never
@@ -546,7 +530,7 @@ instance ToHtml MetricExemplarsGet where
       $ linkList_ (Just ("Representative traces", "Traces this metric recorded a datapoint in, slowest first."))
       $ exemplars
       <&> \x ->
-        ( [href_ $ traceOverlayUrl pid x.point.traceId x.point.timestamp]
+        ( LogItem.traceLinkAttrs_ pid x.point.traceId x.point.timestamp
         , do
             span_ [class_ "block font-mono text-xs text-textStrong"] $ toHtml x.point.traceId
             div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak"] do
@@ -568,7 +552,7 @@ instance AE.ToJSON MetricExemplarsGet where
           , "timestamp" AE..= x.point.timestamp
           , "value" AE..= x.point.value
           , "metric_name" AE..= x.metricName
-          , "url" AE..= traceOverlayUrl pid x.point.traceId x.point.timestamp
+          , "url" AE..= LogItem.traceOverlayUrl pid x.point.traceId x.point.timestamp
           ]
       | x <- exemplars
       ]
@@ -1232,7 +1216,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
       div_ [class_ "flex flex-wrap justify-between items-center gap-y-1 [.investigation-content_&]:hidden"] do
         div_ [class_ "flex items-center gap-3"] $ do
           button_
-            [ class_ "cursor-pointer hidden [#apiLogsPage_&]:flex items-center gap-1.5 text-sm font-medium text-textBrand"
+            [ class_ "cursor-pointer hidden [#apiLogsPage_&]:flex [.page-trace-overlay_&]:flex items-center gap-1.5 text-sm font-medium text-textBrand"
             , term "data-share-hide" ""
             , term "aria-label" "Back to event details"
             , -- Same guard as the fallback panel's Back button above: CSS only hides this

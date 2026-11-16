@@ -11,6 +11,9 @@ module Pages.LogExplorer.LogItem (
   spanBadge,
   detailsPanel_,
   DetailsPanelLayout (..),
+  traceOverlay_,
+  traceOverlayUrl,
+  traceLinkAttrs_,
 ) where
 
 import Control.Lens (filtered, has, (^..), (^?), _Just)
@@ -428,7 +431,6 @@ expandedItemView pid item aptSp selectedTabM = do
     isAlert = item.kind == Just "alert"
     isHttp = not isLog && isHttpSpan item
     identityRows = Telemetry.rowIdentity (unAesonTextMaybe item.attributes)
-    createdAt = formatUTC item.timestamp
     dgrp = "dtab-" <> item.id
     -- Clamp the ?tab= deep link to a marker that actually exists — an unknown
     -- value would check no radio and leave every panel hidden.
@@ -487,25 +489,9 @@ expandedItemView pid item aptSp selectedTabM = do
         -- has to mint a unique selector and the two stay coupled by position.
         button_ [class_ "action-btn", copySourceAttr_ "this.nextElementSibling"] $ actionBtnBody "copy" "Copy as curl"
         pre_ [class_ "hidden"] $ toHtml curl
-      whenJust (Telemetry.traceIdOf item) \trId -> do
-        -- A link first, so it works from every shell this view renders in: the details
-        -- panel now also opens on dashboards, where the log explorer's trace overlay
-        -- doesn't exist and the old button silently did nothing. Where the overlay IS
-        -- present the click is intercepted and the trace opens in place — the overlay's
-        -- loadTrace handler owns skeleton, fetch and fullscreen (Log.hs traceOverlay).
-        let traceUrl = (urls.traces pid).tracesGet trId (Just item.timestamp) Nothing Nothing Nothing Nothing
+      whenJust (Telemetry.traceIdOf item) \trId ->
         a_
-          [ class_ "action-btn"
-          , term "data-share-hide" "1"
-          , href_ $ (urls.logExplorer pid).logExplorerGet Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just $ trId <> "/?timestamp=" <> createdAt) Nothing Nothing Nothing Nothing
-          , term
-              "_"
-              [text|on click if the first <#trace_expanded_view/> exists
-                       halt the event
-                       send loadTrace(url: '${traceUrl}') to #trace_expanded_view
-                       then call updateUrlState('showTrace', "${trId}/?timestamp=${createdAt}")
-                     end|]
-          ]
+          ([class_ "action-btn", term "data-share-hide" "1"] <> traceLinkAttrs_ pid trId item.timestamp)
           (actionBtnBody "cross-hair" "View trace")
       when isAlert
         $ a_ [class_ "action-btn", href_ $ (urls.monitors pid).overviewGet (fromMaybe "" item.parent_id)]
@@ -660,3 +646,127 @@ renderErrors pid svcM attr resAttr errs =
         $ disclosure_ [open_ "" | idx == 0] "px-3 py-2 text-xs font-medium text-textWeak hover:text-textStrong" ("Stack trace" >> span_ [class_ "text-2xs text-textWeak/70"] (toHtml @Text $ "(" <> show (length frames) <> " frames)"))
         $ div_ [class_ "mx-3 mb-3 max-h-96 overflow-auto c-scroll rounded-md border border-strokeWeak bg-bgBase"]
         $ stackTrace_ pid svcM attr resAttr stacktrace
+
+
+-- | The trace waterfall, opened over the page from anywhere: a row's fullscreen button
+-- (@openTraceFullscreen@ on window), a link sending @loadTrace(url)@, or the explorer's
+-- @?showTrace=@ deep link. The explorer hosts it in its list pane and also syncs fullscreen
+-- and the URL; every other page gets it from the shell, over the whole page.
+traceOverlay_ :: Text -> DetailsPanelLayout -> Maybe Text -> Html ()
+traceOverlay_ pidTxt layout showTrace = do
+  template_ [id_ "trace-loading-skeleton"] traceLoadingSkeleton_
+  div_
+    [ class_ $ case layout of ExplorerPanel -> "absolute top-0 right-0 w-full h-full overflow-hidden c-scroll z-50 bg-bgBase transition-all duration-100 " <> bool "hidden" "" (isJust showTrace); IssuesPanel -> "page-trace-overlay fixed inset-0 z-[60] hidden overflow-hidden bg-bgBase"; DrawerPanel -> "page-trace-overlay fixed inset-0 z-[60] hidden overflow-hidden bg-bgBase"
+    , id_ "trace_expanded_view"
+    , term "aria-busy" "true"
+    , term
+        "_"
+        [text|on closeTraceView
+                add .hidden to me
+                if #apiLogsPage exists
+                  send toggleFullscreen(mode: 'trace', active: false) to #apiLogsPage
+                  call updateUrlState('showTrace', '', 'delete')
+                end
+              end
+              on htmx:after:swap from me
+                if #apiLogsPage exists and #apiLogsPage's @data-fullscreen is 'details'
+                  send toggleFullscreen(mode: 'trace', active: true) to #apiLogsPage
+                end
+              end
+              on htmx:response:error from me
+                if #trace-load-error exists remove .hidden from #trace-load-error end
+              end
+              on loadTrace(url)
+                set my @data-trace-url to url
+                if #apiLogsPage exists call updateUrlState('showTrace', url.split('/traces/')[1]) end
+                put #trace-loading-skeleton.innerHTML into me then remove .hidden from me
+                if #apiLogsPage exists send toggleFullscreen(mode: 'trace', active: true) to #apiLogsPage end
+                call htmx.ajax('GET', url, {target: me, swap: 'innerHTML'})
+              end
+              on openTraceFullscreen(traceId, timestamp) from window
+                send loadTrace(url: '/p/${pidTxt}/traces/' + traceId + '/?timestamp=' + encodeURIComponent(timestamp)) to me|]
+    ]
+    do
+      whenJust showTrace \trIdAndTimestamp -> do
+        let url = "/p/" <> pidTxt <> "/traces/" <> trIdAndTimestamp
+        div_ [term "data-trace-url" url, [__|init send loadTrace(url: my @data-trace-url) to #trace_expanded_view|]] pass
+  where
+    traceLoadingSkeleton_ :: Html ()
+    traceLoadingSkeleton_ =
+      div_ [class_ "w-full h-full p-2 flex flex-col gap-4", role_ "status", Aria.live_ "polite"] do
+        -- Match the loaded trace's header so opening it never shifts the waterfall.
+        div_ [class_ "flex flex-wrap justify-between items-center gap-y-1"] do
+          div_ [class_ "flex items-center gap-3"] do
+            div_ [class_ "h-4 w-12 rounded skeleton-shimmer"] ""
+            div_ [class_ "h-5 w-32 rounded skeleton-shimmer"] ""
+          div_ [class_ "flex items-center gap-2"] do
+            div_ [class_ "h-8 w-56 rounded-lg skeleton-shimmer"] ""
+            div_ [class_ "h-7 w-7 rounded skeleton-shimmer"] ""
+        div_ [class_ "flex flex-col gap-2 w-full mt-5"] do
+          div_ [class_ "flex flex-wrap justify-between gap-y-1 mb-2"] do
+            div_ [class_ "flex items-center gap-5"] do
+              div_ [class_ "h-4 w-16 rounded skeleton-shimmer"] ""
+              div_ [class_ "h-4 w-14 rounded skeleton-shimmer"] ""
+              div_ [class_ "h-4 w-14 rounded skeleton-shimmer"] ""
+            div_ [class_ "flex items-center gap-3"] do
+              div_ [class_ "h-4 w-16 rounded skeleton-shimmer"] ""
+              div_ [class_ "h-4 w-16 rounded skeleton-shimmer"] ""
+              div_ [class_ "h-4 w-20 rounded skeleton-shimmer"] ""
+          div_ [class_ "h-9 w-full rounded-lg border border-strokeWeak bg-fillWeaker flex items-center px-3"] do
+            div_ [class_ "h-3 w-32 rounded skeleton-shimmer"] ""
+          div_ [class_ "border border-strokeWeak rounded-2xl min-h-[230px] overflow-hidden"] do
+            div_ [class_ "flex h-8 border-b border-strokeWeak items-end text-xs"] do
+              div_ [class_ "shrink-0 px-2 pb-1 text-textWeak font-medium", style_ "width:35%"] "Service / Span"
+              div_ [class_ "grow flex justify-between px-2 pb-1"]
+                $ replicateM_ 7
+                $ div_ [class_ "h-3 w-8 rounded skeleton-shimmer"] ""
+            div_ [class_ "py-1"]
+              $ forM_
+                ( [ ("w-28", "ml-0 w-full")
+                  , ("w-24", "ml-0 w-[78%]")
+                  , ("w-36", "ml-[70%] w-[21%]")
+                  , ("w-40", "ml-[72%] w-[4%]")
+                  , ("w-32", "ml-[72%] w-[2%]")
+                  , ("w-48", "ml-[73%] w-[8%]")
+                  , ("w-36", "ml-[73%] w-[3%]")
+                  , ("w-40", "ml-[73%] w-[2%]")
+                  , ("w-28", "ml-[74%] w-[5%]")
+                  ]
+                    :: [(Text, Text)]
+                )
+              $ \(labelW, barPos) ->
+                div_ [class_ "flex items-center h-7"] do
+                  div_ [class_ "shrink-0 flex items-center gap-2 px-3", style_ "width:35%"] do
+                    div_ [class_ "w-2.5 h-2.5 rounded-full skeleton-shimmer"] ""
+                    div_ [class_ $ "h-3 " <> labelW <> " rounded skeleton-shimmer"] ""
+                  div_ [class_ "relative grow h-full"]
+                    $ div_ [class_ $ "h-3 mt-2 rounded-sm skeleton-shimmer " <> barPos] ""
+        span_ [class_ "sr-only"] "Loading trace…"
+        div_ [id_ "trace-load-error", class_ "hidden mt-4 flex items-center gap-3 text-sm text-textWeak"] do
+          "Trace details could not be loaded."
+          button_
+            [ class_ "text-textBrand font-medium cursor-pointer hover:underline"
+            , Aria.label_ "Retry loading trace"
+            , [__|on click
+            add .hidden to #trace-load-error
+            call htmx.ajax('GET', #trace_expanded_view's @data-trace-url, {target: #trace_expanded_view, swap: 'innerHTML'})
+          end|]
+            ]
+            "Retry"
+
+
+-- | Opens a trace from the explorer's @?showTrace=@ deep link. The timestamp is not decoration:
+-- 'traceH' without one widens from a +/-5min window to a 3-day scan, which is what OOM-killed
+-- TimeFusion on 2026-07-21.
+traceOverlayUrl :: Projects.ProjectId -> Text -> UTCTime -> Text
+traceOverlayUrl pid trId ts = (urls.logExplorer pid).logExplorerGet Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just $ trId <> "/?timestamp=" <> formatUTC ts) Nothing Nothing Nothing Nothing
+
+
+-- | A trace link: in place over the page wherever 'traceOverlay_' is (every project page), and the
+-- explorer deep link for a new tab or a page without it.
+traceLinkAttrs_ :: Projects.ProjectId -> Text -> UTCTime -> [Attribute]
+traceLinkAttrs_ pid trId ts =
+  [ href_ $ traceOverlayUrl pid trId ts
+  , data_ "trace-url" $ (urls.traces pid).tracesGet trId (Just ts) Nothing Nothing Nothing Nothing
+  , [__|on click if #trace_expanded_view exists halt the event's default then send loadTrace(url: @data-trace-url) to #trace_expanded_view end|]
+  ]

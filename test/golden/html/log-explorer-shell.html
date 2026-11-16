@@ -7,23 +7,28 @@
 <input type="checkbox" class="checkbox checkbox-xs max-md:checkbox-sm" hx-on:click="window.queryEditorCall(&#39;toggleSubQuery&#39;, this.dataset.field, this.dataset.value)" aria-label="resource.service.name equals checkout-svc" data-tippy-content="resource.service.name == &quot;checkout-svc&quot;" data-field="resource.service.name" data-value="checkout-svc"
 <details class="facet-section block border-t border-strokeWeak [&amp;[open]&gt;summary_.facet-chevron]:rotate-0 facet-section-group" data-component="facet-section" data-hx-get="/p/<uuid>/log_explorer/facets?group=http" data-hx-trigger="toggle[target.open] once" data-hx-target="this" data-hx-swap="outerHTML" data-hx-indicator="find .facet-group-loader"
 <div class="absolute top-0 right-0 w-full h-full overflow-hidden c-scroll z-50 bg-bgBase transition-all duration-100 hidden" id="trace_expanded_view" aria-busy="true" _="on closeTraceView
-  add .hidden to me then send toggleFullscreen(mode: &#39;trace&#39;, active: false) to #apiLogsPage
-  call updateUrlState(&#39;showTrace&#39;, &#39;&#39;, &#39;delete&#39;)
+  add .hidden to me
+  if #apiLogsPage exists
+    send toggleFullscreen(mode: &#39;trace&#39;, active: false) to #apiLogsPage
+    call updateUrlState(&#39;showTrace&#39;, &#39;&#39;, &#39;delete&#39;)
+  end
 end
-on htmx:after:swap[#apiLogsPage&#39;s @data-fullscreen is &#39;details&#39;] from me
-  send toggleFullscreen(mode: &#39;trace&#39;, active: true) to #apiLogsPage
+on htmx:after:swap from me
+  if #apiLogsPage exists and #apiLogsPage&#39;s @data-fullscreen is &#39;details&#39;
+    send toggleFullscreen(mode: &#39;trace&#39;, active: true) to #apiLogsPage
+  end
 end
 on htmx:response:error from me
-  remove .hidden from #trace-load-error
+  if #trace-load-error exists remove .hidden from #trace-load-error end
 end
 on loadTrace(url)
   set my @data-trace-url to url
+  if #apiLogsPage exists call updateUrlState(&#39;showTrace&#39;, url.split(&#39;/traces/&#39;)[1]) end
   put #trace-loading-skeleton.innerHTML into me then remove .hidden from me
-  send toggleFullscreen(mode: &#39;trace&#39;, active: true) to #apiLogsPage
+  if #apiLogsPage exists send toggleFullscreen(mode: &#39;trace&#39;, active: true) to #apiLogsPage end
   call htmx.ajax(&#39;GET&#39;, url, {target: me, swap: &#39;innerHTML&#39;})
 end
 on openTraceFullscreen(traceId, timestamp) from window
-  call updateUrlState(&#39;showTrace&#39;, traceId + &#39;/?timestamp=&#39; + timestamp)
   send loadTrace(url: &#39;/p/<uuid>/traces/&#39; + traceId + &#39;/?timestamp=&#39; + encodeURIComponent(timestamp)) to me"
 <div class="details-panel grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto max-md:hidden max-md:[&amp;.details-open]:block! max-md:[&amp;.details-open]:fixed max-md:[&amp;.details-open]:inset-0 max-md:[&amp;.details-open]:z-10020 max-md:[&amp;.details-open]:w-full max-md:[&amp;.details-open]:max-w-full max-md:[&amp;.details-open]:bg-bgBase peer-checked/drawer:fixed peer-checked/drawer:top-0 peer-checked/drawer:bottom-0 peer-checked/drawer:z-10020 peer-checked/drawer:h-full peer-checked/drawer:w-[min(56rem,94vw)]! peer-checked/drawer:max-w-full! peer-checked/drawer:bg-bgBase peer-checked/drawer:border-l peer-checked/drawer:border-strokeWeak peer-checked/drawer:shadow-2xl peer-checked/drawer:overflow-y-auto peer-checked/drawer:transition-[right] peer-checked/drawer:right-[-100vw] peer-checked/open:right-0! peer-checked/open:block!" data-inline-width id="log_details_container" hx-sync="this:replace" data-has-target="0" _="on checkMobileOpen[window.innerWidth &lt; 768] add .details-open to me
         init
@@ -63,9 +68,9 @@ on openTraceFullscreen(traceId, timestamp) from window
 <div data-trace-url="/p/<uuid>/traces/<hex>/?timestamp=2026-07-15T18:59:16.952128Z" _="init send loadTrace(url: my @data-trace-url) to #trace_expanded_view"
 <span class="sr-only">Loading trace…</span>
 <button class="text-textBrand font-medium cursor-pointer hover:underline" aria-label="Retry loading trace" _="on click
-        add .hidden to #trace-load-error
-        call htmx.ajax(&#39;GET&#39;, #trace_expanded_view&#39;s @data-trace-url, {target: #trace_expanded_view, swap: &#39;innerHTML&#39;})
-      end">Retry</button>
+            add .hidden to #trace-load-error
+            call htmx.ajax(&#39;GET&#39;, #trace_expanded_view&#39;s @data-trace-url, {target: #trace_expanded_view, swap: &#39;innerHTML&#39;})
+          end">Retry</button>
 <input class="input input-sm w-full" value name="environment" id="environment" type="text" placeholder="e.g. production"
 <input class="input input-sm w-full" value name="service" id="service" type="text" placeholder="e.g. checkout"
 <h3 class="text-base font-semibold text-textStrong">Create monitor</h3>

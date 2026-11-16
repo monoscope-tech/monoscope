@@ -3,106 +3,812 @@ tags: [llm, ai, agents, genai, opentelemetry]
 read_only: true
 icon: sparkles
 preview: /public/assets/svgs/screens/http-stats.svg
-description: Model calls, tokens, cost, latency and tool use from OpenTelemetry GenAI spans, whichever SDK or framework sent them
+description: Model calls, cost, tokens, latency, tools, agents and errors from OpenTelemetry GenAI spans, whichever SDK or framework sent them
 refresh_interval: 60s
 # Queries filter on the promoted attributes.gen_ai.* columns. Token, cost and latency figures read
 # inference spans only: an agent span may carry its run's aggregate usage, which would count every call twice.
-widgets:
-  - type: group
-    title: Overview
-    layout: { w: 12, h: 3 }
-    children:
-      - type: 'timeseries_stat'
-        title: 'Model calls'
-        icon: sparkles
-        query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") | summarize count() by bin_auto(timestamp)
-        unit: calls
-        eager: true
-        layout: { w: 3, h: 2 }
+# The first tab's first widgets also open the LLM & Agents page (Pages.LLM.overviewWidgets).
+# SQL tables filter through {{query_ast_filters}}: the widget's KQL (scope + variables) compiled to SQL.
 
-      - type: 'timeseries_stat'
-        title: 'Cost'
-        icon: dollar
-        query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") and attributes.gen_ai.usage.cost != null | summarize sum(attributes.gen_ai.usage.cost) by bin_auto(timestamp)
+variables:
+  - key: service
+    title: Service
+    type: query
+    reload_on_change: true
+    facet_field: service.name
+    sql:
+      source: timefusion
+      statement: |
+        SELECT DISTINCT resource___service___name
+        FROM otel_logs_and_spans
+        WHERE project_id='{{project_id}}'
+          AND attributes___gen_ai___operation___name IS NOT NULL
+          AND resource___service___name IS NOT NULL
+          {{time_filter}}
+        LIMIT 100
+    multi: false
+
+  - key: model
+    title: Model
+    type: query
+    reload_on_change: true
+    facet_field: attributes.gen_ai.request.model
+    sql:
+      source: timefusion
+      statement: |
+        SELECT DISTINCT attributes___gen_ai___request___model
+        FROM otel_logs_and_spans
+        WHERE project_id='{{project_id}}'
+          AND attributes___gen_ai___request___model IS NOT NULL
+          {{time_filter}}
+        LIMIT 100
+    multi: false
+
+widgets: []
+
+tabs:
+  - name: Overview
+    icon: sparkles
+    variables: [service, model]
+    widgets:
+      - type: group
+        title: Overview
+        layout: { w: 12, h: 3 }
+        children:
+          - type: 'timeseries_stat'
+            title: 'Model calls'
+            icon: sparkles
+            query: >-
+              {{llm_call_kql}}
+              and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+              and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+              | summarize count() by bin_auto(timestamp)
+            unit: calls
+            eager: true
+            layout: { w: 3, h: 2 }
+
+          - type: 'timeseries_stat'
+            title: 'Cost'
+            icon: dollar
+            query: >-
+              {{llm_call_kql}}
+              and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+              and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+              and attributes.gen_ai.usage.cost != null
+              | summarize sum(attributes.gen_ai.usage.cost) by bin_auto(timestamp)
+            unit: $
+            eager: true
+            layout: { w: 3, h: 2 }
+
+          - type: 'stat'
+            title: 'Model error rate'
+            icon: bug
+            query: >-
+              {{llm_call_kql}}
+              and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+              and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+              | summarize countif(status_code == "ERROR") * 100.0 / count()
+            unit: '%'
+            eager: true
+            layout: { w: 3, h: 2 }
+
+          - type: 'timeseries_stat'
+            title: 'Tokens'
+            icon: comment
+            query: >-
+              {{llm_call_kql}}
+              and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+              and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+              | summarize sum(attributes.gen_ai.usage.input_tokens) + sum(attributes.gen_ai.usage.output_tokens) by bin_auto(timestamp)
+            unit: tokens
+            eager: true
+            layout: { w: 3, h: 2 }
+
+      - type: 'timeseries'
+        title: 'Cost by model'
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          and attributes.gen_ai.usage.cost != null
+          | summarize sum(attributes.gen_ai.usage.cost) by bin_auto(timestamp), attributes.gen_ai.request.model
         unit: $
-        eager: true
-        layout: { w: 3, h: 2 }
+        layout: { w: 6, h: 4 }
 
-      - type: 'stat'
-        title: 'Model error rate'
-        icon: bug
-        query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") | summarize countif(status_code == "ERROR") * 100.0 / count()
-        unit: '%'
-        eager: true
-        layout: { w: 3, h: 2 }
+      - type: 'timeseries'
+        title: 'Model calls by model'
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          | summarize count() by bin_auto(timestamp), attributes.gen_ai.request.model
+        unit: calls
+        layout: { w: 6, h: 4 }
 
-      - type: 'timeseries_stat'
-        title: 'Tokens'
-        icon: comment
-        query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") | summarize sum(attributes.gen_ai.usage.input_tokens) + sum(attributes.gen_ai.usage.output_tokens) by bin_auto(timestamp)
+      - type: group
+        title: Activity
+        layout: { w: 12, h: 3 }
+        children:
+          - type: 'stat'
+            title: 'Conversations'
+            icon: comment
+            description: Distinct gen_ai.conversation.id values on any AI span.
+            query: >-
+              attributes.gen_ai.operation.name != null
+              and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+              and attributes.gen_ai.conversation.id != null
+              | summarize dcount(attributes.gen_ai.conversation.id)
+            unit: conversations
+            layout: { w: 3, h: 2 }
+
+          - type: 'stat'
+            title: 'Agent runs'
+            icon: sparkles
+            description: Traces that ran an agent; nested agents and workflows in one trace count once.
+            query: >-
+              {{agent_run_kql}}
+              and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+              | summarize dcount(trace_id)
+            unit: runs
+            layout: { w: 3, h: 2 }
+
+          - type: 'stat'
+            title: 'Tool calls'
+            icon: function
+            query: >-
+              attributes.gen_ai.operation.name == "execute_tool"
+              and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+              | summarize count()
+            unit: calls
+            layout: { w: 3, h: 2 }
+
+          - type: 'stat'
+            title: 'Average cost per call'
+            icon: dollar
+            query: >-
+              {{llm_call_kql}}
+              and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+              and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+              and attributes.gen_ai.usage.cost != null
+              | summarize avg(attributes.gen_ai.usage.cost)
+            unit: $
+            layout: { w: 3, h: 2 }
+
+      - type: 'timeseries'
+        title: 'Input and output tokens'
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          | summarize sum(attributes.gen_ai.usage.input_tokens), sum(attributes.gen_ai.usage.output_tokens) by bin_auto(timestamp)
         unit: tokens
-        eager: true
-        layout: { w: 3, h: 2 }
+        layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Cost by model'
-    query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") and attributes.gen_ai.usage.cost != null | summarize sum(attributes.gen_ai.usage.cost) by bin_auto(timestamp), attributes.gen_ai.request.model
-    unit: $
-    layout: { w: 6, h: 4 }
+      - type: 'timeseries_line'
+        title: 'Model latency percentiles'
+        hide_subtitle: true
+        summarize_by: max
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          and duration != null
+          | summarize percentiles(duration / 1000000, 50, 95, 99) by bin_auto(timestamp)
+        unit: ms
+        layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Model calls by model'
-    query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") | summarize count() by bin_auto(timestamp), attributes.gen_ai.request.model
-    unit: calls
-    layout: { w: 6, h: 4 }
+  - name: Cost
+    icon: dollar
+    variables: [service, model]
+    widgets:
+      - type: 'timeseries'
+        title: 'Cost by model'
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          and attributes.gen_ai.usage.cost != null
+          | summarize sum(attributes.gen_ai.usage.cost) by bin_auto(timestamp), attributes.gen_ai.request.model
+        unit: $
+        layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Input tokens by model'
-    query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") | summarize sum(attributes.gen_ai.usage.input_tokens) by bin_auto(timestamp), attributes.gen_ai.request.model
-    unit: tokens
-    layout: { w: 6, h: 4 }
+      - type: 'timeseries'
+        title: 'Cost by service'
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          and attributes.gen_ai.usage.cost != null
+          | summarize sum(attributes.gen_ai.usage.cost) by bin_auto(timestamp), resource.service.name
+        unit: $
+        layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Output tokens by model'
-    query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") | summarize sum(attributes.gen_ai.usage.output_tokens) by bin_auto(timestamp), attributes.gen_ai.request.model
-    unit: tokens
-    layout: { w: 6, h: 4 }
+      - type: table
+        title: 'Spend per model'
+        description: Spend, volume and unit cost per model. Unpriced calls (no price for the model, and none reported) count toward calls and tokens but not cost.
+        layout: { w: 12, h: 4 }
+        query: &scopedCalls >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+        columns:
+          - field: model
+            title: Model
+          - field: calls
+            title: Calls
+            column_type: number
+            progress: column_percent
+          - field: input_tokens
+            title: Input tokens
+            column_type: number
+          - field: output_tokens
+            title: Output tokens
+            column_type: number
+          - field: cost
+            title: Cost
+            column_type: number
+            unit: $
+            progress: column_percent
+          - field: cost_per_call
+            title: Avg cost / call
+            column_type: number
+            unit: $
+          - field: cost_per_1k
+            title: Cost / 1K tokens
+            column_type: number
+            unit: $
+        sql: |
+          SELECT
+            COALESCE(attributes___gen_ai___request___model, 'unknown') AS model,
+            COUNT(*) AS calls,
+            COALESCE(SUM(attributes___gen_ai___usage___input_tokens), 0) AS input_tokens,
+            COALESCE(SUM(attributes___gen_ai___usage___output_tokens), 0) AS output_tokens,
+            COALESCE(SUM(attributes___gen_ai___usage___cost), 0)::float8 AS cost,
+            COALESCE(AVG(attributes___gen_ai___usage___cost), 0)::float8 AS cost_per_call,
+            (COALESCE(SUM(attributes___gen_ai___usage___cost), 0) * 1000.0 / GREATEST(1, COALESCE(SUM(attributes___gen_ai___usage___input_tokens), 0) + COALESCE(SUM(attributes___gen_ai___usage___output_tokens), 0)))::float8 AS cost_per_1k
+          FROM otel_logs_and_spans
+          WHERE {{query_ast_filters}}
+          GROUP BY attributes___gen_ai___request___model
+          ORDER BY cost DESC
+          LIMIT 50
 
-  - type: 'timeseries_line'
-    title: 'Model latency percentiles'
-    hide_subtitle: true
-    summarize_by: max
-    query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") and duration != null | summarize percentiles(duration / 1000000, 50, 95, 99) by bin_auto(timestamp)
-    unit: ms
-    layout: { w: 6, h: 4 }
+      - type: top_list
+        title: 'Cost by user'
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          and attributes.gen_ai.usage.cost != null and attributes.user.id != null
+          | summarize sum(attributes.gen_ai.usage.cost) by attributes.user.id
+        unit: $
+        layout: { w: 4, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Model errors by model'
-    theme: 'roma'
-    query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") and status_code == "ERROR" | summarize count() by bin_auto(timestamp), attributes.gen_ai.request.model
-    unit: errors
-    layout: { w: 6, h: 4 }
+      - type: pie_chart
+        title: 'Spend share by model'
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          and attributes.gen_ai.usage.cost != null
+          | summarize sum(attributes.gen_ai.usage.cost) by attributes.gen_ai.request.model
+        unit: $
+        layout: { w: 4, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Tool calls by tool'
-    query: attributes.gen_ai.operation.name == "execute_tool" | summarize count() by bin_auto(timestamp), attributes.gen_ai.tool.name
-    unit: calls
-    layout: { w: 6, h: 4 }
+      - type: table
+        title: 'Most expensive conversations'
+        description: Conversations ranked by the cost of their model calls in this window. Open one from the LLM & Agents page.
+        layout: { w: 12, h: 5 }
+        query: *scopedCalls
+        columns:
+          - field: conversation
+            title: Conversation
+          - field: calls
+            title: Model calls
+            column_type: number
+          - field: tokens
+            title: Tokens
+            column_type: number
+          - field: cost
+            title: Cost
+            column_type: number
+            unit: $
+            progress: column_percent
+          - field: model
+            title: Model
+          - field: last_seen
+            title: Last seen
+        sql: |
+          SELECT
+            attributes___gen_ai___conversation___id AS conversation,
+            COUNT(*) AS calls,
+            COALESCE(SUM(attributes___gen_ai___usage___input_tokens), 0) + COALESCE(SUM(attributes___gen_ai___usage___output_tokens), 0) AS tokens,
+            COALESCE(SUM(attributes___gen_ai___usage___cost), 0)::float8 AS cost,
+            MIN(attributes___gen_ai___request___model) AS model,
+            MAX(timestamp) AS last_seen
+          FROM otel_logs_and_spans
+          WHERE {{query_ast_filters}} AND attributes___gen_ai___conversation___id IS NOT NULL
+          GROUP BY attributes___gen_ai___conversation___id
+          ORDER BY cost DESC
+          LIMIT 20
 
-  - type: top_list
-    title: 'Failing tools'
-    query: attributes.gen_ai.operation.name == "execute_tool" and status_code == "ERROR" | summarize count() by attributes.gen_ai.tool.name | order by count_ desc
-    unit: errors
-    layout: { w: 3, h: 4 }
+      - type: table
+        title: 'Most expensive calls'
+        layout: { w: 12, h: 5 }
+        query: *scopedCalls
+        columns:
+          - field: at
+            title: Time
+          - field: service
+            title: Service
+          - field: model
+            title: Model
+          - field: input_tokens
+            title: Input tokens
+            column_type: number
+          - field: output_tokens
+            title: Output tokens
+            column_type: number
+          - field: latency
+            title: Latency
+            column_type: duration
+            unit: ms
+          - field: cost
+            title: Cost
+            column_type: number
+            unit: $
+            progress: column_percent
+        sql: |
+          SELECT
+            timestamp AS at,
+            resource___service___name AS service,
+            attributes___gen_ai___request___model AS model,
+            attributes___gen_ai___usage___input_tokens AS input_tokens,
+            attributes___gen_ai___usage___output_tokens AS output_tokens,
+            (duration / 1000000.0)::float8 AS latency,
+            attributes___gen_ai___usage___cost::float8 AS cost
+          FROM otel_logs_and_spans
+          WHERE {{query_ast_filters}} AND attributes___gen_ai___usage___cost IS NOT NULL
+          ORDER BY attributes___gen_ai___usage___cost DESC
+          LIMIT 20
 
-  - type: top_list
-    title: 'Cost by agent'
-    query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") and attributes.gen_ai.usage.cost != null and attributes.gen_ai.agent.name != null | summarize sum(attributes.gen_ai.usage.cost) by attributes.gen_ai.agent.name
-    unit: $
-    layout: { w: 3, h: 4 }
+  - name: Models
+    icon: comment
+    variables: [service, model]
+    widgets:
+      - type: table
+        title: 'Model scorecard'
+        description: Volume, reliability, speed and spend per model, side by side.
+        layout: { w: 12, h: 5 }
+        query: *scopedCalls
+        columns:
+          - field: model
+            title: Model
+          - field: calls
+            title: Calls
+            column_type: number
+            progress: column_percent
+          - field: error_rate
+            title: Error rate
+            unit: '%'
+            progress: value_percent
+          - field: avg_latency
+            title: Avg latency
+            column_type: duration
+            unit: ms
+          - field: avg_input
+            title: Avg input tokens
+            column_type: number
+          - field: avg_output
+            title: Avg output tokens
+            column_type: number
+          - field: tokens_per_sec
+            title: Output tokens / s
+            column_type: number
+          - field: cost
+            title: Cost
+            column_type: number
+            unit: $
+        sql: |
+          SELECT
+            COALESCE(attributes___gen_ai___request___model, 'unknown') AS model,
+            COUNT(*) AS calls,
+            AVG(CASE WHEN status_code = 'ERROR' THEN 100.0 ELSE 0 END)::float8 AS error_rate,
+            (AVG(duration) / 1000000.0)::float8 AS avg_latency,
+            COALESCE(AVG(attributes___gen_ai___usage___input_tokens), 0)::float8 AS avg_input,
+            COALESCE(AVG(attributes___gen_ai___usage___output_tokens), 0)::float8 AS avg_output,
+            (COALESCE(SUM(attributes___gen_ai___usage___output_tokens), 0) * 1000000000.0 / GREATEST(1, SUM(duration)))::float8 AS tokens_per_sec,
+            COALESCE(SUM(attributes___gen_ai___usage___cost), 0)::float8 AS cost
+          FROM otel_logs_and_spans
+          WHERE {{query_ast_filters}}
+          GROUP BY attributes___gen_ai___request___model
+          ORDER BY calls DESC
+          LIMIT 50
 
-  - type: 'timeseries'
-    title: 'Cost by service'
-    query: attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content", "embeddings") and attributes.gen_ai.usage.cost != null | summarize sum(attributes.gen_ai.usage.cost) by bin_auto(timestamp), resource.service.name
-    unit: $
-    layout: { w: 6, h: 4 }
+      - type: 'timeseries'
+        title: 'Model calls by model'
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          | summarize count() by bin_auto(timestamp), attributes.gen_ai.request.model
+        unit: calls
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Input tokens by model'
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          | summarize sum(attributes.gen_ai.usage.input_tokens) by bin_auto(timestamp), attributes.gen_ai.request.model
+        unit: tokens
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Output tokens by model'
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          | summarize sum(attributes.gen_ai.usage.output_tokens) by bin_auto(timestamp), attributes.gen_ai.request.model
+        unit: tokens
+        layout: { w: 6, h: 4 }
+
+      - type: pie_chart
+        title: 'Calls by provider'
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          | summarize count() by attributes.gen_ai.provider.name
+        unit: calls
+        layout: { w: 3, h: 4 }
+
+      - type: pie_chart
+        title: 'Calls by operation'
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          | summarize count() by attributes.gen_ai.operation.name
+        unit: calls
+        layout: { w: 3, h: 4 }
+
+  - name: Latency
+    icon: clock
+    variables: [service, model]
+    widgets:
+      - type: 'timeseries_line'
+        title: 'Model latency percentiles'
+        hide_subtitle: true
+        summarize_by: max
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          and duration != null
+          | summarize percentiles(duration / 1000000, 50, 95, 99) by bin_auto(timestamp)
+        unit: ms
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries_line'
+        title: 'Average latency by model'
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          and duration != null
+          | summarize avg(duration) / 1000000 by bin_auto(timestamp), attributes.gen_ai.request.model
+        unit: ms
+        layout: { w: 6, h: 4 }
+
+      - type: heatmap
+        title: 'Model latency distribution'
+        description: Every model call in a log-scaled latency bucket over time, shaded by count, errors in red. Click a cell to open its calls in the Explorer.
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          and duration > 0
+          | summarize count() by bin_auto(timestamp), log_bin(duration), iff(status_code == "ERROR", "error", "ok")
+        unit: ns
+        layout: { w: 12, h: 5 }
+
+      - type: 'timeseries_line'
+        title: 'Output tokens per second'
+        description: Generation throughput, output tokens over time spent in model calls.
+        query: >-
+          attributes.gen_ai.operation.name in ("chat", "text_completion", "generate_content")
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          and duration > 0 and attributes.gen_ai.usage.output_tokens != null
+          | summarize sum(attributes.gen_ai.usage.output_tokens) * 1000000000 / sum(duration) by bin_auto(timestamp), attributes.gen_ai.request.model
+        unit: 'tokens/s'
+        layout: { w: 6, h: 4 }
+
+      - type: table
+        title: 'Slowest model calls'
+        layout: { w: 6, h: 4 }
+        query: *scopedCalls
+        columns:
+          - field: at
+            title: Time
+          - field: model
+            title: Model
+          - field: latency
+            title: Latency
+            column_type: duration
+            unit: ms
+            progress: column_percent
+          - field: output_tokens
+            title: Output tokens
+            column_type: number
+        sql: |
+          SELECT
+            timestamp AS at,
+            attributes___gen_ai___request___model AS model,
+            (duration / 1000000.0)::float8 AS latency,
+            attributes___gen_ai___usage___output_tokens AS output_tokens
+          FROM otel_logs_and_spans
+          WHERE {{query_ast_filters}} AND duration IS NOT NULL
+          ORDER BY duration DESC
+          LIMIT 20
+
+  - name: Tools
+    icon: function
+    variables: [service]
+    widgets:
+      - type: 'timeseries'
+        title: 'Tool calls by tool'
+        query: >-
+          attributes.gen_ai.operation.name == "execute_tool"
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          | summarize count() by bin_auto(timestamp), attributes.gen_ai.tool.name
+        unit: calls
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Tool errors by tool'
+        theme: 'roma'
+        query: >-
+          attributes.gen_ai.operation.name == "execute_tool"
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and status_code == "ERROR"
+          | summarize count() by bin_auto(timestamp), attributes.gen_ai.tool.name
+        unit: errors
+        layout: { w: 6, h: 4 }
+
+      - type: table
+        title: 'Tool scorecard'
+        description: How often each tool runs, how often it fails, and how long it takes.
+        layout: { w: 12, h: 5 }
+        query: >-
+          attributes.gen_ai.operation.name == "execute_tool"
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+        columns:
+          - field: tool
+            title: Tool
+          - field: calls
+            title: Calls
+            column_type: number
+            progress: column_percent
+          - field: errors
+            title: Errors
+            column_type: number
+          - field: error_rate
+            title: Error rate
+            unit: '%'
+            progress: value_percent
+          - field: avg_latency
+            title: Avg duration
+            column_type: duration
+            unit: ms
+          - field: max_latency
+            title: Max duration
+            column_type: duration
+            unit: ms
+        sql: |
+          SELECT
+            COALESCE(attributes___gen_ai___tool___name, name) AS tool,
+            COUNT(*) AS calls,
+            SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) AS errors,
+            AVG(CASE WHEN status_code = 'ERROR' THEN 100.0 ELSE 0 END)::float8 AS error_rate,
+            (AVG(duration) / 1000000.0)::float8 AS avg_latency,
+            (MAX(duration) / 1000000.0)::float8 AS max_latency
+          FROM otel_logs_and_spans
+          WHERE {{query_ast_filters}}
+          GROUP BY COALESCE(attributes___gen_ai___tool___name, name)
+          ORDER BY calls DESC
+          LIMIT 50
+
+      - type: top_list
+        title: 'Failing tools'
+        query: >-
+          attributes.gen_ai.operation.name == "execute_tool"
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and status_code == "ERROR"
+          | summarize count() by attributes.gen_ai.tool.name | order by count_ desc
+        unit: errors
+        layout: { w: 4, h: 4 }
+
+      - type: top_list
+        title: 'Slowest tools (avg)'
+        query: >-
+          attributes.gen_ai.operation.name == "execute_tool"
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and duration != null
+          | summarize avg(duration) / 1000000 by attributes.gen_ai.tool.name
+        unit: ms
+        layout: { w: 4, h: 4 }
+
+      - type: top_list
+        title: 'Tool use by agent'
+        query: >-
+          attributes.gen_ai.operation.name == "execute_tool"
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and attributes.gen_ai.agent.name != null
+          | summarize count() by attributes.gen_ai.agent.name
+        unit: calls
+        layout: { w: 4, h: 4 }
+
+      - type: logs
+        title: 'Failed tool calls'
+        query: >-
+          attributes.gen_ai.operation.name == "execute_tool"
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and status_code == "ERROR"
+        layout: { w: 12, h: 6 }
+
+  - name: Agents
+    icon: diagram-project
+    variables: [service]
+    widgets:
+      - type: 'timeseries'
+        title: 'Agent runs by agent'
+        query: >-
+          {{agent_run_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          | summarize count() by bin_auto(timestamp), attributes.gen_ai.agent.name
+        unit: runs
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Active conversations'
+        description: Distinct conversation ids seen in each interval.
+        query: >-
+          attributes.gen_ai.operation.name != null
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and attributes.gen_ai.conversation.id != null
+          | summarize dcount(attributes.gen_ai.conversation.id) by bin_auto(timestamp)
+        unit: conversations
+        layout: { w: 6, h: 4 }
+
+      - type: table
+        title: 'Agent scorecard'
+        description: Runs, success, and run duration per agent.
+        layout: { w: 12, h: 5 }
+        query: >-
+          {{agent_run_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+        columns:
+          - field: agent
+            title: Agent
+          - field: runs
+            title: Runs
+            column_type: number
+            progress: column_percent
+          - field: error_rate
+            title: Failed runs
+            unit: '%'
+            progress: value_percent
+          - field: avg_duration
+            title: Avg run duration
+            column_type: duration
+            unit: ms
+          - field: max_duration
+            title: Longest run
+            column_type: duration
+            unit: ms
+          - field: conversations
+            title: Conversations
+            column_type: number
+        sql: |
+          SELECT
+            COALESCE(attributes___gen_ai___agent___name, name) AS agent,
+            COUNT(*) AS runs,
+            AVG(CASE WHEN status_code = 'ERROR' THEN 100.0 ELSE 0 END)::float8 AS error_rate,
+            (AVG(duration) / 1000000.0)::float8 AS avg_duration,
+            (MAX(duration) / 1000000.0)::float8 AS max_duration,
+            COUNT(DISTINCT attributes___gen_ai___conversation___id) AS conversations
+          FROM otel_logs_and_spans
+          WHERE {{query_ast_filters}}
+          GROUP BY COALESCE(attributes___gen_ai___agent___name, name)
+          ORDER BY runs DESC
+          LIMIT 50
+
+      - type: 'timeseries_line'
+        title: 'Agent run duration percentiles'
+        hide_subtitle: true
+        summarize_by: max
+        query: >-
+          {{agent_run_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and duration != null
+          | summarize percentiles(duration / 1000000, 50, 95, 99) by bin_auto(timestamp)
+        unit: ms
+        layout: { w: 6, h: 4 }
+
+      - type: top_list
+        title: 'Busiest users'
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and attributes.user.id != null
+          | summarize count() by attributes.user.id
+        unit: calls
+        layout: { w: 6, h: 4 }
+
+  - name: Errors
+    icon: bug
+    variables: [service, model]
+    widgets:
+      - type: 'timeseries'
+        title: 'Model errors by model'
+        theme: 'roma'
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          and status_code == "ERROR"
+          | summarize count() by bin_auto(timestamp), attributes.gen_ai.request.model
+        unit: errors
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries_line'
+        title: 'Model error rate'
+        query: >-
+          {{llm_call_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and ("{{var-model}}" == "" or attributes.gen_ai.request.model == "{{var-model}}")
+          | summarize countif(status_code == "ERROR") * 100.0 / count() by bin_auto(timestamp)
+        unit: '%'
+        layout: { w: 6, h: 4 }
+
+      - type: top_list
+        title: 'Error types'
+        query: >-
+          {{ai_step_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and status_code == "ERROR"
+          | summarize count() by attributes.error.type
+        unit: errors
+        layout: { w: 4, h: 4 }
+
+      - type: top_list
+        title: 'Error messages'
+        query: >-
+          {{ai_step_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and status_code == "ERROR" and status_message != null
+          | summarize count() by status_message
+        unit: errors
+        layout: { w: 8, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Errors by operation'
+        theme: 'roma'
+        query: >-
+          {{ai_step_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and status_code == "ERROR"
+          | summarize count() by bin_auto(timestamp), attributes.gen_ai.operation.name
+        unit: errors
+        layout: { w: 12, h: 4 }
+
+      - type: logs
+        title: 'Failed AI spans'
+        query: >-
+          {{ai_step_kql}}
+          and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          and status_code == "ERROR"
+        layout: { w: 12, h: 6 }

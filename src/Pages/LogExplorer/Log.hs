@@ -73,7 +73,6 @@ import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
-import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, pageActions, pageTitle)
 import Pages.Components (FieldCfg (..), FieldSize (..), explorerNavTabs_, formField_, keyboardActivateAttr_, lazyPanel_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
 import Pages.LogExplorer.LogItem qualified as LogItem
@@ -1397,70 +1396,6 @@ virtualTable pid attrs =
     ("" :: Text)
 
 
-traceLoadingSkeleton_ :: Html ()
-traceLoadingSkeleton_ =
-  div_ [class_ "w-full h-full p-2 flex flex-col gap-4", role_ "status", Aria.live_ "polite"] do
-    -- Match the loaded trace's header so opening it never shifts the waterfall.
-    div_ [class_ "flex flex-wrap justify-between items-center gap-y-1"] do
-      div_ [class_ "flex items-center gap-3"] do
-        div_ [class_ "h-4 w-12 rounded skeleton-shimmer"] ""
-        div_ [class_ "h-5 w-32 rounded skeleton-shimmer"] ""
-      div_ [class_ "flex items-center gap-2"] do
-        div_ [class_ "h-8 w-56 rounded-lg skeleton-shimmer"] ""
-        div_ [class_ "h-7 w-7 rounded skeleton-shimmer"] ""
-    div_ [class_ "flex flex-col gap-2 w-full mt-5"] do
-      div_ [class_ "flex flex-wrap justify-between gap-y-1 mb-2"] do
-        div_ [class_ "flex items-center gap-5"] do
-          div_ [class_ "h-4 w-16 rounded skeleton-shimmer"] ""
-          div_ [class_ "h-4 w-14 rounded skeleton-shimmer"] ""
-          div_ [class_ "h-4 w-14 rounded skeleton-shimmer"] ""
-        div_ [class_ "flex items-center gap-3"] do
-          div_ [class_ "h-4 w-16 rounded skeleton-shimmer"] ""
-          div_ [class_ "h-4 w-16 rounded skeleton-shimmer"] ""
-          div_ [class_ "h-4 w-20 rounded skeleton-shimmer"] ""
-      div_ [class_ "h-9 w-full rounded-lg border border-strokeWeak bg-fillWeaker flex items-center px-3"] do
-        div_ [class_ "h-3 w-32 rounded skeleton-shimmer"] ""
-      div_ [class_ "border border-strokeWeak rounded-2xl min-h-[230px] overflow-hidden"] do
-        div_ [class_ "flex h-8 border-b border-strokeWeak items-end text-xs"] do
-          div_ [class_ "shrink-0 px-2 pb-1 text-textWeak font-medium", style_ "width:35%"] "Service / Span"
-          div_ [class_ "grow flex justify-between px-2 pb-1"]
-            $ replicateM_ 7
-            $ div_ [class_ "h-3 w-8 rounded skeleton-shimmer"] ""
-        div_ [class_ "py-1"]
-          $ forM_
-            ( [ ("w-28", "ml-0 w-full")
-              , ("w-24", "ml-0 w-[78%]")
-              , ("w-36", "ml-[70%] w-[21%]")
-              , ("w-40", "ml-[72%] w-[4%]")
-              , ("w-32", "ml-[72%] w-[2%]")
-              , ("w-48", "ml-[73%] w-[8%]")
-              , ("w-36", "ml-[73%] w-[3%]")
-              , ("w-40", "ml-[73%] w-[2%]")
-              , ("w-28", "ml-[74%] w-[5%]")
-              ]
-                :: [(Text, Text)]
-            )
-          $ \(labelW, barPos) ->
-            div_ [class_ "flex items-center h-7"] do
-              div_ [class_ "shrink-0 flex items-center gap-2 px-3", style_ "width:35%"] do
-                div_ [class_ "w-2.5 h-2.5 rounded-full skeleton-shimmer"] ""
-                div_ [class_ $ "h-3 " <> labelW <> " rounded skeleton-shimmer"] ""
-              div_ [class_ "relative grow h-full"]
-                $ div_ [class_ $ "h-3 mt-2 rounded-sm skeleton-shimmer " <> barPos] ""
-    span_ [class_ "sr-only"] "Loading trace…"
-    div_ [id_ "trace-load-error", class_ "hidden mt-4 flex items-center gap-3 text-sm text-textWeak"] do
-      "Trace details could not be loaded."
-      button_
-        [ class_ "text-textBrand font-medium cursor-pointer hover:underline"
-        , Aria.label_ "Retry loading trace"
-        , [__|on click
-        add .hidden to #trace-load-error
-        call htmx.ajax('GET', #trace_expanded_view's @data-trace-url, {target: #trace_expanded_view, swap: 'innerHTML'})
-      end|]
-        ]
-        "Retry"
-
-
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   -- #main-content is the HTMX swap target; <head> is not included in a boosted
@@ -1474,7 +1409,6 @@ apiLogsPage page = do
       <> encodeText url
       <> ", {headers: {Accept: \"application/json\"}, credentials: \"include\"}).then(r => r.json()); window.logDataPromise = load().catch(load);}"
   sectionWrapper_ do
-    template_ [id_ "trace-loading-skeleton"] traceLoadingSkeleton_
     div_ [class_ "fixed z-10030 hidden right-4 w-max h-max rounded-2xl top-32 border-2 border-strokeStrong p-0.5 bg-bgRaised shadow-lg [&_#replayerOuterContainer]:shadow-none", id_ "sessionPlayerWrapper"] do
       termRaw "session-replay" [id_ "sessionReplay", class_ "shrink-1 flex flex-col", term "projectId" pidTxt, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
     queryControlsSection
@@ -1599,7 +1533,7 @@ apiLogsPage page = do
     logsListPanel = div_ [class_ "@container grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", id_ "logs_list_container"] do
       rowCountHeader
       vizWidget
-      traceOverlay
+      LogItem.traceOverlay_ pidTxt LogItem.ExplorerPanel page.showTrace
       div_ [class_ "flex-1 min-h-0 h-full flex flex-col"]
         $ div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block"]
         $ virtualTable page.pid [term "mode" $ display page.vizType]
@@ -1651,41 +1585,6 @@ apiLogsPage page = do
         , term "hx-sync" "this:replace"
         ]
         $ when isChart (Widget.widget_ page.vizChart)
-
-    -- Both shared-link and in-app paths enter through loadTrace, so they get the
-    -- same immediate skeleton, request, and retry state.
-    traceOverlay =
-      div_
-        [ class_ $ "absolute top-0 right-0 w-full h-full overflow-hidden c-scroll z-50 bg-bgBase transition-all duration-100 " <> if isJust page.showTrace then "" else "hidden"
-        , id_ "trace_expanded_view"
-        , term "aria-busy" "true"
-        , term
-            "_"
-            [text|on closeTraceView
-                    add .hidden to me then send toggleFullscreen(mode: 'trace', active: false) to #apiLogsPage
-                    call updateUrlState('showTrace', '', 'delete')
-                  end
-                  on htmx:after:swap[#apiLogsPage's @data-fullscreen is 'details'] from me
-                    send toggleFullscreen(mode: 'trace', active: true) to #apiLogsPage
-                  end
-                  on htmx:response:error from me
-                    remove .hidden from #trace-load-error
-                  end
-                  on loadTrace(url)
-                    set my @data-trace-url to url
-                    put #trace-loading-skeleton.innerHTML into me then remove .hidden from me
-                    send toggleFullscreen(mode: 'trace', active: true) to #apiLogsPage
-                    call htmx.ajax('GET', url, {target: me, swap: 'innerHTML'})
-                  end
-                  on openTraceFullscreen(traceId, timestamp) from window
-                    call updateUrlState('showTrace', traceId + '/?timestamp=' + timestamp)
-                    send loadTrace(url: '/p/${pidTxt}/traces/' + traceId + '/?timestamp=' + encodeURIComponent(timestamp)) to me|]
-        ]
-        do
-          traceLoadingSkeleton_
-          whenJust page.showTrace \trIdAndTimestamp -> do
-            let url = "/p/" <> pidTxt <> "/traces/" <> trIdAndTimestamp
-            div_ [term "data-trace-url" url, [__|init send loadTrace(url: my @data-trace-url) to #trace_expanded_view|]] pass
 
     -- Lazily loaded (HTMX) the first time this container is revealed, so the
     -- shell never renders it or forks a teams query per load.
