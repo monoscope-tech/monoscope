@@ -1002,7 +1002,13 @@ keyValuePairs kvs = [(kv ^. PCF.key, anyValueToJSON (kv ^. PCF.value)) | kv <- k
 
 
 keyValueToJSON :: [PC.KeyValue] -> AE.Value
-keyValueToJSON !kvs = attrPairsToJSON $ GenAI.normalizeGenAI $ migrateHttpSemanticConventions $ keyValuePairs kvs
+keyValueToJSON !kvs = attrPairsToJSON $ migrateHttpSemanticConventions $ keyValuePairs kvs
+
+
+-- | A span's or log record's own attributes, where LLM telemetry lives; metric, scope, event
+-- and link attributes keep their producer's keys so metric series identity never shifts.
+recordAttributesToJSON :: [PC.KeyValue] -> AE.Value
+recordAttributesToJSON = attrPairsToJSON . GenAI.normalizeGenAI . migrateHttpSemanticConventions . keyValuePairs
 
 
 anyValueToJSON :: PC.AnyValue -> AE.Value
@@ -1120,7 +1126,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM logRecord =
                   , severity_number = severityNumber
                   }
           , body = Just $ AesonText $ anyValueToJSON $ logRecord ^. PLF.body
-          , attributes = fmap AesonText $ jsonToMap $ removeProjectId $ keyValueToJSON $ logRecord ^. PLF.attributes
+          , attributes = fmap AesonText $ jsonToMap $ removeProjectId $ recordAttributesToJSON $ logRecord ^. PLF.attributes
           , resource = fmap AesonText $ jsonToMap $ removeProjectId $ resourceToJSON resourceM
           , hashes = Just V.empty
           , kind = Just "log"
@@ -1216,7 +1222,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM pSpan =
                    ]
                | link <- lks
                ]
-      !attributes = jsonToMap $ removeProjectId $ keyValueToJSON $ pSpan ^. PTF.attributes
+      !attributes = jsonToMap $ removeProjectId $ recordAttributesToJSON $ pSpan ^. PTF.attributes
       spanName' = pSpan ^. PTF.name
       -- "monoscope.http" included so re-ingested spans get consistent body/attribute processing
       isOurSdkSpan = spanName' `elem` Telemetry.sdkSpanNames

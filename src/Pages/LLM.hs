@@ -108,9 +108,10 @@ abnormal c = maybe [] (\(AesonText (GenAI.FinishReasons rs)) -> mapMaybe GenAI.a
 groupConversations :: V.Vector Call -> [Conversation]
 groupConversations calls = sortOn (Down . (.lastSeen)) $ mapMaybe conversation $ M.toList grouped
   where
-    traces = M.fromListWith (<>) [(c.traceId, [c]) | c <- V.toList calls]
-    traceKey spans = asum (map (.conversation) spans) <|> (viaNonEmpty head spans <&> (.traceId)) <* guard (any ((`elem` ["invoke_agent", "invoke_workflow"]) . (.operation)) spans || any (isJust . (.conversation)) spans)
-    grouped = M.fromListWith (<>) [(k, [spans]) | spans <- M.elems traces, Just k <- [traceKey spans]]
+    -- Logs carry no trace (Claude Code's events): each is its own unit, never one shared "" trace.
+    traces = M.fromListWith (<>) [(if T.null c.traceId then c.id else c.traceId, [c]) | c <- V.toList calls]
+    traceKey (unit, spans) = asum (map (.conversation) spans) <|> (unit <$ guard (any ((`elem` ["invoke_agent", "invoke_workflow"]) . (.operation)) spans))
+    grouped = M.fromListWith (<>) [(k, [spans]) | (unit, spans) <- M.toList traces, Just k <- [traceKey (unit, spans)]]
     conversation (k, traceGroups) = do
       let spans = sortOn (.timestamp) $ concat traceGroups
           chats = filter inference spans
@@ -382,9 +383,9 @@ conversationGetH pid key fromP toP sinceP = do
         pid
         window
         True
-        [HI.sql| AND (context___trace_id = #{key} OR context___trace_id IN (
+        [HI.sql| AND (context___trace_id = #{key} OR attributes -> 'gen_ai' -> 'conversation' ->> 'id' = #{key} OR context___trace_id IN (
             SELECT context___trace_id FROM otel_logs_and_spans
-            WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{window.fromTime} AND #{window.toTime}
+            WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{window.fromTime} AND #{window.toTime} AND context___trace_id <> ''
               AND attributes -> 'gen_ai' -> 'conversation' ->> 'id' = #{key})) |]
   let summary = viaNonEmpty head $ groupConversations $ V.fromList steps
   addRespHeaders

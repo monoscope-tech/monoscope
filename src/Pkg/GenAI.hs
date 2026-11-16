@@ -179,7 +179,7 @@ isInferenceOp = (`elem` ["chat", "text_completion", "generate_content", "embeddi
 --
 -- Claude Code log events: string numbers, exclusive input counts made inclusive, its own cost:
 --
--- >>> let cc = normalizeGenAI [("event.name", "api_request"), ("model", "claude-sonnet-4-5"), ("input_tokens", "10"), ("cache_read_tokens", "5000"), ("output_tokens", "20"), ("cost_usd", "0.0021"), ("session.id", "abc")]
+-- >>> let cc = normalizeGenAI [("event.name", "api_request"), ("prompt.id", "98ec"), ("model", "claude-sonnet-4-5"), ("input_tokens", "10"), ("cache_read_tokens", "5000"), ("output_tokens", "20"), ("cost_usd", "0.0021"), ("session.id", "abc")]
 -- >>> mapMaybe (`lookup` cc) ["gen_ai.operation.name", "gen_ai.provider.name", "gen_ai.usage.input_tokens", "gen_ai.usage.cost", "gen_ai.usage.cost_source", "gen_ai.conversation.id"]
 -- [String "chat",String "anthropic",Number 5010.0,Number 2.1e-3,String "reported",String "abc"]
 --
@@ -194,10 +194,18 @@ isInferenceOp = (`elem` ["chat", "text_completion", "generate_content", "embeddi
 -- >>> mapMaybe (`lookup` v) ["gen_ai.operation.name", "gen_ai.usage.input_tokens", "gen_ai.usage.cost"]
 -- [String "invoke_agent"]
 --
--- Records with no GenAI marker pass through untouched, even with a session or bare model key:
+-- Records with no GenAI marker pass through untouched, even with a session, a bare model key or
+-- an event name Claude Code also uses:
 --
 -- >>> normalizeGenAI [("session.id", "s"), ("model", "x"), ("http.request.method", "GET")]
 -- [("session.id",String "s"),("model",String "x"),("http.request.method",String "GET")]
+-- >>> normalizeGenAI [("event.name", "api_error"), ("session.id", "s")]
+-- [("event.name",String "api_error"),("session.id",String "s")]
+--
+-- A model with no operation is a chat call only when it reports tokens:
+--
+-- >>> lookup "gen_ai.operation.name" <$> map normalizeGenAI [[("gen_ai.request.model", "gpt-4o")], [("gen_ai.request.model", "gpt-4o"), ("gen_ai.usage.input_tokens", AE.Number 3)]]
+-- [Nothing,Just (String "chat")]
 normalizeGenAI :: [(Text, AE.Value)] -> [(Text, AE.Value)]
 normalizeGenAI kvs
   | isNothing ccEvent && not (any (\(k, _) -> any (`T.isPrefixOf` k) markers) kvs) = kvs
@@ -205,7 +213,8 @@ normalizeGenAI kvs
   where
     markers = ["gen_ai.", "llm.", "ai.", "openinference.", "traceloop.", "langfuse."]
     -- The guard above runs on every attribute set ingested, so it must not build the map.
-    ccEvent = lookup "event.name" kvs >>= str >>= \e -> find (== fromMaybe e (T.stripPrefix "claude_code." e)) ["api_request", "api_error", "tool_result", "user_prompt"]
+    -- These event names are common elsewhere; Claude Code also stamps every event with prompt.id.
+    ccEvent = guard (isJust $ lookup "prompt.id" kvs) *> lookup "event.name" kvs >>= str >>= \e -> find (== fromMaybe e (T.stripPrefix "claude_code." e)) ["api_request", "api_error", "tool_result", "user_prompt"]
     m = HM.fromList kvs
     pick k = HM.lookup k m
     firstOf = asum . map pick
@@ -219,7 +228,8 @@ normalizeGenAI kvs
         <|> (text "traceloop.span.kind" >>= (`lookup` [("workflow", "invoke_workflow"), ("agent", "invoke_agent"), ("tool", "execute_tool"), ("task", "task")]))
         <|> (text "ai.operationId" >>= vercelOp)
         <|> (ccEvent >>= (`lookup` [("api_request", "chat"), ("api_error", "chat"), ("tool_result", "execute_tool"), ("user_prompt", "user_prompt")]))
-        <|> ("chat" <$ guard (isJust model && isJust inputTokens))
+        -- Raw keys, not the derived counts: those are guarded on this very operation.
+        <|> ("chat" <$ guard (isJust model && isJust (firstOf inputTokenKeys)))
     vercelOp o
       | any (`T.isSuffixOf` o) [".doGenerate", ".doStream"] = Just "chat"
       | ".doEmbed" `T.isSuffixOf` o = Just "embeddings"
@@ -232,7 +242,8 @@ normalizeGenAI kvs
     model = firstOf ["gen_ai.request.model", "llm.request.model_name", "llm.model_name", "ai.model.id", "langfuse.observation.model.name"] <|> cc "model"
     responseModel = firstOf ["gen_ai.response.model", "llm.response.model_name", "ai.response.model"]
     tokens keys = guard inference *> (firstOf keys >>= num)
-    inputTokens = tokens ["gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens", "llm.token_count.prompt", "ai.usage.promptTokens", "ai.usage.inputTokens"]
+    inputTokenKeys = ["gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens", "llm.token_count.prompt", "ai.usage.promptTokens", "ai.usage.inputTokens"]
+    inputTokens = tokens inputTokenKeys
     outputTokens = tokens ["gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens", "llm.token_count.completion", "ai.usage.completionTokens", "ai.usage.outputTokens"]
     cacheRead = tokens ["gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cache_read_input_tokens", "llm.token_count.prompt_details.cache_read"]
     cacheWrite = tokens ["gen_ai.usage.cache_write.input_tokens", "gen_ai.usage.cache_creation.input_tokens", "gen_ai.usage.cache_creation_input_tokens", "llm.token_count.prompt_details.cache_write"]

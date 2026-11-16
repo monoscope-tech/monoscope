@@ -17,6 +17,7 @@ import Pages.LogExplorer.LogItem qualified as LogItem
 import Pkg.AI qualified as AI
 import Pkg.Components.Table (Table (..))
 import Pkg.TestUtils
+import Proto.Opentelemetry.Proto.Logs.V1.Logs qualified as PL
 import System.Config (AuthContext (..), EnvConfig (..))
 
 
@@ -55,6 +56,21 @@ spec = around withTestResources do
       map (\c -> (c.key, c.llmCalls, c.toolCalls, c.title, c.signals)) (toList table.rows) `shouldBe` [("conv-1", 2, 1, Just "Why is checkout slow?", [LLM.Truncated])]
       calls <- call tr $ LLM.llmGetH pid (Just "calls") Nothing (Just "claude-sonnet-4-5") Nothing from to Nothing (Just "1")
       renderT calls `shouldContainAll` ["openllmetry chat", "$0.0027", "2K → 50"]
+
+    it "keeps each trace-less Claude Code session its own conversation, and leaves look-alike app logs alone" \tr -> do
+      pid <- createTestProject tr "Claude Code"
+      apiKey <- createTestAPIKey tr pid "claude-code"
+      now <- getCurrentTime
+      let event n session promptId attrs = ingestLogRecord tr apiKey ("INFO", PL.SEVERITY_NUMBER_INFO) ("claude_code." <> fromMaybe "" (lookup "event.name" attrs)) ([("session.id", session), ("prompt.id", promptId)] <> attrs) (addUTCTime n now)
+      event 1 "sess-a" "p1" [("event.name", "user_prompt"), ("prompt", "Fix the failing build")]
+      event 2 "sess-a" "p1" [("event.name", "api_request"), ("model", "claude-sonnet-4-5"), ("input_tokens", "10"), ("cache_read_tokens", "5000"), ("output_tokens", "20"), ("cost_usd", "0.0021")]
+      event 3 "sess-b" "p2" [("event.name", "user_prompt"), ("prompt", "Write the tests")]
+      event 4 "sess-b" "p2" [("event.name", "api_request"), ("model", "claude-sonnet-4-5"), ("input_tokens", "100"), ("output_tokens", "900"), ("cost_usd", "0.5")]
+      ingestLogRecord tr apiKey ("ERROR", PL.SEVERITY_NUMBER_ERROR) "checkout failed" [("event.name", "api_error"), ("session.id", "sess-a")] (addUTCTime 5 now)
+      let (from, to) = around' now
+      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing from to Nothing (Just "1")
+      map (\c -> (c.key, c.title, c.llmCalls, c.tokens, c.cost)) (toList table.rows) `shouldBe` [("sess-b", Just "Write the tests", 1, 1000, Just 0.5), ("sess-a", Just "Fix the failing build", 1, 5030, Just 0.0021)]
+      renderT <$> call tr (LLM.conversationGetH pid "sess-a" from to Nothing) >>= (`shouldContainAll` ["Fix the failing build", "$0.0021"])
 
     it "observes Monoscope's own assistant: an agent run, its model calls in order, and its tools" \tr -> do
       apiKey <- createTestAPIKey tr testPid "self-telemetry"

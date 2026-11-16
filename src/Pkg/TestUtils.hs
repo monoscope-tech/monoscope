@@ -100,6 +100,7 @@ module Pkg.TestUtils (
   ingestLog,
   ingestLogWithResource,
   ingestErrorLog,
+  ingestLogRecord,
   ingestTrace,
   ingestSpanLinked,
   ingestSpanReq,
@@ -1692,7 +1693,12 @@ ingestLogWithResource tr apiKey attributes bodyText timestamp =
 -- records never carry span events, so error extraction relies on severity +
 -- attributes rather than event_attributes.exception.
 ingestErrorLog :: TestResources -> Text -> Text -> [(Text, Text)] -> UTCTime -> IO ()
-ingestErrorLog tr apiKey bodyText extras timestamp =
+ingestErrorLog tr apiKey = ingestLogRecord tr apiKey ("ERROR", PL.SEVERITY_NUMBER_ERROR)
+
+
+-- | One log record with the given severity, body and string attributes.
+ingestLogRecord :: TestResources -> Text -> (Text, PL.SeverityNumber) -> Text -> [(Text, Text)] -> UTCTime -> IO ()
+ingestLogRecord tr apiKey (severityText, severityNumber) bodyText extras timestamp =
   let attrs = [mkAttr k v | (k, v) <- extras]
       logRecord =
         defMessage
@@ -1701,9 +1707,9 @@ ingestErrorLog tr apiKey bodyText extras timestamp =
             & PLF.body
           .~ (defMessage & PCF.stringValue .~ bodyText)
             & PLF.severityText
-          .~ "ERROR"
+          .~ severityText
             & PLF.severityNumber
-          .~ PL.SEVERITY_NUMBER_ERROR
+          .~ severityNumber
             & PLF.attributes
           .~ attrs
       scopeLog = defMessage & PLF.logRecords .~ [logRecord]
