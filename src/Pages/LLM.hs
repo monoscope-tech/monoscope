@@ -8,7 +8,6 @@ module Pages.LLM (
   LLMGet (..),
   LLMBody (..),
   ConversationGet (..),
-  Call (..),
   Conversation (..),
   Signal (..),
   groupConversations,
@@ -18,7 +17,6 @@ import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Foldable1 qualified as F1
 import Data.Map.Strict qualified as M
-import Data.Scientific (toRealFloat)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
@@ -33,11 +31,11 @@ import Models.Ids qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), RefreshingDeferred (..), callout_, localTimeFmt_, metaChip_, tableSkeleton_, tonePill_, withDeferredBody)
 import Pages.Containers (mkWindow, windowed)
-import Pages.GenAIMessages (StepCall (..), ToolRun (..), genAIAt, message_, renderValue)
+import Pages.GenAIMessages (Call (..), genAIAt, message_)
 import Pkg.Components.Table (Column, Features (..), Table (..), ZeroState (..), col, countedFilter, facetActions, inventoryTable, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe)
+import Pkg.DeriveUtils (unAesonTextMaybe)
 import Pkg.GenAI qualified as GenAI
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, useTfReads)
@@ -45,33 +43,6 @@ import Utils (TabStrip (..), drawerRowAttrs_, faSprite_, getDurationNSMS, navTab
 import Web.Links
 
 
--- | One GenAI span without its message bodies: the list views read thousands of these.
-data Call = Call
-  { id :: Text
-  , traceId :: Text
-  , timestamp :: UTCTime
-  , duration :: Int64
-  , failed :: Bool
-  , name :: Text
-  , service :: Maybe Text
-  , operation :: Text
-  , conversation :: Maybe Text
-  , agent :: Maybe Text
-  , model :: Maybe Text
-  , inputTokens :: Maybe Double
-  , outputTokens :: Maybe Double
-  , cost :: Maybe Double
-  , tool :: Maybe Text
-  , toolArgs :: Maybe Text
-  , preview :: Maybe Text
-  , finish :: Maybe Text
-  , user :: Maybe Text
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
-
-
--- | Deterministic findings: each is a rule over spans, so every one is explainable and free.
 data Signal = ToolError | ModelError | Truncated | Filtered | Looping | ContextPressure
   deriving stock (Bounded, Enum, Eq, Ord, Show)
 
@@ -126,7 +97,7 @@ inference = GenAI.isInferenceOp . (.operation)
 -- otherwise lists only as calls, so single classifier calls don't drown real conversations.
 --
 -- >>> let t = read @UTCTime "2026-01-01 00:00:00 UTC"
--- >>> let c tr op conv = Call "s" tr t 1000 False op Nothing op conv Nothing (Just "gpt-4o") (Just 10) (Just 5) (Just 0.01) Nothing Nothing (Just "hi") Nothing Nothing
+-- >>> let c tr op conv = Call "s" tr t 1000 False op Nothing op conv Nothing (Just "gpt-4o") (Just 10) (Just 5) (Just 0.01) Nothing Nothing (Just "hi") Nothing Nothing Nothing
 -- >>> map (\x -> (x.key, x.turns, x.llmCalls)) $ groupConversations $ V.fromList [c "t1" "invoke_agent" (Just "conv"), c "t1" "chat" Nothing, c "t2" "chat" (Just "conv"), c "t3" "chat" Nothing, c "t4" "invoke_agent" Nothing]
 -- [("conv",2,2),("t4",1,0)]
 groupConversations :: V.Vector Call -> [Conversation]
@@ -162,21 +133,21 @@ groupConversations calls = sortOn (Down . (.lastSeen)) $ mapMaybe conversation $
           , cost = viaNonEmpty sum (mapMaybe (.cost) chats)
           , errors = length $ filter (.failed) spans
           , activeNs = sum $ map traceSpan traceGroups
-          , signals = signalsOf spans
+          , -- Deterministic rules, in 'Signal' order, so each finding is explainable and free.
+            signals =
+              [ sig
+              | (sig, True) <-
+                  zip
+                    universe
+                    [ any (\c -> c.failed && c.operation == "execute_tool") spans
+                    , any (\c -> c.failed && inference c) spans
+                    , any (finishedWith ["length", "max_tokens", "MAX_TOKENS"]) spans
+                    , any (finishedWith ["content_filter", "refusal", "SAFETY"]) spans
+                    , any (>= 3) $ M.fromListWith (+) [((t, c.toolArgs), 1 :: Int) | c <- spans, Just t <- [c.tool]]
+                    , any pressured spans
+                    ]
+              ]
           }
-
-
-signalsOf :: [Call] -> [Signal]
-signalsOf spans = [s | (s, True) <- zip universe checks]
-  where
-    checks =
-      [ any (\c -> c.failed && c.operation == "execute_tool") spans
-      , any (\c -> c.failed && inference c) spans
-      , any (finishedWith ["length", "max_tokens", "MAX_TOKENS"]) spans
-      , any (finishedWith ["content_filter", "refusal", "SAFETY"]) spans
-      , any (>= 3) $ M.elems $ M.fromListWith (+) [((t, c.toolArgs), 1 :: Int) | c <- spans, Just t <- [c.tool]]
-      , any pressured spans
-      ]
     finishedWith rs c = any (\r -> any (T.isInfixOf r) c.finish) rs
     pressured c = fromMaybe False do
       window <- c.model >>= GenAI.lookupPrice >>= (.contextWindow)
@@ -184,14 +155,14 @@ signalsOf spans = [s | (s, True) <- zip universe checks]
       pure $ used >= 0.8 * fromIntegral window
 
 
--- | Every GenAI span in the window, newest first, capped so a busy project stays one bounded scan.
-selectCalls :: Projects.ProjectId -> TimePicker.TimeWindow -> ATAuthCtx (V.Vector Call)
-selectCalls pid window = do
+-- | The window's GenAI spans, newest first and capped so a busy project stays one bounded scan.
+-- Lists skip the attributes blob, where message bodies live; a conversation's detail reads it.
+selectCalls :: Projects.ProjectId -> TimePicker.TimeWindow -> Bool -> HI.Sql -> ATAuthCtx [Call]
+selectCalls pid window bodies scope = do
   tf <- useTfReads
   Hasql.withHasqlTimefusion tf
-    $ V.fromList
-    <$> Hasql.interp
-      [HI.sql|
+    $ Hasql.interp
+    $ [HI.sql|
       SELECT id::text, COALESCE(context___trace_id, ''), timestamp, COALESCE(duration, 0), COALESCE(status_code = 'ERROR', false), COALESCE(name, ''), resource___service___name,
         attributes -> 'gen_ai' -> 'operation' ->> 'name',
         attributes -> 'gen_ai' -> 'conversation' ->> 'id',
@@ -204,12 +175,14 @@ selectCalls pid window = do
         left(attributes -> 'gen_ai' -> 'tool' -> 'call' ->> 'arguments', 300),
         attributes -> 'gen_ai' -> 'input' ->> 'preview',
         attributes -> 'gen_ai' -> 'response' ->> 'finish_reasons',
-        attributes___user___id
+        attributes___user___id, |]
+    <> bool [HI.sql|CASE WHEN false THEN attributes END|] [HI.sql|attributes|] bodies
+    <> [HI.sql|
       FROM otel_logs_and_spans
       WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{window.fromTime} AND #{window.toTime}
-        AND attributes -> 'gen_ai' -> 'operation' ->> 'name' IS NOT NULL
-      ORDER BY timestamp DESC LIMIT 5000
-    |]
+        AND attributes -> 'gen_ai' -> 'operation' ->> 'name' IS NOT NULL |]
+    <> scope
+    <> [HI.sql| ORDER BY timestamp DESC LIMIT 5000|]
 
 
 data View = ConversationsView | CallsView
@@ -245,7 +218,7 @@ llmGetH pid viewM agentM modelM signalM fromP toP sinceP deferredM = do
       url = link view agentM modelM signalM (Just "1")
       matches c = all (\(want, got) -> maybe True (`elem` got) want) ([(agentM, maybeToList c.agent), (modelM, maybeToList c.model)] :: [(Maybe Text, [Text])])
   body <- withDeferredBody deferredM "llmContainer" url (tableSkeleton_ 8) do
-    calls <- selectCalls pid window
+    calls <- V.fromList <$> selectCalls pid window False [HI.sql||]
     let kpis = kpis_ pid calls
         reset = link view Nothing Nothing Nothing Nothing
         zero = ZeroState{icon = "sparkles", title = "No LLM or agent telemetry yet", description = "Send OpenTelemetry GenAI spans from any SDK or framework — OpenLLMetry, OpenInference, Vercel AI SDK, Pydantic AI, LangChain, the OpenAI Agents SDK, Claude Code — and conversations, cost and tool calls appear here.", action = ESLink "https://monoscopehq.com/docs/sdks/llm-observability/" "Instrument your agent"}
@@ -254,7 +227,7 @@ llmGetH pid viewM agentM modelM signalM fromP toP sinceP deferredM = do
     pure $ case view of
       ConversationsView ->
         let all' = V.fromList $ groupConversations calls
-            shown = V.filter (\c -> maybe True (`elem` c.agents) agentM && maybe True (`elem` c.models) modelM && maybe True (\s -> s `elem` map signalParam c.signals) signalM) all'
+            shown = V.filter (\c -> maybe True (`elem` c.agents) agentM && maybe True (`elem` c.models) modelM && maybe True (`elem` map signalLabel c.signals) signalM) all'
             t = base "llm"
          in ConversationsBody
               t
@@ -271,7 +244,7 @@ llmGetH pid viewM agentM modelM signalM fromP toP sinceP deferredM = do
                               "llmContainer"
                               [ countedFilter "Agent" "agent" agentM (.agents) all'
                               , countedFilter "Model" "model" modelM (.models) all'
-                              , countedFilter "Signal" "signal" signalM (map signalParam . (.signals)) all'
+                              , countedFilter "Signal" "signal" signalM (map signalLabel . (.signals)) all'
                               ]
                       }
                 }
@@ -309,10 +282,6 @@ llmGetH pid viewM agentM modelM signalM fromP toP sinceP deferredM = do
     viewLabel = \case
       ConversationsView -> "Conversations" :: Text
       CallsView -> "LLM calls"
-
-
-signalParam :: Signal -> Text
-signalParam = signalLabel
 
 
 -- | Headline numbers over model calls only: agent spans carry aggregate usage that would count twice.
@@ -395,21 +364,7 @@ num = span_ [class_ "tabular-nums text-textWeak"] . toHtml . prettyPrintCount . 
 -- * Conversation detail
 
 
--- | A GenAI span with its attributes, for the transcript and timeline.
-data Step = Step
-  { id :: Text
-  , traceId :: Text
-  , timestamp :: UTCTime
-  , duration :: Int64
-  , failed :: Bool
-  , name :: Text
-  , attributes :: Maybe (AesonText (Map Text AE.Value))
-  }
-  deriving stock (Generic)
-  deriving anyclass (HI.DecodeRow)
-
-
-data ConversationDetail = ConversationDetail {pid :: Projects.ProjectId, key :: Text, window :: TimePicker.TimeWindow, summary :: Maybe Conversation, steps :: [Step]}
+data ConversationDetail = ConversationDetail {pid :: Projects.ProjectId, key :: Text, window :: TimePicker.TimeWindow, summary :: Maybe Conversation, steps :: [Call]}
 
 
 newtype ConversationGet = ConversationPage (PageCtx ConversationDetail)
@@ -420,22 +375,17 @@ conversationGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Ma
 conversationGetH pid key fromP toP sinceP = do
   (_, _, bw) <- mkPageCtx pid
   window <- mkWindow fromP toP sinceP
-  tf <- useTfReads
   steps <-
-    Hasql.withHasqlTimefusion tf
-      $ Hasql.interp
-        [HI.sql|
-        SELECT id::text, COALESCE(context___trace_id, ''), timestamp, COALESCE(duration, 0), COALESCE(status_code = 'ERROR', false), COALESCE(name, ''), attributes
-        FROM otel_logs_and_spans
-        WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{window.fromTime} AND #{window.toTime}
-          AND attributes -> 'gen_ai' -> 'operation' ->> 'name' IS NOT NULL
-          AND (context___trace_id = #{key} OR context___trace_id IN (
+    reverse
+      <$> selectCalls
+        pid
+        window
+        True
+        [HI.sql| AND (context___trace_id = #{key} OR context___trace_id IN (
             SELECT context___trace_id FROM otel_logs_and_spans
             WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{window.fromTime} AND #{window.toTime}
-              AND attributes -> 'gen_ai' -> 'conversation' ->> 'id' = #{key}))
-        ORDER BY timestamp ASC LIMIT 2000
-      |]
-  let summary = viaNonEmpty head $ groupConversations $ V.fromList $ map toCall steps
+              AND attributes -> 'gen_ai' -> 'conversation' ->> 'id' = #{key})) |]
+  let summary = viaNonEmpty head $ groupConversations $ V.fromList steps
   addRespHeaders
     $ ConversationPage
     $ PageCtx
@@ -447,36 +397,6 @@ conversationGetH pid key fromP toP sinceP = do
         , pageActions = Just $ TimePicker.liveDataControls_ Nothing window.currentRange Nothing TimePicker.RefreshOnly
         }
       ConversationDetail{pid, key, window, summary, steps}
-
-
--- | The list's view of a detail row, so both pages compute signals and totals one way.
-toCall :: Step -> Call
-toCall s =
-  Call
-    { id = s.id
-    , traceId = s.traceId
-    , timestamp = s.timestamp
-    , duration = s.duration
-    , failed = s.failed
-    , name = s.name
-    , service = Nothing
-    , operation = fromMaybe "" $ txt ["operation", "name"]
-    , conversation = txt ["conversation", "id"]
-    , agent = txt ["agent", "name"]
-    , model = txt ["response", "model"] <|> txt ["request", "model"]
-    , inputTokens = number ["usage", "input_tokens"]
-    , outputTokens = number ["usage", "output_tokens"]
-    , cost = number ["usage", "cost"]
-    , tool = txt ["tool", "name"]
-    , toolArgs = T.take 300 . renderValue <$> at ["tool", "call", "arguments"]
-    , preview = txt ["input", "preview"]
-    , finish = renderValue <$> at ["response", "finish_reasons"]
-    , user = Nothing
-    }
-  where
-    at = genAIAt (unAesonTextMaybe s.attributes)
-    txt ks = at ks >>= \case AE.String t -> Just t; _ -> Nothing
-    number ks = at ks >>= \case AE.Number n -> Just (toRealFloat n); AE.String t -> readMaybe (toString t); _ -> Nothing
 
 
 instance ToHtml ConversationDetail where
@@ -538,18 +458,18 @@ transcript_ d = div_ [class_ "flex flex-col gap-3"] do
   unless (any (\s -> isJust (messages "input" s) || isJust (messages "output" s)) source) $ callout_ NeutralBadge Nothing "These spans carry no message content. Enable content capture in your instrumentation (OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT=SPAN_ONLY for OpenTelemetry GenAI) to see the transcript."
   sequence_ rendered
   where
-    calls = [s | s <- d.steps, GenAI.isInferenceOp (fromMaybe "" $ op s)]
-    source = if any (isJust . messages "input") calls then calls else filter ((== Just "invoke_agent") . op) d.steps
-    op s = genAIAt (unAesonTextMaybe s.attributes) ["operation", "name"] >>= \case AE.String t -> Just t; _ -> Nothing
-    messages dir s = genAIAt (unAesonTextMaybe s.attributes) [dir, "messages"] >>= \case AE.Array ms -> Just (toList ms); _ -> Nothing
-    tools = M.fromList [(i, ToolRun s.duration s.failed (maybe s.name renderValue $ genAIAt (unAesonTextMaybe s.attributes) ["tool", "name"])) | s <- d.steps, Just (AE.String i) <- [genAIAt (unAesonTextMaybe s.attributes) ["tool", "call", "id"]]]
+    calls = filter inference d.steps
+    source = if any (isJust . messages "input") calls then calls else filter ((== "invoke_agent") . (.operation)) d.steps
+    at c = genAIAt (unAesonTextMaybe c.attributes)
+    messages dir c = at c [dir, "messages"] >>= \case AE.Array ms -> Just (toList ms); _ -> Nothing
+    tools = M.fromList [(i, c) | c <- d.steps, Just (AE.String i) <- [at c ["tool", "call", "id"]]]
     rendered = go S.empty source
     go _ [] = []
     go seen (s : rest) =
       let fresh = filter (\m -> not (S.member (AE.encode m) seen)) (fromMaybe [] $ messages "input" s)
           out = fromMaybe [] $ messages "output" s
           seen' = foldr (S.insert . AE.encode) seen (fresh <> out)
-       in (forM_ fresh (message_ d.pid tools Nothing) >> forM_ out (message_ d.pid tools (Just $ stepCall s))) : go seen' rest
+       in (forM_ fresh (message_ d.pid tools Nothing) >> forM_ out (message_ d.pid tools (Just s))) : go seen' rest
 
 
 -- | AI spans in execution order, with a bar on the conversation's own clock and the running cost.
@@ -561,8 +481,8 @@ timeline_ d = div_ [class_ "overflow-hidden rounded-lg border border-strokeWeak"
     th_ [class_ "px-3 py-1.5 text-right font-medium"] "Duration"
     th_ [class_ "px-3 py-1.5 text-right font-medium"] "Tokens"
     th_ [class_ "px-3 py-1.5 text-right font-medium"] "Cost · total"
-  tbody_ $ forM_ (zip d.steps running) \(s, total) -> do
-    let c = toCall s
+  tbody_ $ forM_ (zip d.steps running) \(c, total) -> do
+    let s = c
         offset = pct (diffUTCTime s.timestamp start)
         width = max 0.5 $ pct (fromIntegral s.duration / 1e9)
     tr_ ([class_ "border-t border-strokeWeak hover:bg-fillHover"] <> maybe [] (\u -> drawerRowAttrs_ $ (urls.logExplorer d.pid).logExplorerItemDetailedGet u s.timestamp Nothing (Just "tab-genai") Nothing True) (UUID.fromText s.id)) do
@@ -579,12 +499,8 @@ timeline_ d = div_ [class_ "overflow-hidden rounded-lg border border-strokeWeak"
     end = maybe start (F1.maximum . fmap (\s -> addUTCTime (fromIntegral s.duration / 1e9) s.timestamp)) (nonEmpty d.steps)
     span' = max 0.001 $ diffUTCTime end start
     pct x = realToFrac (100 * x / span') :: Double
-    running = drop 1 $ scanl (+) 0 $ map (fromMaybe 0 . (.cost) . toCall) d.steps
+    running = drop 1 $ scanl (+) 0 $ map (fromMaybe 0 . (.cost)) d.steps
     opIcon = \case
       "execute_tool" -> "function"
       "invoke_agent" -> "sparkles"
       _ -> "comment"
-
-
-stepCall :: Step -> StepCall
-stepCall s = let c = toCall s in StepCall{id = s.id, timestamp = s.timestamp, duration = s.duration, failed = s.failed, model = c.model, inputTokens = c.inputTokens, outputTokens = c.outputTokens, cost = c.cost}

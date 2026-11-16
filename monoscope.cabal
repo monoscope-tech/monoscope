@@ -328,6 +328,7 @@ extra-source-files:
     static/public/dashboards/http-stats.yaml
     static/public/dashboards/kitchensink.yaml
     static/public/dashboards/kubernetes.yaml
+    static/public/dashboards/llm-observability.yaml
     static/public/dashboards/minio.yaml
     static/public/dashboards/mysql.yaml
     static/public/dashboards/nginx.yaml

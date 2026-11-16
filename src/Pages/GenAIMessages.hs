@@ -1,8 +1,7 @@
 -- | GenAI messages rendered from the conventions' parts shape: the span drawer's
 -- Conversation tab and the conversation transcript share these.
 module Pages.GenAIMessages (
-  StepCall (..),
-  ToolRun (..),
+  Call (..),
   genAIAt,
   renderValue,
   message_,
@@ -18,21 +17,43 @@ import Data.Scientific (toRealFloat)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
+import Hasql.Interpolate qualified as HI
 import Lucid
 import Models.Ids qualified as Projects
 import Pages.Components (BadgeColor (..), metaChip_, tonePill_)
+import Pkg.DeriveUtils (AesonText)
 import Pkg.GenAI qualified as GenAI
 import Relude
 import Utils (drawerRowAttrs_, faSprite_, getDurationNSMS, prettyPrintCount)
 import Web.Links
 
 
--- | The model call a reply came from, for its header chips and span link.
-data StepCall = StepCall {id :: Text, timestamp :: UTCTime, duration :: Int64, failed :: Bool, model :: Maybe Text, inputTokens :: Maybe Double, outputTokens :: Maybe Double, cost :: Maybe Double}
-
-
--- | The @execute_tool@ span a tool call ran as, matched by @gen_ai.tool.call.id@.
-data ToolRun = ToolRun {duration :: Int64, failed :: Bool, name :: Text}
+-- | One GenAI span without its message bodies: the list views read thousands of these.
+data Call = Call
+  { id :: Text
+  , traceId :: Text
+  , timestamp :: UTCTime
+  , duration :: Int64
+  , failed :: Bool
+  , name :: Text
+  , service :: Maybe Text
+  , operation :: Text
+  , conversation :: Maybe Text
+  , agent :: Maybe Text
+  , model :: Maybe Text
+  , inputTokens :: Maybe Double
+  , outputTokens :: Maybe Double
+  , cost :: Maybe Double
+  , tool :: Maybe Text
+  , toolArgs :: Maybe Text
+  , preview :: Maybe Text
+  , finish :: Maybe Text
+  , user :: Maybe Text
+  , attributes :: Maybe (AesonText (Map Text AE.Value))
+  -- ^ Read only for a conversation's detail: it carries the message bodies.
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
 
 
 genAIAt :: Maybe (Map Text AE.Value) -> [Text] -> Maybe AE.Value
@@ -52,7 +73,7 @@ renderValue = \case
   v -> decodeUtf8 $ AE.encode v
 
 
-message_ :: Projects.ProjectId -> Map Text ToolRun -> Maybe StepCall -> AE.Value -> Html ()
+message_ :: Projects.ProjectId -> Map Text Call -> Maybe Call -> AE.Value -> Html ()
 message_ pid tools stepM m = case role of
   "system" -> details_ [class_ "rounded-lg border border-strokeWeak bg-fillWeaker px-3 py-2 text-sm"] do
     summary_ [class_ "cursor-pointer text-xs font-medium text-textWeak"] "System instructions"
@@ -71,7 +92,7 @@ message_ pid tools stepM m = case role of
     parts_ = div_ [class_ "flex flex-col gap-2"] $ forM_ parts (part_ tools)
 
 
-part_ :: Map Text ToolRun -> AE.Value -> Html ()
+part_ :: Map Text Call -> AE.Value -> Html ()
 part_ tools p = case (field "type", p) of
   (Just "text", _) -> textBlock_ $ maybe "" renderValue $ fieldV "content"
   (Just "reasoning", _) -> details_ [class_ "text-sm"] $ summary_ [class_ "cursor-pointer text-xs text-textWeak"] "Reasoning" >> textBlock_ (maybe "" renderValue $ fieldV "content")
@@ -84,7 +105,7 @@ part_ tools p = case (field "type", p) of
         when t.failed $ tonePill_ ErrorBadge "Failed"
     whenJust (fieldV "arguments") $ pre_ [class_ "max-h-48 overflow-auto whitespace-pre-wrap break-all text-textWeak"] . toHtml . prettyJson
   (Just "tool_call_response", _) -> details_ [class_ "rounded-md border border-strokeWeak px-2 py-1.5 text-xs"] do
-    summary_ [class_ "cursor-pointer font-mono text-textWeak"] $ toHtml $ "Result" <> maybe "" ((" · " <>) . (.name)) (field "id" >>= (`M.lookup` tools)) <> " · " <> show (T.length response) <> " chars"
+    summary_ [class_ "cursor-pointer font-mono text-textWeak"] $ toHtml $ "Result" <> maybe "" ((" · " <>) . (\t -> fromMaybe t.name t.tool)) (field "id" >>= (`M.lookup` tools)) <> " · " <> show (T.length response) <> " chars"
     pre_ [class_ "mt-1 max-h-96 overflow-auto whitespace-pre-wrap break-all font-mono text-textWeak"] $ toHtml $ maybe "" prettyJson $ fieldV "response"
   (_, AE.String t) -> textBlock_ t
   _ -> pre_ [class_ "overflow-auto whitespace-pre-wrap break-all font-mono text-xs text-textWeak"] $ toHtml $ renderValue p

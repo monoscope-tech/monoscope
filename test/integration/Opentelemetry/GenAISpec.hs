@@ -50,7 +50,7 @@ spec = around withTestResources do
       genAI "ai.generateText.doGenerate" ^.. key "input" . key "messages" . values . key "parts" . values . key "content" . _String `shouldBe` ["Summarise"]
       map (`path` genAI "ai.toolCall") [["tool", "name"], ["tool", "call", "id"]] `shouldBe` [Just "search_logs", Just "call-9"]
       -- Both conv-1 traces are one conversation; the lone OpenLLMetry call is only a call.
-      (from, to) <- around' now
+      let (from, to) = around' now
       LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       map (\c -> (c.key, c.llmCalls, c.toolCalls, c.title, c.signals)) (toList table.rows) `shouldBe` [("conv-1", 2, 1, Just "Why is checkout slow?", [LLM.Truncated])]
       calls <- call tr $ LLM.llmGetH pid (Just "calls") Nothing (Just "claude-sonnet-4-5") Nothing from to Nothing (Just "1")
@@ -72,11 +72,13 @@ spec = around withTestResources do
       chats ^.. traverse . key "input" . key "messages" . values . key "role" . _String `shouldSatisfy` (\roles -> take 1 roles == ["system"] && "user" `elem` roles)
       chats ^.. traverse . key "output" . key "messages" . values . key "role" . _String `shouldSatisfy` all (== "assistant")
       -- The same run, read back through the pages a user would open.
-      (from, to) <- getCurrentTime >>= around'
-      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH testPid Nothing Nothing Nothing Nothing from to Nothing (Just "1")
+      -- Through TimeFusion reads, which CI points at a real TimeFusion.
+      (from, to) <- around' <$> getCurrentTime
+      let viaTf = tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}}}
+      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call viaTf $ LLM.llmGetH testPid Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       run <- maybe (fail "the assistant run is not listed as a conversation") pure $ viaNonEmpty head $ toList table.rows
       (run.agents, run.title, run.llmCalls >= 2, run.toolCalls >= 1) `shouldBe` (["monoscope"], Just "plot error trend over time", True, True)
-      detail <- call tr $ LLM.conversationGetH testPid run.key from to Nothing
+      detail <- call viaTf $ LLM.conversationGetH testPid run.key from to Nothing
       renderT detail `shouldContainAll` ["plot error trend over time", "System instructions", "Ask AI about this conversation", "Transcript", "Timeline", "execute_tool"]
       [(chatId, chatTs)] <- dbQuery tr [sql| SELECT id::text, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND attributes->'gen_ai'->'operation'->>'name' = 'chat' ORDER BY start_time LIMIT 1 |] (Only testPid)
       chatUuid <- maybe (fail "span id is not a uuid") pure $ UUID.fromText chatId
@@ -85,5 +87,5 @@ spec = around withTestResources do
 
 
 -- | An explicit window around the ingested spans, which carry real timestamps.
-around' :: UTCTime -> IO (Maybe Text, Maybe Text)
-around' t = pure (Just $ toText $ iso8601Show $ addUTCTime (-3600) t, Just $ toText $ iso8601Show $ addUTCTime 3600 t)
+around' :: UTCTime -> (Maybe Text, Maybe Text)
+around' t = (Just $ toText $ iso8601Show $ addUTCTime (-3600) t, Just $ toText $ iso8601Show $ addUTCTime 3600 t)
