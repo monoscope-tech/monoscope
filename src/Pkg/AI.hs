@@ -1438,8 +1438,14 @@ withInvestigationJournal config userQuery model action = withSpanKind Internal "
     (MemberAccess{}; ServiceAccess; SlackAccess{}; SlackCommandAccess{}) -> action Nothing
   where
     agentAttrs =
-      [("gen_ai.operation.name", "invoke_agent"), ("gen_ai.agent.name", "monoscope"), ("gen_ai.provider.name", "openai"), ("gen_ai.request.model", OA.toAttribute model), ("monoscope.project_id", OA.toAttribute config.projectId.toText)]
-        <> [("gen_ai.conversation.id", OA.toAttribute convId.toText) | Just convId <- [config.conversationId]]
+      [("gen_ai.operation.name", "invoke_agent"), ("gen_ai.provider.name", "openai"), ("gen_ai.request.model", OA.toAttribute model), ("monoscope.project_id", OA.toAttribute config.projectId.toText)] <> case config.invocationMode of
+        DurableRun run | Just agent <- unattended run.source -> [("gen_ai.agent.name", agent), ("gen_ai.conversation.id", OA.toAttribute run.rootId.toText)]
+        (InteractiveReadOnly; DurableRun _) -> ("gen_ai.agent.name", "monoscope") : [("gen_ai.conversation.id", OA.toAttribute convId.toText) | Just convId <- [config.conversationId]]
+    -- An unattended run's root is also its Pi sessions' conversation, so the run's whole spend reads as one.
+    unattended = \case
+      (Issues.ScheduledRun; Issues.TriggeredRun _) -> Just "monoscope-routine"
+      Issues.FixRun _ -> Just "monoscope-fix"
+      (Issues.InteractiveRun _; Issues.ConversationRun _) -> Nothing
 
 
 -- | Save each completed decision/read before advancing. Pending read tools may

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -255,4 +256,49 @@ for (const decision of ['approve', 'reject', 'removed', 'changed-schema']) test(
     assert.equal(modelCalls, 3, 'Resume repeated a completed model response');
     assert.deepEqual(result, { summary: decision === 'approve' ? 'The earlier edit survived.' : 'The host action was refused.' });
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('Pi traces follow the OTel GenAI conventions, priced by Pi and grouped by the session file', { timeout: 10000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'impact-pi-otel-'));
+  const spans = [];
+  const server = createServer((request, response) => {
+    let body = '';
+    request.on('data', (chunk) => body += chunk).on('end', () => {
+      if (request.url === '/v1/traces') for (const { resource, scopeSpans } of JSON.parse(body).resourceSpans) for (const { spans: batch } of scopeSpans) for (const span of batch) {
+        const values = (attributes) => Object.fromEntries(attributes.map(({ key, value }) => [key, Object.values(value)[0]]));
+        spans.push({ name: span.name, error: span.status.code === 2, service: values(resource.attributes)['service.name'], ...values(span.attributes) });
+      }
+      response.end('{}');
+    });
+  });
+  await new Promise((listening) => server.listen(0, '127.0.0.1', listening));
+  const exporter = { OTEL_EXPORTER_OTLP_ENDPOINT: `http://127.0.0.1:${server.address().port}`, OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json', OTEL_SERVICE_NAME: 'pi-review', OTEL_LOGS_EXPORTER: 'none' };
+  Object.assign(process.env, exporter);
+  try {
+    const runtime = await ModelRuntime.create({ authPath: join(root, 'auth.json'), modelsPath: null, refreshOnCreate: false });
+    let calls = 0;
+    runtime.registerProvider('anthropic', {
+      api: 'openai-completions', apiKey: 'fixture-key', baseUrl: 'http://127.0.0.1',
+      models: [{ id: 'fixture', name: 'Fixture', reasoning: false, input: ['text'], cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }, contextWindow: 16384, maxTokens: 1024 }],
+      streamSimple(model) {
+        const content = calls++ === 0 ? [{ type: 'toolCall', id: 'submit', name: 'submit_review', arguments: { summary: 'Reviewed.' } }] : [{ type: 'text', text: 'Review finished.' }];
+        const message = { role: 'assistant', content, api: 'openai-completions', provider: model.provider, model: model.id, timestamp: Date.now(), stopReason: content[0].type === 'text' ? 'stop' : 'toolUse', usage: { input: 10, output: 5, cacheRead: 1000, cacheWrite: 50, totalTokens: 1065, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.0123 } } };
+        const stream = new AssistantMessageEventStream();
+        queueMicrotask(() => { stream.push({ type: 'start', partial: message }); stream.push({ type: 'done', reason: message.stopReason, message }); });
+        return stream;
+      },
+    });
+    await mkdir(join(root, 'skills'));
+    const policy = { instructions: 'Submit a review.', builtins: [], tools: [{ name: 'submit_review', description: 'Submit', parameters: { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false } }] };
+    await runPi({ preparedCheckout: { policy, repositorySkills: root }, request: { provider: 'anthropic', model: 'fixture', prompt: 'Secret customer source.', thinkingLevel: 'off' }, modelRuntime: runtime, attemptId: '00000000-0000-0000-0000-000000000001', workflow: { name: 'submit_review', prepare: async (draft) => ({ Right: draft }) }, skillsDir: join(root, 'skills'), root, onEvent: () => {}, tools: [], sessionManager: SessionManager.open(join(root, 'routine-run.jsonl'), root) });
+    const chats = spans.filter((span) => span['gen_ai.operation.name'] === 'chat');
+    assert.deepEqual(spans.map((span) => span.name).filter((name) => !name.startsWith('pi.')).sort(), ['chat fixture', 'chat fixture', 'execute_tool submit_review', 'invoke_agent pi']);
+    assert.ok(spans.every((span) => span.service === 'pi-review' && span['gen_ai.conversation.id'] === 'routine-run' && !span.error));
+    assert.deepEqual(chats.map((span) => [span['gen_ai.provider.name'], span['gen_ai.request.model'], span['gen_ai.usage.input_tokens'], span['gen_ai.usage.cache_read_input_tokens'], span['pi.cost.usd']]), [['anthropic', 'fixture', 10, 1000, 0.0123], ['anthropic', 'fixture', 10, 1000, 0.0123]]);
+    assert.ok(!JSON.stringify(spans).includes('Secret customer source'), 'Prompt content left the host');
+  } finally {
+    for (const name of Object.keys(exporter)) delete process.env[name];
+    server.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });

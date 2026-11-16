@@ -13,6 +13,7 @@ import {
   detectSupportedImageMimeTypeFromFile, DefaultResourceLoader, loadSkills, ModelRuntime, SessionManager, SettingsManager,
 } from '@earendil-works/pi-coding-agent';
 import { runToolCall } from '@earendil-works/pi-agent-core';
+import piOtel from 'pi-otel';
 import { Type } from 'typebox';
 import { Assert } from 'typebox/value';
 import writeFileAtomic from 'write-file-atomic';
@@ -152,8 +153,12 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
       if (sequential) tool.executionMode = 'sequential';
     }
     const settingsManager = SettingsManager.inMemory({ retry: { enabled: true, maxRetries: 1 } });
+    // pi-otel ignores the standard OTel switches and defaults to gRPC, where the spec defaults to http/protobuf.
+    const { OTEL_SDK_DISABLED, OTEL_TRACES_EXPORTER, OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_PROTOCOL = 'http/protobuf' } = process.env;
+    const traced = OTEL_SDK_DISABLED !== 'true' && OTEL_TRACES_EXPORTER !== 'none' && Boolean(OTEL_EXPORTER_OTLP_ENDPOINT);
+    Object.assign(process.env, { OTEL_EXPORTER_OTLP_PROTOCOL, PI_OTEL_SPAN_NAMING: 'genai' });
     const loader = new DefaultResourceLoader({
-      cwd: root, agentDir: join(root, 'agent'), settingsManager,
+      cwd: root, agentDir: join(root, 'agent'), settingsManager, extensionFactories: traced ? [{ name: 'otel', factory: piOtel }] : [],
       noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
       skillsOverride: () => ({ skills, diagnostics: loaded.diagnostics }),
       appendSystemPrompt: [preparedCheckout.policy.instructions],
@@ -172,6 +177,7 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
       onEvent(event);
     };
     session.subscribe(emit);
+    await session.bindExtensions({});
     signal?.throwIfAborted();
     if (session.messages.length === 0) await session.prompt(request.prompt);
     else {
@@ -195,6 +201,8 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
     return submitted;
   } finally {
     signal?.removeEventListener('abort', abort);
+    // pi-otel flushes its spans on session_shutdown, which dispose never emits.
+    await session?.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' }).catch(() => {});
     try { session?.dispose(); } finally { await Promise.allSettled([...modelCalls]); }
   }
 }

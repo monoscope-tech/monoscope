@@ -202,6 +202,12 @@ agentRunOps = ["invoke_agent", "invoke_workflow"]
 -- >>> mapMaybe (`lookup` cc) ["gen_ai.operation.name", "gen_ai.provider.name", "gen_ai.usage.input_tokens", "gen_ai.usage.cost", "gen_ai.usage.cost_source", "gen_ai.conversation.id"]
 -- [String "chat",String "anthropic",Number 5010.0,Number 2.1e-3,String "reported",String "abc"]
 --
+-- pi-otel: the same exclusive input, @gen_ai.system@ naming the agent rather than the provider, Pi's own cost:
+--
+-- >>> let p = normalizeGenAI [("gen_ai.system", "pi"), ("gen_ai.operation.name", "chat"), ("gen_ai.provider.name", "anthropic"), ("gen_ai.request.model", "claude-sonnet-4-5"), ("gen_ai.usage.input_tokens", AE.Number 10), ("gen_ai.usage.cache_read_input_tokens", AE.Number 1000), ("gen_ai.usage.cache_write_input_tokens", AE.Number 50), ("pi.cost.usd", AE.Number 0.0123)]
+-- >>> mapMaybe (`lookup` p) ["gen_ai.provider.name", "gen_ai.usage.input_tokens", "gen_ai.usage.cache_write.input_tokens", "gen_ai.usage.cost", "gen_ai.usage.cost_source"]
+-- [String "anthropic",Number 1060.0,Number 50.0,Number 1.23e-2,String "reported"]
+--
 -- A real @claude -p@ user_prompt record becomes the turn's user message:
 --
 -- >>> lookup "gen_ai.input.messages" $ normalizeGenAI [("event.name", "user_prompt"), ("event.sequence", AE.Number 22), ("prompt.id", "98ec"), ("prompt_length", "30"), ("prompt", "Reply with the single word: hi"), ("session.id", "1381")]
@@ -265,16 +271,16 @@ normalizeGenAI kvs
     inputTokens = tokens inputTokenKeys
     outputTokens = tokens ["gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens", "llm.token_count.completion", "ai.usage.completionTokens", "ai.usage.outputTokens"]
     cacheRead = tokens ["gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cache_read_input_tokens", "llm.token_count.prompt_details.cache_read"]
-    cacheWrite = tokens ["gen_ai.usage.cache_write.input_tokens", "gen_ai.usage.cache_creation.input_tokens", "gen_ai.usage.cache_creation_input_tokens", "llm.token_count.prompt_details.cache_write"]
+    cacheWrite = tokens ["gen_ai.usage.cache_write.input_tokens", "gen_ai.usage.cache_creation.input_tokens", "gen_ai.usage.cache_creation_input_tokens", "gen_ai.usage.cache_write_input_tokens", "llm.token_count.prompt_details.cache_write"]
     ccTokens k = guard inference *> (cc k >>= num)
-    -- Claude Code counts input exclusive of the cache; the conventions count it inclusive.
-    usage = case ccEvent of
-      Just _ ->
-        let (i, r, w) = (ccTokens "input_tokens", ccTokens "cache_read_tokens", ccTokens "cache_creation_tokens")
-         in ((+ sum (catMaybes [r, w])) <$> i, ccTokens "output_tokens", r, w)
+    -- Claude Code and pi-otel count input exclusive of the cache; the conventions count it inclusive,
+    -- so their canonical counts are replaced rather than kept.
+    exclusive = isJust ccEvent || text "gen_ai.system" == Just "pi"
+    (rawIn, outT, readT, writeT) = case ccEvent of
+      Just _ -> (ccTokens "input_tokens", ccTokens "output_tokens", ccTokens "cache_read_tokens", ccTokens "cache_creation_tokens")
       Nothing -> (inputTokens, outputTokens, cacheRead, cacheWrite)
-    (inT, outT, readT, writeT) = usage
-    reported = guard inference *> (firstOf ["gen_ai.usage.cost", "llm.cost.total", "gen_ai.cost.total_tokens"] <|> cc "cost_usd") >>= num
+    inT = bool id (+ sum (catMaybes [readT, writeT])) exclusive <$> rawIn
+    reported = guard inference *> (firstOf ["gen_ai.usage.cost", "llm.cost.total", "gen_ai.cost.total_tokens", "pi.cost.usd"] <|> cc "cost_usd") >>= num
     cost = (,"reported" :: Text) <$> reported <|> (,"estimated") <$> estimated
     estimated = do
       price <- guard inference *> ((model <|> responseModel) >>= str >>= lookupPrice)
@@ -308,6 +314,7 @@ normalizeGenAI kvs
     -- source keys go, as do indexed keys, which would otherwise nest as {"0": …} objects.
     folded k =
       any (\p -> maybe False (isDigit . fst) (T.stripPrefix p k >>= T.uncons)) ["llm.input_messages.", "llm.output_messages.", "gen_ai.prompt.", "gen_ai.completion."]
+        || (exclusive && k `elem` ["gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cache_write.input_tokens"])
         || (k `elem` ["ai.prompt.messages", "input.value"] && emitted "gen_ai.input.messages" inputMessages)
         || (k `elem` ["ai.response.text", "ai.response.toolCalls", "output.value"] && emitted "gen_ai.output.messages" outputMessages)
     emitted k v = not (HM.member k m) && isJust v
@@ -325,7 +332,7 @@ normalizeGenAI kvs
       v@(AE.Array _) -> v
       v -> AE.Array [v]
     conversation = firstOf ["gen_ai.conversation.id", "langfuse.session.id", "traceloop.association.properties.session_id", "ai.telemetry.metadata.sessionId", "ai.telemetry.metadata.conversationId", "ai.telemetry.metadata.threadId"] <|> (guard (isJust op) *> pick "session.id")
-    provider = (pick "gen_ai.system" <|> firstOf ["llm.provider", "llm.system"] <|> (text "ai.model.provider" <&> AE.String . T.takeWhile (/= '.'))) <|> ("anthropic" <$ ccEvent)
+    provider = (firstOf ["gen_ai.provider.name", "gen_ai.system", "llm.provider", "llm.system"] <|> (text "ai.model.provider" <&> AE.String . T.takeWhile (/= '.'))) <|> ("anthropic" <$ ccEvent)
     intV = AE.Number . fromInteger . round
 
     derived =
@@ -354,8 +361,7 @@ normalizeGenAI kvs
         , emit "user.id" (firstOf ["langfuse.user.id", "traceloop.association.properties.user_id", "ai.telemetry.metadata.userId"])
         ]
     emit k v = guard (not $ HM.member k m) *> ((k,) <$> v)
-    -- Claude Code's counts replace their canonical twins, which it never sends.
-    emitTokens k v = (k,) . intV <$> v <* guard (isJust ccEvent || not (HM.member k m))
+    emitTokens k v = (k,) . intV <$> v <* guard (exclusive || not (HM.member k m))
 
 
 -- | Messages in the conventions' parts shape, from OpenAI-, Anthropic-, Vercel- or

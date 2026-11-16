@@ -269,6 +269,7 @@ import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..), mkTwilioContentSid)
 import System.Config qualified as Config
 import System.Directory (doesFileExist, getFileSize, listDirectory)
+import System.Environment (setEnv)
 import System.Envy (DefConfig (..), decodeWithDefaults, fromVar)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Logging
@@ -935,6 +936,8 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
 
   -- Load .env file for tests (to get OPENAI_API_KEY and other non-database configs)
   _ <- Safe.try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException ())
+  -- .env names a real collector; the Pi host's children inherit this environment and must not export test runs.
+  setEnv "OTEL_TRACES_EXPORTER" "none"
 
   -- Load config from environment variables
   envConfig0 <- decodeWithDefaults defConfig

@@ -229,7 +229,7 @@ runLLMReal :: IOE :> es => LLMTelemetry -> Eff (LLM ': es) a -> Eff es a
 runLLMReal t = interpret $ \_ -> \case
   CallLLM model prompt apiKey -> liftIO $ fmap (replyText . (.content)) <$> completeChat t apiKey (promptParams model prompt)
   CallAgenticChat history params apiKey -> liftIO $ fmap (fmap LLMCore.from) <$> completeChat t apiKey (withHistory history params)
-  EmbedDocuments config docs -> liftIO $ embedDocumentsBounded (firstF show . EmbCore.embedDocuments config) docs
+  EmbedDocuments config docs -> liftIO $ genAISpan t "embeddings" config.model [] (const []) $ embedDocumentsBounded (firstF show . EmbCore.embedDocuments config) docs
 
 
 -- | Golden test interpreter that caches responses
@@ -244,22 +244,27 @@ withHistory :: LLMCore.ChatHistory -> OpenAIV1.CreateChatCompletion -> OpenAIV1.
 withHistory history params = params{OpenAIV1.messages = V.fromList $ map LLMCore.to $ toList history}
 
 
--- | A GenAI inference span (semconv-genai) around one chat completion. It writes to the
+-- | A GenAI client span (semconv-genai) around one model call. It writes to the
 -- provider directly: the background stack interprets 'Tracing' before this effect.
-inference :: LLMTelemetry -> OpenAIV1.CreateChatCompletion -> (a -> [(Text, OA.Attribute)]) -> IO (Either Text a) -> IO (Either Text a)
-inference t params describe call =
-  Trace.inSpan' (Trace.makeTracer t.tracerProvider "monoscope.llm" Trace.tracerOptions) ("chat " <> model) Trace.defaultSpanArguments{Trace.kind = Trace.Client, Trace.attributes = HM.fromList requestAttrs} \sp -> do
+genAISpan :: LLMTelemetry -> Text -> Text -> [(Text, OA.Attribute)] -> (a -> [(Text, OA.Attribute)]) -> IO (Either Text a) -> IO (Either Text a)
+genAISpan t op model requestAttrs describe call =
+  Trace.inSpan' (Trace.makeTracer t.tracerProvider "monoscope.llm" Trace.tracerOptions) (op <> " " <> model) Trace.defaultSpanArguments{Trace.kind = Trace.Client, Trace.attributes = HM.fromList attrs} \sp -> do
     result <- call
     case result of
       Left err -> Trace.setStatus sp (Trace.Error err)
       Right reply -> Trace.addAttributes sp $ HM.fromList $ describe reply
     pure result
   where
+    attrs = [("gen_ai.operation.name", OA.toAttribute op), ("gen_ai.provider.name", "openai"), ("gen_ai.request.model", OA.toAttribute model)] <> requestAttrs
+
+
+inference :: LLMTelemetry -> OpenAIV1.CreateChatCompletion -> (a -> [(Text, OA.Attribute)]) -> IO (Either Text a) -> IO (Either Text a)
+inference t params =
+  genAISpan t "chat" model
+    $ [("gen_ai.request.reasoning.level", OA.toAttribute $ T.toLower $ T.drop 16 $ show e) | Just e <- [params.reasoning_effort]]
+    <> contentAttr t "gen_ai.input.messages" params.messages
+  where
     Models.Model model = params.model
-    requestAttrs =
-      [("gen_ai.operation.name", "chat"), ("gen_ai.provider.name", "openai"), ("gen_ai.request.model", OA.toAttribute model)]
-        <> [("gen_ai.request.reasoning.level", OA.toAttribute $ T.toLower $ T.drop 16 $ show e) | Just e <- [params.reasoning_effort]]
-        <> contentAttr t "gen_ai.input.messages" params.messages
 
 
 capturesContent :: GenAIContentCapture -> Bool

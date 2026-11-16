@@ -3316,14 +3316,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
             writeFileBS transcript frozen
         let manifestPath = sessionDirectory </> "checkpoint.json"
         manifestBytes <- readFileBS manifestPath
-        transcriptBytes <- readFileBS $ sessionDirectory </> "active.jsonl"
+        transcriptBytes <- readFileBS $ sessionDirectory </> toString (uid 4 :: UUIDId "ai_routine_run").toText <> ".jsonl"
         bracket_ (removeFile manifestPath) (Native.writePrivateArtifact sessionDirectory "checkpoint.json" $ fromStrict manifestBytes) do
           orphanedContext <- native $ Agent.readSessionContext (Agent.ReviewSubject request.runId) (uid 4)
           isLeft orphanedContext `shouldBe` True
           run >>= (`shouldSatisfy` isLeft)
           length <$> observed `shouldReturn` initialCalls
           readIORef callbacks `shouldReturn` initialCallbacks
-          readFileBS (sessionDirectory </> "active.jsonl") `shouldReturn` transcriptBytes
+          readFileBS (sessionDirectory </> toString (uid 4 :: UUIDId "ai_routine_run").toText <> ".jsonl") `shouldReturn` transcriptBytes
         resumed <- run
         when (isLeft resumed) do
           diagnostic <- readFileBS $ directory </> "worker.log"

@@ -197,7 +197,7 @@ data SavedFix = SavedFix {id :: UUIDId "verifier_session", progress :: FixProgre
 data Suspension = AnalysisSuspended SavedGuest | FixSuspended SavedGuest SavedFix
 
 
-data RetainedSession = RetainedSession {directory :: FilePath, persist :: NativeProgress -> IO (), saved :: Maybe Suspension}
+data RetainedSession = RetainedSession {directory :: FilePath, sessionFile :: FilePath, persist :: NativeProgress -> IO (), saved :: Maybe Suspension}
 
 
 data Accepted result = Accepted {submission :: AE.Value, validated :: AE.Value, result :: result}
@@ -456,7 +456,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
             withJournal action = maybe (action Nothing) (\configured -> Outbox.withOutbox configured scope $ action . Just) artifactStore
             runChild :: Maybe Outbox.Outbox -> Maybe RetainedSession -> IO (Either Text result)
             runChild journal retention = do
-              let sessionDirectory = (.directory) <$> retention
+              let sessionDirectory = retention <&> \retained -> (retained.directory, retained.sessionFile)
                   resumed = retention >>= (.saved)
                   paused = (\case AnalysisSuspended saved -> saved; FixSuspended saved _ -> saved) <$> resumed
                   savedFix = case resumed of Just (FixSuspended _ saved) -> Just saved; (Nothing; Just AnalysisSuspended{}) -> Nothing
@@ -465,17 +465,18 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                     pruneNativeSnapshots retained.directory $ case progress of Waiting saved -> Just saved.id; FixWaiting saved _ -> Just saved.id; Finished{} -> Nothing
               -- A resumed session keeps its proof attempts, so the budget is checked before VMs run.
               writeIORef proofCount $ fromMaybe 0 $ (.proofs) =<< paused
-              for_ sessionDirectory \directory -> case paused of
+              for_ sessionDirectory \(directory, sessionFile) -> case paused of
                 Nothing -> do
-                  removed <- tryIOError $ removeFile $ directory </> "active.jsonl"
+                  removed <- tryIOError $ removeFile $ directory </> sessionFile
                   case removed of Left failed | not (isDoesNotExistError failed) -> throwIO failed; _ -> pass
                 Just saved -> do
                   transcript <- Native.readPrivateArtifact (directory </> toString saved.id.toText) "session.jsonl" (64 * 1048576)
                   unless (Native.sha256 transcript == saved.sha256) $ fail "Native continuation transcript has changed"
-                  Native.writePrivateArtifact directory "active.jsonl" $ fromStrict transcript
+                  Native.writePrivateArtifact directory sessionFile $ fromStrict transcript
               environment <- getEnvironment
-              let selected = [("IMPACT_REVIEW_AGENT_SECONDS", show budget)] <> maybe [] (\outbox -> [("IMPACT_REVIEW_OUTBOX_DIR", Outbox.outboxPath outbox)]) journal <> maybe [] (\directory -> [("IMPACT_REVIEW_SESSION_FILE", directory </> "active.jsonl")]) sessionDirectory
-                  childEnvironment = selected <> filter (\(name, _) -> name `notElem` ["IMPACT_REVIEW_AGENT_SECONDS", "IMPACT_REVIEW_OUTBOX_DIR", "IMPACT_REVIEW_SESSION_FILE"]) environment
+              let selected = [("IMPACT_REVIEW_AGENT_SECONDS", show budget)] <> maybe [] (\outbox -> [("IMPACT_REVIEW_OUTBOX_DIR", Outbox.outboxPath outbox)]) journal <> maybe [] (\(directory, sessionFile) -> [("IMPACT_REVIEW_SESSION_FILE", directory </> sessionFile)]) sessionDirectory <> [("OTEL_SERVICE_NAME", service)]
+                  service = case role of Policy.Advisory -> "pi-review"; Policy.Fix -> "pi-fix"; Policy.Peer -> "pi-fix-review"; Policy.Admission -> "pi-admission"; Policy.Source -> "pi-source"; (Policy.Patch; Policy.SourcePatch) -> "pi-patch"
+                  childEnvironment = selected <> filter ((`notElem` map fst selected) . fst) environment
               withProcessTerm (setStdin createPipe $ setStdout createPipe $ command childEnvironment) \process -> do
                 guest <- newIORef Nothing
                 let stop =
@@ -491,10 +492,10 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                     parseMessage :: AE.Value -> AET.Parser (Either Outbox.Receipt Message)
                     parseMessage value = (Left <$> AE.parseJSON value) <|> (Right <$> AE.parseJSON value)
                     suspend :: Int -> Int -> Maybe AE.Value -> Maybe GuestSession -> IO ()
-                    suspend remaining submissions accepted workflowState = for_ sessionDirectory \directory -> case accepted of
+                    suspend remaining submissions accepted workflowState = for_ sessionDirectory \(directory, sessionFile) -> case accepted of
                       Just draft -> persist $ Finished draft
                       Nothing -> do
-                        transcript <- Native.readPrivateArtifact directory "active.jsonl" (64 * 1048576)
+                        transcript <- Native.readPrivateArtifact directory sessionFile (64 * 1048576)
                         identifier <- UUIDId <$> UUID4.nextRandom
                         generation <- Outbox.privateDirectory directory [toString identifier.toText]
                         Native.writePrivateArtifact generation "session.jsonl" $ fromStrict transcript
@@ -931,7 +932,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                       stored <- readNativeCheckpoint @context directory
                       for_ stored \checkpoint -> unless (checkpoint.input == input) $ fail "Native continuation does not match the original request"
                       let persist progress = capture >>= Native.writePrivateArtifact directory "checkpoint.json" . AE.encode . NativeCheckpoint input progress
-                          begin saved = runChild journal $ Just $ RetainedSession directory persist saved
+                          -- pi-otel names a conversation after its transcript's file, so a routine run's sessions share one.
+                          begin saved = runChild journal $ Just $ RetainedSession directory (toString root.toText <> ".jsonl") persist saved
                       case stored of
                         Nothing -> begin Nothing
                         Just NativeCheckpoint{progress = Waiting saved} -> case role of
