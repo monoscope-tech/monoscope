@@ -84,7 +84,7 @@ message_ pid tools stepM m = case role of
       whenJust stepM \c -> do
         span_ [class_ "text-textWeak"] $ toHtml $ T.intercalate " · " $ catMaybes [c.model, Just $ toText $ getDurationNSMS $ fromIntegral c.duration, (\i o -> prettyPrintCount (round i) <> " → " <> prettyPrintCount (round o) <> " tok") <$> c.inputTokens <*> c.outputTokens, GenAI.formatUsd <$> c.cost]
         when c.failed $ tonePill_ ErrorBadge "Error"
-        whenJust (UUID.fromText c.id) \u -> button_ ([type_ "button", class_ "ms-auto text-textBrand hover:underline"] <> drawerRowAttrs_ ((urls.logExplorer pid).logExplorerItemDetailedGet u c.timestamp Nothing (Just "tab-genai") Nothing True)) "Span"
+        whenJust (UUID.fromText c.id) \u -> button_ ([type_ "button", class_ "ms-auto text-textBrand hover:underline"] <> drawerRowAttrs_ ((urls.logExplorer pid).logExplorerItemDetailedGet u c.timestamp Nothing (Just "tab-genai") Nothing True)) "Open span"
     parts_
   where
     role = case m of AE.Object o | Just (AE.String r) <- KM.lookup "role" o -> r; _ -> "message"

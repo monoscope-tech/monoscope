@@ -320,7 +320,7 @@ llmGetH pid viewM agentM modelM signalM fromP toP sinceP deferredM = do
       , col "Agent" (chips . (.agents)) & withAttrs [class_ "w-36 max-lg:hidden"]
       , col "Models" (chips . (.models)) & withAttrs [class_ "w-40 max-xl:hidden"]
       , col "Turns" (num . fromIntegral . (.turns)) & withAttrs [class_ "w-16 text-right"]
-      , col "Calls" (\c -> span_ [class_ "tabular-nums text-textWeak", term "data-tippy-content" $ show c.llmCalls <> " model calls, " <> show c.toolCalls <> " tool calls"] $ toHtml $ show c.llmCalls <> " · " <> show c.toolCalls) & withAttrs [class_ "w-20 text-right max-md:hidden"]
+      , col "Calls" (\c -> span_ [class_ "whitespace-nowrap tabular-nums text-textWeak"] $ toHtml $ show c.llmCalls <> " model · " <> show c.toolCalls <> " tool") & withAttrs [class_ "w-32 text-right max-md:hidden"]
       , col "Tokens" (num . (.tokens)) & withAttrs [class_ "w-20 text-right"]
       , col "Cost" (\c -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ maybe "—" GenAI.formatUsd c.cost) & withAttrs [class_ "w-20 text-right"]
       , col "Signals" signalsCell & withAttrs [class_ "w-44"]
@@ -411,7 +411,7 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-6xl flex-col gap
   Just c -> do
     header_ [class_ "flex flex-col gap-2"] do
       div_ [class_ "flex flex-wrap items-start gap-3"] do
-        h1_ [class_ "min-w-0 flex-1 text-lg font-semibold text-textStrong text-pretty"] $ toHtml $ fromMaybe "Untitled conversation" c.title
+        h1_ [class_ "min-w-0 flex-1 text-lg font-semibold text-textStrong text-pretty max-sm:basis-full"] $ toHtml $ fromMaybe "Untitled conversation" c.title
         askAi_ c
         a_ ([class_ "btn btn-sm", href_ explorer] <> navTabAttrs) $ faSprite_ "explore" "regular" "h-3.5 w-3.5" >> "Open spans in Explorer"
       div_ [class_ "flex flex-wrap gap-1.5"] do
@@ -425,7 +425,7 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-6xl flex-col gap
         metaChip_ "Active time" $ toText $ getDurationNSMS $ fromIntegral c.activeNs
     unless (null c.signals) $ div_ [class_ "flex flex-col gap-1.5"] $ forM_ c.signals \s -> callout_ (signalTone s) Nothing $ strong_ (toHtml $ signalLabel s) >> " — " >> toHtml (signalHelp s)
     div_ [class_ "group/ctab flex flex-col gap-3"] do
-      div_ [role_ "tablist", Aria.label_ "Conversation views", class_ "tabs tabs-box w-max"] do
+      div_ [role_ "radiogroup", Aria.label_ "Conversation views", class_ "tabs tabs-box w-max"] do
         label_ [class_ "tab has-[:checked]:tab-active"] $ input_ [type_ "radio", name_ "ctab", class_ "sr-only ctab-transcript", checked_] >> "Transcript"
         label_ [class_ "tab has-[:checked]:tab-active"] $ input_ [type_ "radio", name_ "ctab", class_ "sr-only ctab-timeline"] >> "Timeline"
       section_ [class_ "hidden group-has-[.ctab-transcript:checked]/ctab:block"] transcript_
