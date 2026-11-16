@@ -12,6 +12,9 @@ module Pkg.GenAI (
   estimateCost,
   isInferenceOp,
   formatUsd,
+  FinishReasons (..),
+  Abnormal (..),
+  abnormalFinish,
 ) where
 
 import Data.Aeson ((.=))
@@ -116,6 +119,30 @@ formatUsd c
   | c <= 0 = "$0"
   | c < 0.0001 = "<$0.0001"
   | otherwise = "$" <> toText (showFFloat (Just $ if c < 0.01 then 4 else 2) c "")
+
+
+-- | @gen_ai.response.finish_reasons@: an array by the conventions, a single string from some producers.
+newtype FinishReasons = FinishReasons [Text]
+  deriving stock (Eq, Show)
+
+
+instance AE.FromJSON FinishReasons where
+  parseJSON v = FinishReasons <$> (AE.parseJSON v <|> (pure <$> AE.parseJSON v))
+
+
+data Abnormal = Truncated | Filtered
+  deriving stock (Eq, Show)
+
+
+-- | A finish reason that means the reply is incomplete, across providers' spellings.
+--
+-- >>> map abnormalFinish ["length", "MAX_TOKENS", "content_filter", "SAFETY", "stop", "end_turn"]
+-- [Just Truncated,Just Truncated,Just Filtered,Just Filtered,Nothing,Nothing]
+abnormalFinish :: Text -> Maybe Abnormal
+abnormalFinish r
+  | r `elem` ["length", "max_tokens", "MAX_TOKENS"] = Just Truncated
+  | r `elem` ["content_filter", "refusal", "SAFETY"] = Just Filtered
+  | otherwise = Nothing
 
 
 isInferenceOp :: Text -> Bool

@@ -2864,9 +2864,7 @@ generateSpanSummary otel =
         _ -> Nothing
     tokens = (,) <$> atMapInt "gen_ai.usage.input_tokens" attrsM <*> atMapInt "gen_ai.usage.output_tokens" attrsM
     abnormalFinish =
-      attrsM >>= getNestedValue ["gen_ai", "response", "finish_reasons"] >>= \case
-        AE.Array rs -> find (`elem` ["length", "max_tokens", "content_filter", "refusal", "MAX_TOKENS", "SAFETY"]) [r | AE.String r <- toList rs]
-        _ -> Nothing
+      attrsM >>= getNestedValue ["gen_ai", "response", "finish_reasons"] >>= AET.parseMaybe AE.parseJSON >>= \(GenAI.FinishReasons rs) -> find (isJust . GenAI.abnormalFinish) rs
 
     durMs d = toText (getDurationNSMS (fromIntegral d))
     statusCodeStyle code

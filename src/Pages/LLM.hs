@@ -35,7 +35,7 @@ import Pages.GenAIMessages (Call (..), genAIAt, message_)
 import Pkg.Components.Table (Column, Features (..), Table (..), ZeroState (..), col, countedFilter, facetActions, inventoryTable, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe)
 import Pkg.GenAI qualified as GenAI
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, useTfReads)
@@ -92,6 +92,10 @@ inference :: Call -> Bool
 inference = GenAI.isInferenceOp . (.operation)
 
 
+abnormal :: Call -> [GenAI.Abnormal]
+abnormal c = maybe [] (\(AesonText (GenAI.FinishReasons rs)) -> mapMaybe GenAI.abnormalFinish rs) c.finish
+
+
 -- | A trace joins the conversation any of its spans names; frameworks often set the id on the
 -- root agent span only. A trace with no id is its own conversation if it ran an agent, and
 -- otherwise lists only as calls, so single classifier calls don't drown real conversations.
@@ -141,14 +145,13 @@ groupConversations calls = sortOn (Down . (.lastSeen)) $ mapMaybe conversation $
                     universe
                     [ any (\c -> c.failed && c.operation == "execute_tool") spans
                     , any (\c -> c.failed && inference c) spans
-                    , any (finishedWith ["length", "max_tokens", "MAX_TOKENS"]) spans
-                    , any (finishedWith ["content_filter", "refusal", "SAFETY"]) spans
+                    , any ((GenAI.Truncated `elem`) . abnormal) spans
+                    , any ((GenAI.Filtered `elem`) . abnormal) spans
                     , any (>= 3) $ M.fromListWith (+) [((t, c.toolArgs), 1 :: Int) | c <- spans, Just t <- [c.tool]]
                     , any pressured spans
                     ]
               ]
           }
-    finishedWith rs c = any (\r -> any (T.isInfixOf r) c.finish) rs
     pressured c = fromMaybe False do
       window <- c.model >>= GenAI.lookupPrice >>= (.contextWindow)
       used <- c.inputTokens
@@ -174,7 +177,7 @@ selectCalls pid window bodies scope = do
         attributes -> 'gen_ai' -> 'tool' ->> 'name',
         left(attributes -> 'gen_ai' -> 'tool' -> 'call' ->> 'arguments', 300),
         attributes -> 'gen_ai' -> 'input' ->> 'preview',
-        attributes -> 'gen_ai' -> 'response' ->> 'finish_reasons',
+        attributes -> 'gen_ai' -> 'response' -> 'finish_reasons',
         attributes___user___id, |]
     <> bool [HI.sql|CASE WHEN false THEN attributes END|] [HI.sql|attributes|] bodies
     <> [HI.sql|
@@ -219,7 +222,7 @@ llmGetH pid viewM agentM modelM signalM fromP toP sinceP deferredM = do
       matches c = all (\(want, got) -> maybe True (`elem` got) want) ([(agentM, maybeToList c.agent), (modelM, maybeToList c.model)] :: [(Maybe Text, [Text])])
   body <- withDeferredBody deferredM "llmContainer" url (tableSkeleton_ 8) do
     calls <- V.fromList <$> selectCalls pid window False [HI.sql||]
-    let kpis = kpis_ pid calls
+    let kpis = kpis_ calls
         reset = link view Nothing Nothing Nothing Nothing
         zero = ZeroState{icon = "sparkles", title = "No LLM or agent telemetry yet", description = "Send OpenTelemetry GenAI spans from any SDK or framework — OpenLLMetry, OpenInference, Vercel AI SDK, Pydantic AI, LangChain, the OpenAI Agents SDK, Claude Code — and conversations, cost and tool calls appear here.", action = ESLink "https://monoscopehq.com/docs/sdks/llm-observability/" "Instrument your agent"}
         base :: Text -> Table a
@@ -283,68 +286,65 @@ llmGetH pid viewM agentM modelM signalM fromP toP sinceP deferredM = do
       ConversationsView -> "Conversations" :: Text
       CallsView -> "LLM calls"
 
+    -- \| Headline numbers over model calls only: agent spans carry aggregate usage that would count twice.
+    kpis_ :: V.Vector Call -> Html ()
+    kpis_ calls = div_ [class_ "flex flex-col gap-3 px-4 pt-3"] do
+      div_ [class_ "grid grid-cols-6 gap-px overflow-hidden rounded-lg border border-strokeWeak bg-strokeWeak max-xl:grid-cols-3 max-sm:grid-cols-2"] do
+        stat "Conversations" (show $ length $ groupConversations calls) Nothing
+        stat "Model calls" (prettyPrintCount n) Nothing
+        stat "Tokens" (prettyPrintCount $ round $ sum (mapMaybe (.inputTokens) chats) + sum (mapMaybe (.outputTokens) chats)) Nothing
+        stat "Cost" (maybe "—" (GenAI.formatUsd . sum) $ nonEmpty $ mapMaybe (.cost) chats) $ (\k -> show k <> " unpriced") <$> mfilter (> 0) (Just $ length $ filter (isNothing . (.cost)) chats)
+        stat "Error rate" (if n == 0 then "—" else show (round (100 * fromIntegral (length $ filter (.failed) chats) / fromIntegral n :: Double) :: Int) <> "%") Nothing
+        stat "p95 latency" (maybe "—" (toText . getDurationNSMS . fromIntegral . p95) $ nonEmpty $ map (.duration) chats) Nothing
+      div_ [class_ "grid grid-cols-2 gap-3 max-lg:grid-cols-1"] $ forM_ charts $ div_ [class_ "min-h-56"] . Widget.widget_
+      where
+        chats = filter inference $ V.toList calls
+        n = length chats
+        p95 ne = fromMaybe (last ne) $ Relude.sort (toList ne) !!? (length ne * 95 `div` 100)
+        stat :: Text -> Text -> Maybe Text -> Html ()
+        stat label value note = div_ [class_ "flex flex-col gap-0.5 bg-bgRaised px-3 py-2"] do
+          span_ [class_ "text-xs text-textWeak"] $ toHtml label
+          div_ [class_ "flex items-baseline gap-1.5"] do
+            span_ [class_ "text-lg font-semibold tabular-nums text-textStrong"] $ toHtml value
+            whenJust note $ span_ [class_ "text-xs text-textWeak", term "data-tippy-content" "Calls to models without a published price carry tokens but no cost."] . toHtml
+        inferenceKql = "attributes.gen_ai.operation.name in (\"chat\", \"text_completion\", \"generate_content\", \"embeddings\")"
+        charts =
+          [ Widget.infraTimeseries pid "llm-cost" "Cost by model" "$" $ inferenceKql <> " | summarize sum(attributes.gen_ai.usage.cost) by bin_auto(timestamp), attributes.gen_ai.request.model"
+          , Widget.infraTimeseries pid "llm-calls" "Model calls by model" "" $ inferenceKql <> " | summarize count(*) by bin_auto(timestamp), attributes.gen_ai.request.model"
+          ]
 
--- | Headline numbers over model calls only: agent spans carry aggregate usage that would count twice.
-kpis_ :: Projects.ProjectId -> V.Vector Call -> Html ()
-kpis_ pid calls = div_ [class_ "flex flex-col gap-3 px-4 pt-3"] do
-  div_ [class_ "grid grid-cols-6 gap-px overflow-hidden rounded-lg border border-strokeWeak bg-strokeWeak max-xl:grid-cols-3 max-sm:grid-cols-2"] do
-    stat "Conversations" (show $ length $ groupConversations calls) Nothing
-    stat "Model calls" (prettyPrintCount n) Nothing
-    stat "Tokens" (prettyPrintCount $ round $ sum (mapMaybe (.inputTokens) chats) + sum (mapMaybe (.outputTokens) chats)) Nothing
-    stat "Cost" (maybe "—" (GenAI.formatUsd . sum) $ nonEmpty $ mapMaybe (.cost) chats) $ (\k -> show k <> " unpriced") <$> mfilter (> 0) (Just $ length $ filter (isNothing . (.cost)) chats)
-    stat "Error rate" (if n == 0 then "—" else show (round (100 * fromIntegral (length $ filter (.failed) chats) / fromIntegral n :: Double) :: Int) <> "%") Nothing
-    stat "p95 latency" (maybe "—" (toText . getDurationNSMS . fromIntegral . p95) $ nonEmpty $ map (.duration) chats) Nothing
-  div_ [class_ "grid grid-cols-2 gap-3 max-lg:grid-cols-1"] $ forM_ charts $ div_ [class_ "min-h-56"] . Widget.widget_
-  where
-    chats = filter inference $ V.toList calls
-    n = length chats
-    p95 ne = fromMaybe (last ne) $ Relude.sort (toList ne) !!? (length ne * 95 `div` 100)
-    stat :: Text -> Text -> Maybe Text -> Html ()
-    stat label value note = div_ [class_ "flex flex-col gap-0.5 bg-bgRaised px-3 py-2"] do
-      span_ [class_ "text-xs text-textWeak"] $ toHtml label
-      div_ [class_ "flex items-baseline gap-1.5"] do
-        span_ [class_ "text-lg font-semibold tabular-nums text-textStrong"] $ toHtml value
-        whenJust note $ span_ [class_ "text-xs text-textWeak", term "data-tippy-content" "Calls to models without a published price carry tokens but no cost."] . toHtml
-    inferenceKql = "attributes.gen_ai.operation.name in (\"chat\", \"text_completion\", \"generate_content\", \"embeddings\")"
-    charts =
-      [ Widget.infraTimeseries pid "llm-cost" "Cost by model" "$" $ inferenceKql <> " | summarize sum(attributes.gen_ai.usage.cost) by bin_auto(timestamp), attributes.gen_ai.request.model"
-      , Widget.infraTimeseries pid "llm-calls" "Model calls by model" "" $ inferenceKql <> " | summarize count(*) by bin_auto(timestamp), attributes.gen_ai.request.model"
+    conversationColumns :: [Column Conversation]
+    conversationColumns =
+      [ col "Conversation" titleCell & withAttrs [class_ "min-w-72"]
+      , col "Agent" (chips . (.agents)) & withAttrs [class_ "w-36 max-lg:hidden"]
+      , col "Models" (chips . (.models)) & withAttrs [class_ "w-40 max-xl:hidden"]
+      , col "Turns" (num . fromIntegral . (.turns)) & withAttrs [class_ "w-16 text-right"]
+      , col "Calls" (\c -> span_ [class_ "tabular-nums text-textWeak", term "data-tippy-content" $ show c.llmCalls <> " model calls, " <> show c.toolCalls <> " tool calls"] $ toHtml $ show c.llmCalls <> " · " <> show c.toolCalls) & withAttrs [class_ "w-20 text-right max-md:hidden"]
+      , col "Tokens" (num . (.tokens)) & withAttrs [class_ "w-20 text-right"]
+      , col "Cost" (\c -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ maybe "—" GenAI.formatUsd c.cost) & withAttrs [class_ "w-20 text-right"]
+      , col "Signals" signalsCell & withAttrs [class_ "w-44"]
+      , col "Last seen" (localTimeFmt_ "MMM dd, HH:mm" . (.lastSeen)) & withAttrs [class_ "w-28 max-md:hidden"]
       ]
+      where
+        titleCell, signalsCell :: Conversation -> Html ()
+        titleCell c = div_ [class_ "flex min-w-0 flex-col"] do
+          span_ [class_ "truncate font-medium text-textStrong"] $ toHtml $ fromMaybe "Untitled conversation" c.title
+          span_ [class_ "truncate text-xs text-textWeak"] $ toHtml $ T.intercalate " · " $ catMaybes [Just $ T.take 12 c.key, viaNonEmpty head c.users, viaNonEmpty head c.services, Just $ toText (getDurationNSMS $ fromIntegral c.activeNs)]
+        signalsCell c = div_ [class_ "flex flex-wrap gap-1"] do
+          when (c.errors > 0 && null c.signals) $ tonePill_ ErrorBadge $ show c.errors <> " errors"
+          forM_ c.signals \s -> span_ [term "data-tippy-content" $ signalHelp s] $ tonePill_ (signalTone s) $ signalLabel s
 
-
-conversationColumns :: [Column Conversation]
-conversationColumns =
-  [ col "Conversation" titleCell & withAttrs [class_ "min-w-72"]
-  , col "Agent" (chips . (.agents)) & withAttrs [class_ "w-36 max-lg:hidden"]
-  , col "Models" (chips . (.models)) & withAttrs [class_ "w-40 max-xl:hidden"]
-  , col "Turns" (num . fromIntegral . (.turns)) & withAttrs [class_ "w-16 text-right"]
-  , col "Calls" (\c -> span_ [class_ "tabular-nums text-textWeak", term "data-tippy-content" $ show c.llmCalls <> " model calls, " <> show c.toolCalls <> " tool calls"] $ toHtml $ show c.llmCalls <> " · " <> show c.toolCalls) & withAttrs [class_ "w-20 text-right max-md:hidden"]
-  , col "Tokens" (num . (.tokens)) & withAttrs [class_ "w-20 text-right"]
-  , col "Cost" (\c -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ maybe "—" GenAI.formatUsd c.cost) & withAttrs [class_ "w-20 text-right"]
-  , col "Signals" signalsCell & withAttrs [class_ "w-44"]
-  , col "Last seen" (localTimeFmt_ "MMM dd, HH:mm" . (.lastSeen)) & withAttrs [class_ "w-28 max-md:hidden"]
-  ]
-  where
-    titleCell, signalsCell :: Conversation -> Html ()
-    titleCell c = div_ [class_ "flex min-w-0 flex-col"] do
-      span_ [class_ "truncate font-medium text-textStrong"] $ toHtml $ fromMaybe "Untitled conversation" c.title
-      span_ [class_ "truncate text-xs text-textWeak"] $ toHtml $ T.intercalate " · " $ catMaybes [Just $ T.take 12 c.key, viaNonEmpty head c.users, viaNonEmpty head c.services, Just $ toText (getDurationNSMS $ fromIntegral c.activeNs)]
-    signalsCell c = div_ [class_ "flex flex-wrap gap-1"] do
-      when (c.errors > 0 && null c.signals) $ tonePill_ ErrorBadge $ show c.errors <> " errors"
-      forM_ c.signals \s -> span_ [term "data-tippy-content" $ signalHelp s] $ tonePill_ (signalTone s) $ signalLabel s
-
-
-callColumns :: [Column Call]
-callColumns =
-  [ col "Call" (\c -> div_ [class_ "flex min-w-0 flex-col"] $ span_ [class_ "truncate font-medium text-textStrong"] (toHtml c.name) >> span_ [class_ "truncate text-xs text-textWeak"] (toHtml $ fromMaybe "" c.preview)) & withAttrs [class_ "min-w-72"]
-  , col "Model" (chips . maybeToList . (.model)) & withAttrs [class_ "w-40"]
-  , col "Agent" (chips . maybeToList . (.agent)) & withAttrs [class_ "w-32 max-lg:hidden"]
-  , col "Tokens" (\c -> span_ [class_ "tabular-nums text-textWeak"] $ toHtml $ fromMaybe "—" $ (\i o -> prettyPrintCount (round i) <> " → " <> prettyPrintCount (round o)) <$> c.inputTokens <*> c.outputTokens) & withAttrs [class_ "w-28 text-right"]
-  , col "Cost" (\c -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ maybe "—" GenAI.formatUsd c.cost) & withAttrs [class_ "w-20 text-right"]
-  , col "Latency" (\c -> span_ [class_ "tabular-nums"] $ toHtml $ getDurationNSMS $ fromIntegral c.duration) & withAttrs [class_ "w-20 text-right"]
-  , col "Status" (\c -> if c.failed then tonePill_ ErrorBadge "Error" else maybe mempty (\f -> when (any (`T.isInfixOf` f) ["length", "content_filter", "max_tokens"]) $ tonePill_ WarningBadge "Truncated") c.finish) & withAttrs [class_ "w-24"]
-  , col "Time" (localTimeFmt_ "MMM dd, HH:mm:ss" . (.timestamp)) & withAttrs [class_ "w-28 max-md:hidden"]
-  ]
+    callColumns :: [Column Call]
+    callColumns =
+      [ col "Call" (\c -> div_ [class_ "flex min-w-0 flex-col"] $ span_ [class_ "truncate font-medium text-textStrong"] (toHtml c.name) >> span_ [class_ "truncate text-xs text-textWeak"] (toHtml $ fromMaybe "" c.preview)) & withAttrs [class_ "min-w-72"]
+      , col "Model" (chips . maybeToList . (.model)) & withAttrs [class_ "w-40"]
+      , col "Agent" (chips . maybeToList . (.agent)) & withAttrs [class_ "w-32 max-lg:hidden"]
+      , col "Tokens" (\c -> span_ [class_ "tabular-nums text-textWeak"] $ toHtml $ fromMaybe "—" $ (\i o -> prettyPrintCount (round i) <> " → " <> prettyPrintCount (round o)) <$> c.inputTokens <*> c.outputTokens) & withAttrs [class_ "w-28 text-right"]
+      , col "Cost" (\c -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ maybe "—" GenAI.formatUsd c.cost) & withAttrs [class_ "w-20 text-right"]
+      , col "Latency" (\c -> span_ [class_ "tabular-nums"] $ toHtml $ getDurationNSMS $ fromIntegral c.duration) & withAttrs [class_ "w-20 text-right"]
+      , col "Status" (\c -> if c.failed then tonePill_ ErrorBadge "Error" else forM_ (viaNonEmpty head $ abnormal c) (tonePill_ WarningBadge . show)) & withAttrs [class_ "w-24"]
+      , col "Time" (localTimeFmt_ "MMM dd, HH:mm:ss" . (.timestamp)) & withAttrs [class_ "w-28 max-md:hidden"]
+      ]
 
 
 signalTone :: Signal -> BadgeColor
@@ -411,7 +411,7 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-6xl flex-col gap
     header_ [class_ "flex flex-col gap-2"] do
       div_ [class_ "flex flex-wrap items-start gap-3"] do
         h1_ [class_ "min-w-0 flex-1 text-lg font-semibold text-textStrong text-pretty"] $ toHtml $ fromMaybe "Untitled conversation" c.title
-        askAi_ d.pid c
+        askAi_ c
         a_ ([class_ "btn btn-sm", href_ explorer] <> navTabAttrs) $ faSprite_ "explore" "regular" "h-3.5 w-3.5" >> "Open spans in Explorer"
       div_ [class_ "flex flex-wrap gap-1.5"] do
         forM_ c.agents $ metaChip_ "Agent"
@@ -427,80 +427,77 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-6xl flex-col gap
       div_ [role_ "tablist", Aria.label_ "Conversation views", class_ "tabs tabs-box w-max"] do
         label_ [class_ "tab has-[:checked]:tab-active"] $ input_ [type_ "radio", name_ "ctab", class_ "sr-only ctab-transcript", checked_] >> "Transcript"
         label_ [class_ "tab has-[:checked]:tab-active"] $ input_ [type_ "radio", name_ "ctab", class_ "sr-only ctab-timeline"] >> "Timeline"
-      section_ [class_ "hidden group-has-[.ctab-transcript:checked]/ctab:block"] $ transcript_ d
-      section_ [class_ "hidden group-has-[.ctab-timeline:checked]/ctab:block"] $ timeline_ d
+      section_ [class_ "hidden group-has-[.ctab-transcript:checked]/ctab:block"] transcript_
+      section_ [class_ "hidden group-has-[.ctab-timeline:checked]/ctab:block"] timeline_
   where
     explorer = (urls.logExplorer d.pid).logExplorerGet (Just $ "attributes.gen_ai.conversation.id == \"" <> d.key <> "\" or trace_id == \"" <> d.key <> "\"") Nothing d.window.sinceQuery d.window.fromQuery d.window.toQuery (Just "spans") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
+    -- \| Hands the conversation to the assistant dock, which reads the page it was asked from.
+    askAi_ :: Conversation -> Html ()
+    askAi_ c =
+      button_
+        [ type_ "button"
+        , class_ "btn btn-sm btn-primary"
+        , hxPost_ $ urls.aiDockPost d.pid
+        , hxVals_ $ "js:{path: location.pathname + location.search, title: document.title, query: " <> decodeUtf8 (AE.encode prompt) <> "}"
+        , hxTarget_ "#ai-dock"
+        , hxSwap_ "outerMorph"
+        , [__|on htmx:after:request set #ai-dock-open.checked to true|]
+        ]
+        $ faSprite_ "sparkles" "regular" "h-3.5 w-3.5"
+        >> "Ask AI about this conversation"
+      where
+        prompt = "Analyse the agent conversation on this page (gen_ai.conversation.id or trace id " <> c.key <> "). Summarise what the user wanted, whether the agent achieved it, where it went wrong (tool errors, loops, truncation, wrong tool choice), and what drove the cost and latency. Query its spans if you need more than the page shows." :: Text
 
--- | Hands the conversation to the assistant dock, which reads the page it was asked from.
-askAi_ :: Projects.ProjectId -> Conversation -> Html ()
-askAi_ pid c =
-  button_
-    [ type_ "button"
-    , class_ "btn btn-sm btn-primary"
-    , hxPost_ $ urls.aiDockPost pid
-    , hxVals_ $ "js:{path: location.pathname + location.search, title: document.title, query: " <> decodeUtf8 (AE.encode prompt) <> "}"
-    , hxTarget_ "#ai-dock"
-    , hxSwap_ "outerMorph"
-    , [__|on htmx:after:request set #ai-dock-open.checked to true|]
-    ]
-    $ faSprite_ "sparkles" "regular" "h-3.5 w-3.5"
-    >> "Ask AI about this conversation"
-  where
-    prompt = "Analyse the agent conversation on this page (gen_ai.conversation.id or trace id " <> c.key <> "). Summarise what the user wanted, whether the agent achieved it, where it went wrong (tool errors, loops, truncation, wrong tool choice), and what drove the cost and latency. Query its spans if you need more than the page shows." :: Text
+    -- \| Each message once: an LLM call's input repeats the history before it, so only messages
+    -- not already shown are rendered, then the call's reply with its model, latency and cost.
+    transcript_ :: Html ()
+    transcript_ = div_ [class_ "flex flex-col gap-3"] do
+      unless (any (\s -> isJust (messages "input" s) || isJust (messages "output" s)) source) $ callout_ NeutralBadge Nothing "These spans carry no message content. Enable content capture in your instrumentation (OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT=SPAN_ONLY for OpenTelemetry GenAI) to see the transcript."
+      sequence_ rendered
+      where
+        calls = filter inference d.steps
+        source = if any (isJust . messages "input") calls then calls else filter ((== "invoke_agent") . (.operation)) d.steps
+        at c = genAIAt (unAesonTextMaybe c.attributes)
+        messages dir c = at c [dir, "messages"] >>= \case AE.Array ms -> Just (toList ms); _ -> Nothing
+        tools = M.fromList [(i, c) | c <- d.steps, Just (AE.String i) <- [at c ["tool", "call", "id"]]]
+        rendered = go S.empty source
+        go _ [] = []
+        go seen (s : rest) =
+          let fresh = filter (\m -> not (S.member (AE.encode m) seen)) (fromMaybe [] $ messages "input" s)
+              out = fromMaybe [] $ messages "output" s
+              seen' = foldr (S.insert . AE.encode) seen (fresh <> out)
+           in (forM_ fresh (message_ d.pid tools Nothing) >> forM_ out (message_ d.pid tools (Just s))) : go seen' rest
 
-
--- | Each message once: an LLM call's input repeats the history before it, so only messages
--- not already shown are rendered, then the call's reply with its model, latency and cost.
-transcript_ :: ConversationDetail -> Html ()
-transcript_ d = div_ [class_ "flex flex-col gap-3"] do
-  unless (any (\s -> isJust (messages "input" s) || isJust (messages "output" s)) source) $ callout_ NeutralBadge Nothing "These spans carry no message content. Enable content capture in your instrumentation (OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT=SPAN_ONLY for OpenTelemetry GenAI) to see the transcript."
-  sequence_ rendered
-  where
-    calls = filter inference d.steps
-    source = if any (isJust . messages "input") calls then calls else filter ((== "invoke_agent") . (.operation)) d.steps
-    at c = genAIAt (unAesonTextMaybe c.attributes)
-    messages dir c = at c [dir, "messages"] >>= \case AE.Array ms -> Just (toList ms); _ -> Nothing
-    tools = M.fromList [(i, c) | c <- d.steps, Just (AE.String i) <- [at c ["tool", "call", "id"]]]
-    rendered = go S.empty source
-    go _ [] = []
-    go seen (s : rest) =
-      let fresh = filter (\m -> not (S.member (AE.encode m) seen)) (fromMaybe [] $ messages "input" s)
-          out = fromMaybe [] $ messages "output" s
-          seen' = foldr (S.insert . AE.encode) seen (fresh <> out)
-       in (forM_ fresh (message_ d.pid tools Nothing) >> forM_ out (message_ d.pid tools (Just s))) : go seen' rest
-
-
--- | AI spans in execution order, with a bar on the conversation's own clock and the running cost.
-timeline_ :: ConversationDetail -> Html ()
-timeline_ d = div_ [class_ "overflow-hidden rounded-lg border border-strokeWeak"] $ table_ [class_ "w-full text-sm"] do
-  thead_ [class_ "bg-fillWeaker text-xs text-textWeak"] $ tr_ do
-    th_ [class_ "px-3 py-1.5 text-left font-medium"] "Step"
-    th_ [class_ "w-1/3 px-3 py-1.5 text-left font-medium max-md:hidden"] "When"
-    th_ [class_ "px-3 py-1.5 text-right font-medium"] "Duration"
-    th_ [class_ "px-3 py-1.5 text-right font-medium"] "Tokens"
-    th_ [class_ "px-3 py-1.5 text-right font-medium"] "Cost · total"
-  tbody_ $ forM_ (zip d.steps running) \(c, total) -> do
-    let s = c
-        offset = pct (diffUTCTime s.timestamp start)
-        width = max 0.5 $ pct (fromIntegral s.duration / 1e9)
-    tr_ ([class_ "border-t border-strokeWeak hover:bg-fillHover"] <> maybe [] (\u -> drawerRowAttrs_ $ (urls.logExplorer d.pid).logExplorerItemDetailedGet u s.timestamp Nothing (Just "tab-genai") Nothing True) (UUID.fromText s.id)) do
-      td_ [class_ "px-3 py-1.5"] $ div_ [class_ "flex min-w-0 items-center gap-2"] do
-        faSprite_ (opIcon c.operation) "regular" "h-3 w-3 shrink-0 text-iconNeutral"
-        span_ [class_ "truncate text-textStrong"] $ toHtml s.name
-        when s.failed $ tonePill_ ErrorBadge "Error"
-      td_ [class_ "px-3 py-1.5 max-md:hidden"] $ div_ [class_ "relative h-2 rounded-sm bg-fillWeak"] $ div_ [class_ $ "absolute inset-y-0 rounded-sm " <> if s.failed then "bg-fillError-strong" else "bg-fillBrand-strong", style_ $ "left:" <> show offset <> "%;width:" <> show (min width (100 - offset)) <> "%"] ""
-      td_ [class_ "px-3 py-1.5 text-right tabular-nums text-textWeak"] $ toHtml $ getDurationNSMS $ fromIntegral s.duration
-      td_ [class_ "px-3 py-1.5 text-right tabular-nums text-textWeak"] $ toHtml $ maybe "" (\i -> prettyPrintCount (round i) <> maybe "" ((" → " <>) . prettyPrintCount . round) c.outputTokens) c.inputTokens
-      td_ [class_ "px-3 py-1.5 text-right tabular-nums text-textWeak"] $ toHtml $ maybe "" (\x -> GenAI.formatUsd x <> " · " <> GenAI.formatUsd total) c.cost
-  where
-    start = maybe d.window.fromTime (.timestamp) (viaNonEmpty head d.steps)
-    end = maybe start (F1.maximum . fmap (\s -> addUTCTime (fromIntegral s.duration / 1e9) s.timestamp)) (nonEmpty d.steps)
-    span' = max 0.001 $ diffUTCTime end start
-    pct x = realToFrac (100 * x / span') :: Double
-    running = drop 1 $ scanl (+) 0 $ map (fromMaybe 0 . (.cost)) d.steps
-    opIcon = \case
-      "execute_tool" -> "function"
-      "invoke_agent" -> "sparkles"
-      _ -> "comment"
+    -- \| AI spans in execution order, with a bar on the conversation's own clock and the running cost.
+    timeline_ :: Html ()
+    timeline_ = div_ [class_ "overflow-hidden rounded-lg border border-strokeWeak"] $ table_ [class_ "w-full text-sm"] do
+      thead_ [class_ "bg-fillWeaker text-xs text-textWeak"] $ tr_ do
+        th_ [class_ "px-3 py-1.5 text-left font-medium"] "Step"
+        th_ [class_ "w-1/3 px-3 py-1.5 text-left font-medium max-md:hidden"] "When"
+        th_ [class_ "px-3 py-1.5 text-right font-medium"] "Duration"
+        th_ [class_ "px-3 py-1.5 text-right font-medium"] "Tokens"
+        th_ [class_ "px-3 py-1.5 text-right font-medium"] "Cost · total"
+      tbody_ $ forM_ (zip d.steps running) \(c, total) -> do
+        let s = c
+            offset = pct (diffUTCTime s.timestamp start)
+            width = max 0.5 $ pct (fromIntegral s.duration / 1e9)
+        tr_ ([class_ "border-t border-strokeWeak hover:bg-fillHover"] <> maybe [] (\u -> drawerRowAttrs_ $ (urls.logExplorer d.pid).logExplorerItemDetailedGet u s.timestamp Nothing (Just "tab-genai") Nothing True) (UUID.fromText s.id)) do
+          td_ [class_ "px-3 py-1.5"] $ div_ [class_ "flex min-w-0 items-center gap-2"] do
+            faSprite_ (opIcon c.operation) "regular" "h-3 w-3 shrink-0 text-iconNeutral"
+            span_ [class_ "truncate text-textStrong"] $ toHtml s.name
+            when s.failed $ tonePill_ ErrorBadge "Error"
+          td_ [class_ "px-3 py-1.5 max-md:hidden"] $ div_ [class_ "relative h-2 rounded-sm bg-fillWeak"] $ div_ [class_ $ "absolute inset-y-0 rounded-sm " <> if s.failed then "bg-fillError-strong" else "bg-fillBrand-strong", style_ $ "left:" <> show offset <> "%;width:" <> show (min width (100 - offset)) <> "%"] ""
+          td_ [class_ "px-3 py-1.5 text-right tabular-nums text-textWeak"] $ toHtml $ getDurationNSMS $ fromIntegral s.duration
+          td_ [class_ "px-3 py-1.5 text-right tabular-nums text-textWeak"] $ toHtml $ maybe "" (\i -> prettyPrintCount (round i) <> maybe "" ((" → " <>) . prettyPrintCount . round) c.outputTokens) c.inputTokens
+          td_ [class_ "px-3 py-1.5 text-right tabular-nums text-textWeak"] $ toHtml $ maybe "" (\x -> GenAI.formatUsd x <> " · " <> GenAI.formatUsd total) c.cost
+      where
+        start = maybe d.window.fromTime (.timestamp) (viaNonEmpty head d.steps)
+        end = maybe start (F1.maximum . fmap (\s -> addUTCTime (fromIntegral s.duration / 1e9) s.timestamp)) (nonEmpty d.steps)
+        span' = max 0.001 $ diffUTCTime end start
+        pct x = realToFrac (100 * x / span') :: Double
+        running = drop 1 $ scanl (+) 0 $ map (fromMaybe 0 . (.cost)) d.steps
+        opIcon = \case
+          "execute_tool" -> "function"
+          "invoke_agent" -> "sparkles"
+          _ -> "comment"

@@ -47,7 +47,7 @@ data Call = Call
   , tool :: Maybe Text
   , toolArgs :: Maybe Text
   , preview :: Maybe Text
-  , finish :: Maybe Text
+  , finish :: Maybe (AesonText GenAI.FinishReasons)
   , user :: Maybe Text
   , attributes :: Maybe (AesonText (Map Text AE.Value))
   -- ^ Read only for a conversation's detail: it carries the message bodies.

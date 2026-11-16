@@ -232,7 +232,8 @@ withHistory :: LLMCore.ChatHistory -> OpenAIV1.CreateChatCompletion -> OpenAIV1.
 withHistory history params = params{OpenAIV1.messages = V.fromList $ map LLMCore.to $ toList history}
 
 
--- | A GenAI inference span (semconv-genai) around one chat completion.
+-- | A GenAI inference span (semconv-genai) around one chat completion. It writes to the
+-- provider directly: the background stack interprets 'Tracing' before this effect.
 inference :: LLMTelemetry -> OpenAIV1.CreateChatCompletion -> (a -> [(Text, OA.Attribute)]) -> IO (Either Text a) -> IO (Either Text a)
 inference t params describe call =
   Trace.inSpan' (Trace.makeTracer t.tracerProvider "monoscope.llm" Trace.tracerOptions) ("chat " <> model) Trace.defaultSpanArguments{Trace.kind = Trace.Client, Trace.attributes = HM.fromList requestAttrs} \sp -> do
