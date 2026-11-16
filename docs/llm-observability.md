@@ -113,7 +113,9 @@ A signal is a name plus a description ("The user repeats a request or gives up")
 for active projects) sends up to 20 of the day's not-yet-judged conversations to the small
 model in one call (opening request, latest message history, failed tools) and stores a
 verdict with a one-sentence reason per conversation in `apis.llm_signal_matches`. Matches
-show as pills (reason on hover) and in the Signal facet next to the built-in ones.
+show as pills (reason on hover) and in the Signal facet next to the built-in ones. Names are unique per
+project, built-in labels included. A conversation is judged once; one that keeps growing
+afterwards is not re-judged (follow-up: re-judge on new turns).
 
 ### Signals (deterministic)
 | Signal | Rule |

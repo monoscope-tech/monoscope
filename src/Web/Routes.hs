@@ -1096,6 +1096,7 @@ type instance Opaque "LLM.LLMGet" = LLM.LLMGet
 type instance Opaque "LLM.ConversationGet" = LLM.ConversationGet
 type instance Opaque "LLM.SignalForm" = LLM.SignalForm
 type instance Opaque "LLM.SignalQueued" = LLM.SignalQueued
+type instance Opaque "LLM.SignalRejection" = LLM.SignalRejection
 type instance Opaque "Infrastructure.DetailGet" = Infrastructure.DetailGet
 type instance Opaque "Infrastructure.HostMapGet" = Infrastructure.HostMapGet
 type instance Opaque "Infrastructure.HostsGet" = Infrastructure.HostsGet
