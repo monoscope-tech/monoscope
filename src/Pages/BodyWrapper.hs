@@ -1325,7 +1325,7 @@ navFlyoutItems pid = \case
   "Explorer" -> [(label, link pid) | (label, link) <- Components.explorerTabs]
   "Infrastructure" -> [(label, link pid Nothing Nothing Nothing) | (label, link) <- Components.infrastructureTabs]
   "Real User Monitoring" -> [("Dashboard", urls.rumRedirect pid [] []), ("Sessions", urls.rumRedirect pid ["sessions"] [])]
-  "LLM & Agents" -> [(label, (urls.traces pid).llmGetH (Just view) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing) | (label, view) <- [("Conversations", "conversations"), ("Topics", "topics")]] <> [("LLM calls", llmCallsUrl pid Nothing Nothing Nothing), ("Dashboard", urls.llmDashboardRedirect pid [])]
+  "LLM & Agents" -> [(label, (urls.traces pid).llmGetH (Just view) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing) | (label, view) <- [("Conversations", "conversations"), ("Topics", "topics"), ("Signals", "signals")]] <> [("LLM calls", llmCallsUrl pid Nothing Nothing Nothing), ("Dashboard", urls.llmDashboardRedirect pid [])]
   -- API Docs carries no host: it is the whole project's learned spec. The
   -- per-host and per-endpoint scopes are reached from the catalog rows.
   "API Catalog" -> [("Incoming", apiCatalogUrl pid (Just "Incoming")), ("Outgoing", apiCatalogUrl pid (Just "Outgoing")), ("API Docs", urls.apiCatalogDocs pid Nothing (Just "Incoming") Nothing)]

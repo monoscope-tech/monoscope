@@ -59,6 +59,7 @@ data BgJobs
   | AutofixIssues Projects.ProjectId
   | PublishFix Projects.ProjectId (UUIDId "issue_fix")
   | AnalyzeRepository Projects.ProjectId (UUIDId "repository")
+  | EvaluateLLMSignal Projects.ProjectId (UUIDId "llm_signal")
   | RepositorySyncTick UTCTime
   | GitSyncFromRepo Projects.ProjectId
   | GitSyncRepository Projects.ProjectId (UUIDId "github_sync")

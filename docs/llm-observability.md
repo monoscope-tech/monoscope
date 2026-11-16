@@ -79,11 +79,14 @@ Unknown models carry tokens but no cost; the UI says "unpriced" rather than `$0`
 - **Trace header:** total LLM cost and tokens when the trace has gen_ai spans.
 
 ### LLM & Agents page (`/p/:pid/llm`, `/llm/conversations/:key`, `/llm/dashboard`)
-- **KPI strip:** conversations, model calls, tokens, cost (with the count of unpriced calls),
-  error rate, p95 model latency; cost and calls charted by model.
-- **Two lists.** *Conversations* are groups with a `gen_ai.conversation.id` or an
-  `invoke_agent` span; *LLM calls* lists every inference span. Single-call traces (a
-  classifier, a judge) appear only in the second, so they don't drown real conversations.
+- **Overview:** the first widgets of `llm-observability.yaml` (model calls, cost, error rate,
+  tokens), rendered by the shared `Widget`, so the page and the dashboard cannot disagree.
+- **Tabs.** *Conversations*; *Topics* (opening messages clustered with `Pkg.Drain`);
+  *Signals* (plain-language signals); *LLM calls* is the Log Explorer filtered on the
+  ingest-stamped `kind;neutral⇒ai` summary element (`array_has` on TimeFusion), so calls get
+  every Explorer feature for free.
+- **Totals** are aggregated in SQL per conversation key (GROUP BY over the window), not over a
+  capped span sample.
 - **Conversations table** (shared `Table`): title (first user message), agent, models,
   turns, tool calls, tokens, cost, errors/signals, duration, last seen. Grouping key is
   `gen_ai.conversation.id`, falling back to the trace id; a trace adopts the id any of its
@@ -104,6 +107,14 @@ Unknown models carry tokens but no cost; the UI says "unpriced" rather than `$0`
   OpenAI Agents SDK, CrewAI, Mastra, Google ADK, Strands, Agno, Bedrock/Azure/Vertex,
   Claude Code CLI, Claude Console push, MCP, plain OTLP/HTTP.
 
+### Plain-language signals (Raindrop-style)
+A signal is a name plus a description ("The user repeats a request or gives up"), stored in
+`apis.llm_signals`. `EvaluateLLMSignal` (on creation, on "Judge new conversations", and hourly
+for active projects) sends up to 20 of the day's not-yet-judged conversations to the small
+model in one call (opening request, latest message history, failed tools) and stores a
+verdict with a one-sentence reason per conversation in `apis.llm_signal_matches`. Matches
+show as pills (reason on hover) and in the Signal facet next to the built-in ones.
+
 ### Signals (deterministic)
 | Signal | Rule |
 |---|---|
@@ -122,6 +133,8 @@ investigations, routines and the log-pattern judges all call `Data.Effectful.LLM
   call in a `chat {model}` span with the canonical attributes and real token usage.
 - The agent loop opens `invoke_agent monoscope-assistant` (with `gen_ai.conversation.id`)
   and an `execute_tool {name}` span per tool call.
+- `projects.ai_usage` is billed from the provider's reported usage (`ELLM.Reply.usage`); the
+  bytes/4 estimate remains only for golden replays that carry none.
 - Our self-telemetry project therefore shows every assistant conversation, its cost and its
   tools — the first customer of the feature.
 
@@ -134,23 +147,18 @@ the self-telemetry project shows tokens, cost, models and tools there, and trans
 ## Tests
 - Doctests: dialect normalisation per dialect, model-id normalisation, cost formula,
   provided-cost precedence, transcript diffing.
-- Integration (`AIObservabilitySpec`): ingest one conversation mixing dialects through the
+- Integration (`Opentelemetry.GenAISpec`): ingest one conversation mixing dialects through the
   real OTLP path; assert normalised attributes and cost on the stored rows, the conversations
-  list row, transcript, signals, and golden HTML.
+  list, topics, the LLM-calls Explorer query, a plain-language signal judged by a stubbed
+  model, the trace's cost totals, Claude Code sessions, and billing from reported usage.
 - Dogfood: run the assistant against golden LLM responses with an in-memory span exporter,
   replay its spans through ingest, and assert the AI page shows the conversation.
 
 ## Follow-ups (not in this change)
 - Promote `gen_ai.usage.*`, model and conversation id to TimeFusion columns.
-- NL-defined signals compiled to classifiers (Raindrop-style) on the issues pipeline.
-- Topic clustering of first user messages via Drain.
+- Signal matches as issues/alerts (route a signal through the issues pipeline).
 - Resolve `gen_ai.*_ref` content URIs.
-- Bill `projects.ai_usage` from the provider's real usage: return it from the `LLM` effect
-  (spans already carry it) and delete `estimatedTokens`.
-- Aggregate list totals in SQL (GROUP BY the conversation key) instead of over the newest
-  5,000 spans; the pages say when they hit that cap.
 - Normalise per dialect in a pre-pass (detector + alias table + fixups) so new dialects do not
   touch the shared derivation; stamp an `inference` marker so KQL filters stop listing operations.
 - Interpret `LLM` above `Tracing` so inference spans use the `Tracing` effect, and share one
   TLS client across calls.
-- Signals defined in natural language (Raindrop-style), topic clusters of first messages.

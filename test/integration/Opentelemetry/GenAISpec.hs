@@ -71,6 +71,20 @@ spec = around withTestResources do
       forM_ (tr : [viaTf' | realTf]) \t -> call t (Log.logExplorerDataH pid llmCalls) >>= (`shouldBe` 5) . V.length . (.logsData)
       LLM.LLMPage (PageCtx _ (DeferredBody (LLM.TopicsBody topics))) <- call tr $ LLM.llmGetH pid (Just "topics") Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       map (\t -> (t.template, length t.conversations)) (toList topics.rows) `shouldBe` [("Why is checkout slow?", 1)]
+      -- A plain-language signal: one judge call over the day's conversations, matches shown as pills and a facet.
+      LLM.SignalQueued sid <- call tr $ LLM.llmSignalPostH pid (LLM.SignalForm "Slow checkout" "The user asks why checkout is slow.")
+      prompts <- newIORef []
+      let judge = interpose @ELLM.LLM \_ -> \case
+            ELLM.CallLLM _ prompt _ -> modifyIORef prompts (prompt :) $> Right "```json\n[{\"key\":\"conv-1\",\"match\":true,\"reason\":\"Asks about checkout latency.\"}]\n```"
+            ELLM.CallAgenticChat{} -> pure $ Left "Unexpected agent call"
+            ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+      runTestBg (addUTCTime 60 now) tr $ judge $ LLM.evaluateSignal pid sid
+      runTestBg (addUTCTime 60 now) tr $ judge $ LLM.evaluateSignal pid sid
+      readIORef prompts >>= (`shouldSatisfy` \ps -> length ps == 1 && all ("Why is checkout slow?" `T.isInfixOf`) ps)
+      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody flagged))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing (Just "Slow checkout") Nothing from to Nothing (Just "1")
+      (map (.key) (toList flagged.rows), renderT flagged) `shouldSatisfy` \(ks, html) -> ks == ["conv-1"] && "Asks about checkout latency." `T.isInfixOf` html
+      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.SignalsBody _ signals))) <- call tr $ LLM.llmGetH pid (Just "signals") Nothing Nothing Nothing Nothing from to Nothing (Just "1")
+      map (\s' -> (s'.name, s'.matched, s'.judged)) signals `shouldBe` [("Slow checkout", 1, 1)]
       -- Rows open the full span view in the drawer: a partial response is a lone hidden tab panel.
       T.isInfixOf "partial" (renderT table) `shouldBe` False
       -- The trace view prices each step and totals the trace: $0.0035 + $0.000057 for gpt-4o-mini.
