@@ -140,6 +140,7 @@ import Network.URI qualified as URI
 import Network.Wreq qualified as Wreq
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Tool qualified as OAITool
+import OpenTelemetry.Attributes qualified as OA
 import Pkg.AgentCatalog (LocalOperation (..))
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.TimePicker (TimePicker (..), parseTimeRange)
@@ -151,6 +152,7 @@ import Pkg.SchemaLearning (FacetData (..), FacetSummary (..), FacetValue (..))
 import Pkg.Slack qualified as Slack
 import Relude
 import System.Config qualified as Config
+import System.Tracing (SpanKind (Internal), SpanStatus (Error), Tracing, setStatus, withSpanKind)
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (throwIO, withException)
 import Utils (encodeText, formatUTCMicros, hostPath, nonEmptyT, unwrapJsonPrimValue)
@@ -1416,8 +1418,8 @@ runAgenticChatWithHistory suppliedConfig requestedInput model apiKey = do
 
 -- | Each attempt gets its own journal; a retry never overwrites partial evidence.
 -- Persisted Slack turns resume their checkpoint while each worker attempt retains its own activity log.
-withInvestigationJournal :: (DB es, IOE :> es, UUIDEff :> es, W.HTTP :> es) => AgenticConfig -> Text -> Text -> (Maybe Investigations.Scope -> Eff es (Either Text a)) -> Eff es (Either Text a)
-withInvestigationJournal config userQuery model action = do
+withInvestigationJournal :: (DB es, IOE :> es, Tracing :> es, UUIDEff :> es, W.HTTP :> es) => AgenticConfig -> Text -> Text -> (Maybe Investigations.Scope -> Eff es (Either Text a)) -> Eff es (Either Text a)
+withInvestigationJournal config userQuery model action = withSpanKind Internal "invoke_agent monoscope" agentAttrs \_ -> do
   void $ requireConfigAccess config
   case config.access of
     SlackInvestigationAccess run -> do
@@ -1432,6 +1434,10 @@ withInvestigationJournal config userQuery model action = do
       Investigations.recordEvent scope $ either (const Investigations.InvestigationFailed) (const Investigations.InvestigationFinished) result
       pure result
     (MemberAccess{}; ServiceAccess; SlackAccess{}; SlackCommandAccess{}) -> action Nothing
+  where
+    agentAttrs =
+      [("gen_ai.operation.name", "invoke_agent"), ("gen_ai.agent.name", "monoscope"), ("gen_ai.provider.name", "openai"), ("gen_ai.request.model", OA.toAttribute model), ("monoscope.project_id", OA.toAttribute config.projectId.toText)]
+        <> [("gen_ai.conversation.id", OA.toAttribute convId.toText) | Just convId <- [config.conversationId]]
 
 
 -- | Save each completed decision/read before advancing. Pending read tools may
@@ -1508,7 +1514,13 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
       tool : remaining -> do
         Log.logTrace "AI requesting tool" (AE.object ["iteration" AE..= step.iteration, "tool" AE..= LLM.toolFunctionName (LLM.toolCallFunction tool)])
         record $ Investigations.ToolStarted step.iteration tool
-        outcome <- executeToolAt turn config{timeRange = step.timeRange} tool
+        let callFunction = LLM.toolCallFunction tool
+            capture = maybe False (ELLM.capturesContent . (.otelInstrumentationGenaiCaptureContent)) config.sourceConfig
+        outcome <- withSpanKind Internal ("execute_tool " <> LLM.toolFunctionName callFunction) ([("gen_ai.operation.name", "execute_tool"), ("gen_ai.tool.name", OA.toAttribute $ LLM.toolFunctionName callFunction), ("gen_ai.tool.call.id", OA.toAttribute $ LLM.toolCallId tool)] <> [("gen_ai.tool.call.arguments", OA.toAttribute $ encodeText $ LLM.toolFunctionArguments callFunction) | capture]) \sp -> do
+          outcome <- executeToolAt turn config{timeRange = step.timeRange} tool
+          outcome <$ case outcome of
+            Investigations.RefusedResult{} -> setStatus sp (Error "refused by review")
+            (Investigations.RecordedResult{}; Investigations.UncertainResult{}; Investigations.WaitingResult{}) -> pass
         let result = Investigations.operationResponse config.projectId outcome
             attempted = completed <> [(tool, result)]
         next <- case outcome of

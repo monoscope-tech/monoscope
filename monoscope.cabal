@@ -338,6 +338,7 @@ extra-source-files:
     static/public/dashboards/redis.yaml
     static/public/dashboards/rum.yaml
     static/public/dashboards/timefusion.yaml
+    static/model_prices.json
     src/Data/Effectful/CodeReview/proof.sh
 
 source-repository head
@@ -428,9 +429,11 @@ library
       Pages.Containers
       Pages.Dashboards
       Pages.Endpoints
+      Pages.GenAIMessages
       Pages.GitSync
       Pages.Infrastructure
       Pages.Issues
+      Pages.LLM
       Pages.LogExplorer.LiveTail
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
@@ -457,6 +460,7 @@ library
       Pkg.EmailTemplates
       Pkg.ErrorFingerprint
       Pkg.ExtractionWorker
+      Pkg.GenAI
       Pkg.Git
       Pkg.ImpactReview
       Pkg.IngestBudget
@@ -622,6 +626,8 @@ library
     , hasql-th
     , hasql-transaction
     , hs-opentelemetry-api
+    , hs-opentelemetry-exporter-in-memory
+    , hs-opentelemetry-exporter-otlp
     , hs-opentelemetry-instrumentation-auto
     , hs-opentelemetry-instrumentation-hasql
     , hs-opentelemetry-instrumentation-wai
@@ -831,6 +837,7 @@ test-suite integration-tests
       EvalConformanceSpec
       MinioManagerSpec
       MonitoringSpec
+      Opentelemetry.GenAISpec
       Opentelemetry.IngestionSpec
       Pages.BotsSpec
       Pages.CodeContextSpec
@@ -1042,9 +1049,11 @@ test-suite test-dev
       Pages.Containers
       Pages.Dashboards
       Pages.Endpoints
+      Pages.GenAIMessages
       Pages.GitSync
       Pages.Infrastructure
       Pages.Issues
+      Pages.LLM
       Pages.LogExplorer.LiveTail
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
@@ -1071,6 +1080,7 @@ test-suite test-dev
       Pkg.EmailTemplates
       Pkg.ErrorFingerprint
       Pkg.ExtractionWorker
+      Pkg.GenAI
       Pkg.Git
       Pkg.ImpactReview
       Pkg.IngestBudget
@@ -1112,6 +1122,7 @@ test-suite test-dev
       EvalConformanceSpec
       MinioManagerSpec
       MonitoringSpec
+      Opentelemetry.GenAISpec
       Opentelemetry.IngestionSpec
       Pages.BotsSpec
       Pages.CodeContextSpec
@@ -1265,6 +1276,8 @@ test-suite test-dev
     , hasql-th
     , hasql-transaction
     , hs-opentelemetry-api
+    , hs-opentelemetry-exporter-in-memory
+    , hs-opentelemetry-exporter-otlp
     , hs-opentelemetry-instrumentation-auto
     , hs-opentelemetry-instrumentation-hasql
     , hs-opentelemetry-instrumentation-wai

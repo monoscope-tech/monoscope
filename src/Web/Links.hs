@@ -275,6 +275,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardViewDelete :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> "views" :> Capture "name" Text :> AllQueryParams :> Delete '[HTML] (RespHeaders (Opaque "Dashboards.SavedViews"))
   , dashboardViewsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> "views" :> AllQueryParams :> Get '[HTML] (RespHeaders (Opaque "Dashboards.SavedViews"))
   , rumRedirect :: mode :- "p" :> ProjectId :> "rum" :> CaptureAll "view" Text :> AllQueryParams :> LocationRedirect NoContent
+  , llmDashboardRedirect :: mode :- "p" :> ProjectId :> "llm" :> "dashboard" :> AllQueryParams :> LocationRedirect NoContent
   , dashboardNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> "new" :> Get '[HTML] (RespHeaders (Opaque "Dashboards.DashboardNew"))
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> HXRequest :> AllQueryParams :> Get '[HTML] (RespHeaders (Opaque1 "PageCtx" (Opaque "Dashboards.DashboardGet")))
   , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "sort" :> QPT "embedded" :> QueryParam "teamId" ProjectMembers.TeamId :> QPT "copy_widget_id" :> QueryParam "source_dashboard_id" (UUIDId "dashboard") :> QPT "new" :> RecordParam KeepPrefixExp DashboardFilters :> Get '[HTML] (RespHeaders (Opaque "Dashboards.DashboardsGet"))
@@ -514,6 +515,8 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   , metricCardGetH :: mode :- "metrics" :> "card" :> Capture "metric_name" Text :> QPT "label" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Opaque "Metrics.MetricFragment"))
   , serviceMapGetH :: mode :- "service_map" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "env" :> QPT "endpoint_hash" :> Get '[HTML] (RespHeaders (Opaque "ServiceMap.ServiceMapGet"))
   , metricServicesGetH :: mode :- "metrics" :> "services" :> QPT "service_search" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Opaque "Metrics.MetricServices"))
+  , llmGetH :: mode :- "llm" :> QPT "view" :> QPT "agent" :> QPT "model" :> QPT "signal" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders (Opaque "LLM.LLMGet"))
+  , llmConversationGetH :: mode :- "llm" :> "conversations" :> Capture "key" Text :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Opaque "LLM.ConversationGet"))
   , hostsGetH :: mode :- "infrastructure" :> "hosts" :> QPT "provider" :> QPT "region" :> QPT "os" :> QPT "integration" :> QPT "group" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders (Opaque "Infrastructure.HostsGet"))
   , hostDetailGetH :: mode :- "infrastructure" :> "hosts" :> "detail" :> QPT "host" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Opaque "Infrastructure.DetailGet"))
   , infrastructureContainersGetH :: mode :- "infrastructure" :> "containers" :> QPT "runtime" :> QPT "namespace" :> QPT "node" :> QPT "image" :> QPT "cluster" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders (Opaque "Containers.ContainersGet"))

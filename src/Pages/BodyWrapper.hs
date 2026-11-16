@@ -124,6 +124,7 @@ menu lang pid =
   , (I18n.t lang "nav.monitors", (urls.monitors pid).listGet Nothing Nothing, "list-check")
   , ("Real User Monitoring", urls.rumRedirect pid [] [], "web")
   , (I18n.t lang "nav.infrastructure", (urls.traces pid).hostsGetH Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing, "server")
+  , ("LLM & Agents", (urls.traces pid).llmGetH Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing, "sparkles")
   , (I18n.t lang "nav.api_catalog", apiCatalogUrl pid Nothing, "swap")
   , ("Repositories", urls.repositoriesGet pid Nothing Nothing, "code-branch")
   ]
@@ -1317,6 +1318,7 @@ navFlyoutItems pid = \case
   "Explorer" -> [(label, link pid) | (label, link) <- Components.explorerTabs]
   "Infrastructure" -> [(label, link pid Nothing Nothing Nothing) | (label, link) <- Components.infrastructureTabs]
   "Real User Monitoring" -> [("Dashboard", urls.rumRedirect pid [] []), ("Sessions", urls.rumRedirect pid ["sessions"] [])]
+  "LLM & Agents" -> [(label, (urls.traces pid).llmGetH (Just view) Nothing Nothing Nothing Nothing Nothing Nothing Nothing) | (label, view) <- [("Conversations", "conversations"), ("LLM calls", "calls")]] <> [("Dashboard", urls.llmDashboardRedirect pid [])]
   -- API Docs carries no host: it is the whole project's learned spec. The
   -- per-host and per-endpoint scopes are reached from the catalog rows.
   "API Catalog" -> [("Incoming", apiCatalogUrl pid (Just "Incoming")), ("Outgoing", apiCatalogUrl pid (Just "Outgoing")), ("API Docs", urls.apiCatalogDocs pid Nothing (Just "Incoming") Nothing)]

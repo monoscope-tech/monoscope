@@ -203,11 +203,11 @@ export const SUMMARY_ICON_CONFIGS = {
     iconClass: value === 'incoming' ? 'h-3 fill-iconNeutral' : 'h-3 fill-iconBrand',
   }),
   kind: (value: string) =>
-    value === 'internal'
+    value === 'internal' || value === 'ai'
       ? {
           className: 'w-4 ml-2',
-          tooltip: 'Internal span',
-          iconName: 'function',
+          tooltip: value === 'ai' ? 'LLM / agent span' : 'Internal span',
+          iconName: value === 'ai' ? 'sparkles' : 'function',
           iconType: 'regular' as const,
           iconClass: 'h-3 w-3',
         }

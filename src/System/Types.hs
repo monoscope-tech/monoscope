@@ -192,7 +192,7 @@ effToServantHandler :: AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx 
 effToServantHandler env logger tp app =
   app
     & Artifacts.runAgentArtifactsReal env
-    & ELLM.runLLMReal
+    & ELLM.runLLMReal (ELLM.LLMTelemetry tp env.config.otelInstrumentationGenaiCaptureContent)
     & Effectful.Reader.Static.runReader env
     & runUUID
     & runSleep
@@ -224,7 +224,7 @@ effToServantHandlerTestHTTP :: (forall x hes. IOE :> hes => Eff (HTTP ': hes) x 
 effToServantHandlerTestHTTP http clock uuidRef env logger tp app =
   app
     & Artifacts.runAgentArtifactsTest (const $ Left Artifacts.StorageUnavailable) (\_ _ -> Left Artifacts.ArtifactUnavailable)
-    & ELLM.runLLMGolden "./test/golden/"
+    & ELLM.runLLMGolden (ELLM.LLMTelemetry tp ELLM.SpanOnly) "./test/golden/"
     & Effectful.Reader.Static.runReader env
     & runStaticUUIDRef uuidRef
     & runNoSleep
@@ -292,7 +292,7 @@ runBackground logger appCtx tp process =
     & runUUID
     & runSleep
     & runHTTPWreq
-    & ELLM.runLLMReal
+    & ELLM.runLLMReal (ELLM.LLMTelemetry tp appCtx.config.otelInstrumentationGenaiCaptureContent)
     & CodeReview.runCodeReviewReal (CodeReview.ArtifactStore <$> appCtx.config.impactReviewUsageDir <*> appCtx.config.impactReviewCacheDir) (sequenceA $ CodeReview.workerHost (map toString appCtx.config.impactReviewSkills) appCtx.config.impactReviewPrepareScript appCtx.config.impactReviewDependencyArchive appCtx.config.impactReviewWorkspaceRemote <$> appCtx.config.impactReviewGuestImage <*> appCtx.config.impactReviewAgent) appCtx.config.impactReviewAgent (map toString appCtx.config.impactReviewSkills)
     & Workspace.runWorkspaceReal
     & Artifacts.runAgentArtifactsReal appCtx

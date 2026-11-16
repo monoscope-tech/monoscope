@@ -39,6 +39,7 @@ import Models.Telemetry.Telemetry (atMapText)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), copySourceAttr_, curlCommand, dateTime, detailTab_, disclosure_, emptyState_, httpTab_, stackTrace_, tabPanel_, tonePill_)
+import Pages.GenAIMessages qualified as LLM
 import Pkg.DeriveUtils (unAesonTextMaybe)
 import Pkg.ErrorFingerprint qualified as EF
 import Relude
@@ -516,7 +517,8 @@ expandedItemView pid item aptSp selectedTabM = do
 detailTabs :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> [DetailTab]
 detailTabs pid item aptSp =
   catMaybes
-    [ tab
+    [ tab (LLM.isGenAISpan attrs) "tab-genai" "" "Conversation" "group-has-[.tab-genai:checked]/dtab:block" "genai-content" (LLM.genAISpanDetail_ pid attrs)
+    , tab
         ((isLog || isAlert) && isJust item.body)
         "tab-body"
         ""
@@ -578,6 +580,7 @@ detailTabs pid item aptSp =
     isLog = item.kind == Just "log"
     isAlert = item.kind == Just "alert"
     isHttp = not isLog && isHttpSpan item
+    attrs = unAesonTextMaybe item.attributes
     events = fromMaybe AE.Null (unAesonTextMaybe item.events)
     spanErrors = if isLog then [] else getSpanErrors events
     tab shown marker cls label panelClass panelId content = DetailTab{marker, cls, label, panelClass, panelId, content} <$ guard shown

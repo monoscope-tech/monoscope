@@ -176,6 +176,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), idFromText, unAesonTextMaybe)
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as EW
+import Pkg.GenAI qualified as GenAI
 import Pkg.Metrics qualified as Metrics
 import Relude hiding (ask)
 import Relude.Extra.Bifunctor (bimapF)
@@ -183,7 +184,7 @@ import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
 import Text.Casing (fromAny, toKebab)
-import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
+import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, prettyPrintCount, scrubNulText, scrubNulValue)
 import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 import "cryptonite" Crypto.Hash qualified as Crypto
 
@@ -2856,6 +2857,16 @@ generateSpanSummary otel =
     httpStatus = atMapInt "http.response.status_code" attrsM
     httpMethod = atMapText "http.request.method" attrsM
     hasHttp = isJust httpMethod || isJust httpStatus
+    genAIOp = atMapText "gen_ai.operation.name" attrsM
+    genAINumber k =
+      attrsM >>= getNestedValue (T.split (== '.') k) >>= \case
+        AE.Number n -> Just (Sci.toRealFloat n :: Double)
+        _ -> Nothing
+    tokens = (,) <$> atMapInt "gen_ai.usage.input_tokens" attrsM <*> atMapInt "gen_ai.usage.output_tokens" attrsM
+    abnormalFinish =
+      attrsM >>= getNestedValue ["gen_ai", "response", "finish_reasons"] >>= \case
+        AE.Array rs -> find (`elem` ["length", "max_tokens", "content_filter", "refusal", "MAX_TOKENS", "SAFETY"]) [r | AE.String r <- toList rs]
+        _ -> Nothing
 
     durMs d = toText (getDurationNSMS (fromIntegral d))
     statusCodeStyle code
@@ -2916,6 +2927,8 @@ generateSpanSummary otel =
           <$> requestType
           <|> tag "kind" "neutral" "database"
           <$ guard (isJust dbSys)
+          <|> tag "kind" "neutral" "ai"
+          <$ genAIOp
           <|> tag "kind" "neutral" "internal"
           <$ guard (otel.kind == Just "internal")
 
@@ -2943,12 +2956,15 @@ generateSpanSummary otel =
         , tag "rpc.service" "neutral" <$> atMapText "rpc.service" attrsM
         , spanNameFallback
         , errorStatus "badge-error"
+        , tag "gen_ai.response.finish_reasons" "badge-warning" <$> abnormalFinish
         , tag "attributes" "text-textWeak" . encTrunc 500 <$> mfilter (not . Map.null) attrsM
         , errorStatus "right-badge-error"
         , dbBadge <$> dbSys
         , (atMapInt "http.response.body.size" attrsM <|> atMapInt "http.response_content_length" attrsM) >>= \n -> guard (n > 0) $> tag "size" "right-badge-neutral" (formatBytes n)
         , tag "protocol" "right-badge-neutral" "http" <$ guard hasHttp
         , tag "protocol" "right-badge-neutral" "rpc" <$ rpcMethod
+        , (\(i, o) -> tag "gen_ai.usage" "right-badge-neutral" (prettyPrintCount i <> " → " <> prettyPrintCount o <> " tok")) <$> tokens
+        , tag "gen_ai.usage.cost" "right-badge-neutral" . GenAI.formatUsd <$> genAINumber "gen_ai.usage.cost"
         , tag "duration" "right-badge-neutral" . durMs <$> otel.duration
         ]
         <> identitySummary attrsM

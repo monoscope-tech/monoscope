@@ -53,6 +53,7 @@ import Pages.Endpoints qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
 import Pages.Infrastructure qualified as Infrastructure
 import Pages.Issues qualified as IssuesPage
+import Pages.LLM qualified as LLM
 import Pages.LogExplorer.LiveTail qualified as LiveTail
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
@@ -339,6 +340,7 @@ cookieProtectedServer projectTools runNow =
     , slackLinkProjectGet = Slack.linkProjectGetH
     , endpointDetailsRedirect = Dashboards.entrypointRedirectGetH "endpoint-stats.yaml"
     , rumRedirect = Dashboards.rumRedirectH
+    , llmDashboardRedirect = Dashboards.entrypointRedirectGetH "llm-observability.yaml"
     , dashboardViewPost = Dashboards.dashboardViewPostH
     , dashboardViewDelete = Dashboards.dashboardViewDeleteH
     , dashboardViewsGet = Dashboards.dashboardViewsGetH
@@ -557,6 +559,8 @@ telemetryServer pid =
     , metricCardGetH = Metrics.metricCardGetH pid
     , serviceMapGetH = ServiceMap.serviceMapGetH pid
     , metricServicesGetH = Metrics.metricServicesGetH pid
+    , llmGetH = LLM.llmGetH pid
+    , llmConversationGetH = LLM.conversationGetH pid
     , hostsGetH = Infrastructure.hostsGetH pid
     , hostDetailGetH = Infrastructure.hostDetailGetH pid
     , infrastructureContainersGetH = Containers.containersGetH pid
@@ -1086,6 +1090,8 @@ type instance Opaque "GitSync.RepositoryDashboardForm" = GitSync.RepositoryDashb
 type instance Opaque "GitSync.RepositoryDashboardGet" = GitSync.RepositoryDashboardGet
 type instance Opaque "GitSync.SelectRejection" = GitSync.SelectRejection
 type instance Opaque "GitSync.SyncPanels" = GitSync.SyncPanels
+type instance Opaque "LLM.LLMGet" = LLM.LLMGet
+type instance Opaque "LLM.ConversationGet" = LLM.ConversationGet
 type instance Opaque "Infrastructure.DetailGet" = Infrastructure.DetailGet
 type instance Opaque "Infrastructure.HostMapGet" = Infrastructure.HostMapGet
 type instance Opaque "Infrastructure.HostsGet" = Infrastructure.HostsGet

@@ -80,6 +80,7 @@ import Network.GRPC.Server.StreamType (Methods (..), fromMethods)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe, unUUIDId)
+import Pkg.GenAI qualified as GenAI
 import Pkg.LiveTail qualified as LiveTail
 import Pkg.Metrics (wireTypeErrorsRef)
 import Pkg.Metrics qualified as Metrics
@@ -1001,7 +1002,7 @@ keyValuePairs kvs = [(kv ^. PCF.key, anyValueToJSON (kv ^. PCF.value)) | kv <- k
 
 
 keyValueToJSON :: [PC.KeyValue] -> AE.Value
-keyValueToJSON !kvs = attrPairsToJSON $ migrateHttpSemanticConventions $ keyValuePairs kvs
+keyValueToJSON !kvs = attrPairsToJSON $ GenAI.normalizeGenAI $ migrateHttpSemanticConventions $ keyValuePairs kvs
 
 
 anyValueToJSON :: PC.AnyValue -> AE.Value
