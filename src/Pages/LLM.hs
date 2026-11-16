@@ -424,7 +424,15 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
             base
               { columns =
                   [ col "Signal" (\s -> div_ [class_ "flex min-w-0 flex-col"] $ span_ [class_ "font-medium text-textStrong"] (toHtml s.name) >> span_ [class_ "truncate text-xs text-textWeak"] (toHtml s.description)) & withAttrs [class_ "min-w-72"]
-                  , col "Matched" (num . fromIntegral . (.matched)) & withAttrs [class_ "w-20 text-right"]
+                  , col "Matched" (\s -> if s.matched > 0 then span_ [class_ "rounded-full bg-fillBrand-weak px-2 py-0.5 text-xs font-medium tabular-nums text-textBrand"] (toHtml $ prettyPrintCount $ fromIntegral s.matched) else num 0) & withAttrs [class_ "w-24 text-right"]
+                  , col
+                      "Match rate"
+                      ( \s -> div_ [class_ "flex items-center gap-2"] do
+                          let rate = if s.judged > 0 then 100 * fromIntegral s.matched / fromIntegral s.judged else 0 :: Double
+                          div_ [class_ "h-1.5 flex-1 overflow-hidden rounded-full bg-fillWeak"] $ div_ [class_ "h-full rounded-full bg-fillBrand-strong", style_ $ "width:" <> show rate <> "%"] ""
+                          span_ [class_ "w-10 text-right text-xs tabular-nums text-textWeak"] $ toHtml $ show @Text (round rate :: Int) <> "%"
+                      )
+                      & withAttrs [class_ "w-48"]
                   , col "Judged" (num . fromIntegral . (.judged)) & withAttrs [class_ "w-20 text-right"]
                   ]
               , rows = V.fromList signals
@@ -432,28 +440,30 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
                   base.features
                     { header = Just $ details_ ([class_ "group/new mt-3 rounded-xl border border-strokeWeak bg-bgRaised"] <> [open_ "" | null signals]) do
                         summary_ [class_ "flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 [&::-webkit-details-marker]:hidden"] do
-                          span_ [class_ "inline-flex items-center gap-2 text-sm font-semibold text-textStrong"] $ faSprite_ "plus" "regular" "h-3.5 w-3.5 text-iconBrand" >> "New signal"
+                          span_ [class_ "inline-flex items-center gap-2 text-sm font-semibold text-textStrong"] $ span_ [class_ "grid h-6 w-6 place-items-center rounded-md bg-fillBrand-strong text-white"] (faSprite_ "plus" "regular" "h-3 w-3") >> "New signal"
                           span_ [class_ "min-w-0 flex-1 text-sm text-textWeak"] "Describe a behaviour in plain language. A model checks each day's conversations and flags the ones that match."
                           unless (null signals) $ button_ [type_ "button", class_ "btn btn-sm btn-ghost", hxPost_ (urls.traces pid).llmSignalRunPost, hxSwap_ "none", [__|on click halt the event's default|]] $ faSprite_ "arrows-rotate" "regular" "h-3.5 w-3.5" >> "Judge new conversations now"
                           faSprite_ "chevron-down" "regular" "h-3.5 w-3.5 text-iconNeutral transition-transform group-open/new:rotate-180"
-                        form_ [class_ "grid gap-6 border-t border-strokeWeak p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,20rem)]", hxPost_ (urls.traces pid).llmSignalPost, hxSwap_ "none"] do
-                          div_ [class_ "flex min-w-0 flex-col gap-3"] do
-                            div_ [class_ "max-w-md"] $ formField_ FieldSm def{placeholder = "User frustration", extraAttrs = [maxlength_ "80"], inputId = Just "signal-name"} "Name" "name" True Nothing
+                        form_ [class_ "flex flex-col gap-5 border-t border-strokeWeak p-4", hxPost_ (urls.traces pid).llmSignalPost, hxSwap_ "none"] do
+                          div_ [class_ "grid gap-3 lg:grid-cols-[18rem_minmax(0,1fr)]"] do
+                            formField_ FieldSm def{placeholder = "User frustration", extraAttrs = [maxlength_ "80"], inputId = Just "signal-name"} "Name" "name" True Nothing
                             formField_ FieldSm def{inputType = "textarea", placeholder = "The user repeats a request, says the answer is wrong, or gives up.", extraAttrs = [maxlength_ "2000", rows_ "3"], inputId = Just "signal-description"} "What to look for" "description" True Nothing
-                            primaryButton_ [type_ "submit", class_ "self-start"] "Create and judge today's conversations"
+                          primaryButton_ [type_ "submit", class_ "self-start"] "Create and judge today's conversations"
                           div_ [class_ "flex flex-col gap-2"] do
-                            span_ [class_ "text-xs font-medium text-textWeak"] "Start from an example"
-                            forM_ signalExamples \(name, description) ->
+                            span_ [class_ "text-xs font-medium text-textWeak"] "Or start from an example"
+                            div_ [class_ "grid gap-2 sm:grid-cols-2 xl:grid-cols-3"] $ forM_ signalExamples \(chip, name, description) ->
                               button_
                                 [ type_ "button"
-                                , class_ "flex flex-col gap-0.5 rounded-lg border border-strokeWeak px-3 py-2 text-start transition-[background-color,scale] hover:bg-fillHover active:scale-[0.96]"
+                                , class_ "flex items-start gap-3 rounded-lg border border-strokeWeak px-3 py-2 text-start transition-[background-color,border-color,scale] hover:border-strokeBrand-weak hover:bg-fillBrand-weak active:scale-[0.96]"
                                 , data_ "name" name
                                 , data_ "description" description
                                 , [__|on click set #signal-name.value to @data-name then set #signal-description.value to @data-description then call #signal-description.focus()|]
                                 ]
                                 do
-                                  span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml name
-                                  span_ [class_ "text-xs text-textWeak"] $ toHtml description
+                                  chip
+                                  span_ [class_ "flex min-w-0 flex-col gap-0.5"] do
+                                    span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml name
+                                    span_ [class_ "text-xs text-textWeak"] $ toHtml description
                     , zeroState = Just ZeroState{icon = "sparkles", title = "No signals yet", description = "Built-in signals (tool errors, truncation, loops, context pressure) already run on every conversation.", action = ESNone}
                     , rowLink = Just \s -> link ConversationsView Nothing Nothing (Just s.name) Nothing Nothing
                     , resultSummary = Just $ show (length signals) <> " signals"
@@ -732,11 +742,18 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
 
 
 -- | Starting points for a first signal: each fills the form, so the shape of a good description is visible.
-signalExamples :: [(Text, Text)]
+-- The chip is the transcript's colour for whose behaviour the signal watches (user, tool, assistant).
+signalExamples :: [(Html (), Text, Text)]
 signalExamples =
-  [ ("User frustration", "The user repeats a request, says the answer is wrong, or gives up.")
-  , ("Wrong tool", "The agent calls a tool that cannot answer the question, or ignores what a tool returned.")
-  , ("Unsupported claims", "The assistant states numbers, names or links that no tool result or user message supports.")
+  [ (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-fillBrand-strong text-white"] $ faSprite_ "user" "regular" "h-3 w-3", "User frustration", "The user repeats a request, says the answer is wrong, or gives up.")
+  , (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-fillBrand-strong text-white"] $ faSprite_ "user" "regular" "h-3 w-3", "Question left unanswered", "The user asks something and the conversation ends without an answer to that question.")
+  , (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-fillBrand-strong text-white"] $ faSprite_ "user" "regular" "h-3 w-3", "Asks for a human", "The user asks to speak to a person, contact support, or escalate.")
+  , (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-teal-400/15 text-teal-700 dark:text-teal-300"] $ faSprite_ "function" "regular" "h-3 w-3", "Wrong tool", "The agent calls a tool that cannot answer the question, or ignores what a tool returned.")
+  , (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-teal-400/15 text-teal-700 dark:text-teal-300"] $ faSprite_ "function" "regular" "h-3 w-3", "Tool failure ignored", "A tool returns an error or an empty result and the agent carries on as if it succeeded.")
+  , (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-teal-400/15 text-teal-700 dark:text-teal-300"] $ faSprite_ "function" "regular" "h-3 w-3", "Redundant lookups", "The agent fetches the same data more than once, or looks up something it already had.")
+  , (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-violet-400/15 text-violet-600 dark:text-violet-300"] $ faSprite_ "sparkles" "regular" "h-3 w-3", "Unsupported claims", "The assistant states numbers, names or links that no tool result or user message supports.")
+  , (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-violet-400/15 text-violet-600 dark:text-violet-300"] $ faSprite_ "sparkles" "regular" "h-3 w-3", "Refused a valid request", "The assistant declines, or says it cannot help with, a request it should handle.")
+  , (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-violet-400/15 text-violet-600 dark:text-violet-300"] $ faSprite_ "sparkles" "regular" "h-3 w-3", "Leaked instructions or data", "The assistant reveals its system prompt, internal instructions, credentials, or data belonging to another user.")
   ]
 
 

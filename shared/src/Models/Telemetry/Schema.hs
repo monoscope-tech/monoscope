@@ -52,7 +52,7 @@ telemetrySchema =
           , ("id", FieldInfo "string" "Unique identifier for the log/span" Nothing)
           , ("parent_id", FieldInfo "string" "Parent span ID" Nothing)
           , ("hashes", FieldInfo "array" "All relevant hashes for item identification" Nothing)
-          , ("gen_ai", FieldInfo "boolean" "True for LLM and agent spans and logs (any OpenTelemetry gen_ai.operation.name, in any SDK dialect)" (Just ["true", "false"]))
+          , ("gen_ai", FieldInfo "boolean" "LLM/agent record" Nothing)
           , ("name", FieldInfo "string" "Name of the span or log" Nothing)
           , ("kind", FieldInfo "string" "Log record or span kind" (Just ["log", "internal", "server", "client", "producer", "consumer", "unspecified"]))
           , ("status_code", FieldInfo "string" "Status code of the span" (Just ["OK", "ERROR", "UNSET"]))
