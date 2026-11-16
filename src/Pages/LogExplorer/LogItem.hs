@@ -431,7 +431,6 @@ expandedItemView pid item aptSp selectedTabM = do
     isAlert = item.kind == Just "alert"
     isHttp = not isLog && isHttpSpan item
     identityRows = Telemetry.rowIdentity (unAesonTextMaybe item.attributes)
-    createdAt = formatUTC item.timestamp
     dgrp = "dtab-" <> item.id
     -- Clamp the ?tab= deep link to a marker that actually exists — an unknown
     -- value would check no radio and leave every panel hidden.
