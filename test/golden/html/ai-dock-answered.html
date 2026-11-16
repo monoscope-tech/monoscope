@@ -22,6 +22,13 @@
 </g>
 </svg>
 </label>
+<button type="button" class="btn btn-ghost btn-xs btn-square text-iconNeutral" aria-label="Dismiss Dock dashboard" title="Dismiss from the island" data-hx-post="/p/<uuid>/ai/dock/<uuid>/dismissed?selected=<uuid>" data-hx-target="#ai-dock" data-hx-swap="outerMorph">
+<svg class="icon size-3.5" width="1em" height="1em" viewBox="0 0 8 8">
+<g>
+<path d="M7 1L1 7M1 1L7 7" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round" />
+</g>
+</svg>
+</button>
 </header>
 <div id="ai-dock-log" class="flex min-h-0 grow flex-col-reverse overflow-y-auto px-4">
 <div>
@@ -112,7 +119,8 @@
 <span class="max-sm:sr-only">Ask AI</span>
 <kbd class="font-sans text-textDisabled max-sm:hidden">⌘K</kbd>
 </button>
-<label for="ai-dock-open" class="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-fillWeak px-3 py-1.5 text-xs font-medium text-textStrong transition-[scale,opacity,background-color] duration-200 ease-(--ease-out-quint) hover:bg-fillHover active:scale-[0.97] starting:scale-95 starting:opacity-0" title="Dock dashboard">
+<div class="group/bubble flex shrink-0 items-center rounded-full text-xs transition-[opacity,scale,background-color] duration-200 ease-(--ease-out-quint) hover:bg-fillHover starting:scale-95 starting:opacity-0 bg-fillWeak font-medium text-textStrong">
+<label for="ai-dock-open" class="flex cursor-pointer items-center gap-1.5 py-1.5 ps-3 pe-1 transition-transform active:scale-[0.97]" title="Dock dashboard">
 <svg class="icon size-3 text-iconSuccess" width="1em" height="1em" viewBox="0 0 512 512">
 <g>
 <path d="M256 48a208 208 0 1 1 0 416 208 208 0 1 1 0-416zm0 464A256 256 0 1 0 256 0a256 256 0 1 0 0 512zM369 209c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-111 111-47-47c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9l64 64c9.4 9.4 24.6 9.4 33.9 0L369 209z" />
@@ -120,5 +128,13 @@
 </svg>
 <span class="max-w-40 truncate">Dock dashboard</span>
 </label>
+<button type="button" class="me-1 grid size-5 shrink-0 cursor-pointer place-items-center rounded-full text-iconNeutral opacity-0 transition-opacity hover:bg-fillWeak hover:text-textStrong focus-visible:opacity-100 group-hover/bubble:opacity-100 pointer-coarse:opacity-100" aria-label="Dismiss Dock dashboard" title="Dismiss from the island" data-hx-post="/p/<uuid>/ai/dock/<uuid>/dismissed?selected=<uuid>" data-hx-target="#ai-dock" data-hx-swap="outerMorph">
+<svg class="icon size-2.5" width="1em" height="1em" viewBox="0 0 8 8">
+<g>
+<path d="M7 1L1 7M1 1L7 7" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round" />
+</g>
+</svg>
+</button>
+</div>
 </div>
 </div>

@@ -458,6 +458,7 @@ cookieProtectedServer projectTools runNow =
     , aiDockGet = AIThreads.copilotDockGetH
     , aiDockPost = AIThreads.copilotPostH projectTools runNow
     , aiDockBrowserPost = AIThreads.copilotBrowserPostH runNow
+    , aiDockVisibilityPost = AIThreads.copilotVisibilityPostH
     , aiThreadGet = AIThreads.threadGetH
     , aiThreadsPost = AIThreads.startThreadPostHWithTools projectTools
     , aiThreadPost = AIThreads.threadPostHWithTools projectTools

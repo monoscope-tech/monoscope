@@ -2930,6 +2930,21 @@ spec = around withTestResources do
       Just run <- runQueryEffect tr $ Issues.getRoutineRun testPid request
       traverse (fmap (T.isInfixOf explorer) . dockView tr run.conversationId Nothing) ([Just 0, Just 1, Nothing] :: [Maybe Int]) `shouldReturn` [True, False, False]
 
+    it "dock: a dismissed conversation leaves the island until it is pinned back or asked again" \tr -> do
+      let request = UUIDId $ UUID.fromWords 0 0 94 6
+          page = "&title=Overview&path=/p/" <> testPid.toText <> "/dashboards"
+      void $ dockAsk tr (\_ _ -> pass) request ("query=Watch+errors" <> page)
+      Just run <- runQueryEffect tr $ Issues.getRoutineRun testPid request
+      let visibility v = call tr $ AIThreads.copilotVisibilityPostH testPid run.conversationId v Nothing
+          dismissedOf (d :: AIThreads.CopilotDock) = [s.dismissed | s <- d.sessions, s.conversationId == run.conversationId]
+      dismissedOf <$> visibility Issues.DockDismissed `shouldReturn` [True]
+      shown <- visibility Issues.DockShown
+      (dismissedOf shown, isJust shown.selected) `shouldBe` ([False], True)
+      void $ visibility Issues.DockDismissed
+      advanceTestTime tr 1
+      void $ dockAsk tr (\_ _ -> pass) (UUIDId $ UUID.fromWords 0 0 94 7) ("query=And+now&conversation=" <> run.conversationId.toText <> page)
+      dismissedOf <$> call tr (AIThreads.copilotDockGetH testPid Nothing Nothing Nothing) `shouldReturn` [False]
+
     it "dock: a browser tool pauses the run until the user's tab answers, or until no tab does" \tr -> do
       prompts <- newIORef []
       let model :: Stub

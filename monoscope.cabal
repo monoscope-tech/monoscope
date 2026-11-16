@@ -300,6 +300,7 @@ extra-source-files:
     static/migrations/0281_routine_email_destination.sql
     static/migrations/0282_drop_old_reports.sql
     static/migrations/0283_ai_run_page_context.sql
+    static/migrations/0284_ai_conversation_dock_dismissed.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb
     test/fixtures/github-app-test.pem
