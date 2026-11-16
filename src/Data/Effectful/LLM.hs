@@ -223,8 +223,8 @@ runLLMReal t = interpret $ \_ -> \case
 -- | Golden test interpreter that caches responses
 runLLMGolden :: IOE :> es => LLMTelemetry -> FilePath -> Eff (LLM ': es) a -> Eff es a
 runLLMGolden t goldenDir = interpret $ \_ -> \case
-  CallLLM model prompt apiKey -> liftIO $ inference t (promptParams model prompt) (\r -> outputAttrs t [AE.object ["role" AE..= ("assistant" :: Text), "content" AE..= r]]) $ getOrCreateGoldenResponse goldenDir model prompt apiKey
-  CallAgenticChat history params apiKey -> liftIO $ inference t (withHistory history params) (outputAttrs t . pure . AE.toJSON . LLMCore.to @(OpenAIV1.Message (V.Vector OpenAIV1.Content))) $ getOrCreateAgenticGoldenResponse goldenDir history params apiKey
+  CallLLM model prompt apiKey -> liftIO $ inference t (promptParams model prompt) (\r -> contentAttr t "gen_ai.output.messages" ([AE.object ["role" AE..= ("assistant" :: Text), "content" AE..= r]] :: [AE.Value])) $ getOrCreateGoldenResponse goldenDir model prompt apiKey
+  CallAgenticChat history params apiKey -> liftIO $ inference t (withHistory history params) (contentAttr t "gen_ai.output.messages" . pure @[] . LLMCore.to @(OpenAIV1.Message (V.Vector OpenAIV1.Content))) $ getOrCreateAgenticGoldenResponse goldenDir history params apiKey
   EmbedDocuments config docs -> liftIO $ getOrCreateEmbeddingGoldenResponse goldenDir config docs
 
 
@@ -247,15 +247,16 @@ inference t params describe call =
     requestAttrs =
       [("gen_ai.operation.name", "chat"), ("gen_ai.provider.name", "openai"), ("gen_ai.request.model", OA.toAttribute model)]
         <> [("gen_ai.request.reasoning.level", OA.toAttribute $ T.toLower $ T.drop 16 $ show e) | Just e <- [params.reasoning_effort]]
-        <> [("gen_ai.input.messages", OA.toAttribute $ decodeUtf8 @Text $ AE.encode params.messages) | capturesContent t.capture]
+        <> contentAttr t "gen_ai.input.messages" params.messages
 
 
 capturesContent :: GenAIContentCapture -> Bool
 capturesContent = (`elem` [SpanOnly, SpanAndEvent])
 
 
-outputAttrs :: LLMTelemetry -> [AE.Value] -> [(Text, OA.Attribute)]
-outputAttrs t msgs = [("gen_ai.output.messages", OA.toAttribute $ decodeUtf8 @Text $ AE.encode msgs) | capturesContent t.capture]
+-- | A message attribute, recorded only under content capture.
+contentAttr :: AE.ToJSON a => LLMTelemetry -> Text -> a -> [(Text, OA.Attribute)]
+contentAttr t k v = [(k, OA.toAttribute $ decodeUtf8 @Text $ AE.encode v) | capturesContent t.capture]
 
 
 -- | langchain-hs drops the provider's usage, so call the client directly to keep it.
@@ -271,7 +272,7 @@ completeChat t apiKey params = (>>= firstMessage) <$> inference t params usageAt
       ]
         <> [("gen_ai.usage.cache_read.input_tokens", tokens n) | Just Usage.PromptTokensDetails{Usage.cached_tokens = Just n} <- [prompt_tokens_details]]
         <> [("gen_ai.usage.reasoning.output_tokens", tokens n) | Just Usage.CompletionTokensDetails{Usage.reasoning_tokens = Just n} <- [completion_tokens_details]]
-        <> outputAttrs t (V.toList $ V.map (\OpenAIV1.Choice{OpenAIV1.message} -> AE.toJSON message) choices)
+        <> contentAttr t "gen_ai.output.messages" (V.map (\OpenAIV1.Choice{OpenAIV1.message} -> message) choices)
     tokens = OA.toAttribute @Int . fromIntegral
 
 

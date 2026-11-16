@@ -100,6 +100,7 @@ module Models.Telemetry.Telemetry (
   SpanEvent (..),
   atMapText,
   atMapInt,
+  getNestedValue,
   spanServiceName,
   spanAttr,
   mkSystemLog,
@@ -184,7 +185,7 @@ import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
 import Text.Casing (fromAny, toKebab)
-import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, prettyPrintCount, scrubNulText, scrubNulValue)
+import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue, tokenFlow)
 import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 import "cryptonite" Crypto.Hash qualified as Crypto
 
@@ -2961,7 +2962,7 @@ generateSpanSummary otel =
         , (atMapInt "http.response.body.size" attrsM <|> atMapInt "http.response_content_length" attrsM) >>= \n -> guard (n > 0) $> tag "size" "right-badge-neutral" (formatBytes n)
         , tag "protocol" "right-badge-neutral" "http" <$ guard hasHttp
         , tag "protocol" "right-badge-neutral" "rpc" <$ rpcMethod
-        , (\(i, o) -> tag "gen_ai.usage" "right-badge-neutral" (prettyPrintCount i <> " → " <> prettyPrintCount o <> " tok")) <$> tokens
+        , tag "gen_ai.usage" "right-badge-neutral" <$> (tokens >>= \(i, o) -> tokenFlow (Just $ fromIntegral i) (Just $ fromIntegral o))
         , tag "gen_ai.usage.cost" "right-badge-neutral" . GenAI.formatUsd <$> genAINumber "gen_ai.usage.cost"
         , tag "duration" "right-badge-neutral" . durMs <$> otel.duration
         ]

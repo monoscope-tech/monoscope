@@ -25,7 +25,8 @@ import Data.Char (isDigit)
 import Data.FileEmbed (embedFile)
 import Data.HashMap.Strict qualified as HM
 import Data.IntMap.Strict qualified as IntMap
-import Data.List (lookup, maximumBy, minimumBy)
+import Data.List (lookup)
+import Data.Map.Strict qualified as M
 import Data.Scientific (toRealFloat)
 import Data.Text qualified as T
 import Data.Vector qualified as V
@@ -82,13 +83,18 @@ normaliseModel raw = unpin $ dropVendor $ snd $ T.breakOnEnd "/" $ T.toLower raw
 -- >>> lookupPrice "my-finetune"
 -- Nothing
 lookupPrice :: Text -> Maybe ModelPrice
-lookupPrice raw = asum [HM.lookup m prices, HM.lookup undated prices, best maximumBy (\k -> (k <> "-") `T.isPrefixOf` m), best minimumBy ((m <> "-") `T.isPrefixOf`)]
+lookupPrice raw = asum (map (`HM.lookup` prices) (m : undated : families)) <|> dated
   where
     m = normaliseModel raw
-    undated = T.intercalate "-" $ reverse $ dropWhile (\p -> T.all isDigit p && T.length p `elem` [2, 4, 8]) $ reverse $ T.splitOn "-" m
-    best pick keep = case filter keep (HM.keys prices) of
-      [] -> Nothing
-      ks -> HM.lookup (pick (comparing T.length) ks) prices
+    parts = T.splitOn "-" m
+    undated = T.intercalate "-" $ reverse $ dropWhile (\p -> T.all isDigit p && T.length p `elem` [2, 4, 8]) $ reverse parts
+    families = [T.intercalate "-" (take n parts) | n <- [length parts - 1, length parts - 2 .. 1]]
+    dated = M.lookupGE (m <> "-") pricesByKey >>= \(k, p) -> p <$ guard ((m <> "-") `T.isPrefixOf` k)
+
+
+-- | Ordered for the dated-release lookup: a bare alias sorts just before its releases.
+pricesByKey :: M.Map Text ModelPrice
+pricesByKey = M.fromList $ HM.toList prices
 
 
 -- | Totals per the GenAI conventions include cached tokens; Anthropic-native counts
@@ -209,7 +215,7 @@ isInferenceOp = (`elem` ["chat", "text_completion", "generate_content", "embeddi
 normalizeGenAI :: [(Text, AE.Value)] -> [(Text, AE.Value)]
 normalizeGenAI kvs
   | isNothing ccEvent && not (any (\(k, _) -> any (`T.isPrefixOf` k) markers) kvs) = kvs
-  | otherwise = [(k, parsed k v) | (k, v) <- kvs, not (folded k)] <> derived
+  | otherwise = [(k, passThrough k v) | (k, v) <- kvs, not (folded k)] <> derived
   where
     markers = ["gen_ai.", "llm.", "ai.", "openinference.", "traceloop.", "langfuse."]
     -- The guard above runs on every attribute set ingested, so it must not build the map.
@@ -256,14 +262,17 @@ normalizeGenAI kvs
       Nothing -> (inputTokens, outputTokens, cacheRead, cacheWrite)
     (inT, outT, readT, writeT) = usage
     reported = guard inference *> (firstOf ["gen_ai.usage.cost", "llm.cost.total", "gen_ai.cost.total_tokens"] <|> cc "cost_usd") >>= num
+    cost = (,"reported" :: Text) <$> reported <|> (,"estimated") <$> estimated
     estimated = do
       price <- guard inference *> ((model <|> responseModel) >>= str >>= lookupPrice)
       guard $ isJust inT || isJust outT
       pure $ estimateCost price $ Usage (fromMaybe 0 inT) (fromMaybe 0 outT) (fromMaybe 0 readT) (fromMaybe 0 writeT)
 
-    inputMessages = indexedMessages "llm.input_messages." "message." <|> indexedMessages "gen_ai.prompt." "" <|> (pick "ai.prompt.messages" >>= json) <|> valueMessages "user" "input.value" <|> (cc "prompt" <&> \p -> AE.Array [AE.object ["role" .= ("user" :: Text), "content" .= p]])
+    inputMessages = indexedMessages "llm.input_messages." "message." <|> indexedMessages "gen_ai.prompt." "" <|> (pick "ai.prompt.messages" >>= json) <|> valueMessages "user" "input.value" <|> (single "user" <$> cc "prompt")
     outputMessages = indexedMessages "llm.output_messages." "message." <|> indexedMessages "gen_ai.completion." "" <|> vercelOutput <|> valueMessages "assistant" "output.value"
-    valueMessages role k = guard (op == Just "chat") *> pick k <&> \v -> fromMaybe (AE.Array [AE.object ["role" .= (role :: Text), "content" .= v]]) (json v >>= messagesOf)
+    valueMessages role k = guard (op == Just "chat") *> pick k <&> \v -> fromMaybe (single role v) (json v >>= messagesOf)
+    single :: Text -> AE.Value -> AE.Value
+    single role content = AE.Array [AE.object ["role" .= role, "content" .= content]]
     messagesOf v = case v of
       AE.Array _ -> Just v
       AE.Object o -> KM.lookup "messages" o
@@ -289,6 +298,10 @@ normalizeGenAI kvs
         || (k `elem` ["ai.prompt.messages", "input.value"] && emitted "gen_ai.input.messages" inputMessages)
         || (k `elem` ["ai.response.text", "ai.response.toolCalls", "output.value"] && emitted "gen_ai.output.messages" outputMessages)
     emitted k v = not (HM.member k m) && isJust v
+    -- Message bodies are the heaviest values: decode each array once, shared by its emit and the preview.
+    givenInput = parsed "gen_ai.input.messages" <$> pick "gen_ai.input.messages"
+    derivedInput = canonicalMessages <$> inputMessages
+    passThrough k v = if k == "gen_ai.input.messages" then fromMaybe v givenInput else parsed k v
     parsed k v
       | k `elem` ["gen_ai.input.messages", "gen_ai.output.messages"] = canonicalMessages $ fromMaybe v (json v)
       | k `elem` ["gen_ai.system_instructions", "gen_ai.tool.definitions"] = fromMaybe v (json v)
@@ -313,11 +326,11 @@ normalizeGenAI kvs
         , emitTokens "gen_ai.usage.cache_read.input_tokens" readT
         , emitTokens "gen_ai.usage.cache_write.input_tokens" writeT
         , emit "gen_ai.usage.reasoning.output_tokens" (intV <$> tokens ["gen_ai.usage.reasoning_tokens", "llm.token_count.completion_details.reasoning"])
-        , emit "gen_ai.usage.cost" (AE.toJSON <$> (reported <|> estimated))
-        , emit "gen_ai.usage.cost_source" (AE.String (if isJust reported then "reported" else "estimated") <$ (reported <|> estimated))
-        , emit "gen_ai.input.messages" (canonicalMessages <$> inputMessages)
+        , emit "gen_ai.usage.cost" (AE.toJSON . fst <$> cost)
+        , emit "gen_ai.usage.cost_source" (AE.String . snd <$> cost)
+        , emit "gen_ai.input.messages" derivedInput
         , emit "gen_ai.output.messages" (canonicalMessages <$> outputMessages)
-        , emit "gen_ai.input.preview" (AE.String <$> ((parsed "gen_ai.input.messages" <$> pick "gen_ai.input.messages" <|> canonicalMessages <$> inputMessages) >>= latestUserText))
+        , emit "gen_ai.input.preview" (AE.String <$> ((givenInput <|> derivedInput) >>= latestUserText))
         , emit "gen_ai.response.finish_reasons" (asList <$> finishReasons)
         , emit "gen_ai.conversation.id" conversation
         , emit "gen_ai.agent.name" (firstOf ["agent.name", "traceloop.workflow.name", "ai.telemetry.functionId"])

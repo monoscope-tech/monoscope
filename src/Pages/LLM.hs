@@ -16,8 +16,8 @@ module Pages.LLM (
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Foldable1 qualified as F1
+import Data.HashSet qualified as HS
 import Data.Map.Strict qualified as M
-import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.UUID qualified as UUID
@@ -27,6 +27,7 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_, hxVals_)
 import Lucid.Hyperscript (__)
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Ids qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), RefreshingDeferred (..), callout_, localTimeFmt_, metaChip_, tableSkeleton_, tonePill_, withDeferredBody)
@@ -39,7 +40,7 @@ import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe)
 import Pkg.GenAI qualified as GenAI
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, useTfReads)
-import Utils (TabStrip (..), drawerRowAttrs_, faSprite_, getDurationNSMS, navTabStrip_, prettyPrintCount)
+import Utils (TabStrip (..), drawerRowAttrs_, faSprite_, getDurationNSMS, navTabStrip_, prettyPrintCount, tokenFlow)
 import Web.Links
 
 
@@ -135,7 +136,7 @@ groupConversations calls = sortOn (Down . (.lastSeen)) $ mapMaybe conversation $
           , turns = length traceGroups
           , llmCalls = length chats
           , toolCalls = length tools
-          , tokens = sum $ mapMaybe (\c -> (+) <$> c.inputTokens <*> c.outputTokens <|> c.inputTokens <|> c.outputTokens) chats
+          , tokens = sum $ concatMap (\c -> catMaybes [c.inputTokens, c.outputTokens]) chats
           , cost = viaNonEmpty sum (mapMaybe (.cost) chats)
           , errors = length $ filter (.failed) spans
           , activeNs = sum $ map traceSpan traceGroups
@@ -150,7 +151,7 @@ groupConversations calls = sortOn (Down . (.lastSeen)) $ mapMaybe conversation $
                     , any ((GenAI.Truncated `elem`) . abnormal) spans
                     , any ((GenAI.Filtered `elem`) . abnormal) spans
                     , any (>= 3) $ M.fromListWith (+) [((t, c.toolArgs), 1 :: Int) | c <- spans, Just t <- [c.tool]]
-                    , any pressured spans
+                    , any pressured chats
                     ]
               ]
           }
@@ -221,19 +222,22 @@ llmGetH pid viewM agentM modelM signalM fromP toP sinceP deferredM = do
   let view = fromMaybe ConversationsView $ find ((== viewM) . Just . viewParam) universe
       link v a m s = windowed window ((urls.traces pid).llmGetH (Just $ viewParam v) a m s)
       url = link view agentM modelM signalM (Just "1")
-      matches c = all (\(want, got) -> maybe True (`elem` got) want) ([(agentM, maybeToList c.agent), (modelM, maybeToList c.model)] :: [(Maybe Text, [Text])])
+      want m xs = maybe True (`elem` xs) m
   body <- withDeferredBody deferredM "llmContainer" url (tableSkeleton_ 8) do
     calls <- V.fromList <$> selectCalls pid window False [HI.sql||]
-    let kpis = kpis_ calls
+    let conversations = V.fromList $ groupConversations calls
+        capped = bool "" " (newest 5,000 spans)" (V.length calls >= 5000)
+        kpis = kpis_ (V.length conversations) calls
         reset = link view Nothing Nothing Nothing Nothing
         zero = ZeroState{icon = "sparkles", title = "No LLM or agent telemetry yet", description = "Send OpenTelemetry GenAI spans from any SDK or framework — OpenLLMetry, OpenInference, Vercel AI SDK, Pydantic AI, LangChain, the OpenAI Agents SDK, Claude Code — and conversations, cost and tool calls appear here.", action = ESLink "https://monoscopehq.com/docs/sdks/llm-observability/" "Instrument your agent"}
-        base :: Text -> Table a
-        base name = (inventoryTable name url){features = (inventoryTable name url).features{header = Just kpis, zeroState = Just zero, searchPlaceholder = Just $ case view of ConversationsView -> "Search conversations"; CallsView -> "Search model calls"}}
+        table, base :: Table a
+        table = inventoryTable "llm" url
+        base = table{features = table.features{header = Just kpis, zeroState = Just zero, searchPlaceholder = Just $ case view of ConversationsView -> "Search conversations"; CallsView -> "Search model calls"}}
     pure $ case view of
       ConversationsView ->
-        let all' = V.fromList $ groupConversations calls
-            shown = V.filter (\c -> maybe True (`elem` c.agents) agentM && maybe True (`elem` c.models) modelM && maybe True (`elem` map signalLabel c.signals) signalM) all'
-            t = base "llm"
+        let all' = conversations
+            shown = V.filter (\c -> want agentM c.agents && want modelM c.models && want signalM (map signalLabel c.signals)) all'
+            t = base
          in ConversationsBody
               t
                 { columns = conversationColumns
@@ -241,7 +245,7 @@ llmGetH pid viewM agentM modelM signalM fromP toP sinceP deferredM = do
                 , features =
                     t.features
                       { rowLink = Just \c -> windowed window ((urls.traces pid).llmConversationGetH c.key)
-                      , resultSummary = Just $ show (V.length shown) <> " of " <> show (V.length all') <> " conversations"
+                      , resultSummary = Just $ show (V.length shown) <> " of " <> show (V.length all') <> " conversations" <> capped
                       , facets =
                           Just
                             $ facetActions
@@ -257,8 +261,8 @@ llmGetH pid viewM agentM modelM signalM fromP toP sinceP deferredM = do
         -- Frameworks name the agent on its root span only; each call takes its trace's.
         let agents = M.fromList [(c.traceId, a) | c <- V.toList calls, Just a <- [c.agent]]
             all' = V.map (\c -> c{agent = c.agent <|> M.lookup c.traceId agents}) $ V.filter inference calls
-            shown = V.filter matches all'
-            t = base "llm"
+            shown = V.filter (\c -> want agentM (maybeToList c.agent) && want modelM (maybeToList c.model)) all'
+            t = base
          in CallsBody
               t
                 { columns = callColumns
@@ -266,7 +270,7 @@ llmGetH pid viewM agentM modelM signalM fromP toP sinceP deferredM = do
                 , features =
                     t.features
                       { rowAttrs = Just \c -> maybe [] (\u -> drawerRowAttrs_ $ (urls.logExplorer pid).logExplorerItemDetailedGet u c.timestamp Nothing (Just "tab-genai") Nothing True) (UUID.fromText c.id)
-                      , resultSummary = Just $ show (V.length shown) <> " of " <> show (V.length all') <> " model calls" <> bool "" " (newest 5,000 spans)" (V.length calls >= 5000)
+                      , resultSummary = Just $ show (V.length shown) <> " of " <> show (V.length all') <> " model calls" <> capped
                       , facets = Just $ facetActions reset "llmContainer" [countedFilter "Agent" "agent" agentM (maybeToList . (.agent)) all', countedFilter "Model" "model" modelM (maybeToList . (.model)) all']
                       }
                 }
@@ -289,20 +293,19 @@ llmGetH pid viewM agentM modelM signalM fromP toP sinceP deferredM = do
       CallsView -> "LLM calls"
 
     -- \| Headline numbers over model calls only: agent spans carry aggregate usage that would count twice.
-    kpis_ :: V.Vector Call -> Html ()
-    kpis_ calls = div_ [class_ "flex flex-col gap-3 px-4 pt-3"] do
+    kpis_ :: Int -> V.Vector Call -> Html ()
+    kpis_ conversationCount calls = div_ [class_ "flex flex-col gap-3 px-4 pt-3"] do
       div_ [class_ "grid grid-cols-6 gap-px overflow-hidden rounded-lg border border-strokeWeak bg-strokeWeak max-xl:grid-cols-3 max-sm:grid-cols-2"] do
-        stat "Conversations" (show $ length $ groupConversations calls) Nothing
+        stat "Conversations" (show conversationCount) Nothing
         stat "Model calls" (prettyPrintCount n) Nothing
-        stat "Tokens" (prettyPrintCount $ round $ sum (mapMaybe (.inputTokens) chats) + sum (mapMaybe (.outputTokens) chats)) Nothing
+        stat "Tokens" (prettyPrintCount $ round $ sum $ concatMap (\c -> catMaybes [c.inputTokens, c.outputTokens]) chats) Nothing
         stat "Cost" (maybe "—" (GenAI.formatUsd . sum) $ nonEmpty $ mapMaybe (.cost) chats) $ (\k -> show k <> " unpriced") <$> mfilter (> 0) (Just $ length $ filter (isNothing . (.cost)) chats)
         stat "Error rate" (if n == 0 then "—" else show (round (100 * fromIntegral (length $ filter (.failed) chats) / fromIntegral n :: Double) :: Int) <> "%") Nothing
-        stat "p95 latency" (maybe "—" (toText . getDurationNSMS . fromIntegral . p95) $ nonEmpty $ map (.duration) chats) Nothing
+        stat "p95 latency" (if n == 0 then "—" else toText $ getDurationNSMS $ fromIntegral $ LogQueries.percentile 0.95 $ V.fromList $ Relude.sort $ map (.duration) chats) Nothing
       div_ [class_ "grid grid-cols-2 gap-3 max-lg:grid-cols-1"] $ forM_ charts $ div_ [class_ "min-h-56"] . Widget.widget_
       where
         chats = filter inference $ V.toList calls
         n = length chats
-        p95 ne = fromMaybe (last ne) $ Relude.sort (toList ne) !!? (length ne * 95 `div` 100)
         stat :: Text -> Text -> Maybe Text -> Html ()
         stat label value note = div_ [class_ "flex flex-col gap-0.5 bg-bgRaised px-3 py-2"] do
           span_ [class_ "text-xs text-textWeak"] $ toHtml label
@@ -341,7 +344,7 @@ llmGetH pid viewM agentM modelM signalM fromP toP sinceP deferredM = do
       [ col "Call" (\c -> div_ [class_ "flex min-w-0 flex-col"] $ span_ [class_ "truncate font-medium text-textStrong"] (toHtml c.name) >> span_ [class_ "truncate text-xs text-textWeak"] (toHtml $ fromMaybe "" c.preview)) & withAttrs [class_ "min-w-72"]
       , col "Model" (chips . maybeToList . (.model)) & withAttrs [class_ "w-40"]
       , col "Agent" (chips . maybeToList . (.agent)) & withAttrs [class_ "w-32 max-lg:hidden"]
-      , col "Tokens" (\c -> span_ [class_ "tabular-nums text-textWeak"] $ toHtml $ fromMaybe "—" $ (\i o -> prettyPrintCount (round i) <> " → " <> prettyPrintCount (round o)) <$> c.inputTokens <*> c.outputTokens) & withAttrs [class_ "w-28 text-right"]
+      , col "Tokens" (\c -> span_ [class_ "tabular-nums text-textWeak"] $ toHtml $ fromMaybe "—" $ tokenFlow c.inputTokens c.outputTokens) & withAttrs [class_ "w-28 text-right"]
       , col "Cost" (\c -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ maybe "—" GenAI.formatUsd c.cost) & withAttrs [class_ "w-20 text-right"]
       , col "Latency" (\c -> span_ [class_ "tabular-nums"] $ toHtml $ getDurationNSMS $ fromIntegral c.duration) & withAttrs [class_ "w-20 text-right"]
       , col "Status" (\c -> if c.failed then tonePill_ ErrorBadge "Error" else forM_ (viaNonEmpty head $ abnormal c) (tonePill_ WarningBadge . show)) & withAttrs [class_ "w-24"]
@@ -463,12 +466,12 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-6xl flex-col gap
         at c = genAIAt (unAesonTextMaybe c.attributes)
         messages dir c = at c [dir, "messages"] >>= \case AE.Array ms -> Just (toList ms); _ -> Nothing
         tools = M.fromList [(i, c) | c <- d.steps, Just (AE.String i) <- [at c ["tool", "call", "id"]]]
-        rendered = go S.empty source
+        rendered = go HS.empty source
         go _ [] = []
         go seen (s : rest) =
-          let fresh = filter (\m -> not (S.member (AE.encode m) seen)) (fromMaybe [] $ messages "input" s)
+          let fresh = filter (not . (`HS.member` seen)) (fromMaybe [] $ messages "input" s)
               out = fromMaybe [] $ messages "output" s
-              seen' = foldr (S.insert . AE.encode) seen (fresh <> out)
+              seen' = foldr HS.insert seen (fresh <> out)
            in (forM_ fresh (message_ d.pid tools Nothing) >> forM_ out (message_ d.pid tools (Just s))) : go seen' rest
 
     -- \| AI spans in execution order, with a bar on the conversation's own clock and the running cost.
@@ -481,17 +484,16 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-6xl flex-col gap
         th_ [class_ "px-3 py-1.5 text-right font-medium"] "Tokens"
         th_ [class_ "px-3 py-1.5 text-right font-medium"] "Cost · total"
       tbody_ $ forM_ (zip d.steps running) \(c, total) -> do
-        let s = c
-            offset = pct (diffUTCTime s.timestamp start)
-            width = max 0.5 $ pct (fromIntegral s.duration / 1e9)
-        tr_ ([class_ "border-t border-strokeWeak hover:bg-fillHover"] <> maybe [] (\u -> drawerRowAttrs_ $ (urls.logExplorer d.pid).logExplorerItemDetailedGet u s.timestamp Nothing (Just "tab-genai") Nothing True) (UUID.fromText s.id)) do
+        let offset = pct (diffUTCTime c.timestamp start)
+            width = max 0.5 $ pct (fromIntegral c.duration / 1e9)
+        tr_ ([class_ "border-t border-strokeWeak hover:bg-fillHover"] <> maybe [] (\u -> drawerRowAttrs_ $ (urls.logExplorer d.pid).logExplorerItemDetailedGet u c.timestamp Nothing (Just "tab-genai") Nothing True) (UUID.fromText c.id)) do
           td_ [class_ "px-3 py-1.5"] $ div_ [class_ "flex min-w-0 items-center gap-2"] do
             faSprite_ (opIcon c.operation) "regular" "h-3 w-3 shrink-0 text-iconNeutral"
-            span_ [class_ "truncate text-textStrong"] $ toHtml s.name
-            when s.failed $ tonePill_ ErrorBadge "Error"
-          td_ [class_ "px-3 py-1.5 max-md:hidden"] $ div_ [class_ "relative h-2 rounded-sm bg-fillWeak"] $ div_ [class_ $ "absolute inset-y-0 rounded-sm " <> if s.failed then "bg-fillError-strong" else "bg-fillBrand-strong", style_ $ "left:" <> show offset <> "%;width:" <> show (min width (100 - offset)) <> "%"] ""
-          td_ [class_ "px-3 py-1.5 text-right tabular-nums text-textWeak"] $ toHtml $ getDurationNSMS $ fromIntegral s.duration
-          td_ [class_ "px-3 py-1.5 text-right tabular-nums text-textWeak"] $ toHtml $ maybe "" (\i -> prettyPrintCount (round i) <> maybe "" ((" → " <>) . prettyPrintCount . round) c.outputTokens) c.inputTokens
+            span_ [class_ "truncate text-textStrong"] $ toHtml c.name
+            when c.failed $ tonePill_ ErrorBadge "Error"
+          td_ [class_ "px-3 py-1.5 max-md:hidden"] $ div_ [class_ "relative h-2 rounded-sm bg-fillWeak"] $ div_ [class_ $ "absolute inset-y-0 rounded-sm " <> if c.failed then "bg-fillError-strong" else "bg-fillBrand-strong", style_ $ "left:" <> show offset <> "%;width:" <> show (min width (100 - offset)) <> "%"] ""
+          td_ [class_ "px-3 py-1.5 text-right tabular-nums text-textWeak"] $ toHtml $ getDurationNSMS $ fromIntegral c.duration
+          td_ [class_ "px-3 py-1.5 text-right tabular-nums text-textWeak"] $ toHtml $ fromMaybe "" $ tokenFlow c.inputTokens c.outputTokens
           td_ [class_ "px-3 py-1.5 text-right tabular-nums text-textWeak"] $ toHtml $ maybe "" (\x -> GenAI.formatUsd x <> " · " <> GenAI.formatUsd total) c.cost
       where
         start = maybe d.window.fromTime (.timestamp) (viaNonEmpty head d.steps)

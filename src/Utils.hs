@@ -53,6 +53,7 @@ module Utils (
   getSeriesColorHex,
   nestedJsonFromDotNotation,
   prettyPrintCount,
+  tokenFlow,
   formatWithCommas,
   formatBytes,
   showFFloat',
@@ -905,6 +906,14 @@ formatBytes = go "B" ["KiB", "MiB", "GiB", "TiB", "PiB"] . realToFrac
 --
 -- >>> map prettyPrintCount [999, 1000, 1500, 200000, 1534999, 2000000000]
 -- ["999","1K","1.5K","200K","1.5M","2B"]
+-- | A model call's input and output tokens, as every LLM surface prints them.
+--
+-- >>> tokenFlow (Just 1200) (Just 340)
+-- Just "1.2K \8594 340 tok"
+tokenFlow :: Maybe Double -> Maybe Double -> Maybe Text
+tokenFlow i o = (\a b -> prettyPrintCount (round a) <> " → " <> prettyPrintCount (round b) <> " tok") <$> i <*> o
+
+
 prettyPrintCount :: Int -> Text
 prettyPrintCount n
   | n >= 1_000_000_000 = scaled 1_000_000_000 "B"

@@ -112,6 +112,7 @@ import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception qualified as Exception
 import Effectful.Log qualified as Log
+import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
@@ -1515,7 +1516,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
         Log.logTrace "AI requesting tool" (AE.object ["iteration" AE..= step.iteration, "tool" AE..= LLM.toolFunctionName (LLM.toolCallFunction tool)])
         record $ Investigations.ToolStarted step.iteration tool
         let callFunction = LLM.toolCallFunction tool
-            capture = maybe False (ELLM.capturesContent . (.otelInstrumentationGenaiCaptureContent)) config.sourceConfig
+        capture <- ELLM.capturesContent . (.env.otelInstrumentationGenaiCaptureContent) <$> Reader.ask @Config.AuthContext
         outcome <- withSpanKind Internal ("execute_tool " <> LLM.toolFunctionName callFunction) ([("gen_ai.operation.name", "execute_tool"), ("gen_ai.tool.name", OA.toAttribute $ LLM.toolFunctionName callFunction), ("gen_ai.tool.call.id", OA.toAttribute $ LLM.toolCallId tool)] <> [("gen_ai.tool.call.arguments", OA.toAttribute $ encodeText $ LLM.toolFunctionArguments callFunction) | capture]) \sp -> do
           outcome <- executeToolAt turn config{timeRange = step.timeRange} tool
           outcome <$ case outcome of

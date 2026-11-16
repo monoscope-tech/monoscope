@@ -33,7 +33,6 @@ import Data.Char (isSpace)
 import Data.Default
 import Data.List qualified as L
 import Data.Map qualified as Map
-import Data.Scientific (toRealFloat)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale)
@@ -1291,7 +1290,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                 stBox "Spans" (show (length spanRecords) <> foldMap (const "+") moreUrl) Nothing
                 stBox "Errors" (show $ length $ V.filter (\s -> s.status == Just SSError) spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-iconError")
                 stBox "Duration" (toText $ getDurationNSMS traceItem.traceDurationNs) $ Just (faSprite_ "clock" "regular" "w-3 h-3 text-iconNeutral")
-                whenJust (viaNonEmpty sum [toRealFloat c | sp <- V.toList spanRecords, Just (AE.Number c) <- [GenAIMessages.genAIAt sp.attributes ["usage", "cost"]]]) \cost ->
+                whenJust (viaNonEmpty sum $ mapMaybe (\sp -> GenAIMessages.genAINum sp.attributes ["usage", "cost"]) $ V.toList spanRecords) \cost ->
                   stBox "LLM cost" (GenAI.formatUsd cost) $ Just (faSprite_ "sparkles" "regular" "w-3 h-3 text-iconNeutral")
             whenJust moreUrl \url ->
               div_ [id_ "trace-load-more", class_ "flex items-center justify-between gap-2 rounded-lg border border-strokeWeak bg-fillWeaker px-3 py-1.5"] do
