@@ -258,7 +258,7 @@ for (const decision of ['approve', 'reject', 'removed', 'changed-schema']) test(
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('Pi traces follow the OTel GenAI conventions, priced by Pi and grouped by the session file', { timeout: 10000 }, async () => {
+for (const capture of [undefined, 'SPAN_ONLY']) test(`Pi traces follow the OTel GenAI conventions, priced by Pi and grouped by the session file; content capture ${capture ?? 'unset'}`, { timeout: 10000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'impact-pi-otel-'));
   const spans = [];
   const server = createServer((request, response) => {
@@ -272,7 +272,7 @@ test('Pi traces follow the OTel GenAI conventions, priced by Pi and grouped by t
     });
   });
   await new Promise((listening) => server.listen(0, '127.0.0.1', listening));
-  const exporter = { OTEL_EXPORTER_OTLP_ENDPOINT: `http://127.0.0.1:${server.address().port}`, OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json', OTEL_SERVICE_NAME: 'pi-review', OTEL_LOGS_EXPORTER: 'none' };
+  const exporter = { OTEL_EXPORTER_OTLP_ENDPOINT: `http://127.0.0.1:${server.address().port}`, OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json', OTEL_SERVICE_NAME: 'pi-review', OTEL_LOGS_EXPORTER: 'none', ...capture && { OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT: capture } };
   Object.assign(process.env, exporter);
   try {
     const runtime = await ModelRuntime.create({ authPath: join(root, 'auth.json'), modelsPath: null, refreshOnCreate: false });
@@ -295,9 +295,9 @@ test('Pi traces follow the OTel GenAI conventions, priced by Pi and grouped by t
     assert.deepEqual(spans.map((span) => span.name).filter((name) => !name.startsWith('pi.')).sort(), ['chat fixture', 'chat fixture', 'execute_tool submit_review', 'invoke_agent pi']);
     assert.ok(spans.every((span) => span.service === 'pi-review' && span['gen_ai.conversation.id'] === 'routine-run' && !span.error));
     assert.deepEqual(chats.map((span) => [span['gen_ai.provider.name'], span['gen_ai.request.model'], span['gen_ai.usage.input_tokens'], span['gen_ai.usage.cache_read_input_tokens'], span['pi.cost.usd']]), [['anthropic', 'fixture', 10, 1000, 0.0123], ['anthropic', 'fixture', 10, 1000, 0.0123]]);
-    assert.ok(!JSON.stringify(spans).includes('Secret customer source'), 'Prompt content left the host');
+    assert.equal(JSON.stringify(spans).includes('Secret customer source'), Boolean(capture), 'Prompt content is exported exactly when capture is on');
   } finally {
-    for (const name of Object.keys(exporter)) delete process.env[name];
+    for (const name of [...Object.keys(exporter), 'PI_OTEL_SPAN_NAMING', 'PI_OTEL_CAPTURE_CONTENT']) delete process.env[name];
     server.close();
     await rm(root, { recursive: true, force: true });
   }
