@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pages.AIThreads (AIPage (..), PolicySaved (..), PromptError (..), NewThreadError (..), TurnError (..), EmptyTitle (..), UnknownTemplate (..), NoReviewClasses (..), EmailOnlyForReports (..), OperationReviewed (..), AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), OperationReviewForm (..), operationReviewPostH, operationGetH, RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH, CopilotForm, CopilotDock (..), RunNow, BrowserAnswer, copilotDockGetH, copilotPostH, copilotBrowserPostH) where
+module Pages.AIThreads (AIPage (..), PolicySaved (..), PromptError (..), NewThreadError (..), TurnError (..), EmptyTitle (..), UnknownTemplate (..), NoReviewClasses (..), EmailOnlyForReports (..), OperationReviewed (..), AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), OperationReviewForm (..), operationReviewPostH, operationGetH, RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH, CopilotForm, CopilotDock (..), RunNow, BrowserAnswer, copilotDockGetH, copilotPostH, copilotBrowserPostH, copilotVisibilityPostH) where
 
 import BackgroundJobs qualified
 import BackgroundJobs.Types qualified as Jobs
@@ -1265,6 +1265,14 @@ copilotBrowserPostH runNow pid runId answer = do
   addRespHeaders Servant.NoContent
 
 
+-- | Dismissing keeps whichever other conversation the dock had open; pinning one back opens it.
+copilotVisibilityPostH :: Projects.ProjectId -> UUIDId "conversation" -> Issues.DockVisibility -> Maybe (UUIDId "conversation") -> ATAuthCtx (RespHeaders CopilotDock)
+copilotVisibilityPostH pid convId visibility selected = do
+  (sess, _) <- Projects.sessionAndProject pid
+  Issues.setCopilotVisibility pid sess.user.id convId visibility
+  addRespHeaders =<< copilotDock pid (case visibility of Issues.DockShown -> Just convId; Issues.DockDismissed -> mfilter (/= convId) selected) Nothing Nothing
+
+
 -- | @seen@ counts the selected run's tool calls the page already acted on; without it nothing replays.
 copilotDockGetH :: Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders CopilotDock)
 copilotDockGetH pid convM seen = addRespHeaders <=< copilotDock pid convM seen
@@ -1329,7 +1337,17 @@ copilotDock_ dock =
           faSprite_ "sparkles" "regular" "size-3.5 text-iconBrand"
           span_ [class_ "max-sm:sr-only"] "Ask AI"
           kbd_ [class_ "font-sans text-textDisabled max-sm:hidden"] "⌘K"
-        for_ dock.sessions bubble_
+        for_ (take 6 $ filter (not . (.dismissed)) dock.sessions) bubble_
+        -- Dismissed sessions wait here until pinned back.
+        whenNotNull (filter (.dismissed) dock.sessions) \dismissed -> do
+          button_ ([type_ "button", class_ "flex shrink-0 cursor-pointer items-center gap-1 rounded-full px-2.5 py-1.5 text-xs text-textWeak transition-[scale,background-color] hover:bg-fillHover active:scale-[0.97]", title_ "Dismissed conversations"] <> popoverTrigger_ "ai-dock-dismissed") do
+            faSprite_ "clock" "regular" "size-3"
+            toHtml $ show @Text (length dismissed)
+          ul_ ([class_ "dropdown dropdown-top dropdown-end menu menu-sm mb-2 w-72 rounded-box border border-strokeWeak bg-bgRaised p-1 shadow-lg", Aria.label_ "Dismissed conversations"] <> popoverPanel_ "ai-dock-dismissed")
+            $ for_ dismissed \session -> li_ $ button_ [type_ "button", class_ "flex items-center gap-2", title_ "Pin back to the island", hxPost_ $ urls.aiDockVisibilityPost pid session.conversationId Issues.DockShown selectedId, hxTarget_ "#ai-dock", hxSwap_ "outerMorph"] do
+              statusIcon_ session.status
+              span_ [class_ "min-w-0 flex-1 truncate"] $ toHtml session.title
+              faSprite_ "thumbtack" "regular" "size-3 text-iconNeutral"
       -- The tab executes a paused browser call once (morph keeps the element) and posts its answer.
       for_ ((,) <$> dock.selected <*> pending) \(open, call) ->
         term "ai-browser-call" [id_ $ "ai-browser-call-" <> LLM.toolCallId call, data_ "tool" $ LLM.toolFunctionName $ LLM.toolCallFunction call, data_ "args" $ encodeText $ LLM.toolFunctionArguments $ LLM.toolCallFunction call, data_ "call" $ LLM.toolCallId call, data_ "answer" $ urls.aiDockBrowserPost pid open.session.runId] ""
@@ -1344,11 +1362,18 @@ copilotDock_ dock =
     pid = dock.projectId
 
     bubble_ :: Issues.CopilotSession -> Html ()
-    bubble_ session =
+    bubble_ session = do
       let content = statusIcon_ session.status >> span_ [class_ "max-w-40 truncate"] (toHtml session.title)
-       in if Just session.conversationId == selectedId
-            then label_ [Lucid.for_ "ai-dock-open", class_ "flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-fillWeak px-3 py-1.5 text-xs font-medium text-textStrong transition-[scale,opacity,background-color] duration-200 ease-(--ease-out-quint) hover:bg-fillHover active:scale-[0.97] starting:scale-95 starting:opacity-0", title_ session.title] content
-            else button_ [type_ "button", class_ "flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-xs text-textWeak transition-[scale,opacity,background-color] duration-200 ease-(--ease-out-quint) hover:bg-fillHover active:scale-[0.97] starting:scale-95 starting:opacity-0", title_ session.title, hxGet_ $ urls.aiDockGet pid (Just session.conversationId) Nothing, hxTarget_ "#ai-dock", hxSwap_ "outerMorph", [__|on htmx:after:request set #ai-dock-open.checked to true|]] content
+          selected = Just session.conversationId == selectedId
+      div_ [class_ $ "group/bubble flex shrink-0 items-center rounded-full text-xs transition-[opacity,scale,background-color] duration-200 ease-(--ease-out-quint) hover:bg-fillHover starting:scale-95 starting:opacity-0 " <> bool "text-textWeak" "bg-fillWeak font-medium text-textStrong" selected] do
+        if selected
+          then label_ [Lucid.for_ "ai-dock-open", class_ "flex cursor-pointer items-center gap-1.5 py-1.5 ps-3 pe-1 transition-transform active:scale-[0.97]", title_ session.title] content
+          else button_ [type_ "button", class_ "flex cursor-pointer items-center gap-1.5 py-1.5 ps-3 pe-1 transition-transform active:scale-[0.97]", title_ session.title, hxGet_ $ urls.aiDockGet pid (Just session.conversationId) Nothing, hxTarget_ "#ai-dock", hxSwap_ "outerMorph", [__|on htmx:after:request set #ai-dock-open.checked to true|]] content
+        dismiss_ session "me-1 grid size-5 shrink-0 cursor-pointer place-items-center rounded-full text-iconNeutral opacity-0 transition-opacity hover:bg-fillWeak hover:text-textStrong focus-visible:opacity-100 group-hover/bubble:opacity-100 pointer-coarse:opacity-100" "size-2.5"
+
+    -- Takes the conversation off the island; asking it something new brings it back.
+    dismiss_ :: Issues.CopilotSession -> Text -> Text -> Html ()
+    dismiss_ session cls iconCls = button_ [type_ "button", class_ cls, Aria.label_ $ "Dismiss " <> session.title, title_ "Dismiss from the island", hxPost_ $ urls.aiDockVisibilityPost pid session.conversationId Issues.DockDismissed selectedId, hxTarget_ "#ai-dock", hxSwap_ "outerMorph"] $ faSprite_ "xmark" "regular" iconCls
 
     statusIcon_ :: Issues.RoutineRunStatus -> Html ()
     statusIcon_ = \case
@@ -1374,6 +1399,7 @@ copilotDock_ dock =
             h2_ [class_ "min-w-0 flex-1 truncate text-sm font-medium text-textStrong"] $ toHtml session.title
             a_ ([href_ $ threadUrl pid session.conversationId, class_ "btn btn-ghost btn-xs gap-1 text-textWeak"] <> navTabAttrs) $ "Open thread" >> faSprite_ "arrow-up-right-from-square" "regular" "size-3"
             label_ [Lucid.for_ "ai-dock-open", class_ "btn btn-ghost btn-xs btn-square text-iconNeutral", Aria.label_ "Minimize", title_ "Minimize (Esc)"] $ faSprite_ "chevron-down" "regular" "size-3.5"
+            dismiss_ session "btn btn-ghost btn-xs btn-square text-iconNeutral" "size-3.5"
           -- Reversed, the log stays pinned to its newest line as it grows, without script.
           div_ [id_ "ai-dock-log", class_ "flex min-h-0 grow flex-col-reverse overflow-y-auto px-4"] $ div_ do
             IssuePage.aiChatHistoryView_ (\href -> href_ (threadUrl pid session.conversationId <> href) : navTabAttrs) pid messages

@@ -22,6 +22,13 @@
 </g>
 </svg>
 </label>
+<button type="button" class="btn btn-ghost btn-xs btn-square text-iconNeutral" aria-label="Dismiss Make a dashboard" title="Dismiss from the island" data-hx-post="/p/<uuid>/ai/dock/<uuid>/dismissed?selected=<uuid>" data-hx-target="#ai-dock" data-hx-swap="outerMorph">
+<svg class="icon size-3.5" width="1em" height="1em" viewBox="0 0 8 8">
+<g>
+<path d="M7 1L1 7M1 1L7 7" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round" />
+</g>
+</svg>
+</button>
 </header>
 <div id="ai-dock-log" class="flex min-h-0 grow flex-col-reverse overflow-y-auto px-4">
 <div>
@@ -93,7 +100,8 @@
 <span class="max-sm:sr-only">Ask AI</span>
 <kbd class="font-sans text-textDisabled max-sm:hidden">⌘K</kbd>
 </button>
-<label for="ai-dock-open" class="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-fillWeak px-3 py-1.5 text-xs font-medium text-textStrong transition-[scale,opacity,background-color] duration-200 ease-(--ease-out-quint) hover:bg-fillHover active:scale-[0.97] starting:scale-95 starting:opacity-0" title="Make a dashboard">
+<div class="group/bubble flex shrink-0 items-center rounded-full text-xs transition-[opacity,scale,background-color] duration-200 ease-(--ease-out-quint) hover:bg-fillHover starting:scale-95 starting:opacity-0 bg-fillWeak font-medium text-textStrong">
+<label for="ai-dock-open" class="flex cursor-pointer items-center gap-1.5 py-1.5 ps-3 pe-1 transition-transform active:scale-[0.97]" title="Make a dashboard">
 <svg class="icon size-3 animate-spin text-iconBrand" width="1em" height="1em" viewBox="0 0 16 16">
 <g fill="none">
 <g id="regular-spinner-Loader" clip-path="url(#regular-spinner-clip0_6882_4605)"> <path id="regular-spinner-Icon" d="M7.99967 1.3335V4.00016M7.99967 12.0002V14.6668M3.28634 3.28682L5.173 5.17349M10.8263 10.8268L12.713 12.7135M1.33301 8.00016H3.99967M11.9997 8.00016H14.6663M3.28634 12.7135L5.173 10.8268M10.8263 5.17349L12.713 3.28682" stroke="currentColor" stroke-opacity="0.7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /> </g> <defs> <clipPath id="regular-spinner-clip0_6882_4605"> <rect width="16" height="16" fill="white" /> </clipPath> </defs>
@@ -101,5 +109,13 @@
 </svg>
 <span class="max-w-40 truncate">Make a dashboard</span>
 </label>
+<button type="button" class="me-1 grid size-5 shrink-0 cursor-pointer place-items-center rounded-full text-iconNeutral opacity-0 transition-opacity hover:bg-fillWeak hover:text-textStrong focus-visible:opacity-100 group-hover/bubble:opacity-100 pointer-coarse:opacity-100" aria-label="Dismiss Make a dashboard" title="Dismiss from the island" data-hx-post="/p/<uuid>/ai/dock/<uuid>/dismissed?selected=<uuid>" data-hx-target="#ai-dock" data-hx-swap="outerMorph">
+<svg class="icon size-2.5" width="1em" height="1em" viewBox="0 0 8 8">
+<g>
+<path d="M7 1L1 7M1 1L7 7" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round" />
+</g>
+</svg>
+</button>
+</div>
 </div>
 </div>

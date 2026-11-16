@@ -176,6 +176,8 @@ module Models.Apis.Issues (
   PageContext (..),
   CopilotSession (..),
   copilotSessions,
+  setCopilotVisibility,
+  DockVisibility (..),
   startInteractiveRun,
   startMemberConversationRunWith,
   InteractiveStart (..),
@@ -2820,23 +2822,40 @@ data CopilotSession = CopilotSession
   , status :: RoutineRunStatus
   , input :: Maybe Text
   , policy :: ExecutionPolicy
+  , dismissed :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
 
 
--- | The requester's assistant sessions of the last twelve hours, newest first.
+-- | Whether the requester keeps a session on their dock. A dismissed one returns when pinned back, or
+-- when they ask it something new.
+data DockVisibility = DockShown | DockDismissed
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (FromHttpApiData, ToHttpApiData) via WrappedEnumSC 'Nothing "Dock" DockVisibility
+
+
+-- | The requester's assistant sessions of the last twelve hours, newest first, dismissed ones flagged.
 copilotSessions :: (DB es, Time :> es) => Projects.ProjectId -> Projects.UserId -> Eff es [CopilotSession]
 copilotSessions pid user = do
   since <- addUTCTime (-(12 * 3600)) <$> Time.currentTime
   Hasql.interp
-    [HI.sql|SELECT latest.conversation_id, COALESCE(NULLIF(c.title, ''), (SELECT LEFT(f.input, 100) FROM apis.ai_routine_runs f WHERE f.project_id = #{pid} AND f.conversation_id = latest.conversation_id ORDER BY f.scheduled_at LIMIT 1), 'New chat'),
-        latest.id, latest.status, latest.input, latest.policy
-      FROM (SELECT * FROM (SELECT DISTINCT ON (conversation_id) conversation_id, id, status, input, policy, scheduled_at FROM apis.ai_routine_runs
-          WHERE project_id = #{pid} AND scheduled_at > #{since} AND requested_by = #{user} AND page_context IS NOT NULL
-          ORDER BY conversation_id, scheduled_at DESC) runs ORDER BY scheduled_at DESC LIMIT 6) latest
-      JOIN apis.ai_conversations c ON c.project_id = #{pid} AND c.conversation_id = latest.conversation_id
-      ORDER BY latest.scheduled_at DESC|]
+    [HI.sql|SELECT latest.conversation_id, COALESCE(NULLIF(latest.title, ''), (SELECT LEFT(f.input, 100) FROM apis.ai_routine_runs f WHERE f.project_id = #{pid} AND f.conversation_id = latest.conversation_id ORDER BY f.scheduled_at LIMIT 1), 'New chat'),
+        latest.id, latest.status, latest.input, latest.policy, latest.scheduled_at <= COALESCE(latest.dock_dismissed_at, '-infinity')
+      FROM (SELECT DISTINCT ON (run.conversation_id) run.conversation_id, c.title, c.dock_dismissed_at, run.id, run.status, run.input, run.policy, run.scheduled_at
+          FROM apis.ai_routine_runs run JOIN apis.ai_conversations c ON c.project_id = run.project_id AND c.conversation_id = run.conversation_id
+          WHERE run.project_id = #{pid} AND run.scheduled_at > #{since} AND run.requested_by = #{user} AND run.page_context IS NOT NULL
+          ORDER BY run.conversation_id, run.scheduled_at DESC) latest
+      ORDER BY latest.scheduled_at DESC LIMIT 12|]
+
+
+setCopilotVisibility :: (DB es, Time :> es) => Projects.ProjectId -> Projects.UserId -> UUIDId "conversation" -> DockVisibility -> Eff es ()
+setCopilotVisibility pid user conversation visibility = do
+  now <- Time.currentTime
+  Hasql.interpExecute_
+    [HI.sql|UPDATE apis.ai_conversations c SET dock_dismissed_at = #{bool Nothing (Just now) (visibility == DockDismissed)}
+      WHERE c.project_id = #{pid} AND c.conversation_id = #{conversation}
+        AND EXISTS (SELECT 1 FROM apis.ai_routine_runs run WHERE run.project_id = #{pid} AND run.conversation_id = #{conversation} AND run.requested_by = #{user} AND run.page_context IS NOT NULL)|]
 
 
 data InteractiveStart = ConflictingRequest | AcceptedRequest (Maybe ScheduledRoutine)

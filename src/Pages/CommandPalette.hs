@@ -110,8 +110,8 @@ paletteShell_ pid = do
             [ type_ "text"
             , id_ "cmd-palette-input"
             , class_ "w-full py-2.5 bg-transparent outline-none text-sm"
-            , placeholder_ "Search pages, issues, actions\x2026"
-            , term "hx-live:placeholder" "(c => c ? 'Search ' + c + '\x2026' : 'Search pages, issues, actions\x2026')(closest('.cmd-palette').data.currentCategory)"
+            , placeholder_ "Ask AI, or search pages, issues, actions\x2026"
+            , term "hx-live:placeholder" "(c => c ? 'Search ' + c + '\x2026' : 'Ask AI, or search pages, issues, actions\x2026')(closest('.cmd-palette').data.currentCategory)"
             , inputScript
             ]
         -- Back breadcrumb (hidden by default)
@@ -120,17 +120,21 @@ paletteShell_ pid = do
           span_ [term "hx-live:text" "(c => c.charAt(0).toUpperCase() + c.slice(1))(closest('.cmd-palette').data.currentCategory || '')"] ""
         -- Results container
         div_ [id_ "cmd-palette-results", role_ "listbox", class_ "max-h-80 overflow-y-auto p-1"] do
-          -- Any query leads with the assistant, so typing then Enter asks it; ↓ reaches logs and pages.
+          -- The assistant leads the palette, so typing then Enter asks it; ↓ reaches logs and pages.
           cmdLink_
             ""
             CKAiAction
             [ hxPost_ $ urls.aiDockPost pid
+            , hxTrigger_ "click[document.getElementById('cmd-palette-input').value.trim()]"
             , hxVals_ "js:{query: document.getElementById('cmd-palette-input').value, allowActions: true, path: location.pathname + location.search, title: document.title}"
             , hxTarget_ "#ai-dock"
             , hxSwap_ "outerMorph"
             , [__|on htmx:after:request set #ai-dock-open.checked to true then if #ai-dock-input exists call #ai-dock-input.focus() end|]
             ]
-            $ itemBody_ "sparkles" [term "hx-live:text" "'Ask AI: \"' + q('#cmd-palette-input').value + '\"'"] "Ask AI: \"\"" "AI"
+            do
+              faSprite_ "sparkles" "regular" "w-3.5 h-3.5 shrink-0 text-iconBrand"
+              span_ [class_ "truncate flex-1 font-medium text-textStrong", term "hx-live:text" "(v => v.trim() ? 'Ask AI: \"' + v + '\"' : 'Ask AI to find, create or change anything')(q('#cmd-palette-input').value)"] "Ask AI to find, create or change anything"
+              span_ [class_ "badge badge-xs border-0 bg-fillBrand-weak text-2xs text-textBrand"] "AI"
           -- Logs shortcut
           cmdLink_ "search logs" CKLogShortcut [href_ $ logExplorerUrl pid, term "hx-live:href" "'/p/' + closest('.cmd-palette').dataset.pid + '/log_explorer?query=' + encodeURIComponent(q('#cmd-palette-input').value)"]
             $ itemBody_ "explore" [term "hx-live:text" "'Search logs for: \"' + q('#cmd-palette-input').value + '\"'"] "Search logs for: \"\"" "Logs"
@@ -284,7 +288,7 @@ cmdLink_ search kind attrs =
       CKChild -> ("(c ? d.cmdCategory != c : !s) || !t.includes(s)", False)
       CKRecent -> ("!!(c || s)", False)
       CKLogShortcut -> ("!!c", False)
-      CKAiAction -> ("!!c || !s.trim()", False)
+      CKAiAction -> ("!!c", False)
 
 
 itemBody_ :: Text -> [Attribute] -> Html () -> Text -> Html ()
