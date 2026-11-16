@@ -10,10 +10,13 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Utils qualified as Bot
 import Pages.Components (Deferred (..))
 import Pages.LLM qualified as LLM
+import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Telemetry qualified as TelemetryPage
 import Pkg.AI qualified as AI
@@ -54,12 +57,18 @@ spec = around withTestResources do
       map (`path` genAI "ai.toolCall") [["tool", "name"], ["tool", "call", "id"]] `shouldBe` [Just "search_logs", Just "call-9"]
       -- Both conv-1 traces are one conversation; the lone OpenLLMetry call is only a call.
       let (from, to) = around' now
-      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing from to Nothing (Just "1")
+      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       map (\c -> (c.key, c.llmCalls, c.toolCalls, c.title, c.signals)) (toList table.rows) `shouldBe` [("conv-1", 2, 1, Just "Why is checkout slow?", [LLM.Truncated])]
-      calls <- call tr $ LLM.llmGetH pid (Just "calls") Nothing (Just "claude-sonnet-4-5") Nothing from to Nothing (Just "1")
-      renderT calls `shouldContainAll` ["openllmetry chat", "$0.0027", "2K → 50"]
+      -- "LLM calls" is the Explorer over the kind=ai summary element, on both read paths.
+      let llmCalls = def{Log.query = Just ("summary[*] == \"" <> Telemetry.genAIMarker <> "\""), Log.from = from, Log.to = to}
+          viaTf' = tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}}}
+      -- The TimeFusion lowering (array_has) only runs where CI provides a real TimeFusion.
+      realTf <- isJust <$> lookupEnv "TIMEFUSION_PG_TEST_URL"
+      forM_ (tr : [viaTf' | realTf]) \t -> call t (Log.logExplorerDataH pid llmCalls) >>= (`shouldBe` 5) . V.length . (.logsData)
+      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.TopicsBody topics))) <- call tr $ LLM.llmGetH pid (Just "topics") Nothing Nothing Nothing Nothing from to Nothing (Just "1")
+      map (\t -> (t.template, length t.conversations)) (toList topics.rows) `shouldBe` [("Why is checkout slow?", 1)]
       -- Rows open the full span view in the drawer: a partial response is a lone hidden tab panel.
-      T.isInfixOf "partial" (renderT calls) `shouldBe` False
+      T.isInfixOf "partial" (renderT table) `shouldBe` False
       -- The trace view prices each step and totals the trace: $0.0035 + $0.000057 for gpt-4o-mini.
       [(trId, ts)] <- dbQuery tr [sql| SELECT context___trace_id, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND name = 'openinference llm' |] (Only pid)
       renderT <$> call tr (TelemetryPage.traceH pid trId (Just ts) Nothing Nothing Nothing Nothing) >>= (`shouldContainAll` ["1K → 100 tok · $0.0035", "LLM cost", "$0.0036"])
@@ -75,7 +84,7 @@ spec = around withTestResources do
       event 4 "sess-b" "p2" [("event.name", "api_request"), ("model", "claude-sonnet-4-5"), ("input_tokens", "100"), ("output_tokens", "900"), ("cost_usd", "0.5")]
       ingestLogRecord tr apiKey ("ERROR", PL.SEVERITY_NUMBER_ERROR) "checkout failed" [("event.name", "api_error"), ("session.id", "sess-a")] (addUTCTime 5 now)
       let (from, to) = around' now
-      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing from to Nothing (Just "1")
+      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       map (\c -> (c.key, c.title, c.llmCalls, c.tokens, c.cost)) (toList table.rows) `shouldBe` [("sess-b", Just "Write the tests", 1, 1000, Just 0.5), ("sess-a", Just "Fix the failing build", 1, 5030, Just 0.0021)]
       renderT <$> call tr (LLM.conversationGetH pid "sess-a" from to Nothing) >>= (`shouldContainAll` ["Fix the failing build", "$0.0021"])
 
@@ -98,7 +107,7 @@ spec = around withTestResources do
       -- Through TimeFusion reads, which CI points at a real TimeFusion.
       (from, to) <- around' <$> getCurrentTime
       let viaTf = tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}}}
-      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call viaTf $ LLM.llmGetH testPid Nothing Nothing Nothing Nothing from to Nothing (Just "1")
+      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call viaTf $ LLM.llmGetH testPid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       run <- maybe (fail "the assistant run is not listed as a conversation") pure $ viaNonEmpty head $ toList table.rows
       (run.agents, run.title, run.llmCalls >= 2, run.toolCalls >= 1) `shouldBe` (["monoscope"], Just "plot error trend over time", True, True)
       detail <- call viaTf $ LLM.conversationGetH testPid run.key from to Nothing

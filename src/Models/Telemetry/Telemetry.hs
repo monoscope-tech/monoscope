@@ -102,6 +102,7 @@ module Models.Telemetry.Telemetry (
   atMapInt,
   getNestedValue,
   genAIMarker,
+  genAIFinishMarker,
   spanServiceName,
   spanAttr,
   mkSystemLog,
@@ -2652,6 +2653,11 @@ genAIMarker :: T.Text
 genAIMarker = tag "kind" "neutral" "ai"
 
 
+-- | The summary element of a reply that stopped early, so lists can count truncations in SQL.
+genAIFinishMarker :: GenAI.Abnormal -> T.Text
+genAIFinishMarker = tag "gen_ai.response.finish_reasons" "badge-warning" . show
+
+
 -- | Who a telemetry row is *about*: the session it belonged to, the user it was served for,
 -- and the tenant it was scoped to. One list, shared by the log-item detail panel and the
 -- \"User & Session\" facet group, so a field that is displayable is also filterable.
@@ -2872,7 +2878,7 @@ generateSpanSummary otel =
         _ -> Nothing
     tokens = (,) <$> atMapInt "gen_ai.usage.input_tokens" attrsM <*> atMapInt "gen_ai.usage.output_tokens" attrsM
     abnormalFinish =
-      attrsM >>= getNestedValue ["gen_ai", "response", "finish_reasons"] >>= AET.parseMaybe AE.parseJSON >>= \(GenAI.FinishReasons rs) -> find (isJust . GenAI.abnormalFinish) rs
+      attrsM >>= getNestedValue ["gen_ai", "response", "finish_reasons"] >>= AET.parseMaybe AE.parseJSON >>= \(GenAI.FinishReasons rs) -> asum (map GenAI.abnormalFinish rs)
 
     durMs d = toText (getDurationNSMS (fromIntegral d))
     statusCodeStyle code
@@ -2962,7 +2968,7 @@ generateSpanSummary otel =
         , tag "rpc.service" "neutral" <$> atMapText "rpc.service" attrsM
         , spanNameFallback
         , errorStatus "badge-error"
-        , tag "gen_ai.response.finish_reasons" "badge-warning" <$> abnormalFinish
+        , genAIFinishMarker <$> abnormalFinish
         , tag "attributes" "text-textWeak" . encTrunc 500 <$> mfilter (not . Map.null) attrsM
         , errorStatus "right-badge-error"
         , dbBadge <$> dbSys

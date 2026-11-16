@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, frontendBuild, BWConfig (..), stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus, externalHeadScripts_) where
+module Pages.BodyWrapper (bodyWrapper, frontendBuild, BWConfig (..), llmCallsUrl, stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus, externalHeadScripts_) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
@@ -26,6 +26,7 @@ import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (OnboardingStep (..))
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
@@ -124,10 +125,16 @@ menu lang pid =
   , (I18n.t lang "nav.monitors", (urls.monitors pid).listGet Nothing Nothing, "list-check")
   , ("Real User Monitoring", urls.rumRedirect pid [] [], "web")
   , (I18n.t lang "nav.infrastructure", (urls.traces pid).hostsGetH Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing, "server")
-  , ("LLM & Agents", (urls.traces pid).llmGetH Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing, "sparkles")
+  , ("LLM & Agents", (urls.traces pid).llmGetH Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing, "sparkles")
   , (I18n.t lang "nav.api_catalog", apiCatalogUrl pid Nothing, "swap")
   , ("Repositories", urls.repositoriesGet pid Nothing Nothing, "code-branch")
   ]
+
+
+-- | Every GenAI span in the Explorer: charts, facets, columns and the span drawer, filtered on the
+-- summary element ingest stamps on them.
+llmCallsUrl :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Text
+llmCallsUrl pid since from to = (urls.logExplorer pid).logExplorerGet (Just $ "summary[*] == \"" <> Telemetry.genAIMarker <> "\"") Nothing since from to Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 
 dashboardsUrl :: Projects.ProjectId -> Text
@@ -1318,7 +1325,7 @@ navFlyoutItems pid = \case
   "Explorer" -> [(label, link pid) | (label, link) <- Components.explorerTabs]
   "Infrastructure" -> [(label, link pid Nothing Nothing Nothing) | (label, link) <- Components.infrastructureTabs]
   "Real User Monitoring" -> [("Dashboard", urls.rumRedirect pid [] []), ("Sessions", urls.rumRedirect pid ["sessions"] [])]
-  "LLM & Agents" -> [(label, (urls.traces pid).llmGetH (Just view) Nothing Nothing Nothing Nothing Nothing Nothing Nothing) | (label, view) <- [("Conversations", "conversations"), ("LLM calls", "calls")]] <> [("Dashboard", urls.llmDashboardRedirect pid [])]
+  "LLM & Agents" -> [(label, (urls.traces pid).llmGetH (Just view) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing) | (label, view) <- [("Conversations", "conversations"), ("Topics", "topics")]] <> [("LLM calls", llmCallsUrl pid Nothing Nothing Nothing), ("Dashboard", urls.llmDashboardRedirect pid [])]
   -- API Docs carries no host: it is the whole project's learned spec. The
   -- per-host and per-endpoint scopes are reached from the catalog rows.
   "API Catalog" -> [("Incoming", apiCatalogUrl pid (Just "Incoming")), ("Outgoing", apiCatalogUrl pid (Just "Outgoing")), ("API Docs", urls.apiCatalogDocs pid Nothing (Just "Incoming") Nothing)]
