@@ -37,6 +37,7 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale)
 import Data.Time.Format (formatTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful (Eff)
@@ -1292,6 +1293,11 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                 stBox "Duration" (toText $ getDurationNSMS traceItem.traceDurationNs) $ Just (faSprite_ "clock" "regular" "w-3 h-3 text-iconNeutral")
                 whenJust (viaNonEmpty sum $ mapMaybe (\sp -> GenAIMessages.genAINum sp.attributes ["usage", "cost"]) $ V.toList spanRecords) \cost ->
                   stBox "LLM cost" (GenAI.formatUsd cost) $ Just (faSprite_ "sparkles" "regular" "w-3 h-3 text-iconNeutral")
+                -- The same key the LLM pages group by: a span's conversation id, else the trace if it ran an agent.
+                let genAI ks = mapMaybe (\sp -> GenAIMessages.genAIAt sp.attributes ks) (V.toList spanRecords)
+                    around' d = Just $ toText $ iso8601Show $ addUTCTime d traceItem.traceStartTime
+                whenJust (listToMaybe [k | AE.String k <- genAI ["conversation", "id"]] <|> (traceItem.traceId <$ guard (AE.String "invoke_agent" `elem` genAI ["operation", "name"]))) \k ->
+                  a_ [class_ "btn btn-xs", href_ $ (urls.traces pid).llmConversationGetH k (around' (-3600)) (around' 3600) Nothing] $ faSprite_ "sparkles" "regular" "w-3 h-3" >> "View conversation"
             whenJust moreUrl \url ->
               div_ [id_ "trace-load-more", class_ "flex items-center justify-between gap-2 rounded-lg border border-strokeWeak bg-fillWeaker px-3 py-1.5"] do
                 span_ [class_ "text-xs text-textWeak"] "This trace is larger than one page. Search and the waterfall only cover what's loaded."
