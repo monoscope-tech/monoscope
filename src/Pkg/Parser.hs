@@ -14,6 +14,7 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Ids qualified as Projects
 import Pkg.Deriving (WrappedEnumSC (..))
+import Pkg.GenAI qualified as GenAI
 import Pkg.Parser.Eval (evalExpr, filterExpr, resolveIn)
 import Pkg.Parser.Expr
 import Pkg.Parser.Stats
@@ -1018,8 +1019,24 @@ browserKql = "(resource.telemetry.sdk.language in (\"webjs\", \"javascript\", \"
 -- mirrored in TimeFusion's @schemas/otel_logs_and_spans.yaml@.
 -- | Request-independent KQL presets, so a query is resolvable before any fetch (e.g. a heatmap
 -- cell opening the Explorer on its widget's query).
+--
+-- The GenAI presets come from 'GenAI.inferenceOps' / 'GenAI.agentRunOps', so the LLM dashboard counts
+-- a model call exactly as the LLM pages do. @ai_step_kql@ is every AI span but the agent wrappers,
+-- which frameworks also mark failed when a child fails.
+--
+-- >>> kqlConstants Map.! "llm_call_kql"
+-- "attributes.gen_ai.operation.name in (\"chat\", \"text_completion\", \"generate_content\", \"embeddings\")"
 kqlConstants :: Map.Map Text Text
-kqlConstants = Map.fromList [("browser_kql", browserKql), ("request_kql", requestKql)]
+kqlConstants =
+  Map.fromList
+    [ ("browser_kql", browserKql)
+    , ("request_kql", requestKql)
+    , ("llm_call_kql", genAIOp "in" GenAI.inferenceOps)
+    , ("agent_run_kql", genAIOp "in" GenAI.agentRunOps)
+    , ("ai_step_kql", "attributes.gen_ai.operation.name != null and " <> genAIOp "!in" GenAI.agentRunOps)
+    ]
+  where
+    genAIOp op vs = "attributes.gen_ai.operation.name " <> op <> " (" <> T.intercalate ", " (map show vs) <> ")"
 
 
 requestKql :: Text

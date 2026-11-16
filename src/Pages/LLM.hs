@@ -62,6 +62,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), llmCallsUrl, mkPageCtx, n
 import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), FieldCfg (..), FieldSize (..), RefreshingDeferred (..), callout_, formField_, localTimeFmt_, primaryButton_, tableSkeleton_, tonePill_, withDeferredBody)
 import Pages.Containers (mkWindow, windowed)
 import Pages.GenAIMessages (Call (..), genAIAt, genAIMessages, messageParts, message_, roleAvatar_)
+import Pages.Telemetry (traceOverlayUrl)
 import Pkg.Components.Table (Column, Features (..), Table (..), ZeroState (..), col, countedFilter, facetActions, inventoryTable, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
@@ -580,7 +581,7 @@ conversationGetH pid key fromP toP sinceP = do
       bw
         { pageTitle = "LLM & Agents"
         , pageTitleUrl = Just $ windowed window ((urls.traces pid).llmGetH Nothing Nothing Nothing Nothing Nothing) Nothing
-        , pageTitleSuffix = Just $ maybe key (T.take 60 . fromMaybe "Conversation" . (.title)) summary
+        , pageTitleSuffix = Just $ maybe key (\c -> let t = fromMaybe "Conversation" c.title in if T.length t > 60 then T.dropWhileEnd (/= ' ') (T.take 60 t) <> "…" else t) summary
         , menuItem = Just "LLM & Agents"
         , pageActions = Just $ TimePicker.liveDataControls_ Nothing window.currentRange Nothing TimePicker.RefreshOnly
         }
@@ -602,7 +603,7 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
         div_ [class_ "flex flex-wrap items-center gap-2"] do
           askAi_ c
           whenJust (find (not . T.null . (.traceId)) d.steps) \s ->
-            a_ [class_ "btn btn-sm", href_ $ (urls.traces d.pid).tracesGet s.traceId (Just s.timestamp) Nothing Nothing Nothing Nothing] $ faSprite_ "diagram-project" "regular" "h-3.5 w-3.5" >> "Open trace"
+            a_ [class_ "btn btn-sm", href_ $ traceOverlayUrl d.pid s.traceId s.timestamp] $ faSprite_ "diagram-project" "regular" "h-3.5 w-3.5" >> "Open trace"
           a_ ([class_ "btn btn-sm btn-ghost", href_ explorer] <> navTabAttrs) $ faSprite_ "explore" "regular" "h-3.5 w-3.5" >> "Spans in Explorer"
       div_ [class_ "flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-textWeak"]
         $ sequence_
@@ -618,7 +619,7 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
       stat_ "Model calls" (show c.llmCalls) (maybe "" (("avg " <>) . toText . getDurationNSMS . round) avgLatency) False
       stat_ "Tool calls" (show c.toolCalls) (bool "none failed" (show failedTools <> " failed") (failedTools > 0)) (failedTools > 0)
       stat_ "Errors" (show c.errors) ("of " <> show (length d.steps) <> " spans") (c.errors > 0)
-      stat_ "Duration" (toText $ getDurationNSMS $ round $ wall * 1e9) ("active " <> toText (getDurationNSMS $ fromIntegral c.activeNs)) False
+      stat_ "Duration" (toText $ getDurationNSMS $ round $ wall * 1e9) (if abs (fromIntegral c.activeNs - wall * 1e9) < 1e6 then show (length c.units) <> bool " traces" " trace" (length c.units == 1) else "active " <> toText (getDurationNSMS $ fromIntegral c.activeNs)) False
     unless (null c.signals) $ div_ [class_ "flex flex-col gap-1.5"] $ forM_ c.signals \f -> callout_ (flagTone f) Nothing $ strong_ (toHtml $ flagLabel f) >> " — " >> toHtml (flagHelp f)
     div_ [class_ "grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_19rem]"] do
       div_ [class_ "group/ctab flex min-w-0 flex-col gap-3"] do
@@ -707,8 +708,8 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
     timeline_ :: Html ()
     timeline_ = div_ [class_ "flex flex-col gap-2"] do
       div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-textWeak"] do
-        forM_ ([AgentStep, ModelStep, ToolStep] :: [StepKind]) \k -> span_ [class_ "inline-flex items-center gap-1.5"] $ swatch_ k False >> toHtml (kindLabel k)
-        span_ [class_ "inline-flex items-center gap-1.5"] $ swatch_ ModelStep True >> "Error"
+        forM_ ([AgentStep, ModelStep, ToolStep] :: [StepKind]) \k -> span_ [class_ "inline-flex items-center gap-1.5"] $ span_ [class_ "w-2.5"] (swatch_ k False) >> toHtml (kindLabel k)
+        span_ [class_ "inline-flex items-center gap-1.5"] $ span_ [class_ "w-2.5"] (swatch_ ModelStep True) >> "Error"
         span_ [class_ "ms-auto tabular-nums"] $ toHtml $ show @Text (length d.steps) <> " spans over " <> toText (getDurationNSMS $ round $ wall * 1e9)
       div_ [class_ "overflow-hidden rounded-xl border border-strokeWeak bg-bgRaised"] do
         div_ [class_ "grid grid-cols-[minmax(0,1fr)_6.5rem] items-end gap-3 border-b border-strokeWeak bg-fillWeaker px-3 py-1.5 text-xs font-medium text-textWeak md:grid-cols-[minmax(13rem,2fr)_minmax(10rem,3fr)_5.5rem_6.5rem]"] do
@@ -717,9 +718,9 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
             span_ [class_ $ "absolute bottom-0 whitespace-nowrap tabular-nums font-normal " <> bool "-translate-x-1/2" "-translate-x-full" (q == 1), style_ $ "left:" <> show (q * 100) <> "%"] $ toHtml $ if q == 0 then "0" else toText $ getDurationNSMS $ round $ q * wall * 1e9
           span_ [class_ "text-right max-md:hidden"] "Tokens"
           span_ [class_ "text-right"] "Cost · total"
-        forM_ (zip ordered running) \((depth, s), total) -> do
+        forM_ (zip3 ordered running subtrees) \((depth, s), total, (subCost, subTokens)) -> do
           let offset = pct $ realToFrac (diffUTCTime s.timestamp start)
-              width = max 0.6 $ pct (fromIntegral s.duration / 1e9)
+              width = pct (fromIntegral s.duration / 1e9)
               k = kindOf s.operation
           div_ ([class_ "grid cursor-pointer grid-cols-[minmax(0,1fr)_6.5rem] items-center gap-3 border-b border-strokeWeak px-3 py-1.5 transition-colors last:border-b-0 hover:bg-fillHover md:grid-cols-[minmax(13rem,2fr)_minmax(10rem,3fr)_5.5rem_6.5rem]"] <> maybe [] (\u -> drawerRowAttrs_ $ (urls.logExplorer d.pid).logExplorerItemDetailedGet u s.timestamp Nothing (Just "tab-genai") Nothing False) (UUID.fromText s.id)) do
             div_ [class_ "flex min-w-0 items-center gap-2", style_ $ "padding-inline-start:" <> show (depth * 16) <> "px"] do
@@ -733,15 +734,25 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
               when s.failed $ tonePill_ ErrorBadge "Error"
             div_ [class_ "relative h-6 max-md:hidden"] do
               forM_ ([25, 50, 75] :: [Int]) \q -> div_ [class_ "absolute inset-y-0 border-l border-dashed border-strokeWeak", style_ $ "left:" <> show q <> "%"] ""
-              div_ [class_ "absolute top-1/2 h-2.5 -translate-y-1/2 rounded-sm", style_ $ "left:" <> show offset <> "%;width:" <> show (min width (100 - offset)) <> "%"] $ swatch_ k s.failed
-              span_ ([class_ "absolute top-1/2 -translate-y-1/2 whitespace-nowrap text-2xs tabular-nums text-textWeak"] <> [style_ $ if offset + width < 78 then "left:calc(" <> show (offset + width) <> "% + 6px)" else "right:calc(" <> show (100 - offset) <> "% + 6px)"]) $ toHtml $ getDurationNSMS $ fromIntegral s.duration
-            span_ [class_ "text-right text-xs tabular-nums text-textWeak max-md:hidden"] $ toHtml $ fromMaybe "" $ tokenFlow s.inputTokens s.outputTokens
-            div_ [class_ "flex flex-col items-end text-xs tabular-nums"] do
-              span_ [class_ "text-textStrong"] $ toHtml $ maybe "" GenAI.formatUsd (stepCost s)
-              when (isJust $ stepCost s) $ span_ [class_ "text-2xs text-textWeak"] $ toHtml $ "Σ " <> GenAI.formatUsd total
+              div_ [class_ "absolute top-1/2 h-2.5 -translate-y-1/2 rounded-sm", style_ $ "left:" <> show offset <> "%;width:max(" <> show (min width (100 - offset)) <> "%, 6px)"] $ swatch_ k s.failed
+              span_ [class_ "absolute top-1/2 -translate-y-1/2 whitespace-nowrap text-2xs tabular-nums text-textWeak", style_ $ if offset + width < 78 then "left:calc(" <> show offset <> "% + max(" <> show width <> "%, 6px) + 6px)" else "right:calc(" <> show (100 - offset) <> "% + 6px)"] $ toHtml $ getDurationNSMS $ fromIntegral s.duration
+            -- An agent owns its calls' usage: its row carries the sub-tree's totals, muted.
+            span_ [class_ "text-right text-xs tabular-nums text-textWeak max-md:hidden"] $ toHtml $ case k of
+              AgentStep | subTokens > 0 -> "Σ " <> prettyPrintCount (round subTokens) <> " tok"
+              _ -> fromMaybe "" $ tokenFlow s.inputTokens s.outputTokens
+            div_ [class_ "flex flex-col items-end text-xs tabular-nums"] $ case (k, stepCost s) of
+              (_, Just c) -> span_ [class_ "text-textStrong"] (toHtml $ GenAI.formatUsd c) >> span_ [class_ "text-2xs text-textWeak"] (toHtml $ "Σ " <> GenAI.formatUsd total)
+              (AgentStep, Nothing) -> whenJust subCost \c -> span_ [class_ "text-textWeak"] $ toHtml $ "Σ " <> GenAI.formatUsd c
+              _ -> pass
       where
         pct x = 100 * x / wall :: Double
         running = drop 1 $ scanl (+) 0 $ map (fromMaybe 0 . stepCost . snd) ordered
+        -- Each row's descendants (the rows after it until the depth returns to its own): their priced cost and model tokens.
+        subtrees =
+          [ (viaNonEmpty sum (mapMaybe (stepCost . snd) kids), sum [fromMaybe 0 x.inputTokens + fromMaybe 0 x.outputTokens | (_, x) <- kids, GenAI.isInferenceOp x.operation])
+          | ((depth, _), rest) <- zip ordered (drop 1 $ tails ordered)
+          , let kids = takeWhile ((> depth) . fst) rest
+          ]
         kindOf :: Text -> StepKind
         kindOf op
           | op `elem` ("create_agent" : GenAI.agentRunOps) = AgentStep
@@ -758,7 +769,7 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
 
         -- The kind colour is categorical, like service colours; an error always reads red.
         swatch_ :: StepKind -> Bool -> Html ()
-        swatch_ k failed = span_ [class_ $ "block h-2.5 min-w-2.5 rounded-sm " <> if failed then "bg-fillError-strong" else case k of { AgentStep -> "bg-violet-400"; ModelStep -> "bg-blue-400"; ToolStep -> "bg-teal-400"; OtherStep -> "bg-fillNeutral-strong" }] ""
+        swatch_ k failed = span_ [class_ $ "block h-2.5 w-full min-w-1.5 rounded-sm " <> if failed then "bg-fillError-strong" else case k of { AgentStep -> "bg-violet-400"; ModelStep -> "bg-blue-400"; ToolStep -> "bg-teal-400"; OtherStep -> "bg-fillNeutral-strong" }] ""
 
         kindIcon_ :: StepKind -> Html ()
         kindIcon_ = \case

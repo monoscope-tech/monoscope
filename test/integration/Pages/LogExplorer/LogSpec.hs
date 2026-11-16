@@ -498,14 +498,14 @@ spec = do
       -- Legacy rows carry NULL hashes, which the Postgres read must still decode.
       dbExec tr [sql| UPDATE otel_logs_and_spans SET hashes = NULL WHERE id = ? |] (Only rootId)
       (anchored <$> item False rootId rootTs Nothing Nothing False) `shouldReturn` request
-      (call (withTf True) (TelemetryPage.traceH testPid trId (Just rootTs) Nothing Nothing Nothing Nothing (Just "true"))) >>= \case
+      (call (withTf True) (TelemetryPage.traceH testPid trId (Just rootTs) Nothing Nothing Nothing Nothing)) >>= \case
         TelemetryPage.TraceDetails{} -> pass
         _ -> expectationFailure "expected TimeFusion trace details"
       -- Waterfall keyboard-nav onto the SDK span anchors on the request too.
-      call tr (TelemetryPage.traceH testPid trId (Just rootTs) (Just sdkStoredSid) (Just "next") Nothing Nothing (Just "true")) >>= \case
+      call tr (TelemetryPage.traceH testPid trId (Just rootTs) (Just sdkStoredSid) (Just "next") Nothing Nothing) >>= \case
         TelemetryPage.SpanDetails _ target sdkM -> (target.name, (.name) <$> sdkM) `shouldBe` request
         _ -> expectationFailure "expected SpanDetails anchored on the request span"
-      waterfall <- renderT <$> call tr (TelemetryPage.traceH testPid trId (Just rootTs) Nothing Nothing Nothing Nothing (Just "true"))
+      waterfall <- renderT <$> call tr (TelemetryPage.traceH testPid trId (Just rootTs) Nothing Nothing Nothing Nothing)
       (T.isInfixOf "monoscope.http" waterfall, T.isInfixOf "timeline.addEventListener('tab-visible'" waterfall) `shouldBe` (False, True)
 
       initial <- renderT <$> item True rootId rootTs Nothing Nothing False
@@ -544,7 +544,7 @@ spec = do
       apiKey <- createTestAPIKey tr pid "aggregates-key"
       ingestTrace tr apiKey "GET /api/pattern-expand" frozenTime
       pv <- call tr $ Log.logPatternsH pid Nothing (stamp (-60)) Nothing (stamp 60) (Just "spans") Nothing Nothing
-      case pv of Log.PatternsView total _ _ _ -> total `shouldSatisfy` (>= 0)
+      case pv of { Log.PatternsView total _ _ _ -> total `shouldSatisfy` (>= 0) }
       (case AE.toJSON pv of AE.Object o -> filter (`AEKM.member` o) ["totalPatterns", "colIdxMap"]; _ -> []) `shouldBe` ["totalPatterns", "colIdxMap"]
       -- A live poll (cursor set) merges into a list that already has its summary header.
       sessions <- forM [Nothing, stamp (-60)] \cur -> call tr (Log.logSessionsH pid Nothing (stamp (-60)) Nothing (stamp 60) Nothing Nothing cur) <&> \(Log.SessionsView total _ summ) -> (total >= 0, isJust summ)
@@ -565,10 +565,9 @@ spec = do
         $ runQueryEffect tr
         $ Hasql.withHasqlTimefusion True
         $ Hasql.interpExecute_ [HI.sql| UPDATE otel_logs_and_spans SET hashes = #{patTags} WHERE project_id = #{pid.toText} AND name = #{spanName} |]
-      let expand key =
-            call tr (Log.apiLogExpandH pid (Just "pattern") (Just key) Nothing Nothing (stamp (-60)) Nothing (stamp 60)) <&> \case
-              AE.Object o | Just (AE.Number n) <- AEKM.lookup "queryResultCount" o -> round n
-              _ -> -1 :: Int
+      let expand key = call tr (Log.apiLogExpandH pid (Just "pattern") (Just key) Nothing Nothing (stamp (-60)) Nothing (stamp 60)) <&> \case
+            AE.Object o | Just (AE.Number n) <- AEKM.lookup "queryResultCount" o -> round n
+            _ -> -1 :: Int
       eventually (expand "abcd1234") (== 1) `shouldReturn` 1
       mapM expand ["00000000", spanName] `shouldReturn` [0, 0]
 
@@ -914,8 +913,7 @@ otelRow pid name attrs res =
 -- the log-level columns the top-level walk reads.
 richObs :: Projects.ProjectId -> Text -> Bool -> SchemaLearning.ObservationInput
 richObs p method logCols =
-  ProcessMessage.extractObservation
-    ProcessMessage.emptyPathClassifier
+  ProcessMessage.extractObservation ProcessMessage.emptyPathClassifier
     (otelRow p (method <> " /orders") (Map.fromList attrs) (Map.singleton "service.name" (AE.String "checkout-svc")) :: Telemetry.OtelLogsAndSpans)
       { Telemetry.kind = Just "server"
       , Telemetry.status_code = Just "200"
