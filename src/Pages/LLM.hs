@@ -100,7 +100,8 @@ abnormal c = maybe [] (\(AesonText (GenAI.FinishReasons rs)) -> mapMaybe GenAI.a
 -- root agent span only. A trace with no id is its own conversation if it ran an agent, and
 -- otherwise lists only as calls, so single classifier calls don't drown real conversations.
 --
--- >>> let t = read @UTCTime "2026-01-01 00:00:00 UTC"
+-- >>> import Relude.Unsafe qualified as Unsafe
+-- >>> let t = Unsafe.read @UTCTime "2026-01-01 00:00:00 UTC"
 -- >>> let c tr op conv = Call "s" tr t 1000 False op Nothing op conv Nothing (Just "gpt-4o") (Just 10) (Just 5) (Just 0.01) Nothing Nothing (Just "hi") Nothing Nothing Nothing
 -- >>> map (\x -> (x.key, x.turns, x.llmCalls)) $ groupConversations $ V.fromList [c "t1" "invoke_agent" (Just "conv"), c "t1" "chat" Nothing, c "t2" "chat" (Just "conv"), c "t3" "chat" Nothing, c "t4" "invoke_agent" Nothing]
 -- [("conv",2,2),("t4",1,0)]

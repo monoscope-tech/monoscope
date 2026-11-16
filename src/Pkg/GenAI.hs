@@ -170,7 +170,7 @@ isInferenceOp = (`elem` ["chat", "text_completion", "generate_content", "embeddi
 -- >>> mapMaybe (`lookup` ol) ["gen_ai.provider.name", "gen_ai.usage.input_tokens", "gen_ai.response.finish_reasons"]
 -- [String "openai",Number 10.0,Array [String "tool_calls"]]
 -- >>> lookup "gen_ai.output.messages" ol
--- Just (Array [Object (fromList [("parts",Array [Object (fromList [("arguments",String "{\"q\":1}"),("id",Null),("name",String "search"),("type",String "tool_call")])]),("role",String "assistant")])])
+-- Just (Array [Object (fromList [("finish_reason",String "tool_calls"),("parts",Array [Object (fromList [("arguments",String "{\"q\":1}"),("id",Null),("name",String "search"),("type",String "tool_call")])]),("role",String "assistant")])])
 -- >>> let canonical = normalizeGenAI [("gen_ai.operation.name", "chat"), ("gen_ai.input.messages", "[{\"role\":\"user\",\"content\":\"yo\"}]")]
 -- >>> lookup "gen_ai.input.preview" canonical
 -- Just (String "yo")
@@ -326,7 +326,7 @@ normalizeGenAI kvs
 --
 -- >>> canonicalMessages $ AE.Array [AE.object ["role" .= ("tool" :: Text), "tool_call_id" .= ("c1" :: Text), "content" .= ("42" :: Text)]]
 -- Array [Object (fromList [("parts",Array [Object (fromList [("id",String "c1"),("response",String "42"),("type",String "tool_call_response")])]),("role",String "tool")])]
--- >>> canonicalMessages $ AE.Array [AE.object ["role" .= ("assistant" :: Text), "content" .= [AE.object ["type" .= ("tool_use" :: Text), "id" .= ("t" :: Text), "name" .= ("ls" :: Text), "input" .= AE.object []]]]]
+-- >>> canonicalMessages $ AE.Array [AE.object ["role" .= ("assistant" :: Text), "content" .= ([AE.object ["type" .= ("tool_use" :: Text), "id" .= ("t" :: Text), "name" .= ("ls" :: Text), "input" .= AE.object []]] :: [AE.Value])]]
 -- Array [Object (fromList [("parts",Array [Object (fromList [("arguments",Object (fromList [])),("id",String "t"),("name",String "ls"),("type",String "tool_call")])]),("role",String "assistant")])]
 canonicalMessages :: AE.Value -> AE.Value
 canonicalMessages = \case
