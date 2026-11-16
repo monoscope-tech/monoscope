@@ -134,8 +134,9 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPa
 import Pages.Bots.Utils qualified as Bots
 import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), SavedView (..), SavedViewsMenu (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, localTimeFmt_, metadataChip_, options_, periodToggle_, resetFormOnRefusalAttr_, resizer_, savedViewsMenu_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
+import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Replay qualified as Replay
-import Pages.Telemetry (traceFragmentUrl, traceOverlayUrl)
+import Pages.Telemetry (traceFragmentUrl)
 import Pkg.AI qualified as AI
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableResponse (..), TableRows (..), ZeroState (..), col, multiSelectFilter, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
@@ -674,7 +675,7 @@ issueSampleCard_ pid snapshot result = case result of
       span_ "Latest event in range"
       time_ [datetime_ $ formatUTC at] $ toHtml $ fmtDate "%F %T UTC" at
       whenJust (mfilter (not . T.null) sampleTraceId) \tid ->
-        a_ [href_ $ traceOverlayUrl pid tid at, data_ "trace-url" (traceFragmentUrl pid tid (Just at) False Nothing Nothing), [__|on click if #trace_expanded_view exists halt the event's default then send loadTrace(url: @data-trace-url) to #trace_expanded_view end|], class_ "text-textBrand underline underline-offset-2"] "View trace"
+        a_ (class_ "text-textBrand underline underline-offset-2" : LogItem.traceLinkAttrs_ pid tid at) "View trace"
     div_ [class_ "flex flex-wrap items-center gap-1 p-4 max-h-80 overflow-y-auto"] $ V.mapM_ (summaryToken_ True) summary
   SampleLoading -> withSnapshot "Looking for an event in the selected range…"
   SampleEmpty -> withSnapshot "No occurrences in this range. Try another range; older raw events may no longer be retained."

@@ -62,7 +62,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), llmCallsUrl, mkPageCtx, n
 import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), FieldCfg (..), FieldSize (..), RefreshingDeferred (..), callout_, formField_, localTimeFmt_, primaryButton_, tableSkeleton_, tonePill_, withDeferredBody)
 import Pages.Containers (mkWindow, windowed)
 import Pages.GenAIMessages (Call (..), genAIAt, genAIMessages, messageParts, message_, roleAvatar_)
-import Pages.Telemetry (traceFragmentUrl, traceOverlayUrl)
+import Pages.LogExplorer.LogItem qualified as LogItem
 import Pkg.Components.Table (Column, Features (..), Table (..), ZeroState (..), col, countedFilter, facetActions, inventoryTable, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
@@ -73,7 +73,7 @@ import Pkg.Parser.Eval (jsonAsText)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, act, addRespHeaders, done, useTfReads)
-import Utils (TabStrip (..), drawerRowAttrs_, faSprite_, getDurationNSMS, navTabStrip_, prettyPrintCount, tokenFlow)
+import Utils (TabStrip (..), drawerRowAttrs_, faSprite_, getDurationNSMS, navTabStrip_, prettyPrintCount, tokenFlow, truncateText)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links
 
@@ -581,7 +581,7 @@ conversationGetH pid key fromP toP sinceP = do
       bw
         { pageTitle = "LLM & Agents"
         , pageTitleUrl = Just $ windowed window ((urls.traces pid).llmGetH Nothing Nothing Nothing Nothing Nothing) Nothing
-        , pageTitleSuffix = Just $ maybe key (\c -> let t = fromMaybe "Conversation" c.title in if T.length t > 60 then T.dropWhileEnd (/= ' ') (T.take 60 t) <> "…" else t) summary
+        , pageTitleSuffix = Just $ maybe key (truncateText 60 . fromMaybe "Conversation" . (.title)) summary
         , menuItem = Just "LLM & Agents"
         , pageActions = Just $ TimePicker.liveDataControls_ Nothing window.currentRange Nothing TimePicker.RefreshOnly
         }
@@ -603,7 +603,7 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
         div_ [class_ "flex flex-wrap items-center gap-2"] do
           askAi_ c
           whenJust (find (not . T.null . (.traceId)) d.steps) \s ->
-            a_ [class_ "btn btn-sm", href_ $ traceOverlayUrl d.pid s.traceId s.timestamp, data_ "trace-url" (traceFragmentUrl d.pid s.traceId (Just s.timestamp) False Nothing Nothing), [__|on click if #trace_expanded_view exists halt the event's default then send loadTrace(url: @data-trace-url) to #trace_expanded_view end|]] $ faSprite_ "diagram-project" "regular" "h-3.5 w-3.5" >> "Open trace"
+            a_ (class_ "btn btn-sm" : LogItem.traceLinkAttrs_ d.pid s.traceId s.timestamp) $ faSprite_ "diagram-project" "regular" "h-3.5 w-3.5" >> "Open trace"
           a_ ([class_ "btn btn-sm btn-ghost", href_ explorer] <> navTabAttrs) $ faSprite_ "explore" "regular" "h-3.5 w-3.5" >> "Spans in Explorer"
       div_ [class_ "flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-textWeak"]
         $ sequence_
