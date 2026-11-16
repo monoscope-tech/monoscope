@@ -14,6 +14,7 @@ import Pages.Bots.Utils qualified as Bot
 import Pages.Components (Deferred (..))
 import Pages.LLM qualified as LLM
 import Pages.LogExplorer.LogItem qualified as LogItem
+import Pages.Telemetry qualified as TelemetryPage
 import Pkg.AI qualified as AI
 import Pkg.Components.Table (Table (..))
 import Pkg.TestUtils
@@ -56,6 +57,9 @@ spec = around withTestResources do
       map (\c -> (c.key, c.llmCalls, c.toolCalls, c.title, c.signals)) (toList table.rows) `shouldBe` [("conv-1", 2, 1, Just "Why is checkout slow?", [LLM.Truncated])]
       calls <- call tr $ LLM.llmGetH pid (Just "calls") Nothing (Just "claude-sonnet-4-5") Nothing from to Nothing (Just "1")
       renderT calls `shouldContainAll` ["openllmetry chat", "$0.0027", "2K → 50"]
+      -- The trace view prices each step and totals the trace: $0.0035 + $0.000057 for gpt-4o-mini.
+      [(trId, ts)] <- dbQuery tr [sql| SELECT context___trace_id, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND name = 'openinference llm' |] (Only pid)
+      renderT <$> call tr (TelemetryPage.traceH pid trId (Just ts) Nothing Nothing Nothing Nothing) >>= (`shouldContainAll` ["1K → 100 tok · $0.0035", "LLM cost", "$0.0036"])
 
     it "keeps each trace-less Claude Code session its own conversation, and leaves look-alike app logs alone" \tr -> do
       pid <- createTestProject tr "Claude Code"

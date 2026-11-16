@@ -33,6 +33,7 @@ import Data.Char (isSpace)
 import Data.Default
 import Data.List qualified as L
 import Data.Map qualified as Map
+import Data.Scientific (toRealFloat)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale)
@@ -59,6 +60,7 @@ import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), explorerNavTabs_)
 import Pages.Components qualified as Components
+import Pages.GenAIMessages qualified as GenAIMessages
 import Pages.LogExplorer.LogItem (getRequestDetails, getServiceColor, getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pkg.Components.ServiceMap (serviceMapPanel_)
@@ -67,6 +69,7 @@ import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.GenAI qualified as GenAI
 import Relude hiding (ask)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -1288,6 +1291,8 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                 stBox "Spans" (show (length spanRecords) <> foldMap (const "+") moreUrl) Nothing
                 stBox "Errors" (show $ length $ V.filter (\s -> s.status == Just SSError) spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-iconError")
                 stBox "Duration" (toText $ getDurationNSMS traceItem.traceDurationNs) $ Just (faSprite_ "clock" "regular" "w-3 h-3 text-iconNeutral")
+                whenJust (viaNonEmpty sum [toRealFloat c | sp <- V.toList spanRecords, Just (AE.Number c) <- [GenAIMessages.genAIAt sp.attributes ["usage", "cost"]]]) \cost ->
+                  stBox "LLM cost" (GenAI.formatUsd cost) $ Just (faSprite_ "sparkles" "regular" "w-3 h-3 text-iconNeutral")
             whenJust moreUrl \url ->
               div_ [id_ "trace-load-more", class_ "flex items-center justify-between gap-2 rounded-lg border border-strokeWeak bg-fillWeaker px-3 py-1.5"] do
                 span_ [class_ "text-xs text-textWeak"] "This trace is larger than one page. Search and the waterfall only cover what's loaded."
@@ -1658,6 +1663,7 @@ buildSpanTree_ pid sp level scol = do
             do
               span_ [class_ "w-20 max-w-[30%] shrink-0 text-xs text-textWeak truncate"] $ toHtml sp.spanRecord.serviceName
               span_ [class_ "min-w-0 flex-1 text-xs text-textStrong truncate"] $ toHtml label
+              whenJust (GenAIMessages.genAIUsage sp.spanRecord.attributes) $ span_ [class_ "shrink-0 text-2xs tabular-nums text-textWeak max-md:hidden"] . toHtml
               template_ [data_ "trace-tooltip" ""] $ div_ [class_ "space-y-3"] do
                 div_ [class_ "flex flex-wrap items-center gap-2"] do
                   strong_ [class_ "min-w-0 flex-1 text-sm font-semibold break-normal [overflow-wrap:anywhere] text-textStrong"] $ toHtml sp.spanRecord.serviceName

@@ -6,6 +6,7 @@ module Pages.GenAIMessages (
   renderValue,
   message_,
   isGenAISpan,
+  genAIUsage,
   genAISpanDetail_,
 ) where
 
@@ -117,6 +118,14 @@ part_ tools p = case (field "type", p) of
 
 
 -- * Span drawer
+
+
+-- | A model call's tokens and cost in one line, for the waterfall and other dense rows.
+genAIUsage :: Maybe (Map Text AE.Value) -> Maybe Text
+genAIUsage attrs = nonEmptyText $ T.intercalate " · " $ catMaybes [(\i o -> prettyPrintCount (round i) <> " → " <> prettyPrintCount (round o) <> " tok") <$> number ["usage", "input_tokens"] <*> number ["usage", "output_tokens"], GenAI.formatUsd <$> number ["usage", "cost"]]
+  where
+    number ks = genAIAt attrs ks >>= \case AE.Number n -> Just (toRealFloat n :: Double); _ -> Nothing
+    nonEmptyText t = t <$ guard (not $ T.null t)
 
 
 isGenAISpan :: Maybe (Map Text AE.Value) -> Bool
