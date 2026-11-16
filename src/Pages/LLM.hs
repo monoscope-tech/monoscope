@@ -430,14 +430,28 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
               , rows = V.fromList signals
               , features =
                   base.features
-                    { header = Just $ form_ [class_ "mt-3 flex flex-col gap-2 rounded-lg border border-strokeWeak bg-bgRaised p-4", hxPost_ (urls.traces pid).llmSignalPost, hxSwap_ "none"] do
-                        h2_ [class_ "text-sm font-semibold text-textStrong"] "New signal"
-                        p_ [class_ "text-xs text-textWeak"] "Describe a behaviour in plain language. A model checks each of the day's conversations against it and flags the ones that match."
-                        formField_ FieldSm def{placeholder = "User frustration", extraAttrs = [maxlength_ "80"]} "Name" "name" True Nothing
-                        formField_ FieldSm def{inputType = "textarea", placeholder = "The user repeats a request, says the answer is wrong, or gives up.", extraAttrs = [maxlength_ "2000", rows_ "3"]} "What to look for" "description" True Nothing
-                        div_ [class_ "flex flex-wrap items-center gap-2"] do
-                          primaryButton_ [type_ "submit"] "Create and judge today's conversations"
-                          unless (null signals) $ button_ [type_ "button", class_ "btn btn-sm btn-ghost", hxPost_ (urls.traces pid).llmSignalRunPost, hxSwap_ "none"] "Judge new conversations now"
+                    { header = Just $ details_ ([class_ "group/new mt-3 rounded-xl border border-strokeWeak bg-bgRaised"] <> [open_ "" | null signals]) do
+                        summary_ [class_ "flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 [&::-webkit-details-marker]:hidden"] do
+                          span_ [class_ "inline-flex items-center gap-2 text-sm font-semibold text-textStrong"] $ faSprite_ "plus" "regular" "h-3.5 w-3.5 text-iconBrand" >> "New signal"
+                          span_ [class_ "min-w-0 flex-1 text-sm text-textWeak"] "Describe a behaviour in plain language. A model checks each day's conversations and flags the ones that match."
+                          unless (null signals) $ button_ [type_ "button", class_ "btn btn-sm btn-ghost", hxPost_ (urls.traces pid).llmSignalRunPost, hxSwap_ "none", [__|on click halt the event's default|]] $ faSprite_ "arrows-rotate" "regular" "h-3.5 w-3.5" >> "Judge new conversations now"
+                          faSprite_ "chevron-down" "regular" "h-3.5 w-3.5 text-iconNeutral transition-transform group-open/new:rotate-180"
+                        form_ [class_ "grid gap-6 border-t border-strokeWeak p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,20rem)]", hxPost_ (urls.traces pid).llmSignalPost, hxSwap_ "none"] do
+                          div_ [class_ "flex min-w-0 flex-col gap-3"] do
+                            div_ [class_ "max-w-md"] $ formField_ FieldSm def{placeholder = "User frustration", extraAttrs = [maxlength_ "80"], inputId = Just "signal-name"} "Name" "name" True Nothing
+                            formField_ FieldSm def{inputType = "textarea", placeholder = "The user repeats a request, says the answer is wrong, or gives up.", extraAttrs = [maxlength_ "2000", rows_ "3"], inputId = Just "signal-description"} "What to look for" "description" True Nothing
+                            primaryButton_ [type_ "submit", class_ "self-start"] "Create and judge today's conversations"
+                          div_ [class_ "flex flex-col gap-2"] do
+                            span_ [class_ "text-xs font-medium text-textWeak"] "Start from an example"
+                            forM_ signalExamples \(name, description) ->
+                              button_
+                                [ type_ "button"
+                                , class_ "flex flex-col gap-0.5 rounded-lg border border-strokeWeak px-3 py-2 text-start transition-[background-color,scale] hover:bg-fillHover active:scale-[0.96]"
+                                , term "_" $ "on click set #signal-name.value to " <> show name <> " then set #signal-description.value to " <> show description <> " then call #signal-description.focus()"
+                                ]
+                                do
+                                  span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml name
+                                  span_ [class_ "text-xs text-textWeak"] $ toHtml description
                     , zeroState = Just ZeroState{icon = "sparkles", title = "No signals yet", description = "Built-in signals (tool errors, truncation, loops, context pressure) already run on every conversation.", action = ESNone}
                     , rowLink = Just \s -> link ConversationsView Nothing Nothing (Just s.name) Nothing Nothing
                     , resultSummary = Just $ show (length signals) <> " signals"
@@ -713,6 +727,15 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
         children = M.fromListWith (flip (<>)) [(p, [s]) | s <- d.steps, Just p <- [s.parentId], p /= s.spanId, p `S.member` known]
         roots = [s | s <- d.steps, maybe True (\p -> p == s.spanId || not (p `S.member` known)) s.parentId]
         walk depth s = (depth, s) : if depth >= 24 then [] else concatMap (walk (depth + 1)) (M.findWithDefault [] s.spanId children)
+
+
+-- | Starting points for a first signal: each fills the form, so the shape of a good description is visible.
+signalExamples :: [(Text, Text)]
+signalExamples =
+  [ ("User frustration", "The user repeats a request, says the answer is wrong, or gives up.")
+  , ("Wrong tool", "The agent calls a tool that cannot answer the question, or ignores what a tool returned.")
+  , ("Unsupported claims", "The assistant states numbers, names or links that no tool result or user message supports.")
+  ]
 
 
 data StepKind = AgentStep | ModelStep | ToolStep | OtherStep

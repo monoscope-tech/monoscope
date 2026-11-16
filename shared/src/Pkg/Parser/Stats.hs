@@ -489,6 +489,7 @@ data Sources = SSpans | SMetrics
 --
 -- >>> all (\q -> isRight (parseQueryToAST q) && tf q == parseQueryToAST q) ["hashes[*] != \"x\"", "hashes[*] in (\"x\")", "hashes[*].k == \"x\"", "events[*] == \"x\"", "hashes[*] == 1"]
 -- True
+--
 -- @gen_ai == true@ takes the same fast path; the negation keeps the generic predicate:
 --
 -- >>> fmap (rewriteSectionsForSource True Nothing) (parseQueryToAST "gen_ai == true and name == \"chat\"")
