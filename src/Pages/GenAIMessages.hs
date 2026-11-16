@@ -3,6 +3,8 @@
 module Pages.GenAIMessages (
   Call (..),
   genAIAt,
+  genAIMessages,
+  messageParts,
   genAINum,
   message_,
   isGenAISpan,
@@ -63,6 +65,18 @@ genAIAt :: Maybe (Map Text AE.Value) -> [Text] -> Maybe AE.Value
 genAIAt attrs ks = attrs >>= Telemetry.getNestedValue ("gen_ai" : ks)
 
 
+-- | A call's @input@ or @output@ messages.
+genAIMessages :: Maybe (Map Text AE.Value) -> Text -> [AE.Value]
+genAIMessages attrs dir = case genAIAt attrs [dir, "messages"] of Just (AE.Array ms) -> toList ms; _ -> []
+
+
+-- | A message's role and parts; a bare value is one part.
+messageParts :: AE.Value -> (Text, [AE.Value])
+messageParts m = case m of
+  AE.Object o -> (case KM.lookup "role" o of Just (AE.String r) -> r; _ -> "message", case KM.lookup "parts" o of Just (AE.Array ps) -> toList ps; _ -> [m])
+  _ -> ("message", [m])
+
+
 genAINum :: Maybe (Map Text AE.Value) -> [Text] -> Maybe Double
 genAINum attrs ks = genAIAt attrs ks >>= \case AE.Number n -> Just (toRealFloat n); AE.String t -> readMaybe (toString t); _ -> Nothing
 
@@ -88,8 +102,7 @@ message_ pid tools stepM m = case role of
         whenJust (UUID.fromText c.id) \u -> button_ ([type_ "button", class_ "ms-auto text-textBrand hover:underline"] <> drawerRowAttrs_ ((urls.logExplorer pid).logExplorerItemDetailedGet u c.timestamp Nothing (Just "tab-genai") Nothing False)) "Open span"
     parts_
   where
-    role = case m of AE.Object o | Just (AE.String r) <- KM.lookup "role" o -> r; _ -> "message"
-    parts = case m of AE.Object o | Just (AE.Array ps) <- KM.lookup "parts" o -> toList ps; _ -> [m]
+    (role, parts) = messageParts m
     parts_ = div_ [class_ "flex flex-col gap-2"] $ forM_ parts (part_ tools)
 
 
@@ -136,7 +149,7 @@ genAISpanDetail_ :: Projects.ProjectId -> Maybe (Map Text AE.Value) -> Html ()
 genAISpanDetail_ pid attrs = div_ [class_ "flex flex-col gap-3 p-2"] do
   div_ [class_ "flex flex-wrap gap-1.5"] $ forM_ facts $ uncurry metaChip_
   whenJust (at ["system_instructions"]) \v -> message_ pid M.empty Nothing (AE.object ["role" AE..= ("system" :: Text), "parts" AE..= ([AE.object ["type" AE..= ("text" :: Text), "content" AE..= jsonAsText v]] :: [AE.Value])])
-  forM_ (list "input" <> list "output") (message_ pid M.empty Nothing)
+  forM_ (genAIMessages attrs "input" <> genAIMessages attrs "output") (message_ pid M.empty Nothing)
   when (op == Just "execute_tool") do
     whenJust (at ["tool", "call", "arguments"]) \v -> part_ M.empty (AE.object ["type" AE..= ("tool_call" :: Text), "name" AE..= txt ["tool", "name"], "arguments" AE..= v])
     whenJust (at ["tool", "call", "result"]) \v -> part_ M.empty (AE.object ["type" AE..= ("tool_call_response" :: Text), "response" AE..= v])
@@ -144,7 +157,6 @@ genAISpanDetail_ pid attrs = div_ [class_ "flex flex-col gap-3 p-2"] do
     at = genAIAt attrs
     txt ks = at ks >>= \case AE.String t -> Just t; _ -> Nothing
     op = txt ["operation", "name"]
-    list dir = case at [dir, "messages"] of Just (AE.Array ms) -> toList ms; _ -> []
     number = genAINum attrs
     facts =
       catMaybes

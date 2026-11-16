@@ -517,7 +517,7 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   , metricServicesGetH :: mode :- "metrics" :> "services" :> QPT "service_search" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Opaque "Metrics.MetricServices"))
   , llmGetH :: mode :- "llm" :> QPT "view" :> QPT "agent" :> QPT "model" :> QPT "signal" :> QPT "topic" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders (Opaque "LLM.LLMGet"))
   , llmSignalPost :: mode :- "llm" :> "signals" :> ReqBody '[FormUrlEncoded] (Opaque "LLM.SignalForm") :> Action 'POST (Opaque "LLM.SignalRejection") (Opaque "LLM.SignalQueued")
-  , llmSignalRunPost :: mode :- "llm" :> "signals" :> Capture "signal_id" (UUIDId "llm_signal") :> "run" :> Action 'POST (Opaque "LLM.SignalRejection") (Opaque "LLM.SignalQueued")
+  , llmSignalRunPost :: mode :- "llm" :> "signals" :> "run" :> Unrefusable 'POST (Opaque "LLM.SignalQueued")
   , llmConversationGetH :: mode :- "llm" :> "conversations" :> Capture "key" Text :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Opaque "LLM.ConversationGet"))
   , hostsGetH :: mode :- "infrastructure" :> "hosts" :> QPT "provider" :> QPT "region" :> QPT "os" :> QPT "integration" :> QPT "group" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders (Opaque "Infrastructure.HostsGet"))
   , hostDetailGetH :: mode :- "infrastructure" :> "hosts" :> "detail" :> QPT "host" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Opaque "Infrastructure.DetailGet"))

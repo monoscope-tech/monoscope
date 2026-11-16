@@ -14,18 +14,19 @@ module Pages.LLM (
   Topic (..),
   conversationsOf,
   topicsOf,
-  evaluateSignal,
+  evaluateSignals,
   llmSignalPostH,
   llmSignalRunPostH,
   parseVerdicts,
   LLMSignal (..),
   SignalForm (..),
   SignalQueued (..),
+  Flag (..),
   SignalRejection (..),
 ) where
 
 import BackgroundJobs.Types qualified as Jobs
-import Control.Lens ((^..), (^?))
+import Control.Lens ((^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
 import Data.Default (def)
@@ -35,6 +36,7 @@ import Data.Effectful.LLM qualified as ELLM
 import Data.Foldable1 qualified as F1
 import Data.HashSet qualified as HS
 import Data.Map.Strict qualified as M
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
@@ -59,16 +61,17 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), llmCallsUrl, mkPageCtx, navTabAttrs)
 import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), FieldCfg (..), FieldSize (..), RefreshingDeferred (..), callout_, formField_, localTimeFmt_, metaChip_, primaryButton_, tableSkeleton_, tonePill_, withDeferredBody)
 import Pages.Containers (mkWindow, windowed)
-import Pages.GenAIMessages (Call (..), genAIAt, message_)
+import Pages.GenAIMessages (Call (..), genAIAt, genAIMessages, messageParts, message_)
 import Pkg.Components.Table (Column, Features (..), Table (..), ZeroState (..), col, countedFilter, facetActions, inventoryTable, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (DB, UUIDId, unAesonTextMaybe)
 import Pkg.Drain qualified as Drain
 import Pkg.GenAI qualified as GenAI
+import Pkg.Parser.Eval (jsonAsText)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, ActionResult, Outcome (..), Refusal (..), RespHeaders, act, addRespHeaders, useTfReads)
+import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, act, addRespHeaders, done, useTfReads)
 import Utils (TabStrip (..), drawerRowAttrs_, faSprite_, getDurationNSMS, navTabStrip_, prettyPrintCount, tokenFlow)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links
@@ -86,6 +89,17 @@ signalLabel = \case
   Filtered -> "Filtered"
   Looping -> "Repeated tool call"
   ContextPressure -> "Context ≥80%"
+
+
+-- | What a conversation is flagged with: a built-in rule, or a plain-language signal's verdict (name, reason).
+data Flag = Detected Signal | Judged Text Text
+  deriving stock (Eq, Show)
+
+
+flagLabel :: Flag -> Text
+flagLabel = \case
+  Detected s -> signalLabel s
+  Judged name _ -> name
 
 
 signalHelp :: Signal -> Text
@@ -114,7 +128,8 @@ data Conversation = Conversation
   , cost :: Maybe Double
   , errors :: Int64
   , activeNs :: Int64
-  , signals :: [Signal]
+  , signals :: [Flag]
+  , units :: [Text]
   }
   deriving stock (Generic, Show)
 
@@ -185,7 +200,8 @@ conversationsOf units = sortOn (Down . (.lastSeen)) $ mapMaybe conversation $ M.
           , errors = total (.errors)
           , activeNs = total \u -> u.endUs * 1000 - round (utcTimeToPOSIXSeconds u.started * 1e9)
           , -- Deterministic rules, in 'Signal' order, so each finding is explainable and free.
-            signals = [sig | (sig, True) <- zip universe [total (.toolErrors) > 0, total (.modelErrors) > 0, total (.truncated) > 0, total (.filtered) > 0, any ((>= 2) . (.repeats)) us, any pressured us]]
+            signals = [Detected sig | (sig, True) <- zip universe [total (.toolErrors) > 0, total (.modelErrors) > 0, total (.truncated) > 0, total (.filtered) > 0, any ((>= 2) . (.repeats)) us, any pressured us]]
+          , units = map (.unit) us
           }
     pressured u = fromMaybe False do
       window <- u.model >>= GenAI.lookupPrice >>= (.contextWindow)
@@ -245,8 +261,8 @@ unitCap = 10000
 
 
 -- | A conversation's spans with their attributes, oldest first, for the transcript and timeline.
-selectCalls :: (DB es, Labeled "timefusion" Hasql :> es, Reader AuthContext :> es) => Projects.ProjectId -> TimePicker.TimeWindow -> HI.Sql -> Eff es [Call]
-selectCalls pid window scope = do
+selectCalls :: (DB es, Labeled "timefusion" Hasql :> es, Reader AuthContext :> es) => Projects.ProjectId -> TimePicker.TimeWindow -> Int64 -> HI.Sql -> Eff es [Call]
+selectCalls pid window limit scope = do
   tf <- useTfReads
   Hasql.withHasqlTimefusion tf
     $ Hasql.interp
@@ -268,7 +284,7 @@ selectCalls pid window scope = do
       WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{window.fromTime} AND #{window.toTime}
         AND #{Telemetry.genAIMarker} = ANY(summary) |]
     <> scope
-    <> [HI.sql| ORDER BY timestamp ASC LIMIT 2000|]
+    <> [HI.sql| ORDER BY timestamp ASC LIMIT #{limit}|]
 
 
 -- | One conversation's spans: those naming its id, the trace it is keyed by, and traces that name it.
@@ -280,8 +296,20 @@ conversationScope pid window key =
       AND #{Telemetry.genAIMarker} = ANY(summary) AND attributes -> 'gen_ai' -> 'conversation' ->> 'id' = #{key})) |]
 
 
+-- | The spans of these units (trace ids, or a trace-less record's own id): what 'Unit' groups by.
+unitsScope :: [Text] -> HI.Sql
+unitsScope units = [HI.sql| AND (CASE WHEN COALESCE(context___trace_id, '') = '' THEN id::text ELSE context___trace_id END) = ANY(#{V.fromList units}) |]
+
+
+-- | Appends each conversation's judged plain-language signals to its built-in flags.
+withJudged :: DB es => Projects.ProjectId -> [Conversation] -> Eff es [Conversation]
+withJudged pid convs = do
+  matches <- M.fromListWith (flip (<>)) . map (\(k, name, reason) -> (k, [Judged name reason])) <$> selectMatches pid (V.fromList $ map (.key) convs)
+  pure [c{signals = c.signals <> M.findWithDefault [] c.key matches} | c <- convs]
+
+
 -- | Conversations span hours, so these pages open on a day rather than the app-wide five minutes.
-llmWindow :: Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx TimePicker.TimeWindow
+llmWindow :: Time.Time :> es => Maybe Text -> Maybe Text -> Maybe Text -> Eff es TimePicker.TimeWindow
 llmWindow fromP toP sinceP = mkWindow fromP toP (sinceP <|> ("24H" <$ guard (all isNothing [fromP, toP])))
 
 
@@ -309,11 +337,15 @@ data View = ConversationsView | TopicsView | SignalsView
   deriving stock (Bounded, Enum, Eq)
 
 
+viewLabel :: View -> Text
+viewLabel = \case
+  ConversationsView -> "Conversations"
+  TopicsView -> "Topics"
+  SignalsView -> "Signals"
+
+
 viewParam :: View -> Text
-viewParam = \case
-  ConversationsView -> "conversations"
-  TopicsView -> "topics"
-  SignalsView -> "signals"
+viewParam = T.toLower . viewLabel
 
 
 data LLMBody = ConversationsBody (Table Conversation) | TopicsBody (Table Topic) | SignalsBody (Table LLMSignal)
@@ -350,25 +382,24 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
       url = link view agentM modelM signalM topicM (Just "1")
       want m xs = maybe True (`elem` xs) m
   body <- withDeferredBody deferredM "llmContainer" url (tableSkeleton_ 8) do
-    let conversationsIn = selectUnits pid window [HI.sql||] <&> \units -> (conversationsOf units, bool "" (" (newest " <> show unitCap <> " traces)") (length units >= fromIntegral unitCap))
+    let conversationsIn = selectUnits pid window [HI.sql||] >>= \units -> (,bool "" (" (newest " <> show unitCap <> " traces)") (length units >= fromIntegral unitCap)) <$> withJudged pid (conversationsOf units)
         reset = link view Nothing Nothing Nothing Nothing Nothing
         zero = ZeroState{icon = "sparkles", title = "No LLM or agent telemetry yet", description = "Send OpenTelemetry GenAI spans from any SDK or framework — OpenLLMetry, OpenInference, Vercel AI SDK, Pydantic AI, LangChain, the OpenAI Agents SDK, Claude Code — and conversations, cost and tool calls appear here.", action = ESLink "https://monoscopehq.com/docs/sdks/llm-observability/" "Instrument your agent"}
         table, base :: Table a
         table = inventoryTable "llm" url
-        base = table{features = table.features{header = Just overview, zeroState = Just zero, searchPlaceholder = Just $ case view of ConversationsView -> "Search conversations"; TopicsView -> "Search topics"; SignalsView -> "Search signals"}}
+        base = table{features = table.features{header = Just overview, zeroState = Just zero, searchPlaceholder = Just $ "Search " <> viewParam view}}
     case view of
       ConversationsView -> do
         (conversations, capped) <- conversationsIn
-        custom <- M.fromListWith (<>) . map (\(k, name, reason) -> (k, [(name, reason)])) <$> selectMatches pid (V.fromList $ map (.key) conversations)
         let topics = topicsOf now conversations
-            labels c = map signalLabel c.signals <> map fst (M.findWithDefault [] c.key custom)
+            labels = map flagLabel . (.signals)
             inTopic c = maybe True (\t -> any (\tp -> tp.template == t && any ((== c.key) . (.key)) tp.conversations) topics) topicM
             all' = V.fromList conversations
             shown = V.filter (\c -> want agentM c.agents && want modelM c.models && want signalM (labels c) && inTopic c) all'
         pure
           $ ConversationsBody
             base
-              { columns = conversationColumns custom
+              { columns = conversationColumns
               , rows = shown
               , features =
                   base.features
@@ -394,7 +425,6 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
                   [ col "Signal" (\s -> div_ [class_ "flex min-w-0 flex-col"] $ span_ [class_ "font-medium text-textStrong"] (toHtml s.name) >> span_ [class_ "truncate text-xs text-textWeak"] (toHtml s.description)) & withAttrs [class_ "min-w-72"]
                   , col "Matched" (num . fromIntegral . (.matched)) & withAttrs [class_ "w-20 text-right"]
                   , col "Judged" (num . fromIntegral . (.judged)) & withAttrs [class_ "w-20 text-right"]
-                  , col "" (\s -> button_ [type_ "button", class_ "btn btn-xs", hxPost_ $ (urls.traces pid).llmSignalRunPost s.id, hxSwap_ "none"] "Judge new conversations") & withAttrs [class_ "w-44 text-right"]
                   ]
               , rows = V.fromList signals
               , features =
@@ -404,7 +434,9 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
                         p_ [class_ "text-xs text-textWeak"] "Describe a behaviour in plain language. A model checks each of the day's conversations against it and flags the ones that match."
                         formField_ FieldSm def{placeholder = "User frustration", extraAttrs = [maxlength_ "80"]} "Name" "name" True Nothing
                         formField_ FieldSm def{inputType = "textarea", placeholder = "The user repeats a request, says the answer is wrong, or gives up.", extraAttrs = [maxlength_ "2000", rows_ "3"]} "What to look for" "description" True Nothing
-                        primaryButton_ [type_ "submit", class_ "self-start"] "Create and judge today's conversations"
+                        div_ [class_ "flex flex-wrap items-center gap-2"] do
+                          primaryButton_ [type_ "submit"] "Create and judge today's conversations"
+                          unless (null signals) $ button_ [type_ "button", class_ "btn btn-sm btn-ghost", hxPost_ (urls.traces pid).llmSignalRunPost, hxSwap_ "none"] "Judge new conversations now"
                     , zeroState = Just ZeroState{icon = "sparkles", title = "No signals yet", description = "Built-in signals (tool errors, truncation, loops, context pressure) already run on every conversation.", action = ESNone}
                     , rowLink = Just \s -> link ConversationsView Nothing Nothing (Just s.name) Nothing Nothing
                     , resultSummary = Just $ show (length signals) <> " signals"
@@ -434,17 +466,12 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
         }
       body
   where
-    viewLabel = \case
-      ConversationsView -> "Conversations" :: Text
-      TopicsView -> "Topics"
-      SignalsView -> "Signals"
-
     overview :: Html ()
     overview = div_ [class_ "grid grid-cols-4 gap-3 px-4 pt-3 max-lg:grid-cols-2"] $ forM_ (overviewWidgets pid) \w ->
       div_ [class_ $ if w.wType `elem` [Widget.WTStat, Widget.WTTimeseriesStat] then "h-28" else "col-span-2 min-h-56"] $ Widget.widget_ w
 
-    conversationColumns :: M.Map Text [(Text, Text)] -> [Column Conversation]
-    conversationColumns custom =
+    conversationColumns :: [Column Conversation]
+    conversationColumns =
       [ col "Conversation" titleCell & withAttrs [class_ "min-w-72"]
       , col "Agent" (chips . (.agents)) & withAttrs [class_ "w-36 max-lg:hidden"]
       , col "Models" (chips . (.models)) & withAttrs [class_ "w-40 max-xl:hidden"]
@@ -462,8 +489,7 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
           span_ [class_ "truncate text-xs text-textWeak"] $ toHtml $ T.intercalate " · " $ catMaybes [Just $ T.take 12 c.key, viaNonEmpty head c.users, viaNonEmpty head c.services, Just $ toText (getDurationNSMS $ fromIntegral c.activeNs)]
         signalsCell c = div_ [class_ "flex flex-wrap gap-1"] do
           when (c.errors > 0 && null c.signals) $ tonePill_ ErrorBadge $ show c.errors <> " errors"
-          forM_ c.signals \s -> span_ [term "data-tippy-content" $ signalHelp s] $ tonePill_ (signalTone s) $ signalLabel s
-          forM_ (M.findWithDefault [] c.key custom) \(name, reason) -> span_ [term "data-tippy-content" reason] $ tonePill_ BrandBadge name
+          forM_ c.signals \f -> span_ [term "data-tippy-content" $ flagHelp f] $ tonePill_ (flagTone f) $ flagLabel f
 
     topicColumns :: [Column Topic]
     topicColumns =
@@ -475,10 +501,17 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
       ]
 
 
-signalTone :: Signal -> BadgeColor
-signalTone = \case
-  (ToolError; ModelError) -> ErrorBadge
-  (Truncated; Filtered; Looping; ContextPressure) -> WarningBadge
+flagTone :: Flag -> BadgeColor
+flagTone = \case
+  Detected (ToolError; ModelError) -> ErrorBadge
+  Detected (Truncated; Filtered; Looping; ContextPressure) -> WarningBadge
+  Judged{} -> BrandBadge
+
+
+flagHelp :: Flag -> Text
+flagHelp = \case
+  Detected s -> signalHelp s
+  Judged _ reason -> reason
 
 
 chips :: [Text] -> Html ()
@@ -503,9 +536,8 @@ conversationGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Ma
 conversationGetH pid key fromP toP sinceP = do
   (_, _, bw) <- mkPageCtx pid
   window <- llmWindow fromP toP sinceP
-  let scope = conversationScope pid window key
-  summary <- viaNonEmpty head . conversationsOf <$> selectUnits pid window scope
-  steps <- selectCalls pid window scope
+  summary <- viaNonEmpty head <$> (withJudged pid . conversationsOf =<< selectUnits pid window (conversationScope pid window key))
+  steps <- maybe (pure []) (\c -> selectCalls pid window 2000 (unitsScope c.units)) summary
   addRespHeaders
     $ ConversationPage
     $ PageCtx
@@ -542,7 +574,7 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-6xl flex-col gap
         metaChip_ "Tokens" $ prettyPrintCount $ round c.tokens
         metaChip_ "Cost" $ maybe "unpriced" GenAI.formatUsd c.cost
         metaChip_ "Active time" $ toText $ getDurationNSMS $ fromIntegral c.activeNs
-    unless (null c.signals) $ div_ [class_ "flex flex-col gap-1.5"] $ forM_ c.signals \s -> callout_ (signalTone s) Nothing $ strong_ (toHtml $ signalLabel s) >> " — " >> toHtml (signalHelp s)
+    unless (null c.signals) $ div_ [class_ "flex flex-col gap-1.5"] $ forM_ c.signals \f -> callout_ (flagTone f) Nothing $ strong_ (toHtml $ flagLabel f) >> " — " >> toHtml (flagHelp f)
     div_ [class_ "group/ctab flex flex-col gap-3"] do
       div_ [role_ "radiogroup", Aria.label_ "Conversation views", class_ "tabs tabs-box w-max"] do
         label_ [class_ "tab has-[:checked]:tab-active"] $ input_ [type_ "radio", name_ "ctab", class_ "sr-only ctab-transcript", checked_] >> "Transcript"
@@ -579,7 +611,7 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-6xl flex-col gap
         calls = filter (GenAI.isInferenceOp . (.operation)) d.steps
         source = if any (isJust . messages "input") calls then calls else filter ((== "invoke_agent") . (.operation)) d.steps
         at c = genAIAt (unAesonTextMaybe c.attributes)
-        messages dir c = at c [dir, "messages"] >>= \case AE.Array ms -> Just (toList ms); _ -> Nothing
+        messages dir c = (\ms -> ms <$ guard (not $ null ms)) $ genAIMessages (unAesonTextMaybe c.attributes) dir
         tools = M.fromList [(i, c) | c <- d.steps, Just (AE.String i) <- [at c ["tool", "call", "id"]]]
         rendered = go HS.empty source
         go _ [] = []
@@ -656,60 +688,68 @@ data JudgeError = JudgeCallFailed Text | JudgeUnparseable Text
   deriving stock (Show)
 
 
--- | The judge's answer, fenced or not.
+-- | The judge's answer, fenced or not. A key answered twice is dropped ('Drain.answeredOnce').
 --
 -- >>> parseVerdicts "```json\n[{\"key\":\"c1\",\"match\":true,\"reason\":\"asked twice\"}]\n```"
 -- Right [Verdict {key = "c1", match = True, reason = "asked twice"}]
+-- >>> map (.key) <$> parseVerdicts "[{\"key\":\"a\",\"match\":true,\"reason\":\"\"},{\"key\":\"b\",\"match\":true,\"reason\":\"\"},{\"key\":\"a\",\"match\":false,\"reason\":\"\"}]"
+-- Right ["b"]
 -- >>> isLeft $ parseVerdicts "I think yes"
 -- True
 parseVerdicts :: Text -> Either Text [Verdict]
-parseVerdicts = first toText . AE.eitherDecodeStrict . encodeUtf8 . ELLM.stripCodeBlock
+parseVerdicts = bimap toText (Drain.answeredOnce (.key)) . AE.eitherDecodeStrict . encodeUtf8 . ELLM.stripCodeBlock
 
 
--- | Judges the day's not-yet-judged conversations (at most 20 per run) against one signal, in one call.
-evaluateSignal :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Reader AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> UUIDId "llm_signal" -> Eff es ()
-evaluateSignal pid sid = do
+-- | Judges the day's conversations each signal has not judged yet (at most 20 per signal per run):
+-- one window scan and one span fetch for the project, then one model call per signal.
+evaluateSignals :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Reader AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> Eff es ()
+evaluateSignals pid = do
   signals <- selectSignals pid
-  whenJust (find ((== sid) . (.id)) signals) \signal -> do
+  unless (null signals) do
     ctx <- ask @AuthContext
-    window <- (\now -> TimePicker.mkTimeWindow now Nothing Nothing (Just "24H")) <$> Time.currentTime
-    judged <- HS.fromList <$> Hasql.interp @[Text] [HI.sql| SELECT conversation_key FROM apis.llm_signal_matches WHERE signal_id = #{sid} |]
-    pending <- take 20 . filter (not . (`HS.member` judged) . (.key)) . conversationsOf <$> selectUnits pid window [HI.sql||]
-    unless (null pending) do
-      texts <- forM pending \c -> (c.key,) . conversationText c.title <$> selectCalls pid window (conversationScope pid window c.key)
+    window <- llmWindow Nothing Nothing Nothing
+    convs <- conversationsOf <$> selectUnits pid window [HI.sql||]
+    judged <-
+      fromList
+        <$> Hasql.interp @[(UUIDId "llm_signal", Text)]
+          [HI.sql| SELECT signal_id, conversation_key FROM apis.llm_signal_matches
+            WHERE signal_id = ANY(#{V.fromList $ map (.id) signals}) AND conversation_key = ANY(#{V.fromList $ map (.key) convs}) |]
+    let pending :: LLMSignal -> [Conversation]
+        pending sig = take 20 [c | c <- convs, not $ (sig.id, c.key) `Set.member` judged]
+        wanted = ordNubOn (.key) $ concatMap pending signals
+    calls <- if null wanted then pure [] else selectCalls pid window 5000 (unitsScope $ concatMap (.units) wanted)
+    let byUnit = M.fromListWith (flip (<>)) [(bool c.traceId c.id (T.null c.traceId), [c]) | c <- calls]
+        texts = M.fromList [(c.key, conversationText c.title $ sortOn (.timestamp) $ concatMap (\u -> M.findWithDefault [] u byUnit) c.units) | c <- wanted]
+    forM_ signals \sig -> whenNotNull (pending sig) \(toList -> todo) -> do
       let prompt =
             unlines
               $ [ "You judge AI agent conversations for an observability product."
-                , "Signal \"" <> signal.name <> "\": " <> signal.description
+                , "Signal \"" <> sig.name <> "\": " <> sig.description
                 , "For each conversation below, decide whether the signal applies. Answer with JSON only: an array of {\"key\": string, \"match\": boolean, \"reason\": one short sentence}."
                 ]
-              <> ["<conversation key=\"" <> k <> "\">\n" <> t <> "\n</conversation>" | (k, t) <- texts]
+              <> ["<conversation key=\"" <> c.key <> "\">\n" <> M.findWithDefault "" c.key texts <> "\n</conversation>" | c <- todo]
       reply <- ELLM.callLLM ctx.env.openaiSmallModel prompt ctx.env.openaiApiKey
       case first JudgeCallFailed reply >>= first JudgeUnparseable . parseVerdicts of
-        Left err -> Log.logAttention "LLM signal evaluation failed" (AE.object ["signal" AE..= sid, "error" AE..= show @Text err])
+        Left err -> Log.logAttention "LLM signal evaluation failed" (AE.object ["signal" AE..= sig.id, "error" AE..= show @Text err])
         Right verdicts -> do
-          let keys = HS.fromList $ map (.key) pending
-              vs = M.elems $ M.fromList [(v.key, v) | v <- verdicts, v.key `HS.member` keys]
+          let vs = filter ((`elem` map (.key) todo) . (.key)) verdicts
           Hasql.interpExecute_
             [HI.sql| INSERT INTO apis.llm_signal_matches (signal_id, conversation_key, matched, reason)
-              SELECT #{sid}, k, m, r FROM unnest(#{V.fromList $ map (.key) vs}::text[], #{V.fromList $ map (.match) vs}::bool[], #{V.fromList $ map (.reason) vs}::text[]) AS v(k, m, r)
+              SELECT #{sig.id}, k, m, r FROM unnest(#{V.fromList $ map (.key) vs}::text[], #{V.fromList $ map (.match) vs}::bool[], #{V.fromList $ map (.reason) vs}::text[]) AS v(k, m, r)
               ON CONFLICT (signal_id, conversation_key) DO UPDATE SET matched = EXCLUDED.matched, reason = EXCLUDED.reason, evaluated_at = now() |]
   where
     -- What the judge reads: the opening request, the latest call's messages, and failed tools.
     conversationText :: Maybe Text -> [Call] -> Text
     conversationText title calls = T.take 6000 $ unlines $ maybe [] (\t -> ["Opening request: " <> t]) title <> map line history <> ["Failed tool: " <> fromMaybe c.name c.tool | c <- calls, c.failed, c.operation == "execute_tool"]
       where
-        msgs c dir = toList <$> (genAIAt (unAesonTextMaybe c.attributes) [dir, "messages"] >>= (^? AL._Array))
-        history = maybe [] (\c -> fold (msgs c "input") <> fold (msgs c "output")) $ viaNonEmpty last [c | c <- calls, isJust (msgs c "input")]
-        line m = fromMaybe "message" (m ^? AL.key "role" . AL._String) <> ": " <> unwords (mapMaybe part (m ^.. AL.key "parts" . AL.values))
+        msgs c = genAIMessages (unAesonTextMaybe c.attributes)
+        history = maybe [] (\c -> msgs c "input" <> msgs c "output") $ viaNonEmpty last [c | c <- calls, not $ null $ msgs c "input"]
+        line (messageParts -> (role, parts)) = role <> ": " <> unwords (map part parts)
         part p = case p ^? AL.key "type" . AL._String of
-          Just "text" -> p ^? AL.key "content" . AL._String
-          Just "tool_call" -> (\n -> "[calls " <> n <> "]") <$> p ^? AL.key "name" . AL._String
-          Just "tool_call_response" -> Just $ "[result " <> T.take 200 (maybe "" renderJson (p ^? AL.key "response")) <> "]"
-          _ -> Nothing
-        renderJson = \case
-          AE.String t -> t
-          v -> decodeUtf8 (AE.encode v)
+          Just "tool_call" -> "[calls " <> fromMaybe "tool" (p ^? AL.key "name" . AL._String) <> "]"
+          Just "tool_call_response" -> "[result " <> T.take 200 (maybe "" jsonAsText (p ^? AL.key "response")) <> "]"
+          Just _ -> maybe "" jsonAsText (p ^? AL.key "content")
+          Nothing -> jsonAsText p
 
 
 data SignalForm = SignalForm {name :: Text, description :: Text}
@@ -717,7 +757,7 @@ data SignalForm = SignalForm {name :: Text, description :: Text}
   deriving anyclass (FromForm)
 
 
-data SignalRejection = SignalIncomplete | SignalNameTaken Text | SignalGone
+data SignalRejection = SignalIncomplete | SignalNameTaken Text
   deriving stock (Eq, Show)
 
 
@@ -725,35 +765,34 @@ instance Refusal SignalRejection where
   refusalMessage = \case
     SignalIncomplete -> "A signal needs a name (up to 80 characters) and a description (up to 2,000)"
     SignalNameTaken name -> "A signal named “" <> name <> "” already exists"
-    SignalGone -> "That signal no longer exists"
 
 
 -- | Queued for judging: a new signal reloads the Signals view to list it; a re-run only says so.
-data SignalQueued = SignalCreated Projects.ProjectId (UUIDId "llm_signal") | SignalRequeued (UUIDId "llm_signal")
+data SignalQueued = SignalCreated Projects.ProjectId (UUIDId "llm_signal") | SignalsRequeued
   deriving stock (Eq, Show)
 
 
 instance Outcome SignalQueued where
   outcomeRedirect = \case
-    SignalCreated pid _ -> Just $ (urls.traces pid).llmGetH (Just "signals") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-    SignalRequeued _ -> Nothing
-  outcomeToast _ = Just "Judging today's conversations against the signal. Matches appear in a minute."
+    SignalCreated pid _ -> Just $ (urls.traces pid).llmGetH (Just $ viewParam SignalsView) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+    SignalsRequeued -> Nothing
+  outcomeToast _ = Just "Judging today's conversations against your signals. Matches appear in a minute."
 
 
 llmSignalPostH :: Projects.ProjectId -> SignalForm -> ATAuthCtx (ActionResult SignalRejection SignalQueued)
 llmSignalPostH pid form = act do
   _ <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   taken <- (map signalLabel universe <>) . map (.name) <$> selectSignals pid
-  case (T.strip form.name, T.strip form.description) of
-    (name, description)
-      | T.null name || T.null description || T.length name > 80 || T.length description > 2000 -> pure $ Left SignalIncomplete
-      | any ((== T.toLower name) . T.toLower) taken -> pure $ Left $ SignalNameTaken name
-      | otherwise -> do
-          sid <- Hasql.interpScalar [HI.sql| INSERT INTO apis.llm_signals (project_id, name, description) VALUES (#{pid}, #{name}, #{description}) RETURNING id |]
-          Right (SignalCreated pid sid) <$ Jobs.insertJob (Jobs.EvaluateLLMSignal pid sid)
+  let (name, description) = (T.strip form.name, T.strip form.description)
+  if
+    | T.null name || T.null description || T.length name > 80 || T.length description > 2000 -> pure $ Left SignalIncomplete
+    | any ((== T.toLower name) . T.toLower) taken -> pure $ Left $ SignalNameTaken name
+    | otherwise -> do
+        sid <- Hasql.interpScalar [HI.sql| INSERT INTO apis.llm_signals (project_id, name, description) VALUES (#{pid}, #{name}, #{description}) RETURNING id |]
+        Right (SignalCreated pid sid) <$ Jobs.insertJob (Jobs.EvaluateLLMSignals pid)
 
 
-llmSignalRunPostH :: Projects.ProjectId -> UUIDId "llm_signal" -> ATAuthCtx (ActionResult SignalRejection SignalQueued)
-llmSignalRunPostH pid sid = act do
+llmSignalRunPostH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Done SignalQueued))
+llmSignalRunPostH pid = do
   _ <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
-  ifM (any ((== sid) . (.id)) <$> selectSignals pid) (Right (SignalRequeued sid) <$ Jobs.insertJob (Jobs.EvaluateLLMSignal pid sid)) (pure $ Left SignalGone)
+  Jobs.insertJob (Jobs.EvaluateLLMSignals pid) >> done SignalsRequeued

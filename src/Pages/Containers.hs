@@ -17,6 +17,7 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, diffUTCTime)
 import Data.Vector qualified as V
+import Effectful (Eff, (:>))
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Lucid
@@ -94,7 +95,7 @@ matchesFilter :: Maybe Text -> Maybe Text -> Bool
 matchesFilter selected = matchesAny selected . maybeToList
 
 
-mkWindow :: Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx TimePicker.TimeWindow
+mkWindow :: Time.Time :> es => Maybe Text -> Maybe Text -> Maybe Text -> Eff es TimePicker.TimeWindow
 mkWindow fromParam toParam sinceParam = (\now -> TimePicker.mkTimeWindow now fromParam toParam sinceParam) <$> Time.currentTime
 
 

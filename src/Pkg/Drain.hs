@@ -26,6 +26,7 @@ module Pkg.Drain (
   buildErrorMergeChallengePrompt,
   GroupVerdict (..),
   parseGroupReview,
+  answeredOnce,
   buildMergeChallengePrompt,
   buildErrorJudgePrompt,
   parseJudgeResponse,
@@ -726,15 +727,21 @@ data GroupVerdict = Param | Routes | Mixed
 -- >>> parseGroupReview "{\"key\":\"a\",\"verdict\":\"param\"}\n{\"key\":\"b\",\"verdict\":\"routes\"}\n{\"key\":\"a\",\"verdict\":\"routes\"}"
 -- [("b",Routes,"")]
 parseGroupReview :: Text -> [(Text, GroupVerdict, Text)]
-parseGroupReview txt = filter (\(k, _, _) -> Map.lookup k seen == Just (1 :: Int)) parsed
+parseGroupReview txt = answeredOnce (\(k, _, _) -> k) $ mapMaybe (decodeLine . T.dropAround (\c -> c == '`' || c == ' ')) $ lines $ ELLM.stripCodeBlock txt
   where
-    parsed = mapMaybe (decodeLine . T.dropAround (\c -> c == '`' || c == ' ')) $ lines $ ELLM.stripCodeBlock txt
-    seen = Map.fromListWith (+) [(k, 1) | (k, _, _) <- parsed]
     decodeLine ln = do
       v <- AE.decodeStrict (encodeUtf8 ln) :: Maybe AE.Value
       gkey <- v ^? key "key" . _String
       verdict <- parseMaybe AE.parseJSON =<< v ^? key "verdict"
       pure (gkey, verdict, fromMaybe "" $ v ^? key "shape" . _String)
+
+
+-- | A judge's answers, minus every key it answered more than once (see 'parseGroupReview': the
+-- judged text is user-written, so a repeated key may be an injected verdict for a sibling).
+answeredOnce :: Ord k => (a -> k) -> [a] -> [a]
+answeredOnce k xs = filter ((== Just (1 :: Int)) . (`Map.lookup` seen) . k) xs
+  where
+    seen = Map.fromListWith (+) [(k x, 1) | x <- xs]
 
 
 -- | Token considered a placeholder (excluded from Jaccard comparison).

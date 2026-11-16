@@ -62,7 +62,7 @@ spec = around withTestResources do
       -- Both conv-1 traces are one conversation; the lone OpenLLMetry call is only a call.
       let (from, to) = around' now
       LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
-      map (\c -> (c.key, c.llmCalls, c.toolCalls, c.title, c.signals)) (toList table.rows) `shouldBe` [("conv-1", 2, 1, Just "Why is checkout slow?", [LLM.Truncated])]
+      map (\c -> (c.key, c.llmCalls, c.toolCalls, c.title, c.signals)) (toList table.rows) `shouldBe` [("conv-1", 2, 1, Just "Why is checkout slow?", [LLM.Detected LLM.Truncated])]
       -- "LLM calls" is the Explorer over the kind=ai summary element, on both read paths.
       let llmCalls = def{Log.query = Just ("summary[*] == \"" <> Telemetry.genAIMarker <> "\""), Log.from = from, Log.to = to}
           viaTf' = tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}}}
@@ -72,7 +72,7 @@ spec = around withTestResources do
       LLM.LLMPage (PageCtx _ (DeferredBody (LLM.TopicsBody topics))) <- call tr $ LLM.llmGetH pid (Just "topics") Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       map (\t -> (t.template, length t.conversations)) (toList topics.rows) `shouldBe` [("Why is checkout slow?", 1)]
       -- A plain-language signal: one judge call over the day's conversations, matches shown as pills and a facet.
-      Right (LLM.SignalCreated _ sid) <- call tr $ LLM.llmSignalPostH pid (LLM.SignalForm "Slow checkout" "The user asks why checkout is slow.")
+      Right LLM.SignalCreated{} <- call tr $ LLM.llmSignalPostH pid (LLM.SignalForm "Slow checkout" "The user asks why checkout is slow.")
       traverse (call tr . LLM.llmSignalPostH pid) [LLM.SignalForm " slow CHECKOUT " "again", LLM.SignalForm "Tool error" "clashes with a built-in", LLM.SignalForm "  " "blank"]
         `shouldReturn` [Left (LLM.SignalNameTaken "slow CHECKOUT"), Left (LLM.SignalNameTaken "Tool error"), Left LLM.SignalIncomplete]
       prompts <- newIORef []
@@ -80,11 +80,13 @@ spec = around withTestResources do
             ELLM.CallLLM _ prompt _ -> modifyIORef prompts (prompt :) $> Right "```json\n[{\"key\":\"conv-1\",\"match\":true,\"reason\":\"Asks about checkout latency.\"}]\n```"
             ELLM.CallAgenticChat{} -> pure $ Left "Unexpected agent call"
             ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
-      runTestBg (addUTCTime 60 now) tr $ judge $ LLM.evaluateSignal pid sid
-      runTestBg (addUTCTime 60 now) tr $ judge $ LLM.evaluateSignal pid sid
+      runTestBg (addUTCTime 60 now) tr $ judge $ LLM.evaluateSignals pid
+      runTestBg (addUTCTime 60 now) tr $ judge $ LLM.evaluateSignals pid
       readIORef prompts >>= (`shouldSatisfy` \ps -> length ps == 1 && all ("Why is checkout slow?" `T.isInfixOf`) ps)
       LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody flagged))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing (Just "Slow checkout") Nothing from to Nothing (Just "1")
       (map (.key) (toList flagged.rows), renderT flagged) `shouldSatisfy` \(ks, html) -> ks == ["conv-1"] && "Asks about checkout latency." `T.isInfixOf` html
+      -- The verdict reaches the conversation page too.
+      renderT <$> call tr (LLM.conversationGetH pid "conv-1" from to Nothing) >>= (`shouldContainAll` ["Slow checkout", "Asks about checkout latency."])
       LLM.LLMPage (PageCtx _ (DeferredBody (LLM.SignalsBody signals))) <- call tr $ LLM.llmGetH pid (Just "signals") Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       map (\s' -> (s'.name, s'.matched, s'.judged)) (toList signals.rows) `shouldBe` [("Slow checkout", 1, 1)]
       -- Rows open the full span view in the drawer: a partial response is a lone hidden tab panel.
