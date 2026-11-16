@@ -140,7 +140,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl)
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), TemplateLang (..), applyScopedQuery, audienceFilters, audienceKql, binDensityFor, browserKql, constantToKQLList, constantToSQLList, defSqlQueryCfg, fillQueryTemplate, mkScopedQuery, parseQueryToComponents, variablePresetsKQL)
+import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), TemplateLang (..), applyScopedQuery, audienceFilters, audienceKql, binDensityFor, browserKql, constantToKQLList, constantToSQLList, defSqlQueryCfg, fillQueryTemplate, kqlConstants, mkScopedQuery, replacePlaceholders, parseQueryToComponents, variablePresetsKQL)
 import Pkg.Parser.Expr (sqlStringLit)
 import Pkg.SchemaLearning qualified as SchemaLearning
 import Relude hiding (ask)
@@ -1137,7 +1137,7 @@ processWidget prefill pid now timeRange allParams widgetBase = do
       resolveLogsQuery
         | widgetBase.wType == Widget.WTLogs = fmap (fillQueryTemplate KqlTemplate (variablePresetsKQL def pid.toText fromD toD allParams now))
         | otherwise = Relude.id
-      widget = Widget.signWidgetSql secret pid $ widgetBase & #id %~ (<|> (slugify <$> widgetBase.title)) & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #query %~ resolveLogsQuery
+      widget = Widget.signWidgetSql secret pid $ widgetBase & #id %~ (<|> (slugify <$> widgetBase.title)) & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #query %~ fmap (replacePlaceholders kqlConstants) . resolveLogsQuery
 
   -- The prefill is best-effort: past the budget we hand back the widget with no
   -- html/dataset and no `eager` flag, which is precisely the shape whose renderer
