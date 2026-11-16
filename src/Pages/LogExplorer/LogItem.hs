@@ -490,7 +490,7 @@ expandedItemView pid item aptSp selectedTabM = do
         -- has to mint a unique selector and the two stay coupled by position.
         button_ [class_ "action-btn", copySourceAttr_ "this.nextElementSibling"] $ actionBtnBody "copy" "Copy as curl"
         pre_ [class_ "hidden"] $ toHtml curl
-      whenJust (Telemetry.traceIdOf item) \trId -> do
+      whenJust (Telemetry.traceIdOf item) \trId ->
         a_
           ([class_ "action-btn", term "data-share-hide" "1"] <> traceLinkAttrs_ pid trId item.timestamp)
           (actionBtnBody "cross-hair" "View trace")
