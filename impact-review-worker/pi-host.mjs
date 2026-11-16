@@ -203,10 +203,11 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
     signal?.removeEventListener('abort', abort);
     // pi-otel flushes on session_shutdown, which dispose never emits and which fails once disposed;
     // in-flight calls settle first so a failing call's span is still exported.
-    session?.agent.abort();
-    await Promise.allSettled([...modelCalls]);
-    await session?.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' }).catch((error) => process.stderr.write(JSON.stringify({ event: 'telemetry_flush_failed', pid: process.pid, error: String(error) }) + '\n'));
-    session?.dispose();
+    try {
+      session?.agent.abort();
+      await Promise.allSettled([...modelCalls]);
+      await session?.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' }).catch((error) => process.stderr.write(JSON.stringify({ event: 'telemetry_flush_failed', pid: process.pid, error: String(error) }) + '\n'));
+    } finally { session?.dispose(); }
   }
 }
 
