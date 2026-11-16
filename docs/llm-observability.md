@@ -82,12 +82,14 @@ Unknown models carry tokens but no cost; the UI says "unpriced" rather than `$0`
 - **Overview:** the first widgets of `llm-observability.yaml` (model calls, cost, error rate,
   tokens), rendered by the shared `Widget`, so the page and the dashboard cannot disagree.
 - **Tabs.** *Conversations*; *Topics* (opening messages clustered with `Pkg.Drain`);
-  *Signals* (plain-language signals); *LLM calls* is the Log Explorer with `gen_ai == true`,
-  so calls get every Explorer feature for free.
-- **`gen_ai` in KQL** is a boolean flag over the summary element ingest stamps on every record
-  with a `gen_ai.operation.name` (`Pkg.Parser.Expr.genAIMarker`), like `errors == true`. On
-  TimeFusion it lowers to `array_has(summary, …)`, ~20x cheaper than reading the attributes
-  blob; `gen_ai == false` negates it. The dashboard template's queries all start with it.
+  *Signals* (plain-language signals); *LLM calls* is the Log Explorer with
+  `attributes.gen_ai.operation.name != null`, so calls get every Explorer feature for free.
+- **Promoted columns.** `gen_ai.operation.name`, `request.model`, `conversation.id`,
+  `agent.name`, `tool.name`, `usage.input_tokens`, `usage.output_tokens` and `usage.cost` are
+  written at ingest to `attributes___gen_ai___*` columns on both stores (TimeFusion storage
+  widened 2026-11-16; Postgres migration 0286). KQL resolves `attributes.gen_ai.*` to the
+  column automatically, so they filter and aggregate like any first-class field. Rows ingested
+  before the promotion only have the `attributes` blob.
 - **Totals** are aggregated in SQL per conversation key (GROUP BY over the window), not over a
   capped span sample.
 - **Conversations table** (shared `Table`): title (first user message), agent, models,

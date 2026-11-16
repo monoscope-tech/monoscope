@@ -11,6 +11,9 @@ module Pkg.GenAI (
   normaliseModel,
   estimateCost,
   isInferenceOp,
+  inferenceOps,
+  agentRunOps,
+  num,
   formatUsd,
   FinishReasons (..),
   Abnormal (..),
@@ -151,8 +154,18 @@ abnormalFinish r
   | otherwise = Nothing
 
 
+-- | Operations that call a model: the only spans that carry tokens and cost.
+inferenceOps :: [Text]
+inferenceOps = ["chat", "text_completion", "generate_content", "embeddings"]
+
+
 isInferenceOp :: Text -> Bool
-isInferenceOp = (`elem` ["chat", "text_completion", "generate_content", "embeddings"])
+isInferenceOp = (`elem` inferenceOps)
+
+
+-- | Operations that run an agent; a trace with one is a conversation even without a conversation id.
+agentRunOps :: [Text]
+agentRunOps = ["invoke_agent", "invoke_workflow"]
 
 
 -- | Canonical GenAI keys from whichever dialect the producer speaks. Originals are kept,
@@ -418,6 +431,7 @@ arr = \case
   _ -> Nothing
 
 
+-- | A JSON number, or a number sent as a string (common for attribute values).
 num :: AE.Value -> Maybe Double
 num = \case
   AE.Number n -> Just $ toRealFloat n

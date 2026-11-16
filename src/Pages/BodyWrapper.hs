@@ -130,10 +130,10 @@ menu lang pid =
   ]
 
 
--- | Every GenAI span in the Explorer: charts, facets, columns and the span drawer, filtered on the
--- summary element ingest stamps on them.
+-- | Every GenAI span in the Explorer (charts, facets, columns, the span drawer), filtered on the
+-- promoted @gen_ai.operation.name@ column.
 llmCallsUrl :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Text
-llmCallsUrl pid since from to = (urls.logExplorer pid).logExplorerGet (Just "gen_ai == true") Nothing since from to Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+llmCallsUrl pid since from to = (urls.logExplorer pid).logExplorerGet (Just "attributes.gen_ai.operation.name != null") Nothing since from to Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 
 dashboardsUrl :: Projects.ProjectId -> Text

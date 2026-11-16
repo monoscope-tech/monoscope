@@ -7,6 +7,7 @@ module Pages.GenAIMessages (
   messageParts,
   genAINum,
   message_,
+  roleAvatar_,
   isGenAISpan,
   genAIUsage,
   genAISpanDetail_,
@@ -16,7 +17,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Encode.Pretty qualified as AEP
 import Data.Aeson.KeyMap qualified as KM
 import Data.Map.Strict qualified as M
-import Data.Scientific (toRealFloat)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
@@ -81,7 +81,7 @@ messageParts m = case m of
 
 
 genAINum :: Maybe (Map Text AE.Value) -> [Text] -> Maybe Double
-genAINum attrs ks = genAIAt attrs ks >>= \case AE.Number n -> Just (toRealFloat n); AE.String t -> readMaybe (toString t); _ -> Nothing
+genAINum attrs = genAIAt attrs >=> GenAI.num
 
 
 -- | Tool arguments and results usually arrive as JSON strings; indent them when they parse.
@@ -94,10 +94,10 @@ prettyJson v = maybe (jsonAsText v) (decodeUtf8 . AEP.encodePretty) $ case v of
 message_ :: Projects.ProjectId -> Map Text Call -> Maybe Call -> AE.Value -> Html ()
 message_ pid tools stepM m = case role of
   "system" -> details_ [class_ "rounded-xl border border-strokeWeak bg-fillWeaker px-3 py-2 text-sm"] do
-    summary_ [class_ "flex cursor-pointer items-center gap-2 text-xs font-medium text-textWeak"] $ avatar_ >> "System instructions"
+    summary_ [class_ "flex cursor-pointer items-center gap-2 text-xs font-medium text-textWeak"] $ roleAvatar_ role >> "System instructions"
     div_ [class_ "mt-2 max-h-96 overflow-auto"] parts_
-  _ -> article_ [class_ $ "flex gap-3 rounded-xl border px-3 py-2.5 " <> surface] do
-    avatar_
+  _ -> article_ [class_ $ "flex gap-3 rounded-xl border px-3 py-2.5 " <> case role of { "user" -> "border-strokeBrand-weak bg-fillBrand-weak"; "tool" -> "border-strokeWeak bg-fillWeaker"; _ -> "border-strokeWeak bg-bgRaised" }] do
+    roleAvatar_ role
     div_ [class_ "flex min-w-0 flex-1 flex-col gap-1.5"] do
       div_ [class_ "flex flex-wrap items-center gap-1.5 text-xs"] do
         span_ [class_ "me-1 font-semibold text-textStrong"] $ toHtml $ T.toTitle role
@@ -109,15 +109,15 @@ message_ pid tools stepM m = case role of
   where
     (role, parts) = messageParts m
     parts_ = div_ [class_ "flex flex-col gap-2"] $ forM_ parts (part_ tools)
-    surface = case role of
-      "user" -> "border-strokeBrand-weak bg-fillBrand-weak"
-      "tool" -> "border-strokeWeak bg-fillWeaker"
-      _ -> "border-strokeWeak bg-bgRaised"
-    avatar_ = case role of
-      "user" -> span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-fillBrand-strong text-white"] $ faSprite_ "user" "regular" "h-3 w-3"
-      "tool" -> span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-teal-400/15 text-teal-700 dark:text-teal-300"] $ faSprite_ "function" "regular" "h-3 w-3"
-      "system" -> span_ [class_ "grid h-5 w-5 shrink-0 place-items-center rounded-full bg-fillWeak text-iconNeutral"] $ faSprite_ "gear" "regular" "h-3 w-3"
-      _ -> span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-violet-400/15 text-violet-600 dark:text-violet-300"] $ faSprite_ "sparkles" "regular" "h-3 w-3"
+
+
+-- | Who a message (or a signal about one) belongs to: the colour the transcript and signal examples share.
+roleAvatar_ :: Text -> Html ()
+roleAvatar_ = \case
+  "user" -> span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-fillBrand-strong text-white"] $ faSprite_ "user" "regular" "h-3 w-3"
+  "tool" -> span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-teal-400/15 text-teal-700 dark:text-teal-300"] $ faSprite_ "function" "regular" "h-3 w-3"
+  "system" -> span_ [class_ "grid h-5 w-5 shrink-0 place-items-center rounded-full bg-fillWeak text-iconNeutral"] $ faSprite_ "gear" "regular" "h-3 w-3"
+  _ -> span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-violet-400/15 text-violet-600 dark:text-violet-300"] $ faSprite_ "sparkles" "regular" "h-3 w-3"
 
 
 part_ :: Map Text Call -> AE.Value -> Html ()

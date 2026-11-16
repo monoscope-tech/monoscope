@@ -61,7 +61,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), llmCallsUrl, mkPageCtx, navTabAttrs)
 import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), FieldCfg (..), FieldSize (..), RefreshingDeferred (..), callout_, formField_, localTimeFmt_, primaryButton_, tableSkeleton_, tonePill_, withDeferredBody)
 import Pages.Containers (mkWindow, windowed)
-import Pages.GenAIMessages (Call (..), genAIAt, genAIMessages, messageParts, message_)
+import Pages.GenAIMessages (Call (..), genAIAt, genAIMessages, messageParts, message_, roleAvatar_)
 import Pkg.Components.Table (Column, Features (..), Table (..), ZeroState (..), col, countedFilter, facetActions, inventoryTable, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
@@ -100,16 +100,6 @@ flagLabel :: Flag -> Text
 flagLabel = \case
   Detected s -> signalLabel s
   Judged name _ -> name
-
-
-signalHelp :: Signal -> Text
-signalHelp = \case
-  ToolError -> "A tool call failed."
-  ModelError -> "A model call returned an error."
-  Truncated -> "A reply stopped at the output token limit."
-  Filtered -> "A reply was refused or cut by a content filter."
-  Looping -> "The same tool ran with the same arguments three or more times."
-  ContextPressure -> "A call used at least 80% of the model's context window."
 
 
 data Conversation = Conversation
@@ -221,6 +211,8 @@ selectUnits pid window scope = do
         SELECT CASE WHEN COALESCE(context___trace_id, '') = '' THEN id::text ELSE context___trace_id END AS unit,
           timestamp, COALESCE(duration, 0) AS dur, COALESCE(status_code = 'ERROR', false) AS failed,
           attributes -> 'gen_ai' -> 'operation' ->> 'name' AS op,
+          COALESCE(attributes -> 'gen_ai' -> 'operation' ->> 'name' = ANY(#{V.fromList GenAI.inferenceOps}), false) AS model_op,
+          COALESCE(attributes -> 'gen_ai' -> 'operation' ->> 'name' = ANY(#{V.fromList GenAI.agentRunOps}), false) AS agent_op,
           attributes -> 'gen_ai' -> 'conversation' ->> 'id' AS conv,
           attributes -> 'gen_ai' -> 'agent' ->> 'name' AS agent,
           COALESCE(attributes -> 'gen_ai' -> 'response' ->> 'model', attributes -> 'gen_ai' -> 'request' ->> 'model') AS model,
@@ -239,14 +231,14 @@ selectUnits pid window scope = do
       )
       SELECT unit, max(conv) AS conv, max(agent) AS agent, max(model) AS model, max(usr) AS usr, max(svc) AS svc,
         min(timestamp) AS started, max(timestamp) AS last_ts, max(CAST(EXTRACT(EPOCH FROM timestamp) * 1000000 AS BIGINT) + dur / 1000) AS end_us,
-        sum(CASE WHEN op IN ('chat', 'text_completion', 'generate_content', 'embeddings') THEN 1 ELSE 0 END) AS llm_calls,
+        sum(CASE WHEN model_op THEN 1 ELSE 0 END) AS llm_calls,
         sum(CASE WHEN op = 'execute_tool' THEN 1 ELSE 0 END) AS tool_calls,
-        sum(CASE WHEN op IN ('invoke_agent', 'invoke_workflow') THEN 1 ELSE 0 END) AS agent_runs,
-        sum(CASE WHEN op IN ('chat', 'text_completion', 'generate_content', 'embeddings') THEN COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) ELSE 0 END) AS tokens,
-        sum(CASE WHEN op IN ('chat', 'text_completion', 'generate_content', 'embeddings') THEN cost END) AS cost_sum,
+        sum(CASE WHEN agent_op THEN 1 ELSE 0 END) AS agent_runs,
+        sum(CASE WHEN model_op THEN COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) ELSE 0 END) AS tokens,
+        sum(CASE WHEN model_op THEN cost END) AS cost_sum,
         sum(CASE WHEN failed THEN 1 ELSE 0 END) AS errors,
         sum(CASE WHEN failed AND op = 'execute_tool' THEN 1 ELSE 0 END) AS tool_errors,
-        sum(CASE WHEN failed AND op IN ('chat', 'text_completion', 'generate_content', 'embeddings') THEN 1 ELSE 0 END) AS model_errors,
+        sum(CASE WHEN failed AND model_op THEN 1 ELSE 0 END) AS model_errors,
         sum(CASE WHEN #{Telemetry.genAIFinishMarker GenAI.Truncated} = ANY(tags) THEN 1 ELSE 0 END) AS truncated,
         sum(CASE WHEN #{Telemetry.genAIFinishMarker GenAI.Filtered} = ANY(tags) THEN 1 ELSE 0 END) AS filtered,
         sum(CASE WHEN op = 'execute_tool' THEN 1 ELSE 0 END) - count(DISTINCT CASE WHEN op = 'execute_tool' THEN COALESCE(tool, '') || COALESCE(tool_args, '') END) AS repeats,
@@ -364,15 +356,6 @@ newtype LLMGet = LLMPage (PageCtx (Deferred LLMBody))
   deriving (ToHtml) via (PageCtx (RefreshingDeferred LLMBody))
 
 
--- | The LLM dashboard template's opening widgets: one definition serves this page and the dashboard.
-overviewWidgets :: Projects.ProjectId -> [Widget.Widget]
-overviewWidgets pid =
-  [ w{Widget._projectId = Just pid, Widget.standalone = Just True}
-  | d <- take 1 [d | d <- DashboardTemplates.dashboardTemplatesCompiled, d.file == Just "llm-observability.yaml"]
-  , w <- concatMap (\g -> fromMaybe [g] g.children) (take 3 d.widgets)
-  ]
-
-
 llmGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LLMGet)
 llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
   (_, _, bw) <- mkPageCtx pid
@@ -451,7 +434,7 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
                           primaryButton_ [type_ "submit", class_ "self-start"] "Create and judge today's conversations"
                           div_ [class_ "flex flex-col gap-2"] do
                             span_ [class_ "text-xs font-medium text-textWeak"] "Or start from an example"
-                            div_ [class_ "grid gap-2 sm:grid-cols-2 xl:grid-cols-3"] $ forM_ signalExamples \(chip, name, description) ->
+                            div_ [class_ "grid gap-2 sm:grid-cols-2 xl:grid-cols-3"] $ forM_ signalExamples \(role, name, description) ->
                               button_
                                 [ type_ "button"
                                 , class_ "flex items-start gap-3 rounded-lg border border-strokeWeak px-3 py-2 text-start transition-[background-color,border-color,scale] hover:border-strokeBrand-weak hover:bg-fillBrand-weak active:scale-[0.96]"
@@ -460,7 +443,7 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
                                 , [__|on click set #signal-name.value to @data-name then set #signal-description.value to @data-description then call #signal-description.focus()|]
                                 ]
                                 do
-                                  chip
+                                  roleAvatar_ role
                                   span_ [class_ "flex min-w-0 flex-col gap-0.5"] do
                                     span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml name
                                     span_ [class_ "text-xs text-textWeak"] $ toHtml description
@@ -493,8 +476,36 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
         }
       body
   where
+    -- The LLM dashboard template's opening widgets: one definition serves this page and the dashboard.
+    overviewWidgets :: [Widget.Widget]
+    overviewWidgets =
+      [ w{Widget._projectId = Just pid, Widget.standalone = Just True}
+      | d <- take 1 [d | d <- DashboardTemplates.dashboardTemplatesCompiled, d.file == Just "llm-observability.yaml"]
+      , w <- concatMap (\g -> fromMaybe [g] g.children) (take 3 d.widgets)
+      ]
+
+    chips :: [Text] -> Html ()
+    chips xs = div_ [class_ "flex min-w-0 flex-wrap gap-1"] $ forM_ (take 2 xs) (span_ [class_ "truncate rounded bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] . toHtml) >> when (length xs > 2) (span_ [class_ "text-xs text-textWeak"] $ toHtml $ "+" <> show @Text (length xs - 2))
+
+    num :: Double -> Html ()
+    num = span_ [class_ "tabular-nums text-textWeak"] . toHtml . prettyPrintCount . round
+
+    -- Starting points for a first signal, three per actor; each fills the form.
+    signalExamples :: [(Text, Text, Text)]
+    signalExamples =
+      [ ("user", "User frustration", "The user repeats a request, says the answer is wrong, or gives up.")
+      , ("user", "Question left unanswered", "The user asks something and the conversation ends without an answer to that question.")
+      , ("user", "Asks for a human", "The user asks to speak to a person, contact support, or escalate.")
+      , ("tool", "Wrong tool", "The agent calls a tool that cannot answer the question, or ignores what a tool returned.")
+      , ("tool", "Tool failure ignored", "A tool returns an error or an empty result and the agent carries on as if it succeeded.")
+      , ("tool", "Redundant lookups", "The agent fetches the same data more than once, or looks up something it already had.")
+      , ("assistant", "Unsupported claims", "The assistant states numbers, names or links that no tool result or user message supports.")
+      , ("assistant", "Refused a valid request", "The assistant declines, or says it cannot help with, a request it should handle.")
+      , ("assistant", "Leaked instructions or data", "The assistant reveals its system prompt, internal instructions, credentials, or data belonging to another user.")
+      ]
+
     overview :: Html ()
-    overview = div_ [class_ "grid grid-cols-4 gap-3 pt-3 max-lg:grid-cols-2"] $ forM_ (overviewWidgets pid) \w ->
+    overview = div_ [class_ "grid grid-cols-4 gap-3 pt-3 max-lg:grid-cols-2"] $ forM_ overviewWidgets \w ->
       div_ [class_ $ if w.wType `elem` [Widget.WTStat, Widget.WTTimeseriesStat] then "h-28" else "col-span-2 min-h-56"] $ Widget.widget_ w
 
     conversationColumns :: [Column Conversation]
@@ -537,16 +548,14 @@ flagTone = \case
 
 flagHelp :: Flag -> Text
 flagHelp = \case
-  Detected s -> signalHelp s
+  Detected s -> case s of
+    ToolError -> "A tool call failed."
+    ModelError -> "A model call returned an error."
+    Truncated -> "A reply stopped at the output token limit."
+    Filtered -> "A reply was refused or cut by a content filter."
+    Looping -> "The same tool ran with the same arguments three or more times."
+    ContextPressure -> "A call used at least 80% of the model's context window."
   Judged _ reason -> reason
-
-
-chips :: [Text] -> Html ()
-chips xs = div_ [class_ "flex min-w-0 flex-wrap gap-1"] $ forM_ (take 2 xs) (span_ [class_ "truncate rounded bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] . toHtml) >> when (length xs > 2) (span_ [class_ "text-xs text-textWeak"] $ toHtml $ "+" <> show @Text (length xs - 2))
-
-
-num :: Double -> Html ()
-num = span_ [class_ "tabular-nums text-textWeak"] . toHtml . prettyPrintCount . round
 
 
 -- * Conversation detail
@@ -681,7 +690,7 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
       unless (any (\s -> isJust (messages "input" s) || isJust (messages "output" s)) source) $ callout_ NeutralBadge Nothing "These spans carry no message content. Enable content capture in your instrumentation (OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT=SPAN_ONLY for OpenTelemetry GenAI) to see the transcript."
       sequence_ rendered
       where
-        source = if any (isJust . messages "input") inference then inference else filter ((== "invoke_agent") . (.operation)) d.steps
+        source = if any (isJust . messages "input") inference then inference else filter ((`elem` GenAI.agentRunOps) . (.operation)) d.steps
         at c = genAIAt (unAesonTextMaybe c.attributes)
         messages dir c = (\ms -> ms <$ guard (not $ null ms)) $ genAIMessages (unAesonTextMaybe c.attributes) dir
         tools = M.fromList [(i, c) | c <- d.steps, Just (AE.String i) <- [at c ["tool", "call", "id"]]]
@@ -728,11 +737,37 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
               span_ ([class_ "absolute top-1/2 -translate-y-1/2 whitespace-nowrap text-2xs tabular-nums text-textWeak"] <> [style_ $ if offset + width < 78 then "left:calc(" <> show (offset + width) <> "% + 6px)" else "right:calc(" <> show (100 - offset) <> "% + 6px)"]) $ toHtml $ getDurationNSMS $ fromIntegral s.duration
             span_ [class_ "text-right text-xs tabular-nums text-textWeak max-md:hidden"] $ toHtml $ fromMaybe "" $ tokenFlow s.inputTokens s.outputTokens
             div_ [class_ "flex flex-col items-end text-xs tabular-nums"] do
-              span_ [class_ "text-textStrong"] $ toHtml $ maybe "" GenAI.formatUsd s.cost
-              when (isJust s.cost) $ span_ [class_ "text-2xs text-textWeak"] $ toHtml $ "Σ " <> GenAI.formatUsd total
+              span_ [class_ "text-textStrong"] $ toHtml $ maybe "" GenAI.formatUsd (stepCost s)
+              when (isJust $ stepCost s) $ span_ [class_ "text-2xs text-textWeak"] $ toHtml $ "Σ " <> GenAI.formatUsd total
       where
         pct x = 100 * x / wall :: Double
-        running = drop 1 $ scanl (+) 0 $ map (fromMaybe 0 . (.cost) . snd) ordered
+        running = drop 1 $ scanl (+) 0 $ map (fromMaybe 0 . stepCost . snd) ordered
+        kindOf :: Text -> StepKind
+        kindOf op
+          | op `elem` ("create_agent" : GenAI.agentRunOps) = AgentStep
+          | GenAI.isInferenceOp op = ModelStep
+          | op == "execute_tool" = ToolStep
+          | otherwise = OtherStep
+
+        kindLabel :: StepKind -> Text
+        kindLabel = \case
+          AgentStep -> "Agent"
+          ModelStep -> "Model call"
+          ToolStep -> "Tool"
+          OtherStep -> "Span"
+
+        -- The kind colour is categorical, like service colours; an error always reads red.
+        swatch_ :: StepKind -> Bool -> Html ()
+        swatch_ k failed = span_ [class_ $ "block h-2.5 min-w-2.5 rounded-sm " <> if failed then "bg-fillError-strong" else case k of { AgentStep -> "bg-violet-400"; ModelStep -> "bg-blue-400"; ToolStep -> "bg-teal-400"; OtherStep -> "bg-fillNeutral-strong" }] ""
+
+        kindIcon_ :: StepKind -> Html ()
+        kindIcon_ = \case
+          AgentStep -> span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-md bg-violet-400/15 text-violet-600 dark:text-violet-300"] $ faSprite_ "sparkles" "regular" "h-3.5 w-3.5"
+          ModelStep -> span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-md bg-blue-400/15 text-blue-600 dark:text-blue-300"] $ faSprite_ "comment" "regular" "h-3.5 w-3.5"
+          ToolStep -> span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-md bg-teal-400/15 text-teal-700 dark:text-teal-300"] $ faSprite_ "function" "regular" "h-3.5 w-3.5"
+          OtherStep -> span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-md bg-fillWeak text-iconNeutral"] $ faSprite_ "diagram-project" "regular" "h-3.5 w-3.5"
+        -- Only model calls are priced; a producer's own total on an agent span would count twice.
+        stepCost s = s.cost <* guard (GenAI.isInferenceOp s.operation)
         -- Spans under their parent, siblings in time order; a parent outside this conversation makes a root.
         ordered = concatMap (walk (0 :: Int)) roots
         known = S.fromList [s.spanId | s <- d.steps, not (T.null s.spanId)]
@@ -741,59 +776,8 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
         walk depth s = (depth, s) : if depth >= 24 then [] else concatMap (walk (depth + 1)) (M.findWithDefault [] s.spanId children)
 
 
--- | Starting points for a first signal: each fills the form, so the shape of a good description is visible.
--- The chip is the transcript's colour for whose behaviour the signal watches (user, tool, assistant).
-signalExamples :: [(Html (), Text, Text)]
-signalExamples =
-  [ (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-fillBrand-strong text-white"] $ faSprite_ "user" "regular" "h-3 w-3", "User frustration", "The user repeats a request, says the answer is wrong, or gives up.")
-  , (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-fillBrand-strong text-white"] $ faSprite_ "user" "regular" "h-3 w-3", "Question left unanswered", "The user asks something and the conversation ends without an answer to that question.")
-  , (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-fillBrand-strong text-white"] $ faSprite_ "user" "regular" "h-3 w-3", "Asks for a human", "The user asks to speak to a person, contact support, or escalate.")
-  , (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-teal-400/15 text-teal-700 dark:text-teal-300"] $ faSprite_ "function" "regular" "h-3 w-3", "Wrong tool", "The agent calls a tool that cannot answer the question, or ignores what a tool returned.")
-  , (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-teal-400/15 text-teal-700 dark:text-teal-300"] $ faSprite_ "function" "regular" "h-3 w-3", "Tool failure ignored", "A tool returns an error or an empty result and the agent carries on as if it succeeded.")
-  , (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-teal-400/15 text-teal-700 dark:text-teal-300"] $ faSprite_ "function" "regular" "h-3 w-3", "Redundant lookups", "The agent fetches the same data more than once, or looks up something it already had.")
-  , (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-violet-400/15 text-violet-600 dark:text-violet-300"] $ faSprite_ "sparkles" "regular" "h-3 w-3", "Unsupported claims", "The assistant states numbers, names or links that no tool result or user message supports.")
-  , (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-violet-400/15 text-violet-600 dark:text-violet-300"] $ faSprite_ "sparkles" "regular" "h-3 w-3", "Refused a valid request", "The assistant declines, or says it cannot help with, a request it should handle.")
-  , (span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-violet-400/15 text-violet-600 dark:text-violet-300"] $ faSprite_ "sparkles" "regular" "h-3 w-3", "Leaked instructions or data", "The assistant reveals its system prompt, internal instructions, credentials, or data belonging to another user.")
-  ]
-
-
 data StepKind = AgentStep | ModelStep | ToolStep | OtherStep
   deriving stock (Eq)
-
-
-kindOf :: Text -> StepKind
-kindOf op
-  | op `elem` ["invoke_agent", "invoke_workflow", "create_agent"] = AgentStep
-  | GenAI.isInferenceOp op = ModelStep
-  | op == "execute_tool" = ToolStep
-  | otherwise = OtherStep
-
-
-kindLabel :: StepKind -> Text
-kindLabel = \case
-  AgentStep -> "Agent"
-  ModelStep -> "Model call"
-  ToolStep -> "Tool"
-  OtherStep -> "Span"
-
-
--- | The waterfall's kind colour (categorical, like service colours); an error always reads red.
-swatch_ :: StepKind -> Bool -> Html ()
-swatch_ k failed = span_ [class_ $ "block h-2.5 min-w-2.5 rounded-sm " <> if failed then "bg-fillError-strong" else kindFill] ""
-  where
-    kindFill = case k of
-      AgentStep -> "bg-violet-400"
-      ModelStep -> "bg-blue-400"
-      ToolStep -> "bg-teal-400"
-      OtherStep -> "bg-fillNeutral-strong"
-
-
-kindIcon_ :: StepKind -> Html ()
-kindIcon_ = \case
-  AgentStep -> span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-md bg-violet-400/15 text-violet-600 dark:text-violet-300"] $ faSprite_ "sparkles" "regular" "h-3.5 w-3.5"
-  ModelStep -> span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-md bg-blue-400/15 text-blue-600 dark:text-blue-300"] $ faSprite_ "comment" "regular" "h-3.5 w-3.5"
-  ToolStep -> span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-md bg-teal-400/15 text-teal-700 dark:text-teal-300"] $ faSprite_ "function" "regular" "h-3.5 w-3.5"
-  OtherStep -> span_ [class_ "grid h-6 w-6 shrink-0 place-items-center rounded-md bg-fillWeak text-iconNeutral"] $ faSprite_ "diagram-project" "regular" "h-3.5 w-3.5"
 
 
 -- * Signals described in plain language

@@ -1291,12 +1291,12 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                 stBox "Spans" (show (length spanRecords) <> foldMap (const "+") moreUrl) Nothing
                 stBox "Errors" (show $ length $ V.filter (\s -> s.status == Just SSError) spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-iconError")
                 stBox "Duration" (toText $ getDurationNSMS traceItem.traceDurationNs) $ Just (faSprite_ "clock" "regular" "w-3 h-3 text-iconNeutral")
-                whenJust (viaNonEmpty sum $ mapMaybe (\sp -> GenAIMessages.genAINum sp.attributes ["usage", "cost"]) $ V.toList spanRecords) \cost ->
+                whenJust (viaNonEmpty sum [c | sp <- V.toList spanRecords, Just (AE.String op) <- [GenAIMessages.genAIAt sp.attributes ["operation", "name"]], GenAI.isInferenceOp op, Just c <- [GenAIMessages.genAINum sp.attributes ["usage", "cost"]]]) \cost ->
                   stBox "LLM cost" (GenAI.formatUsd cost) $ Just (faSprite_ "sparkles" "regular" "w-3 h-3 text-iconNeutral")
                 -- The same key the LLM pages group by: a span's conversation id, else the trace if it ran an agent.
                 let genAI ks = mapMaybe (\sp -> GenAIMessages.genAIAt sp.attributes ks) (V.toList spanRecords)
                     around' d = Just $ toText $ iso8601Show $ addUTCTime d traceItem.traceStartTime
-                whenJust (listToMaybe [k | AE.String k <- genAI ["conversation", "id"]] <|> (traceItem.traceId <$ guard (AE.String "invoke_agent" `elem` genAI ["operation", "name"]))) \k ->
+                whenJust (listToMaybe [k | AE.String k <- genAI ["conversation", "id"]] <|> (traceItem.traceId <$ guard (any (`elem` map AE.String GenAI.agentRunOps) (genAI ["operation", "name"])))) \k ->
                   a_ [class_ "btn btn-xs", href_ $ (urls.traces pid).llmConversationGetH k (around' (-3600)) (around' 3600) Nothing] $ faSprite_ "sparkles" "regular" "w-3 h-3" >> "View conversation"
             whenJust moreUrl \url ->
               div_ [id_ "trace-load-more", class_ "flex items-center justify-between gap-2 rounded-lg border border-strokeWeak bg-fillWeaker px-3 py-1.5"] do

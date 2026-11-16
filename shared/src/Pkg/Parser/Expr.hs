@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CmpOp (..), MatchOp (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, FreeTextMatch (..), freeTextMatch, freeTextRegex, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, isErrorSql, sqlStringLit, genAIMarker, genAISubject) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CmpOp (..), MatchOp (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, FreeTextMatch (..), freeTextMatch, freeTextRegex, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, isErrorSql, sqlStringLit) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -962,18 +962,6 @@ acceptedFieldRoots :: FieldUniverse -> Set T.Text
 acceptedFieldRoots u =
   u.bareCols
     <> M.keysSet (M.filter (resolvesIn u) outputFieldAliases)
-    <> S.fromList ["gen_ai" | "summary" `S.member` u.bareCols]
-
-
--- | The summary element ingest stamps on every LLM/agent record (any @gen_ai.operation.name@).
--- KQL reads it as the flag @gen_ai == true@; its rendering lives in 'Models.Telemetry.Telemetry'.
-genAIMarker :: T.Text
-genAIMarker = "kind;neutral⇒ai"
-
-
--- | What @gen_ai == true@ means: the marker is in @summary@. TimeFusion lowers it to @array_has@.
-genAISubject :: Expr
-genAISubject = Cmp Eq (Subject "summary[*]" "summary" [ArrayWildcard ""]) (Str genAIMarker)
 
 
 -- | Whether a subject's root names something queryable. @*@/@""@ come from
@@ -1404,15 +1392,6 @@ scalarFuncToSQL name args
 -- >>> T.isPrefixOf "(NOT " (display (Cmp Eq (Subject "errors" "errors" []) (Boolean False)))
 -- True
 --
--- @gen_ai@ is the LLM/agent flag over the ingest marker; @false@ negates it:
---
--- >>> display (Cmp Eq (Subject "gen_ai" "gen_ai" []) (Boolean True)) == display genAISubject
--- True
--- >>> display (Cmp NotEq (Subject "gen_ai" "gen_ai" []) (Boolean True)) == display (Cmp Eq (Subject "gen_ai" "gen_ai" []) (Boolean False))
--- True
--- >>> T.isPrefixOf "(NOT " (display (Cmp Eq (Subject "gen_ai" "gen_ai" []) (Boolean False)))
--- True
---
 -- The column itself is still addressable, so nothing that already worked changes:
 --
 -- >>> display (Cmp NotEq (Subject "errors" "errors" []) Null)
@@ -1583,11 +1562,6 @@ displayExprHelper op prec sub val =
           | Subject "errors" _ [] <- sub
           , Just positive <- lookup c [(Eq, b), (NotEq, not b)] ->
               displayParen True $ displayBuilder $ bool ("NOT " <> errorFlagSql) errorFlagSql positive
-        -- `gen_ai` is a flag over the ingest marker, not a column: see 'genAISubject'.
-        (Left c, Boolean b)
-          | Subject "gen_ai" _ [] <- sub
-          , Just positive <- lookup c [(Eq, b), (NotEq, not b)] ->
-              bool (displayParen True . ("NOT " <>) . displayParen True) id positive $ displayPrec prec genAISubject
         -- `->>` yields text, and text = boolean fails the whole query on both TimeFusion and
         -- Postgres; a JSON boolean reads back as the text 'true'/'false'.
         (Left c, Boolean b) | Subject _ _ (_ : _) <- sub, c `elem` [Eq, NotEq] -> displayPrec prec sub <> displayBuilder (" " <> sqlOp <> " ") <> displayPrec prec (Str (bool "false" "true" b))
