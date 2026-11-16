@@ -79,8 +79,8 @@ Unknown models carry tokens but no cost; the UI says "unpriced" rather than `$0`
 - **Trace header:** total LLM cost and tokens when the trace has gen_ai spans.
 
 ### LLM & Agents page (`/p/:pid/llm`, `/llm/conversations/:key`, `/llm/dashboard`)
-- **KPI strip:** conversations, LLM calls, tokens, cost, error rate, p95 LLM latency, each
-  with the previous-window delta.
+- **KPI strip:** conversations, model calls, tokens, cost (with the count of unpriced calls),
+  error rate, p95 model latency; cost and calls charted by model.
 - **Two lists.** *Conversations* are groups with a `gen_ai.conversation.id` or an
   `invoke_agent` span; *LLM calls* lists every inference span. Single-call traces (a
   classifier, a judge) appear only in the second, so they don't drown real conversations.
@@ -88,7 +88,7 @@ Unknown models carry tokens but no cost; the UI says "unpriced" rather than `$0`
   turns, tool calls, tokens, cost, errors/signals, duration, last seen. Grouping key is
   `gen_ai.conversation.id`, falling back to the trace id; a trace adopts the id any of its
   spans carries (frameworks put it only on the root agent span). Facets: agent, model,
-  service, signal.
+  signal.
 - **Conversation detail:**
   - *Transcript*: each new message once (LLM inputs repeat the history; we diff), with
     per-step model, latency, tokens, cost chips, tool calls inline with their results.
