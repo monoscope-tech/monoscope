@@ -156,7 +156,7 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
     // pi-otel ignores the standard OTel switches and defaults to gRPC, where the spec defaults to http/protobuf.
     const { OTEL_SDK_DISABLED, OTEL_TRACES_EXPORTER, OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_PROTOCOL = 'http/protobuf' } = process.env;
     const traced = OTEL_SDK_DISABLED !== 'true' && OTEL_TRACES_EXPORTER !== 'none' && Boolean(OTEL_EXPORTER_OTLP_ENDPOINT);
-    Object.assign(process.env, { OTEL_EXPORTER_OTLP_PROTOCOL, PI_OTEL_SPAN_NAMING: 'genai' });
+    if (traced) Object.assign(process.env, { OTEL_EXPORTER_OTLP_PROTOCOL, PI_OTEL_SPAN_NAMING: 'genai' });
     const loader = new DefaultResourceLoader({
       cwd: root, agentDir: join(root, 'agent'), settingsManager, extensionFactories: traced ? [{ name: 'otel', factory: piOtel }] : [],
       noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
@@ -201,9 +201,12 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
     return submitted;
   } finally {
     signal?.removeEventListener('abort', abort);
-    // pi-otel flushes its spans on session_shutdown, which dispose never emits.
-    await session?.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' }).catch(() => {});
-    try { session?.dispose(); } finally { await Promise.allSettled([...modelCalls]); }
+    // pi-otel flushes on session_shutdown, which dispose never emits and which fails once disposed;
+    // in-flight calls settle first so a failing call's span is still exported.
+    session?.agent.abort();
+    await Promise.allSettled([...modelCalls]);
+    await session?.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' }).catch((error) => process.stderr.write(JSON.stringify({ event: 'telemetry_flush_failed', pid: process.pid, error: String(error) }) + '\n'));
+    session?.dispose();
   }
 }
 

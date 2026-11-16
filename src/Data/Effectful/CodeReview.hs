@@ -456,8 +456,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
             withJournal action = maybe (action Nothing) (\configured -> Outbox.withOutbox configured scope $ action . Just) artifactStore
             runChild :: Maybe Outbox.Outbox -> Maybe RetainedSession -> IO (Either Text result)
             runChild journal retention = do
-              let sessionDirectory = retention <&> \retained -> (retained.directory, retained.sessionFile)
-                  resumed = retention >>= (.saved)
+              let resumed = retention >>= (.saved)
                   paused = (\case AnalysisSuspended saved -> saved; FixSuspended saved _ -> saved) <$> resumed
                   savedFix = case resumed of Just (FixSuspended _ saved) -> Just saved; (Nothing; Just AnalysisSuspended{}) -> Nothing
                   persist progress = for_ retention \retained -> do
@@ -465,16 +464,16 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                     pruneNativeSnapshots retained.directory $ case progress of Waiting saved -> Just saved.id; FixWaiting saved _ -> Just saved.id; Finished{} -> Nothing
               -- A resumed session keeps its proof attempts, so the budget is checked before VMs run.
               writeIORef proofCount $ fromMaybe 0 $ (.proofs) =<< paused
-              for_ sessionDirectory \(directory, sessionFile) -> case paused of
+              for_ retention \retained -> case paused of
                 Nothing -> do
-                  removed <- tryIOError $ removeFile $ directory </> sessionFile
+                  removed <- tryIOError $ removeFile $ retained.directory </> retained.sessionFile
                   case removed of Left failed | not (isDoesNotExistError failed) -> throwIO failed; _ -> pass
                 Just saved -> do
-                  transcript <- Native.readPrivateArtifact (directory </> toString saved.id.toText) "session.jsonl" (64 * 1048576)
+                  transcript <- Native.readPrivateArtifact (retained.directory </> toString saved.id.toText) "session.jsonl" (64 * 1048576)
                   unless (Native.sha256 transcript == saved.sha256) $ fail "Native continuation transcript has changed"
-                  Native.writePrivateArtifact directory sessionFile $ fromStrict transcript
+                  Native.writePrivateArtifact retained.directory retained.sessionFile $ fromStrict transcript
               environment <- getEnvironment
-              let selected = [("IMPACT_REVIEW_AGENT_SECONDS", show budget)] <> maybe [] (\outbox -> [("IMPACT_REVIEW_OUTBOX_DIR", Outbox.outboxPath outbox)]) journal <> maybe [] (\(directory, sessionFile) -> [("IMPACT_REVIEW_SESSION_FILE", directory </> sessionFile)]) sessionDirectory <> [("OTEL_SERVICE_NAME", service)]
+              let selected = [("IMPACT_REVIEW_AGENT_SECONDS", show budget)] <> maybe [] (\outbox -> [("IMPACT_REVIEW_OUTBOX_DIR", Outbox.outboxPath outbox)]) journal <> maybe [] (\retained -> [("IMPACT_REVIEW_SESSION_FILE", retained.directory </> retained.sessionFile)]) retention <> [("OTEL_SERVICE_NAME", service)]
                   service = case role of Policy.Advisory -> "pi-review"; Policy.Fix -> "pi-fix"; Policy.Peer -> "pi-fix-review"; Policy.Admission -> "pi-admission"; Policy.Source -> "pi-source"; (Policy.Patch; Policy.SourcePatch) -> "pi-patch"
                   childEnvironment = selected <> filter ((`notElem` map fst selected) . fst) environment
               withProcessTerm (setStdin createPipe $ setStdout createPipe $ command childEnvironment) \process -> do
@@ -492,12 +491,12 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                     parseMessage :: AE.Value -> AET.Parser (Either Outbox.Receipt Message)
                     parseMessage value = (Left <$> AE.parseJSON value) <|> (Right <$> AE.parseJSON value)
                     suspend :: Int -> Int -> Maybe AE.Value -> Maybe GuestSession -> IO ()
-                    suspend remaining submissions accepted workflowState = for_ sessionDirectory \(directory, sessionFile) -> case accepted of
+                    suspend remaining submissions accepted workflowState = for_ retention \retained -> case accepted of
                       Just draft -> persist $ Finished draft
                       Nothing -> do
-                        transcript <- Native.readPrivateArtifact directory sessionFile (64 * 1048576)
+                        transcript <- Native.readPrivateArtifact retained.directory retained.sessionFile (64 * 1048576)
                         identifier <- UUIDId <$> UUID4.nextRandom
-                        generation <- Outbox.privateDirectory directory [toString identifier.toText]
+                        generation <- Outbox.privateDirectory retained.directory [toString identifier.toText]
                         Native.writePrivateArtifact generation "session.jsonl" $ fromStrict transcript
                         session <- readIORef guest >>= maybe (fail "Native continuation requires a live guest") pure
                         disk <- session.suspend $ generation </> "guest.qcow2"
@@ -897,7 +896,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             receive supplied guestSession remaining (submissions - 1) $ either (const Nothing) (Just . Accepted (AE.String raw) (AE.String raw)) checked
                           (DraftText{}, _) -> pure $ Left "Text submission requires a prepared patch comparison and remaining budget"
                           (StructuredDraft{}, _) -> pure $ Left "Text submission requires a prepared patch comparison and remaining budget"
-                        Right (Right (Suspend ())) -> case (sessionDirectory, accepted) of
+                        Right (Right (Suspend ())) -> case (retention, accepted) of
                           (Nothing, Nothing) -> writeMessage (Left "Session retention is not configured" :: Either Text ()) $> Left "Session retention is not configured"
                           _ -> do
                             suspend remaining submissions ((.validated) <$> accepted) guestSession
