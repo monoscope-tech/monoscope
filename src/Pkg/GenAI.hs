@@ -314,7 +314,7 @@ normalizeGenAI kvs
     -- source keys go, as do indexed keys, which would otherwise nest as {"0": …} objects.
     folded k =
       any (\p -> maybe False (isDigit . fst) (T.stripPrefix p k >>= T.uncons)) ["llm.input_messages.", "llm.output_messages.", "gen_ai.prompt.", "gen_ai.completion."]
-        || (exclusive && k `elem` ["gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cache_write.input_tokens"])
+        || (exclusive && k `elem` canonicalTokens)
         || (k `elem` ["ai.prompt.messages", "input.value"] && emitted "gen_ai.input.messages" inputMessages)
         || (k `elem` ["ai.response.text", "ai.response.toolCalls", "output.value"] && emitted "gen_ai.output.messages" outputMessages)
     emitted k v = not (HM.member k m) && isJust v
@@ -336,32 +336,30 @@ normalizeGenAI kvs
     intV = AE.Number . fromInteger . round
 
     derived =
-      catMaybes
-        [ emit "gen_ai.operation.name" (AE.String <$> op)
-        , emit "gen_ai.provider.name" provider
-        , emit "gen_ai.request.model" model
-        , emit "gen_ai.response.model" responseModel
-        , emitTokens "gen_ai.usage.input_tokens" inT
-        , emitTokens "gen_ai.usage.output_tokens" outT
-        , emitTokens "gen_ai.usage.cache_read.input_tokens" readT
-        , emitTokens "gen_ai.usage.cache_write.input_tokens" writeT
-        , emit "gen_ai.usage.reasoning.output_tokens" (intV <$> tokens ["gen_ai.usage.reasoning_tokens", "llm.token_count.completion_details.reasoning"])
-        , emit "gen_ai.usage.cost" (AE.toJSON . fst <$> cost)
-        , emit "gen_ai.usage.cost_source" (AE.String . snd <$> cost)
-        , emit "gen_ai.input.messages" derivedInput
-        , emit "gen_ai.output.messages" (canonicalMessages <$> outputMessages)
-        , emit "gen_ai.input.preview" (AE.String <$> ((givenInput <|> derivedInput) >>= latestUserText))
-        , emit "gen_ai.response.finish_reasons" (asList <$> finishReasons)
-        , emit "gen_ai.conversation.id" conversation
-        , emit "gen_ai.agent.name" (firstOf ["agent.name", "traceloop.workflow.name", "ai.telemetry.functionId"])
-        , emit "gen_ai.tool.name" (guard tool *> (firstOf ["tool.name", "ai.toolCall.name", "traceloop.entity.name"] <|> cc "tool_name"))
-        , emit "gen_ai.tool.call.id" (guard tool *> (firstOf ["tool_call.id", "ai.toolCall.id"] <|> cc "tool_use_id"))
-        , emit "gen_ai.tool.call.arguments" (guard tool *> (firstOf ["tool.parameters", "ai.toolCall.args", "ai.toolCall.input", "traceloop.entity.input", "input.value"] <|> cc "tool_parameters"))
-        , emit "gen_ai.tool.call.result" (guard tool *> firstOf ["ai.toolCall.result", "ai.toolCall.output", "traceloop.entity.output", "output.value"])
-        , emit "user.id" (firstOf ["langfuse.user.id", "traceloop.association.properties.user_id", "ai.telemetry.metadata.userId"])
-        ]
+      (tokenCounts <>)
+        $ catMaybes
+          [ emit "gen_ai.operation.name" (AE.String <$> op)
+          , emit "gen_ai.provider.name" provider
+          , emit "gen_ai.request.model" model
+          , emit "gen_ai.response.model" responseModel
+          , emit "gen_ai.usage.reasoning.output_tokens" (intV <$> tokens ["gen_ai.usage.reasoning_tokens", "llm.token_count.completion_details.reasoning"])
+          , emit "gen_ai.usage.cost" (AE.toJSON . fst <$> cost)
+          , emit "gen_ai.usage.cost_source" (AE.String . snd <$> cost)
+          , emit "gen_ai.input.messages" derivedInput
+          , emit "gen_ai.output.messages" (canonicalMessages <$> outputMessages)
+          , emit "gen_ai.input.preview" (AE.String <$> ((givenInput <|> derivedInput) >>= latestUserText))
+          , emit "gen_ai.response.finish_reasons" (asList <$> finishReasons)
+          , emit "gen_ai.conversation.id" conversation
+          , emit "gen_ai.agent.name" (firstOf ["agent.name", "traceloop.workflow.name", "ai.telemetry.functionId"])
+          , emit "gen_ai.tool.name" (guard tool *> (firstOf ["tool.name", "ai.toolCall.name", "traceloop.entity.name"] <|> cc "tool_name"))
+          , emit "gen_ai.tool.call.id" (guard tool *> (firstOf ["tool_call.id", "ai.toolCall.id"] <|> cc "tool_use_id"))
+          , emit "gen_ai.tool.call.arguments" (guard tool *> (firstOf ["tool.parameters", "ai.toolCall.args", "ai.toolCall.input", "traceloop.entity.input", "input.value"] <|> cc "tool_parameters"))
+          , emit "gen_ai.tool.call.result" (guard tool *> firstOf ["ai.toolCall.result", "ai.toolCall.output", "traceloop.entity.output", "output.value"])
+          , emit "user.id" (firstOf ["langfuse.user.id", "traceloop.association.properties.user_id", "ai.telemetry.metadata.userId"])
+          ]
     emit k v = guard (not $ HM.member k m) *> ((k,) <$> v)
-    emitTokens k v = (k,) . intV <$> v <* guard (exclusive || not (HM.member k m))
+    canonicalTokens = ["gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cache_write.input_tokens"]
+    tokenCounts = catMaybes $ zipWith (\k v -> (k,) . intV <$> v <* guard (exclusive || not (HM.member k m))) canonicalTokens [inT, outT, readT, writeT]
 
 
 -- | Messages in the conventions' parts shape, from OpenAI-, Anthropic-, Vercel- or
