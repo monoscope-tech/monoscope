@@ -10,6 +10,7 @@ module Pages.LLM (
   ConversationGet (..),
   Conversation (..),
   Signal (..),
+  signalLabel,
   Unit (..),
   Topic (..),
   conversationsOf,
@@ -19,6 +20,7 @@ module Pages.LLM (
   llmSignalRunPostH,
   parseVerdicts,
   LLMSignal (..),
+  SignalRow (..),
   SignalForm (..),
   SignalQueued (..),
   Flag (..),
@@ -29,6 +31,7 @@ import BackgroundJobs.Types qualified as Jobs
 import Control.Lens ((^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
+import Data.Char (isAlpha)
 import Data.Default (def)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
@@ -72,7 +75,7 @@ import Pkg.Parser.Eval (jsonAsText)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, act, addRespHeaders, done, useTfReads)
-import Utils (TabStrip (..), countNoun, drawerRowAttrs_, faSprite_, getDurationNSMS, navTabStrip_, prettyPrintCount, tokenFlow, truncateText)
+import Utils (TabStrip (..), countNoun, drawerRowAttrs_, faSprite_, getDurationNSMS, navTabStrip_, prettyPrintCount, replaceAllFormats, tokenFlow, truncateText)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links
 
@@ -315,17 +318,19 @@ llmWindow fromP toP sinceP = mkWindow fromP toP (sinceP <|> ("24H" <$ guard (isN
 data Topic = Topic {template :: Text, conversations :: [Conversation]}
 
 
--- | Each conversation joins the first final template its tokens match.
+-- | Each conversation joins the first final template its tokens match. Only a token that is wholly a
+-- value (a number, id, email) becomes a placeholder, so "p95" or "500s" read as written.
 --
 -- >>> import Relude.Unsafe qualified as Unsafe
 -- >>> let t = Unsafe.read @UTCTime "2026-01-01 00:00:00 UTC"
 -- >>> let c k title = Conversation k (Just title) t t [] [] [] [] 1 1 0 10 Nothing 0 0 [] []
--- >>> map (\x -> (x.template, map (.key) x.conversations)) $ topicsOf t [c "a" "refund order 1234 failed", c "b" "refund order 98 failed", c "c" "why is checkout slow"]
--- [("refund order <*> failed",["a","b"]),("why is checkout slow",["c"])]
+-- >>> sortOn fst $ map (\x -> (x.template, map (.key) x.conversations)) $ topicsOf t [c "a" "refund order 1234 failed", c "b" "refund order 98 failed", c "c" "why is checkout slow", c "d" "p95 latency on 500s"]
+-- [("p95 latency on 500s",["d"]),("refund order <*> failed",["a","b"]),("why is checkout slow",["c"])]
 topicsOf :: UTCTime -> [Conversation] -> [Topic]
 topicsOf now convs = sortOn (Down . length . (.conversations)) [Topic tmpl members | tmpl <- ordNub (map (.templateStr) results), let members = [c | (c, Just t) <- assigned, t == tmpl], not (null members)]
   where
-    titled = [(c, Drain.generateDrainTokens t) | c <- convs, Just t <- [c.title]]
+    titled = [(c, V.map valueToken $ Drain.tokenizeForDrain t) | c <- convs, Just t <- [c.title]]
+    valueToken tok = let r = replaceAllFormats tok in if T.any isAlpha tok && not ("{" `T.isPrefixOf` r && "}" `T.isSuffixOf` r && T.count "{" r == 1) then tok else Drain.normalizePlaceholder r
     results = V.toList $ Drain.getAllLogGroups $ Drain.buildDrainTree snd ((.key) . fst) (const Nothing) Drain.emptyDrainTree (V.fromList titled) now
     matching toks r = V.length r.templateTokens == V.length toks && V.and (V.zipWith (\p x -> p == x || Drain.isPlaceholderToken p) r.templateTokens toks)
     assigned = [(c, (.templateStr) <$> find (matching toks) results) | (c, toks) <- titled]
@@ -346,7 +351,11 @@ viewParam :: View -> Text
 viewParam = T.toLower . viewLabel
 
 
-data LLMBody = ConversationsBody (Table Conversation) | TopicsBody (Table Topic) | SignalsBody (Table LLMSignal)
+data LLMBody = ConversationsBody (Table Conversation) | TopicsBody (Table Topic) | SignalsBody (Table SignalRow)
+
+
+-- | A Signals table row: a built-in rule counted over the window's conversations, or a plain-language signal's verdicts.
+data SignalRow = SignalRow {name :: Text, description :: Text, matched :: Int64, judged :: Int64, builtIn :: Bool}
 
 
 instance ToHtml LLMBody where
@@ -407,11 +416,20 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
               }
       SignalsView -> do
         signals <- selectSignals pid
+        (conversations, capped) <- conversationsIn
+        let flagged sig = fromIntegral (length [c | c <- conversations, Detected sig `elem` c.signals])
+            rows = [SignalRow s.name s.description s.matched s.judged False | s <- signals] <> [SignalRow (signalLabel sig) (flagHelp $ Detected sig) (flagged sig) (fromIntegral $ length conversations) True | sig <- universe]
         pure
           $ SignalsBody
             base
               { columns =
-                  [ col "Signal" (\s -> div_ [class_ "flex min-w-0 flex-col"] $ span_ [class_ "font-medium text-textStrong"] (toHtml s.name) >> span_ [class_ "truncate text-xs text-textWeak"] (toHtml s.description)) & fillCol
+                  [ col
+                      "Signal"
+                      ( \s -> div_ [class_ "flex min-w-0 flex-col"] do
+                          span_ [class_ "flex items-center gap-2 font-medium text-textStrong"] $ toHtml s.name >> when s.builtIn (span_ [class_ "rounded bg-fillWeak px-1.5 py-0.5 text-xs font-normal text-textWeak"] "Built-in")
+                          span_ [class_ "truncate text-xs text-textWeak"] (toHtml s.description)
+                      )
+                      & fillCol
                   , col "Matched" (\s -> if s.matched > 0 then span_ [class_ "rounded-full bg-fillBrand-weak px-2 py-0.5 text-xs font-medium tabular-nums text-textBrand"] (toHtml $ prettyPrintCount $ fromIntegral s.matched) else num 0) & withAttrs [class_ "w-24 text-right"]
                   , col
                       "Match rate"
@@ -423,7 +441,7 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
                       & withAttrs [class_ "w-48"]
                   , col "Judged" (num . fromIntegral . (.judged)) & withAttrs [class_ "w-20 text-right"]
                   ]
-              , rows = V.fromList signals
+              , rows = V.fromList rows
               , features =
                   base.features
                     { header = Just $ details_ ([class_ "group/new mt-3 rounded-xl border border-strokeWeak bg-bgRaised"] <> [open_ "" | null signals]) do
@@ -452,9 +470,8 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
                                   span_ [class_ "flex min-w-0 flex-col gap-0.5"] do
                                     span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml name
                                     span_ [class_ "text-xs text-textWeak"] $ toHtml description
-                    , zeroState = Just ZeroState{icon = "sparkles", title = "No signals yet", description = "Built-in signals (tool errors, truncation, loops, context pressure) already run on every conversation.", action = ESNone}
                     , rowLink = Just \s -> link ConversationsView Nothing Nothing (Just s.name) Nothing Nothing
-                    , resultSummary = Just $ show (length signals) <> " signals"
+                    , resultSummary = Just $ countNoun (length signals) "custom signal" <> " · built-ins over " <> countNoun (length conversations) "conversation" <> capped
                     }
               }
       TopicsView -> do
