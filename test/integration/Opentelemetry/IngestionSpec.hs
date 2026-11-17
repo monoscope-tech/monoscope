@@ -108,6 +108,10 @@ spec = do
     -- isNewEndpoint reads knownHashes: a hash already there is not re-minted.
     hashOf <- maybe (fail "no endpoint hash stamped") pure $ (\(_, hs, _, _) -> hs V.!? 0) (entities emptyPathClassifier rootSpan)
     (mints emptyPathClassifier rootSpan, mints emptyPathClassifier{knownHashes = fromList [hashOf]} rootSpan) `shouldBe` (True, False)
+    -- A browser fetch to another site (a consent banner's CDN) is a third party's API; the page's own api.* subdomain is the project's.
+    let browserFetch :: Text -> Telemetry.OtelLogsAndSpans
+        browserFetch h = (emptySpan now){Telemetry.kind = Just "client", Telemetry.attributes = Just $ AesonText $ Map.fromList [("http", AE.object ["host" AE..= (h :: Text), "request" AE..= AE.object ["method" AE..= ("GET" :: Text)], "route" AE..= ("/logo.svg" :: Text)]), ("page", AE.object ["url" AE..= ("https://app.monoscope.tech/p/1" :: Text)])]}
+    map (mints emptyPathClassifier . browserFetch) ["cdn.cookielaw.org", "api.monoscope.tech"] `shouldBe` [False, True]
     let pathOf c sp = (\(_, _, np, _) -> np) $ entities c sp
         fwHashOf c sp = (\(_, _, _, fw) -> fw) $ entities c sp
         stampOne sp = V.head $ stampHashesAtIngest (one (testPid, Projects.defaultProjectCache)) (V.singleton sp)

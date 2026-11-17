@@ -122,6 +122,7 @@ module Models.Projects.Projects (
   setMeterSubItemId,
   markUsageSubmissionSucceeded,
   markUsageSubmissionFailed,
+  SubmissionFailure (..),
   upgradeToPaid,
   downgradeToFree,
   downgradeToFreeBySubId,
@@ -1182,14 +1183,18 @@ splitUsageIntoChunks meter total = UsageChunk meter <$> mapMaybe mkChunkQuantity
     (fulls, rem_) = max 0 total `divMod` chunkCap
 
 
+-- | A bounded batch of retriable chunks per tick, never-tried ones first: the drain is one provider
+-- call per row, so an unbounded oldest-first backlog of failures outran the 600s job timeout and
+-- never reached the newer rows.
 pendingUsageSubmissions :: DB es => ProjectId -> Eff es [UsageSubmission]
 pendingUsageSubmissions pid =
   EHasql.interp
     [HI.sql|
       SELECT id, project_id, window_start, window_end, quantity::int8, meter_kind, status, submitted_at, last_error, created_at
       FROM projects.usage_report_submissions
-      WHERE project_id = #{pid} AND status <> 'submitted'
-      ORDER BY created_at ASC
+      WHERE project_id = #{pid} AND status IN ('pending', 'failed')
+      ORDER BY status = 'failed', created_at ASC
+      LIMIT 50
     |]
 
 
@@ -1265,12 +1270,19 @@ markUsageSubmissionSucceeded sid =
     |]
 
 
-markUsageSubmissionFailed :: DB es => UsageSubmissionId -> Text -> Eff es Int64
-markUsageSubmissionFailed sid err =
+-- | The status a failed chunk takes: 'Failed' is re-sent on a later tick; 'Rejected' (a provider
+-- 4xx that fails the same way every time) is kept for audit and manual reconcile only.
+data SubmissionFailure = Failed | Rejected
+  deriving stock (Eq, Generic, Show)
+  deriving (HI.EncodeValue) via WrappedEnumSC 'Nothing "" SubmissionFailure
+
+
+markUsageSubmissionFailed :: DB es => SubmissionFailure -> UsageSubmissionId -> Text -> Eff es Int64
+markUsageSubmissionFailed failure sid err =
   EHasql.interpExecute
     [HI.sql|
       UPDATE projects.usage_report_submissions
-      SET status = 'failed', last_error = #{err}
+      SET status = #{failure}, last_error = #{err}
       WHERE id = #{sid}
     |]
 

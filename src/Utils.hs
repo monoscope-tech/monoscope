@@ -89,6 +89,7 @@ module Utils (
   FieldMenuCtx (..),
   renderSummaryTags,
   summaryWords,
+  parseSummaryEl,
   renderSummaryElements,
   summaryForDetailView,
   calculateCycleStartDate,
@@ -1512,7 +1513,7 @@ data DashboardSwap = TabPanel | WholePage
 dashboardContentNavAttrs :: DashboardSwap -> Text -> [Attribute]
 dashboardContentNavAttrs target url =
   [ hxGet_ $ path <> foldMap (("?" <>) . T.intercalate "&" . toList) (nonEmpty kept)
-  , hxVals_ "js:{...getTimeRange()}"
+  , hxVals_ "js:{...window.getTimeRange?.()}"
   , hxSwap_ "outerMorph"
   , hxPushUrl_ "true"
   , data_ "preserve-page-context" ""

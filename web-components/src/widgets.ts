@@ -537,7 +537,9 @@ export const createSeriesConfig = (widgetData: WidGetData, name: string, i: numb
   // healthy throughput are both "count(*)"). Explicit intent, never a hash.
   const isErrorSeries = isGenericAggregate && widgetData.seriesIntent === 'error';
   const styles = getChartStyles(); // one getComputedStyle read per series, not three
-  const paletteColor = isErrorStat || isErrorSeries ? styles.errorColor : isGenericAggregate ? styles.brandColor : getSeriesColor(name, undefined, total === 1 ? styles.brandColor : undefined);
+  // An unreadable theme token reads as '' (a browser that drops Tailwind's @layer theme), which
+  // modifyAlpha turns into undefined: addColorStop then threw on every animation frame.
+  const paletteColor = (isErrorStat || isErrorSeries ? styles.errorColor : isGenericAggregate ? styles.brandColor : getSeriesColor(name, undefined, total === 1 ? styles.brandColor : undefined)) || getSeriesColor(name);
 
   const gradientColor = (opacity: number) => new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
     { offset: 0, color: window.echarts.color.modifyAlpha(paletteColor, opacity) },

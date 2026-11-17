@@ -1,4 +1,4 @@
-<div id="dashboard-views" class="flex items-center gap-2 shrink-0 ml-auto max-md:ml-0" data-hx-get="/p/<uuid>/dashboards/<uuid>/views" data-hx-trigger="update-query[!event.detail?.source] from:window" data-hx-swap="outerMorph" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<div id="dashboard-views" class="flex items-center gap-2 shrink-0 ml-auto max-md:ml-0" data-hx-get="/p/<uuid>/dashboards/<uuid>/views" data-hx-trigger="update-query[!event.detail?.source] from:window" data-hx-swap="outerMorph" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <button type="button" class="inline-flex items-center gap-1.5 h-8 px-2 rounded-lg text-sm cursor-pointer bg-fillBrand-weak ring-1 ring-strokeBrand-weak text-textBrand font-medium" aria-label="Saved views: Mobile Safari" popovertarget="dashboard-views-menu" style="anchor-name:--anchor-dashboard-views-menu">
 <svg class="icon w-3.5 h-3.5" width="1em" height="1em" viewBox="0 0 384 512">
 <g>
@@ -15,7 +15,7 @@
 <div class="dropdown dropdown-end z-50 mt-1 w-64 rounded-lg border border-strokeWeak bg-bgRaised p-1.5 text-sm shadow-lg flex flex-col gap-0.5" id="dashboard-views-menu" popover="auto" style="position-try:flip-block; position-anchor:--anchor-dashboard-views-menu">
 <p class="px-2 pt-1 pb-0.5 text-xs text-textWeak">Saved views</p>
 <div class="flex items-center rounded hover:bg-fillWeak">
-<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textBrand font-medium" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=7D&amp;var-app=&amp;var-browser=Safari&amp;var-device=&amp;var-errors=false&amp;var-os=&amp;view=Mobile%20Safari" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors?var-app=&amp;var-browser=Safari&amp;var-device=&amp;var-errors=false&amp;var-os=&amp;view=Mobile%20Safari" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
+<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textBrand font-medium" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=7D&amp;var-app=&amp;var-browser=Safari&amp;var-device=&amp;var-errors=false&amp;var-os=&amp;view=Mobile%20Safari" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors?var-app=&amp;var-browser=Safari&amp;var-device=&amp;var-errors=false&amp;var-os=&amp;view=Mobile%20Safari" data-hx-vals="js:{...window.getTimeRange?.()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
 <span class="w-3.5 shrink-0">
 <svg class="icon w-3.5 h-3.5" width="1em" height="1em" viewBox="0 0 640 640">
 <g>
@@ -23,7 +23,7 @@
 </g>
 </svg>
 </span>Mobile Safari</a>
-<button type="button" class="btn btn-ghost btn-xs" aria-label="Delete view Mobile Safari" data-hx-confirm="Delete view Mobile Safari?" data-hx-delete="/p/<uuid>/dashboards/<uuid>/views/Mobile%20Safari?activeTabSlug=errors" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<button type="button" class="btn btn-ghost btn-xs" aria-label="Delete view Mobile Safari" data-hx-confirm="Delete view Mobile Safari?" data-hx-delete="/p/<uuid>/dashboards/<uuid>/views/Mobile%20Safari?activeTabSlug=errors" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <svg class="icon h-3 w-3" width="1em" height="1em" viewBox="0 0 8 8">
 <g>
 <path d="M7 1L1 7M1 1L7 7" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round" />
@@ -33,17 +33,17 @@
 </div>
 <div class="h-px bg-strokeWeak my-1">
 </div>
-<form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/dashboards/<uuid>/views" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/dashboards/<uuid>/views" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <input type="hidden" name="activeTabSlug" value="errors">
 <input name="name" required maxlength="100" class="input input-sm flex-1 min-w-0" placeholder="View name" aria-label="View name">
 <button type="submit" class="btn btn-primary btn-sm">Save view</button>
 </form>
-<a class="px-2 py-1.5 rounded text-textWeak hover:bg-fillWeak" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=7D" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">Clear filters</a>
+<a class="px-2 py-1.5 rounded text-textWeak hover:bg-fillWeak" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=7D" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors" data-hx-vals="js:{...window.getTimeRange?.()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">Clear filters</a>
 </div>
 <span class="w-px h-6 bg-strokeWeak max-md:hidden">
 </span>
 </div>
-<div id="dashboard-views" class="flex items-center gap-2 shrink-0 ml-auto max-md:ml-0" data-hx-get="/p/<uuid>/dashboards/<uuid>/views" data-hx-trigger="update-query[!event.detail?.source] from:window" data-hx-swap="outerMorph" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<div id="dashboard-views" class="flex items-center gap-2 shrink-0 ml-auto max-md:ml-0" data-hx-get="/p/<uuid>/dashboards/<uuid>/views" data-hx-trigger="update-query[!event.detail?.source] from:window" data-hx-swap="outerMorph" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <button type="button" class="inline-flex items-center gap-1.5 h-8 px-2 rounded-lg text-sm cursor-pointer text-textWeak hover:bg-fillWeak hover:text-textStrong" aria-label="Saved views" popovertarget="dashboard-views-menu" style="anchor-name:--anchor-dashboard-views-menu">
 <svg class="icon w-3.5 h-3.5" width="1em" height="1em" viewBox="0 0 384 512">
 <g>
@@ -61,12 +61,12 @@
 <p class="px-2 py-1 text-textWeak">None yet</p>
 <div class="h-px bg-strokeWeak my-1">
 </div>
-<form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/dashboards/<uuid>/views" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/dashboards/<uuid>/views" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <input type="hidden" name="activeTabSlug" value="errors">
 <input name="name" required maxlength="100" class="input input-sm flex-1 min-w-0" placeholder="View name" aria-label="View name">
 <button type="submit" class="btn btn-primary btn-sm">Save view</button>
 </form>
-<a class="px-2 py-1.5 rounded text-textWeak hover:bg-fillWeak" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=7D" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">Clear filters</a>
+<a class="px-2 py-1.5 rounded text-textWeak hover:bg-fillWeak" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=7D" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors" data-hx-vals="js:{...window.getTimeRange?.()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">Clear filters</a>
 </div>
 <span class="w-px h-6 bg-strokeWeak max-md:hidden">
 </span>
@@ -104,13 +104,13 @@
 <div class="dropdown dropdown-end z-50 mt-1 w-64 rounded-lg border border-strokeWeak bg-bgRaised p-1.5 text-sm shadow-lg flex flex-col gap-0.5" id="dashboard-views-menu" popover="auto" style="position-try:flip-block; position-anchor:--anchor-dashboard-views-menu">
 <p class="px-2 pt-1 pb-0.5 text-xs text-textWeak">Saved views</p>
 <div class="flex items-center rounded hover:bg-fillWeak">
-<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textStrong" href="/p/<uuid>/dashboards/<uuid>/tab/overview?environment&amp;var-region=eu&amp;var-service=api&amp;view=Europe%20API" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/overview?environment&amp;var-region=eu&amp;var-service=api&amp;view=Europe%20API" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
+<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textStrong" href="/p/<uuid>/dashboards/<uuid>/tab/overview?environment&amp;var-region=eu&amp;var-service=api&amp;view=Europe%20API" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/overview?environment&amp;var-region=eu&amp;var-service=api&amp;view=Europe%20API" data-hx-vals="js:{...window.getTimeRange?.()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
 <span class="w-3.5 shrink-0">
 </span>Europe API</a>
 </div>
 <div class="h-px bg-strokeWeak my-1">
 </div>
-<form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/dashboards/<uuid>/views" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/dashboards/<uuid>/views" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <input type="hidden" name="activeTabSlug" value="overview">
 <input name="name" required maxlength="100" class="input input-sm flex-1 min-w-0" placeholder="View name" aria-label="View name">
 <button type="submit" class="btn btn-primary btn-sm">Save view</button>
@@ -160,19 +160,19 @@
 <div class="dropdown dropdown-end z-50 mt-1 w-64 rounded-lg border border-strokeWeak bg-bgRaised p-1.5 text-sm shadow-lg flex flex-col gap-0.5" id="dashboard-views-menu" popover="auto" style="position-try:flip-block; position-anchor:--anchor-dashboard-views-menu">
 <p class="px-2 pt-1 pb-0.5 text-xs text-textWeak">Saved views</p>
 <div class="flex items-center rounded hover:bg-fillWeak">
-<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textStrong" href="/p/<uuid>/dashboards/<uuid>/tab/errors?environment&amp;var-region=eu&amp;var-service=api&amp;view=Europe%20API" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors?environment&amp;var-region=eu&amp;var-service=api&amp;view=Europe%20API" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
+<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textStrong" href="/p/<uuid>/dashboards/<uuid>/tab/errors?environment&amp;var-region=eu&amp;var-service=api&amp;view=Europe%20API" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors?environment&amp;var-region=eu&amp;var-service=api&amp;view=Europe%20API" data-hx-vals="js:{...window.getTimeRange?.()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
 <span class="w-3.5 shrink-0">
 </span>Europe API</a>
 </div>
 <div class="h-px bg-strokeWeak my-1">
 </div>
-<form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/dashboards/<uuid>/views" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/dashboards/<uuid>/views" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <input type="hidden" name="activeTabSlug" value="errors">
 <input name="name" required maxlength="100" class="input input-sm flex-1 min-w-0" placeholder="View name" aria-label="View name">
 <button type="submit" class="btn btn-primary btn-sm">Save view</button>
 </form>
 </div>
-<div id="dashboard-views" class="flex items-center gap-2 shrink-0 ml-auto max-md:ml-0" data-hx-get="/p/<uuid>/dashboards/<uuid>/views" data-hx-trigger="update-query[!event.detail?.source] from:window" data-hx-swap="outerMorph" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<div id="dashboard-views" class="flex items-center gap-2 shrink-0 ml-auto max-md:ml-0" data-hx-get="/p/<uuid>/dashboards/<uuid>/views" data-hx-trigger="update-query[!event.detail?.source] from:window" data-hx-swap="outerMorph" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <button type="button" class="inline-flex items-center gap-1.5 h-8 px-2 rounded-lg text-sm cursor-pointer bg-fillBrand-weak ring-1 ring-strokeBrand-weak text-textBrand font-medium" aria-label="Saved views: Europe API" popovertarget="dashboard-views-menu" style="anchor-name:--anchor-dashboard-views-menu">
 <svg class="icon w-3.5 h-3.5" width="1em" height="1em" viewBox="0 0 384 512">
 <g>
@@ -189,7 +189,7 @@
 <div class="dropdown dropdown-end z-50 mt-1 w-64 rounded-lg border border-strokeWeak bg-bgRaised p-1.5 text-sm shadow-lg flex flex-col gap-0.5" id="dashboard-views-menu" popover="auto" style="position-try:flip-block; position-anchor:--anchor-dashboard-views-menu">
 <p class="px-2 pt-1 pb-0.5 text-xs text-textWeak">Saved views</p>
 <div class="flex items-center rounded hover:bg-fillWeak">
-<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textBrand font-medium" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=24H&amp;var-region=us&amp;var-service=worker&amp;view=Europe%20API" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors?var-region=us&amp;var-service=worker&amp;view=Europe%20API" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
+<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textBrand font-medium" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=24H&amp;var-region=us&amp;var-service=worker&amp;view=Europe%20API" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors?var-region=us&amp;var-service=worker&amp;view=Europe%20API" data-hx-vals="js:{...window.getTimeRange?.()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
 <span class="w-3.5 shrink-0">
 <svg class="icon w-3.5 h-3.5" width="1em" height="1em" viewBox="0 0 640 640">
 <g>
@@ -197,7 +197,7 @@
 </g>
 </svg>
 </span>Europe API</a>
-<button type="button" class="btn btn-ghost btn-xs" aria-label="Delete view Europe API" data-hx-confirm="Delete view Europe API?" data-hx-delete="/p/<uuid>/dashboards/<uuid>/views/Europe%20API?activeTabSlug=errors" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<button type="button" class="btn btn-ghost btn-xs" aria-label="Delete view Europe API" data-hx-confirm="Delete view Europe API?" data-hx-delete="/p/<uuid>/dashboards/<uuid>/views/Europe%20API?activeTabSlug=errors" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <svg class="icon h-3 w-3" width="1em" height="1em" viewBox="0 0 8 8">
 <g>
 <path d="M7 1L1 7M1 1L7 7" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round" />
@@ -206,10 +206,10 @@
 </button>
 </div>
 <div class="flex items-center rounded hover:bg-fillWeak">
-<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textStrong" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=24H&amp;var-region=us&amp;var-service=worker&amp;view=US%20worker" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors?var-region=us&amp;var-service=worker&amp;view=US%20worker" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
+<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textStrong" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=24H&amp;var-region=us&amp;var-service=worker&amp;view=US%20worker" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors?var-region=us&amp;var-service=worker&amp;view=US%20worker" data-hx-vals="js:{...window.getTimeRange?.()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
 <span class="w-3.5 shrink-0">
 </span>US worker</a>
-<button type="button" class="btn btn-ghost btn-xs" aria-label="Delete view US worker" data-hx-confirm="Delete view US worker?" data-hx-delete="/p/<uuid>/dashboards/<uuid>/views/US%20worker?activeTabSlug=errors" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<button type="button" class="btn btn-ghost btn-xs" aria-label="Delete view US worker" data-hx-confirm="Delete view US worker?" data-hx-delete="/p/<uuid>/dashboards/<uuid>/views/US%20worker?activeTabSlug=errors" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <svg class="icon h-3 w-3" width="1em" height="1em" viewBox="0 0 8 8">
 <g>
 <path d="M7 1L1 7M1 1L7 7" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round" />
@@ -219,17 +219,17 @@
 </div>
 <div class="h-px bg-strokeWeak my-1">
 </div>
-<form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/dashboards/<uuid>/views" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/dashboards/<uuid>/views" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <input type="hidden" name="activeTabSlug" value="errors">
 <input name="name" required maxlength="100" class="input input-sm flex-1 min-w-0" placeholder="View name" aria-label="View name">
 <button type="submit" class="btn btn-primary btn-sm">Save view</button>
 </form>
-<a class="px-2 py-1.5 rounded text-textWeak hover:bg-fillWeak" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=24H" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">Clear filters</a>
+<a class="px-2 py-1.5 rounded text-textWeak hover:bg-fillWeak" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=24H" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors" data-hx-vals="js:{...window.getTimeRange?.()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">Clear filters</a>
 </div>
 <span class="w-px h-6 bg-strokeWeak max-md:hidden">
 </span>
 </div>
-<div id="dashboard-views" class="flex items-center gap-2 shrink-0 ml-auto max-md:ml-0" data-hx-get="/p/<uuid>/dashboards/<uuid>/views" data-hx-trigger="update-query[!event.detail?.source] from:window" data-hx-swap="outerMorph" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<div id="dashboard-views" class="flex items-center gap-2 shrink-0 ml-auto max-md:ml-0" data-hx-get="/p/<uuid>/dashboards/<uuid>/views" data-hx-trigger="update-query[!event.detail?.source] from:window" data-hx-swap="outerMorph" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <button type="button" class="inline-flex items-center gap-1.5 h-8 px-2 rounded-lg text-sm cursor-pointer bg-fillBrand-weak ring-1 ring-strokeBrand-weak text-textBrand font-medium" aria-label="Saved views: US worker" popovertarget="dashboard-views-menu" style="anchor-name:--anchor-dashboard-views-menu">
 <svg class="icon w-3.5 h-3.5" width="1em" height="1em" viewBox="0 0 384 512">
 <g>
@@ -246,12 +246,12 @@
 <div class="dropdown dropdown-end z-50 mt-1 w-64 rounded-lg border border-strokeWeak bg-bgRaised p-1.5 text-sm shadow-lg flex flex-col gap-0.5" id="dashboard-views-menu" popover="auto" style="position-try:flip-block; position-anchor:--anchor-dashboard-views-menu">
 <p class="px-2 pt-1 pb-0.5 text-xs text-textWeak">Saved views</p>
 <div class="flex items-center rounded hover:bg-fillWeak">
-<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textStrong" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=24H&amp;var-region=eu&amp;var-service=api&amp;view=Europe%20API" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors?var-region=eu&amp;var-service=api&amp;view=Europe%20API" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
+<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textStrong" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=24H&amp;var-region=eu&amp;var-service=api&amp;view=Europe%20API" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors?var-region=eu&amp;var-service=api&amp;view=Europe%20API" data-hx-vals="js:{...window.getTimeRange?.()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
 <span class="w-3.5 shrink-0">
 </span>Europe API</a>
 </div>
 <div class="flex items-center rounded hover:bg-fillWeak">
-<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textBrand font-medium" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=24H&amp;var-region=us&amp;var-service=worker&amp;view=US%20worker" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors?var-region=us&amp;var-service=worker&amp;view=US%20worker" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
+<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textBrand font-medium" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=24H&amp;var-region=us&amp;var-service=worker&amp;view=US%20worker" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors?var-region=us&amp;var-service=worker&amp;view=US%20worker" data-hx-vals="js:{...window.getTimeRange?.()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
 <span class="w-3.5 shrink-0">
 <svg class="icon w-3.5 h-3.5" width="1em" height="1em" viewBox="0 0 640 640">
 <g>
@@ -259,7 +259,7 @@
 </g>
 </svg>
 </span>US worker</a>
-<button type="button" class="btn btn-ghost btn-xs" aria-label="Delete view US worker" data-hx-confirm="Delete view US worker?" data-hx-delete="/p/<uuid>/dashboards/<uuid>/views/US%20worker?activeTabSlug=errors" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<button type="button" class="btn btn-ghost btn-xs" aria-label="Delete view US worker" data-hx-confirm="Delete view US worker?" data-hx-delete="/p/<uuid>/dashboards/<uuid>/views/US%20worker?activeTabSlug=errors" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <svg class="icon h-3 w-3" width="1em" height="1em" viewBox="0 0 8 8">
 <g>
 <path d="M7 1L1 7M1 1L7 7" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round" />
@@ -269,12 +269,12 @@
 </div>
 <div class="h-px bg-strokeWeak my-1">
 </div>
-<form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/dashboards/<uuid>/views" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/dashboards/<uuid>/views" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <input type="hidden" name="activeTabSlug" value="errors">
 <input name="name" required maxlength="100" class="input input-sm flex-1 min-w-0" placeholder="View name" aria-label="View name">
 <button type="submit" class="btn btn-primary btn-sm">Save view</button>
 </form>
-<a class="px-2 py-1.5 rounded text-textWeak hover:bg-fillWeak" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=24H" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">Clear filters</a>
+<a class="px-2 py-1.5 rounded text-textWeak hover:bg-fillWeak" href="/p/<uuid>/dashboards/<uuid>/tab/errors?since=24H" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/errors" data-hx-vals="js:{...window.getTimeRange?.()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">Clear filters</a>
 </div>
 <span class="w-px h-6 bg-strokeWeak max-md:hidden">
 </span>
@@ -312,15 +312,15 @@
 <div class="dropdown dropdown-end z-50 mt-1 w-64 rounded-lg border border-strokeWeak bg-bgRaised p-1.5 text-sm shadow-lg flex flex-col gap-0.5" id="dashboard-views-menu" popover="auto" style="position-try:flip-block; position-anchor:--anchor-dashboard-views-menu">
 <p class="px-2 pt-1 pb-0.5 text-xs text-textWeak">Saved views</p>
 <div class="flex items-center rounded hover:bg-fillWeak">
-<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textStrong" href="/p/<uuid>/dashboards/<uuid>/tab/overview?environment&amp;since=24H&amp;var-region=eu&amp;var-service=api&amp;view=Europe%20API" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/overview?environment&amp;var-region=eu&amp;var-service=api&amp;view=Europe%20API" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
+<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textStrong" href="/p/<uuid>/dashboards/<uuid>/tab/overview?environment&amp;since=24H&amp;var-region=eu&amp;var-service=api&amp;view=Europe%20API" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/overview?environment&amp;var-region=eu&amp;var-service=api&amp;view=Europe%20API" data-hx-vals="js:{...window.getTimeRange?.()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
 <span class="w-3.5 shrink-0">
 </span>Europe API</a>
 </div>
 <div class="flex items-center rounded hover:bg-fillWeak">
-<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textStrong" href="/p/<uuid>/dashboards/<uuid>/tab/overview?environment&amp;since=24H&amp;var-region=us&amp;var-service=worker&amp;view=US%20worker" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/overview?environment&amp;var-region=us&amp;var-service=worker&amp;view=US%20worker" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
+<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textStrong" href="/p/<uuid>/dashboards/<uuid>/tab/overview?environment&amp;since=24H&amp;var-region=us&amp;var-service=worker&amp;view=US%20worker" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/overview?environment&amp;var-region=us&amp;var-service=worker&amp;view=US%20worker" data-hx-vals="js:{...window.getTimeRange?.()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
 <span class="w-3.5 shrink-0">
 </span>US worker</a>
-<button type="button" class="btn btn-ghost btn-xs" aria-label="Delete view US worker" data-hx-confirm="Delete view US worker?" data-hx-delete="/p/<uuid>/dashboards/<uuid>/views/US%20worker?activeTabSlug=overview" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<button type="button" class="btn btn-ghost btn-xs" aria-label="Delete view US worker" data-hx-confirm="Delete view US worker?" data-hx-delete="/p/<uuid>/dashboards/<uuid>/views/US%20worker?activeTabSlug=overview" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <svg class="icon h-3 w-3" width="1em" height="1em" viewBox="0 0 8 8">
 <g>
 <path d="M7 1L1 7M1 1L7 7" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round" />
@@ -330,13 +330,13 @@
 </div>
 <div class="h-px bg-strokeWeak my-1">
 </div>
-<form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/dashboards/<uuid>/views" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/dashboards/<uuid>/views" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <input type="hidden" name="activeTabSlug" value="overview">
 <input name="name" required maxlength="100" class="input input-sm flex-1 min-w-0" placeholder="View name" aria-label="View name">
 <button type="submit" class="btn btn-primary btn-sm">Save view</button>
 </form>
 </div>
-<div id="dashboard-views" class="flex items-center gap-2 shrink-0 ml-auto max-md:ml-0" data-hx-get="/p/<uuid>/dashboards/<uuid>/views" data-hx-trigger="update-query[!event.detail?.source] from:window" data-hx-swap="outerMorph" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<div id="dashboard-views" class="flex items-center gap-2 shrink-0 ml-auto max-md:ml-0" data-hx-get="/p/<uuid>/dashboards/<uuid>/views" data-hx-trigger="update-query[!event.detail?.source] from:window" data-hx-swap="outerMorph" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <button type="button" class="inline-flex items-center gap-1.5 h-8 px-2 rounded-lg text-sm cursor-pointer bg-fillBrand-weak ring-1 ring-strokeBrand-weak text-textBrand font-medium" aria-label="Saved views: API" popovertarget="dashboard-views-menu" style="anchor-name:--anchor-dashboard-views-menu">
 <svg class="icon w-3.5 h-3.5" width="1em" height="1em" viewBox="0 0 384 512">
 <g>
@@ -353,7 +353,7 @@
 <div class="dropdown dropdown-end z-50 mt-1 w-64 rounded-lg border border-strokeWeak bg-bgRaised p-1.5 text-sm shadow-lg flex flex-col gap-0.5" id="dashboard-views-menu" popover="auto" style="position-try:flip-block; position-anchor:--anchor-dashboard-views-menu">
 <p class="px-2 pt-1 pb-0.5 text-xs text-textWeak">Saved views</p>
 <div class="flex items-center rounded hover:bg-fillWeak">
-<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textBrand font-medium" href="/p/<uuid>/dashboards/<uuid>/tab/logs?since=7D&amp;var-database=&amp;var-service=api&amp;view=API" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/logs?var-database=&amp;var-service=api&amp;view=API" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
+<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textBrand font-medium" href="/p/<uuid>/dashboards/<uuid>/tab/logs?since=7D&amp;var-database=&amp;var-service=api&amp;view=API" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/logs?var-database=&amp;var-service=api&amp;view=API" data-hx-vals="js:{...window.getTimeRange?.()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
 <span class="w-3.5 shrink-0">
 <svg class="icon w-3.5 h-3.5" width="1em" height="1em" viewBox="0 0 640 640">
 <g>
@@ -361,7 +361,7 @@
 </g>
 </svg>
 </span>API</a>
-<button type="button" class="btn btn-ghost btn-xs" aria-label="Delete view API" data-hx-confirm="Delete view API?" data-hx-delete="/p/<uuid>/dashboards/<uuid>/views/API?activeTabSlug=logs" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<button type="button" class="btn btn-ghost btn-xs" aria-label="Delete view API" data-hx-confirm="Delete view API?" data-hx-delete="/p/<uuid>/dashboards/<uuid>/views/API?activeTabSlug=logs" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <svg class="icon h-3 w-3" width="1em" height="1em" viewBox="0 0 8 8">
 <g>
 <path d="M7 1L1 7M1 1L7 7" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round" />
@@ -371,12 +371,12 @@
 </div>
 <div class="h-px bg-strokeWeak my-1">
 </div>
-<form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/dashboards/<uuid>/views" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...getTimeRange()}">
+<form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/dashboards/<uuid>/views" data-hx-target="#dashboard-views" data-hx-swap="outerHTML" data-hx-vals="js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) =&gt; key !== &#39;name&#39;)), ...window.getTimeRange?.()}">
 <input type="hidden" name="activeTabSlug" value="logs">
 <input name="name" required maxlength="100" class="input input-sm flex-1 min-w-0" placeholder="View name" aria-label="View name">
 <button type="submit" class="btn btn-primary btn-sm">Save view</button>
 </form>
-<a class="px-2 py-1.5 rounded text-textWeak hover:bg-fillWeak" href="/p/<uuid>/dashboards/<uuid>/tab/logs?since=7D" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/logs" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">Clear filters</a>
+<a class="px-2 py-1.5 rounded text-textWeak hover:bg-fillWeak" href="/p/<uuid>/dashboards/<uuid>/tab/logs?since=7D" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/logs" data-hx-vals="js:{...window.getTimeRange?.()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">Clear filters</a>
 </div>
 <span class="w-px h-6 bg-strokeWeak max-md:hidden">
 </span>

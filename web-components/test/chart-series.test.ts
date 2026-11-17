@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { collapseLongTail, createSeriesConfig, heatmapCellQuery, heatmapOptions, updateChartConfiguration, visibleMax } from '../src/widgets';
 
 describe('collapseLongTail', () => {
@@ -41,6 +41,23 @@ describe('line-series hierarchy', () => {
 
     expect(leading.areaStyle).toBeDefined();
     expect(secondary.areaStyle).toBeUndefined();
+  });
+});
+
+describe('unreadable theme tokens', () => {
+  test('a stat gradient still gets a real colour when every CSS token reads empty', () => {
+    const stops: string[] = [];
+    (window as any).echarts = {
+      color: { modifyAlpha: (color: string, opacity: number) => (color ? `${color}/${opacity}` : undefined) },
+      graphic: { LinearGradient: class { constructor(_: number, __: number, ___: number, ____: number, s: { color: string }[]) { stops.push(...s.map(x => x.color)); } } },
+    };
+    document.body.setAttribute('data-theme', 'tokens-unreadable');
+    const spy = vi.spyOn(window, 'getComputedStyle').mockReturnValue({ getPropertyValue: () => '' } as any);
+    try {
+      createSeriesConfig({ chartType: 'line', widgetType: 'timeseries_stat' } as any, 'total', 0, 1);
+    } finally { spy.mockRestore(); document.body.removeAttribute('data-theme'); }
+    expect(stops.length).toBeGreaterThan(0);
+    expect(stops.every(Boolean)).toBe(true);
   });
 });
 

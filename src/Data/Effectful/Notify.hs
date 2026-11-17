@@ -36,6 +36,7 @@ module Data.Effectful.Notify (
 ) where
 
 import Control.Exception (try)
+import Control.Exception.Safe qualified as Safe
 import Control.Lens ((.~), (^?))
 import Control.Lens.Getter ((^.))
 import Control.Lens.Setter ((?~))
@@ -222,9 +223,20 @@ discordThreadedNotification channelId payload replyToMessageId =
   DiscordNotification DiscordData{..}
 
 
+-- | Twilio rejects a content variable holding a newline, a tab or 4+ spaces, or an empty one
+-- (error 21656): a multi-line exception message failed every WhatsApp error alert.
+--
+-- >>> case whatsappNotification "t" "+1" (AE.object ["3" AE..= ("`boom\nCallStack:\n    at x`" :: Text), "4" AE..= ("" :: Text)]) of WhatsAppNotification (WhatsAppData _ vars _) -> vars; _ -> AE.Null
+-- Object (fromList [("3",String "`boom CallStack: at x`"),("4",String "-")])
 whatsappNotification :: Text -> Text -> AE.Value -> Notification
-whatsappNotification template to contentVariables =
-  WhatsAppNotification WhatsAppData{..}
+whatsappNotification template to vars =
+  WhatsAppNotification WhatsAppData{contentVariables = clean vars, ..}
+  where
+    clean = \case
+      AE.Object o -> AE.Object (clean <$> o)
+      AE.String t -> AE.String $ fromMaybe "-" $ nonEmptyText $ T.take 1000 $ unwords $ words t
+      v -> v
+    nonEmptyText t = t <$ guard (not $ T.null t)
 
 
 pagerdutyNotification :: Text -> PagerdutyAction -> Text -> Text -> PagerdutySeverity -> AE.Value -> Text -> Notification
@@ -337,8 +349,10 @@ runNotifyProduction = interpret $ \_ -> \case
             , "ContentVariables" := variables
             ]
               :: [FormParam]
-      resp <- liftIO $ postWith opts url payload
-      pass
+      -- A failed send must not abort the rest of the team fan-out (PagerDuty, email) behind it.
+      liftIO (Safe.tryAny $ postWith opts url payload) >>= \case
+        Left e -> Log.logAttention "WhatsApp send failed" (AE.object ["to" AE..= to, "template" AE..= template, "error" AE..= displayException e])
+        Right _ -> pass
     PagerdutyNotification PagerdutyData{..} -> do
       let actionText = display eventAction
           severityText = display severity

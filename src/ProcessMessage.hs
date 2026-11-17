@@ -87,8 +87,10 @@ import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.DeterministicId qualified as DeterministicId
+import Models.Telemetry.ServiceGraph qualified as ServiceGraph
 import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..), generateSummary, ingestionRedactionPaths, redactJSON)
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Network.URI (parseURI, uriAuthority, uriRegName)
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
 import Pkg.IngestBudget qualified as IngestBudget
 import Pkg.Metrics qualified as Metrics
@@ -388,7 +390,7 @@ processSpanToEntities canonicalTemplates projectId otelSpan =
 
       -- knownHashes is the same set, built once per batch. The vector scan this replaces
       -- ran per span, over a catalog that reaches 7k entries on a busy project.
-      !isNewEndpoint = isHttpSpan && not (HashSet.member endpointHash canonicalTemplates.knownHashes) && statusCode /= 404
+      !isNewEndpoint = isHttpSpan && not (HashSet.member endpointHash canonicalTemplates.knownHashes) && statusCode /= 404 && not (otelSpan.kind == Just "client" && isThirdPartyBrowserCall (Telemetry.atMapText "page.url" (Just attributes)) host)
 
       endpoint dumpId =
         if not isNewEndpoint
@@ -417,6 +419,26 @@ processSpanToEntities canonicalTemplates projectId otelSpan =
       , if isHttpSpan then Just urlPath else Nothing
       , guard (pathSource == DeclaredByRouter && isNewEndpoint) $> endpointHash
       )
+
+
+-- | A browser request to a site other than the page's own — consent banners, ad pixels, CDNs —
+-- calls a third party's API, not the project's: 116 of a week's 268 "new endpoint" issues on
+-- Monoscope's own RUM were cookielaw, reddit and bing hosts. Sites compare by registrable
+-- domain, so an app calling its own api.* subdomain still discovers endpoints.
+--
+-- >>> isThirdPartyBrowserCall (Just "https://app.monoscope.tech/p/1?x=2") "cdn.cookielaw.org"
+-- True
+-- >>> map (isThirdPartyBrowserCall (Just "https://app.monoscope.tech/x")) ["api.monoscope.tech", "app.monoscope.tech:443", "monoscope.tech"]
+-- [False,False,False]
+-- >>> map (isThirdPartyBrowserCall (Just "http://shop.example.co.uk/")) ["api.example.co.uk", "other.co.uk"]
+-- [False,True]
+-- >>> isThirdPartyBrowserCall Nothing "cdn.cookielaw.org"
+-- False
+isThirdPartyBrowserCall :: Maybe Text -> Text -> Bool
+isThirdPartyBrowserCall pageUrl host = maybe False ((/= site host) . site) pageHost
+  where
+    pageHost = toText . uriRegName <$> (uriAuthority =<< parseURI . toString =<< pageUrl)
+    site h = let d = T.toLower (T.takeWhile (/= ':') h) in fromMaybe d (ServiceGraph.registrableDomain d)
 
 
 -- | Stamp each record's hashes (endpoint identity + error fingerprints) before the

@@ -64,6 +64,10 @@ spec = around withTestResources $ describe "Error patterns" do
     exc "POST /api/data" "ConnectionError" "connect ECONNREFUSED 192.168.1.100:5432" dbStack (at 310)
     exc "POST /api/data" "TimeoutError" "request timed out after 30000ms" dbStack (at 320)
     forM_ ["GET /api/users", "POST /api/orders", "GET /api/reports", "DELETE /api/sessions"] \sp -> exc sp "IOException" ioMsg "" (at 300)
+    -- Expected control flow is not a fault: a redirect thrown through effectful's Error, a 4xx, and cancellation on shutdown.
+    exc "dashboard.render" "Error" "Effectful.Error.Static.ErrorWrapper: ServerError {errHTTPCode = 302, errReasonPhrase = \"Found\", errBody = \"\", errHeaders = [(\"Location\",\"/p/x\")]}" "" (at 300)
+    exc "GET /p/x" "Error" "Effectful.Error.Static.ErrorWrapper: ServerError {errHTTPCode = 403, errReasonPhrase = \"Forbidden\"}" "" (at 300)
+    exc "supervise" "SomeAsyncException" "AsyncCancelled" "" (at 300)
     -- Log records carry no exception event: OTel's exception.* and the browser SDK's error.*.
     ingestErrorLog tr apiKey "user is not defined" [("exception.type", "ReferenceError"), ("exception.message", "user is not defined"), ("exception.stacktrace", "ReferenceError: user is not defined\n    at (/app.js:123:5)")] (at (-5))
     ingestErrorLog tr apiKey "" [("error.name", "TypeError"), ("error.type", "uncaught_exception"), ("error.message", "Cannot read properties of null"), ("error.stack", "TypeError: Cannot read properties of null\n    at handleClick (app.bundle.js:42:11)"), ("exception.escaped", "false")] (at (-4))

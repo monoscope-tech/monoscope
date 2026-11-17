@@ -102,7 +102,9 @@ import Models.Projects.RepositorySync qualified as RepositorySync
 import Models.Telemetry.ServiceGraph qualified as ServiceGraph
 import Models.Telemetry.Telemetry (SeverityLevel (..), generateSummary, insertSystemLog, mkSystemLog)
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (urlEncode)
+import Network.HTTP.Types qualified as HT
 import Network.Wreq qualified as Wreq
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Config (cfgConcurrencyControl, cfgDefaultJobTimeout, cfgJobOrdering, cfgOnJobFailed, cfgOnJobTimeout, cfgTableName), Job (..), JobErrHandler (..), JobOrdering (EarliestRunAtFirst), LogEvent (..), LogLevel, Seconds (..), Status (Failed), createJob, scheduleJob, startJobRunner, throwParsePayload)
@@ -649,7 +651,7 @@ runMonoscopeAdminDaily authCtx = do
   tryStep "newIssues" do
     issueCounts :: [(Projects.ProjectId, Text, Int64)] <-
       Hasql.interp
-        [HI.sql|SELECT project_id::uuid, issue_type, COUNT(*)::bigint FROM apis.issues WHERE created_at > #{since}::timestamptz GROUP BY project_id, issue_type ORDER BY COUNT(*) DESC|]
+        [HI.sql|SELECT project_id::uuid, issue_type::text, COUNT(*)::bigint FROM apis.issues WHERE created_at > #{since}::timestamptz GROUP BY project_id, issue_type ORDER BY COUNT(*) DESC|]
     unless (null issueCounts) do
       let total = sum $ map (view _3) issueCounts
           byProject = byProjectCounts issueCounts
@@ -722,7 +724,7 @@ runMonoscopeAdminDaily authCtx = do
   tryStep "activeUsers" do
     activeUsers :: [(Text, Text, Text, V.Vector Projects.ProjectId)] <-
       Hasql.interp
-        [HI.sql|SELECT u.email, u.first_name, u.last_name, array_agg(DISTINCT pm.project_id)::uuid[] as project_ids
+        [HI.sql|SELECT u.email::text, u.first_name, u.last_name, array_agg(DISTINCT pm.project_id)::uuid[] as project_ids
            FROM users.persistent_sessions ps
            JOIN users.users u ON u.id = ps.user_id
            LEFT JOIN projects.project_members pm ON pm.user_id = ps.user_id AND pm.active = TRUE
@@ -929,7 +931,7 @@ reportProjectUsage authCtx pid =
                     logFields extra =
                       ("project_id", pid.toText) : ("chunk_id", chunkId) : ("quantity", show qty :: Text) : ("meter", show row.meter :: Text) : ("window_end", show row.windowEnd :: Text) : ("sub_id", fromMaybe "" project.subId) : extra
                 res <- tryAny $ case Projects.resolveMeterTarget meterCfg row.meter of
-                  Right (Projects.StripeMeter custId eventName) -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName qty
+                  Right (Projects.StripeMeter custId eventName) -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName row.id.toText qty
                   Right (Projects.LemonSqueezyMeter subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
                   Right (Projects.LemonSqueezyEventsItem subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
                   -- Not a transient error: throw so the Left branch below marks
@@ -941,8 +943,9 @@ reportProjectUsage authCtx pid =
                 either
                   ( \e -> do
                       let errText = toText (displayException e)
-                      Log.logAttention "Usage chunk submission FAILED — will retry next tick" $ logFields [("provider", show provider :: Text), ("error", errText)]
-                      whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed row.id errText) \e2 ->
+                          failure = submissionFailure e
+                      Log.logAttention "Usage chunk submission FAILED" $ logFields [("provider", show provider :: Text), ("failure", show failure), ("error", errText)]
+                      whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed failure row.id errText) \e2 ->
                         Log.logAttention "Usage chunk status=failed UPDATE failed — row may retry on next tick" $ logFields [("error", toText (displayException e2))]
                   )
                   ( \() -> do
@@ -960,7 +963,7 @@ reportProjectUsage authCtx pid =
             Projects.NoBillingProvider -> do
               Log.logAttention "ReportUsage: NoBillingProvider for paid project" ("project_id", pid.toText, "sub_id", project.subId, "plan", project.paymentPlan, "pending_chunks", length pending)
               for_ pending \row ->
-                whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed row.id "NoBillingProvider: paid plan has no usable billing provider") \e ->
+                whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed Projects.Failed row.id "NoBillingProvider: paid plan has no usable billing provider") \e ->
                   Log.logAttention "NoBillingProvider mark failed — backlog stuck" ("project_id", pid.toText, "chunk_id", show row.id :: Text, "error", toText (displayException e))
             Projects.StripeProvider -> submitPending
             Projects.LemonSqueezyProvider -> submitPending
@@ -3135,15 +3138,27 @@ bearerAuth apiKey = W.defaults & (W.header "Authorization" .~ ["Bearer " <> enco
 -- | On the 'W.HTTP' effect rather than raw IO so tests can drive the drain path
 -- against a fake interpreter. A raw wreq call here means any test that exercises
 -- usage reporting POSTs to api.stripe.com with whatever key the config carries.
-reportUsageToStripe :: W.HTTP :> es => Text -> Text -> Text -> Int -> Eff es ()
-reportUsageToStripe apiKey customerId eventName quantity = do
+-- The chunk id is the meter event's @identifier@, which Stripe dedupes on: a run cancelled
+-- between the POST and marking the row submitted re-sends it without billing twice.
+reportUsageToStripe :: W.HTTP :> es => Text -> Text -> Text -> Text -> Int -> Eff es ()
+reportUsageToStripe apiKey customerId eventName identifier quantity = do
   let params :: [(ByteString, ByteString)]
       params =
         [ ("event_name", encodeUtf8 eventName)
+        , ("identifier", encodeUtf8 identifier)
         , ("payload[value]", encodeUtf8 $ show quantity)
         , ("payload[stripe_customer_id]", encodeUtf8 customerId)
         ]
   void $ W.postWith (bearerAuth apiKey) "https://api.stripe.com/v1/billing/meter_events" params
+
+
+-- | A provider 4xx other than 408/429 answers the same on every retry (Lemon Squeezy's 422 for an
+-- unmetered item, a 404 for a deleted customer), so it is rejected rather than re-sent each tick.
+submissionFailure :: SomeException -> Projects.SubmissionFailure
+submissionFailure e = case fromException e of
+  Just (HTTP.HttpExceptionRequest _ (HTTP.StatusCodeException resp _))
+    | let st = HTTP.responseStatus resp, HT.statusIsClientError st, HT.statusCode st `notElem` [408, 429] -> Projects.Rejected
+  _ -> Projects.Failed
 
 
 -- | `trialEnd` is Nothing when the sub has no trial or the trial is over.
