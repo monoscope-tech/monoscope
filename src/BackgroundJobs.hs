@@ -8,7 +8,7 @@ import BackgroundJobs.Types qualified as Jobs
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
 import Control.Exception qualified as CE
-import Control.Lens (view, (.~), (?~), (^.), (^?), _1, _3)
+import Control.Lens (view, (%~), (.~), (?~), (^.), (^?), _1, _3)
 import Control.Monad.Except (throwError)
 import Control.Monad.Extra (whileM)
 import Control.Retry qualified as Retry
@@ -1664,7 +1664,8 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
 -- a data integrity bug (logged at attention level), and we must not stamp
 -- last_notified_at or the pattern gets silenced for the whole cooldown window.
 sendAlertToChannels
-  :: NotificationAlerts
+  :: V.Vector ProjectMembers.TeamId
+  -> NotificationAlerts
   -> (Incidents.SlackPayload, Incidents.SlackPayload)
   -> Issues.Issue
   -> Projects.Project
@@ -1673,12 +1674,12 @@ sendAlertToChannels
   -> Text
   -> Html ()
   -> ATBackgroundCtx Bool
-sendAlertToChannels alert (rootPayload, replyPayload) issue project users alertUrl subj html =
-  ProjectMembers.getEveryoneTeam project.id >>= \case
-    Nothing -> do
+sendAlertToChannels teamIds alert (rootPayload, replyPayload) issue project users alertUrl subj html =
+  alertTargets project.id teamIds users subj html >>= \case
+    [] -> do
       Log.logAttention "sendAlertToChannels: no @everyone team for project; no dispatch" (AE.object ["project_id" AE..= project.id])
       pure False
-    Just team -> do
+    targets -> do
       now <- Time.currentTime
       installation <- Integrations.getProjectSlackData project.id
       let source = Incidents.IssueIncident issue.id
@@ -1694,7 +1695,7 @@ sendAlertToChannels alert (rootPayload, replyPayload) issue project users alertU
             , issueId = Just issue.id
             , rootPayload
             , replyPayload
-            , destinations = slackDestinations installation [team]
+            , destinations = slackDestinations installation (map fst targets)
             }
       -- Slack failing to record must not keep the other channels from alerting,
       -- but the result says it, so a dropped Slack alert is never reported as sent.
@@ -1702,12 +1703,19 @@ sendAlertToChannels alert (rootPayload, replyPayload) issue project users alertU
         Incidents.Recorded{} -> True <$ tryStep "slack-incident-delivery" runSlackIncidentDeliveries
         Incidents.AlreadyRecorded{} -> pure True
         (Incidents.NoOpenEpisode; Incidents.Rejected _) -> False <$ Log.logAttention "Issue alert was not recorded for Slack" (project.id, issue.id, show @Text result)
-      slackRecorded <$ fanOutToTeam team (emailFanout users subj html) alert project.id project.title alertUrl
+      slackRecorded <$ forM_ targets \(team, fan) -> fanOutToTeam team fan alert project.id project.title alertUrl
 
 
--- | A fan-out whose email goes to these members; Slack goes through the incident outbox.
-emailFanout :: [Projects.User] -> Text -> Html () -> Fanout
-emailFanout users subj html = Fanout{slack = QueuedSlack, threads = Nothing, email = Just FanoutEmail{recipients = map (CI.original . (.email)) users, subject = subj, body = ET.renderEmail subj html}}
+-- | The teams an alert goes to, each with its fan-out (Slack through the incident outbox): the
+-- chosen ones, or @everyone when none are (or all were since deleted). @everyone mails every
+-- member; other teams mail their notify emails.
+alertTargets :: Projects.ProjectId -> V.Vector ProjectMembers.TeamId -> [Projects.User] -> Text -> Html () -> ATBackgroundCtx [(ProjectMembers.Team, Fanout)]
+alertTargets pid teamIds users subj html = do
+  chosen <- ProjectMembers.getTeamsById pid teamIds
+  teams <- if null chosen then maybeToList <$> ProjectMembers.getEveryoneTeam pid else pure chosen
+  pure [(t, fanout $ bool (ProjectMembers.resolveTeamEmails t) (map (.email) users) t.is_everyone) | t <- teams]
+  where
+    fanout to = Fanout{slack = QueuedSlack, threads = Nothing, email = Just FanoutEmail{recipients = map CI.original to, subject = subj, body = ET.renderEmail subj html}}
 
 
 -- | Fan an alert out to every enabled non-email channel of the @everyone team.
@@ -2345,7 +2353,8 @@ claimIssueNotification iid now cooldownHours =
 -- Returns whether the alert was dispatched; False when suppressed by cooldown,
 -- errorAlerts=false, or rate-limit overflow.
 notifyIssue
-  :: Issues.Issue
+  :: V.Vector ProjectMembers.TeamId -- chosen teams; none means @everyone
+  -> Issues.Issue
   -> Projects.Project
   -> [Projects.User]
   -> Int -- cooldown hours (dedup window)
@@ -2356,7 +2365,7 @@ notifyIssue
   -> Text -- email subject
   -> Html () -- email body
   -> ATBackgroundCtx Bool
-notifyIssue issue project users cooldownHours digestReason alert slackMessages alertUrl subj html
+notifyIssue teamIds issue project users cooldownHours digestReason alert slackMessages alertUrl subj html
   | not project.errorAlerts = pure False
   | otherwise = do
       now <- Time.currentTime
@@ -2365,7 +2374,7 @@ notifyIssue issue project users cooldownHours digestReason alert slackMessages a
       if
         | not claimed -> pure False
         | allowed -> do
-            dispatched <- sendAlertToChannels alert slackMessages issue project users alertUrl subj html
+            dispatched <- sendAlertToChannels teamIds alert slackMessages issue project users alertUrl subj html
             Log.logInfo "issue_notification_sent" (AE.object ["project_id" AE..= project.id.toText, "issue_id" AE..= issue.id.toText, "reason" AE..= digestReason, "dispatched" AE..= dispatched])
             pure dispatched
         | otherwise -> do
@@ -5013,9 +5022,11 @@ scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> when cfg.
     spanId <- T.take 16 . T.filter (/= '-') . UUID.toText <$> UUID.genUUID
     t0 <- Time.currentTime
     -- Any status is an answer here: the probe compares it, so a 5xx must not throw.
-    res <- tryAny $ W.getWith (PromCfg.prometheusScrapeOpts Nothing & Wreq.checkResponse ?~ (\_ _ -> pass) & Wreq.header "traceparent" .~ [encodeUtf8 $ "00-" <> trId <> "-" <> spanId <> "-01"]) (toString cfg.url)
+    let PromCfg.RequestHeaders custom = cfg.requestHeaders
+        opts = foldl' (\o (n, v) -> o & Wreq.header (CI.mk $ encodeUtf8 n) %~ (<> [encodeUtf8 v])) (PromCfg.prometheusScrapeOpts Nothing & Wreq.checkResponse ?~ (\_ _ -> pass)) custom & Wreq.header "traceparent" .~ [encodeUtf8 $ "00-" <> trId <> "-" <> spanId <> "-01"]
+    res <- tryAny $ W.requestWith (toString $ PromCfg.methodName cfg.httpMethod) opts (toString cfg.url) (encodeUtf8 <$> cfg.requestBody)
     t1 <- Time.currentTime
-    applyUptimeResult cfg region (trId, spanId) t0 t1 $ bimap (toText . displayException) (^. Wreq.responseStatus . Wreq.statusCode) res
+    applyUptimeResult cfg region (trId, spanId) t0 t1 $ bimap (toText . displayException) (\r -> (r ^. Wreq.responseStatus . Wreq.statusCode, decodeUtf8 $ r ^. Wreq.responseBody)) res
   PromCfg.CKPrometheus -> scrapeMetrics cfg
 
 
@@ -5042,7 +5053,7 @@ emitProbeSpan cfg region (trId, spanId) t0 t1 outcome ok reason = do
     expected = fromMaybe 200 cfg.expectedStatus
     durationNs = round (realToFrac (diffUTCTime t1 t0) * 1e9 :: Double)
     attrs =
-      [ ("http.request.method", "GET")
+      [ ("http.request.method", AE.String $ PromCfg.methodName cfg.httpMethod)
       , ("url.full", AE.String cfg.url)
       , ("monitor.kind", "uptime")
       , ("monitor.check.id", AE.toJSON cfg.id)
@@ -5080,7 +5091,7 @@ evaluateCronMonitor now m = do
         let d = Issues.CronData{monitorId = UUID.toText m.id, slug = m.slug, name = m.name, failure, expectedBy, lastCheckinAt = lastSeen}
             headline = Mail.cronName d <> bool " failed" " missed its run" (failure == Issues.CFMissed)
         issue <- Issues.createCronIssue m.projectId d
-        alertCheckIssue issue CheckAlert{digestReason = "cron", headline, facts = ["Expected by " <> formatUTC expectedBy, maybe "No check-in yet" (("Last check-in " <>) . formatUTC) lastSeen], slack = Mail.cronMessages d}
+        alertCheckIssue issue CheckAlert{digestReason = "cron", headline, facts = ["Expected by " <> formatUTC expectedBy, maybe "No check-in yet" (("Last check-in " <>) . formatUTC) lastSeen], slack = Mail.cronMessages d, teams = mempty}
   let result at ok message = Uptime.recordResult Uptime.CheckResult{projectId = m.projectId, checkId = m.id, kind = Uptime.RKCron, region = "global", checkedAt = at, ok, statusCode = Nothing, durationMs = Nothing, dnsMs = Nothing, message = Just message}
       interval = fromIntegral (max 60 m.intervalSecs) :: NominalDiffTime
       -- Each whole interval past the deadline is one missed run, recorded once.
@@ -5090,7 +5101,7 @@ evaluateCronMonitor now m = do
     result at (status == Monitors.CSOk) (bool "Run reported an error" "Run completed" (status == Monitors.CSOk))
   when (isNothing latest && now > expectedBy) $ result missedSlot False "Missed run"
   case latest of
-    Just (_, Monitors.CSOk) -> resolveOpenIssue m.projectId (Issues.cronTargetHash (UUID.toText m.id)) Issues.Cron now []
+    Just (_, Monitors.CSOk) -> resolveOpenIssue m.projectId mempty (Issues.cronTargetHash (UUID.toText m.id)) Issues.Cron now []
     Just (_, Monitors.CSError) -> open Issues.CFFailed
     Nothing -> when (now > expectedBy) $ open Issues.CFMissed
 
@@ -5098,12 +5109,12 @@ evaluateCronMonitor now m = do
 -- | Record an uptime probe. Two failures in a row confirm downtime and open (or fold
 -- into) the check's issue; the first success after that resolves it. One failed probe
 -- alone is a blip, not an outage.
-applyUptimeResult :: PromCfg.PrometheusScrapeConfig -> Text -> (Text, Text) -> UTCTime -> UTCTime -> Either Text Int -> ATBackgroundCtx ()
-applyUptimeResult cfg region ids t0 now res = do
+applyUptimeResult :: PromCfg.PrometheusScrapeConfig -> Text -> (Text, Text) -> UTCTime -> UTCTime -> Either Text (Int, Text) -> ATBackgroundCtx ()
+applyUptimeResult cfg region ids t0 now answer = do
   let expected = fromMaybe 200 cfg.expectedStatus
-      ok = res == Right expected
+      (ok, reason) = Uptime.probeVerdict expected cfg.responseContains answer
+      res = fst <$> answer
       ms = round (realToFrac (diffUTCTime now t0) * 1000 :: Double)
-      reason = either ("request failed: " <>) (\c -> bool ("status " <> show c <> ", expected " <> show expected) "ok" ok) res
   emitProbeSpan cfg region ids t0 now res ok reason
   Uptime.recordResult Uptime.CheckResult{projectId = cfg.projectId, checkId = cfg.id.unUUIDId, kind = Uptime.RKUptime, region, checkedAt = now, ok, statusCode = rightToMaybe res, durationMs = Just ms, dnsMs = Nothing, message = Just reason}
   (before, after) <- PromCfg.recordUptime cfg.id ok (reason <> " · " <> show ms <> "ms")
@@ -5120,8 +5131,8 @@ applyUptimeResult cfg region ids t0 now res = do
             , downSince = addUTCTime (negate $ fromIntegral cfg.scrapeIntervalSeconds) now
             }
     issue <- Issues.createUptimeIssue cfg.projectId d
-    alertCheckIssue issue CheckAlert{digestReason = "uptime", headline = Mail.uptimeName d <> " is down", facts = [cfg.url, reason], slack = Mail.uptimeMessages d}
-  when (ok && before >= Uptime.downtimeAfter) $ resolveOpenIssue cfg.projectId (Issues.uptimeTargetHash cfg.id.toText) Issues.Uptime now ["after_failures" AE..= before]
+    alertCheckIssue issue CheckAlert{digestReason = "uptime", headline = Mail.uptimeName d <> " is down", facts = [cfg.url, reason], slack = Mail.uptimeMessages d, teams = cfg.teams}
+  when (ok && before >= Uptime.downtimeAfter) $ resolveOpenIssue cfg.projectId cfg.teams (Issues.uptimeTargetHash cfg.id.toText) Issues.Uptime now ["after_failures" AE..= before]
 
 
 -- | Open (or reopen) a failing check's one long-lived issue and alert on it, so a
@@ -5131,6 +5142,7 @@ data CheckAlert = CheckAlert
   , headline :: Text
   , facts :: [Text]
   , slack :: Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
+  , teams :: V.Vector ProjectMembers.TeamId
   }
 
 
@@ -5144,14 +5156,14 @@ alertCheckIssue fresh check = do
     let issue = (fresh :: Issues.Issue){Issues.id = persisted}
         url = issuePageUrl ctx fresh.projectId persisted
         (subj, html) = ET.checkAlertEmail project.title check.headline check.facts url
-    void $ notifyIssue issue project users Issues.issueNotifyDedupHours check.digestReason (MonitorsAlert check.headline url Nothing) (check.slack url) url subj html
+    void $ notifyIssue check.teams issue project users Issues.issueNotifyDedupHours check.digestReason (MonitorsAlert check.headline url Nothing) (check.slack url) url subj html
 
 
 -- | Archive a recovered signal's open issue and log it as resolved. A check that
 -- alerted records its recovery in the same transaction, before the resolution is
 -- logged, so the thread hears it once and a crash cannot split the two.
-resolveOpenIssue :: Projects.ProjectId -> Text -> Issues.IssueType -> UTCTime -> [(AE.Key, AE.Value)] -> ATBackgroundCtx ()
-resolveOpenIssue pid hash ty now extra =
+resolveOpenIssue :: Projects.ProjectId -> V.Vector ProjectMembers.TeamId -> Text -> Issues.IssueType -> UTCTime -> [(AE.Key, AE.Value)] -> ATBackgroundCtx ()
+resolveOpenIssue pid teamIds hash ty now extra =
   Issues.selectIssueByHash pid hash (Issues.OpenOfType ty) >>= traverse_ \i -> do
     ctx <- ask @Config.AuthContext
     let source = Incidents.IssueIncident i.id
@@ -5165,10 +5177,10 @@ resolveOpenIssue pid hash ty now extra =
     whenJust recovered \_ -> do
       tryStep "slack-incident-delivery" runSlackIncidentDeliveries
       Projects.projectById pid >>= traverse_ \project -> do
-        teamM <- ProjectMembers.getEveryoneTeam pid
         let (subj, html) = ET.monitorRecoveryEmail project.title i.title url
         users <- Projects.usersByProjectId pid
-        whenJust teamM \team -> void $ fanOutToTeam team (emailFanout users subj html) (MonitorsRecoveryAlert i.title url) pid project.title url
+        targets <- alertTargets pid teamIds users subj html
+        forM_ targets \(team, fan) -> fanOutToTeam team fan (MonitorsRecoveryAlert i.title url) pid project.title url
 
 
 -- | A read against TimeFusion when the project's reads are switched to it.
@@ -5708,7 +5720,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
           rateChange = Mail.RateChange{issueUrl, patternText = lpRate.logPattern, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = sr.direction, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct, isError = lpRate.isError, chartUrl}
           alert = LogPatternRateChangeAlert rateChange
           (subj, html) = ET.logPatternRateChangeEmail project.title issueUrl lpRate.logPattern lpRate.logLevel lpRate.serviceName dir sr.currentRate sr.mean changePct
-      void $ notifyIssue issue project users Issues.issueNotifyDedupHours "log_pattern_rate_change" alert (Mail.cardMessages $ Mail.rateChangeCard rateChange project.title) issueUrl subj html
+      void $ notifyIssue mempty issue project users Issues.issueNotifyDedupHours "log_pattern_rate_change" alert (Mail.cardMessages $ Mail.rateChangeCard rateChange project.title) issueUrl subj html
     pure issue.id
 
   -- Clear the pending markers for anything we just fired; a new detection
@@ -5754,7 +5766,7 @@ processNewLogPatterns pid authCtx = do
             let issueUrl = hostPath authCtx.env.hostUrl $ (urls.issues pid).detailGet issue.id Nothing Nothing Nothing Nothing Nothing
                 alert = ET.NewLogPattern{issueUrl, patternText = lp.logPattern, sampleMessage = lp.sampleMessage, logLevel = lp.logLevel, serviceName = lp.serviceName, sourceField = lp.sourceField, occurrenceCount = fromIntegral lp.occurrenceCount, isError = lp.isError}
                 (subj, html) = ET.logPatternEmail project.title alert
-            void $ notifyIssue issue project users newPatternCooldownHours "log_pattern" (LogPatternAlert alert) (Mail.cardMessages $ Mail.logPatternCard alert project.title) issueUrl subj html
+            void $ notifyIssue mempty issue project users newPatternCooldownHours "log_pattern" (LogPatternAlert alert) (Mail.cardMessages $ Mail.logPatternCard alert project.title) issueUrl subj html
           pure issue.id
         unless (V.null results) $ enqueueJobs authCtx [EnhanceIssuesWithLLM pid results]
 

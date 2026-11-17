@@ -244,7 +244,7 @@ overallBanner_ noun detailM states = div_ [class_ $ "flex items-center gap-3 rou
 
 -- Uptime list ---------------------------------------------------------------------------
 
-data UptimeOverview = UptimeOverview {pid :: Projects.ProjectId, now :: UTCTime, checks :: V.Vector PromCfg.PrometheusScrapeConfig, buckets :: [Uptime.DayBucket]}
+data UptimeOverview = UptimeOverview {pid :: Projects.ProjectId, now :: UTCTime, checks :: V.Vector PromCfg.PrometheusScrapeConfig, buckets :: [Uptime.DayBucket], teams :: [ManageMembers.Team]}
 
 
 newtype UptimeChecks = UptimeChecks (PageCtx UptimeOverview)
@@ -280,12 +280,17 @@ weightedAvg bs = case [(fromIntegral (b.total - b.failed), a) | b <- bs, b.total
 uptimeChecksList_ :: UptimeOverview -> Html ()
 uptimeChecksList_ o = div_ [id_ "uptime-checks", class_ "space-y-3", term "hx-target:inherited" "this", term "hx-swap:inherited" "outerHTML"] do
   panel_ (Collapsible $ V.null o.checks) def{icon = Just "plus", subtitle = Just "Requested on its interval; two failures in a row open a downtime issue"} "New uptime check"
-    $ form_ [class_ "grid items-end gap-2 md:grid-cols-[1fr_2fr_auto_auto_auto]", hxPost_ (urls.monitors o.pid).uptimePost] do
-      formField_ FieldSm def{placeholder = "Checkout API"} "Name" "name" True Nothing
-      formField_ FieldSm def{inputType = "url", placeholder = "https://shop.example.com/health"} "URL" "url" True Nothing
-      formSelectField_ FieldSm "Every" "interval" False $ options_ Nothing intervalOptions
-      formField_ FieldSm def{inputType = "number", value = "200", extraAttrs = [min_ "100", max_ "599"]} "Expected status" "expectedStatus" False Nothing
-      button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add check"
+    $ form_ [class_ "space-y-3", hxPost_ (urls.monitors o.pid).uptimePost] do
+      div_ [class_ "grid items-end gap-2 md:grid-cols-[1fr_2fr_1fr_auto_auto_auto]"] do
+        formField_ FieldSm def{placeholder = "Checkout API"} "Name" "name" True Nothing
+        formField_ FieldSm def{inputType = "url", placeholder = "https://shop.example.com/health"} "URL" "url" True Nothing
+        formField_ FieldSm def{placeholder = "e.g. \"status\":\"ok\""} "Response contains" "contains" False Nothing
+        formSelectField_ FieldSm "Every" "interval" False $ options_ Nothing intervalOptions
+        formField_ FieldSm def{inputType = "number", value = "200", extraAttrs = [min_ "100", max_ "599"]} "Expected status" "expectedStatus" False Nothing
+        button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add check"
+      details_ [class_ "group/req"] do
+        summary_ [class_ "inline-flex cursor-pointer items-center gap-1.5 text-xs text-textWeak hover:text-textBrand"] $ faSprite_ "code" "regular" "size-3" >> "Customize request and alerts"
+        div_ [class_ "pt-3"] $ requestFields_ o.teams Nothing
   if V.null o.checks
     then emptyState_ def{size = ESCompact} "No uptime checks yet" "Add a URL above. Monoscope requests it on its interval and records every result."
     else ul_ [class_ "surface-raised divide-y divide-strokeWeak overflow-hidden rounded-xl"] $ forM_ o.checks \c -> do
@@ -334,7 +339,8 @@ uptimeOverview pid = do
   now <- Time.currentTime
   checks <- PromCfg.configsByProjectId pid PromCfg.CKUptime
   buckets <- Uptime.dailyBuckets (map (.id.unUUIDId) $ V.toList checks) now
-  pure UptimeOverview{pid, now, checks, buckets}
+  teams <- ManageMembers.getTeams pid
+  pure UptimeOverview{pid, now, checks, buckets, teams}
 
 
 uptimeChecksGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders UptimeChecks)
@@ -343,13 +349,24 @@ uptimeChecksGetH pid = do
   addRespHeaders . UptimeChecks . PageCtx bw =<< uptimeOverview pid
 
 
--- | Adding sends no regions; an empty list means the deployment's own.
-data UptimeForm = UptimeForm {name :: Text, url :: Text, interval :: Maybe Int, expectedStatus :: Maybe Int, regions :: [Text]}
+-- | Adding sends no regions; an empty list means the deployment's own. No teams means @everyone.
+data UptimeForm = UptimeForm
+  { name :: Text
+  , url :: Text
+  , interval :: Maybe Int
+  , expectedStatus :: Maybe Int
+  , regions :: [Text]
+  , method :: Maybe PromCfg.HttpMethod
+  , headers :: Maybe Text
+  , body :: Maybe Text
+  , contains :: Maybe Text
+  , teams :: [ManageMembers.TeamId]
+  }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
-data UptimeRejection = UnnamedCheck | UnsafeUrl | UnservedRegion Text
+data UptimeRejection = UnnamedCheck | UnsafeUrl | UnservedRegion Text | BadHeader Text | NoBodyToSearch
   deriving stock (Eq, Show)
 
 
@@ -358,6 +375,8 @@ instance Refusal UptimeRejection where
     UnnamedCheck -> "Name the check"
     UnsafeUrl -> "URL must be a public http:// or https:// endpoint"
     UnservedRegion r -> "No worker probes from " <> Uptime.regionLabel r <> " yet, so the check would never run there"
+    BadHeader l -> "Headers are one \"Name: value\" per line; this one isn't: " <> l
+    NoBodyToSearch -> "A HEAD response has no body to search; use GET or clear \"Response contains\""
 
 
 newtype UptimeList = UptimeList UptimeOverview
@@ -375,23 +394,28 @@ uptimeCheckPostH pid form = act do
   case validUptime form of
     Left r -> pure $ Left r
     Right v -> do
-      void $ PromCfg.insertConfig pid PromCfg.CKUptime v.name v.url v.interval Nothing (AE.object []) (Just v.expected)
+      void $ PromCfg.insertUptime pid v
       addSuccessToast "Uptime check added" Nothing
       addTriggerEvent "monitorSaved" AE.Null
       Right . UptimeList <$> uptimeOverview pid
 
 
-data ValidUptime = ValidUptime {name :: Text, url :: Text, interval :: Int, expected :: Int}
-
-
-validUptime :: UptimeForm -> Either UptimeRejection ValidUptime
+-- | GET and HEAD send no body, so one typed for them is dropped.
+validUptime :: UptimeForm -> Either UptimeRejection PromCfg.UptimeSpec
 validUptime form
   | T.null name = Left UnnamedCheck
   | not (safeScrapeUrl url) = Left UnsafeUrl
-  | otherwise = Right ValidUptime{name, url, interval = max 60 $ fromMaybe 60 form.interval, expected = clamp (100, 599) $ fromMaybe 200 form.expectedStatus}
+  | method == PromCfg.MHead && isJust contains = Left NoBodyToSearch
+  | otherwise = do
+      headers <- first BadHeader $ PromCfg.parseHeaders $ fold form.headers
+      let body = mfilter (const $ method `notElem` [PromCfg.MGet, PromCfg.MHead]) (nonBlank form.body)
+      Right PromCfg.UptimeSpec{name, url, interval = max 60 $ fromMaybe 60 form.interval, expected = clamp (100, 599) $ fromMaybe 200 form.expectedStatus, regions = [], method, headers, body, contains, teams = ordNub form.teams}
   where
     name = T.strip form.name
     url = T.strip form.url
+    method = fromMaybe PromCfg.MGet form.method
+    contains = nonBlank form.contains
+    nonBlank = mfilter (not . T.null . T.strip)
 
 
 -- | Pause or resume; answered by reloading whichever page asked, list or dashboard.
@@ -422,6 +446,7 @@ data UptimeDashboard = UptimeDashboard
   , incidents :: [Uptime.Incident]
   , recent :: [Uptime.CheckResult]
   , served :: [Text]
+  , teams :: [ManageMembers.Team]
   }
 
 
@@ -435,7 +460,7 @@ instance ToHtml UptimeCheckPage where
       checkHeader_ (urls.monitors d.pid).uptimeGet "Uptime" (uptimeState d.check) d.check.name do
         a_ [href_ d.check.url, target_ "_blank", rel_ "noopener noreferrer", class_ "truncate font-mono text-textBrand hover:underline"] $ toHtml d.check.url
         span_ $ "every " <> toHtml (intervalLabel d.check.scrapeIntervalSeconds)
-        span_ $ "expects " <> show (fromMaybe 200 d.check.expectedStatus)
+        span_ $ toHtml $ PromCfg.methodName d.check.httpMethod <> " · expects " <> show (fromMaybe 200 d.check.expectedStatus) <> foldMap (\t -> " containing \"" <> t <> "\"") d.check.responseContains
         span_ $ toHtml $ maybe "not checked yet" (("checked " <>) . agoText d.now) d.check.lastScrapedAt
       div_ [class_ "flex items-center gap-2"] do
         TimePicker.liveDataControls_ Nothing (Just (d.since, "")) Nothing TimePicker.RefreshOnly
@@ -530,15 +555,32 @@ resultsTable_ now probes rs = div_ [class_ "surface-raised overflow-x-auto round
       else td_ [class_ "px-4 py-2 text-textWeak"] $ toHtml $ fromMaybe "" r.message
 
 
+-- | The request a check sends and who hears when it fails, shared by the add and settings forms.
+requestFields_ :: [ManageMembers.Team] -> Maybe PromCfg.PrometheusScrapeConfig -> Html ()
+requestFields_ teams checkM = div_ [class_ "space-y-3"] do
+  div_ [class_ "grid gap-3 md:grid-cols-[auto_1fr_1fr]"] do
+    formSelectField_ FieldSm "Method" "method" False $ options_ (toUrlPiece . (.httpMethod) <$> checkM) [(toUrlPiece m, PromCfg.methodName m) | m <- [minBound .. maxBound]]
+    formField_ FieldSm def{inputType = "textarea", value = foldMap (PromCfg.renderHeaders . PromCfg.maskHeaders . (.requestHeaders)) checkM, placeholder = "Authorization: Bearer …\nAccept: application/json", hint = Just "One \"Name: value\" per line.", extraAttrs = [rows_ "3"]} "Headers" "headers" False Nothing
+    formField_ FieldSm def{inputType = "textarea", value = foldMap (fold . (.requestBody)) checkM, placeholder = "{\"ping\": true}", hint = Just "Sent with POST, PUT, PATCH and DELETE.", extraAttrs = [rows_ "3"]} "Body" "body" False Nothing
+  fieldset_ [class_ "space-y-2"] do
+    legend_ [class_ "text-sm font-medium text-textStrong"] "Notify"
+    p_ [class_ "text-xs text-textWeak"] "Teams alerted when the check goes down and when it recovers."
+    div_ [class_ "flex flex-wrap gap-x-4 gap-y-2"] $ forM_ teams \t -> do
+      let chosen = maybe t.is_everyone (\c -> if V.null c.teams then t.is_everyone else t.id `V.elem` c.teams) checkM
+      formCheckbox_ FieldSm ("@" <> t.handle) "teams" ([value_ t.id.toText] <> [checked_ | chosen])
+
+
 uptimeSettings_ :: UptimeDashboard -> Html ()
 uptimeSettings_ d = do
   form_ [class_ "surface-raised space-y-4 rounded-xl p-4", hxPost_ ((urls.monitors d.pid).uptimeCheckEdit d.check.id), hxSwap_ "none"] do
     div_ [class_ "grid gap-3 md:grid-cols-[1fr_2fr]"] do
       formField_ FieldSm def{value = d.check.name} "Name" "name" True Nothing
       formField_ FieldSm def{inputType = "url", value = d.check.url} "URL" "url" True Nothing
-    div_ [class_ "grid gap-3 md:grid-cols-2"] do
+    div_ [class_ "grid gap-3 md:grid-cols-3"] do
       formSelectField_ FieldSm "Every" "interval" False $ options_ (Just $ show d.check.scrapeIntervalSeconds) intervalOptions
       formField_ FieldSm def{inputType = "number", value = show (fromMaybe 200 d.check.expectedStatus), extraAttrs = [min_ "100", max_ "599"]} "Expected status" "expectedStatus" False Nothing
+      formField_ FieldSm def{value = fold d.check.responseContains, placeholder = "e.g. \"status\":\"ok\""} "Response contains" "contains" False Nothing
+    requestFields_ d.teams (Just d.check)
     fieldset_ [class_ "space-y-2"] do
       legend_ [class_ "text-sm font-medium text-textStrong"] "Regions"
       p_ [class_ "text-xs text-textWeak"] "None selected runs from this deployment's region. A region can be picked once a worker probes from it."
@@ -570,6 +612,7 @@ uptimeCheckGetH pid cid sinceM = do
   incidents <- incidentsOf (UptimeCheck check) <$> Uptime.incidents [uid] (addUTCTime (-(90 * 86400)) now)
   served <- Uptime.servedRegions region now
   recent <- Uptime.recentResults uid 100
+  teams <- ManageMembers.getTeams pid
   addRespHeaders $ UptimeCheckPage $ PageCtx bw UptimeDashboard{..}
 
 
@@ -585,7 +628,8 @@ uptimeCheckEditH pid cid form = act do
     (Left r, _) -> pure $ Left r
     (_, Just unserved) -> pure $ Left $ UnservedRegion unserved
     (Right v, Nothing) -> do
-      void $ PromCfg.updateUptime pid cid v.name v.url v.interval v.expected regions
+      stored <- maybe (PromCfg.RequestHeaders []) (.requestHeaders) <$> PromCfg.getConfigByProject pid cid
+      void $ PromCfg.updateUptime pid cid v{PromCfg.regions, PromCfg.headers = PromCfg.unmaskHeaders stored v.headers}
       pure $ Right $ Redirected ((urls.monitors pid).uptimeCheckGet cid Nothing) "Check saved"
 
 

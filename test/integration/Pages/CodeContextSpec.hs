@@ -181,6 +181,7 @@ onHost host origin routes act = do
       W.PatchWith _ endpoint _ -> reply "PATCH" endpoint
       W.Delete endpoint -> reply "DELETE" endpoint
       W.DeleteWith _ endpoint -> reply "DELETE" endpoint
+      W.RequestWith m _ endpoint _ -> reply (toText m) endpoint
   (result,) . reverse <$> readIORef seen
 
 
