@@ -330,7 +330,7 @@ topicsOf :: UTCTime -> [Conversation] -> [Topic]
 topicsOf now convs = sortOn (Down . length . (.conversations)) [Topic tmpl members | tmpl <- ordNub (map (.templateStr) results), let members = [c | (c, Just t) <- assigned, t == tmpl], not (null members)]
   where
     titled = [(c, V.map valueToken $ Drain.tokenizeForDrain t) | c <- convs, Just t <- [c.title]]
-    valueToken tok = let r = replaceAllFormats tok in if T.any isAlpha tok && not ("{" `T.isPrefixOf` r && "}" `T.isSuffixOf` r && T.count "{" r == 1) then tok else r
+    valueToken tok = let r = replaceAllFormats tok in if T.any isAlpha tok && not ("{" `T.isPrefixOf` r && "}" `T.isSuffixOf` r && T.count "{" r == 1) then tok else Drain.normalizePlaceholder r
     results = V.toList $ Drain.getAllLogGroups $ Drain.buildDrainTree snd ((.key) . fst) (const Nothing) Drain.emptyDrainTree (V.fromList titled) now
     matching toks r = V.length r.templateTokens == V.length toks && V.and (V.zipWith (\p x -> p == x || Drain.isPlaceholderToken p) r.templateTokens toks)
     assigned = [(c, (.templateStr) <$> find (matching toks) results) | (c, toks) <- titled]
