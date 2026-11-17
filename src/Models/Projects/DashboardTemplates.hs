@@ -1,9 +1,10 @@
-module Models.Projects.DashboardTemplates (Templates, askTemplates, templateList, getDashboardTemplates, loadDashboardFromVM, detach, duplicate, ReadOnly (..), Editable, editableIn, requireEditable, updateSchema, updateTitle, dashboardTemplatesCompiled) where
+module Models.Projects.DashboardTemplates (Templates, askTemplates, templateList, getDashboardTemplates, loadDashboardFromVM, detach, duplicate, ReadOnly (..), Editable, editableIn, requireEditable, updateSchema, updateTitle, dashboardTemplatesCompiled, templateTab) where
 
 import Control.Lens ((%~))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.FileEmbed (embedDir)
 import Data.Generics.Labels ()
+import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Error.Static (Error)
@@ -11,6 +12,8 @@ import Effectful.Reader.Static (Reader, ask)
 import Hasql.Interpolate qualified as HI
 import Models.Ids qualified as Projects
 import Models.Projects.Dashboards qualified as Dashboards
+import Pkg.Components.Widget qualified as Widget
+import Pkg.Parser (TemplateLang (..), fillQueryTemplate)
 import Relude hiding (Reader, ask)
 import Servant (ServerError)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
@@ -99,6 +102,15 @@ updateTitle (Editable dashId) title = Hasql.interpExecute [HI.sql| UPDATE projec
 -- DashboardTemplatesSpec checks that each template decodes.
 dashboardTemplatesCompiled :: [Dashboards.Dashboard]
 dashboardTemplatesCompiled = rights [Dashboards.decodeDashboard f bs | (f, bs) <- sortWith fst $(embedDir "static/public/dashboards"), "yaml" `isExtensionOf` f]
+
+
+-- | One tab of a template for a page that shows that view of the dashboard: @{{var-*}}@ filled and
+-- escaped as the dashboard fills them, unset ones blank; groups' children too.
+templateTab :: FilePath -> Text -> [(Text, Text)] -> [Widget.Widget]
+templateTab file tabName vars = [fill w | d <- dashboardTemplatesCompiled, d.file == Just (toText file), t <- fold d.tabs, t.name == tabName, w <- t.widgets]
+  where
+    fill w = w{Widget.query = fillQueryTemplate KqlTemplate params <$> w.query, Widget.sql = fillQueryTemplate SqlTemplate params <$> w.sql, Widget.children = map fill <$> w.children}
+    params = Map.fromList [("var-" <> k, v) | (k, v) <- vars]
 
 
 askTemplates :: (IOE :> es, Reader AuthContext :> es) => Eff es Templates

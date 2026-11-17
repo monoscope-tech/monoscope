@@ -2971,7 +2971,7 @@ instance ToHtml SqlPreview where
 
 -- | Find a tab by its slug, returns (index, tab) if found
 findTabBySlug :: [Dashboards.Tab] -> Text -> Maybe (Int, Dashboards.Tab)
-findTabBySlug tabs tabSlug = find ((== tabSlug) . (.slug) . snd) (zip [0 ..] tabs)
+findTabBySlug tabs tabSlug = find (\(_, t) -> t.slug == tabSlug && isNothing t.link) (zip [0 ..] tabs)
 
 
 -- | Find widget by ID in dashboard, searching tabs, root, and recursively into children. Returns (Maybe tabSlug, Widget)
@@ -3176,20 +3176,25 @@ dashboardTabStrip_ pid dashId activeTabIdx tabs params extraAttrs =
       ]
         <> extraAttrs
     )
-    $ forM_ (zip [0 ..] tabs) \(idx, tab) -> do
-      let tabUrl = dashboardUrl pid dashId (Just tab.slug) tabParams
-      a_
-        ( [ role_ "tab"
-          , href_ tabUrl
-          , class_ $ "tab group/tab flex items-center gap-2 whitespace-nowrap" <> memptyIfFalse (idx == activeTabIdx) " tab-active"
-          ]
-            <> dashboardContentNavAttrs TabPanel tabUrl
-        )
-        do
-          -- The icon becomes the spinner in place, so the strip doesn't reflow mid-swap.
-          whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4 group-[.htmx-request]/tab:hidden"
-          span_ [class_ "hidden group-[.htmx-request]/tab:inline-flex", role_ "status", Aria.label_ "Loading"] reloadSpinner_
-          toHtml tab.name
+    $ forM_ (zip [0 ..] tabs) \(idx, tab) -> case tab.link of
+      Just link -> a_ [href_ $ T.replace "{{project_id}}" pid.toText link, class_ "tab flex items-center gap-2 whitespace-nowrap text-textWeak"] do
+        whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4"
+        toHtml tab.name
+        faSprite_ "arrow-up-right" "regular" "w-3 h-3"
+      Nothing -> do
+        let tabUrl = dashboardUrl pid dashId (Just tab.slug) tabParams
+        a_
+          ( [ role_ "tab"
+            , href_ tabUrl
+            , class_ $ "tab group/tab flex items-center gap-2 whitespace-nowrap" <> memptyIfFalse (idx == activeTabIdx) " tab-active"
+            ]
+              <> dashboardContentNavAttrs TabPanel tabUrl
+          )
+          do
+            -- The icon becomes the spinner in place, so the strip doesn't reflow mid-swap.
+            whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4 group-[.htmx-request]/tab:hidden"
+            span_ [class_ "hidden group-[.htmx-request]/tab:inline-flex", role_ "status", Aria.label_ "Loading"] reloadSpinner_
+            toHtml tab.name
   where
     tabParams = filter (\(k, _) -> k `notElem` [activeTabSlugKey, "expand"]) params
 

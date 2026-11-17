@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), ChartScope (..), VizType (..), vizWidget, widgetWith_, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, assignWidgetIds, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), monitorChartType, vizChart, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
+module Pkg.Components.Widget (Widget (..), ChartScope (..), VizType (..), vizWidget, widgetWith_, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, embeddedWidgets_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, assignWidgetIds, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), monitorChartType, vizChart, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -128,6 +128,7 @@ data WidgetType
   | WTFlamegraph
   | WTServiceMap -- Service dependency graph visualization
   | WTHeatmap -- Latency distribution heatmap
+  | WTDayBars -- One bar per day, coloured by the day's failures, as status pages draw uptime
   -- Bounded so every widget type can be enumerated ([minBound ..]) rather than listed by
   -- hand: adding a constructor then extends the round-trip/render specs automatically
   -- instead of silently shipping untested.
@@ -528,6 +529,8 @@ chartQuery w
       | isStat = ("summarize count(*)", Charts.DTFloat)
       -- Latency over time on log buckets, Datadog's default for span durations.
       | w.wType == WTHeatmap = ("where duration > 0 | summarize count(*) by bin_auto(timestamp), log_bin(duration), iff(status_code == \"ERROR\", \"error\", \"ok\")", Charts.DTMetric)
+      -- One series per status; day-bars.ts counts the error-named ones as failures.
+      | w.wType == WTDayBars = ("summarize count(*) by bin(timestamp, 1d), status_code", Charts.DTMetric)
       | otherwise = ("summarize count(*) by bin_auto(timestamp)", Charts.DTMetric)
     shape q = case parseQueryToAST q of
       -- Let the query handler report errors in the original malformed query.
@@ -741,6 +744,26 @@ infraTimeseries pid wid title unit query =
 -- use either index or the xxhash as id
 widget_ :: Widget -> Html ()
 widget_ = widgetWith_ mempty
+
+
+-- | A dashboard tab's widgets inside another page: a 12-column grid from each widget's own width,
+-- groups flattened, every widget standalone, so a page can show a view of a dashboard without gridstack.
+embeddedWidgets_ :: Projects.ProjectId -> [Widget] -> Html ()
+embeddedWidgets_ pid ws = div_ [class_ "grid grid-cols-12 gap-3"] $ forM_ (concatMap flat ws) \w ->
+  div_ [class_ $ width (w.layout >>= (.w)) <> " " <> height w] $ widget_ w{_projectId = Just pid, standalone = Just True}
+  where
+    flat w = maybe [w] (concatMap flat) w.children
+    width = \case
+      Just n | n <= 3 -> "col-span-12 md:col-span-6 xl:col-span-3"
+      Just 4 -> "col-span-12 lg:col-span-4"
+      Just n | n <= 6 -> "col-span-12 lg:col-span-6"
+      Just n | n <= 8 -> "col-span-12 lg:col-span-8"
+      _ -> "col-span-12"
+    height w
+      | isStatWidget w = "h-28"
+      | w.wType == WTDayBars = "h-32"
+      | w.wType `elem` [WTLogs, WTTable] = "h-96"
+      | otherwise = "h-72"
 
 
 -- | A widget with controls of the page's own in its header, just before the menu: the Explorer's
@@ -1928,6 +1951,7 @@ mapWidgetTypeToChartType WTTimeseriesStat = "line"
 mapWidgetTypeToChartType WTServiceMap = "graph" -- ECharts force-directed graph
 mapWidgetTypeToChartType WTHeatmap = "heatmap" -- ECharts heatmap
 mapWidgetTypeToChartType WTGeomap = "map" -- ECharts choropleth over static/public/assets/deps/world-110m.json
+mapWidgetTypeToChartType WTDayBars = "daybars" -- web-components/src/day-bars.ts
 mapWidgetTypeToChartType _ = "bar"
 
 

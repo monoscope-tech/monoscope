@@ -343,6 +343,7 @@ extra-source-files:
     static/public/dashboards/redis.yaml
     static/public/dashboards/rum.yaml
     static/public/dashboards/timefusion.yaml
+    static/public/dashboards/uptime.yaml
     static/model_prices.json
     src/Data/Effectful/CodeReview/proof.sh
 

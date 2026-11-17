@@ -117,7 +117,7 @@ import Pkg.AI qualified as AI
 import Pkg.AdConversions qualified as AdConversions
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql, unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql, unAesonTextMaybe)
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.ErrorFingerprint qualified as EF
@@ -145,7 +145,7 @@ import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
 import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny, withException)
-import Utils (FreeTierStatus (..), calculateCycleStartDate, formatUTC, formatWithCommas, freeTierUsageStatus, hostPath, nonEmptyT, prettyPrintCount, toXXHash, truncateHour, usageWindowStart)
+import Utils (FreeTierStatus (..), calculateCycleStartDate, formatUTC, formatWithCommas, freeTierUsageStatus, hostPath, jsonToMap, nestedJsonFromDotNotation, nonEmptyT, prettyPrintCount, toXXHash, truncateHour, usageWindowStart)
 import Web.Links
 
 
@@ -4991,13 +4991,54 @@ scrapePrometheusTarget :: PromCfg.PrometheusScrapeConfigId -> ATBackgroundCtx ()
 scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> when cfg.enabled case cfg.kind of
   PromCfg.CKUptime -> do
     -- 'claimDueConfigs' leased only checks this node's region serves; results carry that region.
-    region <- (.config.uptimeProbeRegion) <$> ask @Config.AuthContext
+    ctx <- ask @Config.AuthContext
+    let region = ctx.config.uptimeProbeRegion
+    -- The probe is a trace root: an instrumented target continues it, so its own spans join the probe's trace.
+    trId <- T.filter (/= '-') . UUID.toText <$> UUID.genUUID
+    spanId <- T.take 16 . T.filter (/= '-') . UUID.toText <$> UUID.genUUID
     t0 <- Time.currentTime
     -- Any status is an answer here: the probe compares it, so a 5xx must not throw.
-    res <- tryAny $ W.getWith (PromCfg.prometheusScrapeOpts Nothing & Wreq.checkResponse ?~ \_ _ -> pass) (toString cfg.url)
+    res <- tryAny $ W.getWith (PromCfg.prometheusScrapeOpts Nothing & Wreq.checkResponse ?~ (\_ _ -> pass) & Wreq.header "traceparent" .~ [encodeUtf8 $ "00-" <> trId <> "-" <> spanId <> "-01"]) (toString cfg.url)
     t1 <- Time.currentTime
-    applyUptimeResult cfg region t1 (round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double)) (bimap (toText . displayException) (^. Wreq.responseStatus . Wreq.statusCode) res)
+    applyUptimeResult cfg region (trId, spanId) t0 t1 $ bimap (toText . displayException) (^. Wreq.responseStatus . Wreq.statusCode) res
   PromCfg.CKPrometheus -> scrapeMetrics cfg
+
+
+-- | An uptime probe as a client span in the check's own project, so dashboards, monitors and
+-- the Explorer read probes like any other telemetry. @geo.country.iso_code@ is where the probe
+-- ran from, which puts probes on the geomap. Best-effort, as the history row is the record.
+emitProbeSpan :: PromCfg.PrometheusScrapeConfig -> Text -> (Text, Text) -> UTCTime -> UTCTime -> Either Text Int -> Bool -> Text -> ATBackgroundCtx ()
+emitProbeSpan cfg region (trId, spanId) t0 t1 outcome ok reason = do
+  ctx <- ask @Config.AuthContext
+  insertSystemLog (Telemetry.writeTargetFor ctx.env Nothing) ctx.hasqlTimefusionUsesPgTypes probe{Telemetry.summary = generateSummary probe}
+  where
+    probe =
+      (mkSystemLog cfg.projectId "uptime.probe" SLInfo reason Map.empty (Just durationNs) t0)
+        { Telemetry.kind = Just "client"
+        , Telemetry.level = Nothing
+        , Telemetry.severity = Nothing
+        , Telemetry.status_code = Just $ bool "ERROR" "OK" ok
+        , Telemetry.status_message = Just reason
+        , Telemetry.end_time = Just t1
+        , Telemetry.context = Just Telemetry.Context{trace_id = Just trId, span_id = Just spanId, trace_state = Nothing, trace_flags = Nothing, is_remote = Nothing}
+        , Telemetry.attributes = fmap AesonText $ jsonToMap $ nestedJsonFromDotNotation attrs
+        , Telemetry.resource = fmap AesonText $ jsonToMap $ nestedJsonFromDotNotation [("service.name", "monoscope-uptime"), ("cloud.region", AE.String region)]
+        }
+    expected = fromMaybe 200 cfg.expectedStatus
+    durationNs = round (realToFrac (diffUTCTime t1 t0) * 1e9 :: Double)
+    attrs =
+      [ ("http.request.method", "GET")
+      , ("url.full", AE.String cfg.url)
+      , ("monitor.kind", "uptime")
+      , ("monitor.check.id", AE.toJSON cfg.id)
+      , ("monitor.check.name", AE.String cfg.name)
+      , ("monitor.region", AE.String region)
+      , ("monitor.ok", AE.Bool ok)
+      , ("monitor.expected_status", AE.toJSON expected)
+      ]
+        <> [("http.response.status_code", AE.toJSON c) | Right c <- [outcome]]
+        <> [("error.type", "request_failed") | isLeft outcome]
+        <> [("geo.country.iso_code", AE.String r.country) | Just r <- [Uptime.regionOf region]]
 
 
 -- | Per-minute: evaluate the cron monitors whose lease has lapsed.
@@ -5042,11 +5083,13 @@ evaluateCronMonitor now m = do
 -- | Record an uptime probe. Two failures in a row confirm downtime and open (or fold
 -- into) the check's issue; the first success after that resolves it. One failed probe
 -- alone is a blip, not an outage.
-applyUptimeResult :: PromCfg.PrometheusScrapeConfig -> Text -> UTCTime -> Int -> Either Text Int -> ATBackgroundCtx ()
-applyUptimeResult cfg region now ms res = do
+applyUptimeResult :: PromCfg.PrometheusScrapeConfig -> Text -> (Text, Text) -> UTCTime -> UTCTime -> Either Text Int -> ATBackgroundCtx ()
+applyUptimeResult cfg region ids t0 now res = do
   let expected = fromMaybe 200 cfg.expectedStatus
       ok = res == Right expected
+      ms = round (realToFrac (diffUTCTime now t0) * 1000 :: Double)
       reason = either ("request failed: " <>) (\c -> bool ("status " <> show c <> ", expected " <> show expected) "ok" ok) res
+  emitProbeSpan cfg region ids t0 now res ok reason
   Uptime.recordResult Uptime.CheckResult{projectId = cfg.projectId, checkId = cfg.id.unUUIDId, kind = Uptime.RKUptime, region, checkedAt = now, ok, statusCode = rightToMaybe res, durationMs = Just ms, dnsMs = Nothing, message = Just reason}
   (before, after) <- PromCfg.recordUptime cfg.id ok (reason <> " · " <> show ms <> "ms")
   when (not ok && after == Uptime.downtimeAfter) do

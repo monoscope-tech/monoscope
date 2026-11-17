@@ -277,6 +277,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardViewsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> "views" :> AllQueryParams :> Get '[HTML] (RespHeaders (Opaque "Dashboards.SavedViews"))
   , rumRedirect :: mode :- "p" :> ProjectId :> "rum" :> CaptureAll "view" Text :> AllQueryParams :> LocationRedirect NoContent
   , llmDashboardRedirect :: mode :- "p" :> ProjectId :> "llm" :> "dashboard" :> AllQueryParams :> LocationRedirect NoContent
+  , uptimeDashboardRedirect :: mode :- "p" :> ProjectId :> "uptime" :> "dashboard" :> AllQueryParams :> LocationRedirect NoContent
   , dashboardNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> "new" :> Get '[HTML] (RespHeaders (Opaque "Dashboards.DashboardNew"))
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> HXRequest :> AllQueryParams :> Get '[HTML] (RespHeaders (Opaque1 "PageCtx" (Opaque "Dashboards.DashboardGet")))
   , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "sort" :> QPT "embedded" :> QueryParam "teamId" ProjectMembers.TeamId :> QPT "copy_widget_id" :> QueryParam "source_dashboard_id" (UUIDId "dashboard") :> QPT "new" :> RecordParam KeepPrefixExp DashboardFilters :> Get '[HTML] (RespHeaders (Opaque "Dashboards.DashboardsGet"))
@@ -559,7 +560,7 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   , cronDelete :: mode :- "cron" :> Capture "monitor_id" UUID.UUID :> "delete" :> Unrefusable 'POST (Opaque "Uptime.Redirected")
   , uptimeGet :: mode :- "uptime" :> Get '[HTML] (RespHeaders (Opaque "Uptime.UptimeChecks"))
   , uptimePost :: mode :- "uptime" :> ReqBody '[FormUrlEncoded] (Opaque "Uptime.UptimeForm") :> Action 'POST (Opaque "Uptime.UptimeRejection") (Opaque "Uptime.UptimeList")
-  , uptimeCheckGet :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> Get '[HTML] (RespHeaders (Opaque "Uptime.UptimeCheckPage"))
+  , uptimeCheckGet :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> QPT "since" :> Get '[HTML] (RespHeaders (Opaque "Uptime.UptimeCheckPage"))
   , uptimeCheckEdit :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> ReqBody '[FormUrlEncoded] (Opaque "Uptime.UptimeForm") :> Action 'POST (Opaque "Uptime.UptimeRejection") (Opaque "Uptime.Redirected")
   , uptimeToggle :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "toggle" :> Unrefusable 'POST (Opaque "Uptime.Redirected")
   , uptimeDelete :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "delete" :> Unrefusable 'POST (Opaque "Uptime.Redirected")

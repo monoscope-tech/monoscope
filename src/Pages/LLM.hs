@@ -55,7 +55,6 @@ import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Ids qualified as Projects
 import Models.Projects.DashboardTemplates qualified as DashboardTemplates
-import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), llmCallsUrl, mkPageCtx, navTabAttrs)
@@ -477,14 +476,6 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
         }
       body
   where
-    -- The LLM dashboard template's opening widgets: one definition serves this page and the dashboard.
-    overviewWidgets :: [Widget.Widget]
-    overviewWidgets =
-      [ w{Widget._projectId = Just pid, Widget.standalone = Just True}
-      | d <- take 1 [d | d <- DashboardTemplates.dashboardTemplatesCompiled, d.file == Just "llm-observability.yaml"]
-      , w <- concatMap (\g -> fromMaybe [g] g.children) (take 3 $ d.widgets <> foldMap (concatMap (.widgets) . take 1) d.tabs)
-      ]
-
     chips :: [Text] -> Html ()
     chips xs = div_ [class_ "flex min-w-0 flex-wrap gap-1"] $ forM_ (take 2 xs) (span_ [class_ "truncate rounded bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] . toHtml) >> when (length xs > 2) (span_ [class_ "text-xs text-textWeak"] $ toHtml $ "+" <> show @Text (length xs - 2))
 
@@ -506,8 +497,8 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
       ]
 
     overview :: Html ()
-    overview = div_ [class_ "grid grid-cols-4 gap-3 pt-3 max-lg:grid-cols-2"] $ forM_ overviewWidgets \w ->
-      div_ [class_ $ if w.wType `elem` [Widget.WTStat, Widget.WTTimeseriesStat] then "h-28" else "col-span-2 min-h-56"] $ Widget.widget_ w
+    -- The LLM dashboard template's opening widgets: one definition serves this page and the dashboard.
+    overview = div_ [class_ "pt-3"] $ Widget.embeddedWidgets_ pid $ take 3 $ DashboardTemplates.templateTab "llm-observability.yaml" "Overview" []
 
     conversationColumns :: [Column Conversation]
     conversationColumns =
