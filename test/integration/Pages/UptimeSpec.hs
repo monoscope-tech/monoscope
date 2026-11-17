@@ -114,7 +114,8 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     -- The cumulative table's SQL runs over the same spans, one row per checked URL.
     tableSql <- maybe (fail "no Checks table") pure $ listToMaybe [q | w <- concatMap flat (DashboardTemplates.templateTab "uptime.yaml" "Overview" []), w.title == Just "Checks", Just q <- [w.sql]]
     let filled = T.replace "{{query_ast_filters}}" ("project_id = '" <> pid.toText <> "' AND name = 'uptime.probe'") tableSql
-    dbQuery @_ @(Text, Int, Double, Maybe Double) tr (fromString $ toString filled) () >>= (`shouldBe` [(shop.url, 6, 66.667, True)]) . map (\(u, n, up, p) -> (u, n, fromIntegral (round (up * 1000) :: Int) / 1000 :: Double, isJust p))
+    dbQuery @_ @(Text, Int, Int, Double, Maybe Double, Maybe Double, Maybe Text) tr (fromString $ toString filled) ()
+      >>= (`shouldBe` [(shop.url, 6, 2, 66.667, True)]) . map (\(u, n, f, up, avg, p, lst) -> (u, n, f, fromIntegral (round (up * 1000) :: Int) / 1000 :: Double, isJust (avg *> p *> lst)))
     page <- renderT <$> call tr (Uptime.uptimeCheckGetH pid shop.id (Just "7D"))
     page `shouldContainAll` ["Open as dashboard", "Daily uptime", "Probes by location", "Failure reasons", "/uptime/dashboard?var-check=" <> shop.id.toText]
     ("{{var-check}}" `T.isInfixOf` page) `shouldBe` False

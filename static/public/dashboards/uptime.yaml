@@ -39,38 +39,48 @@ tabs:
     icon: heart-pulse
     variables: [check, region]
     widgets:
-      - type: group
-        title: Overview
-        layout: { w: 12, h: 3 }
-        children:
-          - type: stat
-            title: Uptime
-            icon: circle-check
-            query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") | summarize countif(status_code != "ERROR") * 100.0 / count()'
-            unit: '%'
-            eager: true
-            layout: { w: 3, h: 2 }
-          - type: timeseries_stat
-            title: Average response
-            icon: clock
-            query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") | summarize avg(duration) by bin_auto(timestamp)'
-            unit: ns
-            eager: true
-            layout: { w: 3, h: 2 }
-          - type: timeseries_stat
-            title: P95 response
-            icon: gauge
-            query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") | summarize p95(duration) by bin_auto(timestamp)'
-            unit: ns
-            eager: true
-            layout: { w: 3, h: 2 }
-          - type: timeseries_stat
-            title: Failed probes
-            icon: circle-exclamation
-            query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") and status_code == "ERROR" | summarize count() by bin_auto(timestamp)'
-            unit: probes
-            eager: true
-            layout: { w: 8, h: 5 }
+      - type: stat
+        title: Uptime
+        icon: circle-check
+        query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") | summarize countif(status_code != "ERROR") * 100.0 / count()'
+        unit: '%'
+        eager: true
+        layout: { w: 2, h: 2 }
+      - type: timeseries_stat
+        title: Probes
+        icon: heart-pulse
+        query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") | summarize count() by bin_auto(timestamp)'
+        unit: probes
+        eager: true
+        layout: { w: 2, h: 2 }
+      - type: timeseries_stat
+        title: Failed probes
+        icon: circle-exclamation
+        query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") and status_code == "ERROR" | summarize count() by bin_auto(timestamp)'
+        unit: probes
+        eager: true
+        layout: { w: 2, h: 2 }
+      - type: timeseries_stat
+        title: Average response
+        icon: clock
+        query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") and status_code != "ERROR" | summarize avg(duration) by bin_auto(timestamp)'
+        unit: ns
+        eager: true
+        layout: { w: 2, h: 2 }
+      - type: timeseries_stat
+        title: P95 response
+        icon: gauge
+        query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") and status_code != "ERROR" | summarize p95(duration) by bin_auto(timestamp)'
+        unit: ns
+        eager: true
+        layout: { w: 2, h: 2 }
+      - type: timeseries_stat
+        title: P99 response
+        icon: gauge
+        query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") and status_code != "ERROR" | summarize p99(duration) by bin_auto(timestamp)'
+        unit: ns
+        eager: true
+        layout: { w: 2, h: 2 }
 
       - type: day_bars
         title: Daily uptime
@@ -83,12 +93,21 @@ tabs:
         query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") and status_code != "ERROR" | summarize p50(duration), p95(duration), p99(duration) by bin_auto(timestamp)'
         unit: ns
         layout: { w: 8, h: 4 }
-
+      - type: pie_chart
+        title: Status codes
+        query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") | summarize count() by attributes.http.response.status_code'
+        unit: probes
+        layout: { w: 4, h: 4 }
       - type: timeseries
         title: Probes by result
         query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") | summarize count() by bin_auto(timestamp), status_code'
         unit: probes
-        layout: { w: 4, h: 4 }
+        layout: { w: 6, h: 3 }
+      - type: timeseries_line
+        title: Average response by region
+        query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") and status_code != "ERROR" | summarize avg(duration) by bin_auto(timestamp), attributes.monitor.region'
+        unit: ns
+        layout: { w: 6, h: 3 }
       - type: table
         title: Checks
         description: Every check in the window, worst uptime first.
@@ -99,19 +118,31 @@ tabs:
           - field: probes
             title: Probes
             column_type: number
+          - field: failed
+            title: Failed
+            column_type: number
           - field: uptime
             title: Uptime
             column_type: number
             unit: '%'
+          - field: avg
+            title: Avg
+            column_type: duration
+            unit: ns
           - field: p95
             title: P95
             column_type: duration
             unit: ns
+          - field: last_probe
+            title: Last probe
         query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}")'
         sql: |
           SELECT attributes___url___full AS url, count(*)::bigint AS probes,
+                 count(*) FILTER (WHERE status_code = 'ERROR')::bigint AS failed,
                  (100.0 * count(*) FILTER (WHERE status_code <> 'ERROR') / count(*))::float8 AS uptime,
-                 approx_percentile(0.95, percentile_agg(duration))::float8 AS p95
+                 avg(duration)::float8 AS avg,
+                 approx_percentile(0.95, percentile_agg(duration))::float8 AS p95,
+                 to_char(max(timestamp), 'Mon DD HH24:MI') AS last_probe
           FROM otel_logs_and_spans
           WHERE {{query_ast_filters}}
           GROUP BY 1 ORDER BY uptime ASC, probes DESC LIMIT 200
@@ -151,6 +182,25 @@ tabs:
     icon: circle-exclamation
     variables: [check, region]
     widgets:
+      - type: stat
+        title: Failure rate
+        icon: circle-exclamation
+        query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") | summarize countif(status_code == "ERROR") * 100.0 / count()'
+        unit: '%'
+        eager: true
+        layout: { w: 3, h: 2 }
+      - type: timeseries_stat
+        title: Failed probes
+        icon: circle-exclamation
+        query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") and status_code == "ERROR" | summarize count() by bin_auto(timestamp)'
+        unit: probes
+        eager: true
+        layout: { w: 3, h: 2 }
+      - type: timeseries_line
+        title: Failure rate
+        query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") | summarize countif(status_code == "ERROR") * 100.0 / count() by bin_auto(timestamp)'
+        unit: '%'
+        layout: { w: 6, h: 2 }
       - type: timeseries
         title: Failures by status code
         query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") and status_code == "ERROR" | summarize count() by bin_auto(timestamp), attributes.http.response.status_code'
@@ -170,7 +220,7 @@ tabs:
         title: Failed probes
         description: Each opens its span; an instrumented target's own spans join the probe's trace.
         query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") and status_code == "ERROR"'
-        layout: { w: 12, h: 5 }
+        layout: { w: 8, h: 5 }
 
   - name: Cron
     icon: clock
