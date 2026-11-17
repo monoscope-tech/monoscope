@@ -513,7 +513,7 @@ rewriteSectionsForSource tfOn src
       Just SMetrics -> \case
         s@(Subject entire root keys)
           | entire `S.member` flattenedMetricsAttributes -> Subject entire (T.replace "." "___" entire) []
-          | root `elem` ["attributes", "resource"] -> Subject entire (if tfOn then "variant_to_json(" <> root <> ")" else "(" <> root <> ")") keys
+          | root `elem` ["attributes", "resource"], tfOn || not (null keys) -> Subject entire (if tfOn then "variant_to_json(" <> root <> ")" else "(" <> root <> ")") keys
           | otherwise -> s
       Just SSpans -> id
       Nothing -> id
