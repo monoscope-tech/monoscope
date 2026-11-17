@@ -73,7 +73,7 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Deriving (WrappedEnumSC (..))
-import Pkg.Parser.Expr (CmpOp (..), Expr (..), FieldKey (..), Parser, Subject (..), ToQueryText (..), Values (..), arrayColumns, defaultBinWidth, knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, searchExpr, suggestFieldRoot, unsupportedTimespan)
+import Pkg.Parser.Expr (CmpOp (..), Expr (..), FieldKey (..), Parser, Subject (..), ToQueryText (..), Values (..), arrayColumns, defaultBinWidth, flattenedMetricsAttributes, knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, searchExpr, suggestFieldRoot, unsupportedTimespan)
 import Relude hiding (GT, LT, Last, Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, hspace, space, string)
@@ -491,18 +491,32 @@ data Sources = SSpans | SMetrics
 -- True
 -- >>> fmap (rewriteSectionsForSource False Nothing) (parseQueryToAST "hashes[*]==\"x\"")
 -- Right [Search (Cmp Eq (Subject "hashes[*]" "hashes" [ArrayWildcard ""]) (Str "x"))]
+--
+-- A metrics subject with no flattened column of its own on @otel_metrics@ reads the JSON
+-- column, on either store: it used to borrow the spans column name (@attributes___db___namespace@),
+-- which @otel_metrics@ does not have.
+--
+-- >>> let metrics tfOn = fmap (rewriteSectionsForSource tfOn (Just SMetrics)) . parseQueryToAST
+-- >>> map (fmap (fmap display . (\case [Search (Cmp _ s _)] -> Just s; _ -> Nothing)) . metrics False) ["attributes.db.namespace == \"x\"", "attributes.db.system.name == \"x\""]
+-- [Right (Just "(attributes)->'db'->>'namespace'"),Right (Just "attributes___db___system___name")]
+-- >>> fmap (fmap display . (\case [Search (Cmp _ s _)] -> Just s; _ -> Nothing)) (metrics True "attributes.db.namespace == \"x\"")
+-- Right (Just "variant_to_json(attributes)->'db'->>'namespace'")
 rewriteSectionsForSource :: Bool -> Maybe Sources -> [Section] -> [Section]
-rewriteSectionsForSource False _ = id
-rewriteSectionsForSource True src =
-  runIdentity . traverseAst (Identity . subject) \case
-    Cmp Eq (Subject _ col [ArrayWildcard ""]) (Str v) | S.member col arrayColumns -> ArrayHas col v
-    e -> e
+rewriteSectionsForSource tfOn src = case (tfOn, src) of
+  (False, Just SSpans) -> id
+  (False, Nothing) -> id
+  _ -> runIdentity . traverseAst (Identity . subject) (if tfOn then arrays else id)
   where
+    arrays = \case
+      Cmp Eq (Subject _ col [ArrayWildcard ""]) (Str v) | S.member col arrayColumns -> ArrayHas col v
+      e -> e
     subject = case src of
       Just SMetrics -> \case
-        Subject entire "attributes" keys -> Subject entire "variant_to_json(attributes)" keys
-        Subject entire "resource" keys -> Subject entire "variant_to_json(resource)" keys
-        s -> s
+        s@(Subject entire root keys)
+          | root `elem` ["attributes", "resource"]
+          , not (entire `S.member` flattenedMetricsAttributes) ->
+              Subject entire (if tfOn then "variant_to_json(" <> root <> ")" else "(" <> root <> ")") keys
+          | otherwise -> s
       Just SSpans -> id
       Nothing -> id
 

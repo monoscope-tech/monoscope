@@ -541,10 +541,10 @@ sqlFromQueryComponents sqlCfg qc =
               asText col = let (expr, aliasM) = splitTrailingAlias col in "(" <> expr <> ")::text" <> maybe "" (" AS " <>) aliasM
               selectCols
                 | null qc.aggregations = qc.select
-                -- No `by` at all is a *scalar* summarize, which Charts.decoderFor
-                -- reads as DTFloat — casting that to text breaks the decode. Only
-                -- the grouped shape goes through the all-text DTText decoder.
-                | null qc.groupByClause = qc.aggregations
+                -- One aggregate with no `by` is a *scalar* summarize, which Charts.decoderFor
+                -- reads as DTFloat — casting that to text breaks the decode. Several, or
+                -- any grouped shape, go through the all-text DTText decoder.
+                | null qc.groupByClause, [_] <- qc.aggregations = qc.aggregations
                 | otherwise = groupCols <> map asText qc.aggregations
               -- buildOrderBy honours an explicit `| sort by`; hand-rolling the
               -- clause here silently dropped it, so `summarize … by svc | sort
@@ -642,11 +642,17 @@ data ResultShape = Events | Scalar | TimeSeries | Categories
 --
 -- >>> fmap resultShape (parseQueryToAST "summarize count() by name | where count_ > 1")
 -- Right Categories
+--
+-- Several aggregates with no @by@ are one row of named columns, not one number:
+--
+-- >>> fmap resultShape (parseQueryToAST "summarize count(), min(timestamp), max(timestamp)")
+-- Right Categories
 resultShape :: [Section] -> ResultShape
-resultShape ast = case listToMaybe [by | SummarizeCommand _ by <- ast] of
+resultShape ast = case listToMaybe [(aggs, by) | SummarizeCommand aggs by <- ast] of
   Nothing -> Events
-  Just Nothing -> Scalar
-  Just (Just (SummarizeByClause items))
+  Just ([_], Nothing) -> Scalar
+  Just (_, Nothing) -> Categories
+  Just (_, Just (SummarizeByClause items))
     | any (\case ByBinFunc _ -> True; _ -> False) items -> TimeSeries
     | otherwise -> Categories
 
