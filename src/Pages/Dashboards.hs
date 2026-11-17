@@ -2971,7 +2971,7 @@ instance ToHtml SqlPreview where
 
 -- | Find a tab by its slug, returns (index, tab) if found
 findTabBySlug :: [Dashboards.Tab] -> Text -> Maybe (Int, Dashboards.Tab)
-findTabBySlug tabs tabSlug = find ((== tabSlug) . (.slug) . snd) (zip [0 ..] tabs)
+findTabBySlug tabs tabSlug = find (\(_, t) -> t.slug == tabSlug && isNothing t.link) (zip [0 ..] tabs)
 
 
 -- | Find widget by ID in dashboard, searching tabs, root, and recursively into children. Returns (Maybe tabSlug, Widget)

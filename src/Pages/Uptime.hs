@@ -108,9 +108,13 @@ sectionPage pid section = do
   pure bw{pageTitle = "Monitors", menuItem = Just "Monitors", docsLink = Just "https://monoscopehq.com/docs/monitors/", navTabs = Just $ monitorSections_ pid section}
 
 
--- | The uptime dashboard's tab for this section, one click from the page that summarises it.
+-- | The uptime dashboard, opened on the view a page summarises.
+openDashboard_ :: Projects.ProjectId -> [(Text, Maybe Text)] -> Html ()
+openDashboard_ pid params = a_ [class_ "btn btn-sm gap-1.5", href_ $ urls.uptimeDashboardRedirect pid params] $ faSprite_ "dashboard" "regular" "size-3.5" >> "Open as dashboard"
+
+
 dashboardAction :: Projects.ProjectId -> Text -> BWConfig -> BWConfig
-dashboardAction pid tab bw = bw{pageActions = Just $ a_ [class_ "btn btn-sm gap-1.5", href_ $ urls.uptimeDashboardRedirect pid [("activeTabSlug", Just tab), ("since", Just "7D")]] $ faSprite_ "dashboard" "regular" "size-3.5" >> "Open as dashboard"}
+dashboardAction pid tab bw = bw{pageActions = Just $ openDashboard_ pid [("activeTabSlug", Just tab)]}
 
 
 -- Day bars ------------------------------------------------------------------------------
@@ -289,7 +293,7 @@ uptimeChecksList_ o = div_ [id_ "uptime-checks", class_ "space-y-3", term "hx-ta
           recent = sumCounts [n | (d, n) <- days, d >= addDays (-29) (utctDay o.now)]
       li_ [class_ "relative grid items-center gap-x-6 gap-y-2 px-4 py-3 hover:bg-fillWeak md:grid-cols-[minmax(0,22rem)_minmax(0,1fr)_auto]"] do
         div_ [class_ "min-w-0"] do
-          a_ [href_ ((urls.monitors o.pid).uptimeCheckGet c.id (Just "7D")), class_ "flex items-center gap-2 font-medium text-textStrong after:absolute after:inset-0 hover:text-textBrand"] do
+          a_ [href_ ((urls.monitors o.pid).uptimeCheckGet c.id Nothing), class_ "flex items-center gap-2 font-medium text-textStrong after:absolute after:inset-0 hover:text-textBrand"] do
             stateDot_ (uptimeState c)
             span_ [class_ "truncate"] $ toHtml c.name
           p_ [class_ "mt-0.5 truncate text-xs text-textWeak"] $ toHtml $ c.url <> " · every " <> intervalLabel c.scrapeIntervalSeconds
@@ -335,7 +339,7 @@ uptimeOverview pid = do
 
 uptimeChecksGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders UptimeChecks)
 uptimeChecksGetH pid = do
-  bw <- dashboardAction pid "all-checks" <$> sectionPage pid SUptime
+  bw <- dashboardAction pid "overview" <$> sectionPage pid SUptime
   addRespHeaders . UptimeChecks . PageCtx bw =<< uptimeOverview pid
 
 
@@ -392,7 +396,7 @@ validUptime form
 
 -- | Pause or resume; answered by reloading whichever page asked, list or dashboard.
 uptimeCheckToggleH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders (Done Redirected))
-uptimeCheckToggleH pid cid = requireEdit pid >> PromCfg.toggleEnabled pid cid >> done (Redirected ((urls.monitors pid).uptimeCheckGet cid (Just "7D")) "Check updated")
+uptimeCheckToggleH pid cid = requireEdit pid >> PromCfg.toggleEnabled pid cid >> done (Redirected ((urls.monitors pid).uptimeCheckGet cid Nothing) "Check updated")
 
 
 uptimeCheckDeleteH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders (Done Redirected))
@@ -435,19 +439,17 @@ instance ToHtml UptimeCheckPage where
         span_ $ toHtml $ maybe "not checked yet" (("checked " <>) . agoText d.now) d.check.lastScrapedAt
       div_ [class_ "flex items-center gap-2"] do
         TimePicker.liveDataControls_ Nothing (Just (d.since, "")) Nothing TimePicker.RefreshOnly
-        a_ [class_ "btn btn-sm gap-1.5", href_ $ urls.uptimeDashboardRedirect d.pid [("var-check", Just d.check.url), ("since", Just d.since)]] $ faSprite_ "dashboard" "regular" "size-3.5" >> "Open as dashboard"
+        openDashboard_ d.pid [("var-check", Just d.check.id.toText), ("since", Just d.since)]
     div_ [class_ "flex overflow-x-auto whitespace-nowrap border-b border-strokeWeak", [__|on click halt the event's bubbling|]] do
       detailTab_ "uc" "t-overview" "" True "Overview"
-      detailTab_ "uc" "t-response" "" False "Response time"
-      detailTab_ "uc" "t-regions" "" False "Regions"
+      detailTab_ "uc" "t-performance" "" False "Performance"
       detailTab_ "uc" "t-errors" "" False "Errors"
       detailTab_ "uc" "t-incidents" "" False $ "Incidents" >> countBadge_ d.incidents
       detailTab_ "uc" "t-log" "" False "Check log"
       detailTab_ "uc" "t-settings" "" False "Settings"
-    let view tab = Widget.embeddedWidgets_ d.pid $ DashboardTemplates.templateTab "uptime.yaml" tab [("check", d.check.url), ("region", "")]
+    let view tab = Widget.embeddedWidgets_ d.pid $ DashboardTemplates.templateTab "uptime.yaml" tab [("check", d.check.id.toText)]
     tabPanel_ "group-has-[.t-overview:checked]/uc:block" "uc-overview" $ view "Overview"
-    tabPanel_ "group-has-[.t-response:checked]/uc:block" "uc-response" $ view "Response time"
-    tabPanel_ "group-has-[.t-regions:checked]/uc:block" "uc-regions" $ view "Regions"
+    tabPanel_ "group-has-[.t-performance:checked]/uc:block" "uc-performance" $ view "Performance"
     tabPanel_ "group-has-[.t-errors:checked]/uc:block" "uc-errors" $ view "Errors"
     tabPanel_ "group-has-[.t-incidents:checked]/uc:block space-y-4" "uc-incidents" $ incidentsTable_ d.now "No downtime in the last 90 days" d.incidents
     tabPanel_ "group-has-[.t-log:checked]/uc:block space-y-4" "uc-log" $ resultsTable_ d.now True d.recent
@@ -568,7 +570,7 @@ uptimeCheckGetH pid cid sinceM = do
   incidents <- incidentsOf (UptimeCheck check) <$> Uptime.incidents [uid] (addUTCTime (-(90 * 86400)) now)
   served <- Uptime.servedRegions region now
   recent <- Uptime.recentResults uid 100
-  addRespHeaders $ UptimeCheckPage $ PageCtx bw{needsGridStack = True} UptimeDashboard{..}
+  addRespHeaders $ UptimeCheckPage $ PageCtx bw UptimeDashboard{..}
 
 
 -- | A region is accepted only once a worker probes from it: with one shared lease per check, a
@@ -584,7 +586,7 @@ uptimeCheckEditH pid cid form = act do
     (_, Just unserved) -> pure $ Left $ UnservedRegion unserved
     (Right v, Nothing) -> do
       void $ PromCfg.updateUptime pid cid v.name v.url v.interval v.expected regions
-      pure $ Right $ Redirected ((urls.monitors pid).uptimeCheckGet cid (Just "7D")) "Check saved"
+      pure $ Right $ Redirected ((urls.monitors pid).uptimeCheckGet cid Nothing) "Check saved"
 
 
 -- Cron ----------------------------------------------------------------------------------

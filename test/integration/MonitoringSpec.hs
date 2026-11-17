@@ -486,7 +486,7 @@ spec = describe "Monitoring" do
       -- One failure is a blip; two open a downtime issue; a success resolves it.
       let uptimeNamed n = maybe (fail $ "no uptime check " <> toString n) pure . find ((== n) . (.name)) =<< runQueryEffect tr (PromCfg.configsByProjectId pid PromCfg.CKUptime)
       shop <- uptimeNamed "Shop"
-      let probe dt res = runTestBg (addUTCTime dt frozenTime) tr $ Jobs.applyUptimeResult shop "eu-west" (addUTCTime dt frozenTime) 120 res
+      let probe dt res = runTestBg (addUTCTime dt frozenTime) tr $ Jobs.applyUptimeResult shop "eu-west" ("4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7") (addUTCTime dt frozenTime) (addUTCTime (dt + 0.12) frozenTime) res
           downtime = runQueryEffect tr (Issues.selectIssueByHash pid (Issues.uptimeTargetHash shop.id.toText) Issues.AnyIssue)
       probe 0 (Right 503)
       (isNothing <$> downtime) `shouldReturn` True

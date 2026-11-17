@@ -39,7 +39,7 @@ spec = around withTestResources $ describe "Uptime and status pages" do
             FROM generate_series(?::timestamptz - interval '60 days', ?::timestamptz - interval '1 day', interval '1 day') t |]
       (pid, cron.id, frozenTime, frozenTime, frozenTime, frozenTime)
     -- A probe from this node's region records its result and the check reports up.
-    runTestBg frozenTime tr $ Jobs.applyUptimeResult shop "eu-west" frozenTime 180 (Right 200)
+    runTestBg frozenTime tr $ Jobs.applyUptimeResult shop "eu-west" ("4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7") (addUTCTime (-0.18) frozenTime) frozenTime (Right 200)
     Just probed <- runQueryEffect tr $ PromCfg.getConfigByProject pid shop.id
 
     overview <- renderT <$> call tr (Uptime.uptimeChecksGetH pid)
@@ -88,7 +88,7 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     void $ call tr $ Uptime.uptimeCheckPostH pid (Uptime.UptimeForm "Checkout API" "https://shop.example.com/health" (Just 60) (Just 200) [])
     [shop] <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId pid PromCfg.CKUptime)
     let at h = addUTCTime (h * 3600) frozenTime
-        probe h region ms outcome = runTestBg (at h) tr $ Jobs.emitProbeSpan shop region ("0af7651916cd43dd8448eb211c80319" <> show (round h `mod` 10 :: Int), "b7ad6b716920333" <> show (round h `mod` 10 :: Int)) (at h) (addUTCTime (ms / 1000) (at h)) outcome
+        probe h region ms outcome = runTestBg (at h) tr $ Jobs.applyUptimeResult shop region ("0af7651916cd43dd8448eb211c80319" <> show (round h `mod` 10 :: Int), "b7ad6b716920333" <> show (round h `mod` 10 :: Int)) (at h) (addUTCTime (ms / 1000) (at h)) outcome
     probe (-50) "eu-west" 120 (Right 200)
     probe (-49) "eu-west" 140 (Right 200)
     probe (-26) "eu-west" 900 (Right 503)
@@ -96,7 +96,7 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     probe (-1) "eu-west" 90 (Right 200)
     probe (-2) "us-east" 5000 (Left "connection refused")
     -- Every view the page embeds runs over the spans, with the check filled in.
-    let views = concatMap (\t -> DashboardTemplates.templateTab "uptime.yaml" t [("check", shop.url), ("region", "")]) ["Overview", "Response time", "Regions", "Errors"]
+    let views = concatMap (\t -> DashboardTemplates.templateTab "uptime.yaml" t [("check", shop.id.toText)]) ["Overview", "Performance", "Errors"]
         flat w = maybe [w] (concatMap flat) w.children
         charts = [w | w <- concatMap flat views, w.wType `notElem` [Widget.WTLogs, Widget.WTTable, Widget.WTGroup]]
         window = (Just $ toText $ iso8601Show $ at (-72), Just $ toText $ iso8601Show $ at 1)
@@ -112,9 +112,9 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     located <- titled "Probes by location"
     sort (mapMaybe (V.!? 0) $ V.toList located.dataText) `shouldBe` ["FR", "US"]
     -- The cumulative table's SQL runs over the same spans, one row per checked URL.
-    tableSql <- maybe (fail "no Checks table") pure $ listToMaybe [q | w <- concatMap flat (DashboardTemplates.templateTab "uptime.yaml" "All checks" [("region", "")]), w.title == Just "Checks", Just q <- [w.sql]]
+    tableSql <- maybe (fail "no Checks table") pure $ listToMaybe [q | w <- concatMap flat (DashboardTemplates.templateTab "uptime.yaml" "Overview" []), w.title == Just "Checks", Just q <- [w.sql]]
     let filled = T.replace "{{query_ast_filters}}" ("project_id = '" <> pid.toText <> "' AND name = 'uptime.probe'") tableSql
     dbQuery @_ @(Text, Int, Double, Maybe Double) tr (fromString $ toString filled) () >>= (`shouldBe` [(shop.url, 6, 66.667, True)]) . map (\(u, n, up, p) -> (u, n, fromIntegral (round (up * 1000) :: Int) / 1000 :: Double, isJust p))
     page <- renderT <$> call tr (Uptime.uptimeCheckGetH pid shop.id (Just "7D"))
-    page `shouldContainAll` ["Open as dashboard", "Daily uptime", "Probes by location", "Failure reasons", "/uptime/dashboard?var-check=https"]
+    page `shouldContainAll` ["Open as dashboard", "Daily uptime", "Probes by location", "Failure reasons", "/uptime/dashboard?var-check=" <> shop.id.toText]
     ("{{var-check}}" `T.isInfixOf` page) `shouldBe` False

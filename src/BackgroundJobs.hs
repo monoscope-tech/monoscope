@@ -1,7 +1,7 @@
 {-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsWorkerInitWithTools, jobsWorkerConfig, jobsRunner, runWorkspaceMaintenanceTimer, ensureDailyJobScheduled, processBackgroundJob, processBackgroundJobWithTools, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, emitProbeSpan, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, dualExecPgTfWithSql, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl, sendAlertToChannels) where
+module BackgroundJobs (jobsWorkerInit, jobsWorkerInitWithTools, jobsWorkerConfig, jobsRunner, runWorkspaceMaintenanceTimer, ensureDailyJobScheduled, processBackgroundJob, processBackgroundJobWithTools, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, dualExecPgTfWithSql, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl, sendAlertToChannels) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -5000,22 +5000,20 @@ scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> when cfg.
     -- Any status is an answer here: the probe compares it, so a 5xx must not throw.
     res <- tryAny $ W.getWith (PromCfg.prometheusScrapeOpts Nothing & Wreq.checkResponse ?~ (\_ _ -> pass) & Wreq.header "traceparent" .~ [encodeUtf8 $ "00-" <> trId <> "-" <> spanId <> "-01"]) (toString cfg.url)
     t1 <- Time.currentTime
-    let outcome = bimap (toText . displayException) (^. Wreq.responseStatus . Wreq.statusCode) res
-    applyUptimeResult cfg region t1 (round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double)) outcome
-    emitProbeSpan cfg region (trId, spanId) t0 t1 outcome
+    applyUptimeResult cfg region (trId, spanId) t0 t1 $ bimap (toText . displayException) (^. Wreq.responseStatus . Wreq.statusCode) res
   PromCfg.CKPrometheus -> scrapeMetrics cfg
 
 
 -- | An uptime probe as a client span in the check's own project, so dashboards, monitors and
 -- the Explorer read probes like any other telemetry. @geo.country.iso_code@ is where the probe
 -- ran from, which puts probes on the geomap. Best-effort, as the history row is the record.
-emitProbeSpan :: PromCfg.PrometheusScrapeConfig -> Text -> (Text, Text) -> UTCTime -> UTCTime -> Either Text Int -> ATBackgroundCtx ()
-emitProbeSpan cfg region (trId, spanId) t0 t1 outcome = do
+emitProbeSpan :: PromCfg.PrometheusScrapeConfig -> Text -> (Text, Text) -> UTCTime -> UTCTime -> Either Text Int -> Bool -> Text -> ATBackgroundCtx ()
+emitProbeSpan cfg region (trId, spanId) t0 t1 outcome ok reason = do
   ctx <- ask @Config.AuthContext
   insertSystemLog (Telemetry.writeTargetFor ctx.env Nothing) ctx.hasqlTimefusionUsesPgTypes probe{Telemetry.summary = generateSummary probe}
   where
     probe =
-      (mkSystemLog cfg.projectId "uptime.probe" (bool SLError SLInfo ok) reason Map.empty (Just durationNs) t0)
+      (mkSystemLog cfg.projectId "uptime.probe" SLInfo reason Map.empty (Just durationNs) t0)
         { Telemetry.kind = Just "client"
         , Telemetry.level = Nothing
         , Telemetry.severity = Nothing
@@ -5027,8 +5025,6 @@ emitProbeSpan cfg region (trId, spanId) t0 t1 outcome = do
         , Telemetry.resource = fmap AesonText $ jsonToMap $ nestedJsonFromDotNotation [("service.name", "monoscope-uptime"), ("cloud.region", AE.String region)]
         }
     expected = fromMaybe 200 cfg.expectedStatus
-    ok = outcome == Right expected
-    reason = either (const "Request failed") (\c -> bool ("Status " <> show c <> ", expected " <> show expected) "OK" ok) outcome
     durationNs = round (realToFrac (diffUTCTime t1 t0) * 1e9 :: Double)
     attrs =
       [ ("http.request.method", "GET")
@@ -5087,11 +5083,13 @@ evaluateCronMonitor now m = do
 -- | Record an uptime probe. Two failures in a row confirm downtime and open (or fold
 -- into) the check's issue; the first success after that resolves it. One failed probe
 -- alone is a blip, not an outage.
-applyUptimeResult :: PromCfg.PrometheusScrapeConfig -> Text -> UTCTime -> Int -> Either Text Int -> ATBackgroundCtx ()
-applyUptimeResult cfg region now ms res = do
+applyUptimeResult :: PromCfg.PrometheusScrapeConfig -> Text -> (Text, Text) -> UTCTime -> UTCTime -> Either Text Int -> ATBackgroundCtx ()
+applyUptimeResult cfg region ids t0 now res = do
   let expected = fromMaybe 200 cfg.expectedStatus
       ok = res == Right expected
+      ms = round (realToFrac (diffUTCTime now t0) * 1000 :: Double)
       reason = either ("request failed: " <>) (\c -> bool ("status " <> show c <> ", expected " <> show expected) "ok" ok) res
+  emitProbeSpan cfg region ids t0 now res ok reason
   Uptime.recordResult Uptime.CheckResult{projectId = cfg.projectId, checkId = cfg.id.unUUIDId, kind = Uptime.RKUptime, region, checkedAt = now, ok, statusCode = rightToMaybe res, durationMs = Just ms, dnsMs = Nothing, message = Just reason}
   (before, after) <- PromCfg.recordUptime cfg.id ok (reason <> " · " <> show ms <> "ms")
   when (not ok && after == Uptime.downtimeAfter) do
