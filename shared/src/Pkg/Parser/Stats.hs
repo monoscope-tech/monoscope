@@ -73,7 +73,7 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Deriving (WrappedEnumSC (..))
-import Pkg.Parser.Expr (CmpOp (..), Expr (..), FieldKey (..), Parser, Subject (..), ToQueryText (..), Values (..), arrayColumns, defaultBinWidth, flattenedMetricsAttributes, knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, searchExpr, suggestFieldRoot, unsupportedTimespan)
+import Pkg.Parser.Expr (CmpOp (..), Expr (..), FieldKey (..), Parser, Subject (..), ToQueryText (..), Values (..), arrayColumns, defaultBinWidth, flattenedMetricsAttributes, flattenedOtelAttributes, knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, searchExpr, suggestFieldRoot, unsupportedTimespan)
 import Relude hiding (GT, LT, Last, Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, hspace, space, string)
@@ -513,7 +513,9 @@ rewriteSectionsForSource tfOn src
       Just SMetrics -> \case
         s@(Subject entire root keys)
           | entire `S.member` flattenedMetricsAttributes -> Subject entire (T.replace "." "___" entire) []
-          | root `elem` ["attributes", "resource"], tfOn || not (null keys) -> Subject entire (if tfOn then "variant_to_json(" <> root <> ")" else "(" <> root <> ")") keys
+          | root `elem` ["attributes", "resource"], tfOn -> Subject entire ("variant_to_json(" <> root <> ")") keys
+          -- A spans-only flattened name: the wrapped root opts out of that column ('Display Subject').
+          | root `elem` ["attributes", "resource"], entire `S.member` flattenedOtelAttributes -> Subject entire ("(" <> root <> ")") keys
           | otherwise -> s
       Just SSpans -> id
       Nothing -> id
