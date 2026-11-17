@@ -259,7 +259,7 @@ executeSecuredQuery useTimefusion pid (SecuredSql source userQuery) limit
 -- | Tables user SQL may read. Each is replaced by the project's slice of itself before the
 -- statement runs, so no predicate the statement writes can widen what it reads.
 tenantTables :: [Text]
-tenantTables = ["otel_logs_and_spans", "otel_metrics", "apis.endpoints", "apis.endpoint_dependency_edges", "apis.error_hourly_stats", "apis.log_pattern_hourly_stats", "projects.replay_sessions"]
+tenantTables = ["otel_logs_and_spans", "otel_metrics", "apis.endpoints", "apis.endpoint_dependency_edges", "apis.error_hourly_stats", "apis.log_pattern_hourly_stats", "apis.prometheus_scrape_configs", "apis.check_results", "projects.replay_sessions"]
 
 
 data SqlTok = SqlLit Text | SqlName [Text] Text | SqlOther Char
