@@ -160,8 +160,8 @@ showPct :: Double -> Text
 showPct p = if p >= 100 then "100%" else show2 p <> "%"
 
 
--- | >>> map showMs [Nothing, Just 182.4, Just 1530]
--- ["—","182 ms","1.53 s"]
+-- | >>> map showMs [Nothing, Just 182.4, Just 1530] == ["—", "182 ms", "1.53 s"]
+-- True
 showMs :: Maybe Double -> Text
 showMs = maybe "—" \ms -> if ms >= 1000 then show2 (ms / 1000) <> " s" else show (round ms :: Int) <> " ms"
 
