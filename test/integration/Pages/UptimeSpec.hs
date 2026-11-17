@@ -60,7 +60,7 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     ("expected 200" `T.isInfixOf` public) `shouldBe` False
     renderT <$> toBaseServantResponse tr (Uptime.publicStatusPageGetH "acme-ops") >>= (`shouldContainAll` ["Status page not found"])
     -- The built-in board shows every check and cron monitor, whatever the pages pick.
-    renderT <$> call tr (Uptime.statusAllGetH pid) >>= (`shouldContainAll` ["All monitors", "Checkout API", "Nightly billing"])
+    renderT <$> call tr (Uptime.statusAllGetH pid) >>= (`shouldContainAll` ["Project status", "Checkout API", "Nightly billing"])
     pages <- runQueryEffect tr $ UptimeM.statusPagesByProject pid
     map (.slug) pages `shouldBe` ["acme", "acme-ops"]
     -- Editing keeps the page's URL unique, and changes what it shows.
@@ -69,7 +69,7 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     (void <$> call tr (Uptime.statusPageEditH pid acmeId (Uptime.StatusPageForm "Acme" "acme-ops" Nothing UptimeM.VPublic []))) `shouldReturn` Left (Uptime.TakenSlug "acme-ops")
     Right _ <- call tr $ Uptime.statusPageEditH pid acmeId (Uptime.StatusPageForm "Acme API" "acme" Nothing UptimeM.VPublic [shop.id.unUUIDId])
     renderT <$> toBaseServantResponse tr (Uptime.publicStatusPageGetH "acme") >>= \h -> (h `shouldContainAll` ["Acme API", "Checkout API", "every 120s"]) >> (("Nightly billing" `T.isInfixOf` h) `shouldBe` False)
-    renderT <$> call tr (Uptime.statusPagesGetH pid) >>= (`shouldContainAll` ["Acme status", "/status/acme", "Ops only", "Internal"])
+    renderT <$> call tr (Uptime.statusPagesGetH pid) >>= (`shouldContainAll` ["Project status", "Checkout API", "Published pages", "Acme status", "/status/acme", "Ops only", "Internal"])
 
     -- Edits keep the history; unknown regions are dropped, and a node only probes a check that runs from its region.
     (void <$> call tr (Uptime.uptimeCheckEditH pid shop.id (Uptime.UptimeForm "Checkout" "https://shop.example.com/health" (Just 300) (Just 204) ["us-east"]))) `shouldReturn` Left (Uptime.UnservedRegion "us-east")

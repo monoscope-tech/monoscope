@@ -891,30 +891,30 @@ statusBoard refresh title description checks = do
   pure StatusBoard{title, description, now, refresh, components = map component checks, incidents = sortWith (\(_, _, i) -> Down i.startedAt) [(checkName c, publicReason c i, i) | c <- checks, i <- incidentsOf c runs]}
 
 
-data StatusPagesData = StatusPagesData {pid :: Projects.ProjectId, now :: UTCTime, host :: Text, pages :: [Uptime.StatusPage], checks :: [Check]}
+data StatusPagesData = StatusPagesData {pid :: Projects.ProjectId, now :: UTCTime, host :: Text, pages :: [Uptime.StatusPage], checks :: [Check], board :: StatusBoard}
 
 
 newtype StatusPages = StatusPages (PageCtx StatusPagesData)
 
 
 instance ToHtml StatusPages where
-  toHtml (StatusPages (PageCtx bw d)) = shell bw $ div_ [class_ "mx-auto max-w-6xl space-y-5 p-4"] do
-    p_ [class_ "max-w-2xl text-sm text-textWeak"] "Group uptime checks and cron monitors into a page with 90 days of daily health and recent incidents. Public pages need no login; internal ones are visible only to this project."
-    panel_ (Collapsible $ null d.pages) def{icon = Just "plus"} "New status page" $ statusPageForm_ (urls.monitors d.pid).statusPagePost d.host Nothing d.checks "Create status page"
-    a_ [href_ (urls.monitors d.pid).statusAllGet, class_ "surface-raised flex items-center justify-between gap-3 rounded-xl px-4 py-3 hover:bg-fillWeak"] do
-      span_ [class_ "flex items-center gap-2 font-medium text-textStrong"] $ faSprite_ "satellite-dish" "regular" "size-4" >> "All monitors"
-      span_ [class_ "text-sm text-textWeak"] $ toHtml $ countNoun (length d.checks) "component" <> " · internal"
-    resourceList_ "status-pages" Nothing (emptyState_ def{size = ESCompact} "No status pages yet" "Create one above to share live health.") $ d.pages <&> \p ->
-      ResourceRow
-        { health = case p.visibility of Uptime.VPublic -> (NeutralBadge, "globe", "Public"); Uptime.VInternal -> (NeutralBadge, "lock", "Internal")
-        , title = a_ [href_ ((urls.monitors d.pid).statusPageGet p.id), class_ "truncate font-medium text-textStrong hover:text-textBrand"] $ toHtml p.title
-        , details =
-            [ if Failing `elem` map (checkState d.now) (pageChecks p d.checks) then tonePill_ ErrorBadge "Incident" else tonePill_ SuccessBadge "Operational"
-            , toHtml $ countNoun (V.length p.checkIds) "component"
-            , bool mempty (a_ [href_ (hostPath d.host ("/status/" <> p.slug)), target_ "_blank", class_ "text-textBrand hover:underline"] $ toHtml $ "/status/" <> p.slug) (p.visibility == Uptime.VPublic)
-            ]
-        , actions = dangerAction_ ("sp-delete-" <> UUID.toText p.id.unUUIDId) "trash" "Delete" ("Delete " <> p.title <> "?") (bool "Only this project's members could see it." ("/status/" <> p.slug <> " stops working for everyone.") (p.visibility == Uptime.VPublic)) [hxPost_ ((urls.monitors d.pid).statusPageDelete p.id), hxSwap_ "none"] "Delete page"
-        }
+  toHtml (StatusPages (PageCtx bw d)) = shell bw do
+    statusBoard_ d.board
+    section_ [class_ "mx-auto max-w-3xl space-y-3 px-4 pb-8"] do
+      h2_ [class_ "text-lg font-semibold text-textStrong"] "Published pages"
+      p_ [class_ "text-sm text-textWeak"] "Share a chosen set of checks with 90 days of daily health and recent incidents. Public pages need no login; internal ones are visible only to this project."
+      panel_ (Collapsible False) def{icon = Just "plus"} "New status page" $ statusPageForm_ (urls.monitors d.pid).statusPagePost d.host Nothing d.checks "Create status page"
+      resourceList_ "status-pages" Nothing (emptyState_ def{size = ESCompact} "No status pages yet" "Create one to share live health outside the app.") $ d.pages <&> \p ->
+        ResourceRow
+          { health = case p.visibility of Uptime.VPublic -> (NeutralBadge, "globe", "Public"); Uptime.VInternal -> (NeutralBadge, "lock", "Internal")
+          , title = a_ [href_ ((urls.monitors d.pid).statusPageGet p.id), class_ "truncate font-medium text-textStrong hover:text-textBrand"] $ toHtml p.title
+          , details =
+              [ if Failing `elem` map (checkState d.now) (pageChecks p d.checks) then tonePill_ ErrorBadge "Incident" else tonePill_ SuccessBadge "Operational"
+              , toHtml $ countNoun (V.length p.checkIds) "component"
+              , bool mempty (a_ [href_ (hostPath d.host ("/status/" <> p.slug)), target_ "_blank", class_ "text-textBrand hover:underline"] $ toHtml $ "/status/" <> p.slug) (p.visibility == Uptime.VPublic)
+              ]
+          , actions = dangerAction_ ("sp-delete-" <> UUID.toText p.id.unUUIDId) "trash" "Delete" ("Delete " <> p.title <> "?") (bool "Only this project's members could see it." ("/status/" <> p.slug <> " stops working for everyone.") (p.visibility == Uptime.VPublic)) [hxPost_ ((urls.monitors d.pid).statusPageDelete p.id), hxSwap_ "none"] "Delete page"
+          }
   toHtmlRaw = toHtml
 
 
@@ -945,6 +945,7 @@ statusPagesGetH pid = do
   now <- Time.currentTime
   pages <- Uptime.statusPagesByProject pid
   checks <- projectChecks pid
+  board <- projectBoard pid checks
   addRespHeaders $ StatusPages $ PageCtx bw StatusPagesData{..}
 
 
@@ -1031,8 +1032,13 @@ statusPageGetH pid sid = do
 statusAllGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders StatusPageView)
 statusAllGetH pid = do
   bw <- sectionPage pid SStatusPages
-  board <- statusBoard (urls.monitors pid).statusAllGet "All monitors" "Every uptime check and cron monitor in this project." =<< projectChecks pid
+  board <- projectBoard pid =<< projectChecks pid
   addRespHeaders $ MemberBoard bw board Nothing
+
+
+-- | Every uptime check and cron monitor on one members-only board.
+projectBoard :: (DB es, Time :> es) => Projects.ProjectId -> [Check] -> Eff es StatusBoard
+projectBoard pid = statusBoard (urls.monitors pid).statusAllGet "Project status" "Every uptime check and cron monitor in this project, visible only to its members."
 
 
 -- | The public page: only a page marked public is served; anything else reads as missing.
