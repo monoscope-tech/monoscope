@@ -93,7 +93,7 @@ tabs:
         query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") and status_code != "ERROR" | summarize p50(duration), p95(duration), p99(duration) by bin_auto(timestamp)'
         unit: ns
         layout: { w: 8, h: 4 }
-      - type: pie_chart
+      - type: top_list
         title: Status codes
         query: 'name == "uptime.probe" and ("{{var-check}}" == "" or attributes.monitor.check.id == "{{var-check}}") and ("{{var-region}}" == "" or attributes.monitor.region == "{{var-region}}") | summarize count() by attributes.http.response.status_code'
         unit: probes

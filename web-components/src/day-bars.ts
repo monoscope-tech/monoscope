@@ -37,7 +37,7 @@ export const dayBarsOptions = (opt: any, source: unknown[][], styles: DayBarStyl
       data: slots,
       axisTick: { show: false },
       axisLine: { show: false },
-      axisLabel: { interval: (i: number) => i === 0 || i === slots.length - 1, formatter: (d: number, i: number) => (i === 0 ? day(d) : 'Today'), color: styles.textColor, fontSize: 10, hideOverlap: false },
+      axisLabel: { interval: (i: number) => i === 0 || i === slots.length - 1, formatter: (d: string, i: number) => (i === 0 ? day(Number(d)) : 'Today'), color: styles.textColor, fontSize: 10, hideOverlap: false },
     },
     yAxis: { type: 'value', show: false, min: 0, max: 1 },
     tooltip: { ...opt.tooltip, trigger: 'item', formatter: (p: any) => `${day(slots[p.dataIndex])} · ${pct(p.data.n, p.data.f)}${p.data.f ? ` · ${p.data.f} failed` : ''}` },

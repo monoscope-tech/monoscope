@@ -1264,8 +1264,8 @@ export const chartWidget = (widgetData: WidGetData) => {
   const theme = isDarkMode ? 'dark' : widgetData.theme || 'default';
   const chart = window.echarts.init(chartEl, theme);
   chart.group = 'default';
-  // A heatmap's or map's drawn option is built from the data, not the server shell: a resize rebuilds it whole.
-  const builtFromData = ['heatmap', 'map'].includes(chartType);
+  // A heatmap's, map's or day strip's drawn option is built from the data, not the server shell: a resize rebuilds it whole.
+  const builtFromData = ['heatmap', 'map', 'daybars'].includes(chartType);
   chartLayoutUpdaters.set(chartId, () =>
     builtFromData
       ? drawSized(chart, chartEl, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, true)
