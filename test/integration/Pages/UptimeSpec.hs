@@ -35,7 +35,7 @@ spec = around withTestResources $ describe "Uptime and status pages" do
       (pid, cron.id, frozenTime, frozenTime, frozenTime, frozenTime)
     -- A probe from this node's region records its result and the check reports up.
     runTestBg frozenTime tr $ Jobs.applyUptimeResult shop "eu-west" frozenTime 180 (Right 200)
-    Just probed <- runQueryEffect tr $ PromCfg.configById pid shop.id
+    Just probed <- runQueryEffect tr $ PromCfg.getConfigByProject pid shop.id
 
     overview <- renderT <$> call tr (Uptime.uptimeChecksGetH pid)
     overview `shouldContainAll` ["All systems operational", "Checkout API", "Uptime, 30 days", "99.86%", "99.86% uptime over 90 days; failures on Dec 29 (12 failed)"]
@@ -69,12 +69,11 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     -- Edits keep the history; unknown regions are dropped, and a node only probes a check that runs from its region.
     (void <$> call tr (Uptime.uptimeCheckEditH pid shop.id (Uptime.UptimeForm "Checkout" "https://shop.example.com/health" (Just 300) (Just 204) ["us-east"]))) `shouldReturn` Left (Uptime.UnservedRegion "us-east")
     Right _ <- call tr $ Uptime.uptimeCheckEditH pid shop.id (Uptime.UptimeForm "Checkout" "https://shop.example.com/health" (Just 300) (Just 204) ["eu-west", "nowhere"])
-    Just edited <- runQueryEffect tr $ PromCfg.configById pid shop.id
+    Just edited <- runQueryEffect tr $ PromCfg.getConfigByProject pid shop.id
     (edited.name, edited.scrapeIntervalSeconds, edited.expectedStatus, edited.regions) `shouldBe` ("Checkout", 300, Just 204, ["eu-west"])
-    -- A check left with only another region's worker is skipped here, loudly.
-    dbExec tr [sql| UPDATE apis.prometheus_scrape_configs SET regions = '{us-east}' WHERE id = ? |] (Only shop.id)
-    let probes = dbQuery @_ @(Only Int) tr [sql| SELECT count(*)::int FROM apis.check_results WHERE check_id = ? |] (Only shop.id)
-    before <- probes
-    runTestBg frozenTime tr $ Jobs.processBackgroundJob tr.trATCtx (Jobs.PrometheusScrapeOne shop.id)
-    probes `shouldReturn` before
+    -- A node leases only checks its region serves; one left with only another region's worker is not its to probe.
+    dbExec tr [sql| UPDATE apis.prometheus_scrape_configs SET regions = '{us-east}', last_scraped_at = NULL WHERE id = ? |] (Only shop.id)
+    let claimed region = map (.id) <$> runQueryEffect tr (PromCfg.claimDueConfigs region 50)
+    claimed "eu-west" `shouldReturn` []
+    claimed "us-east" `shouldReturn` [shop.id]
     renderT <$> call tr (Uptime.uptimeCheckGetH pid shop.id) >>= (`shouldContainAll` ["Selected, no worker yet", "98.21%"])

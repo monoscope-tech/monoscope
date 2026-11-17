@@ -42,7 +42,7 @@ module Pages.Uptime (
 import Data.Aeson qualified as AE
 import Data.Char (isAsciiLower, isDigit)
 import Data.Default (def)
-import Data.List (lookup)
+import Data.List (lookup, partition)
 import Data.Map.Strict qualified as Map
 import Data.Ord (clamp)
 import Data.Text qualified as T
@@ -70,7 +70,7 @@ import Relude hiding (ask)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, DB, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, act, addRespHeaders, addSuccessToast, addTriggerEvent, done, successToast)
-import Utils (TabStrip (..), countNoun, faSprite_, navTabStrip_, safeScrapeUrl, showFFloat')
+import Utils (TabStrip (..), countNoun, faSprite_, hostPath, navTabStrip_, safeScrapeUrl, showFFloat')
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (toUrlPiece)
 import Web.Links (CookieProtectedRoutes (..), MonitorsRoutes' (..), urls)
@@ -211,7 +211,7 @@ statePill_ = uncurry tonePill_ . stateTone
 
 
 -- | The banner over a set of checks: what a reader needs first during an incident.
--- | @detailM@ replaces the operational line, for readers who need no check counts.
+-- @detailM@ replaces the operational line, for readers who need no check counts.
 overallBanner_ :: Text -> Maybe Text -> [CheckState] -> Html ()
 overallBanner_ noun detailM states = div_ [class_ $ "flex items-center gap-3 rounded-xl border px-4 py-3 " <> cls] do
   faSprite_ icon "solid" $ "size-5 shrink-0 " <> iconCls
@@ -321,7 +321,7 @@ uptimeOverview :: Projects.ProjectId -> ATAuthCtx UptimeOverview
 uptimeOverview pid = do
   now <- Time.currentTime
   checks <- PromCfg.configsByProjectId pid PromCfg.CKUptime
-  buckets <- Uptime.dailyBuckets (map (.id.unUUIDId) $ V.toList checks) (addUTCTime (negate $ fromInteger barDays * 86400) now)
+  buckets <- Uptime.dailyBuckets (map (.id.unUUIDId) $ V.toList checks) now
   pure UptimeOverview{pid, now, checks, buckets}
 
 
@@ -437,11 +437,11 @@ instance ToHtml UptimeCheckPage where
       detailTab_ "uc" "t-log" "" False "Check log"
       detailTab_ "uc" "t-settings" "" False "Settings"
     tabPanel_ "group-has-[.t-overview:checked]/uc:block space-y-4" "uc-overview" do
-      windowsGrid_ "check" [("Last 24 hours", d.windows.day), ("Last 7 days", d.windows.week), ("Last 30 days", d.windows.month), ("Last 90 days", d.windows.quarter)]
+      windowsGrid_ "check" d.windows
       panel_ Raised def "Daily uptime" $ barsWithScale_ d.now d.days
       div_ [class_ "grid gap-4 md:grid-cols-2"] do
         panel_ Raised def "Response, last 24 hours" do
-          factGrid_ "grid-cols-3" [("Apdex, 500 ms target", maybe "—" (show2 . apdex) (nonZero d.latency)), ("Average", showMs d.latency.avgMs), ("95th percentile", showMs d.latency.p95Ms)]
+          factGrid_ "grid-cols-3" [("Apdex, 500 ms target", let l = d.latency in if l.total == 0 then "—" else show2 $ (fromIntegral l.satisfied + fromIntegral l.tolerating / 2) / fromIntegral l.total), ("Average", showMs d.latency.avgMs), ("95th percentile", showMs d.latency.p95Ms)]
           hourBars_ d.now d.hours
         panel_ Raised def "Monthly uptime" $ monthsTable_ d.months
     tabPanel_ "group-has-[.t-response:checked]/uc:block space-y-4" "uc-response" do
@@ -468,20 +468,11 @@ countBadge_ :: [Uptime.Incident] -> Html ()
 countBadge_ is = unless (null is) $ span_ [class_ $ if any (isNothing . (.recoveredAt)) is then "ml-1.5 rounded-full bg-fillError-weak px-1.5 text-2xs font-semibold text-textError tabular-nums" else "ml-1.5 rounded-full bg-fillWeak px-1.5 text-2xs font-semibold text-textWeak tabular-nums"] $ show (length is)
 
 
-windowsGrid_ :: Text -> [(Text, (Int, Int))] -> Html ()
-windowsGrid_ noun ws = div_ [class_ "grid grid-cols-2 gap-3 md:grid-cols-4"] $ forM_ ws \(label, (total, failed)) ->
+windowsGrid_ :: Text -> Uptime.WindowUptime -> Html ()
+windowsGrid_ noun w = div_ [class_ "grid grid-cols-2 gap-3 md:grid-cols-4"] $ forM_ @[] [("Last 24 hours", w.day), ("Last 7 days", w.week), ("Last 30 days", w.month), ("Last 90 days", w.quarter)] \(label :: Text, (total, failed)) ->
   div_ [class_ "surface-raised rounded-xl p-4"] do
     statFigure_ "" [] label $ toHtml $ maybe "—" showPct $ Uptime.uptimePercent total failed
     p_ [class_ "mt-2 text-xs text-textWeak tabular-nums"] $ toHtml $ if total == 0 then "None yet" else countNoun total noun <> " · " <> show failed <> " failed"
-
-
-nonZero :: Uptime.LatencyStats -> Maybe Uptime.LatencyStats
-nonZero l = guard (l.total > 0) $> l
-
-
--- | (satisfied + tolerating / 2) / all; failures count as frustrated.
-apdex :: Uptime.LatencyStats -> Double
-apdex l = (fromIntegral l.satisfied + fromIntegral l.tolerating / 2) / fromIntegral l.total
 
 
 show2 :: Double -> Text
@@ -534,7 +525,7 @@ regionsTable_ here selected stats = panel_ Raised def "Probe locations, last 24 
     " set to its code."
   div_ [class_ "overflow-x-auto"] $ table_ [class_ "w-full text-sm"] do
     thead_ $ tr_ [class_ "text-left text-xs text-textWeak"] $ forM_ @[] ["Region", "Status", "Uptime", "Avg response", "Last probe" :: Text] $ th_ [class_ "py-2 pr-4 font-medium"] . toHtml
-    tbody_ $ forM_ (filter (\r -> active r || probed r) Uptime.regions) \r -> tr_ [class_ "border-t border-strokeWeak"] do
+    tbody_ $ forM_ shown \r -> tr_ [class_ "border-t border-strokeWeak"] do
       let s = find ((== r.code) . (.region)) stats
       td_ [class_ "py-2 pr-4"] do
         p_ [class_ "text-textStrong"] $ toHtml r.city
@@ -545,11 +536,9 @@ regionsTable_ here selected stats = panel_ Raised def "Probe locations, last 24 
       td_ [class_ "py-2 pr-4 tabular-nums"] $ toHtml $ maybe "—" (\st -> maybe "—" showPct $ Uptime.uptimePercent st.total st.failed) s
       td_ [class_ "py-2 pr-4 tabular-nums"] $ toHtml $ maybe "—" (showMs . (.avgMs)) s
       td_ [class_ "py-2 pr-4 tabular-nums text-textWeak"] $ toHtml $ maybe "—" (toText . formatTime defaultTimeLocale "%H:%M:%S UTC" . (.lastAt)) s
-  let idle = filter (\r -> not (active r || probed r)) Uptime.regions
   unless (null idle) $ p_ [class_ "text-xs text-textWeak"] $ toHtml $ "Not deployed: " <> T.intercalate ", " (map (.city) idle)
   where
-    active r = V.null selected && r.code == here || r.code `V.elem` selected
-    probed r = any ((== r.code) . (.region)) stats
+    (shown, idle) = partition (\r -> V.null selected && r.code == here || r.code `V.elem` selected || any ((== r.code) . (.region)) stats) Uptime.regions
 
 
 incidentsTable_ :: UTCTime -> Text -> [Uptime.Incident] -> Html ()
@@ -623,20 +612,20 @@ uptimeSettings_ d = do
 
 uptimeCheckGetH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders UptimeCheckPage)
 uptimeCheckGetH pid cid = do
-  check <- PromCfg.configById pid cid >>= maybe (throwError Servant.err404) pure
+  check <- PromCfg.getConfigByProject pid cid >>= maybe (throwError Servant.err404) pure
   now <- Time.currentTime
   region <- (.config.uptimeProbeRegion) <$> ask @AuthContext
   let uid = cid.unUUIDId
       ago n = addUTCTime (negate $ n * 86400) now
   bw <- sectionPage pid SUptime
-  days <- daysOf uid <$> Uptime.dailyBuckets [uid] (ago $ fromInteger barDays)
+  days <- daysOf uid <$> Uptime.dailyBuckets [uid] now
   windows <- Uptime.windowUptime uid now
   latency <- Uptime.latencyStats uid (ago 1)
   hours <- Uptime.hourlyBuckets uid (ago 1)
   byRegion <- Uptime.regionStats [uid] (ago 1)
   incidents <- incidentsOf (UptimeCheck check) <$> Uptime.incidents [uid] (ago 90)
   months <- map (\(_, d, t, f) -> (d, t, f)) <$> Uptime.monthlyUptime [uid] now
-  served <- (region :) <$> Uptime.servedRegions now
+  served <- Uptime.servedRegions region now
   recent <- Uptime.recentResults uid 100
   addRespHeaders $ UptimeCheckPage $ PageCtx bw UptimeDashboard{..}
 
@@ -647,7 +636,7 @@ uptimeCheckEditH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> Up
 uptimeCheckEditH pid cid form = act do
   _ <- requireEdit pid
   here <- (.config.uptimeProbeRegion) <$> ask @AuthContext
-  served <- (here :) <$> (Uptime.servedRegions =<< Time.currentTime)
+  served <- Uptime.servedRegions here =<< Time.currentTime
   let regions = ordNub $ filter (`elem` map (.code) Uptime.regions) form.regions
   case (validUptime form, find (`notElem` served) regions) of
     (Left r, _) -> pure $ Left r
@@ -706,7 +695,7 @@ cronOverview :: Projects.ProjectId -> ATAuthCtx CronOverview
 cronOverview pid = do
   now <- Time.currentTime
   monitors <- Monitors.cronMonitorsByProject pid
-  buckets <- Uptime.dailyBuckets (map (.id) monitors) (addUTCTime (negate $ fromInteger barDays * 86400) now)
+  buckets <- Uptime.dailyBuckets (map (.id) monitors) now
   pure CronOverview{pid, now, monitors, buckets}
 
 
@@ -789,7 +778,7 @@ instance ToHtml CronMonitorPage where
       detailTab_ "cm" "t-setup" "" False "Setup"
       detailTab_ "cm" "t-settings" "" False "Settings"
     tabPanel_ "group-has-[.t-overview:checked]/cm:block space-y-4" "cm-overview" do
-      windowsGrid_ "run" [("Last 24 hours", d.windows.day), ("Last 7 days", d.windows.week), ("Last 30 days", d.windows.month), ("Last 90 days", d.windows.quarter)]
+      windowsGrid_ "run" d.windows
       panel_ Raised def "Daily runs" $ barsWithScale_ d.now d.days
       panel_ Raised def "Schedule" $ factGrid_ "grid-cols-2 md:grid-cols-3" [("Last run", maybe "—" (agoText d.now) m.lastCheckinAt), ("Last result", maybe "—" (bool "Error" "OK" . (== Monitors.CSOk)) m.lastStatus), ("Next run due by", toText $ formatTime defaultTimeLocale "%b %e, %H:%M UTC" nextDue)]
     tabPanel_ "group-has-[.t-runs:checked]/cm:block" "cm-runs" $ resultsTable_ d.now False d.recent
@@ -825,11 +814,11 @@ cronMonitorGetH pid mid = do
   now <- Time.currentTime
   host <- (.config.hostUrl) <$> ask @AuthContext
   bw <- sectionPage pid SCron
-  days <- daysOf mid <$> Uptime.dailyBuckets [mid] (addUTCTime (negate $ fromInteger barDays * 86400) now)
+  days <- daysOf mid <$> Uptime.dailyBuckets [mid] now
   windows <- Uptime.windowUptime mid now
   incidents <- incidentsOf (CronCheck monitor) <$> Uptime.incidents [mid] (addUTCTime (-(90 * 86400)) now)
   recent <- Uptime.recentResults mid 100
-  let ingestUrl = T.dropWhileEnd (== '/') host <> "/v1/traces"
+  let ingestUrl = hostPath host "/v1/traces"
   addRespHeaders $ CronMonitorPage $ PageCtx bw CronDashboard{..}
 
 
@@ -948,7 +937,7 @@ statusBoard :: (DB es, Time :> es) => Text -> Text -> Text -> [Check] -> Eff es 
 statusBoard refresh title description checks = do
   now <- Time.currentTime
   let ids = map checkId checks
-  buckets <- Uptime.dailyBuckets ids (addUTCTime (negate $ fromInteger barDays * 86400) now)
+  buckets <- Uptime.dailyBuckets ids now
   months <- Uptime.monthlyUptime ids now
   -- Cron outcomes are evaluated centrally, so only uptime checks have locations.
   byRegion <- Uptime.regionStats [checkId c | c@UptimeCheck{} <- checks] (addUTCTime (-86400) now)
@@ -979,7 +968,7 @@ instance ToHtml StatusPages where
         , details =
             [ if Failing `elem` map (checkState d.now) (pageChecks p d.checks) then tonePill_ ErrorBadge "Incident" else tonePill_ SuccessBadge "Operational"
             , toHtml $ countNoun (V.length p.checkIds) "component"
-            , bool mempty (a_ [href_ (d.host <> "/status/" <> p.slug), target_ "_blank", class_ "text-textBrand hover:underline"] $ toHtml $ "/status/" <> p.slug) (p.visibility == Uptime.VPublic)
+            , bool mempty (a_ [href_ (hostPath d.host ("/status/" <> p.slug)), target_ "_blank", class_ "text-textBrand hover:underline"] $ toHtml $ "/status/" <> p.slug) (p.visibility == Uptime.VPublic)
             ]
         , actions = dangerAction_ ("sp-delete-" <> UUID.toText p.id.unUUIDId) "trash" "Delete" ("Delete " <> p.title <> "?") (bool "Only this project's members could see it." ("/status/" <> p.slug <> " stops working for everyone.") (p.visibility == Uptime.VPublic)) [hxPost_ ((urls.monitors d.pid).statusPageDelete p.id), hxSwap_ "none"] "Delete page"
         }
@@ -991,7 +980,7 @@ statusPageForm_ :: Text -> Text -> Maybe Uptime.StatusPage -> [Check] -> Text ->
 statusPageForm_ action host pageM checks submit = form_ [class_ "space-y-4", hxPost_ action] do
   div_ [class_ "grid gap-3 md:grid-cols-2"] do
     formField_ FieldSm def{placeholder = "Acme status", value = foldMap (.title) pageM} "Title" "title" True Nothing
-    formField_ FieldSm def{placeholder = "acme", value = foldMap (.slug) pageM, extraAttrs = [pattern_ "[a-z0-9\\-]+"]} "Slug" "slug" True $ Just $ p_ [class_ "text-xs text-textWeak"] $ toHtml $ "Public URL: " <> host <> "/status/<slug>"
+    formField_ FieldSm def{placeholder = "acme", value = foldMap (.slug) pageM, extraAttrs = [pattern_ "[a-z0-9\\-]+"]} "Slug" "slug" True $ Just $ p_ [class_ "text-xs text-textWeak"] $ toHtml $ "Public URL: " <> hostPath host "/status/<slug>"
   formField_ FieldSm def{placeholder = "Live status of Acme's API and jobs", value = foldMap (.description) pageM} "Description" "description" False Nothing
   fieldset_ [class_ "space-y-2"] do
     legend_ [class_ "text-sm font-medium text-textStrong"] "Visibility"
@@ -1009,7 +998,7 @@ statusPageForm_ action host pageM checks submit = form_ [class_ "space-y-4", hxP
 statusPagesGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders StatusPages)
 statusPagesGetH pid = do
   bw <- sectionPage pid SStatusPages
-  host <- T.dropWhileEnd (== '/') . (.config.hostUrl) <$> ask @AuthContext
+  host <- (.config.hostUrl) <$> ask @AuthContext
   now <- Time.currentTime
   pages <- Uptime.statusPagesByProject pid
   checks <- projectChecks pid
@@ -1089,7 +1078,7 @@ statusPageGetH :: Projects.ProjectId -> Uptime.StatusPageId -> ATAuthCtx (RespHe
 statusPageGetH pid sid = do
   page <- Uptime.statusPageById pid sid >>= maybe (throwError Servant.err404) pure
   bw <- sectionPage pid SStatusPages
-  host <- T.dropWhileEnd (== '/') . (.config.hostUrl) <$> ask @AuthContext
+  host <- (.config.hostUrl) <$> ask @AuthContext
   checks <- projectChecks pid
   board <- statusBoard ((urls.monitors pid).statusPageGet sid) page.title page.description (pageChecks page checks)
   addRespHeaders $ MemberBoard bw board $ Just StatusPageEdit{pid, host, page, checks}

@@ -4,7 +4,6 @@ module Models.Apis.PrometheusScrapeConfigs (
   insertConfig,
   updateConfig,
   updateUptime,
-  configById,
   configsByProjectId,
   CheckKind (..),
   recordUptime,
@@ -141,10 +140,6 @@ recordUptime cid ok status =
 
 -- | Unscoped lookup — only for trusted internal callers that already hold a claimed id
 -- (the background scrape worker). Request handlers must use 'getConfigByProject'.
-configById :: DB es => Projects.ProjectId -> PrometheusScrapeConfigId -> Eff es (Maybe PrometheusScrapeConfig)
-configById pid cid = Hasql.interpOne (selectFrom <> [HI.sql|WHERE project_id = #{pid} AND id = #{cid}|])
-
-
 getConfig :: DB es => PrometheusScrapeConfigId -> Eff es (Maybe PrometheusScrapeConfig)
 getConfig cid = Hasql.interpOne (selectFrom <> [HI.sql|WHERE id = #{cid}|])
 
@@ -175,8 +170,7 @@ toggleEnabled pid cid = Hasql.interpExecute [HI.sql|UPDATE apis.prometheus_scrap
 -- nodes/pods concurrently: each due row is handed to exactly one caller, and the lease
 -- (the @last_scraped_at@ bump) keeps the next dispatcher tick from re-picking it before
 -- its interval elapses — so a crashed worker just retries on the next interval rather than
--- being hammered. Oldest-scraped first so a backlog drains fairly.
--- | Only targets this node's @region@ serves: Prometheus targets and region-less checks anywhere,
+-- being hammered. Oldest-scraped first so a backlog drains fairly. Only targets this node's @region@ serves: Prometheus targets and region-less checks anywhere,
 -- a check naming regions only where one of them runs. The lease is still one per target.
 claimDueConfigs :: DB es => Text -> Int -> Eff es [PrometheusScrapeConfig]
 claimDueConfigs region limit =

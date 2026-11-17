@@ -91,9 +91,9 @@ downtimeAfter :: Int
 downtimeAfter = 2
 
 
--- | Regions a worker probed uptime checks from in the last day: the ones a check can run from.
-servedRegions :: DB es => UTCTime -> Eff es [Text]
-servedRegions now = Hasql.interp [HI.sql| SELECT DISTINCT region FROM apis.check_results WHERE kind = 'uptime' AND checked_at > #{now} - interval '1 day' |]
+-- | Regions a check can run from: this node's, and any a worker probed from in the last day.
+servedRegions :: DB es => Text -> UTCTime -> Eff es [Text]
+servedRegions here now = (here :) <$> Hasql.interp [HI.sql| SELECT DISTINCT region FROM apis.check_results WHERE kind = 'uptime' AND checked_at > #{now} - interval '1 day' |]
 
 
 data CheckResult = CheckResult
@@ -143,11 +143,12 @@ dayHealth total failed
   | otherwise = Outage
 
 
+-- | The last 90 days, the span every bar shows.
 dailyBuckets :: DB es => [UUID.UUID] -> UTCTime -> Eff es [DayBucket]
-dailyBuckets ids since =
+dailyBuckets ids now =
   Hasql.interp
     [HI.sql| SELECT check_id, (checked_at AT TIME ZONE 'UTC')::date, count(*)::bigint, count(*) FILTER (WHERE NOT ok)::bigint, avg(duration_ms) FILTER (WHERE ok)::float8
-             FROM apis.check_results WHERE check_id = ANY(#{ids}) AND checked_at >= #{since} GROUP BY 1, 2 |]
+             FROM apis.check_results WHERE check_id = ANY(#{ids}) AND checked_at >= #{now} - interval '90 days' GROUP BY 1, 2 |]
 
 
 -- | >>> uptimePercent 0 0

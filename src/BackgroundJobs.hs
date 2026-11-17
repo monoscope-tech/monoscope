@@ -4990,17 +4990,13 @@ dispatchPrometheusScrapes authCtx = do
 scrapePrometheusTarget :: PromCfg.PrometheusScrapeConfigId -> ATBackgroundCtx ()
 scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> when cfg.enabled case cfg.kind of
   PromCfg.CKUptime -> do
+    -- 'claimDueConfigs' leased only checks this node's region serves; results carry that region.
     region <- (.config.uptimeProbeRegion) <$> ask @Config.AuthContext
-    -- A check names the regions it runs from; this node serves only its own. Every check shares
-    -- one lease, so a skip here is an interval with no probe: say so rather than go quiet.
-    if not (V.null cfg.regions || region `V.elem` cfg.regions)
-      then Log.logAttention "Uptime check skipped: this node does not serve any of its regions" (AE.object ["check_id" AE..= cfg.id, "node_region" AE..= region, "regions" AE..= cfg.regions])
-      else do
-        t0 <- Time.currentTime
-        -- Any status is an answer here: the probe compares it, so a 5xx must not throw.
-        res <- tryAny $ W.getWith (PromCfg.prometheusScrapeOpts Nothing & Wreq.checkResponse ?~ \_ _ -> pass) (toString cfg.url)
-        t1 <- Time.currentTime
-        applyUptimeResult cfg region t1 (round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double)) (bimap (toText . displayException) (^. Wreq.responseStatus . Wreq.statusCode) res)
+    t0 <- Time.currentTime
+    -- Any status is an answer here: the probe compares it, so a 5xx must not throw.
+    res <- tryAny $ W.getWith (PromCfg.prometheusScrapeOpts Nothing & Wreq.checkResponse ?~ \_ _ -> pass) (toString cfg.url)
+    t1 <- Time.currentTime
+    applyUptimeResult cfg region t1 (round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double)) (bimap (toText . displayException) (^. Wreq.responseStatus . Wreq.statusCode) res)
   PromCfg.CKPrometheus -> scrapeMetrics cfg
 
 
