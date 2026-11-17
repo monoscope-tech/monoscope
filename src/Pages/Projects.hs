@@ -1414,7 +1414,6 @@ projectOnboardingH = do
     Nothing -> do
       pid <- UUIDId <$> UUID.genUUID
       _ <- Projects.insertProject Projects.CreateProject{id = pid, title = "Onboarding Project", description = "", paymentPlan = "ONBOARDING", timeZone = "", subId = Nothing, firstSubItemId = Nothing, orderId = Nothing, weeklyNotif = True, dailyNotif = True, endpointAlerts = True, errorAlerts = True}
-      _ <- ProjectMembers.createEveryoneTeam pid sess.user.id
       projectKeyUUID <- UUID.genUUID
       pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" $ ProjectApiKeys.encodeApiKeyB64 envCfg.apiKeyEncryptionSecretKey projectKeyUUID
       _ <- ProjectApiKeys.insertProjectApiKey pApiKey

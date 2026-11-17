@@ -22,7 +22,6 @@ module Models.Projects.ProjectMembers (
   activateAllMembers,
   TeamDetails (..),
   createTeam,
-  createEveryoneTeam,
   updateTeam,
   getTeams,
   getTeamByHandle,
@@ -371,16 +370,6 @@ createTeam pid uidM TeamDetails{name, description, handle, members, notifyEmails
                VALUES (#{pid}, #{uidM}, #{name}, #{description}, #{handle}, #{members}::uuid[], #{notifyEmails}, #{slackChannels}, #{discordChannels}, #{phoneNumbers}, #{pagerdutyServices}, #{disabledChannels})
                ON CONFLICT (project_id, handle) DO NOTHING
                RETURNING id |]
-
-
-createEveryoneTeam :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es Int64
-createEveryoneTeam pid uid =
-  Hasql.interpExecute
-    [HI.sql| INSERT INTO projects.teams
-           (project_id, created_by, name, description, handle, is_everyone, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services, disabled_channels)
-           VALUES (#{pid}, #{uid}, 'Everyone', 'All project members and configured integrations', 'everyone', TRUE,
-                   '{}'::uuid[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[])
-           ON CONFLICT (project_id, handle) DO NOTHING |]
 
 
 getEveryoneTeam :: DB es => Projects.ProjectId -> Eff es (Maybe Team)

@@ -67,6 +67,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Apis.ShareEvents qualified as ShareEvents
+import Models.Apis.Uptime qualified as Uptime
 import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -551,13 +552,23 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   , alertDeleteRoute :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Unrefusable 'DELETE (Opaque "Testing.MonitorActed")
   , teamAlertsGetH :: mode :- "alerts" :> "team" :> Capture "team_id" ProjectMembers.TeamId :> Get '[HTML] (RespHeaders ((Opaque1 "Table.TableRows") (Opaque "Testing.UnifiedMonitorItem")))
   , alertTeamDeleteH :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "teams" :> Capture "team_id" ProjectMembers.TeamId :> Delete '[HTML] (RespHeaders (Opaque "Testing.Alert"))
-  , cronGet :: mode :- "cron" :> Get '[HTML] (RespHeaders (Opaque "Testing.CronMonitors"))
-  , cronPost :: mode :- "cron" :> ReqBody '[FormUrlEncoded] (Opaque "Testing.CronForm") :> Action 'POST (Opaque "Testing.CronRejection") (Opaque "Testing.CronList")
-  , cronDelete :: mode :- "cron" :> Capture "monitor_id" UUID.UUID :> "delete" :> Post '[HTML] (RespHeaders (Opaque "Testing.CronList"))
-  , uptimeGet :: mode :- "uptime" :> Get '[HTML] (RespHeaders (Opaque "Testing.UptimeChecks"))
-  , uptimePost :: mode :- "uptime" :> ReqBody '[FormUrlEncoded] (Opaque "Testing.UptimeForm") :> Action 'POST (Opaque "Testing.UptimeRejection") (Opaque "Testing.UptimeList")
-  , uptimeToggle :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "toggle" :> Post '[HTML] (RespHeaders (Opaque "Testing.UptimeList"))
-  , uptimeDelete :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "delete" :> Post '[HTML] (RespHeaders (Opaque "Testing.UptimeList"))
+  , cronGet :: mode :- "cron" :> Get '[HTML] (RespHeaders (Opaque "Uptime.CronMonitors"))
+  , cronPost :: mode :- "cron" :> ReqBody '[FormUrlEncoded] (Opaque "Uptime.CronForm") :> Action 'POST (Opaque "Uptime.CronRejection") (Opaque "Uptime.CronList")
+  , cronMonitorGet :: mode :- "cron" :> Capture "monitor_id" UUID.UUID :> Get '[HTML] (RespHeaders (Opaque "Uptime.CronMonitorPage"))
+  , cronMonitorEdit :: mode :- "cron" :> Capture "monitor_id" UUID.UUID :> ReqBody '[FormUrlEncoded] (Opaque "Uptime.CronEditForm") :> Action 'POST (Opaque "Uptime.CronRejection") (Opaque "Uptime.Redirected")
+  , cronDelete :: mode :- "cron" :> Capture "monitor_id" UUID.UUID :> "delete" :> Unrefusable 'POST (Opaque "Uptime.Redirected")
+  , uptimeGet :: mode :- "uptime" :> Get '[HTML] (RespHeaders (Opaque "Uptime.UptimeChecks"))
+  , uptimePost :: mode :- "uptime" :> ReqBody '[FormUrlEncoded] (Opaque "Uptime.UptimeForm") :> Action 'POST (Opaque "Uptime.UptimeRejection") (Opaque "Uptime.UptimeList")
+  , uptimeCheckGet :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> Get '[HTML] (RespHeaders (Opaque "Uptime.UptimeCheckPage"))
+  , uptimeCheckEdit :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> ReqBody '[FormUrlEncoded] (Opaque "Uptime.UptimeForm") :> Action 'POST (Opaque "Uptime.UptimeRejection") (Opaque "Uptime.Redirected")
+  , uptimeToggle :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "toggle" :> Unrefusable 'POST (Opaque "Uptime.Redirected")
+  , uptimeDelete :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "delete" :> Unrefusable 'POST (Opaque "Uptime.Redirected")
+  , statusPagesGet :: mode :- "status-pages" :> Get '[HTML] (RespHeaders (Opaque "Uptime.StatusPages"))
+  , statusPagePost :: mode :- "status-pages" :> ReqBody '[FormUrlEncoded] (Opaque "Uptime.StatusPageForm") :> Action 'POST (Opaque "Uptime.StatusPageRejection") (Opaque "Uptime.Redirected")
+  , statusAllGet :: mode :- "status-pages" :> "all" :> Get '[HTML] (RespHeaders (Opaque "Uptime.StatusPageView"))
+  , statusPageGet :: mode :- "status-pages" :> Capture "page_id" Uptime.StatusPageId :> Get '[HTML] (RespHeaders (Opaque "Uptime.StatusPageView"))
+  , statusPageEdit :: mode :- "status-pages" :> Capture "page_id" Uptime.StatusPageId :> ReqBody '[FormUrlEncoded] (Opaque "Uptime.StatusPageForm") :> Action 'POST (Opaque "Uptime.StatusPageRejection") (Opaque "Uptime.Redirected")
+  , statusPageDelete :: mode :- "status-pages" :> Capture "page_id" Uptime.StatusPageId :> "delete" :> Unrefusable 'POST (Opaque "Uptime.Redirected")
   , alertBulkAction :: mode :- "alerts" :> "bulk_action" :> Capture "action" Monitors.MonitorBulkAction :> ReqBody '[FormUrlEncoded] (Opaque "ManageMembers.TBulkActionForm") :> Post '[HTML] (RespHeaders (Opaque1 "PageCtx" ((Opaque1 "Table.Table") (Opaque "Testing.UnifiedMonitorItem"))))
   }
   deriving stock (Generic)

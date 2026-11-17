@@ -2,6 +2,8 @@ module Models.Apis.Monitors (
   CronMonitor (..),
   CheckinStatus (..),
   cronMonitorsByProject,
+  cronMonitorById,
+  updateCronMonitor,
   insertCronMonitor,
   deleteCronMonitor,
   claimDueCronMonitors,
@@ -393,6 +395,14 @@ cronCols = [HI.sql| id, project_id, slug, name, interval_secs::bigint, grace_sec
 
 cronMonitorsByProject :: DB es => Projects.ProjectId -> Eff es [CronMonitor]
 cronMonitorsByProject pid = Hasql.interp ([HI.sql| SELECT |] <> cronCols <> [HI.sql| FROM apis.cron_monitors WHERE project_id = #{pid} ORDER BY created_at |])
+
+
+cronMonitorById :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es (Maybe CronMonitor)
+cronMonitorById pid mid = Hasql.interpOne ([HI.sql| SELECT |] <> cronCols <> [HI.sql| FROM apis.cron_monitors WHERE project_id = #{pid} AND id = #{mid} |])
+
+
+updateCronMonitor :: DB es => Projects.ProjectId -> UUID.UUID -> Text -> Int -> Int -> Eff es Int64
+updateCronMonitor pid mid name interval grace = Hasql.interpExecute [HI.sql| UPDATE apis.cron_monitors SET name = #{name}, interval_secs = #{interval}, grace_secs = #{grace} WHERE project_id = #{pid} AND id = #{mid} |]
 
 
 -- | @now@ is the app clock, not the DB's: the first missed window is measured from it.

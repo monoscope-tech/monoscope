@@ -734,7 +734,7 @@ spec = do
     it "prometheus targets: leased claims, scraped bodies as metrics, duplicate saves kept as drafts, viewers locked out" \tr -> do
       let insert p kind name url interval = void $ runQueryEffect tr $ PromCfg.insertConfig p kind name url interval Nothing (AE.object []) Nothing
           configs p = V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId p PromCfg.CKPrometheus)
-          claim = length <$> runQueryEffect tr (PromCfg.claimDueConfigs 50)
+          claim = length <$> runQueryEffect tr (PromCfg.claimDueConfigs "eu-west" 50)
       -- Each due target is claimed once and leased (multi-node safe); a disabled one never is.
       insert testPid PromCfg.CKPrometheus "svc-a" "http://a/metrics" 3600
       insert testPid PromCfg.CKPrometheus "svc-b" "http://b/metrics" 3600

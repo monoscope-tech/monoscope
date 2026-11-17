@@ -303,6 +303,7 @@ extra-source-files:
     static/migrations/0284_ai_conversation_dock_dismissed.sql
     static/migrations/0285_llm_signals.sql
     static/migrations/0286_promote_gen_ai_columns.sql
+    static/migrations/0287_uptime_history_status_pages.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb
     test/fixtures/github-app-test.pem
@@ -398,6 +399,7 @@ library
       Models.Apis.PrometheusScrapeConfigs
       Models.Apis.SchemaCatalog
       Models.Apis.ShareEvents
+      Models.Apis.Uptime
       Models.Ids
       Models.Projects.Activation
       Models.Projects.AgentUsage
@@ -449,6 +451,7 @@ library
       Pages.Settings
       Pages.Share
       Pages.Telemetry
+      Pages.Uptime
       Pkg.AdConversions
       Pkg.AgentCatalog
       Pkg.AI
@@ -852,6 +855,7 @@ test-suite integration-tests
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
       Pages.Projects.ProjectsSpec
+      Pages.UptimeSpec
       Pkg.EmbeddingFairnessSpec
       ReplaySpec
       Spec
@@ -1018,6 +1022,7 @@ test-suite test-dev
       Models.Apis.PrometheusScrapeConfigs
       Models.Apis.SchemaCatalog
       Models.Apis.ShareEvents
+      Models.Apis.Uptime
       Models.Ids
       Models.Projects.Activation
       Models.Projects.AgentUsage
@@ -1069,6 +1074,7 @@ test-suite test-dev
       Pages.Settings
       Pages.Share
       Pages.Telemetry
+      Pages.Uptime
       Pkg.AdConversions
       Pkg.AgentCatalog
       Pkg.AI
@@ -1137,6 +1143,7 @@ test-suite test-dev
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
       Pages.Projects.ProjectsSpec
+      Pages.UptimeSpec
       Pkg.EmbeddingFairnessSpec
       ReplaySpec
       Spec

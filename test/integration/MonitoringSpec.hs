@@ -53,6 +53,7 @@ import Pages.Dashboards qualified as Dashboards
 import Pages.Issues qualified as IssuesPage
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Monitors qualified as Alerts
+import Pages.Uptime qualified as Uptime
 import Pages.Projects qualified as ProjectPages
 import Pages.Settings qualified as Settings
 import Pkg.AI qualified as AI
@@ -150,6 +151,8 @@ spec = describe "Monitoring" do
       monitors <- runQueryEffect tr $ Monitors.queryMonitorsAll testPid
       [(m.id, m.alertThreshold, m.warningThreshold, m.environment, m.service) | m <- monitors] `shouldBe` [(mid, 1, Nothing, Just "production", Just "checkout")]
       for_ monitors \m -> m.logQueryAsSql `shouldContainAll` ["resource___deployment___environment___name = 'production'", "resource___service___name = 'checkout'"]
+      -- A monitor saved without a team is stored as notifying @everyone, so every reader sees who is told.
+      dbQuery tr [sql|SELECT t.handle FROM monitors.query_monitors m JOIN projects.teams t ON t.id = ANY(m.teams) WHERE m.id = ?|] (Only UUID.nil) `shouldReturn` [Only ("everyone" :: Text)]
       call tr (Alerts.alertSingleGetH testPid mid) >>= \case
         Alerts.AlertSingle _ (Just m) -> (m.id, m.alertThreshold, m.warningThreshold) `shouldBe` (mid, 1, Nothing)
         _ -> fail "unexpected response"
@@ -467,34 +470,36 @@ spec = describe "Monitoring" do
     it "uptime checks and cron monitors: failures open downtime/missed/failed issues, recovery resolves them" \tr -> do
       pid <- createTestProject tr "uptime-cron"
       -- An accepted submission re-renders the form blank above the list (htmx 4 needs the explicit :inherited targets).
-      (void <$> call tr (Alerts.uptimeCheckPostH pid (Alerts.UptimeForm "internal" "http://10.0.0.1/health" (Just 60) (Just 200)))) `shouldReturn` Left Alerts.UnsafeUrl
-      added <- fromRightShow <$> call tr (Alerts.uptimeCheckPostH pid (Alerts.UptimeForm "Shop" "https://shop.example.com/health" (Just 60) (Just 200)))
+      (void <$> call tr (Uptime.uptimeCheckPostH pid (Uptime.UptimeForm "internal" "http://10.0.0.1/health" (Just 60) (Just 200) []))) `shouldReturn` Left Uptime.UnsafeUrl
+      added <- fromRightShow <$> call tr (Uptime.uptimeCheckPostH pid (Uptime.UptimeForm "Shop" "https://shop.example.com/health" (Just 60) (Just 200) []))
       renderT added `shouldContainAll` ["https://shop.example.com/health"]
-      cronAdded <- fromRightShow <$> call tr (Alerts.cronMonitorPostH pid (Alerts.CronForm "nightly-billing" "Nightly billing" 3600 300))
+      cronAdded <- fromRightShow <$> call tr (Uptime.cronMonitorPostH pid (Uptime.CronForm "nightly-billing" "Nightly billing" 3600 300))
       goldenParts "uptime-cron-forms" . ordNub $ tagsWith ["value name=\"url\"", "hx-target:inherited=\"this\""] (renderT added) <> tagsWith ["value name=\"slug\"", "hx-target:inherited=\"this\""] (renderT cronAdded)
 
       -- Uptime checks share Prometheus targets' table, which needs edit access; so do cron monitors.
       setRole tr pid ProjectMembers.PView
       shopId <- maybe (fail "no uptime check") (pure . (.id)) . V.headM =<< runQueryEffect tr (PromCfg.configsByProjectId pid PromCfg.CKUptime)
-      traverse (httpStatus tr) [void $ Alerts.uptimeCheckPostH pid (Alerts.UptimeForm "Viewer" "https://viewer.example.com" Nothing Nothing), void $ Alerts.uptimeCheckToggleH pid shopId, void $ Alerts.uptimeCheckDeleteH pid shopId, void $ Alerts.cronMonitorPostH pid (Alerts.CronForm "viewer" "Viewer" 3600 300)] `shouldReturn` [403, 403, 403, 403]
+      traverse (httpStatus tr) [void $ Uptime.uptimeCheckPostH pid (Uptime.UptimeForm "Viewer" "https://viewer.example.com" Nothing Nothing []), void $ Uptime.uptimeCheckToggleH pid shopId, void $ Uptime.uptimeCheckDeleteH pid shopId, void $ Uptime.cronMonitorPostH pid (Uptime.CronForm "viewer" "Viewer" 3600 300)] `shouldReturn` [403, 403, 403, 403]
       setRole tr pid ProjectMembers.PAdmin
-      void $ runQueryEffect tr $ ProjectMembers.createEveryoneTeam pid (Servant.getResponse tr.trSessAndHeader).user.id
       setupSlackData tr pid "T_UPTIME"
       dbExec tr [sql|UPDATE projects.projects SET error_alerts = TRUE WHERE id = ?|] (Only pid)
       -- One failure is a blip; two open a downtime issue; a success resolves it.
       let uptimeNamed n = maybe (fail $ "no uptime check " <> toString n) pure . find ((== n) . (.name)) =<< runQueryEffect tr (PromCfg.configsByProjectId pid PromCfg.CKUptime)
       shop <- uptimeNamed "Shop"
-      let probe res = runTestBg frozenTime tr $ Jobs.applyUptimeResult shop frozenTime 120 res
+      let probe dt res = runTestBg (addUTCTime dt frozenTime) tr $ Jobs.applyUptimeResult shop "eu-west" (addUTCTime dt frozenTime) 120 res
           downtime = runQueryEffect tr (Issues.selectIssueByHash pid (Issues.uptimeTargetHash shop.id.toText) Issues.AnyIssue)
-      probe (Right 503)
+      probe 0 (Right 503)
       (isNothing <$> downtime) `shouldReturn` True
-      probe (Left "connection refused")
+      probe 60 (Left "connection refused")
       opened <- downtime >>= maybe (fail "no downtime issue after two failures") pure
       (opened.title, isNothing opened.archivedAt) `shouldBe` ("Downtime detected for https://shop.example.com/health", True)
-      probe (Right 200)
+      probe 120 (Right 200)
       resolved <- downtime >>= maybe (fail "issue vanished") pure
       isJust resolved.archivedAt `shouldBe` True
       runTestBg frozenTime tr (Issues.selectLatestStateEvent resolved.id) `shouldReturn` Just Issues.IEResolved
+      -- Every probe is history: the day bars, dashboards and status pages read it back.
+      dbQuery tr [sql|SELECT region, ok, status_code FROM apis.check_results WHERE check_id = ? ORDER BY checked_at|] (Only shop.id)
+        `shouldReturn` [("eu-west", False, Just (503 :: Int)), ("eu-west", False, Nothing), ("eu-west", True, Just 200)]
       -- Downtime posts one Slack card; recovery replies in its thread and edits the card, once.
       dbQuery @_ @(Only Text) tr [sql|SELECT d.operation FROM apis.slack_incident_deliveries d JOIN apis.incident_episodes e ON e.id = d.episode_id WHERE e.issue_id = ? ORDER BY d.sequence|] (Only opened.id)
         `shouldReturn` map Only ["post_root", "post_reply", "update_root"]
@@ -508,7 +513,7 @@ spec = describe "Monitoring" do
       -- Cron: a duplicate slug is refused; a check-in keeps it healthy, a missed window and an error
       -- run open issues, a later check-in resolves. Check-ins go through ingestion (TimeFusion on
       -- CI), so each evaluation retries until the check-in it depends on is visible.
-      (void <$> call tr (Alerts.cronMonitorPostH pid (Alerts.CronForm "nightly-billing" "Again" 3600 300))) `shouldReturn` Left (Alerts.DuplicateSlug "nightly-billing")
+      (void <$> call tr (Uptime.cronMonitorPostH pid (Uptime.CronForm "nightly-billing" "Again" 3600 300))) `shouldReturn` Left (Uptime.DuplicateSlug "nightly-billing")
       [m] <- runQueryEffect tr (Monitors.cronMonitorsByProject pid)
       apiKey <- createTestAPIKey tr pid "cron-key"
       let at dt = addUTCTime dt frozenTime
@@ -528,6 +533,10 @@ spec = describe "Monitoring" do
       checkin "error" 8000
       failed <- evaluateUntil 8060 (Issues.OpenOfType Issues.Cron) isJust >>= maybe (fail "no failed issue") pure
       failed.title `shouldBe` "Cron failed: Nightly billing"
+      -- Each run and each missed window is recorded once, however often the monitor is evaluated.
+      evaluateAt 8120
+      dbQuery tr [sql|SELECT checked_at, ok, message FROM apis.check_results WHERE check_id = ? ORDER BY checked_at|] (Only m.id)
+        `shouldReturn` [(at 0, True, "Run completed"), (at 3900, False, "Missed run" :: Text), (at 4200, True, "Run completed"), (at 8000, False, "Run reported an error")]
 
     it "notification policy: free tier emails only the owner, chart snapshot, reminders until stop-after, recovery always, mute suppresses then resumes" \tr -> do
       let free = Monitors.QueryMonitorId [uuid|22222222-2222-2222-2222-222222222222|]
