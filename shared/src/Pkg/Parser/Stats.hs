@@ -497,15 +497,14 @@ data Sources = SSpans | SMetrics
 -- which @otel_metrics@ does not have.
 --
 -- >>> let metrics tfOn = fmap (rewriteSectionsForSource tfOn (Just SMetrics)) . parseQueryToAST
--- >>> map (fmap (fmap display . (\case [Search (Cmp _ s _)] -> Just s; _ -> Nothing)) . metrics False) ["attributes.db.namespace == \"x\"", "attributes.db.system.name == \"x\""]
--- [Right (Just "(attributes)->'db'->>'namespace'"),Right (Just "attributes___db___system___name")]
+-- >>> map (fmap (fmap display . (\case [Search (Cmp _ s _)] -> Just s; _ -> Nothing)) . metrics False) ["attributes.db.namespace == \"x\"", "attributes.db.system.name == \"x\"", "resource.host.name == \"x\""]
+-- [Right (Just "(attributes)->'db'->>'namespace'"),Right (Just "attributes___db___system___name"),Right (Just "resource___host___name")]
 -- >>> fmap (fmap display . (\case [Search (Cmp _ s _)] -> Just s; _ -> Nothing)) (metrics True "attributes.db.namespace == \"x\"")
 -- Right (Just "variant_to_json(attributes)->'db'->>'namespace'")
 rewriteSectionsForSource :: Bool -> Maybe Sources -> [Section] -> [Section]
-rewriteSectionsForSource tfOn src = case (tfOn, src) of
-  (False, Just SSpans) -> id
-  (False, Nothing) -> id
-  _ -> runIdentity . traverseAst (Identity . subject) (if tfOn then arrays else id)
+rewriteSectionsForSource tfOn src
+  | not tfOn, src /= Just SMetrics = id
+  | otherwise = runIdentity . traverseAst (Identity . subject) (if tfOn then arrays else id)
   where
     arrays = \case
       Cmp Eq (Subject _ col [ArrayWildcard ""]) (Str v) | S.member col arrayColumns -> ArrayHas col v
@@ -513,9 +512,8 @@ rewriteSectionsForSource tfOn src = case (tfOn, src) of
     subject = case src of
       Just SMetrics -> \case
         s@(Subject entire root keys)
-          | root `elem` ["attributes", "resource"]
-          , not (entire `S.member` flattenedMetricsAttributes) ->
-              Subject entire (if tfOn then "variant_to_json(" <> root <> ")" else "(" <> root <> ")") keys
+          | entire `S.member` flattenedMetricsAttributes -> Subject entire (T.replace "." "___" entire) []
+          | root `elem` ["attributes", "resource"] -> Subject entire (if tfOn then "variant_to_json(" <> root <> ")" else "(" <> root <> ")") keys
           | otherwise -> s
       Just SSpans -> id
       Nothing -> id

@@ -24,6 +24,7 @@ import Pages.Telemetry qualified as TelemetryPage
 import Pkg.AI qualified as AI
 import Pkg.Components.Table (Table (..))
 import Pkg.GenAI qualified as GenAI
+import Data.Effectful.Hasql (setTestTime)
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Logs.V1.Logs qualified as PL
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -116,6 +117,13 @@ spec = around withTestResources do
       LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       map (\c -> (c.key, c.title, c.llmCalls, c.tokens, c.cost)) (toList table.rows) `shouldBe` [("sess-b", Just "Write the tests", 1, 1000, Just 0.5), ("sess-a", Just "Fix the failing build", 1, 5030, Just 0.0021)]
       renderT <$> call tr (LLM.conversationGetH pid "sess-a" from to Nothing) >>= (`shouldContainAll` ["Fix the failing build", "$0.0021"])
+      -- The refreshing shell resends an unset picker as since=&from=&to=; that list read the app-wide
+      -- five minutes ("0 of 0 conversations") while the page's charts read the day.
+      event (-7200) "sess-c" "p3" [("event.name", "user_prompt"), ("prompt", "Two hours ago")]
+      event (-7199) "sess-c" "p3" [("event.name", "api_request"), ("model", "claude-sonnet-4-5"), ("input_tokens", "1"), ("output_tokens", "1"), ("cost_usd", "0.01")]
+      setTestTime tr.trTestClock (addUTCTime 60 now)
+      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody refreshed))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing (Just "") (Just "") (Just "") (Just "1")
+      sort (map (.key) (toList refreshed.rows)) `shouldBe` ["sess-a", "sess-b", "sess-c"]
 
     it "prices Pi's durable sessions from pi-otel: one conversation per routine run, input counted with its cache" \tr -> do
       pid <- createTestProject tr "Pi"

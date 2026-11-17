@@ -630,7 +630,9 @@ intervalSeconds t = case words t of
 
 -- | What a query returns, read off its @summarize@ ('parseQueryToAST' admits at most one):
 -- the events themselves, one scalar row, a series binned by time, or a value per group.
-data ResultShape = Events | Scalar | TimeSeries | Categories
+-- | 'Row' is several aggregates with no @by@: one row of named columns, not one number and
+-- not a ranking (it has no label column).
+data ResultShape = Events | Scalar | Row | TimeSeries | Categories
   deriving stock (Eq, Show)
 
 
@@ -643,15 +645,13 @@ data ResultShape = Events | Scalar | TimeSeries | Categories
 -- >>> fmap resultShape (parseQueryToAST "summarize count() by name | where count_ > 1")
 -- Right Categories
 --
--- Several aggregates with no @by@ are one row of named columns, not one number:
---
 -- >>> fmap resultShape (parseQueryToAST "summarize count(), min(timestamp), max(timestamp)")
--- Right Categories
+-- Right Row
 resultShape :: [Section] -> ResultShape
 resultShape ast = case listToMaybe [(aggs, by) | SummarizeCommand aggs by <- ast] of
   Nothing -> Events
   Just ([_], Nothing) -> Scalar
-  Just (_, Nothing) -> Categories
+  Just (_, Nothing) -> Row
   Just (_, Just (SummarizeByClause items))
     | any (\case ByBinFunc _ -> True; _ -> False) items -> TimeSeries
     | otherwise -> Categories

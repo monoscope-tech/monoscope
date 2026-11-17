@@ -191,7 +191,7 @@ data ChartQuery = ChartQuery
 -- | A grouped result names its columns, so a chart can label its categories and series.
 nameCategories :: SqlQueryCfg -> [Section] -> MetricsData -> MetricsData
 nameCategories cfg ast md
-  | resultShape ast == Categories = md{headers = V.fromList $ listToColNames (snd $ queryASTToComponents cfg ast).finalColumns}
+  | resultShape ast `elem` [Categories, Row] = md{headers = V.fromList $ listToColNames (snd $ queryASTToComponents cfg ast).finalColumns}
   | otherwise = md
 
 
@@ -293,7 +293,8 @@ rawAstFilters cfg qc =
 -- (@monoscope chart@, @metrics query --assert@) generally don't, so infer it
 -- from the query shape:
 --
---   * @summarize@ with no @by@      → one scalar row      → 'DTFloat'
+--   * one aggregate, no @by@        → one scalar          → 'DTFloat'
+--   * several aggregates, no @by@   → one row of columns  → 'DTText'
 --   * @summarize … by bin(...)@     → a timeseries        → 'DTMetric'
 --   * anything else (@by <field>@,
 --     or no summarize at all)       → label/value rows    → 'DTText'
@@ -310,6 +311,7 @@ decoderFor requested queryAST = case (requested, resultShape queryAST) of
   (DTMetric, TimeSeries) -> DTMetric
   (DTMetric, Events) -> DTText
   (DTMetric, Categories) -> DTText
+  (DTMetric, Row) -> DTText
   (r, _) -> r
 
 

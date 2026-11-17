@@ -186,14 +186,14 @@ vizDraws = \case
 
 -- | The view for a query: the requested one when it can draw the result, else the result's own.
 --
--- >>> [vizFor s Nothing | s <- [Events, Scalar, TimeSeries, Categories]]
--- [VizLogs,VizTimeseries,VizTimeseries,VizTopList]
+-- >>> [vizFor s Nothing | s <- [Events, Scalar, Row, TimeSeries, Categories]]
+-- [VizLogs,VizTimeseries,VizTimeseries,VizTimeseries,VizTopList]
 -- >>> (vizFor Categories (Just VizLogs), vizFor Categories (Just VizTimeseriesLine), vizFor Events (Just VizSessions), vizFor Events (Just VizTimeseriesLine))
 -- (VizTopList,VizTopList,VizSessions,VizTimeseriesLine)
 --
 -- The view picked always draws the result:
 --
--- >>> and [vizDraws (vizFor s v) s | s <- [Events, Scalar, TimeSeries, Categories], v <- Nothing : map Just [minBound ..]]
+-- >>> and [vizDraws (vizFor s v) s | s <- [Events, Scalar, Row, TimeSeries, Categories], v <- Nothing : map Just [minBound ..]]
 -- True
 vizFor :: ResultShape -> Maybe VizType -> VizType
 vizFor shape = fromMaybe byShape . mfilter (`vizDraws` shape)
@@ -201,6 +201,7 @@ vizFor shape = fromMaybe byShape . mfilter (`vizDraws` shape)
     byShape = case shape of
       Events -> VizLogs
       Scalar -> VizTimeseries
+      Row -> VizTimeseries
       TimeSeries -> VizTimeseries
       Categories -> VizTopList
 
