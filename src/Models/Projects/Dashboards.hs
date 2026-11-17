@@ -199,6 +199,9 @@ data Tab = Tab
   , variables :: Maybe [Text]
   , requires :: Maybe Text -- Required variable name for tab to be active
   , widgets :: [Widget.Widget]
+  , link :: Maybe Text
+  -- ^ A tab that leaves the dashboard for another page of the app (@{{project_id}}@ is filled in), so a
+  -- dashboard can sit among the pages it summarises. It has no widgets and never becomes the active tab.
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)

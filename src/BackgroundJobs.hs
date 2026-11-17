@@ -1,7 +1,7 @@
 {-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsWorkerInitWithTools, jobsWorkerConfig, jobsRunner, runWorkspaceMaintenanceTimer, ensureDailyJobScheduled, processBackgroundJob, processBackgroundJobWithTools, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, dualExecPgTfWithSql, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl, sendAlertToChannels) where
+module BackgroundJobs (jobsWorkerInit, jobsWorkerInitWithTools, jobsWorkerConfig, jobsRunner, runWorkspaceMaintenanceTimer, ensureDailyJobScheduled, processBackgroundJob, processBackgroundJobWithTools, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, emitProbeSpan, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, dualExecPgTfWithSql, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl, sendAlertToChannels) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -117,7 +117,7 @@ import Pkg.AI qualified as AI
 import Pkg.AdConversions qualified as AdConversions
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql, unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql, unAesonTextMaybe)
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.ErrorFingerprint qualified as EF
@@ -145,7 +145,7 @@ import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
 import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny, withException)
-import Utils (FreeTierStatus (..), calculateCycleStartDate, formatUTC, formatWithCommas, freeTierUsageStatus, hostPath, nonEmptyT, prettyPrintCount, toXXHash, truncateHour, usageWindowStart)
+import Utils (FreeTierStatus (..), calculateCycleStartDate, formatUTC, formatWithCommas, freeTierUsageStatus, hostPath, jsonToMap, nestedJsonFromDotNotation, nonEmptyT, prettyPrintCount, toXXHash, truncateHour, usageWindowStart)
 import Web.Links
 
 
@@ -4991,13 +4991,58 @@ scrapePrometheusTarget :: PromCfg.PrometheusScrapeConfigId -> ATBackgroundCtx ()
 scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> when cfg.enabled case cfg.kind of
   PromCfg.CKUptime -> do
     -- 'claimDueConfigs' leased only checks this node's region serves; results carry that region.
-    region <- (.config.uptimeProbeRegion) <$> ask @Config.AuthContext
+    ctx <- ask @Config.AuthContext
+    let region = ctx.config.uptimeProbeRegion
+    -- The probe is a trace root: an instrumented target continues it, so its own spans join the probe's trace.
+    trId <- T.filter (/= '-') . UUID.toText <$> UUID.genUUID
+    spanId <- T.take 16 . T.filter (/= '-') . UUID.toText <$> UUID.genUUID
     t0 <- Time.currentTime
     -- Any status is an answer here: the probe compares it, so a 5xx must not throw.
-    res <- tryAny $ W.getWith (PromCfg.prometheusScrapeOpts Nothing & Wreq.checkResponse ?~ \_ _ -> pass) (toString cfg.url)
+    res <- tryAny $ W.getWith (PromCfg.prometheusScrapeOpts Nothing & Wreq.checkResponse ?~ (\_ _ -> pass) & Wreq.header "traceparent" .~ [encodeUtf8 $ "00-" <> trId <> "-" <> spanId <> "-01"]) (toString cfg.url)
     t1 <- Time.currentTime
-    applyUptimeResult cfg region t1 (round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double)) (bimap (toText . displayException) (^. Wreq.responseStatus . Wreq.statusCode) res)
+    let outcome = bimap (toText . displayException) (^. Wreq.responseStatus . Wreq.statusCode) res
+    applyUptimeResult cfg region t1 (round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double)) outcome
+    emitProbeSpan cfg region (trId, spanId) t0 t1 outcome
   PromCfg.CKPrometheus -> scrapeMetrics cfg
+
+
+-- | An uptime probe as a client span in the check's own project, so dashboards, monitors and
+-- the Explorer read probes like any other telemetry. @geo.country.iso_code@ is where the probe
+-- ran from, which puts probes on the geomap. Best-effort, as the history row is the record.
+emitProbeSpan :: PromCfg.PrometheusScrapeConfig -> Text -> (Text, Text) -> UTCTime -> UTCTime -> Either Text Int -> ATBackgroundCtx ()
+emitProbeSpan cfg region (trId, spanId) t0 t1 outcome = do
+  ctx <- ask @Config.AuthContext
+  insertSystemLog (Telemetry.writeTargetFor ctx.env Nothing) ctx.hasqlTimefusionUsesPgTypes probe{Telemetry.summary = generateSummary probe}
+  where
+    probe =
+      (mkSystemLog cfg.projectId "uptime.probe" (bool SLError SLInfo ok) reason Map.empty (Just durationNs) t0)
+        { Telemetry.kind = Just "client"
+        , Telemetry.level = Nothing
+        , Telemetry.severity = Nothing
+        , Telemetry.status_code = Just $ bool "ERROR" "OK" ok
+        , Telemetry.status_message = Just reason
+        , Telemetry.end_time = Just t1
+        , Telemetry.context = Just Telemetry.Context{trace_id = Just trId, span_id = Just spanId, trace_state = Nothing, trace_flags = Nothing, is_remote = Nothing}
+        , Telemetry.attributes = fmap AesonText $ jsonToMap $ nestedJsonFromDotNotation attrs
+        , Telemetry.resource = fmap AesonText $ jsonToMap $ nestedJsonFromDotNotation [("service.name", "monoscope-uptime"), ("cloud.region", AE.String region)]
+        }
+    expected = fromMaybe 200 cfg.expectedStatus
+    ok = outcome == Right expected
+    reason = either (const "Request failed") (\c -> bool ("Status " <> show c <> ", expected " <> show expected) "OK" ok) outcome
+    durationNs = round (realToFrac (diffUTCTime t1 t0) * 1e9 :: Double)
+    attrs =
+      [ ("http.request.method", "GET")
+      , ("url.full", AE.String cfg.url)
+      , ("monitor.kind", "uptime")
+      , ("monitor.check.id", AE.toJSON cfg.id)
+      , ("monitor.check.name", AE.String cfg.name)
+      , ("monitor.region", AE.String region)
+      , ("monitor.ok", AE.Bool ok)
+      , ("monitor.expected_status", AE.toJSON expected)
+      ]
+        <> [("http.response.status_code", AE.toJSON c) | Right c <- [outcome]]
+        <> [("error.type", "request_failed") | isLeft outcome]
+        <> [("geo.country.iso_code", AE.String r.country) | Just r <- [Uptime.regionOf region]]
 
 
 -- | Per-minute: evaluate the cron monitors whose lease has lapsed.

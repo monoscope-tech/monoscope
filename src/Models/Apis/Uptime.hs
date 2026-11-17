@@ -6,6 +6,7 @@ module Models.Apis.Uptime (
   Region (..),
   regions,
   regionLabel,
+  regionOf,
   servedRegions,
   downtimeAfter,
   CheckResult (..),
@@ -17,12 +18,8 @@ module Models.Apis.Uptime (
   uptimePercent,
   WindowUptime (..),
   windowUptime,
-  LatencyStats (..),
-  latencyStats,
   RegionStats (..),
   regionStats,
-  HourBucket (..),
-  hourlyBuckets,
   Incident (..),
   incidents,
   recentResults,
@@ -39,7 +36,6 @@ module Models.Apis.Uptime (
 ) where
 
 import Data.Effectful.Hasql qualified as Hasql
-import Data.List (lookup)
 import Data.Time (Day, UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -58,23 +54,23 @@ data ResultKind = RKUptime | RKCron
 
 
 -- | A probe location, named as cloud providers name theirs. A node probes from the one its
--- @UPTIME_PROBE_REGION@ names; deploying a worker per region is all multi-region checks need.
-data Region = Region {code :: Text, city :: Text, continent :: Text}
+-- @UPTIME_PROBE_REGION@ names. @country@ (ISO 3166-1 alpha-2) places its probes on the geomap.
+data Region = Region {code :: Text, city :: Text, continent :: Text, country :: Text}
 
 
 regions :: [Region]
 regions =
-  [ Region "us-east" "Virginia" "North America"
-  , Region "us-west" "Oregon" "North America"
-  , Region "sa-east" "São Paulo" "South America"
-  , Region "eu-west" "France" "Europe"
-  , Region "eu-central" "Frankfurt" "Europe"
-  , Region "eu-north" "Helsinki" "Europe"
-  , Region "af-south" "Johannesburg" "Africa"
-  , Region "ap-south" "Mumbai" "Asia"
-  , Region "ap-southeast" "Singapore" "Asia"
-  , Region "ap-northeast" "Tokyo" "Asia"
-  , Region "au-east" "Sydney" "Oceania"
+  [ Region "us-east" "Virginia" "North America" "US"
+  , Region "us-west" "Oregon" "North America" "US"
+  , Region "sa-east" "São Paulo" "South America" "BR"
+  , Region "eu-west" "France" "Europe" "FR"
+  , Region "eu-central" "Frankfurt" "Europe" "DE"
+  , Region "eu-north" "Helsinki" "Europe" "FI"
+  , Region "af-south" "Johannesburg" "Africa" "ZA"
+  , Region "ap-south" "Mumbai" "Asia" "IN"
+  , Region "ap-southeast" "Singapore" "Asia" "SG"
+  , Region "ap-northeast" "Tokyo" "Asia" "JP"
+  , Region "au-east" "Sydney" "Oceania" "AU"
   ]
 
 
@@ -83,7 +79,11 @@ regions =
 -- >>> regionLabel "global"
 -- "global"
 regionLabel :: Text -> Text
-regionLabel c = maybe c (\r -> r.city <> ", " <> r.continent) $ lookup c [(r.code, r) | r <- regions]
+regionLabel c = maybe c (\r -> r.city <> ", " <> r.continent) $ regionOf c
+
+
+regionOf :: Text -> Maybe Region
+regionOf c = find ((== c) . (.code)) regions
 
 
 -- | Consecutive failed probes that make an uptime check down: one alone is a blip.
@@ -176,31 +176,6 @@ windowUptime cid now =
     z = (0, 0)
 
 
--- | Response times over a window: Apdex counts at T = 500 ms (satisfied under T, tolerating
--- under 4T, failures frustrated), and the counts in each band of 'latencyBands'.
-data LatencyStats = LatencyStats
-  { total :: Int
-  , avgMs :: Maybe Double
-  , p95Ms :: Maybe Double
-  , satisfied :: Int
-  , tolerating :: Int
-  , bands :: [Int]
-  }
-
-
-latencyStats :: DB es => UUID.UUID -> UTCTime -> Eff es LatencyStats
-latencyStats cid since =
-  maybe (LatencyStats 0 Nothing Nothing 0 0 []) (\(t, a, p, s, tol, b1, b2, b3, b4, b5, b6, b7) -> LatencyStats t a p s tol [b1, b2, b3, b4, b5, b6, b7])
-    <$> Hasql.interpOne
-      [HI.sql| SELECT count(*)::bigint, avg(duration_ms)::float8, percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::float8,
-                      count(*) FILTER (WHERE ok AND duration_ms <= 500)::bigint, count(*) FILTER (WHERE ok AND duration_ms > 500 AND duration_ms <= 2000)::bigint,
-                      count(*) FILTER (WHERE ok AND duration_ms < 250)::bigint, count(*) FILTER (WHERE ok AND duration_ms >= 250 AND duration_ms < 500)::bigint,
-                      count(*) FILTER (WHERE ok AND duration_ms >= 500 AND duration_ms < 1000)::bigint, count(*) FILTER (WHERE ok AND duration_ms >= 1000 AND duration_ms < 2000)::bigint,
-                      count(*) FILTER (WHERE ok AND duration_ms >= 2000 AND duration_ms < 4000)::bigint, count(*) FILTER (WHERE ok AND duration_ms >= 4000)::bigint,
-                      count(*) FILTER (WHERE NOT ok)::bigint
-               FROM apis.check_results WHERE check_id = #{cid} AND checked_at > #{since} |]
-
-
 data RegionStats = RegionStats {checkId :: UUID.UUID, region :: Text, total :: Int, failed :: Int, avgMs :: Maybe Double, avgDnsMs :: Maybe Double, lastAt :: UTCTime, lastOk :: Bool}
   deriving stock (Generic)
   deriving anyclass (HI.DecodeRow)
@@ -212,18 +187,6 @@ regionStats ids since =
     [HI.sql| SELECT check_id, region, count(*)::bigint, count(*) FILTER (WHERE NOT ok)::bigint, avg(duration_ms)::float8, avg(dns_ms)::float8,
                     max(checked_at), (array_agg(ok ORDER BY checked_at DESC))[1]
              FROM apis.check_results WHERE check_id = ANY(#{ids}) AND checked_at > #{since} GROUP BY check_id, region ORDER BY region |]
-
-
-data HourBucket = HourBucket {at :: UTCTime, total :: Int, failed :: Int, avgMs :: Maybe Double}
-  deriving stock (Generic)
-  deriving anyclass (HI.DecodeRow)
-
-
-hourlyBuckets :: DB es => UUID.UUID -> UTCTime -> Eff es [HourBucket]
-hourlyBuckets cid since =
-  Hasql.interp
-    [HI.sql| SELECT time_bucket('1 hour', checked_at), count(*)::bigint, count(*) FILTER (WHERE NOT ok)::bigint, avg(duration_ms) FILTER (WHERE ok)::float8
-             FROM apis.check_results WHERE check_id = #{cid} AND checked_at > #{since} GROUP BY 1 ORDER BY 1 |]
 
 
 -- | A run of consecutive failures, and the first success after it (none while ongoing). The

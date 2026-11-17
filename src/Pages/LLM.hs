@@ -55,7 +55,6 @@ import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Ids qualified as Projects
 import Models.Projects.DashboardTemplates qualified as DashboardTemplates
-import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), llmCallsUrl, mkPageCtx, navTabAttrs)
@@ -481,8 +480,7 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
     overviewWidgets :: [Widget.Widget]
     overviewWidgets =
       [ w{Widget._projectId = Just pid, Widget.standalone = Just True}
-      | d <- take 1 [d | d <- DashboardTemplates.dashboardTemplatesCompiled, d.file == Just "llm-observability.yaml"]
-      , w <- concatMap (\g -> fromMaybe [g] g.children) (take 3 $ d.widgets <> foldMap (concatMap (.widgets) . take 1) d.tabs)
+      | w <- concatMap (\g -> fromMaybe [g] g.children) $ take 3 $ DashboardTemplates.templateTab "llm-observability.yaml" "Overview" [("service", ""), ("model", "")]
       ]
 
     chips :: [Text] -> Html ()

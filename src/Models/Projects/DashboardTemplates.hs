@@ -1,9 +1,10 @@
-module Models.Projects.DashboardTemplates (Templates, askTemplates, templateList, getDashboardTemplates, loadDashboardFromVM, detach, duplicate, ReadOnly (..), Editable, editableIn, requireEditable, updateSchema, updateTitle, dashboardTemplatesCompiled) where
+module Models.Projects.DashboardTemplates (Templates, askTemplates, templateList, getDashboardTemplates, loadDashboardFromVM, detach, duplicate, ReadOnly (..), Editable, editableIn, requireEditable, updateSchema, updateTitle, dashboardTemplatesCompiled, templateTab) where
 
 import Control.Lens ((%~))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.FileEmbed (embedDir)
 import Data.Generics.Labels ()
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Error.Static (Error)
@@ -11,6 +12,7 @@ import Effectful.Reader.Static (Reader, ask)
 import Hasql.Interpolate qualified as HI
 import Models.Ids qualified as Projects
 import Models.Projects.Dashboards qualified as Dashboards
+import Pkg.Components.Widget qualified as Widget
 import Relude hiding (Reader, ask)
 import Servant (ServerError)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
@@ -99,6 +101,15 @@ updateTitle (Editable dashId) title = Hasql.interpExecute [HI.sql| UPDATE projec
 -- DashboardTemplatesSpec checks that each template decodes.
 dashboardTemplatesCompiled :: [Dashboards.Dashboard]
 dashboardTemplatesCompiled = rights [Dashboards.decodeDashboard f bs | (f, bs) <- sortWith fst $(embedDir "static/public/dashboards"), "yaml" `isExtensionOf` f]
+
+
+-- | One tab of a template, its @{{var-*}}@ placeholders filled, for a page that shows that view of
+-- the dashboard; groups' children are filled too.
+templateTab :: FilePath -> Text -> [(Text, Text)] -> [Widget.Widget]
+templateTab file tabName vars = [fill w | d <- dashboardTemplatesCompiled, d.file == Just (toText file), t <- fold d.tabs, t.name == tabName, w <- t.widgets]
+  where
+    fill w = w{Widget.query = sub <$> w.query, Widget.sql = sub <$> w.sql, Widget.children = map fill <$> w.children}
+    sub t = foldl' (\acc (k, v) -> T.replace ("{{var-" <> k <> "}}") v acc) t vars
 
 
 askTemplates :: (IOE :> es, Reader AuthContext :> es) => Eff es Templates

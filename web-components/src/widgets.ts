@@ -7,6 +7,7 @@ import { echartsUrls } from './assets';
 import { copyParams } from './time-range-utils';
 import debounce from 'lodash/debounce';
 import { legendLayout } from './chart-legend';
+import { dayBarsOptions } from './day-bars';
 import { geomapOptions, registerWorld } from './geomap';
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
@@ -587,6 +588,7 @@ export const updateChartConfiguration = (widgetData: WidGetData, opt: any, data:
   if (!data) return opt;
 
   if (widgetData.chartType === 'heatmap') return heatmapOptions(opt, data, widgetData.unit || 'ns', getChartStyles());
+  if (widgetData.chartType === 'daybars') return dayBarsOptions(opt, data, getChartStyles());
   if (widgetData.chartType === 'map') return geomapOptions(window.echarts, opt, data, widgetData.unit ?? '', getChartStyles());
   const source = collapseLongTail(data, widgetData.summarizeBy && widgetData.summarizeBy !== 'sum' ? (vs) => Math.max(...vs) : undefined);
   opt.dataset = { ...opt.dataset, source };

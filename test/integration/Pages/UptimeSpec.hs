@@ -5,8 +5,13 @@ import Data.Vector qualified as V
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Apis.Uptime qualified as UptimeM
+import Models.Projects.DashboardTemplates qualified as DashboardTemplates
+import Pages.Charts.Charts qualified as Charts
+import Pkg.Components.Widget qualified as Widget
 import Pages.Uptime qualified as Uptime
 import Data.Text qualified as T
+import Data.Time (addUTCTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Pkg.TestUtils
 
 
@@ -39,8 +44,8 @@ spec = around withTestResources $ describe "Uptime and status pages" do
 
     overview <- renderT <$> call tr (Uptime.uptimeChecksGetH pid)
     overview `shouldContainAll` ["All systems operational", "Checkout API", "Uptime, 30 days", "99.86%", "99.86% uptime over 90 days; failures on Dec 29 (12 failed)"]
-    dashboard <- renderT <$> call tr (Uptime.uptimeCheckGetH pid probed.id)
-    dashboard `shouldContainAll` ["Operational", "every 1 min", "expects 200", "98.21%", "99.58%", "99.86%", "Apdex, 500 ms target", "status 503, expected 200", "Resolved", "3h", "France, Europe", "Not deployed: Virginia, Oregon"]
+    dashboard <- renderT <$> call tr (Uptime.uptimeCheckGetH pid probed.id (Just "7D"))
+    dashboard `shouldContainAll` ["Operational", "every 1 min", "expects 200", "status 503, expected 200", "Resolved", "3h", "France · eu-west"]
     cronPage <- renderT <$> call tr (Uptime.cronMonitorGetH pid cron.id)
     cronPage `shouldContainAll` ["Nightly billing", "nightly-billing", "Check-ins", "cron.checkin", "/v1/traces", "error"]
 
@@ -76,4 +81,40 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     let claimed region = map (.id) <$> runQueryEffect tr (PromCfg.claimDueConfigs region 50)
     claimed "eu-west" `shouldReturn` []
     claimed "us-east" `shouldReturn` [shop.id]
-    renderT <$> call tr (Uptime.uptimeCheckGetH pid shop.id) >>= (`shouldContainAll` ["Selected, no worker yet", "98.21%"])
+    renderT <$> call tr (Uptime.uptimeCheckGetH pid shop.id (Just "7D")) >>= (`shouldContainAll` ["Virginia · us-east · no worker"])
+
+  it "probes are uptime.probe spans: the embedded dashboard reads daily bars, percentiles, regions and the map from them" \tr -> do
+    pid <- createTestProject tr "Probes"
+    void $ call tr $ Uptime.uptimeCheckPostH pid (Uptime.UptimeForm "Checkout API" "https://shop.example.com/health" (Just 60) (Just 200) [])
+    [shop] <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId pid PromCfg.CKUptime)
+    let at h = addUTCTime (h * 3600) frozenTime
+        probe h region ms outcome = runTestBg (at h) tr $ Jobs.emitProbeSpan shop region ("0af7651916cd43dd8448eb211c80319" <> show (round h `mod` 10 :: Int), "b7ad6b716920333" <> show (round h `mod` 10 :: Int)) (at h) (addUTCTime (ms / 1000) (at h)) outcome
+    probe (-50) "eu-west" 120 (Right 200)
+    probe (-49) "eu-west" 140 (Right 200)
+    probe (-26) "eu-west" 900 (Right 503)
+    probe (-25) "us-east" 300 (Right 200)
+    probe (-1) "eu-west" 90 (Right 200)
+    probe (-2) "us-east" 5000 (Left "connection refused")
+    -- Every view the page embeds runs over the spans, with the check filled in.
+    let views = concatMap (\t -> DashboardTemplates.templateTab "uptime.yaml" t [("check", shop.url), ("region", "")]) ["Overview", "Response time", "Regions", "Errors"]
+        flat w = maybe [w] (concatMap flat) w.children
+        charts = [w | w <- concatMap flat views, w.wType `notElem` [Widget.WTLogs, Widget.WTTable, Widget.WTGroup]]
+        window = (Just $ toText $ iso8601Show $ at (-72), Just $ toText $ iso8601Show $ at 1)
+        run w = let (q, dt) = Widget.chartQuery w in runQueryEffect tr $ Charts.queryMetrics Nothing (Just dt) (Just pid) q Nothing Nothing (fst window) (snd window) Nothing Nothing []
+    length charts `shouldSatisfy` (> 10)
+    results <- forM charts \w -> (w,) <$> run w
+    [(w.title, md.error) | (w, md) <- results, isJust md.error] `shouldBe` []
+    let titled t = maybe (fail $ toString t <> " missing") (pure . snd) $ find ((== Just t) . (.title) . fst) results
+    bars <- titled "Daily uptime"
+    -- One series per status a day: the 503 and the refused connection are the two ERROR probes.
+    let column h = maybe 0 (\i -> sum [fromMaybe 0 (join $ r V.!? (i + 1)) | r <- V.toList bars.dataset]) $ V.elemIndex h (V.drop 1 bars.headers)
+    (column "OK", column "ERROR") `shouldBe` (4, 2)
+    located <- titled "Probes by location"
+    sort (mapMaybe (V.!? 0) $ V.toList located.dataText) `shouldBe` ["FR", "US"]
+    -- The cumulative table's SQL runs over the same spans, one row per checked URL.
+    tableSql <- maybe (fail "no Checks table") pure $ listToMaybe [q | w <- concatMap flat (DashboardTemplates.templateTab "uptime.yaml" "All checks" [("region", "")]), w.title == Just "Checks", Just q <- [w.sql]]
+    let filled = T.replace "{{query_ast_filters}}" ("project_id = '" <> pid.toText <> "' AND name = 'uptime.probe'") tableSql
+    dbQuery @_ @(Text, Int, Double, Maybe Double) tr (fromString $ toString filled) () >>= (`shouldBe` [(shop.url, 6, 66.667, True)]) . map (\(u, n, up, p) -> (u, n, fromIntegral (round (up * 1000) :: Int) / 1000 :: Double, isJust p))
+    page <- renderT <$> call tr (Uptime.uptimeCheckGetH pid shop.id (Just "7D"))
+    page `shouldContainAll` ["Open as dashboard", "Daily uptime", "Probes by location", "Failure reasons", "/uptime/dashboard?var-check=https"]
+    ("{{var-check}}" `T.isInfixOf` page) `shouldBe` False

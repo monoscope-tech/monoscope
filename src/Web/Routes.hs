@@ -344,6 +344,7 @@ cookieProtectedServer projectTools runNow =
     , endpointDetailsRedirect = Dashboards.entrypointRedirectGetH "endpoint-stats.yaml"
     , rumRedirect = Dashboards.rumRedirectH
     , llmDashboardRedirect = Dashboards.entrypointRedirectGetH "llm-observability.yaml"
+    , uptimeDashboardRedirect = Dashboards.entrypointRedirectGetH "uptime.yaml"
     , dashboardViewPost = Dashboards.dashboardViewPostH
     , dashboardViewDelete = Dashboards.dashboardViewDeleteH
     , dashboardViewsGet = Dashboards.dashboardViewsGetH
