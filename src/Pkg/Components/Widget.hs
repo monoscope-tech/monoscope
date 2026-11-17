@@ -754,6 +754,7 @@ embeddedWidgets_ pid ws = div_ [class_ "grid grid-cols-12 gap-3"] $ forM_ (conca
   where
     flat w = maybe [w] (concatMap flat) w.children
     width = \case
+      Just n | n <= 2 -> "col-span-6 md:col-span-4 xl:col-span-2"
       Just n | n <= 3 -> "col-span-12 md:col-span-6 xl:col-span-3"
       Just 4 -> "col-span-12 lg:col-span-4"
       Just n | n <= 6 -> "col-span-12 lg:col-span-6"
