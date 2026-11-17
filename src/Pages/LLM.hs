@@ -62,7 +62,7 @@ import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), 
 import Pages.Containers (mkWindow, windowed)
 import Pages.GenAIMessages (Call (..), genAIAt, genAIMessages, messageParts, message_, roleAvatar_)
 import Pages.LogExplorer.LogItem qualified as LogItem
-import Pkg.Components.Table (Column, Features (..), Table (..), ZeroState (..), col, countedFilter, facetActions, inventoryTable, withAttrs)
+import Pkg.Components.Table (Column, Features (..), Table (..), ZeroState (..), col, countedFilter, facetActions, fillCol, inventoryTable, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (DB, UUIDId, unAesonTextMaybe)
@@ -72,7 +72,7 @@ import Pkg.Parser.Eval (jsonAsText)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, act, addRespHeaders, done, useTfReads)
-import Utils (TabStrip (..), drawerRowAttrs_, faSprite_, getDurationNSMS, navTabStrip_, prettyPrintCount, tokenFlow, truncateText)
+import Utils (TabStrip (..), countNoun, drawerRowAttrs_, faSprite_, getDurationNSMS, navTabStrip_, prettyPrintCount, tokenFlow, truncateText)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links
 
@@ -406,7 +406,7 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
           $ SignalsBody
             base
               { columns =
-                  [ col "Signal" (\s -> div_ [class_ "flex min-w-0 flex-col"] $ span_ [class_ "font-medium text-textStrong"] (toHtml s.name) >> span_ [class_ "truncate text-xs text-textWeak"] (toHtml s.description)) & withAttrs [class_ "min-w-72"]
+                  [ col "Signal" (\s -> div_ [class_ "flex min-w-0 flex-col"] $ span_ [class_ "font-medium text-textStrong"] (toHtml s.name) >> span_ [class_ "truncate text-xs text-textWeak"] (toHtml s.description)) & fillCol
                   , col "Matched" (\s -> if s.matched > 0 then span_ [class_ "rounded-full bg-fillBrand-weak px-2 py-0.5 text-xs font-medium tabular-nums text-textBrand"] (toHtml $ prettyPrintCount $ fromIntegral s.matched) else num 0) & withAttrs [class_ "w-24 text-right"]
                   , col
                       "Match rate"
@@ -502,7 +502,7 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
 
     conversationColumns :: [Column Conversation]
     conversationColumns =
-      [ col "Conversation" titleCell & withAttrs [class_ "min-w-72"]
+      [ col "Conversation" titleCell & fillCol
       , col "Agent" (chips . (.agents)) & withAttrs [class_ "w-36 max-lg:hidden"]
       , col "Models" (chips . (.models)) & withAttrs [class_ "w-40 max-xl:hidden"]
       , col "Turns" (num . fromIntegral . (.turns)) & withAttrs [class_ "w-16 text-right"]
@@ -510,20 +510,20 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
       , col "Tokens" (num . (.tokens)) & withAttrs [class_ "w-20 text-right"]
       , col "Cost" (\c -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ maybe "—" GenAI.formatUsd c.cost) & withAttrs [class_ "w-20 text-right"]
       , col "Signals" signalsCell & withAttrs [class_ "w-44"]
-      , col "Last seen" (localTimeFmt_ "MMM dd, HH:mm" . (.lastSeen)) & withAttrs [class_ "w-28 max-md:hidden"]
+      , col "Last seen" (localTimeFmt_ "MMM dd, HH:mm" . (.lastSeen)) & withAttrs [class_ "w-28 whitespace-nowrap max-md:hidden"]
       ]
       where
         titleCell, signalsCell :: Conversation -> Html ()
         titleCell c = div_ [class_ "flex min-w-0 flex-col"] do
-          span_ [class_ "truncate font-medium text-textStrong"] $ toHtml $ fromMaybe "Untitled conversation" c.title
+          span_ [class_ "truncate font-medium text-textStrong", title_ $ fromMaybe "" c.title] $ toHtml $ fromMaybe "Untitled conversation" c.title
           span_ [class_ "truncate text-xs text-textWeak"] $ toHtml $ T.intercalate " · " $ catMaybes [Just $ T.take 12 c.key, viaNonEmpty head c.users, viaNonEmpty head c.services, Just $ toText (getDurationNSMS $ fromIntegral c.activeNs)]
         signalsCell c = div_ [class_ "flex flex-wrap gap-1"] do
-          when (c.errors > 0 && null c.signals) $ tonePill_ ErrorBadge $ show c.errors <> " errors"
+          when (c.errors > 0 && null c.signals) $ tonePill_ ErrorBadge $ countNoun c.errors "error"
           forM_ c.signals \f -> span_ [term "data-tippy-content" $ flagHelp f] $ tonePill_ (flagTone f) $ flagLabel f
 
     topicColumns :: [Column Topic]
     topicColumns =
-      [ col "Topic" (\t -> span_ [class_ "font-mono text-sm text-textStrong"] $ toHtml t.template) & withAttrs [class_ "min-w-72"]
+      [ col "Topic" (\t -> span_ [class_ "block truncate text-sm text-textStrong", title_ t.template] $ toHtml t.template) & fillCol
       , col "Conversations" (num . fromIntegral . length . (.conversations)) & withAttrs [class_ "w-28 text-right"]
       , col "Tokens" (num . sum . map (.tokens) . (.conversations)) & withAttrs [class_ "w-20 text-right"]
       , col "Cost" (\t -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ maybe "—" GenAI.formatUsd $ viaNonEmpty sum $ mapMaybe (.cost) t.conversations) & withAttrs [class_ "w-20 text-right"]
@@ -590,7 +590,7 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
   Just c -> do
     header_ [class_ "flex flex-col gap-1.5"] do
       div_ [class_ "flex flex-wrap items-start gap-3"] do
-        h1_ [class_ "min-w-0 flex-1 text-xl font-semibold text-textStrong text-pretty max-sm:basis-full"] $ toHtml $ fromMaybe "Untitled conversation" c.title
+        h1_ [class_ "min-w-0 flex-1 text-xl font-semibold text-textStrong text-pretty line-clamp-2 max-sm:basis-full", title_ $ fromMaybe "" c.title] $ toHtml $ fromMaybe "Untitled conversation" c.title
         div_ [class_ "flex flex-wrap items-center gap-2"] do
           askAi_ c
           whenJust (find (not . T.null . (.traceId)) d.steps) \s ->
@@ -653,7 +653,7 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
     stat_ label value sub alarming = div_ [class_ "flex min-w-0 flex-col gap-0.5 bg-bgRaised px-4 py-3"] do
       span_ [class_ "text-xs font-medium text-textWeak"] $ toHtml label
       span_ [class_ $ "flex items-center gap-1.5 text-xl font-semibold tabular-nums " <> bool "text-textStrong" "text-textError" alarming] $ when alarming (faSprite_ "alert-triangle" "regular" "h-4 w-4") >> toHtml value
-      span_ [class_ "truncate text-xs tabular-nums text-textWeak"] $ toHtml sub
+      span_ [class_ "text-xs tabular-nums text-textWeak"] $ toHtml sub
 
     card_ :: Text -> Html () -> Html ()
     card_ title body = section_ [class_ "flex flex-col gap-3 rounded-xl border border-strokeWeak bg-bgRaised p-4"] $ h2_ [class_ "text-sm font-semibold text-textStrong"] (toHtml title) >> body

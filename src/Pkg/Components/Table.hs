@@ -47,6 +47,7 @@ module Pkg.Components.Table (
   col,
   withSort,
   withAttrs,
+  fillCol,
   withColHeaderExtra,
   headerHint_,
 ) where
@@ -944,6 +945,11 @@ withSort field column = column{sortField = Just field}
 
 withAttrs :: [Attribute] -> Column a -> Column a
 withAttrs as column = column{attrs = as}
+
+
+-- | The column that takes the row's spare width: its content truncates rather than widening the table and pushing the other columns out of view.
+fillCol :: Column a -> Column a
+fillCol c = c{attrs = c.attrs <> [class_ " w-full min-w-64"], render = div_ [class_ "w-0 min-w-full"] . c.render}
 
 
 withColHeaderExtra :: Html () -> Column a -> Column a
