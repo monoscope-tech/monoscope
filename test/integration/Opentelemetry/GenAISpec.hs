@@ -132,10 +132,12 @@ spec = around withTestResources do
       let piSpan n name attrs = ingestSpanLinked tr apiKey "5a1e" ("p" <> show n) Nothing name ([("gen_ai.system", "pi"), ("gen_ai.conversation.id", "routine-run")] <> attrs) (addUTCTime (fromIntegral n) now)
           chat n = piSpan n "chat claude-sonnet-4-5" [("gen_ai.operation.name", "chat"), ("gen_ai.provider.name", "anthropic"), ("gen_ai.request.model", "claude-sonnet-4-5"), ("gen_ai.usage.input_tokens", "10"), ("gen_ai.usage.output_tokens", "5"), ("gen_ai.usage.cache_read_input_tokens", "1000"), ("gen_ai.usage.cache_write_input_tokens", "50"), ("pi.cost.usd", "0.0123")]
       piSpan (0 :: Int) "invoke_agent pi" [("gen_ai.operation.name", "invoke_agent"), ("gen_ai.agent.name", "pi")]
-      chat 1 >> piSpan 2 "execute_tool submit_review" [("gen_ai.operation.name", "execute_tool"), ("gen_ai.tool.name", "submit_review")] >> chat 3
+      chat 1 >> piSpan 2 "execute_tool submit_review" [("gen_ai.operation.name", "execute_tool"), ("gen_ai.tool.name", "submit_review"), ("gen_ai.tool.call.arguments", "{\"summary\":\"Retry budget\\noutlasts the deploy\"}")] >> chat 3
       let (from, to) = around' now
       LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       map (\c -> (c.key, c.llmCalls, c.toolCalls, c.tokens, c.cost)) (toList table.rows) `shouldBe` [("routine-run", 2, 1, 2130, Just 0.0246)]
+      -- Pi sends each turn's delta, so the prompt is rarely captured: the run is named by its first tool call, not "pi run".
+      map LLM.displayTitle (toList table.rows) `shouldBe` ["submit_review: Retry budget outlasts the deploy"]
       dbQuery @_ @(Maybe Text, Maybe Int64) tr [sql| SELECT attributes->'gen_ai'->'provider'->>'name', attributes___gen_ai___usage___input_tokens FROM otel_logs_and_spans WHERE project_id = ? AND name LIKE 'chat %' |] (Only pid)
         `shouldReturn` [(Just "anthropic", Just 1060), (Just "anthropic", Just 1060)]
 

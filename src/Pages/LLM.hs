@@ -4,6 +4,7 @@
 -- from GenAI spans that 'Pkg.GenAI' normalised at ingest (docs/llm-observability.md).
 module Pages.LLM (
   llmGetH,
+  displayTitle,
   conversationGetH,
   LLMGet (..),
   LLMBody (..),
@@ -123,6 +124,8 @@ data Conversation = Conversation
   , activeNs :: Int64
   , signals :: [Flag]
   , units :: [Text]
+  , opening :: Maybe Text
+  -- ^ The first tool call, named when no prompt was captured (Pi sends only each turn's delta).
   }
   deriving stock (Generic, Show)
 
@@ -151,14 +154,27 @@ data Unit = Unit
   , repeats :: Int64
   , maxInput :: Maybe Double
   , firstPreview :: Maybe Text
+  , firstTool :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
 
 
--- | An untitled conversation (no captured prompt) is named after its agent.
+-- | A conversation with no captured prompt is named after its first tool call, else its agent.
 displayTitle :: Conversation -> Text
-displayTitle c = fromMaybe (maybe "Untitled conversation" (<> " run") $ viaNonEmpty head c.agents) c.title
+displayTitle c = fromMaybe (maybe "Untitled conversation" (<> " run") $ viaNonEmpty head c.agents) (c.title <|> c.opening)
+
+
+-- | A tool call as a title: its name and the first string argument, on one line.
+--
+-- >>> map toolOpening ["bash\t{\"command\":\"git diff --stat\\nHEAD\"}", "query_telemetry\t{\"limit\":5,\"query\":\"errors | count\"}", "submit_review\t", "ls\t{\"path\":"]
+-- ["bash: git diff --stat HEAD","query_telemetry: errors | count","submit_review","ls: {\"path\":"]
+toolOpening :: Text -> Text
+toolOpening raw =
+  let (name, args) = second (T.drop 1) $ T.breakOn "\t" raw
+      firstString = \case AE.Object o -> listToMaybe [v | AE.String v <- toList o]; _ -> Nothing
+      arg = fromMaybe args $ firstString =<< AE.decodeStrict (encodeUtf8 args)
+   in T.take 120 $ name <> bool (": " <> unwords (words arg)) "" (T.null $ T.strip arg)
 
 
 -- | A trace joins the conversation any of its spans names (frameworks often set the id on the root
@@ -167,7 +183,7 @@ displayTitle c = fromMaybe (maybe "Untitled conversation" (<> " run") $ viaNonEm
 --
 -- >>> import Relude.Unsafe qualified as Unsafe
 -- >>> let t = Unsafe.read @UTCTime "2026-01-01 00:00:00 UTC"
--- >>> let u name conv runs = Unit name conv Nothing (Just "gpt-4o") Nothing Nothing t t 0 1 0 runs 15 (Just 0.01) 0 0 0 0 0 0 Nothing (Just "1767225600|hi")
+-- >>> let u name conv runs = Unit name conv Nothing (Just "gpt-4o") Nothing Nothing t t 0 1 0 runs 15 (Just 0.01) 0 0 0 0 0 0 Nothing (Just "1767225600|hi") Nothing
 -- >>> map (\c -> (c.key, c.turns, c.llmCalls, c.title)) $ conversationsOf [u "t1" (Just "conv") 1, u "t2" (Just "conv") 0, u "t3" Nothing 0, u "t4" Nothing 1]
 -- [("conv",2,2,Just "hi"),("t4",1,1,Just "hi")]
 conversationsOf :: [Unit] -> [Conversation]
@@ -200,6 +216,7 @@ conversationsOf units = sortOn (Down . (.lastSeen)) $ mapMaybe conversation $ M.
           , -- Deterministic rules, in 'Signal' order, so each finding is explainable and free.
             signals = [Detected sig | (sig, True) <- zip universe [total (.toolErrors) > 0, total (.modelErrors) > 0, total (.truncated) > 0, total (.filtered) > 0, any ((>= 2) . (.repeats)) us, any pressured us]]
           , units = map (.unit) us
+          , opening = toolOpening . T.drop 1 . snd . T.breakOn "|" <$> viaNonEmpty F1.minimum (mapMaybe (.firstTool) us)
           }
     pressured u = fromMaybe False do
       window <- u.model >>= GenAI.lookupPrice >>= (.contextWindow)
@@ -251,7 +268,8 @@ selectUnits pid window scope = do
         sum(CASE WHEN #{Telemetry.genAIFinishMarker GenAI.Filtered} = ANY(tags) THEN 1 ELSE 0 END) AS filtered,
         sum(CASE WHEN op = 'execute_tool' THEN 1 ELSE 0 END) - count(DISTINCT CASE WHEN op = 'execute_tool' THEN COALESCE(tool, '') || COALESCE(tool_args, '') END) AS repeats,
         max(input_tokens) AS max_input,
-        min(CASE WHEN preview IS NOT NULL THEN CAST(CAST(EXTRACT(EPOCH FROM timestamp) AS BIGINT) AS TEXT) || '|' || preview END) AS first_preview
+        min(CASE WHEN preview IS NOT NULL THEN CAST(CAST(EXTRACT(EPOCH FROM timestamp) AS BIGINT) AS TEXT) || '|' || preview END) AS first_preview,
+        min(CASE WHEN op = 'execute_tool' AND tool IS NOT NULL THEN CAST(CAST(EXTRACT(EPOCH FROM timestamp) AS BIGINT) AS TEXT) || '|' || tool || chr(9) || COALESCE(tool_args, '') END) AS first_tool
       FROM spans GROUP BY unit ORDER BY last_ts DESC LIMIT #{unitCap}
     |]
 
@@ -326,7 +344,7 @@ data Topic = Topic {template :: Text, conversations :: [Conversation]}
 --
 -- >>> import Relude.Unsafe qualified as Unsafe
 -- >>> let t = Unsafe.read @UTCTime "2026-01-01 00:00:00 UTC"
--- >>> let c k title = Conversation k (Just title) t t [] [] [] [] 1 1 0 10 Nothing 0 0 [] []
+-- >>> let c k title = Conversation k (Just title) t t [] [] [] [] 1 1 0 10 Nothing 0 0 [] [] Nothing
 -- >>> sortOn fst $ map (\x -> (x.template, map (.key) x.conversations)) $ topicsOf t [c "a" "refund order 1234 failed", c "b" "refund order 98 failed", c "c" "why is checkout slow", c "d" "p95 latency on 500s"]
 -- [("p95 latency on 500s",["d"]),("refund order <*> failed",["a","b"]),("why is checkout slow",["c"])]
 topicsOf :: UTCTime -> [Conversation] -> [Topic]
