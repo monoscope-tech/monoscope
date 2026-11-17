@@ -87,8 +87,10 @@ import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.DeterministicId qualified as DeterministicId
+import Models.Telemetry.ServiceGraph qualified as ServiceGraph
 import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..), generateSummary, ingestionRedactionPaths, redactJSON)
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Network.URI (parseURI, uriAuthority, uriRegName)
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
 import Pkg.IngestBudget qualified as IngestBudget
 import Pkg.Metrics qualified as Metrics
@@ -435,11 +437,8 @@ processSpanToEntities canonicalTemplates projectId otelSpan =
 isThirdPartyBrowserCall :: Maybe Text -> Text -> Bool
 isThirdPartyBrowserCall pageUrl host = maybe False ((/= site host) . site) pageHost
   where
-    pageHost = pageUrl >>= \u -> T.takeWhile (`notElem` ['/', '?', '#']) <$> (T.stripPrefix "https://" u <|> T.stripPrefix "http://" u)
-    site h = case reverse $ T.splitOn "." $ T.toLower $ T.takeWhile (/= ':') h of
-      tld : sld : name : _ | T.length tld == 2, sld `elem` ["co", "com", "net", "org", "gov", "ac", "edu"] -> [name, sld, tld]
-      tld : name : _ -> [name, tld]
-      labels -> labels
+    pageHost = toText . uriRegName <$> (uriAuthority =<< parseURI . toString =<< pageUrl)
+    site h = let d = T.toLower (T.takeWhile (/= ':') h) in fromMaybe d (ServiceGraph.registrableDomain d)
 
 
 -- | Stamp each record's hashes (endpoint identity + error fingerprints) before the

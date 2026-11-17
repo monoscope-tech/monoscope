@@ -245,15 +245,15 @@ updateBaselineBatch pid rows
       Hasql.interpExecute
         [HI.sql|
               WITH v AS (SELECT unnest(#{srcFields}::text[]) AS source_field, unnest(#{hashes}::text[]) AS hash, unnest(#{states}::text[]) AS state, unnest(#{means}::float8[]) AS mean, unnest(#{mads}::float8[]) AS mad, unnest(#{samples}::bigint[]) AS samples),
-              locked AS (SELECT lp.id FROM apis.log_patterns lp JOIN v ON lp.source_field = v.source_field AND lp.pattern_hash = v.hash WHERE lp.project_id = #{pid} ORDER BY lp.id FOR NO KEY UPDATE OF lp)
+              locked AS (SELECT lp.id, v.state, v.mean, v.mad, v.samples FROM apis.log_patterns lp JOIN v ON lp.source_field = v.source_field AND lp.pattern_hash = v.hash WHERE lp.project_id = #{pid} ORDER BY lp.id FOR NO KEY UPDATE OF lp)
               UPDATE apis.log_patterns lp
-              SET baseline_state = v.state,
-                  baseline_volume_hourly_mean = v.mean,
-                  baseline_volume_hourly_mad = v.mad,
-                  baseline_samples = v.samples,
+              SET baseline_state = locked.state,
+                  baseline_volume_hourly_mean = locked.mean,
+                  baseline_volume_hourly_mad = locked.mad,
+                  baseline_samples = locked.samples,
                   baseline_updated_at = #{now}
-              FROM v, locked
-              WHERE lp.project_id = #{pid} AND lp.source_field = v.source_field AND lp.pattern_hash = v.hash AND locked.id = lp.id
+              FROM locked
+              WHERE lp.id = locked.id
             |]
 
 

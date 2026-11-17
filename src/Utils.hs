@@ -89,6 +89,7 @@ module Utils (
   FieldMenuCtx (..),
   renderSummaryTags,
   summaryWords,
+  parseSummaryEl,
   renderSummaryElements,
   summaryForDetailView,
   calculateCycleStartDate,

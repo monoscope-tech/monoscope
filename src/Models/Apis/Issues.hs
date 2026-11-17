@@ -355,7 +355,7 @@ import Servant (FromHttpApiData (..), ToHttpApiData (..))
 import System.Logging (logAttention)
 import System.Types (DB)
 import Text.Slugify (slugify)
-import Utils (toXXHash, truncateMiddle, truncateText)
+import Utils (parseSummaryEl, toXXHash, truncateMiddle, truncateText)
 
 
 type IssueId = UUIDId "issue"
@@ -3804,9 +3804,7 @@ createLogPatternRateChangeIssue projectId lp sr = do
 -- "api: GET /users 500"
 sanitizeLogPatternTitle :: Text -> Maybe Text -> Maybe Text -> Text
 sanitizeLogPatternTitle raw sampleM serviceM =
-  let unmark w = case T.breakOn "⇒" w of
-        (pre, rest) | not (T.null rest) -> unwords $ filter (not . T.null) [fst (T.breakOn ";" pre), T.drop 1 rest]
-        _ -> w
+  let unmark w = maybe w (\(field, _, value) -> unwords $ filter (not . T.null) [field, value]) (parseSummaryEl w)
       stripped = unwords $ map unmark $ words $ flipfoldl' (`T.replace` "*") raw ["{integer}", "{uuid}", "{float}", "{*}", "{hex}"]
       -- printable-ASCII ratio > 0.7, as integer arithmetic
       usable = not (T.null stripped) && 10 * T.length (T.filter (\c -> isPrint c && isAscii c) stripped) > 7 * T.length stripped

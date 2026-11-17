@@ -23,6 +23,7 @@ module Models.Telemetry.ServiceGraph (
   traceEdgeSamples,
   drawnNodes,
   drawnEdges,
+  registrableDomain,
   serviceMapNodeCap,
   RollupEdge (..),
   EndpointRollupEdge (..),

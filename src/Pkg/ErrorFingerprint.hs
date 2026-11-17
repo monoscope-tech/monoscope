@@ -479,12 +479,16 @@ isFrameworkTransportError exceptionType normalizedMessage =
 -- >>> map (uncurry isExpectedControlFlow) [("SomeAsyncException", "AsyncCancelled"), ("SyncExceptionWrapper", "AsyncCancelled"), ("Error", "thread killed"), ("AsyncCancelled", "")]
 -- [True,True,True,True]
 --
--- An application error rethrown as async stays visible:
+-- A 5xx stays an error even when its body quotes a downstream 404, and an application error
+-- rethrown as async stays visible:
+--
+-- >>> isExpectedControlFlow "" "ServerError {errHTTPCode = 502, errBody = \"upstream said errHTTPCode = 404\"}"
+-- False
 --
 -- >>> isExpectedControlFlow "SomeAsyncException" "Effectful.Error.Static.ErrorWrapper: ReviewFailure \"Review failed\""
 -- False
 isExpectedControlFlow :: Text -> Text -> Bool
-isExpectedControlFlow typ msg = any (\d -> ("errHTTPCode = " <> d) `T.isInfixOf` msg) ["1", "2", "3", "4"] || any (`S.member` cancels) [norm typ, norm msg]
+isExpectedControlFlow typ msg = any (\d -> ("ServerError {errHTTPCode = " <> d) `T.isInfixOf` msg) ["1", "2", "3", "4"] || any (`S.member` cancels) [norm typ, norm msg]
   where
     norm = T.toLower . T.strip
     cancels = S.fromList ["asynccancelled" :: Text, "threadkilled", "thread killed", "thread killed by timeout manager"]

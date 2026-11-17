@@ -1183,8 +1183,9 @@ splitUsageIntoChunks meter total = UsageChunk meter <$> mapMaybe mkChunkQuantity
     (fulls, rem_) = max 0 total `divMod` chunkCap
 
 
--- | The oldest retriable chunks, a bounded batch per tick: the drain is one provider call per row,
--- so an unbounded backlog outran the 600s job timeout and never reached the newer rows.
+-- | A bounded batch of retriable chunks per tick, never-tried ones first: the drain is one provider
+-- call per row, so an unbounded oldest-first backlog of failures outran the 600s job timeout and
+-- never reached the newer rows.
 pendingUsageSubmissions :: DB es => ProjectId -> Eff es [UsageSubmission]
 pendingUsageSubmissions pid =
   EHasql.interp
@@ -1192,7 +1193,7 @@ pendingUsageSubmissions pid =
       SELECT id, project_id, window_start, window_end, quantity::int8, meter_kind, status, submitted_at, last_error, created_at
       FROM projects.usage_report_submissions
       WHERE project_id = #{pid} AND status IN ('pending', 'failed')
-      ORDER BY created_at ASC
+      ORDER BY status = 'failed', created_at ASC
       LIMIT 50
     |]
 
@@ -1269,19 +1270,19 @@ markUsageSubmissionSucceeded sid =
     |]
 
 
--- | 'Retryable' rows are re-sent next tick; a 'Rejected' one (a provider 4xx that fails the same
--- way every time) is kept for audit and manual reconcile only.
-data SubmissionFailure = Retryable | Rejected
-  deriving stock (Eq, Show)
+-- | The status a failed chunk takes: 'Failed' is re-sent on a later tick; 'Rejected' (a provider
+-- 4xx that fails the same way every time) is kept for audit and manual reconcile only.
+data SubmissionFailure = Failed | Rejected
+  deriving stock (Eq, Generic, Show)
+  deriving (HI.EncodeValue) via WrappedEnumSC 'Nothing "" SubmissionFailure
 
 
 markUsageSubmissionFailed :: DB es => SubmissionFailure -> UsageSubmissionId -> Text -> Eff es Int64
 markUsageSubmissionFailed failure sid err =
-  let status = case failure of Retryable -> "failed" :: Text; Rejected -> "rejected"
-   in EHasql.interpExecute
-        [HI.sql|
+  EHasql.interpExecute
+    [HI.sql|
       UPDATE projects.usage_report_submissions
-      SET status = #{status}, last_error = #{err}
+      SET status = #{failure}, last_error = #{err}
       WHERE id = #{sid}
     |]
 

@@ -963,7 +963,7 @@ reportProjectUsage authCtx pid =
             Projects.NoBillingProvider -> do
               Log.logAttention "ReportUsage: NoBillingProvider for paid project" ("project_id", pid.toText, "sub_id", project.subId, "plan", project.paymentPlan, "pending_chunks", length pending)
               for_ pending \row ->
-                whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed Projects.Retryable row.id "NoBillingProvider: paid plan has no usable billing provider") \e ->
+                whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed Projects.Failed row.id "NoBillingProvider: paid plan has no usable billing provider") \e ->
                   Log.logAttention "NoBillingProvider mark failed — backlog stuck" ("project_id", pid.toText, "chunk_id", show row.id :: Text, "error", toText (displayException e))
             Projects.StripeProvider -> submitPending
             Projects.LemonSqueezyProvider -> submitPending
@@ -3157,8 +3157,8 @@ reportUsageToStripe apiKey customerId eventName identifier quantity = do
 submissionFailure :: SomeException -> Projects.SubmissionFailure
 submissionFailure e = case fromException e of
   Just (HTTP.HttpExceptionRequest _ (HTTP.StatusCodeException resp _))
-    | let code = HT.statusCode (HTTP.responseStatus resp), code >= 400, code < 500, code `notElem` [408, 429] -> Projects.Rejected
-  _ -> Projects.Retryable
+    | let st = HTTP.responseStatus resp, HT.statusIsClientError st, HT.statusCode st `notElem` [408, 429] -> Projects.Rejected
+  _ -> Projects.Failed
 
 
 -- | `trialEnd` is Nothing when the sub has no trial or the trial is over.

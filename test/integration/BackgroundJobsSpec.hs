@@ -139,7 +139,6 @@ spec = around withTestResources do
     runTestBgNoReset tr $ BackgroundJobs.runNotificationDigest now'
     dbQuery tr [sql|SELECT sent_at FROM apis.notification_digest_queue WHERE project_id = ?|] (Only testPid) `shouldReturn` replicate 5 (Only (Just now'))
 
-  -- Share links keep 30d + 48h grace; replay data (no BYO bucket) keeps 30d. Both cut on the test clock.
   -- issue_type (an enum) and users.email (citext) decoded as text failed the step, and tryStep
   -- swallowed it: both sections vanished from every daily summary.
   it "admin daily summary posts its New Issues and Active Users sections" \tr -> do
@@ -149,6 +148,7 @@ spec = around withTestResources do
     let body = T.concat [decodeUtf8 b | (_, b) <- posts]
     map (`T.isInfixOf` body) ["**New Issues**", "**Active Users**"] `shouldBe` [True, True]
 
+  -- Share links keep 30d + 48h grace; replay data (no BYO bucket) keeps 30d. Both cut on the test clock.
   it "retention expires share events after 32 days and replay data after 30" \tr -> do
     share <- UUIDV4.nextRandom
     session <- UUIDV4.nextRandom
