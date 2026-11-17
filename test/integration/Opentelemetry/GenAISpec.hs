@@ -90,7 +90,8 @@ spec = around withTestResources do
       -- The verdict reaches the conversation page too.
       renderT <$> call tr (LLM.conversationGetH pid "conv-1" from to Nothing) >>= (`shouldContainAll` ["Slow checkout", "Asks about checkout latency."])
       LLM.LLMPage (PageCtx _ (DeferredBody (LLM.SignalsBody signals))) <- call tr $ LLM.llmGetH pid (Just "signals") Nothing Nothing Nothing Nothing from to Nothing (Just "1")
-      map (\s' -> (s'.name, s'.matched, s'.judged)) (toList signals.rows) `shouldBe` [("Slow checkout", 1, 1)]
+      -- Plain-language signals list their verdicts; every built-in rule is listed beside them.
+      [(s'.name, s'.matched, s'.judged, s'.builtIn) | s' <- toList signals.rows] `shouldSatisfy` \rs -> take 1 rs == [("Slow checkout", 1, 1, False)] && map (\(n, _, _, _) -> n) (drop 1 rs) == map LLM.signalLabel universe
       -- Rows open the full span view in the drawer: a partial response is a lone hidden tab panel.
       T.isInfixOf "partial" (renderT table) `shouldBe` False
       -- A trace that only ran a workflow is a conversation, so its trace page links to it.
