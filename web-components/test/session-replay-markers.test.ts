@@ -143,3 +143,21 @@ describe('scrubber markers', () => {
     expect(el.navMarkers).toEqual([]);
   });
 });
+
+// A morph can remove rrweb's wrapper before the element disconnects; its destroy() then threw
+// NotFoundError out of disconnectedCallback and skipped the rest of the cleanup.
+describe('disconnecting after a morph removed the player', () => {
+  test('still destroys the trick player and drops the key listener', () => {
+    const el = new SessionReplay() as any;
+    const gone = () => { throw new DOMException('not a child', 'NotFoundError'); };
+    let trickDestroyed = false;
+    el.player = { destroy: gone };
+    el.trickPlayer = { destroy: () => { trickDestroyed = true; } };
+    const removed: string[] = [];
+    const orig = document.removeEventListener.bind(document);
+    document.removeEventListener = ((t: string, ...rest: any[]) => { removed.push(t); return (orig as any)(t, ...rest); }) as any;
+    try { expect(() => el.disconnectedCallback()).not.toThrow(); } finally { document.removeEventListener = orig; }
+    expect(trickDestroyed).toBe(true);
+    expect(removed).toContain('keydown');
+  });
+});

@@ -3787,24 +3787,27 @@ createLogPatternRateChangeIssue projectId lp sr = do
         }
 
 
--- | Strip token-highlight markup (";neutral⇒", ";badge-*⇒"), collapse drain
--- placeholders ("{integer}", "{uuid}", "{*}"), and fall back to sample / service
--- when the remaining text is mostly non-printable. Keeps Slack/Discord titles readable.
+-- | Strip summary token markup (@field;style⇒value@ becomes @field value@, whatever the style),
+-- mark drain placeholders ("{integer}", "{uuid}", …) as @*@ so paths keep their shape, and fall
+-- back to sample / service when the remaining text is mostly non-printable. Keeps issue,
+-- Slack and Discord titles readable now that LLM title rewriting is opt-in.
 --
 -- >>> sanitizeLogPatternTitle "connection;neutral⇒refused" Nothing Nothing
 -- "connection refused"
--- >>> sanitizeLogPatternTitle "req {integer} took {integer} ms" Nothing Nothing
--- "req took ms"
+-- >>> sanitizeLogPatternTitle "request_type;neutral⇒incoming status_code;badge-4xx⇒<*> method;badge-GET⇒GET route;neutral⇒/api/v{integer}/schema" Nothing Nothing
+-- "request_type incoming status_code <*> method GET route /api/v*/schema"
+-- >>> sanitizeLogPatternTitle "kind database db.query.text;text-textStrong⇒SELECT id FROM t status;right-badge-error⇒ERROR" Nothing Nothing
+-- "kind database db.query.text SELECT id FROM t status ERROR"
+-- >>> sanitizeLogPatternTitle "GET /p/{uuid}/issues took {integer} ms" Nothing Nothing
+-- "GET /p/*/issues took * ms"
 -- >>> sanitizeLogPatternTitle "" (Just "GET /users 500") (Just "api")
 -- "api: GET /users 500"
 sanitizeLogPatternTitle :: Text -> Maybe Text -> Maybe Text -> Text
 sanitizeLogPatternTitle raw sampleM serviceM =
-  let stripped =
-        unwords
-          $ words
-          $ flipfoldl' (uncurry T.replace) raw
-          $ [(m, " ") | m <- [";neutral⇒", ";badge-error⇒", ";badge-warning⇒", ";badge-info⇒", ";badge-success⇒"]]
-          <> [(p, "") | p <- ["{integer}", "{uuid}", "{float}", "{*}", "{hex}"]]
+  let unmark w = case T.breakOn "⇒" w of
+        (pre, rest) | not (T.null rest) -> unwords $ filter (not . T.null) [fst (T.breakOn ";" pre), T.drop 1 rest]
+        _ -> w
+      stripped = unwords $ map unmark $ words $ flipfoldl' (`T.replace` "*") raw ["{integer}", "{uuid}", "{float}", "{*}", "{hex}"]
       -- printable-ASCII ratio > 0.7, as integer arithmetic
       usable = not (T.null stripped) && 10 * T.length (T.filter (\c -> isPrint c && isAscii c) stripped) > 7 * T.length stripped
       fallback = fromMaybe "log event" $ ((\svc s -> svc <> ": " <> T.take 80 s) <$> serviceM <*> sampleM) <|> sampleM <|> serviceM

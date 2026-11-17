@@ -14,6 +14,7 @@ module Pkg.ErrorFingerprint (
   shapeWithMasks,
   maskMinAffixLen,
   isFrameworkTransportError,
+  isExpectedControlFlow,
   framesFor,
   revisionFor,
 )
@@ -464,6 +465,29 @@ isFrameworkTransportError exceptionType normalizedMessage =
     -- Types where a message-pattern fallback is trustworthy (generic / IO layer)
     genericTypes = S.fromList $ "" : words "ioerror ioexception oserror socketexception runtimeerror error systemerror exception"
     messagePatterns = ["client closed", "broken pipe", "connection reset", "connection aborted", "premature eof", "client disconnected"]
+
+
+-- | Control flow that surfaces as an exception without being a fault: a Servant 1xx–4xx thrown
+-- through effectful's @Error@ (OTel HTTP semconv: 3xx is never an error, 4xx is the caller's),
+-- and thread cancellation on shutdown or timeout. Matched on text because the value in flight is
+-- effectful's @ErrorWrapper@, whose payload cannot be downcast.
+--
+-- >>> isExpectedControlFlow "Error" "Effectful.Error.Static.ErrorWrapper: ServerError {errHTTPCode = 302, errReasonPhrase = \"Found\"}"
+-- True
+-- >>> map (isExpectedControlFlow "") ["ServerError {errHTTPCode = 404,", "ServerError {errHTTPCode = 422,", "ServerError {errHTTPCode = 500,", "connection reset by peer"]
+-- [True,True,False,False]
+-- >>> map (uncurry isExpectedControlFlow) [("SomeAsyncException", "AsyncCancelled"), ("SyncExceptionWrapper", "AsyncCancelled"), ("Error", "thread killed"), ("AsyncCancelled", "")]
+-- [True,True,True,True]
+--
+-- An application error rethrown as async stays visible:
+--
+-- >>> isExpectedControlFlow "SomeAsyncException" "Effectful.Error.Static.ErrorWrapper: ReviewFailure \"Review failed\""
+-- False
+isExpectedControlFlow :: Text -> Text -> Bool
+isExpectedControlFlow typ msg = any (\d -> ("errHTTPCode = " <> d) `T.isInfixOf` msg) ["1", "2", "3", "4"] || any (`S.member` cancels) [norm typ, norm msg]
+  where
+    norm = T.toLower . T.strip
+    cancels = S.fromList ["asynccancelled" :: Text, "threadkilled", "thread killed", "thread killed by timeout manager"]
 
 
 -- | A literal prefix and suffix around a part that varies, learned from a group the

@@ -279,13 +279,16 @@ data SeverityLevel = SLTrace | SLDebug | SLInfo | SLWarn | SLError | SLFatal
 
 -- | Severity text, any case and SDK spelling, as (canonical text, level).
 --
--- >>> map parseSeverity ["warning", "CRITICAL", "Error", "verbose"]
--- [Just ("WARN",SLWarn),Just ("FATAL",SLFatal),Just ("ERROR",SLError),Nothing]
+-- @attention@ is log-base's top level, which Monoscope's own server logs at; unmapped, those
+-- lines landed with no severity and never reached the issue pipeline.
+--
+-- >>> map parseSeverity ["warning", "CRITICAL", "Error", "verbose", "attention"]
+-- [Just ("WARN",SLWarn),Just ("FATAL",SLFatal),Just ("ERROR",SLError),Nothing,Just ("ERROR",SLError)]
 parseSeverity :: Text -> Maybe (Text, SeverityLevel)
 parseSeverity = (`Map.lookup` table) . T.toUpper
   where
     base = Map.fromList [(t, (t, sl)) | sl <- universe, let t = T.toUpper (display sl)]
-    table = base <> Map.mapMaybe (`Map.lookup` base) (Map.fromList [("WARNING", "WARN" :: Text), ("INFORMATION", "INFO"), ("CRITICAL", "FATAL")])
+    table = base <> Map.mapMaybe (`Map.lookup` base) (Map.fromList [("WARNING", "WARN" :: Text), ("INFORMATION", "INFO"), ("CRITICAL", "FATAL"), ("ATTENTION", "ERROR")])
 
 
 data SpanStatus = SSOk | SSError | SSUnset
@@ -2449,9 +2452,10 @@ isErrorRecord s =
 -- | Extract all runtime errors from a collection of spans/logs.
 -- Prefers OTel @exception.*@ events; falls back to record-level extraction for
 -- error-severity records that lack an exception event (e.g. OTLP log records,
--- which always have @events = Nothing@).
+-- which always have @events = Nothing@). Expected control flow is dropped whichever
+-- producer marked it, including the auto-instrument plugin that bypasses 'runTracing'.
 getAllATErrors :: V.Vector OtelLogsAndSpans -> V.Vector ErrorPatterns.ATError
-getAllATErrors = V.concatMap extractErrorsFromSpan
+getAllATErrors = V.filter (\e -> not $ EF.isExpectedControlFlow e.errorType e.message) . V.concatMap extractErrorsFromSpan
   where
     extractErrorsFromSpan spanObj =
       let fromEvents = V.mapMaybe (extractATError spanObj) (getErrorEvents spanObj)

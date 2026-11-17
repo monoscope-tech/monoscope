@@ -140,6 +140,15 @@ spec = around withTestResources do
     dbQuery tr [sql|SELECT sent_at FROM apis.notification_digest_queue WHERE project_id = ?|] (Only testPid) `shouldReturn` replicate 5 (Only (Just now'))
 
   -- Share links keep 30d + 48h grace; replay data (no BYO bucket) keeps 30d. Both cut on the test clock.
+  -- issue_type (an enum) and users.email (citext) decoded as text failed the step, and tryStep
+  -- swallowed it: both sections vanished from every daily summary.
+  it "admin daily summary posts its New Issues and Active Users sections" \tr -> do
+    dbExec tr [sql|INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at) VALUES (?, 'runtime_exception', 'summary probe', 'summary-probe', ?)|] (testPid, frozenTime)
+    dbExec tr [sql|UPDATE users.persistent_sessions SET updated_at = ?|] (Only frozenTime)
+    (posts, ()) <- runTestBgRecordingHTTP frozenTime tr $ BackgroundJobs.processBackgroundJob tr.trATCtx BackgroundJobs.MonoscopeAdminDaily
+    let body = T.concat [decodeUtf8 b | (_, b) <- posts]
+    map (`T.isInfixOf` body) ["**New Issues**", "**Active Users**"] `shouldBe` [True, True]
+
   it "retention expires share events after 32 days and replay data after 30" \tr -> do
     share <- UUIDV4.nextRandom
     session <- UUIDV4.nextRandom

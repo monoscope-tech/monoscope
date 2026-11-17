@@ -91,9 +91,12 @@ updatePatternEmbeddings :: forall k es. (DB es, MergeKey k) => [(k, [Float])] ->
 updatePatternEmbeddings [] = pure 0
 updatePatternEmbeddings pairs =
   Hasql.interpExecute
-    [HI.sql| UPDATE ^{patternTable @k} p SET embedding = u.emb::float4[], embedding_at = NOW()
-        FROM ROWS FROM (unnest(#{ids}::^{keyArray @k}), unnest(#{embs}::text[])) AS u(id, emb)
-        WHERE p.id = u.id |]
+    -- Locks rows in id order first: the hourly baseline update takes the same rows in its own join
+    -- order, and the two deadlocked (40P01) on the 11:00 tick.
+    [HI.sql| WITH locked AS (SELECT id FROM ^{patternTable @k} WHERE id = ANY(#{ids}::^{keyArray @k}) ORDER BY id FOR NO KEY UPDATE)
+        UPDATE ^{patternTable @k} p SET embedding = u.emb::float4[], embedding_at = NOW()
+        FROM ROWS FROM (unnest(#{ids}::^{keyArray @k}), unnest(#{embs}::text[])) AS u(id, emb), locked
+        WHERE p.id = u.id AND locked.id = p.id |]
   where
     (ids, embs) = second (map showPGFloatArray) $ unzip pairs
 

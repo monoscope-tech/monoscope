@@ -29,7 +29,7 @@ import Log (LogLevel (..), runLogT)
 import Log qualified as LogBase
 import Network.HTTP.Types (methodGet, methodHead, status200, status404, status500)
 import Network.Wai
-import Network.Wai.Handler.Warp (defaultSettings, runSettings, setGracefulShutdownTimeout, setOnException, setOnExceptionResponse, setPort)
+import Network.Wai.Handler.Warp (defaultSettings, defaultShouldDisplayException, runSettings, setGracefulShutdownTimeout, setOnException, setOnExceptionResponse, setPort)
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Cors
 import Network.Wai.Middleware.Gzip (GzipFiles (..), GzipSettings (..), defaultGzipSettings, gzip)
@@ -347,11 +347,11 @@ runServer appLogger env tp = do
   let server = mkServer appLogger env tp
   -- Warp's request-handler threads can outlive `waitAnyCancel` and call
   -- onException after the bulk logger has shut down; swallow that.
-  -- A per-connection TimeoutThread is Warp's normal HTTP-op timeout, not a fault;
-  -- logging it at attention floods the alert log during any slowdown and buries
-  -- real unhandled exceptions (see the 2026-07-06 wedged-node incident).
+  -- Warp's own filter drops client disconnects (ConnectionClosedByPeer, ECONNRESET) and async
+  -- exceptions such as its per-connection TimeoutThread: logging them at attention buried real
+  -- unhandled exceptions (2026-07-06 wedged node; ~1.3k "Client closed connection" a week).
   let onExc _ exception
-        | Just (_ :: TimeoutThread) <- Safe.fromException exception = pass
+        | not (defaultShouldDisplayException exception) = pass
         | otherwise = void $ Safe.tryAny $ runLogT "monoscope" appLogger LogAttention do
             LogBase.logAttention "Unhandled exception" (AE.object ["exception" AE..= show @String exception])
   let onExcResp _ = responseLBS status500 [("Content-Type", "text/html; charset=utf-8")] (Auth.errorPageHtml env.config 500)

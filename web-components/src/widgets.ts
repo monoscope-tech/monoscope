@@ -539,9 +539,12 @@ export const createSeriesConfig = (widgetData: WidGetData, name: string, i: numb
   const styles = getChartStyles(); // one getComputedStyle read per series, not three
   const paletteColor = isErrorStat || isErrorSeries ? styles.errorColor : isGenericAggregate ? styles.brandColor : getSeriesColor(name, undefined, total === 1 ? styles.brandColor : undefined);
 
+  // An unreadable theme token reads as '' (a browser that drops Tailwind's @layer theme), which
+  // modifyAlpha turns into undefined: addColorStop then threw on every animation frame.
+  const fillColor = paletteColor || getSeriesColor(name);
   const gradientColor = (opacity: number) => new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
-    { offset: 0, color: window.echarts.color.modifyAlpha(paletteColor, opacity) },
-    { offset: 1, color: window.echarts.color.modifyAlpha(paletteColor, 0) },
+    { offset: 0, color: window.echarts.color.modifyAlpha(fillColor, opacity) },
+    { offset: 1, color: window.echarts.color.modifyAlpha(fillColor, 0) },
   ]);
 
   const backgroundStyle = { color: styles.chartBg };

@@ -235,6 +235,7 @@ upsertLogPattern = upsertLogPatternBatch . pure
 
 -- | Bulk update baselines for multiple patterns in a single query.
 -- Matches on (project_id, source_field, pattern_hash) since pattern_hash alone is not unique across source fields.
+-- Rows are locked in id order, like 'PatternMerge.updatePatternEmbeddings': opposite join orders deadlocked.
 updateBaselineBatch :: (DB es, Time :> es) => Projects.ProjectId -> V.Vector (Text, Text, BaselineState, Double, Double, Int) -> Eff es Int64
 updateBaselineBatch pid rows
   | V.null rows = pure 0
@@ -243,14 +244,16 @@ updateBaselineBatch pid rows
       let (srcFields, hashes, states, means, mads, samples) = V.unzip6 rows
       Hasql.interpExecute
         [HI.sql|
+              WITH v AS (SELECT unnest(#{srcFields}::text[]) AS source_field, unnest(#{hashes}::text[]) AS hash, unnest(#{states}::text[]) AS state, unnest(#{means}::float8[]) AS mean, unnest(#{mads}::float8[]) AS mad, unnest(#{samples}::bigint[]) AS samples),
+              locked AS (SELECT lp.id FROM apis.log_patterns lp JOIN v ON lp.source_field = v.source_field AND lp.pattern_hash = v.hash WHERE lp.project_id = #{pid} ORDER BY lp.id FOR NO KEY UPDATE OF lp)
               UPDATE apis.log_patterns lp
               SET baseline_state = v.state,
                   baseline_volume_hourly_mean = v.mean,
                   baseline_volume_hourly_mad = v.mad,
                   baseline_samples = v.samples,
                   baseline_updated_at = #{now}
-              FROM (SELECT unnest(#{srcFields}::text[]) AS source_field, unnest(#{hashes}::text[]) AS hash, unnest(#{states}::text[]) AS state, unnest(#{means}::float8[]) AS mean, unnest(#{mads}::float8[]) AS mad, unnest(#{samples}::bigint[]) AS samples) v
-              WHERE lp.project_id = #{pid} AND lp.source_field = v.source_field AND lp.pattern_hash = v.hash
+              FROM v, locked
+              WHERE lp.project_id = #{pid} AND lp.source_field = v.source_field AND lp.pattern_hash = v.hash AND locked.id = lp.id
             |]
 
 

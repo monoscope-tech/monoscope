@@ -470,7 +470,7 @@ dashboardViews_ pid did dash vm params extraAttrs =
     matched = find ((== variableValues dash params) . variableValues dash . viewParams . fst) availableViews
     -- The view last picked from the menu; it reads as edited once the variables drift from it.
     applied = join (lookup "view" params) >>= (`Map.lookup` availableViews)
-    swapVals = [hxVals_ "js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) => key !== 'name')), ...getTimeRange()}"]
+    swapVals = [hxVals_ "js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) => key !== 'name')), ...window.getTimeRange?.()}"]
     swapAttrs = [hxTarget_ "#dashboard-views", hxSwap_ "outerHTML"] <> swapVals
     context = filter (\(k, _) -> not (any (`T.isPrefixOf` k) ["var-", "const-"]) && k `notElem` [activeTabSlugKey, "name", "expand", "view"]) params
     -- Saved views shadow same-named template views; only saved ones are deletable.
@@ -2833,8 +2833,9 @@ dashboardWidgetExpandGetH pid dashId widgetId editorTabM = do
   (_, dash) <- getDashAndVM pid dashId Nothing
   now <- Time.currentTime
   let timeParams = (Nothing, Nothing, Nothing)
-      paramsWithVarDefaults = addVariableDefaults [] dash.variables
-  (_, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (dashboardQueryText dash) (fold dash.constants)
+  -- Through the same resolver as the page: calling the constants step directly skipped the
+  -- endpoint filter, so endpoint-stats widgets sent a raw {{const-endpointFilter}} to the store.
+  (_, allParamsWithConstants) <- resolveDashboardParams pid now timeParams [] dash
   (tabSlugM, widgetToExpand) <- findWidgetInDashboard widgetId dash `whenNothing` throwError err404{errBody = "Widget not found in dashboard"}
   processedWidget <- processWidget PrefillWidgets pid now timeParams allParamsWithConstants widgetToExpand
   monitorM <- Monitors.queryMonitorByWidgetId pid (Just dashId) widgetId

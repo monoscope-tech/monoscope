@@ -30,6 +30,9 @@ import Effectful.Dispatch.Dynamic (interpose)
 import Effectful.Error.Static (catchError)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
+import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), defaultRequest)
+import Network.HTTP.Client.Internal (Response (..))
+import Network.HTTP.Types qualified as H
 import Network.HTTP.Types.URI (parseSimpleQuery)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Opentelemetry.OtlpServer qualified as OtlpServer
@@ -403,6 +406,9 @@ spec = around withTestResources do
     dbExec tr [sql|UPDATE projects.projects SET customer_id = 'cus_test_reportusage' WHERE id = ?|] (Only pid)
     drained <- report tr pid frozenTime
     (length drained, stripeMeters drained) `shouldBe` (3, [("events_usage", "3"), ("metrics_usage", "4"), ("session_replays_usage", "3")])
+    -- Each event carries its chunk id as Stripe's dedup identifier, so a re-send after a cancelled run bills once.
+    chunkIds <- dbQuery @_ @(Only Text) tr [sql|SELECT id::text FROM projects.usage_report_submissions WHERE project_id = ? ORDER BY id|] (Only pid)
+    sort [decodeUtf8 i | (_, b) <- drained, Just i <- [lookup "identifier" (parseSimpleQuery (toStrict b))]] `shouldBe` [i | Only i <- chunkIds]
     metered tr pid `shouldReturn` [("events", 3, "submitted"), ("metric_datapoints", 4, "submitted"), ("session_replays", 3, "submitted")]
     -- Replays count on an immutable created_at over a half-open window: a later tick counts none again.
     report tr pid (addUTCTime 3600 frozenTime) `shouldReturn` []
@@ -450,6 +456,19 @@ spec = around withTestResources do
     perMeter <- report tr pid (addUTCTime 7200 frozenTime)
     map (\b -> (T.isInfixOf "912999" b, T.isInfixOf "912345" b)) (lsPosts perMeter) `shouldBe` [(True, False)]
     metered tr pid `shouldReturn` [("events", 3, "submitted"), ("metric_datapoints", 4, "submitted"), ("session_replays", 6000, "submitted"), ("session_replays", 2, "submitted")]
+    -- A 4xx such as Lemon Squeezy's 422 for an unmetered item fails the same forever: rejected once,
+    -- never re-sent, while a 429 stays retriable. Retrying both oldest-first pinned prod's drain on
+    -- April's chunks, so the newer ones were never attempted.
+    let lsAnswers code t =
+          fmap fst . runTestBgRecordingHTTP t tr . withHTTPResponses (\_ url -> Nothing <$ when ("lemonsqueezy.com" `T.isInfixOf` toText url) (throwIO $ HttpExceptionRequest defaultRequest $ StatusCodeException ((mockResponse "" $> ()){responseStatus = H.mkStatus code ""}) ""))
+            $ BJ.processBackgroundJob tr.trATCtx (BJ.ReportUsage pid)
+        lastChunk = fmap (fmap (\(_, q, st) -> (q, st)) . viaNonEmpty last) (metered tr pid)
+    seedUsage tr pid (addUTCTime 10800 frozenTime) 2 0 0
+    void $ lsAnswers 429 (addUTCTime 14400 frozenTime)
+    lastChunk `shouldReturn` Just (2, "failed")
+    length . lsPosts <$> lsAnswers 422 (addUTCTime 18000 frozenTime) `shouldReturn` 1
+    lastChunk `shouldReturn` Just (2, "rejected")
+    lsPosts <$> report tr pid (addUTCTime 21600 frozenTime) `shouldReturn` []
 
   -- "Engine/API Prod" (LS sub 445873) was left active = false, deleted_at IS NULL by a direct DB
   -- write while its subscription kept billing; once API-key lookup joined on projects.active its

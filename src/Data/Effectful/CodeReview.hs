@@ -34,7 +34,7 @@ import Network.HTTP.Client.TLS qualified as TLS
 import Network.HTTP.Types.Status qualified as HTTP
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
-import System.Directory (listDirectory, removeFile, removePathForcibly)
+import System.Directory (doesFileExist, listDirectory, removeFile, removePathForcibly)
 import System.Environment (getEnvironment)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose)
@@ -971,14 +971,14 @@ pruneNativeSnapshots directory retained = void $ tryIOError do
 
 
 readNativeCheckpoint :: AE.FromJSON context => FilePath -> IO (Maybe (NativeCheckpoint context))
-readNativeCheckpoint directory = do
-  stored <- tryIOError $ Native.readPrivateArtifact directory "checkpoint.json" (16 * 1048576)
-  case stored of
-    Left failed | isDoesNotExistError failed -> do
+-- A first run has no checkpoint. Checking before reading keeps that expected miss off the
+-- instrumented read, which recorded it as an exception and filed a runtime issue per review.
+readNativeCheckpoint directory =
+  doesFileExist (directory </> "checkpoint.json") >>= \case
+    False -> do
       unlessM (null <$> listDirectory directory) $ fail "Native continuation manifest is missing"
       pure Nothing
-    Left failed -> throwIO failed
-    Right bytes -> either (const $ fail "Invalid native continuation") (pure . Just) $ AE.eitherDecodeStrict bytes
+    True -> Native.readPrivateArtifact directory "checkpoint.json" (16 * 1048576) >>= either (const $ fail "Invalid native continuation") (pure . Just) . AE.eitherDecodeStrict
 
 
 runCodeReviewTest :: IOE :> es => (Request "pr_review" -> Either Text Text) -> (FixRequest -> Either Text FixResult) -> (AdmissionRequest -> Either Text AdmissionDecision) -> (ArtifactRequest -> Either Text ()) -> (ArtifactRequest -> Either Text Explanation) -> (FixReviewRequest -> Either Text FixReviewDecision) -> Eff (CodeReview ': es) a -> Eff es a

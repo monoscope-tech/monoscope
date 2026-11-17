@@ -388,7 +388,7 @@ processSpanToEntities canonicalTemplates projectId otelSpan =
 
       -- knownHashes is the same set, built once per batch. The vector scan this replaces
       -- ran per span, over a catalog that reaches 7k entries on a busy project.
-      !isNewEndpoint = isHttpSpan && not (HashSet.member endpointHash canonicalTemplates.knownHashes) && statusCode /= 404
+      !isNewEndpoint = isHttpSpan && not (HashSet.member endpointHash canonicalTemplates.knownHashes) && statusCode /= 404 && not (otelSpan.kind == Just "client" && isThirdPartyBrowserCall (Telemetry.atMapText "page.url" (Just attributes)) host)
 
       endpoint dumpId =
         if not isNewEndpoint
@@ -417,6 +417,29 @@ processSpanToEntities canonicalTemplates projectId otelSpan =
       , if isHttpSpan then Just urlPath else Nothing
       , guard (pathSource == DeclaredByRouter && isNewEndpoint) $> endpointHash
       )
+
+
+-- | A browser request to a site other than the page's own — consent banners, ad pixels, CDNs —
+-- calls a third party's API, not the project's: 116 of a week's 268 "new endpoint" issues on
+-- Monoscope's own RUM were cookielaw, reddit and bing hosts. Sites compare by registrable
+-- domain, so an app calling its own api.* subdomain still discovers endpoints.
+--
+-- >>> isThirdPartyBrowserCall (Just "https://app.monoscope.tech/p/1?x=2") "cdn.cookielaw.org"
+-- True
+-- >>> map (isThirdPartyBrowserCall (Just "https://app.monoscope.tech/x")) ["api.monoscope.tech", "app.monoscope.tech:443", "monoscope.tech"]
+-- [False,False,False]
+-- >>> map (isThirdPartyBrowserCall (Just "http://shop.example.co.uk/")) ["api.example.co.uk", "other.co.uk"]
+-- [False,True]
+-- >>> isThirdPartyBrowserCall Nothing "cdn.cookielaw.org"
+-- False
+isThirdPartyBrowserCall :: Maybe Text -> Text -> Bool
+isThirdPartyBrowserCall pageUrl host = maybe False ((/= site host) . site) pageHost
+  where
+    pageHost = pageUrl >>= \u -> T.takeWhile (`notElem` ['/', '?', '#']) <$> (T.stripPrefix "https://" u <|> T.stripPrefix "http://" u)
+    site h = case reverse $ T.splitOn "." $ T.toLower $ T.takeWhile (/= ':') h of
+      tld : sld : name : _ | T.length tld == 2, sld `elem` ["co", "com", "net", "org", "gov", "ac", "edu"] -> [name, sld, tld]
+      tld : name : _ -> [name, tld]
+      labels -> labels
 
 
 -- | Stamp each record's hashes (endpoint identity + error fingerprints) before the

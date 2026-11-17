@@ -236,8 +236,11 @@ export class SessionReplay extends LitElement {
     this.observer?.disconnect();
     this.resizeObserver?.disconnect();
     this.stopTimer();
-    this.player?.destroy();
-    this.trickPlayer?.destroy();
+    // A morph may already have removed the player's wrapper: rrweb's destroy() pauses, then
+    // root.removeChild throws NotFoundError, which skipped the rest of this cleanup.
+    for (const p of [this.player, this.trickPlayer]) {
+      try { p?.destroy(); } catch (e) { if (!(e instanceof DOMException && e.name === 'NotFoundError')) throw e; }
+    }
     if (this.trickPlayerCleanupTimer) {
       clearTimeout(this.trickPlayerCleanupTimer);
       this.trickPlayerCleanupTimer = null;
