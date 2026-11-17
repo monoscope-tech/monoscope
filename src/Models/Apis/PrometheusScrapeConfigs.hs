@@ -3,6 +3,7 @@ module Models.Apis.PrometheusScrapeConfigs (
   PrometheusScrapeConfigId,
   insertConfig,
   updateConfig,
+  updateUptime,
   configsByProjectId,
   CheckKind (..),
   recordUptime,
@@ -23,7 +24,6 @@ import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
-import Data.Char (isDigit, isHexDigit)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Sleep (Sleep)
 import Data.List (partition)
@@ -82,13 +82,14 @@ data PrometheusScrapeConfig = PrometheusScrapeConfig
   , kind :: CheckKind
   , expectedStatus :: Maybe Int
   , consecutiveFailures :: Int
+  , regions :: V.Vector Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow, NFData)
 
 
 selectCols :: HI.Sql
-selectCols = [HI.sql|id, project_id, created_at, updated_at, name, url, scrape_interval_seconds, auth_header, extra_labels, enabled, last_scraped_at, last_status, kind, expected_status::bigint, consecutive_failures::bigint|]
+selectCols = [HI.sql|id, project_id, created_at, updated_at, name, url, scrape_interval_seconds, auth_header, extra_labels, enabled, last_scraped_at, last_status, kind, expected_status::bigint, consecutive_failures::bigint, regions|]
 
 
 selectFrom :: HI.Sql
@@ -109,6 +110,15 @@ updateConfig pid cid name url interval authHeader extraLabels =
     [HI.sql|UPDATE apis.prometheus_scrape_configs
             SET name = #{name}, url = #{url}, scrape_interval_seconds = #{interval}, auth_header = #{authHeader}, extra_labels = #{extraLabels}
             WHERE id = #{cid} AND project_id = #{pid}|]
+
+
+-- | Edit an uptime check's target and schedule; history is keyed by id, so it carries over.
+updateUptime :: DB es => Projects.ProjectId -> PrometheusScrapeConfigId -> Text -> Text -> Int -> Int -> [Text] -> Eff es Int64
+updateUptime pid cid name url interval expected regions =
+  Hasql.interpExecute
+    [HI.sql|UPDATE apis.prometheus_scrape_configs
+            SET name = #{name}, url = #{url}, scrape_interval_seconds = #{interval}, expected_status = #{expected}, regions = #{regions}, updated_at = now()
+            WHERE id = #{cid} AND project_id = #{pid} AND kind = 'uptime'|]
 
 
 configsByProjectId :: DB es => Projects.ProjectId -> CheckKind -> Eff es (V.Vector PrometheusScrapeConfig)
@@ -160,14 +170,15 @@ toggleEnabled pid cid = Hasql.interpExecute [HI.sql|UPDATE apis.prometheus_scrap
 -- nodes/pods concurrently: each due row is handed to exactly one caller, and the lease
 -- (the @last_scraped_at@ bump) keeps the next dispatcher tick from re-picking it before
 -- its interval elapses — so a crashed worker just retries on the next interval rather than
--- being hammered. Oldest-scraped first so a backlog drains fairly.
-claimDueConfigs :: DB es => Int -> Eff es [PrometheusScrapeConfig]
-claimDueConfigs limit =
+-- being hammered. Oldest-scraped first so a backlog drains fairly. Only targets this node's @region@ serves: Prometheus targets and region-less checks anywhere,
+-- a check naming regions only where one of them runs. The lease is still one per target.
+claimDueConfigs :: DB es => Text -> Int -> Eff es [PrometheusScrapeConfig]
+claimDueConfigs region limit =
   Hasql.interp
     ( [HI.sql|UPDATE apis.prometheus_scrape_configs SET last_scraped_at = now()
               WHERE id IN (
                 SELECT id FROM apis.prometheus_scrape_configs
-                WHERE enabled AND (last_scraped_at IS NULL
+                WHERE enabled AND (regions = '{}' OR #{region} = ANY(regions)) AND (last_scraped_at IS NULL
                       OR last_scraped_at < now() - make_interval(secs => scrape_interval_seconds))
                 ORDER BY last_scraped_at ASC NULLS FIRST
                 FOR UPDATE SKIP LOCKED

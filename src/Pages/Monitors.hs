@@ -15,22 +15,7 @@ module Pages.Monitors (
   -- Unified monitors (formerly Testing)
   UnifiedMonitorItem (..),
   unifiedMonitorsGetH,
-  UptimeChecks (..),
-  UptimeForm (..),
-  UptimeRejection (..),
-  UptimeList,
-  CronRejection (..),
-  CronList,
   MonitorActed,
-  uptimeChecksGetH,
-  uptimeCheckPostH,
-  uptimeCheckToggleH,
-  uptimeCheckDeleteH,
-  CronMonitors (..),
-  CronForm (..),
-  cronMonitorsGetH,
-  cronMonitorPostH,
-  cronMonitorDeleteH,
   unifiedMonitorOverviewH,
   teamAlertsGetH,
   alertBulkActionH,
@@ -44,16 +29,14 @@ where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
-import Data.Char (isAsciiLower, isDigit)
 import Data.Default (def)
 import Data.Effectful.UUID qualified as UUIDEff
 import Data.Generics.Labels ()
 import Data.List (partition)
 import Data.Map.Strict qualified as Map
-import Data.Ord (clamp)
 import Data.Text qualified as T
 import Data.Text.Display qualified as Display
-import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful.Concurrent.Async (concurrently)
@@ -70,7 +53,6 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.MonitorDefinitions (MonitorInput (..), monitorFromInput)
 import Models.Apis.Monitors (MonitorBulkAction (..))
 import Models.Apis.Monitors qualified as Monitors
-import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.ProjectMembers (Team (discord_channels, slack_channels))
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
@@ -79,9 +61,9 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPa
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils (Channel (channelId, channelName))
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), ResourceRow (..), agoText, detailTab_, durationMenu_, emptyState_, formCheckbox_, formField_, formSelectField_, inlineIconBtn_, metadataChip_, options_, panel_, resourceList_, silenceBadge_, tagInput_, untilLabel)
+import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), agoText, detailTab_, durationMenu_, emptyState_, formCheckbox_, formField_, formSelectField_, inlineIconBtn_, metadataChip_, options_, panel_, silenceBadge_, tagInput_, untilLabel)
 import Pages.Projects (TBulkActionForm (..))
-import Pages.Settings (safeScrapeUrl)
+import Pages.Uptime qualified as Uptime
 import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
@@ -490,18 +472,13 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
           , docsLink = Just "https://monoscopehq.com/docs/monitors/"
           , freeTierStatus = freeTierStatus
           , pageActions = Just $ div_ [class_ "flex gap-2"] do
-              a_ [class_ "btn btn-sm btn-ghost gap-2", href_ (urls.monitors pid).cronGet] do
-                faSprite_ "clock" "regular" "h-4 w-4"
-                span_ [class_ "max-md:hidden"] "Cron monitors"
-              a_ [class_ "btn btn-sm btn-ghost gap-2", href_ (urls.monitors pid).uptimeGet] do
-                faSprite_ "heart-pulse" "regular" "h-4 w-4"
-                span_ [class_ "max-md:hidden"] "Uptime checks"
               a_ [class_ "btn btn-sm btn-primary gap-2", href_ createMonitorHref] do
                 faSprite_ "bell" "regular" "h-4 w-4 max-md:hidden"
                 faSprite_ "plus" "regular" "h-4 w-4 md:hidden"
                 span_ [class_ "max-md:hidden"] "Create monitor"
           , navTabs =
               Just
+                $ (Uptime.monitorSections_ pid Uptime.SAlerts >>)
                 $ toHtml
                 $ TabFilter
                   { current = filterType
@@ -882,204 +859,3 @@ alertNotificationsTab_ alert teams =
           p_ [class_ "text-sm leading-relaxed text-textStrong whitespace-pre-wrap break-normal [overflow-wrap:anywhere] max-w-[65ch]"]
             $ toHtml
             $ if T.null (T.strip alert.alertConfig.message) then "No message configured" else alert.alertConfig.message
-
-
--- | Uptime checks: URLs Monoscope probes on a schedule. They share the scrape-target
--- table and dispatcher (kind 'uptime'); two failed probes in a row open an uptime issue.
-newtype UptimeChecks = UptimeChecks (PageCtx (Projects.ProjectId, V.Vector PromCfg.PrometheusScrapeConfig))
-
-
-instance ToHtml UptimeChecks where
-  toHtml (UptimeChecks (PageCtx bw (pid, checks))) = toHtml $ PageCtx bw page
-    where
-      page :: Html ()
-      page = div_ [class_ "p-4 max-w-5xl space-y-4"] do
-        p_ [class_ "text-sm text-textWeak"] "Monoscope requests each URL on its interval. Two failed checks in a row open a downtime issue; the next success resolves it."
-        uptimeChecksList_ pid checks
-  toHtmlRaw = toHtml
-
-
--- | The add form and the list, swapped together: a successful add returns the form blank,
--- a rejected one swaps nothing so the form keeps what was typed.
-uptimeChecksList_ :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
-uptimeChecksList_ pid checks = div_ [id_ "uptime-checks", class_ "space-y-4", term "hx-target:inherited" "this", term "hx-swap:inherited" "outerHTML"] do
-  form_ [class_ "surface-raised rounded-xl p-4 grid md:grid-cols-[1fr_2fr_auto_auto_auto] gap-2 items-end", hxPost_ (urls.monitors pid).uptimePost] do
-    formField_ FieldSm def{placeholder = "Checkout API"} "Name" "name" True Nothing
-    formField_ FieldSm def{inputType = "url", placeholder = "https://shop.example.com/health"} "URL" "url" True Nothing
-    formSelectField_ FieldSm "Every" "interval" False $ options_ Nothing [("60", "1 min"), ("300", "5 min"), ("900", "15 min"), ("3600", "1 hour")]
-    formField_ FieldSm def{inputType = "number", value = "200", extraAttrs = [min_ "100", max_ "599"]} "Expect" "expectedStatus" False Nothing
-    button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add check"
-  resourceList_ "uptime-checks" Nothing (emptyState_ def{size = ESCompact} "No uptime checks yet" "Add a URL above to start checking it.") $ V.toList checks <&> \c ->
-    ResourceRow
-      { health = case (c.enabled, c.lastStatus, c.consecutiveFailures) of
-          (False, _, _) -> (NeutralBadge, "pause", "Paused")
-          (True, Nothing, _) -> (NeutralBadge, "clock", "Not checked yet")
-          (True, Just _, 0) -> (SuccessBadge, "circle-check", "Up")
-          (True, Just _, _) -> (ErrorBadge, "circle-exclamation", "Down")
-      , title = span_ [class_ "font-medium text-textStrong truncate"] $ toHtml c.name
-      , details = [toHtml $ c.url <> " \x00b7 expects " <> show (fromMaybe 200 c.expectedStatus) <> " \x00b7 every " <> show (c.scrapeIntervalSeconds `div` 60) <> " min", toHtml $ fromMaybe "Not checked yet" c.lastStatus]
-      , actions = do
-          button_ [type_ "button", class_ "btn btn-xs btn-ghost", hxPost_ ((urls.monitors pid).uptimeToggle c.id)] $ bool "Resume" "Pause" c.enabled
-          button_ [type_ "button", class_ "btn btn-xs btn-ghost text-textError", hxPost_ ((urls.monitors pid).uptimeDelete c.id), hxConfirm_ ("Delete the check for " <> c.url <> "?")] "Delete"
-      }
-
-
-data UptimeForm = UptimeForm {name :: Text, url :: Text, interval :: Maybe Int, expectedStatus :: Maybe Int}
-  deriving stock (Generic, Show)
-  deriving anyclass (FromForm)
-
-
-uptimeChecksGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders UptimeChecks)
-uptimeChecksGetH pid = do
-  (_, _, bw) <- mkPageCtx pid
-  checks <- PromCfg.configsByProjectId pid PromCfg.CKUptime
-  addRespHeaders $ UptimeChecks $ PageCtx bw{pageTitle = "Uptime checks", menuItem = Just "Monitors"} (pid, checks)
-
-
-data UptimeRejection = UnnamedCheck | UnsafeUrl
-  deriving stock (Eq, Show)
-
-
-instance Refusal UptimeRejection where
-  refusalMessage = \case
-    UnnamedCheck -> "Name the check"
-    UnsafeUrl -> "URL must be a public http:// or https:// endpoint"
-
-
--- | The uptime form above the project's checks, re-rendered after every change.
-data UptimeList = UptimeList Projects.ProjectId (V.Vector PromCfg.PrometheusScrapeConfig)
-  deriving (Outcome) via Rendered UptimeList
-
-
-instance ToHtml UptimeList where
-  toHtml (UptimeList pid checks) = toHtml $ uptimeChecksList_ pid checks
-  toHtmlRaw = toHtml
-
-
-uptimeCheckPostH :: Projects.ProjectId -> UptimeForm -> ATAuthCtx (ActionResult UptimeRejection UptimeList)
-uptimeCheckPostH pid form = act do
-  _ <- requireEdit pid
-  let url = T.strip form.url
-      name = T.strip form.name
-  if
-    | T.null name -> pure $ Left UnnamedCheck
-    | not (safeScrapeUrl url) -> pure $ Left UnsafeUrl
-    | otherwise -> do
-        void $ PromCfg.insertConfig pid PromCfg.CKUptime name url (max 60 $ fromMaybe 60 form.interval) Nothing (AE.object []) (Just $ clamp (100, 599) $ fromMaybe 200 form.expectedStatus)
-        addSuccessToast "Uptime check added" Nothing
-        addTriggerEvent "monitorSaved" AE.Null
-        Right <$> uptimeList pid
-
-
-uptimeCheckToggleH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders UptimeList)
-uptimeCheckToggleH pid cid = requireEdit pid >> PromCfg.toggleEnabled pid cid >> (addRespHeaders =<< uptimeList pid)
-
-
-uptimeCheckDeleteH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders UptimeList)
-uptimeCheckDeleteH pid cid = requireEdit pid >> PromCfg.deleteConfig pid cid >> (addRespHeaders =<< uptimeList pid)
-
-
--- | Uptime checks share the scrape-target table with Prometheus targets, whose settings need edit access.
-requireEdit :: Projects.ProjectId -> ATAuthCtx (Projects.Session, Projects.Project)
-requireEdit = ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit
-
-
-uptimeList :: Projects.ProjectId -> ATAuthCtx UptimeList
-uptimeList pid = UptimeList pid <$> PromCfg.configsByProjectId pid PromCfg.CKUptime
-
-
--- | Cron monitors: jobs that check in with a @cron.checkin@ span or log.
-newtype CronMonitors = CronMonitors (PageCtx (Projects.ProjectId, [Monitors.CronMonitor]))
-
-
-instance ToHtml CronMonitors where
-  toHtml (CronMonitors (PageCtx bw (pid, mons))) = toHtml $ PageCtx bw page
-    where
-      page :: Html ()
-      page = div_ [class_ "p-4 max-w-5xl space-y-4"] do
-        p_ [class_ "text-sm text-textWeak"] do
-          "Each run of the job sends a span or log named "
-          code_ "cron.checkin"
-          " with attributes "
-          code_ "monitor.slug"
-          " and "
-          code_ "monitor.status"
-          " (ok or error). A missed window or an error run opens a cron issue."
-        cronMonitorsList_ pid mons
-  toHtmlRaw = toHtml
-
-
-cronMonitorsList_ :: Projects.ProjectId -> [Monitors.CronMonitor] -> Html ()
-cronMonitorsList_ pid mons = div_ [id_ "cron-monitors", class_ "space-y-4", term "hx-target:inherited" "this", term "hx-swap:inherited" "outerHTML"] do
-  form_ [class_ "surface-raised rounded-xl p-4 grid md:grid-cols-[1fr_1fr_auto_auto_auto] gap-2 items-end", hxPost_ (urls.monitors pid).cronPost] do
-    -- `-` last: browsers compile `pattern` with the v flag, where a bare `-` mid-class is a syntax error.
-    formField_ FieldSm def{placeholder = "nightly-billing", extraAttrs = [pattern_ "[a-z0-9_.\\-]+"]} "Slug" "slug" True Nothing
-    formField_ FieldSm def{placeholder = "Nightly billing run"} "Name" "name" True Nothing
-    formSelectField_ FieldSm "Runs every" "interval" False $ options_ Nothing [("300", "5 min"), ("900", "15 min"), ("3600", "1 hour"), ("21600", "6 hours"), ("86400", "1 day"), ("604800", "1 week")]
-    formSelectField_ FieldSm "Grace" "grace" False $ options_ Nothing [("300", "5 min"), ("900", "15 min"), ("3600", "1 hour")]
-    button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add monitor"
-  resourceList_ "cron-monitors" Nothing (emptyState_ def{size = ESCompact} "No cron monitors yet" "Add one above, then send a check-in from the job.") $ mons <&> \m ->
-    ResourceRow
-      { health = case m.lastStatus of
-          Just Monitors.CSOk -> (SuccessBadge, "circle-check", "OK")
-          Just Monitors.CSError -> (ErrorBadge, "circle-exclamation", "Failed")
-          Nothing -> (NeutralBadge, "clock", "No check-in yet")
-      , title = span_ [class_ "font-medium text-textStrong truncate"] $ toHtml m.name
-      , details = [span_ [class_ "font-mono"] $ toHtml $ m.slug <> " \x00b7 every " <> show (m.intervalSecs `div` 60) <> " min", toHtml $ maybe "No check-in yet" (("Last: " <>) . toText . formatTime defaultTimeLocale "%F %R UTC") m.lastCheckinAt]
-      , actions = button_ [type_ "button", class_ "btn btn-xs btn-ghost text-textError", hxPost_ ((urls.monitors pid).cronDelete m.id), hxConfirm_ ("Delete the monitor " <> m.slug <> "?")] "Delete"
-      }
-
-
-data CronForm = CronForm {slug :: Text, name :: Text, interval :: Int, grace :: Int}
-  deriving stock (Generic, Show)
-  deriving anyclass (FromForm)
-
-
-cronMonitorsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CronMonitors)
-cronMonitorsGetH pid = do
-  (_, _, bw) <- mkPageCtx pid
-  mons <- Monitors.cronMonitorsByProject pid
-  addRespHeaders $ CronMonitors $ PageCtx bw{pageTitle = "Cron monitors", menuItem = Just "Monitors"} (pid, mons)
-
-
-data CronRejection = MissingSlugOrName | InvalidSlug | DuplicateSlug Text
-  deriving stock (Eq, Show)
-
-
-instance Refusal CronRejection where
-  refusalMessage = \case
-    MissingSlugOrName -> "Slug and name are required"
-    InvalidSlug -> "Slug may only contain a-z, 0-9, _, . and -"
-    DuplicateSlug slug -> "A monitor with slug " <> slug <> " already exists"
-
-
--- | The cron form above the project's monitors, re-rendered after every change.
-data CronList = CronList Projects.ProjectId [Monitors.CronMonitor]
-  deriving (Outcome) via Rendered CronList
-
-
-instance ToHtml CronList where
-  toHtml (CronList pid mons) = toHtml $ cronMonitorsList_ pid mons
-  toHtmlRaw = toHtml
-
-
-cronMonitorPostH :: Projects.ProjectId -> CronForm -> ATAuthCtx (ActionResult CronRejection CronList)
-cronMonitorPostH pid form = act do
-  _ <- requireEdit pid
-  let slug = T.toLower (T.strip form.slug)
-      name = T.strip form.name
-  if
-    | T.null slug || T.null name -> pure $ Left MissingSlugOrName
-    | not (T.all (\c -> isAsciiLower c || isDigit c || c `elem` ("_.-" :: String)) slug) -> pure $ Left InvalidSlug
-    | otherwise ->
-        (Monitors.insertCronMonitor pid slug name (max 60 form.interval) (max 60 form.grace) =<< Time.currentTime) >>= \case
-          0 -> pure $ Left $ DuplicateSlug slug
-          _ -> addSuccessToast "Cron monitor added" Nothing >> Right <$> cronList pid
-
-
-cronMonitorDeleteH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders CronList)
-cronMonitorDeleteH pid mid = requireEdit pid >> Monitors.deleteCronMonitor pid mid >> (addRespHeaders =<< cronList pid)
-
-
-cronList :: Projects.ProjectId -> ATAuthCtx CronList
-cronList pid = CronList pid <$> Monitors.cronMonitorsByProject pid

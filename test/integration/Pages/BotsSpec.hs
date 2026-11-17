@@ -1730,7 +1730,6 @@ spec = around withTestResources do
       (scheduledFirst, slotNow, pausedNow) <- runTestBg frozenTime tr $ (fmap (.scheduledAt) weekly,,) <$> Issues.resumeRoutine Issues.RunNow (uid tr) pid reportConv <*> Issues.resumeRoutine Issues.RunNow (uid tr) pid dailyConv
       (scheduledFirst > Just frozenTime, (.scheduledAt) <$> slotNow, isNothing pausedNow) `shouldBe` (True, Just frozenTime, True)
       slot <- scheduled slotNow
-      void $ runQueryEffect tr $ PM.createEveryoneTeam pid (uid tr)
       (notifs, _) <- captureNotifs tr $ runReport slot
       let emails = [email | Notify.EmailNotification email <- notifs]
       emails `shouldSatisfy` (not . null)

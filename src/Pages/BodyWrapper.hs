@@ -1330,7 +1330,7 @@ navFlyoutItems pid = \case
   -- per-host and per-endpoint scopes are reached from the catalog rows.
   "API Catalog" -> [("Incoming", apiCatalogUrl pid (Just "Incoming")), ("Outgoing", apiCatalogUrl pid (Just "Outgoing")), ("API Docs", urls.apiCatalogDocs pid Nothing (Just "Incoming") Nothing)]
   "Issues" -> [(f, issuesUrl pid (Just f)) | f <- ["Inbox", "Acknowledged", "Archived"]]
-  "Monitors" -> [("Active", (urls.monitors pid).listGet (Just "Active") Nothing), ("Inactive", (urls.monitors pid).listGet (Just "Inactive") Nothing), ("New Monitor", Components.logExplorerUrl pid <> "#create-alert-toggle")]
+  "Monitors" -> [("Uptime checks", (urls.monitors pid).uptimeGet), ("Cron monitors", (urls.monitors pid).cronGet), ("Status pages", (urls.monitors pid).statusPagesGet), ("Alerts", (urls.monitors pid).listGet Nothing Nothing), ("New alert", Components.logExplorerUrl pid <> "#create-alert-toggle")]
   "Settings" -> [(t, l) | (t, l, _) <- navBottomList pid]
   _ -> []
 

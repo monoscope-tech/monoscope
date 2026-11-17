@@ -70,6 +70,7 @@ import Pages.Settings qualified as Settings
 import Pages.Share qualified as Share
 import Pages.Telemetry qualified as Metrics
 import Pages.Telemetry qualified as Trace
+import Pages.Uptime qualified as Uptime
 import Pkg.AI qualified as AI
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
@@ -167,6 +168,7 @@ data Routes mode = Routes
     otlpTracesPost :: mode :- "v1" :> "traces" :> Header "x-api-key" Text :> Header "X-Real-IP" Text :> RemoteHost :> ReqBody '[OTLPProto] BS.ByteString :> Post '[OTLPProto] BS.ByteString
   , otlpLogsPost :: mode :- "v1" :> "logs" :> Header "x-api-key" Text :> Header "X-Real-IP" Text :> RemoteHost :> ReqBody '[OTLPProto] BS.ByteString :> Post '[OTLPProto] BS.ByteString
   , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] Share.ShareLinkGet
+  , publicStatusPageGet :: mode :- "status" :> Capture "slug" Text :> Get '[HTML] Uptime.StatusPageView
   , shareReplaySessionGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] Replay.ReplaySessionResp
   , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> LocationRedirect BotUtils.BotResponse
   , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
@@ -234,6 +236,7 @@ server otlpTraces otlpLogs runNow =
         , otlpTracesPost = \key realIp -> otlpHttpH otlpTraces key . sender realIp
         , otlpLogsPost = \key realIp -> otlpHttpH otlpLogs key . sender realIp
         , shareLinkGet = Share.shareLinkGetH
+        , publicStatusPageGet = Uptime.publicStatusPageGetH
         , shareReplaySessionGet = Share.shareReplaySessionGetH
         , discordLinkProjectGet = Discord.linkDiscordGetH
         , discordInteractions = Discord.discordInteractionsH projectTools
@@ -582,13 +585,23 @@ monitorsServer pid =
   MonitorsRoutes'
     { listGet = Testing.unifiedMonitorsGetH pid
     , overviewGet = Testing.unifiedMonitorOverviewH pid
-    , cronGet = Testing.cronMonitorsGetH pid
-    , cronPost = Testing.cronMonitorPostH pid
-    , cronDelete = Testing.cronMonitorDeleteH pid
-    , uptimeGet = Testing.uptimeChecksGetH pid
-    , uptimePost = Testing.uptimeCheckPostH pid
-    , uptimeToggle = Testing.uptimeCheckToggleH pid
-    , uptimeDelete = Testing.uptimeCheckDeleteH pid
+    , cronGet = Uptime.cronMonitorsGetH pid
+    , cronPost = Uptime.cronMonitorPostH pid
+    , cronMonitorGet = Uptime.cronMonitorGetH pid
+    , cronMonitorEdit = Uptime.cronMonitorEditH pid
+    , cronDelete = Uptime.cronMonitorDeleteH pid
+    , uptimeGet = Uptime.uptimeChecksGetH pid
+    , uptimePost = Uptime.uptimeCheckPostH pid
+    , uptimeCheckGet = Uptime.uptimeCheckGetH pid
+    , uptimeCheckEdit = Uptime.uptimeCheckEditH pid
+    , uptimeToggle = Uptime.uptimeCheckToggleH pid
+    , uptimeDelete = Uptime.uptimeCheckDeleteH pid
+    , statusPagesGet = Uptime.statusPagesGetH pid
+    , statusPagePost = Uptime.statusPagePostH pid
+    , statusAllGet = Uptime.statusAllGetH pid
+    , statusPageGet = Uptime.statusPageGetH pid
+    , statusPageDelete = Uptime.statusPageDeleteH pid
+    , statusPageEdit = Uptime.statusPageEditH pid
     , alertUpsertPost = Testing.alertUpsertPostH pid
     , alertSingleGet = Testing.alertSingleGetH pid
     , alertSingleToggleActive = Testing.alertSingleToggleActiveH pid
@@ -1214,17 +1227,25 @@ type instance Opaque "Slack.SlackLinkForm" = Slack.SlackLinkForm
 type instance Opaque1 "Table.Table" = Table.Table
 type instance Opaque1 "Table.TableResponse" = Table.TableResponse
 type instance Opaque1 "Table.TableRows" = Table.TableRows
+type instance Opaque "Uptime.Redirected" = Uptime.Redirected
+type instance Opaque "Uptime.CronEditForm" = Uptime.CronEditForm
+type instance Opaque "Uptime.CronForm" = Uptime.CronForm
+type instance Opaque "Uptime.CronList" = Uptime.CronList
+type instance Opaque "Uptime.CronMonitorPage" = Uptime.CronMonitorPage
+type instance Opaque "Uptime.CronMonitors" = Uptime.CronMonitors
+type instance Opaque "Uptime.CronRejection" = Uptime.CronRejection
+type instance Opaque "Uptime.StatusPageForm" = Uptime.StatusPageForm
+type instance Opaque "Uptime.StatusPageRejection" = Uptime.StatusPageRejection
+type instance Opaque "Uptime.StatusPageView" = Uptime.StatusPageView
+type instance Opaque "Uptime.StatusPages" = Uptime.StatusPages
+type instance Opaque "Uptime.UptimeCheckPage" = Uptime.UptimeCheckPage
+type instance Opaque "Uptime.UptimeChecks" = Uptime.UptimeChecks
+type instance Opaque "Uptime.UptimeForm" = Uptime.UptimeForm
+type instance Opaque "Uptime.UptimeList" = Uptime.UptimeList
+type instance Opaque "Uptime.UptimeRejection" = Uptime.UptimeRejection
 type instance Opaque "Testing.Alert" = Testing.Alert
 type instance Opaque "Testing.AlertUpsertForm" = Testing.AlertUpsertForm
-type instance Opaque "Testing.CronForm" = Testing.CronForm
-type instance Opaque "Testing.CronList" = Testing.CronList
-type instance Opaque "Testing.CronMonitors" = Testing.CronMonitors
-type instance Opaque "Testing.CronRejection" = Testing.CronRejection
 type instance Opaque "Testing.MonitorActed" = Testing.MonitorActed
 type instance Opaque "Testing.UnifiedMonitorItem" = Testing.UnifiedMonitorItem
-type instance Opaque "Testing.UptimeChecks" = Testing.UptimeChecks
-type instance Opaque "Testing.UptimeForm" = Testing.UptimeForm
-type instance Opaque "Testing.UptimeList" = Testing.UptimeList
-type instance Opaque "Testing.UptimeRejection" = Testing.UptimeRejection
 type instance Opaque "Trace.TraceDetailsGet" = Trace.TraceDetailsGet
 type instance Opaque "Widget.Widget" = Widget.Widget

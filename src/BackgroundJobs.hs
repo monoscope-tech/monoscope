@@ -91,6 +91,7 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMergeDB
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
+import Models.Apis.Uptime qualified as Uptime
 import Models.Projects.Activation qualified as Activation
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
@@ -4972,7 +4973,7 @@ serviceMapEdgeLimit = 20000
 -- the work scales horizontally with the worker fleet rather than a single sequential loop.
 dispatchPrometheusScrapes :: Config.AuthContext -> ATBackgroundCtx ()
 dispatchPrometheusScrapes authCtx = do
-  due <- PromCfg.claimDueConfigs prometheusScrapeBatchLimit
+  due <- PromCfg.claimDueConfigs authCtx.config.uptimeProbeRegion prometheusScrapeBatchLimit
   unless (null due) do
     Log.logInfo "Dispatching Prometheus scrapes" (length due)
     -- Each enqueue is guarded: the targets were already leased (last_scraped_at bumped) by the
@@ -4989,11 +4990,13 @@ dispatchPrometheusScrapes authCtx = do
 scrapePrometheusTarget :: PromCfg.PrometheusScrapeConfigId -> ATBackgroundCtx ()
 scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> when cfg.enabled case cfg.kind of
   PromCfg.CKUptime -> do
+    -- 'claimDueConfigs' leased only checks this node's region serves; results carry that region.
+    region <- (.config.uptimeProbeRegion) <$> ask @Config.AuthContext
     t0 <- Time.currentTime
     -- Any status is an answer here: the probe compares it, so a 5xx must not throw.
     res <- tryAny $ W.getWith (PromCfg.prometheusScrapeOpts Nothing & Wreq.checkResponse ?~ \_ _ -> pass) (toString cfg.url)
     t1 <- Time.currentTime
-    applyUptimeResult cfg t1 (round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double)) (bimap (toText . displayException) (^. Wreq.responseStatus . Wreq.statusCode) res)
+    applyUptimeResult cfg region t1 (round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double)) (bimap (toText . displayException) (^. Wreq.responseStatus . Wreq.statusCode) res)
   PromCfg.CKPrometheus -> scrapeMetrics cfg
 
 
@@ -5022,7 +5025,14 @@ evaluateCronMonitor now m = do
             headline = Mail.cronName d <> bool " failed" " missed its run" (failure == Issues.CFMissed)
         issue <- Issues.createCronIssue m.projectId d
         alertCheckIssue issue CheckAlert{digestReason = "cron", headline, facts = ["Expected by " <> formatUTC expectedBy, maybe "No check-in yet" (("Last check-in " <>) . formatUTC) lastSeen], slack = Mail.cronMessages d}
-  whenJust latest \(at, status) -> void $ Monitors.recordCronCheckin m.id at status
+  let result at ok message = Uptime.recordResult Uptime.CheckResult{projectId = m.projectId, checkId = m.id, kind = Uptime.RKCron, region = "global", checkedAt = at, ok, statusCode = Nothing, durationMs = Nothing, dnsMs = Nothing, message = Just message}
+      interval = fromIntegral (max 60 m.intervalSecs) :: NominalDiffTime
+      -- Each whole interval past the deadline is one missed run, recorded once.
+      missedSlot = addUTCTime (interval * fromIntegral @Int (floor (diffUTCTime now expectedBy / interval))) expectedBy
+  whenJust latest \(at, status) -> do
+    void $ Monitors.recordCronCheckin m.id at status
+    result at (status == Monitors.CSOk) (bool "Run reported an error" "Run completed" (status == Monitors.CSOk))
+  when (isNothing latest && now > expectedBy) $ result missedSlot False "Missed run"
   case latest of
     Just (_, Monitors.CSOk) -> resolveOpenIssue m.projectId (Issues.cronTargetHash (UUID.toText m.id)) Issues.Cron now []
     Just (_, Monitors.CSError) -> open Issues.CFFailed
@@ -5032,13 +5042,14 @@ evaluateCronMonitor now m = do
 -- | Record an uptime probe. Two failures in a row confirm downtime and open (or fold
 -- into) the check's issue; the first success after that resolves it. One failed probe
 -- alone is a blip, not an outage.
-applyUptimeResult :: PromCfg.PrometheusScrapeConfig -> UTCTime -> Int -> Either Text Int -> ATBackgroundCtx ()
-applyUptimeResult cfg now ms res = do
+applyUptimeResult :: PromCfg.PrometheusScrapeConfig -> Text -> UTCTime -> Int -> Either Text Int -> ATBackgroundCtx ()
+applyUptimeResult cfg region now ms res = do
   let expected = fromMaybe 200 cfg.expectedStatus
       ok = res == Right expected
       reason = either ("request failed: " <>) (\c -> bool ("status " <> show c <> ", expected " <> show expected) "ok" ok) res
+  Uptime.recordResult Uptime.CheckResult{projectId = cfg.projectId, checkId = cfg.id.unUUIDId, kind = Uptime.RKUptime, region, checkedAt = now, ok, statusCode = rightToMaybe res, durationMs = Just ms, dnsMs = Nothing, message = Just reason}
   (before, after) <- PromCfg.recordUptime cfg.id ok (reason <> " · " <> show ms <> "ms")
-  when (not ok && after == 2) do
+  when (not ok && after == Uptime.downtimeAfter) do
     let d =
           Issues.UptimeData
             { checkId = cfg.id.toText
@@ -5052,7 +5063,7 @@ applyUptimeResult cfg now ms res = do
             }
     issue <- Issues.createUptimeIssue cfg.projectId d
     alertCheckIssue issue CheckAlert{digestReason = "uptime", headline = Mail.uptimeName d <> " is down", facts = [cfg.url, reason], slack = Mail.uptimeMessages d}
-  when (ok && before >= 2) $ resolveOpenIssue cfg.projectId (Issues.uptimeTargetHash cfg.id.toText) Issues.Uptime now ["after_failures" AE..= before]
+  when (ok && before >= Uptime.downtimeAfter) $ resolveOpenIssue cfg.projectId (Issues.uptimeTargetHash cfg.id.toText) Issues.Uptime now ["after_failures" AE..= before]
 
 
 -- | Open (or reopen) a failing check's one long-lived issue and alert on it, so a

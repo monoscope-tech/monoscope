@@ -186,6 +186,8 @@ data EnvConfig = EnvConfig
   , s3Region :: Text
   , enableReplayService :: Bool
   , enableTimefusionReads :: Bool
+  , uptimeProbeRegion :: Text
+  -- ^ The probe location this node checks uptime from (a 'Models.Apis.Uptime.regions' code).
   , enableServiceMapRollup :: Bool
   -- ^ Runs the 5-minute service-dependency rollup. Off by default: the rollup is the only
   -- place a span self-join runs against TimeFusion, which is the query shape that has
@@ -338,6 +340,7 @@ instance DefConfig EnvConfig where
       , enableErrorGroupAutoApply = False
       , enableErrorMaskPromotion = False
       , openaiSmallModel = "gpt-5.6-luna#low"
+      , uptimeProbeRegion = "eu-west"
       , aiInputMicrousdPerMillionTokens = AIPrice 0
       , aiOutputMicrousdPerMillionTokens = AIPrice 0
       , kafkaGroupConcurrency = 4
