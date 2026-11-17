@@ -153,6 +153,11 @@ data Unit = Unit
   deriving anyclass (HI.DecodeRow)
 
 
+-- | An untitled conversation (no captured prompt) is named after its agent.
+displayTitle :: Conversation -> Text
+displayTitle c = fromMaybe (maybe "Untitled conversation" (<> " run") $ viaNonEmpty head c.agents) c.title
+
+
 -- | A trace joins the conversation any of its spans names (frameworks often set the id on the root
 -- agent span only). A trace with no id is its own conversation if it ran an agent; otherwise it is
 -- only model calls, so single classifier calls don't drown real conversations.
@@ -515,7 +520,7 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
       where
         titleCell, signalsCell :: Conversation -> Html ()
         titleCell c = div_ [class_ "flex min-w-0 flex-col"] do
-          span_ [class_ "truncate font-medium text-textStrong", title_ $ fromMaybe "" c.title] $ toHtml $ fromMaybe "Untitled conversation" c.title
+          span_ [class_ $ "truncate font-medium " <> maybe "text-textWeak" (const "text-textStrong") c.title, title_ $ fromMaybe "" c.title] $ toHtml $ displayTitle c
           span_ [class_ "truncate text-xs text-textWeak"] $ toHtml $ T.intercalate " · " $ catMaybes [Just $ T.take 12 c.key, viaNonEmpty head c.users, viaNonEmpty head c.services, Just $ toText (getDurationNSMS $ fromIntegral c.activeNs)]
         signalsCell c = div_ [class_ "flex flex-wrap gap-1"] do
           when (c.errors > 0 && null c.signals) $ tonePill_ ErrorBadge $ countNoun c.errors "error"
@@ -590,7 +595,7 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
   Just c -> do
     header_ [class_ "flex flex-col gap-1.5"] do
       div_ [class_ "flex flex-wrap items-start gap-3"] do
-        h1_ [class_ "min-w-0 flex-1 text-xl font-semibold text-textStrong text-pretty line-clamp-2 max-sm:basis-full", title_ $ fromMaybe "" c.title] $ toHtml $ fromMaybe "Untitled conversation" c.title
+        h1_ [class_ "min-w-0 flex-1 text-xl font-semibold text-textStrong text-pretty line-clamp-2 max-sm:basis-full", title_ $ fromMaybe "" c.title] $ toHtml $ displayTitle c
         div_ [class_ "flex flex-wrap items-center gap-2"] do
           askAi_ c
           whenJust (find (not . T.null . (.traceId)) d.steps) \s ->
