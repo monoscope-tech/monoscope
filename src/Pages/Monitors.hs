@@ -478,7 +478,8 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
                 span_ [class_ "max-md:hidden"] "Create monitor"
           , navTabs =
               Just
-                $ (Uptime.monitorSections_ pid Uptime.SAlerts >>)
+                $ div_ [class_ "flex items-center gap-3"]
+                . (\filters -> Uptime.monitorSections_ pid Uptime.SAlerts >> span_ [class_ "text-strokeStrong", term "aria-hidden" "true"] "|" >> filters)
                 $ toHtml
                 $ TabFilter
                   { current = filterType
