@@ -11,10 +11,12 @@ import Data.Text qualified as T
 import Effectful (Eff, IOE, runEff)
 import Hasql.Interpolate qualified as HI
 import Hasql.Session qualified as Session
+import Hasql.Statement (Statement)
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import OpenTelemetry.Attributes (Attribute (..), PrimitiveAttribute (..), lookupAttribute)
 import OpenTelemetry.Exporter.InMemory.Span (inMemoryListExporter)
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import OpenTelemetry.Trace (createTracerProvider, emptyTracerProviderOptions, getGlobalTracerProvider, setGlobalTracerProvider)
 import OpenTelemetry.Trace.Core (ImmutableSpan (..), SpanHot (..))
 import Pkg.DeriveUtils (mkHasqlPool)
@@ -36,15 +38,21 @@ spec = around withTestResources do
         run act = runEff (EHasql.runHasqlPool pool act)
         query :: HI.Sql -> IO ()
         query q = void (run (EHasql.interp q) :: IO [HI.OneColumn Int32])
+        statementOf h = case lookupAttribute (hotAttributes h) "db.statement" of Just (AttributeValue (TextAttribute t)) -> t; _ -> ""
+        waitOf h = case lookupAttribute (hotAttributes h) "db.client.connection.wait_time" of Just (AttributeValue (DoubleAttribute w)) -> Just w; _ -> Nothing
     bracket getGlobalTracerProvider setGlobalTracerProvider \_ -> do
       setGlobalTracerProvider traced
-      concurrently_ (query [HI.sql| SELECT 1 FROM pg_sleep(0.4) |]) (threadDelay 100_000 >> query [HI.sql| SELECT 2 AS waited |])
+      -- Both a statement and a session queue behind the one connection for at least 0.8 s.
+      concurrently_ (query [HI.sql| SELECT 1 FROM pg_sleep(1.0) |]) $ threadDelay 200_000 >> concurrently_ (query [HI.sql| SELECT 2 AS waited |]) (run $ EHasql.use $ Session.script "SELECT 3")
+      void $ OHasql.useStatement pool () (HI.interp False [HI.sql| SELECT 4 AS direct |] :: Statement () [HI.OneColumn Int32])
     hots <- traverse (readIORef . spanHot) =<< readIORef ended
-    waiter <- maybe (fail "no span for the waiting statement") pure $ find (\h -> "waited" `T.isInfixOf` show (lookupAttribute (hotAttributes h) "db.statement")) hots
-    T.isPrefixOf "SELECT" (hotName waiter) `shouldBe` True
-    case lookupAttribute (hotAttributes waiter) "db.client.connection.wait_time" of
-      Just (AttributeValue (DoubleAttribute w)) -> w `shouldSatisfy` (>= 0.2)
-      other -> expectationFailure ("wait_time: " <> show other)
+    let spanWith p = maybe (fail "missing span") pure $ find p hots
+    waiter <- spanWith (T.isInfixOf "waited" . statementOf)
+    session <- spanWith (T.isPrefixOf "hasql.session" . hotName)
+    direct <- spanWith (T.isInfixOf "direct" . statementOf)
+    -- Named exactly as the library's own useStatement names it, so the two cannot drift.
+    hotName waiter `shouldBe` hotName direct
+    map waitOf [waiter, session] `shouldSatisfy` all (maybe False (>= 0.5))
 
   describe "Hasql write-transaction guard (guardWriteTx)"
     $ it "arms idle_in_transaction_session_timeout on writes only, at LOCAL scope"

@@ -861,21 +861,26 @@ selectPerfCandidates pid from to =
   (,)
     <$> Hasql.interp
       [HI.sql| SELECT context___trace_id, parent_id, ^{normalizedQuery},
-                      count(*)::bigint, sum(^{execNs})::bigint, min(timestamp), max(resource___service___name), max(attributes___db___system___name)
+                      count(*)::bigint, sum(exec_ns)::bigint, min(timestamp), max(resource___service___name), max(attributes___db___system___name)
                ^{dbSpans} AND parent_id IS NOT NULL
                GROUP BY context___trace_id, parent_id, ^{normalizedQuery}
-               HAVING count(*) >= 5 AND sum(^{execNs}) >= 50000000
-               ORDER BY sum(^{execNs}) DESC LIMIT 50 |]
+               HAVING count(*) >= 5 AND sum(exec_ns) >= 50000000
+               ORDER BY sum(exec_ns) DESC LIMIT 50 |]
     <*> Hasql.interp
       [HI.sql| SELECT context___trace_id, parent_id, ^{normalizedQuery},
-                      1::bigint, ^{execNs}, timestamp, resource___service___name, attributes___db___system___name
-               ^{dbSpans} AND ^{execNs} > 1000000000
-               ORDER BY ^{execNs} DESC LIMIT 50 |]
+                      1::bigint, exec_ns, timestamp, resource___service___name, attributes___db___system___name
+               ^{dbSpans} AND exec_ns > 1000000000
+               ORDER BY exec_ns DESC LIMIT 50 |]
   where
-    -- A DB span's own time, less what it queued for a pool connection: a cheap lookup stuck
-    -- behind a busy pool is a capacity problem, not a slow query (#803).
-    execNs = [HI.sql|(duration - COALESCE((attributes->'db'->'client'->'connection'->>'wait_time')::float * 1e9, 0)::bigint)|]
-    dbSpans = [HI.sql| FROM otel_logs_and_spans WHERE project_id = #{pid.toText} AND timestamp >= #{from} AND timestamp < #{to} AND attributes___db___query___text IS NOT NULL AND context___trace_id IS NOT NULL |]
+    -- exec_ns: a DB span's own time, less what it queued for a pool connection, never below 0.
+    -- A cheap lookup stuck behind a busy pool is a capacity problem, not a slow query (#803).
+    dbSpans =
+      [HI.sql| FROM (SELECT context___trace_id, parent_id, attributes___db___query___summary, attributes___db___query___text, timestamp, resource___service___name, attributes___db___system___name,
+                            CASE WHEN own_ns > 0 THEN own_ns ELSE 0 END AS exec_ns
+                     FROM (SELECT *, duration - COALESCE((attributes->'db'->'client'->'connection'->>'wait_time')::float * 1e9, 0)::bigint AS own_ns
+                           FROM otel_logs_and_spans
+                           WHERE project_id = #{pid.toText} AND timestamp >= #{from} AND timestamp < #{to} AND attributes___db___query___text IS NOT NULL AND context___trace_id IS NOT NULL) own) spans
+               WHERE TRUE |]
     -- Literals out, so `WHERE id = 1` and `WHERE id = 2` group as one query. Both engines
     -- (Postgres, DataFusion) accept this regexp_replace form.
     normalizedQuery = [HI.sql|regexp_replace(regexp_replace(COALESCE(attributes___db___query___summary, attributes___db___query___text), '''[^'']*''', '?', 'g'), '[0-9]+', '?', 'g')|]
