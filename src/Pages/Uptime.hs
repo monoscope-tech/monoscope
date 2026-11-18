@@ -288,7 +288,7 @@ uptimeChecksList_ o = div_ [id_ "uptime-checks", class_ "space-y-3", term "hx-ta
         formSelectField_ FieldSm "Every" "interval" False $ options_ Nothing intervalOptions
         formField_ FieldSm def{inputType = "number", value = "200", extraAttrs = [min_ "100", max_ "599"]} "Expected status" "expectedStatus" False Nothing
         button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add check"
-      details_ [class_ "group/req"] do
+      details_ do
         summary_ [class_ "inline-flex cursor-pointer items-center gap-1.5 text-xs text-textWeak hover:text-textBrand"] $ faSprite_ "code" "regular" "size-3" >> "Customize request and alerts"
         div_ [class_ "pt-3"] $ requestFields_ o.teams Nothing
   if V.null o.checks
@@ -400,7 +400,7 @@ uptimeCheckPostH pid form = act do
       Right . UptimeList <$> uptimeOverview pid
 
 
--- | GET and HEAD send no body, so one typed for them is dropped.
+-- | GET and HEAD send no body, so one typed for them is dropped; unknown regions are too.
 validUptime :: UptimeForm -> Either UptimeRejection PromCfg.UptimeSpec
 validUptime form
   | T.null name = Left UnnamedCheck
@@ -409,7 +409,7 @@ validUptime form
   | otherwise = do
       headers <- first BadHeader $ PromCfg.parseHeaders $ fold form.headers
       let body = mfilter (const $ method `notElem` [PromCfg.MGet, PromCfg.MHead]) (nonBlank form.body)
-      Right PromCfg.UptimeSpec{name, url, interval = max 60 $ fromMaybe 60 form.interval, expected = clamp (100, 599) $ fromMaybe 200 form.expectedStatus, regions = [], method, headers, body, contains, teams = ordNub form.teams}
+      Right PromCfg.UptimeSpec{name, url, interval = max 60 $ fromMaybe 60 form.interval, expected = clamp (100, 599) $ fromMaybe 200 form.expectedStatus, regions = ordNub $ filter (`elem` map (.code) Uptime.regions) form.regions, method, headers, body, contains, teams = ordNub form.teams}
   where
     name = T.strip form.name
     url = T.strip form.url
@@ -557,17 +557,18 @@ resultsTable_ now probes rs = div_ [class_ "surface-raised overflow-x-auto round
 
 -- | The request a check sends and who hears when it fails, shared by the add and settings forms.
 requestFields_ :: [ManageMembers.Team] -> Maybe PromCfg.PrometheusScrapeConfig -> Html ()
-requestFields_ teams checkM = div_ [class_ "space-y-3"] do
+requestFields_ teams checkM = div_ [class_ "group/req space-y-3"] do
   div_ [class_ "grid gap-3 md:grid-cols-[auto_1fr_1fr]"] do
     formSelectField_ FieldSm "Method" "method" False $ options_ (toUrlPiece . (.httpMethod) <$> checkM) [(toUrlPiece m, PromCfg.methodName m) | m <- [minBound .. maxBound]]
     formField_ FieldSm def{inputType = "textarea", value = foldMap (PromCfg.renderHeaders . PromCfg.maskHeaders . (.requestHeaders)) checkM, placeholder = "Authorization: Bearer …\nAccept: application/json", hint = Just "One \"Name: value\" per line.", extraAttrs = [rows_ "3"]} "Headers" "headers" False Nothing
-    formField_ FieldSm def{inputType = "textarea", value = foldMap (fold . (.requestBody)) checkM, placeholder = "{\"ping\": true}", hint = Just "Sent with POST, PUT, PATCH and DELETE.", extraAttrs = [rows_ "3"]} "Body" "body" False Nothing
+    div_ [class_ "group-has-[option[value=get]:checked]/req:invisible group-has-[option[value=head]:checked]/req:invisible"]
+      $ formField_ FieldSm def{inputType = "textarea", value = foldMap (fold . (.requestBody)) checkM, placeholder = "{\"ping\": true}", hint = Just "Sent with POST, PUT, PATCH and DELETE.", extraAttrs = [rows_ "3"]} "Body" "body" False Nothing
   fieldset_ [class_ "space-y-2"] do
     legend_ [class_ "text-sm font-medium text-textStrong"] "Notify"
     p_ [class_ "text-xs text-textWeak"] "Teams alerted when the check goes down and when it recovers."
-    div_ [class_ "flex flex-wrap gap-x-4 gap-y-2"] $ forM_ teams \t -> do
-      let chosen = maybe t.is_everyone (\c -> if V.null c.teams then t.is_everyone else t.id `V.elem` c.teams) checkM
-      formCheckbox_ FieldSm ("@" <> t.handle) "teams" ([value_ t.id.toText] <> [checked_ | chosen])
+    let picked = foldMap (.teams) checkM
+    div_ [class_ "flex flex-wrap gap-x-4 gap-y-2"] $ forM_ teams \t ->
+      formCheckbox_ FieldSm ("@" <> t.handle) "teams" ([value_ t.id.toText] <> [checked_ | bool (t.id `V.elem` picked) t.is_everyone (V.null picked)])
 
 
 uptimeSettings_ :: UptimeDashboard -> Html ()
@@ -623,13 +624,11 @@ uptimeCheckEditH pid cid form = act do
   _ <- requireEdit pid
   here <- (.config.uptimeProbeRegion) <$> ask @AuthContext
   served <- Uptime.servedRegions here =<< Time.currentTime
-  let regions = ordNub $ filter (`elem` map (.code) Uptime.regions) form.regions
-  case (validUptime form, find (`notElem` served) regions) of
-    (Left r, _) -> pure $ Left r
-    (_, Just unserved) -> pure $ Left $ UnservedRegion unserved
-    (Right v, Nothing) -> do
-      stored <- maybe (PromCfg.RequestHeaders []) (.requestHeaders) <$> PromCfg.getConfigByProject pid cid
-      void $ PromCfg.updateUptime pid cid v{PromCfg.regions, PromCfg.headers = PromCfg.unmaskHeaders stored v.headers}
+  case validUptime form >>= \v -> maybe (Right v) (Left . UnservedRegion) (find (`notElem` served) v.regions) of
+    Left r -> pure $ Left r
+    Right v -> do
+      stored <- foldMap (.requestHeaders) <$> PromCfg.getConfigByProject pid cid
+      void $ PromCfg.updateUptime pid cid v{PromCfg.headers = PromCfg.unmaskHeaders stored v.headers}
       pure $ Right $ Redirected ((urls.monitors pid).uptimeCheckGet cid Nothing) "Check saved"
 
 

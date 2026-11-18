@@ -120,7 +120,7 @@ methodName = T.toUpper . toUrlPiece
 -- | Extra request headers, in the order they are sent.
 newtype RequestHeaders = RequestHeaders [(Text, Text)]
   deriving stock (Eq, Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, NFData)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Monoid, NFData, Semigroup)
   deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb RequestHeaders
 
 
@@ -207,20 +207,20 @@ updateConfig pid cid name url interval authHeader extraLabels =
 
 
 insertUptime :: DB es => Projects.ProjectId -> UptimeSpec -> Eff es Int64
-insertUptime pid u =
-  Hasql.interpExecute
-    [HI.sql|INSERT INTO apis.prometheus_scrape_configs (project_id, kind, name, url, scrape_interval_seconds, extra_labels, expected_status, regions, http_method, request_headers, request_body, response_contains, teams)
-            VALUES (#{pid}, 'uptime', #{u.name}, #{u.url}, #{u.interval}, '{}', #{u.expected}, #{u.regions}, #{u.method}, #{u.headers}, #{u.body}, #{u.contains}, #{u.teams}::uuid[])|]
+insertUptime pid u = Hasql.interpExecute ([HI.sql|INSERT INTO apis.prometheus_scrape_configs (project_id, kind, extra_labels, |] <> uptimeCols <> [HI.sql|) VALUES (#{pid}, 'uptime', '{}', |] <> uptimeVals u <> ")")
 
 
 -- | Edit an uptime check in place; history is keyed by id, so it carries over.
 updateUptime :: DB es => Projects.ProjectId -> PrometheusScrapeConfigId -> UptimeSpec -> Eff es Int64
-updateUptime pid cid u =
-  Hasql.interpExecute
-    [HI.sql|UPDATE apis.prometheus_scrape_configs
-            SET name = #{u.name}, url = #{u.url}, scrape_interval_seconds = #{u.interval}, expected_status = #{u.expected}, regions = #{u.regions},
-                http_method = #{u.method}, request_headers = #{u.headers}, request_body = #{u.body}, response_contains = #{u.contains}, teams = #{u.teams}::uuid[], updated_at = now()
-            WHERE id = #{cid} AND project_id = #{pid} AND kind = 'uptime'|]
+updateUptime pid cid u = Hasql.interpExecute ([HI.sql|UPDATE apis.prometheus_scrape_configs SET (updated_at, |] <> uptimeCols <> [HI.sql|) = (now(), |] <> uptimeVals u <> [HI.sql|) WHERE id = #{cid} AND project_id = #{pid} AND kind = 'uptime'|])
+
+
+uptimeCols :: HI.Sql
+uptimeCols = [HI.sql|name, url, scrape_interval_seconds, expected_status, regions, http_method, request_headers, request_body, response_contains, teams|]
+
+
+uptimeVals :: UptimeSpec -> HI.Sql
+uptimeVals u = [HI.sql|#{u.name}, #{u.url}, #{u.interval}, #{u.expected}, #{u.regions}, #{u.method}, #{u.headers}, #{u.body}, #{u.contains}, #{u.teams}::uuid[]|]
 
 
 configsByProjectId :: DB es => Projects.ProjectId -> CheckKind -> Eff es (V.Vector PrometheusScrapeConfig)

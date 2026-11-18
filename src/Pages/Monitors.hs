@@ -659,7 +659,7 @@ unifiedMonitorOverviewH pid monitorId = do
     Just alert -> do
       (teams, (slackDataM, discordDataM)) <-
         concurrently
-          (ManageMembers.getTeamsById pid alert.teams >>= \selected -> if null selected then maybeToList <$> ManageMembers.getEveryoneTeam pid else pure selected)
+          (ManageMembers.teamsOrEveryone pid alert.teams)
           (concurrently (Slack.getProjectSlackData pid) (Slack.getDiscordDataByProjectId pid))
       (channels, discordChannels) <-
         concurrently

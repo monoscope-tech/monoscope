@@ -31,6 +31,7 @@ module Models.Projects.ProjectMembers (
   TeamVM (..),
   deleteTeams,
   getTeamsById,
+  teamsOrEveryone,
   getTeamById,
   Team (..),
   TeamMemberVM (..),
@@ -75,6 +76,7 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Error.Static qualified as EffError
 import Effectful.Log (Log)
+import Effectful.Log qualified as ELog
 import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
@@ -504,12 +506,23 @@ deleteTeams pid tids
       now <- Time.currentTime
       Hasql.interpExecute_
         [HI.sql| UPDATE projects.teams SET deleted_at = #{now} WHERE project_id = #{pid} AND id = ANY(#{tids}::uuid[]) AND is_everyone = FALSE |]
+      Hasql.interpExecute_
+        [HI.sql| UPDATE apis.prometheus_scrape_configs SET teams = ARRAY(SELECT t FROM unnest(teams) t WHERE t <> ALL(#{tids}::uuid[])) WHERE project_id = #{pid} AND teams && #{tids}::uuid[] |]
 
 
 getTeamsById :: DB es => Projects.ProjectId -> V.Vector TeamId -> Eff es [Team]
 getTeamsById pid tids
   | V.null tids = pure []
   | otherwise = Hasql.interp (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND id = ANY(#{tids}::uuid[]) AND deleted_at IS NULL |])
+
+
+-- | The teams an alert goes to: the chosen ones, or @everyone when none are. Chosen teams
+-- that no longer exist are reported, since @everyone then hears an alert meant for others.
+teamsOrEveryone :: (DB es, Log :> es) => Projects.ProjectId -> V.Vector TeamId -> Eff es [Team]
+teamsOrEveryone pid tids = do
+  chosen <- getTeamsById pid tids
+  when (not (V.null tids) && null chosen) $ ELog.logAttention "Alert configured with teams but none found (possibly deleted)" (pid, V.length tids)
+  if null chosen then maybeToList <$> getEveryoneTeam pid else pure chosen
 
 
 getTeamById :: DB es => Projects.ProjectId -> TeamId -> Eff es (Maybe Team)

@@ -108,6 +108,9 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     page <- renderT <$> call tr (Uptime.uptimeCheckGetH pid check.id Nothing)
     page `shouldContainAll` ["POST · expects 200 containing &quot;healthy&quot;", "X-Probe: ••••••"]
     ("X-Probe: yes" `T.isInfixOf` page) `shouldBe` False
+    -- A deleted team leaves the check, which then alerts @everyone.
+    runQueryEffect tr $ ProjectMembers.deleteTeams pid [ops]
+    ((.teams) <$>) <$> runQueryEffect tr (PromCfg.getConfig check.id) `shouldReturn` Just []
     -- GET sends no body, so editing to GET drops it.
     Right _ <- call tr $ Uptime.uptimeCheckEditH pid check.id (form (Just PromCfg.MGet) (Just "X-Probe: ••••••\nAccept: */*") (Just "{}") Nothing [])
     Just edited <- runQueryEffect tr $ PromCfg.getConfig check.id

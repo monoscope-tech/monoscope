@@ -8,7 +8,7 @@ import BackgroundJobs.Types qualified as Jobs
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
 import Control.Exception qualified as CE
-import Control.Lens (view, (%~), (.~), (?~), (^.), (^?), _1, _3)
+import Control.Lens (view, (.~), (<>~), (?~), (^.), (^?), _1, _3)
 import Control.Monad.Except (throwError)
 import Control.Monad.Extra (whileM)
 import Control.Retry qualified as Retry
@@ -1706,16 +1706,15 @@ sendAlertToChannels teamIds alert (rootPayload, replyPayload) issue project user
       slackRecorded <$ forM_ targets \(team, fan) -> fanOutToTeam team fan alert project.id project.title alertUrl
 
 
--- | The teams an alert goes to, each with its fan-out (Slack through the incident outbox): the
--- chosen ones, or @everyone when none are (or all were since deleted). @everyone mails every
--- member; other teams mail their notify emails.
+-- | Each alert team with its fan-out (Slack through the incident outbox). @everyone mails every
+-- member, other teams their notify emails; an address two teams share is mailed once.
 alertTargets :: Projects.ProjectId -> V.Vector ProjectMembers.TeamId -> [Projects.User] -> Text -> Html () -> ATBackgroundCtx [(ProjectMembers.Team, Fanout)]
-alertTargets pid teamIds users subj html = do
-  chosen <- ProjectMembers.getTeamsById pid teamIds
-  teams <- if null chosen then maybeToList <$> ProjectMembers.getEveryoneTeam pid else pure chosen
-  pure [(t, fanout $ bool (ProjectMembers.resolveTeamEmails t) (map (.email) users) t.is_everyone) | t <- teams]
+alertTargets pid teamIds users subj html = snd . mapAccumL assign mempty <$> ProjectMembers.teamsOrEveryone pid teamIds
   where
-    fanout to = Fanout{slack = QueuedSlack, threads = Nothing, email = Just FanoutEmail{recipients = map CI.original to, subject = subj, body = ET.renderEmail subj html}}
+    body = ET.renderEmail subj html
+    assign seen t =
+      let to = filter (`notElem` seen) $ ordNub $ bool (ProjectMembers.resolveTeamEmails t) (map (.email) users) t.is_everyone
+       in (seen <> to, (t, Fanout{slack = QueuedSlack, threads = Nothing, email = Just FanoutEmail{recipients = map CI.original to, subject = subj, body}}))
 
 
 -- | Fan an alert out to every enabled non-email channel of the @everyone team.
@@ -3295,10 +3294,7 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
   case project of
     Nothing -> Hasql.transaction TxS.ReadCommitted TxS.Write commitStatus
     Just p -> do
-      teams <- ProjectMembers.getTeamsById monitor.projectId monitor.teams
-      when (not (V.null monitor.teams) && null teams)
-        $ Log.logAttention "Monitor configured with teams but none found (possibly deleted)" (monitor.id, monitor.projectId, V.length monitor.teams)
-      targetTeams <- if null teams then maybeToList <$> ProjectMembers.getEveryoneTeam monitor.projectId else pure teams
+      targetTeams <- ProjectMembers.teamsOrEveryone monitor.projectId monitor.teams
       installation <- Integrations.getProjectSlackData monitor.projectId
       let widgetUrlM = widgetMonitorUrl appCtx.env.hostUrl monitor
           monitorUrl = fromMaybe (hostPath appCtx.env.hostUrl $ (urls.monitors monitor.projectId).overviewGet monitor.id.toText) widgetUrlM
@@ -5023,10 +5019,11 @@ scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> when cfg.
     t0 <- Time.currentTime
     -- Any status is an answer here: the probe compares it, so a 5xx must not throw.
     let PromCfg.RequestHeaders custom = cfg.requestHeaders
-        opts = foldl' (\o (n, v) -> o & Wreq.header (CI.mk $ encodeUtf8 n) %~ (<> [encodeUtf8 v])) (PromCfg.prometheusScrapeOpts Nothing & Wreq.checkResponse ?~ (\_ _ -> pass)) custom & Wreq.header "traceparent" .~ [encodeUtf8 $ "00-" <> trId <> "-" <> spanId <> "-01"]
+        opts = PromCfg.prometheusScrapeOpts Nothing & Wreq.checkResponse ?~ (\_ _ -> pass) & Wreq.headers <>~ [(CI.mk $ encodeUtf8 n, encodeUtf8 v) | (n, v) <- custom] & Wreq.header "traceparent" .~ [encodeUtf8 $ "00-" <> trId <> "-" <> spanId <> "-01"]
     res <- tryAny $ W.requestWith (toString $ PromCfg.methodName cfg.httpMethod) opts (toString cfg.url) (encodeUtf8 <$> cfg.requestBody)
     t1 <- Time.currentTime
-    applyUptimeResult cfg region (trId, spanId) t0 t1 $ bimap (toText . displayException) (\r -> (r ^. Wreq.responseStatus . Wreq.statusCode, decodeUtf8 $ r ^. Wreq.responseBody)) res
+    -- The body is kept only for a check that searches it.
+    applyUptimeResult cfg region (trId, spanId) t0 t1 $ bimap (toText . displayException) (\r -> (r ^. Wreq.responseStatus . Wreq.statusCode, foldMap (const $ decodeUtf8 $ r ^. Wreq.responseBody) cfg.responseContains)) res
   PromCfg.CKPrometheus -> scrapeMetrics cfg
 
 
