@@ -338,7 +338,7 @@ getDashboardByIdUnscoped did = Hasql.interpOne (selectFrom @DashboardVM <> [HI.s
 -- | The scoped lookup. A dashboard belonging to another project reads as absent,
 -- which is the correct answer to give a caller that should not know it exists.
 getDashboardByProjectId :: DB es => Projects.ProjectId -> DashboardId -> Eff es (Maybe DashboardVM)
-getDashboardByProjectId pid did = viaNonEmpty head <$> getDashboardsByIds pid (V.singleton did)
+getDashboardByProjectId pid did = listToMaybe <$> getDashboardsByIds pid (V.singleton did)
 
 
 getDashboardsByIds :: DB es => Projects.ProjectId -> V.Vector DashboardId -> Eff es [DashboardVM]

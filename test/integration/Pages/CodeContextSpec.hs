@@ -1235,6 +1235,11 @@ spec = do
             observed <- snapshot deleted
             importDef deleted observed (Just actual) `shouldReturn` Right ()
             localOf deleted `shouldReturn` Just (AE.toJSON actual)
+        -- A sync reads definitions in one batch; it returns per resource what a one-file read does.
+        registered <- runQueryEffect tr (RepositorySync.resources testPid sync.id)
+        batched <- runQueryEffect tr (RepositorySync.localDefinitions testPid registered)
+        perResource <- traverse localOf registered
+        (length registered >= 3, map (fmap AE.toJSON . snd) batched) `shouldBe` (True, perResource)
         -- configurationImport_doesNotOverwriteAnEditMadeAfterItsSnapshot (nor deletes it).
         edited <- register testPid sync.id RepositorySync.Cron "monitors/job.yaml"
         let original = RepositorySync.CronDefinitionConfig $ RepositorySync.CronDefinition "job" "Original" 3600 60
