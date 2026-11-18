@@ -186,11 +186,16 @@ saveBaseline resource remote local = Hasql.interpExecute_ $ baselineSql resource
 
 
 baselineSql :: Resource -> Maybe AE.Value -> Maybe AE.Value -> HI.Sql
-baselineSql resource remote local = [HI.sql| UPDATE projects.repository_resources SET merged_definition = #{remote}, local_baseline = #{local}, remote_definition = NULL, conflicted = false WHERE id = #{resource.id} AND project_id = #{resource.projectId} |]
+baselineSql resource remote local =
+  [HI.sql| UPDATE projects.repository_resources SET merged_definition = #{remote}, local_baseline = #{local}, remote_definition = NULL, conflicted = false
+           WHERE id = #{resource.id} AND project_id = #{resource.projectId}
+             AND (merged_definition IS DISTINCT FROM #{remote} OR local_baseline IS DISTINCT FROM #{local} OR remote_definition IS NOT NULL OR conflicted) |]
 
 
+-- | Every sync tick re-derives the same conflict; an unchanged one is left alone rather than
+-- rewritten (35 UPDATEs per sync in prod).
 markConflict :: DB es => Resource -> Maybe AE.Value -> Eff es ()
-markConflict resource value = Hasql.interpExecute_ [HI.sql| UPDATE projects.repository_resources SET remote_definition = #{value}, conflicted = true WHERE id = #{resource.id} AND project_id = #{resource.projectId} |]
+markConflict resource value = Hasql.interpExecute_ [HI.sql| UPDATE projects.repository_resources SET remote_definition = #{value}, conflicted = true WHERE id = #{resource.id} AND project_id = #{resource.projectId} AND (NOT conflicted OR remote_definition IS DISTINCT FROM #{value}) |]
 
 
 decodeDefinition :: Text -> ByteString -> Either Text Definition
