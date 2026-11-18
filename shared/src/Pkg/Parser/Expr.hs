@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CmpOp (..), MatchOp (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, FreeTextMatch (..), freeTextMatch, freeTextRegex, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, isErrorSql, sqlStringLit) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CmpOp (..), MatchOp (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, FreeTextMatch (..), freeTextMatch, freeTextRegex, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, flattenedMetricsAttributes, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, isErrorSql, sqlStringLit) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -1142,7 +1142,9 @@ instance Display Subject where
     case M.lookup entire outputFieldAliases of
       Just col -> displayPrec prec col
       Nothing
-        | entire `S.member` flattenedOtelAttributes -> displayPrec prec (transformFlattenedAttribute entire)
+        -- Only while the root is still the bare column: a source rewrite that wraps it (a
+        -- metrics JSON read) has opted out of the spans-only flattened columns.
+        | entire `S.member` flattenedOtelAttributes, T.takeWhile (/= '.') entire == x -> displayPrec prec (transformFlattenedAttribute entire)
         | otherwise -> displayPrec prec (buildQuerySequence x keys)
     where
       buildQuerySequence :: T.Text -> [FieldKey] -> T.Text

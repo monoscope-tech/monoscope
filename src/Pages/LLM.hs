@@ -75,7 +75,7 @@ import Pkg.Parser.Eval (jsonAsText)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, act, addRespHeaders, done, useTfReads)
-import Utils (TabStrip (..), countNoun, drawerRowAttrs_, faSprite_, getDurationNSMS, navTabStrip_, prettyPrintCount, replaceAllFormats, tokenFlow, truncateText)
+import Utils (TabStrip (..), countNoun, drawerRowAttrs_, faSprite_, getDurationNSMS, navTabStrip_, nonEmptyT, prettyPrintCount, replaceAllFormats, tokenFlow, truncateText)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links
 
@@ -311,7 +311,10 @@ withJudged pid convs = do
 
 -- | Conversations span hours, so these pages open on a day rather than the app-wide five minutes.
 llmWindow :: Time.Time :> es => Maybe Text -> Maybe Text -> Maybe Text -> Eff es TimePicker.TimeWindow
-llmWindow fromP toP sinceP = mkWindow fromP toP (sinceP <|> ("24H" <$ guard (isNothing fromP && isNothing toP)))
+--
+-- The refreshing shell resends an unset picker as @since=&from=&to=@; blanks are absent here too,
+-- or the list read the app-wide five minutes while the page's charts read the day.
+llmWindow fromP toP sinceP = mkWindow fromP toP (nonEmptyT sinceP <|> ("24H" <$ guard (all (isNothing . nonEmptyT) [fromP, toP])))
 
 
 -- | Recurring openings: Drain over the conversations' first user messages, the clustering log patterns use.

@@ -910,6 +910,13 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     let buckets q = (\md -> (md.error, V.length md.dataset)) <$> runQueryEffect tr (Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) (Just $ q <> "hashes[*]==\"ba3431d5\" | summarize count() by bin_auto(timestamp)") Nothing (Just "24H") Nothing Nothing Nothing Nothing [])
     buckets "" >>= (`shouldSatisfy` \(err, n) -> isNothing err && n > 0)
     snd <$> buckets "kind==\"server\" AND " `shouldReturn` 0
+    -- Several aggregates with no `by` are one row of named columns; a single-float decoder failed
+    -- them ("column count does not match its decoder"). A metrics query on an attribute with no
+    -- otel_metrics column reads the JSON, not the spans-only attributes___db___namespace.
+    let chart src dt q = runQueryEffect tr (Charts.queryMetrics (Just Hasql.SqlPostgres) (Just dt) (Just testPid) (Just q) Nothing (Just "24H") Nothing Nothing src Nothing [])
+    multi <- chart Nothing Charts.DTMetric "summarize count(), min(duration), max(duration)"
+    (multi.error, V.length multi.headers) `shouldBe` (Nothing, 3)
+    (.error) <$> chart (Just "metrics") Charts.DTMetric "attributes.db.namespace == \"orders\" | summarize avg(value) by bin_auto(timestamp), attributes.db.namespace" `shouldReturn` Nothing
     template <- decodeUtf8 <$> readFileBS "static/public/dashboards/endpoint-stats.yaml"
     (T.isInfixOf "{{const-endpointFilter}}" template, T.isInfixOf "kind" template) `shouldBe` (True, False)
 

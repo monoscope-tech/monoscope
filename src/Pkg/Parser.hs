@@ -541,10 +541,10 @@ sqlFromQueryComponents sqlCfg qc =
               asText col = let (expr, aliasM) = splitTrailingAlias col in "(" <> expr <> ")::text" <> maybe "" (" AS " <>) aliasM
               selectCols
                 | null qc.aggregations = qc.select
-                -- No `by` at all is a *scalar* summarize, which Charts.decoderFor
-                -- reads as DTFloat — casting that to text breaks the decode. Only
-                -- the grouped shape goes through the all-text DTText decoder.
-                | null qc.groupByClause = qc.aggregations
+                -- One aggregate with no `by` is a *scalar* summarize, which Charts.decoderFor
+                -- reads as DTFloat — casting that to text breaks the decode. Several, or
+                -- any grouped shape, go through the all-text DTText decoder.
+                | null qc.groupByClause, [_] <- qc.aggregations = qc.aggregations
                 | otherwise = groupCols <> map asText qc.aggregations
               -- buildOrderBy honours an explicit `| sort by`; hand-rolling the
               -- clause here silently dropped it, so `summarize … by svc | sort
@@ -630,7 +630,9 @@ intervalSeconds t = case words t of
 
 -- | What a query returns, read off its @summarize@ ('parseQueryToAST' admits at most one):
 -- the events themselves, one scalar row, a series binned by time, or a value per group.
-data ResultShape = Events | Scalar | TimeSeries | Categories
+-- | 'Row' is several aggregates with no @by@: one row of named columns, not one number and
+-- not a ranking (it has no label column).
+data ResultShape = Events | Scalar | Row | TimeSeries | Categories
   deriving stock (Eq, Show)
 
 
@@ -642,11 +644,15 @@ data ResultShape = Events | Scalar | TimeSeries | Categories
 --
 -- >>> fmap resultShape (parseQueryToAST "summarize count() by name | where count_ > 1")
 -- Right Categories
+--
+-- >>> fmap resultShape (parseQueryToAST "summarize count(), min(timestamp), max(timestamp)")
+-- Right Row
 resultShape :: [Section] -> ResultShape
-resultShape ast = case listToMaybe [by | SummarizeCommand _ by <- ast] of
+resultShape ast = case listToMaybe [(aggs, by) | SummarizeCommand aggs by <- ast] of
   Nothing -> Events
-  Just Nothing -> Scalar
-  Just (Just (SummarizeByClause items))
+  Just ([_], Nothing) -> Scalar
+  Just (_, Nothing) -> Row
+  Just (_, Just (SummarizeByClause items))
     | any (\case ByBinFunc _ -> True; _ -> False) items -> TimeSeries
     | otherwise -> Categories
 
