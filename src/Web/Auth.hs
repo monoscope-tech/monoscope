@@ -473,12 +473,10 @@ clientMetadataH :: Maybe Text -> ATBaseCtx ClientMetadata
 clientMetadataH Nothing = throwError err401
 clientMetadataH (Just authTextB64) = do
   appCtx <- ask @AuthContext
-  let authTextE = B64.decodeBase64Untyped (encodeUtf8 $ stripBearer authTextB64)
-  case authTextE of
-    Left err -> Logging.logAttention "Auth Error in clientMetadata" (toString err) >> throwError err401
-    Right authText -> do
-      let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 appCtx.config.apiKeyEncryptionSecretKey) authText
-      case ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey of
+  -- Malformed keys are anyone's to send (a Go client posted a wrong-length one ~30 times a day,
+  -- each an attention log): a 401, not a page.
+  let keyIdM = rightToMaybe (B64.decodeBase64Untyped (encodeUtf8 $ stripBearer authTextB64)) >>= UUID.fromASCIIBytes . ProjectApiKeys.decryptAPIKey (encodeUtf8 appCtx.config.apiKeyEncryptionSecretKey)
+  case ProjectApiKeys.ProjectApiKeyId <$> keyIdM of
         Nothing -> throwError err401
         Just apiKeyUUID -> do
           -- The project lookup is the SECOND half of authenticating this key, not
