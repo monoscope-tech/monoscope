@@ -834,7 +834,7 @@ evidenceWidget from until item = case item.queryResult of
   Just o@QueryObservation{headers, dataset}
     | numericAggregate o ->
         let binned = binnedQuery o
-            rows = if binned then V.fromList $ sortOn (\r -> r V.!? 0 >>= num) $ map (\r -> V.imap (\i v -> if i == 0 then toMs v else v) r) $ V.toList dataset else dataset
+            rows = if binned then V.fromList $ sortOn (\r -> r V.!? 0 >>= num) $ map (V.imap (\i v -> if i == 0 then toMs v else v)) $ V.toList dataset else dataset
             num = \case AE.Number n -> Just n; _ -> Nothing
             toMs = \case AE.Number n | n < 1e11 -> AE.Number (n * 1000); v -> v
          in Just (def :: Widget.Widget){Widget.wType = bool Widget.WTTable Widget.WTTimeseries binned, Widget.title = Just "Review query", Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.source = AE.toJSON $ V.cons (AE.toJSON <$> headers) rows}}
@@ -942,7 +942,7 @@ renderReview host run audience result =
     <> [footer]
   where
     evidenceBlock item = case item.queryResult of
-      Just o -> ["![Review query results](" <> url <> ")" | Just url <- [item.chartUrl], binnedQuery o] <> [evidenceTable item.service o | numericAggregate o]
+      Just o -> ["![Review query results](" <> url <> ")" | binnedQuery o, Just url <- [item.chartUrl]] <> [evidenceTable item.service o | numericAggregate o]
       Nothing -> ["![Observed service events](" <> url <> ")" | Just url <- [item.chartUrl]]
     (github, shown, runUrl, rate) = case audience of GitHubComment{includeEvidence, runUrl = url, rate = link} -> (True, includeEvidence, Just url, link); MonoscopeView -> (False, True, Nothing, Nothing)
     label = \case
