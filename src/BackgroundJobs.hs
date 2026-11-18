@@ -3511,10 +3511,12 @@ processAPIChangeAnomalies pid targetHashes = do
   -- Group by endpoint hash to consolidate related changes
   anomaliesByEndpoint <- groupAnomaliesByEndpointHash . V.fromList <$> ApiChanges.getAnomaliesVM pid targetHashes
 
+  openIssues <- maybe (pure mempty) (\hs -> Issues.selectIssuesByHashes pid hs (Issues.OpenOfType Issues.ApiChange)) (nonEmpty (map fst anomaliesByEndpoint))
+
   -- Process each endpoint group, collecting info for newly created issues only
   newEndpointInfos <-
     catMaybes <$> forM anomaliesByEndpoint \(endpointHash, anomalies) -> do
-      existingIssueM <- Issues.selectIssueByHash pid endpointHash (Issues.OpenOfType Issues.ApiChange)
+      let existingIssueM = Map.lookup endpointHash openIssues
       let firstAnom = head anomalies
           hasChanges = any ((== ApiChanges.ATEndpoint) . (.anomalyType)) anomalies || Issues.hasFieldDrift (Issues.apiChangeDataFrom anomalies)
       case existingIssueM of
