@@ -235,6 +235,10 @@ tests:
       - these
       - hs-opentelemetry-instrumentation-auto
       - hs-opentelemetry-instrumentation-hasql
+      # HasqlGuardSpec captures the DB spans the pool emits.
+      - hs-opentelemetry-api
+      - hs-opentelemetry-sdk
+      - hs-opentelemetry-exporter-in-memory
       - hspec
       - log-base
       - servant-queryparam-core

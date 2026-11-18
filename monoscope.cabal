@@ -922,8 +922,11 @@ test-suite integration-tests
     , hasql-interpolate
     , hasql-pool
     , hasql-transaction
+    , hs-opentelemetry-api
+    , hs-opentelemetry-exporter-in-memory
     , hs-opentelemetry-instrumentation-auto
     , hs-opentelemetry-instrumentation-hasql
+    , hs-opentelemetry-sdk
     , hspec
     , http-api-data
     , http-client
