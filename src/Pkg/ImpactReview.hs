@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.ImpactReview (reviewPullRequest, prepareReviewWorkspace, requestReview, fixIssue, autofixIssues, publishIssueFix, PublishSkip (..), ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Claim (..), ClaimStatus (..), Issue (..), ProofLink (..), Shot (..), proofLink, Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, renderProgress, ReviewQuery, mkReviewQuery) where
+module Pkg.ImpactReview (reviewPullRequest, prepareReviewWorkspace, requestReview, fixIssue, autofixIssues, publishIssueFix, PublishSkip (..), ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Claim (..), ClaimStatus (..), Issue (..), ProofLink (..), Shot (..), proofLink, Evidence (..), Observation (..), EvidenceKind (..), QueryObservation (..), QueryKind (..), evidenceTable, Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, renderProgress, ReviewQuery, mkReviewQuery) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Control.Monad.Trans.Except (throwE)
@@ -25,8 +25,10 @@ import Data.List.Extra (lookup, nubOrd)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.OpenApi.Schema.Validation qualified as Schema
+import Data.Scientific (toRealFloat)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, nominalDay)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID.V5 qualified as UUID5
 import Data.Vector qualified as V
@@ -72,7 +74,7 @@ import System.Logging qualified as Log
 import System.Tracing (Tracing)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB)
 import UnliftIO.Exception (bracket, throwIO, tryAny)
-import Utils (hostPath, prettyPrintCount)
+import Utils (formatWithCommas, hostPath, prettyPrintCount)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), fixMediaPath, proofMediaPath, proofRatingPath, urls)
 
 
@@ -825,17 +827,68 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
 
 
 -- | One evidence item as one widget: the run page draws it live and GitHub gets its PNG.
--- Log and span samples have no widget, so their bodies never leave Monoscope as images.
+-- Log and span samples have no widget, so their bodies never leave Monoscope as images. A query
+-- binned by time is drawn as the chart it is (charts read millisecond timestamps), not a table of epochs.
 evidenceWidget :: UTCTime -> UTCTime -> Evidence -> Maybe Widget.Widget
 evidenceWidget from until item = case item.queryResult of
-  Just QueryObservation{kind = Aggregated, headers, dataset}
-    | all (all (\case AE.Number{} -> True; AE.Null -> True; _ -> False)) dataset ->
-        Just (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.title = Just "Review query", Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.source = AE.toJSON $ V.cons (AE.toJSON <$> headers) dataset}}
+  Just o@QueryObservation{headers, dataset}
+    | numericAggregate o ->
+        let binned = binnedQuery o
+            rows = if binned then V.fromList $ sortOn (\r -> r V.!? 0 >>= num) $ map (\r -> V.imap (\i v -> if i == 0 then toMs v else v) r) $ V.toList dataset else dataset
+            num = \case AE.Number n -> Just n; _ -> Nothing
+            toMs = \case AE.Number n | n < 1e11 -> AE.Number (n * 1000); v -> v
+         in Just (def :: Widget.Widget){Widget.wType = bool Widget.WTTable Widget.WTTimeseries binned, Widget.title = Just "Review query", Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.source = AE.toJSON $ V.cons (AE.toJSON <$> headers) rows}}
   Just _ -> Nothing
   Nothing -> case (item.kind, item.service) of
     (Telemetry, Just _) ->
       Just (def :: Widget.Widget){Widget.wType = Widget.WTTimeseries, Widget.title = Just "Observed service events", Widget.query = Just (serviceSelector item <> " and " <> toQText (evidenceWindow from until) <> " | summarize events = count() by bin_auto(timestamp)"), Widget.timeFrom = Just $ toText $ iso8601Show from, Widget.timeTo = Just $ toText $ iso8601Show until}
     _ -> Nothing
+
+
+-- | Counts and measures only: sampled rows carry log and span bodies, which never leave Monoscope.
+numericAggregate :: QueryObservation -> Bool
+numericAggregate o = case o.kind of
+  Aggregated -> all (all (\case AE.Number{} -> True; AE.Null -> True; _ -> False)) o.dataset
+  Sampled -> False
+
+
+-- | A query binned by time, which reads as a chart rather than a table of epochs.
+binnedQuery :: QueryObservation -> Bool
+binnedQuery o = V.headM o.headers == Just "timestamp" && V.length o.dataset > 1
+
+
+-- | Query evidence as GitHub reads it: an HTML table laid out like the table widget (the column
+-- names, readable UTC times, grouped digits right-aligned), not a picture of raw cells.
+--
+-- >>> let o = QueryObservation Aggregated (V.fromList ["timestamp", "matching", "total"]) (V.fromList [V.fromList [AE.Number 1794873600, AE.Number 0, AE.Number 1164948]]) False False
+-- >>> putTextLn $ evidenceTable (Just "api") o
+-- <table>
+-- <tr><th>timestamp</th><th align="right">matching</th><th align="right">total</th></tr>
+-- <tr><td>Nov 17 00:00</td><td align="right">0</td><td align="right">1,164,948</td></tr>
+-- </table>
+-- <BLANKLINE>
+-- <sub>api · 1 row · times in UTC</sub>
+evidenceTable :: Maybe Text -> QueryObservation -> Text
+evidenceTable service o =
+  let headers = V.toList o.headers
+      rows = V.toList $ V.take 8 o.dataset
+      isTime h = h == "timestamp"
+      numeric h = not (isTime h) && all (maybe True (\case AE.Number _ -> True; AE.Null -> True; _ -> False) . (V.!? i h)) o.dataset
+      i h = fromMaybe 0 $ V.elemIndex h o.headers
+      right h = bool "" " align=\"right\"" (numeric h)
+      esc = T.replace ">" "&gt;" . T.replace "<" "&lt;" . T.replace "&" "&amp;"
+      cell h = \case
+        AE.Number n | isTime h -> let secs = toRealFloat n :: Double in toText $ formatTime defaultTimeLocale "%b %-e %H:%M" $ posixSecondsToUTCTime $ realToFrac $ bool secs (secs / 1000) (secs > 1e11)
+        AE.Number n -> formatWithCommas (toRealFloat n)
+        AE.String t -> esc $ T.take 120 t
+        AE.Null -> "—"
+        v -> esc $ T.take 120 $ decodeUtf8 $ AE.encode v
+      total = V.length o.dataset
+      counted = if total > length rows then "showing " <> show (length rows) <> " of " <> show total <> " rows" else show total <> bool " rows" " row" (total == 1)
+   in T.intercalate "\n" (["<table>", "<tr>" <> foldMap (\h -> "<th" <> right h <> ">" <> esc h <> "</th>") headers <> "</tr>"] <> ["<tr>" <> mconcat (zipWith (\h v -> "<td" <> right h <> ">" <> cell h v <> "</td>") headers (V.toList r)) <> "</tr>" | r <- rows] <> ["</table>"])
+        <> "\n\n<sub>"
+        <> T.intercalate " · " (maybeToList (esc <$> service) <> [counted] <> ["times in UTC" | any isTime headers] <> ["result limit reached" | o.limitReached])
+        <> "</sub>"
 
 
 serviceSelector :: Evidence -> Text
@@ -883,10 +936,14 @@ renderReview host run audience result =
     <> [plain s | Just s <- [result.summary]]
     <> foldMap (pure . riskTable) result.assessments
     <> (if null result.findings then [] else ("#### Worth checking in production (" <> show (length result.findings) <> ")") : map findingText result.findings)
-    <> ["![" <> (if isJust item.queryResult then "Review query results" else "Observed service events") <> "](" <> url <> ")" | github && shown, item <- take 3 $ filter (\e -> any (elem e.key . (.evidenceKeys)) result.findings) result.evidence, Just url <- [item.chartUrl]]
+    -- Identical query results are shown once: a reviewer that re-ran a query cited it twice.
+    <> (if github && shown then concatMap evidenceBlock $ take 3 $ ordNubOn (\e -> maybe (Left e.key) (Right . AE.encode) e.queryResult) $ filter (\e -> any (elem e.key . (.evidenceKeys)) result.findings) result.evidence else [])
     <> coverage
     <> [footer]
   where
+    evidenceBlock item = case item.queryResult of
+      Just o -> ["![Review query results](" <> url <> ")" | Just url <- [item.chartUrl], binnedQuery o] <> [evidenceTable item.service o | numericAggregate o]
+      Nothing -> ["![Observed service events](" <> url <> ")" | Just url <- [item.chartUrl]]
     (github, shown, runUrl, rate) = case audience of GitHubComment{includeEvidence, runUrl = url, rate = link} -> (True, includeEvidence, Just url, link); MonoscopeView -> (False, True, Nothing, Nothing)
     label = \case
       WorthChecking -> "Worth checking"
@@ -943,7 +1000,7 @@ renderReview host run audience result =
       callout "WARNING"
         $ ["**[`" <> clean finding.location.path <> ":" <> show finding.location.line <> "`](" <> diffLink finding.location <> ")**" <> case finding.location.side of Base -> " (removed line)"; Head -> ""]
         <> if shown
-          then [plain finding.mechanism, "", "**Next check:** " <> plain finding.nextStep, ""] <> map evidenceText (filter (\e -> e.key `elem` finding.evidenceKeys) result.evidence)
+          then [plain finding.mechanism, "", "**Next check:** " <> plain finding.nextStep, ""] <> ordNub (map evidenceText (filter (\e -> e.key `elem` finding.evidenceKeys) result.evidence))
           else ["The reasoning and production evidence are in the " <> fullReview <> "."]
     diffLink location = "https://github.com/" <> run.owner <> "/" <> run.repo <> "/pull/" <> show run.number <> "/files#diff-" <> sha256 (encodeUtf8 location.path) <> (case location.side of Base -> "L"; Head -> "R") <> show location.line
     evidenceText item =

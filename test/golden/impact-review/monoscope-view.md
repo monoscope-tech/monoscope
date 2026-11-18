@@ -34,6 +34,7 @@ Adds retries to payment capture. A second timeout can charge a customer twice, a
 > **Next check:** Count captures with two or more retries in the last week, then add a test for a double timeout.
 >
 > [checkout-api in production](https://app.monoscope.tech/p/x/log_explorer): 120.3K events and 312 errors, Jan 1 to Jan 8, 2025
+> [checkout-api](https://app.monoscope.tech/p/x/settings): query results
 
 > **[`src/payments/capture.ts:120`](https://github.com/acme/checkout/pull/42/files#diff-5badcd3e5097afa5539d90a33dfe2c3d239f41513fa07ece41696a1a74ab438bR120)**
 > The give-up branch swallows the provider error, so a failed capture leaves no log or span error.
@@ -41,6 +42,7 @@ Adds retries to payment capture. A second timeout can charge a customer twice, a
 > **Next check:** Log the provider error and mark the span as an error before returning.
 >
 > [checkout-api in production](https://app.monoscope.tech/p/x/log_explorer): 120.3K events and 312 errors, Jan 1 to Jan 8, 2025
+> [checkout-api](https://app.monoscope.tech/p/x/settings): query results
 
 **What this review could not verify**
 

@@ -46,6 +46,7 @@ Adds retries to payment capture. A second timeout can charge a customer twice, a
 > **Next check:** Count captures with two or more retries in the last week, then add a test for a double timeout.
 >
 > [checkout-api in production](https://app.monoscope.tech/p/x/log_explorer): 120.3K events and 312 errors, Jan 1 to Jan 8, 2025
+> [checkout-api](https://app.monoscope.tech/p/x/settings): query results
 
 > [!WARNING]
 > **[`src/payments/capture.ts:120`](https://github.com/acme/checkout/pull/42/files#diff-5badcd3e5097afa5539d90a33dfe2c3d239f41513fa07ece41696a1a74ab438bR120)**
@@ -54,8 +55,20 @@ Adds retries to payment capture. A second timeout can charge a customer twice, a
 > **Next check:** Log the provider error and mark the span as an error before returning.
 >
 > [checkout-api in production](https://app.monoscope.tech/p/x/log_explorer): 120.3K events and 312 errors, Jan 1 to Jan 8, 2025
+> [checkout-api](https://app.monoscope.tech/p/x/settings): query results
 
 ![Observed service events](https://app.monoscope.tech/p/x/widget.png?widgetZ=fixture)
+
+![Review query results](https://app.monoscope.tech/p/x/widget.png?widgetZ=query)
+
+<table>
+<tr><th>timestamp</th><th align="right">retried_twice</th><th align="right">captures</th></tr>
+<tr><td>Nov 17 00:00</td><td align="right">3</td><td align="right">1,164,948</td></tr>
+<tr><td>Nov 16 00:00</td><td align="right">0</td><td align="right">1,556,994</td></tr>
+<tr><td>Nov 15 00:00</td><td align="right">1</td><td align="right">1,538,283</td></tr>
+</table>
+
+<sub>checkout-api · 3 rows · times in UTC</sub>
 
 <details><summary>What this review could not verify (2)</summary>
 

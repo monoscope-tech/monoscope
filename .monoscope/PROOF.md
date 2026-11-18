@@ -39,6 +39,9 @@ migrated Postgres and return once sample traffic is flowing: an hour of history 
 then a few requests a second, so Live Tail streams. The demo project at
 `/p/00000000-0000-0000-0000-000000000000/` needs no login.
 
+Chromium and Playwright are preinstalled; never run `playwright install` (its browser cache is
+read-only, so it fails the setup).
+
 Command: write the Playwright script into `web-components/` (so `playwright` resolves; the file is
 untracked) with a quoted heredoc, so nothing in it needs escaping, then run it. Record the whole
 window, sidebar included, at 1280x800. The host draws a browser window around the recording from

@@ -27,7 +27,7 @@ import System.IO.Temp (withSystemTempDirectory, withTempDirectory)
 import System.Posix.Files qualified as Posix
 import System.Posix.IO qualified as Posix
 import System.Posix.Unistd (fileSynchronise)
-import System.Process.Typed (ExitCode (..), createPipe, getStderr, getStdout, nullStream, proc, readProcessStdout_, setEnv, setStderr, setStdin, setStdout, setWorkingDir, waitExitCode, withProcessTerm)
+import System.Process.Typed (ExitCode (..), createPipe, getStderr, getStdout, nullStream, proc, readProcessStderr, readProcessStdout_, setEnv, setStderr, setStdin, setStdout, setWorkingDir, waitExitCode, withProcessTerm)
 import UnliftIO.Async (concurrently)
 import UnliftIO.Exception (bracket, throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
@@ -336,7 +336,10 @@ renderMedia input steps = do
   outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-proof" \directory -> do
     environment <- filter ((== "PATH") . fst) <$> getEnvironment
     writeFileBS (directory </> "proof.input") input
-    steps directory \program args -> withProcessTerm (setStdin nullStream $ setStdout nullStream $ setStderr nullStream $ setEnv environment $ setWorkingDir directory $ proc "nice" (["-n", "19", program] <> args)) waitExitCode >>= \code -> unless (code == ExitSuccess) $ throwIO $ userError $ program <> " exited with " <> show code
+    -- The stderr tail goes in the failure: "ffmpeg exited with ExitFailure 1" alone left three failed proofs undiagnosable.
+    steps directory \program args ->
+      readProcessStderr (setStdin nullStream $ setStdout nullStream $ setEnv environment $ setWorkingDir directory $ proc "nice" (["-n", "19", program] <> args)) >>= \(code, err) ->
+        unless (code == ExitSuccess) $ throwIO $ userError $ program <> " exited with " <> show code <> ": " <> toString (T.takeEnd 600 $ T.strip $ decodeUtf8 err)
     join bitraverse (\name -> readPrivateArtifact directory name mediaLimit) ("proof.gif", "proof.mp4")
   pure $ case outcome of
     Right (Just media) -> Right media
