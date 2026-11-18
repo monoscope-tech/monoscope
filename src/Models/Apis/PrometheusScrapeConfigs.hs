@@ -38,7 +38,6 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Sleep (Sleep)
 import Data.List (lookup, partition)
 import Data.Text qualified as T
-import "these" Data.These qualified as These
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Vector qualified as V
@@ -65,6 +64,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (DB)
 import Utils (safeScrapeUrl)
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData, toUrlPiece)
+import "these" Data.These qualified as These
 
 
 type PrometheusScrapeConfigId = UUIDId "prometheus_scrape_config"

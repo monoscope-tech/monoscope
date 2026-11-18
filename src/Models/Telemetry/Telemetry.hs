@@ -143,8 +143,6 @@ import Data.Scientific qualified as Sci
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
-import "these" Data.These (These (..))
-import "these" Data.These qualified as These
 import Data.Time (UTCTime (..))
 import Data.Time.Clock (NominalDiffTime, addUTCTime, diffTimeToPicoseconds, diffUTCTime, nominalDay, picosecondsToDiffTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
@@ -190,6 +188,8 @@ import Text.Casing (fromAny, toKebab)
 import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue, tokenFlow)
 import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 import "cryptonite" Crypto.Hash qualified as Crypto
+import "these" Data.These (These (..))
+import "these" Data.These qualified as These
 
 
 -- $setup
