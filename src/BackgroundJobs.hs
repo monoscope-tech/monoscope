@@ -4803,7 +4803,7 @@ proposePathTemplates paths =
 
 
 -- | OddJobs owns retry counts and exponential backoff; do not replace these with fresh jobs.
-data GitSyncJobFailure = SyncLeaseUnavailable GitSync.GitHubSyncId | SyncTimedOut GitSync.GitHubSyncId
+newtype GitSyncJobFailure = SyncTimedOut GitSync.GitHubSyncId
   deriving stock (Show)
   deriving anyclass (CE.Exception)
 
@@ -4816,7 +4816,10 @@ withGitSync pid sidM operation k = do
   when (null syncs) $ Log.logAttention "No git sync configured for project" (pid, sidM)
   forM_ syncs \observed ->
     bracket (GitSync.claimSyncLease observed.id) (traverse_ GitSync.releaseSyncLease) \case
-      Nothing -> throwIO $ SyncLeaseUnavailable observed.id
+      -- Another worker is running this same reconciliation (imports and every pending export), and the
+      -- minute tick runs it again. Failing here only retried duplicate work: ~120 syncs an hour overlap
+      -- a 16 s median run, and each overlap was an error span plus backoff retries.
+      Nothing -> Log.logInfo "Repository sync already running; the next tick reconciles again" (pid, observed.id)
       Just _ -> do
         -- The two-minute budget leaves a minute for cancellation before the lease expires.
         outcome <- Timeout.timeout (120 * 1_000_000) do
