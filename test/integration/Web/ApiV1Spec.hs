@@ -395,6 +395,11 @@ spec = describe "API v1" do
       let tree = (body :: ApiT.EventsQuery){ApiT.query = Just $ "attributes.wc.marker == \"" <> marker <> "\""}
       V.length . (.logsData) <$> runB (ApiH.apiEventsQuery Log.queryEvents testPid tree) `shouldReturn` 1
       V.length . (.logsData) <$> runB (ApiH.apiEventsQuery Log.queryEvents testPid (tree :: ApiT.EventsQuery){ApiT.withChildren = Just True}) `shouldReturn` 3
+      -- body holds JSON, so `body == "x"` compared it with the bare text: no match on TimeFusion
+      -- (a full-window scan that timed out in prod) and an invalid-json error on Postgres.
+      ingestLog tr apiKey marker (addUTCTime (-30) frozenTime)
+      let bodyIs q = V.length . (.logsData) <$> runB (ApiH.apiEventsQuery Log.queryEvents testPid (body :: ApiT.EventsQuery){ApiT.query = Just q})
+      (,) <$> bodyIs ("body == \"" <> marker <> "\"") <*> bodyIs ("body in (\"" <> marker <> "\", \"other\")") `shouldReturn` (1, 1)
 
       issues <- runB $ ApiH.apiIssuesList testPid Nothing Nothing Nothing Nothing Nothing
       (issues.perPage > 0, issues.totalCount >= 0) `shouldBe` (True, True)

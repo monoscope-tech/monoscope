@@ -473,36 +473,34 @@ clientMetadataH :: Maybe Text -> ATBaseCtx ClientMetadata
 clientMetadataH Nothing = throwError err401
 clientMetadataH (Just authTextB64) = do
   appCtx <- ask @AuthContext
-  let authTextE = B64.decodeBase64Untyped (encodeUtf8 $ stripBearer authTextB64)
-  case authTextE of
-    Left err -> Logging.logAttention "Auth Error in clientMetadata" (toString err) >> throwError err401
-    Right authText -> do
-      let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 appCtx.config.apiKeyEncryptionSecretKey) authText
-      case ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey of
-        Nothing -> throwError err401
-        Just apiKeyUUID -> do
-          -- The project lookup is the SECOND half of authenticating this key, not
-          -- a decoration: an API key outlives the project it belongs to, so
-          -- without this a deleted or deactivated project's key still collects
-          -- pubsub credentials and keeps ingesting. It was previously fetched
-          -- and discarded, which validated nothing.
-          pApiKey <-
-            ProjectApiKeys.getProjectApiKey apiKeyUUID >>= \case
-              Nothing -> Logging.logAttention "clientMetadata: no api key with given id" () >> throwError err401
-              Just pApiKey ->
-                Projects.activeProjectById pApiKey.projectId >>= \case
-                  Nothing -> Logging.logAttention "clientMetadata: api key for inactive or deleted project" pApiKey.projectId >> throwError err401
-                  Just _ -> pure pApiKey
-          serviceAccountJson <-
-            maybe (Logging.logAttention "clientMetadata: failed to decode service account from env" () >> throwError Servant.err500) pure
-              $ AE.decodeStrict (B64.decodeBase64Lenient $ encodeUtf8 appCtx.config.monoscopePusherServiceAccountB64)
-          pure
-            $ ClientMetadata
-              { projectId = pApiKey.projectId
-              , pubsubProjectId = "past-3"
-              , topicId = fromMaybe "" $ listToMaybe appCtx.config.requestPubsubTopics
-              , pubsubPushServiceAccount = serviceAccountJson
-              }
+  -- Malformed keys are anyone's to send (a Go client posted a wrong-length one ~30 times a day,
+  -- each an attention log): a 401, not a page.
+  let keyIdM = rightToMaybe (B64.decodeBase64Untyped (encodeUtf8 $ stripBearer authTextB64)) >>= UUID.fromASCIIBytes . ProjectApiKeys.decryptAPIKey (encodeUtf8 appCtx.config.apiKeyEncryptionSecretKey)
+  case ProjectApiKeys.ProjectApiKeyId <$> keyIdM of
+    Nothing -> throwError err401
+    Just apiKeyUUID -> do
+      -- The project lookup is the SECOND half of authenticating this key, not
+      -- a decoration: an API key outlives the project it belongs to, so
+      -- without this a deleted or deactivated project's key still collects
+      -- pubsub credentials and keeps ingesting. It was previously fetched
+      -- and discarded, which validated nothing.
+      pApiKey <-
+        ProjectApiKeys.getProjectApiKey apiKeyUUID >>= \case
+          Nothing -> Logging.logAttention "clientMetadata: no api key with given id" () >> throwError err401
+          Just pApiKey ->
+            Projects.activeProjectById pApiKey.projectId >>= \case
+              Nothing -> Logging.logAttention "clientMetadata: api key for inactive or deleted project" pApiKey.projectId >> throwError err401
+              Just _ -> pure pApiKey
+      serviceAccountJson <-
+        maybe (Logging.logAttention "clientMetadata: failed to decode service account from env" () >> throwError Servant.err500) pure
+          $ AE.decodeStrict (B64.decodeBase64Lenient $ encodeUtf8 appCtx.config.monoscopePusherServiceAccountB64)
+      pure
+        $ ClientMetadata
+          { projectId = pApiKey.projectId
+          , pubsubProjectId = "past-3"
+          , topicId = fromMaybe "" $ listToMaybe appCtx.config.requestPubsubTopics
+          , pubsubPushServiceAccount = serviceAccountJson
+          }
 
 
 -- | Device Authorization Flow (CLI login).
