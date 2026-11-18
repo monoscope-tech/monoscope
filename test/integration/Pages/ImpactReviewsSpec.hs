@@ -4493,7 +4493,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     queue lostId
     lostAttempt <- maybe (fail "Lost-session attempt missing") pure =<< runQueryEffect tr (Usage.startAttempt testPid (Usage.Fix lostId) "fixture" "fixture")
     runQueryEffect tr (Usage.recordCall testPid (Usage.Fix lostId) $ Agent.ModelCall (uid 994) lostAttempt "fixture" "fixture") `shouldReturn` True
-    void $ tryAny $ run lostId "--app-job-lost-session"
+    -- Terminal: the job ends without throwing, so odd-jobs does not retry what cannot resume.
+    tryAny (run lostId "--app-job-lost-session") >>= (`shouldSatisfy` isRight)
     readIORef lostSessionCalls `shouldReturn` 0
     dbOne tr [sql|SELECT failure FROM projects.issue_fix_jobs WHERE run_id = ?|] (Only lostId) `shouldReturn` (Just "Saved progress was lost, so this run cannot resume. Start it again for a fresh run." :: Maybe Text)
     lostRuns <- filter ((== Issues.FixRun lostId) . (.source)) <$> runQueryEffect tr (Issues.listRoutineRuns testPid 12)

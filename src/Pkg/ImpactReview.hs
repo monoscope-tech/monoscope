@@ -1293,12 +1293,12 @@ fixIssue pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob)
   case outcome of
     Right (Just (Right ())) -> Jobs.scheduleJob Jobs.WakeNow $ Jobs.PublishFix pid fid
     _ -> do
-      let message = case outcome of
-            Right (Just (Left NativeSessionLost)) -> nativeSessionLostMessage
-            _ -> "Issue fix failed; retry to collect current evidence"
+      let lost = case outcome of Right (Just (Left NativeSessionLost)) -> True; _ -> False
+          message = bool "Issue fix failed; retry to collect current evidence" nativeSessionLostMessage lost
       Fixes.failJob lease message
       Log.logAttention "Issue-fix job failed" (pid, fid, either (toText . displayException) (maybe "Timed out" (either (show @Text) (const ""))) outcome)
-      throwIO $ ReviewFailure message
+      -- A lost session cannot resume, so a retry only repeats this failure (ten times, in prod).
+      unless lost $ throwIO $ ReviewFailure message
   where
     require :: Error ReviewFailure :> es => Either Text a -> Eff es a
     require = either (throwError . ReviewFailure) pure
