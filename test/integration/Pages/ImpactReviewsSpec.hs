@@ -3029,7 +3029,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let pid = UUIDId UUID.nil
         run = Reviews.ReviewRun{id = UUIDId UUID.nil, threadId = UUIDId UUID.nil, projectId = pid, owner = "acme", repo = "checkout", number = 42, revision = T.replicate 40 "a", state = Reviews.Completed, result = Nothing, error = Nothing, commentId = Nothing, latestRevision = T.replicate 40 "a", createdAt = frozenTime, request = Nothing, base = Nothing}
         telemetry = Impact.Evidence "telemetry-1" Impact.Telemetry (Just "checkout-api") (Just "production") "https://app.monoscope.tech/p/x/log_explorer" Nothing (Just $ Impact.Observation 120340 312) (Just "https://app.monoscope.tech/p/x/widget.png?widgetZ=fixture") Nothing
-        finding path line mechanism next = Impact.Finding (Impact.ChangedLine path line Impact.Head) mechanism next ["telemetry-1"]
+        -- The agent queried twice and got the same daily counts: they show once, as a table, not a picture.
+        observation = Impact.QueryObservation Impact.Aggregated (V.fromList ["timestamp", "retried_twice", "captures"]) (V.fromList [V.fromList [AE.Number t, AE.Number r, AE.Number c] | (t, r, c) <- [(1794873600, 3, 1164948), (1794787200, 0, 1556994), (1794700800, 1, 1538283)]]) False False
+        query n = Impact.Evidence ("query-" <> n) Impact.Telemetry (Just "checkout-api") Nothing "https://app.monoscope.tech/p/x/settings" (Just "summarize retried_twice = countif(retries >= 2), captures = count() by bin(timestamp, 1d)") Nothing (Just "https://app.monoscope.tech/p/x/widget.png?widgetZ=query") (Just observation)
+        finding path line mechanism next = Impact.Finding (Impact.ChangedLine path line Impact.Head) mechanism next ["telemetry-1", "query-1", "query-2"]
         grades = [(Impact.Alignment, Impact.Good, []), (Impact.Impact, Impact.Poor, ["Changes how payment captures are retried", "checkout-api serves every order"]), (Impact.Verification, Impact.Fair, ["No test covers a capture that times out twice"]), (Impact.Rollback, Impact.Good, []), (Impact.ErrorDetection, Impact.Poor, ["The new retry path logs nothing when it gives up"])]
         result =
           Impact.ReviewResult
@@ -3038,7 +3041,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             , finding "src/payments/capture.ts" 120 "The give-up branch swallows the provider error, so a failed capture leaves no log or span error." "Log the provider error and mark the span as an error before returning."
             ]
             ["No load test covers the retry backoff.", "Provider-side duplicates are not visible in this project's telemetry."]
-            [telemetry]
+            [telemetry, query "1", query "2"]
             frozenTime
             (addUTCTime (7 * 86400) frozenTime)
             Nothing
@@ -3490,7 +3493,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       renderT detail `shouldContainAll` ["write project memory", "publish pull request comment", "Merge risk: low", "Observed service events"]
     length (filter (T.isInfixOf "/issues/comments/99" . fst) requests) `shouldBe` 1
     let published = sentTo "/issues/comments/99" requests
-    published `shouldContainAll` ["Merge risk: low", "Worth checking", "Related test toolchain unavailable", "production query reached its result limit", "test-service](", "/widget.png?widgetZ=", "![Review query results]", "\\\\*check", revision]
+    published `shouldContainAll` ["Merge risk: low", "Worth checking", "Related test toolchain unavailable", "production query reached its result limit", "test-service](", "<table>", "</table>", "\\\\*check", revision]
     for_ @[] ["@impact-review-test", "https://untrusted.invalid", "long-review-log-body", "another-in-scope-event", "checkout-review-span", "Review temperature gauge"] \hidden -> published `shouldNotSatisfy` T.isInfixOf hidden
     completed <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
     (completed.state, completed.commentId) `shouldBe` (Reviews.Completed, Just 99)
@@ -3812,7 +3815,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
       unlift (respond request) >>= (`shouldBe` AE.encode observed) . AE.encode
       unlift (respond request{Agent.query = request.query <> " | take 1"}) >>= (`shouldSatisfy` T.isInfixOf "84") . jsonText
       resultText result{Impact.findings = [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "Check the changed metric behavior." "Verify the gauge." ["query-1"]]}
-    T.intercalate " " (map (decodeUtf8 . snd) metricsRequests) `shouldSatisfy` T.isInfixOf "Review query results"
+    -- A metric result reaches GitHub as a table of its values, not a picture of them.
+    T.intercalate " " (map (decodeUtf8 . snd) metricsRequests) `shouldSatisfy` \body -> all (`T.isInfixOf` body) ["<table>", "avg_value", ">42<"]
     T.intercalate " " (map (decodeUtf8 . snd) metricsRequests) `shouldNotSatisfy` T.isInfixOf "No telemetry observed"
 
     Just routine <- runQueryEffect tr $ Issues.getEventRoutine reviewPid Issues.EventPullRequest

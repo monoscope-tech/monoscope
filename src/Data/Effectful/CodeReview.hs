@@ -699,6 +699,11 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                     receive :: Maybe Checkout.Prepared -> Maybe GuestSession -> Int -> Int -> Maybe (Accepted result) -> IO (Either Text result)
                     receive supplied guestSession remaining submissions accepted = do
                       message <- (AE.eitherDecodeStrict >=> AET.parseEither parseMessage) <$> BS.hGetLine (getStdout process)
+                      -- A spent budget answers the call instead of discarding the review: the agent gets three
+                      -- more turns to submit what it has (it had evidence; the whole run used to fail and retry).
+                      let overBudget
+                            | remaining > -3 = writeMessage (Left @Text @AE.Value "Query budget spent: submit your result now with the evidence you already have.") >> receive supplied guestSession (remaining - 1) submissions Nothing
+                            | otherwise = pure $ Left "Review agent exceeded its query budget"
                       case message of
                         Left _ -> pure $ Left "Review agent returned an invalid protocol message"
                         Right (Left receipt) -> do
@@ -831,13 +836,13 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                               response <- pause remaining submissions guestSession $ if validTool invocation then request else pure $ Left "Tool is unavailable or its arguments violate the host contract"
                               writeMessage response
                               receive supplied guestSession (remaining - 1) submissions Nothing
-                          | otherwise -> pure $ Left "Review agent exceeded its query budget"
+                          | otherwise -> overBudget
                         Right (Right (Query query))
                           | remaining > 0 -> callbacks.respond query >>= writeMessage >> receive supplied guestSession (remaining - 1) submissions Nothing
-                          | otherwise -> pure $ Left "Review agent exceeded its query budget"
+                          | otherwise -> overBudget
                         Right (Right (Knowledge requestKnowledge))
                           | remaining > 0 -> callbacks.knowledge requestKnowledge >>= writeMessage >> receive supplied guestSession (remaining - 1) submissions Nothing
-                          | otherwise -> pure $ Left "Review agent exceeded its query budget"
+                          | otherwise -> overBudget
                         Right (Right (Admit artifact))
                           | isNothing supplied && isJust artifactStore -> pure $ Left "Review agent has not acquired its repository checkout"
                           | remaining > 0 -> do
@@ -851,7 +856,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                 ((SourceTask{}, _); (AdvisoryTask{}, _); (AdmissionTask{}, _); (PeerTask{}, _)) -> pure admitted
                               writeMessage saved
                               receive supplied guestSession (remaining - 1) submissions Nothing
-                          | otherwise -> pure $ Left "Review agent exceeded its query budget"
+                          | otherwise -> overBudget
                         Right (Right (Guest operation)) -> do
                           response <- active $ \session -> session.operate operation
                           writeMessage response
@@ -970,14 +975,17 @@ pruneNativeSnapshots directory retained = void $ tryIOError do
     unless (Just (UUIDId identifier) == retained) $ removePathForcibly $ directory </> filename
 
 
+-- | No checkpoint means nothing to resume. A run killed (deploy, timeout) before its first
+-- checkpoint leaves a transcript and maybe an unreferenced snapshot; failing on them retried every
+-- such job forever ("Native continuation manifest is missing", ~120 fix jobs a day). The fresh
+-- start already discards the transcript, so orphaned snapshots go too.
+--
+-- >>> withSystemTempDirectory "native" \d -> writeFileText (d </> "run.jsonl") "" >> (,) <$> (isNothing <$> readNativeCheckpoint @AE.Value d) <*> listDirectory d
+-- (True,["run.jsonl"])
 readNativeCheckpoint :: AE.FromJSON context => FilePath -> IO (Maybe (NativeCheckpoint context))
--- A first run has no checkpoint. Checking before reading keeps that expected miss off the
--- instrumented read, which recorded it as an exception and filed a runtime issue per review.
 readNativeCheckpoint directory =
   doesFileExist (directory </> "checkpoint.json") >>= \case
-    False -> do
-      unlessM (null <$> listDirectory directory) $ fail "Native continuation manifest is missing"
-      pure Nothing
+    False -> Nothing <$ pruneNativeSnapshots directory Nothing
     True -> Native.readPrivateArtifact directory "checkpoint.json" (16 * 1048576) >>= either (const $ fail "Invalid native continuation") (pure . Just) . AE.eitherDecodeStrict
 
 
