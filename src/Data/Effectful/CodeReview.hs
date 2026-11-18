@@ -172,8 +172,8 @@ data SessionSubject context where
   PeerSubject :: UUIDId "issue_fix" -> ArtifactRequest -> SessionSubject (UUIDId "agent_attempt")
 
 
-queryLimit, submissionLimit :: Int
-(queryLimit, submissionLimit) = (20, 5)
+submissionLimit, fixQueryLimit :: Int
+(submissionLimit, fixQueryLimit) = (5, 60)
 
 
 -- | @proofs@ is absent in checkpoints written before proof recording existed.
@@ -185,7 +185,7 @@ data SavedGuest = SavedGuest {id :: UUIDId "native_checkpoint", guest :: Guest.S
 instance AE.FromJSON SavedGuest where
   parseJSON value = do
     saved <- AE.genericParseJSON AE.defaultOptions value
-    unless (saved.remaining >= 0 && saved.remaining <= queryLimit && saved.submissions >= 0 && saved.submissions <= submissionLimit && all (\n -> n >= 0 && n <= proofBudget) saved.proofs) $ fail "Invalid native continuation budget"
+    unless (saved.remaining >= 0 && saved.remaining <= fixQueryLimit && saved.submissions >= 0 && saved.submissions <= submissionLimit && all (\n -> n >= 0 && n <= proofBudget) saved.proofs) $ fail "Invalid native continuation budget"
     pure saved
 
 
@@ -248,6 +248,15 @@ data Task format where
   FixTask :: SessionIdentity IO FixContext -> FixRequest -> Task 'JsonDraft
   AdmissionTask :: SessionIdentity IO (UUIDId "agent_attempt") -> AdmissionRequest -> Task 'JsonDraft
   PeerTask :: SessionIdentity IO (UUIDId "agent_attempt") -> FixReviewRequest -> Task 'JsonDraft
+
+
+-- | Tool calls a task may spend. A fix investigates, writes and runs a regression test, changes code
+-- and verifies it on both revisions, which 20 calls could not cover (production fixes ran out of budget).
+queryLimit :: Task format -> Int
+queryLimit = \case
+  FixTask{} -> fixQueryLimit
+  (PatchTask{}; SourcePatchTask{}) -> 20
+  (SourceTask{}; AdvisoryTask{}; AdmissionTask{}; PeerTask{}) -> 20
 
 
 data DraftValidator format result where
@@ -918,7 +927,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                           _ -> pure $ Left "Review agent returned an unvalidated draft"
                 ( do
                     writeMessage payload
-                    receive Nothing Nothing (maybe queryLimit (.remaining) paused) (maybe submissionLimit (.submissions) paused) Nothing
+                    receive Nothing Nothing (maybe (queryLimit task) (.remaining) paused) (maybe submissionLimit (.submissions) paused) Nothing
                   )
                   `finally` stop
         -- Replay persisted work before starting a child, fetching source or calling a model.
