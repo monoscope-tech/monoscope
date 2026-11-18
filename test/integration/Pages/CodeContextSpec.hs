@@ -1469,6 +1469,12 @@ spec = do
         (.lastRevision) <$> syncById tr sync `shouldReturn` Just "remote-conflict"
         conflicts <- runQueryEffect tr $ RepositorySync.resources testPid sync.id
         conflict <- maybe (fail "Expected the dashboard conflict") pure $ find (.conflicted) conflicts
+        -- The same conflict on the next tick is not written again (35 rewrites per sync in prod):
+        -- xmin moves on any UPDATE, so an unchanged one means the row was left alone.
+        let rowVersion = dbQuery @_ @(Only Text) tr "SELECT xmin::text FROM projects.repository_resources WHERE id = ?" (Only conflict.id)
+        before <- rowVersion
+        _ <- pull "remote-conflict-again" remote
+        rowVersion `shouldReturn` before
         [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
         status <- renderT . (.content) <$> call tr (PageCodeContext.repositoryGetH testPid repository.id)
         for_ ["Both versions changed", "Keep Monoscope", "Compare versions", "Active in Monoscope"] \part -> status `shouldSatisfy` T.isInfixOf part

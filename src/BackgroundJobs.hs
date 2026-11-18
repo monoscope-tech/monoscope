@@ -4887,7 +4887,8 @@ gitSyncFromRepo pid sid = withGitSync pid sid GitSync.ImportDashboards $ \conn s
                     then leftToMaybe <$> RepositorySync.importDefinition resource observed Nothing
                     else RepositorySync.saveBaseline resource remoteValue localValue $> Nothing
                 RepositorySync.KeepLocal -> pure Nothing
-                RepositorySync.Conflict -> RepositorySync.markConflict resource remoteValue $> Nothing
+                -- Every tick re-derives the same conflict; rewriting it was a write per conflicted file per sync.
+                RepositorySync.Conflict -> Nothing <$ unless (resource.conflicted && resource.remoteDefinition == remoteValue) (RepositorySync.markConflict resource remoteValue)
                 RepositorySync.ImportRemote -> do
                   applied <- RepositorySync.importDefinition resource observed incoming
                   case applied of
