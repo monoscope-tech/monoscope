@@ -511,7 +511,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                         session <- readIORef guest >>= maybe (fail "Native continuation requires a live guest") pure
                         disk <- session.suspend $ generation </> "guest.qcow2"
                         attempted <- readIORef proofCount
-                        let saved = SavedGuest identifier disk (Native.sha256 transcript) remaining submissions (Just attempted)
+                        -- Grace calls past a spent budget run it negative; a saved session must still validate.
+                        let saved = SavedGuest identifier disk (Native.sha256 transcript) (max 0 remaining) submissions (Just attempted)
                         persist $ case workflowState of
                           Just (FixReady current) -> FixWaiting saved $ SavedFix current.id $ Native.candidateSnapshot <$> current.progress
                           (Nothing; Just AdmissionReady; Just SourceReady) -> Waiting saved
