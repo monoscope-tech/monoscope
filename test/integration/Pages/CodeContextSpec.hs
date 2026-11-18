@@ -47,8 +47,6 @@ import Network.HTTP.Types.URI (urlEncode)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Test qualified as WT
-import OddJobs.ConfigBuilder (mkConfig)
-import OddJobs.Job qualified as Jobs
 import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.CodeContext qualified as PageCodeContext
@@ -1526,9 +1524,9 @@ spec = do
                 else pure $ Just $ if "/git/trees/" `T.isInfixOf` path then treeOf [("dashboards/overview.yaml", "blob")] else "{\"sha\":\"head\"}"
         withAsync (runJob tr (provider True) job) \worker -> do
           timeout 5000000 (takeMVar fetching) `shouldReturn` Just ()
-          for_ [job, BackgroundJobs.GitSyncPushDashboard testPid did.unUUIDId, BackgroundJobs.GitSyncPushAllDashboards testPid] \overlap -> do
-            outcome <- try @_ @SomeException $ runJob tr (provider False) overlap
-            outcome `shouldSatisfy` isLeft
+          -- Overlaps end without a provider call or an error; the tick's next reconcile imports and exports.
+          for_ [job, BackgroundJobs.GitSyncPushDashboard testPid did.unUUIDId, BackgroundJobs.GitSyncPushAllDashboards testPid] \overlap ->
+            filter (T.isInfixOf ("/repos/" <> sync.owner <> "/" <> sync.repo <> "/") . fst) <$> runJob tr (provider False) overlap `shouldReturn` []
           pendingJobs tr >>= (`shouldSatisfy` null)
           independent <- runJob tr (provider False) (BackgroundJobs.GitSyncRepository testPid other.id)
           length independent `shouldBe` 3
@@ -1594,22 +1592,14 @@ spec = do
             runTestBg (addUTCTime 181 frozenTime) tr (GitSync.claimSyncLease sync.id) `shouldReturn` Nothing
         bracket (acquire $ addUTCTime 181 frozenTime) relinquish (const pass)
 
-      it "repositoryWorkers_leaveContentionToTheQueuesBoundedRetryPolicy" \tr -> do
+      it "repositoryWorkers_leaveContentionToTheNextTick" \tr -> do
         sync <- teamDashboards tr
         Just lease <- runTestBg frozenTime tr $ GitSync.claimSyncLease sync.id
         bracket (pure lease) (\claimed -> runQueryEffect tr $ GitSync.releaseSyncLease claimed) \_ -> do
-          job <- withResource tr.trATCtx.jobsPool \conn -> Jobs.createJob conn "background_jobs" (BackgroundJobs.GitSyncRepository testPid sync.id)
-          threads <- newIORef M.empty
-          let runner queued = Jobs.throwParsePayload queued >>= void . runTestBgRecordingHTTP frozenTime tr . BackgroundJobs.processBackgroundJob tr.trATCtx
-              env = Jobs.RunnerEnv (mkConfig (\_ _ -> pass) "background_jobs" tr.trATCtx.jobsPool (Jobs.MaxConcurrentJobs 1) runner id) threads
-          for_ [1 .. 10] \attempt -> do
-            withResource tr.trATCtx.jobsPool \conn -> void $ PG.execute conn "UPDATE background_jobs SET run_at = ? WHERE id = ?" (frozenTime, job.jobId)
-            Just worker <- runReaderT (Jobs.pollRunJob "repository-retry-test" Nothing) env
-            void $ waitCatch worker
-            retried <- withResource tr.trATCtx.jobsPool (\conn -> Jobs.findJobByIdIO conn "background_jobs" job.jobId) >>= maybe (fail "Retry replaced the original job") pure
-            (retried.jobAttempts, retried.jobStatus) `shouldBe` (attempt, if attempt == 10 then Jobs.Failed else Jobs.Retry)
-            retried.jobLastError `shouldSatisfy` maybe False (T.isInfixOf "SyncLeaseUnavailable" . decodeUtf8 . LBS.toStrict . AE.encode)
-            withResource tr.trATCtx.jobsPool (\conn -> PG.query_ conn "SELECT count(*) FROM background_jobs" :: IO [PG.Only Int]) `shouldReturn` [PG.Only 1]
+          -- A held lease is this same reconciliation in flight, and the minute tick runs it again: the
+          -- duplicate ends without an error, a retry or a provider call (it was ~120 overlaps an hour).
+          (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncRepository testPid sync.id)
+          requests `shouldBe` []
 
       it "repositoryBulkExport_claimsOneLeasePerRepository" \tr -> do
         leases <- newIORef ([] :: [(Text, UUID.UUID)])
