@@ -12,6 +12,7 @@ module Models.Projects.RepositorySync (
   adoptDashboards,
   normalizeDefinition,
   localDefinition,
+  localDefinitions,
   importDefinition,
   resourceSnapshot,
   decodeDefinition,
@@ -211,18 +212,26 @@ encodeDefinition = \case
 
 
 localDefinition :: DB es => Resource -> Eff es (Maybe Definition)
-localDefinition resource = case resource.kind of
-  Dashboard ->
-    Dashboards.getDashboardByProjectId resource.projectId (UUIDId resource.localId)
-      >>= traverse
-        ( \dash -> do
-            teams <- Members.getTeamsById resource.projectId dash.teams
-            pure $ DashboardDefinition $ GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
-        )
-      . mfilter (isJust . (.schema))
-  Query -> fmap (QueryDefinition . monitorToInput) . mfilter (isNothing . (.deletedAt)) <$> Monitors.queryMonitorByProjectId resource.projectId (Monitors.QueryMonitorId resource.localId)
-  Uptime -> fmap (\config -> UptimeDefinitionConfig $ UptimeDefinition config.name config.url config.scrapeIntervalSeconds (fromMaybe 200 config.expectedStatus) config.enabled) <$> PromCfg.getConfigByProject resource.projectId (UUIDId resource.localId)
-  Cron -> fmap (\monitor -> CronDefinitionConfig $ CronDefinition monitor.slug monitor.name monitor.intervalSecs monitor.graceSecs) . find ((== resource.localId) . (.id)) <$> Monitors.cronMonitorsByProject resource.projectId
+localDefinition resource = join . viaNonEmpty head <$> localDefinitions resource.projectId [resource]
+
+
+-- | 'localDefinition' for a project's resources, in their order. Dashboards, their teams and
+-- the cron list load once for the whole set: a sync reading them per file was monoscope's
+-- GitSyncRepository N+1 (19 dashboard selects in one trace).
+localDefinitions :: DB es => Projects.ProjectId -> [Resource] -> Eff es [Maybe Definition]
+localDefinitions pid rs = do
+  dashes <- Dashboards.getDashboardsByIds pid (V.fromList [UUIDId r.localId | r <- rs, r.kind == Dashboard])
+  teams <- Members.getTeamsById pid (V.concat (map (.teams) dashes))
+  crons <- if any ((== Cron) . (.kind)) rs then Monitors.cronMonitorsByProject pid else pure []
+  forM rs \r -> case r.kind of
+    Dashboard -> pure $ dashboardDefinition teams <$> find (\d -> d.id == UUIDId r.localId && isJust d.schema) dashes
+    Query -> fmap (QueryDefinition . monitorToInput) . mfilter (isNothing . (.deletedAt)) <$> Monitors.queryMonitorByProjectId pid (Monitors.QueryMonitorId r.localId)
+    Uptime -> fmap (\config -> UptimeDefinitionConfig $ UptimeDefinition config.name config.url config.scrapeIntervalSeconds (fromMaybe 200 config.expectedStatus) config.enabled) <$> PromCfg.getConfigByProject pid (UUIDId r.localId)
+    Cron -> pure $ (\monitor -> CronDefinitionConfig $ CronDefinition monitor.slug monitor.name monitor.intervalSecs monitor.graceSecs) <$> find ((== r.localId) . (.id)) crons
+  where
+    -- Teams in the order the query returns them, as the one-dashboard lookup did, so an
+    -- unchanged dashboard serialises identically and never reads as a local edit.
+    dashboardDefinition teams dash = DashboardDefinition $ GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) [t.handle | t <- teams, t.id `V.elem` dash.teams]
 
 
 -- | Row snapshots include runtime fields. If either an editor or evaluator changed the row,

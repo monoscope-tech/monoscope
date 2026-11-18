@@ -17,6 +17,7 @@ module Models.Projects.Dashboards (
   Constant (..),
   getDashboardByIdUnscoped,
   getDashboardByProjectId,
+  getDashboardsByIds,
   getDashboardByFilePath,
   decodeDashboard,
   readDashboardEndpoint,
@@ -337,7 +338,11 @@ getDashboardByIdUnscoped did = Hasql.interpOne (selectFrom @DashboardVM <> [HI.s
 -- | The scoped lookup. A dashboard belonging to another project reads as absent,
 -- which is the correct answer to give a caller that should not know it exists.
 getDashboardByProjectId :: DB es => Projects.ProjectId -> DashboardId -> Eff es (Maybe DashboardVM)
-getDashboardByProjectId pid did = Hasql.interpOne (selectFrom @DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND id = #{did} |])
+getDashboardByProjectId pid did = viaNonEmpty head <$> getDashboardsByIds pid (V.singleton did)
+
+
+getDashboardsByIds :: DB es => Projects.ProjectId -> V.Vector DashboardId -> Eff es [DashboardVM]
+getDashboardsByIds pid dids = Hasql.interp (selectFrom @DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND id = ANY(#{dids}::uuid[]) |])
 
 
 getDashboardByFilePath :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardVM)
