@@ -1432,6 +1432,7 @@ withHTTPResponses fixture = interpose @HTTP \_ -> \case
   PutWith opts url value -> send (PutWith opts url value) >>= respond opts url
   PatchWith opts url value -> send (PatchWith opts url value) >>= respond opts url
   DeleteWith opts url -> send (DeleteWith opts url) >>= respond W.defaults url
+  RequestWith m opts url body -> send (RequestWith m opts url body) >>= respond opts url
   where
     respond opts url response = maybe response (\value -> response & W.responseBody .~ value) <$> liftIO (fixture opts url)
 
@@ -1858,6 +1859,7 @@ runHTTPtoServant tr = interpret $ \_ -> \case
   Patch url body -> liftIO $ routeWriteRequest tr "PATCH" (extractPath url) [] (unsafeCoerce body)
   DeleteWith _opts url -> liftIO $ routeDeleteRequest tr (extractPath url)
   Delete url -> liftIO $ routeDeleteRequest tr (extractPath url)
+  RequestWith m opts url body -> liftIO $ routeWriteRequest tr (toText m) (extractPath url) (extractParams opts) (fold body)
 
 
 -- | Boot the real WAI app ('Server.mkServer') on an ephemeral port for tests

@@ -306,6 +306,7 @@ extra-source-files:
     static/migrations/0287_uptime_history_status_pages.sql
     static/migrations/0288_check_results_unique.sql
     static/migrations/0290_usage_submissions_rejected.sql
+    static/migrations/0291_uptime_request_and_teams.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb
     test/fixtures/github-app-test.pem

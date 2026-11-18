@@ -9,6 +9,7 @@ module Models.Apis.Uptime (
   regionOf,
   servedRegions,
   downtimeAfter,
+  probeVerdict,
   CheckResult (..),
   recordResult,
   DayBucket (..),
@@ -36,6 +37,7 @@ module Models.Apis.Uptime (
 ) where
 
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Text qualified as T
 import Data.Time (Day, UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -89,6 +91,25 @@ regionOf c = find ((== c) . (.code)) regions
 -- | Consecutive failed probes that make an uptime check down: one alone is a blip.
 downtimeAfter :: Int
 downtimeAfter = 2
+
+
+-- | Whether a probe's answer (status, body) counts as up, with the reason shown for it.
+--
+-- >>> probeVerdict 200 Nothing (Right (200, ""))
+-- (True,"ok")
+-- >>> probeVerdict 200 (Just "healthy") (Right (200, "status: degraded"))
+-- (False,"response lacks \"healthy\"")
+-- >>> probeVerdict 200 (Just "healthy") (Right (503, "healthy"))
+-- (False,"status 503, expected 200")
+-- >>> probeVerdict 200 Nothing (Left "timeout")
+-- (False,"request failed: timeout")
+probeVerdict :: Int -> Maybe Text -> Either Text (Int, Text) -> (Bool, Text)
+probeVerdict expected contains = \case
+  Left err -> (False, "request failed: " <> err)
+  Right (code, _) | code /= expected -> (False, "status " <> show code <> ", expected " <> show expected)
+  Right (_, body) -> case contains of
+    Just t | not (t `T.isInfixOf` body) -> (False, "response lacks \"" <> t <> "\"")
+    _ -> (True, "ok")
 
 
 -- | Regions a check can run from: this node's, and any a worker probed from in the last day.

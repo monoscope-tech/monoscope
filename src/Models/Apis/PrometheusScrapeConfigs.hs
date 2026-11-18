@@ -3,7 +3,16 @@ module Models.Apis.PrometheusScrapeConfigs (
   PrometheusScrapeConfigId,
   insertConfig,
   updateConfig,
+  UptimeSpec (..),
+  insertUptime,
   updateUptime,
+  HttpMethod (..),
+  methodName,
+  RequestHeaders (..),
+  parseHeaders,
+  renderHeaders,
+  maskHeaders,
+  unmaskHeaders,
   configsByProjectId,
   CheckKind (..),
   recordUptime,
@@ -24,9 +33,10 @@ import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
+import Data.Char (isAlphaNum)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Sleep (Sleep)
-import Data.List (partition)
+import Data.List (lookup, partition)
 import Data.Text qualified as T
 import Data.These qualified as These
 import Data.Time (UTCTime)
@@ -42,6 +52,7 @@ import Effectful.Log qualified as Log
 import Effectful.Reader.Static qualified as Eff
 import Hasql.Interpolate qualified as HI
 import Models.Ids qualified as Projects
+import Models.Projects.ProjectMembers (TeamId)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Client (managerResponseTimeout, responseTimeoutMicro)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
@@ -53,6 +64,7 @@ import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (DB)
 import Utils (safeScrapeUrl)
+import Web.HttpApiData (FromHttpApiData, ToHttpApiData, toUrlPiece)
 
 
 type PrometheusScrapeConfigId = UUIDId "prometheus_scrape_config"
@@ -83,13 +95,95 @@ data PrometheusScrapeConfig = PrometheusScrapeConfig
   , expectedStatus :: Maybe Int
   , consecutiveFailures :: Int
   , regions :: V.Vector Text
+  , httpMethod :: HttpMethod
+  , requestHeaders :: RequestHeaders
+  , requestBody :: Maybe Text
+  , responseContains :: Maybe Text
+  , teams :: V.Vector TeamId
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow, NFData)
 
 
+data HttpMethod = MGet | MHead | MPost | MPut | MPatch | MDelete
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToHttpApiData) via WrappedEnumSC 'Nothing "M" HttpMethod
+
+
+-- | >>> map methodName [minBound .. maxBound]
+-- ["GET","HEAD","POST","PUT","PATCH","DELETE"]
+methodName :: HttpMethod -> Text
+methodName = T.toUpper . toUrlPiece
+
+
+-- | Extra request headers, in the order they are sent.
+newtype RequestHeaders = RequestHeaders [(Text, Text)]
+  deriving stock (Eq, Generic, Show)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Monoid, NFData, Semigroup)
+  deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb RequestHeaders
+
+
+-- | One @Name: value@ per line; blank lines are skipped.
+--
+-- >>> parseHeaders "X-Token: abc\n\nAccept:  text/html "
+-- Right (RequestHeaders [("X-Token","abc"),("Accept","text/html")])
+-- >>> parseHeaders "no colon here"
+-- Left "no colon here"
+-- >>> parseHeaders "Bad Name: x"
+-- Left "Bad Name: x"
+-- >>> parseHeaders . renderHeaders =<< parseHeaders "A: 1\nB: 2"
+-- Right (RequestHeaders [("A","1"),("B","2")])
+parseHeaders :: Text -> Either Text RequestHeaders
+parseHeaders = fmap RequestHeaders . traverse header' . filter (not . T.null) . map T.strip . lines
+  where
+    header' l = case T.breakOn ":" l of
+      (n, v) | not (T.null v), not (T.null n), T.all token n -> Right (n, T.strip $ T.drop 1 v)
+      _ -> Left l
+    token c = isAlphaNum c || c `elem` ("!#$%&'*+-.^_`|~" :: String)
+
+
+renderHeaders :: RequestHeaders -> Text
+renderHeaders (RequestHeaders hs) = unlines [n <> ": " <> v | (n, v) <- hs]
+
+
+-- | Header values often carry tokens, so pages show them masked; a submitted line still
+-- masked keeps the value stored under its name.
+--
+-- >>> let stored = RequestHeaders [("Authorization", "Bearer s3cret"), ("X-Env", "prod")]
+-- >>> unmaskHeaders stored <$> parseHeaders (renderHeaders (maskHeaders stored) <> "Accept: */*")
+-- Right (RequestHeaders [("Authorization","Bearer s3cret"),("X-Env","prod"),("Accept","*/*")])
+-- >>> unmaskHeaders stored (RequestHeaders [("X-Env", "staging")])
+-- RequestHeaders [("X-Env","staging")]
+maskHeaders :: RequestHeaders -> RequestHeaders
+maskHeaders (RequestHeaders hs) = RequestHeaders [(n, mask) | (n, _) <- hs]
+
+
+unmaskHeaders :: RequestHeaders -> RequestHeaders -> RequestHeaders
+unmaskHeaders (RequestHeaders stored) (RequestHeaders hs) = RequestHeaders [(n, if v == mask then fromMaybe v (lookup n stored) else v) | (n, v) <- hs]
+
+
+mask :: Text
+mask = "••••••"
+
+
+-- | A validated uptime check: what to request, and what counts as up.
+data UptimeSpec = UptimeSpec
+  { name :: Text
+  , url :: Text
+  , interval :: Int
+  , expected :: Int
+  , regions :: [Text]
+  , method :: HttpMethod
+  , headers :: RequestHeaders
+  , body :: Maybe Text
+  , contains :: Maybe Text
+  , teams :: [TeamId]
+  }
+
+
 selectCols :: HI.Sql
-selectCols = [HI.sql|id, project_id, created_at, updated_at, name, url, scrape_interval_seconds, auth_header, extra_labels, enabled, last_scraped_at, last_status, kind, expected_status::bigint, consecutive_failures::bigint, regions|]
+selectCols = [HI.sql|id, project_id, created_at, updated_at, name, url, scrape_interval_seconds, auth_header, extra_labels, enabled, last_scraped_at, last_status, kind, expected_status::bigint, consecutive_failures::bigint, regions, http_method, request_headers, request_body, response_contains, teams|]
 
 
 selectFrom :: HI.Sql
@@ -112,13 +206,21 @@ updateConfig pid cid name url interval authHeader extraLabels =
             WHERE id = #{cid} AND project_id = #{pid}|]
 
 
--- | Edit an uptime check's target and schedule; history is keyed by id, so it carries over.
-updateUptime :: DB es => Projects.ProjectId -> PrometheusScrapeConfigId -> Text -> Text -> Int -> Int -> [Text] -> Eff es Int64
-updateUptime pid cid name url interval expected regions =
-  Hasql.interpExecute
-    [HI.sql|UPDATE apis.prometheus_scrape_configs
-            SET name = #{name}, url = #{url}, scrape_interval_seconds = #{interval}, expected_status = #{expected}, regions = #{regions}, updated_at = now()
-            WHERE id = #{cid} AND project_id = #{pid} AND kind = 'uptime'|]
+insertUptime :: DB es => Projects.ProjectId -> UptimeSpec -> Eff es Int64
+insertUptime pid u = Hasql.interpExecute ([HI.sql|INSERT INTO apis.prometheus_scrape_configs (project_id, kind, extra_labels, |] <> uptimeCols <> [HI.sql|) VALUES (#{pid}, 'uptime', '{}', |] <> uptimeVals u <> ")")
+
+
+-- | Edit an uptime check in place; history is keyed by id, so it carries over.
+updateUptime :: DB es => Projects.ProjectId -> PrometheusScrapeConfigId -> UptimeSpec -> Eff es Int64
+updateUptime pid cid u = Hasql.interpExecute ([HI.sql|UPDATE apis.prometheus_scrape_configs SET (updated_at, |] <> uptimeCols <> [HI.sql|) = (now(), |] <> uptimeVals u <> [HI.sql|) WHERE id = #{cid} AND project_id = #{pid} AND kind = 'uptime'|])
+
+
+uptimeCols :: HI.Sql
+uptimeCols = [HI.sql|name, url, scrape_interval_seconds, expected_status, regions, http_method, request_headers, request_body, response_contains, teams|]
+
+
+uptimeVals :: UptimeSpec -> HI.Sql
+uptimeVals u = [HI.sql|#{u.name}, #{u.url}, #{u.interval}, #{u.expected}, #{u.regions}, #{u.method}, #{u.headers}, #{u.body}, #{u.contains}, #{u.teams}::uuid[]|]
 
 
 configsByProjectId :: DB es => Projects.ProjectId -> CheckKind -> Eff es (V.Vector PrometheusScrapeConfig)

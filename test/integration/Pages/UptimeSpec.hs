@@ -1,10 +1,12 @@
 module Pages.UptimeSpec (spec) where
 
 import BackgroundJobs qualified as Jobs
+import Data.Effectful.Notify (EmailData (..), Notification (..))
 import Data.Vector qualified as V
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Apis.Uptime qualified as UptimeM
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.DashboardTemplates qualified as DashboardTemplates
 import Pages.Charts.Charts qualified as Charts
 import Pkg.Components.Widget qualified as Widget
@@ -19,7 +21,7 @@ spec :: Spec
 spec = around withTestResources $ describe "Uptime and status pages" do
   it "draws 90 days of each check, publishes a status page, gates probes by region, and keeps history across edits" \tr -> do
     pid <- createTestProject tr "Status"
-    void $ call tr $ Uptime.uptimeCheckPostH pid (Uptime.UptimeForm "Checkout API" "https://shop.example.com/health" (Just 60) (Just 200) [])
+    void $ call tr $ Uptime.uptimeCheckPostH pid (Uptime.UptimeForm "Checkout API" "https://shop.example.com/health" (Just 60) (Just 200) [] Nothing Nothing Nothing Nothing [])
     void $ call tr $ Uptime.cronMonitorPostH pid (Uptime.CronForm "nightly-billing" "Nightly billing" 86400 3600)
     [shop] <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId pid PromCfg.CKUptime)
     [cron] <- runQueryEffect tr $ Monitors.cronMonitorsByProject pid
@@ -39,7 +41,7 @@ spec = around withTestResources $ describe "Uptime and status pages" do
             FROM generate_series(?::timestamptz - interval '60 days', ?::timestamptz - interval '1 day', interval '1 day') t |]
       (pid, cron.id, frozenTime, frozenTime, frozenTime, frozenTime)
     -- A probe from this node's region records its result and the check reports up.
-    runTestBg frozenTime tr $ Jobs.applyUptimeResult shop "eu-west" ("4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7") (addUTCTime (-0.18) frozenTime) frozenTime (Right 200)
+    runTestBg frozenTime tr $ Jobs.applyUptimeResult shop "eu-west" ("4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7") (addUTCTime (-0.18) frozenTime) frozenTime (Right (200, ""))
     Just probed <- runQueryEffect tr $ PromCfg.getConfigByProject pid shop.id
 
     overview <- renderT <$> call tr (Uptime.uptimeChecksGetH pid)
@@ -72,8 +74,8 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     renderT <$> call tr (Uptime.statusPagesGetH pid) >>= (`shouldContainAll` ["Project status", "Checkout API", "Published pages", "Acme status", "/status/acme", "Ops only", "Internal"])
 
     -- Edits keep the history; unknown regions are dropped, and a node only probes a check that runs from its region.
-    (void <$> call tr (Uptime.uptimeCheckEditH pid shop.id (Uptime.UptimeForm "Checkout" "https://shop.example.com/health" (Just 300) (Just 204) ["us-east"]))) `shouldReturn` Left (Uptime.UnservedRegion "us-east")
-    Right _ <- call tr $ Uptime.uptimeCheckEditH pid shop.id (Uptime.UptimeForm "Checkout" "https://shop.example.com/health" (Just 300) (Just 204) ["eu-west", "nowhere"])
+    (void <$> call tr (Uptime.uptimeCheckEditH pid shop.id (Uptime.UptimeForm "Checkout" "https://shop.example.com/health" (Just 300) (Just 204) ["us-east"] Nothing Nothing Nothing Nothing []))) `shouldReturn` Left (Uptime.UnservedRegion "us-east")
+    Right _ <- call tr $ Uptime.uptimeCheckEditH pid shop.id (Uptime.UptimeForm "Checkout" "https://shop.example.com/health" (Just 300) (Just 204) ["eu-west", "nowhere"] Nothing Nothing Nothing Nothing [])
     Just edited <- runQueryEffect tr $ PromCfg.getConfigByProject pid shop.id
     (edited.name, edited.scrapeIntervalSeconds, edited.expectedStatus, edited.regions) `shouldBe` ("Checkout", 300, Just 204, ["eu-west"])
     -- A node leases only checks its region serves; one left with only another region's worker is not its to probe.
@@ -83,12 +85,43 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     claimed "us-east" `shouldReturn` [shop.id]
     renderT <$> call tr (Uptime.uptimeCheckGetH pid shop.id (Just "7D")) >>= (`shouldContainAll` ["Virginia · us-east · no worker"])
 
+  it "a check sends its own request, searches the answer, and alerts only the teams it picked" \tr -> do
+    pid <- createTestProject tr "Request"
+    dbExec tr [sql|UPDATE projects.projects SET error_alerts = TRUE, payment_plan = 'PAID' WHERE id = ?|] (Only pid)
+    let form m hs b c = Uptime.UptimeForm "Health" "https://shop.example.com/health" (Just 60) (Just 200) [] m hs b c
+        add f = void <$> call tr (Uptime.uptimeCheckPostH pid f)
+    add (form (Just PromCfg.MHead) Nothing Nothing (Just "ok") []) `shouldReturn` Left Uptime.NoBodyToSearch
+    add (form Nothing (Just "X-Probe yes") Nothing Nothing []) `shouldReturn` Left (Uptime.BadHeader "X-Probe yes")
+    Just ops <- runQueryEffect tr $ ProjectMembers.createTeam pid Nothing ProjectMembers.TeamDetails{name = "Ops", description = "", handle = "ops", members = [], notifyEmails = ["ops@example.com"], slackChannels = [], discordChannels = [], phoneNumbers = [], pagerdutyServices = [], disabledChannels = []}
+    Right _ <- add (form (Just PromCfg.MPost) (Just "X-Probe: yes") (Just "{\"ping\":true}") (Just "healthy") [ops])
+    [check] <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId pid PromCfg.CKUptime)
+    (check.httpMethod, check.requestHeaders, check.requestBody, check.responseContains, check.teams) `shouldBe` (PromCfg.MPost, PromCfg.RequestHeaders [("X-Probe", "yes")], Just "{\"ping\":true}", Just "healthy", [ops])
+    -- The worker sends the body; the stubbed `{}` answer has the right status but lacks "healthy".
+    (reqs, _) <- runTestBgRecordingHTTP frozenTime tr $ Jobs.processBackgroundJob tr.trATCtx (Jobs.PrometheusScrapeOne check.id)
+    reqs `shouldBe` [("https://shop.example.com/health", "{\"ping\":true}")]
+    Just probed <- runQueryEffect tr $ PromCfg.getConfig check.id
+    (probed.consecutiveFailures, T.isPrefixOf "response lacks \"healthy\"" <$> probed.lastStatus) `shouldBe` (1, Just True)
+    -- The second failure opens the downtime issue and mails the picked team, not every member.
+    (notifs, _) <- captureNotifs tr $ Jobs.applyUptimeResult probed "eu-west" ("4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7") frozenTime (addUTCTime 0.1 frozenTime) (Right (200, "{}"))
+    [e.receiver | EmailNotification e <- notifs] `shouldBe` ["ops@example.com"]
+    -- Header values may be tokens: the page masks them, and saving the mask back keeps them.
+    page <- renderT <$> call tr (Uptime.uptimeCheckGetH pid check.id Nothing)
+    page `shouldContainAll` ["POST · expects 200 containing &quot;healthy&quot;", "X-Probe: ••••••"]
+    ("X-Probe: yes" `T.isInfixOf` page) `shouldBe` False
+    -- A deleted team leaves the check, which then alerts @everyone.
+    runQueryEffect tr $ ProjectMembers.deleteTeams pid [ops]
+    ((.teams) <$>) <$> runQueryEffect tr (PromCfg.getConfig check.id) `shouldReturn` Just []
+    -- GET sends no body, so editing to GET drops it.
+    Right _ <- call tr $ Uptime.uptimeCheckEditH pid check.id (form (Just PromCfg.MGet) (Just "X-Probe: ••••••\nAccept: */*") (Just "{}") Nothing [])
+    Just edited <- runQueryEffect tr $ PromCfg.getConfig check.id
+    (edited.httpMethod, edited.requestHeaders, edited.requestBody, edited.teams) `shouldBe` (PromCfg.MGet, PromCfg.RequestHeaders [("X-Probe", "yes"), ("Accept", "*/*")], Nothing, [])
+
   it "probes are uptime.probe spans: the embedded dashboard reads daily bars, percentiles, regions and the map from them" \tr -> do
     pid <- createTestProject tr "Probes"
-    void $ call tr $ Uptime.uptimeCheckPostH pid (Uptime.UptimeForm "Checkout API" "https://shop.example.com/health" (Just 60) (Just 200) [])
+    void $ call tr $ Uptime.uptimeCheckPostH pid (Uptime.UptimeForm "Checkout API" "https://shop.example.com/health" (Just 60) (Just 200) [] Nothing Nothing Nothing Nothing [])
     [shop] <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId pid PromCfg.CKUptime)
     let at h = addUTCTime (h * 3600) frozenTime
-        probe h region ms outcome = runTestBg (at h) tr $ Jobs.applyUptimeResult shop region ("0af7651916cd43dd8448eb211c80319" <> show (round h `mod` 10 :: Int), "b7ad6b716920333" <> show (round h `mod` 10 :: Int)) (at h) (addUTCTime (ms / 1000) (at h)) outcome
+        probe h region ms outcome = runTestBg (at h) tr $ Jobs.applyUptimeResult shop region ("0af7651916cd43dd8448eb211c80319" <> show (round h `mod` 10 :: Int), "b7ad6b716920333" <> show (round h `mod` 10 :: Int)) (at h) (addUTCTime (ms / 1000) (at h)) ((,"") <$> outcome)
     probe (-50) "eu-west" 120 (Right 200)
     probe (-49) "eu-west" 140 (Right 200)
     probe (-26) "eu-west" 900 (Right 503)

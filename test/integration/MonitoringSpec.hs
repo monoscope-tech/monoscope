@@ -470,8 +470,8 @@ spec = describe "Monitoring" do
     it "uptime checks and cron monitors: failures open downtime/missed/failed issues, recovery resolves them" \tr -> do
       pid <- createTestProject tr "uptime-cron"
       -- An accepted submission re-renders the form blank above the list (htmx 4 needs the explicit :inherited targets).
-      (void <$> call tr (Uptime.uptimeCheckPostH pid (Uptime.UptimeForm "internal" "http://10.0.0.1/health" (Just 60) (Just 200) []))) `shouldReturn` Left Uptime.UnsafeUrl
-      added <- fromRightShow <$> call tr (Uptime.uptimeCheckPostH pid (Uptime.UptimeForm "Shop" "https://shop.example.com/health" (Just 60) (Just 200) []))
+      (void <$> call tr (Uptime.uptimeCheckPostH pid (Uptime.UptimeForm "internal" "http://10.0.0.1/health" (Just 60) (Just 200) [] Nothing Nothing Nothing Nothing []))) `shouldReturn` Left Uptime.UnsafeUrl
+      added <- fromRightShow <$> call tr (Uptime.uptimeCheckPostH pid (Uptime.UptimeForm "Shop" "https://shop.example.com/health" (Just 60) (Just 200) [] Nothing Nothing Nothing Nothing []))
       renderT added `shouldContainAll` ["https://shop.example.com/health"]
       cronAdded <- fromRightShow <$> call tr (Uptime.cronMonitorPostH pid (Uptime.CronForm "nightly-billing" "Nightly billing" 3600 300))
       goldenParts "uptime-cron-forms" . ordNub $ tagsWith ["value name=\"url\"", "hx-target:inherited=\"this\""] (renderT added) <> tagsWith ["value name=\"slug\"", "hx-target:inherited=\"this\""] (renderT cronAdded)
@@ -479,14 +479,14 @@ spec = describe "Monitoring" do
       -- Uptime checks share Prometheus targets' table, which needs edit access; so do cron monitors.
       setRole tr pid ProjectMembers.PView
       shopId <- maybe (fail "no uptime check") (pure . (.id)) . V.headM =<< runQueryEffect tr (PromCfg.configsByProjectId pid PromCfg.CKUptime)
-      traverse (httpStatus tr) [void $ Uptime.uptimeCheckPostH pid (Uptime.UptimeForm "Viewer" "https://viewer.example.com" Nothing Nothing []), void $ Uptime.uptimeCheckToggleH pid shopId, void $ Uptime.uptimeCheckDeleteH pid shopId, void $ Uptime.cronMonitorPostH pid (Uptime.CronForm "viewer" "Viewer" 3600 300)] `shouldReturn` [403, 403, 403, 403]
+      traverse (httpStatus tr) [void $ Uptime.uptimeCheckPostH pid (Uptime.UptimeForm "Viewer" "https://viewer.example.com" Nothing Nothing [] Nothing Nothing Nothing Nothing []), void $ Uptime.uptimeCheckToggleH pid shopId, void $ Uptime.uptimeCheckDeleteH pid shopId, void $ Uptime.cronMonitorPostH pid (Uptime.CronForm "viewer" "Viewer" 3600 300)] `shouldReturn` [403, 403, 403, 403]
       setRole tr pid ProjectMembers.PAdmin
       setupSlackData tr pid "T_UPTIME"
       dbExec tr [sql|UPDATE projects.projects SET error_alerts = TRUE WHERE id = ?|] (Only pid)
       -- One failure is a blip; two open a downtime issue; a success resolves it.
       let uptimeNamed n = maybe (fail $ "no uptime check " <> toString n) pure . find ((== n) . (.name)) =<< runQueryEffect tr (PromCfg.configsByProjectId pid PromCfg.CKUptime)
       shop <- uptimeNamed "Shop"
-      let probe dt res = runTestBg (addUTCTime dt frozenTime) tr $ Jobs.applyUptimeResult shop "eu-west" ("4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7") (addUTCTime dt frozenTime) (addUTCTime (dt + 0.12) frozenTime) res
+      let probe dt res = runTestBg (addUTCTime dt frozenTime) tr $ Jobs.applyUptimeResult shop "eu-west" ("4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7") (addUTCTime dt frozenTime) (addUTCTime (dt + 0.12) frozenTime) ((,"") <$> res)
           downtime = runQueryEffect tr (Issues.selectIssueByHash pid (Issues.uptimeTargetHash shop.id.toText) Issues.AnyIssue)
       probe 0 (Right 503)
       (isNothing <$> downtime) `shouldReturn` True
@@ -988,7 +988,7 @@ spec = describe "Monitoring" do
         -- Never inserted: the outbox rejects an alert for an issue it cannot find.
         unsaved <- runTestBgNoReset tr $ Issues.createQueryAlertIssue testPid "unsaved" "Never saved" "" 60 84 Issues.Above
         let messages = Mail.uptimeMessages (Issues.UptimeData "1" "Shop" "https://shop.example.com" 200 (Just 503) "status 503" 10 frozenTime) "https://example.com/issues/1"
-        (notifs, sent) <- captureNotifs tr $ Jobs.sendAlertToChannels (Mail.MonitorsAlert "Shop is down" "https://example.com" Nothing) messages unsaved project users "https://example.com" "Shop is down" (Lucid.toHtml ("Shop is down" :: Text))
+        (notifs, sent) <- captureNotifs tr $ Jobs.sendAlertToChannels mempty (Mail.MonitorsAlert "Shop is down" "https://example.com" Nothing) messages unsaved project users "https://example.com" "Shop is down" (Lucid.toHtml ("Shop is down" :: Text))
         (sent, null [() | EmailNotification _ <- notifs], slack notifs) `shouldBe` (False, False, [])
 
       it "delivers channel-specific roots, replies, and updates through the notification worker" \tr -> do

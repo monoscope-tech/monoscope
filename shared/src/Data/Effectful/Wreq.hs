@@ -10,6 +10,7 @@ module Data.Effectful.Wreq (
   putWith,
   patchWith,
   deleteWith,
+  requestWith,
   W.header,
   runHTTPWreq,
   runHTTPGolden,
@@ -65,6 +66,8 @@ data HTTP :: Effect where
   PutWith :: Putable a => Options -> String -> a -> HTTP m (Response LBS.ByteString)
   PatchWith :: Patchable a => Options -> String -> a -> HTTP m (Response LBS.ByteString)
   DeleteWith :: Options -> String -> HTTP m (Response LBS.ByteString)
+  -- | Any method by name, with an optional body.
+  RequestWith :: String -> Options -> String -> Maybe LBS.ByteString -> HTTP m (Response LBS.ByteString)
 
 
 type instance DispatchOf HTTP = 'Dynamic
@@ -86,6 +89,7 @@ runHTTPWreq = interpret $ \_ -> \case
   PutWith opts url body -> liftIO $ W.putWith opts url body
   PatchWith opts url body -> liftIO $ W.patchWith opts url body
   DeleteWith opts url -> liftIO $ W.deleteWith opts url
+  RequestWith m opts url body -> liftIO $ maybe (W.customMethodWith m opts url) (W.customPayloadMethodWith m opts url) body
 
 
 -- | Record outgoing requests as @(url, rendered body)@ instead of performing
@@ -105,6 +109,7 @@ runHTTPRecord ref = interpret $ \_ -> \case
   PutWith _ url body -> record url (payload $ W.putPayload body)
   PatchWith _ url body -> record url (payload $ W.patchPayload body)
   DeleteWith _ url -> record url (pure "")
+  RequestWith _ _ url body -> record url (pure $ fold body)
   where
     payload mk = renderBody . requestBody <$> mk defaultRequest
     renderBody = \case
@@ -129,6 +134,7 @@ runHTTPGolden goldenDir = interpret $ \_ -> \case
   PutWith opts url body -> liftIO $ getOrCreateGoldenResponse goldenDir (sanitizeFileName url <> "_put_with.json") (W.putWith opts url body)
   PatchWith opts url body -> liftIO $ getOrCreateGoldenResponse goldenDir (sanitizeFileName url <> "_patch_with.json") (W.patchWith opts url body)
   DeleteWith opts url -> liftIO $ getOrCreateGoldenResponse goldenDir (sanitizeFileName url <> "_delete_with.json") (W.deleteWith opts url)
+  RequestWith m opts url body -> liftIO $ getOrCreateGoldenResponse goldenDir (sanitizeFileName url <> "_" <> m <> "_with.json") (maybe (W.customMethodWith m opts url) (W.customPayloadMethodWith m opts url) body)
 
 
 -- Helper functions
