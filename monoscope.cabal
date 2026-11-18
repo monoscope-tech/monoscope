@@ -697,6 +697,7 @@ library
     , proto-lens
     , proto-lens-runtime
     , random
+    , refined
     , regex
     , regex-tdfa
     , relude >=1.2.0.0
@@ -1354,6 +1355,7 @@ test-suite test-dev
     , proto-lens
     , proto-lens-runtime
     , random
+    , refined
     , regex
     , regex-tdfa
     , relude >=1.2.0.0

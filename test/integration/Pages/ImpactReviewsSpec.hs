@@ -71,6 +71,7 @@ import Pages.GitSync qualified as GitSyncPage
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (Within, unrefine)
 import Pkg.Git qualified as Git
 import Pkg.GitCommand qualified as HostGit
 import Pkg.ImpactReview qualified as Impact
@@ -333,15 +334,9 @@ withKey :: AE.Key -> AE.Value -> AE.Value -> AE.Value
 withKey key value = \case AE.Object fields -> AE.Object $ KM.insert key value fields; other -> other
 
 
-data SandboxSession = SandboxSession {id :: Text, pid :: Word32, alive :: Bool}
+data SandboxSession = SandboxSession {id :: Text, pid :: Within 2 2147483647 Word32, alive :: Bool}
   deriving stock (Generic)
-
-
-instance AE.FromJSON SandboxSession where
-  parseJSON value = do
-    session <- AE.genericParseJSON AE.defaultOptions value
-    unless (session.pid > 1 && session.pid <= fromIntegral (maxBound :: Int32)) $ fail "Invalid SDK host process ID"
-    pure session
+  deriving anyclass (AE.FromJSON)
 
 
 sandboxSessions :: IO [SandboxSession]
@@ -604,7 +599,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 closed <- Timeout.timeout (5 * 1000000) $ vanished session
                 when (isNothing closed) do
                   sessions <- sandboxSessions
-                  when (any (\current -> current.id == session.id && current.pid == session.pid && current.alive) sessions) $ Signal.signalProcess Signal.sigTERM $ fromIntegral session.pid
+                  when (any (\current -> current.id == session.id && current.pid == session.pid && current.alive) sessions) $ Signal.signalProcess Signal.sigTERM $ fromIntegral (unrefine session.pid)
                   Timeout.timeout (5 * 1000000) (vanished session) `shouldReturn` Just ()
         ( do
             path <- Timeout.timeout (15 * 1000000) (untilReady started) >>= maybe (fail "Verifier did not produce its startup marker and VM identity") pure
@@ -3169,7 +3164,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 when (recovery == RuntimeWake) do
                   owner <- either fail pure . AE.eitherDecodeStrict @Int32 =<< readFileBS (bridge <> ".pid")
                   owner `shouldSatisfy` (> 1)
-                  owned <- filter (\session -> session.pid == fromIntegral owner && session.alive) <$> sandboxSessions
+                  owned <- filter (\session -> unrefine session.pid == fromIntegral owner && session.alive) <$> sandboxSessions
                   length owned `shouldBe` 1
                   children <- words . decodeUtf8 @Text <$> readProcessStdout_ (proc "pgrep" ["-P", show owner])
                   runner <- case traverse (readMaybe . toString) children of Just [child] | child > 1 -> pure (child :: Int32); _ -> fail "Expected the owned VM runner"

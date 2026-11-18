@@ -38,7 +38,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Sleep (Sleep)
 import Data.List (lookup, partition)
 import Data.Text qualified as T
-import Data.These qualified as These
+import "these" Data.These qualified as These
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Vector qualified as V

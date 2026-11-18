@@ -32,7 +32,7 @@ import Models.Projects.ProjectMemory qualified as Memory
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Client.TLS qualified as TLS
 import Network.HTTP.Types.Status qualified as HTTP
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (UUIDId (..), UpTo, natInt, unrefine, upTo)
 import Relude
 import System.Directory (doesFileExist, listDirectory, removeFile, removePathForcibly)
 import System.Environment (getEnvironment)
@@ -64,8 +64,11 @@ data ProofArgs = ProofArgs {claim :: Text, shellCommand :: Text, setup :: Maybe 
 
 
 -- | Proof attempts a review may make. Failed attempts count too: each one costs two VM runs.
+type ProofBudget = 3
+
+
 proofBudget :: Int
-proofBudget = 3
+proofBudget = natInt @ProofBudget
 
 
 -- The report is opaque presentation data; decisions use the typed receipts.
@@ -172,21 +175,18 @@ data SessionSubject context where
   PeerSubject :: UUIDId "issue_fix" -> ArtifactRequest -> SessionSubject (UUIDId "agent_attempt")
 
 
+type SubmissionLimit = 5
+type FixQueryLimit = 60
+
+
 submissionLimit, fixQueryLimit :: Int
-(submissionLimit, fixQueryLimit) = (5, 60)
+(submissionLimit, fixQueryLimit) = (natInt @SubmissionLimit, natInt @FixQueryLimit)
 
 
 -- | @proofs@ is absent in checkpoints written before proof recording existed.
-data SavedGuest = SavedGuest {id :: UUIDId "native_checkpoint", guest :: Guest.Suspended, sha256 :: Text, remaining :: Int, submissions :: Int, proofs :: Maybe Int}
+data SavedGuest = SavedGuest {id :: UUIDId "native_checkpoint", guest :: Guest.Suspended, sha256 :: Text, remaining :: UpTo FixQueryLimit, submissions :: UpTo SubmissionLimit, proofs :: Maybe (UpTo ProofBudget)}
   deriving stock (Generic)
-  deriving anyclass (AE.ToJSON)
-
-
-instance AE.FromJSON SavedGuest where
-  parseJSON value = do
-    saved <- AE.genericParseJSON AE.defaultOptions value
-    unless (saved.remaining >= 0 && saved.remaining <= fixQueryLimit && saved.submissions >= 0 && saved.submissions <= submissionLimit && all (\n -> n >= 0 && n <= proofBudget) saved.proofs) $ fail "Invalid native continuation budget"
-    pure saved
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data SavedFix = SavedFix {id :: UUIDId "verifier_session", progress :: FixProgress Native.CandidateSnapshot}
@@ -473,7 +473,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                     retained.persist progress
                     pruneNativeSnapshots retained.directory $ case progress of Waiting saved -> Just saved.id; FixWaiting saved _ -> Just saved.id; Finished{} -> Nothing
               -- A resumed session keeps its proof attempts, so the budget is checked before VMs run.
-              writeIORef proofCount $ fromMaybe 0 $ (.proofs) =<< paused
+              writeIORef proofCount $ maybe 0 unrefine $ (.proofs) =<< paused
               for_ retention \retained -> case paused of
                 Nothing -> do
                   removed <- tryIOError $ removeFile $ retained.directory </> retained.sessionFile
@@ -511,8 +511,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                         session <- readIORef guest >>= maybe (fail "Native continuation requires a live guest") pure
                         disk <- session.suspend $ generation </> "guest.qcow2"
                         attempted <- readIORef proofCount
-                        -- Grace calls past a spent budget run it negative; a saved session must still validate.
-                        let saved = SavedGuest identifier disk (Native.sha256 transcript) (max 0 remaining) submissions (Just attempted)
+                        -- Grace calls past a spent budget run it negative; 'upTo' clamps so a saved session still decodes.
+                        let saved = SavedGuest identifier disk (Native.sha256 transcript) (upTo remaining) (upTo submissions) (Just $ upTo attempted)
                         persist $ case workflowState of
                           Just (FixReady current) -> FixWaiting saved $ SavedFix current.id $ Native.candidateSnapshot <$> current.progress
                           (Nothing; Just AdmissionReady; Just SourceReady) -> Waiting saved
@@ -929,7 +929,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                           _ -> pure $ Left "Review agent returned an unvalidated draft"
                 ( do
                     writeMessage payload
-                    receive Nothing Nothing (maybe (queryLimit task) (.remaining) paused) (maybe submissionLimit (.submissions) paused) Nothing
+                    receive Nothing Nothing (maybe (queryLimit task) (unrefine . (.remaining)) paused) (maybe submissionLimit (unrefine . (.submissions)) paused) Nothing
                   )
                   `finally` stop
         -- Replay persisted work before starting a child, fetching source or calling a model.

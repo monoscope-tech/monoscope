@@ -6,6 +6,11 @@ module Pkg.DeriveUtils (
   SortOrder (..),
   SortField (..),
   AesonText (..),
+  Within,
+  unrefine,
+  UpTo,
+  upTo,
+  natInt,
   SnakeJSON (..),
   BaselineState (..),
   DB,
@@ -80,6 +85,8 @@ import Numeric (showHex)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.AssetManifestFingerprint (assetManifestFingerprint)
 import Pkg.Deriving
+import Refined (FromTo, Refined, unrefine)
+import Refined.Unsafe (reallyUnsafeRefine)
 import Relude
 import Servant (FromHttpApiData (..), ToHttpApiData (..))
 import System.Directory (doesDirectoryExist, listDirectory)
@@ -661,3 +668,30 @@ data SortField = SortField
 instance HasField "toSql" SortField Text where
   getField (SortField name Asc) = name <> " ASC NULLS FIRST"
   getField (SortField name Desc) = name <> " DESC NULLS LAST"
+
+
+-- | An integer in @[lo, hi]@: decoding ('Refined''s own instance) rejects anything outside it, so a
+-- record holding one derives its 'AE.FromJSON' instead of re-checking the bounds by hand.
+--
+-- >>> unrefine <$> (AE.decode "60" :: Maybe (UpTo 60))
+-- Just 60
+-- >>> isNothing (AE.decode "61" :: Maybe (UpTo 60))
+-- True
+-- >>> isNothing (AE.decode "1" :: Maybe (Within 2 10 Word32))
+-- True
+-- >>> (unrefine (upTo 99 :: UpTo 5), unrefine (upTo (-1) :: UpTo 5))
+-- (5,0)
+type Within (lo :: Nat) (hi :: Nat) a = Refined (FromTo lo hi) a
+
+
+-- | A count in @[0, n]@.
+type UpTo n = Within 0 n Int
+
+
+-- | Clamped into range, so the refinement holds by construction.
+upTo :: forall n. KnownNat n => Int -> UpTo n
+upTo = reallyUnsafeRefine . max 0 . min (natInt @n)
+
+
+natInt :: forall n. KnownNat n => Int
+natInt = fromIntegral $ natVal (Proxy @n)
