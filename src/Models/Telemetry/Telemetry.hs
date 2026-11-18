@@ -861,17 +861,20 @@ selectPerfCandidates pid from to =
   (,)
     <$> Hasql.interp
       [HI.sql| SELECT context___trace_id, parent_id, ^{normalizedQuery},
-                      count(*)::bigint, sum(duration)::bigint, min(timestamp), max(resource___service___name), max(attributes___db___system___name)
+                      count(*)::bigint, sum(^{execNs})::bigint, min(timestamp), max(resource___service___name), max(attributes___db___system___name)
                ^{dbSpans} AND parent_id IS NOT NULL
                GROUP BY context___trace_id, parent_id, ^{normalizedQuery}
-               HAVING count(*) >= 5 AND sum(duration) >= 50000000
-               ORDER BY sum(duration) DESC LIMIT 50 |]
+               HAVING count(*) >= 5 AND sum(^{execNs}) >= 50000000
+               ORDER BY sum(^{execNs}) DESC LIMIT 50 |]
     <*> Hasql.interp
       [HI.sql| SELECT context___trace_id, parent_id, ^{normalizedQuery},
-                      1::bigint, duration, timestamp, resource___service___name, attributes___db___system___name
-               ^{dbSpans} AND duration > 1000000000
-               ORDER BY duration DESC LIMIT 50 |]
+                      1::bigint, ^{execNs}, timestamp, resource___service___name, attributes___db___system___name
+               ^{dbSpans} AND ^{execNs} > 1000000000
+               ORDER BY ^{execNs} DESC LIMIT 50 |]
   where
+    -- A DB span's own time, less what it queued for a pool connection: a cheap lookup stuck
+    -- behind a busy pool is a capacity problem, not a slow query (#803).
+    execNs = [HI.sql|(duration - COALESCE((attributes->'db'->'client'->'connection'->>'wait_time')::float * 1e9, 0)::bigint)|]
     dbSpans = [HI.sql| FROM otel_logs_and_spans WHERE project_id = #{pid.toText} AND timestamp >= #{from} AND timestamp < #{to} AND attributes___db___query___text IS NOT NULL AND context___trace_id IS NOT NULL |]
     -- Literals out, so `WHERE id = 1` and `WHERE id = 2` group as one query. Both engines
     -- (Postgres, DataFusion) accept this regexp_replace form.

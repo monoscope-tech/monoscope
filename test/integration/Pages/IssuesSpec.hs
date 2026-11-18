@@ -231,6 +231,8 @@ spec = around withTestResources $ describe "Issues" do
     span' ("2", Just "1", "ProductController.index", Nothing, 800_000_000, -59)
     forM_ [1 .. 6 :: Integer] \i -> span' ("3" <> show i, Just "2", "SELECT reviews", Just ("SELECT * FROM reviews WHERE product_id = " <> show i), 20_000_000, fromIntegral (i - 58))
     span' ("4", Just "1", "SELECT promotions", Just "SELECT * FROM promotions WHERE active", 1_500_000_000, -40)
+    -- 1.6 s end to end, but 1.5 s of it queued for a pool connection: not a slow query (#803).
+    ingestSpanReq tr . withSpanDuration 1_600_000_000 $ mkSpanRequest "0e7f0000000000000000000000000001" "5" (Just "1") "SELECT sessions" [] Nothing [mkAttr "db.system.name" "postgresql", mkAttr "db.query.text" "SELECT * FROM sessions WHERE id = 1", mkAttr "db.client.connection.wait_time" "1.5"] (mkResource apiKey [mkAttr "service.name" "catalog"]) (at (-35))
     forM_ [0, 0.4, 0.9, 1.4] \dt -> click ("click", "sess-rage", "Place order", -120 + dt)
     click ("click", "sess-rage", "Continue shopping", -100)
     forM_ ([("sess-a", -90), ("sess-b", -80)] :: [(Text, NominalDiffTime)]) \(sid, dt) -> click ("dead_click", sid, "Apply coupon", dt)
@@ -363,7 +365,9 @@ spec = around withTestResources $ describe "Issues" do
 
     [prod, _, _] <- forM ([("scope-checkout", "production"), ("scope-catalog", "production"), ("scope-checkout", "staging")] :: [(Text, Text)]) \(svc, env) ->
       seedIssue tr (issueSeed Issues.RuntimeException (svc <> "-" <> env)){service = Just svc, environment = Just env}
-    map (.id) . fst <$> runHasqlEffect tr (Issues.selectIssues testPid Issues.PIssue Issues.defIssueFilters{Issues.service = Just "scope-checkout", Issues.environment = Just "production", Issues.limit = 100})
+    map (.id)
+      . fst
+      <$> runHasqlEffect tr (Issues.selectIssues testPid Issues.PIssue Issues.defIssueFilters{Issues.service = Just "scope-checkout", Issues.environment = Just "production", Issues.limit = 100})
       `shouldReturn` [prod]
     let scoped = tr{trSessAndHeader = (\s -> s{Projects.service = Just "scope-checkout", Projects.environment = Just "production"}) <$> tr.trSessAndHeader}
     list scoped "Inbox" Nothing (Just "100") (Just "24h") ["scope-catalog"] [] >>= rowsOf >>= (`shouldSatisfy` V.null)
