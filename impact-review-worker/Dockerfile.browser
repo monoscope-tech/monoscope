@@ -31,6 +31,8 @@ ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
 # Commands run with a reset environment, so the toolchains go on its default PATH.
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path \
   && ln -s /opt/ghc/*/bin/* /opt/cabal/*/bin/* /usr/local/go/bin/* /opt/rustup/toolchains/*/bin/* /usr/local/bin/ 2>/dev/null; ls /usr/local/bin/ghc /usr/local/bin/cabal /usr/local/bin/cargo /usr/local/bin/go
+# Rust repositories commonly test with nextest; agents reach for `cargo nextest` first.
+RUN curl -fsSL https://get.nexte.st/latest/linux | tar -xz -C /usr/local/bin cargo-nextest && cargo nextest --version
 COPY --from=node /usr/local/bin/node /usr/local/bin/
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
