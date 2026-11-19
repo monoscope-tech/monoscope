@@ -10,7 +10,7 @@ import Data.List (partition)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, zonedTimeToUTC)
-import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField (..))
 import Lucid
@@ -24,19 +24,19 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Pages.AIThreads (promptField_, threadUrl)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
-import Pages.Components (agoText)
+import Pages.Components (agoText, copyButton_)
 import Pages.Dashboards (dashboardUrl)
 import Pages.Issues (issueDetailUrl, issuePreview_, issuesListUrl, renderIssueTitle_)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (SortOrder (..), UUIDId (..))
-import Relude hiding (ask, asks)
+import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging (logAttention)
 import System.Types (ATAuthCtx, Outcome (..), RespHeaders, Toast (..), ToastLevel (..), addRespHeaders, done)
 import System.Types qualified
 import Text.Slugify (slugify)
 import UnliftIO.Exception (tryAny)
-import Utils (countNoun, faSprite_, navTabAttrs)
+import Utils (countNoun, faSprite_, navTabAttrs, popoverPanel_, popoverTrigger_)
 import Web.Links (CookieProtectedRoutes (..), urls)
 
 
@@ -47,6 +47,7 @@ data HomeData = HomeData
   { pid :: Projects.ProjectId
   , firstName :: Text
   , now :: UTCTime
+  , hostUrl :: Text
   , newIssues :: [Issues.IssueL]
   , newIssueCount :: Int
   , openIssueCount :: Int
@@ -57,7 +58,7 @@ data HomeData = HomeData
   , glance :: [Widget.Widget]
   , starred :: [(Dashboards.DashboardVM, [Widget.Widget])]
   , slack :: Maybe SlackConnectCard
-  -- ^ Absent on the demo project and on servers with no Slack bot (self-hosted), where no channel can exist.
+  -- ^ Absent on servers with no Slack bot (self-hosted), where no channel can exist.
   }
 
 
@@ -79,7 +80,8 @@ homeGetH pid = do
   templates <- templateList <$> askTemplates
   dashboards <- filter (isJust . (.starredSince)) <$> Dashboards.selectDashboardsSortedBy pid Desc Dashboards.DSUpdatedAt
   slackConnect <- Integrations.getSlackConnect pid
-  slackConfigured <- asks @AuthContext $ not . T.null . (.config.slackBotToken)
+  appCtx <- ask @AuthContext
+  let slackConfigured = not $ T.null appCtx.config.slackBotToken
   let glance = take 1 $ templateTab "_overview.yaml" "Overview" []
       -- A widget's id names its DOM elements, so one shown twice (a starred overview repeats the
       -- golden signals) loads into the first copy and leaves the second a skeleton forever.
@@ -92,7 +94,7 @@ homeGetH pid = do
   addRespHeaders
     $ HomePage
     $ PageCtx bw{pageTitle = "Home", menuItem = Just "Home"}
-    $ HomeData{pid, firstName = sess.user.firstName, now, newIssues, newIssueCount, openIssueCount, resolved, highlights, routines, recentThreads = take 4 chats, glance, starred, slack = SlackConnectCard pid email slackConnect Nothing <$ guard (slackConfigured && pid /= Projects.demoProjectId)}
+    $ HomeData{pid, firstName = sess.user.firstName, now, newIssues, newIssueCount, openIssueCount, resolved, highlights, routines, recentThreads = take 4 chats, glance, starred, slack = SlackConnectCard pid email slackConnect Nothing <$ guard slackConfigured, hostUrl = appCtx.env.hostUrl}
   where
     -- Charts that render on their own: a widget needing its dashboard's variables or constants would only show an error here.
     homeWidget vm w = do
@@ -104,9 +106,11 @@ homeGetH pid = do
 home_ :: HomeData -> Html ()
 home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ "mx-auto max-w-5xl px-4 sm:px-8 pt-10 pb-16 flex flex-col gap-12"] do
   section_ [class_ "flex flex-col gap-5", Aria.label_ "Ask Monoscope AI"] do
-    header_ [class_ "flex flex-col gap-1"] do
-      p_ [class_ "text-3xl font-semibold tracking-tight text-textStrong text-balance"] $ toHtml $ "Hello" <> foldMap (", " <>) (guarded (not . T.null) d.firstName) <> "."
-      p_ [class_ "text-sm text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%A, %-d %B" d.now
+    header_ [class_ "flex flex-wrap items-end justify-between gap-4"] do
+      div_ [class_ "flex flex-col gap-1"] do
+        p_ [class_ "text-3xl font-semibold tracking-tight text-textStrong text-balance"] $ toHtml $ "Hello" <> foldMap (", " <>) (guarded (not . T.null) d.firstName) <> "."
+        p_ [class_ "text-sm text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%A, %-d %B" d.now
+      connectAgent_ d
     askBox_ d
     statusBar_ d
   whenJust (mfilter (not . (.invited)) d.slack) slackConnectCard_
@@ -134,6 +138,44 @@ home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ 
     sectionHead_ (faSprite_ "star" "solid" "w-3.5 h-3.5 text-iconWarning" >> toHtml vm.title) Nothing $ Just ("Open dashboard", dashboardUrl d.pid vm.id Nothing [])
     Widget.embeddedWidgets_ d.pid ws
   jumpBackIn_ d
+
+
+-- | One prompt that connects any coding agent (Claude Code, Codex, Cursor…) to this project:
+-- the skills, the CLI, and the MCP server, with the API key kept out of the prompt.
+connectAgent_ :: HomeData -> Html ()
+connectAgent_ d = div_ [class_ "relative"] do
+  button_
+    ( [type_ "button", class_ "inline-flex items-center gap-2 rounded-full surface-raised px-3.5 py-2 text-sm font-medium text-textStrong shadow-[0_0_0_1px_var(--color-strokeWeak)] hover:shadow-[0_0_0_1px_var(--color-strokeStrong)] active:scale-[0.96] transition-[box-shadow,scale] duration-100 cursor-pointer"]
+        <> popoverTrigger_ "connect-agent-pop"
+    )
+    do
+      faSprite_ "terminal" "regular" "w-4 h-4 text-iconNeutral"
+      "Connect your agent"
+  div_ ([class_ "dropdown dropdown-end z-50 mt-2 w-[min(36rem,calc(100vw-2rem))] rounded-2xl border border-strokeWeak bg-bgRaised p-4 shadow-lg flex flex-col gap-3", role_ "dialog", Aria.label_ "Connect your agent"] <> popoverPanel_ "connect-agent-pop") do
+    div_ [class_ "flex flex-col gap-1"] do
+      p_ [class_ "text-sm font-semibold text-textStrong"] "Connect your coding agent"
+      p_ [class_ "text-sm text-textWeak text-pretty"] "Paste this into Claude Code, Codex, Cursor or any coding agent. It installs Monoscope's skills and CLI and adds this project's MCP server, so the agent can read your telemetry, issues and monitors."
+    pre_ [id_ "agent-prompt", class_ "max-h-64 overflow-auto c-scroll rounded-xl bg-fillWeak p-3 text-xs leading-relaxed text-textStrong whitespace-pre-wrap break-words"] $ toHtml prompt
+    div_ [class_ "flex items-center justify-between gap-3"] do
+      a_ [href_ "https://monoscopehq.com/docs/", target_ "_blank", rel_ "noopener", class_ "text-xs text-textWeak hover:text-textBrand"] "Read the MCP and CLI docs"
+      copyButton_ "btn btn-sm btn-primary gap-1.5" "w-3.5 h-3.5" "#agent-prompt.innerText" []
+  where
+    host = T.dropWhileEnd (== '/') d.hostUrl
+    prompt =
+      T.unlines
+        [ "Connect yourself to my Monoscope project (" <> d.pid.toText <> ") so you can investigate production telemetry, issues and monitors."
+        , ""
+        , "1. Install the Monoscope skills:"
+        , "   - Claude Code: claude plugin marketplace add monoscope-tech/skills && claude plugin install monoscope-skills@monoscope-skills"
+        , "   - Codex: codex plugin marketplace add monoscope-tech/skills && codex plugin add monoscope-skills@monoscope-skills"
+        , "   - Any other agent: npx skills add monoscope-tech/skills"
+        , "2. Install the CLI and log in: curl -fsSL https://monoscopehq.com/install.sh | sh && monoscope auth login"
+        , "   Then set the project: monoscope config set project " <> d.pid.toText
+        , "3. Add the MCP server " <> host <> "/api/v1/mcp (HTTP transport) with the header \"Authorization: Bearer <API key>\"."
+        , "   Ask me for the key; I'll create one at " <> host <> urls.apiGet d.pid <> ". Never write it into the repository."
+        , ""
+        , "When you're done, confirm the connection by listing today's open issues."
+        ]
 
 
 askBox_ :: HomeData -> Html ()
@@ -333,8 +375,8 @@ instance Outcome SlackConnectCard where
 
 
 slackConnectCard_ :: SlackConnectCard -> Html ()
-slackConnectCard_ c = div_ [id_ "slack-connect-card", class_ "flex flex-wrap items-center gap-3 rounded-xl border border-strokeWeak bg-bgRaised p-4"] do
-  span_ [class_ "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-fillWeak"] $ faSprite_ "slack" "solid" "w-4 h-4"
+slackConnectCard_ c = div_ [id_ "slack-connect-card", class_ "flex flex-wrap items-center gap-4 rounded-2xl surface-raised p-4 shadow-[0_0_0_1px_var(--color-strokeWeak)]"] do
+  span_ [class_ "flex size-10 shrink-0 items-center justify-center rounded-xl bg-fillWeak"] $ faSprite_ "slack" "solid" "w-5 h-5"
   div_ [class_ "min-w-0 flex-1 flex flex-col gap-0.5"] do
     p_ [class_ "text-sm font-medium text-textStrong"] $ case c.connect of
       Just ch | c.invited -> toHtml $ "Invite to #" <> ch.channelName <> " sent to " <> c.email
@@ -345,21 +387,26 @@ slackConnectCard_ c = div_ [id_ "slack-connect-card", class_ "flex flex-wrap ite
       (_, Just ch) | Just e <- (.lastError) =<< find ((== c.email) . (.email)) ch.invites -> "Your last invite failed (" <> e <> "). Try again, or email hello@monoscope.tech."
       (_, Just _) | c.invited -> "Accept it in Slack. If your workspace needs admin approval, your Slack admin gets a request."
       (_, Just _) -> "Get an invite to join your teammates and our engineers there."
-      (_, Nothing) -> "A private Slack Connect channel between your team and ours: setup help, alert tuning, feature requests. Every project member is invited by email."
-  button_
-    [ type_ "button"
-    , class_ "btn btn-sm btn-primary"
-    , hxPost_ $ urls.slackConnectPost c.pid
-    , hxTarget_ "#slack-connect-card"
-    , hxSwap_ "outerHTML"
-    , term "hx-disabled-elt" "this"
-    ]
+      (_, Nothing)
+        | demo -> "Your own projects get a private Slack Connect channel with our engineers. It isn't available on the demo project."
+        | otherwise -> "A private Slack Connect channel between your team and ours: setup help, alert tuning, feature requests. Every project member is invited by email."
+  unless demo
+    $ button_
+      [ type_ "button"
+      , class_ "btn btn-sm btn-primary"
+      , hxPost_ $ urls.slackConnectPost c.pid
+      , hxTarget_ "#slack-connect-card"
+      , hxSwap_ "outerHTML"
+      , term "hx-disabled-elt" "this"
+      ]
     $ case c.connect of
       Nothing -> "Create shared channel"
       Just _ | c.invited -> "Resend invite"
       Just _ -> "Get invited"
   whenJust (guarded (const c.invited) =<< c.connect) \ch ->
     a_ [href_ $ Integrations.slackConnectUrl ch, target_ "_blank", rel_ "noopener", class_ "btn btn-sm btn-ghost"] "Open in Slack"
+  where
+    demo = c.pid == Projects.demoProjectId
 
 
 slackConnectPostH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (System.Types.Done SlackConnectCard))
