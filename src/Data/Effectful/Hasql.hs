@@ -75,9 +75,12 @@ import Hasql.Statement (Statement)
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Language.Haskell.TH.Syntax qualified as THS
-import OpenTelemetry.Attributes (Attribute)
+import OpenTelemetry.Attributes (Attribute, toAttribute)
+import OpenTelemetry.Context qualified as Ctx
+import OpenTelemetry.Context.ThreadLocal qualified as CtxTL
 import OpenTelemetry.Instrumentation.Hasql (TracedPool)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
+import OpenTelemetry.Trace.Core qualified as Trace
 import Pkg.Deriving (WrappedEnumSC (..))
 import Relude
 import Text.Show (showString, showsPrec)
@@ -282,11 +285,28 @@ isUniqueViolation :: HasqlException -> Bool
 isUniqueViolation = (== Just "23505") . serverErrorCode
 
 
+-- | Each DB span also carries @db.client.connection.wait_time@ (seconds): the span wraps the
+-- pool checkout, so a 20 ms lookup that waited 1.5 s for a connection read as a 1.5 s slow
+-- query (#803) with nothing to tell the two apart.
 runHasqlPool :: IOE :> es => TracedPool -> Eff (Hasql ': es) a -> Eff es a
 runHasqlPool pool = interpret \_ -> \case
-  UseSession s -> OHasql.use pool s
-  UseStatement p st -> OHasql.useStatement pool p st
-  UseLabeledSession n xs s -> OHasql.useSession pool n xs s
+  UseSession s -> waited \pre -> OHasql.use pool (pre *> s)
+  UseStatement p st -> waited \pre -> uncurry (OHasql.useSession pool) (statementSpan pool st) (pre *> Session.statement p st)
+  UseLabeledSession n xs s -> waited \pre -> OHasql.useSession pool n xs (pre *> s)
+  where
+    waited run = liftIO do
+      start <- getMonotonicTime
+      run $ liftIO do
+        acquired <- getMonotonicTime
+        traverse_ (\sp -> Trace.addAttribute sp "db.client.connection.wait_time" (acquired - start)) . Ctx.lookupSpan =<< CtxTL.getContext
+
+
+-- | The span name and attributes 'OHasql.useStatement' gives a statement.
+statementSpan :: TracedPool -> Statement p a -> (Text, HM.HashMap Text Attribute)
+statementSpan pool st = (fromMaybe "hasql.statement" op <> foldMap (" " <>) (OHasql.saDbName (OHasql.poolAttrs pool)), HM.fromList $ ("db.statement", toAttribute sql) : [("db.operation.name", toAttribute o) | Just o <- [op]])
+  where
+    sql = OHasql.extractStatementSql st
+    op = OHasql.extractOperationName sql
 
 
 -- | Run a `Session`, throwing `HasqlException` on `UsageError`. Mirrors
