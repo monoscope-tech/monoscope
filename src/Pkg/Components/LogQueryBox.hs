@@ -287,7 +287,7 @@ logQueryBox_ config = do
         whenNothing_ config.targetWidgetPreview $ div_ [class_ "flex shrink-0 items-center justify-end gap-3 whitespace-nowrap max-md:w-full"] do
           label_ [class_ "flex min-h-8 cursor-pointer items-center gap-1.5 text-xs text-textWeak hover:text-textStrong"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart", [__|init if window.innerWidth < 768 set my.checked to true|]]
-            span_ "Hide timeline"
+            span_ "Hide chart"
           label_ [class_ "flex min-h-8 cursor-pointer items-center gap-1.5 text-xs text-textWeak hover:text-textStrong group-has-[#viz-patterns:checked]/pg:hidden group-has-[#viz-sessions:checked]/pg:hidden"] do
             input_
               $ [ type_ "checkbox"
