@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, frontendBuild, BWConfig (..), llmCallsUrl, stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus, externalHeadScripts_) where
+module Pages.BodyWrapper (bodyWrapper, frontendBuild, BWConfig (..), llmCallsUrl, apiCatalogUrl, stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus, externalHeadScripts_) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)

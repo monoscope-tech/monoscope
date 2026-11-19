@@ -6,6 +6,7 @@ module Pages.Home (homeGetH, HomeGet (..), HomeData (..), highlightDismissPostH,
 
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
+import Data.Default (def)
 import Data.List (partition)
 import Data.Set qualified as S
 import Data.Text qualified as T
@@ -17,14 +18,17 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxIndicator_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
+import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Issues qualified as Issues
+import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.DashboardTemplates (askTemplates, loadDashboardFromVM, templateList, templateTab)
 import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.AIThreads (promptField_, threadUrl)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
-import Pages.Components (agoText, copyButton_)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), apiCatalogUrl, mkPageCtx)
+import Pages.Components (agoText, copyButton_, logExplorerUrl)
 import Pages.Dashboards (dashboardUrl)
 import Pages.Issues (issueDetailUrl, issuePreview_, issuesListUrl, renderIssueTitle_)
 import Pkg.Components.Widget qualified as Widget
@@ -37,7 +41,7 @@ import System.Types qualified
 import Text.Slugify (slugify)
 import UnliftIO.Exception (tryAny)
 import Utils (countNoun, faSprite_, navTabAttrs, popoverPanel_, popoverTrigger_)
-import Web.Links (CookieProtectedRoutes (..), urls)
+import Web.Links (CookieProtectedRoutes (..), MonitorsRoutes' (..), ProjectsRoutes' (..), TelemetryRoutes' (..), urls)
 
 
 newtype HomeGet = HomePage (PageCtx HomeData)
@@ -57,6 +61,10 @@ data HomeData = HomeData
   , recentThreads :: [Issues.ConversationSummary]
   , glance :: [Widget.Widget]
   , starred :: [(Dashboards.DashboardVM, [Widget.Widget])]
+  , firing :: [Monitors.QueryMonitor]
+  , monitorCount :: Int
+  , activeIncidents :: Int
+  , members :: [ProjectMembers.ProjectMemberVM]
   , slack :: Maybe SlackConnectCard
   -- ^ Absent on servers with no Slack bot (self-hosted), where no channel can exist.
   }
@@ -80,9 +88,12 @@ homeGetH pid = do
   templates <- templateList <$> askTemplates
   dashboards <- filter (isJust . (.starredSince)) <$> Dashboards.selectDashboardsSortedBy pid Desc Dashboards.DSUpdatedAt
   slackConnect <- Integrations.getSlackConnect pid
+  monitors <- filter (isNothing . (.deactivatedAt)) <$> Monitors.queryMonitorsAll pid
+  activeIncidents <- length <$> Incidents.listEpisodes pid (Just Incidents.EpisodeActive) 50
+  members <- ProjectMembers.selectActiveProjectMembers pid
   appCtx <- ask @AuthContext
   let slackConfigured = not $ T.null appCtx.config.slackBotToken
-  let glance = take 1 $ templateTab "_overview.yaml" "Overview" []
+  let glance = take 1 (templateTab "_overview.yaml" "Overview" []) <> stackWidgets pid
       -- A widget's id names its DOM elements, so one shown twice (a starred overview repeats the
       -- golden signals) loads into the first copy and leaves the second a skeleton forever.
       pick seen vm = let ws = take 4 [w | w <- mapMaybe (homeWidget vm) $ foldMap Dashboards.allWidgets $ loadDashboardFromVM templates vm, all (`S.notMember` seen) (domId w)] in (seen <> S.fromList (mapMaybe domId ws), (vm, ws))
@@ -94,7 +105,7 @@ homeGetH pid = do
   addRespHeaders
     $ HomePage
     $ PageCtx bw{pageTitle = "Home", menuItem = Just "Home"}
-    $ HomeData{pid, firstName = sess.user.firstName, now, newIssues, newIssueCount, openIssueCount, resolved, highlights, routines, recentThreads = take 4 chats, glance, starred, slack = SlackConnectCard pid email slackConnect Nothing <$ guard slackConfigured, hostUrl = appCtx.env.hostUrl}
+    $ HomeData{pid, firstName = sess.user.firstName, now, newIssues, newIssueCount, openIssueCount, resolved, highlights, routines, recentThreads = take 4 chats, glance, starred, firing = filter ((/= Monitors.MSNormal) . (.currentStatus)) monitors, monitorCount = length monitors, activeIncidents, members, slack = SlackConnectCard pid email slackConnect Nothing <$ guard slackConfigured, hostUrl = appCtx.env.hostUrl}
   where
     -- Charts that render on their own: a widget needing its dashboard's variables or constants would only show an error here.
     homeWidget vm w = do
@@ -114,6 +125,7 @@ home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ 
     askBox_ d
     statusBar_ d
   whenJust (mfilter (not . (.invited)) d.slack) slackConnectCard_
+  alerts_ d
   let flagged kind = filter ((== kind) . (.kind)) d.highlights
   div_ [class_ "grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-10"] do
     column_ "Today's issues" (d.newIssueCount + length (flagged Issues.HKIssue)) (Just ("All issues", issuesListUrl d.pid)) do
@@ -131,13 +143,25 @@ home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ 
   unless (null $ flagged Issues.HKInsight) $ section_ [class_ "flex flex-col gap-2", Aria.label_ "For you today"] do
     sectionHead_ "For you today" (Just $ length $ flagged Issues.HKInsight) $ Just ("AI routines", urls.aiRoutinesGet d.pid)
     div_ [class_ "flex flex-col"] $ forM_ (flagged Issues.HKInsight) $ feedRow_ d.pid d.now
-  section_ [class_ "flex flex-col gap-3", Aria.label_ "Service health"] do
-    sectionHead_ "Service health" Nothing $ Just ("Overview dashboard", urls.dashboardRedirectGet d.pid ([] :: [(Text, Maybe Text)]))
+  section_ [class_ "flex flex-col gap-3", Aria.label_ "Your stack"] do
+    sectionHead_ "Your stack" Nothing $ Just ("Overview dashboard", urls.dashboardRedirectGet d.pid ([] :: [(Text, Maybe Text)]))
     Widget.embeddedWidgets_ d.pid d.glance
+    div_ [class_ "flex flex-wrap gap-2"] $ forM_ stackLinks \(icon, label, href) ->
+      a_ ([href_ href, class_ "inline-flex items-center gap-1.5 rounded-full bg-fillWeak px-3 py-1.5 text-xs text-textWeak hover:text-textStrong hover:bg-fillHover transition-colors"] <> navTabAttrs) $ faSprite_ icon "regular" "w-3.5 h-3.5" >> label
   forM_ d.starred \(vm, ws) -> section_ [class_ "flex flex-col gap-3", Aria.label_ vm.title] do
     sectionHead_ (faSprite_ "star" "solid" "w-3.5 h-3.5 text-iconNeutral" >> toHtml vm.title) Nothing $ Just ("Open dashboard", dashboardUrl d.pid vm.id Nothing [])
     Widget.embeddedWidgets_ d.pid ws
   jumpBackIn_ d
+  homeFooter_ d
+  where
+    stackLinks :: [(Text, Html (), Text)]
+    stackLinks =
+      [ ("explore", "Logs & traces", logExplorerUrl d.pid)
+      , ("web", "Real user monitoring", urls.rumRedirect d.pid [] [])
+      , ("sparkles", "LLM & agents", (urls.traces d.pid).llmGetH Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing)
+      , ("list-check", "Monitors", (urls.monitors d.pid).listGet Nothing Nothing)
+      , ("swap", "API catalog", apiCatalogUrl d.pid Nothing)
+      ]
 
 
 -- | One prompt that connects any coding agent (Claude Code, Codex, Cursor…) to this project:
@@ -176,6 +200,59 @@ connectAgent_ d = div_ [class_ "relative"] do
         , ""
         , "When you're done, confirm the connection by listing today's open issues."
         ]
+
+
+-- | Volume per signal, beside the golden signals: what this project actually sends.
+stackWidgets :: Projects.ProjectId -> [Widget.Widget]
+stackWidgets pid =
+  [ stat "home-stack-logs" "Logs" "file-lines" "logs" "kind == \"log\""
+  , stat "home-stack-spans" "Spans" "diagram-project" "spans" "kind != \"log\" and kind != null"
+  , stat "home-stack-pageviews" "Page views" "web" "views" "name == \"documentLoad\" or name startswith \"Pageview \""
+  , stat "home-stack-llm" "LLM calls" "sparkles" "calls" "attributes.gen_ai.operation.name != null"
+  ]
+  where
+    stat wid title icon unit q =
+      def
+        { Widget.id = Just wid
+        , Widget.wType = Widget.WTTimeseriesStat
+        , Widget.title = Just title
+        , Widget.icon = Just icon
+        , Widget.query = Just $ q <> " | summarize count() by bin_auto(timestamp)"
+        , Widget.unit = Just unit
+        , Widget.summarizeBy = Just Widget.SBSum
+        , Widget.layout = Just def{Widget.w = Just 3, Widget.h = Just 2}
+        , Widget._projectId = Just pid
+        }
+
+
+-- | Monitors that are firing now, or one calm line when none are.
+alerts_ :: HomeData -> Html ()
+alerts_ d = section_ [class_ "flex flex-col gap-3", Aria.label_ "Alerts"] do
+  sectionHead_ "Alerts" (guarded (> 0) $ length d.firing) $ Just ("All monitors", (urls.monitors d.pid).listGet Nothing Nothing)
+  if null d.firing
+    then div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-1 rounded-2xl surface-raised px-4 py-3 text-sm shadow-[0_0_0_1px_var(--color-strokeWeak)]"] do
+      span_ [class_ "inline-flex items-center gap-2 font-medium text-textStrong"] $ faSprite_ "circle-check" "regular" "w-4 h-4 text-iconSuccess" >> "All clear. No monitors are firing."
+      span_ [class_ "text-textWeak"] $ toHtml $ countNoun d.monitorCount "monitor" <> " watching" <> bool "" (" · " <> countNoun d.activeIncidents "active incident") (d.activeIncidents > 0)
+      when (d.monitorCount == 0) $ a_ ([href_ $ (urls.monitors d.pid).listGet Nothing Nothing, class_ "ms-auto text-textBrand hover:underline"] <> navTabAttrs) "Create a monitor"
+    else div_ [class_ "flex flex-col divide-y divide-strokeWeak overflow-hidden rounded-2xl surface-raised shadow-[0_0_0_1px_var(--color-strokeWeak)]"] $ forM_ d.firing \m -> do
+      let alerting = m.currentStatus == Monitors.MSAlerting
+      a_ ([href_ $ (urls.monitors d.pid).overviewGet m.id.toText, class_ "flex items-center gap-3 px-4 py-3 hover:bg-fillWeak transition-colors"] <> navTabAttrs) do
+        span_ [class_ $ "size-2 shrink-0 rounded-full " <> bool "bg-fillWarning-strong" "bg-fillError-strong" alerting] ""
+        span_ [class_ $ "shrink-0 text-xs font-medium " <> bool "text-textWarning" "text-textError" alerting] $ bool "Warning" "Alerting" alerting
+        span_ [class_ "min-w-0 truncate text-sm font-medium text-textStrong"] $ toHtml m.alertConfig.title
+        span_ [class_ "ms-auto shrink-0 text-xs text-textWeak tabular-nums"] $ toHtml $ show @Text (round @Double @Int m.currentValue) <> foldMap (" " <>) m.alertConfig.unit <> foldMap ((" · since " <>) . agoText d.now) (m.alertLastTriggered <|> m.warningLastTriggered)
+
+
+-- | The people on this project and where to go next, in one quiet row.
+homeFooter_ :: HomeData -> Html ()
+homeFooter_ d = footer_ [class_ "flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-strokeWeak pt-6 text-xs text-textWeak"] do
+  a_ ([href_ $ urls.projects.membersManageGet d.pid, class_ "inline-flex items-center gap-2 hover:text-textStrong"] <> navTabAttrs) do
+    span_ [class_ "flex -space-x-1.5"] $ forM_ (take 4 d.members) \m ->
+      span_ [class_ "flex size-6 items-center justify-center rounded-full bg-fillWeak text-[10px] font-semibold uppercase text-textStrong ring-2 ring-bgBase", title_ $ CI.original m.email] $ toHtml $ T.take 1 m.first_name <> T.take 1 m.last_name
+    toHtml $ bool (countNoun (length d.members) "member" <> " · Invite") "Just you so far · Invite teammates" (length d.members <= 1)
+  a_ [href_ "https://monoscopehq.com/docs/", target_ "_blank", rel_ "noopener", class_ "hover:text-textStrong"] "Documentation"
+  a_ ([href_ $ urls.apiGet d.pid, class_ "hover:text-textStrong"] <> navTabAttrs) "API keys"
+  a_ ([href_ $ urls.projects.settingsGet d.pid, class_ "hover:text-textStrong"] <> navTabAttrs) "Project settings"
 
 
 askBox_ :: HomeData -> Html ()
