@@ -879,7 +879,8 @@ reportProjectUsage authCtx pid =
             -- line and no "Usage to report" line — and they need opposite fixes.
             Log.logInfo "Counting usage" ("project_id", pid.toText, "window_start", show wStart :: Text, "window_end", show nowU :: Text)
             (wStart,) <$> Telemetry.getUsageTotals authCtx.env.enableTimefusionReads pid wStart nowU
-      case (Projects.isPaidPlan (Projects.parsePlan project.paymentPlan), nonEmptyT project.firstSubItemId) of
+      -- The demo project carries a paid plan to show paid features, but nobody is billed for it.
+      case (Projects.isPaidPlan (Projects.parsePlan project.paymentPlan) && pid /= Projects.demoProjectId, nonEmptyT project.firstSubItemId) of
         -- Unbilled plans still record daily_usage: free-tier limits and the billing page read it.
         -- Floored at 00:00 UTC: a first run (or a long gap) would otherwise land weeks of usage
         -- in one window ending today and cap a project that is under today's limit.
@@ -1585,7 +1586,7 @@ autoProvisionDashboards scheduledTime = do
             firstMemberM <- Hasql.interpOne [HI.sql| SELECT user_id FROM projects.project_members WHERE project_id = #{pid} AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 1 |]
             case firstMemberM of
               -- Don't mark: leave the template pending so the next hourly run retries once the project has a member.
-              Nothing -> Log.logAttention "Auto-provision skipped: project has no members" (AE.object ["project_id" AE..= pid, "template" AE..= file])
+              Nothing -> Log.logInfo "Auto-provision skipped: project has no members" (AE.object ["project_id" AE..= pid, "template" AE..= file])
               Just (userId :: Projects.UserId) -> do
                 did <- UUIDId <$> UUID.genUUID
                 void
@@ -2282,7 +2283,7 @@ dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors)
               whenJust refs.discordMsgId \messageId ->
                 void $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.KeepNotifiedAt sub.errorId Nothing (Just messageId) now
         tryStep "slack-error-incident-delivery" runSlackIncidentDeliveries
-      _ -> Log.logAttention "Error notifications skipped: no channels configured" pid
+      _ -> Log.logInfo "Error notifications skipped: no channels configured" pid
 
 
 data NotificationDecision = NotificationSkipped | NotificationDigested | NotificationQueued
@@ -3541,7 +3542,7 @@ processAPIChangeAnomalies pid targetHashes = do
               enqueueJobs authCtx [Jobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)]
               -- A span schema has neither by nature (~56 false alarms a day).
               when (unresolved && firstAnom.keyKind /= Just SchemaLearning.SpanIdentity)
-                $ Log.logAttention
+                $ Log.logInfo
                   "Suppressed new-endpoint notification: anomaly missing method+url_path"
                   (AE.object ["project_id" AE..= pid, "endpoint_hash" AE..= endpointHash, "issue_id" AE..= issue.id])
               pure $ Just (endpointHash, unresolved)

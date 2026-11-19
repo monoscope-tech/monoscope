@@ -489,7 +489,7 @@ clientMetadataH (Just authTextB64) = do
           Nothing -> Logging.logAttention "clientMetadata: no api key with given id" () >> throwError err401
           Just pApiKey ->
             Projects.activeProjectById pApiKey.projectId >>= \case
-              Nothing -> Logging.logAttention "clientMetadata: api key for inactive or deleted project" pApiKey.projectId >> throwError err401
+              Nothing -> Logging.logInfo "clientMetadata: api key for inactive or deleted project" pApiKey.projectId >> throwError err401
               Just _ -> pure pApiKey
       serviceAccountJson <-
         maybe (Logging.logAttention "clientMetadata: failed to decode service account from env" () >> throwError Servant.err500) pure

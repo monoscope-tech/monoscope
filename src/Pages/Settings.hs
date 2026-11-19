@@ -1309,7 +1309,7 @@ data StripePeriods = StripePeriods
 
 stripeBillingPeriods :: (IOE :> es, Log.Log :> es, W.HTTP :> es) => EnvConfig -> Projects.Project -> Eff es (Maybe StripePeriods)
 stripeBillingPeriods envCfg project
-  | Projects.isFreeTier project.paymentPlan = pure Nothing
+  | Projects.isFreeTier project.paymentPlan || project.id == Projects.demoProjectId = pure Nothing
   | Projects.projectProvider project /= Projects.StripeProvider = pure Nothing
   | otherwise = case mfilter (not . T.null) project.subId of
       Nothing -> pure Nothing
