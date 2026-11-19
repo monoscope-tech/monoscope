@@ -291,7 +291,7 @@ bodyWrapper bcfg child = do
       -- carrying a telemetry key rendered `new Monoscope(...)` with nothing having loaded it.
       browserMonitoring = isProd && bcfg.config.enableBrowserMonitoring && bcfg.config.telemetryApiKey /= ""
       initialTheme = maybe "dark" (.theme) bcfg.sessM
-      themeColor = bool "#fbfcfd" "#060708" (initialTheme == "dark")
+      themeColor = bool "#fbfcfd" "#111316" (initialTheme == "dark")
       projectTimeZone = mfilter (not . T.null) $ (.timeZone) <$> bcfg.currProject
   doctype_
   -- The theme is on <html> too: overscroll reveals html's background, which sits outside body's tokens.
@@ -620,7 +620,7 @@ bodyWrapper bcfg child = do
 
           function applyTheme(theme) {
             [document.documentElement, document.body].forEach(el => el.setAttribute('data-theme', theme));
-            document.getElementById('theme-color-meta').content = theme === 'dark' ? '#060708' : '#fbfcfd';
+            document.getElementById('theme-color-meta').content = theme === 'dark' ? '#111316' : '#fbfcfd';
           }
 
           // Suppresses transitions across the swap so the theme change doesn't flash.
@@ -751,7 +751,6 @@ projectsDropDown currProject projects = do
 
 sideNav :: Projects.Session -> Projects.Project -> BWConfig -> Html ()
 sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeaker max-md:bg-bgBase text-sm max-md:fixed max-md:z-50 max-md:w-60 max-md:h-full max-md:-translate-x-full max-md:transition-transform group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0 md:min-w-13 md:w-13 md:shrink-0 group-has-[#sidenav-toggle:checked]/pg:md:w-[var(--sidenav-w,15rem)] h-full md:transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
-  span_ [Aria.hidden_ "true", class_ "pointer-events-none absolute inset-x-0 bottom-0 h-64 bg-gradient-to-t from-fillBrand-weak/30 via-fillBrand-weak/10 to-transparent"] ""
   -- Right edge (desktop): collapsed it expands on click; expanded it drags to resize (resizer.ts), double-click collapses.
   label_ [term "for" "sidenav-toggle", class_ "max-md:hidden group-has-[#sidenav-toggle:checked]/pg:hidden absolute right-0 top-0 bottom-0 w-1 border-r border-strokeWeak cursor-e-resize hover:border-strokeBrand-strong transition-colors z-10", Aria.label_ "Expand sidebar"] ""
   div_

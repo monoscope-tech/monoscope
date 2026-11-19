@@ -148,7 +148,7 @@
 
   /* Background colors */
   --color-bgAlternate: oklch(97% 0.01 261);
-  --color-bgBase: oklch(98.5% 0.006 261);
+  --color-bgBase: oklch(97.5% 0.008 261);
   --color-bgInverse: oklch(16.4% 0.012 263);
   --color-bgOverlay: oklch(99.5% 0.004 261);
   --color-bgRaised: oklch(100% 0 0);
@@ -197,7 +197,7 @@
   --color-iconInverse: oklch(100% 0 0 / 0.6);
   --color-iconInverseDisabled: oklch(100% 0 0 / 0.12);
   --color-iconInverse-strong: oklch(100% 0 0);
-  --color-iconNeutral: oklch(21.2% 0.117 264 / 0.45);
+  --color-iconNeutral: oklch(55% 0.02 261);
   --color-iconSuccess: rgba(6 122 87 / 0.8);
   --color-iconWarning: rgba(143 108 26 / 0.8);
 
@@ -214,16 +214,16 @@
   --color-strokeInverse-strong: oklch(100% 0 0 / 0.6);
   --color-strokeInverse-weak: oklch(100% 0 0 / 0.12);
   --color-strokeSelected: oklch(56.7% 0.239 261);
-  --color-strokeStrong: oklch(21.2% 0.117 264 / 0.5);
+  --color-strokeStrong: oklch(76% 0.02 261);
   --color-strokeSuccess-strong: rgba(6 122 87 / 0.8);
   --color-strokeSuccess-weak: rgba(6 122 87 / 0.2);
   --color-strokeWarning-strong: rgba(143 108 26 / 0.8);
   --color-strokeWarning-weak: rgba(143 108 26 / 0.2);
-  --color-strokeWeak: oklch(25.2% 0.146 264 / 0.18);
+  --color-strokeWeak: oklch(89% 0.012 261);
 
   /* Text colors */
   --color-textBrand: oklch(50.5% 0.22 261);
-  --color-textDisabled: oklch(21.2% 0.117 264 / 0.45);
+  --color-textDisabled: oklch(60% 0.015 261);
   --color-textError: oklch(51.3% 0.197 21);
   --color-textInformation: oklch(53% 0.16 261);
   --color-textSuccess: oklch(47.8% 0.130 162);
@@ -232,7 +232,7 @@
   --color-textInverse-strong: oklch(100% 0 0);
   --color-textInverse-weak: oklch(100% 0 0 / 0.78);
   --color-textStrong: oklch(14.4% 0.069 263 / 0.9);
-  --color-textWeak: oklch(16.7% 0.086 263 / 0.84);
+  --color-textWeak: oklch(46% 0.02 261);
   --animate-fadeBg: fadeBg 2s ease-out;
 
 
@@ -955,7 +955,7 @@
   --color-primary: var(--color-fillBrand-action);
   --color-primary-content: oklch(100% 0 0);
   --color-secondary: var(--color-textBrand);
-  --color-secondary-content: oklch(16.7% 0.086 263 / 0.65);
+  --color-secondary-content: var(--color-textWeak);
   --color-accent: oklch(29.2% 0.174 264 / 0.02);
   --color-accent-content: oklch(56.7% 0.239 261);
   --color-neutral: oklch(29.2% 0.174 264 / 0.04);
@@ -975,8 +975,8 @@
   --size-selector: 0.25rem;
   --size-field: 0.25rem;
   --border: 1px;
-  --depth: 1;
-  --noise: 1;
+  --depth: 0;
+  --noise: 0;
   --tw-prose-body: var(--color-textStrong) !important;
 }
 
@@ -986,13 +986,13 @@
   prefersdark: true;
   color-scheme: 'dark';
   --color-base-100: var(--color-bgBase);
-  --color-base-200: oklch(18% 0.004 260);
-  --color-base-300: oklch(22% 0.004 260);
-  --color-base-content: oklch(90% 0.005 260);
+  --color-base-200: var(--color-bgAlternate);
+  --color-base-300: var(--color-bgRaised);
+  --color-base-content: var(--color-textStrong);
   --color-primary: var(--color-fillBrand-action);
   --color-primary-content: oklch(92% 0.005 260);
   --color-secondary: var(--color-textBrand);
-  --color-secondary-content: oklch(72% 0.005 260);
+  --color-secondary-content: var(--color-textWeak);
   --color-accent: rgba(255 255 255 / 0.03);
   --color-accent-content: oklch(60% 0.18 265);
   --color-neutral: rgba(255 255 255 / 0.06);
@@ -1011,8 +1011,8 @@
   --size-selector: 0.25rem;
   --size-field: 0.25rem;
   --border: 1px;
-  --depth: 1;
-  --noise: 1;
+  --depth: 0;
+  --noise: 0;
   --tw-prose-body: var(--color-textStrong) !important;
 }
 
@@ -1110,8 +1110,8 @@ body, :host {
 
   /* Fix dark mode modal backdrop */
   [data-theme="dark"] {
-    --page-scroll-bg: color-mix(in srgb, oklch(12.5% 0.004 260), oklch(0% 0 0) 40%);
-    --root-bg: oklch(12.5% 0.004 260);
+    --page-scroll-bg: var(--color-bgSunken);
+    --root-bg: var(--color-bgBase);
   }
 
   .dropdown summary {
@@ -1955,24 +1955,24 @@ code, pre, .code, .monospace {
   /* Dark mode overrides */
   [data-theme="dark"] {
     /* Background colors — subtle warm charcoal, clear surface steps */
-    --color-bgAlternate: oklch(17% 0.004 260);
-    --color-bgBase: oklch(12.5% 0.004 260);
-    --color-bgInverse: rgb(255 255 255);
-    --color-bgOverlay: oklch(22% 0.004 260);
-    --color-bgRaised: oklch(20% 0.004 260);
-    --color-bgSunken: oklch(8% 0.003 260);
+    --color-bgAlternate: oklch(20.5% 0.008 261);
+    --color-bgBase: oklch(18.5% 0.008 261);
+    --color-bgInverse: oklch(96% 0.006 261);
+    --color-bgOverlay: oklch(26.5% 0.008 261);
+    --color-bgRaised: oklch(22.5% 0.008 261);
+    --color-bgSunken: oklch(15.5% 0.008 261);
     --color-bgBrand: oklch(64% 0.18 261);
 
     /* Chart colors — dark theme */
     --color-chartBg: oklch(22% 0.015 260 / 0.04);
-    --color-chartMask: oklch(15% 0.01 260 / 0.85);
+    --color-chartMask: oklch(18.5% 0.008 261 / 0.85);
 
     /* Fill colors — dark theme */
     --color-fillBrand-strong: oklch(64% 0.18 261);
     --color-fillBrand-action: oklch(54% 0.18 261);
     --color-fillBrand-weak: oklch(64% 0.18 261 / 0.15);
     --color-fillDisabled: rgba(255 255 255 / 0.12);
-    --color-fillStrong: rgb(255 255 255);
+    --color-fillStrong: oklch(93% 0.006 261);
     --color-fillError-strong: oklch(77.2% 0.126 21);
     --color-fillError-weak: rgba(255 156 156 / 0.08);
     --color-fillHover: rgba(255 255 255 / 0.07);
@@ -1982,7 +1982,7 @@ code, pre, .code, .monospace {
     --color-fillInverseDisabled: rgba(15 15 20 / 0.1);
     --color-fillInverse-hover: rgba(15 15 20 / 0.04);
     --color-fillInverse-press: rgba(15 15 20 / 0.1);
-    --color-fillInverse-strong: oklch(12.5% 0.004 260);
+    --color-fillInverse-strong: var(--color-bgBase);
     --color-fillInverse-weak: rgba(15 15 20 / 0.04);
     --color-fillOverlay: rgba(5 5 8 / 0.88);
     --color-fillPress: rgba(255 255 255 / 0.12);
@@ -2004,7 +2004,7 @@ code, pre, .code, .monospace {
     --color-iconInverse: oklch(10% 0.005 260 / 0.45);
     --color-iconInverseDisabled: oklch(10% 0.005 260 / 0.1);
     --color-iconInverse-strong: oklch(10% 0.005 260 / 0.88);
-    --color-iconNeutral: oklch(100% 0 0 / 0.55);
+    --color-iconNeutral: oklch(68% 0.01 261);
     --color-iconSuccess: oklch(78% 0.088 162 / 0.8);
     --color-iconWarning: oklch(79.5% 0.106 92 / 0.8);
 
@@ -2012,8 +2012,8 @@ code, pre, .code, .monospace {
     --color-strokeBrand-strong: oklch(72% 0.15 261 / 0.5);
     --color-strokeBrand-weak: oklch(72% 0.15 261 / 0.15);
     --color-strokeDisabled: rgba(255 255 255 / 0.12);
-    --color-strokeError-strong: rgba(248 113 113 / 0.5);
-    --color-strokeError-weak: rgba(248 113 113 / 0.15);
+    --color-strokeError-strong: oklch(77.2% 0.126 21 / 0.5);
+    --color-strokeError-weak: oklch(77.2% 0.126 21 / 0.15);
     --color-strokeFocus: oklch(72% 0.15 261);
     --color-strokeInformation-strong: oklch(78% 0.095 261 / 0.5);
     --color-strokeInformation-weak: oklch(78% 0.095 261 / 0.15);
@@ -2021,38 +2021,38 @@ code, pre, .code, .monospace {
     --color-strokeInverse-strong: rgba(10 10 15 / 0.4);
     --color-strokeInverse-weak: rgba(15 15 20 / 0.1);
     --color-strokeSelected: oklch(64% 0.18 261);
-    --color-strokeStrong: rgba(255 255 255 / 0.35);
-    --color-strokeSuccess-strong: rgba(134 239 172 / 0.5);
-    --color-strokeSuccess-weak: rgba(134 239 172 / 0.15);
-    --color-strokeWarning-strong: rgba(251 191 36 / 0.5);
-    --color-strokeWarning-weak: rgba(251 191 36 / 0.15);
-    --color-strokeWeak: rgba(255 255 255 / 0.09);
+    --color-strokeStrong: oklch(100% 0 0 / 0.28);
+    --color-strokeSuccess-strong: oklch(78% 0.088 162 / 0.5);
+    --color-strokeSuccess-weak: oklch(78% 0.088 162 / 0.15);
+    --color-strokeWarning-strong: oklch(79.5% 0.106 92 / 0.5);
+    --color-strokeWarning-weak: oklch(79.5% 0.106 92 / 0.15);
+    --color-strokeWeak: oklch(100% 0 0 / 0.1);
 
     /* Text colors — dark theme */
     --color-textBrand: oklch(78% 0.15 261);
-    --color-textDisabled: rgba(255 255 255 / 0.35);
+    --color-textDisabled: oklch(56% 0.01 261);
     --color-textError: oklch(77.2% 0.126 21);
     --color-textInformation: oklch(78% 0.095 261);
     --color-textInverseDisabled: rgba(15 15 20 / 0.1);
     --color-textInverse-strong: rgba(10 10 15 / 0.88);
     --color-textInverse-weak: rgba(10 10 15 / 0.6);
-    --color-textStrong: oklch(90% 0.005 260);
+    --color-textStrong: oklch(93% 0.006 261);
     --color-textSuccess: oklch(78% 0.088 162);
     --color-textWarning: oklch(79.5% 0.106 92);
-    --color-textWeak: oklch(85% 0.005 260);
+    --color-textWeak: oklch(78% 0.012 261);
 
     /* Dark mode shadow scale — deeper for contrast on dark surfaces */
     --shadow-xs: 0 1px 2px -1px rgba(0 0 0 / 0.2);
-    --shadow-sm: 0 2px 8px -2px rgba(0 0 0 / 0.55), 0 4px 16px -4px rgba(0 0 0 / 0.4);
-    --shadow-md: 0 4px 12px -2px rgba(0 0 0 / 0.6), 0 8px 24px -4px rgba(0 0 0 / 0.45);
-    --shadow-lg: 0 8px 30px -5px rgba(0 0 0 / 0.6), 0 4px 12px -5px rgba(0 0 0 / 0.35);
+    --shadow-sm: 0 2px 8px -2px rgba(0 0 0 / 0.35), 0 4px 16px -4px rgba(0 0 0 / 0.25);
+    --shadow-md: 0 4px 12px -2px rgba(0 0 0 / 0.4), 0 8px 24px -4px rgba(0 0 0 / 0.3);
+    --shadow-lg: 0 8px 30px -5px rgba(0 0 0 / 0.4), 0 4px 12px -5px rgba(0 0 0 / 0.25);
     --shadow-toast: 0 0 0 1px var(--color-strokeWeak), 0 4px 8px -4px rgba(0 0 0 / 0.4), 0 12px 32px -8px rgba(0 0 0 / 0.5);
 
     /* Update fallback colors for dark mode */
     --fallback-b2: rgba(255 255 255 / 0.06);
-    --tab-color: oklch(72% 0.005 260);
-    --fallback-pc: oklch(92% 0.005 260);
-    --fallback-bc: rgba(255 255 255 / 0.55);
+    --tab-color: var(--color-textWeak);
+    --fallback-pc: var(--color-textStrong);
+    --fallback-bc: var(--color-strokeStrong);
   }
   .btn-primary {
     @apply bg-fillBrand-action hover:bg-fillBrand-action text-white;

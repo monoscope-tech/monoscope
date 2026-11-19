@@ -135,7 +135,7 @@ home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ 
     sectionHead_ "Service health" Nothing $ Just ("Overview dashboard", urls.dashboardRedirectGet d.pid ([] :: [(Text, Maybe Text)]))
     Widget.embeddedWidgets_ d.pid d.glance
   forM_ d.starred \(vm, ws) -> section_ [class_ "flex flex-col gap-3", Aria.label_ vm.title] do
-    sectionHead_ (faSprite_ "star" "solid" "w-3.5 h-3.5 text-iconWarning" >> toHtml vm.title) Nothing $ Just ("Open dashboard", dashboardUrl d.pid vm.id Nothing [])
+    sectionHead_ (faSprite_ "star" "solid" "w-3.5 h-3.5 text-iconNeutral" >> toHtml vm.title) Nothing $ Just ("Open dashboard", dashboardUrl d.pid vm.id Nothing [])
     Widget.embeddedWidgets_ d.pid ws
   jumpBackIn_ d
 
@@ -202,13 +202,13 @@ statusBar_ d = div_ [class_ "grid grid-cols-2 sm:grid-cols-5 gap-px overflow-hid
   stat_ (issuesListUrl d.pid) (length d.resolved) "Resolved today" (bool "" "text-textSuccess" (not $ null d.resolved))
   stat_ (urls.aiRoutinesGet d.pid) (length d.highlights) "Flagged by AI" ""
   case length d.routines of
-    0 -> a_ ([href_ $ urls.aiRoutinesGet d.pid, class_ "col-span-2 sm:col-span-1 flex flex-col justify-center gap-0.5 bg-bgRaised px-4 py-3 hover:bg-fillWeak transition-colors"] <> navTabAttrs) do
+    0 -> a_ ([href_ $ urls.aiRoutinesGet d.pid, class_ "col-span-2 sm:col-span-1 flex flex-col justify-center gap-0.5 surface-raised px-4 py-3 hover:bg-fillWeak transition-colors"] <> navTabAttrs) do
       span_ [class_ "inline-flex items-center gap-1.5 text-sm font-medium text-textBrand"] $ faSprite_ "sparkles" "regular" "w-3.5 h-3.5" >> "Set up a routine"
       span_ [class_ "text-xs text-textWeak"] "AI that watches for you"
     n -> stat_ (urls.aiRoutinesGet d.pid) n (bool "AI routines watching" "AI routine watching" (n == 1)) ""
   where
     stat_ :: Text -> Int -> Html () -> Text -> Html ()
-    stat_ href n label tone = a_ ([href_ href, class_ "flex flex-col gap-0.5 bg-bgRaised px-4 py-3 hover:bg-fillWeak transition-colors"] <> navTabAttrs) do
+    stat_ href n label tone = a_ ([href_ href, class_ "flex flex-col gap-0.5 surface-raised px-4 py-3 hover:bg-fillWeak transition-colors"] <> navTabAttrs) do
       span_ [class_ $ "text-xl font-semibold tabular-nums text-textStrong " <> tone] $ toHtml (show @Text n)
       span_ [class_ "text-xs text-textWeak"] label
 
