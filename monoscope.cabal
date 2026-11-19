@@ -949,6 +949,7 @@ test-suite integration-tests
     , monoscope
     , monoscope-cli
     , monoscope-shared
+    , network
     , odd-jobs
     , openai
     , openapi3
