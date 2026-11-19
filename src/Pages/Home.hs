@@ -162,7 +162,7 @@ connectAgent_ d = div_ [class_ "relative"] do
   where
     host = T.dropWhileEnd (== '/') d.hostUrl
     prompt =
-      T.unlines
+      unlines
         [ "Connect yourself to my Monoscope project (" <> d.pid.toText <> ") so you can investigate production telemetry, issues and monitors."
         , ""
         , "1. Install the Monoscope skills:"
