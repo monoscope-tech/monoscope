@@ -1005,25 +1005,9 @@ reportProjectUsage authCtx pid =
 runDailyJobScheduling :: Config.AuthContext -> ATBackgroundCtx ()
 runDailyJobScheduling authCtx =
   if authCtx.config.enableDailyJobScheduling
-    then withAdvisoryLock "daily_job_scheduling" schedule
+    then withXactLease authCtx "daily_job_scheduling" schedule >>= maybe (Log.logInfo "Daily job already running in another pod, skipping" ()) pure
     else Log.logInfo "Daily job scheduling is disabled, skipping" ()
   where
-    -- Advisory lock for distributed coordination. Uses session-level locks which auto-release
-    -- on connection close, providing a safety net if explicit unlock fails.
-    withAdvisoryLock :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
-    withAdvisoryLock lockName action = do
-      let acquireLock = Hasql.statement lockName [singletonStatement|SELECT pg_try_advisory_lock(hashtext($1 :: text)) :: bool|]
-          releaseLock =
-            ( Hasql.statement lockName [singletonStatement|SELECT pg_advisory_unlock(hashtext($1 :: text)) :: bool|] >>= \ok ->
-                unless ok
-                  $ Log.logAttention
-                    "Advisory unlock returned FALSE (lock was not held by this session)"
-                    (AE.object ["lock_name" AE..= lockName, "released" AE..= ok])
-            )
-              `catch` \(e :: SomeException) -> Log.logAttention "Failed to release advisory lock (will auto-release on disconnect)" (AE.object ["lock_name" AE..= lockName, "error" AE..= show e])
-      bracket acquireLock (when ?? releaseLock) \acquired ->
-        if acquired then action else Log.logInfo "Daily job already running in another pod, skipping" ()
-
     -- Seed @count@ ticks of a self-chaining job, spaced @step@ seconds from @from@.
     seedJobs :: SimplePG.Connection -> UTCTime -> Int -> Int -> (UTCTime -> BgJobs) -> IO ()
     seedJobs conn from count step mkJob = forM_ ([0 .. count - 1] :: [Int]) \i -> do
