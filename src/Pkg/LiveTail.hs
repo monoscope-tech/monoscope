@@ -1,3 +1,5 @@
+{-# LANGUAGE NoFieldSelectors #-}
+
 -- | Live Tail: matching telemetry on the ingest pod and pushing it to a browser.
 --
 -- The Events tab answers "what happened?" by querying TimeFusion. Live Tail answers "what is
@@ -131,6 +133,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addDays)
 import Data.Vector qualified as V
+import Deriving.Aeson qualified as DA
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import GHC.Generics (Generically (..))
@@ -893,11 +896,11 @@ instance AE.FromJSON LogRowFields where
 -- subscription is what selects the shape, so they cannot be mismatched.
 data LiveRow
   = -- | Live Tail's fixed, compact projection.
-    LogRow LogRowFields
+    LogRow {log :: LogRowFields}
   | -- | The Events table: column name → value, for exactly the columns the browser said it
     -- was rendering. A name the in-memory record cannot answer is absent rather than guessed,
     -- and the client leaves that cell empty until the durable read fills it.
-    TableRow (Map Text AE.Value)
+    TableRow {cols :: Map Text AE.Value}
   | -- | Not a row: something the server needs to tell this one browser, delivered down the
     -- same addressed path so it lands on the pod actually holding the connection.
     --
@@ -911,25 +914,11 @@ data LiveRow
     -- for a set of one is a shape to maintain rather than information to carry. The text is
     -- written by the server for a human and never contains parser internals — see
     -- 'registerErrorMessage'.
-    Notice Text
+    Notice {message :: Text}
   deriving stock (Generic, Show)
-
-
--- Tagged so a consumer can tell them apart without inferring it from the payload's shape.
-instance AE.ToJSON LiveRow where
-  toJSON = \case
-    LogRow f -> AE.object ["shape" AE..= ("log" :: Text), "log" AE..= f]
-    TableRow cols -> AE.object ["shape" AE..= ("table" :: Text), "cols" AE..= cols]
-    Notice msg -> AE.object ["shape" AE..= ("notice" :: Text), "message" AE..= msg]
-
-
-instance AE.FromJSON LiveRow where
-  parseJSON = AE.withObject "LiveRow" \o ->
-    o AE..: "shape" >>= \case
-      ("log" :: Text) -> LogRow <$> o AE..: "log"
-      "table" -> TableRow <$> o AE..: "cols"
-      "notice" -> Notice <$> o AE..: "message"
-      other -> fail ("unknown live row shape: " <> toString other)
+  -- Tagged so a consumer can tell them apart without inferring it from the payload's shape:
+  -- @{"shape": "log" | "table" | "notice", …the constructor's field}@.
+  deriving (AE.FromJSON, AE.ToJSON) via DA.CustomJSON '[DA.SumTaggedObject "shape" "contents", DA.ConstructorTagModifier '[DA.StripSuffix "Row", DA.CamelToSnake]] LiveRow
 
 
 -- | What crosses Kafka: one matched row addressed to one subscription.

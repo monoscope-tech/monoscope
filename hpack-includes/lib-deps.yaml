@@ -101,6 +101,7 @@
 - hasql-interpolate
 - hasql-dynamic-statements
 - hs-opentelemetry-instrumentation-hasql
+- refined
 - regex-tdfa
 - regex
 - resource-pool
