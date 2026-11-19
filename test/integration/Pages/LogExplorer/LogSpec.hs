@@ -329,7 +329,7 @@ spec = do
       -- #564: a number compared with a custom attribute failed the whole query (text > integer).
       _ <- spanWith "GET /job/slow" [mkAttr "job.duration_seconds" "12"] []
       _ <- spanWith "GET /job/odd" [mkAttr "job.duration_seconds" "n/a"] []
-      timed <- eventually (fetch (span' (-60) 60){Log.query = Just "attributes.job.duration_seconds > 5"}) ((>= 1) . V.length . (.logsData))
+      timed <- eventually (fetch (span' (-60) 60){Log.query = Just "attributes.job.duration_seconds > 5", Log.cols = Just "id,name"}) ((>= 1) . V.length . (.logsData))
       (timed.error, mapMaybe (str "name") (cells timed)) `shouldBe` (Nothing, ["GET /job/slow"])
 
       -- `deployment.environment.name` is a promoted column so the app-wide selector scopes every
