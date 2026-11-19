@@ -439,7 +439,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
         proofCount <- newIORef (0 :: Int)
         -- A review's or fix's agent stops a minute before its job; both run on the long queue. At eight
         -- minutes a fix was killed before its first checkpoint, and its retry could only report the session lost.
-        let budget = case task of AdvisoryTask{} -> reviewSeconds - 60; FixTask{} -> reviewSeconds - 60; _ -> 480
+        let budget = case task of AdvisoryTask{} -> reviewSeconds - 60; FixTask{} -> fixSeconds - 300; _ -> 480
         let tagged :: AE.ToJSON value => Text -> value -> AE.Value
             tagged tag contents = AE.object ["tag" AE..= tag, "contents" AE..= contents]
             (scope, source, payload, role) = case task of

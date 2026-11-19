@@ -4222,6 +4222,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     baseRevision <- fixRevision base
     runQueryEffect tr (Fixes.createRun testPid fid issue mapping.id baseRevision imageId) `shouldReturn` Just fid
     runQueryEffect tr (Fixes.queueJob testPid (getResponse tr.trSessAndHeader).user.id fid) `shouldReturn` True
+    -- The base's workspace is prepared: odd-jobs deletes a finished job's row.
+    dbExec tr "DELETE FROM background_jobs_long WHERE payload->>'tag' = 'PrepareFixWorkspace'" ()
     [original] <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
     original.source `shouldBe` Issues.FixRun fid
     appConfig <- githubApp tr
@@ -4335,6 +4337,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- fixTitle_marksTheCut: a long issue title is cut with an ellipsis, not mid-word without one.
     dbOne tr "SELECT title FROM apis.ai_conversations WHERE title LIKE 'Fix: %'" () >>= (`shouldSatisfy` T.isSuffixOf "…")
     dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'FixIssue'" () `shouldReturn` (1 :: Int)
+    -- The base's warm workspace is prepared with it, outside the fix's own time budget.
+    dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'PrepareFixWorkspace'" () `shouldReturn` (1 :: Int)
     -- The routine's page lists the fix run it started, though fix runs carry no routine_id.
     fixId <- dbOne tr "SELECT run_id FROM projects.issue_fix_jobs" ()
     map ((.source) &&& (.routine)) <$> runQueryEffect tr (Issues.listConversationRuns testPid routine 5) `shouldReturn` [(Issues.FixRun fixId, Just "Issue autofix")]
@@ -4352,6 +4356,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Fixes.createRun testPid fid issue mapping.id base image) `shouldReturn` Just fid
     runQueryEffect tr (Fixes.queueJob testPid user fid) `shouldReturn` True
     runQueryEffect tr (Fixes.queueJob testPid user fid) `shouldReturn` True
+    -- The base's workspace is prepared: odd-jobs deletes a finished job's row.
+    dbExec tr "DELETE FROM background_jobs_long WHERE payload->>'tag' = 'PrepareFixWorkspace'" ()
     [shared] <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
     shared.source `shouldBe` Issues.FixRun fid
     runQueryEffect tr (Issues.runContextFor testPid $ Issues.ConversationClaim shared.id) `shouldReturn` Nothing
@@ -4479,6 +4485,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
         queue jobId = do
           runQueryEffect tr (Fixes.createRun testPid jobId issue mapping.id base image) `shouldReturn` Just jobId
           runQueryEffect tr (Fixes.queueJob testPid user jobId) `shouldReturn` True
+          -- The base's workspace is prepared: odd-jobs deletes a finished job's row.
+          dbExec tr "DELETE FROM background_jobs_long WHERE payload->>'tag' = 'PrepareFixWorkspace'" ()
         -- A refused job completes nothing.
         refused jobId mode = do
           tryAny (run jobId mode) >>= (`shouldSatisfy` isLeft)
