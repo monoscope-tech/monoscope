@@ -253,8 +253,8 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
         forM_ recipients \to -> renderAndSend to (ET.projectInviteEmail user.firstName projectTitle' inviteUrl)
     SlackConnectSync pid create -> whenJustM (Projects.activeProjectById pid) \project -> do
       users <- Projects.usersByProjectId pid
-      void $ Integrations.syncSlackConnect authCtx.config.slackBotToken (filter (not . T.null) authCtx.config.slackConnectTeamUserIds) pid project.title (create && pid /= Projects.demoProjectId) (map (CI.original . (.email)) users) Nothing
-    SlackConnectSweep -> unless (T.null authCtx.config.slackBotToken) do
+      void $ Integrations.syncSlackConnect authCtx.config.slackConnectBotToken (filter (not . T.null) authCtx.config.slackConnectTeamUserIds) pid project.title (create && pid /= Projects.demoProjectId) (map (CI.original . (.email)) users) Nothing
+    SlackConnectSweep -> unless (T.null authCtx.config.slackConnectBotToken) do
       now <- Time.currentTime
       pids <- filter (/= Projects.demoProjectId) <$> Integrations.slackConnectBacklog now
       -- conversations.create and inviteShared are Tier 2 (~20/min); a project costs a few calls.

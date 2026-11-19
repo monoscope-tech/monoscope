@@ -93,7 +93,7 @@ homeGetH pid = do
   members <- ProjectMembers.selectActiveProjectMembers pid
   recents <- Projects.recentViews sess.user.id pid
   appCtx <- ask @AuthContext
-  let slackConfigured = not $ T.null appCtx.config.slackBotToken
+  let slackConfigured = not $ T.null appCtx.config.slackConnectBotToken
   -- Every tile states the same window, so a number on Home always means "the last 24 hours".
   let window w = w{Widget.timeFrom = Just $ formatUTC dayAgo, Widget.timeTo = Just $ formatUTC now, Widget.children = map window <$> w.children}
       glance = map window $ take 1 (templateTab "_overview.yaml" "Overview" []) <> stackWidgets pid
@@ -422,18 +422,19 @@ dismiss_ pid h =
 
 -- | Where this person was: what they opened most recently, and the project's starred dashboards.
 jumpBackIn_ :: HomeData -> Html ()
-jumpBackIn_ d = section_ [class_ "flex flex-col gap-3", Aria.label_ "Jump back in"] do
-  sectionHead_ "Jump back in" Nothing Nothing
-  div_ [role_ "tablist", class_ "tabs tabs-border"] do
-    tab_ "Recent" True do
-      if null recent then quiet_ "clock-rotate-left" "Dashboards, issues, monitors and AI threads you open show up here." else grid_ recent
-    tab_ "Starred" False do
-      if null starred then quiet_ "star" "Star a dashboard to keep it one click from Home." else grid_ starred
+jumpBackIn_ d = section_ [class_ "group/jump flex flex-col gap-3", Aria.label_ "Jump back in"] do
+  div_ [class_ "flex items-baseline gap-5"] do
+    h2_ [class_ "text-base font-semibold text-textStrong"] "Jump back in"
+    div_ [role_ "radiogroup", Aria.label_ "Show", class_ "flex items-baseline gap-4 text-sm"] do
+      tab_ "home-jump-recent" "Recent" True
+      tab_ "home-jump-starred" "Starred" False
+  div_ [class_ "group-has-[#home-jump-starred:checked]/jump:hidden"] $ if null recent then quiet_ "clock-rotate-left" "Dashboards, issues, monitors and AI threads you open show up here." else grid_ recent
+  div_ [class_ "hidden group-has-[#home-jump-starred:checked]/jump:block"] $ if null starred then quiet_ "star" "Star a dashboard to keep it one click from Home." else grid_ starred
   where
-    tab_ :: Text -> Bool -> Html () -> Html ()
-    tab_ label checked body = do
-      input_ $ [type_ "radio", name_ "home-jump-tabs", class_ "tab", Aria.label_ label] <> [checked_ | checked]
-      div_ [class_ "tab-content pt-3"] body
+    tab_ :: Text -> Text -> Bool -> Html ()
+    tab_ tid label checked = label_ [class_ "cursor-pointer rounded text-textWeak hover:text-textStrong has-[:checked]:font-medium has-[:checked]:text-textStrong has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-strokeFocus transition-colors"] do
+      input_ $ [type_ "radio", name_ "home-jump-tabs", id_ tid, class_ "sr-only"] <> [checked_ | checked]
+      toHtml label
     grid_ :: [(Text, Text, Text, Text)] -> Html ()
     grid_ items = div_ [class_ "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2"] $ forM_ items \(icon, title, sub, href) ->
       a_ [href_ href, class_ "flex items-center gap-3 rounded-xl p-2 hover:bg-fillWeak transition-colors min-w-0"] do
@@ -520,7 +521,7 @@ slackConnectPostH pid = do
       cfg = appCtx.config
   -- Slack transport failures and rate limits throw; the card still answers with what went wrong.
   result <-
-    tryAny (Integrations.syncSlackConnect cfg.slackBotToken (filter (not . T.null) cfg.slackConnectTeamUserIds) pid project.title (pid /= Projects.demoProjectId) (map (CI.original . (.email)) users) (Just email))
+    tryAny (Integrations.syncSlackConnect cfg.slackConnectBotToken (filter (not . T.null) cfg.slackConnectTeamUserIds) pid project.title (pid /= Projects.demoProjectId) (map (CI.original . (.email)) users) (Just email))
       >>= either (\e -> Left "slack_unreachable" <$ logAttention "Slack Connect request failed" (AE.object ["project_id" AE..= pid, "error" AE..= show @Text e])) pure
   connect <- Integrations.getSlackConnect pid
   done $ SlackConnectCard pid email connect $ either (Just . failureText) (const Nothing) result
