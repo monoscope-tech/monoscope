@@ -24,7 +24,11 @@ spec = around withTestResources $ describe "Home screen" do
     flag Issues.HKImprovement "p95 latency on /cart down 38%"
     dbOne @_ @Int tr [sql|SELECT count(*)::int FROM apis.home_highlights WHERE project_id = ?|] (Only pid) `shouldReturn` 2
 
+    -- Starring the overview dashboard must not render its golden signals twice: duplicate DOM ids left the second copy loading forever.
+    dbExec tr [sql|INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, title, starred_since) VALUES (gen_random_uuid(), ?, now(), now(), '00000000-0000-0000-0000-000000000001', '_overview.yaml', 'Overview', now())|] (Only pid)
+
     page <- renderT <$> call tr (Home.homeGetH pid)
+    map (\w -> T.count ("id=\"" <> w <> "_widgetEl\"") page) ["traffic", "p95-latency", "error-rate", "apdex-score"] `shouldBe` [1, 1, 1, 1]
     page `shouldContainAll` ["Today&#39;s issues", "Checkout fails on a null cart", "Today&#39;s improvements", "Payment gateway timeout", "RESOLVED", "p95 latency on /cart down 38%", "Flagged by AI", "Checkout 5xx up 4.8x since deploy v3.2.1", "Error regression radar", "Talk to Monoscope engineers in Slack", "home-ask-form"]
 
     [hid] <- dbQuery tr [sql|SELECT id FROM apis.home_highlights WHERE project_id = ? AND kind = 'insight'|] (Only pid)

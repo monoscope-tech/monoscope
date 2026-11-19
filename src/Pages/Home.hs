@@ -7,6 +7,7 @@ module Pages.Home (homeGetH, HomeGet (..), HomeData (..), highlightDismissPostH,
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.List (partition)
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Effectful.Reader.Static (ask, asks)
@@ -33,6 +34,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging (logAttention)
 import System.Types (ATAuthCtx, Outcome (..), RespHeaders, Toast (..), ToastLevel (..), addRespHeaders, done)
 import System.Types qualified
+import Text.Slugify (slugify)
 import UnliftIO.Exception (tryAny)
 import Utils (faSprite_, navTabAttrs)
 import Web.Links (CookieProtectedRoutes (..), urls)
@@ -52,6 +54,7 @@ data HomeData = HomeData
   , highlights :: [Issues.HomeHighlight]
   , routines :: [Issues.ConversationSummary]
   , recentThreads :: [Issues.ConversationSummary]
+  , glance :: [Widget.Widget]
   , starred :: [(Dashboards.DashboardVM, [Widget.Widget])]
   , slack :: Maybe SlackConnectCard
   -- ^ Absent on the demo project and on servers with no Slack bot (self-hosted), where no channel can exist.
@@ -77,13 +80,19 @@ homeGetH pid = do
   dashboards <- filter (isJust . (.starredSince)) <$> Dashboards.selectDashboardsSortedBy pid Desc Dashboards.DSUpdatedAt
   slackConnect <- Integrations.getSlackConnect pid
   slackConfigured <- asks @AuthContext $ not . T.null . (.config.slackBotToken)
-  let starred = take 2 [(vm, ws) | vm <- dashboards, d <- maybeToList $ loadDashboardFromVM templates vm, let ws = take 4 $ mapMaybe (homeWidget vm) $ Dashboards.allWidgets d, not (null ws)]
+  let glance = take 1 $ templateTab "_overview.yaml" "Overview" []
+      -- A widget's id names its DOM elements, so one shown twice (a starred overview repeats the
+      -- golden signals) loads into the first copy and leaves the second a skeleton forever.
+      pick seen vm = let ws = take 4 [w | w <- mapMaybe (homeWidget vm) $ foldMap Dashboards.allWidgets $ loadDashboardFromVM templates vm, all (`S.notMember` seen) (domId w)] in (seen <> S.fromList (mapMaybe domId ws), (vm, ws))
+      starred = take 2 $ filter (not . null . snd) $ snd $ mapAccumL pick (S.fromList $ mapMaybe domId $ foldMap flat glance) dashboards
+      flat w = w : foldMap (concatMap flat) w.children
+      domId w = w.id <|> (slugify <$> w.title)
       (routines, chats) = partition (.routineActive) bw.conversations
       email = T.toLower $ CI.original sess.user.email
   addRespHeaders
     $ HomePage
     $ PageCtx bw{pageTitle = "Home", menuItem = Just "Home"}
-    $ HomeData{pid, firstName = sess.user.firstName, now, newIssues, newIssueCount, openIssueCount, resolved, highlights, routines, recentThreads = take 4 chats, starred, slack = SlackConnectCard pid email slackConnect Nothing <$ guard (slackConfigured && pid /= Projects.demoProjectId)}
+    $ HomeData{pid, firstName = sess.user.firstName, now, newIssues, newIssueCount, openIssueCount, resolved, highlights, routines, recentThreads = take 4 chats, glance, starred, slack = SlackConnectCard pid email slackConnect Nothing <$ guard (slackConfigured && pid /= Projects.demoProjectId)}
   where
     -- Charts that render on their own: a widget needing its dashboard's variables or constants would only show an error here.
     homeWidget vm w = do
@@ -102,7 +111,7 @@ home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ 
   section_ [class_ "flex flex-col gap-3", Aria.label_ "At a glance"] do
     sectionHead_ "At a glance" Nothing $ Just ("Overview dashboard", urls.dashboardRedirectGet d.pid ([] :: [(Text, Maybe Text)]))
     glanceStrip_ d
-    Widget.embeddedWidgets_ d.pid $ take 1 $ templateTab "_overview.yaml" "Overview" []
+    Widget.embeddedWidgets_ d.pid d.glance
   div_ [class_ "grid grid-cols-1 lg:grid-cols-2 gap-8"] do
     section_ [class_ "flex flex-col gap-3 min-w-0", Aria.label_ "Today's issues"] do
       sectionHead_ "Today's issues" (Just d.newIssueCount) $ Just ("All issues", issuesListUrl d.pid)
@@ -124,7 +133,7 @@ home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ 
     sectionHead_ "Flagged by AI" (Just $ length insights) $ Just ("Routines", urls.aiRoutinesGet d.pid)
     div_ [class_ "grid grid-cols-1 lg:grid-cols-2 gap-2"] $ forM_ insights $ highlight_ d.pid
   forM_ d.starred \(vm, ws) -> section_ [class_ "flex flex-col gap-3", Aria.label_ vm.title] do
-    sectionHead_ vm.title Nothing $ Just ("Open dashboard", dashboardUrl d.pid vm.id Nothing [])
+    sectionHead_ (faSprite_ "star" "solid" "w-3.5 h-3.5 text-iconWarning" >> toHtml vm.title) Nothing $ Just ("Open dashboard", dashboardUrl d.pid vm.id Nothing [])
     div_ [class_ "grid grid-cols-1 md:grid-cols-2 gap-3"] $ forM_ ws \w ->
       div_ [class_ $ bool "h-64" "h-28" (Widget.isStatWidget w)] $ Widget.widget_ w
   jumpBackIn_ d
@@ -136,7 +145,7 @@ askBox_ d = section_ [class_ "flex flex-col gap-3", Aria.label_ "Ask Monoscope A
     promptField_ "home-ask" "Ask about your system — “why is checkout slower today?”" [autofocus_]
     input_ [type_ "hidden", name_ "mode", value_ "chat"]
   div_ [class_ "flex flex-wrap gap-2"] $ forM_ suggestions \q ->
-    button_ [type_ "button", class_ "rounded-full border border-strokeWeak px-3 py-1 text-xs text-textWeak hover:text-textStrong hover:bg-fillWeak transition-colors cursor-pointer", data_ "q" q, [__|on click set #home-ask.value to @data-q then call #home-ask-form.requestSubmit()|]] $ toHtml q
+    button_ [type_ "button", class_ "rounded-full border border-strokeWeak px-3 py-1 text-xs text-textWeak hover:text-textStrong hover:bg-fillWeak active:scale-[0.96] transition-[color,background-color,scale] duration-100 cursor-pointer", data_ "q" q, [__|on click set #home-ask.value to @data-q then call #home-ask-form.requestSubmit()|]] $ toHtml q
   where
     suggestions =
       [ "What changed in the last 24 hours?"
@@ -152,7 +161,11 @@ glanceStrip_ d = div_ [class_ "flex flex-wrap items-center gap-x-6 gap-y-2 text-
   stat_ (issuesListUrl d.pid) "bug" (show d.openIssueCount) "open issues"
   stat_ (issuesListUrl d.pid) "circle-exclamation" (show d.newIssueCount) "new today"
   stat_ (issuesListUrl d.pid) "circle-check" (show $ length d.resolved) "resolved today"
-  stat_ (urls.aiRoutinesGet d.pid) "sparkles" (show $ length d.routines) (bool "AI routines watching" "AI routine watching" (length d.routines == 1))
+  case length d.routines of
+    0 -> a_ ([href_ $ urls.aiRoutinesGet d.pid, class_ "inline-flex items-center gap-1.5 text-textBrand hover:underline"] <> navTabAttrs) do
+      faSprite_ "sparkles" "regular" "w-3.5 h-3.5"
+      "Set up an AI routine"
+    n -> stat_ (urls.aiRoutinesGet d.pid) "sparkles" (show n) (bool "AI routines watching" "AI routine watching" (n == 1))
   where
     stat_ href icon n label = a_ ([href_ href, class_ "inline-flex items-center gap-1.5 hover:text-textStrong"] <> navTabAttrs) do
       faSprite_ icon "regular" "w-3.5 h-3.5"
@@ -160,9 +173,9 @@ glanceStrip_ d = div_ [class_ "flex flex-wrap items-center gap-x-6 gap-y-2 text-
       toHtml (label :: Text)
 
 
-sectionHead_ :: Text -> Maybe Int -> Maybe (Text, Text) -> Html ()
+sectionHead_ :: Html () -> Maybe Int -> Maybe (Text, Text) -> Html ()
 sectionHead_ title countM linkM = div_ [class_ "flex items-center gap-2"] do
-  h2_ [class_ "text-sm font-semibold text-textStrong"] $ toHtml title
+  h2_ [class_ "inline-flex items-center gap-1.5 text-sm font-semibold text-textStrong"] title
   whenJust countM $ span_ [class_ "rounded bg-fillWeak px-1.5 text-xs tabular-nums text-textWeak"] . show
   whenJust linkM \(label, href) -> a_ ([href_ href, class_ "ml-auto inline-flex items-center gap-1 text-xs text-textWeak hover:text-textBrand"] <> navTabAttrs) do
     toHtml label
@@ -189,12 +202,12 @@ highlight_ pid h = div_ [id_ $ "highlight-" <> h.id.toText, class_ "group/hl rel
   button_
     [ type_ "button"
     , Aria.label_ "Dismiss"
-    , class_ "absolute top-2 right-2 rounded p-1 text-iconNeutral opacity-0 group-hover/hl:opacity-100 focus-visible:opacity-100 hover:bg-fillWeak cursor-pointer"
+    , class_ "absolute top-1.5 right-1.5 rounded-md p-1.5 text-iconNeutral opacity-0 group-hover/hl:opacity-100 focus-visible:opacity-100 hover:bg-fillWeak transition-opacity cursor-pointer"
     , hxPost_ $ urls.homeHighlightDismissPost pid h.id
     , hxTarget_ $ "#highlight-" <> h.id.toText
     , hxSwap_ "outerHTML"
     ]
-    $ faSprite_ "xmark" "regular" "w-3 h-3"
+    $ faSprite_ "xmark" "regular" "w-3.5 h-3.5"
   where
     (icon, iconColor) = case h.kind of
       Issues.HKIssue -> ("triangle-exclamation", "text-iconError")
