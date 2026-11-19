@@ -1295,7 +1295,11 @@ tfTopProjectCounts topN extra s e =
 -- read every tenant's evening decline (550k/h → 58k/h over six smooth hours) as a
 -- 75–95% "drop": over 30 hours of 2026-11-17/18 it fired in 20 with no rows lost.
 -- The previous hour alone still fired in 9, on bursts winding down; the minimum
--- fired in 3. A real collapse (the 2026-07-27 shape) is below both, so it still trips.
+-- fired in 3. A collapse lasting most of the hour is below both and still trips; a
+-- sub-hour gap like 2026-07-27 (~9 minutes, ~14% of the hour) was never visible at
+-- this granularity under either baseline. The window is read projectless, so from
+-- Delta only: its still-buffered tail is missing, which the 60% threshold absorbs.
+-- The yesterday read adds a third projectless count per hour (4-6s on TF).
 checkIngestContinuity :: UTCTime -> UTCTime -> ATBackgroundCtx ([Text], [Text])
 checkIngestContinuity start end = do
   let minRows = 500 :: Int64 -- baseline floor: ignore low-volume projects
