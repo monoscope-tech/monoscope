@@ -85,7 +85,7 @@ test("a dashboard can be created without assigning a team", async ({ page }) => 
   await page.waitForURL(/\/dashboards\/[0-9a-f-]{36}/i, { timeout: 20000 });
   expect(responses).not.toContain(400);
   await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
-  await expect(page.getByText("No Team Dashboard").first()).toBeVisible();
+  await expect(page.locator("#main-content").getByText("No Team Dashboard").first()).toBeVisible();
 });
 
 const FIXTURE = "E2E Grid Fixture";
@@ -102,7 +102,7 @@ const FIXTURE = "E2E Grid Fixture";
 async function openFirstDashboard(page: Page) {
   await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
 
-  const links = page.locator(`a[href^="/p/${DEMO_PROJECT}/dashboards/"]`, { hasText: FIXTURE });
+  const links = page.locator(`#main-content a[href^="/p/${DEMO_PROJECT}/dashboards/"]`, { hasText: FIXTURE });
   if ((await links.count()) === 0) {
     await page.locator('label[for="newDashboardMdl"]').first().click();
     // A template, not "Blank dashboard": this spec is about the grid adopting widgets, and
