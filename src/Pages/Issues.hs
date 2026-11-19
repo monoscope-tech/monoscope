@@ -849,12 +849,12 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
     -- Icon id + tailwind colour class for a breadcrumb @type@.
     breadcrumbVisual :: Text -> (Text, Text)
     breadcrumbVisual = \case
-      "click" -> ("arrow-pointer", "text-fillBrand-strong")
-      "console.error" -> ("terminal", "text-fillError-strong")
-      "console.warn" -> ("terminal", "text-fillWarning-strong")
+      "click" -> ("arrow-pointer", "text-iconBrand")
+      "console.error" -> ("terminal", "text-iconError")
+      "console.warn" -> ("terminal", "text-iconWarning")
       t
-        | t `elem` ["navigation", "nav"] -> ("globe", "text-fillSuccess-strong")
-        | t `elem` ["xhr", "fetch"] -> ("wifi", "text-fillInformation-strong")
+        | t `elem` ["navigation", "nav"] -> ("globe", "text-iconSuccess")
+        | t `elem` ["xhr", "fetch"] -> ("wifi", "text-iconInformation")
         | otherwise -> ("terminal", "text-textWeak")
     -- Compact selector / url summary from a breadcrumb's @data@ blob.
     breadcrumbDataSummary :: AE.Value -> Maybe Text
@@ -1184,14 +1184,14 @@ issueAggregate_ v@IssueView{..} = do
         whenJust d.relatedErrorHash \h -> a_ [href_ $ (urls.issues pid).detailHashGet h Nothing Nothing Nothing Nothing Nothing, class_ "text-xs text-textBrand hover:underline"] "Open the error from this user's trace"
     Just (Issues.CronP d) ->
       contextCard_ "p-4 flex flex-col gap-2" "Schedule" do
-        detailRow_ [("clock", "text-fillError-strong", "Expected by", agoText now d.expectedBy)]
+        detailRow_ [("clock", "text-iconError", "Expected by", agoText now d.expectedBy)]
         detailRow_ [("check", "text-textWeak", "Last check-in", maybe "never" (agoText now) d.lastCheckinAt)]
     Just (Issues.UptimeP d) ->
       contextCard_ "p-4 flex items-start gap-8" "Failing check" $ figures_ [("Status", maybe "\x2014" show d.statusCode), ("Expected", show d.expectedStatus), ("Response", show d.durationMs <> " ms")]
     Just (Issues.FrontendP d) ->
       contextCard_ "p-4 flex flex-col gap-2" "Where it happened" do
         whenJust d.pageUrl \u -> a_ [href_ u, target_ "_blank", rel_ "noopener", class_ "text-sm text-textBrand break-all hover:underline"] $ toHtml u
-        detailRow_ [("arrow-pointer", "text-fillBrand-strong", "Clicks in the burst", show d.clickCount)]
+        detailRow_ [("arrow-pointer", "text-iconBrand", "Clicks in the burst", show d.clickCount)]
     Just (Issues.RuntimeExceptionP d) ->
       sideBySide_ (issueVolumeChart_ "Error Frequency")
         $ whenJust ((,) <$> d.requestMethod <*> d.requestPath) \(method, path) ->
@@ -1204,7 +1204,7 @@ issueAggregate_ v@IssueView{..} = do
       sideBySide_ (issueChartCard_ "Alert Query" "h-56" (Just d.thresholdValue) Nothing d.queryExpression)
         $ contextCard_ "p-4 flex flex-col gap-4" "Recorded evaluation" do
           div_ [class_ "flex items-start gap-6"] do
-            statFigure_ "" [] "Recorded value" $ span_ [class_ $ bool "" "text-fillWarning-strong" meetsThreshold] $ toHtml $ formatWithCommas d.actualValue
+            statFigure_ "" [] "Recorded value" $ span_ [class_ $ bool "" "text-textWarning" meetsThreshold] $ toHtml $ formatWithCommas d.actualValue
             statFigure_ "" [] "Threshold" do
               toHtml $ formatWithCommas d.thresholdValue
               span_ [class_ "block mt-1 text-xs font-normal text-textWeak"] $ bool "At or above" "At or below" below
@@ -1212,7 +1212,7 @@ issueAggregate_ v@IssueView{..} = do
             $ p_
               [class_ "text-sm text-textWeak"]
               "This value does not meet the recorded threshold. Check the monitor’s warning and recovery settings."
-          detailRow_ [("bolt", "text-fillWarning-strong", "Recorded", agoText now d.triggeredAt)]
+          detailRow_ [("bolt", "text-iconWarning", "Recorded", agoText now d.triggeredAt)]
           when (isJust $ UUID.fromText d.queryId) $ externalLink_ [href_ $ (urls.monitors pid).overviewGet d.queryId] "View monitor"
     Just (Issues.ApiChangeP d) -> do
       div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-textStrong"] do
@@ -1449,7 +1449,7 @@ eventCard_ view@IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflo
                      -- so it shows whether or not there is a stack trace.
                      unless (T.null d.errorMessage) $ div_ [class_ "max-md:px-3 px-4 pb-3 border-b border-strokeWeak"] do
                        fieldLabel_ "mb-1" "Error message"
-                       pre_ [class_ "text-sm leading-relaxed text-fillError-strong whitespace-pre-wrap break-words font-mono"] $ toHtml d.errorMessage
+                       pre_ [class_ "text-sm leading-relaxed text-textError whitespace-pre-wrap break-words font-mono"] $ toHtml d.errorMessage
                      if hasStack
                        then
                          -- The fingerprint grammar, not framesFor: the issue hash is computed from these frames.
@@ -1819,7 +1819,7 @@ aiSidePanel_ pid issueId requestId = do
   div_ [id_ "ai_chat_container", class_ "hidden group-has-[#ai-panel-toggle:checked]/ai:flex w-[420px] shrink-0 h-full overflow-hidden flex-col bg-bgBase border-l border-t border-strokeWeak"] do
     div_ [class_ "shrink-0 px-4 py-2.5 border-b border-strokeWeak flex items-center justify-between"] do
       div_ [class_ "flex items-center gap-2"] do
-        faSprite_ "sparkles" "regular" "w-3.5 h-3.5 text-fillBrand-strong"
+        faSprite_ "sparkles" "regular" "w-3.5 h-3.5 text-iconBrand"
         sectionLabel_ "AI Assistant"
       button_
         [ type_ "button"
@@ -2132,7 +2132,7 @@ aiChatResponse_ artifactLinkAttrs pid userQuery explanation widgetsM toolCallsM 
       p_ [class_ "text-sm text-textStrong mt-0.5"] $ toHtml q
     -- AI response
     div_ [class_ "flex items-start gap-2.5"] do
-      chatAvatar_ "bg-fillBrand-weak" "sparkles" "text-fillBrand-strong"
+      chatAvatar_ "bg-fillBrand-weak" "sparkles" "text-iconBrand"
       div_ [class_ "flex-1 min-w-0 mt-0.5"] do
         div_ [class_ "prose prose-sm text-textStrong max-w-none leading-relaxed"] $ renderMarkdown explanation
         let savedDocs = ordNub [toText k | tc <- fold toolCallsM, tc.name == "save_artifact", Just (AE.String raw) <- [tc.rawData], Right k <- [Issues.mkArtifactKey raw]]
@@ -2573,10 +2573,10 @@ issueRowId (IssueVM _ issue) = issue.base.id.toText
 anomalyStatusIndicator :: Issues.Issue -> Maybe (Text, Text, Text)
 anomalyStatusIndicator issue
   | isJust issue.archivedAt = Just ("archive", "text-fillStrong", "Archived \x2014 hidden, no notifications")
-  | isJust issue.acknowledgedAt = Just ("bell-slash", "text-fillSuccess-strong", "Acknowledged \x2014 notifications paused")
+  | isJust issue.acknowledgedAt = Just ("bell-slash", "text-iconSuccess", "Acknowledged \x2014 notifications paused")
   | otherwise = case issue.severity of
-      Issues.Critical -> Just ("octagon-exclamation", "text-fillError-strong", "Critical")
-      Issues.Warning -> Just ("triangle-alert", "text-fillWarning-strong", "Warning")
+      Issues.Critical -> Just ("octagon-exclamation", "text-iconError", "Critical")
+      Issues.Warning -> Just ("triangle-alert", "text-iconWarning", "Warning")
       Issues.Info -> Nothing
       Issues.Low -> Nothing
 
@@ -2862,16 +2862,16 @@ issueTypeChip_ compact issueType =
   where
     color, icon, fullTxt, shortTxt :: Text
     (color, icon, fullTxt) = case issueType of
-      Issues.RuntimeException -> ("text-fillError-strong", "circle-xmark", "Error")
-      Issues.QueryAlert -> ("text-fillWarning-strong", "zap", "Alert")
-      Issues.LogPattern -> ("text-fillInformation-strong", "file-text", "Log Pattern")
-      Issues.LogPatternRateChange -> ("text-fillWarning-strong", "activity", "Rate Change")
-      Issues.Performance -> ("text-fillWarning-strong", "gauge-high", "Performance")
-      Issues.Frontend -> ("text-fillWarning-strong", "arrow-pointer", "Frontend")
-      Issues.Uptime -> ("text-fillError-strong", "heart-pulse", "Uptime")
-      Issues.Cron -> ("text-fillError-strong", "clock", "Cron")
-      Issues.Feedback -> ("text-fillBrand-strong", "comment", "Feedback")
-      Issues.ApiChange -> ("text-fillInformation-strong", "info", "Schema change")
+      Issues.RuntimeException -> ("text-textError", "circle-xmark", "Error")
+      Issues.QueryAlert -> ("text-textWarning", "zap", "Alert")
+      Issues.LogPattern -> ("text-textInformation", "file-text", "Log Pattern")
+      Issues.LogPatternRateChange -> ("text-textWarning", "activity", "Rate Change")
+      Issues.Performance -> ("text-textWarning", "gauge-high", "Performance")
+      Issues.Frontend -> ("text-textWarning", "arrow-pointer", "Frontend")
+      Issues.Uptime -> ("text-textError", "heart-pulse", "Uptime")
+      Issues.Cron -> ("text-textError", "clock", "Cron")
+      Issues.Feedback -> ("text-textBrand", "comment", "Feedback")
+      Issues.ApiChange -> ("text-textInformation", "info", "Schema change")
     shortTxt = case issueType of
       Issues.LogPattern -> "Log"
       Issues.LogPatternRateChange -> "Rate"
@@ -2996,28 +2996,28 @@ issueActivityTimeline_ userMap now activities
     -- alert a reader saw in Slack — "Alerted", not "alert".
     eventDisplay :: Issues.ActivityEvent -> (Text, Text, Text)
     eventDisplay = \case
-      Issues.Episode Issues.EKAlert -> ("bell", "bg-fillError-weak text-fillError-strong", "Alerted")
-      Issues.Episode Issues.EKObservation -> ("eye", "bg-fillWarning-weak text-fillWarning-strong", "Still firing")
-      Issues.Episode Issues.EKReminder -> ("bell-on", "bg-fillWarning-weak text-fillWarning-strong", "Reminder sent")
+      Issues.Episode Issues.EKAlert -> ("bell", "bg-fillError-weak text-iconError", "Alerted")
+      Issues.Episode Issues.EKObservation -> ("eye", "bg-fillWarning-weak text-iconWarning", "Still firing")
+      Issues.Episode Issues.EKReminder -> ("bell-on", "bg-fillWarning-weak text-iconWarning", "Reminder sent")
       Issues.Episode Issues.EKDataUnavailable -> ("plug-circle-exclamation", "bg-fillWeaker text-textWeak", "No data to evaluate")
-      Issues.Episode Issues.EKRecovered -> ("heart-pulse", "bg-fillSuccess-weak text-fillSuccess-strong", "Recovered")
-      Issues.Episode Issues.EKResolved -> ("check-double", "bg-fillSuccess-weak text-fillSuccess-strong", "Resolved")
-      Issues.Lifecycle Issues.IECreated -> ("plus", "bg-fillSuccess-weak text-fillSuccess-strong", "Created")
-      Issues.Lifecycle Issues.IEAcknowledged -> ("bell-slash", "bg-fillBrand-weak text-fillBrand-strong", "Acknowledged")
+      Issues.Episode Issues.EKRecovered -> ("heart-pulse", "bg-fillSuccess-weak text-iconSuccess", "Recovered")
+      Issues.Episode Issues.EKResolved -> ("check-double", "bg-fillSuccess-weak text-iconSuccess", "Resolved")
+      Issues.Lifecycle Issues.IECreated -> ("plus", "bg-fillSuccess-weak text-iconSuccess", "Created")
+      Issues.Lifecycle Issues.IEAcknowledged -> ("bell-slash", "bg-fillBrand-weak text-iconBrand", "Acknowledged")
       Issues.Lifecycle Issues.IEUnacknowledged -> ("arrow-rotate-left", "bg-fillWeaker text-textWeak", "Unacknowledged")
-      Issues.Lifecycle Issues.IEAckExpired -> ("clock", "bg-fillWarning-weak text-fillWarning-strong", "Acknowledgement expired \x2014 back in the Inbox")
+      Issues.Lifecycle Issues.IEAckExpired -> ("clock", "bg-fillWarning-weak text-iconWarning", "Acknowledgement expired \x2014 back in the Inbox")
       Issues.Lifecycle Issues.IEArchived -> ("box-archive", "bg-fillWeaker text-textWeak", "Archived")
       Issues.Lifecycle Issues.IEUnarchived -> ("box-archive", "bg-fillWeaker text-textWeak", "Unarchived")
-      Issues.Lifecycle Issues.IEResolved -> ("check-double", "bg-fillSuccess-weak text-fillSuccess-strong", "Resolved")
-      Issues.Lifecycle Issues.IEReopened -> ("arrow-rotate-left", "bg-fillWarning-weak text-fillWarning-strong", "Reopened")
-      Issues.Lifecycle Issues.IERegressed -> ("arrow-trend-up", "bg-fillError-weak text-fillError-strong", "Regressed")
-      Issues.Lifecycle Issues.IEAssigned -> ("user-plus", "bg-fillBrand-weak text-fillBrand-strong", "Assigned")
+      Issues.Lifecycle Issues.IEResolved -> ("check-double", "bg-fillSuccess-weak text-iconSuccess", "Resolved")
+      Issues.Lifecycle Issues.IEReopened -> ("arrow-rotate-left", "bg-fillWarning-weak text-iconWarning", "Reopened")
+      Issues.Lifecycle Issues.IERegressed -> ("arrow-trend-up", "bg-fillError-weak text-iconError", "Regressed")
+      Issues.Lifecycle Issues.IEAssigned -> ("user-plus", "bg-fillBrand-weak text-iconBrand", "Assigned")
       Issues.Lifecycle Issues.IEUnassigned -> ("user-minus", "bg-fillWeaker text-textWeak", "Unassigned")
-      Issues.Lifecycle Issues.IEAutoResolved -> ("wand-magic-sparkles", "bg-fillSuccess-weak text-fillSuccess-strong", "Auto-resolved")
-      Issues.Lifecycle Issues.IEEscalated -> ("arrow-up", "bg-fillError-weak text-fillError-strong", "Escalated")
-      Issues.Lifecycle Issues.IECommented -> ("comment", "bg-fillBrand-weak text-fillBrand-strong", "Commented")
+      Issues.Lifecycle Issues.IEAutoResolved -> ("wand-magic-sparkles", "bg-fillSuccess-weak text-iconSuccess", "Auto-resolved")
+      Issues.Lifecycle Issues.IEEscalated -> ("arrow-up", "bg-fillError-weak text-iconError", "Escalated")
+      Issues.Lifecycle Issues.IECommented -> ("comment", "bg-fillBrand-weak text-iconBrand", "Commented")
       Issues.Lifecycle Issues.IEViewed -> ("eye", "bg-fillWeaker text-textWeak", "Viewed")
-      Issues.Lifecycle Issues.IELinked -> ("link", "bg-fillBrand-weak text-fillBrand-strong", "Linked an external issue")
+      Issues.Lifecycle Issues.IELinked -> ("link", "bg-fillBrand-weak text-iconBrand", "Linked an external issue")
       Issues.Lifecycle Issues.IEMerged -> ("code-merge", "bg-fillWeaker text-textWeak", "Merged into another issue")
       Issues.Lifecycle Issues.IEUnmerged -> ("arrow-rotate-left", "bg-fillWeaker text-textWeak", "Unmerged")
       Issues.Lifecycle Issues.IESpam -> ("ban", "bg-fillWeaker text-textWeak", "Marked as spam")
