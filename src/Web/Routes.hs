@@ -51,6 +51,7 @@ import Pages.Containers qualified as Containers
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
+import Pages.Home qualified as Home
 import Pages.Infrastructure qualified as Infrastructure
 import Pages.Issues qualified as IssuesPage
 import Pages.LLM qualified as LLM
@@ -341,7 +342,12 @@ cookieProtectedServer :: Maybe AI.ProjectTools -> AIThreads.RunNow -> Servant.Se
 cookieProtectedServer projectTools runNow =
   CookieProtectedRoutes
     { -- Dashboard handlers
-      dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml"
+      homeGet = Home.homeGetH
+    , auditLogGet = Settings.auditLogGetH
+    , auditLogCsvGet = Settings.auditLogCsvGetH
+    , homeHighlightDismissPost = Home.highlightDismissPostH
+    , slackConnectPost = Home.slackConnectPostH
+    , dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml"
     , slackInstallGet = Slack.startInstallGetH
     , slackEvidenceGet = Slack.startEvidenceGetH
     , slackEvidenceDisconnectPost = Slack.disconnectEvidencePostH
@@ -1218,6 +1224,10 @@ type instance Opaque1 "PageCtx" = PageCtx
 type instance Opaque "QueryLibrary.QueryLibraryView" = QueryLibrary.QueryLibraryView
 type instance Opaque "QueryLibrary.SaveQueryForm" = QueryLibrary.SaveQueryForm
 type instance Opaque "ServiceMap.ServiceMapGet" = ServiceMap.ServiceMapGet
+type instance Opaque "Home.HomeGet" = Home.HomeGet
+type instance Opaque "Settings.AuditLogGet" = Settings.AuditLogGet
+type instance Opaque "Home.HighlightDismissed" = Home.HighlightDismissed
+type instance Opaque "Home.SlackConnectCard" = Home.SlackConnectCard
 type instance Opaque "Settings.ApiGet" = Settings.ApiGet
 type instance Opaque "Settings.ApiKeyNotFound" = Settings.ApiKeyNotFound
 type instance Opaque "Settings.ApiMut" = Settings.ApiMut

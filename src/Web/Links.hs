@@ -20,6 +20,7 @@ module Web.Links (
   AllQueryParams,
   PNG,
   YAML,
+  CSV,
   SseHeaders,
   DashboardFilters (..),
   DashboardBulkAction (..),
@@ -206,6 +207,14 @@ instance MimeRender YAML Text where
   mimeRender _ = fromStrict . encodeUtf8
 
 
+data CSV
+  deriving (Accept) via Mime "text/csv"
+
+
+instance MimeRender CSV Text where
+  mimeRender _ = fromStrict . encodeUtf8
+
+
 -- | The headers that decide whether an SSE response actually streams.
 --
 -- Every hop between this handler and the browser would rather buffer than forward: a CDN caches
@@ -264,7 +273,12 @@ repositoryTabs = [("overview", Overview), ("reviews", PullRequests), ("fixes", F
 type CookieProtectedRoutes :: Type -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { -- Dashboard routes
-    dashboardRedirectGet :: mode :- "p" :> ProjectId :> AllQueryParams :> LocationRedirect NoContent
+    homeGet :: mode :- "p" :> ProjectId :> Get '[HTML] (RespHeaders (Opaque "Home.HomeGet"))
+  , auditLogGet :: mode :- "p" :> ProjectId :> "settings" :> "audit" :> QueryParam "source" Projects.ActivitySource :> QPT "actor" :> QueryParam "before" UTCTime :> Get '[HTML] (RespHeaders (Opaque "Settings.AuditLogGet"))
+  , auditLogCsvGet :: mode :- "p" :> ProjectId :> "settings" :> "audit.csv" :> QueryParam "source" Projects.ActivitySource :> QPT "actor" :> Get '[CSV] (Headers '[Header "Content-Disposition" Text] Text)
+  , homeHighlightDismissPost :: mode :- "p" :> ProjectId :> "home" :> "highlights" :> Capture "highlight_id" (UUIDId "home_highlight") :> "dismiss" :> Unrefusable 'POST (Opaque "Home.HighlightDismissed")
+  , slackConnectPost :: mode :- "p" :> ProjectId :> "slack-connect" :> Unrefusable 'POST (Opaque "Home.SlackConnectCard")
+  , dashboardRedirectGet :: mode :- "p" :> ProjectId :> "overview" :> AllQueryParams :> LocationRedirect NoContent
   , slackInstallGet :: mode :- "p" :> ProjectId :> "slack" :> "install" :> QueryFlag "onboarding" :> LocationRedirect NoContent
   , slackEvidenceGet :: mode :- "p" :> ProjectId :> "slack" :> "evidence" :> Capture "slackUser" Text :> LocationRedirect NoContent
   , slackEvidenceDisconnectPost :: mode :- "p" :> ProjectId :> "slack" :> "evidence" :> "disconnect" :> Verb 'POST 303 '[HTML] (Headers '[Header "Location" Text] NoContent)
@@ -661,7 +675,7 @@ proofMediaPath pid rid file sig = safeLink' (("/" <>) . toUrlPiece) (Proxy @Proo
 -- >>> urls.projectWikiGet pid ["runbooks", "retry & recover"] Nothing Nothing Nothing True
 -- "/p/00000000-0000-0000-0000-000000000000/wiki/runbooks/retry%20%26%20recover?edit"
 -- >>> urls.dashboardRedirectGet pid [("var-service", Just "api & worker"), ("deferred", Nothing)]
--- "/p/00000000-0000-0000-0000-000000000000?var-service=api%20%26%20worker&deferred"
+-- "/p/00000000-0000-0000-0000-000000000000/overview?var-service=api%20%26%20worker&deferred"
 urls :: CookieProtectedRoutes (AsLink Text)
 urls = allFieldLinks' (("/" <>) . toUrlPiece)
 

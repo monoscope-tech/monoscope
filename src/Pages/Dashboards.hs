@@ -11,6 +11,7 @@ module Pages.Dashboards (
   dashboardSettledPostH,
   dashboardTabRenamePatchH,
   entrypointRedirectGetH,
+  dashboardUrl,
   rumRedirectH,
   DashboardGet (..),
   DashboardSettleSample (..),
@@ -1527,6 +1528,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr hxRequest allParams = do
           scopedParams = dashboardScopedParams session.environment allParams
 
       (dashVM, dash) <- getDashAndVM pid dashId fileM
+      Projects.recordView session.user.id pid Projects.VKDashboard dashId.toText dashVM.title (dashboardUrl pid dashId Nothing [])
 
       -- Deep links to a widget must open its tab, rather than the default tab.
       case (join (lookup "expand" allParams) >>= \wid -> fst =<< findWidgetInDashboard wid dash) <|> (join (lookup "tab" allParams) >>= \slug -> slug <$ findTabBySlug (fold dash.tabs) slug) <|> (slugify . (.name) <$> (dash.tabs >>= viaNonEmpty head)) of
@@ -2556,6 +2558,7 @@ dashboardsPostH pid form = do
               }
       -- A read-only template is linked only by its entrypoint; created here it is the user's own copy.
       _ <- Dashboards.insert $ maybe dbd (const $ detach templates dbd) (Dashboards.readOnlyTemplate templates dbd)
+      Projects.logAudit pid Projects.AEDashboardCreated sess (Just $ Projects.AuditTarget Projects.ATDashboard did.toText form.title) Nothing
       case (form.copyWidgetId, form.sourceDashboardId, widgetM) of
         (Just wid, Just src, _) -> void $ dashboardDuplicateWidgetPostH pid dbd.id wid (Just src)
         (_, _, Just w) -> void $ dashboardWidgetPutH pid dbd.id Nothing Nothing w
@@ -2564,7 +2567,7 @@ dashboardsPostH pid form = do
       addRespHeaders DashboardNoContent
 
 
--- THe current /p/:projectId/  handler. Redirects users to the overview dashboard if it exists, or creates it.
+-- @/p/:projectId/overview@ and the other dashboard entrypoints: redirect to the project's copy of a template, creating it on first visit.
 entrypointRedirectGetH
   :: Text
   -> Projects.ProjectId
@@ -2624,10 +2627,11 @@ data DashboardRenameForm = DashboardRenameForm
 -- It updates the title and optionally the git file path.
 dashboardRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardRenameForm -> ATAuthCtx (ActionResult EditRefusal DashboardRenamed)
 dashboardRenamePatchH pid dashId form = act do
-  _ <- Projects.sessionAndProject pid
+  (sess, _) <- Projects.sessionAndProject pid
   withEditableDash pid dashId \ed dashVM _ ->
     Right <$> do
       _ <- updateTitle ed form.title
+      when (form.title /= dashVM.title) $ Projects.logAudit pid Projects.AEDashboardRenamed sess (Just $ Projects.AuditTarget Projects.ATDashboard dashId.toText form.title) (Just $ AE.object ["from" AE..= dashVM.title])
       whenJust dashVM.schema \schema -> void $ updateSchema ed (schema & #title ?~ form.title) Nothing
       when (form.title /= dashVM.title) do
         monitors <- Monitors.queryMonitorsAll pid
@@ -2700,9 +2704,10 @@ dashboardStarPostH pid dashId = do
 -- After deletion, redirects to the dashboard list page.
 dashboardDeleteH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardDeleteH pid dashId = do
-  _ <- Projects.sessionAndProject pid
-  _ <- Dashboards.getDashboardByProjectId pid dashId `whenNothingM` throwError err404{errBody = "Dashboard not found or does not belong to this project"}
+  (sess, _) <- Projects.sessionAndProject pid
+  dashVM <- Dashboards.getDashboardByProjectId pid dashId `whenNothingM` throwError err404{errBody = "Dashboard not found or does not belong to this project"}
   _ <- Dashboards.deleteDashboardsByIds pid (V.singleton dashId)
+  Projects.logAudit pid Projects.AEDashboardDeleted sess (Just $ Projects.AuditTarget Projects.ATDashboard dashId.toText dashVM.title) Nothing
   redirectCS $ dashboardsListUrl pid
   addSuccessToast "Dashboard was deleted successfully" Nothing
   addRespHeaders DashboardNoContent
@@ -3265,7 +3270,7 @@ newtype DashboardYaml = DashboardYaml Dashboards.Dashboard
 data DashboardSwitcher = DashboardSwitcher
   { pid :: Projects.ProjectId
   , current :: Dashboards.DashboardId
-  , dashboards :: [Dashboards.DashboardVM]
+  , dashboards :: [Dashboards.NavDashboard]
   }
 
 
@@ -3278,7 +3283,7 @@ instance ToHtml DashboardSwitcher where
     div_ [class_ "max-h-[50vh] space-y-0.5 overflow-y-auto", id_ "dashboard-switcher-list"] $ forM_ s.dashboards \d -> do
       let isCurrent = d.id == s.current
       a_ ([class_ $ "dashboard_item flex min-w-0 items-center gap-2 rounded-lg px-2.5 py-2 text-sm " <> bool "hover:bg-fillHover" "bg-fillWeak font-medium" isCurrent, href_ $ urls.dashboardsGet s.pid d.id Nothing Nothing Nothing Nothing [], data_ "filter" (dashTitle d.title)] <> [term "aria-current" "page" | isCurrent]) do
-        span_ [class_ "flex w-3.5 shrink-0"] $ when (isJust d.starredSince) $ faSprite_ "star" "solid" "size-3.5 text-iconWarning"
+        span_ [class_ "flex w-3.5 shrink-0"] $ when d.starred $ faSprite_ "star" "solid" "size-3.5 text-iconWarning"
         span_ [class_ "grow truncate"] $ toHtml (dashTitle d.title)
         when isCurrent $ faSprite_ "check" "regular" "size-3.5 shrink-0 text-textBrand"
     p_ [class_ "hidden py-4 text-center text-sm text-textWeak", term "hx-live:.hidden" "q('.dashboard_item:not(.hidden) in #dashboard-switcher-list').count > 0"] "No matching dashboards"
@@ -3291,7 +3296,7 @@ instance ToHtml DashboardSwitcher where
 dashboardSwitcherGetH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardSwitcher)
 dashboardSwitcherGetH pid dashId = do
   _ <- Projects.sessionAndProject pid
-  addRespHeaders . DashboardSwitcher pid dashId =<< Dashboards.selectDashboardsSortedBy pid Dashboards.Asc Dashboards.DSTitle
+  addRespHeaders . DashboardSwitcher pid dashId =<< Dashboards.selectNavDashboards pid
 
 
 instance ToHtml DashboardYaml where

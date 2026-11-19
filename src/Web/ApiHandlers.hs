@@ -97,6 +97,7 @@ module Web.ApiHandlers (
   synthStackFromSpans,
 ) where
 
+import BackgroundJobs.Types qualified as Jobs
 import Control.Lens ((%~), (.~), (?~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
@@ -327,6 +328,7 @@ data ApiV1Routes mode = ApiV1Routes
   , issuesBulk :: mode :- Refuses 400 :> "issues" :> "bulk" :> ReqBody '[JSON] (BulkAction Issues.IssueId) :> Post '[JSON] (BulkResult Issues.IssueId)
   , incidentsList :: mode :- "incidents" :> QueryParam "phase" Incidents.EpisodePhase :> QueryParam "limit" Int :> Get '[JSON] [IncidentSummary]
   , incidentGet :: mode :- Refuses 404 :> "incidents" :> Capture "incident_id" Incidents.EpisodeId :> Get '[JSON] IncidentSummary
+  , auditEventsList :: mode :- "audit_events" :> QueryParam "source" Projects.ActivitySource :> QueryParam "actor" Text :> QueryParam "before" UTCTime :> QueryParam "limit" Int :> Get '[JSON] [Projects.ActivityEntry]
   , -- Teams + Members
     teamsList :: mode :- "teams" :> Get '[JSON] [TeamSummary]
   , teamGet :: mode :- Refuses 404 :> "teams" :> Capture "team_id" TeamId :> Get '[JSON] TeamFull
@@ -458,6 +460,7 @@ apiV1Server actor principal queryEvents dashboardRenderer mcpHandler =
     , issuesBulk = apiIssuesBulk actor pid
     , incidentsList = apiIncidentsList pid
     , incidentGet = apiIncidentGet pid
+    , auditEventsList = \source actorM before limit -> Projects.projectActivity pid source actorM before (maybe 100 (max 1 . min 500) limit)
     , -- Teams + Members
       teamsList = apiTeamsList pid
     , teamGet = apiTeamGet pid
@@ -1383,6 +1386,7 @@ apiMemberAdd pid req = do
     (Nothing, Nothing) ->
       refuse MemberIdentityMissing
   _ <- PM.insertProjectMembers [PM.CreateProjectMembers{projectId = pid, userId = uid, permission = fromMaybe PM.PView req.permission}]
+  Jobs.insertJob $ Jobs.SlackConnectSync pid False
   apiMemberGet pid uid
 
 

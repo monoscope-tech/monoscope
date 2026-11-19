@@ -109,7 +109,11 @@ data EnvConfig = EnvConfig
   , slackSigningSecret :: Text
   , slackAppId :: Text
   , slackRedirectUri :: Text
-  , slackBotToken :: Text
+  , slackConnectBotToken :: Text
+  -- ^ A dedicated internal app in Monoscope's workspace, never the customer-facing agent app: creates customers'
+  -- private Slack Connect channels and invites them (scopes: groups:write, groups:read, conversations.connect:write, chat:write).
+  , slackConnectTeamUserIds :: [Text]
+  -- ^ Monoscope staff (Slack user ids) added to every Slack Connect channel.
   , discordRedirectUri :: Text
   , discordClientId :: Text
   , discordClientSecret :: Text

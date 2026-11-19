@@ -309,6 +309,12 @@ extra-source-files:
     static/migrations/0291_uptime_request_and_teams.sql
     static/migrations/0292_instance_telemetry.sql
     static/migrations/0293_repository_resource_detach.sql
+    static/migrations/0294_home_highlights_and_slack_connect.sql
+    static/migrations/0295_recent_views_and_audit_targets.sql
+    static/migrations/0296_project_activity_view.sql
+    static/migrations/0297_slack_connect_invite_status.sql
+    static/migrations/0298_dashboards_project_index.sql
+    static/migrations/0299_slack_connect_invite_attempts.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb
     test/fixtures/github-app-test.pem
@@ -442,6 +448,7 @@ library
       Pages.Endpoints
       Pages.GenAIMessages
       Pages.GitSync
+      Pages.Home
       Pages.Infrastructure
       Pages.Issues
       Pages.LLM
@@ -858,6 +865,7 @@ test-suite integration-tests
       Pages.CodeContextSpec
       Pages.DashboardWidgetsSpec
       Pages.ErrorPatternsSpec
+      Pages.HomeSpec
       Pages.ImpactReviewsSpec
       Pages.InfrastructureSpec
       Pages.IssuesSpec
@@ -1073,6 +1081,7 @@ test-suite test-dev
       Pages.Endpoints
       Pages.GenAIMessages
       Pages.GitSync
+      Pages.Home
       Pages.Infrastructure
       Pages.Issues
       Pages.LLM
@@ -1152,6 +1161,7 @@ test-suite test-dev
       Pages.CodeContextSpec
       Pages.DashboardWidgetsSpec
       Pages.ErrorPatternsSpec
+      Pages.HomeSpec
       Pages.ImpactReviewsSpec
       Pages.InfrastructureSpec
       Pages.IssuesSpec

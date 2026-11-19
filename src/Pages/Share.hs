@@ -41,7 +41,7 @@ data ShareView
 
 shareLinkPostH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe ShareEvents.ShareKind -> ATAuthCtx (RespHeaders ShareLinkPost)
 shareLinkPostH pid eventId createdAt reqTypeM = do
-  _ <- Projects.sessionAndProject pid
+  (sess, _) <- Projects.sessionAndProject pid
   useTf <- useTfReads
   _ <- Telemetry.otelRecordByProjectAndId useTf pid createdAt eventId `whenNothingM` throwError err404
   -- Random on purpose, not genUUID: the test interpreter restarts its static sequence per
@@ -49,6 +49,7 @@ shareLinkPostH pid eventId createdAt reqTypeM = do
   -- deterministic id twice is a share_events pkey collision.
   shareId <- liftIO UUIDV4.nextRandom
   ShareEvents.createShareLink shareId pid eventId (fromMaybe ShareEvents.ShareRequest reqTypeM) createdAt
+  Projects.logAudit pid Projects.AEShareLinkCreated sess (Just $ Projects.AuditTarget Projects.ATShareLink (UUID.toText shareId) (UUID.toText eventId)) Nothing
   addRespHeaders $ ShareLinkPost $ UUID.toText shareId
 
 

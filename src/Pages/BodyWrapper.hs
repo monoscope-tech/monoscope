@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, frontendBuild, BWConfig (..), llmCallsUrl, stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus, externalHeadScripts_) where
+module Pages.BodyWrapper (bodyWrapper, frontendBuild, BWConfig (..), llmCallsUrl, apiCatalogUrl, stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus, externalHeadScripts_) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
@@ -23,6 +23,7 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
+import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (OnboardingStep (..))
 import Models.Projects.Projects qualified as Projects
@@ -57,15 +58,18 @@ mkPageCtxWithScope withScope pid = do
   (sess, project, bw) <- mkAIPageCtx pid
   viewerPermission <- fromMaybe ProjectMembers.PView <$> ProjectMembers.getSessionPermission pid sess.user.id
   let now = bw.shellNow
-  (facetsM, (activationProgressM, conversations)) <-
+  ((facetsM, navDashboards), (activationProgressM, conversations)) <-
     concurrently
-      (if withScope then SchemaCatalog.getFacetSummary (Just [envField, serviceField]) pid "otel_logs_and_spans" now now else pure Nothing)
+      ( concurrently
+          (if withScope then SchemaCatalog.getFacetSummary (Just [envField, serviceField]) pid "otel_logs_and_spans" now now else pure Nothing)
+          (Dashboards.selectNavDashboards pid)
+      )
       ( concurrently
           (if V.elem "checklist_dismissed" project.onboardingStepsCompleted then pure Nothing else Just <$> activationProgress pid (V.elem (show Integration) project.onboardingStepsCompleted))
           (Issues.listVisibleConversations pid viewerPermission (Investigations.MemberViewer sess.user.id))
       )
   let options field = V.fromList $ sort [v.value | SchemaCatalog.FacetData m <- (.facetJson) <$> maybeToList facetsM, v <- HM.findWithDefault [] field m, not (T.null v.value)]
-  pure (sess, project, bw{activationProgressM, conversations, envOptions = options envField, serviceOptions = options serviceField, needsTagify = True})
+  pure (sess, project, bw{activationProgressM, conversations, navDashboards, envOptions = options envField, serviceOptions = options serviceField, needsTagify = True})
   where
     envField = "resource.deployment.environment.name"
     serviceField = "resource.service.name"
@@ -118,7 +122,8 @@ tippyRight_ content = [term "data-tippy-placement" "right", term "data-tippy-con
 
 menu :: I18n.Language -> Projects.ProjectId -> [(Text, Text, Text)]
 menu lang pid =
-  [ (I18n.t lang "nav.dashboards", dashboardsUrl pid, "dashboard")
+  [ ("Home", urls.homeGet pid, "house")
+  , (I18n.t lang "nav.dashboards", dashboardsUrl pid, "dashboard")
   , (I18n.t lang "nav.explorer", Components.logExplorerUrl pid, "explore")
   , (I18n.t lang "nav.issues", issuesUrl pid Nothing, "bug")
   , (I18n.t lang "nav.monitors", (urls.monitors pid).listGet Nothing Nothing, "list-check")
@@ -267,6 +272,7 @@ data BWConfig = BWConfig
   -- Explorer's facet sidebar offers.
   , serviceOptions :: V.Vector Text
   , activationProgressM :: Maybe ActivationProgress
+  , navDashboards :: [Dashboards.NavDashboard]
   , conversations :: [Issues.ConversationSummary]
   , activeConversationId :: Maybe (UUIDId "conversation")
   , composerRequestId :: Maybe (UUIDId "ai_routine_run")
@@ -290,7 +296,7 @@ bodyWrapper bcfg child = do
       -- carrying a telemetry key rendered `new Monoscope(...)` with nothing having loaded it.
       browserMonitoring = isProd && bcfg.config.enableBrowserMonitoring && bcfg.config.telemetryApiKey /= ""
       initialTheme = maybe "dark" (.theme) bcfg.sessM
-      themeColor = bool "#fbfcfd" "#060708" (initialTheme == "dark")
+      themeColor = bool "#fbfcfd" "#111316" (initialTheme == "dark")
       projectTimeZone = mfilter (not . T.null) $ (.timeZone) <$> bcfg.currProject
   doctype_
   -- The theme is on <html> too: overscroll reveals html's background, which sits outside body's tokens.
@@ -619,7 +625,7 @@ bodyWrapper bcfg child = do
 
           function applyTheme(theme) {
             [document.documentElement, document.body].forEach(el => el.setAttribute('data-theme', theme));
-            document.getElementById('theme-color-meta').content = theme === 'dark' ? '#060708' : '#fbfcfd';
+            document.getElementById('theme-color-meta').content = theme === 'dark' ? '#111316' : '#fbfcfd';
           }
 
           // Suppresses transitions across the swap so the theme change doesn't flash.
@@ -736,7 +742,7 @@ projectsDropDown currProject projects = do
       div_ [class_ "space-y-0.5 max-h-[50vh] overflow-y-auto", id_ "projectsContainer"] do
         projects & mapM_ \project -> do
           let isActive = currProject.id == project.id
-          a_ [class_ $ "flex justify-between items-center py-2 px-2.5 rounded-lg transition-colors duration-100 project_item min-w-0" <> bool " hover:bg-fillHover" " bg-fillWeak font-medium" isActive, href_ $ urls.dashboardRedirectGet project.id []] do
+          a_ [class_ $ "flex justify-between items-center py-2 px-2.5 rounded-lg transition-colors duration-100 project_item min-w-0" <> bool " hover:bg-fillHover" " bg-fillWeak font-medium" isActive, href_ $ urls.homeGet project.id] do
             span_ [class_ "truncate"] $ toHtml project.title
             when isActive $ faSprite_ "check" "regular" "h-3.5 w-3.5 text-textBrand shrink-0"
         p_ [class_ "hidden text-textWeak text-sm text-center py-4", term "hx-live:.hidden" "q('.project_item:not(.hidden) in #projectsContainer').count > 0"] "No matching projects"
@@ -750,7 +756,6 @@ projectsDropDown currProject projects = do
 
 sideNav :: Projects.Session -> Projects.Project -> BWConfig -> Html ()
 sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeaker max-md:bg-bgBase text-sm max-md:fixed max-md:z-50 max-md:w-60 max-md:h-full max-md:-translate-x-full max-md:transition-transform group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0 md:min-w-13 md:w-13 md:shrink-0 group-has-[#sidenav-toggle:checked]/pg:md:w-[var(--sidenav-w,15rem)] h-full md:transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
-  span_ [Aria.hidden_ "true", class_ "pointer-events-none absolute inset-x-0 bottom-0 h-64 bg-gradient-to-t from-fillBrand-weak/30 via-fillBrand-weak/10 to-transparent"] ""
   -- Right edge (desktop): collapsed it expands on click; expanded it drags to resize (resizer.ts), double-click collapses.
   label_ [term "for" "sidenav-toggle", class_ "max-md:hidden group-has-[#sidenav-toggle:checked]/pg:hidden absolute right-0 top-0 bottom-0 w-1 border-r border-strokeWeak cursor-e-resize hover:border-strokeBrand-strong transition-colors z-10", Aria.label_ "Expand sidebar"] ""
   div_
@@ -827,15 +832,20 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
       | (view, label) <- [("menu", "Navigate"), ("ai", "Agents")]
       ]
     nav_ [id_ "main-sidenav", class_ "mt-2 min-h-0 overflow-x-hidden overflow-y-auto flex flex-col gap-1 text-textWeak group-has-[#nav-view-ai:checked]/nav:hidden [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end|]] do
-      let flyoutLink (linkText, link) =
-            a_ ([href_ link, class_ "flex gap-2.5 items-center px-3 py-2 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong whitespace-nowrap"] <> navTabAttrs)
-              $ span_ [] (toHtml linkText)
+      let flyoutLink (label, link) =
+            a_ ([href_ link, class_ "flex gap-2.5 items-center px-3 py-2 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong whitespace-nowrap"] <> navTabAttrs) label
+          -- Starred first; the list is capped so the flyout stays a menu, with the rest one click away.
+          dashboardFlyout ds =
+            [ (span_ [class_ "flex w-3 shrink-0"] (when d.starred $ faSprite_ "star" "solid" "size-3 text-iconWarning") >> span_ [class_ "max-w-64 truncate"] (toHtml $ Dashboards.dashTitle d.title), urls.dashboardsGet project.id d.id Nothing Nothing Nothing Nothing [])
+            | d <- take 15 ds
+            ]
+              <> [(span_ [class_ "w-3 shrink-0"] "" >> "All dashboards", dashboardsUrl project.id) | not (null ds)]
           renderNavItem mTitle mUrl fIcon = do
             -- Page handlers name the section in English; labels may be translated.
             let sectionTitle = fromMaybe mTitle $ lookup mUrl [(url, title) | (title, url, _) <- menu I18n.En project.id]
                 isActive = fromMaybe pageTitle menuItem == sectionTitle
                 activeCls = bool "" " active" isActive
-                flyoutItems = navFlyoutItems project.id sectionTitle
+                flyoutItems = if sectionTitle == "Dashboards" then dashboardFlyout bcfg.navDashboards else first toHtml <$> navFlyoutItems project.id sectionTitle
                 hasFlyout = not (null flyoutItems)
             ( if hasFlyout
                 then
@@ -849,6 +859,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                         set flyoutTop to Math.max(workspaceBounds.top + 8, Math.min(my.getBoundingClientRect().top, workspaceBounds.bottom - flyout.offsetHeight - 8)) - workspaceBounds.top
                         set flyout.style.left to `${flyoutLeft}px`
                         set flyout.style.top to `${flyoutTop}px`
+                        set flyout.dataset.placed to ''
                       end|]
                     ]
                 else id
@@ -870,10 +881,12 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                     faSprite_ fIcon "regular" "nav-icon w-4 h-4 shrink-0"
                     span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
                     when hasFlyout $ span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block ml-auto text-textWeak"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
+                -- Shown only once placed: a morph after clicking a link resets the inline position while the
+                -- pointer is still over the item, which used to flash the flyout at the viewport's corner.
                 when hasFlyout
-                  $ div_ [class_ "nav-flyout max-md:hidden invisible opacity-0 group-hover/flyout:visible group-hover/flyout:opacity-100 fixed top-0 left-0 z-50 min-w-44 bg-bgRaised border border-strokeWeak rounded-lg shadow-md py-1.5 transition-[opacity,visibility] duration-100"]
+                  $ div_ [class_ "nav-flyout max-md:hidden invisible opacity-0 group-hover/flyout:data-placed:visible group-hover/flyout:data-placed:opacity-100 max-h-[70vh] overflow-y-auto fixed top-0 left-0 z-50 min-w-44 bg-bgRaised border border-strokeWeak rounded-lg shadow-md py-1.5 transition-[opacity,visibility] duration-100"]
                   $ mapM_ flyoutLink flyoutItems
-      let (primary, secondary) = splitAt 4 $ menu sess.lang project.id
+      let (primary, secondary) = splitAt 5 $ menu sess.lang project.id
       mapM_ (uncurry3 renderNavItem) primary
       div_ [class_ "border-t border-strokeWeak/50 my-1.5 mx-2"] ""
       mapM_ (uncurry3 renderNavItem) secondary
@@ -1317,6 +1330,7 @@ navBottomList pid =
   , ("Prometheus", urls.prometheusSettingsGet pid, "objects-column")
   , ("Storage", urls.bringS3 pid, "bucket")
   , ("Billing", urls.manageBillingGet pid, "dollar")
+  , ("Audit log", urls.auditLogGet pid Nothing Nothing Nothing, "clock-rotate-left")
   ]
 
 

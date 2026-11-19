@@ -215,7 +215,7 @@ enqueueAIRoutine ctx routineId at = enqueueAt ctx at [Jobs.AIRoutineRun routineI
 
 -- | URL for a project's main view.
 projectUrl :: Config.AuthContext -> Projects.ProjectId -> Text
-projectUrl ctx pid = hostPath ctx.env.hostUrl $ urls.dashboardRedirectGet pid []
+projectUrl ctx pid = hostPath ctx.env.hostUrl $ urls.homeGet pid
 
 
 issuePageUrl :: Config.AuthContext -> Projects.ProjectId -> Issues.IssueId -> Text
@@ -250,9 +250,15 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
         -- Invitees usually have no Auth0 identity yet: send them to /login with
         -- signup + email hints so they land on the sign-up tab, pre-filled.
         let enc = decodeUtf8 . urlEncode True . encodeUtf8
-            inviteUrl = authCtx.env.hostUrl <> "login?screen_hint=signup&login_hint=" <> enc reciever <> "&redirect_to=" <> enc (urls.dashboardRedirectGet projectId [])
+            inviteUrl = authCtx.env.hostUrl <> "login?screen_hint=signup&login_hint=" <> enc reciever <> "&redirect_to=" <> enc (urls.homeGet projectId)
         recipients <- Projects.projectEmailRecipients projectId [reciever]
         forM_ recipients \to -> renderAndSend to (ET.projectInviteEmail user.firstName projectTitle' inviteUrl)
+    SlackConnectSync pid create -> void $ Integrations.syncProjectSlackConnect authCtx.config pid create Nothing
+    SlackConnectSweep -> unless (T.null authCtx.config.slackConnectBotToken) do
+      now <- Time.currentTime
+      pids <- filter (/= Projects.demoProjectId) <$> Integrations.slackConnectBacklog now
+      -- conversations.create and inviteShared are Tier 2 (~20/min); a project costs a few calls.
+      for_ (zip [0 ..] pids) \(i, pid) -> enqueueAt authCtx (addUTCTime (fromIntegral @Int $ i * 15) now) [SlackConnectSync pid True]
     SendDiscordData userId projectId fullName stack foundUsFrom -> sendDiscordData authCtx userId projectId fullName stack foundUsFrom
     SyncProjectContacts pid -> whenJustM (Projects.projectById pid) \project ->
       unless (T.null authCtx.config.convertkitApiKey) $ do
@@ -501,7 +507,7 @@ runAIRoutine authCtx projectTools =
     (enqueueAIRoutine authCtx)
     authCtx
   where
-    routinePrompt = "Run the recurring task defined in this conversation now. Return JSON with has_findings set to true only when the task found something worth reporting, plus the usual explanation and widgets."
+    routinePrompt = "Run the recurring task defined in this conversation now. Return JSON with has_findings set to true only when the task found something worth reporting, plus the usual explanation and widgets. Put each finding the team should see today on the project's Home page with highlight_on_home: kind issue for a regression, improvement for something measurably better, insight otherwise."
     -- Stay comfortably inside the database lease, so recovery cannot execute the
     -- same routine while a legitimate worker is still running.
     routineRunTimeoutMicros = 20 * 60 * 1_000_000
@@ -571,6 +577,9 @@ deliverReport authCtx routine templateKey (from, to) digest = do
   let key = Issues.mkArtifactKey $ templateKey <> "-" <> day "%Y-%m-%d" to
       body = "*" <> period <> "*\n\n" <> AI.digestMarkdown digest (map (.chart) items)
       reportUrl = hostPath authCtx.env.hostUrl $ urls.aiThreadGet pid routine.conversationId (rightToMaybe key)
+  -- Home highlights are a side channel: failing to write them must not hold back the report itself.
+  whenLeftM_ (tryAny $ Hasql.transaction TxS.ReadCommitted TxS.Write $ for_ digest.highlights \h -> Issues.upsertHighlightTx pid (Just routine.conversationId) Issues.NewHighlight{kind = Issues.HKInsight, title = unwords (words h.title), detail = h.detail, link = h.link, source = "Report"}) \e ->
+    Log.logAttention "Report highlights not saved" (AE.object ["project_id" AE..= pid, "conversation_id" AE..= routine.conversationId, "error" AE..= displayException e])
   for_ (rightToMaybe key) \k ->
     whenLeftM_ (Issues.saveArtifact pid routine.conversationId k (Just digest.headline) body Issues.ArtifactReplace) \rejection ->
       Log.logAttention "Report document was not saved" $ AE.object ["conversation_id" AE..= routine.conversationId, "project_id" AE..= pid, "reason" AE..= show @Text rejection]
@@ -1049,7 +1058,7 @@ runDailyJobScheduling authCtx =
           -- ExpireReplayData is the 30-day replay retention sweep; it re-enqueues itself
           -- if it hit the batch cap, so backlog drains across multiple runs.
           enqueueJobs authCtx
-            $ [Jobs.MonoscopeAdminDaily, Jobs.UsageAuditReport, Jobs.ExpireReplayData, Jobs.ExpireShareEvents]
+            $ [Jobs.MonoscopeAdminDaily, Jobs.UsageAuditReport, Jobs.ExpireReplayData, Jobs.ExpireShareEvents, Jobs.SlackConnectSweep]
             <> [Jobs.CleanupDemoProject | dayOfWeek currentDay == Monday]
           -- Spread over six hours so installs do not all report at midnight.
           when (UsageTelemetry.modeOf authCtx.config /= UsageTelemetry.Off) $ liftIO (randomRIO (0, 6 * 3600 :: Int)) >>= \delay -> enqueueAt authCtx (addUTCTime (fromIntegral delay) currentTime) [Jobs.UsageReport]

@@ -73,7 +73,7 @@ import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Effectful (Eff, IOE, type (:>))
+import Effectful (Eff, type (:>))
 import Effectful.Error.Static qualified as EffError
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified as EffReader

@@ -60,6 +60,7 @@ module Pages.Projects (
 where
 
 import BackgroundJobs qualified
+import BackgroundJobs.Types qualified as Jobs
 import Control.Lens ((^.))
 import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
@@ -201,7 +202,7 @@ listProjectsBody sessM projects demoProject showDemoProject restrictedProjectTit
 projectCard_ :: Projects.ProjectListItem -> Html ()
 projectCard_ project = do
   div_ [class_ "surface-raised hover:shadow-md transition-shadow duration-200 overflow-hidden group"] do
-    a_ [href_ (Links.urls.dashboardRedirectGet project.id []), class_ "block"] do
+    a_ [href_ (Links.urls.homeGet project.id), class_ "block"] do
       div_ [class_ "p-5 pb-3"] do
         div_ [class_ "flex justify-between items-start mb-3"] do
           div_ [class_ "flex-1 min-w-0"] do
@@ -784,6 +785,7 @@ manageMembersPostH pid onboardingM form = do
 
   whenJust (nonEmpty deletedUAndP) $ void . ProjectMembers.softDeleteProjectMembers
   when (Projects.isFreeTier project.paymentPlan) $ void $ ProjectMembers.deactivateNonOwnerMembers pid
+  unless (null uAndPNew) $ Jobs.insertJob $ Jobs.SlackConnectSync pid False
   unless (null uAndPNew)
     $ Projects.logAuditS pid Projects.AEMemberAdded sess
     $ Just
@@ -1543,7 +1545,7 @@ data PricingUpdated = PricingOnboarded Projects.ProjectId | PricingSaved
 
 instance Outcome PricingUpdated where
   outcomeRedirect = \case
-    PricingOnboarded pid -> Just $ Links.urls.dashboardRedirectGet pid []
+    PricingOnboarded pid -> Just $ Links.urls.homeGet pid
     PricingSaved -> Nothing
   outcomeToast = \case
     PricingOnboarded _ -> Nothing
@@ -1568,6 +1570,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = act do
         let fullName = sess.user.firstName <> " " <> sess.user.lastName
             foundUsFrom = fromMaybe "" $ project.questions >>= (`lookupValueText` "foundUsFrom")
         _ <- createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName [foundUsFrom] foundUsFrom
+        _ <- createJob conn "background_jobs" $ BackgroundJobs.SlackConnectSync pid True
         createJob conn "background_jobs" $ BackgroundJobs.SyncProjectContacts pid
 
   let auditPlan name =

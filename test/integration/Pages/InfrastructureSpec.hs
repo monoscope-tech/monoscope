@@ -57,7 +57,7 @@ import Servant.API (ResponseHeader (..), lookupResponseHeader, parseUrlPiece)
 import System.Config (AuthContext (..))
 import System.Config qualified as Config
 import Text.Read (read)
-import Utils (formatUTC, lookupIcon)
+import Utils (formatUTC, formatUTCMicros, lookupIcon)
 
 
 spec :: Spec
@@ -727,7 +727,7 @@ spec = do
       (rid, ts) <- firstRow =<< dbQuery @_ @(UUID.UUID, UTCTime) tr [sql| SELECT id, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND context___trace_id = ? |] (pid, exemplarTrace)
       seedMeta tr pid exemplarMetric "test-service" [] (Just ts)
       relatedHtml <- shellHtml tr $ Trace.relatedMetricsGetH pid rid ts
-      relatedHtml `shouldContainAll` ["Recorded in this trace", exemplarMetric, "Metrics from test-service", "timeFrom", "highlightFrom", formatUTC (addUTCTime (-120) ts), formatUTC ts]
+      relatedHtml `shouldContainAll` ["Recorded in this trace", exemplarMetric, "Metrics from test-service", "timeFrom", "highlightFrom", formatUTCMicros (addUTCTime (-120) ts), formatUTC ts]
       -- Opening a span pays for no metrics lookup: the panel ships a placeholder whose content is another shell.
       item <- shellHtml tr $ LogItem.expandAPIlogItemH pid rid ts Nothing Nothing Nothing False
       metricsTab <- shellHtml tr $ LogItem.expandAPIlogItemH pid rid ts Nothing (Just "tab-metrics") Nothing True

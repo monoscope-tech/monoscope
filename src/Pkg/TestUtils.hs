@@ -32,6 +32,7 @@ module Pkg.TestUtils (
   runTestBackground,
   runTestBackgroundWithNotifications,
   runTestBgRecordingHTTP,
+  runTestBackgroundWithHTTP,
   runTestBg,
   runTestBgNoReset,
   captureNotifs,
@@ -1047,7 +1048,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
               , twilioAuthToken = bool envConfig.twilioAuthToken "test_auth_token_for_tests_only" (T.null envConfig.twilioAuthToken)
               , whatsappFromNumber = bool envConfig.whatsappFromNumber "+15555551234" (T.null envConfig.whatsappFromNumber)
               , whatsappMonitorTemplate = envConfig.whatsappMonitorTemplate <|> mkTwilioContentSid "HX00000000000000000000000000000000"
-              , slackBotToken = bool envConfig.slackBotToken "xoxb-test-token-not-real" (T.null envConfig.slackBotToken)
+              , slackConnectBotToken = bool envConfig.slackConnectBotToken "xoxb-test-token-not-real" (T.null envConfig.slackConnectBotToken)
               , discordBotToken = bool envConfig.discordBotToken "test-discord-bot-token" (T.null envConfig.discordBotToken)
               , openaiApiKey = bool envConfig.openaiApiKey "sk-test-key-not-real" (T.null envConfig.openaiApiKey)
               }

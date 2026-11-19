@@ -6,7 +6,7 @@
 <h2 class="max-md:text-xl text-2xl font-semibold text-textStrong break-words line-clamp-3" title="N+1 Query: SELECT * FROM reviews WHERE product_id = ?">N+1 Query: SELECT * FROM reviews WHERE product_id = ?</h2>
 <p class="text-sm text-textWeak max-w-3xl border-l-2 border-strokeError-strong pl-2">Batch these queries: load the rows in one query (a join or an IN list) instead of one per item.</p>
 <div class="flex flex-wrap gap-x-3 gap-y-1.5 items-center">
-<span class="flex items-center gap-1.5 text-xs font-medium text-fillWarning-strong">
+<span class="flex items-center gap-1.5 text-xs font-medium text-textWarning">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 512 512">
 <g>
 <path d="M256 48a208 208 0 1 1 0 416 208 208 0 1 1 0-416zm0 464A256 256 0 1 0 256 0a256 256 0 1 0 0 512zm32-400a32 32 0 1 0 -64 0 32 32 0 1 0 64 0zM256 408c30.9 0 56-25.1 56-56c0-14-5.1-26.8-13.7-36.6L366 161.7c5.3-12.1-.2-26.3-12.3-31.6s-26.3 .2-31.6 12.3L254.4 296c-30.2 .8-54.4 25.6-54.4 56c0 30.9 25.1 56 56 56zM192 160a32 32 0 1 0 -64 0 32 32 0 1 0 64 0zM112 288a32 32 0 1 0 0-64 32 32 0 1 0 0 64zm320-32a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z"/>
@@ -872,7 +872,7 @@
 <div id="ai_chat_container" class="hidden group-has-[#ai-panel-toggle:checked]/ai:flex w-[420px] shrink-0 h-full overflow-hidden flex-col bg-bgBase border-l border-t border-strokeWeak">
 <div class="shrink-0 px-4 py-2.5 border-b border-strokeWeak flex items-center justify-between">
 <div class="flex items-center gap-2">
-<svg class="icon w-3.5 h-3.5 text-fillBrand-strong" width="1em" height="1em" viewBox="0 0 512 512">
+<svg class="icon w-3.5 h-3.5 text-iconBrand" width="1em" height="1em" viewBox="0 0 512 512">
 <g>
 <path d="M327.5 85.2c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L384 128l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L448 128l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L448 64 426.8 7.5C425.1 3 420.8 0 416 0s-9.1 3-10.8 7.5L384 64 327.5 85.2zM9.3 240C3.6 242.6 0 248.3 0 254.6s3.6 11.9 9.3 14.5L26.3 277l8.1 3.7 .6 .3 88.3 40.8L164.1 410l.3 .6 3.7 8.1 7.9 17.1c2.6 5.7 8.3 9.3 14.5 9.3s11.9-3.6 14.5-9.3l7.9-17.1 3.7-8.1 .3-.6 40.8-88.3L346 281l.6-.3 8.1-3.7 17.1-7.9c5.7-2.6 9.3-8.3 9.3-14.5s-3.6-11.9-9.3-14.5l-17.1-7.9-8.1-3.7-.6-.3-88.3-40.8L217 99.1l-.3-.6L213 90.3l-7.9-17.1c-2.6-5.7-8.3-9.3-14.5-9.3s-11.9 3.6-14.5 9.3l-7.9 17.1-3.7 8.1-.3 .6-40.8 88.3L35.1 228.1l-.6 .3-8.1 3.7L9.3 240zm83 14.5l51.2-23.6c10.4-4.8 18.7-13.1 23.5-23.5l23.6-51.2 23.6 51.2c4.8 10.4 13.1 18.7 23.5 23.5l51.2 23.6-51.2 23.6c-10.4 4.8-18.7 13.1-23.5 23.5l-23.6 51.2-23.6-51.2c-4.8-10.4-13.1-18.7-23.5-23.5L92.3 254.6zM384 384l-56.5 21.2c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L384 448l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L448 448l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L448 384l-21.2-56.5c-1.7-4.5-6-7.5-10.8-7.5s-9.1 3-10.8 7.5L384 384z" />
 </g>
@@ -926,7 +926,7 @@
 <h2 class="max-md:text-xl text-2xl font-semibold text-textStrong break-words line-clamp-3" title="Rage Click: Place order">Rage Click: Place order</h2>
 <p class="text-sm text-textWeak max-w-3xl border-l-2 border-strokeError-strong pl-2">Users clicked this repeatedly: check it responds, shows progress, and is not disabled without saying why.</p>
 <div class="flex flex-wrap gap-x-3 gap-y-1.5 items-center">
-<span class="flex items-center gap-1.5 text-xs font-medium text-fillWarning-strong">
+<span class="flex items-center gap-1.5 text-xs font-medium text-textWarning">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 320 512">
 <g>
 <path d="M0 55.2L0 426c0 12.2 9.9 22 22 22c6.3 0 12.4-2.7 16.6-7.5L121.2 346l58.1 116.3c7.9 15.8 27.1 22.2 42.9 14.3s22.2-27.1 14.3-42.9L179.8 320l118.1 0c12.2 0 22-9.9 22-22c0-6.3-2.7-12.3-7.4-16.5L38.6 37.9C34.3 34.1 28.9 32 23.2 32C10.4 32 0 42.4 0 55.2z" fill="currentColor"/>
@@ -1510,7 +1510,7 @@
 <a href="https://shop.example.com/checkout" target="_blank" rel="noopener" class="text-sm text-textBrand break-all hover:underline">https://shop.example.com/checkout</a>
 <div class="flex flex-wrap items-center gap-x-5 gap-y-2">
 <div class="flex items-center gap-1.5 whitespace-nowrap">
-<svg class="icon w-3 h-3 text-fillBrand-strong" width="1em" height="1em" viewBox="0 0 320 512">
+<svg class="icon w-3 h-3 text-iconBrand" width="1em" height="1em" viewBox="0 0 320 512">
 <g>
 <path d="M0 55.2L0 426c0 12.2 9.9 22 22 22c6.3 0 12.4-2.7 16.6-7.5L121.2 346l58.1 116.3c7.9 15.8 27.1 22.2 42.9 14.3s22.2-27.1 14.3-42.9L179.8 320l118.1 0c12.2 0 22-9.9 22-22c0-6.3-2.7-12.3-7.4-16.5L38.6 37.9C34.3 34.1 28.9 32 23.2 32C10.4 32 0 42.4 0 55.2z" fill="currentColor"/>
 </g>
@@ -1788,7 +1788,7 @@
 <div id="ai_chat_container" class="hidden group-has-[#ai-panel-toggle:checked]/ai:flex w-[420px] shrink-0 h-full overflow-hidden flex-col bg-bgBase border-l border-t border-strokeWeak">
 <div class="shrink-0 px-4 py-2.5 border-b border-strokeWeak flex items-center justify-between">
 <div class="flex items-center gap-2">
-<svg class="icon w-3.5 h-3.5 text-fillBrand-strong" width="1em" height="1em" viewBox="0 0 512 512">
+<svg class="icon w-3.5 h-3.5 text-iconBrand" width="1em" height="1em" viewBox="0 0 512 512">
 <g>
 <path d="M327.5 85.2c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L384 128l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L448 128l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L448 64 426.8 7.5C425.1 3 420.8 0 416 0s-9.1 3-10.8 7.5L384 64 327.5 85.2zM9.3 240C3.6 242.6 0 248.3 0 254.6s3.6 11.9 9.3 14.5L26.3 277l8.1 3.7 .6 .3 88.3 40.8L164.1 410l.3 .6 3.7 8.1 7.9 17.1c2.6 5.7 8.3 9.3 14.5 9.3s11.9-3.6 14.5-9.3l7.9-17.1 3.7-8.1 .3-.6 40.8-88.3L346 281l.6-.3 8.1-3.7 17.1-7.9c5.7-2.6 9.3-8.3 9.3-14.5s-3.6-11.9-9.3-14.5l-17.1-7.9-8.1-3.7-.6-.3-88.3-40.8L217 99.1l-.3-.6L213 90.3l-7.9-17.1c-2.6-5.7-8.3-9.3-14.5-9.3s-11.9 3.6-14.5 9.3l-7.9 17.1-3.7 8.1-.3 .6-40.8 88.3L35.1 228.1l-.6 .3-8.1 3.7L9.3 240zm83 14.5l51.2-23.6c10.4-4.8 18.7-13.1 23.5-23.5l23.6-51.2 23.6 51.2c4.8 10.4 13.1 18.7 23.5 23.5l51.2 23.6-51.2 23.6c-10.4 4.8-18.7 13.1-23.5 23.5l-23.6 51.2-23.6-51.2c-4.8-10.4-13.1-18.7-23.5-23.5L92.3 254.6zM384 384l-56.5 21.2c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L384 448l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L448 448l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L448 384l-21.2-56.5c-1.7-4.5-6-7.5-10.8-7.5s-9.1 3-10.8 7.5L384 384z" />
 </g>
@@ -1842,7 +1842,7 @@
 <h2 class="max-md:text-xl text-2xl font-semibold text-textStrong break-words line-clamp-3" title="Feedback: The cart button does nothing">Feedback: The cart button does nothing</h2>
 <p class="text-sm text-textWeak max-w-3xl border-l-2 border-strokeError-strong pl-2">Reply to the user, or mark it as spam.</p>
 <div class="flex flex-wrap gap-x-3 gap-y-1.5 items-center">
-<span class="flex items-center gap-1.5 text-xs font-medium text-fillBrand-strong">
+<span class="flex items-center gap-1.5 text-xs font-medium text-textBrand">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 512 512">
 <g>
 <path d="M123.6 391.3c12.9-9.4 29.6-11.8 44.6-6.4c26.5 9.6 56.2 15.1 87.8 15.1c124.7 0 208-80.5 208-160s-83.3-160-208-160S48 160.5 48 240c0 32 12.4 62.8 35.7 89.2c8.6 9.7 12.8 22.5 11.8 35.5c-1.4 18.1-5.7 34.7-11.3 49.4c17-7.9 31.1-16.7 39.4-22.7zM21.2 431.9c1.8-2.7 3.5-5.4 5.1-8.1c10-16.6 19.5-38.4 21.4-62.9C17.7 326.8 0 285.1 0 240C0 125.1 114.6 32 256 32s256 93.1 256 208s-114.6 208-256 208c-37.1 0-72.3-6.4-104.1-17.9c-11.9 8.7-31.3 20.6-54.3 30.6c-15.1 6.6-32.3 12.6-50.1 16.1c-.8 .2-1.6 .3-2.4 .5c-4.4 .8-8.7 1.5-13.2 1.9c-.2 0-.5 .1-.7 .1c-5.1 .5-10.2 .8-15.3 .8c-6.5 0-12.3-3.9-14.8-9.9c-2.5-6-1.1-12.8 3.4-17.4c4.1-4.2 7.8-8.7 11.3-13.5c1.7-2.3 3.3-4.6 4.8-6.9l.3-.5z"/>
@@ -2690,7 +2690,7 @@
 <div id="ai_chat_container" class="hidden group-has-[#ai-panel-toggle:checked]/ai:flex w-[420px] shrink-0 h-full overflow-hidden flex-col bg-bgBase border-l border-t border-strokeWeak">
 <div class="shrink-0 px-4 py-2.5 border-b border-strokeWeak flex items-center justify-between">
 <div class="flex items-center gap-2">
-<svg class="icon w-3.5 h-3.5 text-fillBrand-strong" width="1em" height="1em" viewBox="0 0 512 512">
+<svg class="icon w-3.5 h-3.5 text-iconBrand" width="1em" height="1em" viewBox="0 0 512 512">
 <g>
 <path d="M327.5 85.2c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L384 128l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L448 128l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L448 64 426.8 7.5C425.1 3 420.8 0 416 0s-9.1 3-10.8 7.5L384 64 327.5 85.2zM9.3 240C3.6 242.6 0 248.3 0 254.6s3.6 11.9 9.3 14.5L26.3 277l8.1 3.7 .6 .3 88.3 40.8L164.1 410l.3 .6 3.7 8.1 7.9 17.1c2.6 5.7 8.3 9.3 14.5 9.3s11.9-3.6 14.5-9.3l7.9-17.1 3.7-8.1 .3-.6 40.8-88.3L346 281l.6-.3 8.1-3.7 17.1-7.9c5.7-2.6 9.3-8.3 9.3-14.5s-3.6-11.9-9.3-14.5l-17.1-7.9-8.1-3.7-.6-.3-88.3-40.8L217 99.1l-.3-.6L213 90.3l-7.9-17.1c-2.6-5.7-8.3-9.3-14.5-9.3s-11.9 3.6-14.5 9.3l-7.9 17.1-3.7 8.1-.3 .6-40.8 88.3L35.1 228.1l-.6 .3-8.1 3.7L9.3 240zm83 14.5l51.2-23.6c10.4-4.8 18.7-13.1 23.5-23.5l23.6-51.2 23.6 51.2c4.8 10.4 13.1 18.7 23.5 23.5l51.2 23.6-51.2 23.6c-10.4 4.8-18.7 13.1-23.5 23.5l-23.6 51.2-23.6-51.2c-4.8-10.4-13.1-18.7-23.5-23.5L92.3 254.6zM384 384l-56.5 21.2c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L384 448l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L448 448l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L448 384l-21.2-56.5c-1.7-4.5-6-7.5-10.8-7.5s-9.1 3-10.8 7.5L384 384z" />
 </g>

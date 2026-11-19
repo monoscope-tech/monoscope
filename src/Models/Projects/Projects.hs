@@ -145,7 +145,18 @@ module Models.Projects.Projects (
   newPersistentSessionId,
   -- Audit Log
   AuditEvent (..),
+  AuditTarget (..),
+  AuditTargetKind (..),
   logAuditS,
+  logAudit,
+  ActivitySource (..),
+  ActorKind (..),
+  ActivityEntry (..),
+  projectActivity,
+  ViewKind (..),
+  RecentView (..),
+  recordView,
+  recentViews,
 )
 where
 
@@ -158,7 +169,7 @@ import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.HashMap.Strict qualified as HM
 import Data.List (unzip4)
 import Data.Map.Strict qualified as Map
-import Data.OpenApi (ToSchema)
+import Data.OpenApi (ToParamSchema, ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display
 import Data.Time (Day, UTCTime (..), ZonedTime)
@@ -1774,11 +1785,100 @@ data AuditEvent
   | AEIntegrationConnected
   | AEIntegrationDisconnected
   | AEPlanChanged
-  deriving stock (Eq, Generic, Read, Show)
+  | AEDashboardCreated
+  | AEDashboardRenamed
+  | AEDashboardDeleted
+  | AEMonitorSaved
+  | AEMonitorMuted
+  | AEMonitorUnmuted
+  | AEMonitorDeactivated
+  | AEMonitorReactivated
+  | AEMonitorResolved
+  | AEShareLinkCreated
+  | AERoutineSaved
+  | AERoutineDeleted
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "AE" AuditEvent
+  deriving (AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "AE" AuditEvent
+
+
+-- | What an audited change was made to, kept by value so the entry still reads after the thing is gone.
+data AuditTarget = AuditTarget {kind :: AuditTargetKind, targetId :: Text, title :: Text}
+
+
+data AuditTargetKind = ATDashboard | ATMonitor | ATShareLink | ATRoutine
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (Display, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "AT" AuditTargetKind
 
 
 logAuditS :: DB es => ProjectId -> AuditEvent -> Session -> Maybe AE.Value -> Eff es ()
-logAuditS pid event sess metadataM =
-  EHasql.interpExecute_ [HI.sql| INSERT INTO projects.audit_log (project_id, event, actor_id, actor_email, metadata) VALUES (#{pid}, #{event}, #{sess.user.id}, #{CI.original sess.user.email}, #{HI.AsJsonb <$> metadataM}) |]
+logAuditS pid event sess = logAudit pid event sess Nothing
+
+
+logAudit :: DB es => ProjectId -> AuditEvent -> Session -> Maybe AuditTarget -> Maybe AE.Value -> Eff es ()
+logAudit pid event sess target metadataM =
+  EHasql.interpExecute_
+    [HI.sql| INSERT INTO projects.audit_log (project_id, event, actor_id, actor_email, metadata, target_kind, target_id, target_title)
+             VALUES (#{pid}, #{event}, #{sess.user.id}, #{CI.original sess.user.email}, #{HI.AsJsonb <$> metadataM}, #{(.kind) <$> target}, #{(.targetId) <$> target}, #{(.title) <$> target}) |]
+
+
+-- | Which ledger an activity entry comes from: people's changes, issue lifecycle, or AI agent operations.
+data ActivitySource = ASAudit | ASIssue | ASAgent
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (AE.ToJSON, Display, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToHttpApiData, ToParamSchema, ToSchema) via WrappedEnumSC 'Nothing "AS" ActivitySource
+
+
+data ActorKind = AKUser | AKAgent | AKSystem
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (AE.ToJSON, Display, HI.DecodeValue, ToSchema) via WrappedEnumSC 'Nothing "AK" ActorKind
+
+
+-- | One project's activity from every ledger. Newest first; @before@ pages, the filters narrow.
+data ActivityEntry = ActivityEntry
+  { at :: UTCTime
+  , source :: ActivitySource
+  , actorKind :: ActorKind
+  , actor :: Maybe Text
+  , event :: Text
+  , targetKind :: Maybe Text
+  , targetTitle :: Maybe Text
+  , targetId :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+  deriving (AE.ToJSON) via DAE.Snake ActivityEntry
+  deriving (ToSchema) via SnakeSchema ActivityEntry
+
+
+-- | A blank actor filter is no filter.
+projectActivity :: DB es => ProjectId -> Maybe ActivitySource -> Maybe Text -> Maybe UTCTime -> Int -> Eff es [ActivityEntry]
+projectActivity pid sourceM actorM before limit =
+  EHasql.interp
+    [HI.sql| SELECT at, source, actor_kind, actor, event, target_kind, target_title, target_id FROM projects.activity
+             WHERE project_id = #{pid}
+               AND (#{sourceM}::text IS NULL OR source = #{sourceM})
+               AND (NULLIF(btrim(#{actorM}), '') IS NULL OR strpos(lower(actor), lower(btrim(#{actorM}))) > 0)
+               AND (#{before}::timestamptz IS NULL OR at < #{before})
+             ORDER BY at DESC LIMIT #{limit} |]
+
+
+-- | What a person opens, for Home's "Jump back in". One row per thing, refreshed on each visit.
+data ViewKind = VKDashboard | VKIssue | VKMonitor | VKThread
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (Display, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "VK" ViewKind
+
+
+data RecentView = RecentView {kind :: ViewKind, title :: Text, url :: Text, viewedAt :: UTCTime}
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+recordView :: DB es => UserId -> ProjectId -> ViewKind -> Text -> Text -> Text -> Eff es ()
+recordView uid pid kind target title url =
+  EHasql.interpExecute_
+    [HI.sql| INSERT INTO projects.recent_views (user_id, project_id, kind, target, title, url, viewed_at) VALUES (#{uid}, #{pid}, #{kind}, #{target}, #{title}, #{url}, now())
+             ON CONFLICT (user_id, project_id, kind, target) DO UPDATE SET title = EXCLUDED.title, url = EXCLUDED.url, viewed_at = now() |]
+
+
+recentViews :: DB es => UserId -> ProjectId -> Eff es [RecentView]
+recentViews uid pid = EHasql.interp [HI.sql| SELECT kind, title, url, viewed_at FROM projects.recent_views WHERE user_id = #{uid} AND project_id = #{pid} ORDER BY viewed_at DESC LIMIT 8 |]

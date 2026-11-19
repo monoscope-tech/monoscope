@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), ChartScope (..), VizType (..), vizWidget, widgetWith_, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, embeddedWidgets_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, assignWidgetIds, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), monitorChartType, vizChart, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
+module Pkg.Components.Widget (Widget (..), pinWidget, ChartScope (..), VizType (..), vizWidget, widgetWith_, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, embeddedWidgets_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, assignWidgetIds, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), monitorChartType, vizChart, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -745,6 +745,16 @@ infraTimeseries pid wid title unit query =
 -- use either index or the xxhash as id
 widget_ :: Widget -> Html ()
 widget_ = widgetWith_ mempty
+
+
+-- | Shows the widget, and every widget in its group, over its own window instead of the page's range.
+--
+-- >>> import Data.Time (UTCTime (..), fromGregorian)
+-- >>> let day d = UTCTime (fromGregorian 2026 1 d) 0
+-- >>> map (.timeFrom) . fold . (.children) $ pinWidget (day 1, day 2) (def :: Widget){wType = WTGroup, children = Just [def]}
+-- [Just "2026-01-01T00:00:00.000000Z"]
+pinWidget :: (UTCTime, UTCTime) -> Widget -> Widget
+pinWidget range@(start, end) w = w{timeFrom = Just $ formatUTCMicros start, timeTo = Just $ formatUTCMicros end, children = map (pinWidget range) <$> w.children}
 
 
 -- | A dashboard tab's widgets inside another page: a 12-column grid from each widget's own width,

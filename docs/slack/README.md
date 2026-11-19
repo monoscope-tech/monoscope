@@ -299,3 +299,18 @@ another investigation. Unlinked and revoked users receive private account-link
 guidance. The template declares callback ID `monoscope-investigate-message` on
 the existing `/actions/slack` interactivity endpoint; apply it to the selected app
 before live acceptance.
+
+## Slack Connect channels
+
+The home page's "Talk to Monoscope engineers in Slack" card runs as a separate app installed
+in Monoscope's own workspace, whose bot token is `SLACK_CONNECT_BOT_TOKEN`.
+[`connect-manifest.json`](connect-manifest.json) carries the four bot scopes it needs:
+`groups:write` to create the private channel and add staff, `groups:read` to find a channel an
+earlier run created, `chat:write` for the welcome, and `conversations.connect:write` to send the
+Slack Connect invite. A token without them fails
+with `missing_scope (needs …)` on the card and in the "Slack Connect sync failed" log. Add the
+scopes, reinstall the app, and replace `SLACK_CONNECT_BOT_TOKEN` with the new bot token. A
+channel created before the invite failed is reused on the next attempt: its name ends in the
+project id, so `name_taken` means this project's own channel and the sync looks it up. Failed
+invites are retried up to five times; a resend from the card always tries again.
+

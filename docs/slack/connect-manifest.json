@@ -1,0 +1,26 @@
+{
+  "display_information": {
+    "name": "Monoscope Connect",
+    "description": "Opens each customer's private Slack Connect channel with the Monoscope team and invites them."
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Monoscope"
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "groups:write",
+        "groups:read",
+        "conversations.connect:write",
+        "chat:write"
+      ]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

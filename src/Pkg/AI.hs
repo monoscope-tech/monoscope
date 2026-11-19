@@ -157,7 +157,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanKind (Internal), SpanStatus (Error), Tracing, setStatus, withSpanKind)
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (throwIO, withException)
-import Utils (encodeText, formatUTCMicros, hostPath, nonEmptyT, unwrapJsonPrimValue)
+import Utils (encodeText, hostPath, nonEmptyT, unwrapJsonPrimValue)
 import Web.ApiTypes (ApiActor (..))
 import Web.HttpApiData (parseQueryParam)
 import Web.Links (CookieProtectedRoutes (..), urls)
@@ -341,7 +341,7 @@ runWidgets :: Maybe UTCTime -> LLMResponse -> [Widget.Widget]
 runWidgets ranAt response = take 10 . map pin . filter (all (isRight . parseQueryToAST) . (.query)) $ responseWidgets response
   where
     pin w = case (ranAt, w.timeFrom) of
-      (Just at, Nothing) | (Just from, Just to, _) <- parseTimeRange at $ fromMaybe (TimePicker Nothing Nothing Nothing) response.timeRange -> pinWidget (from, to) w
+      (Just at, Nothing) | (Just from, Just to, _) <- parseTimeRange at $ fromMaybe (TimePicker Nothing Nothing Nothing) response.timeRange -> Widget.pinWidget (from, to) w
       _ -> w
 
 
@@ -402,13 +402,9 @@ parseReportDigest pid response = do
 reportRunAnswer :: Projects.ProjectId -> (UTCTime, UTCTime) -> AgenticChatResult -> Maybe (ReportDigest, Issues.RunAnswer)
 reportRunAnswer pid window answer =
   parseReportDigest pid answer.response <&> \digest ->
-    let pinned = digest{highlights = [h{widget = pinWidget (reportComparison window) <$> h.widget} | h <- digest.highlights]}
+    let pinned = digest{highlights = [h{widget = Widget.pinWidget (reportComparison window) <$> h.widget} | h <- digest.highlights]}
         md = digestMarkdown pinned []
      in (pinned, Issues.RunAnswer{content = md, widgets = AE.toJSON <$> guarded (not . null) (mapMaybe (.widget) pinned.highlights), report = md, evidence = Issues.AgentEvidence answer})
-
-
-pinWidget :: (UTCTime, UTCTime) -> Widget.Widget -> Widget.Widget
-pinWidget (from, to) w = w{Widget.timeFrom = Just $ formatUTCMicros from, Widget.timeTo = Just $ formatUTCMicros to}
 
 
 -- | Charts span the window 'reportRunAnswer' pinned each widget to.
@@ -1174,6 +1170,7 @@ initialLocalOperations config =
     <> [operation | SlackInvestigationAccess{} <- [config.access], operation <- [GetInvestigationHistory, GetRelatedIncidents, GetIncidentContext]]
     <> [operation | isJust config.sourceConfig, operation <- [GetCodeContext, ListRunbooks, ReadRunbook, GetLinkedRepositories, GetDeployments]]
     <> [SaveArtifact | isJust $ documentConversation config, isJust $ invocationContext config.invocationMode]
+    <> [HighlightOnHome | isJust $ invocationContext config.invocationMode]
     <> [ReadArtifact | isJust $ documentConversation config]
     <> [operation | isJust $ pageContext config, operation <- [OpenPage, ReadPage] <> [operation' | writes, operation' <- [Click, Fill]]]
   where
@@ -1936,6 +1933,14 @@ executeToolAt cursor config tc = do
             Right doc -> ToolResult ("Saved document '" <> toText doc.key <> "' (" <> doc.title <> ", " <> show doc.characters <> " characters).") (Just $ AE.toJSON doc.key)
             Left Issues.ArtifactFull -> noRaw $ "Document '" <> toText key' <> "' is full. Continue in a new document with a different key."
             Left Issues.ArtifactLimitReached -> noRaw $ "This conversation already holds " <> show Issues.maxArtifactsPerConversation <> " documents. Rewrite an existing one instead; read_artifact without a key lists them."
+      HighlightOnHome -> AtomicOperation $ either (pure . noRaw) Relude.id do
+        title <- maybeToRight (failure "missing 'title'") $ T.take 200 <$> nonEmptyT (unwords . words <$> getTextArg "title" args)
+        kind <- maybeToRight "kind must be issue, improvement or insight." $ parseMaybe AE.parseJSON =<< Map.lookup "kind" args
+        let detail = foldMap (T.take 600 . T.strip) $ getTextArg "detail" args
+        let linkArg = getTextArg "link" args
+            link = projectPagePath config.projectId =<< linkArg
+            ignored = if isJust linkArg && isNothing link then " The link was dropped: it must be a path under /p/" <> config.projectId.toText <> "." else ""
+        pure $ noRaw ("Flagged on Home: " <> title <> ignored) <$ Issues.upsertHighlightTx config.projectId config.conversationId Issues.NewHighlight{kind, title, detail, link, source = "AI assistant"}
       ReadArtifact -> EffectfulOperation $ inConversation \convId ->
         noRaw <$> case getTextArg "key" args of
           Nothing -> Issues.listArtifacts config.projectId convId Nothing <&> \docs -> encodeText [AE.object ["key" AE..= d.key, "title" AE..= d.title, "updated_at" AE..= d.updatedAt, "characters" AE..= d.characters] | d <- docs]

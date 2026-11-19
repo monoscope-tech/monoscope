@@ -75,7 +75,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (FormWithOptional (..), encodeText, faSprite_, formatWithCommas, popoverPanel_, popoverTrigger_)
+import Utils (FormWithOptional (..), faSprite_, formatWithCommas, popoverPanel_, popoverTrigger_)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), ProjectsRoutes' (..), explorerUrl, urls)
 
@@ -188,7 +188,7 @@ minsToInterval = \case
 
 alertUpsertPostH :: Projects.ProjectId -> AlertUpsertForm -> ATAuthCtx (RespHeaders Alert)
 alertUpsertPostH pid form = do
-  _ <- Projects.sessionAndProject pid
+  (sess, _) <- Projects.sessionAndProject pid
   everyoneM <- ManageMembers.getEveryoneTeam pid
   let alertId = form.alertId >>= UUID.fromText
       emailAll = null form.teams || maybe False (\team -> team.id `elem` form.teams) everyoneM
@@ -205,6 +205,7 @@ alertUpsertPostH pid form = do
     Left err -> addToast "error" "Monitor query is invalid" (Just err) Nothing >> addRespHeaders (AlertNoContent "")
     Right queryMonitor -> do
       _ <- Monitors.queryMonitorUpsert queryMonitor
+      Projects.logAudit pid Projects.AEMonitorSaved sess (Just $ Projects.AuditTarget Projects.ATMonitor queryMonitorId.toText queryMonitor.alertConfig.title) (Just $ AE.object ["created" AE..= isNothing alertId])
       when (isNothing alertId)
         $ void
         $ Projects.completeOnboardingStep pid "created_monitor"
@@ -574,12 +575,20 @@ instance Outcome MonitorActed where
     BAReactivate -> "Monitor reactivated"
 
 
--- | One bulk action on a single monitor; deletes are also audited.
+-- | One bulk action on a single monitor, audited with the monitor's title as it was.
 monitorActionH :: MonitorBulkAction -> Maybe Int -> Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Done MonitorActed))
 monitorActionH action durationM pid monitorId = do
   (sess, _) <- Projects.sessionAndProject pid
+  titleM <- fmap (.alertConfig.title) <$> Monitors.queryMonitorById monitorId
   void $ Monitors.monitorsBulkUpdate pid action durationM [monitorId]
-  when (action == BADelete) $ Projects.logAuditS pid Projects.AEMonitorDeleted sess Nothing
+  let event = case action of
+        BADelete -> Projects.AEMonitorDeleted
+        BAMute -> Projects.AEMonitorMuted
+        BAResolve -> Projects.AEMonitorResolved
+        BADeactivate -> Projects.AEMonitorDeactivated
+        BAReactivate -> Projects.AEMonitorReactivated
+        BAUnmute -> Projects.AEMonitorUnmuted
+  Projects.logAudit pid event sess (Projects.AuditTarget Projects.ATMonitor monitorId.toText <$> titleM) (AE.object . one . ("duration_mins" AE..=) <$> durationM)
   done $ MonitorActed pid action durationM
 
 
@@ -631,13 +640,14 @@ statusBadge_ isLarge st = do
 
 unifiedMonitorOverviewH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 unifiedMonitorOverviewH pid monitorId = do
-  (_, project, bw) <- mkPageCtx pid
+  (sess, project, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   currTime <- Time.currentTime
   (freeTierStatus, alertM) <-
     concurrently
       (checkFreeTierStatus pid project.paymentPlan)
       (maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMonitorId) (UUID.fromText monitorId))
+  whenJust alertM \alert -> Projects.recordView sess.user.id pid Projects.VKMonitor monitorId alert.alertConfig.title ((urls.monitors pid).overviewGet monitorId)
 
   let baseBwconf =
         bw
