@@ -214,7 +214,7 @@
   --color-strokeInverse-strong: oklch(100% 0 0 / 0.6);
   --color-strokeInverse-weak: oklch(100% 0 0 / 0.12);
   --color-strokeSelected: oklch(56.7% 0.239 261);
-  --color-strokeStrong: oklch(76% 0.02 261);
+  --color-strokeStrong: oklch(21.2% 0.117 264 / 0.5);
   --color-strokeSuccess-strong: rgba(6 122 87 / 0.8);
   --color-strokeSuccess-weak: rgba(6 122 87 / 0.2);
   --color-strokeWarning-strong: rgba(143 108 26 / 0.8);
@@ -2021,12 +2021,12 @@ code, pre, .code, .monospace {
     --color-strokeInverse-strong: rgba(10 10 15 / 0.4);
     --color-strokeInverse-weak: rgba(15 15 20 / 0.1);
     --color-strokeSelected: oklch(64% 0.18 261);
-    --color-strokeStrong: oklch(100% 0 0 / 0.28);
+    --color-strokeStrong: rgba(255 255 255 / 0.35);
     --color-strokeSuccess-strong: oklch(78% 0.088 162 / 0.5);
     --color-strokeSuccess-weak: oklch(78% 0.088 162 / 0.15);
     --color-strokeWarning-strong: oklch(79.5% 0.106 92 / 0.5);
     --color-strokeWarning-weak: oklch(79.5% 0.106 92 / 0.15);
-    --color-strokeWeak: oklch(100% 0 0 / 0.1);
+    --color-strokeWeak: rgba(255 255 255 / 0.09);
 
     /* Text colors — dark theme */
     --color-textBrand: oklch(78% 0.15 261);
