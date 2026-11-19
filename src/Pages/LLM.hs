@@ -49,7 +49,6 @@ import Data.Vector qualified as V
 import Effectful (Eff, (:>))
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
-import Effectful.Log qualified as Log
 import Effectful.Reader.Static (Reader, ask)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
@@ -75,6 +74,7 @@ import Pkg.GenAI qualified as GenAI
 import Pkg.Parser.Eval (jsonAsText)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, act, addRespHeaders, done, useTfReads)
 import Utils (TabStrip (..), countNoun, drawerRowAttrs_, faSprite_, getDurationNSMS, navTabStrip_, nonEmptyT, prettyPrintCount, replaceAllFormats, tokenFlow, truncateText)
 import Web.FormUrlEncoded (FromForm)

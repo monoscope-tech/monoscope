@@ -49,7 +49,6 @@ import Effectful.Exception (throwIO)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
-import Effectful.Log qualified as Log
 import Effectful.Reader.Static qualified as Eff
 import Hasql.Interpolate qualified as HI
 import Models.Ids qualified as Projects
@@ -62,6 +61,7 @@ import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..), unUUIDId)
 import Pkg.Prometheus qualified as Prom
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Logging qualified as Log
 import System.Types (DB)
 import Utils (safeScrapeUrl)
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData, toUrlPiece)

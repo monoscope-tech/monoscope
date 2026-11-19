@@ -37,7 +37,6 @@ import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import GHC.Clock (getMonotonicTimeNSec)
-import Log qualified
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Ids qualified as Projects
 import OpenTelemetry.Attributes qualified as OA
@@ -54,6 +53,7 @@ import Servant qualified
 import Servant.Server (ServerError (errBody), err400)
 import Servant.Types.SourceT (SourceT (..), StepT (..))
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Logging qualified as Log
 import System.Tracing (Tracing, withSpan_)
 import System.Types (Mime)
 import Text.Megaparsec (parseMaybe)

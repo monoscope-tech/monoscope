@@ -37,7 +37,6 @@ import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, raise, (:>))
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, tryError)
 import Effectful.Labeled (Labeled)
-import Effectful.Log qualified as ELog
 import Effectful.Reader.Static (Reader, ask)
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
@@ -381,7 +380,7 @@ evidenceWindow begin end = And (Cmp GTEq timestamp (TimestampLit $ toText $ iso8
 
 -- | A comment delivery carries no PR head, so read it with the installation token
 -- before recording the ask; the 👀 reaction tells the asker it was queued.
-requestReview :: (DB es, ELog.Log :> es, HTTP.HTTP :> es, IOE :> es, Reader AuthContext :> es) => Reviews.CommentRequest -> Eff es (Either Text ())
+requestReview :: (DB es, HTTP.HTTP :> es, IOE :> es, Log.Log :> es, Reader AuthContext :> es) => Reviews.CommentRequest -> Eff es (Either Text ())
 requestReview request = runErrorNoCallStack @Text do
   cfg <- (.config) <$> ask @AuthContext
   token <- orThrow =<< GitSync.githubToken cfg.githubAppId cfg.githubAppPrivateKey (GitSync.AppInstallation request.installationId)
@@ -908,7 +907,7 @@ serviceSelector :: Evidence -> Text
 serviceSelector item = T.intercalate " and " $ ["resource.service.name == " <> decodeUtf8 (AE.encode service) | Just service <- [item.service]] <> ["resource.deployment.environment.name == " <> decodeUtf8 (AE.encode environment) | Just environment <- [item.environment]]
 
 
-evidencePng :: (ELog.Log :> es, Reader AuthContext :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Evidence -> Eff es (Maybe Text)
+evidencePng :: (Log.Log :> es, Reader AuthContext :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Evidence -> Eff es (Maybe Text)
 evidencePng pid from until item = do
   ctx <- ask @AuthContext
   join <$> forM (evidenceWidget from until item) \widget -> Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.config.hostUrl pid widget{Widget.pngProfile = Just Widget.PngSlack} Nothing (Just $ toText $ iso8601Show from) (Just $ toText $ iso8601Show until)
@@ -1089,7 +1088,7 @@ renderProgress host baseRevision headRevision claims links =
        in statusIcon host 16 icon <> " " <> plain c.claim <> suffix
 
 
-requestEvidence :: (DB es, ELog.Log :> es, IOE :> es, Labeled "timefusion" Hasql.Hasql :> es, Reader AuthContext :> es, State.State ReviewMemory :> es, Time.Time :> es, Timeout.Timeout :> es, Tracing :> es) => Projects.ProjectId -> Eff es [Text] -> UTCTime -> UTCTime -> Agent.TelemetryQuery -> Eff es (Either Text AE.Value)
+requestEvidence :: (DB es, IOE :> es, Labeled "timefusion" Hasql.Hasql :> es, Log.Log :> es, Reader AuthContext :> es, State.State ReviewMemory :> es, Time.Time :> es, Timeout.Timeout :> es, Tracing :> es) => Projects.ProjectId -> Eff es [Text] -> UTCTime -> UTCTime -> Agent.TelemetryQuery -> Eff es (Either Text AE.Value)
 requestEvidence pid currentServices windowStart windowEnd request = do
   queried <- State.gets @ReviewMemory (.evidence)
   services <- currentServices

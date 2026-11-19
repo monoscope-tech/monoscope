@@ -1739,7 +1739,7 @@ sendAlertToChannels teamIds alert (rootPayload, replyPayload) issue project aler
 -- removing them from the project; an address two teams share is mailed once.
 alertTargets :: Projects.ProjectId -> Text -> Html () -> [ProjectMembers.Team] -> ATBackgroundCtx [(ProjectMembers.Team, Fanout)]
 alertTargets pid subj html teams = do
-  forM_ teams \t -> when (null t.notify_emails && ProjectMembers.isChannelEnabled ProjectMembers.Email t) $ Log.logAttention "Alert team has email enabled but no notify_emails: zero email recipients" (pid, t.id, t.is_everyone)
+  forM_ teams \t -> when (null t.notify_emails && ProjectMembers.isChannelEnabled ProjectMembers.Email t) $ Log.logWarn "Alert team has email enabled but no notify_emails: zero email recipients" (pid, t.id, t.is_everyone)
   pure $ snd $ mapAccumL assign mempty teams
   where
     body = ET.renderEmail subj html
@@ -5240,7 +5240,7 @@ checkTriggeredQueryMonitors = do
       tryAny (evaluateQueryMonitor monitor startWall) >>= \case
         Right _ -> pass
         Left err -> do
-          Log.logWarn "Query monitor evaluation failed" (monitor.id, monitor.alertConfig.title, show err)
+          Log.logAttention "Query monitor evaluation failed" (monitor.id, monitor.alertConfig.title, show err)
           tryStep "monitor-data-unavailable" $ recordMonitorDataGap monitor startWall Monitors.EvaluationFailed
   tryStep "slack-incident-delivery" runSlackIncidentDeliveries
 

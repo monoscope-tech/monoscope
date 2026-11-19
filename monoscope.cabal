@@ -865,6 +865,7 @@ test-suite integration-tests
       ReplaySpec
       Spec
       SpecHook
+      System.LoggingSpec
       System.MigrationRunnerSpec
       Web.ApiV1Spec
       Web.AuthSpec
@@ -1156,6 +1157,7 @@ test-suite test-dev
       ReplaySpec
       Spec
       SpecHook
+      System.LoggingSpec
       System.MigrationRunnerSpec
       Web.ApiV1Spec
       Web.AuthSpec
