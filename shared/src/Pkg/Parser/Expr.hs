@@ -1590,9 +1590,10 @@ displayExprHelper op prec sub given =
         -- `->>` yields text, and text = boolean fails the whole query on both TimeFusion and
         -- Postgres; a JSON boolean reads back as the text 'true'/'false'.
         (Left c, Boolean b) | Subject _ _ (_ : _) <- sub, c `elem` [Eq, NotEq] -> displayPrec prec sub <> displayBuilder (" " <> sqlOp <> " ") <> displayPrec prec (Str (bool "false" "true" b))
-        -- `->>` yields text, and text > 0 failed the whole query (#564). A value that is not a number
-        -- reads as NULL, so it fails the comparison rather than the query.
-        (Left _, Num _) | Subject _ _ (_ : _) <- sub -> "CASE WHEN " <> displayPrec prec sub <> " ~ '^-?[0-9]+(\\.[0-9]+)?([eE][-+]?[0-9]+)?$' THEN (" <> displayPrec prec sub <> ")::float8 END " <> displayPrec @T.Text prec sqlOp <> " " <> displayPrec prec val
+        -- `->>` yields text, and text > 0 failed the whole query (#564); materialized attributes are
+        -- typed columns and compare as they are. A value that is not a number reads as NULL, so it
+        -- fails the comparison rather than the query.
+        (Left _, Num _) | "->>" `T.isInfixOf` display sub -> "CASE WHEN " <> displayPrec prec sub <> " ~ '^-?[0-9]+(\\.[0-9]+)?([eE][-+]?[0-9]+)?$' THEN (" <> displayPrec prec sub <> ")::float8 END " <> displayPrec @T.Text prec sqlOp <> " " <> displayPrec prec val
         (Right m, List vs) | m `elem` [In, NotIn] -> displayPrec prec sub <> displayBuilder (" " <> sqlOp <> " (") <> commaSep vs <> ")"
         -- has_any/has_all fan the (escaped, case-insensitive) literal match over the list
         (Right m, List vs) | Just j <- lookup m [(HasAny, " OR "), (HasAll, " AND ")] -> "(" <> (mconcat . intersperse j . map (\v -> subAsText <> " ~* " <> reTerm "" "" v)) vs <> ")"
