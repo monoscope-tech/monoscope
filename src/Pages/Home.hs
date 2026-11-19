@@ -104,7 +104,7 @@ homeGetH pid = do
 home_ :: HomeData -> Html ()
 home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ "mx-auto max-w-6xl px-4 sm:px-6 py-8 flex flex-col gap-10"] do
   header_ [class_ "flex flex-col gap-1"] do
-    h1_ [class_ "text-2xl font-semibold text-textStrong tracking-tight"] $ toHtml $ "Hello" <> foldMap (", " <>) (guarded (not . T.null) d.firstName) <> "."
+    p_ [class_ "text-2xl font-semibold text-textStrong tracking-tight"] $ toHtml $ "Hello" <> foldMap (", " <>) (guarded (not . T.null) d.firstName) <> "."
     p_ [class_ "text-sm text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%A, %-d %B" d.now
   askBox_ d
   whenJust (mfilter (not . (.invited)) d.slack) slackConnectCard_
@@ -134,8 +134,7 @@ home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ 
     div_ [class_ "grid grid-cols-1 lg:grid-cols-2 gap-2"] $ forM_ insights $ highlight_ d.pid
   forM_ d.starred \(vm, ws) -> section_ [class_ "flex flex-col gap-3", Aria.label_ vm.title] do
     sectionHead_ (faSprite_ "star" "solid" "w-3.5 h-3.5 text-iconWarning" >> toHtml vm.title) Nothing $ Just ("Open dashboard", dashboardUrl d.pid vm.id Nothing [])
-    div_ [class_ "grid grid-cols-1 md:grid-cols-2 gap-3"] $ forM_ ws \w ->
-      div_ [class_ $ bool "h-64" "h-28" (Widget.isStatWidget w)] $ Widget.widget_ w
+    Widget.embeddedWidgets_ d.pid ws
   jumpBackIn_ d
 
 
@@ -202,7 +201,7 @@ highlight_ pid h = div_ [id_ $ "highlight-" <> h.id.toText, class_ "group/hl rel
   button_
     [ type_ "button"
     , Aria.label_ "Dismiss"
-    , class_ "absolute top-1.5 right-1.5 rounded-md p-1.5 text-iconNeutral opacity-0 group-hover/hl:opacity-100 focus-visible:opacity-100 hover:bg-fillWeak transition-opacity cursor-pointer"
+    , class_ "absolute top-1.5 right-1.5 rounded-md p-1.5 text-iconNeutral opacity-0 group-hover/hl:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:bg-fillWeak transition-opacity cursor-pointer"
     , hxPost_ $ urls.homeHighlightDismissPost pid h.id
     , hxTarget_ $ "#highlight-" <> h.id.toText
     , hxSwap_ "outerHTML"
@@ -212,7 +211,7 @@ highlight_ pid h = div_ [id_ $ "highlight-" <> h.id.toText, class_ "group/hl rel
     (icon, iconColor) = case h.kind of
       Issues.HKIssue -> ("triangle-exclamation", "text-iconError")
       Issues.HKImprovement -> ("arrow-trend-up", "text-iconSuccess")
-      Issues.HKInsight -> ("lightbulb", "text-iconBrand")
+      Issues.HKInsight -> ("lightbulb", "text-iconInformation")
 
 
 resolvedCard_ :: Projects.ProjectId -> UTCTime -> Issues.ResolvedIssue -> Html ()
