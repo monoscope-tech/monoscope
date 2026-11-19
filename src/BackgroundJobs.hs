@@ -1673,12 +1673,11 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
   deriving anyclass (HI.DecodeRow)
 
 
--- | Dispatch an alert to the project's @everyone team (see 'fanOutToTeam' for the
+-- | Dispatch an alert to the chosen teams, or @everyone (see 'fanOutToTeam' for the
 -- per-channel enablement rules). Slack goes through the incident outbox, so the
 -- issue keeps one thread per channel and a recurrence replies in it.
--- Email routes to project members, not the team's notify_emails.
 --
--- The returned Bool reports whether the @everyone team existed. Callers use it to
+-- The returned Bool reports whether any team existed. Callers use it to
 -- decide whether to persist "last notified" state: when the team is missing that's
 -- a data integrity bug (logged at attention level), and we must not stamp
 -- last_notified_at or the pattern gets silenced for the whole cooldown window.
@@ -1688,13 +1687,12 @@ sendAlertToChannels
   -> (Incidents.SlackPayload, Incidents.SlackPayload)
   -> Issues.Issue
   -> Projects.Project
-  -> [Projects.User]
   -> Text
   -> Text
   -> Html ()
   -> ATBackgroundCtx Bool
-sendAlertToChannels teamIds alert (rootPayload, replyPayload) issue project users alertUrl subj html =
-  alertTargets project.id teamIds users subj html >>= \case
+sendAlertToChannels teamIds alert (rootPayload, replyPayload) issue project alertUrl subj html =
+  (alertTargets project.id subj html =<< ProjectMembers.teamsOrEveryone project.id teamIds) >>= \case
     [] -> do
       Log.logAttention "sendAlertToChannels: no @everyone team for project; no dispatch" (AE.object ["project_id" AE..= project.id])
       pure False
@@ -1725,14 +1723,17 @@ sendAlertToChannels teamIds alert (rootPayload, replyPayload) issue project user
       slackRecorded <$ forM_ targets \(team, fan) -> fanOutToTeam team fan alert project.id project.title alertUrl
 
 
--- | Each alert team with its fan-out (Slack through the incident outbox). @everyone mails every
--- member, other teams their notify emails; an address two teams share is mailed once.
-alertTargets :: Projects.ProjectId -> V.Vector ProjectMembers.TeamId -> [Projects.User] -> Text -> Html () -> ATBackgroundCtx [(ProjectMembers.Team, Fanout)]
-alertTargets pid teamIds users subj html = snd . mapAccumL assign mempty <$> ProjectMembers.teamsOrEveryone pid teamIds
+-- | Each alert team with its fan-out (Slack through the incident outbox). A team mails its
+-- notify_emails, @everyone included, so an owner can drop a teammate from alerts without
+-- removing them from the project; an address two teams share is mailed once.
+alertTargets :: Projects.ProjectId -> Text -> Html () -> [ProjectMembers.Team] -> ATBackgroundCtx [(ProjectMembers.Team, Fanout)]
+alertTargets pid subj html teams = do
+  forM_ teams \t -> when (null t.notify_emails && ProjectMembers.isChannelEnabled ProjectMembers.Email t) $ Log.logAttention "Alert team has email enabled but no notify_emails: zero email recipients" (pid, t.id, t.is_everyone)
+  pure $ snd $ mapAccumL assign mempty teams
   where
     body = ET.renderEmail subj html
     assign seen t =
-      let to = filter (`notElem` seen) $ ordNub $ bool (ProjectMembers.resolveTeamEmails t) (map (.email) users) t.is_everyone
+      let to = filter (`notElem` seen) $ ordNub $ ProjectMembers.resolveTeamEmails t
        in (seen <> to, (t, Fanout{slack = QueuedSlack, threads = Nothing, email = Just FanoutEmail{recipients = map CI.original to, subject = subj, body}}))
 
 
@@ -2374,7 +2375,6 @@ notifyIssue
   :: V.Vector ProjectMembers.TeamId -- chosen teams; none means @everyone
   -> Issues.Issue
   -> Projects.Project
-  -> [Projects.User]
   -> Int -- cooldown hours (dedup window)
   -> Text -- digest reason (matches apis.notification_digest_queue.reason values)
   -> NotificationAlerts
@@ -2383,7 +2383,7 @@ notifyIssue
   -> Text -- email subject
   -> Html () -- email body
   -> ATBackgroundCtx Bool
-notifyIssue teamIds issue project users cooldownHours digestReason alert slackMessages alertUrl subj html
+notifyIssue teamIds issue project cooldownHours digestReason alert slackMessages alertUrl subj html
   | not project.errorAlerts = pure False
   | otherwise = do
       now <- Time.currentTime
@@ -2392,7 +2392,7 @@ notifyIssue teamIds issue project users cooldownHours digestReason alert slackMe
       if
         | not claimed -> pure False
         | allowed -> do
-            dispatched <- sendAlertToChannels teamIds alert slackMessages issue project users alertUrl subj html
+            dispatched <- sendAlertToChannels teamIds alert slackMessages issue project alertUrl subj html
             Log.logInfo "issue_notification_sent" (AE.object ["project_id" AE..= project.id.toText, "issue_id" AE..= issue.id.toText, "reason" AE..= digestReason, "dispatched" AE..= dispatched])
             pure dispatched
         | otherwise -> do
@@ -3369,7 +3369,7 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
         Right (Just (alertUrl, flapping)) -> do
           let alert = if isRecovery then MonitorsRecoveryAlert monitor.alertConfig.title alertUrl else MonitorsAlert monitor.alertConfig.title alertUrl chartUrlM
               (subj, html) = if isRecovery then ET.monitorRecoveryEmail p.title monitor.alertConfig.title alertUrl else ET.monitorAlertEmail p.title monitor.alertConfig.title alertUrl value threshold (display thresholdDir) chartUrlM
-          when (delivery == Incidents.PublishIncident && not flapping) $ for_ targetTeams \team -> dispatchTeamNotifications team alert monitor.projectId p.title alertUrl subj (ET.renderEmail subj html)
+          when (delivery == Incidents.PublishIncident && not flapping) $ alertTargets monitor.projectId subj html targetTeams >>= traverse_ \(team, fan) -> fanOutToTeam team fan alert monitor.projectId p.title alertUrl
           tryStep "slack-incident-delivery" runSlackIncidentDeliveries
           pure True
 
@@ -3389,18 +3389,6 @@ slackDestinations installation teams =
   , ProjectMembers.isChannelEnabled ProjectMembers.Slack team
   , channel <- toList team.slack_channels
   ]
-
-
-dispatchTeamNotifications :: ProjectMembers.Team -> NotificationAlerts -> Projects.ProjectId -> Text -> Text -> Text -> Text -> ATBackgroundCtx ()
-dispatchTeamNotifications team alert projectId projectTitle monitorUrl subj renderedBody = do
-  let emails = ProjectMembers.resolveTeamEmails team
-  -- notify_emails is the authoritative audience now (no implicit member fallback) —
-  -- if it's empty the alert goes to zero email recipients, which is almost never intended.
-  when (null emails && ProjectMembers.isChannelEnabled ProjectMembers.Email team)
-    $ Log.logAttention "dispatchTeamNotifications: email channel enabled but notify_emails is empty — zero email recipients"
-    $ AE.object ["project_id" AE..= projectId, "team_id" AE..= team.id, "is_everyone" AE..= team.is_everyone]
-  void
-    $ fanOutToTeam team Fanout{slack = QueuedSlack, threads = Nothing, email = Just FanoutEmail{recipients = map CI.original emails, subject = subj, body = renderedBody}} alert projectId projectTitle monitorUrl
 
 
 jobsWorkerInit :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
@@ -5045,7 +5033,7 @@ scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> when cfg.
     t0 <- Time.currentTime
     -- Any status is an answer here: the probe compares it, so a 5xx must not throw.
     let PromCfg.RequestHeaders custom = cfg.requestHeaders
-        opts = PromCfg.prometheusScrapeOpts Nothing & Wreq.checkResponse ?~ (\_ _ -> pass) & Wreq.headers <>~ [(CI.mk $ encodeUtf8 n, encodeUtf8 v) | (n, v) <- custom] & Wreq.header "traceparent" .~ [encodeUtf8 $ "00-" <> trId <> "-" <> spanId <> "-01"]
+        opts = PromCfg.prometheusScrapeOpts ctx.probeManager Nothing & Wreq.checkResponse ?~ (\_ _ -> pass) & Wreq.headers <>~ [(CI.mk $ encodeUtf8 n, encodeUtf8 v) | (n, v) <- custom] & Wreq.header "traceparent" .~ [encodeUtf8 $ "00-" <> trId <> "-" <> spanId <> "-01"]
     res <- tryAny $ W.requestWith (toString $ PromCfg.methodName cfg.httpMethod) opts (toString cfg.url) (encodeUtf8 <$> cfg.requestBody)
     t1 <- Time.currentTime
     -- The body is kept only for a check that searches it.
@@ -5056,8 +5044,8 @@ scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> when cfg.
 -- | An uptime probe as a client span in the check's own project, so dashboards, monitors and
 -- the Explorer read probes like any other telemetry. @geo.country.iso_code@ is where the probe
 -- ran from, which puts probes on the geomap. Best-effort, as the history row is the record.
-emitProbeSpan :: PromCfg.PrometheusScrapeConfig -> Text -> (Text, Text) -> UTCTime -> UTCTime -> Either Text Int -> Bool -> Text -> ATBackgroundCtx ()
-emitProbeSpan cfg region (trId, spanId) t0 t1 outcome ok reason = do
+emitProbeSpan :: PromCfg.PrometheusScrapeConfig -> Text -> (Text, Text) -> UTCTime -> UTCTime -> Maybe Int -> Maybe Uptime.ProbeFailure -> ATBackgroundCtx ()
+emitProbeSpan cfg region (trId, spanId) t0 t1 status failure = do
   ctx <- ask @Config.AuthContext
   insertSystemLog (Telemetry.writeTargetFor ctx.env Nothing) ctx.hasqlTimefusionUsesPgTypes probe{Telemetry.summary = generateSummary probe}
   where
@@ -5066,7 +5054,7 @@ emitProbeSpan cfg region (trId, spanId) t0 t1 outcome ok reason = do
         { Telemetry.kind = Just "client"
         , Telemetry.level = Nothing
         , Telemetry.severity = Nothing
-        , Telemetry.status_code = Just $ bool "ERROR" "OK" ok
+        , Telemetry.status_code = Just $ maybe "OK" (const "ERROR") failure
         , Telemetry.status_message = Just reason
         , Telemetry.end_time = Just t1
         , Telemetry.context = Just Telemetry.Context{trace_id = Just trId, span_id = Just spanId, trace_state = Nothing, trace_flags = Nothing, is_remote = Nothing}
@@ -5074,6 +5062,7 @@ emitProbeSpan cfg region (trId, spanId) t0 t1 outcome ok reason = do
         , Telemetry.resource = fmap AesonText $ jsonToMap $ nestedJsonFromDotNotation [("service.name", "monoscope-uptime"), ("cloud.region", AE.String region)]
         }
     expected = fromMaybe 200 cfg.expectedStatus
+    reason = maybe "ok" Uptime.probeReason failure
     durationNs = round (realToFrac (diffUTCTime t1 t0) * 1e9 :: Double)
     attrs =
       [ ("http.request.method", AE.String $ PromCfg.methodName cfg.httpMethod)
@@ -5082,11 +5071,11 @@ emitProbeSpan cfg region (trId, spanId) t0 t1 outcome ok reason = do
       , ("monitor.check.id", AE.toJSON cfg.id)
       , ("monitor.check.name", AE.String cfg.name)
       , ("monitor.region", AE.String region)
-      , ("monitor.ok", AE.Bool ok)
+      , ("monitor.ok", AE.Bool $ isNothing failure)
       , ("monitor.expected_status", AE.toJSON expected)
       ]
-        <> [("http.response.status_code", AE.toJSON c) | Right c <- [outcome]]
-        <> [("error.type", "request_failed") | isLeft outcome]
+        <> [("http.response.status_code", AE.toJSON c) | Just c <- [status]]
+        <> [("error.type", case f of Uptime.RequestFailed{} -> "request_failed"; Uptime.WrongStatus{} -> "unexpected_status"; Uptime.MissingText{} -> "missing_text") | Just f <- [failure]]
         <> [("geo.country.iso_code", AE.String r.country) | Just r <- [Uptime.regionOf region]]
 
 
@@ -5135,11 +5124,11 @@ evaluateCronMonitor now m = do
 applyUptimeResult :: PromCfg.PrometheusScrapeConfig -> Text -> (Text, Text) -> UTCTime -> UTCTime -> Either Text (Int, Text) -> ATBackgroundCtx ()
 applyUptimeResult cfg region ids t0 now answer = do
   let expected = fromMaybe 200 cfg.expectedStatus
-      (ok, reason) = Uptime.probeVerdict expected cfg.responseContains answer
-      res = fst <$> answer
+      failure = Uptime.probeFailure expected cfg.responseContains answer
+      (ok, reason, status) = (isNothing failure, maybe "ok" Uptime.probeReason failure, fst <$> rightToMaybe answer)
       ms = round (realToFrac (diffUTCTime now t0) * 1000 :: Double)
-  emitProbeSpan cfg region ids t0 now res ok reason
-  Uptime.recordResult Uptime.CheckResult{projectId = cfg.projectId, checkId = cfg.id.unUUIDId, kind = Uptime.RKUptime, region, checkedAt = now, ok, statusCode = rightToMaybe res, durationMs = Just ms, dnsMs = Nothing, message = Just reason}
+  emitProbeSpan cfg region ids t0 now status failure
+  Uptime.recordResult Uptime.CheckResult{projectId = cfg.projectId, checkId = cfg.id.unUUIDId, kind = Uptime.RKUptime, region, checkedAt = now, ok, statusCode = status, durationMs = Just ms, dnsMs = Nothing, message = Just reason}
   (before, after) <- PromCfg.recordUptime cfg.id ok (reason <> " · " <> show ms <> "ms")
   when (not ok && after == Uptime.downtimeAfter) do
     let d =
@@ -5148,7 +5137,7 @@ applyUptimeResult cfg region ids t0 now answer = do
             , name = cfg.name
             , url = cfg.url
             , expectedStatus = expected
-            , statusCode = rightToMaybe res
+            , statusCode = status
             , reason
             , durationMs = ms
             , downSince = addUTCTime (negate $ fromIntegral cfg.scrapeIntervalSeconds) now
@@ -5175,11 +5164,10 @@ alertCheckIssue fresh check = do
   now <- Time.currentTime
   persisted <- Hasql.transaction TxS.ReadCommitted TxS.Write $ Issues.reopenOrInsertIssueTx now fresh
   Projects.projectById fresh.projectId >>= traverse_ \project -> do
-    users <- Projects.usersByProjectId fresh.projectId
     let issue = (fresh :: Issues.Issue){Issues.id = persisted}
         url = issuePageUrl ctx fresh.projectId persisted
         (subj, html) = ET.checkAlertEmail project.title check.headline check.facts url
-    void $ notifyIssue check.teams issue project users Issues.issueNotifyDedupHours check.digestReason (MonitorsAlert check.headline url Nothing) (check.slack url) url subj html
+    void $ notifyIssue check.teams issue project Issues.issueNotifyDedupHours check.digestReason (MonitorsAlert check.headline url Nothing) (check.slack url) url subj html
 
 
 -- | Archive a recovered signal's open issue and log it as resolved. A check that
@@ -5201,8 +5189,7 @@ resolveOpenIssue pid teamIds hash ty now extra =
       tryStep "slack-incident-delivery" runSlackIncidentDeliveries
       Projects.projectById pid >>= traverse_ \project -> do
         let (subj, html) = ET.monitorRecoveryEmail project.title i.title url
-        users <- Projects.usersByProjectId pid
-        targets <- alertTargets pid teamIds users subj html
+        targets <- alertTargets pid subj html =<< ProjectMembers.teamsOrEveryone pid teamIds
         forM_ targets \(team, fan) -> fanOutToTeam team fan (MonitorsRecoveryAlert i.title url) pid project.title url
 
 
@@ -5213,8 +5200,9 @@ tfRead q = ask @Config.AuthContext >>= \c -> withHasqlTimefusion c.env.enableTim
 
 scrapeMetrics :: PromCfg.PrometheusScrapeConfig -> ATBackgroundCtx ()
 scrapeMetrics cfg = do
+  mgr <- (.scrapeManager) <$> ask @Config.AuthContext
   result <- tryAny do
-    resp <- W.getWith (PromCfg.prometheusScrapeOpts cfg.authHeader) (toString cfg.url)
+    resp <- W.getWith (PromCfg.prometheusScrapeOpts mgr cfg.authHeader) (toString cfg.url)
     -- Capture the fallback metricTime *after* the response arrives: a slow endpoint would
     -- otherwise backdate every timestamp-less sample by the scrape latency.
     now <- Time.currentTime
@@ -5727,7 +5715,6 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
     not <$> Issues.isSilenced pid lp.patternHash Issues.LogPatternRateChange scheduledTime
 
   projectM <- Projects.projectById pid
-  users <- Projects.usersByProjectId pid
   volumes <- patternVolumes pid (map fst firesAllowed) scheduledTime
   issueIds <- forM firesAllowed \(lpRate, sr) -> do
     let dir = display sr.direction
@@ -5743,7 +5730,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
           rateChange = Mail.RateChange{issueUrl, patternText = lpRate.logPattern, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = sr.direction, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct, isError = lpRate.isError, chartUrl}
           alert = LogPatternRateChangeAlert rateChange
           (subj, html) = ET.logPatternRateChangeEmail project.title issueUrl lpRate.logPattern lpRate.logLevel lpRate.serviceName dir sr.currentRate sr.mean changePct
-      void $ notifyIssue mempty issue project users Issues.issueNotifyDedupHours "log_pattern_rate_change" alert (Mail.cardMessages $ Mail.rateChangeCard rateChange project.title) issueUrl subj html
+      void $ notifyIssue mempty issue project Issues.issueNotifyDedupHours "log_pattern_rate_change" alert (Mail.cardMessages $ Mail.rateChangeCard rateChange project.title) issueUrl subj html
     pure issue.id
 
   -- Clear the pending markers for anything we just fired; a new detection
@@ -5780,7 +5767,6 @@ processNewLogPatterns pid authCtx = do
         -- Filter out infrastructure noise; errors/exceptions/app logs still create issues
         let issueWorthy = V.fromList $ filter (\lp -> isIssueWorthy lp.logLevel lp.logPattern) newPatterns
         projectM <- Projects.projectById pid
-        users <- Projects.usersByProjectId pid
         results <- V.forM issueWorthy \lp -> do
           issue <- Issues.createLogPatternIssue pid lp
           Issues.insertIssue issue
@@ -5789,7 +5775,7 @@ processNewLogPatterns pid authCtx = do
             let issueUrl = hostPath authCtx.env.hostUrl $ (urls.issues pid).detailGet issue.id Nothing Nothing Nothing Nothing Nothing
                 alert = ET.NewLogPattern{issueUrl, patternText = lp.logPattern, sampleMessage = lp.sampleMessage, logLevel = lp.logLevel, serviceName = lp.serviceName, sourceField = lp.sourceField, occurrenceCount = fromIntegral lp.occurrenceCount, isError = lp.isError}
                 (subj, html) = ET.logPatternEmail project.title alert
-            void $ notifyIssue mempty issue project users newPatternCooldownHours "log_pattern" (LogPatternAlert alert) (Mail.cardMessages $ Mail.logPatternCard alert project.title) issueUrl subj html
+            void $ notifyIssue mempty issue project newPatternCooldownHours "log_pattern" (LogPatternAlert alert) (Mail.cardMessages $ Mail.logPatternCard alert project.title) issueUrl subj html
           pure issue.id
         unless (V.null results) $ enqueueJobs authCtx [EnhanceIssuesWithLLM pid results]
 

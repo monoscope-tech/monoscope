@@ -14,7 +14,13 @@ import Pages.Uptime qualified as Uptime
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
+import Data.ByteString.Lazy qualified as LBS
+import Network.HTTP.Client qualified as HC
+import Network.HTTP.Types (status200)
+import Network.Wai qualified as Wai
+import Network.Wai.Handler.Warp qualified as Warp
 import Pkg.TestUtils
+import System.Config qualified as Config
 
 
 spec :: Spec
@@ -115,6 +121,12 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     Right _ <- call tr $ Uptime.uptimeCheckEditH pid check.id (form (Just PromCfg.MGet) (Just "X-Probe: ••••••\nAccept: */*") (Just "{}") Nothing [])
     Just edited <- runQueryEffect tr $ PromCfg.getConfig check.id
     (edited.httpMethod, edited.requestHeaders, edited.requestBody, edited.teams) `shouldBe` (PromCfg.MGet, PromCfg.RequestHeaders [("X-Probe", "yes"), ("Accept", "*/*")], Nothing, [])
+
+  it "a probe reads at most 1 MB of an answer, however large" \_ -> do
+    (_, probe) <- Config.newProbeManagers
+    Warp.testWithApplication (pure \_ respond -> respond $ Wai.responseLBS status200 [] (LBS.replicate 3_000_000 120)) \port -> do
+      request <- HC.parseRequest $ "http://127.0.0.1:" <> show port
+      HC.httpLbs request probe >>= (`shouldBe` 1_048_576) . LBS.length . HC.responseBody
 
   it "probes are uptime.probe spans: the embedded dashboard reads daily bars, percentiles, regions and the map from them" \tr -> do
     pid <- createTestProject tr "Probes"

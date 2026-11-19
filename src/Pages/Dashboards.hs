@@ -1885,7 +1885,6 @@ instance ToHtml WidgetEditor where
                 , hxPost_ alertEndpoint
                 , hxSwap_ "none"
                 , hxTrigger_ "submit"
-                , hxVals_ $ "js:{teams: window.getTagValues('#" <> alertFormId <> "-teams')}"
                 , class_ "flex max-w-4xl flex-col gap-4 pb-6 [&>details]:bg-fillWeaker"
                 ]
                   <> [term "_" [text|on htmx:after:request[detail.ctx.response.status >= 400] put 'Retry monitor' into #${widPrefix}-add-monitor-button|] | isNewWidget]
@@ -1910,7 +1909,7 @@ instance ToHtml WidgetEditor where
                     Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show (monitorM >>= (.alertRecoveryThreshold)), Components.placeholder = "Same as alert threshold", Components.extraAttrs = [step_ "any"]} "Alert recovery (optional)" "alertRecoveryThreshold" False Nothing
                     Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show (monitorM >>= (.warningRecoveryThreshold)), Components.placeholder = "Same as warning threshold", Components.extraAttrs = [step_ "any"]} "Warning recovery (optional)" "warningRecoveryThreshold" False Nothing
 
-                Alerts.notificationSettingsSection_ teams (maybe V.empty (.teams) monitorM) alertFormId monitorM
+                Alerts.notificationSettingsSection_ teams (maybe V.empty (.teams) monitorM) monitorM
 
                 unless isNewWidget $ div_ [class_ "flex flex-wrap items-center justify-between gap-3 border-t border-strokeWeak pt-4"] do
                   when hasAlert $ button_ [type_ "button", class_ "btn btn-ghost btn-sm text-textError", hxDelete_ (urls.widgetAlertDelete pid sourceWid (Just dashId)), hxSwap_ "none"] "Remove monitor"
@@ -1943,8 +1942,7 @@ data WidgetAlertForm = WidgetAlertForm
   , teams :: [ManageMembers.TeamId]
   }
   deriving stock (Generic, Show)
-  -- Posted by the widget alert config with the same @getTagValues@ hx-vals as
-  -- 'DashboardForm', so an empty picker sends @teams=@ here too.
+  -- 'teamPicker_' checkboxes post @teams@ once per chosen team, and none when unchecked.
   deriving (FromForm) via (FormWithOptional '["teams"] WidgetAlertForm)
 
 

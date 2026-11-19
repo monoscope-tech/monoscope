@@ -65,7 +65,7 @@ import Models.Projects.DashboardTemplates qualified as DashboardTemplates
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), ResourceRow (..), agoText, callout_, copyField_, dangerAction_, detailTab_, emptyState_, factGrid_, formCheckbox_, formField_, formSelectField_, options_, panel_, resourceList_, sectionLabel_, statFigure_, tabPanel_, toneDot_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), ResourceRow (..), agoText, callout_, copyField_, dangerAction_, detailTab_, emptyState_, factGrid_, formCheckbox_, formField_, formSelectField_, options_, panel_, resourceList_, sectionLabel_, statFigure_, tabPanel_, teamPicker_, toneDot_, tonePill_)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
@@ -563,12 +563,7 @@ requestFields_ teams checkM = div_ [class_ "group/req space-y-3"] do
     formField_ FieldSm def{inputType = "textarea", value = foldMap (PromCfg.renderHeaders . PromCfg.maskHeaders . (.requestHeaders)) checkM, placeholder = "Authorization: Bearer …\nAccept: application/json", hint = Just "One \"Name: value\" per line.", extraAttrs = [rows_ "3"]} "Headers" "headers" False Nothing
     div_ [class_ "group-has-[option[value=get]:checked]/req:invisible group-has-[option[value=head]:checked]/req:invisible"]
       $ formField_ FieldSm def{inputType = "textarea", value = foldMap (fold . (.requestBody)) checkM, placeholder = "{\"ping\": true}", hint = Just "Sent with POST, PUT, PATCH and DELETE.", extraAttrs = [rows_ "3"]} "Body" "body" False Nothing
-  fieldset_ [class_ "space-y-2"] do
-    legend_ [class_ "text-sm font-medium text-textStrong"] "Notify"
-    p_ [class_ "text-xs text-textWeak"] "Teams alerted when the check goes down and when it recovers."
-    let picked = foldMap (.teams) checkM
-    div_ [class_ "flex flex-wrap gap-x-4 gap-y-2"] $ forM_ teams \t ->
-      formCheckbox_ FieldSm ("@" <> t.handle) "teams" ([value_ t.id.toText] <> [checked_ | bool (t.id `V.elem` picked) t.is_everyone (V.null picked)])
+  teamPicker_ teams (foldMap (V.toList . (.teams)) checkM)
 
 
 uptimeSettings_ :: UptimeDashboard -> Html ()

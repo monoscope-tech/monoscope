@@ -822,7 +822,7 @@ test("widget monitors persist independently across dashboards and reopen with sa
     ]);
     const form = await openWidgetMonitor(page, dash);
     await expect(form.locator('[name="title"]')).toHaveCount(0);
-    await expect(form.locator(".tagify__tag")).toContainText("@everyone");
+    await expect(form.locator('label:has-text("@everyone") input[name="teams"]')).toBeChecked();
     await expect(form.getByRole("checkbox", { name: "Send to all team members" })).toHaveCount(0);
     await expect(form.locator('[name="alertThreshold"]')).toHaveValue("10.0");
     await form.getByText("Notification Settings", { exact: true }).click();
@@ -841,7 +841,7 @@ test("widget monitors persist independently across dashboards and reopen with sa
   await expect(page.getByText("Active monitor", { exact: true })).toBeVisible();
   await expect(form.getByRole("button", { name: "Save monitor", exact: true })).toBeVisible();
   await expect(form.locator('[name="title"]')).toHaveCount(0);
-  await expect(form.locator(".tagify__tag")).toContainText("@everyone");
+  await expect(form.locator('label:has-text("@everyone") input[name="teams"]')).toBeChecked();
   await expect(form.locator('[name="alertThreshold"]')).toHaveValue("10.0");
   await expect(form.locator('[name="notifyAfterCheck"]')).toBeChecked();
   await expect(form.locator('[name="notifyAfter"]')).toHaveValue("10m");

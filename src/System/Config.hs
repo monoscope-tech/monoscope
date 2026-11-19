@@ -1,8 +1,9 @@
-module System.Config (EnvConfig (..), AIPrice, aiPriceMicrousd, TwilioContentSid, mkTwilioContentSid, twilioContentSidText, AuthContext (..), CodeBlobKey, getAppContext, configToEnv, DeploymentEnv (..), runPendingMigrations) where
+module System.Config (EnvConfig (..), AIPrice, aiPriceMicrousd, TwilioContentSid, mkTwilioContentSid, twilioContentSidText, AuthContext (..), CodeBlobKey, getAppContext, configToEnv, newProbeManagers, DeploymentEnv (..), runPendingMigrations) where
 
 import Colourista.IO (blueMessage)
 import Control.Exception.Safe qualified as Safe
 import Data.Base64.Types qualified as B64
+import Data.ByteString qualified as BS
 import Data.Cache (Cache, newCache)
 import Data.Char (isHexDigit)
 import Data.Default (Default (..))
@@ -437,6 +438,10 @@ type CodeBlobKey = (Text, Text, Text, Text)
 data AuthContext = AuthContext
   { env :: EnvConfig
   , s3HttpManager :: HC.Manager
+  , scrapeManager :: HC.Manager
+  -- ^ Prometheus scrapes: pooled, 10s timeout.
+  , probeManager :: HC.Manager
+  -- ^ Uptime probes: as 'scrapeManager', but a response body stops at 1 MB.
   , pool :: Pool.Pool Connection
   , jobsPool :: Pool.Pool Connection
   , timefusionPgPool :: Pool.Pool Connection
@@ -507,9 +512,21 @@ instance Default DeploymentEnv where
   def = Staging
 
 
+-- | The (scrape, probe) managers: pooled TLS with a 10s timeout; a probe's body stops at 1 MB,
+-- so a huge page cannot bloat the worker.
+newProbeManagers :: IO (HC.Manager, HC.Manager)
+newProbeManagers = (,) <$> HC.newManager settings <*> HC.newManager settings{HC.managerModifyResponse = capBody}
+  where
+    settings = HCTLS.tlsManagerSettings{HC.managerResponseTimeout = HC.responseTimeoutMicro 10_000_000}
+    capBody response = do
+      left <- newIORef (1_048_576 :: Int)
+      pure response{HC.responseBody = readIORef left >>= \n -> if n <= 0 then pure mempty else HC.brRead (HC.responseBody response) >>= \chunk -> BS.take n chunk <$ writeIORef left (n - BS.length chunk)}
+
+
 configToEnv :: IOE :> es => EnvConfig -> Eff es AuthContext
 configToEnv config = do
   s3HttpManager <- liftIO $ HC.newManager HCTLS.tlsManagerSettings
+  (scrapeManager, probeManager) <- liftIO newProbeManagers
   let createPgConnIO = PG.connectPostgreSQL $ DeriveUtils.addKeepaliveParams $ encodeUtf8 config.databaseUrl
       -- Raise TimescaleDB DML decompression limit for UPDATE queries on compressed hypertables
       tfParams =
@@ -634,6 +651,8 @@ configToEnv config = do
       , hasqlTimefusionUsesPgTypes = False -- prod TF is a real TimeFusion: bare text→Variant
       , env = config
       , s3HttpManager
+      , scrapeManager
+      , probeManager
       , projectCache
       , projectKeyCache
       , logsPatternCache

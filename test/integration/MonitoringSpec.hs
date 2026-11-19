@@ -984,11 +984,10 @@ spec = describe "Monitoring" do
       it "reports an issue alert Slack could not record as not sent, and still sends the email" \tr -> do
         setupSlackData tr testPid "T1"
         project <- runTestBgNoReset tr (Projects.projectById testPid) >>= maybe (fail "test project missing") pure
-        users <- runTestBgNoReset tr (Projects.usersByProjectId testPid)
         -- Never inserted: the outbox rejects an alert for an issue it cannot find.
         unsaved <- runTestBgNoReset tr $ Issues.createQueryAlertIssue testPid "unsaved" "Never saved" "" 60 84 Issues.Above
         let messages = Mail.uptimeMessages (Issues.UptimeData "1" "Shop" "https://shop.example.com" 200 (Just 503) "status 503" 10 frozenTime) "https://example.com/issues/1"
-        (notifs, sent) <- captureNotifs tr $ Jobs.sendAlertToChannels mempty (Mail.MonitorsAlert "Shop is down" "https://example.com" Nothing) messages unsaved project users "https://example.com" "Shop is down" (Lucid.toHtml ("Shop is down" :: Text))
+        (notifs, sent) <- captureNotifs tr $ Jobs.sendAlertToChannels mempty (Mail.MonitorsAlert "Shop is down" "https://example.com" Nothing) messages unsaved project "https://example.com" "Shop is down" (Lucid.toHtml ("Shop is down" :: Text))
         (sent, null [() | EmailNotification _ <- notifs], slack notifs) `shouldBe` (False, False, [])
 
       it "delivers channel-specific roots, replies, and updates through the notification worker" \tr -> do
