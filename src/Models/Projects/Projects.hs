@@ -145,7 +145,15 @@ module Models.Projects.Projects (
   newPersistentSessionId,
   -- Audit Log
   AuditEvent (..),
+  AuditTarget (..),
   logAuditS,
+  logAudit,
+  ActivityEntry (..),
+  projectActivity,
+  ViewKind (..),
+  RecentView (..),
+  recordView,
+  recentViews,
 )
 where
 
@@ -1774,11 +1782,81 @@ data AuditEvent
   | AEIntegrationConnected
   | AEIntegrationDisconnected
   | AEPlanChanged
-  deriving stock (Eq, Generic, Read, Show)
+  | AEDashboardCreated
+  | AEDashboardRenamed
+  | AEDashboardDeleted
+  | AEMonitorSaved
+  | AEMonitorMuted
+  | AEMonitorResolved
+  | AEShareLinkCreated
+  | AERoutineSaved
+  | AERoutineDeleted
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "AE" AuditEvent
+  deriving (AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "AE" AuditEvent
+
+
+-- | What an audited change was made to, kept by value so the entry still reads after the thing is gone.
+data AuditTarget = AuditTarget {kind :: Text, targetId :: Text, title :: Text}
 
 
 logAuditS :: DB es => ProjectId -> AuditEvent -> Session -> Maybe AE.Value -> Eff es ()
-logAuditS pid event sess metadataM =
-  EHasql.interpExecute_ [HI.sql| INSERT INTO projects.audit_log (project_id, event, actor_id, actor_email, metadata) VALUES (#{pid}, #{event}, #{sess.user.id}, #{CI.original sess.user.email}, #{HI.AsJsonb <$> metadataM}) |]
+logAuditS pid event sess = logAudit pid event sess Nothing
+
+
+logAudit :: DB es => ProjectId -> AuditEvent -> Session -> Maybe AuditTarget -> Maybe AE.Value -> Eff es ()
+logAudit pid event sess target metadataM =
+  EHasql.interpExecute_
+    [HI.sql| INSERT INTO projects.audit_log (project_id, event, actor_id, actor_email, metadata, target_kind, target_id, target_title)
+             VALUES (#{pid}, #{event}, #{sess.user.id}, #{CI.original sess.user.email}, #{HI.AsJsonb <$> metadataM}, #{(.kind) <$> target}, #{(.targetId) <$> target}, #{(.title) <$> target}) |]
+
+
+-- | One project's activity from every ledger: people's changes (the audit log), issue lifecycle
+-- events, and what AI agents did. Newest first; @before@ pages, the filters narrow.
+data ActivityEntry = ActivityEntry
+  { at :: UTCTime
+  , source :: Text
+  , actorKind :: Text
+  , actor :: Maybe Text
+  , event :: Text
+  , targetKind :: Maybe Text
+  , targetTitle :: Maybe Text
+  , targetId :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+  deriving (AE.ToJSON) via DAE.Snake ActivityEntry
+  deriving (ToSchema) via SnakeSchema ActivityEntry
+
+
+projectActivity :: DB es => ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Int -> Eff es [ActivityEntry]
+projectActivity pid sourceM actorM before limit =
+  EHasql.interp
+    [HI.sql| SELECT at, source, actor_kind, actor, event, target_kind, target_title, target_id FROM projects.activity
+             WHERE project_id = #{pid}
+               AND (#{sourceM}::text IS NULL OR source = #{sourceM})
+               AND (#{actorM}::text IS NULL OR actor ILIKE '%' || #{actorM} || '%')
+               AND (#{before}::timestamptz IS NULL OR at < #{before})
+             ORDER BY at DESC LIMIT #{limit} |]
+
+
+-- | What a person opens, for Home's "Jump back in". One row per thing, refreshed on each visit.
+data ViewKind = VKDashboard | VKIssue | VKMonitor | VKThread
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (Display, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "VK" ViewKind
+
+
+data RecentView = RecentView {kind :: ViewKind, title :: Text, url :: Text, viewedAt :: UTCTime}
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+recordView :: DB es => UserId -> ProjectId -> ViewKind -> Text -> Text -> Text -> Eff es ()
+recordView uid pid kind target title url =
+  EHasql.interpExecute_
+    [HI.sql| INSERT INTO projects.recent_views (user_id, project_id, kind, target, title, url, viewed_at) VALUES (#{uid}, #{pid}, #{kind}, #{target}, #{title}, #{url}, now())
+             ON CONFLICT (user_id, project_id, kind, target) DO UPDATE SET title = EXCLUDED.title, url = EXCLUDED.url, viewed_at = now() |]
+
+
+recentViews :: DB es => UserId -> ProjectId -> Eff es [RecentView]
+recentViews uid pid = EHasql.interp [HI.sql| SELECT kind, title, url, viewed_at FROM projects.recent_views WHERE user_id = #{uid} AND project_id = #{pid} ORDER BY viewed_at DESC LIMIT 8 |]

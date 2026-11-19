@@ -7,7 +7,6 @@ module Pages.Home (homeGetH, HomeGet (..), HomeData (..), highlightDismissPostH,
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
-import Data.List (partition)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, zonedTimeToUTC)
@@ -58,7 +57,8 @@ data HomeData = HomeData
   , resolved :: [Issues.ResolvedIssue]
   , highlights :: [Issues.HomeHighlight]
   , routines :: [Issues.ConversationSummary]
-  , recentThreads :: [Issues.ConversationSummary]
+  , recents :: [Projects.RecentView]
+  , starredDashboards :: [Dashboards.DashboardVM]
   , glance :: [Widget.Widget]
   , starred :: [(Dashboards.DashboardVM, [Widget.Widget])]
   , firing :: [Monitors.QueryMonitor]
@@ -91,6 +91,7 @@ homeGetH pid = do
   monitors <- filter (isNothing . (.deactivatedAt)) <$> Monitors.queryMonitorsAll pid
   activeIncidents <- length <$> Incidents.listEpisodes pid (Just Incidents.EpisodeActive) 50
   members <- ProjectMembers.selectActiveProjectMembers pid
+  recents <- Projects.recentViews sess.user.id pid
   appCtx <- ask @AuthContext
   let slackConfigured = not $ T.null appCtx.config.slackBotToken
   -- Every tile states the same window, so a number on Home always means "the last 24 hours".
@@ -102,12 +103,12 @@ homeGetH pid = do
       starred = take 2 $ filter (not . null . snd) $ snd $ mapAccumL pick (S.fromList $ mapMaybe domId $ foldMap flat glance) dashboards
       flat w = w : foldMap (concatMap flat) w.children
       domId w = w.id <|> (slugify <$> w.title)
-      (routines, chats) = partition (.routineActive) bw.conversations
+      routines = filter (.routineActive) bw.conversations
       email = T.toLower $ CI.original sess.user.email
   addRespHeaders
     $ HomePage
     $ PageCtx bw{pageTitle = "Home", menuItem = Just "Home"}
-    $ HomeData{pid, firstName = sess.user.firstName, now, newIssues, newIssueCount, openIssueCount, resolved, highlights, routines, recentThreads = take 4 chats, glance, starred, firing = filter ((/= Monitors.MSNormal) . (.currentStatus)) monitors, monitorCount = length monitors, activeIncidents, members, slack = SlackConnectCard pid email slackConnect Nothing <$ guard slackConfigured, hostUrl = appCtx.env.hostUrl}
+    $ HomeData{pid, firstName = sess.user.firstName, now, newIssues, newIssueCount, openIssueCount, resolved, highlights, routines, recents, starredDashboards = dashboards, glance, starred, firing = filter ((/= Monitors.MSNormal) . (.currentStatus)) monitors, monitorCount = length monitors, activeIncidents, members, slack = SlackConnectCard pid email slackConnect Nothing <$ guard slackConfigured, hostUrl = appCtx.env.hostUrl}
   where
     -- Charts that render on their own: a widget needing its dashboard's variables or constants would only show an error here.
     homeWidget vm w = do
@@ -142,6 +143,7 @@ home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ 
         else do
           forM_ (flagged Issues.HKImprovement) $ highlightCard_ d.pid d.now
           forM_ d.resolved $ resolvedCard_ d.pid d.now
+  jumpBackIn_ d
   unless (null $ flagged Issues.HKInsight) $ section_ [class_ "flex flex-col gap-2", Aria.label_ "For you today"] do
     sectionHead_ "For you today" (Just $ length $ flagged Issues.HKInsight) $ Just ("AI routines", urls.aiRoutinesGet d.pid)
     div_ [class_ "flex flex-col"] $ forM_ (flagged Issues.HKInsight) $ feedRow_ d.pid d.now
@@ -153,7 +155,6 @@ home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ 
   forM_ d.starred \(vm, ws) -> section_ [class_ "flex flex-col gap-3", Aria.label_ vm.title] do
     sectionHead_ (faSprite_ "star" "solid" "w-3.5 h-3.5 text-iconNeutral" >> toHtml vm.title >> windowNote_) Nothing $ Just ("Open dashboard", dashboardUrl d.pid vm.id Nothing [])
     Widget.embeddedWidgets_ d.pid ws
-  jumpBackIn_ d
   homeFooter_ d
   where
     stackLinks :: [(Text, Html (), Text)]
@@ -419,22 +420,41 @@ dismiss_ pid h =
     $ faSprite_ "xmark" "regular" "w-3.5 h-3.5"
 
 
+-- | Where this person was: what they opened most recently, and the project's starred dashboards.
 jumpBackIn_ :: HomeData -> Html ()
-jumpBackIn_ d = unless (null items) $ section_ [class_ "flex flex-col gap-3", Aria.label_ "Jump back in"] do
+jumpBackIn_ d = section_ [class_ "flex flex-col gap-3", Aria.label_ "Jump back in"] do
   sectionHead_ "Jump back in" Nothing Nothing
-  div_ [class_ "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2"] $ forM_ items \(icon, title, sub, href) ->
-    a_ [href_ href, class_ "flex items-center gap-3 rounded-xl p-2 -ms-2 hover:bg-fillWeak transition-colors min-w-0"] do
-      span_ [class_ "flex size-9 shrink-0 items-center justify-center rounded-lg surface-raised shadow-[0_0_0_1px_var(--color-strokeWeak)]"] $ faSprite_ icon "regular" "w-4 h-4 text-iconNeutral"
-      span_ [class_ "flex flex-col min-w-0"] do
-        span_ [class_ "text-sm font-medium text-textStrong truncate"] $ toHtml title
-        span_ [class_ "text-xs text-textWeak truncate"] $ toHtml sub
+  div_ [role_ "tablist", class_ "tabs tabs-border"] do
+    tab_ "Recent" True do
+      if null recent then quiet_ "clock-rotate-left" "Dashboards, issues, monitors and AI threads you open show up here." else grid_ recent
+    tab_ "Starred" False do
+      if null starred then quiet_ "star" "Star a dashboard to keep it one click from Home." else grid_ starred
   where
+    tab_ :: Text -> Bool -> Html () -> Html ()
+    tab_ label checked body = do
+      input_ $ [type_ "radio", name_ "home-jump-tabs", class_ "tab", Aria.label_ label] <> [checked_ | checked]
+      div_ [class_ "tab-content pt-3"] body
+    grid_ :: [(Text, Text, Text, Text)] -> Html ()
+    grid_ items = div_ [class_ "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2"] $ forM_ items \(icon, title, sub, href) ->
+      a_ [href_ href, class_ "flex items-center gap-3 rounded-xl p-2 hover:bg-fillWeak transition-colors min-w-0"] do
+        span_ [class_ "flex size-9 shrink-0 items-center justify-center rounded-lg surface-raised shadow-[0_0_0_1px_var(--color-strokeWeak)]"] $ faSprite_ icon "regular" "w-4 h-4 text-iconNeutral"
+        span_ [class_ "flex flex-col min-w-0"] do
+          span_ [class_ "text-sm font-medium text-textStrong truncate"] $ toHtml (title :: Text)
+          span_ [class_ "text-xs text-textWeak truncate"] $ toHtml (sub :: Text)
     slackItem = [("slack", "#" <> c.channelName, "Shared with the Monoscope team", Integrations.slackConnectUrl c) | Just s <- [d.slack], s.invited, Just c <- [s.connect]]
-    items =
-      take 8
-        $ slackItem
-        <> [("dashboard", vm.title, "Starred dashboard", dashboardUrl d.pid vm.id Nothing []) | (vm, _) <- d.starred]
-        <> [("sparkles", t.title, agoText d.now t.updatedAt, threadUrl d.pid t.conversationId) | t <- d.recentThreads]
+    recent = slackItem <> [(viewIcon v.kind, v.title, viewLabel v.kind <> " · " <> agoText d.now v.viewedAt, v.url) | v <- d.recents]
+    starred = [("dashboard", vm.title, "Starred dashboard", dashboardUrl d.pid vm.id Nothing []) | vm <- d.starredDashboards]
+    viewIcon, viewLabel :: Projects.ViewKind -> Text
+    viewIcon = \case
+      Projects.VKDashboard -> "dashboard"
+      Projects.VKIssue -> "bug"
+      Projects.VKMonitor -> "list-check"
+      Projects.VKThread -> "sparkles"
+    viewLabel = \case
+      Projects.VKDashboard -> "Dashboard"
+      Projects.VKIssue -> "Issue"
+      Projects.VKMonitor -> "Monitor"
+      Projects.VKThread -> "AI thread"
 
 
 -- | The Slack Connect channel between this project and the Monoscope team, from the viewer's side.

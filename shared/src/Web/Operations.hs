@@ -163,6 +163,8 @@ operations =
   , -- Incidents
     op "list_incidents" GET "/incidents" (Just View) "List recent incidents" [list "incidents list" [flag "phase" "PHASE" "active|recovered|resolved" (Query "phase") Str, Opt (Option ("limit" :| ["n"]) Optional "N" "Maximum incidents (default: 20)" (Query "limit") Int)] "id" [self "phase" State, col "started" "started_at" Muted, col "last_event" "last_event_at" Muted]]
   , op "get_incident" GET "/incidents/{incident_id}" (Just View) "Get incident by ID" [at "incidents get" []]
+  , -- Audit trail
+    op "list_audit_events" GET "/audit_events" (Just View) "List the project's audit trail: people's changes, issue status changes and AI agent operations, newest first" [list "audit list" [flag "source" "SOURCE" "audit|issue|agent" (Query "source") Str, flag "actor" "TEXT" "Actor email contains" (Query "actor") Str, flag "before" "TIME" "Only entries before this ISO-8601 time (for paging)" (Query "before") Str, Opt (Option ("limit" :| ["n"]) Optional "N" "Maximum entries (default: 100, at most 500)" (Query "limit") Int)] "at" [self "event" Plain, col "actor" "actor" Brand, col "target" "target_title" Plain, col "source" "source" Muted]]
   , -- Teams
     op "list_teams" GET "/teams" (Just View) "List teams" [list "teams list" [] "id" [self "name" Brand, col "members" "member_count" Numeric, col "created" "created_at" Muted]]
   , op "create_team" (Write POST) "/teams" (Just Admin) "Create team from YAML/JSON file" [at "teams create" [file]]

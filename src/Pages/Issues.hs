@@ -429,6 +429,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
     Nothing ->
       addRespHeaders $ PageCtx baseBwconf{pageTitle = "Issue Not Found"} $ IssueNotFound pid
     Just issue -> do
+      Projects.recordView sess.user.id pid Projects.VKIssue issue.id.toText issue.title (issueDetailUrl pid issue.id)
       requestId <- UUIDId <$> UUIDEff.genUUID
       -- The default window is anchored on the issue's own last activity rather than
       -- on @now@, and is kept narrow. Both halves are load-bearing, and the width is

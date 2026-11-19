@@ -20,6 +20,7 @@ module Web.Links (
   AllQueryParams,
   PNG,
   YAML,
+  CSV,
   SseHeaders,
   DashboardFilters (..),
   DashboardBulkAction (..),
@@ -206,6 +207,14 @@ instance MimeRender YAML Text where
   mimeRender _ = fromStrict . encodeUtf8
 
 
+data CSV
+  deriving (Accept) via Mime "text/csv"
+
+
+instance MimeRender CSV Text where
+  mimeRender _ = fromStrict . encodeUtf8
+
+
 -- | The headers that decide whether an SSE response actually streams.
 --
 -- Every hop between this handler and the browser would rather buffer than forward: a CDN caches
@@ -265,6 +274,8 @@ type CookieProtectedRoutes :: Type -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { -- Dashboard routes
     homeGet :: mode :- "p" :> ProjectId :> Get '[HTML] (RespHeaders (Opaque "Home.HomeGet"))
+  , auditLogGet :: mode :- "p" :> ProjectId :> "settings" :> "audit" :> QPT "source" :> QPT "actor" :> QPT "before" :> Get '[HTML] (RespHeaders (Opaque "Settings.AuditLogGet"))
+  , auditLogCsvGet :: mode :- "p" :> ProjectId :> "settings" :> "audit.csv" :> QPT "source" :> QPT "actor" :> Get '[CSV] (Headers '[Header "Content-Disposition" Text] Text)
   , homeHighlightDismissPost :: mode :- "p" :> ProjectId :> "home" :> "highlights" :> Capture "highlight_id" (UUIDId "home_highlight") :> "dismiss" :> Unrefusable 'POST (Opaque "Home.HighlightDismissed")
   , slackConnectPost :: mode :- "p" :> ProjectId :> "slack-connect" :> Unrefusable 'POST (Opaque "Home.SlackConnectCard")
   , dashboardRedirectGet :: mode :- "p" :> ProjectId :> "overview" :> AllQueryParams :> LocationRedirect NoContent

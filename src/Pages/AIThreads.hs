@@ -430,7 +430,7 @@ threadPageGetH :: Projects.ProjectId -> UUIDId "conversation" -> Maybe Issues.Ar
 threadPageGetH pid convId docM runM hxTarget = do
   requestId <- UUIDId <$> UUID.genUUID
   canEdit <- canEditRoutines pid
-  (_, _, bw) <- mkAIPageCtx pid
+  (sess, _, bw) <- mkAIPageCtx pid
   viewerPermission <- currentViewerPermission pid
   for_ (convId : map (.conversationId) (maybeToList runM)) $ authorizeConversation pid
   -- The open document's refresh keeps only #ai-document (htmx 4 sends `tag#id`), so skip what it discards.
@@ -442,6 +442,7 @@ threadPageGetH pid convId docM runM hxTarget = do
       $ concurrently (Issues.getConversation pid convId)
       $ concurrently (unlessRefresh $ Issues.selectChatHistory pid convId) (Issues.listArtifacts pid convId docM)
   instructions <- Issues.getRoutineInstructions pid convId
+  unless (any ("#ai-document" `T.isSuffixOf`) hxTarget) $ for_ conversationM \c -> Projects.recordView sess.user.id pid Projects.VKThread convId.toText c.title (threadUrl pid convId)
   runs <- Issues.listConversationRuns pid convId 20
   -- A report routine's latest result reads as its digest, each highlight beside its own chart.
   reportM <- case (find ((== Issues.RunSucceeded) . (.status)) runs, any ("#ai-document" `T.isSuffixOf`) hxTarget) of
@@ -1013,7 +1014,9 @@ routinePostH pid convId form = do
   void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid)
   (sess, _) <- Projects.sessionAndProject pid
   whenJustM (Issues.getConversation pid convId) \conversation ->
-    when (conversation.conversationType == Issues.CTWeb) $ enqueue (Issues.upsertRoutine sess.user.id pid convId form.intervalMinutes)
+    when (conversation.conversationType == Issues.CTWeb) do
+      enqueue (Issues.upsertRoutine sess.user.id pid convId form.intervalMinutes)
+      Projects.logAudit pid Projects.AERoutineSaved sess (Just $ Projects.AuditTarget "routine" convId.toText conversation.title) Nothing
   done $ ThreadPage pid convId
 
 
@@ -1035,7 +1038,13 @@ routineResumePostH pid convId now = do
   done $ ThreadPage pid convId
 
 
-routineDeleteH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.pauseRoutine pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> Issues.deleteRoutine pid convId >> done (RoutinesPage pid)
+routineDeleteH pid convId = do
+  authorizeConversation pid convId
+  (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
+  titleM <- fmap (.title) <$> Issues.getConversation pid convId
+  Issues.pauseRoutine pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> Issues.deleteRoutine pid convId
+  Projects.logAudit pid Projects.AERoutineDeleted sess (Projects.AuditTarget "routine" convId.toText <$> titleM) Nothing
+  done (RoutinesPage pid)
 
 
 routineDestinationPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineDestinationForm -> ATAuthCtx (ActionResult EmailOnlyForReports AIPage)

@@ -1317,6 +1317,7 @@ navBottomList pid =
   , ("Prometheus", urls.prometheusSettingsGet pid, "objects-column")
   , ("Storage", urls.bringS3 pid, "bucket")
   , ("Billing", urls.manageBillingGet pid, "dollar")
+  , ("Audit log", urls.auditLogGet pid Nothing Nothing Nothing, "clock-rotate-left")
   ]
 
 

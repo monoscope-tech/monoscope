@@ -2,6 +2,10 @@
 
 module Pages.Settings (
   billingUrl,
+  -- Audit log
+  auditLogGetH,
+  auditLogCsvGetH,
+  AuditLogGet (..),
   -- S3
   bringS3GetH,
   brings3PostH,
@@ -94,6 +98,7 @@ import Data.Aeson.KeyMap qualified as AEKM
 import Data.Effectful.UUID qualified as UUIDEff
 import Data.Effectful.Wreq qualified as W
 import Data.Text.Display (Display, display)
+import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Effectful.Exception (throwIO, try, trySync)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
@@ -120,11 +125,11 @@ import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail (NotificationAlerts (..), sampleAlertByIssueTypeText, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
 import Pkg.Prometheus qualified as Prom
 import Relude hiding (ask, asks)
-import Servant (FromHttpApiData (..), err400, err503, errBody)
+import Servant (FromHttpApiData (..), Header, Headers, addHeader, err400, err503, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, done, successToast)
 import Text.Printf (printf)
-import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, formatBytes, hostPath, htmxIndicator_)
+import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, formatBytes, formatUTC, hostPath, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links
 import "cryptonite" Crypto.Hash (SHA256)
@@ -554,6 +559,83 @@ prometheusGetH pid = do
   cfgs <- PromCfg.configsByProjectId pid PromCfg.CKPrometheus
   permission <- ProjectMembers.getUserPermission pid session.user.id
   addRespHeaders $ PrometheusGet $ PageCtx bw{pageTitle = "Prometheus", isSettingsPage = True} (PrometheusSettings pid cfgs permission)
+
+
+-- Audit log
+
+newtype AuditLogGet = AuditLogGet (PageCtx (Projects.ProjectId, Maybe Text, Maybe Text, [Projects.ActivityEntry]))
+
+
+instance ToHtml AuditLogGet where
+  toHtml (AuditLogGet (PageCtx bwconf (pid, sourceM, actorM, entries))) = toHtml $ PageCtx bwconf $ auditLogPage_ pid sourceM actorM entries
+  toHtmlRaw = toHtml
+
+
+-- | Who did what in this project: people's changes, issue lifecycle, and AI agent operations, newest first.
+auditLogGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders AuditLogGet)
+auditLogGetH pid sourceM actorM beforeM = do
+  (_, _, bw) <- mkPageCtx pid
+  let source = mfilter (`elem` ["audit", "issue", "agent"]) sourceM
+      actor = mfilter (not . T.null) $ T.strip <$> actorM
+  entries <- Projects.projectActivity pid source actor (iso8601ParseM . toString =<< beforeM) 100
+  addRespHeaders $ AuditLogGet $ PageCtx bw{pageTitle = "Audit log", isSettingsPage = True} (pid, source, actor, entries)
+
+
+auditLogCsvGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (Headers '[Header "Content-Disposition" Text] Text)
+auditLogCsvGetH pid sourceM actorM = do
+  _ <- Projects.sessionAndProject pid
+  entries <- Projects.projectActivity pid (mfilter (`elem` ["audit", "issue", "agent"]) sourceM) (mfilter (not . T.null) actorM) Nothing 10000
+  let cell t = "\"" <> T.replace "\"" "\"\"" t <> "\""
+      row = T.intercalate "," . map cell
+      rows = row ["time", "source", "actor_kind", "actor", "event", "target_kind", "target", "target_id"] : [row [formatUTC e.at, e.source, e.actorKind, fold e.actor, e.event, fold e.targetKind, fold e.targetTitle, fold e.targetId] | e <- entries]
+  pure $ addHeader ("attachment; filename=\"audit-log-" <> pid.toText <> ".csv\"") $ unlines rows
+
+
+auditLogPage_ :: Projects.ProjectId -> Maybe Text -> Maybe Text -> [Projects.ActivityEntry] -> Html ()
+auditLogPage_ pid sourceM actorM entries = div_ [class_ "flex flex-col gap-4"] do
+  div_ [class_ "flex flex-wrap items-end justify-between gap-3"] do
+    div_ [class_ "flex flex-col gap-1"] do
+      settingsH2_ "Audit log"
+      p_ [class_ "text-sm text-textWeak text-pretty"] "Every change people, AI agents and Monoscope made in this project: settings, members, keys, dashboards, monitors, routines and issue status."
+    a_ [href_ $ urls.auditLogCsvGet pid sourceM actorM, class_ "btn btn-sm"] $ faSprite_ "download" "regular" "w-3.5 h-3.5" >> "Export CSV"
+  form_ [method_ "get", action_ $ urls.auditLogGet pid Nothing Nothing Nothing, class_ "flex flex-wrap items-end gap-2"] do
+    label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] do
+      "Source"
+      select_ [name_ "source", class_ "select select-sm"] do
+        forM_ @[] @_ @(Text, Text) [("", "Everything"), ("audit", "People and settings"), ("issue", "Issues"), ("agent", "AI agents")] \(v, l) ->
+          option_ ([value_ v] <> [selected_ "" | Just v == sourceM || (T.null v && isNothing sourceM)]) $ toHtml l
+    label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] do
+      "Actor"
+      input_ [type_ "search", name_ "actor", value_ (fold actorM), placeholder_ "name@company.com", class_ "input input-sm w-56"]
+    button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Filter"
+  if null entries
+    then emptyState_ def{size = ESCompact, icon = Just "clock-rotate-left"} "No activity yet" "Changes to settings, members, dashboards, monitors and routines appear here as they happen."
+    else do
+      div_ [class_ "overflow-x-auto rounded-xl border border-strokeWeak"] $ table_ [class_ "w-full text-sm"] do
+        thead_ [class_ "bg-fillWeaker text-xs text-textWeak text-start"] $ tr_ $ forM_ @[] @_ @Text ["Time", "Actor", "Event", "Target"] th_ [class_ "px-3 py-2 text-start font-medium"] . toHtml
+        tbody_ [class_ "divide-y divide-strokeWeak"] $ forM_ entries \e -> tr_ [class_ "align-top"] do
+          td_ [class_ "px-3 py-2 whitespace-nowrap text-textWeak tabular-nums"] $ localTimeFmt_ "MMM dd, HH:mm:ss" e.at
+          td_ [class_ "px-3 py-2"] do
+            div_ [class_ "flex items-center gap-1.5"] do
+              faSprite_ (actorIcon e.actorKind) "regular" "w-3.5 h-3.5 shrink-0 text-iconNeutral"
+              span_ [class_ "text-textStrong break-all"] $ toHtml $ fromMaybe (actorLabel e.actorKind) e.actor
+            when (e.actorKind == "agent") $ span_ [class_ "text-xs text-textWeak"] "AI agent, on their behalf"
+          td_ [class_ "px-3 py-2 text-textStrong"] $ toHtml $ humanize e.event
+          td_ [class_ "px-3 py-2 text-textWeak"] $ toHtml $ T.intercalate ": " $ catMaybes [humanize <$> e.targetKind, e.targetTitle]
+      whenJust (viaNonEmpty last entries) \lastE ->
+        when (length entries >= 100) $ a_ [href_ $ urls.auditLogGet pid sourceM actorM (Just $ formatUTC lastE.at), class_ "self-start text-sm text-textBrand hover:underline"] "Show older activity"
+  where
+    humanize t = case T.replace "_" " " t of
+      "" -> ""
+      h -> T.toUpper (T.take 1 h) <> T.drop 1 h
+    actorIcon = \case
+      "agent" -> "sparkles"
+      "system" -> "gear"
+      _ -> "user"
+    actorLabel = \case
+      "agent" -> "AI agent"
+      "system" -> "Monoscope"
+      _ -> "Unknown user"
 
 
 requireSettingsWrite :: Projects.ProjectId -> ATAuthCtx Projects.Session
