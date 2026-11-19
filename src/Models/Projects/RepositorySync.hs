@@ -52,6 +52,7 @@ import Models.Projects.ProjectMembers qualified as Members
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.MonitorConfig (encodeMonitorConfig)
 import Relude hiding (local)
+import Relude.Extra.Tuple (toFst)
 import System.Types (DB)
 import Web.HttpApiData (FromHttpApiData)
 
@@ -213,7 +214,7 @@ encodeDefinition = \case
 
 
 localDefinition :: DB es => Resource -> Eff es (Maybe Definition)
-localDefinition resource = (>>= snd) . listToMaybe <$> localDefinitions resource.projectId [resource]
+localDefinition resource = (snd <=< listToMaybe) <$> localDefinitions resource.projectId [resource]
 
 
 -- | 'localDefinition' for a set of resources, each kind's rows loaded once for the whole set
@@ -221,7 +222,7 @@ localDefinition resource = (>>= snd) . listToMaybe <$> localDefinitions resource
 localDefinitions :: DB es => Projects.ProjectId -> [Resource] -> Eff es [(Resource, Maybe Definition)]
 localDefinitions pid rs = do
   let has k = any ((== k) . (.kind)) rs
-      byId f = Map.fromList . map (\x -> (f x, x))
+      byId f = Map.fromList . map (toFst f)
   dashes <- Dashboards.getDashboardsByIds pid (V.fromList [UUIDId r.localId | r <- rs, r.kind == Dashboard])
   teams <- Members.getTeamsById pid (V.concat (map (.teams) dashes))
   queries <- byId (.id) <$> if has Query then Monitors.queryMonitorsAll pid else pure []
