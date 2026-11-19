@@ -1044,8 +1044,10 @@ resolveTraceOrphans pid trId fetch spanIdOf parentIdOf initial = do
               then pure acc
               else let acc' = acc <> extras in go acc' (hop + 1) (missing acc')
   resolved <- go initial 0 (missing initial)
+  -- Info, not attention: a producer that never exports the parent (an uninstrumented upstream,
+  -- the OTel demo's load generator) misses it on every view, and the waterfall already shows it.
   whenNotNull (missing resolved) \stillMissing ->
-    Log.logAttention "TRACE_ORPHAN_PARENTS_UNRESOLVED"
+    Log.logInfo "TRACE_ORPHAN_PARENTS_UNRESOLVED"
       $ AE.object
         [ "project_id" AE..= pid.toText
         , "trace_id" AE..= trId

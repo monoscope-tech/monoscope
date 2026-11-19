@@ -1289,7 +1289,7 @@ data PublishSkip = NotPublishable | MappingRemoved | TokenUnavailable Text | Rep
 
 fixIssue :: Projects.ProjectId -> Fixes.FixId -> ATBackgroundCtx ()
 fixIssue pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob) \claimed -> for_ claimed \lease -> do
-  outcome <- tryAny $ Timeout.timeout (540 * 1000000) $ runErrorNoCallStack $ execute lease
+  outcome <- tryAny $ Timeout.timeout (reviewSeconds * 1000000) $ runErrorNoCallStack $ execute lease
   case outcome of
     Right (Just (Right ())) -> Jobs.scheduleJob Jobs.WakeNow $ Jobs.PublishFix pid fid
     _ -> do

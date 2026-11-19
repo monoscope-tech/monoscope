@@ -106,7 +106,19 @@ data SecuredSql = SecuredSql
   }
   deriving stock (Eq, Generic, Show, THS.Lift)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake SecuredSql
+  deriving (AE.ToJSON) via DAE.Snake SecuredSql
+
+
+-- | Also reads the bare-string SQL that dashboards exported to Git before 0119 gave it a source,
+-- routed as that migration did: TimeFusion, but Postgres for the endpoint variables reading
+-- @apis.endpoints@. Without it every such repository failed its import on every sync.
+--
+-- >>> map (AE.decode @SecuredSql) ["\"SELECT 1\"", "\"SELECT host FROM apis.endpoints\"", "{\"source\":\"postgres\",\"statement\":\"SELECT 2\"}"]
+-- [Just (SecuredSql {source = SqlTimefusion, statement = "SELECT 1"}),Just (SecuredSql {source = SqlPostgres, statement = "SELECT host FROM apis.endpoints"}),Just (SecuredSql {source = SqlPostgres, statement = "SELECT 2"})]
+instance AE.FromJSON SecuredSql where
+  parseJSON = \case
+    AE.String sql -> pure $ SecuredSql (bool SqlTimefusion SqlPostgres ("apis.endpoints" `T.isInfixOf` sql)) sql
+    v -> coerce <$> AE.parseJSON @(DAE.Snake SecuredSql) v
 
 
 data Hasql :: Effect where
