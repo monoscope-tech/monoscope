@@ -1,15 +1,16 @@
+-- | Monoscope's logging: log-base's 'Log' effect and levels, plus a real warning level, with every
+-- message tagged with the calling thread's trace and span (see 'makeLogger').
 module System.Logging (
   makeLogger,
   runLog,
-  logWithTrace,
-  logInfo,
-  logInfo_,
+  Log,
+  Log.logInfo,
+  Log.logInfo_,
   logWarn,
-  logError,
-  logDebug,
-  logTrace,
-  logAttention,
-  logAttention_,
+  Log.logTrace,
+  Log.logTrace_,
+  Log.logAttention,
+  Log.logAttention_,
   withError,
   timeAction,
   tolerantLogger,
@@ -21,9 +22,10 @@ import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
-import Data.ByteString.Char8 qualified as BS
+import Data.ByteString.Lazy.Char8 qualified as BSL
 import Data.Default (Default (..))
 import Data.HashMap.Strict qualified as HM
+import Data.Text qualified as T
 import Data.Time.Clock as Time (NominalDiffTime, diffUTCTime)
 import Effectful (
   Eff,
@@ -36,8 +38,7 @@ import Effectful.Log (Log)
 import Effectful.Log qualified as Log
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
-import Log (LogLevel (..), Logger)
-import Log.Backend.StandardOutput.Bulk qualified as LogBulk
+import Log (LogLevel (..), Logger, showLogMessage)
 import Log.Internal.Logger (Logger (..), withLogger)
 import OpenTelemetry.Context qualified as Context
 import OpenTelemetry.Context.ThreadLocal qualified as Context
@@ -72,108 +73,65 @@ runLog envTxt = Log.runLog ("[AT]-" <> envTxt)
 
 
 makeLogger :: IOE :> es => LoggingDestination -> (Logger -> Eff es a) -> Eff es a
-makeLogger dest action = inner dest (action . tolerantLogger)
+makeLogger dest action = withRunInIO \unlift -> do
+  logger <- case dest of
+    StdOut -> bulk "stdout-bulk" (putTextLn . showLogMessage Nothing)
+    Json -> bulk "stdout-bulk-json" (putLBSLn . jsonLine)
+    JSONFile -> putBSLn ("Redirecting logs to " <> encodeUtf8 file) >> Log.mkLogger "file-json" (BSL.appendFile file . (<> "\n") . jsonLine)
+  withLogger (tolerantLogger logger) (unlift . action)
   where
-    inner StdOut = LogBulk.withBulkStdOutLogger
-    inner Json = LogBulk.withBulkJsonStdOutLogger
-    inner JSONFile = withJSONFileBackend FileBackendConfig{destinationFile = "logs/monoscope.json"}
+    file = "logs/monoscope.json"
+    bulk name write = Log.mkBulkLogger name (\msgs -> traverse_ write msgs >> hFlush stdout) pass
 
 
--- | Wrap a `Logger` so that exceptions thrown by `loggerWriteMessage` are
--- swallowed instead of escaping the caller. Without this, a `runLogT` against
--- a logger that has shut down (bulk worker thread died, or `withLogger` is mid
--- close while another thread still tries to log) raises `AssertionFailed:
--- attempt to write to a shut down logger`. That assertion has been escaping
--- through `supervise`'s own logExc call, the periodic error logger thread,
--- and Warp's onException — taking the whole process down. Wrapping at the
--- `Logger` boundary protects every log site at once.
+-- | One JSON object per line. A message logged by 'logWarn' carries the @warn@ domain, which is
+-- written as its level instead: log-base has no warning level, and ingestion reads @attention@
+-- as ERROR, which files an issue, while @warn@ is WARN, which does not.
+--
+-- >>> import Data.Map.Strict qualified as Map
+-- >>> import Data.Time (UTCTime (..), fromGregorian)
+-- >>> let at d = AE.decode @(Map Text AE.Value) $ jsonLine (Log.LogMessage "c" d (UTCTime (fromGregorian 2026 1 1) 0) Log.LogAttention "m" AE.Null)
+-- >>> [(Map.lookup "level" =<< at d, Map.lookup "domain" =<< at d) | d <- [["warn"], ["jobs"]]]
+-- [(Just (String "warn"),Just (Array [])),(Just (String "attention"),Just (Array [String "jobs"]))]
+jsonLine :: Log.LogMessage -> LByteString
+jsonLine m
+  | warnDomain `notElem` m.lmDomain = AE.encode m
+  | otherwise = AE.encode case AE.toJSON m{Log.lmDomain = filter (/= warnDomain) m.lmDomain} of
+      AE.Object o -> AE.Object (AEKM.insert "level" "warn" o)
+      v -> v
+
+
+warnDomain :: Text
+warnDomain = "warn"
+
+
+-- | The process's 'Logger' wrapper. Writes run on the caller's thread, so each message gets that
+-- thread's trace and span ids, whichever API logged it; a non-object payload, which log-base files
+-- under @__data_array@ and the like, stays under @data@. A write to a logger that has shut down is
+-- swallowed: it used to escape through 'supervise', the error-logger thread and Warp's
+-- onException, taking the process down.
 tolerantLogger :: Logger -> Logger
-tolerantLogger l = l{loggerWriteMessage = void . Safe.tryAny . loggerWriteMessage l}
+tolerantLogger l = l{loggerWriteMessage = \m -> void $ Safe.tryAny $ loggerWriteMessage l . shaped m =<< traceIds}
+  where
+    traceIds = maybe (pure []) (fmap ids . Trace.getSpanContext) . Context.lookupSpan =<< Context.getContext
+    ids c = [("trace_id", hex TraceId.traceIdBaseEncodedByteString c.traceId), ("span_id", hex TraceId.spanIdBaseEncodedByteString c.spanId)]
+    hex enc = AE.String . decodeUtf8 . enc TraceId.Base16
+    shaped m extra = m{Log.lmData = AE.Object $ AEKM.fromList $ extra <> fields m.lmData}
+    fields = \case
+      AE.Object o -> [(bool k "data" ("__data_" `T.isPrefixOf` AEK.toText k), v) | (k, v) <- AEKM.toList o]
+      v -> [("data", v)]
 
 
-newtype FileBackendConfig = FileBackendConfig
-  { destinationFile :: FilePath
-  }
-  deriving stock (Eq, Generic, Ord, Show)
-
-
-withJSONFileBackend
-  :: forall (es :: [Effect]) (a :: Type)
-   . IOE :> es
-  => FileBackendConfig
-  -> (Logger -> Eff es a)
-  -> Eff es a
-withJSONFileBackend FileBackendConfig{destinationFile} action = withRunInIO $ \unlift -> do
-  liftIO $ BS.hPutStrLn stdout $ BS.pack $ "Redirecting logs to " <> destinationFile
-  logger <- liftIO $ Log.mkLogger "file-json" $ \msg -> liftIO $ BS.appendFile destinationFile (toStrict $ AE.encode msg <> "\n")
-  withLogger logger (unlift . action)
-
-
--- | Log with trace context if available
-logWithTrace :: (AE.ToJSON a, IOE :> es, Log :> es) => Log.LogLevel -> Text -> a -> Eff es ()
-logWithTrace level msg fields = do
-  -- Get current context to extract trace information
-  ctx <- liftIO Context.getContext
-  traceFields <- case Context.lookupSpan ctx of
-    Nothing -> pure []
-    Just currentSpan -> liftIO $ do
-      -- Extract SpanContext from the current span
-      spanCtx <- Trace.getSpanContext currentSpan
-      let tId = Trace.traceId spanCtx
-          sId = Trace.spanId spanCtx
-          -- Convert IDs to hex strings
-          traceIdHex = decodeUtf8 $ TraceId.traceIdBaseEncodedByteString TraceId.Base16 tId
-          spanIdHex = decodeUtf8 $ TraceId.spanIdBaseEncodedByteString TraceId.Base16 sId
-      pure
-        [ ("trace_id", AE.String traceIdHex)
-        , ("span_id", AE.String spanIdHex)
-        ]
-  -- Convert fields to JSON value and merge with trace fields
-  let fieldsValue = AE.toJSON fields
-      traceFieldsKeyMap = AEKM.fromList $ map (first AEK.fromText) traceFields
-      mergedObject = case fieldsValue of
-        AE.Object obj -> AE.Object $ obj <> traceFieldsKeyMap
-        _ -> AE.object $ (AEK.fromText "data", fieldsValue) : map (first AEK.fromText) traceFields
-  Log.logMessage level msg mergedObject
-
-
--- | Convenience functions that automatically include trace context
-logInfo :: (AE.ToJSON a, IOE :> es, Log :> es) => Text -> a -> Eff es ()
-logInfo = logWithTrace Log.LogInfo
-
-
-logWarn :: (AE.ToJSON a, IOE :> es, Log :> es) => Text -> a -> Eff es ()
-logWarn = logWithTrace Log.LogAttention -- Using LogAttention for warnings
-
-
-logError :: (AE.ToJSON a, IOE :> es, Log :> es) => Text -> a -> Eff es ()
-logError = logWithTrace Log.LogAttention -- Using LogAttention for errors
-
-
-logDebug :: (AE.ToJSON a, IOE :> es, Log :> es) => Text -> a -> Eff es ()
-logDebug = logWithTrace Log.LogTrace -- Using LogTrace for debug
-
-
-logTrace :: (AE.ToJSON a, IOE :> es, Log :> es) => Text -> a -> Eff es ()
-logTrace = logWithTrace Log.LogTrace
-
-
-logAttention :: (AE.ToJSON a, IOE :> es, Log :> es) => Text -> a -> Eff es ()
-logAttention = logWithTrace Log.LogAttention
+-- | Something to look at that is not a defect: filtered like 'logAttention', but written at level
+-- @warn@ (see 'jsonLine'), so it never files an issue.
+logWarn :: (AE.ToJSON a, Log.MonadLog m) => Text -> a -> m ()
+logWarn msg = Log.localDomain warnDomain . Log.logAttention msg
 
 
 -- | Attach a rendered exception to a log context under the conventional
 -- "error" key, so call sites stop repeating the displayException dance.
 withError :: Exception e => e -> HashMap Text Text -> HashMap Text Text
 withError e = HM.insert "error" (toText $ displayException e)
-
-
-logInfo_ :: (IOE :> es, Log :> es) => Text -> Eff es ()
-logInfo_ msg = logInfo msg ()
-
-
-logAttention_ :: (IOE :> es, Log :> es) => Text -> Eff es ()
-logAttention_ msg = logAttention msg ()
 
 
 timeAction

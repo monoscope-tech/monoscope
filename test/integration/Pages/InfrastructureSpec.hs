@@ -752,7 +752,7 @@ spec = do
 
       -- A duplicate name hits UNIQUE(project_id, name) (migration 0103) and becomes an inline error
       -- that keeps the draft — not a 500, not a redirect, not a second row; so does a private URL.
-      let form = PrometheusForm{name = "dup", url = "http://example.com/metrics", scrapeInterval = Nothing, authHeader = Nothing, extraLabels = Nothing, clearAuth = Nothing}
+      let form = PrometheusForm{name = "dup", url = "http://example.com/metrics", scrapeInterval = Nothing, authHeader = Nothing, extraLabels = Nothing}
       _ <- testServant tr $ Settings.prometheusPostH testPid form
       (rejected, rejection) <- testServant tr $ Settings.prometheusPostH testPid form
       (lookupResponseHeader @"HX-Redirect" @Text rejected, reswapOf rejected) `shouldBe` (MissingHeader, Just "none")
@@ -761,12 +761,17 @@ spec = do
       (reswapOf . fst <$> testServant tr (Settings.prometheusPostH testPid form{url = "http://127.0.0.1/metrics"})) `shouldReturn` Just "none"
       (length . filter ((== "dup") . (.name)) <$> configs testPid) `shouldReturn` 1
 
+      -- A saved token comes back masked: saving the mask keeps it, a cleared field removes it.
+      dup <- maybe (fail "dup missing") pure . find ((== "dup") . (.name)) =<< configs testPid
+      let saveAuth auth = void (testServant tr $ Settings.prometheusUpdateH testPid dup.id form{authHeader = auth}) >> ((.authHeader) <=< find ((== dup.id) . (.id))) <$> configs testPid
+      traverse saveAuth [Just "Bearer kept", Just PromCfg.mask, Nothing] `shouldReturn` [Just "Bearer kept", Just "Bearer kept", Nothing]
+
       -- A viewer can neither change targets nor make the server probe an endpoint, and never sees the auth header.
       viewer <- createTestProject tr "prometheus-viewer"
       void $ runQueryEffect tr $ PromCfg.insertConfig viewer PromCfg.CKPrometheus "Saved target" "https://metrics.example.com/metrics" 60 (Just "Bearer saved-secret") (AE.object []) Nothing
       [saved] <- configs viewer
       let uid = (getResponse tr.trSessAndHeader).user.id
-          replacement = PrometheusForm "Replacement target" "https://metrics.example.com/replacement" Nothing (Just "Bearer replacement-secret") Nothing Nothing
+          replacement = PrometheusForm "Replacement target" "https://metrics.example.com/replacement" Nothing (Just "Bearer replacement-secret") Nothing
       dbExec tr [sql| UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ? |] (viewer, uid)
       requests <- newIORef (0 :: Int)
       statuses <- forM

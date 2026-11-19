@@ -63,7 +63,6 @@ import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Exception qualified as EE
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
-import Effectful.Log qualified as Log
 import Effectful.Time (Time (..))
 import GHC.Clock (getMonotonicTime)
 import Hasql.Errors (IsError (..), ServerError (..), SessionError (..), StatementError (..), toDetailedText)
@@ -83,6 +82,7 @@ import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import OpenTelemetry.Trace.Core qualified as Trace
 import Pkg.Deriving (WrappedEnumSC (..))
 import Relude
+import System.Logging qualified as Log
 import Text.Show (showString, showsPrec)
 import UnliftIO qualified
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData (..))

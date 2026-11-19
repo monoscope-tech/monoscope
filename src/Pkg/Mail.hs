@@ -15,7 +15,7 @@ import Data.Text.Display (display)
 import Data.Time
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
-import Effectful (Eff, IOE, type (:>))
+import Effectful (Eff, type (:>))
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
@@ -42,7 +42,7 @@ sendRenderedEmail receiver subject htmlBody =
   Notify.sendNotification $ Notify.emailNotification receiver subject htmlBody
 
 
-sendSlackMessage :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()
+sendSlackMessage :: (DB es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()
 sendSlackMessage pid message =
   getProjectSlackData pid
     >>= maybe
@@ -103,7 +103,7 @@ data AlertImpact = AlertImpact
 
 -- | Send a Discord alert, optionally as a reply under a parent message.
 -- Returns the message ID if threading is enabled and the send succeeds.
-sendDiscordAlert :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendDiscordAlert :: (DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
 sendDiscordAlert replyToMsgIdM alert pid pTitle channelIdM' = do
   appCtx <- ask @Config.AuthContext
   -- When no explicit channel is supplied, fall back to the first entry of
@@ -141,7 +141,7 @@ sendDiscordAlert replyToMsgIdM alert pid pTitle channelIdM' = do
 --
 -- Both transports preserve thread context. Webhook root timestamps require
 -- separate capture through Slack events or message retrieval.
-sendSlackAlert :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendSlackAlert :: (DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
 sendSlackAlert threadTsM alert pid pTitle channelM = do
   appCtx <- ask @Config.AuthContext
   slackData <- getProjectSlackData pid
@@ -182,7 +182,7 @@ sendSlackAlert threadTsM alert pid pTitle channelM = do
     _ -> Nothing <$ Log.logAttention "Slack alert skipped: missing channel or slack data" (AE.object ["project_id" AE..= pid, "has_channel" AE..= isJust channelM, "has_slack" AE..= isJust slackData])
 
 
-sendWhatsAppAlert :: (IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> V.Vector Text -> Eff es ()
+sendWhatsAppAlert :: (Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> V.Vector Text -> Eff es ()
 sendWhatsAppAlert alert pid pTitle tos = do
   appCtx <- ask @Config.AuthContext
   case alert of

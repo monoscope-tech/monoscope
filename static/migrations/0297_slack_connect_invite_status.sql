@@ -6,6 +6,7 @@ SET status = CASE WHEN error IS NOT NULL THEN 'failed' WHEN COALESCE(invite_id, 
     invite_id = CASE WHEN error IS NULL THEN NULLIF(invite_id, '') END;
 ALTER TABLE projects.slack_connect_invites
   ALTER COLUMN status SET NOT NULL,
+  DROP CONSTRAINT IF EXISTS slack_connect_invites_status_ck,
   ADD CONSTRAINT slack_connect_invites_status_ck CHECK (
     (status = 'invited' AND invite_id IS NOT NULL AND error IS NULL)
     OR (status = 'already_member' AND invite_id IS NULL AND error IS NULL)

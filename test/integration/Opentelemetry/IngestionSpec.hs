@@ -48,6 +48,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry hiding (BulkCol (..))
 import Network.GRPC.Common (GrpcError (..), GrpcException (..))
 import Network.GRPC.Common.Protobuf (Proto (..))
+import Network.Socket qualified as NS
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts
@@ -216,6 +217,13 @@ spec = do
       void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime k1 ["bulk-8.1/" <> show i | i <- [1 .. 2000 :: Int]] frozenTime)
       dbOne tr [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND body::text LIKE '%bulk-8.1/%' |] (Only pid) `shouldReturn` (2000 :: Int)
 
+    it "GRPC_HOSTS opens one OTLP listener per address, so IPv4 and IPv6 clients both connect" \tr -> do
+      let hosts = ["127.0.0.1", "::1"] :: [String]
+          ctx = tr.trATCtx{config = tr.trATCtx.config{grpcHosts = toText <$> hosts, grpcPort = 14317}}
+          connects host = do
+            addr : _ <- toList <$> NS.getAddrInfo (Just NS.defaultHints{NS.addrSocketType = NS.Stream}) (Just host) (Just "14317")
+            isRight <$> try @_ @SomeException (bracket (NS.openSocket addr) NS.close (`NS.connect` NS.addrAddress addr))
+      withAsync (OtlpServer.runServer tr.trLogger ctx tr.trTracerProvider) \_ -> traverse (\h -> eventually (connects h) id) hosts `shouldReturn` [True, True]
     it "HTTP credentials: header-only exports persist, keyed siblings stay isolated, and resource keys retain precedence" \tr -> do
       pid <- createTestProject tr "otlp-http-credentials"
       other <- createTestProject tr "otlp-http-other"

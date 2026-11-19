@@ -17,6 +17,8 @@ Monoscope can be configured through:
 |----------|-------------|---------|----------|
 | `PORT` | HTTP server port | 8080 | No |
 | `GRPC_PORT` | gRPC server port for OpenTelemetry | 4317 | No |
+| `GRPC_HOSTS` | Comma-separated addresses the gRPC server listens on, one listener each. An IPv6 listener accepts only IPv6, so use `0.0.0.0,::` for dual-stack and `::` for IPv6-only | 0.0.0.0 | No |
+| `HTTP_HOST` | Address the HTTP server listens on: `*4` IPv4, `*6` IPv4 and IPv6 (where the OS defaults to dual-stack sockets, as Linux does), `!6` IPv6 only, or one address | *4 | No |
 | `ENVIRONMENT` | Environment (DEV/STAGING/PROD) | DEV | No |
 | `HOST_URL` | Public URL of your Monoscope instance | http://localhost:8080 | No |
 

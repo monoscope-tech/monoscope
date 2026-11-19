@@ -55,7 +55,7 @@ import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Client (RequestBody (..), defaultRequest, requestBody)
+import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), RequestBody (..), defaultRequest, requestBody, responseStatus)
 import Network.HTTP.Types (Status, parseSimpleQuery, renderSimpleQuery, status202, status204, status401, status403, status429, status503)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types qualified as WreqTypes
@@ -146,6 +146,21 @@ data SlackReviewCase = ApproveSlackAction | DeclineSlackAction | ExpireSlackActi
 
 spec :: Spec
 spec = around withTestResources do
+  -- The production interpreter sends through the HTTP effect, so it is observable here: a
+  -- channel that refuses the bot (Discord 403) neither throws nor stops the fan-out behind it.
+  describe "Notify production" do
+    it "delivers Discord, WhatsApp and PagerDuty through HTTP; a refused Discord channel is contained" \tr -> do
+      let refuseDiscord _ url = Nothing <$ when ("discord.com" `T.isInfixOf` toText url) (throwIO $ HttpExceptionRequest defaultRequest $ StatusCodeException ((mockResponse "" $> ()){responseStatus = status403}) "")
+          fanOut =
+            traverse_
+              Notify.sendNotification
+              [ Notify.discordNotification "1387856684218581215" (AE.object [])
+              , Notify.whatsappNotification "tpl" "+15550000000" (AE.object [])
+              , Notify.pagerdutyNotification "rk" Notify.PDTrigger "dedup" "down" Notify.PDCritical (AE.object []) "https://x"
+              ]
+      (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses refuseDiscord $ Notify.runNotifyProduction fanOut
+      map (T.takeWhile (/= '/') . T.drop 8 . fst) requests `shouldBe` ["discord.com", "api.twilio.com", "events.pagerduty.com"]
+
   describe "Slack" do
     it "commands: /monoscope-here binds the channel once, /monoscope and /dashboard answer linked admins of one project" \tr -> do
       setupLinkedSlackData tr testPid "T_WF_SLACK"

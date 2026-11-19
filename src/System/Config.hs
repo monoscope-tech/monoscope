@@ -1,8 +1,9 @@
-module System.Config (EnvConfig (..), AIPrice, aiPriceMicrousd, TwilioContentSid, mkTwilioContentSid, twilioContentSidText, AuthContext (..), CodeBlobKey, getAppContext, configToEnv, DeploymentEnv (..), runPendingMigrations) where
+module System.Config (EnvConfig (..), AIPrice, aiPriceMicrousd, TwilioContentSid, mkTwilioContentSid, twilioContentSidText, AuthContext (..), CodeBlobKey, getAppContext, configToEnv, newProbeManagers, DeploymentEnv (..), runPendingMigrations) where
 
 import Colourista.IO (blueMessage)
 import Control.Exception.Safe qualified as Safe
 import Data.Base64.Types qualified as B64
+import Data.ByteString qualified as BS
 import Data.Cache (Cache, newCache)
 import Data.Char (isHexDigit)
 import Data.Default (Default (..))
@@ -15,6 +16,7 @@ import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..))
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple qualified as PG
@@ -58,6 +60,10 @@ data EnvConfig = EnvConfig
   , timefusionPgUrl :: Text -- TIMEFUSION_PG_URL
   , port :: Int
   , grpcPort :: Int -- "GRPC_PORT"
+  , grpcHosts :: [Text]
+  -- ^ One OTLP/gRPC listener per address. An IPv6 listener accepts only IPv6, so dual-stack is @0.0.0.0,::@.
+  , httpHost :: Text
+  -- ^ Warp host preference: @*4@ IPv4 (default), @*6@ dual-stack, @!6@ IPv6 only, or one address.
   , migrationsDir :: Text -- "MIGRATIONS_DIR"
   , chartCliPath :: Maybe Text -- "CHART_CLI_PATH"; unset means ./chart-cli. Local CI points it inside its container so its Linux build never replaces the host binary.
   , auth0ClientId :: Text
@@ -236,6 +242,15 @@ data EnvConfig = EnvConfig
   , redditConversionsToken :: Maybe Text
   , linkedInPartnerId :: Maybe Text
   , postHogApiKey :: Maybe Text
+  , monoscopeTelemetryDisabled :: Maybe Text
+  -- ^ Any value but empty, @0@ or @false@ stops anonymous usage reports; so does @DO_NOT_TRACK@.
+  , monoscopeTelemetryDebug :: Maybe Text
+  -- ^ Logs each usage report instead of sending it.
+  , doNotTrack :: Maybe Text
+  , telemetryEndpoint :: Text
+  , telemetryProjectId :: Maybe Projects.ProjectId
+  -- ^ Set on Monoscope's own deployment: the project usage reports are ingested into. It also stops
+  -- that deployment reporting on itself.
   , postHogApiHost :: Maybe Text
   , crispWebsiteId :: Maybe Text
   , basicAuthEnabled :: Bool
@@ -320,7 +335,10 @@ instance DefConfig EnvConfig where
   defConfig =
     (def :: EnvConfig)
       { port = 8080
+      , grpcHosts = ["0.0.0.0"]
+      , httpHost = "*4"
       , environment = Dev
+      , telemetryEndpoint = "https://app.monoscope.tech/telemetry/v1/report"
       , migrationsDir = "./static/migrations/"
       , messagesPerPubsubPullBatch = 1000
       , rrwebTopics = ["rrweb-client"]
@@ -378,6 +396,11 @@ instance DefConfig EnvConfig where
         -- the migration H1 rationale rules out.
         processedAtCutoff = UTCTime (fromGregorian 2026 4 15) 0
       }
+
+
+instance Var Projects.ProjectId where
+  fromVar = fmap DeriveUtils.UUIDId . UUID.fromString
+  toVar = UUID.toString . DeriveUtils.unUUIDId
 
 
 -- Support unmarshalling a coma separated text into a text list
@@ -441,6 +464,10 @@ type CodeBlobKey = (Text, Text, Text, Text)
 data AuthContext = AuthContext
   { env :: EnvConfig
   , s3HttpManager :: HC.Manager
+  , scrapeManager :: HC.Manager
+  -- ^ Prometheus scrapes: pooled, 10s timeout.
+  , probeManager :: HC.Manager
+  -- ^ Uptime probes: as 'scrapeManager', but a response body stops at 1 MB.
   , pool :: Pool.Pool Connection
   , jobsPool :: Pool.Pool Connection
   , timefusionPgPool :: Pool.Pool Connection
@@ -511,9 +538,21 @@ instance Default DeploymentEnv where
   def = Staging
 
 
+-- | The (scrape, probe) managers: pooled TLS with a 10s timeout; a probe's body stops at 1 MB,
+-- so a huge page cannot bloat the worker.
+newProbeManagers :: IO (HC.Manager, HC.Manager)
+newProbeManagers = (,) <$> HC.newManager settings <*> HC.newManager settings{HC.managerModifyResponse = capBody}
+  where
+    settings = HCTLS.tlsManagerSettings{HC.managerResponseTimeout = HC.responseTimeoutMicro 10_000_000}
+    capBody response = do
+      left <- newIORef (1_048_576 :: Int)
+      pure response{HC.responseBody = readIORef left >>= \n -> if n <= 0 then pure mempty else HC.brRead (HC.responseBody response) >>= \chunk -> BS.take n chunk <$ writeIORef left (n - BS.length chunk)}
+
+
 configToEnv :: IOE :> es => EnvConfig -> Eff es AuthContext
 configToEnv config = do
   s3HttpManager <- liftIO $ HC.newManager HCTLS.tlsManagerSettings
+  (scrapeManager, probeManager) <- liftIO newProbeManagers
   let createPgConnIO = PG.connectPostgreSQL $ DeriveUtils.addKeepaliveParams $ encodeUtf8 config.databaseUrl
       -- Raise TimescaleDB DML decompression limit for UPDATE queries on compressed hypertables
       tfParams =
@@ -638,6 +677,8 @@ configToEnv config = do
       , hasqlTimefusionUsesPgTypes = False -- prod TF is a real TimeFusion: bare text→Variant
       , env = config
       , s3HttpManager
+      , scrapeManager
+      , probeManager
       , projectCache
       , projectKeyCache
       , logsPatternCache

@@ -1617,6 +1617,16 @@ renderParseError q bundle =
 -- >>> parseQueryToAST "summarize count() by attribut"
 -- Left "Unknown field \"attribut\". Did you mean \"attributes\"?"
 --
+-- @project x = x@ passes @x@ through rather than defining it, so @x@ must still be a
+-- column; exempting it shipped @No field named span_id@ to TimeFusion:
+--
+-- >>> map (first (.message) . parseQueryDiagnosed Nothing) ["| project span_id = span_id", "message contains \"x\" | project message = message"]
+-- [Left "Unknown field \"span_id\"",Left "Unknown field \"message\""]
+-- >>> isRight (parseQueryToAST "| project body = body, trace_id = trace_id | take 5")
+-- True
+-- >>> isRight (parseQueryToAST "| extend slow = duration | project slow = slow")
+-- True
+--
 -- A numeric argument is a literal, not a field:
 -- >>> isRight (parseQueryToAST "summarize countif(coalesce(attributes.http.response.status_code, 0) >= 500)")
 -- True
@@ -1634,8 +1644,13 @@ unknownField sections = listToMaybe (mapMaybe check (collectSubjects sections))
     -- A number written as a scalar argument (`coalesce(status_code, 0)`) parses
     -- as a subject but names no field; it reaches SQL as the literal it is.
     isNumericLiteral t = not (T.null t) && T.all (\c -> isDigit c || c == '.') t
+    dropPassThrough = \case
+      ProjectCommand kvs -> ProjectCommand (filter (not . passThrough) kvs)
+      ExtendCommand kvs -> ExtendCommand (filter (not . passThrough) kvs)
+      s -> s
+    passThrough (name, agg) = case agg of Plain (Subject entire _ _) _ -> name == entire; _ -> False
     check (Subject entire root _)
-      | isNumericLiteral root || knownFieldRoot fieldUniverse root || root `elem` definedNames sections = Nothing
+      | isNumericLiteral root || knownFieldRoot fieldUniverse root || root `elem` definedNames (map dropPassThrough sections) = Nothing
       | otherwise = Just (entire, "Unknown field \"" <> entire <> "\"", ((\s -> "Did you mean \"" <> s <> "\"?") <$> suggestFieldRoot fieldUniverse root) <|> ("To search text, quote it: \"" <> entire <> "\"" <$ guard (entire `elem` bareWords)))
     -- Words typed on their own (parsed as `isnotempty(word)`), where free text was likely meant.
     bareWords = concatMap (foldMap bare . sectionExpr) sections

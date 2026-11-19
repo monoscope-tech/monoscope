@@ -105,6 +105,7 @@ module Models.Apis.Issues (
   setIssueAssignee,
   autoArchiveStaleDiscoveryIssues,
   selectIssueByHash,
+  selectIssuesByHashes,
   IssueScope (..),
   reopenIssue,
   bumpIssueUpdatedAt,
@@ -335,7 +336,7 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
-import Effectful (Eff, IOE, type (:>))
+import Effectful (Eff, type (:>))
 import Effectful.Log (Log)
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
@@ -845,15 +846,23 @@ data IssueScope = AnyIssue | OfType IssueType | OpenOfType IssueType
 
 
 selectIssueByHash :: DB es => Projects.ProjectId -> Text -> IssueScope -> Eff es (Maybe Issue)
-selectIssueByHash pid tgtHash scope =
-  Hasql.interpOne
-    $ selectFrom @Issue
-    <> [HI.sql| WHERE project_id = #{pid} AND target_hash = #{tgtHash}|]
-    <> case scope of
-      AnyIssue -> [HI.sql| ORDER BY updated_at DESC, id DESC|]
-      OfType ty -> [HI.sql| AND issue_type = #{ty}::apis.issue_type ORDER BY created_at DESC|]
-      OpenOfType ty -> [HI.sql| AND issue_type = #{ty}::apis.issue_type AND acknowledged_at IS NULL AND archived_at IS NULL|]
-    <> [HI.sql| LIMIT 1 |]
+selectIssueByHash pid tgtHash scope = Map.lookup tgtHash <$> selectIssuesByHashes pid (one tgtHash) scope
+
+
+-- | 'selectIssueByHash' for many hashes in one query (NewAnomaly ran it ~230 times per job),
+-- keyed by target hash. Rows arrive in scope order, so the first per hash is the one chosen.
+selectIssuesByHashes :: DB es => Projects.ProjectId -> NonEmpty Text -> IssueScope -> Eff es (Map Text Issue)
+selectIssuesByHashes pid hashes scope =
+  Map.fromListWith (\_ kept -> kept)
+    . map (\i -> (i.targetHash, i))
+    <$> Hasql.interp
+      ( selectFrom @Issue
+          <> [HI.sql| WHERE project_id = #{pid} AND target_hash = ANY(#{toList hashes}::text[])|]
+          <> case scope of
+            AnyIssue -> [HI.sql| ORDER BY updated_at DESC, id DESC|]
+            OfType ty -> [HI.sql| AND issue_type = #{ty}::apis.issue_type ORDER BY created_at DESC|]
+            OpenOfType ty -> [HI.sql| AND issue_type = #{ty}::apis.issue_type AND acknowledged_at IS NULL AND archived_at IS NULL|]
+      )
 
 
 -- | Bump updated_at and occurrence count; @extra@ appends further SET clauses
@@ -4300,7 +4309,7 @@ data ActivityNote = ActivityNote
 -- event of every alert episode that hung off it. The episodes are reachable from
 -- here and nowhere else, which is the point — an episode is a chapter of an
 -- issue, not a thing to go and look at separately.
-selectIssueActivity :: (DB es, IOE :> es, Log :> es) => Projects.ProjectId -> IssueId -> Eff es [IssueActivity]
+selectIssueActivity :: (DB es, Log :> es) => Projects.ProjectId -> IssueId -> Eff es [IssueActivity]
 selectIssueActivity pid issueId = do
   rows <-
     Hasql.interp @[(Text, Maybe Projects.UserId, UTCTime, Maybe (HI.AsJsonb AE.Value))]

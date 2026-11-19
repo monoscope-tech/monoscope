@@ -307,7 +307,13 @@ extra-source-files:
     static/migrations/0288_check_results_unique.sql
     static/migrations/0290_usage_submissions_rejected.sql
     static/migrations/0291_uptime_request_and_teams.sql
-    static/migrations/0292_home_highlights_and_slack_connect.sql
+    static/migrations/0292_instance_telemetry.sql
+    static/migrations/0293_repository_resource_detach.sql
+    static/migrations/0294_home_highlights_and_slack_connect.sql
+    static/migrations/0295_recent_views_and_audit_targets.sql
+    static/migrations/0296_project_activity_view.sql
+    static/migrations/0297_slack_connect_invite_status.sql
+    static/migrations/0298_dashboards_project_index.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb
     test/fixtures/github-app-test.pem
@@ -488,6 +494,7 @@ library
       Pkg.SchemaLearning
       Pkg.Slack
       Pkg.TestUtils
+      Pkg.UsageTelemetry
       ProcessMessage
       Start
       System.Config
@@ -680,6 +687,7 @@ library
     , monoscope-shared
     , mtl
     , neat-interpolation
+    , network
     , network-uri
     , odd-jobs
     , openai
@@ -699,6 +707,7 @@ library
     , proto-lens
     , proto-lens-runtime
     , random
+    , refined
     , regex
     , regex-tdfa
     , relude >=1.2.0.0
@@ -867,6 +876,7 @@ test-suite integration-tests
       ReplaySpec
       Spec
       SpecHook
+      System.LoggingSpec
       System.MigrationRunnerSpec
       Web.ApiV1Spec
       Web.AuthSpec
@@ -950,6 +960,7 @@ test-suite integration-tests
     , monoscope
     , monoscope-cli
     , monoscope-shared
+    , network
     , odd-jobs
     , openai
     , openapi3
@@ -1116,6 +1127,7 @@ test-suite test-dev
       Pkg.SchemaLearning
       Pkg.Slack
       Pkg.TestUtils
+      Pkg.UsageTelemetry
       ProcessMessage
       Start
       System.Config
@@ -1160,6 +1172,7 @@ test-suite test-dev
       ReplaySpec
       Spec
       SpecHook
+      System.LoggingSpec
       System.MigrationRunnerSpec
       Web.ApiV1Spec
       Web.AuthSpec
@@ -1340,6 +1353,7 @@ test-suite test-dev
     , monoscope-shared
     , mtl
     , neat-interpolation
+    , network
     , network-uri
     , odd-jobs
     , openai
@@ -1359,6 +1373,7 @@ test-suite test-dev
     , proto-lens
     , proto-lens-runtime
     , random
+    , refined
     , regex
     , regex-tdfa
     , relude >=1.2.0.0

@@ -248,6 +248,8 @@ tests:
       - text-display
       # The log explorer spec races live-tail registrations through a ki scope, and fakes a broker that throws.
       - ki
+      # IngestionSpec connects to each OTLP/gRPC listener over IPv4 and IPv6.
+      - network
       - safe-exceptions
       # DashboardWidgetsSpec slugifies widget titles the way the page does.
       - slugify

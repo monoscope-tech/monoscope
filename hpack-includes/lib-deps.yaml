@@ -101,6 +101,7 @@
 - hasql-interpolate
 - hasql-dynamic-statements
 - hs-opentelemetry-instrumentation-hasql
+- refined
 - regex-tdfa
 - regex
 - resource-pool
@@ -137,6 +138,7 @@
 - pretty-relative-time
 - tmp-postgres
 - directory
+- network
 - network-uri
 - scotty
 - filepath

@@ -10,7 +10,6 @@ import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Error.Static (throwError)
 import Effectful.Ki qualified as Ki
-import Effectful.Log qualified as Log
 import Effectful.Reader.Static (asks)
 import Effectful.Time qualified as Time
 import Models.Apis.Integrations (DiscordData (..), getDashboardsForDiscord, getDiscordData, insertDiscordData)
@@ -31,6 +30,7 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400, err401, err404)
 import System.Config (AuthContext (env), EnvConfig (..))
+import System.Logging qualified as Log
 import System.Types (ATBaseCtx)
 import Utils (hostPath)
 import Web.Links (CookieProtectedRoutes (..), urls)

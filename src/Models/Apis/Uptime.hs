@@ -9,7 +9,9 @@ module Models.Apis.Uptime (
   regionOf,
   servedRegions,
   downtimeAfter,
-  probeVerdict,
+  ProbeFailure (..),
+  probeFailure,
+  probeReason,
   CheckResult (..),
   recordResult,
   DayBucket (..),
@@ -93,23 +95,29 @@ downtimeAfter :: Int
 downtimeAfter = 2
 
 
--- | Whether a probe's answer (status, body) counts as up, with the reason shown for it.
+-- | Why a probe's answer (status, body) counts as down; 'Nothing' is up.
 --
--- >>> probeVerdict 200 Nothing (Right (200, ""))
--- (True,"ok")
--- >>> probeVerdict 200 (Just "healthy") (Right (200, "status: degraded"))
--- (False,"response lacks \"healthy\"")
--- >>> probeVerdict 200 (Just "healthy") (Right (503, "healthy"))
--- (False,"status 503, expected 200")
--- >>> probeVerdict 200 Nothing (Left "timeout")
--- (False,"request failed: timeout")
-probeVerdict :: Int -> Maybe Text -> Either Text (Int, Text) -> (Bool, Text)
-probeVerdict expected contains = \case
-  Left err -> (False, "request failed: " <> err)
-  Right (code, _) | code /= expected -> (False, "status " <> show code <> ", expected " <> show expected)
-  Right (_, body) -> case contains of
-    Just t | not (t `T.isInfixOf` body) -> (False, "response lacks \"" <> t <> "\"")
-    _ -> (True, "ok")
+-- >>> probeFailure 200 Nothing (Right (200, ""))
+-- Nothing
+-- >>> map (fmap probeReason . probeFailure 200 (Just "healthy")) [Right (200, "status: degraded"), Right (503, "healthy"), Left "timeout"]
+-- [Just "response lacks \"healthy\"",Just "status 503, expected 200",Just "request failed: timeout"]
+data ProbeFailure = RequestFailed Text | WrongStatus {got :: Int, expected :: Int} | MissingText Text
+  deriving stock (Eq, Show)
+
+
+probeFailure :: Int -> Maybe Text -> Either Text (Int, Text) -> Maybe ProbeFailure
+probeFailure expected contains = \case
+  Left err -> Just $ RequestFailed err
+  Right (got, body)
+    | got /= expected -> Just WrongStatus{got, expected}
+    | otherwise -> MissingText <$> mfilter (not . (`T.isInfixOf` body)) contains
+
+
+probeReason :: ProbeFailure -> Text
+probeReason = \case
+  RequestFailed err -> "request failed: " <> err
+  WrongStatus{got, expected} -> "status " <> show got <> ", expected " <> show expected
+  MissingText t -> "response lacks \"" <> t <> "\""
 
 
 -- | Regions a check can run from: this node's, and any a worker probed from in the last day.

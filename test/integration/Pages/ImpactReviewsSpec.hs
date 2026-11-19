@@ -64,6 +64,7 @@ import Network.Minio qualified as Minio
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Test qualified as WT
+import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.AIThreads qualified as AIThreads
 
 import Pages.CodeContext qualified as CodeContextPage
@@ -71,6 +72,7 @@ import Pages.GitSync qualified as GitSyncPage
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (Within, unrefine)
 import Pkg.Git qualified as Git
 import Pkg.GitCommand qualified as HostGit
 import Pkg.ImpactReview qualified as Impact
@@ -83,6 +85,7 @@ import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Directory (canonicalizePath, copyFile, createDirectoryIfMissing, createFileLink, doesDirectoryExist, doesFileExist, listDirectory, removeFile, removePathForcibly, renameDirectory)
 import System.Environment (getEnvironment)
+import System.Environment qualified as Environment
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.IO (hClose)
@@ -333,15 +336,9 @@ withKey :: AE.Key -> AE.Value -> AE.Value -> AE.Value
 withKey key value = \case AE.Object fields -> AE.Object $ KM.insert key value fields; other -> other
 
 
-data SandboxSession = SandboxSession {id :: Text, pid :: Word32, alive :: Bool}
+data SandboxSession = SandboxSession {id :: Text, pid :: Within 2 2147483647 Word32, alive :: Bool}
   deriving stock (Generic)
-
-
-instance AE.FromJSON SandboxSession where
-  parseJSON value = do
-    session <- AE.genericParseJSON AE.defaultOptions value
-    unless (session.pid > 1 && session.pid <= fromIntegral (maxBound :: Int32)) $ fail "Invalid SDK host process ID"
-    pure session
+  deriving anyclass (AE.FromJSON)
 
 
 sandboxSessions :: IO [SandboxSession]
@@ -495,10 +492,19 @@ slots agents = Workspace.Slots{node = "test-node", agents, verifiers = 2, builds
 
 spec :: Spec
 spec = around withTestResources $ describe "Production impact reviews" do
+  -- 2026-11-19: three fix runs ended as "Review agent could not be executed" when the agent gave up.
+  it "agentExitsWithoutSubmitting_saysSoInsteadOfCouldNotBeExecuted" \_ -> do
+    let request = Agent.Request{projectId = testPid, runId = UUIDId UUID.nil, attemptId = UUIDId UUID.nil, repository = "fixture", base = revision, head = revision, gitToken = "", prompt = "Review.", provider = "fixture", model = "fixture", thinkingLevel = Agent.Off}
+    result <- runEff $ Agent.runCodeReviewWith Nothing (Right Nothing) (Just \_ -> proc "sh" ["-c", "read request"]) $ Agent.reviewPatch request (const pass) (const pass) (const $ pure $ Right ())
+    leftToMaybe result `shouldBe` Just "Review agent exited without submitting a result"
+  -- 2026-11-19: reproduce_issue's admission agent waited 45 s for the slot its own parent fix held, then failed the fix.
+  it "childAgent_getsASlotWhileItsParentHoldsTheLastAgentSlot" \_ -> withSystemTempDirectory "vm-slots" \directory ->
+    bracket_ (Environment.setEnv "IMPACT_REVIEW_VM_SLOT_DIR" directory >> Environment.setEnv "IMPACT_REVIEW_VM_SLOTS" "1,1,1") (traverse_ Environment.unsetEnv ["IMPACT_REVIEW_VM_SLOT_DIR", "IMPACT_REVIEW_VM_SLOTS"]) do
+      Timeout.timeout 5000000 (Workspace.withSlot (Workspace.AgentPool Workspace.Parent) $ Workspace.withSlot (Workspace.AgentPool Workspace.Child) pass) `shouldReturn` Just ()
   it "allocation bridge: a malformed VM identity issues no proof; a cancelled VM records its confirmed cleanup per close outcome" \_ -> do
     base <- either (fail . show) pure $ Workspace.mkRevision revision
     let operations directory = lines . decodeUtf8 @Text <$> readFileBS (directory </> "operations.log")
-        open host directory = Guest.withGuest host Nothing directory base (Guest.Fresh Guest.Explore) Nothing (UUIDId UUID.nil)
+        open host directory = Guest.withGuest Workspace.Parent host Nothing directory base (Guest.Fresh Guest.Explore) Nothing (UUIDId UUID.nil)
     withAllocationBridge "malformed" \host directory -> do
       entered <- newIORef False
       (capture, receipts) <- recorder @Agent.AllocationReceipt
@@ -604,7 +610,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 closed <- Timeout.timeout (5 * 1000000) $ vanished session
                 when (isNothing closed) do
                   sessions <- sandboxSessions
-                  when (any (\current -> current.id == session.id && current.pid == session.pid && current.alive) sessions) $ Signal.signalProcess Signal.sigTERM $ fromIntegral session.pid
+                  when (any (\current -> current.id == session.id && current.pid == session.pid && current.alive) sessions) $ Signal.signalProcess Signal.sigTERM $ fromIntegral (unrefine session.pid)
                   Timeout.timeout (5 * 1000000) (vanished session) `shouldReturn` Just ()
         ( do
             path <- Timeout.timeout (15 * 1000000) (untilReady started) >>= maybe (fail "Verifier did not produce its startup marker and VM identity") pure
@@ -1879,7 +1885,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       initRepo repository
       base <- commit repository [("completed.txt", "original\n")] >>= either (fail . show) pure . Workspace.mkRevision
       let open :: Guest.Start -> (Guest.Session -> IO a) -> IO (Either Text a)
-          open preparation = Guest.withGuest host Nothing repository base preparation Nothing (UUIDId UUID.nil) (const $ pure ()) (const $ pure ())
+          open preparation = Guest.withGuest Workspace.Parent host Nothing repository base preparation Nothing (UUIDId UUID.nil) (const $ pure ()) (const $ pure ())
       let disk = directory </> "suspended.qcow2"
           digest = readProcessStdout_ $ proc "shasum" ["-a", "256", disk]
       saved <- open (Guest.Fresh Guest.Explore) \session -> do
@@ -1897,7 +1903,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         digest `shouldReturn` originalHash
       entered <- newIORef False
       changed <- either (fail . show) pure $ Workspace.mkRevision $ T.replicate 40 "1"
-      mismatched <- Guest.withGuest host Nothing repository changed (Guest.ResumeSession restored) Nothing (UUIDId UUID.nil) (const $ pure ()) (const $ pure ()) $ const $ writeIORef entered True
+      mismatched <- Guest.withGuest Workspace.Parent host Nothing repository changed (Guest.ResumeSession restored) Nothing (UUIDId UUID.nil) (const $ pure ()) (const $ pure ()) $ const $ writeIORef entered True
       mismatched `shouldSatisfy` isLeft
       readIORef entered `shouldReturn` False
       writeFileBS disk "corrupted checkpoint"
@@ -2906,7 +2912,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let attempt = UUIDId UUID.nil
     dbExec tr "INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, revision, exit_code, cast_bytes, gif, mp4) VALUES (?, ?, 'proof-1', 'head', ?, 0, convert_to('cast', 'UTF8'), convert_to('GIF89a fixture', 'UTF8'), convert_to('mp4 fixture', 'UTF8'))" (run.id, attempt, revision)
     [link] <- map (Impact.proofLink tr.trATCtx run) <$> runQueryEffect tr (Reviews.proofSides run attempt)
-    let app = genericServeTWithContext (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider) (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused") \_ _ -> pass) (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+    let app = genericServeTWithContext (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider) (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused") OtlpServer.collectUsageReport \_ _ -> pass) (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
         fetchWith headers url = WT.runSession (WT.request $ WT.setPath Wai.defaultRequest{Wai.requestHeaders = headers} $ encodeUtf8 $ fromMaybe url $ T.stripPrefix tr.trATCtx.config.hostUrl url) app
         fetch = fetchWith []
     preview <- fetch link.preview
@@ -3055,10 +3061,13 @@ spec = around withTestResources $ describe "Production impact reviews" do
             )
             (Just [Impact.ProofLink key side (T.replicate 40 (if side == Agent.Base then "d" else "a")) (Just $ if side == Agent.Base then 1 else 0) (media "gif") (media "mp4") (media "cast") (Just browser) (Just [Impact.Shot label (media (show n <> ".png")) | browser, (n, label) <- zip [1 :: Int ..] (if side == Agent.Base then ["Receipt without retries"] else ["Receipt with retry count", "Retry history"])]) (Just [(t, step) | browser, (t, step) <- [(0, "Open the receipt"), (6.4, "Retry the charge"), (14.2, "Read the retry count")]]) | (key, browser) <- [("proof-1", True), ("proof-2", False)], side <- [Agent.Base, Agent.Head], let media ext = "https://app.monoscope.tech/p/x/reviews/r/proofs/" <> key <> "-" <> T.toLower (show side) <> (if "png" `T.isSuffixOf` ext then "-" else ".") <> ext <> "?sig=s"])
             Nothing
+            Nothing
         render audience = Impact.renderReview "https://app.monoscope.tech" run audience result
     goldenText "impact-review/github-comment.md" $ render $ Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y" Nothing
     goldenText "impact-review/github-comment-links-only.md" $ render $ Impact.GitHubComment False "https://app.monoscope.tech/p/x/ai/runs/y" Nothing
     goldenText "impact-review/monoscope-view.md" $ render Impact.MonoscopeView
+    -- A change the diff shows whole says so instead of recording it.
+    goldenText "impact-review/github-comment-no-proof.md" $ Impact.renderReview "https://app.monoscope.tech" run (Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y" Nothing) result{Impact.findings = [], Impact.claims = Nothing, Impact.proofs = Nothing, Impact.summary = Just "Adds a Railway deploy button to the README and drops the obsolete Compose version field.", Impact.noProofNeeded = Just "Only the README and docker-compose.yml change; the diff shows both."}
     -- A browser proof leads with its recording, chapters and the merge-base and pull-request stills.
     let uiProof = result{Impact.claims = Just [Impact.Claim "Shows the retry count in the receipt" Impact.Matches "The receipt shows Retried once under the charge; before, it showed only the amount." ["proof-1"], Impact.Claim "Retries a timed-out capture once" Impact.Matches "The capture command retries after the first timeout and succeeds." ["proof-2"]]}
     goldenText "impact-review/github-comment-ui-proof.md" $ Impact.renderReview "https://app.monoscope.tech" run (Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y" (Just \case Reviews.Up -> "https://app.monoscope.tech/rate/up"; Reviews.Down -> "https://app.monoscope.tech/rate/down")) uiProof{Impact.issues = Just [Impact.Issue "Receipt total overflows its card at 1280px" "The total runs 9px past the receipt card on the right; it fits at 1440px." ["proof-1"]]}
@@ -3169,7 +3178,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 when (recovery == RuntimeWake) do
                   owner <- either fail pure . AE.eitherDecodeStrict @Int32 =<< readFileBS (bridge <> ".pid")
                   owner `shouldSatisfy` (> 1)
-                  owned <- filter (\session -> session.pid == fromIntegral owner && session.alive) <$> sandboxSessions
+                  owned <- filter (\session -> unrefine session.pid == fromIntegral owner && session.alive) <$> sandboxSessions
                   length owned `shouldBe` 1
                   children <- words . decodeUtf8 @Text <$> readProcessStdout_ (proc "pgrep" ["-P", show owner])
                   runner <- case traverse (readMaybe . toString) children of Just [child] | child > 1 -> pure (child :: Int32); _ -> fail "Expected the owned VM runner"
@@ -3359,7 +3368,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       [review] <- runQueryEffect tr $ Reviews.latestRuns testPid
       Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventPullRequest
       runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ExternalPosts) Catalog.ReviewEditors
-      let result = Impact.ReviewResult Impact.NoFinding [] [] [] frozenTime frozenTime Nothing Nothing Nothing Nothing Nothing Nothing
+      let result = Impact.ReviewResult Impact.NoFinding [] [] [] frozenTime frozenTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       runQueryEffect tr $ Reviews.saveResult review result
       dbExec tr "DELETE FROM background_jobs_long WHERE payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest review.id)
       cfg <- githubApp tr
@@ -3423,7 +3432,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         appComment (n :: Int) (app :: Int) body = AE.object ["id" AE..= n, "body" AE..= (body :: Text), "performed_via_github_app" AE..= AE.object ["id" AE..= app]]
         transport :: Bool -> ATBackgroundCtx a -> ATBackgroundCtx a
         transport hasComment = pullRequestApi files [appComment n app marker | hasComment, (n, app) <- [(88, 456), (99, 123)]] pass (prAt revision)
-        result = Impact.ReviewResult Impact.WorthChecking [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "The changed operation may stop emitting the signal used by the monitor. *check* @impact-review-test [outside](https://untrusted.invalid)\r#heading" "Check the monitor query before deploying." ["telemetry-1"]] [] [] frozenTime frozenTime Nothing (Just "Moves retry handling into the checkout operation. @impact-review-test | the monitor may lose its signal.") (Just [Impact.Assessment d (if d == Impact.ErrorDetection then Impact.Poor else Impact.Good) ["New path emits no span | table-breaking gap" | d == Impact.ErrorDetection] | d <- universe]) (Just []) Nothing Nothing
+        result = Impact.ReviewResult Impact.WorthChecking [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "The changed operation may stop emitting the signal used by the monitor. *check* @impact-review-test [outside](https://untrusted.invalid)\r#heading" "Check the monitor query before deploying." ["telemetry-1"]] [] [] frozenTime frozenTime Nothing (Just "Moves retry handling into the checkout operation. @impact-review-test | the monitor may lose its signal.") (Just [Impact.Assessment d (if d == Impact.ErrorDetection then Impact.Poor else Impact.Good) ["New path emits no span | table-breaking gap" | d == Impact.ErrorDetection] | d <- universe]) (Just []) Nothing Nothing Nothing
         resultText = pure . Right . jsonText
         fakeAgent :: ATBackgroundCtx a -> ATBackgroundCtx a
         fakeAgent = fakeAgentWith []
@@ -4222,6 +4231,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     baseRevision <- fixRevision base
     runQueryEffect tr (Fixes.createRun testPid fid issue mapping.id baseRevision imageId) `shouldReturn` Just fid
     runQueryEffect tr (Fixes.queueJob testPid (getResponse tr.trSessAndHeader).user.id fid) `shouldReturn` True
+    -- The base's workspace is prepared: odd-jobs deletes a finished job's row.
+    dbExec tr "DELETE FROM background_jobs_long WHERE payload->>'tag' = 'PrepareFixWorkspace'" ()
     [original] <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
     original.source `shouldBe` Issues.FixRun fid
     appConfig <- githubApp tr
@@ -4335,6 +4346,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- fixTitle_marksTheCut: a long issue title is cut with an ellipsis, not mid-word without one.
     dbOne tr "SELECT title FROM apis.ai_conversations WHERE title LIKE 'Fix: %'" () >>= (`shouldSatisfy` T.isSuffixOf "…")
     dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'FixIssue'" () `shouldReturn` (1 :: Int)
+    -- The base's warm workspace is prepared with it, outside the fix's own time budget.
+    dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'PrepareFixWorkspace'" () `shouldReturn` (1 :: Int)
     -- The routine's page lists the fix run it started, though fix runs carry no routine_id.
     fixId <- dbOne tr "SELECT run_id FROM projects.issue_fix_jobs" ()
     map ((.source) &&& (.routine)) <$> runQueryEffect tr (Issues.listConversationRuns testPid routine 5) `shouldReturn` [(Issues.FixRun fixId, Just "Issue autofix")]
@@ -4352,6 +4365,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Fixes.createRun testPid fid issue mapping.id base image) `shouldReturn` Just fid
     runQueryEffect tr (Fixes.queueJob testPid user fid) `shouldReturn` True
     runQueryEffect tr (Fixes.queueJob testPid user fid) `shouldReturn` True
+    -- The base's workspace is prepared: odd-jobs deletes a finished job's row.
+    dbExec tr "DELETE FROM background_jobs_long WHERE payload->>'tag' = 'PrepareFixWorkspace'" ()
     [shared] <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
     shared.source `shouldBe` Issues.FixRun fid
     runQueryEffect tr (Issues.runContextFor testPid $ Issues.ConversationClaim shared.id) `shouldReturn` Nothing
@@ -4479,6 +4494,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
         queue jobId = do
           runQueryEffect tr (Fixes.createRun testPid jobId issue mapping.id base image) `shouldReturn` Just jobId
           runQueryEffect tr (Fixes.queueJob testPid user jobId) `shouldReturn` True
+          -- The base's workspace is prepared: odd-jobs deletes a finished job's row.
+          dbExec tr "DELETE FROM background_jobs_long WHERE payload->>'tag' = 'PrepareFixWorkspace'" ()
         -- A refused job completes nothing.
         refused jobId mode = do
           tryAny (run jobId mode) >>= (`shouldSatisfy` isLeft)
@@ -4673,7 +4690,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             app mode =
               genericServeTWithContext
                 (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider . withMedia mode)
-                (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused") \_ _ -> pass)
+                (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused") OtlpServer.collectUsageReport \_ _ -> pass)
                 (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
             path = "/p/" <> testPid.toText <> "/issue-fixes/" <> fid.toText
             authorization = ("Authorization", "Bearer " <> UUID.toASCIIBytes (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId)

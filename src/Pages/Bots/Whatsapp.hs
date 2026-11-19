@@ -7,7 +7,6 @@ import Data.Aeson.Lens qualified as AEL
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Text qualified as T
 import Data.Vector qualified as V
-import Effectful.Log qualified as Log
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Models.Apis.Integrations (getDashboardsForWhatsapp)
@@ -20,6 +19,7 @@ import Pkg.Components.Widget (Widget (..))
 import Relude
 import System.Config (AuthContext (backgroundScope))
 import System.Config qualified as Config
+import System.Logging qualified as Log
 import System.Tracing (forkBackground)
 import System.Types (ATBaseCtx)
 import Utils (toUriStr)

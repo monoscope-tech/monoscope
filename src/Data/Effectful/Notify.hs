@@ -35,8 +35,6 @@ module Data.Effectful.Notify (
   pagerdutyNotification,
 ) where
 
-import Control.Exception (try)
-import Control.Exception.Safe qualified as Safe
 import Control.Lens ((.~), (^?))
 import Control.Lens.Getter ((^.))
 import Control.Lens.Setter ((?~))
@@ -45,6 +43,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.Lens (key, _String)
 import Data.Aeson.QQ (aesonQQ)
+import Data.Effectful.Wreq (HTTP, postWith)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
 import Data.Vector qualified as V
@@ -56,12 +55,14 @@ import Effectful.TH
 import Network.HTTP.Types (statusCode, statusIsSuccessful)
 import Network.Mail.Mime (Address (..), Mail (..), htmlPart)
 import Network.Mail.SMTP (sendMailWithLoginSTARTTLS', sendMailWithLoginTLS')
-import Network.Wreq (FormParam ((:=)), auth, basicAuth, checkResponse, defaults, header, postWith, responseBody, responseHeader, responseStatus)
+import Network.Wreq (FormParam ((:=)), auth, basicAuth, checkResponse, defaults, header, responseBody, responseHeader, responseStatus)
 import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude hiding (Reader, State, ask, get, modify, put, runState)
 import System.Config qualified as Config
+import System.IO.Error (userError)
 import System.Logging qualified as Log
-import System.Timeout (timeout)
+import UnliftIO.Exception (throwIO, tryAny)
+import UnliftIO.Timeout (timeout)
 
 
 -- Notification data types
@@ -301,7 +302,7 @@ dropChannel v = v
 
 
 -- Production interpreter
-runNotifyProduction :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => Eff (Notify ': es) a -> Eff es a
+runNotifyProduction :: (HTTP :> es, IOE :> es, Log :> es, Reader Config.AuthContext :> es) => Eff (Notify ': es) a -> Eff es a
 runNotifyProduction = interpret $ \_ -> \case
   SendNotification notification -> case notification of
     EmailNotification EmailData{..} -> do
@@ -310,8 +311,7 @@ runNotifyProduction = interpret $ \_ -> \case
           via = if cfg.smtpHost == "" then "api" :: Text else "smtp"
       Log.logTrace "Sending email notification" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via])
       result <-
-        liftIO
-          $ try @SomeException
+        tryAny
           $ timeout 30_000_000
           $ if cfg.smtpHost == ""
             then do
@@ -320,14 +320,14 @@ runNotifyProduction = interpret $ \_ -> \case
                   reqPayload = [aesonQQ|{ "From": #{fromAddress}, "Subject": #{subject}, "To": #{receiver}, "HtmlBody": #{htmlBody}, "MessageStream": "outbound" }|]
                   opts = defaults & header "Content-Type" .~ ["application/json"] & header "Accept" .~ ["application/json"] & header "X-Postmark-Server-Token" .~ [apiKey]
               re <- postWith opts "https://api.postmarkapp.com/email" reqPayload
-              unless (statusIsSuccessful (re ^. responseStatus)) $ fail $ "Postmark returned " <> show (re ^. responseStatus)
+              unless (statusIsSuccessful (re ^. responseStatus)) $ throwIO $ userError $ "Postmark returned " <> show (re ^. responseStatus)
             else do
               let from = Address Nothing cfg.smtpSender
                   to = Address Nothing receiver
                   mail = Mail from [to] [] [] [("Subject", subject)] [[htmlPart (toLazy htmlBody)]]
                   port = fromIntegral cfg.smtpPort
                   sendMail = if cfg.smtpTls then sendMailWithLoginTLS' else sendMailWithLoginSTARTTLS'
-              sendMail (toString cfg.smtpHost) port (toString cfg.smtpUsername) (toString cfg.smtpPassword) mail
+              liftIO $ sendMail (toString cfg.smtpHost) port (toString cfg.smtpUsername) (toString cfg.smtpPassword) mail
       case result of
         Right (Just ()) -> Log.logTrace "Email sent successfully" (AE.object ["to" AE..= receiver, "via" AE..= via])
         Right Nothing -> Log.logAttention "Email send timed out after 30s" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via])
@@ -350,7 +350,7 @@ runNotifyProduction = interpret $ \_ -> \case
             ]
               :: [FormParam]
       -- A failed send must not abort the rest of the team fan-out (PagerDuty, email) behind it.
-      liftIO (Safe.tryAny $ postWith opts url payload) >>= \case
+      tryAny (postWith opts url payload) >>= \case
         Left e -> Log.logAttention "WhatsApp send failed" (AE.object ["to" AE..= to, "template" AE..= template, "error" AE..= displayException e])
         Right _ -> pass
     PagerdutyNotification PagerdutyData{..} -> do
@@ -379,7 +379,7 @@ runNotifyProduction = interpret $ \_ -> \case
             }|]
           opts = defaults & header "Content-Type" .~ ["application/json"]
           policy = exponentialBackoff 1000000 <> limitRetries 3
-      re <- liftIO $ retrying policy (\_ r -> pure $ not $ statusIsSuccessful (r ^. responseStatus)) \_ -> postWith opts "https://events.pagerduty.com/v2/enqueue" payload
+      re <- retrying policy (\_ r -> pure $ not $ statusIsSuccessful (r ^. responseStatus)) \_ -> postWith opts "https://events.pagerduty.com/v2/enqueue" payload
       unless (statusIsSuccessful (re ^. responseStatus)) $ Log.logAttention "PagerDuty notification failed" (dedupKey, show $ re ^. responseStatus)
   SendNotificationWithReply notification -> case notification of
     SlackNotification slackData -> sendSlack slackData
@@ -409,7 +409,7 @@ runNotifyProduction = interpret $ \_ -> \case
             authenticated = if isJust webhook then opts else opts & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> sd.botToken]
             context = AE.object ["project_id" AE..= sd.projectIdCtx, "team_id" AE..= sd.teamIdCtx, "channel_id" AE..= sd.channelId, "transport" AE..= if isJust webhook then "webhook" else apiMethod]
             post payload = do
-              response <- liftIO $ try @SomeException $ timeout 30_000_000 $ postWith authenticated (toString url) payload
+              response <- tryAny $ timeout 30_000_000 $ postWith authenticated (toString url) payload
               pure $ case response of
                 Right (Just re)
                   | statusCode (re ^. responseStatus) == 429 ->
@@ -441,22 +441,24 @@ runNotifyProduction = interpret $ \_ -> \case
         pure result
       _ -> pure $ SlackRejected "invalid_payload"
 
-    sendDiscord :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => DiscordData -> Eff es (Maybe Text)
+    sendDiscord :: (HTTP :> es, IOE :> es, Log :> es, Reader Config.AuthContext :> es) => DiscordData -> Eff es (Maybe Text)
     sendDiscord DiscordData{..} = do
       appCtx <- ask @Config.AuthContext
       let url = toString $ "https://discord.com/api/v10/channels/" <> channelId <> "/messages"
-          opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bot " <> appCtx.config.discordBotToken]
+          -- A rejection is answered, not thrown: wreq's exception dumped the whole request and
+          -- response (cookies included) and hid Discord's reason, e.g. 50001 Missing Access.
+          opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bot " <> appCtx.config.discordBotToken] & checkResponse ?~ (\_ _ -> pass)
           payloadWithReply = case (replyToMessageId, payload) of
             (Just msgId, AE.Object obj) ->
               AE.Object $ AEK.insert "message_reference" (AE.object ["message_id" AE..= msgId]) obj
             _ -> payload
-      result <- liftIO $ try @SomeException $ postWith opts url payloadWithReply
+      result <- tryAny $ postWith opts url payloadWithReply
       case result of
         Right re
           | statusIsSuccessful (re ^. responseStatus) ->
               pure $ (AE.decode (re ^. responseBody) :: Maybe AE.Value) >>= (^? key "id" . _String)
         Right re -> do
-          Log.logAttention "Discord notification failed" (channelId, show $ re ^. responseStatus)
+          Log.logAttention "Discord notification failed" (channelId, statusCode (re ^. responseStatus), T.take 500 $ decodeUtf8 @Text (re ^. responseBody))
           pure Nothing
         Left ex -> do
           Log.logAttention "Discord notification failed" (channelId, displayException ex)

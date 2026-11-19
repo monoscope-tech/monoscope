@@ -143,8 +143,6 @@ import Data.Scientific qualified as Sci
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
-import Data.These (These (..))
-import Data.These qualified as These
 import Data.Time (UTCTime (..))
 import Data.Time.Clock (NominalDiffTime, addUTCTime, diffTimeToPicoseconds, diffUTCTime, nominalDay, picosecondsToDiffTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
@@ -190,6 +188,8 @@ import Text.Casing (fromAny, toKebab)
 import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue, tokenFlow)
 import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 import "cryptonite" Crypto.Hash qualified as Crypto
+import "these" Data.These (These (..))
+import "these" Data.These qualified as These
 
 
 -- $setup
@@ -668,7 +668,7 @@ mkTrace trId startOf endOf svcOf ne =
 
 -- | Fetch a trace's spans once and return both the aggregate 'Trace' and the
 -- spans, so callers rendering the waterfall don't re-query the same trace.
-getTraceDetails :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe (Trace, [OtelLogsAndSpans]))
+getTraceDetails :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe (Trace, [OtelLogsAndSpans]))
 getTraceDetails useTf pid trId tme now = do
   spans <- getSpanRecordsByTraceId useTf pid trId tme now Nothing
   pure $ viaNonEmpty (\ne -> (mkTrace trId (.start_time) (.end_time) spanServiceName ne, toList ne)) spans
@@ -683,7 +683,7 @@ getTraceDetails useTf pid trId tme now = do
 -- past this page, so the caller can offer the next one. The 'Trace' aggregate
 -- (span count, duration, services) describes the page, not the whole trace —
 -- it is what the header reports, and the header reports what is on screen.
-getTraceDetailsForView :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es (Maybe (Trace, V.Vector SpanRecord, Bool))
+getTraceDetailsForView :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es (Maybe (Trace, V.Vector SpanRecord, Bool))
 getTraceDetailsForView useTf pid trId tme now limitM = do
   (rows, hasMore) <- getTraceRowsWith selectTraceSpanRows (.spanId) (.parentSpanId) useTf pid trId tme now limitM
   pure $ viaNonEmpty (\ne -> (mkTrace trId (.startTime) (.endTime) (resourceServiceName . unAesonTextMaybe . (.resource)) ne, V.mapMaybe (traceSpanRecord trId) (V.fromList (toList ne)), hasMore)) rows
@@ -821,7 +821,7 @@ defaultTraceSpanPage = 300
 --
 -- Parameterized by SELECT builder and id accessors so the full-record and
 -- overlay-projection row types share one implementation.
-getTraceRowsWith :: (DB es, HI.DecodeRow a, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es) => (Text -> UTCTime -> UTCTime -> HI.Sql -> HI.Sql) -> (a -> Maybe Text) -> (a -> Maybe Text) -> Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es ([a], Bool)
+getTraceRowsWith :: (DB es, HI.DecodeRow a, Labeled "timefusion" Hasql :> es, Log :> es) => (Text -> UTCTime -> UTCTime -> HI.Sql -> HI.Sql) -> (a -> Maybe Text) -> (a -> Maybe Text) -> Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es ([a], Bool)
 getTraceRowsWith select spanIdOf parentIdOf useTf pid trId tme now limitM = Hasql.withHasqlTimefusion useTf do
   let baseT = fromMaybe now tme
       (start, end) = case tme of
@@ -1032,7 +1032,7 @@ maxOrphanResolverHops :: Int
 maxOrphanResolverHops = 3
 
 
-resolveTraceOrphans :: (IOE :> es, Log :> es) => Projects.ProjectId -> Text -> ([Text] -> Eff es [a]) -> (a -> Maybe Text) -> (a -> Maybe Text) -> [a] -> Eff es [a]
+resolveTraceOrphans :: Log :> es => Projects.ProjectId -> Text -> ([Text] -> Eff es [a]) -> (a -> Maybe Text) -> (a -> Maybe Text) -> [a] -> Eff es [a]
 resolveTraceOrphans pid trId fetch spanIdOf parentIdOf initial = do
   -- Parent_ids referenced by some span in the batch but not present (and not empty).
   let missing rs = let present = S.fromList $ mapMaybe spanIdOf rs in ordNub [p | r <- rs, Just p <- [parentIdOf r], not (T.null p), not (S.member p present)]
@@ -1062,7 +1062,7 @@ resolveTraceOrphans pid trId fetch spanIdOf parentIdOf initial = do
 -- drawing the whole trace, so they should pass a limit generous enough to
 -- contain the span they are searching for — a render-sized page would silently
 -- anchor them on the first span instead.
-getSpanRecordsByTraceId :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es [OtelLogsAndSpans]
+getSpanRecordsByTraceId :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es [OtelLogsAndSpans]
 getSpanRecordsByTraceId useTf pid trId tme now limitM =
   fst <$> getTraceRowsWith selectOtelSpans (\r -> r.context >>= (.span_id)) (.parent_id) useTf pid trId tme now limitM
 
@@ -1999,7 +1999,7 @@ handOffBatches worker caches records = do
 -- 0x1F-joined and are rebuilt with @string_to_array(_, chr(31))@.
 -- @usePgTypes@: 'True' for PostgreSQL/TimescaleDB (cast id/JSON to
 -- uuid/jsonb), 'False' for TimeFusion (bare text→Variant). See 'insertUnnestStmt'.
-bulkInsertOtelLogsAndSpans :: (DB es, IOE :> es, Log :> es) => Bool -> V.Vector OtelLogsAndSpans -> Eff es BulkInsertResult
+bulkInsertOtelLogsAndSpans :: (DB es, Log :> es) => Bool -> V.Vector OtelLogsAndSpans -> Eff es BulkInsertResult
 bulkInsertOtelLogsAndSpans usePgTypes records
   | V.null records = pure mempty
   | otherwise = do
@@ -2344,7 +2344,7 @@ otelColumns =
 -- JSON ~50× per row), parse is_remote, and validate the id is a UUID (TS's id
 -- column is uuid — fail loud rather than write under a sentinel). An
 -- unparseable is_remote is logged, not fatal.
-mkOtelRow :: (IOE :> es, Log :> es) => OtelLogsAndSpans -> Eff es OtelRow
+mkOtelRow :: Log :> es => OtelLogsAndSpans -> Eff es OtelRow
 mkOtelRow e = do
   when (isNothing (UUID.fromText e.id)) $ throwIO (InvalidOtelRowIdException e.id)
   isRemote <- case e.context >>= (.is_remote) of

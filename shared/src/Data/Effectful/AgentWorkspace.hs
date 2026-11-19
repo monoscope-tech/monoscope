@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Data.Effectful.AgentWorkspace (Workspace, checkLogLimit, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Outcome (..), Start (..), preparedOutcome, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), Slots (..), hostSlots, buildSeconds, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, checkLogLimit, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Outcome (..), Start (..), preparedOutcome, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), Seat (..), Slots (..), hostSlots, buildSeconds, withSlot, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, compileFailed, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
 import Control.Exception qualified as Exception
@@ -1257,6 +1257,8 @@ verifyArtifactRegression options request = do
                       | before /= after = (Invalidated, Just "Tracked source changed during the check")
                       | exit `elem` [126, 127] = (Blocked, Just "Check command or dependency unavailable")
                       | exit == 0 = (Passed, Nothing)
+                      -- A compiler quotes the source line, so a test that never ran still "emits" its literal.
+                      | compileFailed logBytes = (Blocked, Just "The check did not compile. Fix the build error in the log; a compile failure is not a reproduced bug.")
                       | encodeUtf8 artifact.failureMessage `BS.isInfixOf` logBytes = (Failed, Nothing)
                       | otherwise = (Blocked, Just $ "Failure did not emit the expected case-sensitive literal " <> decodeUtf8 (AE.encode artifact.failureMessage) <> ". Inspect the full log and correct the check or assertion text; setup/dependency errors are not reproduced bugs.")
                 change $ \measured -> measured{status, reason, exitCode = Just exit, sourceAfter = Just after}
@@ -1730,10 +1732,15 @@ buildSeconds :: Int
 buildSeconds = 3600
 
 
--- | Which host-wide VM slots a sandbox draws from. Verifier VMs start while an agent VM holds its
--- slot, so they have their own pool and agents can never starve them; long workspace builds get
--- one slot of their own so they cannot starve proofs. Image lookups start no VM.
-data Pool = AgentPool | VerifierPool | PreparePool | NoVm
+-- | Which host-wide VM slots a sandbox draws from. Verifier and child-agent (admission, peer) VMs
+-- start while their parent agent VM holds its slot, so they have their own pools and agents can
+-- never starve them; long workspace builds get one slot of their own so they cannot starve proofs.
+-- Image lookups start no VM.
+data Pool = AgentPool Seat | VerifierPool | PreparePool | NoVm
+  deriving stock (Eq, Show)
+
+
+data Seat = Parent | Child
   deriving stock (Eq, Show)
 
 
@@ -1774,7 +1781,8 @@ withSlot pool action = do
       held name count patience = createDirectoryIfMissing True directory >> bracket (acquire patience (paths name count) (0 :: Int)) unlockFile (const action)
   case pool of
     NoVm -> action
-    AgentPool -> held "agent" slots.agents 45
+    AgentPool Parent -> held "agent" slots.agents 45
+    AgentPool Child -> held "child" slots.agents 45
     VerifierPool -> held "verifier" slots.verifiers 45
     PreparePool -> held "prepare" slots.builds buildSeconds
 
@@ -1838,3 +1846,12 @@ withOwner supplied action = do
   present
   thread <- myThreadId
   withAsync (catchAny (forever $ threadDelay 250000 >> present) $ throwTo thread) $ const action
+
+
+-- | Whether a check's log shows its build failing, for each stack the guest builds: a failure
+-- there never ran the test, whatever text the diagnostics quote.
+--
+-- >>> map compileFailed ["test/Spec.hs:173:14: error: [GHC-39999]\n  expectationFailure \"boom\"", "error[E0308]: mismatched types", "src/a.ts(3,1): error TS2322: x", "FAIL\tpkg [build failed]", "[ERROR] COMPILATION ERROR :", "expected: 5\n but got: 6\nboom"]
+-- [True,True,True,True,True,False]
+compileFailed :: ByteString -> Bool
+compileFailed logBytes = any (`BS.isInfixOf` logBytes) ["error: [GHC-", "error[E", "): error TS", "[build failed]", "COMPILATION ERROR"]

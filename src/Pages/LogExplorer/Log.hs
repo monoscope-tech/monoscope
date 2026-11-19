@@ -56,7 +56,6 @@ import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Exception (trySync)
 import Effectful.Labeled (Labeled)
-import Effectful.Log qualified as ELog
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Lucid
@@ -619,7 +618,7 @@ buildLogResult useTf withChildren' shape pid now sinceM addCols removeCols (requ
 -- | Standalone query function for the v1 API events endpoint. Returns a
 -- JSON-shaped 400 (@{"error": {code, message, field?, suggestion?, details?}}@)
 -- for parse/query errors instead of raw Hasql/SQL.
-queryEvents :: (DB es, ELog.Log :> es, Effectful.Reader.Static.Reader AuthContext :> es, Error Servant.ServerError :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Text -> Eff es LogResult
+queryEvents :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error Servant.ServerError :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log.Log :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Text -> Eff es LogResult
 queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttributesM environmentM serviceM = do
   now <- Time.currentTime
   let queryInput = fromMaybe "" queryM
@@ -1697,7 +1696,7 @@ instance ToHtml AlertForm where
         form_
           [ id_ "alert-form"
           , hxPost_ (urls.monitors pid).alertUpsertPost
-          , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: window.getTagValues('#alert-form-teams')}"
+          , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType()}"
           , hxSwap_ "none"
           , class_ "flex flex-col gap-3"
           , resetFormOnSuccessAttr_
@@ -1724,7 +1723,7 @@ instance ToHtml AlertForm where
                 div_ [class_ "flex-1"] $ formField_ FieldSm def{value = fromMaybe "" monitorService, placeholder = "e.g. checkout"} "Service" "service" False Nothing
 
             let selectedTeamIds = maybe V.empty (.teams) alertM
-            AlertUI.notificationSettingsSection_ teams selectedTeamIds "alert-form" alertM
+            AlertUI.notificationSettingsSection_ teams selectedTeamIds alertM
 
             div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
               label_

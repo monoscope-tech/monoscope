@@ -63,6 +63,19 @@ describe('embedded log widget: fetch URL', () => {
     expect(url.searchParams.get('to')).toBe('2024-01-02T00:00:00Z');
   });
 
+  // #743: the list kept the variable value resolved at render until the page was reloaded.
+  test('a dashboard variable changed after render re-resolves the widget query', async () => {
+    setPageUrl('?var-service=service-b');
+    const el = await embedded({
+      initialFetchUrl: '/p/proj-1/log_explorer/data?json=true&layout=1&query=resource.service.name%20%3D%3D%20%22service-a%22',
+      queryTemplate: 'resource.service.name == "{{var-service}}"',
+    });
+
+    expect(new URL((el as any).buildJsonUrl()).searchParams.get('query')).toBe('resource.service.name == "service-b"');
+    setPageUrl('');
+    expect(new URL((el as any).buildJsonUrl()).searchParams.get('query')).toBe('resource.service.name == "service-a"');
+  });
+
   test('a standalone list ignores initialFetchUrl and derives the path from its mode', async () => {
     setPageUrl('?since=1H');
     const el = await mountList({ projectId: 'proj-1', mode: 'patterns' } as any);

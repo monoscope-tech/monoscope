@@ -11,6 +11,8 @@ module Models.Apis.PrometheusScrapeConfigs (
   RequestHeaders (..),
   parseHeaders,
   renderHeaders,
+  mask,
+  unmask,
   maskHeaders,
   unmaskHeaders,
   configsByProjectId,
@@ -38,7 +40,6 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Sleep (Sleep)
 import Data.List (lookup, partition)
 import Data.Text qualified as T
-import Data.These qualified as These
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Vector qualified as V
@@ -48,23 +49,23 @@ import Effectful.Exception (throwIO)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
-import Effectful.Log qualified as Log
 import Effectful.Reader.Static qualified as Eff
 import Hasql.Interpolate qualified as HI
 import Models.Ids qualified as Projects
 import Models.Projects.ProjectMembers (TeamId)
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Network.HTTP.Client (managerResponseTimeout, responseTimeoutMicro)
-import Network.HTTP.Client.TLS (tlsManagerSettings)
+import Network.HTTP.Client (Manager)
 import Network.Wreq (defaults, header)
 import Network.Wreq qualified as Wreq
 import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..), unUUIDId)
 import Pkg.Prometheus qualified as Prom
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Logging qualified as Log
 import System.Types (DB)
 import Utils (safeScrapeUrl)
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData, toUrlPiece)
+import "these" Data.These qualified as These
 
 
 type PrometheusScrapeConfigId = UUIDId "prometheus_scrape_config"
@@ -160,11 +161,20 @@ maskHeaders (RequestHeaders hs) = RequestHeaders [(n, mask) | (n, _) <- hs]
 
 
 unmaskHeaders :: RequestHeaders -> RequestHeaders -> RequestHeaders
-unmaskHeaders (RequestHeaders stored) (RequestHeaders hs) = RequestHeaders [(n, if v == mask then fromMaybe v (lookup n stored) else v) | (n, v) <- hs]
+unmaskHeaders (RequestHeaders stored) (RequestHeaders hs) = RequestHeaders [(n, fromMaybe v (unmask (lookup n stored) v)) | (n, v) <- hs]
 
 
+-- | What a page shows in place of a stored secret.
 mask :: Text
 mask = "••••••"
+
+
+-- | A submitted secret: the 'mask' sent back keeps the stored one.
+--
+-- >>> (unmask (Just "s3cret") mask, unmask (Just "s3cret") "new", unmask Nothing mask)
+-- (Just "s3cret",Just "new",Nothing)
+unmask :: Maybe Text -> Text -> Maybe Text
+unmask stored v = if v == mask then stored else Just v
 
 
 -- | A validated uptime check: what to request, and what counts as up.
@@ -362,11 +372,11 @@ sampleToMetricRecord cfg now s =
 -- | wreq Options for a scrape: hard 10s response timeout (a dead/slow endpoint must never wedge
 -- a worker), no redirect following, and an optional Authorization header. Shared by the background
 -- worker and the settings Test button so the two never drift on timeout or header wiring.
-prometheusScrapeOpts :: Maybe Text -> Wreq.Options
-prometheusScrapeOpts authHeader =
+prometheusScrapeOpts :: Manager -> Maybe Text -> Wreq.Options
+prometheusScrapeOpts mgr authHeader =
   defaults
     & Wreq.manager
-    .~ Left tlsManagerSettings{managerResponseTimeout = responseTimeoutMicro 10_000_000}
+    .~ Right mgr
       -- Don't follow redirects: http-client (unlike browsers) re-sends Authorization across a
       -- cross-host 3xx, so a target answering 302 -> attacker could exfiltrate the bearer token.
       & Wreq.redirects

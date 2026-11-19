@@ -7,7 +7,7 @@
 -- which reaches @Pkg.Components.Widget@, which imports @LogItem@ — a cycle. The renderer in
 -- "Pages.Components" only ever builds the URL, so nothing on the rendering side has to know
 -- this module exists.
-module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, FrameSource (..), repositoriesGetH, RepositoriesGet (..), serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, RepositoryRemoval (..), repositorySourceGetH, RepositorySourceGet, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, ReviewChange (..), repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), MappingsPanel, MappingRejection (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixEvidenceH, issueFixMediaH, issueFixPackageH, rangedMedia) where
+module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, repositoryDetachPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, FrameSource (..), repositoriesGetH, RepositoriesGet (..), serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, RepositoryRemoval (..), repositorySourceGetH, RepositorySourceGet, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, ReviewChange (..), repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), MappingsPanel, MappingRejection (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixEvidenceH, issueFixMediaH, issueFixPackageH, rangedMedia) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Commonmark qualified as Markdown
@@ -40,7 +40,7 @@ import Effectful.Reader.Static qualified
 import Hasql.Interpolate qualified as HI
 import Lucid hiding (for_)
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxDelete_, hxGet_, hxInclude_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxInclude_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.AgentUsage qualified as Usage
@@ -955,6 +955,17 @@ repositoryFolderPostH pid rid form = do
   repositoryGetH pid rid
 
 
+-- | Stops syncing one resource: it stays in Monoscope and its file stays in the repository (#680).
+repositoryDetachPostH :: Projects.ProjectId -> GitSync.RepositoryId -> UUIDId "repository_resource" -> ATAuthCtx (RespHeaders (PageCtx RepositoryGet))
+repositoryDetachPostH pid rid resourceId = do
+  requireReviewWrite pid
+  page <- repositoryGetH pid rid
+  resource <- maybe (throwError err404) pure $ find (\item -> item.id == resourceId && isNothing item.detachedAt) (getResponse page).content.resources
+  RepositorySync.detach resource
+  addSuccessToast "Detached from Git" (Just "It stays in Monoscope. Its file stays in the repository, and sync no longer changes either.")
+  repositoryGetH pid rid
+
+
 repositoryConflictPostH :: Projects.ProjectId -> GitSync.RepositoryId -> UUIDId "repository_resource" -> ConflictForm -> ATAuthCtx (RespHeaders (PageCtx RepositoryGet))
 repositoryConflictPostH pid rid resourceId form = do
   requireReviewWrite pid
@@ -1113,6 +1124,9 @@ instance ToHtml RepositoryGet where
       $ ul_ [class_ "divide-y divide-strokeWeak"]
       $ forM_ page.resources \resource -> li_ [class_ "flex flex-wrap items-center justify-between gap-3 p-3"] do
         code_ [class_ "text-xs text-textStrong break-all"] $ toHtml resource.filePath
+        if isJust resource.detachedAt
+          then span_ [class_ "text-sm text-textWeak"] "Detached: kept in Monoscope, not synced"
+          else when canEdit $ post (urls.repositoryDetachPost pid rid resource.id) [hxConfirm_ "Stop syncing this file? It stays in Monoscope and in the repository."] $ button_ [type_ "submit", class_ "btn btn-sm btn-ghost"] "Detach"
         when resource.conflicted do
           span_ [class_ "text-sm text-textWarning"] "Both versions changed"
           details_ [class_ "w-full min-w-0 space-y-3"] do

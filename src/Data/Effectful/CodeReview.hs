@@ -32,13 +32,13 @@ import Models.Projects.ProjectMemory qualified as Memory
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Client.TLS qualified as TLS
 import Network.HTTP.Types.Status qualified as HTTP
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (UUIDId (..), UpTo, natInt, unrefine, upTo)
 import Relude
 import System.Directory (doesFileExist, listDirectory, removeFile, removePathForcibly)
 import System.Environment (getEnvironment)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose)
-import System.IO.Error (isDoesNotExistError, tryIOError)
+import System.IO.Error (isDoesNotExistError, isEOFError, tryIOError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
 import Text.HTML.TagSoup qualified as TagSoup
@@ -64,8 +64,11 @@ data ProofArgs = ProofArgs {claim :: Text, shellCommand :: Text, setup :: Maybe 
 
 
 -- | Proof attempts a review may make. Failed attempts count too: each one costs two VM runs.
+type ProofBudget = 3
+
+
 proofBudget :: Int
-proofBudget = 3
+proofBudget = natInt @ProofBudget
 
 
 -- The report is opaque presentation data; decisions use the typed receipts.
@@ -172,21 +175,18 @@ data SessionSubject context where
   PeerSubject :: UUIDId "issue_fix" -> ArtifactRequest -> SessionSubject (UUIDId "agent_attempt")
 
 
+type SubmissionLimit = 5
+type FixQueryLimit = 60
+
+
 submissionLimit, fixQueryLimit :: Int
-(submissionLimit, fixQueryLimit) = (5, 60)
+(submissionLimit, fixQueryLimit) = (natInt @SubmissionLimit, natInt @FixQueryLimit)
 
 
 -- | @proofs@ is absent in checkpoints written before proof recording existed.
-data SavedGuest = SavedGuest {id :: UUIDId "native_checkpoint", guest :: Guest.Suspended, sha256 :: Text, remaining :: Int, submissions :: Int, proofs :: Maybe Int}
+data SavedGuest = SavedGuest {id :: UUIDId "native_checkpoint", guest :: Guest.Suspended, sha256 :: Text, remaining :: UpTo FixQueryLimit, submissions :: UpTo SubmissionLimit, proofs :: Maybe (UpTo ProofBudget)}
   deriving stock (Generic)
-  deriving anyclass (AE.ToJSON)
-
-
-instance AE.FromJSON SavedGuest where
-  parseJSON value = do
-    saved <- AE.genericParseJSON AE.defaultOptions value
-    unless (saved.remaining >= 0 && saved.remaining <= fixQueryLimit && saved.submissions >= 0 && saved.submissions <= submissionLimit && all (\n -> n >= 0 && n <= proofBudget) saved.proofs) $ fail "Invalid native continuation budget"
-    pure saved
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data SavedFix = SavedFix {id :: UUIDId "verifier_session", progress :: FixProgress Native.CandidateSnapshot}
@@ -439,7 +439,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
         proofCount <- newIORef (0 :: Int)
         -- A review's or fix's agent stops a minute before its job; both run on the long queue. At eight
         -- minutes a fix was killed before its first checkpoint, and its retry could only report the session lost.
-        let budget = case task of AdvisoryTask{} -> reviewSeconds - 60; FixTask{} -> reviewSeconds - 60; _ -> 480
+        let budget = case task of AdvisoryTask{} -> reviewSeconds - 60; FixTask{} -> fixSeconds - 300; _ -> 480
         let tagged :: AE.ToJSON value => Text -> value -> AE.Value
             tagged tag contents = AE.object ["tag" AE..= tag, "contents" AE..= contents]
             (scope, source, payload, role) = case task of
@@ -473,7 +473,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                     retained.persist progress
                     pruneNativeSnapshots retained.directory $ case progress of Waiting saved -> Just saved.id; FixWaiting saved _ -> Just saved.id; Finished{} -> Nothing
               -- A resumed session keeps its proof attempts, so the budget is checked before VMs run.
-              writeIORef proofCount $ fromMaybe 0 $ (.proofs) =<< paused
+              writeIORef proofCount $ maybe 0 unrefine $ (.proofs) =<< paused
               for_ retention \retained -> case paused of
                 Nothing -> do
                   removed <- tryIOError $ removeFile $ retained.directory </> retained.sessionFile
@@ -511,8 +511,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                         session <- readIORef guest >>= maybe (fail "Native continuation requires a live guest") pure
                         disk <- session.suspend $ generation </> "guest.qcow2"
                         attempted <- readIORef proofCount
-                        -- Grace calls past a spent budget run it negative; a saved session must still validate.
-                        let saved = SavedGuest identifier disk (Native.sha256 transcript) (max 0 remaining) submissions (Just attempted)
+                        -- Grace calls past a spent budget run it negative; 'upTo' clamps so a saved session still decodes.
+                        let saved = SavedGuest identifier disk (Native.sha256 transcript) (upTo remaining) (upTo submissions) (Just $ upTo attempted)
                         persist $ case workflowState of
                           Just (FixReady current) -> FixWaiting saved $ SavedFix current.id $ Native.candidateSnapshot <$> current.progress
                           (Nothing; Just AdmissionReady; Just SourceReady) -> Waiting saved
@@ -751,7 +751,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                             saved <- maybe (record $ Outbox.Allocation receipt) (\outbox -> Outbox.deliver outbox (Outbox.Allocation receipt) record) journal
                                             either (fail . toString) pure saved
                                           retain receipt = for_ journal $ \outbox -> Outbox.retain outbox $ Outbox.Allocation receipt
-                                      join <$> Guest.withGuest worker expected checkout.directory revision (maybe (Guest.Fresh setup) (Guest.ResumeSession . (.guest)) paused) (Just lease) request.attemptId allocate retain \session -> do
+                                      join <$> Guest.withGuest (case role of (Policy.Admission; Policy.Peer) -> Workspace.Child; (Policy.Patch; Policy.SourcePatch; Policy.Source; Policy.Advisory; Policy.Fix) -> Workspace.Parent) worker expected checkout.directory revision (maybe (Guest.Fresh setup) (Guest.ResumeSession . (.guest)) paused) (Just lease) request.attemptId allocate retain \session -> do
                                         writeIORef guest $ Just session
                                         initialized <- case task of
                                           FixTask _ job -> case (journal, savedFix) of
@@ -929,7 +929,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                           _ -> pure $ Left "Review agent returned an unvalidated draft"
                 ( do
                     writeMessage payload
-                    receive Nothing Nothing (maybe (queryLimit task) (.remaining) paused) (maybe submissionLimit (.submissions) paused) Nothing
+                    receive Nothing Nothing (maybe (queryLimit task) (unrefine . (.remaining)) paused) (maybe submissionLimit (unrefine . (.submissions)) paused) Nothing
                   )
                   `finally` stop
         -- Replay persisted work before starting a child, fetching source or calling a model.
@@ -973,7 +973,9 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
             | Just ProviderWait <- fromException @NativePause err -> case role of
                 (Policy.Admission; Policy.Peer) -> throwIO ProviderWait
                 (Policy.Patch; Policy.SourcePatch; Policy.Source; Policy.Advisory; Policy.Fix) -> pure $ Left "Native child session interrupted; retry its retained request"
-            | otherwise -> pure $ Left "Review agent could not be executed"
+            -- The child closed its stdout: it stopped (gave up, crashed or was killed) without submitting.
+            | Just closed <- fromException err, isEOFError closed -> pure $ Left "Review agent exited without submitting a result"
+            | otherwise -> pure $ Left $ "Review agent could not be executed: " <> T.take 300 (toText $ displayException err)
           Right Nothing -> pure $ Left "Review agent exceeded its time budget"
           Right (Just result) -> pure result
 

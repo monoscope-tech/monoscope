@@ -87,8 +87,8 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (throwError)
-import Effectful.Log qualified as Log
 import Hasql.Interpolate qualified as HI
+import System.Logging qualified as Log
 import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 
 import BackgroundJobs (errorTrendChartUrl)
@@ -117,7 +117,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), ResourceRow (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, dialogTrigger_, disclosure_, emptyState_, formActionsModal_, formCheckbox_, formField_, grantsTrial, headerRow_, iconBadge_, keyboardActivateAttr_, localTimeFmt_, modalWith_, nativeDialog_, options_, paymentPlanPicker, resourceList_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), ResourceRow (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, dialogTrigger_, disclosure_, emptyState_, formActionsModal_, formField_, grantsTrial, headerRow_, iconBadge_, keyboardActivateAttr_, localTimeFmt_, modalWith_, nativeDialog_, options_, paymentPlanPicker, resourceList_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
@@ -509,7 +509,6 @@ data PrometheusForm = PrometheusForm
   , scrapeInterval :: Maybe Int
   , authHeader :: Maybe Text
   , extraLabels :: Maybe Text
-  , clearAuth :: Maybe Text -- "on" when the "Clear saved token" box is ticked
   }
   deriving stock (Generic)
   deriving anyclass (FromForm)
@@ -669,13 +668,8 @@ prometheusPostH pid form = promSave pid form "Added" \t -> PromCfg.insertConfig 
 
 prometheusUpdateH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
 prometheusUpdateH pid cid form = promSave pid form "Updated" \t -> do
-  -- The edit form never echoes the saved token back into the password field, so a blank
-  -- auth field means "keep the existing token" — unless "Clear saved token" was ticked.
-  keptAuth <- case t.authHeader of
-    Just a -> pure (Just a)
-    Nothing | isJust form.clearAuth -> pure Nothing
-    Nothing -> PromCfg.getConfigByProject pid cid <&> (>>= (.authHeader))
-  PromCfg.updateConfig pid cid t.name t.url t.interval keptAuth t.labels
+  stored <- PromCfg.getConfigByProject pid cid <&> (>>= (.authHeader))
+  PromCfg.updateConfig pid cid t.name t.url t.interval (PromCfg.unmask stored =<< t.authHeader) t.labels
 
 
 -- | Shared create/edit flow. The DB UNIQUE(project_id, name) constraint (migration 0103)
@@ -729,7 +723,9 @@ prometheusTestH pid form = do
   done =<< case validateScrapeUrl form.url of
     Left err -> pure $ ProbeRefused err
     Right url -> do
-      let opts = PromCfg.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
+      mgr <- asks @AuthContext (.scrapeManager)
+      -- An unedited saved token arrives as the mask; Test has no target id to look it up by.
+      let opts = PromCfg.prometheusScrapeOpts mgr (mfilter (`notElem` ["", PromCfg.mask]) (T.strip <$> form.authHeader))
       t0 <- Time.currentTime
       res <- trySync (W.getWith opts (toString url))
       t1 <- Time.currentTime
@@ -835,15 +831,10 @@ promTargetModal_ pid mcfg = do
         let hasAdvanced = maybe False (\c -> isJust c.authHeader || not (T.null (labelsToText c.extraLabels))) mcfg
         disclosure_ [open_ "" | hasAdvanced] "text-sm text-textWeak" "Advanced"
           $ div_ [class_ "flex flex-col gap-3 mt-3"] do
-            -- Never echo the saved token into the HTML (it would sit in the page source / proxy
-            -- caches): show an empty field, and on edit treat blank as "keep the saved token".
+            -- Never echo the saved token into the HTML (page source, proxy caches): a saved one shows
+            -- as the mask, which saves back as "keep it"; a cleared field removes it.
             let hasToken = maybe False (isJust . (.authHeader)) mcfg
-                (authPh, authHelp) =
-                  if hasToken
-                    then ("Leave blank to keep the saved token", "A token is saved. Enter a new value to replace it.")
-                    else ("Bearer <token>", "Sent as the Authorization header on every scrape.")
-            field_ "authHeader" "Authorization header" False def{inputType = "password", placeholder = authPh, hint = Just authHelp}
-            when hasToken $ formCheckbox_ FieldMd "Clear saved token" "clearAuth" []
+            field_ "authHeader" "Authorization header" False def{inputType = "password", placeholder = "Bearer <token>", value = bool "" PromCfg.mask hasToken, hint = Just $ bool "Sent as the Authorization header on every scrape." "A token is saved. Replace it, or clear the field to remove it." hasToken}
             field_ "extraLabels" "Static labels" False def{placeholder = "env=prod, team=core", value = maybe "" (labelsToText . (.extraLabels)) mcfg, hint = Just "Comma-separated key=value pairs, added to every series from this target."}
         div_ [class_ "prom-save-result"] ""
         div_ [class_ "flex flex-wrap items-center gap-3 border-t border-strokeWeak pt-4"] do
@@ -1400,7 +1391,7 @@ data StripePeriods = StripePeriods
 
 stripeBillingPeriods :: (IOE :> es, Log.Log :> es, W.HTTP :> es) => EnvConfig -> Projects.Project -> Eff es (Maybe StripePeriods)
 stripeBillingPeriods envCfg project
-  | Projects.isFreeTier project.paymentPlan = pure Nothing
+  | Projects.isFreeTier project.paymentPlan || project.id == Projects.demoProjectId = pure Nothing
   | Projects.projectProvider project /= Projects.StripeProvider = pure Nothing
   | otherwise = case mfilter (not . T.null) project.subId of
       Nothing -> pure Nothing

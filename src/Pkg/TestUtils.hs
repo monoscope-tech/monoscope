@@ -984,12 +984,15 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   let liveTail = LiveTail.Runtime{transport = LiveTail.PostgresRelay, cache = liveTailCache, hub = liveTailHub, relayBuffer = liveTailBuffer, emit = LiveTail.deliver liveTailHub}
 
   s3HttpManager <- HC.newManager HCTLS.tlsManagerSettings
+  (scrapeManager, probeManager) <- Config.newProbeManagers
   -- MaxMind's published test database: 81.2.69.142 is London, 89.160.20.112 Linköping.
   geoDb <- GeoIP2.openGeoDB "test/fixtures/GeoIP2-City-Test.mmdb"
   let atAuthCtx =
         AuthContext
           envConfig
           s3HttpManager
+          scrapeManager
+          probeManager
           pool
           pool
           pool

@@ -1,10 +1,13 @@
 #!/bin/bash
-# Warms a repository's build at its pull request's base, offline, in the review guest. Build output
-# stays in the checkout's ignored directories (dist-newstyle/, target/, node_modules/), so proofs at the
-# head compile only the change. A stack that cannot build here is skipped: the review just starts cold.
+# Warms a repository's build at a review's or fix's base in the guest, for whatever stack it uses.
+# Dependencies come from the package registries the sandbox allows; build output stays in the
+# checkout's ignored directories (dist-newstyle/, target/, node_modules/, .venv/), and tests are built
+# too, so a fix's regression test and the review's proofs compile only the change. A stack whose tools
+# are missing or whose build fails is skipped: that base just starts cold.
 set -u
-export CARGO_HOME=$HOME/.cargo GOPROXY=off
-try() { echo "== $*"; "$@" || echo "!! $1 failed; reviews of this base start cold"; }
+export CARGO_HOME=$HOME/.cargo
+try() { echo "== $*"; "$@" || echo "!! $1 failed; work at this base starts cold"; }
+has() { command -v "$1" >/dev/null; }
 
 if [ -f web-components/vite.config.mjs ] && [ -d /opt/proof/node_modules ]; then
   ln -sfn /opt/proof/node_modules node_modules
@@ -12,14 +15,40 @@ if [ -f web-components/vite.config.mjs ] && [ -d /opt/proof/node_modules ]; then
   # Template Haskell reads the bundle manifest, so the frontend builds before the server.
   try ./node_modules/.bin/tailwindcss -i static/public/assets/css/tailwind.css -o static/public/assets/css/tailwind.min.css
   (cd web-components && try ./node_modules/.bin/vite build)
+elif [ -f package.json ]; then
+  if [ -f pnpm-lock.yaml ] && has pnpm; then try pnpm install --frozen-lockfile
+  elif [ -f yarn.lock ] && has yarn; then try yarn install --frozen-lockfile
+  elif has npm; then if [ -f package-lock.json ]; then try npm ci; else try npm install; fi; fi
+  grep -q '"build"' package.json && has npm && try npm run build --if-present
 fi
-if [ -f cabal.project ] && command -v cabal >/dev/null; then
+
+if [ -f cabal.project ] && has cabal; then
   if [ -f monoscope.cabal ]; then
-    # Its git-sourced dependencies were fetched when the guest was built; the VM has no network.
+    # Its git-sourced dependencies were fetched when the guest was built; git hosts are not reachable.
     mkdir -p dist-newstyle/src && cp -Rn /opt/haskell/dist-src/. dist-newstyle/src/ 2>/dev/null
-    try cabal build exe:monoscope-server --offline --ghc-options="-O0 -j2"
-  else try cabal build all --offline --ghc-options=-O0; fi
+    # Tests stay enabled for every later cabal call here, or each one reconfigures and rebuilds the library.
+    echo "tests: True" > cabal.project.local
+    try cabal build exe:monoscope-server test:integration-tests --offline --ghc-options="-O0 -j2"
+  else try cabal update && try cabal build all --enable-tests --ghc-options=-O0; fi
+elif [ -f stack.yaml ] && has stack; then try stack build --test --no-run-tests --fast
 fi
-[ -f Cargo.lock ] && command -v cargo >/dev/null && try cargo build --offline --locked
-[ -f go.sum ] && command -v go >/dev/null && try go build ./...
+
+[ -f Cargo.toml ] && has cargo && try cargo test --no-run --locked
+[ -f go.mod ] && has go && try go test -run '^$' ./...
+
+if [ -f uv.lock ] && has uv; then try uv sync --all-extras
+elif [ -f poetry.lock ] && has poetry; then try poetry install --no-interaction
+elif has python3 && { [ -f requirements.txt ] || [ -f pyproject.toml ] || [ -f setup.py ]; }; then
+  try python3 -m venv .venv
+  [ -f requirements.txt ] && try .venv/bin/pip install -r requirements.txt
+  [ -f requirements-dev.txt ] && try .venv/bin/pip install -r requirements-dev.txt
+  { [ -f pyproject.toml ] || [ -f setup.py ]; } && try .venv/bin/pip install -e .
+fi
+
+if [ -f pom.xml ] && has mvn; then try mvn -q -B test-compile
+elif { [ -f build.gradle ] || [ -f build.gradle.kts ]; }; then
+  if [ -x ./gradlew ]; then try ./gradlew --no-daemon testClasses; elif has gradle; then try gradle --no-daemon testClasses; fi
+fi
+
+[ -f Gemfile ] && has bundle && try bundle install
 exit 0

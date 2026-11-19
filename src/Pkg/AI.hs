@@ -111,7 +111,6 @@ import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception qualified as Exception
-import Effectful.Log qualified as Log
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
@@ -154,6 +153,7 @@ import Pkg.SchemaLearning (FacetData (..), FacetSummary (..), FacetValue (..))
 import Pkg.Slack qualified as Slack
 import Relude
 import System.Config qualified as Config
+import System.Logging qualified as Log
 import System.Tracing (SpanKind (Internal), SpanStatus (Error), Tracing, setStatus, withSpanKind)
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (throwIO, withException)

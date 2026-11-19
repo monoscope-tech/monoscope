@@ -4,13 +4,18 @@ import { jsonLines } from './jsonl.mjs';
 import { open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { DEFAULT_GUEST_TMPFS, RealFSProvider, ReadonlyProvider, VM, VmCheckpoint, createHttpHooks, importImageFromDirectory, resolveImageSelector } from '@earendil-works/gondolin';
-// Guests run pull request code, so they reach only package registries, only to read: GET and HEAD
-// with a fixed User-Agent. GitHub is left out on purpose: a repository's traffic insights list the
-// paths its visitors fetched, which would let that code exfiltrate source through crafted URLs.
+// Guests run pull request code, so they reach only package registries and GitHub, only to read: GET
+// and HEAD with a fixed User-Agent, plus git's upload-pack POST so git dependencies fetch. GitHub is an
+// accepted risk (2026-11-19): a repository's traffic insights list the paths its visitors fetched, so
+// that code could exfiltrate source through crafted URLs; without it no git-pinned dependency builds.
 const { httpHooks } = createHttpHooks({
-  allowedHosts: ['deb.debian.org', 'security.debian.org', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org', 'index.crates.io', 'static.crates.io', 'static.rust-lang.org', 'proxy.golang.org', 'sum.golang.org', 'hackage.haskell.org', 'downloads.haskell.org', 'get-ghcup.haskell.org', 'nodejs.org', 'repo.maven.apache.org', 'repo1.maven.org', 'rubygems.org', 'index.rubygems.org', 'raw.githubusercontent.com'],
+  allowedHosts: ['deb.debian.org', 'security.debian.org', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org', 'index.crates.io', 'static.crates.io', 'static.rust-lang.org', 'proxy.golang.org', 'sum.golang.org', 'hackage.haskell.org', 'downloads.haskell.org', 'get-ghcup.haskell.org', 'nodejs.org', 'repo.maven.apache.org', 'repo1.maven.org', 'rubygems.org', 'index.rubygems.org', 'raw.githubusercontent.com', 'github.com', 'codeload.github.com', 'objects.githubusercontent.com'],
   // ghcup's release metadata is the only GitHub content a guest may read.
-  isRequestAllowed: (request) => ['GET', 'HEAD'].includes(request.method) && (new URL(request.url).host !== 'raw.githubusercontent.com' || new URL(request.url).pathname.startsWith('/haskell/ghcup-metadata/')),
+  isRequestAllowed: (request) => {
+    const { host, pathname } = new URL(request.url);
+    const read = ['GET', 'HEAD'].includes(request.method) || (request.method === 'POST' && host === 'github.com' && pathname.endsWith('/git-upload-pack'));
+    return read && (host !== 'raw.githubusercontent.com' || pathname.startsWith('/haskell/ghcup-metadata/'));
+  },
   onRequest: (request) => { const headers = new Headers(request.headers); headers.set('user-agent', 'monoscope-sandbox'); return new Request(request, { headers }); },
 });
 let vm;
