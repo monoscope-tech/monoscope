@@ -1288,21 +1288,27 @@ tfTopProjectCounts topN extra s e =
 -- 9 minutes, ~90% of ingest) triggered no alert: going TF-only silently
 -- retired the only automated loss detector.
 --
--- Two grouped TF queries (not the N+1 fan-out 'checkParity' pays): top projects
--- by volume over a multi-hour baseline, then the same projects over the window.
+-- Three grouped TF queries (not the N+1 fan-out 'checkParity' pays): top projects
+-- by volume over the previous hour and the same hour yesterday, then the window.
+--
+-- The baseline is the LOWER of those two hours, not a multi-hour mean. A 6h mean
+-- read every tenant's evening decline (550k/h → 58k/h over six smooth hours) as a
+-- 75–95% "drop": over 30 hours of 2026-11-17/18 it fired in 20 with no rows lost.
+-- The previous hour alone still fired in 9, on bursts winding down; the minimum
+-- fired in 3. A real collapse (the 2026-07-27 shape) is below both, so it still trips.
 checkIngestContinuity :: UTCTime -> UTCTime -> ATBackgroundCtx ([Text], [Text])
 checkIngestContinuity start end = do
   let minRows = 500 :: Int64 -- baseline floor: ignore low-volume projects
       dropPct = 60.0 :: Double
       topN = 30 :: Int64
-      baselineHours = 6 :: Int64
-      baseStart = addUTCTime (negate (fromIntegral baselineHours * 3600)) start
+      hourBefore = addUTCTime (-3600)
+      dayBefore = addUTCTime (-86400)
       tfCounts = tfTopProjectCounts topN mempty
-  baseRows :: [(Text, Int64)] <- tfCounts baseStart start
-  curRows :: [(Text, Int64)] <- tfCounts start end
-  let curMap = HM.fromList curRows
-      -- Baseline is per-window (the window is one hour; see runInfraHealthCheck).
-      rows = [(pid, baseN `div` baselineHours, HM.lookupDefault 0 pid curMap) | (pid, baseN) <- baseRows]
+  baseRows :: [(Text, Int64)] <- tfCounts (hourBefore start) start
+  yesterday :: HM.HashMap Text Int64 <- HM.fromList <$> tfCounts (dayBefore start) (dayBefore end)
+  curMap :: HM.HashMap Text Int64 <- HM.fromList <$> tfCounts start end
+  -- A project missing from yesterday's top N keeps the previous hour as its baseline.
+  let rows = [(pid, maybe baseN (min baseN) (HM.lookup pid yesterday), HM.lookupDefault 0 pid curMap) | (pid, baseN) <- baseRows]
       baseTotal = sum [b | (_, b, _) <- rows]
       curTotal = sum [c | (_, _, c) <- rows]
       dropAlerts =
@@ -1310,21 +1316,21 @@ checkIngestContinuity start end = do
             <> pct1 pct
             <> "% for "
             <> pid
-            <> " (baseline≈"
+            <> " (baseline "
             <> show baseN
-            <> "/h, got "
+            <> ", got "
             <> show curN
             <> ") — rows may have been acked but never stored"
         | (pid, baseN, curN, pct) <- continuityDrop dropPct minRows rows
         ]
       stallAlert =
-        [ "🔴 TF INGEST STALLED: baseline≈" <> show baseTotal <> "/h across " <> show (length rows) <> " projects, got 0"
+        [ "🔴 TF INGEST STALLED: baseline " <> show baseTotal <> " rows across " <> show (length rows) <> " projects, got 0"
         | baseTotal > 0
         , curTotal == 0
         ]
   pure
     ( stallAlert <> dropAlerts
-    , ["continuity: " <> show curTotal <> " rows vs baseline≈" <> show baseTotal <> "/h over " <> show (length rows) <> " projects"]
+    , ["continuity: " <> show curTotal <> " rows vs baseline " <> show baseTotal <> " over " <> show (length rows) <> " projects"]
     )
 
 
