@@ -148,6 +148,8 @@ module Models.Projects.Projects (
   AuditTarget (..),
   logAuditS,
   logAudit,
+  ActivitySource (..),
+  ActorKind (..),
   ActivityEntry (..),
   projectActivity,
   ViewKind (..),
@@ -166,7 +168,7 @@ import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.HashMap.Strict qualified as HM
 import Data.List (unzip4)
 import Data.Map.Strict qualified as Map
-import Data.OpenApi (ToSchema)
+import Data.OpenApi (ToParamSchema, ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display
 import Data.Time (Day, UTCTime (..), ZonedTime)
@@ -1811,12 +1813,22 @@ logAudit pid event sess target metadataM =
              VALUES (#{pid}, #{event}, #{sess.user.id}, #{CI.original sess.user.email}, #{HI.AsJsonb <$> metadataM}, #{(.kind) <$> target}, #{(.targetId) <$> target}, #{(.title) <$> target}) |]
 
 
--- | One project's activity from every ledger: people's changes (the audit log), issue lifecycle
--- events, and what AI agents did. Newest first; @before@ pages, the filters narrow.
+-- | Which ledger an activity entry comes from: people's changes, issue lifecycle, or AI agent operations.
+data ActivitySource = ASAudit | ASIssue | ASAgent
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (AE.ToJSON, Display, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToHttpApiData, ToParamSchema, ToSchema) via WrappedEnumSC 'Nothing "AS" ActivitySource
+
+
+data ActorKind = AKUser | AKAgent | AKSystem
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (AE.ToJSON, Display, HI.DecodeValue, ToSchema) via WrappedEnumSC 'Nothing "AK" ActorKind
+
+
+-- | One project's activity from every ledger. Newest first; @before@ pages, the filters narrow.
 data ActivityEntry = ActivityEntry
   { at :: UTCTime
-  , source :: Text
-  , actorKind :: Text
+  , source :: ActivitySource
+  , actorKind :: ActorKind
   , actor :: Maybe Text
   , event :: Text
   , targetKind :: Maybe Text
@@ -1829,13 +1841,14 @@ data ActivityEntry = ActivityEntry
   deriving (ToSchema) via SnakeSchema ActivityEntry
 
 
-projectActivity :: DB es => ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Int -> Eff es [ActivityEntry]
+-- | A blank actor filter is no filter.
+projectActivity :: DB es => ProjectId -> Maybe ActivitySource -> Maybe Text -> Maybe UTCTime -> Int -> Eff es [ActivityEntry]
 projectActivity pid sourceM actorM before limit =
   EHasql.interp
     [HI.sql| SELECT at, source, actor_kind, actor, event, target_kind, target_title, target_id FROM projects.activity
              WHERE project_id = #{pid}
                AND (#{sourceM}::text IS NULL OR source = #{sourceM})
-               AND (#{actorM}::text IS NULL OR actor ILIKE '%' || #{actorM} || '%')
+               AND (NULLIF(btrim(#{actorM}), '') IS NULL OR actor ILIKE '%' || btrim(#{actorM}) || '%')
                AND (#{before}::timestamptz IS NULL OR at < #{before})
              ORDER BY at DESC LIMIT #{limit} |]
 

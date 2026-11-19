@@ -9,6 +9,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Set qualified as S
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, zonedTimeToUTC)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
@@ -27,9 +28,9 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.AIThreads (promptField_, threadUrl)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), apiCatalogUrl, mkPageCtx)
-import Pages.Components (agoText, copyButton_, logExplorerUrl)
+import Pages.Components (BadgeColor (..), agoText, copyButton_, logExplorerUrl, toneCls)
 import Pages.Dashboards (dashboardUrl)
-import Pages.Issues (issueDetailUrl, issuePreview_, issuesListUrl, renderIssueTitle_)
+import Pages.Issues (issueDetailUrl, issuePreview_, issuesListUrl, renderIssueTitle_, severityTone)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (SortOrder (..), UUIDId (..))
 import Relude hiding (ask)
@@ -39,11 +40,12 @@ import System.Types (ATAuthCtx, Outcome (..), RespHeaders, Toast (..), ToastLeve
 import System.Types qualified
 import Text.Slugify (slugify)
 import UnliftIO.Exception (tryAny)
-import Utils (countNoun, faSprite_, formatUTC, navTabAttrs, popoverPanel_, popoverTrigger_)
+import Utils (countNoun, faSprite_, navTabAttrs, popoverPanel_, popoverTrigger_)
 import Web.Links (CookieProtectedRoutes (..), MonitorsRoutes' (..), ProjectsRoutes' (..), TelemetryRoutes' (..), urls)
 
 
 newtype HomeGet = HomePage (PageCtx HomeData)
+  deriving (ToHtml) via (PageCtx HomeData)
 
 
 data HomeData = HomeData
@@ -70,8 +72,8 @@ data HomeData = HomeData
   }
 
 
-instance ToHtml HomeGet where
-  toHtml (HomePage (PageCtx conf d)) = toHtml $ PageCtx conf $ home_ d
+instance ToHtml HomeData where
+  toHtml = toHtml . home_
   toHtmlRaw = toHtml
 
 
@@ -95,7 +97,7 @@ homeGetH pid = do
   appCtx <- ask @AuthContext
   let slackConfigured = not $ T.null appCtx.config.slackConnectBotToken
   -- Every tile states the same window, so a number on Home always means "the last 24 hours".
-  let window w = w{Widget.timeFrom = Just $ formatUTC dayAgo, Widget.timeTo = Just $ formatUTC now, Widget.children = map window <$> w.children}
+  let window = Widget.pinWidget (dayAgo, now)
       glance = map window $ take 1 (templateTab "_overview.yaml" "Overview" []) <> stackWidgets pid
       -- A widget's id names its DOM elements, so one shown twice (a starred overview repeats the
       -- golden signals) loads into the first copy and leaves the second a skeleton forever.
@@ -339,10 +341,10 @@ cardCls = "group/card relative flex flex-col gap-2.5 min-w-0 rounded-2xl surface
 
 
 -- | A card's identity row: a toned dot and id (the dot's meaning is repeated in text for screen readers), then context.
-cardMeta_ :: Text -> Text -> Text -> Html () -> Html ()
-cardMeta_ dot dotLabel ident context = div_ [class_ "flex items-center gap-2 min-w-0 text-xs text-textWeak"] do
+cardMeta_ :: BadgeColor -> Text -> Text -> Html () -> Html ()
+cardMeta_ tone dotLabel ident context = div_ [class_ "flex items-center gap-2 min-w-0 text-xs text-textWeak"] do
   span_ [class_ "inline-flex shrink-0 items-center gap-1.5 rounded-md bg-fillWeak px-1.5 py-0.5 font-medium tabular-nums text-textStrong"] do
-    span_ [class_ $ "size-1.5 rounded-full " <> dot] ""
+    span_ [class_ $ "size-1.5 rounded-full bg-current " <> (\(_, _, _, fg) -> fg) (toneCls tone)] ""
     span_ [class_ "sr-only"] $ toHtml dotLabel
     toHtml ident
   context
@@ -350,12 +352,8 @@ cardMeta_ dot dotLabel ident context = div_ [class_ "flex items-center gap-2 min
 
 issueCard_ :: Projects.ProjectId -> UTCTime -> Issues.IssueL -> Html ()
 issueCard_ pid now i = a_ ([href_ $ issueDetailUrl pid i.base.id, class_ cardCls] <> navTabAttrs) do
-  let (dot, label) = case i.base.severity of
-        Issues.Critical -> ("bg-fillError-strong", "Critical")
-        Issues.Warning -> ("bg-fillWarning-strong", "Warning")
-        Issues.Info -> ("bg-fillInformation-strong", "Info")
-        Issues.Low -> ("bg-fillNeutral-strong", "Low")
-  cardMeta_ dot label ("#" <> show i.base.seqNum) do
+  let label = T.toTitle $ display i.base.severity
+  cardMeta_ (fromMaybe NeutralBadge $ severityTone i.base.severity) label ("#" <> show i.base.seqNum) do
     span_ [class_ "font-medium text-textStrong"] $ toHtml label
     span_ [class_ "ml-auto shrink-0"] $ toHtml $ agoText now $ zonedTimeToUTC i.base.createdAt
   p_ [class_ "text-[15px] leading-snug font-medium text-textStrong line-clamp-2 break-words"] $ renderIssueTitle_ i
@@ -375,7 +373,7 @@ activityStrip_ fill buckets = div_ [class_ "flex h-6 items-end gap-0.5", role_ "
 
 resolvedCard_ :: Projects.ProjectId -> UTCTime -> Issues.ResolvedIssue -> Html ()
 resolvedCard_ pid now r = a_ ([href_ $ issueDetailUrl pid r.id, class_ cardCls] <> navTabAttrs) do
-  cardMeta_ "bg-fillSuccess-strong" "Resolved" ("#" <> show r.seqNum) do
+  cardMeta_ SuccessBadge "Resolved" ("#" <> show r.seqNum) do
     span_ [class_ "inline-flex items-center gap-1 text-textSuccess"] $ faSprite_ "circle-check" "regular" "w-3 h-3" >> bool "Resolved" "Auto-resolved" (r.event == Issues.IEAutoResolved)
     whenJust r.service $ span_ [class_ "truncate"] . toHtml
     span_ [class_ "ml-auto shrink-0"] $ toHtml $ agoText now r.resolvedAt
@@ -385,11 +383,11 @@ resolvedCard_ pid now r = a_ ([href_ $ issueDetailUrl pid r.id, class_ cardCls] 
 -- | An agent-flagged issue or win, in the same card as the issues beside it.
 highlightCard_ :: Projects.ProjectId -> UTCTime -> Issues.HomeHighlight -> Html ()
 highlightCard_ pid now h = div_ [id_ $ "highlight-" <> h.id.toText, class_ cardCls] do
-  let (dot, label) = case h.kind of
-        Issues.HKIssue -> ("bg-fillError-strong", "Flagged issue")
-        Issues.HKImprovement -> ("bg-fillSuccess-strong", "Improvement")
-        Issues.HKInsight -> ("bg-fillInformation-strong", "Insight")
-  cardMeta_ dot label "AI" do
+  let (tone, label) = case h.kind of
+        Issues.HKIssue -> (ErrorBadge, "Flagged issue")
+        Issues.HKImprovement -> (SuccessBadge, "Improvement")
+        Issues.HKInsight -> (NeutralBadge, "Insight")
+  cardMeta_ tone label "AI" do
     highlightSource_ pid h
     span_ [class_ "ml-auto shrink-0 pe-6"] $ toHtml $ agoText now h.updatedAt
   highlightTitle_ "text-[15px] leading-snug" h
@@ -488,7 +486,7 @@ instance ToHtml SlackConnectCard where
 
 
 instance Outcome SlackConnectCard where
-  outcomeBody = slackConnectCard_
+  outcomeBody = toHtml
   outcomeToast c
     | c.invited = Just $ Toast SuccessToast ("Slack Connect invite sent to " <> c.email) (Just "Accept it in Slack to join the channel.") Nothing
     | otherwise = Nothing
@@ -530,14 +528,12 @@ slackConnectCard_ c = div_ [id_ "slack-connect-card", class_ "flex flex-wrap ite
 
 slackConnectPostH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (System.Types.Done SlackConnectCard))
 slackConnectPostH pid = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, _) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
-  users <- Projects.usersByProjectId pid
   let email = T.toLower $ CI.original sess.user.email
-      cfg = appCtx.config
   -- Slack transport failures and rate limits throw; the card still answers with what went wrong.
   result <-
-    tryAny (Integrations.syncSlackConnect cfg.slackConnectBotToken (filter (not . T.null) cfg.slackConnectTeamUserIds) pid project.title (pid /= Projects.demoProjectId) (map (CI.original . (.email)) users) (Just email))
+    tryAny (Integrations.syncProjectSlackConnect appCtx.config pid True (Just email))
       >>= either (\e -> Left "slack_unreachable" <$ logAttention "Slack Connect request failed" (AE.object ["project_id" AE..= pid, "error" AE..= show @Text e])) pure
   connect <- Integrations.getSlackConnect pid
   done $ SlackConnectCard pid email connect $ either (Just . failureText) (const Nothing) result

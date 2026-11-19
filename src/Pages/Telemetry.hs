@@ -198,10 +198,8 @@ instance ToHtml RelatedMetrics where
       ms -> div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] $ forM_ ms \m ->
         div_ [class_ "h-40 rounded-xl border border-strokeWeak p-1"]
           $ toHtml
-          $ (metricWidget pid m.metricName m.metricType m.metricUnit service Nothing (Just m.metricName) (Just $ "rel_" <> T.replace "." "_" m.metricName) Nothing)
-            { Widget.timeFrom = Just $ formatUTC lo
-            , Widget.timeTo = Just $ formatUTC hi
-            , Widget.highlightFrom = Just $ formatUTC subLo
+          $ (Widget.pinWidget (lo, hi) $ metricWidget pid m.metricName m.metricType m.metricUnit service Nothing (Just m.metricName) (Just $ "rel_" <> T.replace "." "_" m.metricName) Nothing)
+            { Widget.highlightFrom = Just $ formatUTC subLo
             , Widget.highlightTo = Just $ formatUTC subHi
             }
     where

@@ -64,6 +64,7 @@ module Models.Apis.Integrations (
   SlackConnectInvite (..),
   getSlackConnect,
   syncSlackConnect,
+  syncProjectSlackConnect,
   slackConnectBacklog,
   slackConnectUrl,
 ) where
@@ -95,6 +96,9 @@ import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Models.Ids qualified as Projects
+import Models.Projects.Projects qualified as ProjectsM
+import System.Config (EnvConfig (..))
+import Data.CaseInsensitive qualified as CI
 import Models.Projects.ProjectApiKeys qualified as Secrets
 import Models.Projects.ProjectMembers (activeMembership)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -945,6 +949,17 @@ getSlackConnect pid = do
   channel <- Hasql.interpOne @(Text, Text, Maybe Text) [HI.sql|SELECT channel_id, channel_name, team_id FROM projects.slack_connect_channels WHERE project_id = #{pid}|]
   forM channel \(channelId, channelName, teamId) ->
     SlackConnect channelId channelName teamId <$> Hasql.interp [HI.sql|SELECT email, invite_id, error, invited_at FROM projects.slack_connect_invites WHERE project_id = #{pid} ORDER BY invited_at|]
+
+
+-- | 'syncSlackConnect' with this server's bot and staff and the project's current members.
+-- The demo project never gets a channel.
+syncProjectSlackConnect :: (DB es, HTTP.HTTP :> es, IOE :> es, Log :> es) => EnvConfig -> Projects.ProjectId -> Bool -> Maybe Text -> Eff es (Either Text (Maybe SlackConnect))
+syncProjectSlackConnect cfg pid create resend =
+  ProjectsM.activeProjectById pid >>= \case
+    Nothing -> pure $ Right Nothing
+    Just project -> do
+      users <- ProjectsM.usersByProjectId pid
+      syncSlackConnect cfg.slackConnectBotToken (filter (not . T.null) cfg.slackConnectTeamUserIds) pid project.title (create && pid /= ProjectsM.demoProjectId) (map (CI.original . (.email)) users) resend
 
 
 -- | Opens the channel in the viewer's Slack client (web or desktop).

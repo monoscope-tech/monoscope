@@ -65,6 +65,7 @@ module Pages.Issues (
   -- Shared rendering helpers
   issueCardCompact_,
   issuePreview_,
+  severityTone,
   renderIssueTitle_,
   issueDetailUrl,
   issuesListUrl,
@@ -2733,11 +2734,16 @@ issueCardCompact_ pid now issue = do
 -- round-trip meant renaming a constructor would silently drop *both* badges instead of
 -- failing to compile. Spelling the two silent cases out makes the omission a decision.
 severityBadge_ :: Issues.IssueSeverity -> Html ()
-severityBadge_ = \case
-  Issues.Critical -> tonePill_ ErrorBadge "CRITICAL"
-  Issues.Warning -> tonePill_ WarningBadge "WARNING"
-  Issues.Info -> pass
-  Issues.Low -> pass
+severityBadge_ s = whenJust (severityTone s) \tone -> tonePill_ tone $ T.toUpper $ display s
+
+
+-- | The tone a severity carries wherever it is shown; Info and Low carry none, so lists stay quiet for them.
+severityTone :: Issues.IssueSeverity -> Maybe BadgeColor
+severityTone = \case
+  Issues.Critical -> Just ErrorBadge
+  Issues.Warning -> Just WarningBadge
+  Issues.Info -> Nothing
+  Issues.Low -> Nothing
 
 
 issueStateBadge_ :: Maybe Issues.IssueEvent -> Html ()

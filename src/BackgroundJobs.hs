@@ -251,9 +251,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
             inviteUrl = authCtx.env.hostUrl <> "login?screen_hint=signup&login_hint=" <> enc reciever <> "&redirect_to=" <> enc (urls.homeGet projectId)
         recipients <- Projects.projectEmailRecipients projectId [reciever]
         forM_ recipients \to -> renderAndSend to (ET.projectInviteEmail user.firstName projectTitle' inviteUrl)
-    SlackConnectSync pid create -> whenJustM (Projects.activeProjectById pid) \project -> do
-      users <- Projects.usersByProjectId pid
-      void $ Integrations.syncSlackConnect authCtx.config.slackConnectBotToken (filter (not . T.null) authCtx.config.slackConnectTeamUserIds) pid project.title (create && pid /= Projects.demoProjectId) (map (CI.original . (.email)) users) Nothing
+    SlackConnectSync pid create -> void $ Integrations.syncProjectSlackConnect authCtx.config pid create Nothing
     SlackConnectSweep -> unless (T.null authCtx.config.slackConnectBotToken) do
       now <- Time.currentTime
       pids <- filter (/= Projects.demoProjectId) <$> Integrations.slackConnectBacklog now

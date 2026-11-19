@@ -157,7 +157,7 @@ import System.Config qualified as Config
 import System.Tracing (SpanKind (Internal), SpanStatus (Error), Tracing, setStatus, withSpanKind)
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (throwIO, withException)
-import Utils (encodeText, formatUTCMicros, hostPath, nonEmptyT, unwrapJsonPrimValue)
+import Utils (encodeText, hostPath, nonEmptyT, unwrapJsonPrimValue)
 import Web.ApiTypes (ApiActor (..))
 import Web.HttpApiData (parseQueryParam)
 import Web.Links (CookieProtectedRoutes (..), urls)
@@ -341,7 +341,7 @@ runWidgets :: Maybe UTCTime -> LLMResponse -> [Widget.Widget]
 runWidgets ranAt response = take 10 . map pin . filter (all (isRight . parseQueryToAST) . (.query)) $ responseWidgets response
   where
     pin w = case (ranAt, w.timeFrom) of
-      (Just at, Nothing) | (Just from, Just to, _) <- parseTimeRange at $ fromMaybe (TimePicker Nothing Nothing Nothing) response.timeRange -> pinWidget (from, to) w
+      (Just at, Nothing) | (Just from, Just to, _) <- parseTimeRange at $ fromMaybe (TimePicker Nothing Nothing Nothing) response.timeRange -> Widget.pinWidget (from, to) w
       _ -> w
 
 
@@ -402,13 +402,9 @@ parseReportDigest pid response = do
 reportRunAnswer :: Projects.ProjectId -> (UTCTime, UTCTime) -> AgenticChatResult -> Maybe (ReportDigest, Issues.RunAnswer)
 reportRunAnswer pid window answer =
   parseReportDigest pid answer.response <&> \digest ->
-    let pinned = digest{highlights = [h{widget = pinWidget (reportComparison window) <$> h.widget} | h <- digest.highlights]}
+    let pinned = digest{highlights = [h{widget = Widget.pinWidget (reportComparison window) <$> h.widget} | h <- digest.highlights]}
         md = digestMarkdown pinned []
      in (pinned, Issues.RunAnswer{content = md, widgets = AE.toJSON <$> guarded (not . null) (mapMaybe (.widget) pinned.highlights), report = md, evidence = Issues.AgentEvidence answer})
-
-
-pinWidget :: (UTCTime, UTCTime) -> Widget.Widget -> Widget.Widget
-pinWidget (from, to) w = w{Widget.timeFrom = Just $ formatUTCMicros from, Widget.timeTo = Just $ formatUTCMicros to}
 
 
 -- | Charts span the window 'reportRunAnswer' pinned each widget to.

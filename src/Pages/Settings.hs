@@ -563,7 +563,7 @@ prometheusGetH pid = do
 
 -- Audit log
 
-newtype AuditLogGet = AuditLogGet (PageCtx (Projects.ProjectId, Maybe Text, Maybe Text, [Projects.ActivityEntry]))
+newtype AuditLogGet = AuditLogGet (PageCtx (Projects.ProjectId, Maybe Projects.ActivitySource, Maybe Text, [Projects.ActivityEntry]))
 
 
 instance ToHtml AuditLogGet where
@@ -572,26 +572,23 @@ instance ToHtml AuditLogGet where
 
 
 -- | Who did what in this project: people's changes, issue lifecycle, and AI agent operations, newest first.
-auditLogGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders AuditLogGet)
+auditLogGetH :: Projects.ProjectId -> Maybe Projects.ActivitySource -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders AuditLogGet)
 auditLogGetH pid sourceM actorM beforeM = do
   (_, _, bw) <- mkPageCtx pid
-  let source = mfilter (`elem` ["audit", "issue", "agent"]) sourceM
-      actor = mfilter (not . T.null) $ T.strip <$> actorM
-  entries <- Projects.projectActivity pid source actor (iso8601ParseM . toString =<< beforeM) 100
-  addRespHeaders $ AuditLogGet $ PageCtx bw{pageTitle = "Audit log", isSettingsPage = True} (pid, source, actor, entries)
+  entries <- Projects.projectActivity pid sourceM actorM (iso8601ParseM . toString =<< beforeM) 100
+  addRespHeaders $ AuditLogGet $ PageCtx bw{pageTitle = "Audit log", isSettingsPage = True} (pid, sourceM, actorM, entries)
 
 
-auditLogCsvGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (Headers '[Header "Content-Disposition" Text] Text)
+auditLogCsvGetH :: Projects.ProjectId -> Maybe Projects.ActivitySource -> Maybe Text -> ATAuthCtx (Headers '[Header "Content-Disposition" Text] Text)
 auditLogCsvGetH pid sourceM actorM = do
   _ <- Projects.sessionAndProject pid
-  entries <- Projects.projectActivity pid (mfilter (`elem` ["audit", "issue", "agent"]) sourceM) (mfilter (not . T.null) actorM) Nothing 10000
-  let cell t = "\"" <> T.replace "\"" "\"\"" t <> "\""
-      row = T.intercalate "," . map cell
-      rows = row ["time", "source", "actor_kind", "actor", "event", "target_kind", "target", "target_id"] : [row [formatUTC e.at, e.source, e.actorKind, fold e.actor, e.event, fold e.targetKind, fold e.targetTitle, fold e.targetId] | e <- entries]
+  entries <- Projects.projectActivity pid sourceM actorM Nothing 10000
+  let row = T.intercalate "," . map (\t -> "\"" <> T.replace "\"" "\"\"" t <> "\"")
+      rows = row ["time", "source", "actor_kind", "actor", "event", "target_kind", "target", "target_id"] : [row [formatUTC e.at, display e.source, display e.actorKind, fold e.actor, e.event, fold e.targetKind, fold e.targetTitle, fold e.targetId] | e <- entries]
   pure $ addHeader ("attachment; filename=\"audit-log-" <> pid.toText <> ".csv\"") $ unlines rows
 
 
-auditLogPage_ :: Projects.ProjectId -> Maybe Text -> Maybe Text -> [Projects.ActivityEntry] -> Html ()
+auditLogPage_ :: Projects.ProjectId -> Maybe Projects.ActivitySource -> Maybe Text -> [Projects.ActivityEntry] -> Html ()
 auditLogPage_ pid sourceM actorM entries = settingsSection_ do
   div_ [class_ "flex flex-wrap items-end justify-between gap-3"] do
     div_ [class_ "flex flex-col gap-1"] do
@@ -602,40 +599,44 @@ auditLogPage_ pid sourceM actorM entries = settingsSection_ do
     label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] do
       "Source"
       select_ [name_ "source", class_ "select select-sm"] do
-        forM_ @[] @_ @(Text, Text) [("", "Everything"), ("audit", "People and settings"), ("issue", "Issues"), ("agent", "AI agents")] \(v, l) ->
-          option_ ([value_ v] <> [selected_ "" | Just v == sourceM || (T.null v && isNothing sourceM)]) $ toHtml l
+        option_ ([value_ ""] <> [selected_ "" | isNothing sourceM]) "Everything"
+        forM_ [minBound .. maxBound] \src -> option_ ([value_ $ display src] <> [selected_ "" | Just src == sourceM]) $ toHtml $ sourceLabel src
     label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] do
       "Actor"
       input_ [type_ "search", name_ "actor", value_ (fold actorM), placeholder_ "name@company.com", class_ "input input-sm w-56"]
     button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Filter"
-  if null entries
-    then emptyState_ def{size = ESCompact, icon = Just "clock-rotate-left"} "No activity yet" "Changes to settings, members, dashboards, monitors and routines appear here as they happen."
-    else do
-      div_ [class_ "overflow-x-auto rounded-xl border border-strokeWeak"] $ table_ [class_ "w-full text-sm"] do
-        thead_ [class_ "bg-fillWeaker text-xs text-textWeak text-start"] $ tr_ $ forM_ @[] @_ @Text ["Time", "Actor", "Event", "Target"] (th_ [class_ "px-3 py-2 text-start font-medium"] . toHtml)
-        tbody_ [class_ "divide-y divide-strokeWeak"] $ forM_ entries \e -> tr_ [class_ "align-top"] do
-          td_ [class_ "px-3 py-2 whitespace-nowrap text-textWeak tabular-nums"] $ localTimeFmt_ "MMM dd, HH:mm:ss" e.at
-          td_ [class_ "px-3 py-2"] do
-            div_ [class_ "flex items-center gap-1.5"] do
-              faSprite_ (actorIcon e.actorKind) "regular" "w-3.5 h-3.5 shrink-0 text-iconNeutral"
-              span_ [class_ "text-textStrong break-words"] $ toHtml $ fromMaybe (actorLabel e.actorKind) e.actor
-            when (e.actorKind == "agent") $ span_ [class_ "text-xs text-textWeak"] "AI agent, on their behalf"
-          td_ [class_ "px-3 py-2 text-textStrong"] $ toHtml $ humanize e.event
-          td_ [class_ "px-3 py-2 text-textWeak"] $ toHtml $ T.intercalate ": " $ catMaybes [humanize <$> e.targetKind, e.targetTitle]
-      whenJust (viaNonEmpty last entries) \lastE ->
-        when (length entries >= 100) $ a_ [href_ $ urls.auditLogGet pid sourceM actorM (Just $ formatUTC lastE.at), class_ "self-start text-sm text-textBrand hover:underline"] "Show older activity"
+  toHtml
+    Table.Table
+      { config = def{Table.elemID = "audit-log", Table.renderAsTable = True}
+      , rows = V.fromList entries
+      , features = def{Table.zeroState = Just Table.ZeroState{icon = "clock-rotate-left", title = "No activity yet", description = "Changes to settings, members, dashboards, monitors and routines appear here as they happen.", action = Table.ESNone}}
+      , columns =
+          [ Table.col "Time" \e -> span_ [class_ "whitespace-nowrap text-textWeak tabular-nums"] $ localTimeFmt_ "MMM dd, HH:mm:ss" e.at
+          , Table.col "Actor" \e -> do
+              div_ [class_ "flex items-center gap-1.5"] do
+                faSprite_ (actorIcon e.actorKind) "regular" "w-3.5 h-3.5 shrink-0 text-iconNeutral"
+                span_ [class_ "text-textStrong break-words"] $ toHtml $ fromMaybe (actorLabel e.actorKind) e.actor
+              when (e.actorKind == Projects.AKAgent) $ span_ [class_ "text-xs text-textWeak"] "AI agent, on their behalf"
+          , Table.col "Event" $ span_ [class_ "text-textStrong"] . toHtml . humanize . (.event)
+          , Table.col "Target" \e -> span_ [class_ "text-textWeak"] $ toHtml $ T.intercalate ": " $ catMaybes [humanize <$> e.targetKind, e.targetTitle]
+          ]
+      }
+  whenJust (guarded ((>= 100) . length) entries >>= viaNonEmpty last) \lastE ->
+    a_ [href_ $ urls.auditLogGet pid sourceM actorM (Just $ formatUTC lastE.at), class_ "self-start text-sm text-textBrand hover:underline"] "Show older activity"
   where
-    humanize t = case T.replace "_" " " t of
-      "" -> ""
-      h -> T.toUpper (T.take 1 h) <> T.drop 1 h
+    humanize t = T.toUpper (T.take 1 h) <> T.drop 1 h where h = T.replace "_" " " t
+    sourceLabel = \case
+      Projects.ASAudit -> "People and settings"
+      Projects.ASIssue -> "Issues"
+      Projects.ASAgent -> "AI agents"
     actorIcon = \case
-      "agent" -> "sparkles"
-      "system" -> "gear"
-      _ -> "user"
+      Projects.AKUser -> "user"
+      Projects.AKAgent -> "sparkles"
+      Projects.AKSystem -> "gear"
     actorLabel = \case
-      "agent" -> "AI agent"
-      "system" -> "Monoscope"
-      _ -> "Unknown user"
+      Projects.AKUser -> "Unknown user"
+      Projects.AKAgent -> "AI agent"
+      Projects.AKSystem -> "Monoscope"
 
 
 requireSettingsWrite :: Projects.ProjectId -> ATAuthCtx Projects.Session

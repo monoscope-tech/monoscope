@@ -46,7 +46,7 @@ spec = around withTestResources $ describe "Home screen" do
     did <- UUIDId <$> dbOne @_ @UUID.UUID tr [sql|SELECT id FROM projects.dashboards WHERE project_id = ? AND title = 'Checkout health'|] (Only pid)
     -- The change is in the audit trail with its actor and target; the visit is in this person's recents.
     entries <- runQueryEffect tr $ Projects.projectActivity pid Nothing Nothing Nothing 10
-    [(e.event, e.targetTitle, e.targetId, e.actorKind) | e <- entries, e.source == "audit"] `shouldBe` [("dashboard_created", Just "Checkout health", Just did.toText, "user")]
+    [(e.event, e.targetTitle, e.targetId, e.actorKind) | e <- entries, e.source == Projects.ASAudit] `shouldBe` [("dashboard_created", Just "Checkout health", Just did.toText, Projects.AKUser)]
     void $ testServant tr $ Dashboards.dashboardGetH pid did Nothing Nothing Nothing Nothing Nothing []
     owner <- UUIDId <$> dbOne @_ @UUID.UUID tr [sql|SELECT '00000000-0000-0000-0000-000000000001'::uuid|] ()
     (map (.title) <$> runQueryEffect tr (Projects.recentViews owner pid)) `shouldReturn` ["Checkout health"]
@@ -54,7 +54,7 @@ spec = around withTestResources $ describe "Home screen" do
     home `shouldContainAll` ["Jump back in", "Checkout health", "Dashboard · "]
     audit <- renderT <$> call tr (Settings.auditLogGetH pid Nothing Nothing Nothing)
     audit `shouldContainAll` ["Audit log", "Dashboard created", "Dashboard: Checkout health", "Export CSV"]
-    csv <- call tr (Settings.auditLogCsvGetH pid (Just "audit") Nothing)
+    csv <- call tr (Settings.auditLogCsvGetH pid (Just Projects.ASAudit) Nothing)
     csv `shouldContainAll` ["\"dashboard_created\"", "\"Checkout health\""]
 
   it "slackConnect_createsOneChannelAndInvitesEachMemberOnce" \tr -> do
