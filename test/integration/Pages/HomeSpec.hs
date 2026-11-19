@@ -82,7 +82,7 @@ spec = around withTestResources $ describe "Home screen" do
     swept `shouldReturn` 1
     created <- sync True
     methods created `shouldBe` ["conversations.create", "chat.postMessage", "conversations.inviteShared"]
-    foldMap (decodeUtf8 . snd) (viaNonEmpty last created) `shouldContainAll` ["channel=C0HOME", "emails=" <> T.replace "@" "%40" owner]
+    foldMap (decodeUtf8 . snd) (viaNonEmpty last created) `shouldContainAll` ["channel=C0HOME", "emails=" <> T.replace "@" "%40" owner, "external_limited=false"]
     -- A later member gets one invite; members already invited are not re-sent.
     dbExec tr [sql|INSERT INTO users.users (id, first_name, last_name, email) VALUES ('00000000-0000-0000-0000-00000000a11c', 'Ada', 'L', 'ada@acme.test')|] ()
     dbExec tr [sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (?, '00000000-0000-0000-0000-00000000a11c', 'edit')|] (Only pid)

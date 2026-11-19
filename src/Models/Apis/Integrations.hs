@@ -954,7 +954,8 @@ slackConnectUrl c = "https://slack.com/app_redirect?channel=" <> c.channelId <> 
 
 -- | Creates the project's channel when @create@ and it has none (adding Monoscope's staff and a
 -- welcome), then sends a Slack Connect invite to every email not yet successfully invited, plus
--- @resend@ again. Slack accepts one recipient per invite. Failures are recorded per email and
+-- @resend@ again. Slack accepts one recipient per invite; invites are full (not external_limited)
+-- so customers can add their own colleagues. Failures are recorded per email and
 -- logged; an unusable bot token or missing scope fails the whole sync with Slack's error code.
 syncSlackConnect :: (DB es, HTTP.HTTP :> es, IOE :> es, Log :> es) => Text -> [Text] -> Projects.ProjectId -> Text -> Bool -> [Text] -> Maybe Text -> Eff es (Either Text (Maybe SlackConnect))
 syncSlackConnect token staff pid title create emails resend
@@ -971,7 +972,7 @@ syncSlackConnect token staff pid title create emails resend
         Right (Just c) -> do
           let invited = S.fromList [i.email | i <- c.invites, isJust i.inviteId]
           for_ (ordNub $ filter (\e -> not (T.null e) && not (e `S.member` invited)) (map (T.toLower . T.strip) emails) <> maybeToList resend) \email -> do
-            result <- call "conversations.inviteShared" ["channel" := c.channelId, "emails" := email, "external_limited" := ("true" :: Text)]
+            result <- call "conversations.inviteShared" ["channel" := c.channelId, "emails" := email, "external_limited" := ("false" :: Text)]
             let (inviteId, err) = case result of
                   Right v -> (Just $ fromMaybe "" $ v ^? AEL.key "invite_id" . AEL._String, Nothing)
                   Left "already_in_channel" -> (Just "", Nothing)
