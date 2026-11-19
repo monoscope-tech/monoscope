@@ -16,6 +16,7 @@ import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..))
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple qualified as PG
@@ -237,6 +238,15 @@ data EnvConfig = EnvConfig
   , redditConversionsToken :: Maybe Text
   , linkedInPartnerId :: Maybe Text
   , postHogApiKey :: Maybe Text
+  , monoscopeTelemetryDisabled :: Maybe Text
+  -- ^ Any value but empty, @0@ or @false@ stops anonymous usage reports; so does @DO_NOT_TRACK@.
+  , monoscopeTelemetryDebug :: Maybe Text
+  -- ^ Logs each usage report instead of sending it.
+  , doNotTrack :: Maybe Text
+  , telemetryEndpoint :: Text
+  , telemetryProjectId :: Maybe Projects.ProjectId
+  -- ^ Set on Monoscope's own deployment: the project usage reports are ingested into. It also stops
+  -- that deployment reporting on itself.
   , postHogApiHost :: Maybe Text
   , crispWebsiteId :: Maybe Text
   , basicAuthEnabled :: Bool
@@ -324,6 +334,7 @@ instance DefConfig EnvConfig where
       , grpcHosts = ["0.0.0.0"]
       , httpHost = "*4"
       , environment = Dev
+      , telemetryEndpoint = "https://app.monoscope.tech/telemetry/v1/report"
       , migrationsDir = "./static/migrations/"
       , messagesPerPubsubPullBatch = 1000
       , rrwebTopics = ["rrweb-client"]
@@ -381,6 +392,11 @@ instance DefConfig EnvConfig where
         -- the migration H1 rationale rules out.
         processedAtCutoff = UTCTime (fromGregorian 2026 4 15) 0
       }
+
+
+instance Var Projects.ProjectId where
+  fromVar = fmap DeriveUtils.UUIDId . UUID.fromString
+  toVar = UUID.toString . DeriveUtils.unUUIDId
 
 
 -- Support unmarshalling a coma separated text into a text list

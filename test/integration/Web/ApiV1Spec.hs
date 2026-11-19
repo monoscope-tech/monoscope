@@ -42,6 +42,7 @@ import Pkg.Git qualified as Git
 import Pkg.MonitorConfig (MonitorCondition (unit), MonitorConfig (condition, environment, service))
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.TestUtils
+import Pkg.UsageTelemetry qualified as UsageTelemetry
 import Servant (NoContent (..))
 import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
@@ -65,7 +66,7 @@ topAppWithHTTP :: (forall x es. IOE :> es => Eff (HTTP ': es) x -> Eff es x) -> 
 topAppWithHTTP http tr =
   genericServeTWithContext
     (effToServantHandlerTestHTTP http tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-    (Routes.server (OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider) (OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider) \_ _ -> pass)
+    (Routes.server (OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider) (OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider) OtlpServer.collectUsageReport \_ _ -> pass)
     (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
 
 
@@ -141,6 +142,32 @@ spec = describe "API v1" do
     filter (`Map.member` reg) ["post_mcp", "mcp_post"] `shouldBe` []
 
   around withTestResources do
+    it "usage telemetry: one report a day unless opted out, collected into the telemetry project without the IP" \tr -> do
+      let withCfg f = tr{trATCtx = tr.trATCtx{config = f tr.trATCtx.config}}
+          send r = fst <$> runTestBgRecordingHTTP frozenTime r UsageTelemetry.reportUsage
+      runHasqlEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE apis.instance_telemetry SET last_sent_at = NULL, last_payload = NULL |]
+      send (withCfg \c -> c{doNotTrack = Just "1"}) `shouldReturn` []
+      -- Debug mode keeps the report for inspection without sending it or claiming the day.
+      send (withCfg \c -> c{monoscopeTelemetryDebug = Just "1"}) `shouldReturn` []
+      runHasqlEffect tr (Hasql.interpScalar [HI.sql| SELECT last_payload IS NOT NULL AND last_sent_at IS NULL FROM apis.instance_telemetry |]) `shouldReturn` True
+      -- The collecting deployment never reports about itself.
+      send (withCfg \c -> c{telemetryProjectId = Just testPid}) `shouldReturn` []
+      [(url, body)] <- send tr
+      url `shouldBe` tr.trATCtx.config.telemetryEndpoint
+      report <- either fail pure $ AE.eitherDecode @UsageTelemetry.Report body
+      instanceId <- runHasqlEffect tr $ Hasql.interpOne [HI.sql| SELECT instance_id FROM apis.instance_telemetry |]
+      (report.schema, Just report.instanceId) `shouldBe` (UsageTelemetry.schemaVersion, instanceId)
+      send tr `shouldReturn` []
+      pid <- createTestProject tr "Usage reports"
+      let post r sent = status <$> request (topAppWithHTTP (runHTTPGolden "./test/golden/") r) H.methodPost "/telemetry/v1/report" [json, ("X-Real-IP", "203.0.113.7")] (AE.encode sent)
+      post tr report `shouldReturn` 404
+      let collecting = withCfg \c -> c{telemetryProjectId = Just pid}
+      post collecting report{UsageTelemetry.schema = 99} `shouldReturn` 400
+      post collecting report{UsageTelemetry.version = T.replicate 4096 "x"} `shouldReturn` 400
+      post collecting report `shouldReturn` 202
+      stored <- runHasqlEffect tr $ Hasql.interpOneJson @AE.Value [HI.sql| SELECT attributes FROM otel_logs_and_spans WHERE project_id::text = #{pid.toText} AND name = 'monoscope.usage_report' |]
+      let attrs = fromMaybe AE.Null stored
+      (attrs ^? key "monoscope" . key "usage_report", "203.0.113.7" `T.isInfixOf` decodeUtf8 (AE.encode attrs)) `shouldBe` (Just (AE.toJSON report), False)
     it "HTTP auth: API keys gate /api/v1 and MCP, the demo project is open, secrets are never echoed or cached" \tr -> do
       apiKey <- createTestAPIKey tr testPid "ingestion-key-auth"
       runQueryEffect tr (traverse (`resolveApiKeyProject` Nothing) ([apiKey, "invalid-key", ""] :: [Text])) `shouldReturn` [Just testPid, Nothing, Nothing]

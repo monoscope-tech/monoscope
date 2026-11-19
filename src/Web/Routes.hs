@@ -79,6 +79,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Git qualified as Git
 import Pkg.Parser qualified as Parser
+import Pkg.UsageTelemetry qualified as UsageTelemetry
 import Relude hiding (ask)
 import Servant
 import Servant.HTML.Lucid (HTML)
@@ -181,6 +182,7 @@ data Routes mode = Routes
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] Auth.ClientMetadata
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[HTML] (Html ())
   , stripeWebhook :: mode :- "webhook" :> "stripe" :> Header "Stripe-Signature" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[HTML] (Html ())
+  , usageReport :: mode :- "telemetry" :> "v1" :> "report" :> Header "X-Real-IP" Text :> RemoteHost :> ReqBody '[JSON] UsageTelemetry.Report :> PostAccepted '[JSON] NoContent
   , -- Kept at its original path so hooks configured before multi-host support keep delivering.
     githubWebhook :: mode :- "webhook" :> "github" :> Header "X-Hub-Signature-256" Text :> Header "X-GitHub-Event" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[JSON] AE.Value
   , -- One route per host. The host is in the path rather than sniffed from the headers because
@@ -220,8 +222,8 @@ data Routes mode = Routes
   deriving stock (Generic)
 
 
-server :: OtlpHttpHandler -> OtlpHttpHandler -> AIThreads.RunNow -> Routes (AsServerT ATBaseCtx)
-server otlpTraces otlpLogs runNow =
+server :: OtlpHttpHandler -> OtlpHttpHandler -> (Maybe Text -> UsageTelemetry.Report -> ATBaseCtx NoContent) -> AIThreads.RunNow -> Routes (AsServerT ATBaseCtx)
+server otlpTraces otlpLogs collectUsage runNow =
   let projectTools = Just mcpProjectTools
       -- The proxy's X-Real-IP (nginx overwrites whatever a client sent), else the connecting socket.
       sender realIp peer = realIp <|> show . fst <$> IP.fromSockAddr peer
@@ -252,6 +254,7 @@ server otlpTraces otlpLogs runNow =
         , clientMetadata = Auth.clientMetadataH
         , lemonWebhook = Settings.webhookPostH
         , stripeWebhook = Settings.stripeWebhookPostH
+        , usageReport = \realIp -> collectUsage . sender realIp
         , githubWebhook = \sigM eventM body -> GitSync.gitWebhookPostH Git.GitHub (Git.WebhookReq eventM sigM Nothing Nothing Nothing body)
         , gitWebhook = \host bbSig giteaSig glSig glToken glId glTs giteaEvent glEvent bbEvent body ->
             GitSync.gitWebhookPostH

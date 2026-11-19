@@ -47,6 +47,7 @@ import Network.HTTP.Types.URI (urlEncode)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Test qualified as WT
+import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.CodeContext qualified as PageCodeContext
@@ -229,7 +230,7 @@ wikiApp :: TestResources -> Wai.Application
 wikiApp tr =
   genericServeTWithContext
     (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-    (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused") \_ _ -> pass)
+    (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused") OtlpServer.collectUsageReport \_ _ -> pass)
     (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
 
 

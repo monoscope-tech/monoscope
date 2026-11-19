@@ -133,6 +133,7 @@ import Pkg.QueryCache qualified as QueryCache
 import Pkg.Queue (getOrInitKafkaProducer, kafkaSaslExtraProps)
 import Pkg.SchemaLearning (SummaryDoc (..))
 import Pkg.SchemaLearning qualified as SchemaLearning
+import Pkg.UsageTelemetry qualified as UsageTelemetry
 import ProcessMessage (classifyUrlPath, classifyUrlPathWith, extractObservation, fetchProjectCache, mkBatchPathClassifiers, mkPathClassifier, processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask, local)
@@ -142,6 +143,7 @@ import System.Clock (Clock (Monotonic), diffTimeSpec, getTime, toNanoSecs)
 import System.Config qualified as Config
 import System.Directory (findExecutable)
 import System.Logging qualified as Log
+import System.Random (randomRIO)
 import System.Tracing (SpanStatus (..), Tracing, addEvent, forkWithCtx, setStatus, withSpan, withSpan_)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
@@ -324,6 +326,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
     FixIssue pid fid -> ImpactReview.fixIssue pid fid
     AutofixIssues pid -> ImpactReview.autofixIssues pid
     PrepareFixWorkspace pid fid -> ImpactReview.prepareFixWorkspace pid fid
+    UsageReport -> UsageTelemetry.reportUsage
     PublishFix pid fid -> do
       github <- liftIO $ findExecutable "gh"
       Publication.runGitPublicationReal (CodeReview.ArtifactStore <$> authCtx.config.impactReviewUsageDir <*> authCtx.config.impactReviewCacheDir) github $ ImpactReview.publishIssueFix pid fid
@@ -1048,6 +1051,8 @@ runDailyJobScheduling authCtx =
           enqueueJobs authCtx
             $ [Jobs.MonoscopeAdminDaily, Jobs.UsageAuditReport, Jobs.ExpireReplayData, Jobs.ExpireShareEvents]
             <> [Jobs.CleanupDemoProject | dayOfWeek currentDay == Monday]
+          -- Spread over six hours so installs do not all report at midnight.
+          when (UsageTelemetry.modeOf authCtx.config /= UsageTelemetry.Off) $ liftIO (randomRIO (0, 6 * 3600 :: Int)) >>= \delay -> enqueueAt authCtx (addUTCTime (fromIntegral delay) currentTime) [Jobs.UsageReport]
           liftIO $ withResource authCtx.jobsPool \conn -> do
             -- Each handler re-enqueues itself; the daily loop seeds a full day's
             -- ticks so a single restart can't leave a gap when the chain broke.
@@ -3408,6 +3413,9 @@ jobsWorkerInit logger appCtx tp = jobsWorkerInitWithTools logger appCtx tp Nothi
 
 jobsWorkerInitWithTools :: Logger -> Config.AuthContext -> TracerProvider -> Maybe AI.ProjectTools -> IO ()
 jobsWorkerInitWithTools logger appCtx tp projectTools = when appCtx.config.enableBackgroundJobs do
+  runLogT (show appCtx.config.environment) logger appCtx.config.logLevel $ LogLegacy.logInfo_ (UsageTelemetry.startupNotice appCtx.config)
+  -- A first report a few minutes after start; 'UsageTelemetry.reportUsage' skips it if one went out today.
+  when (UsageTelemetry.modeOf appCtx.config /= UsageTelemetry.Off) $ getCurrentTime >>= \now -> enqueueAt appCtx (addUTCTime 300 now) [Jobs.UsageReport]
   when appCtx.config.enableDailyJobScheduling $ ensureDailyJobScheduled appCtx
   -- Scoped to the runner so a supervisor restart does not leak another backstop loop.
   UIO.concurrently_
