@@ -490,6 +490,11 @@ slots agents = Workspace.Slots{node = "test-node", agents, verifiers = 2, builds
 
 spec :: Spec
 spec = around withTestResources $ describe "Production impact reviews" do
+  -- 2026-11-19: three fix runs ended as "Review agent could not be executed" when the agent gave up.
+  it "agentExitsWithoutSubmitting_saysSoInsteadOfCouldNotBeExecuted" \_ -> do
+    let request = Agent.Request{projectId = testPid, runId = UUIDId UUID.nil, attemptId = UUIDId UUID.nil, repository = "fixture", base = revision, head = revision, gitToken = "", prompt = "Review.", provider = "fixture", model = "fixture", thinkingLevel = Agent.Off}
+    result <- runEff $ Agent.runCodeReviewWith Nothing (Right Nothing) (Just \_ -> proc "sh" ["-c", "read request"]) $ Agent.reviewPatch request (const pass) (const pass) (const $ pure $ Right ())
+    leftToMaybe result `shouldBe` Just "Review agent exited without submitting a result"
   it "allocation bridge: a malformed VM identity issues no proof; a cancelled VM records its confirmed cleanup per close outcome" \_ -> do
     base <- either (fail . show) pure $ Workspace.mkRevision revision
     let operations directory = lines . decodeUtf8 @Text <$> readFileBS (directory </> "operations.log")
