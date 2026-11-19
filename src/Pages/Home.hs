@@ -496,7 +496,7 @@ slackConnectCard_ c = div_ [id_ "slack-connect-card", class_ "flex flex-wrap ite
   unless demo
     $ button_
       [ type_ "button"
-      , class_ "btn btn-sm btn-primary"
+      , class_ "btn btn-sm"
       , hxPost_ $ urls.slackConnectPost c.pid
       , hxTarget_ "#slack-connect-card"
       , hxSwap_ "outerHTML"
