@@ -40,7 +40,7 @@ import System.Types (ATAuthCtx, Outcome (..), RespHeaders, Toast (..), ToastLeve
 import System.Types qualified
 import Text.Slugify (slugify)
 import UnliftIO.Exception (tryAny)
-import Utils (countNoun, faSprite_, navTabAttrs, popoverPanel_, popoverTrigger_)
+import Utils (countNoun, faSprite_, formatUTC, navTabAttrs, popoverPanel_, popoverTrigger_)
 import Web.Links (CookieProtectedRoutes (..), MonitorsRoutes' (..), ProjectsRoutes' (..), TelemetryRoutes' (..), urls)
 
 
@@ -93,10 +93,12 @@ homeGetH pid = do
   members <- ProjectMembers.selectActiveProjectMembers pid
   appCtx <- ask @AuthContext
   let slackConfigured = not $ T.null appCtx.config.slackBotToken
-  let glance = take 1 (templateTab "_overview.yaml" "Overview" []) <> stackWidgets pid
+  -- Every tile states the same window, so a number on Home always means "the last 24 hours".
+  let window w = w{Widget.timeFrom = Just $ formatUTC dayAgo, Widget.timeTo = Just $ formatUTC now, Widget.children = map window <$> w.children}
+      glance = map window $ take 1 (templateTab "_overview.yaml" "Overview" []) <> stackWidgets pid
       -- A widget's id names its DOM elements, so one shown twice (a starred overview repeats the
       -- golden signals) loads into the first copy and leaves the second a skeleton forever.
-      pick seen vm = let ws = take 4 [w | w <- mapMaybe (homeWidget vm) $ foldMap Dashboards.allWidgets $ loadDashboardFromVM templates vm, all (`S.notMember` seen) (domId w)] in (seen <> S.fromList (mapMaybe domId ws), (vm, ws))
+      pick seen vm = let ws = take 4 [window w | w <- mapMaybe (homeWidget vm) $ foldMap Dashboards.allWidgets $ loadDashboardFromVM templates vm, all (`S.notMember` seen) (domId w)] in (seen <> S.fromList (mapMaybe domId ws), (vm, ws))
       starred = take 2 $ filter (not . null . snd) $ snd $ mapAccumL pick (S.fromList $ mapMaybe domId $ foldMap flat glance) dashboards
       flat w = w : foldMap (concatMap flat) w.children
       domId w = w.id <|> (slugify <$> w.title)
@@ -144,12 +146,12 @@ home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ 
     sectionHead_ "For you today" (Just $ length $ flagged Issues.HKInsight) $ Just ("AI routines", urls.aiRoutinesGet d.pid)
     div_ [class_ "flex flex-col"] $ forM_ (flagged Issues.HKInsight) $ feedRow_ d.pid d.now
   section_ [class_ "flex flex-col gap-3", Aria.label_ "Your stack"] do
-    sectionHead_ "Your stack" Nothing $ Just ("Overview dashboard", urls.dashboardRedirectGet d.pid ([] :: [(Text, Maybe Text)]))
+    sectionHead_ ("Your stack" >> windowNote_) Nothing $ Just ("Overview dashboard", urls.dashboardRedirectGet d.pid ([] :: [(Text, Maybe Text)]))
     Widget.embeddedWidgets_ d.pid d.glance
     div_ [class_ "flex flex-wrap gap-2"] $ forM_ stackLinks \(icon, label, href) ->
       a_ ([href_ href, class_ "inline-flex items-center gap-1.5 rounded-full bg-fillWeak px-3 py-1.5 text-xs text-textWeak hover:text-textStrong hover:bg-fillHover transition-colors"] <> navTabAttrs) $ faSprite_ icon "regular" "w-3.5 h-3.5" >> label
   forM_ d.starred \(vm, ws) -> section_ [class_ "flex flex-col gap-3", Aria.label_ vm.title] do
-    sectionHead_ (faSprite_ "star" "solid" "w-3.5 h-3.5 text-iconNeutral" >> toHtml vm.title) Nothing $ Just ("Open dashboard", dashboardUrl d.pid vm.id Nothing [])
+    sectionHead_ (faSprite_ "star" "solid" "w-3.5 h-3.5 text-iconNeutral" >> toHtml vm.title >> windowNote_) Nothing $ Just ("Open dashboard", dashboardUrl d.pid vm.id Nothing [])
     Widget.embeddedWidgets_ d.pid ws
   jumpBackIn_ d
   homeFooter_ d
@@ -288,6 +290,10 @@ statusBar_ d = div_ [class_ "grid grid-cols-2 sm:grid-cols-5 gap-px overflow-hid
     stat_ href n label tone = a_ ([href_ href, class_ "flex flex-col gap-0.5 surface-raised px-4 py-3 hover:bg-fillWeak transition-colors"] <> navTabAttrs) do
       span_ [class_ $ "text-xl font-semibold tabular-nums text-textStrong " <> tone] $ toHtml (show @Text n)
       span_ [class_ "text-xs text-textWeak"] label
+
+
+windowNote_ :: Html ()
+windowNote_ = span_ [class_ "text-xs font-normal text-textWeak"] "· last 24 hours"
 
 
 sectionHead_ :: Html () -> Maybe Int -> Maybe (Text, Text) -> Html ()
