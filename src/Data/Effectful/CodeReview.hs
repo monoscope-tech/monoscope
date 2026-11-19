@@ -751,7 +751,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                             saved <- maybe (record $ Outbox.Allocation receipt) (\outbox -> Outbox.deliver outbox (Outbox.Allocation receipt) record) journal
                                             either (fail . toString) pure saved
                                           retain receipt = for_ journal $ \outbox -> Outbox.retain outbox $ Outbox.Allocation receipt
-                                      join <$> Guest.withGuest worker expected checkout.directory revision (maybe (Guest.Fresh setup) (Guest.ResumeSession . (.guest)) paused) (Just lease) request.attemptId allocate retain \session -> do
+                                      join <$> Guest.withGuest (case role of (Policy.Admission; Policy.Peer) -> Workspace.Child; (Policy.Patch; Policy.SourcePatch; Policy.Source; Policy.Advisory; Policy.Fix) -> Workspace.Parent) worker expected checkout.directory revision (maybe (Guest.Fresh setup) (Guest.ResumeSession . (.guest)) paused) (Just lease) request.attemptId allocate retain \session -> do
                                         writeIORef guest $ Just session
                                         initialized <- case task of
                                           FixTask _ job -> case (journal, savedFix) of
