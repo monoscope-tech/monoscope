@@ -180,34 +180,44 @@ connectAgent_ d = div_ [class_ "relative"] do
       [ type_ "button"
       , Aria.label_ "Copy the agent setup prompt"
       , class_ "rounded-e-full ps-1.5 pe-3.5 py-2 text-iconNeutral hover:text-textStrong active:scale-[0.96] transition-[color,scale] duration-100 cursor-pointer"
-      , [__|on click call navigator.clipboard.writeText(#agent-prompt.innerText) then add .text-iconSuccess to me then put 'Copied the agent setup prompt' into #agent-copy-status then wait 1.5s then remove .text-iconSuccess from me|]
+      , [__|on click call navigator.clipboard.writeText(#agent-prompt.textContent) then add .text-iconSuccess to me then put 'Copied the agent setup prompt' into #agent-copy-status then wait 1.5s then remove .text-iconSuccess from me|]
       ]
       $ faSprite_ "copy" "regular" "w-4 h-4"
     span_ [id_ "agent-copy-status", role_ "status", class_ "sr-only"] ""
-  div_ ([class_ "dropdown dropdown-end z-50 mt-2 w-[min(36rem,calc(100vw-2rem))] rounded-2xl border border-strokeWeak bg-bgRaised p-4 shadow-lg flex flex-col gap-3", role_ "dialog", Aria.label_ "Connect your agent"] <> popoverPanel_ "connect-agent-pop") do
+  div_ ([class_ "dropdown dropdown-end z-50 mt-2 w-[min(30rem,calc(100vw-2rem))] rounded-2xl border border-strokeWeak bg-bgRaised p-5 shadow-lg flex flex-col gap-4", role_ "dialog", Aria.label_ "Connect your agent"] <> popoverPanel_ "connect-agent-pop") do
     div_ [class_ "flex flex-col gap-1"] do
-      p_ [class_ "text-sm font-semibold text-textStrong"] "Connect your coding agent"
-      p_ [class_ "text-sm text-textWeak text-pretty"] "Paste this into Claude Code, Codex, Cursor or any coding agent. It installs Monoscope's skills and CLI and adds this project's MCP server, so the agent can read your telemetry, issues and monitors."
-    pre_ [id_ "agent-prompt", class_ "max-h-64 overflow-auto c-scroll rounded-xl bg-fillWeak p-3 text-xs leading-relaxed text-textStrong whitespace-pre-wrap break-words"] $ toHtml prompt
-    div_ [class_ "flex items-center justify-between gap-3"] do
-      a_ [href_ "https://monoscopehq.com/docs/", target_ "_blank", rel_ "noopener", class_ "text-xs text-textWeak hover:text-textBrand"] "Read the MCP and CLI docs"
-      copyButton_ "btn btn-sm btn-primary gap-1.5" "w-3.5 h-3.5" "#agent-prompt.innerText" []
+      p_ [class_ "text-base font-semibold text-textStrong"] "Connect your coding agent"
+      p_ [class_ "text-sm text-textWeak"] "Copy one prompt into Claude Code, Codex or Cursor. It does these three steps."
+    ol_ [class_ "flex flex-col gap-3"] do
+      setupStep_ "1" "Add Monoscope's skills" $ cmd_ "npx skills add monoscope-tech/skills"
+      setupStep_ "2" "Install the CLI and log in" $ cmd_ "curl -fsSL https://monoscopehq.com/install.sh | sh"
+      setupStep_ "3" "Connect the MCP server" do
+        cmd_ $ host <> "/api/v1/mcp"
+        p_ [class_ "text-xs text-textWeak"] do
+          "With an API key as a Bearer token. "
+          a_ ([href_ $ urls.apiGet d.pid, class_ "text-textBrand hover:underline"] <> navTabAttrs) "Create a key"
+    -- What the copy buttons put on the clipboard; the steps above are its readable form.
+    pre_ [id_ "agent-prompt", hidden_ ""] $ toHtml prompt
+    div_ [class_ "flex items-center justify-between gap-3 border-t border-strokeWeak pt-4"] do
+      a_ [href_ "https://monoscopehq.com/docs/", target_ "_blank", rel_ "noopener", class_ "text-xs text-textWeak hover:text-textBrand"] "MCP and CLI docs"
+      copyButton_ "btn btn-sm btn-primary gap-1.5" "w-3.5 h-3.5" "#agent-prompt.textContent" []
   where
     host = T.dropWhileEnd (== '/') d.hostUrl
+    setupStep_ :: Text -> Text -> Html () -> Html ()
+    setupStep_ n label body = li_ [class_ "flex gap-3"] do
+      span_ [class_ "flex size-5 shrink-0 items-center justify-center rounded-full bg-fillWeak text-[11px] font-semibold tabular-nums text-textWeak"] $ toHtml n
+      div_ [class_ "flex min-w-0 flex-1 flex-col gap-1.5"] do
+        p_ [class_ "text-sm font-medium text-textStrong"] $ toHtml label
+        body
+    cmd_ :: Text -> Html ()
+    cmd_ t = code_ [class_ "block overflow-x-auto c-scroll whitespace-nowrap rounded-lg bg-fillWeak px-2.5 py-1.5 font-mono text-xs text-textStrong"] $ toHtml t
     prompt =
       unlines
-        [ "Connect yourself to my Monoscope project (" <> d.pid.toText <> ") so you can investigate production telemetry, issues and monitors."
-        , ""
-        , "1. Install the Monoscope skills:"
-        , "   - Claude Code: claude plugin marketplace add monoscope-tech/skills && claude plugin install monoscope-skills@monoscope-skills"
-        , "   - Codex: codex plugin marketplace add monoscope-tech/skills && codex plugin add monoscope-skills@monoscope-skills"
-        , "   - Any other agent: npx skills add monoscope-tech/skills"
-        , "2. Install the CLI and log in: curl -fsSL https://monoscopehq.com/install.sh | sh && monoscope auth login"
-        , "   Then set the project: monoscope config set project " <> d.pid.toText
-        , "3. Add the MCP server " <> host <> "/api/v1/mcp (HTTP transport) with the header \"Authorization: Bearer <API key>\"."
-        , "   Ask me for the key; I'll create one at " <> host <> urls.apiGet d.pid <> ". Never write it into the repository."
-        , ""
-        , "When you're done, confirm the connection by listing today's open issues."
+        [ "Connect to my Monoscope project " <> d.pid.toText <> ":"
+        , "1. Add the skills: npx skills add monoscope-tech/skills"
+        , "2. Install the CLI and log in: curl -fsSL https://monoscopehq.com/install.sh | sh && monoscope auth login && monoscope config set project " <> d.pid.toText
+        , "3. Add the MCP server " <> host <> "/api/v1/mcp (HTTP) with \"Authorization: Bearer <API key>\". Ask me for the key (" <> host <> urls.apiGet d.pid <> ") and never commit it."
+        , "Then list today's open issues to confirm."
         ]
 
 
