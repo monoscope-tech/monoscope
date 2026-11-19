@@ -85,6 +85,7 @@ import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Directory (canonicalizePath, copyFile, createDirectoryIfMissing, createFileLink, doesDirectoryExist, doesFileExist, listDirectory, removeFile, removePathForcibly, renameDirectory)
 import System.Environment (getEnvironment)
+import System.Environment qualified as Environment
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.IO (hClose)
@@ -496,10 +497,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let request = Agent.Request{projectId = testPid, runId = UUIDId UUID.nil, attemptId = UUIDId UUID.nil, repository = "fixture", base = revision, head = revision, gitToken = "", prompt = "Review.", provider = "fixture", model = "fixture", thinkingLevel = Agent.Off}
     result <- runEff $ Agent.runCodeReviewWith Nothing (Right Nothing) (Just \_ -> proc "sh" ["-c", "read request"]) $ Agent.reviewPatch request (const pass) (const pass) (const $ pure $ Right ())
     leftToMaybe result `shouldBe` Just "Review agent exited without submitting a result"
+  -- 2026-11-19: reproduce_issue's admission agent waited 45 s for the slot its own parent fix held, then failed the fix.
+  it "childAgent_getsASlotWhileItsParentHoldsTheLastAgentSlot" \_ -> withSystemTempDirectory "vm-slots" \directory ->
+    bracket_ (Environment.setEnv "IMPACT_REVIEW_VM_SLOT_DIR" directory >> Environment.setEnv "IMPACT_REVIEW_VM_SLOTS" "1,1,1") (traverse_ Environment.unsetEnv ["IMPACT_REVIEW_VM_SLOT_DIR", "IMPACT_REVIEW_VM_SLOTS"]) do
+      Timeout.timeout 5000000 (Workspace.withSlot (Workspace.AgentPool Workspace.Parent) $ Workspace.withSlot (Workspace.AgentPool Workspace.Child) pass) `shouldReturn` Just ()
   it "allocation bridge: a malformed VM identity issues no proof; a cancelled VM records its confirmed cleanup per close outcome" \_ -> do
     base <- either (fail . show) pure $ Workspace.mkRevision revision
     let operations directory = lines . decodeUtf8 @Text <$> readFileBS (directory </> "operations.log")
-        open host directory = Guest.withGuest host Nothing directory base (Guest.Fresh Guest.Explore) Nothing (UUIDId UUID.nil)
+        open host directory = Guest.withGuest Workspace.Parent host Nothing directory base (Guest.Fresh Guest.Explore) Nothing (UUIDId UUID.nil)
     withAllocationBridge "malformed" \host directory -> do
       entered <- newIORef False
       (capture, receipts) <- recorder @Agent.AllocationReceipt
@@ -1880,7 +1885,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       initRepo repository
       base <- commit repository [("completed.txt", "original\n")] >>= either (fail . show) pure . Workspace.mkRevision
       let open :: Guest.Start -> (Guest.Session -> IO a) -> IO (Either Text a)
-          open preparation = Guest.withGuest host Nothing repository base preparation Nothing (UUIDId UUID.nil) (const $ pure ()) (const $ pure ())
+          open preparation = Guest.withGuest Workspace.Parent host Nothing repository base preparation Nothing (UUIDId UUID.nil) (const $ pure ()) (const $ pure ())
       let disk = directory </> "suspended.qcow2"
           digest = readProcessStdout_ $ proc "shasum" ["-a", "256", disk]
       saved <- open (Guest.Fresh Guest.Explore) \session -> do
@@ -1898,7 +1903,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         digest `shouldReturn` originalHash
       entered <- newIORef False
       changed <- either (fail . show) pure $ Workspace.mkRevision $ T.replicate 40 "1"
-      mismatched <- Guest.withGuest host Nothing repository changed (Guest.ResumeSession restored) Nothing (UUIDId UUID.nil) (const $ pure ()) (const $ pure ()) $ const $ writeIORef entered True
+      mismatched <- Guest.withGuest Workspace.Parent host Nothing repository changed (Guest.ResumeSession restored) Nothing (UUIDId UUID.nil) (const $ pure ()) (const $ pure ()) $ const $ writeIORef entered True
       mismatched `shouldSatisfy` isLeft
       readIORef entered `shouldReturn` False
       writeFileBS disk "corrupted checkpoint"

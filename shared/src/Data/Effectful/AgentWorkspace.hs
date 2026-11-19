@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Data.Effectful.AgentWorkspace (Workspace, checkLogLimit, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Outcome (..), Start (..), preparedOutcome, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), Slots (..), hostSlots, buildSeconds, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, compileFailed, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, checkLogLimit, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Outcome (..), Start (..), preparedOutcome, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), Seat (..), Slots (..), hostSlots, buildSeconds, withSlot, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, compileFailed, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
 import Control.Exception qualified as Exception
@@ -1732,10 +1732,15 @@ buildSeconds :: Int
 buildSeconds = 3600
 
 
--- | Which host-wide VM slots a sandbox draws from. Verifier VMs start while an agent VM holds its
--- slot, so they have their own pool and agents can never starve them; long workspace builds get
--- one slot of their own so they cannot starve proofs. Image lookups start no VM.
-data Pool = AgentPool | VerifierPool | PreparePool | NoVm
+-- | Which host-wide VM slots a sandbox draws from. Verifier and child-agent (admission, peer) VMs
+-- start while their parent agent VM holds its slot, so they have their own pools and agents can
+-- never starve them; long workspace builds get one slot of their own so they cannot starve proofs.
+-- Image lookups start no VM.
+data Pool = AgentPool Seat | VerifierPool | PreparePool | NoVm
+  deriving stock (Eq, Show)
+
+
+data Seat = Parent | Child
   deriving stock (Eq, Show)
 
 
@@ -1776,7 +1781,8 @@ withSlot pool action = do
       held name count patience = createDirectoryIfMissing True directory >> bracket (acquire patience (paths name count) (0 :: Int)) unlockFile (const action)
   case pool of
     NoVm -> action
-    AgentPool -> held "agent" slots.agents 45
+    AgentPool Parent -> held "agent" slots.agents 45
+    AgentPool Child -> held "child" slots.agents 45
     VerifierPool -> held "verifier" slots.verifiers 45
     PreparePool -> held "prepare" slots.builds buildSeconds
 
