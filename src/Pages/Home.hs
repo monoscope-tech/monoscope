@@ -160,7 +160,7 @@ glanceStrip_ d = div_ [class_ "flex flex-wrap items-center gap-x-6 gap-y-2 text-
 sectionHead_ :: Text -> Maybe Int -> Maybe (Text, Text) -> Html ()
 sectionHead_ title countM linkM = div_ [class_ "flex items-center gap-2"] do
   h2_ [class_ "text-sm font-semibold text-textStrong"] $ toHtml title
-  whenJust countM \n -> span_ [class_ "rounded bg-fillWeak px-1.5 text-xs tabular-nums text-textWeak"] $ show n
+  whenJust countM $ span_ [class_ "rounded bg-fillWeak px-1.5 text-xs tabular-nums text-textWeak"] . show
   whenJust linkM \(label, href) -> a_ ([href_ href, class_ "ml-auto inline-flex items-center gap-1 text-xs text-textWeak hover:text-textBrand"] <> navTabAttrs) do
     toHtml label
     faSprite_ "arrow-right" "regular" "w-3 h-3"
