@@ -89,7 +89,8 @@ makeLogger dest action = withRunInIO \unlift -> do
 -- as ERROR, which files an issue, while @warn@ is WARN, which does not.
 --
 -- >>> import Data.Map.Strict qualified as Map
--- >>> let at d = AE.decode @(Map Text AE.Value) $ jsonLine (Log.LogMessage "c" d (read "2026-01-01 00:00:00 UTC") Log.LogAttention "m" AE.Null)
+-- >>> import Data.Time (UTCTime (..), fromGregorian)
+-- >>> let at d = AE.decode @(Map Text AE.Value) $ jsonLine (Log.LogMessage "c" d (UTCTime (fromGregorian 2026 1 1) 0) Log.LogAttention "m" AE.Null)
 -- >>> [(Map.lookup "level" =<< at d, Map.lookup "domain" =<< at d) | d <- [["warn"], ["jobs"]]]
 -- [(Just (String "warn"),Just (Array [])),(Just (String "attention"),Just (Array [String "jobs"]))]
 jsonLine :: Log.LogMessage -> LByteString
