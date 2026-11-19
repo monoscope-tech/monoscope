@@ -56,7 +56,6 @@ import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Exception (trySync)
 import Effectful.Labeled (Labeled)
-import Effectful.Log qualified as ELog
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Lucid
@@ -619,7 +618,7 @@ buildLogResult useTf withChildren' shape pid now sinceM addCols removeCols (requ
 -- | Standalone query function for the v1 API events endpoint. Returns a
 -- JSON-shaped 400 (@{"error": {code, message, field?, suggestion?, details?}}@)
 -- for parse/query errors instead of raw Hasql/SQL.
-queryEvents :: (DB es, ELog.Log :> es, Effectful.Reader.Static.Reader AuthContext :> es, Error Servant.ServerError :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Text -> Eff es LogResult
+queryEvents :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error Servant.ServerError :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log.Log :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Text -> Eff es LogResult
 queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttributesM environmentM serviceM = do
   now <- Time.currentTime
   let queryInput = fromMaybe "" queryM

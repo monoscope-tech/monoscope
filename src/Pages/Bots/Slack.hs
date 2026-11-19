@@ -45,7 +45,6 @@ import Effectful.Concurrent (Concurrent)
 import Effectful.Concurrent qualified as Concurrent
 import Effectful.Concurrent.Async (concurrently, race_)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
-import Effectful.Log qualified as Log
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Effectful.Writer.Static.Local qualified as Writer
@@ -77,6 +76,7 @@ import Servant.API qualified as Servant
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400, err401, err403, err409, err503)
 import System.Config (AuthContext (config, env, pool), EnvConfig (..))
+import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, ProjectToolCtx, RespHeaders, addRespHeaders)
 import UnliftIO (timeout, withRunInIO)
 import UnliftIO.Exception (Handler (..), bracket, catch, catches, finally, throwIO, tryAny)

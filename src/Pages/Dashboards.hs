@@ -1087,7 +1087,7 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
         (res, duration) <- Log.timeAction action
         either
           (\err -> Log.logWarn ("Dashboard constant " <> label <> " query failed") (constant.key, err, duration) $> constant)
-          (\val -> Log.logDebug ("Dashboard constant " <> label <> " query completed") (constant.key, duration) $> constant{Dashboards.result = Just $ toResult val})
+          (\val -> Log.logTrace ("Dashboard constant " <> label <> " query completed") (constant.key, duration) $> constant{Dashboards.result = Just $ toResult val})
           res
   useTf <- useTfReads
   case (constant.sql, constant.query) of

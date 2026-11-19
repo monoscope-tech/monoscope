@@ -601,7 +601,7 @@ getSessionEvents manager conn pid bucket sessionId = do
       noEvents reason = do
         Log.logAttention "No replay events found anywhere for session" (HM.insert "reason" reason logCtx)
         pure $ Left notFoundErr
-      legacyFailed e = Left transientMsg <$ Log.logError "Failed to load legacy replay blob" (HM.insert "error" e logCtx)
+      legacyFailed e = Left transientMsg <$ Log.logAttention "Failed to load legacy replay blob" (HM.insert "error" e logCtx)
       -- Ancient single-object sessions (pre file_keys migration): fetch raw.
       legacy reason = do
         Log.logInfo "Falling back to legacy replay blob" (HM.insert "reason" reason logCtx)
@@ -621,7 +621,7 @@ getSessionEvents manager conn pid bucket sessionId = do
   -- A corrupt shard is surfaced (not silently dropped); a transient fetch failure
   -- flags the recording partial, same contract as a missing individual file.
   let shardCorrupt = not (null shards.decodeErrs) -- data-integrity event
-  unless (null shards.decodeErrs) $ Log.logError "Corrupt replay shard" (HM.insert "errors" (toText $ show shards.decodeErrs) logCtx)
+  unless (null shards.decodeErrs) $ Log.logAttention "Corrupt replay shard" (HM.insert "errors" (toText $ show shards.decodeErrs) logCtx)
   unless (null shards.transportErrs) $ Log.logAttention "Transient shard fetch failure; serving partial recording" (HM.insert "errors" (toText $ show shards.transportErrs) logCtx)
   (individuals, indivPartial, missingCount) <-
     if null fileKeys then pure ([], False, 0) else fetchIndividualsRaw manager conn bucket fileKeys logCtx
@@ -995,7 +995,7 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge =
                 -- Fatal: corrupt data will never succeed. Mark merged so we stop
                 -- retrying forever and paging on-call.
                 MergeDecodeFailed _ -> do
-                  Log.logError "Replay session merge aborted due to corrupt data; marking merged to stop retries" ctxWithErr
+                  Log.logAttention "Replay session merge aborted due to corrupt data; marking merged to stop retries" ctxWithErr
                   Time.currentTime >>= markMerged pid sessionId
                 -- Transient: leave row untouched so next batch retries.
                 MergeFetchFailed _ -> Log.logAttention "Replay session merge transient fetch failure; will retry" ctxWithErr

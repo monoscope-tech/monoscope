@@ -137,7 +137,7 @@ import Relude.Extra.Bifunctor (bimapF)
 import System.Config (AuthContext)
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
-import System.Logging (logWarn)
+import System.Logging (logAttention)
 import Text.Casing (fromAny, toKebab)
 import "base64" Data.ByteString.Base64 qualified as B64
 import "crypton-x509" Data.X509 (PrivKey (..))
@@ -367,8 +367,8 @@ decryptAccessToken encKey row = case row ^. GL.field' @"accessToken" of
 
 -- | Drop a row whose PAT would not decrypt, rather than returning it with the ciphertext
 -- still in place — that ciphertext would be sent to GitHub as a password.
-decryptedOr :: (IOE :> es, Log :> es) => Text -> ProjectId -> Either Text a -> Eff es (Maybe a)
-decryptedOr what pid = either (\err -> logWarn ("GitHub " <> what <> " token decryption failed") (pid, err) $> Nothing) (pure . Just)
+decryptedOr :: Log :> es => Text -> ProjectId -> Either Text a -> Eff es (Maybe a)
+decryptedOr what pid = either (\err -> logAttention ("GitHub " <> what <> " token decryption failed") (pid, err) $> Nothing) (pure . Just)
 
 
 -- | How to authenticate against an account. The App installation covers every repo in the
@@ -448,7 +448,7 @@ getGitHubCredentials pid = Hasql.interp (selectFrom @GitHubCredential <> [HI.sql
 
 
 -- | One credential, with its PAT decrypted.
-getGitHubCredential :: (DB es, IOE :> es, Log :> es) => ByteString -> ProjectId -> GitHubCredentialId -> Eff es (Maybe GitHubCredential)
+getGitHubCredential :: (DB es, Log :> es) => ByteString -> ProjectId -> GitHubCredentialId -> Eff es (Maybe GitHubCredential)
 getGitHubCredential encKey pid cid =
   Hasql.interp (selectFrom @GitHubCredential <> [HI.sql| WHERE project_id = #{pid} AND id = #{cid} |])
     >>= maybe (pure Nothing) (decryptedOr "credential" pid . decryptAccessToken encKey)
@@ -497,15 +497,15 @@ getGitSyncById :: DB es => ProjectId -> GitHubSyncId -> Eff es (Maybe GitHubSync
 getGitSyncById pid sid = Hasql.interp (selectFrom @GitHubSync <> [HI.sql| WHERE project_id = #{pid} AND id = #{sid} |])
 
 
-getGitSyncsDecrypted :: (DB es, IOE :> es, Log :> es) => ByteString -> ProjectId -> Eff es [GitHubSync]
+getGitSyncsDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> Eff es [GitHubSync]
 getGitSyncsDecrypted encKey pid = getGitSyncs pid >>= fmap catMaybes . traverse (\sync -> decryptSync encKey (maybe ImportDashboards (.operation) sync.lastError) sync)
 
 
-getGitSyncByIdDecrypted :: (DB es, IOE :> es, Log :> es) => ByteString -> ProjectId -> GitHubSyncId -> SyncOperation -> Eff es (Maybe GitHubSync)
+getGitSyncByIdDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> GitHubSyncId -> SyncOperation -> Eff es (Maybe GitHubSync)
 getGitSyncByIdDecrypted encKey pid sid operation = getGitSyncById pid sid >>= maybe (pure Nothing) (decryptSync encKey operation)
 
 
-decryptSync :: (DB es, IOE :> es, Log :> es) => ByteString -> SyncOperation -> GitHubSync -> Eff es (Maybe GitHubSync)
+decryptSync :: (DB es, Log :> es) => ByteString -> SyncOperation -> GitHubSync -> Eff es (Maybe GitHubSync)
 decryptSync encKey operation sync = case decryptAccessToken encKey sync of
   Left err -> recordSyncError sync.id operation ("Reconnect this repository: " <> err) >> decryptedOr "sync" sync.projectId (Left err)
   Right plain -> pure $ Just plain
