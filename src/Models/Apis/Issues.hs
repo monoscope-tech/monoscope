@@ -276,6 +276,7 @@ module Models.Apis.Issues (
   HighlightKind (..),
   HomeHighlight (..),
   upsertHighlightTx,
+  NewHighlight (..),
   liveHighlights,
   dismissHighlight,
   ResolvedIssue (..),
@@ -3698,11 +3699,14 @@ data HomeHighlight = HomeHighlight
   deriving anyclass (HI.DecodeRow)
 
 
+data NewHighlight = NewHighlight {kind :: HighlightKind, title :: Text, detail :: Text, link :: Maybe Text, source :: Text}
+
+
 -- | Attributed to the flagging conversation's title (a routine's name), else @source@.
 -- Flagging the same (kind, title) again refreshes it for another two days. A dismissal holds
 -- while the highlight is live; once it has expired, a fresh flag is a new occurrence and shows again.
-upsertHighlightTx :: Projects.ProjectId -> Maybe (UUIDId "conversation") -> Text -> HighlightKind -> Text -> Text -> Maybe Text -> Tx.Transaction ()
-upsertHighlightTx pid convId source kind title detail link =
+upsertHighlightTx :: Projects.ProjectId -> Maybe (UUIDId "conversation") -> NewHighlight -> Tx.Transaction ()
+upsertHighlightTx pid convId NewHighlight{kind, title, detail, link, source} =
   Hasql.executeTx
     [HI.sql| INSERT INTO apis.home_highlights (project_id, kind, title, detail, link, source, conversation_id, created_at, updated_at, expires_at)
              VALUES (#{pid}, #{kind}, #{title}, #{detail}, #{link},

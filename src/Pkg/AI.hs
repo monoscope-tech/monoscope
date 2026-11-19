@@ -1937,7 +1937,10 @@ executeToolAt cursor config tc = do
         title <- maybeToRight (failure "missing 'title'") $ T.take 200 <$> nonEmptyT (T.strip <$> getTextArg "title" args)
         kind <- maybeToRight "kind must be issue, improvement or insight." $ parseMaybe AE.parseJSON =<< Map.lookup "kind" args
         let detail = foldMap (T.take 600 . T.strip) $ getTextArg "detail" args
-        pure $ noRaw ("Flagged on Home: " <> title) <$ Issues.upsertHighlightTx config.projectId config.conversationId "AI assistant" kind title detail (projectPagePath config.projectId =<< getTextArg "link" args)
+        let linkArg = getTextArg "link" args
+            link = projectPagePath config.projectId =<< linkArg
+            ignored = if isJust linkArg && isNothing link then " The link was dropped: it must be a path under /p/" <> config.projectId.toText <> "." else ""
+        pure $ noRaw ("Flagged on Home: " <> title <> ignored) <$ Issues.upsertHighlightTx config.projectId config.conversationId Issues.NewHighlight{kind, title, detail, link, source = "AI assistant"}
       ReadArtifact -> EffectfulOperation $ inConversation \convId ->
         noRaw <$> case getTextArg "key" args of
           Nothing -> Issues.listArtifacts config.projectId convId Nothing <&> \docs -> encodeText [AE.object ["key" AE..= d.key, "title" AE..= d.title, "updated_at" AE..= d.updatedAt, "characters" AE..= d.characters] | d <- docs]

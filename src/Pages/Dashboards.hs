@@ -2560,7 +2560,7 @@ dashboardsPostH pid form = do
               }
       -- A read-only template is linked only by its entrypoint; created here it is the user's own copy.
       _ <- Dashboards.insert $ maybe dbd (const $ detach templates dbd) (Dashboards.readOnlyTemplate templates dbd)
-      Projects.logAudit pid Projects.AEDashboardCreated sess (Just $ Projects.AuditTarget "dashboard" did.toText form.title) Nothing
+      Projects.logAudit pid Projects.AEDashboardCreated sess (Just $ Projects.AuditTarget Projects.ATDashboard did.toText form.title) Nothing
       case (form.copyWidgetId, form.sourceDashboardId, widgetM) of
         (Just wid, Just src, _) -> void $ dashboardDuplicateWidgetPostH pid dbd.id wid (Just src)
         (_, _, Just w) -> void $ dashboardWidgetPutH pid dbd.id Nothing Nothing w
@@ -2633,7 +2633,7 @@ dashboardRenamePatchH pid dashId form = act do
   withEditableDash pid dashId \ed dashVM _ ->
     Right <$> do
       _ <- updateTitle ed form.title
-      when (form.title /= dashVM.title) $ Projects.logAudit pid Projects.AEDashboardRenamed sess (Just $ Projects.AuditTarget "dashboard" dashId.toText form.title) (Just $ AE.object ["from" AE..= dashVM.title])
+      when (form.title /= dashVM.title) $ Projects.logAudit pid Projects.AEDashboardRenamed sess (Just $ Projects.AuditTarget Projects.ATDashboard dashId.toText form.title) (Just $ AE.object ["from" AE..= dashVM.title])
       whenJust dashVM.schema \schema -> void $ updateSchema ed (schema & #title ?~ form.title) Nothing
       when (form.title /= dashVM.title) do
         monitors <- Monitors.queryMonitorsAll pid
@@ -2709,7 +2709,7 @@ dashboardDeleteH pid dashId = do
   (sess, _) <- Projects.sessionAndProject pid
   dashVM <- Dashboards.getDashboardByProjectId pid dashId `whenNothingM` throwError err404{errBody = "Dashboard not found or does not belong to this project"}
   _ <- Dashboards.deleteDashboardsByIds pid (V.singleton dashId)
-  Projects.logAudit pid Projects.AEDashboardDeleted sess (Just $ Projects.AuditTarget "dashboard" dashId.toText dashVM.title) Nothing
+  Projects.logAudit pid Projects.AEDashboardDeleted sess (Just $ Projects.AuditTarget Projects.ATDashboard dashId.toText dashVM.title) Nothing
   redirectCS $ dashboardsListUrl pid
   addSuccessToast "Dashboard was deleted successfully" Nothing
   addRespHeaders DashboardNoContent

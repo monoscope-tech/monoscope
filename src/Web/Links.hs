@@ -274,7 +274,7 @@ type CookieProtectedRoutes :: Type -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { -- Dashboard routes
     homeGet :: mode :- "p" :> ProjectId :> Get '[HTML] (RespHeaders (Opaque "Home.HomeGet"))
-  , auditLogGet :: mode :- "p" :> ProjectId :> "settings" :> "audit" :> QueryParam "source" Projects.ActivitySource :> QPT "actor" :> QPT "before" :> Get '[HTML] (RespHeaders (Opaque "Settings.AuditLogGet"))
+  , auditLogGet :: mode :- "p" :> ProjectId :> "settings" :> "audit" :> QueryParam "source" Projects.ActivitySource :> QPT "actor" :> QueryParam "before" UTCTime :> Get '[HTML] (RespHeaders (Opaque "Settings.AuditLogGet"))
   , auditLogCsvGet :: mode :- "p" :> ProjectId :> "settings" :> "audit.csv" :> QueryParam "source" Projects.ActivitySource :> QPT "actor" :> Get '[CSV] (Headers '[Header "Content-Disposition" Text] Text)
   , homeHighlightDismissPost :: mode :- "p" :> ProjectId :> "home" :> "highlights" :> Capture "highlight_id" (UUIDId "home_highlight") :> "dismiss" :> Unrefusable 'POST (Opaque "Home.HighlightDismissed")
   , slackConnectPost :: mode :- "p" :> ProjectId :> "slack-connect" :> Unrefusable 'POST (Opaque "Home.SlackConnectCard")

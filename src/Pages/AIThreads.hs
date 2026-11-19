@@ -1016,7 +1016,7 @@ routinePostH pid convId form = do
   whenJustM (Issues.getConversation pid convId) \conversation ->
     when (conversation.conversationType == Issues.CTWeb) do
       enqueue (Issues.upsertRoutine sess.user.id pid convId form.intervalMinutes)
-      Projects.logAudit pid Projects.AERoutineSaved sess (Just $ Projects.AuditTarget "routine" convId.toText conversation.title) Nothing
+      Projects.logAudit pid Projects.AERoutineSaved sess (Just $ Projects.AuditTarget Projects.ATRoutine convId.toText conversation.title) Nothing
   done $ ThreadPage pid convId
 
 
@@ -1043,7 +1043,7 @@ routineDeleteH pid convId = do
   (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   titleM <- fmap (.title) <$> Issues.getConversation pid convId
   Issues.pauseRoutine pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> Issues.deleteRoutine pid convId
-  Projects.logAudit pid Projects.AERoutineDeleted sess (Projects.AuditTarget "routine" convId.toText <$> titleM) Nothing
+  Projects.logAudit pid Projects.AERoutineDeleted sess (Projects.AuditTarget Projects.ATRoutine convId.toText <$> titleM) Nothing
   done (RoutinesPage pid)
 
 

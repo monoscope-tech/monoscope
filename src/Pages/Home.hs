@@ -26,6 +26,7 @@ import Models.Projects.DashboardTemplates (askTemplates, loadDashboardFromVM, te
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
+import Network.HTTP.Client (HttpException)
 import Pages.AIThreads (promptField_, threadUrl)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), apiCatalogUrl, mkPageCtx)
 import Pages.Components (BadgeColor (..), agoText, copyButton_, logExplorerUrl, toneCls)
@@ -33,13 +34,14 @@ import Pages.Dashboards (dashboardUrl)
 import Pages.Issues (issueDetailUrl, issuePreview_, issuesListUrl, renderIssueTitle_, severityTone)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (SortOrder (..), UUIDId (..))
+import Pkg.Slack qualified as Slack
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging (logAttention)
 import System.Types (ATAuthCtx, Outcome (..), RespHeaders, Toast (..), ToastLevel (..), addRespHeaders, done)
 import System.Types qualified
 import Text.Slugify (slugify)
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (catch)
 import Utils (countNoun, faSprite_, navTabAttrs, popoverPanel_, popoverTrigger_)
 import Web.Links (CookieProtectedRoutes (..), MonitorsRoutes' (..), ProjectsRoutes' (..), TelemetryRoutes' (..), urls)
 
@@ -473,11 +475,11 @@ jumpBackIn_ d = section_ [class_ "group/jump flex flex-col gap-3", Aria.label_ "
 
 
 -- | The Slack Connect channel between this project and the Monoscope team, from the viewer's side.
-data SlackConnectCard = SlackConnectCard {pid :: Projects.ProjectId, email :: Text, connect :: Maybe Integrations.SlackConnect, failure :: Maybe Text}
+data SlackConnectCard = SlackConnectCard {pid :: Projects.ProjectId, email :: Text, connect :: Maybe Integrations.SlackConnect, failure :: Maybe Integrations.SlackConnectFailure}
 
 
 instance HasField "invited" SlackConnectCard Bool where
-  getField c = maybe False (any (\i -> i.email == c.email && isJust i.inviteId) . (.invites)) c.connect
+  getField c = maybe False (any (\i -> i.email == c.email && Integrations.inviteSettled i.status) . (.invites)) c.connect
 
 
 instance ToHtml SlackConnectCard where
@@ -501,8 +503,8 @@ slackConnectCard_ c = div_ [id_ "slack-connect-card", class_ "flex flex-wrap ite
       Just ch -> toHtml $ "Your team has a shared Slack channel: #" <> ch.channelName
       Nothing -> "Talk to Monoscope engineers in Slack"
     p_ [class_ "text-xs text-textWeak"] $ toHtml case (c.failure, c.connect) of
-      (Just err, _) -> err
-      (_, Just ch) | Just e <- (.lastError) =<< find ((== c.email) . (.email)) ch.invites -> "Your last invite failed (" <> e <> "). Try again, or email hello@monoscope.tech."
+      (Just err, _) -> failureMessage err
+      (_, Just ch) | Just (Integrations.InviteFailed e) <- (.status) <$> find ((== c.email) . (.email)) ch.invites -> "Your last invite failed (" <> e <> "). Try again, or email hello@monoscope.tech."
       (_, Just _) | c.invited -> "Accept it in Slack. If your workspace needs admin approval, your Slack admin gets a request."
       (_, Just _) -> "We'll send a Slack Connect invite to " <> c.email <> " so you can join your teammates and our engineers there."
       (_, Nothing)
@@ -524,6 +526,10 @@ slackConnectCard_ c = div_ [id_ "slack-connect-card", class_ "flex flex-wrap ite
     a_ [href_ $ Integrations.slackConnectUrl ch, target_ "_blank", rel_ "noopener", class_ "btn btn-sm btn-ghost"] "Open in Slack"
   where
     demo = c.pid == Projects.demoProjectId
+    failureMessage = \case
+      Integrations.BotTokenUnset -> "Slack Connect isn't set up on this server yet. Email hello@monoscope.tech and we'll add you by hand."
+      Integrations.SlackUnavailable retryAt -> "Slack is rate limiting us or unreachable" <> foldMap (\t -> "; try again after " <> toText (formatTime defaultTimeLocale "%H:%M UTC" t)) retryAt <> "."
+      err -> "We couldn't send your invite automatically, so our team has been alerted and will invite you by hand. Slack said: " <> Integrations.failureCode err <> "."
 
 
 slackConnectPostH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (System.Types.Done SlackConnectCard))
@@ -531,16 +537,15 @@ slackConnectPostH pid = do
   (sess, _) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let email = T.toLower $ CI.original sess.user.email
-  -- Slack transport failures and rate limits throw; the card still answers with what went wrong.
+  -- Rate limits and HTTP failures throw from the Slack client; the card answers with them instead.
+  let unavailable retryAt e = Left (Integrations.SlackUnavailable retryAt) <$ logAttention "Slack Connect request failed" (AE.object ["project_id" AE..= pid, "error" AE..= (e :: Text)])
   result <-
-    tryAny (Integrations.syncProjectSlackConnect appCtx.config pid True (Just email))
-      >>= either (\e -> Left "slack_unreachable" <$ logAttention "Slack Connect request failed" (AE.object ["project_id" AE..= pid, "error" AE..= show @Text e])) pure
+    Integrations.syncProjectSlackConnect appCtx.config pid True (Just email)
+      `catch` (\e@(Slack.SlackRateLimited at) -> unavailable (Just at) (show e))
+      `catch` (\(e :: Slack.SlackHttpFailure) -> unavailable Nothing (show e))
+      `catch` (\(e :: HttpException) -> unavailable Nothing (show e))
   connect <- Integrations.getSlackConnect pid
-  done $ SlackConnectCard pid email connect $ either (Just . failureText) (const Nothing) result
-  where
-    failureText = \case
-      "slack_bot_token_unset" -> "Slack Connect isn't set up on this server yet. Email hello@monoscope.tech and we'll add you by hand."
-      err -> "We couldn't send your invite automatically, so our team has been alerted and will invite you by hand. Slack said: " <> err <> "."
+  done $ SlackConnectCard pid email connect $ leftToMaybe result
 
 
 data HighlightDismissed = HighlightDismissed

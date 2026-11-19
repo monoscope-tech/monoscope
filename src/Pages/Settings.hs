@@ -98,7 +98,6 @@ import Data.Aeson.KeyMap qualified as AEKM
 import Data.Effectful.UUID qualified as UUIDEff
 import Data.Effectful.Wreq qualified as W
 import Data.Text.Display (Display, display)
-import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Effectful.Exception (throwIO, try, trySync)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
@@ -572,10 +571,10 @@ instance ToHtml AuditLogGet where
 
 
 -- | Who did what in this project: people's changes, issue lifecycle, and AI agent operations, newest first.
-auditLogGetH :: Projects.ProjectId -> Maybe Projects.ActivitySource -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders AuditLogGet)
+auditLogGetH :: Projects.ProjectId -> Maybe Projects.ActivitySource -> Maybe Text -> Maybe UTCTime -> ATAuthCtx (RespHeaders AuditLogGet)
 auditLogGetH pid sourceM actorM beforeM = do
   (_, _, bw) <- mkPageCtx pid
-  entries <- Projects.projectActivity pid sourceM actorM (iso8601ParseM . toString =<< beforeM) 100
+  entries <- Projects.projectActivity pid sourceM actorM beforeM 100
   addRespHeaders $ AuditLogGet $ PageCtx bw{pageTitle = "Audit log", isSettingsPage = True} (pid, sourceM, actorM, entries)
 
 
@@ -622,7 +621,7 @@ auditLogPage_ pid sourceM actorM entries = settingsSection_ do
           ]
       }
   whenJust (guarded ((>= 100) . length) entries >>= viaNonEmpty last) \lastE ->
-    a_ [href_ $ urls.auditLogGet pid sourceM actorM (Just $ formatUTC lastE.at), class_ "self-start text-sm text-textBrand hover:underline"] "Show older activity"
+    a_ [href_ $ urls.auditLogGet pid sourceM actorM (Just lastE.at), class_ "self-start text-sm text-textBrand hover:underline"] "Show older activity"
   where
     humanize t = T.toUpper (T.take 1 h) <> T.drop 1 h where h = T.replace "_" " " t
     sourceLabel = \case

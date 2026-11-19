@@ -206,7 +206,7 @@ alertUpsertPostH pid form = do
     Left err -> addToast "error" "Monitor query is invalid" (Just err) Nothing >> addRespHeaders (AlertNoContent "")
     Right queryMonitor -> do
       _ <- Monitors.queryMonitorUpsert queryMonitor
-      Projects.logAudit pid Projects.AEMonitorSaved sess (Just $ Projects.AuditTarget "monitor" queryMonitorId.toText queryMonitor.alertConfig.title) (Just $ AE.object ["created" AE..= isNothing alertId])
+      Projects.logAudit pid Projects.AEMonitorSaved sess (Just $ Projects.AuditTarget Projects.ATMonitor queryMonitorId.toText queryMonitor.alertConfig.title) (Just $ AE.object ["created" AE..= isNothing alertId])
       when (isNothing alertId)
         $ void
         $ Projects.completeOnboardingStep pid "created_monitor"
@@ -592,10 +592,10 @@ monitorActionH action durationM pid monitorId = do
         BADelete -> Projects.AEMonitorDeleted
         BAMute -> Projects.AEMonitorMuted
         BAResolve -> Projects.AEMonitorResolved
-        BADeactivate -> Projects.AEMonitorSaved
-        BAReactivate -> Projects.AEMonitorSaved
-        BAUnmute -> Projects.AEMonitorSaved
-  Projects.logAudit pid event sess (Projects.AuditTarget "monitor" monitorId.toText <$> titleM) (Just $ AE.object ["action" AE..= show @Text action, "duration_mins" AE..= durationM])
+        BADeactivate -> Projects.AEMonitorDeactivated
+        BAReactivate -> Projects.AEMonitorReactivated
+        BAUnmute -> Projects.AEMonitorUnmuted
+  Projects.logAudit pid event sess (Projects.AuditTarget Projects.ATMonitor monitorId.toText <$> titleM) (AE.object . one . ("duration_mins" AE..=) <$> durationM)
   done $ MonitorActed pid action durationM
 
 

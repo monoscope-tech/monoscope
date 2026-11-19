@@ -146,6 +146,7 @@ module Models.Projects.Projects (
   -- Audit Log
   AuditEvent (..),
   AuditTarget (..),
+  AuditTargetKind (..),
   logAuditS,
   logAudit,
   ActivitySource (..),
@@ -1789,6 +1790,9 @@ data AuditEvent
   | AEDashboardDeleted
   | AEMonitorSaved
   | AEMonitorMuted
+  | AEMonitorUnmuted
+  | AEMonitorDeactivated
+  | AEMonitorReactivated
   | AEMonitorResolved
   | AEShareLinkCreated
   | AERoutineSaved
@@ -1799,7 +1803,12 @@ data AuditEvent
 
 
 -- | What an audited change was made to, kept by value so the entry still reads after the thing is gone.
-data AuditTarget = AuditTarget {kind :: Text, targetId :: Text, title :: Text}
+data AuditTarget = AuditTarget {kind :: AuditTargetKind, targetId :: Text, title :: Text}
+
+
+data AuditTargetKind = ATDashboard | ATMonitor | ATShareLink | ATRoutine
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (Display, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "AT" AuditTargetKind
 
 
 logAuditS :: DB es => ProjectId -> AuditEvent -> Session -> Maybe AE.Value -> Eff es ()

@@ -23,7 +23,7 @@ spec = around withTestResources $ describe "Home screen" do
     resolvedId <- dbOne @_ @Issues.IssueId tr [sql|INSERT INTO apis.issues (project_id, issue_type, title, target_hash, endpoint_hash, created_at, archived_at) VALUES (?, 'runtime_exception', 'Payment gateway timeout', 'home-old', 'home-old', ?::timestamptz - interval '3 days', ?) RETURNING id|] (pid, frozenTime, frozenTime)
     dbExec tr [sql|INSERT INTO apis.issue_activity_log (issue_id, event, created_at) VALUES (?, 'resolved', ?)|] (resolvedId, frozenTime)
     -- A daily routine flagging the same thing twice refreshes one item instead of stacking two.
-    let flag kind title = runQueryEffect tr $ EHasql.transaction TxS.ReadCommitted TxS.Write $ Issues.upsertHighlightTx pid Nothing "Error regression radar" kind title "412 to 1,980 in an hour." (Just $ "/p/" <> pid.toText <> "/issues")
+    let flag kind title = runQueryEffect tr $ EHasql.transaction TxS.ReadCommitted TxS.Write $ Issues.upsertHighlightTx pid Nothing Issues.NewHighlight{kind, title, detail = "412 to 1,980 in an hour.", link = Just $ "/p/" <> pid.toText <> "/issues", source = "Error regression radar"}
     replicateM_ 2 $ flag Issues.HKInsight "Checkout 5xx up 4.8x since deploy v3.2.1"
     flag Issues.HKImprovement "p95 latency on /cart down 38%"
     dbOne @_ @Int tr [sql|SELECT count(*)::int FROM apis.home_highlights WHERE project_id = ?|] (Only pid) `shouldReturn` 2
@@ -76,7 +76,7 @@ spec = around withTestResources $ describe "Home screen" do
     scopeless <-
       runTestBackgroundWithHTTP (runHTTPRecordWith (const "{\"ok\":false,\"error\":\"missing_scope\",\"needed\":\"groups:write\"}") ref0) tr.trTracerProvider tr.trTestClock tr.trLogger tr.trATCtx
         $ Integrations.syncSlackConnect "xoxb-test" [] pid "Acme Shop" True [owner] Nothing
-    either id (const "") (snd scopeless) `shouldBe` "missing_scope needs groups:write"
+    leftToMaybe (snd scopeless) `shouldBe` Just Integrations.SlackRejected{method = "conversations.create", code = "missing_scope", neededScope = Just "groups:write"}
     -- The daily sweep picks up recently active projects still without a channel, and drops them once synced.
     dbExec tr [sql|INSERT INTO apis.daily_usage (project_id, total_requests, created_at) VALUES (?, 10, ?)|] (pid, frozenTime)
     swept `shouldReturn` 1
@@ -91,7 +91,7 @@ spec = around withTestResources $ describe "Home screen" do
     foldMap (decodeUtf8 . snd) (viaNonEmpty last later) `shouldContainAll` ["emails=ada%40acme.test"]
     swept `shouldReturn` 0
     Just c <- runQueryEffect tr $ Integrations.getSlackConnect pid
-    (c.channelName, sort [i.email | i <- c.invites, isJust i.inviteId]) `shouldBe` ("monoscope-acme-shop", sort ["ada@acme.test", owner])
+    (c.channelName, sort [(i.email, i.status) | i <- c.invites]) `shouldBe` ("monoscope-acme-shop", sort [("ada@acme.test", Integrations.Invited "I0INVITE"), (owner, Integrations.Invited "I0INVITE")])
     page <- renderT <$> call tr (Home.homeGetH pid)
     page `shouldContainAll` ["#monoscope-acme-shop", "Shared with the Monoscope team", "slack.com/app_redirect?channel=C0HOME&amp;team=T0MONO"]
   where

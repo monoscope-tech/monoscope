@@ -62,6 +62,10 @@ module Models.Apis.Integrations (
   slackInvestigationStopped,
   SlackConnect (..),
   SlackConnectInvite (..),
+  InviteStatus (..),
+  SlackConnectFailure (..),
+  failureCode,
+  inviteSettled,
   getSlackConnect,
   syncSlackConnect,
   syncProjectSlackConnect,
@@ -75,6 +79,7 @@ import Data.Aeson.Lens qualified as AEL
 import Data.Aeson.Types qualified as Aeson
 import Data.Base64.Types (extractBase64)
 import Data.ByteArray qualified as BA
+import Data.CaseInsensitive qualified as CI
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID qualified as UUID
@@ -90,25 +95,24 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Exception qualified as Exception
 import Effectful.Log (Log)
+import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
 import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Models.Ids qualified as Projects
-import Models.Projects.Projects qualified as ProjectsM
-import System.Config (EnvConfig (..))
-import Data.CaseInsensitive qualified as CI
 import Models.Projects.ProjectApiKeys qualified as Secrets
 import Models.Projects.ProjectMembers (activeMembership)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.Projects qualified as ProjectsM
 import Network.Wreq (FormParam ((:=)))
 import Network.Wreq qualified as Wreq
 import Pkg.DeriveUtils (UUIDId, enumLit, refineText)
 import Pkg.Slack (SlackTokenLifetime (..), SlackUserGrant (..), slackEvidenceScopes)
 import Pkg.Slack qualified as Slack
 import Relude
-import System.Logging (logAttention)
+import System.Config (EnvConfig (..))
 import System.Types (DB)
 import Text.Slugify (slugify)
 import "base64" Data.ByteString.Base64.URL qualified as B64URL
@@ -939,21 +943,43 @@ deleteSlackData pid = Hasql.interpExecute [HI.sql|DELETE FROM apis.slack WHERE p
 data SlackConnect = SlackConnect {channelId :: Text, channelName :: Text, teamId :: Maybe Text, invites :: [SlackConnectInvite]}
 
 
-data SlackConnectInvite = SlackConnectInvite {email :: Text, inviteId :: Maybe Text, lastError :: Maybe Text, invitedAt :: UTCTime}
+data SlackConnectInvite = SlackConnectInvite {email :: Text, status :: InviteStatus, invitedAt :: UTCTime}
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
+
+
+-- | Where one person's invite stands. Stored as @status@ plus the column only its case has (migration 0295).
+data InviteStatus = Invited Text | AlreadyMember | InviteFailed Text
+  deriving stock (Eq, Generic, Ord, Show)
+  deriving anyclass (Aeson.FromJSON)
+  deriving (HI.DecodeValue) via HI.AsJsonb InviteStatus
+
+
+-- | Why a sync could not finish; each case reads differently to the person who asked.
+data SlackConnectFailure
+  = BotTokenUnset
+  | SlackRejected {method :: Text, code :: Text, neededScope :: Maybe Text}
+  | MalformedReply Text
+  | SlackUnavailable (Maybe UTCTime)
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (Aeson.ToJSON)
 
 
 getSlackConnect :: DB es => Projects.ProjectId -> Eff es (Maybe SlackConnect)
 getSlackConnect pid = do
   channel <- Hasql.interpOne @(Text, Text, Maybe Text) [HI.sql|SELECT channel_id, channel_name, team_id FROM projects.slack_connect_channels WHERE project_id = #{pid}|]
   forM channel \(channelId, channelName, teamId) ->
-    SlackConnect channelId channelName teamId <$> Hasql.interp [HI.sql|SELECT email, invite_id, error, invited_at FROM projects.slack_connect_invites WHERE project_id = #{pid} ORDER BY invited_at|]
+    SlackConnect channelId channelName teamId
+      <$> Hasql.interp
+        [HI.sql|SELECT email, CASE status WHEN 'invited' THEN jsonb_build_object('tag', 'Invited', 'contents', invite_id)
+                                          WHEN 'already_member' THEN jsonb_build_object('tag', 'AlreadyMember')
+                                          ELSE jsonb_build_object('tag', 'InviteFailed', 'contents', error) END, invited_at
+                FROM projects.slack_connect_invites WHERE project_id = #{pid} ORDER BY invited_at|]
 
 
 -- | 'syncSlackConnect' with this server's bot and staff and the project's current members.
 -- The demo project never gets a channel.
-syncProjectSlackConnect :: (DB es, HTTP.HTTP :> es, IOE :> es, Log :> es) => EnvConfig -> Projects.ProjectId -> Bool -> Maybe Text -> Eff es (Either Text (Maybe SlackConnect))
+syncProjectSlackConnect :: (DB es, HTTP.HTTP :> es, Log :> es) => EnvConfig -> Projects.ProjectId -> Bool -> Maybe Text -> Eff es (Either SlackConnectFailure (Maybe SlackConnect))
 syncProjectSlackConnect cfg pid create resend =
   ProjectsM.activeProjectById pid >>= \case
     Nothing -> pure $ Right Nothing
@@ -972,9 +998,9 @@ slackConnectUrl c = "https://slack.com/app_redirect?channel=" <> c.channelId <> 
 -- @resend@ again. Slack accepts one recipient per invite; invites are full (not external_limited)
 -- so customers can add their own colleagues. Failures are recorded per email and
 -- logged; an unusable bot token or missing scope fails the whole sync with Slack's error code.
-syncSlackConnect :: (DB es, HTTP.HTTP :> es, IOE :> es, Log :> es) => Text -> [Text] -> Projects.ProjectId -> Text -> Bool -> [Text] -> Maybe Text -> Eff es (Either Text (Maybe SlackConnect))
+syncSlackConnect :: (DB es, HTTP.HTTP :> es, Log :> es) => Text -> [Text] -> Projects.ProjectId -> Text -> Bool -> [Text] -> Maybe Text -> Eff es (Either SlackConnectFailure (Maybe SlackConnect))
 syncSlackConnect token staff pid title create emails resend
-  | T.null token = failed "slack_bot_token_unset"
+  | T.null token = failed BotTokenUnset
   | otherwise = Slack.withRateLimits "monoscope-slack-connect" do
       existing <- getSlackConnect pid
       channel <- case existing of
@@ -985,40 +1011,63 @@ syncSlackConnect token staff pid title create emails resend
         Left err -> failed err
         Right Nothing -> pure $ Right Nothing
         Right (Just c) -> do
-          let invited = S.fromList [i.email | i <- c.invites, isJust i.inviteId]
+          let invited = S.fromList [i.email | i <- c.invites, inviteSettled i.status]
           for_ (ordNub $ filter (\e -> not (T.null e) && not (e `S.member` invited)) (map (T.toLower . T.strip) emails) <> maybeToList resend) \email -> do
-            result <- call "conversations.inviteShared" ["channel" := c.channelId, "emails" := email, "external_limited" := ("false" :: Text)]
-            let (inviteId, err) = case result of
-                  Right v -> (Just $ fromMaybe "" $ v ^? AEL.key "invite_id" . AEL._String, Nothing)
-                  Left "already_in_channel" -> (Just "", Nothing)
-                  Left e -> (Nothing, Just e)
-            for_ err \e -> logAttention "Slack Connect invite failed" $ Aeson.object ["project_id" Aeson..= pid, "email" Aeson..= email, "error" Aeson..= e]
+            status <-
+              call "conversations.inviteShared" ["channel" := c.channelId, "emails" := email, "external_limited" := ("false" :: Text)] <&> \case
+                Right v -> maybe (InviteFailed "invite_id missing from Slack's reply") Invited (v ^? AEL.key "invite_id" . AEL._String)
+                Left SlackRejected{code = "already_in_channel"} -> AlreadyMember
+                Left err -> InviteFailed $ failureCode err
+            let (statusTag, inviteId, err) = case status of
+                  Invited i -> ("invited" :: Text, Just i, Nothing)
+                  AlreadyMember -> ("already_member", Nothing, Nothing)
+                  InviteFailed e -> ("failed", Nothing, Just e)
+            for_ err \e -> Log.logAttention "Slack Connect invite failed" $ Aeson.object ["project_id" Aeson..= pid, "email" Aeson..= email, "error" Aeson..= e]
             Hasql.interpExecute_
-              [HI.sql|INSERT INTO projects.slack_connect_invites (project_id, email, invite_id, error, invited_at) VALUES (#{pid}, #{email}, #{inviteId}, #{err}, now())
-                      ON CONFLICT (project_id, email) DO UPDATE SET invite_id = COALESCE(EXCLUDED.invite_id, slack_connect_invites.invite_id), error = EXCLUDED.error, invited_at = now()|]
+              [HI.sql|INSERT INTO projects.slack_connect_invites (project_id, email, status, invite_id, error, invited_at) VALUES (#{pid}, #{email}, #{statusTag}, #{inviteId}, #{err}, now())
+                      ON CONFLICT (project_id, email) DO UPDATE SET status = EXCLUDED.status, invite_id = EXCLUDED.invite_id, error = EXCLUDED.error, invited_at = now()|]
           Right <$> getSlackConnect pid
   where
-    failed err = Left err <$ logAttention "Slack Connect sync failed" (Aeson.object ["project_id" Aeson..= pid, "error" Aeson..= err])
+    failed err = Left err <$ Log.logAttention "Slack Connect sync failed" (Aeson.object ["project_id" Aeson..= pid, "error" Aeson..= err])
     baseName = "monoscope-" <> T.dropWhileEnd (== '-') (T.take 60 $ slugify title)
     createChannel =
       call "conversations.create" ["name" := baseName, "is_private" := ("true" :: Text)] >>= \case
-        Left "name_taken" -> call "conversations.create" ["name" := (baseName <> "-" <> T.take 6 pid.toText), "is_private" := ("true" :: Text)] >>= either (pure . Left) saveChannel
+        Left SlackRejected{code = "name_taken"} -> call "conversations.create" ["name" := (baseName <> "-" <> T.take 6 pid.toText), "is_private" := ("true" :: Text)] >>= either (pure . Left) saveChannel
         r -> either (pure . Left) saveChannel r
     saveChannel v = case (v ^? AEL.key "channel" . AEL.key "id" . AEL._String, v ^? AEL.key "channel" . AEL.key "name" . AEL._String) of
       (Just channelId, Just channelName) -> do
         let teamId = v ^? AEL.key "channel" . AEL.key "context_team_id" . AEL._String
-        unless (null staff) $ void $ call "conversations.invite" ["channel" := channelId, "users" := T.intercalate "," staff]
-        void $ call "chat.postMessage" ["channel" := channelId, "text" := ("Welcome to your shared channel with the Monoscope team. Ask us anything here: setup, alerts, a confusing trace, or feature requests. A person reads every message." :: Text)]
+        -- Staff and the welcome are best effort, but a channel without them must not go unnoticed.
+        for_ ([("conversations.invite", ["channel" := channelId, "users" := T.intercalate "," staff]) | not (null staff)] <> [("chat.postMessage", ["channel" := channelId, "text" := welcome])]) \(m, ps) ->
+          whenLeftM_ (call m ps) \e -> Log.logAttention "Slack Connect channel setup step failed" (Aeson.object ["project_id" Aeson..= pid, "channel" Aeson..= channelId, "error" Aeson..= e])
         Hasql.interpExecute_ [HI.sql|INSERT INTO projects.slack_connect_channels (project_id, channel_id, channel_name, team_id) VALUES (#{pid}, #{channelId}, #{channelName}, #{teamId}) ON CONFLICT (project_id) DO NOTHING|]
         pure $ Right $ SlackConnect channelId channelName teamId []
-      _ -> pure $ Left "invalid_response"
+      _ -> pure $ Left $ MalformedReply "conversations.create"
+    welcome = "Welcome to your shared channel with the Monoscope team. Ask us anything here: setup, alerts, a confusing trace, or feature requests. A person reads every message." :: Text
     call method (params :: [FormParam]) = do
       response <- HTTP.postWith (HTTP.defaults & Wreq.header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token]) ("https://slack.com/api/" <> toString @Text method) params
       let body = Aeson.decode @Aeson.Value $ response ^. HTTP.responseBody
       pure $ case body of
         Just v | v ^? AEL.key "ok" . AEL._Bool == Just True -> Right v
-        -- missing_scope names the scope Slack wanted, which is the only actionable part.
-        _ -> Left $ fromMaybe "invalid_response" (body >>= (^? AEL.key "error" . AEL._String)) <> foldMap (" needs " <>) (body >>= (^? AEL.key "needed" . AEL._String))
+        Just v | Just code <- v ^? AEL.key "error" . AEL._String -> Left $ SlackRejected method code (v ^? AEL.key "needed" . AEL._String)
+        _ -> Left $ MalformedReply method
+
+
+-- | Invited or already in the channel: nothing left to send.
+inviteSettled :: InviteStatus -> Bool
+inviteSettled = \case
+  Invited _ -> True
+  AlreadyMember -> True
+  InviteFailed _ -> False
+
+
+-- | The short form stored on a failed invite and shown in its retry hint.
+failureCode :: SlackConnectFailure -> Text
+failureCode = \case
+  BotTokenUnset -> "bot_token_unset"
+  SlackRejected{code, neededScope} -> code <> foldMap (\s -> " (needs " <> s <> ")") neededScope
+  MalformedReply m -> "malformed reply from " <> m
+  SlackUnavailable _ -> "slack_unavailable"
 
 
 -- | Recently active projects (usage in the last 30 days) with no Slack Connect channel yet, or with
@@ -1031,5 +1080,5 @@ slackConnectBacklog now =
             WHERE p.active AND p.deleted_at IS NULL
               AND EXISTS (SELECT 1 FROM apis.daily_usage u WHERE u.project_id = p.id AND u.created_at > #{now}::timestamptz - interval '30 days')
               AND (NOT EXISTS (SELECT 1 FROM projects.slack_connect_channels c WHERE c.project_id = p.id)
-                   OR EXISTS (SELECT 1 FROM projects.slack_connect_invites i WHERE i.project_id = p.id AND i.invite_id IS NULL))
+                   OR EXISTS (SELECT 1 FROM projects.slack_connect_invites i WHERE i.project_id = p.id AND i.status = 'failed'))
             ORDER BY p.created_at DESC LIMIT 100|]

@@ -49,7 +49,7 @@ shareLinkPostH pid eventId createdAt reqTypeM = do
   -- deterministic id twice is a share_events pkey collision.
   shareId <- liftIO UUIDV4.nextRandom
   ShareEvents.createShareLink shareId pid eventId (fromMaybe ShareEvents.ShareRequest reqTypeM) createdAt
-  Projects.logAudit pid Projects.AEShareLinkCreated sess (Just $ Projects.AuditTarget "share_link" (UUID.toText shareId) (UUID.toText eventId)) Nothing
+  Projects.logAudit pid Projects.AEShareLinkCreated sess (Just $ Projects.AuditTarget Projects.ATShareLink (UUID.toText shareId) (UUID.toText eventId)) Nothing
   addRespHeaders $ ShareLinkPost $ UUID.toText shareId
 
 
