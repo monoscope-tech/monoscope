@@ -16,6 +16,7 @@ import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..))
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple qualified as PG
@@ -243,7 +244,7 @@ data EnvConfig = EnvConfig
   -- ^ Logs each usage report instead of sending it.
   , doNotTrack :: Maybe Text
   , telemetryEndpoint :: Text
-  , telemetryProjectId :: Maybe Text
+  , telemetryProjectId :: Maybe Projects.ProjectId
   -- ^ Set on Monoscope's own deployment: the project usage reports are ingested into. It also stops
   -- that deployment reporting on itself.
   , postHogApiHost :: Maybe Text
@@ -391,6 +392,11 @@ instance DefConfig EnvConfig where
         -- the migration H1 rationale rules out.
         processedAtCutoff = UTCTime (fromGregorian 2026 4 15) 0
       }
+
+
+instance Var (DeriveUtils.UUIDId n) where
+  fromVar = fmap DeriveUtils.UUIDId . UUID.fromString
+  toVar = UUID.toString . DeriveUtils.unUUIDId
 
 
 -- Support unmarshalling a coma separated text into a text list

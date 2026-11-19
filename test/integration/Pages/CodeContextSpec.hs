@@ -47,6 +47,7 @@ import Network.HTTP.Types.URI (urlEncode)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Test qualified as WT
+import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.CodeContext qualified as PageCodeContext
@@ -54,7 +55,6 @@ import Pages.Components (stackTrace_)
 import Pages.Dashboards qualified as DashboardPage
 import Pages.GitSync qualified as GitSyncPage
 import Pkg.Git qualified as Git
-import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.TestUtils
 import Servant (ServerError (..), getHeaders, getResponse)
 import Servant.Server.Generic (genericServeTWithContext)

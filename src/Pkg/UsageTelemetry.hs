@@ -1,12 +1,11 @@
 -- | Anonymous usage reports: each self-hosted instance sends one bucketed report a day to Monoscope,
 -- which ingests it into its own project. What is sent, how to stop it and how to read it before it
 -- leaves are documented in docs/telemetry.md; add a field there and bump 'schemaVersion' together.
-module Pkg.UsageTelemetry (Mode (..), telemetryMode, modeOf, bucket, Report (..), reportUsage, startupNotice) where
+module Pkg.UsageTelemetry (Mode (..), telemetryMode, modeOf, bucket, schemaVersion, Report (..), Counts (..), Usage (..), Features (..), reportUsage, startupNotice) where
 
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as W
-import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (Day, UTCTime, utctDay)
 import Data.UUID (UUID)
@@ -69,30 +68,47 @@ data Report = Report
   , deployment :: Text
   , os :: Text
   , arch :: Text
-  , counts :: Map Text Text
-  , usage24h :: Map Text Text
-  , features :: Map Text Bool
+  , counts :: Counts
+  , usage24h :: Usage
+  , features :: Features
   }
   deriving stock (Eq, Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] Report
 
 
+data Counts = Counts {projects :: Text, users :: Text, monitors :: Text, dashboards :: Text}
+  deriving stock (Eq, Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.RejectUnknownFields] Counts
+
+
+data Usage = Usage {events :: Text, metrics :: Text}
+  deriving stock (Eq, Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.RejectUnknownFields] Usage
+
+
+data Features = Features {ai :: Bool, slack :: Bool, githubApp :: Bool, timefusion :: Bool}
+  deriving stock (Eq, Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake], DAE.RejectUnknownFields] Features
+
+
 -- | Builds today's report and, unless switched off, sends it (or logs it in debug mode). Failure is
--- expected on air-gapped hosts, so it is logged at info and never retried.
+-- expected on air-gapped hosts, so it is logged at info and not retried until the next day.
 reportUsage :: ATBackgroundCtx ()
 reportUsage = do
   cfg <- (.config) <$> ask @AuthContext
-  -- The daily job and every replica's startup both ask; the first one in a day sends.
-  recent <- Hasql.interpScalar [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.instance_telemetry WHERE last_sent_at > now() - interval '20 hours')|]
-  unless (modeOf cfg == Off || recent) do
-    report <- buildReport cfg
-    if modeOf cfg == Debug
-      then Log.logInfo "Usage report (debug mode, not sent)" report
-      else do
+  let store report = Hasql.interpExecute_ [HI.sql|UPDATE apis.instance_telemetry SET last_payload = #{AE.toJSON report}|]
+  case modeOf cfg of
+    Off -> pass
+    Debug -> buildReport cfg >>= \report -> store report >> Log.logInfo "Usage report (debug mode, not sent)" report
+    On -> do
+      -- The daily job and every replica's startup all ask; claiming the day first lets only one send.
+      claimed <- Hasql.interpExecute [HI.sql|UPDATE apis.instance_telemetry SET last_sent_at = now() WHERE last_sent_at IS NULL OR last_sent_at < now() - interval '20 hours'|]
+      when (claimed > 0) do
+        report <- buildReport cfg
         sent <- trySync $ Timeout.timeout 5_000_000 $ W.postWith W.defaults (toString cfg.telemetryEndpoint) (AE.toJSON report)
-        if sent & either (const False) isJust
-          then Hasql.interpExecute_ [HI.sql|UPDATE apis.instance_telemetry SET last_sent_at = now(), last_payload = #{AE.toJSON report}|] >> Log.logInfo "Usage report sent" report
-          else Log.logInfo "Usage report not sent" (cfg.telemetryEndpoint, either (Just . show @Text) (const Nothing) sent)
+        case sent of
+          Right (Just _) -> store report >> Log.logInfo "Usage report sent" report
+          failure -> Log.logInfo "Usage report not sent" (cfg.telemetryEndpoint, either (Just . show @Text) (const Nothing) failure)
 
 
 buildReport :: EnvConfig -> ATBackgroundCtx Report
@@ -106,7 +122,7 @@ buildReport cfg = do
         (SELECT coalesce(sum(total_requests), 0)::int8 FROM apis.daily_usage WHERE created_at > now() - interval '1 day'),
         (SELECT coalesce(sum(total_metrics), 0)::int8 FROM apis.daily_usage WHERE created_at > now() - interval '1 day')|]
       <&> fromMaybe (0, 0, 0, 0, 0, 0)
-  ci <- or <$> traverse (fmap isJust . lookupEnv) ["CI", "GITHUB_ACTIONS", "GITLAB_CI", "BUILDKITE", "JENKINS_URL", "CIRCLECI", "TF_BUILD"]
+  ci <- anyM (fmap isJust . lookupEnv) ["CI", "GITHUB_ACTIONS", "GITLAB_CI", "BUILDKITE", "JENKINS_URL", "CIRCLECI", "TF_BUILD"]
   docker <- liftIO $ doesFileExist "/.dockerenv"
   kubernetes <- isJust <$> lookupEnv "KUBERNETES_SERVICE_HOST"
   gitHash <- fromMaybe "dev" <$> lookupEnv "GIT_HASH"
@@ -120,9 +136,9 @@ buildReport cfg = do
       , deployment = if kubernetes then "kubernetes" else if docker then "docker" else "binary"
       , os = toText Info.os
       , arch = toText Info.arch
-      , counts = bucket <$> Map.fromList [("projects", projects), ("users", users), ("monitors", monitors), ("dashboards", dashboards)]
-      , usage24h = bucket <$> Map.fromList [("events", events), ("metrics", metrics)]
-      , features = Map.fromList [("ai", not $ T.null cfg.openaiApiKey), ("slack", not $ T.null cfg.slackClientId), ("github_app", not $ T.null cfg.githubAppId), ("timefusion", cfg.enableTimefusionWrites)]
+      , counts = Counts (bucket projects) (bucket users) (bucket monitors) (bucket dashboards)
+      , usage24h = Usage (bucket events) (bucket metrics)
+      , features = Features (not $ T.null cfg.openaiApiKey) (not $ T.null cfg.slackClientId) (not $ T.null cfg.githubAppId) cfg.enableTimefusionWrites
       }
 
 

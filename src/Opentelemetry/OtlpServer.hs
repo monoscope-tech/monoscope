@@ -83,7 +83,7 @@ import Network.GRPC.Server.Run hiding (runServer)
 import Network.GRPC.Server.StreamType (Methods (..), fromMethods)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
-import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe, unUUIDId)
+import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe, unUUIDId)
 import Pkg.GenAI qualified as GenAI
 import Pkg.LiveTail qualified as LiveTail
 import Pkg.Metrics (wireTypeErrorsRef)
@@ -110,7 +110,7 @@ import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude hiding (ask)
 import Relude.Extra.Enum (safeToEnum)
-import Servant (NoContent (..), err404)
+import Servant (NoContent (..), err400, err404)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Log
@@ -909,28 +909,15 @@ placeRecords geoM recs = place <$> adopted
       _ -> r
 
 
--- | The @geo.*@ fields (without the @geo.@ prefix) one MaxMind-format record holds. MaxMind databases nest
--- (@country.iso_code@, @subdivisions[0].iso_code@, @city.names.en@; DB-IP names the subdivision without an
--- iso_code); IPinfo's are flat (@country_code@, @region@ as a name, @city@).
---
--- >>> import Data.GeoIP2 qualified as GeoIP2
--- >>> import Data.Map qualified as GeoMap
--- >>> import "monoscope" Opentelemetry.OtlpServer qualified as OS
--- >>> let m = GeoIP2.DataMap . GeoMap.fromList . map (\(k, v) -> (GeoIP2.DataString k, v)); s = GeoIP2.DataString
--- >>> OS.geoFields (m [("country", m [("iso_code", s "US")]), ("city", m [("names", m [("en", s "Santa Clara")])]), ("subdivisions", GeoIP2.DataArray [m [("iso_code", s "CA")]])])
--- [("country.iso_code","US"),("region.iso_code","CA"),("locality.name","Santa Clara")]
--- >>> OS.geoFields (m [("country", m [("iso_code", s "US")]), ("subdivisions", GeoIP2.DataArray [m [("names", m [("en", s "California")])]])])
--- [("country.iso_code","US"),("region.name","California")]
--- >>> OS.geoFields (m [("country_code", s "NG"), ("region", s "Lagos"), ("city", s "Ikeja")])
--- [("country.iso_code","NG"),("region.name","Lagos"),("locality.name","Ikeja")]
--- >>> OS.geoFields (m [("asn", s "AS1")])
--- []
 -- | Ingests a report into Monoscope's usage project as one log event. The sender's address is used
 -- only to name its country and is never stored.
 collectUsageReport :: Maybe Text -> UsageTelemetry.Report -> ATBaseCtx NoContent
 collectUsageReport sender report = do
   ctx <- ask @AuthContext
-  pid <- maybe (throwError err404) (pure . UUIDId) $ UUID.fromText =<< ctx.config.telemetryProjectId
+  pid <- maybe (throwError err404) pure ctx.config.telemetryProjectId
+  let encoded = AE.encode report
+  -- The route is public: only the current schema, at a report's size, is stored.
+  when (report.schema /= UsageTelemetry.schemaVersion || LBS.length encoded > 2048) $ throwError err400
   now <- Time.currentTime
   caches <- fetchIngestCaches [pid]
   let country = countryOf ctx.geoDb =<< sender
@@ -961,7 +948,7 @@ collectUsageReport sender report = do
           , summary = V.empty
           , date = now
           , errors = Nothing
-          , message_size_bytes = fromIntegral $ length $ show @String report
+          , message_size_bytes = fromIntegral $ LBS.length encoded
           }
   void $ ingestOtelRecords ctx (Telemetry.writeTargetFor ctx.env Nothing) caches (V.singleton record{summary = generateSummary record})
   pure NoContent
@@ -979,6 +966,22 @@ countryOf geoM ip = do
   L.lookup "country.iso_code" . geoFields =<< rightToMaybe . GeoIP2.rawGeoData db =<< addressOf ip
 
 
+-- | The @geo.*@ fields (without the @geo.@ prefix) one MaxMind-format record holds. MaxMind databases nest
+-- (@country.iso_code@, @subdivisions[0].iso_code@, @city.names.en@; DB-IP names the subdivision without an
+-- iso_code); IPinfo's are flat (@country_code@, @region@ as a name, @city@).
+--
+-- >>> import Data.GeoIP2 qualified as GeoIP2
+-- >>> import Data.Map qualified as GeoMap
+-- >>> import "monoscope" Opentelemetry.OtlpServer qualified as OS
+-- >>> let m = GeoIP2.DataMap . GeoMap.fromList . map (\(k, v) -> (GeoIP2.DataString k, v)); s = GeoIP2.DataString
+-- >>> OS.geoFields (m [("country", m [("iso_code", s "US")]), ("city", m [("names", m [("en", s "Santa Clara")])]), ("subdivisions", GeoIP2.DataArray [m [("iso_code", s "CA")]])])
+-- [("country.iso_code","US"),("region.iso_code","CA"),("locality.name","Santa Clara")]
+-- >>> OS.geoFields (m [("country", m [("iso_code", s "US")]), ("subdivisions", GeoIP2.DataArray [m [("names", m [("en", s "California")])]])])
+-- [("country.iso_code","US"),("region.name","California")]
+-- >>> OS.geoFields (m [("country_code", s "NG"), ("region", s "Lagos"), ("city", s "Ikeja")])
+-- [("country.iso_code","NG"),("region.name","Lagos"),("locality.name","Ikeja")]
+-- >>> OS.geoFields (m [("asn", s "AS1")])
+-- []
 geoFields :: GeoIP2.GeoField -> [(Text, Text)]
 geoFields f =
   [ (k, v)

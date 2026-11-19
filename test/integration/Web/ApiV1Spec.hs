@@ -145,21 +145,26 @@ spec = describe "API v1" do
     it "usage telemetry: one report a day unless opted out, collected into the telemetry project without the IP" \tr -> do
       let withCfg f = tr{trATCtx = tr.trATCtx{config = f tr.trATCtx.config}}
           send r = fst <$> runTestBgRecordingHTTP frozenTime r UsageTelemetry.reportUsage
-      runHasqlEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE apis.instance_telemetry SET last_sent_at = NULL |]
+      runHasqlEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE apis.instance_telemetry SET last_sent_at = NULL, last_payload = NULL |]
       send (withCfg \c -> c{doNotTrack = Just "1"}) `shouldReturn` []
+      -- Debug mode keeps the report for inspection without sending it or claiming the day.
       send (withCfg \c -> c{monoscopeTelemetryDebug = Just "1"}) `shouldReturn` []
+      runHasqlEffect tr (Hasql.interpScalar [HI.sql| SELECT last_payload IS NOT NULL AND last_sent_at IS NULL FROM apis.instance_telemetry |]) `shouldReturn` True
       -- The collecting deployment never reports about itself.
-      send (withCfg \c -> c{telemetryProjectId = Just "x"}) `shouldReturn` []
+      send (withCfg \c -> c{telemetryProjectId = Just testPid}) `shouldReturn` []
       [(url, body)] <- send tr
       url `shouldBe` tr.trATCtx.config.telemetryEndpoint
       report <- either fail pure $ AE.eitherDecode @UsageTelemetry.Report body
       instanceId <- runHasqlEffect tr $ Hasql.interpOne [HI.sql| SELECT instance_id FROM apis.instance_telemetry |]
-      (report.schema, Just report.instanceId, Map.keys report.counts) `shouldBe` (1, instanceId, ["dashboards", "monitors", "projects", "users"])
+      (report.schema, Just report.instanceId) `shouldBe` (UsageTelemetry.schemaVersion, instanceId)
       send tr `shouldReturn` []
       pid <- createTestProject tr "Usage reports"
-      let post r = status <$> request (topAppWithHTTP (runHTTPGolden "./test/golden/") r) H.methodPost "/telemetry/v1/report" [json, ("X-Real-IP", "203.0.113.7")] (AE.encode report)
-      post tr `shouldReturn` 404
-      post (withCfg \c -> c{telemetryProjectId = Just pid.toText}) `shouldReturn` 202
+      let post r body = status <$> request (topAppWithHTTP (runHTTPGolden "./test/golden/") r) H.methodPost "/telemetry/v1/report" [json, ("X-Real-IP", "203.0.113.7")] (AE.encode body)
+      post tr report `shouldReturn` 404
+      let collecting = withCfg \c -> c{telemetryProjectId = Just pid}
+      post collecting report{UsageTelemetry.schema = 99} `shouldReturn` 400
+      post collecting report{UsageTelemetry.version = T.replicate 4096 "x"} `shouldReturn` 400
+      post collecting report `shouldReturn` 202
       stored <- runHasqlEffect tr $ Hasql.interpOneJson @AE.Value [HI.sql| SELECT attributes FROM otel_logs_and_spans WHERE project_id::text = #{pid.toText} AND name = 'monoscope.usage_report' |]
       let attrs = fromMaybe AE.Null stored
       (attrs ^? key "monoscope" . key "usage_report", "203.0.113.7" `T.isInfixOf` decodeUtf8 (AE.encode attrs)) `shouldBe` (Just (AE.toJSON report), False)

@@ -64,6 +64,7 @@ import Network.Minio qualified as Minio
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Test qualified as WT
+import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.AIThreads qualified as AIThreads
 
 import Pages.CodeContext qualified as CodeContextPage
@@ -77,7 +78,6 @@ import Pkg.GitCommand qualified as HostGit
 import Pkg.ImpactReview qualified as Impact
 import Pkg.Minio qualified as Storage
 import Pkg.Parser.Stats qualified as KQL
-import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.TestUtils hiding (call)
 import Pkg.TestUtils qualified as Test
 import Servant (ServerError (..), getResponse)

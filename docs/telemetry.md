@@ -13,8 +13,8 @@ MONOSCOPE_TELEMETRY_DISABLED=1
 DO_NOT_TRACK=1    # the cross-tool convention; any value but empty, 0 or false
 ```
 
-`MONOSCOPE_TELEMETRY_DEBUG=1` keeps reports on this machine: each one is written to the log instead of
-being sent. The server logs at startup whether telemetry is on, off or in debug mode.
+`MONOSCOPE_TELEMETRY_DEBUG=1` keeps reports on this machine: each one is written to the log and to
+`apis.instance_telemetry.last_payload` instead of being sent. The server logs at startup whether telemetry is on, off or in debug mode.
 
 ## What a report contains
 
@@ -61,7 +61,7 @@ values, and any telemetry your applications send to Monoscope.
 
 ## Seeing what was sent
 
-The last report sent and when it went out are kept in this instance's database:
+The last report built and when one was last sent (or attempted) are kept in this instance's database:
 
 ```sql
 SELECT last_sent_at, jsonb_pretty(last_payload) FROM apis.instance_telemetry;

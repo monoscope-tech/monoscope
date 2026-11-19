@@ -1052,7 +1052,7 @@ runDailyJobScheduling authCtx =
             $ [Jobs.MonoscopeAdminDaily, Jobs.UsageAuditReport, Jobs.ExpireReplayData, Jobs.ExpireShareEvents]
             <> [Jobs.CleanupDemoProject | dayOfWeek currentDay == Monday]
           -- Spread over six hours so installs do not all report at midnight.
-          liftIO (randomRIO (0, 6 * 3600 :: Int)) >>= \delay -> enqueueAt authCtx (addUTCTime (fromIntegral delay) currentTime) [Jobs.UsageReport]
+          when (UsageTelemetry.modeOf authCtx.config /= UsageTelemetry.Off) $ liftIO (randomRIO (0, 6 * 3600 :: Int)) >>= \delay -> enqueueAt authCtx (addUTCTime (fromIntegral delay) currentTime) [Jobs.UsageReport]
           liftIO $ withResource authCtx.jobsPool \conn -> do
             -- Each handler re-enqueues itself; the daily loop seeds a full day's
             -- ticks so a single restart can't leave a gap when the chain broke.
@@ -3415,7 +3415,7 @@ jobsWorkerInitWithTools :: Logger -> Config.AuthContext -> TracerProvider -> May
 jobsWorkerInitWithTools logger appCtx tp projectTools = when appCtx.config.enableBackgroundJobs do
   runLogT (show appCtx.config.environment) logger appCtx.config.logLevel $ LogLegacy.logInfo_ (UsageTelemetry.startupNotice appCtx.config)
   -- A first report a few minutes after start; 'UsageTelemetry.reportUsage' skips it if one went out today.
-  getCurrentTime >>= \now -> enqueueAt appCtx (addUTCTime 300 now) [Jobs.UsageReport]
+  when (UsageTelemetry.modeOf appCtx.config /= UsageTelemetry.Off) $ getCurrentTime >>= \now -> enqueueAt appCtx (addUTCTime 300 now) [Jobs.UsageReport]
   when appCtx.config.enableDailyJobScheduling $ ensureDailyJobScheduled appCtx
   -- Scoped to the runner so a supervisor restart does not leak another backstop loop.
   UIO.concurrently_
