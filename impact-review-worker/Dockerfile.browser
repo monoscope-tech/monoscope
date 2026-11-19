@@ -15,9 +15,10 @@ WORKDIR /build
 RUN rm -f cabal.project.local
 COPY monoscope.cabal cabal.project cabal.project.freeze ./
 # The server's library depends on the local shared and CLI packages, which cabal builds from source here.
+# Test suites too: a fix proves itself with a regression test, and Hackage mirrors are outside the sandbox.
 COPY shared shared
 COPY cli cli
-RUN cabal update && cabal build --only-dependencies exe:monoscope-server -j && mkdir -p /opt/haskell && cp -R dist-newstyle/src /opt/haskell/dist-src
+RUN cabal update && cabal build --only-dependencies --enable-tests exe:monoscope-server test:integration-tests -j && mkdir -p /opt/haskell && cp -R dist-newstyle/src /opt/haskell/dist-src
 
 FROM haskell:9.12.2
 RUN apt-get update && apt-get install -y --no-install-recommends bash git ripgrep ca-certificates asciinema curl udhcpc fonts-liberation fonts-noto-color-emoji \

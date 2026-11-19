@@ -26,7 +26,9 @@ if [ -f cabal.project ] && has cabal; then
   if [ -f monoscope.cabal ]; then
     # Its git-sourced dependencies were fetched when the guest was built; git hosts are not reachable.
     mkdir -p dist-newstyle/src && cp -Rn /opt/haskell/dist-src/. dist-newstyle/src/ 2>/dev/null
-    try cabal build exe:monoscope-server --offline --ghc-options="-O0 -j2"
+    # Tests stay enabled for every later cabal call here, or each one reconfigures and rebuilds the library.
+    echo "tests: True" > cabal.project.local
+    try cabal build exe:monoscope-server test:integration-tests --offline --ghc-options="-O0 -j2"
   else try cabal update && try cabal build all --enable-tests --ghc-options=-O0; fi
 elif [ -f stack.yaml ] && has stack; then try stack build --test --no-run-tests --fast
 fi

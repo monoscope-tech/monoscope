@@ -38,7 +38,7 @@ import System.Directory (doesFileExist, listDirectory, removeFile, removePathFor
 import System.Environment (getEnvironment)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose)
-import System.IO.Error (isDoesNotExistError, tryIOError)
+import System.IO.Error (isDoesNotExistError, isEOFError, tryIOError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
 import Text.HTML.TagSoup qualified as TagSoup
@@ -973,7 +973,9 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
             | Just ProviderWait <- fromException @NativePause err -> case role of
                 (Policy.Admission; Policy.Peer) -> throwIO ProviderWait
                 (Policy.Patch; Policy.SourcePatch; Policy.Source; Policy.Advisory; Policy.Fix) -> pure $ Left "Native child session interrupted; retry its retained request"
-            | otherwise -> pure $ Left "Review agent could not be executed"
+            -- The child closed its stdout: it stopped (gave up, crashed or was killed) without submitting.
+            | Just closed <- fromException err, isEOFError closed -> pure $ Left "Review agent exited without submitting a result"
+            | otherwise -> pure $ Left $ "Review agent could not be executed: " <> T.take 300 (toText $ displayException err)
           Right Nothing -> pure $ Left "Review agent exceeded its time budget"
           Right (Just result) -> pure result
 
