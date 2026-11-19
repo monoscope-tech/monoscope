@@ -218,6 +218,8 @@ const latencyDimPref = {
 export class LogList extends LitElement {
   @property({ type: String }) projectId: string = '';
   @property({ type: String }) initialFetchUrl: string = '';
+  // A dashboard logs widget's query before {{var-*}} were resolved into initialFetchUrl at render.
+  @property({ type: String }) queryTemplate: string = '';
   @property({ type: String }) mode: 'logs' | 'patterns' | 'sessions' = 'logs';
   // A list scoped by its host page (an issue's trace, a host) says so when empty; it has no query of its own to clear.
   @property({ type: String }) emptyMessage = '';
@@ -701,6 +703,9 @@ export class LogList extends LitElement {
       for (const key of PAGE_CONTEXT_PARAMS) {
         if (pageParams.has(key)) url.searchParams.set(key, pageParams.get(key)!);
       }
+      // Variables changed since render live in the page URL; one without a value there keeps its rendered default.
+      const query = this.queryTemplate.replace(/\{\{var-([\w-]+)\}\}/g, (placeholder, key) => pageParams.get(`var-${key}`) ?? placeholder);
+      if (this.queryTemplate && !query.includes('{{')) url.searchParams.set('query', query);
       if (this.sortSpec) url.searchParams.set('sort', this.sortSpec);
       return url.toString();
     } else {
