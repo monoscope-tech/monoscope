@@ -16,6 +16,7 @@ import {
   resolveColor,
   getSeriesPalette,
   TAILWIND_TO_HEX,
+  hexToHsl,
 } from '../src/colorMapping';
 
 const isHex = (c: string) => /^#[0-9a-f]{6}$/i.test(c);
@@ -305,6 +306,12 @@ describe('server ↔ client service palette contract', () => {
   test('every colour the server can assign has a hex on the client', () => {
     const missing = serverPalette.filter((c) => !TAILWIND_TO_HEX[c]);
     expect(missing).toEqual([]);
+  });
+
+  // Red is reserved for errors; a service hashed to it made every one of its spans look failed.
+  test('no service colour sits in the error hue', () => {
+    const hue = (c: string) => hexToHsl(TAILWIND_TO_HEX[c])[0];
+    expect(serverPalette.filter((c) => Math.min(hue(c), 360 - hue(c)) < 15)).toEqual([]);
   });
 
   test('no two server palette entries collapse to the same hex', () => {

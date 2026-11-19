@@ -406,7 +406,7 @@ expandedItemView pid item aptSp selectedTabM = do
         -- explorer's drawer over stale content. `closeDetailPanel` is the one close
         -- channel every shell already listens on, and it unchecks the box itself.
         button_
-          ( [ class_ "cursor-pointer detail-close-btn rounded-md p-1 hover:bg-fillWeak transition-colors tooltip tooltip-left"
+          ( [ class_ "cursor-pointer detail-close-btn rounded-md p-1.5 hover:bg-fillWeak transition-colors tooltip tooltip-left"
             , Aria.label_ "Close item details"
             , data_ "tip" "Close · Esc"
             ]

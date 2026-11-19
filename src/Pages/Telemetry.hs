@@ -1320,7 +1320,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                       div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-strokeWeak"] pass
               resizeDivider_ "--tl-left" 30 85 "resize" "max-md:hidden top-2"
               div_ [class_ "border rounded-lg md:w-[calc(100%-var(--tl-left)-8px)] w-full overflow-x-hidden"] do
-                h3_ [class_ "w-full flex px-3 py-2 font-medium justify-between items-center text-xs text-textWeak border-b"] do
+                div_ [class_ "w-full flex px-3 py-2 font-medium justify-between items-center text-xs text-textWeak border-b"] do
                   span_ [] "Services"
                   span_ [] "Exec Time %"
                 div_ [class_ "w-full overflow-x-hidden text-textWeak text-xs", id_ $ "services-" <> traceItem.traceId] do

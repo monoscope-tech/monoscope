@@ -1012,7 +1012,7 @@ issueDetailPage :: IssueView -> Html ()
 issueDetailPage v@IssueView{..} = div_ [class_ "flex h-full overflow-hidden relative group/ai"] do
   div_ [class_ "flex-1 min-w-0 min-h-0 overflow-y-auto"] do
     issueHeader_ v
-    div_ [class_ "grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem]"] do
+    div_ [class_ "grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_18rem] xl:grid-cols-[minmax(0,1fr)_20rem]"] do
       div_ [class_ "min-w-0 max-md:p-3 p-4 max-md:space-y-3 space-y-4"] do
         -- Seed the URL with whichever form of range the page defaulted to, so the
         -- standalone chart widgets read the window the picker shows. A query alert
@@ -1021,7 +1021,7 @@ issueDetailPage v@IssueView{..} = div_ [class_ "flex h-full overflow-hidden rela
         script_ [fmt|(() => {{const seed=()=>{{const p=new URLSearchParams(location.search);if(!p.get('since')&&!p.get('from')&&!p.get('to'))window.setParams({seedParams})}};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',seed,{{once:true}});else seed()}})();|]
         issueAggregate_ v
         eventCard_ v
-      aside_ [class_ "min-w-0 px-4 xl:border-l max-xl:border-t border-strokeWeak"] do
+      aside_ [class_ "min-w-0 px-4 lg:border-l max-lg:border-t border-strokeWeak"] do
         issueFactRow_ now issue ((.base) <$> errM) patternM
         railSection_ "AI analysis" do
           -- The background analysis job's verdict, when it has run for this error.
@@ -1124,7 +1124,7 @@ issueHeader_ v@IssueView{..} = header_ [class_ "max-md:px-3 px-4 max-md:pt-4 pt-
         unless (isJust issue.archivedAt)
           $ button_ [type_ "button", class_ "btn btn-sm btn-ghost gap-1.5 text-textSuccess hover:bg-fillSuccess-weak", hxPost_ $ (urls.issues pid).resolveGet issue.id, hxTarget_ $ "#archive-ctl-" <> issue.id.toText, hxSwap_ "outerHTML", Aria.label_ "Resolve issue", [__|on htmx:after:request[detail.ctx.response.status < 400] remove me|]] do
             faSprite_ "circle-check" "regular" "w-4 h-4"
-            span_ [class_ "max-md:hidden"] "Resolve"
+            "Resolve"
     issueTriage_ pid issue members
   where
     ackUntil = zonedTimeToUTC <$> issue.acknowledgedUntil <* issue.acknowledgedAt
@@ -1890,9 +1890,9 @@ errorResolveAction pid err errState canResolve =
       if errState == ErrorPatterns.ESResolved
         then button_ [class_ "btn btn-sm btn-ghost text-textWeak", disabled_ "true"] do
           faSprite_ "circle-check" "regular" "w-4 h-4"
-          span_ [class_ "max-md:hidden"] $ toHtml $ maybe "Resolved" ("Resolved after " <>) err.resolvedInRelease
+          toHtml $ maybe "Resolved" ("Resolved after " <>) err.resolvedInRelease
         else do
-          resolveBtn (actionUrl False) (faSprite_ "circle-check" "regular" "w-4 h-4" >> span_ [class_ "max-md:hidden"] "Resolve") "Resolve issue"
+          resolveBtn (actionUrl False) (faSprite_ "circle-check" "regular" "w-4 h-4" >> "Resolve") "Resolve issue"
           -- Occurrences still reporting this release will not reopen it; a newer one will.
           whenJust err.lastRelease \rel -> resolveBtn (actionUrl True) (span_ [class_ "text-xs"] "in next release") ("Resolve in the release after " <> rel)
 
@@ -1911,7 +1911,7 @@ errorSubscriptionAction pid err = do
     do
       span_ [class_ "text-xs text-textWeak flex items-center gap-1"] do
         faSprite_ "bell" "regular" "w-3 h-3"
-        span_ [class_ "max-md:hidden"] "Notify"
+        "Notify"
       select_ [class_ "select select-sm max-md:w-28 w-36", name_ "notifyEveryMinutes", Aria.label_ "Notification frequency"]
         $ options_ (Just $ bool "0" (show err.notifyEveryMinutes) isActive) (("0", "Off") : [(show @Text @Int val, "Every " <> label) | (val, label) <- [(10, "10 min"), (20, "20 min"), (30, "30 min"), (60, "hour"), (360, "6 hrs"), (1440, "24 hrs")]])
 
@@ -2808,7 +2808,7 @@ issueAcknowledgeButton pid aid now untilM = div_ [id_ ctlId, class_ "inline-flex
       )
       do
         faSprite_ "bell-slash" "regular" "w-4 h-4"
-        span_ [class_ "max-md:hidden"] $ toHtml $ untilLabel "Acknowledged" now until'
+        toHtml $ untilLabel "Acknowledged" now until'
   Nothing -> div_ [class_ "join"] do
     button_
       ( [ type_ "button"
@@ -2820,7 +2820,7 @@ issueAcknowledgeButton pid aid now untilM = div_ [id_ ctlId, class_ "inline-flex
       )
       do
         faSprite_ "check" "regular" "w-4 h-4"
-        span_ [class_ "max-md:hidden"] "Acknowledge"
+        "Acknowledge"
     durationMenu_ (ctlId <> "-menu") "Acknowledge for\x2026" [] (req . (urls.issues pid).acknowledgeGet aid . readMaybe . toString) \popId ->
       button_ ([type_ "button", class_ "btn btn-sm btn-primary join-item px-2", Aria.label_ "Acknowledge for a set time"] <> popoverTrigger_ popId)
         $ faSprite_ "chevron-down" "regular" "w-3 h-3"
@@ -2834,11 +2834,11 @@ issueArchiveButton pid aid archived = div_ [id_ ctlId, class_ "inline-flex"] do
   if archived
     then button_ ([type_ "button", class_ "btn btn-sm gap-1.5 tooltip tooltip-bottom btn-ghost bg-fillWarning-weak text-textWarning border-strokeWarning-weak", data_ "tip" "Move back to the Inbox", Aria.label_ "Unarchive issue"] <> req ((urls.issues pid).unarchiveGet aid)) do
       faSprite_ "archive" "regular" "w-4 h-4"
-      span_ [class_ "max-md:hidden"] "Unarchive"
+      "Unarchive"
     else div_ [class_ "join"] do
       button_ ([type_ "button", class_ "btn btn-sm btn-ghost join-item gap-1.5 tooltip tooltip-bottom", data_ "tip" "Not actionable \x2014 hide it and stop notifying", Aria.label_ "Archive issue"] <> req ((urls.issues pid).archiveGet aid Nothing)) do
         faSprite_ "archive" "regular" "w-4 h-4"
-        span_ [class_ "max-md:hidden"] "Archive"
+        "Archive"
       durationMenu_ (ctlId <> "-menu") "Archive for\x2026" [("Until it escalates", "escalating")] (req . (urls.issues pid).archiveGet aid . parseQueryParamMaybe) \popId ->
         button_ ([type_ "button", class_ "btn btn-sm btn-ghost join-item px-2", Aria.label_ "Archive for a set time"] <> popoverTrigger_ popId)
           $ faSprite_ "chevron-down" "regular" "w-3 h-3"

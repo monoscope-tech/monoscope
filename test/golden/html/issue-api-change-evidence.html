@@ -31,9 +31,7 @@
 <g>
 <path d="M534 132.5C544.8 140.2 547.2 155.2 539.5 166L275.5 534C271.4 539.7 265 543.4 258 543.9C251 544.4 244 542 239 537L103 401C93.6 391.6 93.6 376.4 103 367.1C112.4 357.8 127.6 357.7 136.9 367.1L253 483L500.5 138C508.2 127.2 523.2 124.8 534 132.5z" />
 </g>
-</svg>
-<span class="max-md:hidden">Acknowledge</span>
-</button>
+</svg>Acknowledge</button>
 <div class="inline-block">
 <button type="button" class="btn btn-sm btn-primary join-item px-2" aria-label="Acknowledge for a set time" popovertarget="ack-ctl-<uuid>-menu" style="anchor-name:--anchor-ack-ctl-<uuid>-menu">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 512 512">
@@ -62,9 +60,7 @@
 <g fill="none">
 <path d="M2.66671 5.33333V12.6667C2.66671 13.0203 2.80718 13.3594 3.05723 13.6095C3.30728 13.8595 3.64642 14 4.00004 14H12C12.3537 14 12.6928 13.8595 12.9428 13.6095C13.1929 13.3594 13.3334 13.0203 13.3334 12.6667V5.33333M6.66671 8H9.33337M2.00004 2H14C14.3682 2 14.6667 2.29848 14.6667 2.66667V4.66667C14.6667 5.03486 14.3682 5.33333 14 5.33333H2.00004C1.63185 5.33333 1.33337 5.03486 1.33337 4.66667V2.66667C1.33337 2.29848 1.63185 2 2.00004 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
 </g>
-</svg>
-<span class="max-md:hidden">Archive</span>
-</button>
+</svg>Archive</button>
 <div class="inline-block">
 <button type="button" class="btn btn-sm btn-ghost join-item px-2" aria-label="Archive for a set time" popovertarget="archive-ctl-<uuid>-menu" style="anchor-name:--anchor-archive-ctl-<uuid>-menu">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 512 512">
@@ -92,9 +88,7 @@
 <g>
 <path d="M256 48a208 208 0 1 1 0 416 208 208 0 1 1 0-416zm0 464A256 256 0 1 0 256 0a256 256 0 1 0 0 512zM369 209c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-111 111-47-47c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9l64 64c9.4 9.4 24.6 9.4 33.9 0L369 209z" />
 </g>
-</svg>
-<span class="max-md:hidden">Resolve</span>
-</button>
+</svg>Resolve</button>
 <form id="issue-triage" class="ml-auto max-md:w-full flex flex-wrap items-center gap-3 text-xs text-textWeak" data-hx-post="/p/<uuid>/issues/<uuid>/triage" data-hx-trigger="change" data-hx-swap="outerHTML" hx-on:htmx:after:request="if (event.detail.ctx.response.status &gt;= 400) this.reset()">
 <label class="flex items-center gap-1.5 max-md:flex-1 min-w-0">Priority<select id="issue-triage-priority" class="select select-sm md:w-28 max-md:flex-1 min-w-0" name="severity" aria-label="Priority">
 <option value="critical">Critical</option>
@@ -112,7 +106,7 @@
 </form>
 </div>
 </header>
-<div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem]">
+<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_18rem] xl:grid-cols-[minmax(0,1fr)_20rem]">
 <div class="min-w-0 max-md:p-3 p-4 max-md:space-y-3 space-y-4">
 <script>(() => {const seed=()=>{const p=new URLSearchParams(location.search);if(!p.get('since')&&!p.get('from')&&!p.get('to'))window.setParams({"since":"1H"})};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',seed,{once:true});else seed()})();</script>
 <div id="anomaly-chart-refresh" class="hidden" _="on submit trigger &#39;update-query&#39; on window">
@@ -918,7 +912,7 @@
 </details>
 </div>
 </div>
-<aside class="min-w-0 px-4 xl:border-l max-xl:border-t border-strokeWeak">
+<aside class="min-w-0 px-4 lg:border-l max-lg:border-t border-strokeWeak">
 <section class="py-4 border-b border-strokeWeak last:border-b-0">
 <div class="mb-2">
 <h3 class="text-xs font-semibold text-textWeak uppercase tracking-wider">Issue details</h3>
@@ -1085,9 +1079,7 @@
 <g>
 <path d="M534 132.5C544.8 140.2 547.2 155.2 539.5 166L275.5 534C271.4 539.7 265 543.4 258 543.9C251 544.4 244 542 239 537L103 401C93.6 391.6 93.6 376.4 103 367.1C112.4 357.8 127.6 357.7 136.9 367.1L253 483L500.5 138C508.2 127.2 523.2 124.8 534 132.5z" />
 </g>
-</svg>
-<span class="max-md:hidden">Acknowledge</span>
-</button>
+</svg>Acknowledge</button>
 <div class="inline-block">
 <button type="button" class="btn btn-sm btn-primary join-item px-2" aria-label="Acknowledge for a set time" popovertarget="ack-ctl-<uuid>-menu" style="anchor-name:--anchor-ack-ctl-<uuid>-menu">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 512 512">
@@ -1116,9 +1108,7 @@
 <g fill="none">
 <path d="M2.66671 5.33333V12.6667C2.66671 13.0203 2.80718 13.3594 3.05723 13.6095C3.30728 13.8595 3.64642 14 4.00004 14H12C12.3537 14 12.6928 13.8595 12.9428 13.6095C13.1929 13.3594 13.3334 13.0203 13.3334 12.6667V5.33333M6.66671 8H9.33337M2.00004 2H14C14.3682 2 14.6667 2.29848 14.6667 2.66667V4.66667C14.6667 5.03486 14.3682 5.33333 14 5.33333H2.00004C1.63185 5.33333 1.33337 5.03486 1.33337 4.66667V2.66667C1.33337 2.29848 1.63185 2 2.00004 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
 </g>
-</svg>
-<span class="max-md:hidden">Archive</span>
-</button>
+</svg>Archive</button>
 <div class="inline-block">
 <button type="button" class="btn btn-sm btn-ghost join-item px-2" aria-label="Archive for a set time" popovertarget="archive-ctl-<uuid>-menu" style="anchor-name:--anchor-archive-ctl-<uuid>-menu">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 512 512">
@@ -1146,9 +1136,7 @@
 <g>
 <path d="M256 48a208 208 0 1 1 0 416 208 208 0 1 1 0-416zm0 464A256 256 0 1 0 256 0a256 256 0 1 0 0 512zM369 209c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-111 111-47-47c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9l64 64c9.4 9.4 24.6 9.4 33.9 0L369 209z" />
 </g>
-</svg>
-<span class="max-md:hidden">Resolve</span>
-</button>
+</svg>Resolve</button>
 <form id="issue-triage" class="ml-auto max-md:w-full flex flex-wrap items-center gap-3 text-xs text-textWeak" data-hx-post="/p/<uuid>/issues/<uuid>/triage" data-hx-trigger="change" data-hx-swap="outerHTML" hx-on:htmx:after:request="if (event.detail.ctx.response.status &gt;= 400) this.reset()">
 <label class="flex items-center gap-1.5 max-md:flex-1 min-w-0">Priority<select id="issue-triage-priority" class="select select-sm md:w-28 max-md:flex-1 min-w-0" name="severity" aria-label="Priority">
 <option value="critical">Critical</option>
@@ -1166,7 +1154,7 @@
 </form>
 </div>
 </header>
-<div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem]">
+<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_18rem] xl:grid-cols-[minmax(0,1fr)_20rem]">
 <div class="min-w-0 max-md:p-3 p-4 max-md:space-y-3 space-y-4">
 <script>(() => {const seed=()=>{const p=new URLSearchParams(location.search);if(!p.get('since')&&!p.get('from')&&!p.get('to'))window.setParams({"since":"1H"})};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',seed,{once:true});else seed()})();</script>
 <div id="anomaly-chart-refresh" class="hidden" _="on submit trigger &#39;update-query&#39; on window">
@@ -1963,7 +1951,7 @@
 </details>
 </div>
 </div>
-<aside class="min-w-0 px-4 xl:border-l max-xl:border-t border-strokeWeak">
+<aside class="min-w-0 px-4 lg:border-l max-lg:border-t border-strokeWeak">
 <section class="py-4 border-b border-strokeWeak last:border-b-0">
 <div class="mb-2">
 <h3 class="text-xs font-semibold text-textWeak uppercase tracking-wider">Issue details</h3>
@@ -2130,9 +2118,7 @@
 <g>
 <path d="M534 132.5C544.8 140.2 547.2 155.2 539.5 166L275.5 534C271.4 539.7 265 543.4 258 543.9C251 544.4 244 542 239 537L103 401C93.6 391.6 93.6 376.4 103 367.1C112.4 357.8 127.6 357.7 136.9 367.1L253 483L500.5 138C508.2 127.2 523.2 124.8 534 132.5z" />
 </g>
-</svg>
-<span class="max-md:hidden">Acknowledge</span>
-</button>
+</svg>Acknowledge</button>
 <div class="inline-block">
 <button type="button" class="btn btn-sm btn-primary join-item px-2" aria-label="Acknowledge for a set time" popovertarget="ack-ctl-<uuid>-menu" style="anchor-name:--anchor-ack-ctl-<uuid>-menu">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 512 512">
@@ -2161,9 +2147,7 @@
 <g fill="none">
 <path d="M2.66671 5.33333V12.6667C2.66671 13.0203 2.80718 13.3594 3.05723 13.6095C3.30728 13.8595 3.64642 14 4.00004 14H12C12.3537 14 12.6928 13.8595 12.9428 13.6095C13.1929 13.3594 13.3334 13.0203 13.3334 12.6667V5.33333M6.66671 8H9.33337M2.00004 2H14C14.3682 2 14.6667 2.29848 14.6667 2.66667V4.66667C14.6667 5.03486 14.3682 5.33333 14 5.33333H2.00004C1.63185 5.33333 1.33337 5.03486 1.33337 4.66667V2.66667C1.33337 2.29848 1.63185 2 2.00004 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
 </g>
-</svg>
-<span class="max-md:hidden">Archive</span>
-</button>
+</svg>Archive</button>
 <div class="inline-block">
 <button type="button" class="btn btn-sm btn-ghost join-item px-2" aria-label="Archive for a set time" popovertarget="archive-ctl-<uuid>-menu" style="anchor-name:--anchor-archive-ctl-<uuid>-menu">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 512 512">
@@ -2191,9 +2175,7 @@
 <g>
 <path d="M256 48a208 208 0 1 1 0 416 208 208 0 1 1 0-416zm0 464A256 256 0 1 0 256 0a256 256 0 1 0 0 512zM369 209c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-111 111-47-47c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9l64 64c9.4 9.4 24.6 9.4 33.9 0L369 209z" />
 </g>
-</svg>
-<span class="max-md:hidden">Resolve</span>
-</button>
+</svg>Resolve</button>
 <form id="issue-triage" class="ml-auto max-md:w-full flex flex-wrap items-center gap-3 text-xs text-textWeak" data-hx-post="/p/<uuid>/issues/<uuid>/triage" data-hx-trigger="change" data-hx-swap="outerHTML" hx-on:htmx:after:request="if (event.detail.ctx.response.status &gt;= 400) this.reset()">
 <label class="flex items-center gap-1.5 max-md:flex-1 min-w-0">Priority<select id="issue-triage-priority" class="select select-sm md:w-28 max-md:flex-1 min-w-0" name="severity" aria-label="Priority">
 <option value="critical">Critical</option>
@@ -2211,7 +2193,7 @@
 </form>
 </div>
 </header>
-<div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem]">
+<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_18rem] xl:grid-cols-[minmax(0,1fr)_20rem]">
 <div class="min-w-0 max-md:p-3 p-4 max-md:space-y-3 space-y-4">
 <script>(() => {const seed=()=>{const p=new URLSearchParams(location.search);if(!p.get('since')&&!p.get('from')&&!p.get('to'))window.setParams({"since":"1H"})};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',seed,{once:true});else seed()})();</script>
 <div id="anomaly-chart-refresh" class="hidden" _="on submit trigger &#39;update-query&#39; on window">
@@ -2924,7 +2906,7 @@
 </details>
 </div>
 </div>
-<aside class="min-w-0 px-4 xl:border-l max-xl:border-t border-strokeWeak">
+<aside class="min-w-0 px-4 lg:border-l max-lg:border-t border-strokeWeak">
 <section class="py-4 border-b border-strokeWeak last:border-b-0">
 <div class="mb-2">
 <h3 class="text-xs font-semibold text-textWeak uppercase tracking-wider">Issue details</h3>
