@@ -139,7 +139,8 @@ test.each([false, true])('Issues panel keeps fractional inline sizing; drawer=%s
   const rows = buildRows(1);
   clickRow(el, rows[0].tr, 'r0');
   expect(document.querySelector<HTMLInputElement>('#details-open')!.checked).toBe(true);
-  await vi.waitFor(() => expect(panel.style.width).toBe(drawer ? '0px' : '33.333333%'));
+  // jsdom 31 serialises percentages to four decimals; the width, not its formatting, is the contract.
+  await vi.waitFor(() => drawer ? expect(panel.style.width).toBe('0px') : expect(parseFloat(panel.style.width)).toBeCloseTo(33.333333, 3));
 });
 
 test('restores the Issues desktop width after reopening under the mobile layout', async () => {
@@ -150,5 +151,5 @@ test('restores the Issues desktop width after reopening under the mobile layout'
   document.body.insertAdjacentHTML('beforeend', '<input type="checkbox" id="details-open"><input type="checkbox" id="details-drawer-mode">');
   const el = await mountList();
   clickRow(el, buildRows(1)[0].tr, 'r0');
-  await vi.waitFor(() => expect(panel.style.width).toBe('33.333333%'));
+  await vi.waitFor(() => expect(parseFloat(panel.style.width)).toBeCloseTo(33.333333, 3));
 });

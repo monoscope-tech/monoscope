@@ -1277,13 +1277,13 @@ data SubmissionFailure = Failed | Rejected
   deriving (HI.EncodeValue) via WrappedEnumSC 'Nothing "" SubmissionFailure
 
 
-markUsageSubmissionFailed :: DB es => SubmissionFailure -> UsageSubmissionId -> Text -> Eff es Int64
-markUsageSubmissionFailed failure sid err =
+markUsageSubmissionFailed :: DB es => SubmissionFailure -> NonEmpty UsageSubmissionId -> Text -> Eff es Int64
+markUsageSubmissionFailed failure sids err =
   EHasql.interpExecute
     [HI.sql|
       UPDATE projects.usage_report_submissions
       SET status = #{failure}, last_error = #{err}
-      WHERE id = #{sid}
+      WHERE id = ANY(#{toList sids}::uuid[])
     |]
 
 
