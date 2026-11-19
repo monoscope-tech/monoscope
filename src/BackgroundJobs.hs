@@ -254,6 +254,11 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
     SlackConnectSync pid create -> whenJustM (Projects.activeProjectById pid) \project -> do
       users <- Projects.usersByProjectId pid
       void $ Integrations.syncSlackConnect authCtx.config.slackBotToken (filter (not . T.null) authCtx.config.slackConnectTeamUserIds) pid project.title (create && pid /= Projects.demoProjectId) (map (CI.original . (.email)) users) Nothing
+    SlackConnectSweep -> unless (T.null authCtx.config.slackBotToken) do
+      now <- Time.currentTime
+      pids <- filter (/= Projects.demoProjectId) <$> Integrations.slackConnectBacklog now
+      -- conversations.create and inviteShared are Tier 2 (~20/min); a project costs a few calls.
+      for_ (zip [0 ..] pids) \(i, pid) -> enqueueAt authCtx (addUTCTime (fromIntegral @Int $ i * 15) now) [SlackConnectSync pid True]
     SendDiscordData userId projectId fullName stack foundUsFrom -> sendDiscordData authCtx userId projectId fullName stack foundUsFrom
     SyncProjectContacts pid -> whenJustM (Projects.projectById pid) \project ->
       unless (T.null authCtx.config.convertkitApiKey) $ do
@@ -1048,7 +1053,7 @@ runDailyJobScheduling authCtx =
           -- ExpireReplayData is the 30-day replay retention sweep; it re-enqueues itself
           -- if it hit the batch cap, so backlog drains across multiple runs.
           enqueueJobs authCtx
-            $ [Jobs.MonoscopeAdminDaily, Jobs.UsageAuditReport, Jobs.ExpireReplayData, Jobs.ExpireShareEvents]
+            $ [Jobs.MonoscopeAdminDaily, Jobs.UsageAuditReport, Jobs.ExpireReplayData, Jobs.ExpireShareEvents, Jobs.SlackConnectSweep]
             <> [Jobs.CleanupDemoProject | dayOfWeek currentDay == Monday]
           liftIO $ withResource authCtx.jobsPool \conn -> do
             -- Each handler re-enqueues itself; the daily loop seeds a full day's

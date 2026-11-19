@@ -489,10 +489,10 @@ slackConnectCard_ c = div_ [id_ "slack-connect-card", class_ "flex flex-wrap ite
       (Just err, _) -> err
       (_, Just ch) | Just e <- (.lastError) =<< find ((== c.email) . (.email)) ch.invites -> "Your last invite failed (" <> e <> "). Try again, or email hello@monoscope.tech."
       (_, Just _) | c.invited -> "Accept it in Slack. If your workspace needs admin approval, your Slack admin gets a request."
-      (_, Just _) -> "Get an invite to join your teammates and our engineers there."
+      (_, Just _) -> "We'll send a Slack Connect invite to " <> c.email <> " so you can join your teammates and our engineers there."
       (_, Nothing)
         | demo -> "Your own projects get a private Slack Connect channel with our engineers. It isn't available on the demo project."
-        | otherwise -> "A private Slack Connect channel between your team and ours: setup help, alert tuning, feature requests. Every project member is invited by email."
+        | otherwise -> "A private Slack Connect channel between your team and ours for setup help, alert tuning and feature requests. We'll invite " <> c.email <> " and every project member."
   unless demo
     $ button_
       [ type_ "button"
@@ -503,9 +503,8 @@ slackConnectCard_ c = div_ [id_ "slack-connect-card", class_ "flex flex-wrap ite
       , term "hx-disabled-elt" "this"
       ]
     $ case c.connect of
-      Nothing -> "Create shared channel"
       Just _ | c.invited -> "Resend invite"
-      Just _ -> "Get invited"
+      _ -> "Invite me"
   whenJust (guarded (const c.invited) =<< c.connect) \ch ->
     a_ [href_ $ Integrations.slackConnectUrl ch, target_ "_blank", rel_ "noopener", class_ "btn btn-sm btn-ghost"] "Open in Slack"
   where
@@ -528,7 +527,7 @@ slackConnectPostH pid = do
   where
     failureText = \case
       "slack_bot_token_unset" -> "Slack Connect isn't set up on this server yet. Email hello@monoscope.tech and we'll add you by hand."
-      err -> "Slack couldn't set this up (" <> err <> "). We've been alerted; email hello@monoscope.tech if it's urgent."
+      err -> "We couldn't send your invite automatically, so our team has been alerted and will invite you by hand. Slack said: " <> err <> "."
 
 
 data HighlightDismissed = HighlightDismissed

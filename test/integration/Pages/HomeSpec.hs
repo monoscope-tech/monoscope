@@ -65,8 +65,20 @@ spec = around withTestResources $ describe "Home screen" do
           void $ runTestBackgroundWithHTTP (runHTTPRecordWith slackReply ref) tr.trTracerProvider tr.trTestClock tr.trLogger tr.trATCtx $ Jobs.processBackgroundJob tr.trATCtx (Jobs.SlackConnectSync pid create)
           reverse <$> readIORef ref
         methods = map (T.drop (T.length "https://slack.com/api/") . fst)
+        swept = do
+          dbExec tr [sql|DELETE FROM background_jobs WHERE payload->>'tag' = 'SlackConnectSync'|] ()
+          void $ runTestBackgroundWithHTTP (runHTTPRecordWith slackReply ref0) tr.trTracerProvider tr.trTestClock tr.trLogger tr.trATCtx $ Jobs.processBackgroundJob tr.trATCtx Jobs.SlackConnectSweep
+          dbOne @_ @Int tr [sql|SELECT count(*)::int FROM background_jobs WHERE payload->>'tag' = 'SlackConnectSync' AND payload->'contents'->>0 = ?|] (Only pid)
+    ref0 <- newIORef []
     -- A member added before the project is activated waits for the channel; nothing is created.
     sync False `shouldReturn` []
+    -- slackConnect_missingScope_namesTheScope: a bot token without groups:write says so, not just "missing_scope".
+    scopeless <- runTestBackgroundWithHTTP (runHTTPRecordWith (const "{\"ok\":false,\"error\":\"missing_scope\",\"needed\":\"groups:write\"}") ref0) tr.trTracerProvider tr.trTestClock tr.trLogger tr.trATCtx
+      $ Integrations.syncSlackConnect "xoxb-test" [] pid "Acme Shop" True [owner] Nothing
+    either id (const "") (snd scopeless) `shouldBe` "missing_scope needs groups:write"
+    -- The daily sweep picks up recently active projects still without a channel, and drops them once synced.
+    dbExec tr [sql|INSERT INTO apis.daily_usage (project_id, total_requests, created_at) VALUES (?, 10, ?)|] (pid, frozenTime)
+    swept `shouldReturn` 1
     created <- sync True
     methods created `shouldBe` ["conversations.create", "chat.postMessage", "conversations.inviteShared"]
     foldMap (decodeUtf8 . snd) (viaNonEmpty last created) `shouldContainAll` ["channel=C0HOME", "emails=" <> T.replace "@" "%40" owner]
@@ -76,6 +88,7 @@ spec = around withTestResources $ describe "Home screen" do
     later <- sync False
     methods later `shouldBe` ["conversations.inviteShared"]
     foldMap (decodeUtf8 . snd) (viaNonEmpty last later) `shouldContainAll` ["emails=ada%40acme.test"]
+    swept `shouldReturn` 0
     Just c <- runQueryEffect tr $ Integrations.getSlackConnect pid
     (c.channelName, sort [i.email | i <- c.invites, isJust i.inviteId]) `shouldBe` ("monoscope-acme-shop", sort ["ada@acme.test", owner])
     page <- renderT <$> call tr (Home.homeGetH pid)

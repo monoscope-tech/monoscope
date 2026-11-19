@@ -64,6 +64,7 @@ module Models.Apis.Integrations (
   SlackConnectInvite (..),
   getSlackConnect,
   syncSlackConnect,
+  slackConnectBacklog,
   slackConnectUrl,
 ) where
 
@@ -1000,4 +1001,19 @@ syncSlackConnect token staff pid title create emails resend
       let body = Aeson.decode @Aeson.Value $ response ^. HTTP.responseBody
       pure $ case body of
         Just v | v ^? AEL.key "ok" . AEL._Bool == Just True -> Right v
-        _ -> Left $ fromMaybe "invalid_response" $ body >>= (^? AEL.key "error" . AEL._String)
+        -- missing_scope names the scope Slack wanted, which is the only actionable part.
+        _ -> Left $ fromMaybe "invalid_response" (body >>= (^? AEL.key "error" . AEL._String)) <> foldMap (" needs " <>) (body >>= (^? AEL.key "needed" . AEL._String))
+
+
+-- | Recently active projects (usage in the last 30 days) with no Slack Connect channel yet, or with
+-- a member whose invite failed. The daily sweep syncs these, which backfills older projects and
+-- retries anything that failed at creation (e.g. while the bot token lacked a scope).
+slackConnectBacklog :: DB es => UTCTime -> Eff es [Projects.ProjectId]
+slackConnectBacklog now =
+  Hasql.interp
+    [HI.sql|SELECT p.id FROM projects.projects p
+            WHERE p.active AND p.deleted_at IS NULL
+              AND EXISTS (SELECT 1 FROM apis.daily_usage u WHERE u.project_id = p.id AND u.created_at > #{now}::timestamptz - interval '30 days')
+              AND (NOT EXISTS (SELECT 1 FROM projects.slack_connect_channels c WHERE c.project_id = p.id)
+                   OR EXISTS (SELECT 1 FROM projects.slack_connect_invites i WHERE i.project_id = p.id AND i.invite_id IS NULL))
+            ORDER BY p.created_at DESC LIMIT 100|]

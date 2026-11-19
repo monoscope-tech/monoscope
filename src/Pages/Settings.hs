@@ -612,7 +612,7 @@ auditLogPage_ pid sourceM actorM entries = div_ [class_ "flex flex-col gap-4"] d
     then emptyState_ def{size = ESCompact, icon = Just "clock-rotate-left"} "No activity yet" "Changes to settings, members, dashboards, monitors and routines appear here as they happen."
     else do
       div_ [class_ "overflow-x-auto rounded-xl border border-strokeWeak"] $ table_ [class_ "w-full text-sm"] do
-        thead_ [class_ "bg-fillWeaker text-xs text-textWeak text-start"] $ tr_ $ forM_ @[] @_ @Text ["Time", "Actor", "Event", "Target"] th_ [class_ "px-3 py-2 text-start font-medium"] . toHtml
+        thead_ [class_ "bg-fillWeaker text-xs text-textWeak text-start"] $ tr_ $ forM_ @[] @_ @Text ["Time", "Actor", "Event", "Target"] (th_ [class_ "px-3 py-2 text-start font-medium"] . toHtml)
         tbody_ [class_ "divide-y divide-strokeWeak"] $ forM_ entries \e -> tr_ [class_ "align-top"] do
           td_ [class_ "px-3 py-2 whitespace-nowrap text-textWeak tabular-nums"] $ localTimeFmt_ "MMM dd, HH:mm:ss" e.at
           td_ [class_ "px-3 py-2"] do
