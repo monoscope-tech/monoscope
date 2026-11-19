@@ -12,6 +12,7 @@
     "scopes": {
       "bot": [
         "groups:write",
+        "groups:read",
         "conversations.connect:write",
         "chat:write"
       ]

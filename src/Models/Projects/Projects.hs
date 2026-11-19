@@ -1857,7 +1857,7 @@ projectActivity pid sourceM actorM before limit =
     [HI.sql| SELECT at, source, actor_kind, actor, event, target_kind, target_title, target_id FROM projects.activity
              WHERE project_id = #{pid}
                AND (#{sourceM}::text IS NULL OR source = #{sourceM})
-               AND (NULLIF(btrim(#{actorM}), '') IS NULL OR actor ILIKE '%' || btrim(#{actorM}) || '%')
+               AND (NULLIF(btrim(#{actorM}), '') IS NULL OR strpos(lower(actor), lower(btrim(#{actorM}))) > 0)
                AND (#{before}::timestamptz IS NULL OR at < #{before})
              ORDER BY at DESC LIMIT #{limit} |]
 

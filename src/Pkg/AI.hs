@@ -1934,7 +1934,7 @@ executeToolAt cursor config tc = do
             Left Issues.ArtifactFull -> noRaw $ "Document '" <> toText key' <> "' is full. Continue in a new document with a different key."
             Left Issues.ArtifactLimitReached -> noRaw $ "This conversation already holds " <> show Issues.maxArtifactsPerConversation <> " documents. Rewrite an existing one instead; read_artifact without a key lists them."
       HighlightOnHome -> AtomicOperation $ either (pure . noRaw) Relude.id do
-        title <- maybeToRight (failure "missing 'title'") $ T.take 200 <$> nonEmptyT (T.strip <$> getTextArg "title" args)
+        title <- maybeToRight (failure "missing 'title'") $ T.take 200 <$> nonEmptyT (unwords . words <$> getTextArg "title" args)
         kind <- maybeToRight "kind must be issue, improvement or insight." $ parseMaybe AE.parseJSON =<< Map.lookup "kind" args
         let detail = foldMap (T.take 600 . T.strip) $ getTextArg "detail" args
         let linkArg = getTextArg "link" args

@@ -324,7 +324,7 @@ validateDraft changed evidence recorded value = do
 -- >>> map check [[claim Matches ["proof-1"]], [claim Unverified []], [claim Differs ["proof-2"]], [claim Differs []], [claim Matches ["proof-9"]], [claim Matches ["proof-2"]], [claim Differs ["proof-3"]]]
 -- ["accepted","accepted","accepted","A matching or differing claim must cite a recorded proof","Claim cites a proof that was not recorded on base and head","A matching claim needs a head recording that succeeded","Claim cites a proof that was not recorded on base and head"]
 -- >>> let skip reason recordings = either id (const "accepted") . validateClaims recordings (Just reason)
--- >>> [skip "Only the README changes." [] [], skip " " [] [], skip "Docs only." [] [claim Unverified []], skip "Docs only." (recorded "proof-1" 0) []]
+-- >>> [skip "Only the README changes." [] [], skip " " [] [], skip "Docs only." [] [claim Unverified []], skip "Docs only." (recorded "proof-1" 0) []] :: [Text]
 -- ["accepted","Say what the diff shows","A review that needs no proof has no claims or recordings","A review that needs no proof has no claims or recordings"]
 validateClaims :: [ProofLink] -> Maybe Text -> [Claim] -> Either Text ()
 validateClaims recorded noProofNeeded claims = do

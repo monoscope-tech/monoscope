@@ -82,6 +82,7 @@ spec = around withTestResources $ describe "Home screen" do
     swept `shouldReturn` 1
     created <- sync True
     methods created `shouldBe` ["conversations.create", "chat.postMessage", "conversations.inviteShared"]
+    foldMap (decodeUtf8 . snd) (viaNonEmpty head created) `shouldContainAll` ["name=monoscope-acme-shop-" <> T.take 6 pid.toText]
     foldMap (decodeUtf8 . snd) (viaNonEmpty last created) `shouldContainAll` ["channel=C0HOME", "emails=" <> T.replace "@" "%40" owner, "external_limited=false"]
     -- A later member gets one invite; members already invited are not re-sent.
     dbExec tr [sql|INSERT INTO users.users (id, first_name, last_name, email) VALUES ('00000000-0000-0000-0000-00000000a11c', 'Ada', 'L', 'ada@acme.test')|] ()
@@ -93,7 +94,24 @@ spec = around withTestResources $ describe "Home screen" do
     Just c <- runQueryEffect tr $ Integrations.getSlackConnect pid
     (c.channelName, sort [(i.email, i.status) | i <- c.invites]) `shouldBe` ("monoscope-acme-shop", sort [("ada@acme.test", Integrations.Invited "I0INVITE"), (owner, Integrations.Invited "I0INVITE")])
     page <- renderT <$> call tr (Home.homeGetH pid)
+    -- slackConnect_failedInviteRetriesAreCapped: an address Slack keeps rejecting stops being retried by syncs and the sweep.
+    dbExec tr [sql|UPDATE projects.slack_connect_invites SET status = 'failed', invite_id = NULL, error = 'user_not_found', attempts = 5 WHERE email = 'ada@acme.test'|] ()
+    (methods <$> sync False) `shouldReturn` []
+    swept `shouldReturn` 0
     page `shouldContainAll` ["#monoscope-acme-shop", "Shared with the Monoscope team", "slack.com/app_redirect?channel=C0HOME&amp;team=T0MONO"]
+
+  it "slackConnect_nameTaken_reusesTheProjectsOwnChannelInsteadOfASecond" \tr -> do
+    -- A concurrent sync, or one whose save was lost, already created this project's channel.
+    pid <- createTestProject tr "Acme Shop"
+    let own = "monoscope-acme-shop-" <> T.take 6 pid.toText
+        reply url
+          | "conversations.create" `T.isSuffixOf` url = "{\"ok\":false,\"error\":\"name_taken\"}"
+          | "users.conversations" `T.isSuffixOf` url = "{\"ok\":true,\"channels\":[{\"id\":\"C0OTHER\",\"name\":\"monoscope-acme-shop\"},{\"id\":\"C0OWN\",\"name\":\"" <> own <> "\"}],\"response_metadata\":{\"next_cursor\":\"\"}}"
+          | otherwise = slackReply url
+    ref <- newIORef []
+    (_, result) <- runTestBackgroundWithHTTP (runHTTPRecordWith reply ref) tr.trTracerProvider tr.trTestClock tr.trLogger tr.trATCtx $ Integrations.syncSlackConnect "xoxb-test" ["U0STAFF"] pid "Acme Shop" True ["ada@acme.test"] Nothing
+    map (T.drop (T.length "https://slack.com/api/") . fst) . reverse <$> readIORef ref `shouldReturn` ["conversations.create", "users.conversations", "conversations.inviteShared"]
+    (fmap (.channelId) <$> rightToMaybe result) `shouldBe` Just (Just "C0OWN")
   where
     slackReply url
       | "conversations.create" `T.isSuffixOf` url = "{\"ok\":true,\"channel\":{\"id\":\"C0HOME\",\"name\":\"monoscope-acme-shop\",\"context_team_id\":\"T0MONO\"}}"

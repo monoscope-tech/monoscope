@@ -304,10 +304,13 @@ before live acceptance.
 
 The home page's "Talk to Monoscope engineers in Slack" card runs as a separate app installed
 in Monoscope's own workspace, whose bot token is `SLACK_CONNECT_BOT_TOKEN`.
-[`connect-manifest.json`](connect-manifest.json) carries the three bot scopes it needs:
-`groups:write` to create the private channel and add staff, `chat:write` for the welcome, and
-`conversations.connect:write` to send the Slack Connect invite. A token without them fails
+[`connect-manifest.json`](connect-manifest.json) carries the four bot scopes it needs:
+`groups:write` to create the private channel and add staff, `groups:read` to find a channel an
+earlier run created, `chat:write` for the welcome, and `conversations.connect:write` to send the
+Slack Connect invite. A token without them fails
 with `missing_scope (needs …)` on the card and in the "Slack Connect sync failed" log. Add the
 scopes, reinstall the app, and replace `SLACK_CONNECT_BOT_TOKEN` with the new bot token. A
-channel created before the invite failed is reused on the next attempt.
+channel created before the invite failed is reused on the next attempt: its name ends in the
+project id, so `name_taken` means this project's own channel and the sync looks it up. Failed
+invites are retried up to five times; a resend from the card always tries again.
 

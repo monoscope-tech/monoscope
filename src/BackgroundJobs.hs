@@ -577,7 +577,9 @@ deliverReport authCtx routine templateKey (from, to) digest = do
   let key = Issues.mkArtifactKey $ templateKey <> "-" <> day "%Y-%m-%d" to
       body = "*" <> period <> "*\n\n" <> AI.digestMarkdown digest (map (.chart) items)
       reportUrl = hostPath authCtx.env.hostUrl $ urls.aiThreadGet pid routine.conversationId (rightToMaybe key)
-  Hasql.transaction TxS.ReadCommitted TxS.Write $ for_ digest.highlights \h -> Issues.upsertHighlightTx pid (Just routine.conversationId) Issues.NewHighlight{kind = Issues.HKInsight, title = h.title, detail = h.detail, link = h.link, source = "Report"}
+  -- Home highlights are a side channel: failing to write them must not hold back the report itself.
+  whenLeftM_ (tryAny $ Hasql.transaction TxS.ReadCommitted TxS.Write $ for_ digest.highlights \h -> Issues.upsertHighlightTx pid (Just routine.conversationId) Issues.NewHighlight{kind = Issues.HKInsight, title = unwords (words h.title), detail = h.detail, link = h.link, source = "Report"}) \e ->
+    Log.logAttention "Report highlights not saved" (AE.object ["project_id" AE..= pid, "conversation_id" AE..= routine.conversationId, "error" AE..= displayException e])
   for_ (rightToMaybe key) \k ->
     whenLeftM_ (Issues.saveArtifact pid routine.conversationId k (Just digest.headline) body Issues.ArtifactReplace) \rejection ->
       Log.logAttention "Report document was not saved" $ AE.object ["conversation_id" AE..= routine.conversationId, "project_id" AE..= pid, "reason" AE..= show @Text rejection]
