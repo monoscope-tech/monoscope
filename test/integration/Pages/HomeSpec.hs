@@ -73,8 +73,9 @@ spec = around withTestResources $ describe "Home screen" do
     -- A member added before the project is activated waits for the channel; nothing is created.
     sync False `shouldReturn` []
     -- slackConnect_missingScope_namesTheScope: a bot token without groups:write says so, not just "missing_scope".
-    scopeless <- runTestBackgroundWithHTTP (runHTTPRecordWith (const "{\"ok\":false,\"error\":\"missing_scope\",\"needed\":\"groups:write\"}") ref0) tr.trTracerProvider tr.trTestClock tr.trLogger tr.trATCtx
-      $ Integrations.syncSlackConnect "xoxb-test" [] pid "Acme Shop" True [owner] Nothing
+    scopeless <-
+      runTestBackgroundWithHTTP (runHTTPRecordWith (const "{\"ok\":false,\"error\":\"missing_scope\",\"needed\":\"groups:write\"}") ref0) tr.trTracerProvider tr.trTestClock tr.trLogger tr.trATCtx
+        $ Integrations.syncSlackConnect "xoxb-test" [] pid "Acme Shop" True [owner] Nothing
     either id (const "") (snd scopeless) `shouldBe` "missing_scope needs groups:write"
     -- The daily sweep picks up recently active projects still without a channel, and drops them once synced.
     dbExec tr [sql|INSERT INTO apis.daily_usage (project_id, total_requests, created_at) VALUES (?, 10, ?)|] (pid, frozenTime)
