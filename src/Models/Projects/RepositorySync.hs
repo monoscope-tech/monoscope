@@ -12,6 +12,7 @@ module Models.Projects.RepositorySync (
   adoptDashboards,
   normalizeDefinition,
   localDefinition,
+  localDefinitions,
   importDefinition,
   resourceSnapshot,
   decodeDefinition,
@@ -27,6 +28,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types qualified as AET
 import Data.Char (isAsciiLower, isDigit)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
@@ -50,6 +52,7 @@ import Models.Projects.ProjectMembers qualified as Members
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.MonitorConfig (encodeMonitorConfig)
 import Relude hiding (local)
+import Relude.Extra.Tuple (fmapToFst)
 import System.Types (DB)
 import Web.HttpApiData (FromHttpApiData)
 
@@ -216,18 +219,30 @@ encodeDefinition = \case
 
 
 localDefinition :: DB es => Resource -> Eff es (Maybe Definition)
-localDefinition resource = case resource.kind of
-  Dashboard ->
-    Dashboards.getDashboardByProjectId resource.projectId (UUIDId resource.localId)
-      >>= traverse
-        ( \dash -> do
-            teams <- Members.getTeamsById resource.projectId dash.teams
-            pure $ DashboardDefinition $ GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
-        )
-      . mfilter (isJust . (.schema))
-  Query -> fmap (QueryDefinition . monitorToInput) . mfilter (isNothing . (.deletedAt)) <$> Monitors.queryMonitorByProjectId resource.projectId (Monitors.QueryMonitorId resource.localId)
-  Uptime -> fmap (\config -> UptimeDefinitionConfig $ UptimeDefinition config.name config.url config.scrapeIntervalSeconds (fromMaybe 200 config.expectedStatus) config.enabled) <$> PromCfg.getConfigByProject resource.projectId (UUIDId resource.localId)
-  Cron -> fmap (\monitor -> CronDefinitionConfig $ CronDefinition monitor.slug monitor.name monitor.intervalSecs monitor.graceSecs) . find ((== resource.localId) . (.id)) <$> Monitors.cronMonitorsByProject resource.projectId
+localDefinition resource = (snd <=< listToMaybe) <$> localDefinitions resource.projectId [resource]
+
+
+-- | 'localDefinition' for a set of resources, each kind's rows loaded once for the whole set
+-- rather than per file.
+localDefinitions :: DB es => Projects.ProjectId -> [Resource] -> Eff es [(Resource, Maybe Definition)]
+localDefinitions pid rs = do
+  let has k = any ((== k) . (.kind)) rs
+      byId f = Map.fromList . fmapToFst f
+  dashes <- Dashboards.getDashboardsByIds pid (V.fromList [UUIDId r.localId | r <- rs, r.kind == Dashboard])
+  teams <- Members.getTeamsById pid (V.concat (map (.teams) dashes))
+  queries <- byId (.id) <$> if has Query then Monitors.queryMonitorsAll pid else pure []
+  uptimes <- byId (.id) . toList <$> if has Uptime then PromCfg.configsByProjectId pid PromCfg.CKUptime else pure mempty
+  crons <- byId (.id) <$> if has Cron then Monitors.cronMonitorsByProject pid else pure []
+  let dashById = byId (.id) dashes
+  pure $ rs <&> \r -> (r,) $ case r.kind of
+    Dashboard -> dashboardDefinition teams <$> mfilter (isJust . (.schema)) (Map.lookup (UUIDId r.localId) dashById)
+    Query -> QueryDefinition . monitorToInput <$> Map.lookup (Monitors.QueryMonitorId r.localId) queries
+    Uptime -> (\config -> UptimeDefinitionConfig $ UptimeDefinition config.name config.url config.scrapeIntervalSeconds (fromMaybe 200 config.expectedStatus) config.enabled) <$> Map.lookup (UUIDId r.localId) uptimes
+    Cron -> (\monitor -> CronDefinitionConfig $ CronDefinition monitor.slug monitor.name monitor.intervalSecs monitor.graceSecs) <$> Map.lookup r.localId crons
+  where
+    -- Teams in the order the query returns them, as the one-dashboard lookup did, so an
+    -- unchanged dashboard serialises identically and never reads as a local edit.
+    dashboardDefinition teams dash = DashboardDefinition $ GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) [t.handle | t <- teams, t.id `V.elem` dash.teams]
 
 
 -- | Row snapshots include runtime fields. If either an editor or evaluator changed the row,
