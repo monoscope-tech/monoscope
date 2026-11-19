@@ -1146,8 +1146,8 @@ requestEvidence pid currentServices windowStart windowEnd request = do
 -- >>> map queryFailure ["Server error\n  code: XX000\n  message: No field named span_id", "Query timed out"]
 -- ["No field named span_id","Query timed out"]
 queryFailure :: Text -> Text
-queryFailure raw = T.take 300 case T.lines <$> T.breakOnEnd "\n  message:" raw of
-  (found, line : more) | not (T.null found) -> T.unwords $ filter (not . T.null) $ map T.strip $ line : takeWhile ("    " `T.isPrefixOf`) more
+queryFailure raw = T.take 300 case lines <$> T.breakOnEnd "\n  message:" raw of
+  (found, line : more) | not (T.null found) -> unwords $ filter (not . T.null) $ map T.strip $ line : takeWhile ("    " `T.isPrefixOf`) more
   _ -> raw
 
 
