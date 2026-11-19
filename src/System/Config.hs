@@ -394,7 +394,7 @@ instance DefConfig EnvConfig where
       }
 
 
-instance Var (DeriveUtils.UUIDId n) where
+instance Var Projects.ProjectId where
   fromVar = fmap DeriveUtils.UUIDId . UUID.fromString
   toVar = UUID.toString . DeriveUtils.unUUIDId
 

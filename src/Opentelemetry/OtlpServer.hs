@@ -37,6 +37,7 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.Annotation (toAnnotation)
 import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isDigit)
@@ -948,7 +949,7 @@ collectUsageReport sender report = do
           , summary = V.empty
           , date = now
           , errors = Nothing
-          , message_size_bytes = fromIntegral $ LBS.length encoded
+          , message_size_bytes = LBS.length encoded
           }
   void $ ingestOtelRecords ctx (Telemetry.writeTargetFor ctx.env Nothing) caches (V.singleton record{summary = generateSummary record})
   pure NoContent

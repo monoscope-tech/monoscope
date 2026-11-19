@@ -159,7 +159,7 @@ spec = describe "API v1" do
       (report.schema, Just report.instanceId) `shouldBe` (UsageTelemetry.schemaVersion, instanceId)
       send tr `shouldReturn` []
       pid <- createTestProject tr "Usage reports"
-      let post r body = status <$> request (topAppWithHTTP (runHTTPGolden "./test/golden/") r) H.methodPost "/telemetry/v1/report" [json, ("X-Real-IP", "203.0.113.7")] (AE.encode body)
+      let post r sent = status <$> request (topAppWithHTTP (runHTTPGolden "./test/golden/") r) H.methodPost "/telemetry/v1/report" [json, ("X-Real-IP", "203.0.113.7")] (AE.encode sent)
       post tr report `shouldReturn` 404
       let collecting = withCfg \c -> c{telemetryProjectId = Just pid}
       post collecting report{UsageTelemetry.schema = 99} `shouldReturn` 400
