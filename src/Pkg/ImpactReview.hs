@@ -432,7 +432,7 @@ prepareReviewWorkspace rid = whenJustM (Reviews.getRun rid) \run -> prepareWorks
 -- fix's hour goes to the fix and not to a cold build of the customer's stack.
 prepareFixWorkspace :: Projects.ProjectId -> Fixes.FixId -> ATBackgroundCtx ()
 prepareFixWorkspace pid fid =
-  (either (const Nothing) id <$> Fixes.getRun pid fid) >>= traverse_ \run -> prepareWorkspace "Fix" (pid, run.setup.owner, run.setup.repo) do
+  Fixes.getRun pid fid >>= \loaded -> for_ (fromRight Nothing loaded) \run -> prepareWorkspace "Fix" (pid, run.setup.owner, run.setup.repo) do
     cfg <- (.config) <$> ask @AuthContext
     token <- either throwError pure =<< GitSync.githubToken cfg.githubAppId cfg.githubAppPrivateKey (GitSync.AppInstallation run.setup.installationId)
     pure Checkout.Fetch{projectId = pid, repository = "https://github.com/" <> run.setup.owner <> "/" <> run.setup.repo <> ".git", base = Fixes.revisionText run.setup.base, head = Fixes.revisionText run.setup.base, gitToken = token}

@@ -4356,6 +4356,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Fixes.createRun testPid fid issue mapping.id base image) `shouldReturn` Just fid
     runQueryEffect tr (Fixes.queueJob testPid user fid) `shouldReturn` True
     runQueryEffect tr (Fixes.queueJob testPid user fid) `shouldReturn` True
+    -- The base's workspace is prepared: odd-jobs deletes a finished job's row.
+    dbExec tr "DELETE FROM background_jobs_long WHERE payload->>'tag' = 'PrepareFixWorkspace'" ()
     [shared] <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
     shared.source `shouldBe` Issues.FixRun fid
     runQueryEffect tr (Issues.runContextFor testPid $ Issues.ConversationClaim shared.id) `shouldReturn` Nothing
