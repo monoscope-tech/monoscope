@@ -437,8 +437,9 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
       (Right host, Just command) -> do
         verifierSession <- UUID4.nextRandom
         proofCount <- newIORef (0 :: Int)
-        -- A review's agent stops a minute before its job; fixes keep the main queue's short budget.
-        let budget = case task of AdvisoryTask{} -> reviewSeconds - 60; _ -> 480
+        -- A review's or fix's agent stops a minute before its job; both run on the long queue. At eight
+        -- minutes a fix was killed before its first checkpoint, and its retry could only report the session lost.
+        let budget = case task of AdvisoryTask{} -> reviewSeconds - 60; FixTask{} -> reviewSeconds - 60; _ -> 480
         let tagged :: AE.ToJSON value => Text -> value -> AE.Value
             tagged tag contents = AE.object ["tag" AE..= tag, "contents" AE..= contents]
             (scope, source, payload, role) = case task of
@@ -510,7 +511,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                         session <- readIORef guest >>= maybe (fail "Native continuation requires a live guest") pure
                         disk <- session.suspend $ generation </> "guest.qcow2"
                         attempted <- readIORef proofCount
-                        let saved = SavedGuest identifier disk (Native.sha256 transcript) remaining submissions (Just attempted)
+                        -- Grace calls past a spent budget run it negative; a saved session must still validate.
+                        let saved = SavedGuest identifier disk (Native.sha256 transcript) (max 0 remaining) submissions (Just attempted)
                         persist $ case workflowState of
                           Just (FixReady current) -> FixWaiting saved $ SavedFix current.id $ Native.candidateSnapshot <$> current.progress
                           (Nothing; Just AdmissionReady; Just SourceReady) -> Waiting saved
@@ -972,7 +974,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                 (Policy.Admission; Policy.Peer) -> throwIO ProviderWait
                 (Policy.Patch; Policy.SourcePatch; Policy.Source; Policy.Advisory; Policy.Fix) -> pure $ Left "Native child session interrupted; retry its retained request"
             | otherwise -> pure $ Left "Review agent could not be executed"
-          Right Nothing -> pure $ Left "Review agent exceeded its eight-minute budget"
+          Right Nothing -> pure $ Left "Review agent exceeded its time budget"
           Right (Just result) -> pure result
 
 

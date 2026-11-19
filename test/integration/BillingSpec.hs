@@ -459,18 +459,21 @@ spec = around withTestResources do
     metered tr pid `shouldReturn` [("events", 3, "submitted"), ("metric_datapoints", 4, "submitted"), ("session_replays", 6000, "submitted"), ("session_replays", 2, "submitted")]
     -- A 4xx such as Lemon Squeezy's 422 for an unmetered item fails the same forever: rejected once,
     -- never re-sent, while a 429 stays retriable. Retrying both oldest-first pinned prod's drain on
-    -- April's chunks, so the newer ones were never attempted.
+    -- April's chunks, so the newer ones were never attempted. The 422 answers for the item, not the
+    -- chunk: LS sub 445873's backlog spent 50 calls an hour hearing it again, so one call settles it.
     let lsAnswers code t =
           fmap fst
             . runTestBgRecordingHTTP t tr
             . withHTTPResponses (\_ url -> Nothing <$ when ("lemonsqueezy.com" `T.isInfixOf` toText url) (throwIO $ HttpExceptionRequest defaultRequest $ StatusCodeException ((mockResponse "" $> ()){responseStatus = H.mkStatus code ""}) ""))
             $ BJ.processBackgroundJob tr.trATCtx (BJ.ReportUsage pid)
-        lastChunk = fmap (fmap (\(_, q, st) -> (q, st)) . viaNonEmpty last) (metered tr pid)
+        lastChunks = fmap (map (\(_, q, st) -> (q, st)) . drop 4) (metered tr pid)
     seedUsage tr pid (addUTCTime 10800 frozenTime) 2 0 0
     void $ lsAnswers 429 (addUTCTime 14400 frozenTime)
-    lastChunk `shouldReturn` Just (2, "failed")
+    seedUsage tr pid (addUTCTime 14500 frozenTime) 5 0 0
+    void $ lsAnswers 429 (addUTCTime 16200 frozenTime)
+    lastChunks `shouldReturn` [(2, "failed"), (5, "failed")]
     length . lsPosts <$> lsAnswers 422 (addUTCTime 18000 frozenTime) `shouldReturn` 1
-    lastChunk `shouldReturn` Just (2, "rejected")
+    lastChunks `shouldReturn` [(2, "rejected"), (5, "rejected")]
     lsPosts <$> report tr pid (addUTCTime 21600 frozenTime) `shouldReturn` []
 
   -- "Engine/API Prod" (LS sub 445873) was left active = false, deleted_at IS NULL by a direct DB

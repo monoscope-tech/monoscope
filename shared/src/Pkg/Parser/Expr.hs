@@ -1410,6 +1410,16 @@ scalarFuncToSQL name args
 -- >>> display (Cmp NotEq (Subject "errors" "errors" []) Null)
 -- "errors IS NOT NULL"
 --
+-- A bare JSONB column holds its value's JSON encoding, so a string is compared in that form;
+-- @body == "x"@ matched nothing and scanned the whole window until the statement timed out:
+--
+-- >>> display (Cmp Eq (Subject "" "body" []) (Str "it's done"))
+-- "body = '\"it''s done\"'"
+-- >>> display (Match NotIn (Subject "" "body" []) (List [Str "a", Str "b"]))
+-- "body NOT IN ('\"a\"','\"b\"')"
+-- >>> display (Cmp Eq (Subject "" "name" []) (Str "x"))
+-- "name = 'x'"
+--
 -- -- abc[*].xyz which should generate something else than what is generated.
 -- -- TODO: investigate and then FIXME
 -- >>> display (Subject "" "abc" [ArrayWildcard "",FieldKey "xyz"])
@@ -1556,7 +1566,7 @@ searchExpr t = Paren (F1.foldr1 Or ((\c -> Regex CI (Subject c c []) (freeTextRe
 
 -- Helper function to handle the common display logic
 displayExprHelper :: Either CmpOp MatchOp -> Int -> Subject -> Values -> Builder
-displayExprHelper op prec sub val =
+displayExprHelper op prec sub given =
   displayParen (prec > 0)
     $ if subjectHasWildcard sub
       then displayPrec prec (renderJsonpathSQL op sub val)
@@ -1587,6 +1597,13 @@ displayExprHelper op prec sub val =
         (Right m, _) | (neg, base) <- matchPolarity m, Just (pre, post) <- literalAnchors base -> subAsText <> (if neg then " !~* " else " ~* ") <> reTerm pre post val
         _ -> displayPrec prec sub <> " " <> displayPrec @T.Text prec sqlOp <> " " <> displayPrec prec val
   where
+    val = case sub of
+      Subject _ col [] | isJsonbColumn col, op `elem` [Left Eq, Left NotEq, Right In, Right NotIn] -> asJson given
+      _ -> given
+    asJson = \case
+      Str t -> Str (jsonString t)
+      List vs -> List (map asJson vs)
+      v -> v
     sqlOp = snd (either cmpTokens matchTokens op)
     literalAnchors = \case
       (Has; Contains) -> Just ("", "")

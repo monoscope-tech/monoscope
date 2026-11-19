@@ -923,7 +923,23 @@ reportProjectUsage authCtx pid =
           --    succeeded chunk. Retry happens on the next daily ReportUsage tick.
           pending <- Projects.pendingUsageSubmissions pid
           unless (null pending) $ Log.logInfo "Draining pending usage chunks" ("project_id", pid.toText, "pending", length pending)
-          let submitPending = for_ pending \row -> do
+          let submitPending = for_ (NE.groupAllWith (.meter) pending) (submitMeter . toList)
+              -- A Lemon Squeezy rejection answers for the meter's item, which the rest of its backlog
+              -- shares: one call settles them all (sub 445873 spent 50 an hour hearing the same 422).
+              -- Not Stripe: a re-sent chunk whose success went unrecorded may be refused as a
+              -- duplicate identifier, which says nothing about the chunks behind it.
+              submitMeter = \case
+                [] -> pass
+                row : rest ->
+                  submitOne row >>= \case
+                    Just (Projects.Rejected, errText)
+                      | provider == Projects.LemonSqueezyProvider
+                      , Just restIds <- nonEmpty (map (.id) rest) -> do
+                          Log.logAttention "Usage chunks rejected with their meter's target" ("project_id", pid.toText, "meter", show @Text row.meter, "chunks", length restIds)
+                          whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed Projects.Rejected restIds errText) \e ->
+                            Log.logAttention "Usage chunk status=rejected UPDATE failed — rows retry on next tick" ("project_id", pid.toText, "error", toText (displayException e))
+                    _ -> submitMeter rest
+              submitOne row = do
                 let chunkId = show row.id :: Text
                     qty = Projects.chunkQuantityInt row.quantity
                     -- window_end + sub_id surface in logs so on-call can pivot to
@@ -945,8 +961,9 @@ reportProjectUsage authCtx pid =
                       let errText = toText (displayException e)
                           failure = submissionFailure e
                       Log.logAttention "Usage chunk submission FAILED" $ logFields [("provider", show provider :: Text), ("failure", show failure), ("error", errText)]
-                      whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed failure row.id errText) \e2 ->
+                      whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed failure (one row.id) errText) \e2 ->
                         Log.logAttention "Usage chunk status=failed UPDATE failed — row may retry on next tick" $ logFields [("error", toText (displayException e2))]
+                      pure $ Just (failure, errText)
                   )
                   ( \() -> do
                       markRes <- tryAny $ Projects.markUsageSubmissionSucceeded row.id
@@ -954,6 +971,7 @@ reportProjectUsage authCtx pid =
                         Right _ -> Log.logInfo "Usage chunk submitted" $ logFields []
                         Left e2 ->
                           Log.logAttention "Usage chunk submitted but DB mark failed — DOUBLE-SUBMIT RISK, manual reconcile required" $ logFields [("error", toText (displayException e2))]
+                      pure Nothing
                   )
                   res
           case provider of
@@ -962,9 +980,9 @@ reportProjectUsage authCtx pid =
             -- (rather than being quietly marked 'submitted' by the happy path).
             Projects.NoBillingProvider -> do
               Log.logAttention "ReportUsage: NoBillingProvider for paid project" ("project_id", pid.toText, "sub_id", project.subId, "plan", project.paymentPlan, "pending_chunks", length pending)
-              for_ pending \row ->
-                whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed Projects.Failed row.id "NoBillingProvider: paid plan has no usable billing provider") \e ->
-                  Log.logAttention "NoBillingProvider mark failed — backlog stuck" ("project_id", pid.toText, "chunk_id", show row.id :: Text, "error", toText (displayException e))
+              for_ (nonEmpty $ map (.id) pending) \ids ->
+                whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed Projects.Failed ids "NoBillingProvider: paid plan has no usable billing provider") \e ->
+                  Log.logAttention "NoBillingProvider mark failed — backlog stuck" ("project_id", pid.toText, "chunks", length ids, "error", toText (displayException e))
             Projects.StripeProvider -> submitPending
             Projects.LemonSqueezyProvider -> submitPending
 
@@ -3532,7 +3550,8 @@ processAPIChangeAnomalies pid targetHashes = do
               issue <- Issues.createAPIChangeIssue pid endpointHash anomalies
               Issues.insertIssue issue
               enqueueJobs authCtx [Jobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)]
-              when unresolved
+              -- A span schema has neither by nature (~56 false alarms a day).
+              when (unresolved && firstAnom.keyKind /= Just SchemaLearning.SpanIdentity)
                 $ Log.logAttention
                   "Suppressed new-endpoint notification: anomaly missing method+url_path"
                   (AE.object ["project_id" AE..= pid, "endpoint_hash" AE..= endpointHash, "issue_id" AE..= issue.id])
@@ -4786,7 +4805,7 @@ proposePathTemplates paths =
 
 
 -- | OddJobs owns retry counts and exponential backoff; do not replace these with fresh jobs.
-data GitSyncJobFailure = SyncLeaseUnavailable GitSync.GitHubSyncId | SyncTimedOut GitSync.GitHubSyncId
+newtype GitSyncJobFailure = SyncTimedOut GitSync.GitHubSyncId
   deriving stock (Show)
   deriving anyclass (CE.Exception)
 
@@ -4799,7 +4818,10 @@ withGitSync pid sidM operation k = do
   when (null syncs) $ Log.logAttention "No git sync configured for project" (pid, sidM)
   forM_ syncs \observed ->
     bracket (GitSync.claimSyncLease observed.id) (traverse_ GitSync.releaseSyncLease) \case
-      Nothing -> throwIO $ SyncLeaseUnavailable observed.id
+      -- Another worker is running this same reconciliation (imports and every pending export), and the
+      -- minute tick runs it again. Failing here only retried duplicate work: ~120 syncs an hour overlap
+      -- a 16 s median run, and each overlap was an error span plus backoff retries.
+      Nothing -> Log.logInfo "Repository sync already running; the next tick reconciles again" (pid, observed.id)
       Just _ -> do
         -- The two-minute budget leaves a minute for cancellation before the lease expires.
         outcome <- Timeout.timeout (120 * 1_000_000) do
