@@ -12,7 +12,8 @@ test.describe("Onboarding flow", () => {
     });
     await page.goto(`${ONBOARDING_URL}?step=Pricing`);
     await page.locator("#freePricing").getByRole("button", { name: "Start free", exact: true }).click();
-    await expect(page).toHaveURL(new RegExp(`/p/${DEMO_PROJECT}/dashboards/`));
+    await expect(page).toHaveURL(new RegExp(`/p/${DEMO_PROJECT}/$`));
+    await expect(page.locator("#home-ask-form")).toBeVisible();
     expect(submissions).toBe(1);
   });
 

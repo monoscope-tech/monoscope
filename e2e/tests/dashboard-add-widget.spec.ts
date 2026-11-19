@@ -22,7 +22,7 @@ const FIXTURE = "E2E Add Widget Fixture";
 /** Open this spec's own blank dashboard, creating it the first time. */
 async function openFixture(page: Page): Promise<string> {
   await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
-  const links = page.locator(`a[href^="/p/${DEMO_PROJECT}/dashboards/"]`, { hasText: FIXTURE });
+  const links = page.locator(`#main-content a[href^="/p/${DEMO_PROJECT}/dashboards/"]`, { hasText: FIXTURE });
   if ((await links.count()) === 0) {
     await page.locator('label[for="newDashboardMdl"]').first().click();
     // Blank, not a template: these tests count widgets, and a template's own widgets
