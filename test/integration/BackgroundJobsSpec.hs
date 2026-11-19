@@ -204,6 +204,25 @@ spec = around withTestResources do
     Timeout.timeout 1_000_000 (BackgroundJobs.jobsWorkerInit tr.trLogger disabled tr.trTracerProvider) `shouldReturn` Just ()
     dailyJobs `shouldReturn` 2
 
+  -- A session lock taken and released by separate pool checkouts only worked while both landed on
+  -- one server session; a lost unlock would skip every later day, usage metering included.
+  it "dailyJob_releasesItsSchedulingLock_soTheNextRunSchedules" \tr -> do
+    let enabled = tr.trATCtx{Config.config = tr.trATCtx.config{Config.enableDailyJobScheduling = True}}
+        runDaily = void $ runTestBg frozenTime tr $ BackgroundJobs.processBackgroundJob enabled BackgroundJobs.DailyJob
+        dailyJobs = dbOne @_ @Int tr [sql|SELECT count(*)::int FROM background_jobs WHERE payload->>'tag' = 'DailyJob'|] ()
+        held = dbOne @_ @Int tr [sql|SELECT count(*)::int FROM pg_locks WHERE locktype = 'advisory' AND objsubid = 1 AND objid = (hashtext('daily_job_scheduling')::int8 & 4294967295)::oid|] ()
+        lockAs conn f = void (PGS.query conn [sql|SELECT pg_advisory_lock(hashtext('daily_job_scheduling'))::text|] () :: IO [Only Text]) >> f >> void (PGS.query conn [sql|SELECT pg_advisory_unlock(hashtext('daily_job_scheduling'))|] () :: IO [Only Bool])
+    before <- dailyJobs
+    -- Another pod holding the lock: this one schedules nothing.
+    withResource tr.trPool \other -> lockAs other runDaily
+    dailyJobs `shouldReturn` before
+    runDaily
+    dailyJobs `shouldReturn` before + 1
+    held `shouldReturn` 0
+    dbExec tr [sql|DELETE FROM background_jobs WHERE payload->>'tag' = 'DailyJob'|] ()
+    runDaily
+    dailyJobs `shouldReturn` 1
+
   it "dual-exec: the TimeFusion arm outwaits a deploy drain instead of dropping the UPDATE" \tr -> do
     -- Two drain refusals, then the write lands: what TimeFusion returns across a handoff.
     dbExec
