@@ -83,8 +83,8 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (throwError)
-import Effectful.Log qualified as Log
 import Hasql.Interpolate qualified as HI
+import System.Logging qualified as Log
 import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 
 import BackgroundJobs (errorTrendChartUrl)
@@ -113,7 +113,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), ResourceRow (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, dialogTrigger_, disclosure_, emptyState_, formActionsModal_, formCheckbox_, formField_, grantsTrial, headerRow_, iconBadge_, keyboardActivateAttr_, localTimeFmt_, modalWith_, nativeDialog_, options_, paymentPlanPicker, resourceList_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), ResourceRow (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, dialogTrigger_, disclosure_, emptyState_, formActionsModal_, formField_, grantsTrial, headerRow_, iconBadge_, keyboardActivateAttr_, localTimeFmt_, modalWith_, nativeDialog_, options_, paymentPlanPicker, resourceList_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET

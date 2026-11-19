@@ -678,7 +678,7 @@ data PrecomputedPattern = PrecomputedPattern
 
 
 fetchLogPatterns
-  :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
+  :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
   => Bool
   -- ^ enableTimefusionReads (caller threads it through — keeps this module a
   -- leaf of `System.Config` so `Telemetry.OtelLogsAndSpans` can be named in
@@ -832,7 +832,7 @@ sessionSortLabel ordering = T.toUpper (T.take 1 label) <> T.drop 1 label
     label = T.replace "_" " " $ display ordering
 
 
-fetchSessions :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> SessionsRead -> Eff es (Maybe SessionSummary, Int, [SessionRow])
+fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> SessionsRead -> Eff es (Maybe SessionSummary, Int, [SessionRow])
 fetchSessions enableTfReads pid queryAST dateRange environment service sortByM skip readKind = do
   now <- Time.currentTime
   let scope = mkScopedQuery pid dateRange environment service
@@ -998,7 +998,7 @@ data ExpandKind = ExpandSession Text | ExpandPattern Text
 -- projected with the same default-select columns as logs mode so the web
 -- component can render them with the existing logs-mode row template.
 fetchEventExamples
-  :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
+  :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
   => Bool
   -> Projects.ProjectId
   -> [Section]

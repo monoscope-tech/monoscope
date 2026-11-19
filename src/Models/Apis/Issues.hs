@@ -4233,7 +4233,7 @@ data ActivityNote = ActivityNote
 -- event of every alert episode that hung off it. The episodes are reachable from
 -- here and nowhere else, which is the point — an episode is a chapter of an
 -- issue, not a thing to go and look at separately.
-selectIssueActivity :: (DB es, IOE :> es, Log :> es) => Projects.ProjectId -> IssueId -> Eff es [IssueActivity]
+selectIssueActivity :: (DB es, Log :> es) => Projects.ProjectId -> IssueId -> Eff es [IssueActivity]
 selectIssueActivity pid issueId = do
   rows <-
     Hasql.interp @[(Text, Maybe Projects.UserId, UTCTime, Maybe (HI.AsJsonb AE.Value))]

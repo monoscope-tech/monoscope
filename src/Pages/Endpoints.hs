@@ -10,7 +10,6 @@ import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.Vector qualified as V
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
-import Log (logAttention)
 import Lucid
 import Models.Apis.Endpoints (HostBulkAction (..))
 import Models.Apis.Endpoints qualified as Endpoints
@@ -24,6 +23,7 @@ import Pkg.OpenApi qualified as OpenApi
 import Pkg.QueryCache qualified as QueryCache
 import Relude hiding (ask, asks)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Logging (logAttention, logWarn)
 import System.Types (ATAuthCtx, ActionResult, Outcome (..), Refusal (..), RespHeaders, act, addRespHeaders, addTriggerEvent, successToast)
 import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
@@ -603,7 +603,7 @@ apiCatalogBulkActionH pid action currentTabM items = act do
             BAUnarchive -> Endpoints.Unarchive
       touched <- fromIntegral <$> Endpoints.setHostsArchived pid outgoingM op items.itemId
       if touched == 0
-        then Left (NothingChanged action requested) <$ logAttention "api_catalog bulk action affected 0 rows" (logCtx ["outgoing" AE..= outgoingM])
+        then Left (NothingChanged action requested) <$ logWarn "api_catalog bulk action affected 0 rows" (logCtx ["outgoing" AE..= outgoingM])
         else do
           when (touched < requested)
             $ logAttention "api_catalog bulk action partially applied"

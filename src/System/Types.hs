@@ -365,7 +365,7 @@ addReswap :: State.State HXReswap :> es => Text -> Eff es ()
 addReswap x = State.put $ HXReswap $ Just x
 
 
-addErrorToast :: (IOE :> es, Log :> es, State.State TriggerEvents :> es) => Text -> Maybe Text -> Eff es ()
+addErrorToast :: (Log :> es, State.State TriggerEvents :> es) => Text -> Maybe Text -> Eff es ()
 addErrorToast msg msg2 = do
   Logging.logInfo_ $ "Error toast: " <> msg <> " => " <> maybeToMonoid msg2
   addToast "error" msg msg2 Nothing
@@ -374,7 +374,7 @@ addErrorToast msg msg2 = do
 -- | Toast an error and short-circuit with the given response payload.
 -- Collapses the recurrent `addErrorToast msg Nothing >> addRespHeaders payload` pattern.
 toastError
-  :: (IOE :> es, Log :> es, State.State HXRedirectDest :> es, State.State HXReswap :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es)
+  :: (Log :> es, State.State HXRedirectDest :> es, State.State HXReswap :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es)
   => Text -> a -> Eff es (RespHeaders a)
 toastError msg payload = addErrorToast msg Nothing *> addRespHeaders payload
 

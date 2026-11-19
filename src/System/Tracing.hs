@@ -26,7 +26,6 @@ import Effectful.Concurrent (Concurrent, forkIO)
 import Effectful.Dispatch.Dynamic
 import Effectful.Ki qualified as Ki
 import Effectful.Log (Log)
-import Effectful.Log qualified as Log
 import Effectful.TH
 import OpenTelemetry.Attributes (Attribute)
 import OpenTelemetry.Attributes qualified as OA
@@ -42,6 +41,7 @@ import OpenTelemetry.Trace (
 import OpenTelemetry.Trace qualified as Trace
 import Pkg.ErrorFingerprint qualified as EF
 import Relude hiding (span)
+import System.Logging qualified as Log
 import UnliftIO qualified
 import UnliftIO.Exception (bracket, finally, tryAny, withException)
 
