@@ -3061,10 +3061,13 @@ spec = around withTestResources $ describe "Production impact reviews" do
             )
             (Just [Impact.ProofLink key side (T.replicate 40 (if side == Agent.Base then "d" else "a")) (Just $ if side == Agent.Base then 1 else 0) (media "gif") (media "mp4") (media "cast") (Just browser) (Just [Impact.Shot label (media (show n <> ".png")) | browser, (n, label) <- zip [1 :: Int ..] (if side == Agent.Base then ["Receipt without retries"] else ["Receipt with retry count", "Retry history"])]) (Just [(t, step) | browser, (t, step) <- [(0, "Open the receipt"), (6.4, "Retry the charge"), (14.2, "Read the retry count")]]) | (key, browser) <- [("proof-1", True), ("proof-2", False)], side <- [Agent.Base, Agent.Head], let media ext = "https://app.monoscope.tech/p/x/reviews/r/proofs/" <> key <> "-" <> T.toLower (show side) <> (if "png" `T.isSuffixOf` ext then "-" else ".") <> ext <> "?sig=s"])
             Nothing
+            Nothing
         render audience = Impact.renderReview "https://app.monoscope.tech" run audience result
     goldenText "impact-review/github-comment.md" $ render $ Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y" Nothing
     goldenText "impact-review/github-comment-links-only.md" $ render $ Impact.GitHubComment False "https://app.monoscope.tech/p/x/ai/runs/y" Nothing
     goldenText "impact-review/monoscope-view.md" $ render Impact.MonoscopeView
+    -- A change the diff shows whole says so instead of recording it.
+    goldenText "impact-review/github-comment-no-proof.md" $ Impact.renderReview "https://app.monoscope.tech" run (Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y" Nothing) result{Impact.findings = [], Impact.claims = Nothing, Impact.proofs = Nothing, Impact.summary = Just "Adds a Railway deploy button to the README and drops the obsolete Compose version field.", Impact.noProofNeeded = Just "Only the README and docker-compose.yml change; the diff shows both."}
     -- A browser proof leads with its recording, chapters and the merge-base and pull-request stills.
     let uiProof = result{Impact.claims = Just [Impact.Claim "Shows the retry count in the receipt" Impact.Matches "The receipt shows Retried once under the charge; before, it showed only the amount." ["proof-1"], Impact.Claim "Retries a timed-out capture once" Impact.Matches "The capture command retries after the first timeout and succeeds." ["proof-2"]]}
     goldenText "impact-review/github-comment-ui-proof.md" $ Impact.renderReview "https://app.monoscope.tech" run (Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y" (Just \case Reviews.Up -> "https://app.monoscope.tech/rate/up"; Reviews.Down -> "https://app.monoscope.tech/rate/down")) uiProof{Impact.issues = Just [Impact.Issue "Receipt total overflows its card at 1280px" "The total runs 9px past the receipt card on the right; it fits at 1440px." ["proof-1"]]}
@@ -3365,7 +3368,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       [review] <- runQueryEffect tr $ Reviews.latestRuns testPid
       Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventPullRequest
       runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ExternalPosts) Catalog.ReviewEditors
-      let result = Impact.ReviewResult Impact.NoFinding [] [] [] frozenTime frozenTime Nothing Nothing Nothing Nothing Nothing Nothing
+      let result = Impact.ReviewResult Impact.NoFinding [] [] [] frozenTime frozenTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       runQueryEffect tr $ Reviews.saveResult review result
       dbExec tr "DELETE FROM background_jobs_long WHERE payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest review.id)
       cfg <- githubApp tr
@@ -3429,7 +3432,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         appComment (n :: Int) (app :: Int) body = AE.object ["id" AE..= n, "body" AE..= (body :: Text), "performed_via_github_app" AE..= AE.object ["id" AE..= app]]
         transport :: Bool -> ATBackgroundCtx a -> ATBackgroundCtx a
         transport hasComment = pullRequestApi files [appComment n app marker | hasComment, (n, app) <- [(88, 456), (99, 123)]] pass (prAt revision)
-        result = Impact.ReviewResult Impact.WorthChecking [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "The changed operation may stop emitting the signal used by the monitor. *check* @impact-review-test [outside](https://untrusted.invalid)\r#heading" "Check the monitor query before deploying." ["telemetry-1"]] [] [] frozenTime frozenTime Nothing (Just "Moves retry handling into the checkout operation. @impact-review-test | the monitor may lose its signal.") (Just [Impact.Assessment d (if d == Impact.ErrorDetection then Impact.Poor else Impact.Good) ["New path emits no span | table-breaking gap" | d == Impact.ErrorDetection] | d <- universe]) (Just []) Nothing Nothing
+        result = Impact.ReviewResult Impact.WorthChecking [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "The changed operation may stop emitting the signal used by the monitor. *check* @impact-review-test [outside](https://untrusted.invalid)\r#heading" "Check the monitor query before deploying." ["telemetry-1"]] [] [] frozenTime frozenTime Nothing (Just "Moves retry handling into the checkout operation. @impact-review-test | the monitor may lose its signal.") (Just [Impact.Assessment d (if d == Impact.ErrorDetection then Impact.Poor else Impact.Good) ["New path emits no span | table-breaking gap" | d == Impact.ErrorDetection] | d <- universe]) (Just []) Nothing Nothing Nothing
         resultText = pure . Right . jsonText
         fakeAgent :: ATBackgroundCtx a -> ATBackgroundCtx a
         fakeAgent = fakeAgentWith []

@@ -224,6 +224,7 @@ schema role = \case
             & O.description
             ?~ "Grade each dimension once; gaps say concretely what raises the risk, without production numbers. alignment: the code does what the title and description claim; undocumented drive-by changes lower it. impact: blast radius; auth, permissions, payments, personal data, secrets, data migrations, dependency bumps, infra or config, and heavily used production paths raise it (good = small, poor = large). verification: tests or recorded proof exercise the changed behaviour, before and after; user-facing behaviour without end-to-end proof is poor, but a change the diff shows completely (documentation, comments, config nothing runs) is good on the diff alone. rollback: good = easily reverted; poor = one-way door such as a destructive migration, a data rewrite or an external side effect. error_detection: if this breaks in production, telemetry or monitors show it before users do; swallowed errors and new paths without logs, spans or metrics lower it; not_applicable only when nothing changed runs in production."
         )
+      , ("noProofNeeded", bounded 1 (Just 300) & O.description ?~ "Only when no recording is needed because the diff shows the whole change, and then with no claims: one sentence naming what it shows (\"Only the README and docker-compose.yml change; the diff shows both.\"). Optional.")
       ,
         ( "issues"
         , array 0 3 (object [("title", bounded 1 $ Just 200), ("summary", bounded 1 $ Just 600), ("proofKeys", array 1 3 text)])
@@ -232,7 +233,7 @@ schema role = \case
         )
       ]
       & O.required
-      %~ filter (/= "issues")
+      %~ filter (`notElem` ["issues", "noProofNeeded"])
   where
     enum values = text & O.enum_ ?~ map AE.String values
     uuid = text & O.format ?~ "uuid"
