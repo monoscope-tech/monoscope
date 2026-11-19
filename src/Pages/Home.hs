@@ -171,13 +171,19 @@ home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ 
 -- the skills, the CLI, and the MCP server, with the API key kept out of the prompt.
 connectAgent_ :: HomeData -> Html ()
 connectAgent_ d = div_ [class_ "relative"] do
-  button_
-    ( [type_ "button", class_ "inline-flex items-center gap-2 rounded-full surface-raised px-3.5 py-2 text-sm font-medium text-textStrong shadow-[0_0_0_1px_var(--color-strokeWeak)] hover:shadow-[0_0_0_1px_var(--color-strokeStrong)] active:scale-[0.96] transition-[box-shadow,scale] duration-100 cursor-pointer"]
-        <> popoverTrigger_ "connect-agent-pop"
-    )
-    do
-      faSprite_ "terminal" "regular" "w-4 h-4 text-iconNeutral"
+  -- One pill, two targets: the label opens the setup panel; the copy icon copies its prompt straight away.
+  div_ [class_ "inline-flex items-center rounded-full surface-raised text-sm font-medium text-textStrong shadow-[0_0_0_1px_var(--color-strokeWeak)] hover:shadow-[0_0_0_1px_var(--color-strokeStrong)] transition-shadow"] do
+    button_ ([type_ "button", class_ "inline-flex items-center gap-2.5 rounded-s-full ps-3.5 pe-2 py-2 active:scale-[0.96] transition-transform duration-100 cursor-pointer"] <> popoverTrigger_ "connect-agent-pop") do
+      span_ [class_ "flex items-center gap-1.5 text-iconNeutral", Aria.hidden_ "true"] $ forM_ ["brand-claude", "brand-openai", "brand-cursor"] \icon -> faSprite_ icon "solid" "w-4 h-4"
       "Connect your agent"
+    button_
+      [ type_ "button"
+      , Aria.label_ "Copy the agent setup prompt"
+      , class_ "rounded-e-full ps-1.5 pe-3.5 py-2 text-iconNeutral hover:text-textStrong active:scale-[0.96] transition-[color,scale] duration-100 cursor-pointer"
+      , [__|on click call navigator.clipboard.writeText(#agent-prompt.innerText) then add .text-iconSuccess to me then put 'Copied the agent setup prompt' into #agent-copy-status then wait 1.5s then remove .text-iconSuccess from me|]
+      ]
+      $ faSprite_ "copy" "regular" "w-4 h-4"
+    span_ [id_ "agent-copy-status", role_ "status", class_ "sr-only"] ""
   div_ ([class_ "dropdown dropdown-end z-50 mt-2 w-[min(36rem,calc(100vw-2rem))] rounded-2xl border border-strokeWeak bg-bgRaised p-4 shadow-lg flex flex-col gap-3", role_ "dialog", Aria.label_ "Connect your agent"] <> popoverPanel_ "connect-agent-pop") do
     div_ [class_ "flex flex-col gap-1"] do
       p_ [class_ "text-sm font-semibold text-textStrong"] "Connect your coding agent"
