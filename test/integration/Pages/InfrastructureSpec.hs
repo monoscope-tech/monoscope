@@ -360,18 +360,25 @@ spec = do
       rows "metrics | where metric_name == \"d.total\" | summarize rate(value) by bin(timestamp, 10s)" `shouldReturn` replicate 10 [Just 100]
       (take 1 <$> rows "metrics | where metric_name == \"g.bytes\" | summarize last(value) by bin(timestamp, 1m)") `shouldReturn` [[Just 3060]]
 
-      -- Gauges through OTLP reach every configured backend: hits at 10/s (tier a) and 30/s (b), misses at 60/s (a).
+      -- Gauges through OTLP reach every configured backend: hits at 10/s (tier a) and 30/s (b), misses at 60/s (a);
+      -- a sparse series at 20/s with a point every 2m, a flat one, and one at 50/s (tier c) first seen at +60s.
       key <- createTestAPIKey tr testPid "kql-ratio"
       tag <- T.take 8 . UUID.toText <$> nextRandom
-      let hits = "kql.hits." <> tag
-          misses = "kql.misses." <> tag
-          isHit = "metric_name == \"" <> hits <> "\""
-          ratio db aggs extend = do
-            md <- chart db testPid (Just Charts.DTMetric) $ "metrics | where metric_name in (\"" <> hits <> "\", \"" <> misses <> "\") | summarize " <> aggs <> " by bin(timestamp, 1m)" <> extend
+      let metric n = "kql." <> n <> "." <> tag
+          (hits, misses, sparse, flat, fresh) = (metric "hits", metric "misses", metric "sparse", metric "flat", metric "fresh")
+          isName n = "metric_name == \"" <> n <> "\""
+          isHit = isName hits
+          metricsOf names db aggs extend = do
+            md <- chart db testPid (Just Charts.DTMetric) $ "metrics | where metric_name in (" <> T.intercalate ", " (map show names) <> ") | summarize " <> aggs <> " by bin(timestamp, 1m)" <> extend
             md.error `shouldBe` Nothing
-            pure $ map (V.toList . V.drop 1) (V.toList md.dataset)
+            pure md
+          cells md = map (V.toList . V.drop 1) (V.toList md.dataset)
+          ratio db aggs extend = cells <$> metricsOf [hits, misses] db aggs extend
       for_ [-300, -270 .. 290] \s -> for_ ([(hits, "a", 10), (hits, "b", 30), (misses, "a", 60)] :: [(Text, Text, Double)]) \(name, tier, perSec) ->
         ingestMetric tr key [] [mkAttr "tier" tier] name (perSec * realToFrac (s + 300)) (addUTCTime s kqlBase)
+      for_ [-300, -180 .. 290] \s -> ingestMetric tr key [] [] sparse (20 * realToFrac (s + 300)) (addUTCTime s kqlBase)
+      for_ [-300, -270 .. 290] \s -> ingestMetric tr key [] [] flat 5 (addUTCTime s kqlBase)
+      for_ [60, 90 .. 290] \s -> ingestMetric tr key [] [mkAttr "tier" "c"] fresh (50 * realToFrac (s - 60)) (addUTCTime s kqlBase)
       tfUrl <- lookupEnv "TIMEFUSION_PG_TEST_URL"
       for_ (Hasql.SqlPostgres : [Hasql.SqlTimefusion | isJust tfUrl]) \db -> do
         -- The chart cache is keyed on the query, not the backend.
@@ -380,6 +387,13 @@ spec = do
         ratio db "100.0 * rateif(value, attributes.tier == \"a\") / rate(value)" "" `shouldReturn` replicate 5 [Just 70]
         ratio db ("lastif(value, attributes.tier == \"b\" and " <> isHit <> ") / lastif(value, attributes.tier == \"a\" and " <> isHit <> ")") "" `shouldReturn` replicate 5 [Just 3]
         ratio db "rate(value)" ", attributes.tier" `shouldReturn` replicate 5 [Just 70, Just 30]
+        -- A bin where the denominator series has no point is no data, never a fabricated 0, and the stat mean skips it.
+        sparseRatio <- metricsOf [hits, sparse] db ("hits = rateif(value, " <> isHit <> "), total = rateif(value, " <> isName sparse <> ")") " | extend hit_pct = 100.0 * hits / total"
+        (cells sparseRatio, (.mean) <$> sparseRatio.stats) `shouldBe` (replicate 2 [Just 200], Just 200)
+        -- A present series that does not move increases by a measured 0.
+        (cells <$> metricsOf [flat] db "increase(value)" "") `shouldReturn` replicate 5 [Just 0]
+        -- The bin holding a series' first point has no increment yet.
+        (cells <$> metricsOf [hits, fresh] db "rate(value)" ", attributes.tier") `shouldReturn` (replicate 2 [Just 10, Just 30, Nothing] <> replicate 3 [Just 10, Just 30, Just 50])
 
   around withTestResources do
     -- Peers on a shared registrable domain collapse into one head (hundreds of per-tenant hosts

@@ -142,7 +142,7 @@ arithOpText = \case Mul -> " * "; Div -> " / "; Add -> " + "; Sub -> " - "
 instance Display ScalarExpr where
   displayPrec p (SVal v) = displayPrec p v
   displayPrec _ (SAgg agg) = displayBuilder $ aggToSqlNoAlias agg
-  displayPrec _ (SArith l Div r) = displayBuilder $ "COALESCE((" <> display l <> " / NULLIF(" <> display r <> ", 0)), 0)"
+  displayPrec _ (SArith l Div r) = displayBuilder $ "(" <> display l <> " / NULLIF(" <> display r <> ", 0))"
   displayPrec _ (SArith l op r) = displayBuilder $ "(" <> display l <> arithOpText op <> display r <> ")"
 
 
@@ -193,7 +193,8 @@ aggToSqlNoAlias (Median sub _) = simpleAggSQL "median" sub
 aggToSqlNoAlias (Stdev sub _) = simpleAggSQL "stdev" sub
 aggToSqlNoAlias (Range sub _) = "(max((" <> display sub <> ")::float) - min((" <> display sub <> ")::float))"
 -- A CASE, not FILTER (WHERE …): TimeFusion fails to plan a FILTER over a variant @->>@.
-aggToSqlNoAlias (Series fn sub predM _) = "COALESCE(sum(" <> maybe id (\p c -> "CASE WHEN " <> display p <> " THEN " <> c <> " END") predM (seriesCol fn sub) <> "), 0)::float"
+-- No COALESCE: a bin no series contributes to is no data, not a measured 0.
+aggToSqlNoAlias (Series fn sub predM _) = "sum(" <> maybe id (\p c -> "CASE WHEN " <> display p <> " THEN " <> c <> " END") predM (seriesCol fn sub) <> ")::float"
 aggToSqlNoAlias (P50 sub _) = percentileSQL 0.50 (display sub)
 aggToSqlNoAlias (P75 sub _) = percentileSQL 0.75 (display sub)
 aggToSqlNoAlias (P90 sub _) = percentileSQL 0.90 (display sub)
