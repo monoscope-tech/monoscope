@@ -799,7 +799,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
         ( [ term "for" "sidenav-toggle"
           , role_ "button"
           , tabindex_ "0"
-          , class_ "max-md:hidden cursor-pointer text-textWeak hover:text-textStrong flex items-center justify-center group-has-[#sidenav-toggle:checked]/pg:text-strokeStrong transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2"
+          , class_ "max-md:hidden size-6 cursor-pointer text-textWeak hover:text-textStrong flex items-center justify-center group-has-[#sidenav-toggle:checked]/pg:text-strokeStrong transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2"
           , Aria.label_ "Toggle sidebar"
           , Aria.expanded_ (bool "true" "false" sess.isSidebarClosed)
           , Aria.controls_ "side-nav-menu"

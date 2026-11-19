@@ -346,6 +346,8 @@ spec = around withTestResources $ describe "Issues" do
     -- Hover preloads every hx-get, so no issue mutation may be reachable by GET.
     let actions = renderT do IssuesPage.issueAcknowledgeButton testPid parent frozenTime Nothing; IssuesPage.issueArchiveButton testPid parent False
     (T.count "hx-post=" actions > 2, T.count "hx-get=" actions) `shouldBe` (True, 0)
+    -- On a phone the buttons read only as icons; their labels stay visible at every width.
+    actions `shouldNotSatisfy` T.isInfixOf "max-md:hidden"
 
   it "the test clock drives auto-resolve stamps, the 24h window and scoped lists" \tr -> do
     let errHash = "auto-resolve-hash" :: Text
