@@ -1360,11 +1360,13 @@ renderLogsWidget widget = do
   withCardFrame False widget action
     $ termRaw
       "log-list"
-      [ id_ wId
-      , class_ "w-full flex flex-col h-full min-w-0"
-      , term "projectId" pid
-      , term "initialFetchUrl" fetchUrl
-      ]
+      ( [ id_ wId
+        , class_ "w-full flex flex-col h-full min-w-0"
+        , term "projectId" pid
+        , term "initialFetchUrl" fetchUrl
+        ]
+          <> [term "queryTemplate" t | Just t <- [widget.rawQuery], "{{var-" `T.isInfixOf` t]
+      )
       ("" :: Text)
 
 
