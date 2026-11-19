@@ -237,6 +237,15 @@ data EnvConfig = EnvConfig
   , redditConversionsToken :: Maybe Text
   , linkedInPartnerId :: Maybe Text
   , postHogApiKey :: Maybe Text
+  , monoscopeTelemetryDisabled :: Maybe Text
+  -- ^ Any value but empty, @0@ or @false@ stops anonymous usage reports; so does @DO_NOT_TRACK@.
+  , monoscopeTelemetryDebug :: Maybe Text
+  -- ^ Logs each usage report instead of sending it.
+  , doNotTrack :: Maybe Text
+  , telemetryEndpoint :: Text
+  , telemetryProjectId :: Maybe Text
+  -- ^ Set on Monoscope's own deployment: the project usage reports are ingested into. It also stops
+  -- that deployment reporting on itself.
   , postHogApiHost :: Maybe Text
   , crispWebsiteId :: Maybe Text
   , basicAuthEnabled :: Bool
@@ -324,6 +333,7 @@ instance DefConfig EnvConfig where
       , grpcHosts = ["0.0.0.0"]
       , httpHost = "*4"
       , environment = Dev
+      , telemetryEndpoint = "https://app.monoscope.tech/telemetry/v1/report"
       , migrationsDir = "./static/migrations/"
       , messagesPerPubsubPullBatch = 1000
       , rrwebTopics = ["rrweb-client"]

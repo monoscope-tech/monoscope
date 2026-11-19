@@ -54,6 +54,7 @@ import Pages.Components (stackTrace_)
 import Pages.Dashboards qualified as DashboardPage
 import Pages.GitSync qualified as GitSyncPage
 import Pkg.Git qualified as Git
+import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.TestUtils
 import Servant (ServerError (..), getHeaders, getResponse)
 import Servant.Server.Generic (genericServeTWithContext)
@@ -229,7 +230,7 @@ wikiApp :: TestResources -> Wai.Application
 wikiApp tr =
   genericServeTWithContext
     (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-    (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused") \_ _ -> pass)
+    (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused") OtlpServer.collectUsageReport \_ _ -> pass)
     (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
 
 

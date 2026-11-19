@@ -20,6 +20,9 @@ module Opentelemetry.OtlpServer (
   migrateElasticsearchPathParts,
   deriveClientAddress,
   placeRecords,
+  countryOf,
+  ingestOtelRecords,
+  collectUsageReport,
   geoFields,
   nanosecondsToUTC,
 ) where
@@ -58,6 +61,7 @@ import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
 import Effectful
 import Effectful.Concurrent (Concurrent)
+import Effectful.Error.Static (throwError)
 import Effectful.Exception (try)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
@@ -79,13 +83,14 @@ import Network.GRPC.Server.Run hiding (runServer)
 import Network.GRPC.Server.StreamType (Methods (..), fromMethods)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
-import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe, unUUIDId)
+import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe, unUUIDId)
 import Pkg.GenAI qualified as GenAI
 import Pkg.LiveTail qualified as LiveTail
 import Pkg.Metrics (wireTypeErrorsRef)
 import Pkg.Metrics qualified as Metrics
 import Pkg.Parser qualified as Parser
 import Pkg.QueryCache qualified as QueryCache
+import Pkg.UsageTelemetry qualified as UsageTelemetry
 import ProcessMessage (fetchIngestCaches, overFreeTierQuota, sampleMetrics, sampleSpans, stampHashesAtIngest, urlPathFromRawUrl)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
@@ -105,11 +110,12 @@ import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude hiding (ask)
 import Relude.Extra.Enum (safeToEnum)
+import Servant (NoContent (..), err404)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, batchSpanAttrs, withSpan_)
-import System.Types (ATBackgroundCtx, DB, runBackground)
+import System.Types (ATBackgroundCtx, ATBaseCtx, DB, runBackground)
 import UnliftIO.Async (forConcurrently_)
 import UnliftIO.Exception (throwIO, tryAny)
 import Utils (b64ToJson, jsonToMap, nestedJsonFromDotNotation)
@@ -891,8 +897,7 @@ placeRecords geoM recs = place <$> adopted
       Just g | isNothing (Telemetry.atMapText "geo.country.iso_code" (attrsOf r)) -> merge "geo" g r
       _ -> r
     lookupGeo db ip = do
-      -- "203.0.113.9:4711" is an address too; IPv6 parses on the first attempt.
-      addr <- readMaybe @IP (toString ip) <|> readMaybe (toString $ fst $ T.breakOn ":" ip)
+      addr <- addressOf ip
       fields <- geoFields <$> rightToMaybe (GeoIP2.rawGeoData db addr)
       nestedJsonFromDotNotation (second AE.String <$> fields) <$ L.lookup "country.iso_code" fields
     adoptSender r = case unAesonTextMaybe r.resource of
@@ -920,6 +925,60 @@ placeRecords geoM recs = place <$> adopted
 -- [("country.iso_code","NG"),("region.name","Lagos"),("locality.name","Ikeja")]
 -- >>> OS.geoFields (m [("asn", s "AS1")])
 -- []
+-- | Ingests a report into Monoscope's usage project as one log event. The sender's address is used
+-- only to name its country and is never stored.
+collectUsageReport :: Maybe Text -> UsageTelemetry.Report -> ATBaseCtx NoContent
+collectUsageReport sender report = do
+  ctx <- ask @AuthContext
+  pid <- maybe (throwError err404) (pure . UUIDId) $ UUID.fromText =<< ctx.config.telemetryProjectId
+  now <- Time.currentTime
+  caches <- fetchIngestCaches [pid]
+  let country = countryOf ctx.geoDb =<< sender
+      attributes = Map.fromList $ ("monoscope", AE.object ["usage_report" AE..= report]) : [("geo", AE.object ["country" AE..= AE.object ["iso_code" AE..= c]]) | c <- toList country]
+      record =
+        OtelLogsAndSpans
+          { project_id = pid.toText
+          , id = UUID.toText UUID.nil
+          , timestamp = now
+          , observed_timestamp = Just now
+          , context = Nothing
+          , level = Just "INFO"
+          , severity = Just Severity{severity_text = Just Telemetry.SLInfo, severity_number = 9}
+          , body = Just $ AesonText $ AE.String "monoscope.usage_report"
+          , attributes = Just $ AesonText attributes
+          , resource = Just $ AesonText $ Map.fromList [("service", AE.object ["name" AE..= ("monoscope" :: Text), "version" AE..= report.version])]
+          , hashes = Just V.empty
+          , kind = Just "log"
+          , status_code = Nothing
+          , status_message = Nothing
+          , duration = Nothing
+          , start_time = now
+          , end_time = Nothing
+          , events = Nothing
+          , links = Nothing
+          , name = Just "monoscope.usage_report"
+          , parent_id = Nothing
+          , summary = V.empty
+          , date = now
+          , errors = Nothing
+          , message_size_bytes = fromIntegral $ length $ show @String report
+          }
+  void $ ingestOtelRecords ctx (Telemetry.writeTargetFor ctx.env Nothing) caches (V.singleton record{summary = generateSummary record})
+  pure NoContent
+
+
+-- | "203.0.113.9:4711" is an address too; IPv6 parses on the first attempt.
+addressOf :: Text -> Maybe IP
+addressOf ip = readMaybe (toString ip) <|> readMaybe (toString $ fst $ T.breakOn ":" ip)
+
+
+-- | An address's ISO country and nothing finer: usage reports keep the country, never the address.
+countryOf :: Maybe GeoIP2.GeoDB -> Text -> Maybe Text
+countryOf geoM ip = do
+  db <- geoM
+  L.lookup "country.iso_code" . geoFields =<< rightToMaybe . GeoIP2.rawGeoData db =<< addressOf ip
+
+
 geoFields :: GeoIP2.GeoField -> [(Text, Text)]
 geoFields f =
   [ (k, v)

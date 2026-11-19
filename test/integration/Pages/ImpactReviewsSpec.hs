@@ -77,6 +77,7 @@ import Pkg.GitCommand qualified as HostGit
 import Pkg.ImpactReview qualified as Impact
 import Pkg.Minio qualified as Storage
 import Pkg.Parser.Stats qualified as KQL
+import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.TestUtils hiding (call)
 import Pkg.TestUtils qualified as Test
 import Servant (ServerError (..), getResponse)
@@ -2906,7 +2907,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let attempt = UUIDId UUID.nil
     dbExec tr "INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, revision, exit_code, cast_bytes, gif, mp4) VALUES (?, ?, 'proof-1', 'head', ?, 0, convert_to('cast', 'UTF8'), convert_to('GIF89a fixture', 'UTF8'), convert_to('mp4 fixture', 'UTF8'))" (run.id, attempt, revision)
     [link] <- map (Impact.proofLink tr.trATCtx run) <$> runQueryEffect tr (Reviews.proofSides run attempt)
-    let app = genericServeTWithContext (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider) (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused") \_ _ -> pass) (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+    let app = genericServeTWithContext (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider) (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused") OtlpServer.collectUsageReport \_ _ -> pass) (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
         fetchWith headers url = WT.runSession (WT.request $ WT.setPath Wai.defaultRequest{Wai.requestHeaders = headers} $ encodeUtf8 $ fromMaybe url $ T.stripPrefix tr.trATCtx.config.hostUrl url) app
         fetch = fetchWith []
     preview <- fetch link.preview
@@ -4681,7 +4682,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             app mode =
               genericServeTWithContext
                 (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider . withMedia mode)
-                (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused") \_ _ -> pass)
+                (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused") OtlpServer.collectUsageReport \_ _ -> pass)
                 (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
             path = "/p/" <> testPid.toText <> "/issue-fixes/" <> fid.toText
             authorization = ("Authorization", "Bearer " <> UUID.toASCIIBytes (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId)

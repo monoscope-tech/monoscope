@@ -592,7 +592,7 @@ mkServer logger env tp = do
     (effToServantHandler env logger tp)
     -- OTLP/HTTP handlers injected here: Routes can't import OtlpServer
     -- (proto-lens orphan IsLabel instances clash with generic-lens #labels)
-    (Routes.server (OtlpServer.httpTracesExport logger env tp) (OtlpServer.httpLogsExport logger env tp) \pid run -> runBackground logger env tp $ BackgroundJobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) env $ BackgroundJobs.RunConversation pid run)
+    (Routes.server (OtlpServer.httpTracesExport logger env tp) (OtlpServer.httpLogsExport logger env tp) OtlpServer.collectUsageReport \pid run -> runBackground logger env tp $ BackgroundJobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) env $ BackgroundJobs.RunConversation pid run)
     (Routes.genAuthServerContext logger env)
 
 
