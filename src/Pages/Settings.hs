@@ -592,12 +592,12 @@ auditLogCsvGetH pid sourceM actorM = do
 
 
 auditLogPage_ :: Projects.ProjectId -> Maybe Text -> Maybe Text -> [Projects.ActivityEntry] -> Html ()
-auditLogPage_ pid sourceM actorM entries = div_ [class_ "flex flex-col gap-4"] do
+auditLogPage_ pid sourceM actorM entries = settingsSection_ do
   div_ [class_ "flex flex-wrap items-end justify-between gap-3"] do
     div_ [class_ "flex flex-col gap-1"] do
       settingsH2_ "Audit log"
       p_ [class_ "text-sm text-textWeak text-pretty"] "Every change people, AI agents and Monoscope made in this project: settings, members, keys, dashboards, monitors, routines and issue status."
-    a_ [href_ $ urls.auditLogCsvGet pid sourceM actorM, class_ "btn btn-sm"] $ faSprite_ "download" "regular" "w-3.5 h-3.5" >> "Export CSV"
+    a_ [href_ $ urls.auditLogCsvGet pid sourceM actorM, class_ "btn btn-sm"] "Export CSV"
   form_ [method_ "get", action_ $ urls.auditLogGet pid Nothing Nothing Nothing, class_ "flex flex-wrap items-end gap-2"] do
     label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] do
       "Source"
@@ -618,7 +618,7 @@ auditLogPage_ pid sourceM actorM entries = div_ [class_ "flex flex-col gap-4"] d
           td_ [class_ "px-3 py-2"] do
             div_ [class_ "flex items-center gap-1.5"] do
               faSprite_ (actorIcon e.actorKind) "regular" "w-3.5 h-3.5 shrink-0 text-iconNeutral"
-              span_ [class_ "text-textStrong break-all"] $ toHtml $ fromMaybe (actorLabel e.actorKind) e.actor
+              span_ [class_ "text-textStrong break-words"] $ toHtml $ fromMaybe (actorLabel e.actorKind) e.actor
             when (e.actorKind == "agent") $ span_ [class_ "text-xs text-textWeak"] "AI agent, on their behalf"
           td_ [class_ "px-3 py-2 text-textStrong"] $ toHtml $ humanize e.event
           td_ [class_ "px-3 py-2 text-textWeak"] $ toHtml $ T.intercalate ": " $ catMaybes [humanize <$> e.targetKind, e.targetTitle]

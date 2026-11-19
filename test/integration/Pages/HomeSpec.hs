@@ -60,6 +60,7 @@ spec = around withTestResources $ describe "Home screen" do
   it "slackConnect_createsOneChannelAndInvitesEachMemberOnce" \tr -> do
     pid <- createTestProject tr "Acme Shop"
     owner <- dbOne @_ @Text tr [sql|SELECT lower(email) FROM users.users WHERE id = '00000000-0000-0000-0000-000000000001'|] ()
+    ref0 <- newIORef []
     let sync create = do
           ref <- newIORef []
           void $ runTestBackgroundWithHTTP (runHTTPRecordWith slackReply ref) tr.trTracerProvider tr.trTestClock tr.trLogger tr.trATCtx $ Jobs.processBackgroundJob tr.trATCtx (Jobs.SlackConnectSync pid create)
@@ -69,7 +70,6 @@ spec = around withTestResources $ describe "Home screen" do
           dbExec tr [sql|DELETE FROM background_jobs WHERE payload->>'tag' = 'SlackConnectSync'|] ()
           void $ runTestBackgroundWithHTTP (runHTTPRecordWith slackReply ref0) tr.trTracerProvider tr.trTestClock tr.trLogger tr.trATCtx $ Jobs.processBackgroundJob tr.trATCtx Jobs.SlackConnectSweep
           dbOne @_ @Int tr [sql|SELECT count(*)::int FROM background_jobs WHERE payload->>'tag' = 'SlackConnectSync' AND payload->'contents'->>0 = ?|] (Only pid)
-    ref0 <- newIORef []
     -- A member added before the project is activated waits for the channel; nothing is created.
     sync False `shouldReturn` []
     -- slackConnect_missingScope_namesTheScope: a bot token without groups:write says so, not just "missing_scope".
