@@ -324,7 +324,7 @@ claimJob pid fid = Hasql.transaction TxS.ReadCommitted TxS.Write do
   leased <-
     map (\(project, identifier, owner) -> Lease project identifier owner)
       <$> Hasql.queryTx @[(ProjectId, FixId, UUIDId "fix_lease")]
-        [HI.sql|UPDATE projects.issue_fix_jobs job SET lease_owner = gen_random_uuid(), lease_until = now() + interval '10 minutes', failure = NULL, finished_at = NULL
+        [HI.sql|UPDATE projects.issue_fix_jobs job SET lease_owner = gen_random_uuid(), lease_until = now() + make_interval(secs => #{fromIntegral @Int @Int32 (Agent.reviewSeconds + 300)}), failure = NULL, finished_at = NULL
       FROM projects.issue_fix_run_access allowed, apis.ai_routine_runs run
       WHERE job.run_id = #{fid} AND allowed.run_id = job.run_id AND allowed.project_id = #{pid} AND allowed.user_id = job.requested_by
         AND run.id = job.agent_run_id AND run.status IN ('running', 'failed', 'timed_out') AND run.policy_limit = #{Issues.Autonomous}

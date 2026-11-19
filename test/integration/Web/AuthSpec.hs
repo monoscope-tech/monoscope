@@ -83,15 +83,15 @@ spec = around withTestResources do
     _ <- testServant tr $ Auth.deviceApproveH True (Just code)
     bound `shouldReturn` True
 
-    -- SDK client metadata: a live project's key gets its pubsub config; a bad key, or a key
-    -- whose project was deleted, is a 401.
+    -- SDK client metadata: a live project's key gets its pubsub config; a bad or wrong-length
+    -- (unpadded base64) key, or a key whose project was deleted, is a 401.
     key <- createTestAPIKey tr testPid "metadata"
     Right meta <- base $ Auth.clientMetadataH (Just key)
     (meta.projectId, meta.topicId, meta.pubsubProjectId) `shouldBe` (testPid, "monoscope-prod-default", "past-3")
     victim <- createTestProject tr "deleted"
     deletedKey <- createTestAPIKey tr victim "metadata"
     dbExec tr [sql| UPDATE projects.projects SET deleted_at = now(), active = false WHERE id = ? |] (Only victim)
-    for_ [Just "invalid-api-key", Just deletedKey, Nothing] \k -> base (Auth.clientMetadataH k) >>= (`shouldBe` Just 401) . leftToMaybe . first errHTTPCode
+    for_ [Just "invalid-api-key", Just (T.drop 1 key), Just deletedKey, Nothing] \k -> base (Auth.clientMetadataH k) >>= (`shouldBe` Just 401) . leftToMaybe . first errHTTPCode
 
   it "ad attribution: a consenting landing becomes one signup conversion, tags wait for consent, a first ingest is reported once" \tr -> do
     let adCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.auth0Domain = "https://auth0.test", Config.metaCapiAccessToken = Just "capi-token", Config.metaCapiPixelId = Just "123", Config.redditConversionsToken = Just "rdt-token", Config.redditPixelId = Just "t2_px"}}

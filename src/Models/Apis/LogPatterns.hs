@@ -257,17 +257,23 @@ updateBaselineBatch pid rows
             |]
 
 
--- | Batch version of upsertLogPattern using executeMany.
+-- | One statement for the whole batch (a statement per row was the ingestion path's N+1).
 -- Pre-merges rows with the same (projectId, sourceField, hash) to avoid
--- "ON CONFLICT DO UPDATE command cannot affect row a second time".
+-- "ON CONFLICT DO UPDATE command cannot affect row a second time"; key order keeps
+-- concurrent batches from deadlocking on each other's rows.
 upsertLogPatternBatch :: (DB es, Time :> es) => [UpsertPattern] -> Eff es Int64
 upsertLogPatternBatch [] = pure 0
 upsertLogPatternBatch ups = do
   now <- Time.currentTime
-  sum <$> forM (cap <$> dedup ups) \u ->
-    Hasql.interpExecute
-      [HI.sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count, last_seen_at, is_error)
-        VALUES (#{u.projectId}, #{u.logPattern}, #{u.hash}, #{u.sourceField}, #{u.serviceName}, #{u.logLevel}, #{u.traceId}, #{u.sampleMessage}, #{u.eventCount}, #{now}, #{u.isError})
+  let rows = V.fromList (cap <$> dedup ups)
+      col :: (UpsertPattern -> a) -> V.Vector a
+      col = (`V.map` rows)
+  Hasql.interpExecute
+    [HI.sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count, last_seen_at, is_error)
+        SELECT p, lp, h, sf, sn, ll, ti, sm, ec, #{now}, ie
+        FROM unnest(#{col (.projectId)}::uuid[], #{col (.logPattern)}::text[], #{col (.hash)}::text[], #{col (.sourceField)}::text[], #{col (.serviceName)}::text[], #{col (.logLevel)}::text[], #{col (.traceId)}::text[], #{col (.sampleMessage)}::text[], #{col (.eventCount)}::bigint[], #{col (.isError)}::bool[])
+          AS u(p, lp, h, sf, sn, ll, ti, sm, ec, ie)
+        ORDER BY p, sf, h
         ON CONFLICT (project_id, source_field, pattern_hash) DO UPDATE SET
           last_seen_at = EXCLUDED.last_seen_at,
           occurrence_count = apis.log_patterns.occurrence_count + EXCLUDED.occurrence_count,
@@ -295,17 +301,20 @@ upsertHourlyStat pid sourceField patHash hourBucket count =
   upsertHourlyStatBatch [(pid, sourceField, patHash, hourBucket, count)]
 
 
--- | Batch version of upsertHourlyStat using executeMany.
+-- | One statement for the whole batch, rows pre-summed per key and inserted in key order.
 upsertHourlyStatBatch :: DB es => [(Projects.ProjectId, Text, Text, UTCTime, Int64)] -> Eff es Int64
 upsertHourlyStatBatch rows =
-  sum <$> forM (Map.toList deduped) \((pid, sf, ph, hb), ec) ->
-    Hasql.interpExecute
-      [HI.sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
-        VALUES (#{pid}, #{sf}, #{ph}, #{hb}, #{ec})
-        ON CONFLICT (project_id, source_field, pattern_hash, hour_bucket)
-        DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
+  Hasql.interpExecute
+    [HI.sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
+      SELECT * FROM unnest(#{pids}::uuid[], #{fields}::text[], #{hashes}::text[], #{hours}::timestamptz[], #{counts}::bigint[])
+      ORDER BY 1, 2, 3, 4
+      ON CONFLICT (project_id, source_field, pattern_hash, hour_bucket)
+      DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
   where
-    deduped = Map.fromListWith (+) [((pid, sf, ph, truncateHour hb), ec) | (pid, sf, ph, hb, ec) <- rows]
+    deduped = Map.toList $ Map.fromListWith (+) [((pid, sf, ph, truncateHour hb), ec) | (pid, sf, ph, hb, ec) <- rows]
+    col :: (((Projects.ProjectId, Text, Text, UTCTime), Int64) -> a) -> V.Vector a
+    col f = V.fromList (map f deduped)
+    (pids, fields, hashes, hours, counts) = (col \((p, _, _, _), _) -> p, col \((_, f, _, _), _) -> f, col \((_, _, h, _), _) -> h, col \((_, _, _, t), _) -> t, col snd)
 
 
 -- | Baseline inputs for unmerged patterns with recent hourly statistics.

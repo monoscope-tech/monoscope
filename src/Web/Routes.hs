@@ -158,6 +158,7 @@ data Routes mode = Routes
   { public :: mode :- "public" :> Servant.Raw
   , cookieProtected :: mode :- AuthProtect "optional-cookie-auth" :> Servant.NamedRoutes CookieProtectedRoutes
   , ping :: mode :- "ping" :> Get '[PlainText] Text
+  , robots :: mode :- "robots.txt" :> Get '[PlainText] Text
   , status :: mode :- "status" :> Get '[JSON] Status
   , login :: mode :- "login" :> QPT "redirect_to" :> QPT "screen_hint" :> QPT "login_hint" :> SessionRedirect NoContent
   , toLogin :: mode :- "to_login" :> QPT "redirect_to" :> SessionRedirect NoContent
@@ -227,6 +228,9 @@ server otlpTraces otlpLogs runNow =
    in Routes
         { public = Servant.serveDirectoryWebApp "./static/public"
         , ping = pure "pong"
+        , -- The demo project and share links are public; crawlers walking their dashboards ran
+          -- every widget query (SemrushBot: ~500 requests per 3h on deleted demo dashboards).
+          robots = pure "User-agent: *\nDisallow: /p/\nDisallow: /share/\n"
         , status = statusH
         , login = Auth.loginH
         , toLogin = Auth.loginRedirectH
