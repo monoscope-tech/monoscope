@@ -648,6 +648,7 @@ recordIncidentEventTx update = do
                     -- so a flapping monitor reads as one conversation, not a channel flood.
                     -- A thread's first alert, reminder, or closure of a UTC day also goes
                     -- to the channel: an old root is out of sight, so its news must surface.
+                    -- So does a recurrence after an hour's quiet; quicker flaps stay in the thread.
                     let announces = case update.change of
                           (IncidentAlert; IncidentReminder; IncidentRecovered; IncidentResolved _) -> True
                           (IncidentObservation; IncidentDataUnavailable) -> False
@@ -680,13 +681,16 @@ recordIncidentEventTx update = do
                           [HI.sql|INSERT INTO apis.slack_incident_deliveries
                               (root_id, episode_id, event_id, operation, available_at, reply_broadcast)
                               SELECT #{rootId}, #{eid}, #{eventId}, #{operation}, #{at},
-                                #{announces} AND #{operation} = 'post_reply' AND r.message_ts IS NOT NULL AND NOT EXISTS (
+                                #{announces} AND #{operation} = 'post_reply' AND r.message_ts IS NOT NULL AND (NOT EXISTS (
                                   SELECT 1 FROM apis.slack_incident_deliveries posted
                                   JOIN apis.slack_incident_roots thread ON thread.id = posted.root_id
                                   JOIN apis.incident_events event ON event.id = posted.event_id
                                   WHERE thread.team_id = r.team_id AND thread.channel_id = r.channel_id AND thread.message_ts = r.message_ts
                                     AND posted.operation IN ('post_root', 'post_reply') AND event.id <> #{eventId}
                                     AND (event.observed_at AT TIME ZONE 'UTC')::date = (#{at}::timestamptz AT TIME ZONE 'UTC')::date)
+                                  OR (r.first_event_id = #{eventId} AND COALESCE((SELECT max(previous.closed_at) FROM apis.incident_episodes previous
+                                    WHERE previous.project_id = #{pid} AND previous.source_kind = #{sourceKind} AND previous.source_id = #{sourceId}
+                                      AND previous.id <> #{eid}) <= #{at}::timestamptz - interval '1 hour', false)))
                               FROM apis.slack_incident_roots r WHERE r.id = #{rootId} AND (r.first_event_id <> #{eventId} OR r.message_ts IS NOT NULL)
                                 AND NOT (r.threadless AND #{operation} = 'update_root')
                               ON CONFLICT (root_id, event_id, operation, activity_id) DO NOTHING|]

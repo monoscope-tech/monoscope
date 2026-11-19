@@ -919,6 +919,12 @@ spec = describe "Monitoring" do
         (sort (replies continued), roots continued) `shouldBe` (sort [(cid, ts, Nothing) | (cid, ts, _) <- edits], [])
         advanceMinutes tr 1
         void $ evaluate 18
+        -- Firing again after an hour's quiet is news even on the same day, so it reaches the channel.
+        advanceMinutes tr 61
+        quietGap <- evaluate 84
+        (sort (replies quietGap), roots quietGap) `shouldBe` (sort [(cid, ts, Just (AE.Bool True)) | (cid, ts, _) <- edits], [])
+        advanceMinutes tr 1
+        void $ evaluate 18
         advanceMinutes tr (24 * 60)
         nextDay <- evaluate 84
         (sort (replies nextDay), roots nextDay) `shouldBe` (sort [(cid, ts, Just (AE.Bool True)) | (cid, ts, _) <- edits], [])
