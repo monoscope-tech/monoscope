@@ -29,7 +29,7 @@ import Log (LogLevel (..), runLogT)
 import Log qualified as LogBase
 import Network.HTTP.Types (methodGet, methodHead, status200, status404, status500)
 import Network.Wai
-import Network.Wai.Handler.Warp (defaultSettings, defaultShouldDisplayException, runSettings, setGracefulShutdownTimeout, setOnException, setOnExceptionResponse, setPort)
+import Network.Wai.Handler.Warp (defaultSettings, defaultShouldDisplayException, runSettings, setGracefulShutdownTimeout, setHost, setOnException, setOnExceptionResponse, setPort)
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Cors
 import Network.Wai.Middleware.Gzip (GzipFiles (..), GzipSettings (..), defaultGzipSettings, gzip)
@@ -358,6 +358,7 @@ runServer appLogger env tp = do
   let warpSettings =
         defaultSettings
           & setPort env.config.port
+          & setHost (fromString $ toString env.config.httpHost)
           & setGracefulShutdownTimeout (Just 30)
           & setOnException onExc
           & setOnExceptionResponse onExcResp

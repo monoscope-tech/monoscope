@@ -110,6 +110,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, batchSpanAttrs, withSpan_)
 import System.Types (ATBackgroundCtx, DB, runBackground)
+import UnliftIO.Async (forConcurrently_)
 import UnliftIO.Exception (throwIO, tryAny)
 import Utils (b64ToJson, jsonToMap, nestedJsonFromDotNotation)
 import "base16-bytestring" Data.ByteString.Base16 qualified as B16
@@ -1467,7 +1468,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM resourceSchemaUrl droppe
 runServer :: Logger -> AuthContext -> TracerProvider -> IO ()
 runServer appLogger appCtx tp = do
   initPeriodicErrorLogging appCtx.backgroundScope appLogger
-  runServerWithHandlers def ServerConfig{serverInsecure = Just (InsecureConfig (Just "0.0.0.0") (fromIntegral appCtx.config.grpcPort)), serverSecure = Nothing} (services appLogger appCtx tp)
+  forConcurrently_ appCtx.config.grpcHosts \host -> runServerWithHandlers def ServerConfig{serverInsecure = Just (InsecureConfig (Just $ toString host) (fromIntegral appCtx.config.grpcPort)), serverSecure = Nothing} (services appLogger appCtx tp)
 
 
 -- | Process trace request with optional API key from gRPC metadata (extracted for testing)
