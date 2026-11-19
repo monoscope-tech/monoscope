@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.ImpactReview (reviewPullRequest, prepareReviewWorkspace, requestReview, fixIssue, autofixIssues, publishIssueFix, PublishSkip (..), ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Claim (..), ClaimStatus (..), Issue (..), ProofLink (..), Shot (..), proofLink, Evidence (..), Observation (..), EvidenceKind (..), QueryObservation (..), QueryKind (..), evidenceTable, Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, renderProgress, ReviewQuery, mkReviewQuery) where
+module Pkg.ImpactReview (reviewPullRequest, prepareReviewWorkspace, prepareFixWorkspace, requestReview, fixIssue, autofixIssues, publishIssueFix, PublishSkip (..), ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Claim (..), ClaimStatus (..), Issue (..), ProofLink (..), Shot (..), proofLink, Evidence (..), Observation (..), EvidenceKind (..), QueryObservation (..), QueryKind (..), evidenceTable, Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, renderProgress, ReviewQuery, mkReviewQuery) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Control.Monad.Trans.Except (throwE)
@@ -16,7 +16,7 @@ import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Artifacts (sha256)
 import Data.Effectful.CodeReview.Checkout qualified as Checkout (Fetch (..))
 import Data.Effectful.CodeReview.Policy qualified as Policy
-import Data.Effectful.CodeReview.Types (Evidence (..), EvidenceKind (..), KnowledgeSnapshot (..), Observation (..), QueryKind (..), QueryObservation (..), ReviewMemory (..), reviewSeconds)
+import Data.Effectful.CodeReview.Types (Evidence (..), EvidenceKind (..), KnowledgeSnapshot (..), Observation (..), QueryKind (..), QueryObservation (..), ReviewMemory (..), fixSeconds, reviewSeconds)
 import Data.Effectful.GitPublication qualified as Publication
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as LLM
@@ -421,15 +421,28 @@ reviewConnection run = runErrorNoCallStack @Text do
 -- repository start warm; a no-op when that checkpoint already exists. The first build of a
 -- repository is cold; later ones start from its latest build and compile incrementally.
 prepareReviewWorkspace :: Reviews.ReviewId -> ATBackgroundCtx ()
-prepareReviewWorkspace rid = whenJustM (Reviews.getRun rid) \run -> do
+prepareReviewWorkspace rid = whenJustM (Reviews.getRun rid) \run -> prepareWorkspace "Review" (run.projectId, run.owner, run.repo) do
+  (_, _, _, conn) <- either throwError pure =<< reviewConnection run
+  -- Runs queued before the base was recorded look it up.
+  base <- maybe ((.base.revision) <$> (either throwError pure =<< Git.getPullRequest conn (Git.RepoRef run.owner run.repo run.revision) run.number)) pure run.base
+  pure Checkout.Fetch{projectId = run.projectId, repository = "https://github.com/" <> run.owner <> "/" <> run.repo <> ".git", base, head = base, gitToken = conn.token.reveal}
+
+
+-- | The same warm build for a fix's base, queued with the fix, which waits for it ('fixIssue'), so a
+-- fix's hour goes to the fix and not to a cold build of the customer's stack.
+prepareFixWorkspace :: Projects.ProjectId -> Fixes.FixId -> ATBackgroundCtx ()
+prepareFixWorkspace pid fid =
+  (either (const Nothing) id <$> Fixes.getRun pid fid) >>= traverse_ \run -> prepareWorkspace "Fix" (pid, run.setup.owner, run.setup.repo) do
+    cfg <- (.config) <$> ask @AuthContext
+    token <- either throwError pure =<< GitSync.githubToken cfg.githubAppId cfg.githubAppPrivateKey (GitSync.AppInstallation run.setup.installationId)
+    pure Checkout.Fetch{projectId = pid, repository = "https://github.com/" <> run.setup.owner <> "/" <> run.setup.repo <> ".git", base = Fixes.revisionText run.setup.base, head = Fixes.revisionText run.setup.base, gitToken = token}
+
+
+-- | Prepares the workspace @fetch@ names, timing and logging how its checkpoint arrived.
+prepareWorkspace :: Text -> (Projects.ProjectId, Text, Text) -> Eff (Error Text ': ATBackgroundEffects) Checkout.Fetch -> ATBackgroundCtx ()
+prepareWorkspace kind repository fetch = do
   started <- liftIO getMonotonicTime
-  outcome <- runErrorNoCallStack @Text do
-    (_, _, _, conn) <- either throwError pure =<< reviewConnection run
-    -- Runs queued before the base was recorded look it up.
-    base <- maybe ((.base.revision) <$> (either throwError pure =<< Git.getPullRequest conn (Git.RepoRef run.owner run.repo run.revision) run.number)) pure run.base
-    either throwError pure
-      =<< Agent.prepareRepository
-        Checkout.Fetch{projectId = run.projectId, repository = "https://github.com/" <> run.owner <> "/" <> run.repo <> ".git", base, head = base, gitToken = conn.token.reveal}
+  outcome <- runErrorNoCallStack @Text $ fetch >>= Agent.prepareRepository >>= either throwError pure
   ended <- liftIO getMonotonicTime
   Metrics.recordMs Metrics.workspacePrepareHist ((ended - started) * 1000)
     . one
@@ -437,9 +450,9 @@ prepareReviewWorkspace rid = whenJustM (Reviews.getRun rid) \run -> do
     . OA.toAttribute @Text
     $ either (const "failed") (\case Workspace.Cached -> "cached"; Workspace.Restored -> "restored"; Workspace.Built Workspace.Cold _ -> "cold"; Workspace.Built Workspace.Warm _ -> "warm"; Workspace.Built (Workspace.ColdAfterWarm _) _ -> "cold_after_warm") outcome
   case outcome of
-    Left err -> Log.logAttention "Review workspace preparation failed" (run.id, err)
-    Right (Workspace.Built (Workspace.ColdAfterWarm why) _) -> Log.logAttention "Review workspace built cold after its warm start failed" (run.id, why)
-    Right prepared -> Log.logInfo "Review workspace ready" (run.projectId, run.owner, run.repo, prepared)
+    Left err -> Log.logAttention (kind <> " workspace preparation failed") (repository, err)
+    Right (Workspace.Built (Workspace.ColdAfterWarm why) _) -> Log.logAttention (kind <> " workspace built cold after its warm start failed") (repository, why)
+    Right prepared -> Log.logInfo (kind <> " workspace ready") (repository, prepared)
 
 
 reviewPullRequest :: Reviews.ReviewId -> ATBackgroundCtx ()
@@ -1288,8 +1301,16 @@ data PublishSkip = NotPublishable | MappingRemoved | TokenUnavailable Text | Rep
 
 
 fixIssue :: Projects.ProjectId -> Fixes.FixId -> ATBackgroundCtx ()
-fixIssue pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob) \claimed -> for_ claimed \lease -> do
-  outcome <- tryAny $ Timeout.timeout (reviewSeconds * 1000000) $ runErrorNoCallStack $ execute lease
+fixIssue pid fid = do
+  preparing <- Hasql.interpScalar [HI.sql|SELECT EXISTS (SELECT 1 FROM background_jobs_long WHERE payload = #{HI.AsJsonb $ Jobs.PrepareFixWorkspace pid fid} AND status IN ('queued', 'retry', 'locked'))|]
+  if preparing
+    then Time.currentTime >>= \now -> Jobs.scheduleJob (Jobs.DeferUntil $ addUTCTime 60 now) (Jobs.FixIssue pid fid)
+    else runFix pid fid
+
+
+runFix :: Projects.ProjectId -> Fixes.FixId -> ATBackgroundCtx ()
+runFix pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob) \claimed -> for_ claimed \lease -> do
+  outcome <- tryAny $ Timeout.timeout ((fixSeconds - 60) * 1000000) $ runErrorNoCallStack $ execute lease
   case outcome of
     Right (Just (Right ())) -> Jobs.scheduleJob Jobs.WakeNow $ Jobs.PublishFix pid fid
     _ -> do

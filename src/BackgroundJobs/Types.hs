@@ -58,6 +58,7 @@ data BgJobs
   | FixIssue Projects.ProjectId (UUIDId "issue_fix")
   | AutofixIssues Projects.ProjectId
   | PublishFix Projects.ProjectId (UUIDId "issue_fix")
+  | PrepareFixWorkspace Projects.ProjectId (UUIDId "issue_fix")
   | AnalyzeRepository Projects.ProjectId (UUIDId "repository")
   | EvaluateLLMSignals Projects.ProjectId
   | RepositorySyncTick UTCTime
@@ -260,6 +261,7 @@ longJob = \case
   ReviewPullRequest{} -> True
   PrepareReviewWorkspace{} -> True
   FixIssue{} -> True
+  PrepareFixWorkspace{} -> True
   PublishFix{} -> True
   AutofixIssues{} -> True
   _ -> False

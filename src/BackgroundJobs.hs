@@ -323,6 +323,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
     PrepareReviewWorkspace rid -> ImpactReview.prepareReviewWorkspace rid
     FixIssue pid fid -> ImpactReview.fixIssue pid fid
     AutofixIssues pid -> ImpactReview.autofixIssues pid
+    PrepareFixWorkspace pid fid -> ImpactReview.prepareFixWorkspace pid fid
     PublishFix pid fid -> do
       github <- liftIO $ findExecutable "gh"
       Publication.runGitPublicationReal (CodeReview.ArtifactStore <$> authCtx.config.impactReviewUsageDir <*> authCtx.config.impactReviewCacheDir) github $ ImpactReview.publishIssueFix pid fid
