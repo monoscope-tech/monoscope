@@ -9,7 +9,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.List (partition)
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, zonedTimeToUTC)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField (..))
@@ -24,9 +24,9 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Pages.AIThreads (promptField_, threadUrl)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
-import Pages.Components (BadgeColor (..), agoText, tonePill_)
+import Pages.Components (agoText)
 import Pages.Dashboards (dashboardUrl)
-import Pages.Issues (issueCardCompact_, issueDetailUrl, issuesListUrl)
+import Pages.Issues (issueDetailUrl, issuePreview_, issuesListUrl, renderIssueTitle_)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (SortOrder (..), UUIDId (..))
 import Relude hiding (ask, asks)
@@ -36,7 +36,7 @@ import System.Types (ATAuthCtx, Outcome (..), RespHeaders, Toast (..), ToastLeve
 import System.Types qualified
 import Text.Slugify (slugify)
 import UnliftIO.Exception (tryAny)
-import Utils (faSprite_, navTabAttrs)
+import Utils (countNoun, faSprite_, navTabAttrs)
 import Web.Links (CookieProtectedRoutes (..), urls)
 
 
@@ -102,36 +102,34 @@ homeGetH pid = do
 
 
 home_ :: HomeData -> Html ()
-home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ "mx-auto max-w-6xl px-4 sm:px-6 py-8 flex flex-col gap-10"] do
-  header_ [class_ "flex flex-col gap-1"] do
-    p_ [class_ "text-2xl font-semibold text-textStrong tracking-tight"] $ toHtml $ "Hello" <> foldMap (", " <>) (guarded (not . T.null) d.firstName) <> "."
-    p_ [class_ "text-sm text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%A, %-d %B" d.now
-  askBox_ d
+home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ "mx-auto max-w-5xl px-4 sm:px-8 pt-10 pb-16 flex flex-col gap-12"] do
+  section_ [class_ "flex flex-col gap-5", Aria.label_ "Ask Monoscope AI"] do
+    header_ [class_ "flex flex-col gap-1"] do
+      p_ [class_ "text-3xl font-semibold tracking-tight text-textStrong text-balance"] $ toHtml $ "Hello" <> foldMap (", " <>) (guarded (not . T.null) d.firstName) <> "."
+      p_ [class_ "text-sm text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%A, %-d %B" d.now
+    askBox_ d
+    statusBar_ d
   whenJust (mfilter (not . (.invited)) d.slack) slackConnectCard_
-  section_ [class_ "flex flex-col gap-3", Aria.label_ "At a glance"] do
-    sectionHead_ "At a glance" Nothing $ Just ("Overview dashboard", urls.dashboardRedirectGet d.pid ([] :: [(Text, Maybe Text)]))
-    glanceStrip_ d
-    Widget.embeddedWidgets_ d.pid d.glance
-  div_ [class_ "grid grid-cols-1 lg:grid-cols-2 gap-8"] do
-    section_ [class_ "flex flex-col gap-3 min-w-0", Aria.label_ "Today's issues"] do
-      sectionHead_ "Today's issues" (Just d.newIssueCount) $ Just ("All issues", issuesListUrl d.pid)
-      if null d.newIssues && not (any ((== Issues.HKIssue) . (.kind)) d.highlights)
-        then quiet_ "check" "No new issues in the last 24 hours."
-        else div_ [class_ "flex flex-col gap-2"] do
-          forM_ (filter ((== Issues.HKIssue) . (.kind)) d.highlights) $ highlight_ d.pid
-          forM_ d.newIssues $ issueCardCompact_ d.pid d.now
-    section_ [class_ "flex flex-col gap-3 min-w-0", Aria.label_ "Today's improvements"] do
-      let wins = filter ((== Issues.HKImprovement) . (.kind)) d.highlights
-      sectionHead_ "Today's improvements" (Just $ length d.resolved + length wins) Nothing
-      if null d.resolved && null wins
-        then quiet_ "chart-line" "Resolved issues and AI-confirmed wins from the last 24 hours show up here."
-        else div_ [class_ "flex flex-col gap-2"] do
-          forM_ wins $ highlight_ d.pid
+  let flagged kind = filter ((== kind) . (.kind)) d.highlights
+  div_ [class_ "grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-10"] do
+    column_ "Today's issues" (d.newIssueCount + length (flagged Issues.HKIssue)) (Just ("All issues", issuesListUrl d.pid)) do
+      if null d.newIssues && null (flagged Issues.HKIssue)
+        then quiet_ "circle-check" "Nothing new broke in the last 24 hours."
+        else do
+          forM_ (flagged Issues.HKIssue) $ highlightCard_ d.pid d.now
+          forM_ d.newIssues $ issueCard_ d.pid d.now
+    column_ "Today's improvements" (length d.resolved + length (flagged Issues.HKImprovement)) Nothing do
+      if null d.resolved && null (flagged Issues.HKImprovement)
+        then quiet_ "arrow-trend-up" "Resolved issues and AI-confirmed wins from the last 24 hours land here."
+        else do
+          forM_ (flagged Issues.HKImprovement) $ highlightCard_ d.pid d.now
           forM_ d.resolved $ resolvedCard_ d.pid d.now
-  let insights = filter ((== Issues.HKInsight) . (.kind)) d.highlights
-  unless (null insights) $ section_ [class_ "flex flex-col gap-3", Aria.label_ "Flagged by AI"] do
-    sectionHead_ "Flagged by AI" (Just $ length insights) $ Just ("Routines", urls.aiRoutinesGet d.pid)
-    div_ [class_ "grid grid-cols-1 lg:grid-cols-2 gap-2"] $ forM_ insights $ highlight_ d.pid
+  unless (null $ flagged Issues.HKInsight) $ section_ [class_ "flex flex-col gap-2", Aria.label_ "For you today"] do
+    sectionHead_ "For you today" (Just $ length $ flagged Issues.HKInsight) $ Just ("AI routines", urls.aiRoutinesGet d.pid)
+    div_ [class_ "flex flex-col"] $ forM_ (flagged Issues.HKInsight) $ feedRow_ d.pid d.now
+  section_ [class_ "flex flex-col gap-3", Aria.label_ "Service health"] do
+    sectionHead_ "Service health" Nothing $ Just ("Overview dashboard", urls.dashboardRedirectGet d.pid ([] :: [(Text, Maybe Text)]))
+    Widget.embeddedWidgets_ d.pid d.glance
   forM_ d.starred \(vm, ws) -> section_ [class_ "flex flex-col gap-3", Aria.label_ vm.title] do
     sectionHead_ (faSprite_ "star" "solid" "w-3.5 h-3.5 text-iconWarning" >> toHtml vm.title) Nothing $ Just ("Open dashboard", dashboardUrl d.pid vm.id Nothing [])
     Widget.embeddedWidgets_ d.pid ws
@@ -139,96 +137,169 @@ home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ 
 
 
 askBox_ :: HomeData -> Html ()
-askBox_ d = section_ [class_ "flex flex-col gap-3", Aria.label_ "Ask Monoscope AI"] do
+askBox_ d = div_ [class_ "flex flex-col gap-2.5"] do
   form_ [id_ "home-ask-form", hxPost_ $ urls.aiThreadsPost d.pid, hxTarget_ "this", hxSwap_ "none", hxIndicator_ "#home-ask-loader"] do
     promptField_ "home-ask" "Ask about your system — “why is checkout slower today?”" [autofocus_]
     input_ [type_ "hidden", name_ "mode", value_ "chat"]
   div_ [class_ "flex flex-wrap gap-2"] $ forM_ suggestions \q ->
-    button_ [type_ "button", class_ "rounded-full border border-strokeWeak px-3 py-1 text-xs text-textWeak hover:text-textStrong hover:bg-fillWeak active:scale-[0.96] transition-[color,background-color,scale] duration-100 cursor-pointer", data_ "q" q, [__|on click set #home-ask.value to @data-q then call #home-ask-form.requestSubmit()|]] $ toHtml q
+    button_ [type_ "button", class_ "rounded-full bg-fillWeak px-3 py-1.5 text-xs text-textWeak hover:text-textStrong hover:bg-fillHover active:scale-[0.96] transition-[color,background-color,scale] duration-100 cursor-pointer", data_ "q" q, [__|on click set #home-ask.value to @data-q then call #home-ask-form.requestSubmit()|]] $ toHtml q
   where
     suggestions =
       [ "What changed in the last 24 hours?"
       , "Which endpoints got slower today?"
-      , "Summarize today's errors and their likely causes"
+      , "Summarize today's errors"
       , "Are any services close to their limits?"
       ]
 
 
--- | Counts that frame the day: work waiting, work done, and how much the AI is watching.
-glanceStrip_ :: HomeData -> Html ()
-glanceStrip_ d = div_ [class_ "flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-textWeak"] do
-  stat_ (issuesListUrl d.pid) "bug" (show d.openIssueCount) "open issues"
-  stat_ (issuesListUrl d.pid) "circle-exclamation" (show d.newIssueCount) "new today"
-  stat_ (issuesListUrl d.pid) "circle-check" (show $ length d.resolved) "resolved today"
+-- | The day in five numbers, each a door to the list behind it.
+statusBar_ :: HomeData -> Html ()
+statusBar_ d = div_ [class_ "grid grid-cols-2 sm:grid-cols-5 gap-px overflow-hidden rounded-xl bg-strokeWeak shadow-[0_0_0_1px_var(--color-strokeWeak)]"] do
+  stat_ (issuesListUrl d.pid) d.openIssueCount "Open issues" ""
+  stat_ (issuesListUrl d.pid) d.newIssueCount "New today" (bool "" "text-textError" (d.newIssueCount > 0))
+  stat_ (issuesListUrl d.pid) (length d.resolved) "Resolved today" (bool "" "text-textSuccess" (not $ null d.resolved))
+  stat_ (urls.aiRoutinesGet d.pid) (length d.highlights) "Flagged by AI" ""
   case length d.routines of
-    0 -> a_ ([href_ $ urls.aiRoutinesGet d.pid, class_ "inline-flex items-center gap-1.5 text-textBrand hover:underline"] <> navTabAttrs) do
-      faSprite_ "sparkles" "regular" "w-3.5 h-3.5"
-      "Set up an AI routine"
-    n -> stat_ (urls.aiRoutinesGet d.pid) "sparkles" (show n) (bool "AI routines watching" "AI routine watching" (n == 1))
+    0 -> a_ ([href_ $ urls.aiRoutinesGet d.pid, class_ "col-span-2 sm:col-span-1 flex flex-col justify-center gap-0.5 bg-bgRaised px-4 py-3 hover:bg-fillWeak transition-colors"] <> navTabAttrs) do
+      span_ [class_ "inline-flex items-center gap-1.5 text-sm font-medium text-textBrand"] $ faSprite_ "sparkles" "regular" "w-3.5 h-3.5" >> "Set up a routine"
+      span_ [class_ "text-xs text-textWeak"] "AI that watches for you"
+    n -> stat_ (urls.aiRoutinesGet d.pid) n (bool "AI routines watching" "AI routine watching" (n == 1)) ""
   where
-    stat_ href icon n label = a_ ([href_ href, class_ "inline-flex items-center gap-1.5 hover:text-textStrong"] <> navTabAttrs) do
-      faSprite_ icon "regular" "w-3.5 h-3.5"
-      span_ [class_ "font-semibold text-textStrong tabular-nums"] $ toHtml (n :: Text)
-      toHtml (label :: Text)
+    stat_ :: Text -> Int -> Html () -> Text -> Html ()
+    stat_ href n label tone = a_ ([href_ href, class_ "flex flex-col gap-0.5 bg-bgRaised px-4 py-3 hover:bg-fillWeak transition-colors"] <> navTabAttrs) do
+      span_ [class_ $ "text-xl font-semibold tabular-nums text-textStrong " <> tone] $ toHtml (show @Text n)
+      span_ [class_ "text-xs text-textWeak"] label
 
 
 sectionHead_ :: Html () -> Maybe Int -> Maybe (Text, Text) -> Html ()
 sectionHead_ title countM linkM = div_ [class_ "flex items-center gap-2"] do
-  h2_ [class_ "inline-flex items-center gap-1.5 text-sm font-semibold text-textStrong"] title
-  whenJust countM $ span_ [class_ "rounded bg-fillWeak px-1.5 text-xs tabular-nums text-textWeak"] . show
+  h2_ [class_ "inline-flex items-center gap-1.5 text-base font-semibold text-textStrong"] title
+  whenJust countM $ span_ [class_ "rounded-md bg-fillWeak px-1.5 text-xs font-medium tabular-nums text-textWeak"] . show
   whenJust linkM \(label, href) -> a_ ([href_ href, class_ "ml-auto inline-flex items-center gap-1 text-xs text-textWeak hover:text-textBrand"] <> navTabAttrs) do
     toHtml label
     faSprite_ "arrow-right" "regular" "w-3 h-3"
 
 
+column_ :: Html () -> Int -> Maybe (Text, Text) -> Html () -> Html ()
+column_ title n linkM body = section_ [class_ "flex flex-col gap-3 min-w-0"] do
+  sectionHead_ title (Just n) linkM
+  div_ [class_ "flex flex-col gap-3"] body
+
+
 quiet_ :: Text -> Text -> Html ()
-quiet_ icon msg = div_ [class_ "flex items-center gap-2 rounded-xl border border-dashed border-strokeWeak px-4 py-6 text-sm text-textWeak"] do
-  faSprite_ icon "regular" "w-4 h-4 shrink-0"
+quiet_ icon msg = div_ [class_ "flex items-center gap-3 rounded-2xl border border-dashed border-strokeWeak px-4 py-5 text-sm text-textWeak"] do
+  span_ [class_ "flex size-8 shrink-0 items-center justify-center rounded-full bg-fillWeak"] $ faSprite_ icon "regular" "w-4 h-4"
   toHtml msg
 
 
--- | An item an agent put on Home: its kind's tone, the flagging routine, and a dismiss control.
-highlight_ :: Projects.ProjectId -> Issues.HomeHighlight -> Html ()
-highlight_ pid h = div_ [id_ $ "highlight-" <> h.id.toText, class_ "group/hl relative flex gap-3 rounded-xl border border-strokeWeak p-3 hover:bg-bgRaised transition-colors"] do
-  div_ [class_ "shrink-0 pt-0.5"] $ faSprite_ icon "regular" $ "w-4 h-4 " <> iconColor
-  div_ [class_ "min-w-0 flex-1 flex flex-col gap-1"] do
-    let title = span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml h.title
-    maybe title (\l -> a_ [href_ l, class_ "hover:underline"] title) h.link
-    unless (T.null h.detail) $ p_ [class_ "text-xs text-textWeak line-clamp-2"] $ toHtml h.detail
-    div_ [class_ "flex items-center gap-2 text-xs text-textWeak"] do
-      faSprite_ "sparkles" "regular" "w-3 h-3"
-      maybe (toHtml h.source) (\c -> a_ [href_ $ threadUrl pid c, class_ "hover:text-textBrand"] $ toHtml h.source) h.conversationId
+cardCls :: Text
+cardCls = "group/card relative flex flex-col gap-2.5 min-w-0 rounded-2xl surface-raised p-4 shadow-[0_0_0_1px_var(--color-strokeWeak)] hover:shadow-[0_0_0_1px_var(--color-strokeStrong)] transition-shadow"
+
+
+-- | A card's identity row: a toned dot and id (the dot's meaning is repeated in text for screen readers), then context.
+cardMeta_ :: Text -> Text -> Text -> Html () -> Html ()
+cardMeta_ dot dotLabel ident context = div_ [class_ "flex items-center gap-2 min-w-0 text-xs text-textWeak"] do
+  span_ [class_ "inline-flex shrink-0 items-center gap-1.5 rounded-md bg-fillWeak px-1.5 py-0.5 font-medium tabular-nums text-textStrong"] do
+    span_ [class_ $ "size-1.5 rounded-full " <> dot] ""
+    span_ [class_ "sr-only"] $ toHtml dotLabel
+    toHtml ident
+  context
+
+
+issueCard_ :: Projects.ProjectId -> UTCTime -> Issues.IssueL -> Html ()
+issueCard_ pid now i = a_ ([href_ $ issueDetailUrl pid i.base.id, class_ cardCls] <> navTabAttrs) do
+  let (dot, label) = case i.base.severity of
+        Issues.Critical -> ("bg-fillError-strong", "Critical")
+        Issues.Warning -> ("bg-fillWarning-strong", "Warning")
+        Issues.Info -> ("bg-fillInformation-strong", "Info")
+        Issues.Low -> ("bg-fillNeutral-strong", "Low")
+  cardMeta_ dot label ("#" <> show i.base.seqNum) do
+    span_ [class_ "font-medium text-textStrong"] $ toHtml label
+    span_ [class_ "ml-auto shrink-0"] $ toHtml $ agoText now $ zonedTimeToUTC i.base.createdAt
+  p_ [class_ "text-[15px] leading-snug font-medium text-textStrong line-clamp-2 break-words"] $ renderIssueTitle_ i
+  issuePreview_ Nothing i
+  let buckets = toList i.activityBuckets
+  unless (all (== 0) buckets) $ activityStrip_ (bool "bg-fillWarning-strong" "bg-fillError-strong" (i.base.severity == Issues.Critical)) buckets
+  when (i.eventCount > 0) $ p_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml $ countNoun i.eventCount "event" <> bool "" (" · " <> countNoun i.usersCount "user") (i.usersCount > 0)
+
+
+-- | Twenty-four hourly bars: when it started, and whether it is still going.
+activityStrip_ :: Text -> [Int] -> Html ()
+activityStrip_ fill buckets = div_ [class_ "flex h-6 items-end gap-0.5", role_ "img", Aria.label_ "Events per hour over the last 24 hours"] $ forM_ buckets \n ->
+  span_ [class_ $ "flex-1 rounded-[2px] " <> bool "bg-fillWeak" fill (n > 0), style_ $ "height:" <> show @Text (bool 12 (max 25 $ n * 100 `div` peak) (n > 0)) <> "%"] ""
+  where
+    peak = foldr max 1 buckets
+
+
+resolvedCard_ :: Projects.ProjectId -> UTCTime -> Issues.ResolvedIssue -> Html ()
+resolvedCard_ pid now r = a_ ([href_ $ issueDetailUrl pid r.id, class_ cardCls] <> navTabAttrs) do
+  cardMeta_ "bg-fillSuccess-strong" "Resolved" ("#" <> show r.seqNum) do
+    span_ [class_ "inline-flex items-center gap-1 text-textSuccess"] $ faSprite_ "circle-check" "regular" "w-3 h-3" >> bool "Resolved" "Auto-resolved" (r.event == Issues.IEAutoResolved)
+    whenJust r.service $ span_ [class_ "truncate"] . toHtml
+    span_ [class_ "ml-auto shrink-0"] $ toHtml $ agoText now r.resolvedAt
+  p_ [class_ "text-[15px] leading-snug font-medium text-textStrong line-clamp-2 break-words"] $ toHtml r.title
+
+
+-- | An agent-flagged issue or win, in the same card as the issues beside it.
+highlightCard_ :: Projects.ProjectId -> UTCTime -> Issues.HomeHighlight -> Html ()
+highlightCard_ pid now h = div_ [id_ $ "highlight-" <> h.id.toText, class_ cardCls] do
+  let (dot, label) = case h.kind of
+        Issues.HKIssue -> ("bg-fillError-strong", "Flagged issue")
+        Issues.HKImprovement -> ("bg-fillSuccess-strong", "Improvement")
+        Issues.HKInsight -> ("bg-fillInformation-strong", "Insight")
+  cardMeta_ dot label "AI" do
+    highlightSource_ pid h
+    span_ [class_ "ml-auto shrink-0 pe-6"] $ toHtml $ agoText now h.updatedAt
+  highlightTitle_ "text-[15px] leading-snug" h
+  unless (T.null h.detail) $ p_ [class_ "text-sm text-textWeak line-clamp-3 text-pretty"] $ toHtml h.detail
+  dismiss_ pid h
+
+
+-- | An insight as a quiet feed row rather than a card: context, not an alarm.
+feedRow_ :: Projects.ProjectId -> UTCTime -> Issues.HomeHighlight -> Html ()
+feedRow_ pid now h = div_ [id_ $ "highlight-" <> h.id.toText, class_ "group/card relative -mx-3 flex gap-3 rounded-xl px-3 py-3 hover:bg-fillWeak transition-colors"] do
+  span_ [class_ "flex size-8 shrink-0 items-center justify-center rounded-lg bg-fillInformation-weak"] $ faSprite_ "lightbulb" "regular" "w-4 h-4 text-iconInformation"
+  div_ [class_ "min-w-0 flex-1 flex flex-col gap-0.5 pe-8"] do
+    highlightTitle_ "text-sm" h
+    unless (T.null h.detail) $ p_ [class_ "text-sm text-textWeak line-clamp-2 text-pretty"] $ toHtml h.detail
+    div_ [class_ "flex items-center gap-1.5 text-xs text-textWeak"] do
+      highlightSource_ pid h
+      span_ [class_ "opacity-40"] "·"
+      toHtml $ agoText now h.updatedAt
+  dismiss_ pid h
+
+
+highlightTitle_ :: Text -> Issues.HomeHighlight -> Html ()
+highlightTitle_ size h = maybe title (\l -> a_ [href_ l, class_ "hover:underline underline-offset-2"] title) h.link
+  where
+    title = p_ [class_ $ size <> " font-medium text-textStrong line-clamp-2 break-words"] $ toHtml h.title
+
+
+highlightSource_ :: Projects.ProjectId -> Issues.HomeHighlight -> Html ()
+highlightSource_ pid h = span_ [class_ "inline-flex min-w-0 items-center gap-1"] do
+  faSprite_ "sparkles" "regular" "w-3 h-3 shrink-0"
+  maybe (span_ [class_ "truncate"] $ toHtml h.source) (\c -> a_ [href_ $ threadUrl pid c, class_ "truncate hover:text-textBrand"] $ toHtml h.source) h.conversationId
+
+
+dismiss_ :: Projects.ProjectId -> Issues.HomeHighlight -> Html ()
+dismiss_ pid h =
   button_
     [ type_ "button"
-    , Aria.label_ "Dismiss"
-    , class_ "absolute top-1.5 right-1.5 rounded-md p-1.5 text-iconNeutral opacity-0 group-hover/hl:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:bg-fillWeak transition-opacity cursor-pointer"
+    , Aria.label_ $ "Dismiss: " <> h.title
+    , class_ "absolute top-2 right-2 rounded-lg p-1.5 text-iconNeutral opacity-0 group-hover/card:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:bg-fillHover transition-opacity cursor-pointer"
     , hxPost_ $ urls.homeHighlightDismissPost pid h.id
     , hxTarget_ $ "#highlight-" <> h.id.toText
     , hxSwap_ "outerHTML"
     ]
     $ faSprite_ "xmark" "regular" "w-3.5 h-3.5"
-  where
-    (icon, iconColor) = case h.kind of
-      Issues.HKIssue -> ("triangle-exclamation", "text-iconError")
-      Issues.HKImprovement -> ("arrow-trend-up", "text-iconSuccess")
-      Issues.HKInsight -> ("lightbulb", "text-iconInformation")
-
-
-resolvedCard_ :: Projects.ProjectId -> UTCTime -> Issues.ResolvedIssue -> Html ()
-resolvedCard_ pid now r = a_ ([href_ $ issueDetailUrl pid r.id, class_ "flex items-center gap-2 rounded-xl border border-strokeWeak p-3 hover:bg-bgRaised transition-colors min-w-0"] <> navTabAttrs) do
-  faSprite_ "circle-check" "regular" "w-4 h-4 shrink-0 text-iconSuccess"
-  span_ [class_ "text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ "#" <> show @Text r.seqNum
-  span_ [class_ "text-sm font-medium text-textStrong truncate min-w-0"] $ toHtml r.title
-  tonePill_ SuccessBadge $ bool "RESOLVED" "AUTO-RESOLVED" (r.event == Issues.IEAutoResolved)
-  span_ [class_ "text-xs text-textWeak shrink-0 ml-auto"] $ toHtml $ agoText now r.resolvedAt
 
 
 jumpBackIn_ :: HomeData -> Html ()
 jumpBackIn_ d = unless (null items) $ section_ [class_ "flex flex-col gap-3", Aria.label_ "Jump back in"] do
   sectionHead_ "Jump back in" Nothing Nothing
-  div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-3"] $ forM_ items \(icon, title, sub, href) ->
-    a_ [href_ href, class_ "flex items-center gap-3 rounded-xl p-2 hover:bg-fillWeak transition-colors min-w-0"] do
-      span_ [class_ "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-fillWeak"] $ faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
+  div_ [class_ "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2"] $ forM_ items \(icon, title, sub, href) ->
+    a_ [href_ href, class_ "flex items-center gap-3 rounded-xl p-2 -ms-2 hover:bg-fillWeak transition-colors min-w-0"] do
+      span_ [class_ "flex size-9 shrink-0 items-center justify-center rounded-lg surface-raised shadow-[0_0_0_1px_var(--color-strokeWeak)]"] $ faSprite_ icon "regular" "w-4 h-4 text-iconNeutral"
       span_ [class_ "flex flex-col min-w-0"] do
         span_ [class_ "text-sm font-medium text-textStrong truncate"] $ toHtml title
         span_ [class_ "text-xs text-textWeak truncate"] $ toHtml sub

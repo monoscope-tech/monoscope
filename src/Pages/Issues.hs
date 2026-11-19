@@ -64,6 +64,8 @@ module Pages.Issues (
   PatternUnmerged,
   -- Shared rendering helpers
   issueCardCompact_,
+  issuePreview_,
+  renderIssueTitle_,
   issueDetailUrl,
   issuesListUrl,
   aiChatHistoryView_,
