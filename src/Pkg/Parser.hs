@@ -685,8 +685,13 @@ resultShape ast = case listToMaybe [(aggs, by) | SummarizeCommand aggs by <- ast
 -- A binned rate by plain columns or attributes reads per-bin series rows, filtered
 -- inside; mixed with another aggregation, it reads every point:
 -- >>> let chart q = maybe "" (T.unwords . words) $ (.finalSummarizeQuery) . snd =<< hush (parseQueryToComponents cfg ("metrics | where metric_name == \"a\" | summarize " <> q))
--- >>> [T.isInfixOf "AS __series_cells" (chart q) | q <- ["rate(value) * 60 by bin(timestamp, 30m), metric_name", "rate(value) by bin(timestamp, 30m), attributes.t", "rate(value), count() by bin(timestamp, 30m)"]]
+-- >>> let shapes = ["rate(value) * 60 by bin(timestamp, 30m), metric_name", "rate(value) by bin(timestamp, 30m), attributes.t", "rate(value), count() by bin(timestamp, 30m)"]
+-- >>> [T.isInfixOf "AS __series_cells" (chart q) | q <- shapes]
 -- [True,True,False]
+--
+-- On every path a bin no series contributes to sums to NULL, never a coalesced 0:
+-- >>> [T.isInfixOf "sum(__rate_value)::float" (chart q) && not (T.isInfixOf "COALESCE(sum" (chart q)) | q <- shapes]
+-- [True,True,True]
 -- >>> snd $ T.breakOn ") AS otel_metrics" $ chart "increase(value) by bin(timestamp, 30m)"
 -- ") AS otel_metrics WHERE TRUE GROUP BY time_bucket('30 minutes', timestamp) ORDER BY time_bucket('30 minutes', timestamp) DESC"
 --
@@ -724,13 +729,14 @@ resultShape ast = case listToMaybe [(aggs, by) | SummarizeCommand aggs by <- ast
 --
 -- A ratio of filtered rates. The filter applies to the outer sum, so every series
 -- still takes its deltas over its own points in the shared series source;
--- on TimeFusion the attribute goes through the metrics variant accessor:
+-- on TimeFusion the attribute goes through the metrics variant accessor. Nothing
+-- is coalesced to 0, so a bin missing the denominator series is NULL, not 0:
 -- >>> let ratio = "metrics | summarize hits = rateif(value, attributes.tier == \"day\"), total = rate(value) by bin(timestamp, 1m) | extend pct = 100.0 * hits / total"
 -- >>> let chartSelect c = either id (T.strip . T.takeWhile (/= '\n') . T.strip . maybeToMonoid . (.finalSummarizeQuery) . snd) (parseQueryToComponents c ratio)
 -- >>> chartSelect cfg
--- "SELECT extract(epoch from time_bucket('1 minutes', timestamp))::integer, 'value', (COALESCE(((100.0 * COALESCE(sum(CASE WHEN attributes->>'tier' = 'day' THEN __rate_value END), 0)::float) / NULLIF(COALESCE(sum(__rate_value), 0)::float, 0)), 0))::float AS pct"
+-- "SELECT extract(epoch from time_bucket('1 minutes', timestamp))::integer, 'value', (((100.0 * sum(CASE WHEN attributes->>'tier' = 'day' THEN __rate_value END)::float) / NULLIF(sum(__rate_value)::float, 0)))::float AS pct"
 -- >>> chartSelect cfg{targetsTimefusion = True}
--- "SELECT extract(epoch from time_bucket('1 minutes', timestamp))::integer, 'value', (COALESCE(((100.0 * COALESCE(sum(CASE WHEN variant_to_json(attributes)->>'tier' = 'day' THEN __rate_value END), 0)::float) / NULLIF(COALESCE(sum(__rate_value), 0)::float, 0)), 0))::float AS pct"
+-- "SELECT extract(epoch from time_bucket('1 minutes', timestamp))::integer, 'value', (((100.0 * sum(CASE WHEN variant_to_json(attributes)->>'tier' = 'day' THEN __rate_value END)::float) / NULLIF(sum(__rate_value)::float, 0)))::float AS pct"
 --
 -- Field validation is told the cfg's source for the same reason 'queryASTToComponents'
 -- resolves the FROM table from it: a metrics query can arrive with its source in the
