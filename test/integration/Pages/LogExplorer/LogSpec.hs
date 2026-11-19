@@ -326,6 +326,12 @@ spec = do
       fat <- eventually (fetch (span' (-60) 60)) (not . V.null . (.logsData))
       [T.length t | c <- cells fat, Just (AE.Array els) <- [HM.lookup "summary" c], AE.String t <- V.toList els] `shouldSatisfy` \ls -> not (null ls) && all (<= 8000) ls
 
+      -- #564: a number compared with a custom attribute failed the whole query (text > integer).
+      _ <- spanWith "GET /job/slow" [mkAttr "job.duration_seconds" "12"] []
+      _ <- spanWith "GET /job/odd" [mkAttr "job.duration_seconds" "n/a"] []
+      timed <- eventually (fetch (span' (-60) 60){Log.query = Just "attributes.job.duration_seconds > 5"}) ((>= 1) . V.length . (.logsData))
+      (timed.error, mapMaybe (str "name") (cells timed)) `shouldBe` (Nothing, ["GET /job/slow"])
+
       -- `deployment.environment.name` is a promoted column so the app-wide selector scopes every
       -- query; an environment nothing reports is empty, not unfiltered.
       _ <- spanWith "GET /env/prod" [] [mkAttr "deployment.environment.name" "prod", mkAttr "service.name" "checkout"]
