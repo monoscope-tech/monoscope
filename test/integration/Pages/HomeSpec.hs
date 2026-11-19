@@ -16,7 +16,7 @@ spec = around withTestResources $ describe "Home screen" do
   it "home_showsTodaysIssuesImprovementsAndRoutineFlagsOnce" \tr -> do
     pid <- createTestProject tr "Acme Shop"
     dbExec tr [sql|INSERT INTO apis.issues (project_id, issue_type, title, target_hash, endpoint_hash, created_at) VALUES (?, 'runtime_exception', 'Checkout fails on a null cart', 'home-new', 'home-new', ?)|] (pid, frozenTime)
-    resolvedId <- dbOne @_ @Issues.IssueId tr [sql|INSERT INTO apis.issues (project_id, issue_type, title, target_hash, endpoint_hash, created_at, archived_at) VALUES (?, 'runtime_exception', 'Payment gateway timeout', 'home-old', 'home-old', ? - interval '3 days', ?) RETURNING id|] (pid, frozenTime, frozenTime)
+    resolvedId <- dbOne @_ @Issues.IssueId tr [sql|INSERT INTO apis.issues (project_id, issue_type, title, target_hash, endpoint_hash, created_at, archived_at) VALUES (?, 'runtime_exception', 'Payment gateway timeout', 'home-old', 'home-old', ?::timestamptz - interval '3 days', ?) RETURNING id|] (pid, frozenTime, frozenTime)
     dbExec tr [sql|INSERT INTO apis.issue_activity_log (issue_id, event, created_at) VALUES (?, 'resolved', ?)|] (resolvedId, frozenTime)
     -- A daily routine flagging the same thing twice refreshes one item instead of stacking two.
     let flag kind title = runQueryEffect tr $ EHasql.transaction TxS.ReadCommitted TxS.Write $ Issues.upsertHighlightTx pid Nothing "Error regression radar" kind title "412 to 1,980 in an hour." (Just $ "/p/" <> pid.toText <> "/issues")
