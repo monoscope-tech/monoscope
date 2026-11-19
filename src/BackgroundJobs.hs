@@ -4883,10 +4883,12 @@ gitSyncFromRepo pid sid = withGitSync pid sid GitSync.ImportDashboards $ \conn s
             unreadable = [path | (path, Left _) <- fileReads]
             readErrors = [err | (_, Left err) <- fileReads]
         lift $ RepositorySync.adoptDashboards sync
+        -- A detached resource is a tombstone: its path stays taken, so its file never registers as new.
+        let attached = filter (isNothing . (.detachedAt))
         previousResources <- lift $ RepositorySync.resources sync.projectId sync.id
         -- Content-preserving Git renames keep local identities, history, and pending edits.
         legacyShas <- lift $ Map.fromList . map (\d -> (d.id, d.fileSha)) <$> Dashboards.getDashboardsByIds sync.projectId (V.fromList [UUIDId r.localId | r <- previousResources, r.kind == RepositorySync.Dashboard])
-        lift $ forM_ previousResources \resource -> unless (resource.filePath `elem` map fst remote || resource.filePath `elem` unreadable) do
+        lift $ forM_ (attached previousResources) \resource -> unless (resource.filePath `elem` map fst remote || resource.filePath `elem` unreadable) do
           let legacy = guard (resource.kind == RepositorySync.Dashboard) *> join (Map.lookup (UUIDId resource.localId) legacyShas)
           candidates <-
             catMaybes <$> forM entries \entry -> do
@@ -4903,7 +4905,7 @@ gitSyncFromRepo pid sid = withGitSync pid sid GitSync.ImportDashboards $ \conn s
         forM_ remote \(path, definition) -> unless (any ((== path) . (.filePath)) owned) do
           localId <- lift UUID.genUUID
           lift $ RepositorySync.registerResource sync.projectId sync.id (RepositorySync.definitionKind definition) localId path
-        allResources <- lift $ RepositorySync.resources sync.projectId sync.id
+        allResources <- lift $ attached <$> RepositorySync.resources sync.projectId sync.id
         let readable = filter (\resource -> resource.filePath `notElem` unreadable) allResources
         locals <- lift $ RepositorySync.localDefinitions sync.projectId readable
         failures <-
@@ -4941,7 +4943,7 @@ gitSyncFromRepo pid sid = withGitSync pid sid GitSync.ImportDashboards $ \conn s
               _ -> do
                 owned <- lift $ RepositorySync.resources updatedSync.projectId updatedSync.id
                 -- Conflicts block only their own files; unrelated resources continue exporting.
-                let exportable = filter (\resource -> not resource.conflicted && resource.filePath `notElem` unreadable) owned
+                let exportable = filter (\resource -> not resource.conflicted && isNothing resource.detachedAt && resource.filePath `notElem` unreadable) owned
                 snapshot <- lift $ RepositorySync.localDefinitions updatedSync.projectId exportable
                 let changed = [(resource.filePath, RepositorySync.encodeDefinition <$> local) | (resource, local) <- snapshot, (AE.toJSON <$> local) /= resource.localBaseline]
                     snapshotHash = Git.computeContentSha $ encodeUtf8 revisionKey <> toStrict (AE.encode [(path, decodeUtf8 @Text <$> body) | (path, body) <- changed])

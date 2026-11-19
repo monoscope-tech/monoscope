@@ -9,6 +9,7 @@ module Models.Projects.RepositorySync (
   Reconciliation (..),
   reconcile,
   resources,
+  detach,
   adoptDashboards,
   normalizeDefinition,
   localDefinition,
@@ -91,6 +92,7 @@ data Resource = Resource
   , remoteDefinition :: Maybe AE.Value
   , conflicted :: Bool
   , localBaseline :: Maybe AE.Value
+  , detachedAt :: Maybe UTCTime
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
@@ -150,7 +152,7 @@ reconcile (remoteBase, localBase) local remote
 
 
 resources :: DB es => Projects.ProjectId -> GitSync.GitHubSyncId -> Eff es [Resource]
-resources pid sid = Hasql.interp [HI.sql| SELECT id, project_id, sync_id, kind, local_id, file_path, merged_definition, remote_definition, conflicted, local_baseline FROM projects.repository_resources WHERE project_id = #{pid} AND sync_id = #{sid} ORDER BY file_path |]
+resources pid sid = Hasql.interp [HI.sql| SELECT id, project_id, sync_id, kind, local_id, file_path, merged_definition, remote_definition, conflicted, local_baseline, detached_at FROM projects.repository_resources WHERE project_id = #{pid} AND sync_id = #{sid} ORDER BY file_path |]
 
 
 adoptDashboards :: DB es => GitSync.GitHubSync -> Eff es ()
@@ -182,6 +184,13 @@ registerResource pid sid kind localId path =
     [HI.sql| INSERT INTO projects.repository_resources (project_id, sync_id, kind, local_id, file_path)
     SELECT #{pid}, id, #{kind}, #{localId}, #{path} FROM projects.git_sync WHERE project_id = #{pid} AND id = #{sid}
     ON CONFLICT (project_id, kind, local_id) DO NOTHING |]
+
+
+-- | Ends a resource's sync and keeps it in Monoscope; its file stays in the repository, untouched.
+detach :: DB es => Resource -> Eff es ()
+detach resource = do
+  Hasql.interpExecute_ [HI.sql| UPDATE projects.repository_resources SET detached_at = now(), conflicted = false, remote_definition = NULL WHERE id = #{resource.id} AND project_id = #{resource.projectId} |]
+  when (resource.kind == Dashboard) $ Hasql.interpExecute_ [HI.sql| UPDATE projects.dashboards SET git_sync_id = NULL, file_path = NULL, file_sha = NULL WHERE id = #{resource.localId} AND project_id = #{resource.projectId} |]
 
 
 saveBaseline :: DB es => Resource -> Maybe AE.Value -> Maybe AE.Value -> Eff es ()
@@ -310,7 +319,7 @@ importDefinition resource observed definition = runExceptT do
       pure ([sql] <> [[HI.sql| UPDATE monitors.query_monitors SET deleted_at = NULL WHERE project_id = #{resource.projectId} AND id = #{resource.localId} |] | resource.kind == Query], Just $ AE.toJSON value)
   ExceptT $ handleCollision $ Hasql.transaction TxS.ReadCommitted TxS.Write $ runExceptT do
     -- Serialize imports/conflict resolution even when the local row does not exist yet.
-    present <- lift $ Hasql.queryTx @(Maybe Resource) [HI.sql| SELECT id, project_id, sync_id, kind, local_id, file_path, merged_definition, remote_definition, conflicted, local_baseline FROM projects.repository_resources WHERE id = #{resource.id} AND project_id = #{resource.projectId} FOR UPDATE |]
+    present <- lift $ Hasql.queryTx @(Maybe Resource) [HI.sql| SELECT id, project_id, sync_id, kind, local_id, file_path, merged_definition, remote_definition, conflicted, local_baseline, detached_at FROM projects.repository_resources WHERE id = #{resource.id} AND project_id = #{resource.projectId} FOR UPDATE |]
     fresh <- hoistEither $ maybeToRight "This resource is no longer in the repository folder." present
     unless ((fresh.mergedDefinition, fresh.remoteDefinition, fresh.conflicted, fresh.localBaseline) == (resource.mergedDefinition, resource.remoteDefinition, resource.conflicted, resource.localBaseline)) $ hoistEither $ Left "Sync state changed during import. Refresh and retry."
     current <- lift $ fmap (\(HI.OneColumn value) -> value) <$> Hasql.queryTx @(Maybe (HI.OneColumn AE.Value)) (snapshotSql resource <> [HI.sql| FOR UPDATE |])
