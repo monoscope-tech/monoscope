@@ -2766,26 +2766,25 @@ issuePreview_ nowM Issues.IssueL{base} = div_ [class_ "flex items-center gap-2 m
     let created = zonedTimeToUTC base.createdAt; age = agoText now created
     span_ [class_ "shrink-0 opacity-40"] "·"
     span_ [class_ "shrink-0 whitespace-nowrap", term "data-tippy-content" $ "First seen " <> formatUTC created] $ toHtml $ maybe age (<> " old") $ T.stripSuffix " ago" age
-  span_ [class_ "shrink-0 opacity-40"] "·"
-  snippet
+  -- No payload to preview: say nothing rather than a "details unavailable" on every card.
+  whenJust (Issues.issuePayload base) \payload -> span_ [class_ "shrink-0 opacity-40"] "·" >> snippet payload
   where
-    snippet = case Issues.issuePayload base of
-      Just (Issues.RuntimeExceptionP d) -> previewSnippet $ d.errorType <> ": " <> d.errorMessage
-      Just (Issues.QueryAlertP d) -> previewSnippet d.queryExpression
-      Just (Issues.LogPatternP d) -> logPatternPreview d.logPattern d.sampleMessage
-      Just (Issues.LogPatternRateChangeP d) -> logPatternPreview d.logPattern d.sampleMessage
-      Just (Issues.PerformanceP d) -> previewSnippet d.query
-      Just (Issues.CronP d) -> previewSnippet $ d.slug <> " \x2014 " <> display d.failure
-      Just (Issues.FeedbackP d) -> previewSnippet d.message
-      Just (Issues.UptimeP d) -> previewSnippet $ d.url <> " \x2014 " <> d.reason
-      Just (Issues.FrontendP d) -> previewSnippet $ d.element <> foldMap (" on " <>) d.pageUrl
-      Just (Issues.ApiChangeP d) ->
+    snippet = \case
+      Issues.RuntimeExceptionP d -> previewSnippet $ d.errorType <> ": " <> d.errorMessage
+      Issues.QueryAlertP d -> previewSnippet d.queryExpression
+      Issues.LogPatternP d -> logPatternPreview d.logPattern d.sampleMessage
+      Issues.LogPatternRateChangeP d -> logPatternPreview d.logPattern d.sampleMessage
+      Issues.PerformanceP d -> previewSnippet d.query
+      Issues.CronP d -> previewSnippet $ d.slug <> " \x2014 " <> display d.failure
+      Issues.FeedbackP d -> previewSnippet d.message
+      Issues.UptimeP d -> previewSnippet $ d.url <> " \x2014 " <> d.reason
+      Issues.FrontendP d -> previewSnippet $ d.element <> foldMap (" on " <>) d.pageUrl
+      Issues.ApiChangeP d ->
         previewSnippet $ case [countNoun (V.length fs) "field" <> " " <> verb | (verb, fs) <- [("added", d.newFields), ("modified", d.modifiedFields), ("removed", d.deletedFields)], not (V.null fs)] of
           [] -> case d.subject of
             Just (ApiChanges.SpanSchema _) -> "Span schema observed"
             _ -> "New endpoint observed"
           changes -> T.intercalate " · " changes
-      Nothing -> unparsablePayload_
     previewSnippet txt = span_ [class_ "font-mono truncate min-w-0", term "data-tippy-content" txt] $ renderWithPlaceholders_ $ unescSummary txt
     logPatternPreview pat sampleMsg
       | "⇒" `T.isInfixOf` pat = span_ [class_ "truncate min-w-0"] $ renderSummaryText_ pat
@@ -2863,7 +2862,7 @@ issueTypeChip_ compact issueType =
   where
     color, icon, fullTxt, shortTxt :: Text
     (color, icon, fullTxt) = case issueType of
-      Issues.RuntimeException -> ("text-fillError-strong", "triangle-alert", "Error")
+      Issues.RuntimeException -> ("text-fillError-strong", "circle-xmark", "Error")
       Issues.QueryAlert -> ("text-fillWarning-strong", "zap", "Alert")
       Issues.LogPattern -> ("text-fillInformation-strong", "file-text", "Log Pattern")
       Issues.LogPatternRateChange -> ("text-fillWarning-strong", "activity", "Rate Change")

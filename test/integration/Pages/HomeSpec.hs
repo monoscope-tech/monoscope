@@ -33,7 +33,7 @@ spec = around withTestResources $ describe "Home screen" do
 
     page <- renderT <$> call tr (Home.homeGetH pid)
     map (\w -> T.count ("id=\"" <> w <> "_widgetEl\"") page) ["traffic", "p95-latency", "error-rate", "apdex-score", "home-stack-logs"] `shouldBe` [1, 1, 1, 1, 1]
-    page `shouldContainAll` ["Today&#39;s issues", "Checkout fails on a null cart", "Today&#39;s improvements", "Payment gateway timeout", "Resolved", "p95 latency on /cart down 38%", "Flagged by AI", "Checkout 5xx up 4.8x since deploy v3.2.1", "Error regression radar", "Talk to Monoscope engineers in Slack", "home-ask-form", "Connect your coding agent", "/api/v1/mcp", "All clear. No monitors are firing.", "Your stack", "Just you so far", "monoscope config set project " <> pid.toText]
+    page `shouldContainAll` ["Today&#39;s issues", "Checkout fails on a null cart", "Today&#39;s improvements", "Payment gateway timeout", "Resolved", "p95 latency on /cart down 38%", "Flagged by AI", "Checkout 5xx up 4.8x since deploy v3.2.1", "Error regression radar", "Talk to Monoscope engineers in Slack", "home-ask-form", "Connect your coding agent", "/api/v1/mcp", "Nothing is being watched yet.", "Your stack", "Just you so far", "monoscope config set project " <> pid.toText]
 
     [hid] <- dbQuery tr [sql|SELECT id FROM apis.home_highlights WHERE project_id = ? AND kind = 'insight'|] (Only pid)
     void $ call tr $ Home.highlightDismissPostH pid (fromOnly hid)

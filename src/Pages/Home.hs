@@ -254,8 +254,12 @@ alerts_ d = section_ [class_ "flex flex-col gap-3", Aria.label_ "Alerts"] do
   sectionHead_ "Alerts" (guarded (> 0) $ length d.firing) $ Just ("All monitors", (urls.monitors d.pid).listGet Nothing Nothing)
   if null d.firing
     then div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-1 rounded-2xl surface-raised px-4 py-3 text-sm shadow-[0_0_0_1px_var(--color-strokeWeak)]"] do
-      span_ [class_ "inline-flex items-center gap-2 font-medium text-textStrong"] $ faSprite_ "circle-check" "regular" "w-4 h-4 text-iconSuccess" >> "All clear. No monitors are firing."
-      span_ [class_ "text-textWeak"] $ toHtml $ countNoun d.monitorCount "monitor" <> " watching" <> bool "" (" · " <> countNoun d.activeIncidents "active incident") (d.activeIncidents > 0)
+      -- Green means checked and healthy; with no monitors nothing is checked, so it stays neutral.
+      span_ [class_ "inline-flex items-center gap-2 font-medium text-textStrong"]
+        $ if d.monitorCount == 0
+          then faSprite_ "bell-slash" "regular" "w-4 h-4 text-iconNeutral" >> "Nothing is being watched yet."
+          else faSprite_ "circle-check" "regular" "w-4 h-4 text-iconSuccess" >> "All clear. No monitors are firing."
+      when (d.monitorCount > 0) $ span_ [class_ "text-textWeak"] $ toHtml $ countNoun d.monitorCount "monitor" <> " watching" <> bool "" (" · " <> countNoun d.activeIncidents "active incident") (d.activeIncidents > 0)
       when (d.monitorCount == 0) $ a_ ([href_ $ (urls.monitors d.pid).listGet Nothing Nothing, class_ "ms-auto text-textBrand hover:underline"] <> navTabAttrs) "Create a monitor"
     else div_ [class_ "flex flex-col divide-y divide-strokeWeak overflow-hidden rounded-2xl surface-raised shadow-[0_0_0_1px_var(--color-strokeWeak)]"] $ forM_ d.firing \m -> do
       let alerting = m.currentStatus == Monitors.MSAlerting
@@ -302,8 +306,9 @@ statusBar_ d = div_ [class_ "grid grid-cols-2 sm:grid-cols-5 gap-px overflow-hid
   stat_ (issuesListUrl d.pid) (length d.resolved) "Resolved today" (bool "" "text-textSuccess" (not $ null d.resolved))
   stat_ (urls.aiRoutinesGet d.pid) (length d.highlights) "Flagged by AI" ""
   case length d.routines of
+    -- Every tile is a link, so this one is neutral like the rest; only its icon carries the brand.
     0 -> a_ ([href_ $ urls.aiRoutinesGet d.pid, class_ "col-span-2 sm:col-span-1 flex flex-col justify-center gap-0.5 surface-raised px-4 py-3 hover:bg-fillWeak transition-colors"] <> navTabAttrs) do
-      span_ [class_ "inline-flex items-center gap-1.5 text-sm font-medium text-textBrand"] $ faSprite_ "sparkles" "regular" "w-3.5 h-3.5" >> "Set up a routine"
+      span_ [class_ "inline-flex items-center gap-1.5 text-sm font-medium text-textStrong"] $ faSprite_ "sparkles" "regular" "w-3.5 h-3.5 text-iconBrand" >> "Set up a routine"
       span_ [class_ "text-xs text-textWeak"] "AI that watches for you"
     n -> stat_ (urls.aiRoutinesGet d.pid) n (bool "AI routines watching" "AI routine watching" (n == 1)) ""
   where
@@ -343,11 +348,13 @@ cardCls = "group/card relative flex flex-col gap-2.5 min-w-0 rounded-2xl surface
 
 
 -- | A card's identity row: a toned dot and id (the dot's meaning is repeated in text for screen readers), then context.
-cardMeta_ :: BadgeColor -> Text -> Text -> Html () -> Html ()
-cardMeta_ tone dotLabel ident context = div_ [class_ "flex items-center gap-2 min-w-0 text-xs text-textWeak"] do
+-- The dot is severity's, so a card whose context already names its outcome passes 'Nothing'.
+cardMeta_ :: Maybe BadgeColor -> Text -> Text -> Html () -> Html ()
+cardMeta_ toneM dotLabel ident context = div_ [class_ "flex items-center gap-2 min-w-0 text-xs text-textWeak"] do
   span_ [class_ "inline-flex shrink-0 items-center gap-1.5 rounded-md bg-fillWeak px-1.5 py-0.5 font-medium tabular-nums text-textStrong"] do
-    span_ [class_ $ "size-1.5 rounded-full bg-current " <> (\(_, _, _, fg) -> fg) (toneCls tone)] ""
-    span_ [class_ "sr-only"] $ toHtml dotLabel
+    whenJust toneM \tone -> do
+      span_ [class_ $ "size-1.5 rounded-full bg-current " <> (\(_, _, _, fg) -> fg) (toneCls tone)] ""
+      span_ [class_ "sr-only"] $ toHtml dotLabel
     toHtml ident
   context
 
@@ -355,7 +362,7 @@ cardMeta_ tone dotLabel ident context = div_ [class_ "flex items-center gap-2 mi
 issueCard_ :: Projects.ProjectId -> UTCTime -> Issues.IssueL -> Html ()
 issueCard_ pid now i = a_ ([href_ $ issueDetailUrl pid i.base.id, class_ cardCls] <> navTabAttrs) do
   let label = T.toTitle $ display i.base.severity
-  cardMeta_ (fromMaybe NeutralBadge $ severityTone i.base.severity) label ("#" <> show i.base.seqNum) do
+  cardMeta_ (Just $ fromMaybe NeutralBadge $ severityTone i.base.severity) label ("#" <> show i.base.seqNum) do
     span_ [class_ "font-medium text-textStrong"] $ toHtml label
     span_ [class_ "ml-auto shrink-0"] $ toHtml $ agoText now $ zonedTimeToUTC i.base.createdAt
   p_ [class_ "text-[15px] leading-snug font-medium text-textStrong line-clamp-2 break-words"] $ renderIssueTitle_ i
@@ -375,7 +382,7 @@ activityStrip_ fill buckets = div_ [class_ "flex h-6 items-end gap-0.5", role_ "
 
 resolvedCard_ :: Projects.ProjectId -> UTCTime -> Issues.ResolvedIssue -> Html ()
 resolvedCard_ pid now r = a_ ([href_ $ issueDetailUrl pid r.id, class_ cardCls] <> navTabAttrs) do
-  cardMeta_ SuccessBadge "Resolved" ("#" <> show r.seqNum) do
+  cardMeta_ Nothing "Resolved" ("#" <> show r.seqNum) do
     span_ [class_ "inline-flex items-center gap-1 text-textSuccess"] $ faSprite_ "circle-check" "regular" "w-3 h-3" >> bool "Resolved" "Auto-resolved" (r.event == Issues.IEAutoResolved)
     whenJust r.service $ span_ [class_ "truncate"] . toHtml
     span_ [class_ "ml-auto shrink-0"] $ toHtml $ agoText now r.resolvedAt
@@ -389,7 +396,7 @@ highlightCard_ pid now h = div_ [id_ $ "highlight-" <> h.id.toText, class_ cardC
         Issues.HKIssue -> (ErrorBadge, "Flagged issue")
         Issues.HKImprovement -> (SuccessBadge, "Improvement")
         Issues.HKInsight -> (NeutralBadge, "Insight")
-  cardMeta_ tone label "AI" do
+  cardMeta_ (Just tone) label "AI" do
     highlightSource_ pid h
     span_ [class_ "ml-auto shrink-0 pe-6"] $ toHtml $ agoText now h.updatedAt
   highlightTitle_ "text-[15px] leading-snug" h
