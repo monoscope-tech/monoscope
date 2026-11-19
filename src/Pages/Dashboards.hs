@@ -3272,7 +3272,7 @@ newtype DashboardYaml = DashboardYaml Dashboards.Dashboard
 data DashboardSwitcher = DashboardSwitcher
   { pid :: Projects.ProjectId
   , current :: Dashboards.DashboardId
-  , dashboards :: [Dashboards.DashboardVM]
+  , dashboards :: [Dashboards.NavDashboard]
   }
 
 
@@ -3285,7 +3285,7 @@ instance ToHtml DashboardSwitcher where
     div_ [class_ "max-h-[50vh] space-y-0.5 overflow-y-auto", id_ "dashboard-switcher-list"] $ forM_ s.dashboards \d -> do
       let isCurrent = d.id == s.current
       a_ ([class_ $ "dashboard_item flex min-w-0 items-center gap-2 rounded-lg px-2.5 py-2 text-sm " <> bool "hover:bg-fillHover" "bg-fillWeak font-medium" isCurrent, href_ $ urls.dashboardsGet s.pid d.id Nothing Nothing Nothing Nothing [], data_ "filter" (dashTitle d.title)] <> [term "aria-current" "page" | isCurrent]) do
-        span_ [class_ "flex w-3.5 shrink-0"] $ when (isJust d.starredSince) $ faSprite_ "star" "solid" "size-3.5 text-iconWarning"
+        span_ [class_ "flex w-3.5 shrink-0"] $ when d.starred $ faSprite_ "star" "solid" "size-3.5 text-iconWarning"
         span_ [class_ "grow truncate"] $ toHtml (dashTitle d.title)
         when isCurrent $ faSprite_ "check" "regular" "size-3.5 shrink-0 text-textBrand"
     p_ [class_ "hidden py-4 text-center text-sm text-textWeak", term "hx-live:.hidden" "q('.dashboard_item:not(.hidden) in #dashboard-switcher-list').count > 0"] "No matching dashboards"
@@ -3298,7 +3298,7 @@ instance ToHtml DashboardSwitcher where
 dashboardSwitcherGetH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardSwitcher)
 dashboardSwitcherGetH pid dashId = do
   _ <- Projects.sessionAndProject pid
-  addRespHeaders . DashboardSwitcher pid dashId =<< Dashboards.selectDashboardsSortedBy pid Dashboards.Asc Dashboards.DSTitle
+  addRespHeaders . DashboardSwitcher pid dashId =<< Dashboards.selectNavDashboards pid
 
 
 instance ToHtml DashboardYaml where

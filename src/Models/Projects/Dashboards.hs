@@ -31,6 +31,8 @@ module Models.Projects.Dashboards (
   getOrInsertByBaseTemplate,
   selectDashboardsByTeam,
   selectDashboardsSortedBy,
+  NavDashboard (..),
+  selectNavDashboards,
   DashboardSort (..),
   SortOrder (..),
   readOnlyTemplate,
@@ -393,6 +395,20 @@ selectDashboardsSortedBy pid order key =
     $ selectFrom @DashboardVM
     <> [HI.sql| WHERE project_id = #{pid} ORDER BY starred_since DESC NULLS LAST, |]
     <> fromString (toString (SortField (display key) order).toSql)
+
+
+-- | The columns a dashboard picker needs, without the widget schema: every page's nav loads it.
+data NavDashboard = NavDashboard {id :: DashboardId, title :: Text, starred :: Bool}
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | Starred first, then by title.
+selectNavDashboards :: DB es => Projects.ProjectId -> Eff es [NavDashboard]
+selectNavDashboards pid =
+  Hasql.interp
+    [HI.sql| SELECT id, title, starred_since IS NOT NULL FROM projects.dashboards
+             WHERE project_id = #{pid} ORDER BY starred_since DESC NULLS LAST, title |]
 
 
 dashTitle :: Text -> Text

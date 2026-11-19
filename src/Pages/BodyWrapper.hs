@@ -23,6 +23,7 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
+import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (OnboardingStep (..))
 import Models.Projects.Projects qualified as Projects
@@ -57,15 +58,18 @@ mkPageCtxWithScope withScope pid = do
   (sess, project, bw) <- mkAIPageCtx pid
   viewerPermission <- fromMaybe ProjectMembers.PView <$> ProjectMembers.getSessionPermission pid sess.user.id
   let now = bw.shellNow
-  (facetsM, (activationProgressM, conversations)) <-
+  ((facetsM, navDashboards), (activationProgressM, conversations)) <-
     concurrently
-      (if withScope then SchemaCatalog.getFacetSummary (Just [envField, serviceField]) pid "otel_logs_and_spans" now now else pure Nothing)
+      ( concurrently
+          (if withScope then SchemaCatalog.getFacetSummary (Just [envField, serviceField]) pid "otel_logs_and_spans" now now else pure Nothing)
+          (Dashboards.selectNavDashboards pid)
+      )
       ( concurrently
           (if V.elem "checklist_dismissed" project.onboardingStepsCompleted then pure Nothing else Just <$> activationProgress pid (V.elem (show Integration) project.onboardingStepsCompleted))
           (Issues.listVisibleConversations pid viewerPermission (Investigations.MemberViewer sess.user.id))
       )
   let options field = V.fromList $ sort [v.value | SchemaCatalog.FacetData m <- (.facetJson) <$> maybeToList facetsM, v <- HM.findWithDefault [] field m, not (T.null v.value)]
-  pure (sess, project, bw{activationProgressM, conversations, envOptions = options envField, serviceOptions = options serviceField, needsTagify = True})
+  pure (sess, project, bw{activationProgressM, conversations, navDashboards, envOptions = options envField, serviceOptions = options serviceField, needsTagify = True})
   where
     envField = "resource.deployment.environment.name"
     serviceField = "resource.service.name"
@@ -268,6 +272,7 @@ data BWConfig = BWConfig
   -- Explorer's facet sidebar offers.
   , serviceOptions :: V.Vector Text
   , activationProgressM :: Maybe ActivationProgress
+  , navDashboards :: [Dashboards.NavDashboard]
   , conversations :: [Issues.ConversationSummary]
   , activeConversationId :: Maybe (UUIDId "conversation")
   , composerRequestId :: Maybe (UUIDId "ai_routine_run")
@@ -827,15 +832,20 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
       | (view, label) <- [("menu", "Navigate"), ("ai", "Agents")]
       ]
     nav_ [id_ "main-sidenav", class_ "mt-2 min-h-0 overflow-x-hidden overflow-y-auto flex flex-col gap-1 text-textWeak group-has-[#nav-view-ai:checked]/nav:hidden [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end|]] do
-      let flyoutLink (linkText, link) =
-            a_ ([href_ link, class_ "flex gap-2.5 items-center px-3 py-2 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong whitespace-nowrap"] <> navTabAttrs)
-              $ span_ [] (toHtml linkText)
+      let flyoutLink (label, link) =
+            a_ ([href_ link, class_ "flex gap-2.5 items-center px-3 py-2 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong whitespace-nowrap"] <> navTabAttrs) label
+          -- Starred first; the list is capped so the flyout stays a menu, with the rest one click away.
+          dashboardFlyout ds =
+            [ (span_ [class_ "flex w-3 shrink-0"] (when d.starred $ faSprite_ "star" "solid" "size-3 text-iconWarning") >> span_ [class_ "max-w-64 truncate"] (toHtml $ Dashboards.dashTitle d.title), urls.dashboardsGet project.id d.id Nothing Nothing Nothing Nothing [])
+            | d <- take 15 ds
+            ]
+              <> [(span_ [class_ "w-3 shrink-0"] "" >> "All dashboards", dashboardsUrl project.id) | not (null ds)]
           renderNavItem mTitle mUrl fIcon = do
             -- Page handlers name the section in English; labels may be translated.
             let sectionTitle = fromMaybe mTitle $ lookup mUrl [(url, title) | (title, url, _) <- menu I18n.En project.id]
                 isActive = fromMaybe pageTitle menuItem == sectionTitle
                 activeCls = bool "" " active" isActive
-                flyoutItems = navFlyoutItems project.id sectionTitle
+                flyoutItems = if sectionTitle == "Dashboards" then dashboardFlyout bcfg.navDashboards else first toHtml <$> navFlyoutItems project.id sectionTitle
                 hasFlyout = not (null flyoutItems)
             ( if hasFlyout
                 then
@@ -849,6 +859,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                         set flyoutTop to Math.max(workspaceBounds.top + 8, Math.min(my.getBoundingClientRect().top, workspaceBounds.bottom - flyout.offsetHeight - 8)) - workspaceBounds.top
                         set flyout.style.left to `${flyoutLeft}px`
                         set flyout.style.top to `${flyoutTop}px`
+                        set flyout.dataset.placed to ''
                       end|]
                     ]
                 else id
@@ -870,8 +881,10 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                     faSprite_ fIcon "regular" "nav-icon w-4 h-4 shrink-0"
                     span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
                     when hasFlyout $ span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block ml-auto text-textWeak"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
+                -- Shown only once placed: a morph after clicking a link resets the inline position while the
+                -- pointer is still over the item, which used to flash the flyout at the viewport's corner.
                 when hasFlyout
-                  $ div_ [class_ "nav-flyout max-md:hidden invisible opacity-0 group-hover/flyout:visible group-hover/flyout:opacity-100 fixed top-0 left-0 z-50 min-w-44 bg-bgRaised border border-strokeWeak rounded-lg shadow-md py-1.5 transition-[opacity,visibility] duration-100"]
+                  $ div_ [class_ "nav-flyout max-md:hidden invisible opacity-0 group-hover/flyout:data-placed:visible group-hover/flyout:data-placed:opacity-100 max-h-[70vh] overflow-y-auto fixed top-0 left-0 z-50 min-w-44 bg-bgRaised border border-strokeWeak rounded-lg shadow-md py-1.5 transition-[opacity,visibility] duration-100"]
                   $ mapM_ flyoutLink flyoutItems
       let (primary, secondary) = splitAt 5 $ menu sess.lang project.id
       mapM_ (uncurry3 renderNavItem) primary
