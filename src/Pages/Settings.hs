@@ -938,7 +938,7 @@ notificationsTestPostH pid TestForm{..} = do
 
   Log.logTrace "Sending test notification" (channel, pid, issueType)
 
-  let projectUrl = urls.dashboardRedirectGet pid []
+  let projectUrl = urls.homeGet pid
       issuesUrl = hostPath appCtx.env.hostUrl $ (urls.issues pid).listGet Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] []
       testTemplate
         | Just mk <- lookup issueType [("runtime_exception", ET.runtimeErrorsEmail), ("escalating_errors", ET.escalatingErrorsEmail), ("regressed_errors", ET.regressedErrorsEmail), ("error_spike", ET.errorSpikesEmail)] =

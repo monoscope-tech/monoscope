@@ -210,6 +210,7 @@ data LocalOperation
   | GetRelatedIncidents
   | GetIncidentContext
   | SaveArtifact
+  | HighlightOnHome
   | ReadArtifact
   | SearchProjectTools
   | GetProjectToolSchema
@@ -239,6 +240,8 @@ localPolicy :: LocalOperation -> AgentPolicy
 localPolicy = \case
   SendToSlack -> ExternalPublication
   SaveArtifact -> ConversationWrite
+  -- Dismissable and self-expiring, so routines may flag without a review step.
+  HighlightOnHome -> ConversationWrite
   WriteProjectMemory -> ProjectMemoryWrite
   (GetFieldValues; GetServices; CountQuery; SampleLogs; GetFacets; RunQuery; RunSqlQuery; GetInvestigationHistory; GetRelatedIncidents; GetIncidentContext; ReadArtifact; SearchProjectTools; GetProjectToolSchema; GetCodeContext; ListRunbooks; ReadRunbook; GetLinkedRepositories; GetDeployments; ListProjectMemory; ReadProjectMemory; OpenPage; ReadPage; Click; Fill) -> ReadOnly ProjectMembers.PView
 
@@ -278,6 +281,7 @@ localTools = Map.fromList [(tool.name, tool) | operation <- [minBound .. maxBoun
       GetRelatedIncidents -> readTool "Find up to ten earlier episodes related to this incident by the same source, or the same service, environment and issue type. Each result states its matching basis, recorded status and notification snapshots. Service/environment matching uses current stored issue metadata, which may differ from onset. Similarity is not proof of the same cause or a successful fix; resolved is distinct from measured recovery. limitReached means the list may be incomplete. Scope is fixed by the authorized Slack thread." []
       GetIncidentContext -> readTool "Get the stored incident state, onset and latest notification, evidence links, and current monitor query for this Slack thread. No arguments; project and thread scope are fixed by authorization." []
       SaveArtifact -> definition True "Create or update a markdown document in this conversation. The same key always addresses the same document." [("key", "string", "Stable document key, e.g. checkout-latency-review or 2026-10-28"), ("content", "string", "Markdown body to write"), ("title", "string", "Human title; required when creating, optional when updating"), ("mode", "string", "replace (default) rewrites the document; append adds content to its end")]
+      HighlightOnHome -> definition True "Put one item on this project's Home page, where the team looks first each day. Use sparingly, for what a person should see today: kind=issue for a problem needing attention, kind=improvement for something measurably better (a fix holding, latency down, errors gone), kind=insight for useful context. Flagging the same title again refreshes it; items expire after two days." [("title", "string", "One-line headline with the number that matters, e.g. 'Checkout 5xx up 4.8x since deploy v3.2.1'"), ("kind", "string", "issue, improvement or insight"), ("detail", "string", "One or two sentences of evidence"), ("link", "string", "Optional project page path starting with /p/<project id>/ that shows the evidence")]
       ReadArtifact -> optionalReadTool "Read one document from this conversation by key, or list every document (key, title, last update, size) when no key is given." [("key", "string", "Document key")]
       SearchProjectTools -> readTool "Find project operations by name or task. Returns short summaries; load a selected tool before calling it." [("query", "string", "Operation or task to search for")]
       GetProjectToolSchema -> readTool "Load the full input schema for one discovered project operation and make it callable in this conversation." [("name", "string", "Exact operation name from search_project_tools")]

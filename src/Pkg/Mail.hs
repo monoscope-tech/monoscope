@@ -112,7 +112,7 @@ sendDiscordAlert replyToMsgIdM alert pid pTitle channelIdM' = do
   case channelIdM of
     Nothing -> Nothing <$ Log.logAttention "Discord alert skipped: no channel configured" (AE.object ["project_id" AE..= pid])
     Just cid -> do
-      let projectUrl = hostPath appCtx.env.hostUrl $ urls.dashboardRedirectGet pid []
+      let projectUrl = hostPath appCtx.env.hostUrl $ urls.homeGet pid
           byHash h = hostPath appCtx.env.hostUrl $ (urls.issues pid).detailHashGet h Nothing Nothing Nothing Nothing Nothing
           mkPayload = \case
             RuntimeErrorAlert{..} -> Just $ discordErrorAlert runtimeAlertType errorData pTitle projectUrl (byHash errorData.hash) chartUrl occurrenceText firstSeenText ongoingFor
@@ -147,7 +147,7 @@ sendSlackAlert threadTsM alert pid pTitle channelM = do
   slackData <- getProjectSlackData pid
   case (channelM, slackData) of
     (Just cid, Just sd) -> do
-      let projectUrl = hostPath appCtx.env.hostUrl $ urls.dashboardRedirectGet pid []
+      let projectUrl = hostPath appCtx.env.hostUrl $ urls.homeGet pid
           byHash h = hostPath appCtx.env.hostUrl $ (urls.issues pid).detailHashGet h Nothing Nothing Nothing Nothing Nothing
           mkPayload =
             fmap AE.toJSON . \case

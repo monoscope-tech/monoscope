@@ -64,6 +64,8 @@ module Pages.Issues (
   PatternUnmerged,
   -- Shared rendering helpers
   issueCardCompact_,
+  issueDetailUrl,
+  issuesListUrl,
   aiChatHistoryView_,
   chatAvatar_,
   aiChatWidgets_,
@@ -2009,7 +2011,7 @@ resolveErrorPostH pid errUuid inNextRelease = act do
 resolveErrorAs :: Projects.User -> ErrorPatterns.ErrorPattern -> UTCTime -> ATAuthCtx Incidents.ErrorResolution
 resolveErrorAs user err now = do
   ctx <- ask @AuthContext
-  let message iid = Mail.resolvedErrorMessage err.errorData (Projects.userLabel user) now (hostPath ctx.env.hostUrl $ urls.dashboardRedirectGet err.projectId []) (hostPath ctx.env.hostUrl . issueDetailUrl err.projectId <$> iid)
+  let message iid = Mail.resolvedErrorMessage err.errorData (Projects.userLabel user) now (hostPath ctx.env.hostUrl $ urls.homeGet err.projectId) (hostPath ctx.env.hostUrl . issueDetailUrl err.projectId <$> iid)
   Incidents.resolveErrorIncident err.projectId err.id user.id now message
 
 

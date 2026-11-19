@@ -11,6 +11,7 @@ module Pages.Dashboards (
   dashboardSettledPostH,
   dashboardTabRenamePatchH,
   entrypointRedirectGetH,
+  dashboardUrl,
   rumRedirectH,
   DashboardGet (..),
   DashboardSettleSample (..),

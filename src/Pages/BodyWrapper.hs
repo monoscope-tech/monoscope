@@ -118,7 +118,8 @@ tippyRight_ content = [term "data-tippy-placement" "right", term "data-tippy-con
 
 menu :: I18n.Language -> Projects.ProjectId -> [(Text, Text, Text)]
 menu lang pid =
-  [ (I18n.t lang "nav.dashboards", dashboardsUrl pid, "dashboard")
+  [ ("Home", urls.homeGet pid, "house")
+  , (I18n.t lang "nav.dashboards", dashboardsUrl pid, "dashboard")
   , (I18n.t lang "nav.explorer", Components.logExplorerUrl pid, "explore")
   , (I18n.t lang "nav.issues", issuesUrl pid Nothing, "bug")
   , (I18n.t lang "nav.monitors", (urls.monitors pid).listGet Nothing Nothing, "list-check")
@@ -736,7 +737,7 @@ projectsDropDown currProject projects = do
       div_ [class_ "space-y-0.5 max-h-[50vh] overflow-y-auto", id_ "projectsContainer"] do
         projects & mapM_ \project -> do
           let isActive = currProject.id == project.id
-          a_ [class_ $ "flex justify-between items-center py-2 px-2.5 rounded-lg transition-colors duration-100 project_item min-w-0" <> bool " hover:bg-fillHover" " bg-fillWeak font-medium" isActive, href_ $ urls.dashboardRedirectGet project.id []] do
+          a_ [class_ $ "flex justify-between items-center py-2 px-2.5 rounded-lg transition-colors duration-100 project_item min-w-0" <> bool " hover:bg-fillHover" " bg-fillWeak font-medium" isActive, href_ $ urls.homeGet project.id] do
             span_ [class_ "truncate"] $ toHtml project.title
             when isActive $ faSprite_ "check" "regular" "h-3.5 w-3.5 text-textBrand shrink-0"
         p_ [class_ "hidden text-textWeak text-sm text-center py-4", term "hx-live:.hidden" "q('.project_item:not(.hidden) in #projectsContainer').count > 0"] "No matching projects"
@@ -873,7 +874,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                 when hasFlyout
                   $ div_ [class_ "nav-flyout max-md:hidden invisible opacity-0 group-hover/flyout:visible group-hover/flyout:opacity-100 fixed top-0 left-0 z-50 min-w-44 bg-bgRaised border border-strokeWeak rounded-lg shadow-md py-1.5 transition-[opacity,visibility] duration-100"]
                   $ mapM_ flyoutLink flyoutItems
-      let (primary, secondary) = splitAt 4 $ menu sess.lang project.id
+      let (primary, secondary) = splitAt 5 $ menu sess.lang project.id
       mapM_ (uncurry3 renderNavItem) primary
       div_ [class_ "border-t border-strokeWeak/50 my-1.5 mx-2"] ""
       mapM_ (uncurry3 renderNavItem) secondary

@@ -104,6 +104,9 @@ data EnvConfig = EnvConfig
   , slackAppId :: Text
   , slackRedirectUri :: Text
   , slackBotToken :: Text
+  -- ^ Monoscope's own workspace bot: creates customers' Slack Connect channels (scopes: channels:manage, groups:write, conversations.connect:write, chat:write).
+  , slackConnectTeamUserIds :: [Text]
+  -- ^ Monoscope staff (Slack user ids) added to every Slack Connect channel.
   , discordRedirectUri :: Text
   , discordClientId :: Text
   , discordClientSecret :: Text

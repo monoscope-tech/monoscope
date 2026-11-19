@@ -32,6 +32,7 @@ module Pkg.TestUtils (
   runTestBackground,
   runTestBackgroundWithNotifications,
   runTestBgRecordingHTTP,
+  runTestBackgroundWithHTTP,
   runTestBg,
   runTestBgNoReset,
   captureNotifs,

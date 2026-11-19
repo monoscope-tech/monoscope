@@ -65,6 +65,7 @@ import Pages.Projects qualified as Integrations
 import Pages.Projects qualified as ListProjects
 import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
+import Pages.Home qualified as Home
 import Pages.ServiceMap qualified as ServiceMap
 import Pages.Settings qualified as Settings
 import Pages.Share qualified as Share
@@ -338,7 +339,10 @@ cookieProtectedServer :: Maybe AI.ProjectTools -> AIThreads.RunNow -> Servant.Se
 cookieProtectedServer projectTools runNow =
   CookieProtectedRoutes
     { -- Dashboard handlers
-      dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml"
+      homeGet = Home.homeGetH
+    , homeHighlightDismissPost = Home.highlightDismissPostH
+    , slackConnectPost = Home.slackConnectPostH
+    , dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml"
     , slackInstallGet = Slack.startInstallGetH
     , slackEvidenceGet = Slack.startEvidenceGetH
     , slackEvidenceDisconnectPost = Slack.disconnectEvidencePostH
@@ -1214,6 +1218,9 @@ type instance Opaque1 "PageCtx" = PageCtx
 type instance Opaque "QueryLibrary.QueryLibraryView" = QueryLibrary.QueryLibraryView
 type instance Opaque "QueryLibrary.SaveQueryForm" = QueryLibrary.SaveQueryForm
 type instance Opaque "ServiceMap.ServiceMapGet" = ServiceMap.ServiceMapGet
+type instance Opaque "Home.HomeGet" = Home.HomeGet
+type instance Opaque "Home.HighlightDismissed" = Home.HighlightDismissed
+type instance Opaque "Home.SlackConnectCard" = Home.SlackConnectCard
 type instance Opaque "Settings.ApiGet" = Settings.ApiGet
 type instance Opaque "Settings.ApiKeyNotFound" = Settings.ApiKeyNotFound
 type instance Opaque "Settings.ApiMut" = Settings.ApiMut

@@ -43,6 +43,8 @@ data BgJobs
   | DeletedProject Projects.ProjectId
   | CleanupDemoProject
   | SlackNotification Projects.ProjectId Text
+  | -- | Invite members to the project's Slack Connect channel, creating it first when the flag is set.
+    SlackConnectSync Projects.ProjectId Bool
   | ProcessSlackEvent (UUIDId "slack_event")
   | RefreshSlackProgress (UUIDId "slack_progress")
   | RunConversation Projects.ProjectId (UUIDId "ai_routine_run")

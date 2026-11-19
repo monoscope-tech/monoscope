@@ -1174,6 +1174,7 @@ initialLocalOperations config =
     <> [operation | SlackInvestigationAccess{} <- [config.access], operation <- [GetInvestigationHistory, GetRelatedIncidents, GetIncidentContext]]
     <> [operation | isJust config.sourceConfig, operation <- [GetCodeContext, ListRunbooks, ReadRunbook, GetLinkedRepositories, GetDeployments]]
     <> [SaveArtifact | isJust $ documentConversation config, isJust $ invocationContext config.invocationMode]
+    <> [HighlightOnHome | isJust $ invocationContext config.invocationMode]
     <> [ReadArtifact | isJust $ documentConversation config]
     <> [operation | isJust $ pageContext config, operation <- [OpenPage, ReadPage] <> [operation' | writes, operation' <- [Click, Fill]]]
   where
@@ -1936,6 +1937,11 @@ executeToolAt cursor config tc = do
             Right doc -> ToolResult ("Saved document '" <> toText doc.key <> "' (" <> doc.title <> ", " <> show doc.characters <> " characters).") (Just $ AE.toJSON doc.key)
             Left Issues.ArtifactFull -> noRaw $ "Document '" <> toText key' <> "' is full. Continue in a new document with a different key."
             Left Issues.ArtifactLimitReached -> noRaw $ "This conversation already holds " <> show Issues.maxArtifactsPerConversation <> " documents. Rewrite an existing one instead; read_artifact without a key lists them."
+      HighlightOnHome -> AtomicOperation $ either (pure . noRaw) Relude.id do
+        title <- maybeToRight (failure "missing 'title'") $ T.take 200 <$> nonEmptyT (T.strip <$> getTextArg "title" args)
+        kind <- maybeToRight "kind must be issue, improvement or insight." $ parseMaybe AE.parseJSON =<< Map.lookup "kind" args
+        let detail = foldMap (T.take 600 . T.strip) $ getTextArg "detail" args
+        pure $ noRaw ("Flagged on Home: " <> title) <$ Issues.upsertHighlightTx config.projectId config.conversationId "AI assistant" kind title detail (projectPagePath config.projectId =<< getTextArg "link" args)
       ReadArtifact -> EffectfulOperation $ inConversation \convId ->
         noRaw <$> case getTextArg "key" args of
           Nothing -> Issues.listArtifacts config.projectId convId Nothing <&> \docs -> encodeText [AE.object ["key" AE..= d.key, "title" AE..= d.title, "updated_at" AE..= d.updatedAt, "characters" AE..= d.characters] | d <- docs]

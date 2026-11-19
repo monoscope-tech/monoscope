@@ -97,6 +97,7 @@ module Web.ApiHandlers (
   synthStackFromSpans,
 ) where
 
+import BackgroundJobs.Types qualified as Jobs
 import Control.Lens ((%~), (.~), (?~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
@@ -1383,6 +1384,7 @@ apiMemberAdd pid req = do
     (Nothing, Nothing) ->
       refuse MemberIdentityMissing
   _ <- PM.insertProjectMembers [PM.CreateProjectMembers{projectId = pid, userId = uid, permission = fromMaybe PM.PView req.permission}]
+  Jobs.insertJob $ Jobs.SlackConnectSync pid False
   apiMemberGet pid uid
 
 

@@ -15,6 +15,7 @@ module Data.Effectful.Wreq (
   runHTTPWreq,
   runHTTPGolden,
   runHTTPRecord,
+  runHTTPRecordWith,
   Options,
   Response,
   W.responseBody,
@@ -98,7 +99,12 @@ runHTTPWreq = interpret $ \_ -> \case
 -- responses are keyed by URL alone, so two different bodies sent to one URL
 -- are indistinguishable there.
 runHTTPRecord :: IOE :> es => IORef [(Text, LBS.ByteString)] -> Eff (HTTP ': es) a -> Eff es a
-runHTTPRecord ref = interpret $ \_ -> \case
+runHTTPRecord = runHTTPRecordWith (const "{}")
+
+
+-- | 'runHTTPRecord' replying with a body chosen per URL, for providers whose replies steer the caller.
+runHTTPRecordWith :: IOE :> es => (Text -> Text) -> IORef [(Text, LBS.ByteString)] -> Eff (HTTP ': es) a -> Eff es a
+runHTTPRecordWith reply ref = interpret $ \_ -> \case
   Get url -> record url (pure "")
   Post url body -> record url (payload $ W.postPayload body)
   Put url body -> record url (payload $ W.putPayload body)
@@ -119,7 +125,7 @@ runHTTPRecord ref = interpret $ \_ -> \case
     record url getBody = liftIO do
       body <- getBody
       modifyIORef' ref ((toText url, body) :)
-      pure $ toWreqResponse $ WreqResponse 200 "OK" "{}" [] "" []
+      pure $ toWreqResponse $ WreqResponse 200 "OK" (reply $ toText url) [] "" []
 
 
 runHTTPGolden :: IOE :> es => FilePath -> Eff (HTTP ': es) a -> Eff es a

@@ -273,6 +273,13 @@ module Models.Apis.Issues (
   saveArtifact,
   saveArtifactTx,
   listArtifacts,
+  HighlightKind (..),
+  HomeHighlight (..),
+  upsertHighlightTx,
+  liveHighlights,
+  dismissHighlight,
+  ResolvedIssue (..),
+  resolvedIssuesSince,
   selectChatHistory,
   prepareSlackTurn,
   seedChatHistory,
@@ -3669,6 +3676,71 @@ listArtifacts pid convId openKey =
   Hasql.interp
     [HI.sql| SELECT key, title, length(content)::bigint, CASE WHEN key = #{openKey} THEN content END, updated_at FROM apis.ai_artifacts
              WHERE project_id = #{pid} AND conversation_id = #{convId} ORDER BY updated_at DESC |]
+
+
+-- | What a Home highlight reports: something to look at, something that got better, or context.
+data HighlightKind = HKIssue | HKImprovement | HKInsight
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON, Display, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "HK" HighlightKind
+
+
+data HomeHighlight = HomeHighlight
+  { id :: UUIDId "home_highlight"
+  , kind :: HighlightKind
+  , title :: Text
+  , detail :: Text
+  , link :: Maybe Text
+  , source :: Text
+  , conversationId :: Maybe (UUIDId "conversation")
+  , updatedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | Attributed to the flagging conversation's title (a routine's name), else @source@.
+-- Flagging the same (kind, title) again refreshes it for another two days. A dismissal holds
+-- while the highlight is live; once it has expired, a fresh flag is a new occurrence and shows again.
+upsertHighlightTx :: Projects.ProjectId -> Maybe (UUIDId "conversation") -> Text -> HighlightKind -> Text -> Text -> Maybe Text -> Tx.Transaction ()
+upsertHighlightTx pid convId source kind title detail link =
+  Hasql.executeTx
+    [HI.sql| INSERT INTO apis.home_highlights (project_id, kind, title, detail, link, source, conversation_id, created_at, updated_at, expires_at)
+             VALUES (#{pid}, #{kind}, #{title}, #{detail}, #{link},
+                     COALESCE((SELECT NULLIF(title, '') FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{convId}), #{source}),
+                     #{convId}, app_now(), app_now(), app_now() + interval '48 hours')
+             ON CONFLICT (project_id, kind, title) DO UPDATE
+               SET detail = EXCLUDED.detail, link = EXCLUDED.link, source = EXCLUDED.source, conversation_id = EXCLUDED.conversation_id,
+                   updated_at = app_now(), expires_at = EXCLUDED.expires_at,
+                   created_at = CASE WHEN home_highlights.expires_at < app_now() THEN app_now() ELSE home_highlights.created_at END,
+                   dismissed_at = CASE WHEN home_highlights.expires_at < app_now() THEN NULL ELSE home_highlights.dismissed_at END |]
+
+
+liveHighlights :: DB es => Projects.ProjectId -> Eff es [HomeHighlight]
+liveHighlights pid =
+  Hasql.interp
+    [HI.sql| SELECT id, kind, title, detail, link, source, conversation_id, updated_at FROM apis.home_highlights
+             WHERE project_id = #{pid} AND dismissed_at IS NULL AND expires_at > app_now() ORDER BY updated_at DESC LIMIT 12 |]
+
+
+dismissHighlight :: DB es => Projects.ProjectId -> UUIDId "home_highlight" -> Eff es ()
+dismissHighlight pid hid = Hasql.interpExecute_ [HI.sql| UPDATE apis.home_highlights SET dismissed_at = app_now() WHERE project_id = #{pid} AND id = #{hid} |]
+
+
+data ResolvedIssue = ResolvedIssue {id :: IssueId, seqNum :: Int, title :: Text, service :: Maybe Text, event :: IssueEvent, resolvedAt :: UTCTime}
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | Issues resolved (by a person or automatically) since @since@, latest first, one row per issue.
+resolvedIssuesSince :: DB es => Projects.ProjectId -> UTCTime -> Eff es [ResolvedIssue]
+resolvedIssuesSince pid since =
+  Hasql.interp
+    [HI.sql| SELECT * FROM (
+               SELECT DISTINCT ON (i.id) i.id, i.seq_num, i.title, i.service, a.event, a.created_at
+               FROM apis.issues i JOIN apis.issue_activity_log a ON a.issue_id = i.id
+               WHERE i.project_id = #{pid} AND a.event IN ('resolved', 'auto_resolved') AND a.created_at >= #{since}
+               ORDER BY i.id, a.created_at DESC) r
+             ORDER BY created_at DESC LIMIT 8 |]
 
 
 -- | Persist a Slack question once, and exclude that turn from the history passed

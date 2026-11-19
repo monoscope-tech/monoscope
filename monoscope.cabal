@@ -307,6 +307,7 @@ extra-source-files:
     static/migrations/0288_check_results_unique.sql
     static/migrations/0290_usage_submissions_rejected.sql
     static/migrations/0291_uptime_request_and_teams.sql
+    static/migrations/0292_home_highlights_and_slack_connect.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb
     test/fixtures/github-app-test.pem
@@ -440,6 +441,7 @@ library
       Pages.Endpoints
       Pages.GenAIMessages
       Pages.GitSync
+      Pages.Home
       Pages.Infrastructure
       Pages.Issues
       Pages.LLM
@@ -853,6 +855,7 @@ test-suite integration-tests
       Pages.CodeContextSpec
       Pages.DashboardWidgetsSpec
       Pages.ErrorPatternsSpec
+      Pages.HomeSpec
       Pages.ImpactReviewsSpec
       Pages.InfrastructureSpec
       Pages.IssuesSpec
@@ -1066,6 +1069,7 @@ test-suite test-dev
       Pages.Endpoints
       Pages.GenAIMessages
       Pages.GitSync
+      Pages.Home
       Pages.Infrastructure
       Pages.Issues
       Pages.LLM
@@ -1144,6 +1148,7 @@ test-suite test-dev
       Pages.CodeContextSpec
       Pages.DashboardWidgetsSpec
       Pages.ErrorPatternsSpec
+      Pages.HomeSpec
       Pages.ImpactReviewsSpec
       Pages.InfrastructureSpec
       Pages.IssuesSpec
