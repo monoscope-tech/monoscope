@@ -419,6 +419,7 @@ cookieProtectedServer projectTools runNow =
     , repositoryResumePost = PageCodeContext.repositoryResumePostH
     , repositoryFolderPost = PageCodeContext.repositoryFolderPostH
     , repositoryConflictPost = PageCodeContext.repositoryConflictPostH
+    , repositoryDetachPost = PageCodeContext.repositoryDetachPostH
     , repositorySourceEnabledPost = PageCodeContext.repositorySourceEnabledPostH
     , repositorySourceGet = PageCodeContext.repositorySourceGetH
     , repositorySourcePost = PageCodeContext.repositorySourcePostH

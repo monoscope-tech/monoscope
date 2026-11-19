@@ -1497,6 +1497,22 @@ spec = do
         map fst requests `shouldBe` map ("https://api.github.com/repos/team/dashboards" <>) ["/commits/main", "/git/trees/first-commit?recursive=1", "/contents/dashboards/overview.yaml?ref=first-commit"]
         (.lastRevision) <$> syncById tr sync `shouldReturn` Just "first-commit"
 
+      -- #680: clearing a synced dashboard's git columns did nothing, and deleting its resource row
+      -- re-imported the file as a second dashboard.
+      it "repositoryDetach_keepsTheDashboardWithoutReimportOrDuplicate" \tr -> do
+        sync <- syncOf tr testPid (Just "https://127.0.0.1:1") "team" "dashboards" (GitSync.PersonalToken "fixture") ""
+        did <- seedDash tr \d -> d{Dashboards.title = "Overview", Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "overview.yaml"}
+        let pull revision title = runJob tr (gitHost [("/git/trees/", treeOf [("dashboards/overview.yaml", revision)]), ("/contents/", blobOf ("title: " <> title <> "\nwidgets: []\n"))] (AE.encode $ AE.object ["sha" AE..= revision])) (BackgroundJobs.GitSyncRepository testPid sync.id)
+        _ <- pull "first" "Remote overview"
+        fmap (.title) <$> dashOf tr did `shouldReturn` Just "Remote overview"
+        [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
+        resource <- maybe (fail "Expected the synced dashboard") pure . find ((== did.unUUIDId) . (.localId)) =<< runQueryEffect tr (RepositorySync.resources testPid sync.id)
+        void $ testServant tr $ PageCodeContext.repositoryDetachPostH testPid repository.id resource.id
+        _ <- pull "second" "Changed in Git"
+        map (\d -> (d.title, d.gitSyncId, d.filePath)) <$> allDashboards tr `shouldReturn` [("Remote overview", Nothing, Nothing)]
+        status <- renderT . (.content) <$> call tr (PageCodeContext.repositoryGetH testPid repository.id)
+        status `shouldSatisfy` T.isInfixOf "Detached: kept in Monoscope"
+
       it "repositoryPull_renamesAnOwnedDashboardWithoutLosingItsIdentity" \tr -> do
         sync <- syncOf tr testPid (Just "https://127.0.0.1:1") "team" "dashboards" (GitSync.PersonalToken "fixture") ""
         did <- seedDash tr \d -> d{Dashboards.title = "Overview", Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "old.yaml", Dashboards.fileSha = Just "same-content"}
