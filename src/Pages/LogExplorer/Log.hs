@@ -1697,7 +1697,7 @@ instance ToHtml AlertForm where
         form_
           [ id_ "alert-form"
           , hxPost_ (urls.monitors pid).alertUpsertPost
-          , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: window.getTagValues('#alert-form-teams')}"
+          , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType()}"
           , hxSwap_ "none"
           , class_ "flex flex-col gap-3"
           , resetFormOnSuccessAttr_
@@ -1724,7 +1724,7 @@ instance ToHtml AlertForm where
                 div_ [class_ "flex-1"] $ formField_ FieldSm def{value = fromMaybe "" monitorService, placeholder = "e.g. checkout"} "Service" "service" False Nothing
 
             let selectedTeamIds = maybe V.empty (.teams) alertM
-            AlertUI.notificationSettingsSection_ teams selectedTeamIds "alert-form" alertM
+            AlertUI.notificationSettingsSection_ teams selectedTeamIds alertM
 
             div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
               label_

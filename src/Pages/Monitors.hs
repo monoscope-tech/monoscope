@@ -61,7 +61,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPa
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils (Channel (channelId, channelName))
-import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), agoText, detailTab_, durationMenu_, emptyState_, formCheckbox_, formField_, formSelectField_, inlineIconBtn_, metadataChip_, options_, panel_, silenceBadge_, tagInput_, untilLabel)
+import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), agoText, detailTab_, durationMenu_, emptyState_, formCheckbox_, formField_, formSelectField_, inlineIconBtn_, metadataChip_, options_, panel_, silenceBadge_, teamPicker_, untilLabel)
 import Pages.Projects (TBulkActionForm (..))
 import Pages.Uptime qualified as Uptime
 import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
@@ -118,8 +118,7 @@ data AlertUpsertForm = AlertUpsertForm
   , service :: Maybe Text
   }
   deriving stock (Generic, Show)
-  -- The alert editor posts @teams@ through the same @getTagValues@ hx-vals as the
-  -- dashboard forms, and an empty picker sends @teams=@.
+  -- 'teamPicker_' checkboxes post @teams@ once per chosen team, and none when unchecked.
   deriving (FromForm) via (FormWithOptional '["teams"] AlertUpsertForm)
 
 
@@ -326,23 +325,17 @@ thresholdsSection_ unitM chartTargetIdM alertThresholdM warningThresholdM trigge
         formField_ FieldSm def{inputType = "number", dot = Just "bg-fillWarning-strong", suffix = unitM, placeholder = "Same as trigger", value = showVal warningRecoveryM} "Warning recovery" "warningRecoveryThreshold" False Nothing
 
 
-notificationSettingsSection_ :: V.Vector ManageMembers.Team -> V.Vector ManageMembers.TeamId -> Text -> Maybe Monitors.QueryMonitor -> Html ()
-notificationSettingsSection_ allTeams selectedTeamIds formId monitorM = do
+notificationSettingsSection_ :: V.Vector ManageMembers.Team -> V.Vector ManageMembers.TeamId -> Maybe Monitors.QueryMonitor -> Html ()
+notificationSettingsSection_ allTeams selectedTeamIds monitorM = do
   let defaultSeverity = maybe "Error" (.alertConfig.severity) monitorM
       defaultSubject = maybe "Alert triggered" (.alertConfig.subject) monitorM
       defaultMessage = maybe "The alert threshold has been exceeded. Check the Monoscope dashboard for details." (.alertConfig.message) monitorM
-      teamList = encodeText $ (\x -> AE.object ["name" AE..= ("@" <> x.handle), "value" AE..= x.id]) <$> allTeams
-      teamName tId = maybe "Unknown Team" (("@" <>) . (.handle)) $ V.find (\t -> t.id == tId) allTeams
-      initialTeamIds = if V.null selectedTeamIds then V.map (.id) $ V.filter (.is_everyone) allTeams else selectedTeamIds
-      existingTeams = encodeText $ (\tId -> AE.object ["name" AE..= teamName tId, "value" AE..= tId]) <$> initialTeamIds
       renotifyEnabled = maybe True (isJust . (.renotifyIntervalMins)) monitorM
       renotifyVal = maybe "30m" minsToInterval $ monitorM >>= (.renotifyIntervalMins)
       stopEnabled = maybe False (isJust . (.stopAfterCount)) monitorM
       stopVal = maybe "5" show $ monitorM >>= (.stopAfterCount)
   panel_ (Collapsible False) def{icon = Just "envelope"} "Notification Settings" do
-    formField_ FieldSm def{hint = Just "All project members and notification channels."} "Teams" (formId <> "-teams") False
-      $ Just
-      $ tagInput_ (formId <> "-teams") "" [name_ "teams", data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-initial" existingTeams, Aria.describedby_ (formId <> "-teams-hint")]
+    teamPicker_ (V.toList allTeams) (V.toList selectedTeamIds)
     details_ [class_ "mt-4 border-t border-strokeWeak pt-3"] do
       summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Advanced notification settings"
       div_ [class_ "space-y-3 pt-3"] do
