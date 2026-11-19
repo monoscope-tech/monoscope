@@ -845,7 +845,7 @@ selectIssueByHash pid tgtHash scope = Map.lookup tgtHash <$> selectIssuesByHashe
 -- keyed by target hash. Rows arrive in scope order, so the first per hash is the one chosen.
 selectIssuesByHashes :: DB es => Projects.ProjectId -> NonEmpty Text -> IssueScope -> Eff es (Map Text Issue)
 selectIssuesByHashes pid hashes scope =
-  Map.fromListWith (\_ kept -> kept)
+  Map.fromListWith (flip const)
     . map (\i -> (i.targetHash, i))
     <$> Hasql.interp
       ( selectFrom @Issue

@@ -342,7 +342,8 @@ spec = around withTestResources do
     (tr, pid) <- onboarded tr0
     let webhook event = do
           (reqs, _) <- runAsBaseRecordingHTTP tr $ Settings.webhookPostH Nothing $ toStrict $ AE.encode $ lsEvent event pid
-          reqs `shouldBe` []
+          -- No billing-provider call; the plan-change email now goes through the HTTP effect too.
+          filter (not . T.isInfixOf "postmarkapp.com" . fst) reqs `shouldBe` []
         plan = (.paymentPlan) <$> projectOf tr pid
         banner = noticeOf pid tr "billing-downgrade-banner"
         billing = do
@@ -362,7 +363,7 @@ spec = around withTestResources do
     let enforced = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.lsWebhookSigEnforce = True}}}
         cancel = toStrict $ AE.encode $ lsEvent "subscription_cancelled" pid
         lsSig key = decodeUtf8 $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 @Text @ByteString key) cancel :: HMAC.HMAC SHA256)
-        deliver h = runAsBaseRecordingHTTP enforced $ catchError @ServantS.ServerError (Settings.webhookPostH h cancel $> 200) (\_ err -> pure err.errHTTPCode)
+        deliver h = first (filter (not . T.isInfixOf "postmarkapp.com" . fst)) <$> runAsBaseRecordingHTTP enforced (catchError @ServantS.ServerError (Settings.webhookPostH h cancel $> 200) (\_ err -> pure err.errHTTPCode))
     for_ @[] [Nothing, Just "not-hex", Just (lsSig "wrong-secret")] \h -> deliver h `shouldReturn` ([], 400 :: Int)
     plan `shouldReturn` "Test Plan"
     deliver (Just $ lsSig tr.trATCtx.env.lemonSqueezyWebhookSecret) `shouldReturn` ([], 200)
@@ -460,7 +461,9 @@ spec = around withTestResources do
     -- never re-sent, while a 429 stays retriable. Retrying both oldest-first pinned prod's drain on
     -- April's chunks, so the newer ones were never attempted.
     let lsAnswers code t =
-          fmap fst . runTestBgRecordingHTTP t tr . withHTTPResponses (\_ url -> Nothing <$ when ("lemonsqueezy.com" `T.isInfixOf` toText url) (throwIO $ HttpExceptionRequest defaultRequest $ StatusCodeException ((mockResponse "" $> ()){responseStatus = H.mkStatus code ""}) ""))
+          fmap fst
+            . runTestBgRecordingHTTP t tr
+            . withHTTPResponses (\_ url -> Nothing <$ when ("lemonsqueezy.com" `T.isInfixOf` toText url) (throwIO $ HttpExceptionRequest defaultRequest $ StatusCodeException ((mockResponse "" $> ()){responseStatus = H.mkStatus code ""}) ""))
             $ BJ.processBackgroundJob tr.trATCtx (BJ.ReportUsage pid)
         lastChunk = fmap (fmap (\(_, q, st) -> (q, st)) . viaNonEmpty last) (metered tr pid)
     seedUsage tr pid (addUTCTime 10800 frozenTime) 2 0 0

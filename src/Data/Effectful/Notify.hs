@@ -59,8 +59,9 @@ import Network.Wreq (FormParam ((:=)), auth, basicAuth, checkResponse, defaults,
 import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude hiding (Reader, State, ask, get, modify, put, runState)
 import System.Config qualified as Config
+import System.IO.Error (userError)
 import System.Logging qualified as Log
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (throwIO, tryAny)
 import UnliftIO.Timeout (timeout)
 
 
@@ -319,7 +320,7 @@ runNotifyProduction = interpret $ \_ -> \case
                   reqPayload = [aesonQQ|{ "From": #{fromAddress}, "Subject": #{subject}, "To": #{receiver}, "HtmlBody": #{htmlBody}, "MessageStream": "outbound" }|]
                   opts = defaults & header "Content-Type" .~ ["application/json"] & header "Accept" .~ ["application/json"] & header "X-Postmark-Server-Token" .~ [apiKey]
               re <- postWith opts "https://api.postmarkapp.com/email" reqPayload
-              unless (statusIsSuccessful (re ^. responseStatus)) $ liftIO $ fail $ "Postmark returned " <> show (re ^. responseStatus)
+              unless (statusIsSuccessful (re ^. responseStatus)) $ throwIO $ userError $ "Postmark returned " <> show (re ^. responseStatus)
             else do
               let from = Address Nothing cfg.smtpSender
                   to = Address Nothing receiver
@@ -457,7 +458,7 @@ runNotifyProduction = interpret $ \_ -> \case
           | statusIsSuccessful (re ^. responseStatus) ->
               pure $ (AE.decode (re ^. responseBody) :: Maybe AE.Value) >>= (^? key "id" . _String)
         Right re -> do
-          Log.logAttention "Discord notification failed" (channelId, statusCode (re ^. responseStatus), decodeUtf8 @Text (re ^. responseBody))
+          Log.logAttention "Discord notification failed" (channelId, statusCode (re ^. responseStatus), T.take 500 $ decodeUtf8 @Text (re ^. responseBody))
           pure Nothing
         Left ex -> do
           Log.logAttention "Discord notification failed" (channelId, displayException ex)
