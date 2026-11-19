@@ -367,7 +367,7 @@ addReswap x = State.put $ HXReswap $ Just x
 
 addErrorToast :: (IOE :> es, Log :> es, State.State TriggerEvents :> es) => Text -> Maybe Text -> Eff es ()
 addErrorToast msg msg2 = do
-  Logging.logAttention_ $ "ERROR: " <> msg <> " => " <> maybeToMonoid msg2
+  Logging.logInfo_ $ "Error toast: " <> msg <> " => " <> maybeToMonoid msg2
   addToast "error" msg msg2 Nothing
 
 

@@ -1108,7 +1108,8 @@ requestEvidence pid currentServices windowStart windowEnd request = do
           let source = listToMaybe [s | KQL.Source s <- sections]
           response <- fromMaybe (Left "Query timed out") <$> Timeout.timeout (30 * 1000000) (selectLogTable ctx.env.enableTimefusionReads pid queryAST query Nothing (Just windowStart, Just windowEnd) [] source Nothing Nothing (Just request.service))
           case response of
-            Left _ -> pure $ Left "Production query failed"
+            -- The agent can only correct a query it can see the failure of.
+            Left err -> pure $ Left $ "Production query failed: " <> queryFailure err
             Right (rawRows, headers, count) -> do
               let rows = capRowValue <<$>> V.take rowLimit rawRows
                   observation = QueryObservation (if aggregated then Aggregated else Sampled) (V.fromList headers) rows (count > V.length rows || V.length rawRows >= rowLimit) (rows /= V.take rowLimit rawRows)
@@ -1135,6 +1136,19 @@ requestEvidence pid currentServices windowStart windowEnd request = do
       Or left right -> Paren $ Or (grouped left) (grouped right)
       Paren expr -> Paren $ grouped expr
       expr -> expr
+
+
+-- | The database's own message from a rendered query failure, which the generated SQL
+-- otherwise leads. hasql indents a multi-line value under its key.
+--
+-- >>> queryFailure "AnnotatedException {annotations = [\"q\"], exception = Hasql session error: Server error\n  sql:\n    SELECT span_id\n    FROM t\n  code: XX000\n  message:\n    Optimizer rule failed\n    caused by\n    Cast error\n  position: 3}"
+-- "Optimizer rule failed caused by Cast error"
+-- >>> map queryFailure ["Server error\n  code: XX000\n  message: No field named span_id", "Query timed out"]
+-- ["No field named span_id","Query timed out"]
+queryFailure :: Text -> Text
+queryFailure raw = T.take 300 case lines <$> T.breakOnEnd "\n  message:" raw of
+  (found, line : more) | not (T.null found) -> unwords $ filter (not . T.null) $ map T.strip $ line : takeWhile ("    " `T.isPrefixOf`) more
+  _ -> raw
 
 
 requestMemory :: (DB es, HTTP.HTTP :> es, IOE :> es, Time.Time :> es) => Issues.RunContext -> UUIDId "agent_attempt" -> Eff es Bool -> Agent.KnowledgeRequest -> Eff es (Either Text AE.Value)

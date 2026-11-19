@@ -879,7 +879,8 @@ reportProjectUsage authCtx pid =
             -- line and no "Usage to report" line — and they need opposite fixes.
             Log.logInfo "Counting usage" ("project_id", pid.toText, "window_start", show wStart :: Text, "window_end", show nowU :: Text)
             (wStart,) <$> Telemetry.getUsageTotals authCtx.env.enableTimefusionReads pid wStart nowU
-      case (Projects.isPaidPlan (Projects.parsePlan project.paymentPlan), nonEmptyT project.firstSubItemId) of
+      -- The demo project carries a paid plan to show paid features, but nobody is billed for it.
+      case (Projects.isPaidPlan (Projects.parsePlan project.paymentPlan) && pid /= Projects.demoProjectId, nonEmptyT project.firstSubItemId) of
         -- Unbilled plans still record daily_usage: free-tier limits and the billing page read it.
         -- Floored at 00:00 UTC: a first run (or a long gap) would otherwise land weeks of usage
         -- in one window ending today and cap a project that is under today's limit.
@@ -1287,21 +1288,31 @@ tfTopProjectCounts topN extra s e =
 -- 9 minutes, ~90% of ingest) triggered no alert: going TF-only silently
 -- retired the only automated loss detector.
 --
--- Two grouped TF queries (not the N+1 fan-out 'checkParity' pays): top projects
--- by volume over a multi-hour baseline, then the same projects over the window.
+-- Three grouped TF queries (not the N+1 fan-out 'checkParity' pays): top projects
+-- by volume over the previous hour and the same hour yesterday, then the window.
+--
+-- The baseline is the LOWER of those two hours, not a multi-hour mean. A 6h mean
+-- read every tenant's evening decline (550k/h → 58k/h over six smooth hours) as a
+-- 75–95% "drop": over 30 hours of 2026-11-17/18 it fired in 20 with no rows lost.
+-- The previous hour alone still fired in 9, on bursts winding down; the minimum
+-- fired in 3. A collapse lasting most of the hour is below both and still trips; a
+-- sub-hour gap like 2026-07-27 (~9 minutes, ~14% of the hour) was never visible at
+-- this granularity under either baseline. The window is read projectless, so from
+-- Delta only: its still-buffered tail is missing, which the 60% threshold absorbs.
+-- The yesterday read adds a third projectless count per hour (4-6s on TF).
 checkIngestContinuity :: UTCTime -> UTCTime -> ATBackgroundCtx ([Text], [Text])
 checkIngestContinuity start end = do
   let minRows = 500 :: Int64 -- baseline floor: ignore low-volume projects
       dropPct = 60.0 :: Double
       topN = 30 :: Int64
-      baselineHours = 6 :: Int64
-      baseStart = addUTCTime (negate (fromIntegral baselineHours * 3600)) start
+      hourBefore = addUTCTime (-3600)
+      dayBefore = addUTCTime (-86400)
       tfCounts = tfTopProjectCounts topN mempty
-  baseRows :: [(Text, Int64)] <- tfCounts baseStart start
-  curRows :: [(Text, Int64)] <- tfCounts start end
-  let curMap = HM.fromList curRows
-      -- Baseline is per-window (the window is one hour; see runInfraHealthCheck).
-      rows = [(pid, baseN `div` baselineHours, HM.lookupDefault 0 pid curMap) | (pid, baseN) <- baseRows]
+  baseRows :: [(Text, Int64)] <- tfCounts (hourBefore start) start
+  yesterday :: HM.HashMap Text Int64 <- HM.fromList <$> tfCounts (dayBefore start) (dayBefore end)
+  curMap :: HM.HashMap Text Int64 <- HM.fromList <$> tfCounts start end
+  -- A project missing from yesterday's top N keeps the previous hour as its baseline.
+  let rows = [(pid, maybe baseN (min baseN) (HM.lookup pid yesterday), HM.lookupDefault 0 pid curMap) | (pid, baseN) <- baseRows]
       baseTotal = sum [b | (_, b, _) <- rows]
       curTotal = sum [c | (_, _, c) <- rows]
       dropAlerts =
@@ -1309,21 +1320,21 @@ checkIngestContinuity start end = do
             <> pct1 pct
             <> "% for "
             <> pid
-            <> " (baseline≈"
+            <> " (baseline "
             <> show baseN
-            <> "/h, got "
+            <> ", got "
             <> show curN
             <> ") — rows may have been acked but never stored"
         | (pid, baseN, curN, pct) <- continuityDrop dropPct minRows rows
         ]
       stallAlert =
-        [ "🔴 TF INGEST STALLED: baseline≈" <> show baseTotal <> "/h across " <> show (length rows) <> " projects, got 0"
+        [ "🔴 TF INGEST STALLED: baseline " <> show baseTotal <> " rows across " <> show (length rows) <> " projects, got 0"
         | baseTotal > 0
         , curTotal == 0
         ]
   pure
     ( stallAlert <> dropAlerts
-    , ["continuity: " <> show curTotal <> " rows vs baseline≈" <> show baseTotal <> "/h over " <> show (length rows) <> " projects"]
+    , ["continuity: " <> show curTotal <> " rows vs baseline " <> show baseTotal <> " over " <> show (length rows) <> " projects"]
     )
 
 
@@ -1585,7 +1596,7 @@ autoProvisionDashboards scheduledTime = do
             firstMemberM <- Hasql.interpOne [HI.sql| SELECT user_id FROM projects.project_members WHERE project_id = #{pid} AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 1 |]
             case firstMemberM of
               -- Don't mark: leave the template pending so the next hourly run retries once the project has a member.
-              Nothing -> Log.logAttention "Auto-provision skipped: project has no members" (AE.object ["project_id" AE..= pid, "template" AE..= file])
+              Nothing -> Log.logInfo "Auto-provision skipped: project has no members" (AE.object ["project_id" AE..= pid, "template" AE..= file])
               Just (userId :: Projects.UserId) -> do
                 did <- UUIDId <$> UUID.genUUID
                 void
@@ -2282,7 +2293,7 @@ dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors)
               whenJust refs.discordMsgId \messageId ->
                 void $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.KeepNotifiedAt sub.errorId Nothing (Just messageId) now
         tryStep "slack-error-incident-delivery" runSlackIncidentDeliveries
-      _ -> Log.logAttention "Error notifications skipped: no channels configured" pid
+      _ -> Log.logInfo "Error notifications skipped: no channels configured" pid
 
 
 data NotificationDecision = NotificationSkipped | NotificationDigested | NotificationQueued
@@ -3541,7 +3552,7 @@ processAPIChangeAnomalies pid targetHashes = do
               enqueueJobs authCtx [Jobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)]
               -- A span schema has neither by nature (~56 false alarms a day).
               when (unresolved && firstAnom.keyKind /= Just SchemaLearning.SpanIdentity)
-                $ Log.logAttention
+                $ Log.logInfo
                   "Suppressed new-endpoint notification: anomaly missing method+url_path"
                   (AE.object ["project_id" AE..= pid, "endpoint_hash" AE..= endpointHash, "issue_id" AE..= issue.id])
               pure $ Just (endpointHash, unresolved)
