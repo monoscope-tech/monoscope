@@ -51,6 +51,7 @@ import Pages.Containers qualified as Containers
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
+import Pages.Home qualified as Home
 import Pages.Infrastructure qualified as Infrastructure
 import Pages.Issues qualified as IssuesPage
 import Pages.LLM qualified as LLM
@@ -65,7 +66,6 @@ import Pages.Projects qualified as Integrations
 import Pages.Projects qualified as ListProjects
 import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
-import Pages.Home qualified as Home
 import Pages.ServiceMap qualified as ServiceMap
 import Pages.Settings qualified as Settings
 import Pages.Share qualified as Share

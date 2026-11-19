@@ -4,6 +4,7 @@
 -- the Monoscope team over Slack Connect.
 module Pages.Home (homeGetH, HomeGet (..), HomeData (..), highlightDismissPostH, HighlightDismissed, slackConnectPostH, SlackConnectCard (..)) where
 
+import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.List (partition)
 import Data.Text qualified as T
@@ -29,8 +30,10 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (SortOrder (..), UUIDId (..))
 import Relude hiding (ask, asks)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Logging (logAttention)
 import System.Types (ATAuthCtx, Outcome (..), RespHeaders, Toast (..), ToastLevel (..), addRespHeaders, done)
 import System.Types qualified
+import UnliftIO.Exception (tryAny)
 import Utils (faSprite_, navTabAttrs)
 import Web.Links (CookieProtectedRoutes (..), urls)
 
@@ -51,7 +54,7 @@ data HomeData = HomeData
   , recentThreads :: [Issues.ConversationSummary]
   , starred :: [(Dashboards.DashboardVM, [Widget.Widget])]
   , slack :: Maybe SlackConnectCard
-  -- ^ Absent when this server has no Slack bot (self-hosted), where the channel cannot exist.
+  -- ^ Absent on the demo project and on servers with no Slack bot (self-hosted), where no channel can exist.
   }
 
 
@@ -80,7 +83,7 @@ homeGetH pid = do
   addRespHeaders
     $ HomePage
     $ PageCtx bw{pageTitle = "Home", menuItem = Just "Home"}
-    $ HomeData{pid, firstName = sess.user.firstName, now, newIssues, newIssueCount, openIssueCount, resolved, highlights, routines, recentThreads = take 4 chats, starred, slack = SlackConnectCard pid email slackConnect Nothing <$ guard slackConfigured}
+    $ HomeData{pid, firstName = sess.user.firstName, now, newIssues, newIssueCount, openIssueCount, resolved, highlights, routines, recentThreads = take 4 chats, starred, slack = SlackConnectCard pid email slackConnect Nothing <$ guard (slackConfigured && pid /= Projects.demoProjectId)}
   where
     -- Charts that render on their own: a widget needing its dashboard's variables or constants would only show an error here.
     homeWidget vm w = do
@@ -283,7 +286,10 @@ slackConnectPostH pid = do
   users <- Projects.usersByProjectId pid
   let email = T.toLower $ CI.original sess.user.email
       cfg = appCtx.config
-  result <- Integrations.syncSlackConnect cfg.slackBotToken (filter (not . T.null) cfg.slackConnectTeamUserIds) pid project.title (pid /= Projects.demoProjectId) (map (CI.original . (.email)) users) (Just email)
+  -- Slack transport failures and rate limits throw; the card still answers with what went wrong.
+  result <-
+    tryAny (Integrations.syncSlackConnect cfg.slackBotToken (filter (not . T.null) cfg.slackConnectTeamUserIds) pid project.title (pid /= Projects.demoProjectId) (map (CI.original . (.email)) users) (Just email))
+      >>= either (\e -> Left "slack_unreachable" <$ logAttention "Slack Connect request failed" (AE.object ["project_id" AE..= pid, "error" AE..= show @Text e])) pure
   connect <- Integrations.getSlackConnect pid
   done $ SlackConnectCard pid email connect $ either (Just . failureText) (const Nothing) result
   where

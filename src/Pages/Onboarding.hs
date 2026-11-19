@@ -312,7 +312,7 @@ onboardingCompleteBody pid = do
       div_ [class_ "flex flex-col gap-2"] do
         h3_ [class_ " text-textStrong  text-2xl"] "Onboarding completed!"
         p_ [class_ " text-textWeak text-sm"] "You're all set! You can now start exploring the monoscope dashboard by clicking the button below."
-      a_ [class_ "btn-primary py-2  rounded-lg text-center mt-1", href_ $ urls.homeGet pid] "Go to your dashboard"
+      a_ [class_ "btn-primary py-2  rounded-lg text-center mt-1", href_ $ urls.homeGet pid] "Go to your project"
   script_ [src_ "/public/assets/js/confetti.js"] ("" :: Text)
 
 
