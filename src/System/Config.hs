@@ -59,6 +59,10 @@ data EnvConfig = EnvConfig
   , timefusionPgUrl :: Text -- TIMEFUSION_PG_URL
   , port :: Int
   , grpcPort :: Int -- "GRPC_PORT"
+  , grpcHosts :: [Text]
+  -- ^ One OTLP/gRPC listener per address. An IPv6 listener accepts only IPv6, so dual-stack is @0.0.0.0,::@.
+  , httpHost :: Text
+  -- ^ Warp host preference: @*4@ IPv4 (default), @*6@ dual-stack, @!6@ IPv6 only, or one address.
   , migrationsDir :: Text -- "MIGRATIONS_DIR"
   , chartCliPath :: Maybe Text -- "CHART_CLI_PATH"; unset means ./chart-cli. Local CI points it inside its container so its Linux build never replaces the host binary.
   , auth0ClientId :: Text
@@ -317,6 +321,8 @@ instance DefConfig EnvConfig where
   defConfig =
     (def :: EnvConfig)
       { port = 8080
+      , grpcHosts = ["0.0.0.0"]
+      , httpHost = "*4"
       , environment = Dev
       , migrationsDir = "./static/migrations/"
       , messagesPerPubsubPullBatch = 1000

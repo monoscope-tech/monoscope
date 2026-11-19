@@ -678,6 +678,7 @@ library
     , monoscope-shared
     , mtl
     , neat-interpolation
+    , network
     , network-uri
     , odd-jobs
     , openai
@@ -1336,6 +1337,7 @@ test-suite test-dev
     , monoscope-shared
     , mtl
     , neat-interpolation
+    , network
     , network-uri
     , odd-jobs
     , openai

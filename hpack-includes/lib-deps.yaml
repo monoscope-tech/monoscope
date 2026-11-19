@@ -138,6 +138,7 @@
 - pretty-relative-time
 - tmp-postgres
 - directory
+- network
 - network-uri
 - scotty
 - filepath
