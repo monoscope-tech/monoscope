@@ -99,7 +99,8 @@ homeGetH pid = do
   appCtx <- ask @AuthContext
   let slackConfigured = not $ T.null appCtx.config.slackConnectBotToken
   -- Every tile states the same window, so a number on Home always means "the last 24 hours".
-  let window = Widget.pinWidget (dayAgo, now)
+  -- Signed like a dashboard's, or /widget refuses a viewer the raw-SQL tiles.
+  let window = Widget.signWidgetSql appCtx.env.apiKeyEncryptionSecretKey pid . Widget.pinWidget (dayAgo, now)
       glance = map window $ take 1 (templateTab "_overview.yaml" "Overview" []) <> stackWidgets pid
       -- A widget's id names its DOM elements, so one shown twice (a starred overview repeats the
       -- golden signals) loads into the first copy and leaves the second a skeleton forever.
