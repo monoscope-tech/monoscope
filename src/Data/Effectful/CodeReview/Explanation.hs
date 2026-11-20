@@ -250,7 +250,6 @@ clipCast highlight cast = case BS8.lines cast of
             -- Plain output only fills the rows it printed, so the clip drops the empty terminal
             -- below it; anything else keeps its full screen.
             row = 1 + if plainOutput printed then min (floor rows) (max 3 (length (lines printed) + 1)) else floor rows :: Int
-            clock seconds = let whole = floor seconds :: Int in show (whole `div` 60) <> ":" <> T.justifyRight 2 '0' (show (whole `mod` 60))
             timeline now =
               let cells = max 10 (width - 2 - T.length (clock now) - T.length (clock total))
                   cell at = min (cells - 1) $ floor (at / max 1e-9 total * fromIntegral cells)
@@ -365,10 +364,9 @@ renderVideo page chapters video = renderMedia video \directory run -> do
   probed <- readProcessStdout_ (proc "ffprobe" ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", directory </> "proof.mp4"])
   let total = max 1 $ fromMaybe 30 $ readMaybe @Double $ toString $ T.strip $ decodeUtf8 probed
       shown = previewWindow total chapters
-      clock t = let n = round t :: Int in show (n `div` 60) <> ":" <> T.justifyRight 2 '0' (show (n `mod` 60))
   -- The left clock counts the whole video's time as the preview plays (drawtext expands it per frame).
   writeFileBS (directory </> "proof.clock") $ encodeUtf8 $ "%{eif:floor((t+" <> fixed shown.start <> ")/60):d}:%{eif:mod(floor(t+" <> fixed shown.start <> ")\\,60):d:2}"
-  for_ [("proof.end", clock total), ("proof.label", "▶  Watch full video")] \(name, label) -> writeFileBS (directory </> name) (encodeUtf8 label)
+  for_ [("proof.end", clock (fromIntegral (round total :: Int))), ("proof.label", "▶  Watch full video")] \(name, label) -> writeFileBS (directory </> name) (encodeUtf8 label)
   let preview (fps, width, quality) = do
         -- A player bar: the whole video's track with the preview's part bracketed in yellow; a bright
         -- yellow bar slides across a dim one to fill that part as the preview plays.
@@ -386,11 +384,11 @@ renderVideo page chapters video = renderMedia video \directory run -> do
                 , text "textfile=proof.end:fontcolor=white:fontsize=18:x=w-334:y=h-33"
                 , text "textfile=proof.label:fontcolor=0x111111:fontsize=17:box=1:boxcolor=white:boxborderw=8:x=w-tw-18:y=h-32"
                 ]
-            bar colour = ["-f", "lavfi", "-i", "color=c=" <> colour <> ":s=" <> show span' <> "x8:r=" <> fps]
+            bar colour = ["-f", "lavfi", "-i", "color=c=" <> colour <> ":s=" <> show span' <> "x8:r=" <> show fps]
             duration = fixed (shown.end - shown.start)
-        run "ffmpeg" (quiet <> ["-ss", fixed shown.start, "-t", duration, "-i", "proof.mp4"] <> bar "0x77772E" <> bar "0xF5F56A" <> ["-filter_complex", "[0:v]fps=" <> fps <> ",scale=" <> show width <> ":-2:flags=lanczos," <> timeline <> "[v];[1:v][2:v]overlay=x=-W+W*t/" <> duration <> ":shortest=1[fill];[v][fill]overlay=x=" <> show from <> ":y=H-27:shortest=1", "-c:v", "libwebp_anim", "-quality", quality, "-loop", "0", "-f", "webp", "proof.gif"])
+        run "ffmpeg" (quiet <> ["-ss", fixed shown.start, "-t", duration, "-i", "proof.mp4"] <> bar "0x77772E" <> bar "0xF5F56A" <> ["-filter_complex", "[0:v]fps=" <> show fps <> ",scale=" <> show width <> ":-2:flags=lanczos," <> timeline <> "[v];[1:v][2:v]overlay=x=-W+W*t/" <> duration <> ":shortest=1[fill];[v][fill]overlay=x=" <> show from <> ":y=H-27:shortest=1", "-c:v", "libwebp_anim", "-quality", show quality, "-loop", "0", "-f", "webp", "proof.gif"])
         (<= 4718592) <$> getFileSize (directory </> "proof.gif")
-  unlessM (anyM preview [("15", 1200, "70"), ("10", 1200, "60"), ("8", 960, "50")]) $ throwIO $ userError "the preview exceeds GitHub's image size limit"
+  unlessM (anyM preview ([(15, 1200, 70), (10, 1200, 60), (8, 960, 50)] :: [(Int, Int, Int)])) $ throwIO $ userError "the preview exceeds GitHub's image size limit"
 
 
 -- | Runs @steps@ in a private directory holding @input@ as @proof.input@, then returns the
@@ -410,6 +408,11 @@ renderMedia input steps = do
     Right (Just media) -> Right media
     Right Nothing -> Left "Rendering the proof recording timed out"
     Left failure -> Left $ "The proof recording could not be rendered: " <> toText (displayException failure)
+
+
+-- | Whole seconds as @m:ss@.
+clock :: Double -> Text
+clock seconds = let whole = floor seconds :: Int in show (whole `div` 60) <> ":" <> T.justifyRight 2 '0' (show (whole `mod` 60))
 
 
 -- Fixed-point, as ffmpeg's time and expression parsers need ('show' writes 0.05 as 5.0e-2).
