@@ -160,7 +160,8 @@ data ProofLink = ProofLink {key :: Text, side :: Agent.RevisionSide, revision ::
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data Shot = Shot {label :: Text, url :: Text}
+-- | A screenshot, with its pixel width when known (stored before widths: unknown).
+data Shot = Shot {label :: Text, url :: Text, width :: Maybe Int}
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -931,7 +932,7 @@ proofLink ctx run proof =
     , video = url $ Reviews.Recording Reviews.Mp4
     , recording = url $ Reviews.Recording Reviews.Cast
     , browser = Just proof.browser
-    , shots = Just [Shot label (url $ Reviews.Screenshot n) | (n, label) <- zip [1 ..] (getAeson proof.shots)]
+    , shots = Just [Shot label (url $ Reviews.Screenshot n) width | (n, (label, width)) <- zip [1 ..] (getAeson proof.shots)]
     , chapters = Just $ getAeson proof.chapters
     }
   where
@@ -989,6 +990,7 @@ renderReview host run audience result =
                    (("**Also checked** · " <> T.intercalate " · " [show n <> " " <> bool plural singular (n == 1) | (status, singular, plural) <- [(Matches, "match", "match"), (Differs, "differs", "differ"), (Unverified, "not verified", "not verified")], let n = length (filter ((== status) . (.status)) rest), n > 0]) : [icon 16 c.status <> " " <> plain c.title <> watch c.proofKeys | c <- rest])
                | not (null rest)
                ]
+            <> [callout "WARNING" ["**Doesn't do what was asked**", "", "**" <> plain c.title <> "**", "", plain c.summary <> watch c.proofKeys] | c <- rest, c.status == Differs]
     sidesOf claim = [p | key <- take 1 claim.proofKeys, p <- fold result.proofs, p.key == key]
     watch keys = foldMap (\p -> " · [Watch recording](" <> p.video <> ")") $ find (\p -> p.side == Agent.Head && p.key `elem` take 1 keys) (fold result.proofs)
     callout tag = T.intercalate "\n" . map (\line -> if T.null line then ">" else "> " <> line) . (["[!" <> tag <> "]" | github] <>)
@@ -996,20 +998,35 @@ renderReview host run audience result =
       let pr = find ((== Agent.Head) . (.side)) sides
           base = find ((== Agent.Base) . (.side)) sides
           hero = fromMaybe (head sides) pr
-          stills p = case fold p.shots of [] -> [(sideName p.side, p.preview)]; shots -> [(s.label, s.url) | s <- shots]
-          image (alt, url) = if github then "<img src=\"" <> url <> "\" alt=\"" <> attr alt <> "\" width=\"100%\">" else "![" <> plain alt <> "](" <> url <> ")"
-       in [ if github then "<a href=\"" <> hero.video <> "\"><img src=\"" <> hero.preview <> "\" alt=\"Recording\" width=\"100%\"></a>" else image ("Recording", hero.preview)
-          , T.intercalate " · " $ ("[Watch full video](" <> hero.video <> ")") : ["[" <> timestamp at <> " " <> plain chapter <> "](" <> hero.video <> "#t=" <> T.dropWhileEnd (== '.') (T.dropWhileEnd (== '0') (show at)) <> ")" | (at, chapter) <- fold hero.chapters]
-          ]
-            <> concat [caption ("Merge-base" <> exit p) : map image (stills p) | Just p <- [base], or p.browser || isJust pr]
-            <> concat [caption ("This PR " <> if github then "<code>" <> T.take 8 p.revision <> "</code>" else "`" <> T.take 8 p.revision <> "`") : map image (stills p) | Just p <- [pr], or p.browser]
+          shotsOf = foldMap (fold . (.shots))
+          -- A terminal recording without a still card (a TUI, a progress bar) can only be shown moving.
+          animated = not (or hero.browser) && null (shotsOf base <> shotsOf pr)
+          headName = "This PR " <> (if github then "<code>" <> T.take 8 hero.revision <> "</code>" else "`" <> T.take 8 hero.revision <> "`") <> foldMap exit pr
+          image width (alt, url) = if github then "<img src=\"" <> url <> "\" alt=\"" <> attr alt <> "\" width=\"" <> width <> "\">" else "![" <> plain alt <> "](" <> url <> ")"
+          -- Stills are captured at device pixel ratio 2, so half their pixels is their size on screen.
+          still s = image (maybe "100%" (show . max 1 . (`div` 2)) s.width) (s.label, s.url)
+          narrow s = maybe False (<= 900) s.width
+          pairs = [(find ((== l) . (.label)) (shotsOf base), find ((== l) . (.label)) (shotsOf pr)) | l <- ordNub (map (.label) (shotsOf base <> shotsOf pr))]
+          pair = \case
+            (Just b, Just h) | github && narrow b && narrow h -> ["<table>\n<tr><th width=\"50%\">Merge-base" <> foldMap exit base <> "</th><th width=\"50%\">" <> headName <> "</th></tr>\n<tr><td>" <> still b <> "</td><td>" <> still h <> "</td></tr>\n</table>"]
+            (b, h) -> concat [[caption name, still s] | (name, Just s) <- [("Merge-base" <> foldMap exit base, b), (headName, h)]]
+       in ( if or hero.browser || animated
+              then
+                [ if github then "<a href=\"" <> hero.video <> "\"><img src=\"" <> hero.preview <> "\" alt=\"Recording\" width=\"100%\"></a>" else image "100%" ("Recording", hero.preview)
+                , T.intercalate " · " $ ("[Watch full video](" <> hero.video <> ")") : ["[" <> timestamp at <> " " <> plain chapter <> "](" <> hero.video <> "#t=" <> T.dropWhileEnd (== '.') (T.dropWhileEnd (== '0') (show at)) <> ")" | (at, chapter) <- fold hero.chapters]
+                ]
+              else []
+          )
+            -- A base with no stills of its own is shown by its recording.
+            <> concat [[caption ("Merge-base" <> exit p), image "100%" ("Merge-base", p.preview)] | isJust pr, null (shotsOf base), Just p <- [base], animated || or p.browser]
+            <> concatMap pair pairs
+            <> ["[Watch recording](" <> hero.video <> ")" | not (or hero.browser || animated)]
     -- Monoscope renders Markdown with embedded HTML as text, so only GitHub gets <sub>.
     caption text = if github then "<sub>" <> text <> "</sub>" else "*" <> text <> "*"
     -- A terminal recording's exit code is its verdict; a screenshot carries its own.
     exit p = case (or p.browser, p.exitCode) of (False, Just code) | code /= 0 -> " · exit " <> show code; _ -> ""
     timestamp at = let total = floor at :: Int in show (total `div` 60) <> ":" <> T.justifyRight 2 '0' (show (total `mod` 60))
     icon size status = if github then statusIcon host size (T.toLower $ show status) else case status of Matches -> "✅"; Differs -> "⚠️"; Unverified -> "👀"
-    sideName = \case Agent.Base -> "Merge-base"; Agent.Head -> "This PR"
     attr = T.replace "\"" "&quot;" . clean
     dimensionName = \case Alignment -> "Alignment"; Impact -> "Impact"; Verification -> "Verification"; Rollback -> "Rollback cost"; ErrorDetection -> "Error detection"
     gradeText dimension grade =

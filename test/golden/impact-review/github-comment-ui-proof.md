@@ -6,15 +6,14 @@ The receipt shows Retried once under the charge; before, it showed only the amou
 
 [Watch full video](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s) · [0:00 Open the receipt](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s#t=0) · [0:06 Retry the charge](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s#t=6.4) · [0:14 Read the retry count](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s#t=14.2)
 
-<sub>Merge-base</sub>
-
-<img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-base-1.png?sig=s" alt="Receipt without retries" width="100%">
+<table>
+<tr><th width="50%">Merge-base</th><th width="50%">This PR <code>aaaaaaaa</code></th></tr>
+<tr><td><img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-base-1.png?sig=s" alt="Receipt card" width="360"></td><td><img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head-1.png?sig=s" alt="Receipt card" width="360"></td></tr>
+</table>
 
 <sub>This PR <code>aaaaaaaa</code></sub>
 
-<img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head-1.png?sig=s" alt="Receipt with retry count" width="100%">
-
-<img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head-2.png?sig=s" alt="Retry history" width="100%">
+<img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head-2.png?sig=s" alt="Retry history" width="1280">
 
 **Also checked** · 1 match<br><img src="https://app.monoscope.tech/public/assets/proof/matches.svg" alt="Matches" width="16" height="16" align="absmiddle"> Retries a timed-out capture once · [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
 
