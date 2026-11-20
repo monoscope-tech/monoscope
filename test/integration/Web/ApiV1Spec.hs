@@ -213,6 +213,10 @@ spec = describe "API v1" do
       filter (`notElem` names) ["get_schema", "list_monitors", "find_error_patterns"] `shouldBe` []
       called ^? _Just . key "result" . key "isError" `shouldBe` Just (AE.Bool False)
       liveSchemaFields (called ^? _Just . key "result" . key "structuredContent") `shouldBe` Right (Map.keys (Schema.deriveSchema ParserExpr.flattenedOtelAttributes).fields)
+      -- An editor's session token reached admin tools through MCP: the API app re-checks the role.
+      let sid = UUID.toText (Servant.getResponse tr.trSessAndHeader).sessionId.getPersistentSessionId
+          createKeyAs role = setRole tr testPid role >> request app H.methodPost "/api/v1/mcp" [json, bearer sid, ("X-Project-Id", encodeUtf8 testPid.toText)] (AE.encode $ toolCall "create_api_key" ["body" AE..= AE.object ["title" AE..= ("mcp-" <> show role :: Text)]]) <&> \r -> AE.decode @AE.Value (WT.simpleBody r) ^? _Just . key "result" . key "isError"
+      traverse createKeyAs [PM.PEdit, PM.PAdmin] `shouldReturn` [Just (AE.Bool True), Just (AE.Bool False)]
 
     it "HTTP pages: dashboard form fragment, onboarding fallback, avatars, proxied docs" \tr -> do
       newForm <- getPath tr "/p/00000000-0000-0000-0000-000000000000/dashboards/new" []

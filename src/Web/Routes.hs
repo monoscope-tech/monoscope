@@ -311,9 +311,11 @@ apiV1App :: ProjectToolCtx es => (forall a. Eff es a -> IO a) -> ApiActor -> Api
 apiV1App run actor principal = case principal of
   -- MCP tool calls reach handlers through here, not through the auth handler.
   DemoReader _ -> \req reply -> if Auth.demoReaderAllows req then app req reply else reply $ Wai.responseLBS H.status401 [(H.hContentType, "application/json")] "{\"error\":\"The demo project is read-only without credentials\"}"
-  Editor _ -> \req reply -> if Auth.adminRequest req then reply $ Wai.responseLBS H.status403 [(H.hContentType, "application/json")] "{\"error\":\"Your role on this project does not allow this\"}" else app req reply
+  Viewer _ -> \req reply -> if Auth.demoReaderAllows req then app req reply else reply roleRefused
+  Editor _ -> \req reply -> if Auth.adminRequest req then reply roleRefused else app req reply
   Authenticated _ -> app
   where
+    roleRefused = Wai.responseLBS H.status403 [(H.hContentType, "application/json")] "{\"error\":\"Your role on this project does not allow this\"}"
     app =
       genericServeTWithContext
         (Handler . ExceptT . run . Error.runErrorNoCallStack @ServerError . Eff.inject)

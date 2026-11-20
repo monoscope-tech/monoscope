@@ -933,6 +933,7 @@ apiMe pid = do
 apiIngestionKey :: ApiPrincipal -> ATBaseCtx (Headers '[Header "Cache-Control" Text] Wire.IngestionKey)
 apiIngestionKey = \case
   DemoReader _ -> refuse AuthenticationRequired
+  Viewer _ -> refuse InsufficientRole
   Authenticated pid -> ingestionKey pid
   -- Settings already shows editors the project's keys.
   Editor pid -> ingestionKey pid

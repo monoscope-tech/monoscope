@@ -346,7 +346,7 @@ apiKeyAuthHandler logger env = mkAuthHandler \req -> do
   -- and only an admin manages members, keys, teams and the project. API keys are unchanged.
   let principal pid =
         maybe (pure Nothing) (runEffs . (`sessionBearerRole` pid)) mbAuth >>= \case
-          Just r | r < ProjectMembers.PEdit -> if demoReaderAllows req then pure $ DemoReader pid else T.throwError $ refusal InsufficientRole
+          Just r | r < ProjectMembers.PEdit -> if demoReaderAllows req then pure $ Viewer pid else T.throwError $ refusal InsufficientRole
           Just r | r < ProjectMembers.PAdmin -> if adminRequest req then T.throwError $ refusal InsufficientRole else pure $ Editor pid
           _ -> pure $ Authenticated pid
   case (mbHeaderPid, authed) of
