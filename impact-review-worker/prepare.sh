@@ -26,9 +26,10 @@ if [ -f cabal.project ] && has cabal; then
   if [ -f monoscope.cabal ]; then
     # Its git-sourced dependencies were fetched when the guest was built; git hosts are not reachable.
     mkdir -p dist-newstyle/src && cp -Rn /opt/haskell/dist-src/. dist-newstyle/src/ 2>/dev/null
-    # Tests stay enabled for every later cabal call here, or each one reconfigures and rebuilds the library.
-    echo "tests: True" > cabal.project.local
-    try cabal build exe:monoscope-server test:integration-tests --offline --ghc-options="-O0 -j2"
+    # The configuration lives in cabal.project.local, not on the command line, so any later plain
+    # `cabal build`/`cabal test` here (the agent's checks) reuses this build instead of reconfiguring.
+    printf 'tests: True\noptimization: False\npackage monoscope\n  ghc-options: -j4\n' > cabal.project.local
+    try cabal build exe:monoscope-server test:integration-tests --offline
   else try cabal update && try cabal build all --enable-tests --ghc-options=-O0; fi
 elif [ -f stack.yaml ] && has stack; then try stack build --test --no-run-tests --fast
 fi
