@@ -294,7 +294,7 @@ data SqlTok = SqlLit Text | SqlName [Text] Text | SqlOther Char
 -- E'' / U&'' strings and dollar quoting (mis-lexed, so code passed as a literal), and
 -- functions that run SQL text or reach the server (query_to_xml('select … from users.users')).
 --
--- >>> map (isLeft . scopeUserSql False pid) (["SELECT 1 FROM otel_metrics; SELECT * FROM otel_logs_and_spans", "SELECT E'\\'' FROM otel_metrics", "SELECT U&'a' FROM otel_metrics", "SELECT $$x$$ FROM otel_metrics", "SELECT query_to_xml('select 1', true, true, '') FROM otel_metrics", "SELECT pg_sleep(9) FROM otel_metrics", "SELECT dblink('x', 'y')"] :: [Text])
+-- >>> map (isLeft . scopeUserSql False pid) (["SELECT 1 FROM otel_metrics; SELECT * FROM otel_logs_and_spans", "SELECT E'\\'' FROM otel_metrics", "SELECT U&'a' FROM otel_metrics", "SELECT $$x$$ FROM otel_metrics", "SELECT query_to_xml('select 1', true, true, '') FROM otel_metrics", "SELECT pg_read_file('/etc/passwd') FROM otel_metrics", "SELECT dblink('x', 'y')"] :: [Text])
 -- [True,True,True,True,True,True,True]
 -- >>> isRight (scopeUserSql False pid "SELECT 'it''s; fine' AS e FROM otel_metrics;")
 -- True
@@ -331,7 +331,7 @@ scopeUserSql postgres pid sql = do
     alias t = bool t ("tenant_" <> T.replace "." "_" t) ("." `T.isInfixOf` t)
     schemas = ["apis", "monitors", "projects", "telemetry", "tests", "users", "public", "information_schema"]
     disallowed = \case
-      [n] -> n `elem` ["background_jobs", "background_jobs_long", "otel_metrics_meta", "query_cache", "rum_panel_cache", "schema_migrations", "current_setting", "set_config"] || ("otel_" `T.isPrefixOf` n && n `notElem` tenantTables) || any (`T.isPrefixOf` n) ["pg_", "lo_", "dblink", "query_to_xml", "table_to_xml", "schema_to_xml", "database_to_xml", "cursor_to_xml"]
+      [n] -> n `elem` ["background_jobs", "background_jobs_long", "otel_metrics_meta", "query_cache", "rum_panel_cache", "schema_migrations", "current_setting", "set_config"] || ("otel_" `T.isPrefixOf` n && n `notElem` tenantTables) || (n /= "pg_sleep" && any (`T.isPrefixOf` n) ["pg_", "lo_", "dblink", "query_to_xml", "table_to_xml", "schema_to_xml", "database_to_xml", "cursor_to_xml"])
       [q, n] -> (q `elem` schemas || any (`T.isPrefixOf` q) ["pg_", "_timescaledb", "timescaledb"]) && (q <> "." <> n) `notElem` tenantTables
       _ -> True
 

@@ -1,26 +1,27 @@
 module Pages.UptimeSpec (spec) where
 
 import BackgroundJobs qualified as Jobs
+import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.Notify (EmailData (..), Notification (..))
+import Data.Text qualified as T
+import Data.Time (addUTCTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Apis.Uptime qualified as UptimeM
-import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.DashboardTemplates qualified as DashboardTemplates
-import Pages.Charts.Charts qualified as Charts
-import Pkg.Components.Widget qualified as Widget
-import Pages.Uptime qualified as Uptime
-import Data.Text qualified as T
-import Data.Time (addUTCTime)
-import Data.Time.Format.ISO8601 (iso8601Show)
-import Data.ByteString.Lazy qualified as LBS
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Network.HTTP.Client qualified as HC
 import Network.HTTP.Types (status200)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
+import Pages.Charts.Charts qualified as Charts
+import Pages.Uptime qualified as Uptime
+import Pkg.Components.Widget qualified as Widget
 import Pkg.TestUtils
 import System.Config qualified as Config
+import Utils (internalAddress)
 
 
 spec :: Spec
@@ -123,10 +124,13 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     (edited.httpMethod, edited.requestHeaders, edited.requestBody, edited.teams) `shouldBe` (PromCfg.MGet, PromCfg.RequestHeaders [("X-Probe", "yes"), ("Accept", "*/*")], Nothing, [])
 
   it "a probe reads at most 1 MB of an answer, however large" \_ -> do
-    (_, probe) <- Config.newProbeManagers
+    (_, probe) <- Config.newProbeManagers (const False)
+    (_, prodProbe) <- Config.newProbeManagers internalAddress
     Warp.testWithApplication (pure \_ respond -> respond $ Wai.responseLBS status200 [] (LBS.replicate 3_000_000 120)) \port -> do
       request <- HC.parseRequest $ "http://127.0.0.1:" <> show port
       HC.httpLbs request probe >>= (`shouldBe` 1_048_576) . LBS.length . HC.responseBody
+      -- A saved name can resolve to loopback (127.0.0.1.nip.io, DNS rebinding): refused at connect.
+      HC.httpLbs request prodProbe `shouldThrow` \case HC.HttpExceptionRequest _ (HC.ConnectionFailure _) -> True; _ -> False
 
   it "probes are uptime.probe spans: the embedded dashboard reads daily bars, percentiles, regions and the map from them" \tr -> do
     pid <- createTestProject tr "Probes"
@@ -160,7 +164,8 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     tableSql <- maybe (fail "no Checks table") pure $ listToMaybe [q | w <- concatMap flat (DashboardTemplates.templateTab "uptime.yaml" "Overview" []), w.title == Just "Checks", Just q <- [w.sql]]
     let filled = T.replace "{{query_ast_filters}}" ("project_id = '" <> pid.toText <> "' AND name = 'uptime.probe'") tableSql
     dbQuery @_ @(Text, Int, Int, Double, Maybe Double, Maybe Double, Maybe Text) tr (fromString $ toString filled) ()
-      >>= (`shouldBe` [(shop.url, 6, 2, 66.667, True)]) . map (\(u, n, f, up, avg, p, lst) -> (u, n, f, fromIntegral (round (up * 1000) :: Int) / 1000 :: Double, isJust (avg *> p *> lst)))
+      >>= (`shouldBe` [(shop.url, 6, 2, 66.667, True)])
+      . map (\(u, n, f, up, avg, p, lst) -> (u, n, f, fromIntegral (round (up * 1000) :: Int) / 1000 :: Double, isJust (avg *> p *> lst)))
     page <- renderT <$> call tr (Uptime.uptimeCheckGetH pid shop.id (Just "7D"))
     page `shouldContainAll` ["Open as dashboard", "Daily uptime", "Probes by location", "Failure reasons", "/uptime/dashboard?var-check=" <> shop.id.toText]
     ("{{var-check}}" `T.isInfixOf` page) `shouldBe` False

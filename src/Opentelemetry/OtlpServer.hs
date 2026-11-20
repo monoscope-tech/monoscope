@@ -1573,9 +1573,8 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
   currentTime <- Time.currentTime
   appCtx <- ask @AuthContext
 
-  let
-    -- Combine API key from metadata with keys from resource attributes
-    !allApiKeys = maybe projectKeys (`V.cons` projectKeys) metadataApiKey
+  -- Combine API key from metadata with keys from resource attributes
+  let !allApiKeys = maybe projectKeys (`V.cons` projectKeys) metadataApiKey
 
   projectIdsAndKeys <-
     checkpoint (toAnnotation $ "processList:" <> signal <> ":getProjectIds")
@@ -1584,15 +1583,11 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
   -- @at-project-id@ attribute alone used to be enough to write into any project whose UUID was
   -- known, and it outranked the caller's own key; it now only picks among the key's projects.
   -- (The internal Kafka path, fed by our collector, still routes on it: 'processBatchPipeline'.)
-  let keyPids = hashNub $ map snd (V.toList projectIdsAndKeys)
-      atIds = V.filter (`elem` keyPids) $ V.catMaybes $ Projects.projectIdFromText <$> V.fromList atIds'
-      allProjectIds = keyPids
-
+  let allProjectIds = hashNub $ map snd (V.toList projectIdsAndKeys)
   when (null allProjectIds) $ throwGrpc GrpcUnauthenticated "Invalid or missing project API key"
-  do
-    Log.logTrace
-      (label <> ": Authentication successful")
-      (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "at_project_ids" AE..= V.map unUUIDId atIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
+  Log.logTrace
+    (label <> ": Authentication successful")
+    (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "at_project_ids" AE..= atIds', "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
 
   projectCaches <- checkpoint (toAnnotation $ "processList:" <> signal <> ":getProjectCaches") $ fetchIngestCaches allProjectIds
   let routing = ProjectRouting (metadataApiKey >>= \key -> snd <$> find ((== key) . fst) projectIdsAndKeys) projectIdsAndKeys

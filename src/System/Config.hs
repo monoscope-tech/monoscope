@@ -548,16 +548,16 @@ instance Default DeploymentEnv where
 
 
 -- | The (scrape, probe) managers: pooled TLS with a 10s timeout; a probe's body stops at 1 MB,
--- so a huge page cannot bloat the worker.
-newProbeManagers :: IO (HC.Manager, HC.Manager)
-newProbeManagers = (,) <$> HC.newManager settings <*> HC.newManager settings{HC.managerModifyResponse = capBody}
+-- so a huge page cannot bloat the worker. Connections to addresses @refused@ matches are refused.
+newProbeManagers :: (IP.IP -> Bool) -> IO (HC.Manager, HC.Manager)
+newProbeManagers refused = (,) <$> HC.newManager settings <*> HC.newManager settings{HC.managerModifyResponse = capBody}
   where
     tls = HCTLS.tlsManagerSettings
     settings =
       tls
         { HC.managerResponseTimeout = HC.responseTimeoutMicro 10_000_000
-        , HC.managerRawConnection = publicOnly <$> HC.managerRawConnection tls
-        , HC.managerTlsConnection = publicOnly <$> HC.managerTlsConnection tls
+        , HC.managerRawConnection = publicOnly refused <$> HC.managerRawConnection tls
+        , HC.managerTlsConnection = publicOnly refused <$> HC.managerTlsConnection tls
         }
     capBody response = do
       left <- newIORef (1_048_576 :: Int)
@@ -568,18 +568,18 @@ newProbeManagers = (,) <$> HC.newManager settings <*> HC.newManager settings{HC.
 -- host when it is saved; this vets every address the name resolves to when it connects, so an
 -- internal DNS name, a wildcard name like 127.0.0.1.nip.io, or a rebinding answer is refused.
 -- IPv4 is pinned to the address that was checked.
-publicOnly :: (Maybe NS.HostAddress -> String -> Int -> IO HCI.Connection) -> Maybe NS.HostAddress -> String -> Int -> IO HCI.Connection
-publicOnly connect _ host port = do
+publicOnly :: (IP.IP -> Bool) -> (Maybe NS.HostAddress -> String -> Int -> IO HCI.Connection) -> Maybe NS.HostAddress -> String -> Int -> IO HCI.Connection
+publicOnly refused connect _ host port = do
   addrs <- map NS.addrAddress <$> NS.getAddrInfo (Just NS.defaultHints{NS.addrSocketType = NS.Stream}) (Just host) (Just $ show port)
   let ips = mapMaybe (fmap fst . IP.fromSockAddr) addrs
-  when (null ips || any internalAddress ips) $ Safe.throwIO $ userError $ "refusing to connect to an internal address for " <> host
+  when (null ips || any refused ips) $ Safe.throwIO $ userError $ "refusing to connect to an internal address for " <> host
   connect (listToMaybe [a | NS.SockAddrInet _ a <- addrs]) host port
 
 
 configToEnv :: IOE :> es => EnvConfig -> Eff es AuthContext
 configToEnv config = do
   s3HttpManager <- liftIO $ HC.newManager HCTLS.tlsManagerSettings
-  (scrapeManager, probeManager) <- liftIO newProbeManagers
+  (scrapeManager, probeManager) <- liftIO $ newProbeManagers internalAddress
   let createPgConnIO = PG.connectPostgreSQL $ DeriveUtils.addKeepaliveParams $ encodeUtf8 config.databaseUrl
       -- Raise TimescaleDB DML decompression limit for UPDATE queries on compressed hypertables
       tfParams =

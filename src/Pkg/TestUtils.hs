@@ -281,7 +281,7 @@ import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, ActionResult, Done (
 import Test.Hspec (Expectation, Spec, SpecWith, anyException, around, aroundAll, beforeWith, describe, expectationFailure, it, pendingWith, runIO, sequential, shouldBe, shouldContain, shouldMatchList, shouldNotBe, shouldNotContain, shouldNotSatisfy, shouldReturn, shouldSatisfy, shouldThrow)
 import Text.RE.TDFA.Text (ed, (*=~/))
 import Unsafe.Coerce (unsafeCoerce)
-import Utils (toXXHash)
+import Utils (internalAddress, toXXHash)
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes (ApiActor (..))
 import Web.Auth qualified as Auth
@@ -984,7 +984,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   let liveTail = LiveTail.Runtime{transport = LiveTail.PostgresRelay, cache = liveTailCache, hub = liveTailHub, relayBuffer = liveTailBuffer, emit = LiveTail.deliver liveTailHub}
 
   s3HttpManager <- HC.newManager HCTLS.tlsManagerSettings
-  (scrapeManager, probeManager) <- Config.newProbeManagers
+  (scrapeManager, probeManager) <- Config.newProbeManagers internalAddress
   -- MaxMind's published test database: 81.2.69.142 is London, 89.160.20.112 Linköping.
   geoDb <- GeoIP2.openGeoDB "test/fixtures/GeoIP2-City-Test.mmdb"
   let atAuthCtx =
