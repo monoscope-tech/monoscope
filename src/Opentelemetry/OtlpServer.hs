@@ -58,7 +58,6 @@ import Data.Time (UTCTime, diffUTCTime)
 import Data.Time.Clock (secondsToNominalDiffTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
-import Data.UUID.Quasi qualified as UUIDQ
 import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
 import Effectful
@@ -85,7 +84,7 @@ import Network.GRPC.Server.Run hiding (runServer)
 import Network.GRPC.Server.StreamType (Methods (..), fromMethods)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
-import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe, unUUIDId)
+import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe, unUUIDId)
 import Pkg.GenAI qualified as GenAI
 import Pkg.LiveTail qualified as LiveTail
 import Pkg.Metrics (wireTypeErrorsRef)
@@ -193,25 +192,6 @@ minValidTimestampNanos = 946684800000000000
 -- | Keys that carry project identity and must not be stored in telemetry payloads
 projectSecretKeys :: [Text]
 projectSecretKeys = ["at-project-key", "at-project-id", "x-api-key"]
-
-
--- | The only projects the public endpoints still accept by @at-project-id@ alone, without a key:
--- the busiest pre-2026 customers by ingest over the 90 days to 2026-11-20, whose exporters may
--- predate keys. Every other sender must present one. Shrink this list; never grow it.
-legacyProjectIdSenders :: [Projects.ProjectId]
-legacyProjectIdSenders =
-  map
-    UUIDId
-    [ [UUIDQ.uuid|dcad860a-9a98-4c9e-9e69-20d52dcf90e2|]
-    , -- Lunix Backend
-      [UUIDQ.uuid|98fdd4f3-3544-4087-ad91-1e7ca95aba29|]
-    , -- Mainhedge
-      [UUIDQ.uuid|d062e010-e3d0-4673-8dfe-d652d6826f49|]
-    , -- Engine/API Prod
-      [UUIDQ.uuid|4f020cf8-979e-4d61-8de8-6edc8232d669|]
-    , -- KrosAI
-      [UUIDQ.uuid|1c4f2651-7130-4e6c-bd80-965c3866da61|]
-    ]
 
 
 -- tt
@@ -1602,9 +1582,9 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
     checkpoint (toAnnotation $ "processList:" <> signal <> ":getProjectIds")
       $ ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
   -- These are the public gRPC/HTTP endpoints, so a presented key names a project; an
-  -- @at-project-id@ alone does only for 'legacyProjectIdSenders'. It used to for any project whose
+  -- @at-project-id@ alone does only for 'Config.otlpKeylessProjectIds'. It used to for any project whose
   -- UUID was known. (The internal Kafka path, fed by our collector, still routes on it.)
-  let legacyIds = filter (`elem` legacyProjectIdSenders) $ mapMaybe Projects.projectIdFromText atIds'
+  let legacyIds = filter (`elem` appCtx.config.otlpKeylessProjectIds) $ mapMaybe Projects.projectIdFromText atIds'
       allProjectIds = hashNub $ map snd (V.toList projectIdsAndKeys) <> legacyIds
   when (null allProjectIds) $ throwGrpc GrpcUnauthenticated "Invalid or missing project API key"
   Log.logTrace
@@ -1675,7 +1655,8 @@ processMetricsRequest metadataApiKey req = do
   -- Metadata API key first, then the resource attribute key, then a legacy sender's project id
   -- (see 'processSignalRequest').
   keyPidM <- asum <$> traverse ProjectApiKeys.getProjectIdByApiKey (maybeToList metadataApiKey <> maybeToList projectKey)
-  case keyPidM <|> mfilter (`elem` legacyProjectIdSenders) (Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" resourceMetrics) of
+  keyless <- (.config.otlpKeylessProjectIds) <$> ask @AuthContext
+  case keyPidM <|> mfilter (`elem` keyless) (Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" resourceMetrics) of
     Just pid -> do
       Log.logTrace
         "Metrics: Authentication successful"

@@ -26,7 +26,6 @@ import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrent
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
-import Data.UUID.Quasi (uuid)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Query, execute_)
@@ -196,10 +195,10 @@ spec = do
       OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto traceReq) `shouldThrow` unauthenticated
       OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createGaugeMetricAtTime "definitely-not-a-valid-key" [] [] "rejected.metric" 99.9 frozenTime) `shouldThrow` unauthenticated
       runTestBg frozenTime tr (OtlpServer.processLogsRequest (Just "invalid-header-key") (createOtelLogAtTime "" ["Should not be stored"] frozenTime)) `shouldThrow` unauthenticated
-      -- An at-project-id alone wrote into any project whose UUID was known; only legacy senders keep it.
-      let legacy = UUIDId [uuid|dcad860a-9a98-4c9e-9e69-20d52dcf90e2|]
-          byIdOnly p = OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime "" ["by id only"] frozenTime & LSF.resourceLogs %~ map (PLF.resource . PRF.attributes .~ [mkAttr "at-project-id" p.toText]))
-      dbExec tr [sql| INSERT INTO projects.projects (id, title, payment_plan, active, weekly_notif, daily_notif) VALUES (?, 'legacy sender', 'GraduatedPricing', true, true, true) |] (Only legacy)
+      -- An at-project-id alone wrote into any project whose UUID was known; only OTLP_KEYLESS_PROJECT_IDS keep it.
+      legacy <- createTestProject tr "legacy sender"
+      let keylessCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.otlpKeylessProjectIds = [legacy]}}
+          byIdOnly p = OtlpServer.logsServiceExport tr.trLogger keylessCtx tr.trTracerProvider (Proto $ createOtelLogAtTime "" ["by id only"] frozenTime & LSF.resourceLogs %~ map (PLF.resource . PRF.attributes .~ [mkAttr "at-project-id" p.toText]))
       byIdOnly pid `shouldThrow` unauthenticated
       void $ byIdOnly legacy
       drainExtractionWorker tr

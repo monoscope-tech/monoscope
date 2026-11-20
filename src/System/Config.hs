@@ -117,6 +117,9 @@ data EnvConfig = EnvConfig
   , slackConnectBotToken :: Text
   -- ^ A dedicated internal app in Monoscope's workspace, never the customer-facing agent app: creates customers'
   -- private Slack Connect channels and invites them (scopes: groups:write, groups:read, conversations.connect:write, chat:write).
+  , otlpKeylessProjectIds :: [Projects.ProjectId]
+  -- ^ Legacy projects the public OTLP endpoints still accept by @at-project-id@ alone, without an
+  -- API key (comma-separated). Every other sender must present a key. Shrink it; never grow it.
   , slackConnectTeamUserIds :: [Text]
   -- ^ Monoscope staff (Slack user ids) added to every Slack Connect channel.
   , discordRedirectUri :: Text
@@ -410,6 +413,11 @@ instance DefConfig EnvConfig where
 instance Var Projects.ProjectId where
   fromVar = fmap DeriveUtils.UUIDId . UUID.fromString
   toVar = UUID.toString . DeriveUtils.unUUIDId
+
+
+instance Var [Projects.ProjectId] where
+  fromVar = traverse (fromVar . toString) . filter (not . T.null) . map T.strip . T.splitOn "," . toText
+  toVar = toString . T.intercalate "," . map (toText . toVar)
 
 
 -- Support unmarshalling a coma separated text into a text list
