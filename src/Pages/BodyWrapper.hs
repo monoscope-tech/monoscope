@@ -681,7 +681,7 @@ bodyWrapper bcfg child = do
                     window.monoscope = new Monoscope({
                       apiKey: "${telemetryApiKey}",
                       serviceName: "${telemetryServiceName}",
-                      exporterEndpoint: "https://otel.monoscope.tech/v1/traces",
+                      exporterEndpoint: "https://otel.monoscopehq.com/v1/traces",
                       debug: undefined,
                       sessionReplay: ${enableReplay},
                       user: {
