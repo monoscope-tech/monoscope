@@ -10,9 +10,9 @@ import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
+import Pages.BodyWrapper (PageCtx (..))
 import Pages.Dashboards qualified as Dashboards
 import Pages.Home qualified as Home
-import Pages.BodyWrapper (PageCtx (..))
 import Pages.Settings qualified as Settings
 import Pkg.Components.Widget qualified as Widget
 import Pkg.TestUtils
@@ -50,7 +50,7 @@ spec = around withTestResources $ describe "Home screen" do
     dbExec tr [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ?|] (Only pid)
     Home.HomePage (PageCtx _ d) <- call tr (Home.homeGetH pid)
     let flat w = w : foldMap (concatMap flat) w.children
-        sqlWidgets = filter (isJust . (.sql)) $ concatMap flat $ d.glance <> foldMap snd d.starred
+        sqlWidgets = concatMap (filter (isJust . (.sql)) . flat) (d.glance <> foldMap snd d.starred)
     map (.title) sqlWidgets `shouldSatisfy` elem (Just "Near memory limit")
     for_ sqlWidgets \w -> void $ call tr $ Routes.widgetGetH pid (Just $ decodeUtf8 $ AE.encode w) Nothing Nothing Nothing Nothing []
 
