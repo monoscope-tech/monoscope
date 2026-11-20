@@ -322,7 +322,7 @@ scopeUserSql postgres pid sql = do
       | otherwise -> "WITH " <> ctes <> " " <> render toks
   where
     isSemicolon = \case SqlOther ';' -> True; _ -> False
-    dropTrailingSemicolon = reverse . dropWhile (\case SqlOther c -> c == ';' || isSpace c; _ -> False) . reverse
+    dropTrailingSemicolon ts = case dropWhile (\case SqlOther c -> isSpace c; _ -> False) (reverse ts) of SqlOther ';' : rest -> reverse rest; _ -> ts
     unlexable a b = case (a, b) of
       (SqlName ["e"] _, SqlLit _) -> True
       (SqlName ["u"] _, SqlOther '&') -> True
