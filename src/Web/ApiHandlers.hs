@@ -102,6 +102,7 @@ import Control.Lens ((%~), (.~), (?~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
+import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
@@ -849,13 +850,22 @@ apiKeyActivate pid kid = withRefetch (apiKeyGet pid kid) (ProjectApiKeys.activat
 apiKeyDeactivate :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATBaseCtx ApiKeySummary
 apiKeyDeactivate pid kid = do
   s <- apiKeyGet pid kid
-  _ <- ProjectApiKeys.revokeApiKey kid
+  _ <- revokeKey kid
   -- getProjectApiKey filters to active keys, so return pre-fetched summary with active=False
   pure $ s & #active .~ False
 
 
 apiKeyDelete :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATBaseCtx NoContent
-apiKeyDelete pid kid = withRefetchNoContent (apiKeyGet pid kid) (ProjectApiKeys.revokeApiKey kid)
+apiKeyDelete pid kid = withRefetchNoContent (apiKeyGet pid kid) (revokeKey kid)
+
+
+-- | Revoking in the database alone left the key authenticating from 'projectKeyCache' for up
+-- to its 30-minute TTL, so a leaked key revoked from the CLI kept working.
+revokeKey :: ProjectApiKeys.ProjectApiKeyId -> ATBaseCtx Int64
+revokeKey kid = do
+  key <- ProjectApiKeys.getProjectApiKey kid
+  cache <- (.projectKeyCache) <$> ask @AuthContext
+  ProjectApiKeys.revokeApiKey kid <* whenJust key \k -> liftIO (Cache.insert cache k.keyPrefix Nothing)
 
 
 apiEventsQuery :: EventsSearchHandler -> Projects.ProjectId -> EventsQuery -> ATBaseCtx LogResult
@@ -923,10 +933,15 @@ apiMe pid = do
 apiIngestionKey :: ApiPrincipal -> ATBaseCtx (Headers '[Header "Cache-Control" Text] Wire.IngestionKey)
 apiIngestionKey = \case
   DemoReader _ -> refuse AuthenticationRequired
-  Authenticated pid -> do
-    whenNothingM_ (Projects.activeProjectById pid) $ refuse ProjectInactive
-    k <- maybe (refuse NoActiveIngestionKey) pure . find (\key -> key.active && isNothing key.deletedAt) =<< ProjectApiKeys.projectApiKeysByProjectId pid
-    pure $ addHeader ("no-store" :: Text) (Wire.IngestionKey k.keyPrefix)
+  Viewer _ -> refuse InsufficientRole
+  Authenticated pid -> ingestionKey pid
+  -- Settings already shows editors the project's keys.
+  Editor pid -> ingestionKey pid
+  where
+    ingestionKey pid = do
+      whenNothingM_ (Projects.activeProjectById pid) $ refuse ProjectInactive
+      k <- maybe (refuse NoActiveIngestionKey) pure . find (\key -> key.active && isNothing key.deletedAt) =<< ProjectApiKeys.projectApiKeysByProjectId pid
+      pure $ addHeader ("no-store" :: Text) (Wire.IngestionKey k.keyPrefix)
 
 
 apiProjectGet :: Projects.ProjectId -> ATBaseCtx ProjectFull

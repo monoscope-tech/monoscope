@@ -23,6 +23,7 @@ import Data.Effectful.Notify qualified as Notify
 import Data.Effectful.UUID qualified as UUIDEff
 import Data.Effectful.Wreq qualified as HTTP
 import Data.Generics.Product.Fields qualified as Generic
+import Data.HashMap.Strict qualified as HM
 import Data.List (lookup)
 import Data.Map qualified as Map
 import Data.Pool (withResource)
@@ -67,7 +68,7 @@ import Pages.Bots.Discord (discordInteractionsH)
 import Pages.Bots.Slack (processSlackEvent, slackEventsPostH, slackInteractionsH)
 import Pages.Bots.Slack qualified as SlackPage
 import Pages.Bots.Utils qualified as Bot
-import Pages.Bots.Whatsapp (BodyType (..), TwilioWhatsAppMessage (TwilioWhatsAppMessage), getWhatsappList, parseWhatsappBody, whatsappIncomingPostH)
+import Pages.Bots.Whatsapp (BodyType (..), getWhatsappList, parseWhatsappBody, twilioSignature, whatsappIncomingPostH)
 import Pages.CodeContext qualified as CodeContextPage
 import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
@@ -86,8 +87,9 @@ import System.Timeout (timeout)
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB)
 import UnliftIO.Async (concurrently, concurrently_, wait, withAsync)
 import UnliftIO.Exception (tryAny)
+import Utils (hostPath)
 import Web.ApiTypes (ApiActor (..))
-import Web.FormUrlEncoded (FromForm, urlDecodeAsForm)
+import Web.FormUrlEncoded (Form (..), FromForm, urlDecodeAsForm)
 import Web.MCP qualified as MCP
 import Web.Routes qualified as Routes
 
@@ -5235,7 +5237,10 @@ spec = around withTestResources do
     interact ping `shouldReturn` AE.object ["type" .= (1 :: Int)]
     -- discordInteraction_staleTimestamp_rejected: a validly signed request replayed past Slack's 300s window.
     traverse (toBaseServantResponse tr . statusOf) [discordInteractionsH Nothing pingBody (Just $ BS.replicate 128 0x30) (Just pingTs), discordInteractionsH Nothing staleBody (Just staleSig) (Just staleTs)] `shouldReturn` [401, 401]
-    interact (command "here" "" AE.Null) >>= goldenJson "discord/here_response.json"
+    -- Any guild member could redirect the project's alerts with /here; it needs Manage Server now.
+    let here perms = command "here" "" AE.Null & _Object . Lens.at "member" ?~ AE.object ["permissions" .= (perms :: Text)]
+    interact (here "2048") `shouldReturn` AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Only members with Manage Server can choose where Monoscope sends alerts." :: Text)]]
+    interact (here "32") >>= goldenJson "discord/here_response.json"
     interact (command "monoscope" "show errors" AE.Null) `shouldReturn` AE.object []
     histories <- newIORef ([] :: [[(Chat.Role, Text)]])
     let threadHistory = withHTTPResponses \_ url ->
@@ -5269,18 +5274,27 @@ spec = around withTestResources do
           _ -> []
     map listVars [0, 2] `shouldBe` [[Just "a", Just "dashboard___2"], [Just "c", Just "dash___e"]]
     let phone = fromMaybe "+2348161115653" tr.trATCtx.config.testPhoneNumber
-        message from body = TwilioWhatsAppMessage sid sid sid tr.trATCtx.config.twilioAccountSid Nothing ("whatsapp:" <> from) ("whatsapp:" <> tr.trATCtx.config.whatsappFromNumber) body 0 1 (Just "Test User") (T.stripPrefix "+" from) Nothing Nothing Nothing
+        cfg = tr.trATCtx.config
+        message accountSid from body = Form $ HM.fromList [(k, [v]) | (k, v) <- [("MessageSid", sid), ("SmsSid", sid), ("SmsMessageSid", sid), ("AccountSid", accountSid), ("From", "whatsapp:" <> from), ("To", "whatsapp:" <> cfg.whatsappFromNumber), ("Body", body), ("ProfileName", "Test User")]]
+        sign = Just . twilioSignature cfg.twilioAuthToken (hostPath cfg.hostUrl "whatsapp/incoming")
         sid = "SMa1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
-        whatsapp from body = runAsBaseRecordingHTTP tr $ whatsappIncomingPostH Nothing $ message from body
+        signed from body = let f = message cfg.twilioAccountSid from body in whatsappIncomingPostH Nothing (sign f) f
+        whatsapp from body = runAsBaseRecordingHTTP tr $ signed from body
         twilio = filter (T.isInfixOf "twilio" . fst)
     whatsapp "+19999999999" "show errors" `shouldReturn` ([], AE.object [])
+    -- Regression: the webhook trusted an unsigned From, so anyone could run the agent on a
+    -- registered number's project. Unsigned, mis-signed and other-account posts are refused.
+    let forged = message cfg.twilioAccountSid phone "show errors"
+        otherAccount = message "ACsomeoneelse" phone "show errors"
+    for_ [whatsappIncomingPostH Nothing Nothing forged, whatsappIncomingPostH Nothing (Just "bm90IGEgc2ln") forged, whatsappIncomingPostH Nothing (sign otherAccount) otherAccount] \act ->
+      (snd <$> runAsBaseRecordingHTTP tr (statusOf act)) `shouldReturn` 403
     dbExec tr [sql|UPDATE projects.teams SET phone_numbers = ARRAY[?] WHERE project_id = ? AND is_everyone = TRUE AND deleted_at IS NULL|] (phone, testPid)
     -- Six dashboards: the skip=2 window still overflows, so the next Load More token is dashboard___4.
     dbExec tr [sql|INSERT INTO projects.dashboards (project_id, created_by, title) SELECT ?, ?, 'wa-dash-' || i FROM generate_series(1, 6) i|] (testPid, uid tr)
     for_ ([("/dashboard", "dashboard___2"), ("dashboard___2", "dashboard___4")] :: [(Text, ByteString)]) \(body, next) ->
       whatsapp phone body >>= (`shouldSatisfy` any ((next `BS.isInfixOf`) . toStrict . snd)) . twilio . fst
     -- Prompts are answered off the request thread, so its Twilio reply may land after this returns; the stub keeps that fork off the network.
-    snd <$> runAsBaseRecordingHTTP tr (agent (\_ _ -> pure $ said "ok") $ whatsappIncomingPostH Nothing $ message phone "what's my error rate?") `shouldReturn` AE.object []
+    snd <$> runAsBaseRecordingHTTP tr (agent (\_ _ -> pure $ said "ok") $ signed phone "what's my error rate?") `shouldReturn` AE.object []
 
 
 uid :: TestResources -> Projects.UserId

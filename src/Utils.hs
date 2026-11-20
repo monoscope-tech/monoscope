@@ -1,5 +1,8 @@
 module Utils (
   safeScrapeUrl,
+  internalAddress,
+  scriptJson,
+  constEqText,
   Icon (..),
   lookupIcon,
   queryStringFrom,
@@ -111,11 +114,13 @@ import Data.Aeson.Extra.Merge (lodashMerge)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Types qualified as AET
+import Data.ByteArray qualified as BA
 import Data.Char (isAlpha, isAlphaNum, isDigit, isHexDigit)
 import Data.Default (Default (..))
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
+import Data.IP qualified as IP
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Text.Lazy.Builder qualified as TLB
@@ -692,9 +697,24 @@ hostPath :: Text -> Text -> Text
 hostPath host path = T.dropWhileEnd (== '/') host <> "/" <> T.dropWhile (== '/') path
 
 
+-- | Equality whose time does not depend on where the inputs differ: for secrets and signatures.
+constEqText :: Text -> Text -> Bool
+constEqText a b = BA.constEq (encodeUtf8 @Text @ByteString a) (encodeUtf8 @Text @ByteString b)
+
+
 -- | Encode a value as JSON Text (data attributes, widget JSON, etc.)
 encodeText :: AE.ToJSON a => a -> Text
 encodeText = decodeUtf8 . AE.encode
+
+
+-- | JSON safe to splice into an inline @<script>@ (or a @type=application/json@ one): aeson
+-- leaves @<@ alone, so a telemetry service name or a widget title holding @</script>@ closed
+-- the element and the rest parsed as HTML.
+--
+-- >>> scriptJson ("</script><img src=x onerror=alert(1)>" :: Text)
+-- "\"\\u003c/script\\u003e\\u003cimg src=x onerror=alert(1)\\u003e\""
+scriptJson :: AE.ToJSON a => a -> Text
+scriptJson = T.replace "\x2029" "\\u2029" . T.replace "\x2028" "\\u2028" . T.replace "&" "\\u0026" . T.replace ">" "\\u003e" . T.replace "<" "\\u003c" . encodeText
 
 
 -- | @FreeTierSampled oneIn limit@: today's events are being kept about one in @oneIn@.
@@ -1603,7 +1623,7 @@ renderMarkdownTocWithPrefix :: Text -> Text -> (Html (), [(Text, Text)])
 renderMarkdownTocWithPrefix prefix md = case MMark.parse "" md of
   Left _ -> (either (const $ toHtml md) (toHtmlRaw . sanitizeBalance . toStrict . Markdown.renderHtml @()) $ runIdentity $ Markdown.commonmarkWith (textOnlyHtml $ gfmExtensions <> Markdown.defaultSyntaxSpec) "" md, [])
   Right parsed ->
-    let doc = if T.null prefix then parsed else MMark.useExtension scoped parsed
+    let doc = MMark.useExtension safeUrls $ if T.null prefix then parsed else MMark.useExtension scoped parsed
      in ( toHtmlRaw $ MMark.render doc
         , reverse $ MMark.runScanner doc $ MExt.scanner [] \acc -> \case
             MExt.Heading2 inlines -> (prefix <> MExt.headerId inlines, MExt.asPlainText inlines) : acc
@@ -1628,6 +1648,14 @@ renderMarkdownTocWithPrefix prefix md = case MMark.parse "" md of
               inline -> render inline
           )
     heading element (inlines, body) = element [id_ $ prefix <> MExt.headerId (MExt.getOis inlines), tabindex_ "-1"] body >> toHtmlRaw ("\n" :: Text)
+    -- Model output is rendered here, and telemetry steers the model: a @javascript:@ link ran
+    -- on click, and any external image loaded on sight with whatever the model put in its URL.
+    -- Links keep only http(s)/mailto/relative targets; images keep only relative ones.
+    safeUrls = MExt.inlineRender \render -> \case
+      MExt.Link label uri _ | not (linkSchemeOk uri) -> foldMap render label
+      MExt.Image label uri _ | isJust (URI.uriScheme uri) || isRight (URI.uriAuthority uri) -> toHtml (MExt.asPlainText label)
+      inline -> render inline
+    linkSchemeOk uri = maybe True ((`elem` ["http", "https", "mailto"]) . T.toLower . URI.unRText) (URI.uriScheme uri)
 
 
 -- | Embedded HTML is text; only Markdown constructs may create markup.
@@ -2093,10 +2121,32 @@ embeddedIcons =
    )
 
 
+-- | Addresses an outbound fetch must never reach: loopback, unspecified, RFC 1918, CGNAT,
+-- link-local (incl. cloud metadata), benchmarking, multicast/reserved, ULA, and IPv4 spelt
+-- as IPv6 (mapped or compatible). Shared by 'safeScrapeUrl' (the literal host) and the probe
+-- managers' connect hook (every address the name resolves to).
+--
+-- >>> map (maybe False internalAddress . readMaybe @IP.IP . toString @Text) ["127.0.0.1", "100.64.0.1", "169.254.169.254", "198.18.0.1", "8.8.8.8", "::", "::ffff:7f00:1", "fe80::1", "2606:4700::1111"]
+-- [True,True,True,True,False,True,True,True,False]
+internalAddress :: IP.IP -> Bool
+internalAddress = \case
+  IP.IPv4 a -> any (IP.isMatchedTo a) v4
+  IP.IPv6 a -> any (IP.isMatchedTo a) v6 || any (internalAddress . IP.IPv4) (embeddedV4 a)
+  where
+    v4 :: [IP.AddrRange IP.IPv4]
+    v4 = mapMaybe (readMaybe . toString @Text) ["0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15", "224.0.0.0/3"]
+    v6 :: [IP.AddrRange IP.IPv6]
+    v6 = mapMaybe (readMaybe . toString @Text) ["::/127", "fc00::/7", "fe80::/10", "ff00::/8", "64:ff9b::/96"]
+    embeddedV4 a = case IP.fromIPv6w a of
+      (0, 0, 0xffff, w) -> Just (IP.toIPv4w w)
+      (0, 0, 0, w) | w > 1 -> Just (IP.toIPv4w w)
+      _ -> Nothing
+
+
 -- | Reject non-http(s) schemes and hosts that resolve to the internal network
 -- (loopback, link-local, RFC-1918, ULA, IPv4-mapped IPv6, and obfuscated numeric
--- literals — octal/decimal/short forms), to blunt SSRF via the scrape URL. DNS-rebinding
--- remains a known gap (we only vet the literal host; resolve-and-pin is the full fix).
+-- literals — octal/decimal/short forms), to blunt SSRF via the scrape URL. This vets the
+-- literal host; 'System.Config.publicOnly' vets every address a name resolves to at connect.
 --
 -- >>> map safeScrapeUrl ["https://metrics.example.com/m", "http://10.0.0.1/m", "http://[::ffff:127.0.0.1]/m", "file:///etc/passwd"]
 -- [True,False,False,False]
@@ -2116,18 +2166,15 @@ safeScrapeUrl u = case parseURI (toString (T.strip u)) of
   where
     internalHost raw =
       let h = fromMaybe raw (T.stripSuffix "." raw) -- normalise the trailing-dot FQDN form
-          ip6 = fromMaybe h (T.stripPrefix "[" h >>= T.stripSuffix "]") -- inside of a [..] literal
        in T.null h
             || h
             == "localhost"
-            || any (`T.isPrefixOf` ip6) ["::1", "fc", "fd", "fe8", "fe9", "fea", "feb", "::ffff:"] -- fc/fd = ULA fc00::/7; fe8-feb = link-local fe80::/10
-            || internalIPv4 h
+            -- A bracketed literal must parse as IPv6; textual prefixes missed [::], [0::1] and
+            -- [0:0:0:0:0:ffff:7f00:1].
+            || maybe False (maybe True (internalAddress . IP.IPv6) . readMaybe @IP.IPv6 . toString) (T.stripPrefix "[" h >>= T.stripSuffix "]")
+            || any internalAddress (readMaybe @IP.IP (toString h))
             || obfuscatedNumericHost h
             || hexNumericHost h
-    -- A clean dotted-decimal quad whose address is loopback/RFC-1918/link-local/unspecified.
-    internalIPv4 h = case traverse octet (T.splitOn "." h) of
-      Just [a, b, _, _] -> a `elem` [0, 127] || a == 10 || (a == 169 && b == 254) || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168)
-      _ -> False
     -- Any all-numeric host that is not a clean 4-octet quad: bare integer (2130706433),
     -- octal octets (0177.0.0.1), or short forms (127.1) — all of which an OS resolver
     -- expands to an internal address.

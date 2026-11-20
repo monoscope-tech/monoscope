@@ -217,7 +217,11 @@ spec = describe "Monitoring" do
     it "tenant boundary: bulk actions and the single toggle never touch another project's monitor; non-members are refused" \tr -> do
       otherPid <- createTestProject tr "monitors-authz-victim"
       let victimId = Monitors.QueryMonitorId [uuid|0000ffff-0000-0000-0000-00000000cafe|]
-      void $ runTestBgNoReset tr $ Monitors.queryMonitorUpsert def{Monitors.id = victimId, Monitors.projectId = otherPid, Monitors.logQuery = "status_code == 200", Monitors.alertThreshold = 1, Monitors.checkIntervalMins = 5, Monitors.timeWindowMins = 5}
+      let victim p q = def{Monitors.id = victimId, Monitors.projectId = p, Monitors.logQuery = q, Monitors.alertThreshold = 1, Monitors.checkIntervalMins = 5, Monitors.timeWindowMins = 5}
+      void $ runTestBgNoReset tr $ Monitors.queryMonitorUpsert $ victim otherPid "status_code == 200"
+      -- The upsert matched on id alone, so a form carrying another tenant's monitor id rewrote it.
+      void $ runTestBgNoReset tr $ Monitors.queryMonitorUpsert $ victim testPid "hijacked"
+      (runQueryEffect tr (Monitors.queryMonitorById victimId) <&> fmap ((.projectId) &&& (.logQuery))) `shouldReturn` Just (otherPid, "status_code == 200")
       void $ testServant tr $ Alerts.alertSingleToggleActiveH testPid victimId
       (runQueryEffect tr (Monitors.queryMonitorById victimId) <&> (>>= (.deactivatedAt))) `shouldReturn` Nothing
       -- Every action, so a newly added one is covered without anyone remembering to add it here.
@@ -228,6 +232,9 @@ spec = describe "Monitoring" do
       assertNonMemberDenied tr otherPid $ Alerts.alertSingleToggleActiveH otherPid victimId
       assertNonMemberDenied tr otherPid $ Alerts.alertUpsertPostH otherPid alertForm
       assertNonMemberDenied tr otherPid $ Alerts.alertBulkActionH otherPid Monitors.BADelete (ProjectPages.TBulkActionForm [victimId.unwrap])
+      setRole tr testPid ProjectMembers.PView
+      traverse (httpStatus tr) [void $ Alerts.alertUpsertPostH testPid alertForm, void $ Alerts.alertBulkActionH testPid Monitors.BADelete (ProjectPages.TBulkActionForm [])] `shouldReturn` [403, 403]
+      setRole tr testPid ProjectMembers.PAdmin
 
     it "widget monitor: alerts and recovers for the saved widget, follows renames, links copies to their dashboard, deletes with the widget" \tr -> do
       void $ testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Widget Monitor Lifecycle", Dashboards.file = "widget-monitor.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}

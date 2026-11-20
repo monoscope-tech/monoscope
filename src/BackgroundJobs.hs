@@ -119,7 +119,7 @@ import Pkg.AI qualified as AI
 import Pkg.AdConversions qualified as AdConversions
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (AesonText (..), BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql, unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), BaselineState (..), UUIDId (..), WrappedEnumSC (..), liveProjectSql, rawSql, unAesonTextMaybe)
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.ErrorFingerprint qualified as EF
@@ -5343,7 +5343,7 @@ recordMonitorDataGap monitor at reason = do
           AND m.muted_until IS NOT DISTINCT FROM #{monitor.mutedUntil}
           AND m.notification_count = #{monitor.notificationCount}
           AND m.deleted_at IS NULL AND m.deactivated_at IS NULL
-          AND EXISTS (SELECT 1 FROM projects.projects p WHERE p.id = m.project_id AND p.active AND p.deleted_at IS NULL)|]
+          AND ^{liveProjectSql "m.project_id"}|]
     open <- if changed == 1 then Incidents.openEpisodeTx monitor.projectId source else pure Nothing
     case open of
       Nothing -> pure $ Right ()

@@ -62,7 +62,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Ids qualified as Projects
 import Models.Projects.Activation qualified as Activation
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Pkg.DeriveUtils (SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), selectFrom)
+import Pkg.DeriveUtils (SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), liveProjectSql, selectFrom)
 import Relude
 import Servant (FromHttpApiData, ToHttpApiData (..))
 import System.Types (DB)
@@ -220,6 +220,8 @@ queryMonitorUpsertSql qm =
                   deactivated_at=EXCLUDED.deactivated_at,
                   environment=EXCLUDED.environment,
                   service=EXCLUDED.service
+    -- Keyed on id alone, a caller authorised on one project overwrote another project's monitor.
+    WHERE monitors.query_monitors.project_id = EXCLUDED.project_id
       |]
 
 
@@ -421,7 +423,7 @@ claimDueCronMonitors :: DB es => Int -> Eff es [CronMonitor]
 claimDueCronMonitors limit =
   Hasql.interp
     ( [HI.sql| UPDATE apis.cron_monitors SET next_eval_at = now() + interval '1 minute'
-               WHERE id IN (SELECT id FROM apis.cron_monitors WHERE next_eval_at <= now() ORDER BY next_eval_at FOR UPDATE SKIP LOCKED LIMIT #{limit})
+               WHERE id IN (SELECT id FROM apis.cron_monitors cm WHERE next_eval_at <= now() AND ^{liveProjectSql "cm.project_id"} ORDER BY next_eval_at FOR UPDATE SKIP LOCKED LIMIT #{limit})
                RETURNING |]
         <> cronCols
     )

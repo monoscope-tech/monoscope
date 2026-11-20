@@ -309,7 +309,9 @@ type instance
 
 -- | How an @/api/v1@ request reached its project: with a key or session, or through
 -- the world-readable demo bypass, which must never be handed credentials.
-data ApiPrincipal = Authenticated {projectId :: Sessions.ProjectId} | DemoReader {projectId :: Sessions.ProjectId}
+-- | 'Editor' is a member session below admin: it may not change members, keys, teams or the project.
+-- 'Viewer' is a member session that only reads; 'DemoReader' is a credential-less demo caller.
+data ApiPrincipal = Authenticated {projectId :: Sessions.ProjectId} | Editor {projectId :: Sessions.ProjectId} | Viewer {projectId :: Sessions.ProjectId} | DemoReader {projectId :: Sessions.ProjectId}
   deriving stock (Eq, Show)
 
 

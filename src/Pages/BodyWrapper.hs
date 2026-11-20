@@ -37,7 +37,7 @@ import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
 import System.Types (ATAuthCtx)
-import Utils (FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, fieldMenuActions, freeTierUsageBanner, freeTierUsageStatus, loadingIndicatorWith_, navTabAttrs, popoverPanel_, popoverTrigger_)
+import Utils (FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, fieldMenuActions, freeTierUsageBanner, freeTierUsageStatus, loadingIndicatorWith_, navTabAttrs, popoverPanel_, popoverTrigger_, scriptJson)
 import Web.I18n qualified as I18n
 import Web.Links
 
@@ -670,16 +670,18 @@ bodyWrapper bcfg child = do
           window.addEventListener('DOMContentLoaded', () => syncThemeToggles(document.body.getAttribute('data-theme')));
       |]
       let userM = (.persistentSession.user.getUser) <$> bcfg.sessM
-          email = show $ maybe "" (.email) userM
-          name = maybe "" (\u -> u.firstName <> " " <> u.lastName) userM
+          -- Spliced into inline scripts: a project title holding </script> or a quote ran as
+          -- code on every page of the project, for every member and for sudo staff.
+          email = scriptJson $ maybe "" (CI.original . (.email)) userM
+          name = scriptJson $ maybe "" (\u -> u.firstName <> " " <> u.lastName) userM
           pidT = foldMap (.id.toText) bcfg.currProject
-          pTitle = foldMap (.title) bcfg.currProject
+          pTitle = scriptJson $ foldMap (.title) bcfg.currProject
           telemetryApiKey = bcfg.config.telemetryApiKey
           telemetryServiceName = bcfg.config.telemetryServiceName
       script_
         [text| window.addEventListener("load", (event) => {
                   if (typeof posthog !== 'undefined' && posthog && posthog.people && posthog.people.set_once) {
-                    posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
+                    posthog.people.set_once({email: ${email}, name: ${name}, projectId: "${pidT}", projectTitle: ${pTitle}});
                   }
                   // echarts.connect('default');
                 });
@@ -702,7 +704,7 @@ bodyWrapper bcfg child = do
                       sessionReplay: ${enableReplay},
                       user: {
                         email: ${email},
-                        name: "${name}"
+                        name: ${name}
                       }
                     });
                   });

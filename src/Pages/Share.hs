@@ -19,7 +19,7 @@ import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Replay qualified as Replay
 import Pages.Telemetry qualified as PTelemetry
-import Pkg.DeriveUtils (unAesonTextMaybe)
+import Pkg.DeriveUtils (liveProjectSql, unAesonTextMaybe)
 import Relude
 import Servant (err404)
 import System.Config (AuthContext (..))
@@ -94,7 +94,7 @@ resolveShare :: UUID.UUID -> UTCTime -> ATBaseCtx (Maybe ShareRow)
 resolveShare sid now =
   Hasql.interpOne
     [HI.sql|SELECT project_id, event_id, event_type, event_created_at, created_at
-            FROM apis.share_events WHERE id=#{sid} LIMIT 1|]
+            FROM apis.share_events se WHERE id=#{sid} AND ^{liveProjectSql "se.project_id"} LIMIT 1|]
     <&> fmap \(pid, eid, ty, eca, createdAt :: UTCTime) ->
       ShareRow pid eid ty eca (ceiling (diffUTCTime (addUTCTime (48 * 3600) createdAt) now / 3600))
 

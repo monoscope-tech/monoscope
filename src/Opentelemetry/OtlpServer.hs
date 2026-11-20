@@ -1573,21 +1573,21 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
   currentTime <- Time.currentTime
   appCtx <- ask @AuthContext
 
-  let atIds = V.catMaybes $ Projects.projectIdFromText <$> V.fromList atIds'
-      -- Combine API key from metadata with keys from resource attributes
-      !allApiKeys = maybe projectKeys (`V.cons` projectKeys) metadataApiKey
+  -- Combine API key from metadata with keys from resource attributes
+  let !allApiKeys = maybe projectKeys (`V.cons` projectKeys) metadataApiKey
 
   projectIdsAndKeys <-
     checkpoint (toAnnotation $ "processList:" <> signal <> ":getProjectIds")
       $ ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
-  let allProjectIds = hashNub $ V.toList atIds <> map snd (V.toList projectIdsAndKeys)
-
-  -- Verify authentication: if project keys or IDs are present, they must resolve to valid projects
-  when (not (V.null allApiKeys) || not (V.null atIds)) do
-    when (null allProjectIds) $ throwGrpc GrpcUnauthenticated "Invalid or missing project API key"
-    Log.logTrace
-      (label <> ": Authentication successful")
-      (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
+  -- These are the public gRPC/HTTP endpoints, so a presented key names a project; an
+  -- @at-project-id@ alone does only for 'Config.otlpKeylessProjectIds'. It used to for any project whose
+  -- UUID was known. (The internal Kafka path, fed by our collector, still routes on it.)
+  let legacyIds = filter (`elem` appCtx.config.otlpKeylessProjectIds) $ mapMaybe Projects.projectIdFromText atIds'
+      allProjectIds = hashNub $ map snd (V.toList projectIdsAndKeys) <> legacyIds
+  when (null allProjectIds) $ throwGrpc GrpcUnauthenticated "Invalid or missing project API key"
+  Log.logTrace
+    (label <> ": Authentication successful")
+    (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "at_project_ids" AE..= atIds', "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
 
   projectCaches <- checkpoint (toAnnotation $ "processList:" <> signal <> ":getProjectCaches") $ fetchIngestCaches allProjectIds
   let routing = ProjectRouting (metadataApiKey >>= \key -> snd <$> find ((== key) . fst) projectIdsAndKeys) projectIdsAndKeys
@@ -1650,11 +1650,11 @@ processMetricsRequest metadataApiKey req = do
   let !resourceMetrics = V.fromList $ req ^. PMF.resourceMetrics
       !projectKey = getMetricApiKey resourceMetrics
 
-  -- Try metadata API key first, then resource attribute key, then project ID
+  -- Metadata API key first, then the resource attribute key, then a legacy sender's project id
+  -- (see 'processSignalRequest').
   keyPidM <- asum <$> traverse ProjectApiKeys.getProjectIdByApiKey (maybeToList metadataApiKey <> maybeToList projectKey)
-  let pidM = keyPidM <|> (Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" resourceMetrics)
-
-  case pidM of
+  keyless <- (.config.otlpKeylessProjectIds) <$> ask @AuthContext
+  case keyPidM <|> mfilter (`elem` keyless) (Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" resourceMetrics) of
     Just pid -> do
       Log.logTrace
         "Metrics: Authentication successful"

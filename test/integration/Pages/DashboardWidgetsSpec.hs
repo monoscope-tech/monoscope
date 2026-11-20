@@ -412,6 +412,15 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     (got.sql, got.title) `shouldBe` (bigSqlWidget.sql, bigSqlWidget.title)
     Widget.decodeWidgetZ "not-a-gzip-blob" `shouldReturn` Nothing
 
+    -- `html` is emitted raw and was only stripped from the top widget; a nested child's SQL went unchecked.
+    let child = (def :: Widget.Widget){Widget.wType = Widget.WTStat, Widget.html = Just "<script>pwn()</script>"}
+        groupOf kid = Utils.encodeText (def :: Widget.Widget){Widget.wType = Widget.WTGroup, Widget.children = Just [kid]}
+    grouped <- call tr $ Routes.widgetGetH testPid (Just $ groupOf child) Nothing Nothing Nothing Nothing []
+    (grouped.html, map (.html) <$> grouped.children) `shouldBe` (Nothing, Just [Nothing])
+    setRole tr testPid ProjectMembers.PView
+    httpStatus tr (Routes.widgetGetH testPid (Just $ groupOf child{Widget.sql = Just "SELECT 1 FROM otel_logs_and_spans"}) Nothing Nothing Nothing Nothing []) `shouldReturn` 403
+    setRole tr testPid ProjectMembers.PAdmin
+
     -- pinnedWidget_readsItsOwnWindow: a run's tables re-queried the page's default window ending
     -- now, so a fixed past hour read 45, 64, 0, 1 and 72 on successive loads of a live project.
     pinnedPid <- createTestProject tr "pinned-window"

@@ -11,6 +11,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.Char (isAlphaNum)
 import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.AgentWorkspace.Guest qualified as Guest
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..))
@@ -1051,14 +1052,25 @@ validReviewContext request verified =
         /= result.attemptId
 
 
+-- | The review agent's page fetch. Its context holds production telemetry and text the PR author
+-- wrote, so a fetched URL is an exfiltration channel: only short, plain document addresses go
+-- out (at most 160 URL-safe characters: no query, fragment or userinfo), which caps what one
+-- call can carry. Removing the tool from automatic runs is the full fix.
+--
+-- >>> map documentUrlOk ["https://docs.example.com/guide/install", "https://evil.example/?d=secret", "https://evil.example?d=secret", "https://evil.example/" <> T.replicate 200 "a", "https://evil.example/a#frag", "https://user:pw@evil.example/"]
+-- [True,False,False,False,False,False]
+documentUrlOk :: Text -> Bool
+documentUrlOk = maybe False (\rest -> T.length rest <= 160 && T.all (\c -> isAlphaNum c || c `elem` ("/._-~:" :: String)) rest) . T.stripPrefix "https://"
+
+
 -- | A documentation page for the agent, fetched by the host so the guest stays off the web: public
--- https:// only (the scrape-target SSRF guard), no redirects, the first 512 KB, HTML reduced to text.
+-- https:// only ('documentUrlOk' and the scrape-target SSRF guard), no redirects, the first 512 KB, HTML reduced to text.
 --
 -- >>> traverse fetchDocument ["https://127.0.0.1/admin", "http://example.com/docs", "https://169.254.169.254/latest"]
--- [Left "Only public https:// URLs can be fetched",Left "Only public https:// URLs can be fetched",Left "Only public https:// URLs can be fetched"]
+-- [Left "Only short public https:// document URLs, without a query string, can be fetched",Left "Only short public https:// document URLs, without a query string, can be fetched",Left "Only short public https:// document URLs, without a query string, can be fetched"]
 fetchDocument :: Text -> IO (Either Text AE.Value)
 fetchDocument url
-  | not ("https://" `T.isPrefixOf` url && safeScrapeUrl url) = pure $ Left "Only public https:// URLs can be fetched"
+  | not (documentUrlOk url && safeScrapeUrl url) = pure $ Left "Only short public https:// document URLs, without a query string, can be fetched"
   | otherwise =
       first (const "The page could not be fetched") <$> tryAny do
         manager <- HTTP.newManager TLS.tlsManagerSettings{HTTP.managerResponseTimeout = HTTP.responseTimeoutMicro 15000000}

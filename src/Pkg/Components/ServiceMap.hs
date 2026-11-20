@@ -18,7 +18,7 @@ import Models.Ids qualified as Projects
 import Models.Telemetry.ServiceGraph (MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), drawnEdges, drawnNodes)
 import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), disclosure_, emptyState_)
 import Relude
-import Utils (faSprite_, getDurationNSMS, prettyPrintCount, showFFloat')
+import Utils (faSprite_, getDurationNSMS, prettyPrintCount, scriptJson, showFFloat')
 import Web.Links (CookieProtectedRoutes (..), TelemetryRoutes' (..), urls)
 
 
@@ -99,10 +99,9 @@ serviceMapPanelWith_ panel pid elId graph colors = div_ [class_ "w-full flex fle
           -- Outside the scrolling viewport: an absolutely positioned menu inside a scroll
           -- container is clipped by it the moment the node is near an edge.
           nodeMenu_ elId
-          script_ [type_ "application/json", id_ $ elId <> "-data"] $ decodeUtf8 @Text $ AE.encode graph
+          script_ [type_ "application/json", id_ $ elId <> "-data"] $ scriptJson graph
           script_ [type_ "application/json", id_ $ elId <> "-colors"]
-            $ decodeUtf8 @Text
-            $ AE.encode
+            $ scriptJson
             $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList colors]
           dependencyTable_ graph
 

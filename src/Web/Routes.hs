@@ -86,6 +86,7 @@ import Servant
 import Servant.HTML.Lucid (HTML)
 import Servant.QueryParam.Server.Record ()
 import Servant.Server.Generic (AsServerT, genericServeTWithContext)
+import Servant.Server.Internal.ServerError (responseServerError)
 import System.Config (AuthContext (..), DeploymentEnv (..), EnvConfig (..))
 import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
@@ -102,6 +103,7 @@ import Web.ApiTypes qualified as ApiT
 import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, servantRejection)
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
+import Web.FormUrlEncoded (Form)
 import Web.Links
 import Web.MCP qualified as MCP
 import "base16-bytestring" Data.ByteString.Base16 qualified as B16
@@ -162,9 +164,9 @@ data Routes mode = Routes
   , ping :: mode :- "ping" :> Get '[PlainText] Text
   , robots :: mode :- "robots.txt" :> Get '[PlainText] Text
   , status :: mode :- "status" :> Get '[JSON] Status
-  , login :: mode :- "login" :> QPT "redirect_to" :> QPT "screen_hint" :> QPT "login_hint" :> SessionRedirect NoContent
+  , login :: mode :- "login" :> QPT "redirect_to" :> QPT "screen_hint" :> QPT "login_hint" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] NoContent)
   , toLogin :: mode :- "to_login" :> QPT "redirect_to" :> SessionRedirect NoContent
-  , logout :: mode :- "logout" :> SessionRedirect NoContent
+  , logout :: mode :- "logout" :> Header "Cookie" ByteString :> SessionRedirect NoContent
   , setLanguage :: mode :- "set_language" :> Capture "lang" Text :> QPT "redirect_to" :> SessionRedirect NoContent
   , authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> QPT "redirect_to" :> Header "Cookie" ByteString :> Header "User-Agent" ByteString :> Header "CF-IPCountry" ByteString :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] (Html ()))
   , -- OTLP/HTTP ingestion (protobuf) — collector-less SDK exporters
@@ -173,13 +175,13 @@ data Routes mode = Routes
   , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] Share.ShareLinkGet
   , publicStatusPageGet :: mode :- "status" :> Capture "slug" Text :> Get '[HTML] Uptime.StatusPageView
   , shareReplaySessionGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] Replay.ReplaySessionResp
-  , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> LocationRedirect BotUtils.BotResponse
+  , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> Header "Cookie" ByteString :> LocationRedirect BotUtils.BotResponse
   , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
   , slackInteractions :: mode :- "interactions" :> "slack" :> ReqBody '[RawForm] BS.ByteString :> Header "X-Slack-Request-Timestamp" Text :> Header "X-Slack-Signature" Text :> Post '[JSON] AE.Value
   , slackActionsPost :: mode :- "actions" :> "slack" :> ReqBody '[RawForm] BS.ByteString :> Header "X-Slack-Request-Timestamp" Text :> Header "X-Slack-Signature" Text :> Post '[JSON] AE.Value
   , slackEventsPost :: mode :- "slack" :> "events" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Slack-Request-Timestamp" Text :> Header "X-Slack-Signature" Text :> Post '[JSON] AE.Value
   , externalOptionsGet :: mode :- "interactions" :> "external_options" :> ReqBody '[RawForm] BS.ByteString :> Header "X-Slack-Request-Timestamp" Text :> Header "X-Slack-Signature" Text :> Post '[JSON] AE.Value
-  , whatsappIncomingPost :: mode :- "whatsapp" :> "incoming" :> ReqBody '[FormUrlEncoded] Whatsapp.TwilioWhatsAppMessage :> Post '[JSON] AE.Value
+  , whatsappIncomingPost :: mode :- "whatsapp" :> "incoming" :> Header "X-Twilio-Signature" Text :> ReqBody '[FormUrlEncoded] Form :> Post '[JSON] AE.Value
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] Auth.ClientMetadata
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[HTML] (Html ())
   , stripeWebhook :: mode :- "webhook" :> "stripe" :> Header "Stripe-Signature" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[HTML] (Html ())
@@ -307,11 +309,14 @@ apiV1ServerAs actor principal = ApiH.apiV1Server actor principal Log.queryEvents
 
 
 apiV1App :: ProjectToolCtx es => (forall a. Eff es a -> IO a) -> ApiActor -> ApiPrincipal -> Servant.Application
-apiV1App run actor principal =
-  genericServeTWithContext
-    (Handler . ExceptT . run . Error.runErrorNoCallStack @ServerError . Eff.inject)
-    (apiV1ServerAs actor principal)
-    Servant.EmptyContext
+-- MCP tool calls reach handlers through here, not through the auth handler.
+apiV1App run actor principal req reply = maybe (app req reply) (reply . responseServerError . ApiT.refusal) (Auth.principalRefusal principal req)
+  where
+    app =
+      genericServeTWithContext
+        (Handler . ExceptT . run . Error.runErrorNoCallStack @ServerError . Eff.inject)
+        (apiV1ServerAs actor principal)
+        Servant.EmptyContext
 
 
 -- | MCP tool registry — REST tools (from OpenAPI) + composite workflow tools,
@@ -394,7 +399,7 @@ cookieProtectedServer projectTools runNow =
     , -- Chart and widget handlers
       chartsDataGet = chartsDataGetH
     , chartsDataStreamGet = chartsDataStreamGetH
-    , widgetPost = Widget.widgetPostH
+    , widgetPost = widgetPostH
     , widgetGet = widgetGetH
     , widgetSqlPreview = Dashboards.widgetSqlPreviewGetH
     , widgetSqlText = Dashboards.widgetSqlTextGetH
@@ -821,6 +826,15 @@ chartScopeParams pid params = case pid of
     pure $ scope <> filter (\(k, _) -> k `notElem` ["environment", "service", "dashboard_id", "pinned_scope"]) params
 
 
+-- | The returned widget carries a signed PNG URL, and widget.png trusts that signature as the
+-- server's word: so only a member may have a widget signed for a project, and only SQL they
+-- could already run.
+widgetPostH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
+widgetPostH pid sinceM fromM toM widget = do
+  _ <- Projects.sessionAndProject pid
+  Widget.widgetPostH pid sinceM fromM toM =<< Dashboards.authorizeClientWidget pid widget
+
+
 widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders Widget.Widget)
 widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
   -- widgetZ is what we render now (see 'Widget.widgetFetchUrl'); widgetJSON stays readable
@@ -829,7 +843,7 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
   widget <-
     AE.eitherDecode (encodeUtf8 $ fromMaybe "" widgetJson)
       & either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure
-  Dashboards.authorizeClientSql pid widget.sql widget.rollupSql widget.sqlSig
+        >>= Dashboards.authorizeClientWidget pid
   now <- Time.currentTime
   let scopeMarkers = [("dashboard_id", Just d) | Just d <- [widget._dashboardId]] <> [("pinned_scope", Just $ decodeUtf8 $ AE.encode sc) | Just sc <- [widget.scope]]
   scopedParams <- chartScopeParams (Just pid) $ scopeMarkers <> allParams
@@ -891,6 +905,8 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
   v <- maybe (pure fallback) (fmap (fromMaybe fallback) . Widget.decodeWidgetZ) widgetZM
   Log.logInfo "widgetPngGetH: request" $ AE.object ["widgetJson_len" AE..= T.length v]
   whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v sigM) \err -> Error.throwError $ err403{errBody = err}
+  -- Signed links never expire, so a deleted project's charts kept rendering live data for them.
+  whenNothingM_ (Projects.activeProjectById pid) $ Error.throwError err404
 
   widget <- either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure $ AE.eitherDecode (encodeUtf8 v)
   let (defaultWidth, defaultHeight) = Widget.pngExportSize widget.pngProfile
@@ -1000,6 +1016,11 @@ reportPreviewH :: Maybe AI.ProjectTools -> Projects.ProjectId -> Maybe Text -> A
 reportPreviewH tools pid templateM = do
   guardDevOnly
   ctx <- ask @AuthContext
+  -- This route is public, and ENVIRONMENT defaults to Dev: anyone could run the report agent
+  -- over any project's telemetry on the operator's LLM key. Off a developer's own machine it
+  -- previews only the demo project.
+  let onLoopback = any (`T.isInfixOf` ctx.config.hostUrl) ["://localhost", "://127.0.0.1", "://[::1]"]
+  unless (onLoopback || pid == Projects.demoProjectId) $ Error.throwError err404
   now <- Time.currentTime
   let (template, days) = fromMaybe (Issues.weeklyReportTemplate, 7) $ Issues.reportTemplate =<< templateM
       (start, end) = Issues.reportWindow days now
@@ -1077,7 +1098,7 @@ type instance Opaque "CreateProject.PricingUpdateForm" = CreateProject.PricingUp
 type instance Opaque "CreateProject.PricingUpdated" = CreateProject.PricingUpdated
 type instance Opaque "CreateProject.ProjectDeleted" = CreateProject.ProjectDeleted
 type instance Opaque "CreateProject.StripeCheckoutForm" = CreateProject.StripeCheckoutForm
-type instance Opaque "CreateProject.SubscriptionLookupFailed" = CreateProject.SubscriptionLookupFailed
+type instance Opaque "CreateProject.PricingRejection" = CreateProject.PricingRejection
 type instance Opaque "Dashboards.DashboardBulkActionForm" = Dashboards.DashboardBulkActionForm
 type instance Opaque "Dashboards.DashboardForm" = Dashboards.DashboardForm
 type instance Opaque "Dashboards.DashboardGet" = Dashboards.DashboardGet

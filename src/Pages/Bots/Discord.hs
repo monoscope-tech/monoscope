@@ -1,7 +1,9 @@
 module Pages.Bots.Discord (linkDiscordGetH, discordInteractionsH, getDiscordChannels, DiscordInteraction) where
 
-import Control.Lens ((^.))
+import Control.Lens ((^.), (^?))
 import Data.Aeson qualified as AE
+import Data.Aeson.Lens qualified as AEL
+import Data.Bits ((.&.))
 import Data.ByteString qualified as BS
 import Data.Default (Default (def))
 import Data.Effectful.Wreq (HTTP, defaults, getWith, postWith, responseBody)
@@ -16,6 +18,7 @@ import Models.Apis.Integrations (DiscordData (..), getDashboardsForDiscord, getD
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards (Dashboard (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
@@ -33,20 +36,30 @@ import System.Config (AuthContext (env), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATBaseCtx)
 import Utils (hostPath)
+import Web.Cookie (parseCookies)
 import Web.Links (CookieProtectedRoutes (..), urls)
 import "base16-bytestring" Data.ByteString.Base16 qualified as Base16
 import "cryptonite" Crypto.Error qualified as Crypto
 import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
 
 
-linkDiscordGetH :: Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] BotResponse)
-linkDiscordGetH pidM' codeM guildIdM = do
+-- | The OAuth @state@ is only the project id, so anyone who knew a project's UUID could bind
+-- their own guild to it: answer its alerts in their channel and query its telemetry from Discord.
+-- The browser finishing the install must therefore carry the session of an editor of that
+-- project, and the guild must be the one Discord issued the code for.
+linkDiscordGetH :: Maybe Text -> Maybe Text -> Maybe Text -> Maybe ByteString -> ATBaseCtx (Headers '[Header "Location" Text] BotResponse)
+linkDiscordGetH pidM' codeM guildIdM cookieM = do
   envCfg <- asks env
   let (pidM, isOnboarding) = parseInstallState pidM'
       bwconf = (def :: BWConfig){sessM = Nothing, currProject = Nothing, pageTitle = "Discord app installed", config = envCfg}
       discordErr = addHeader "" $ DiscordError $ PageCtx def ()
-  case (pidM, codeM, guildIdM) of
-    (Just pid, Just code, Just guildId) -> do
+  installer <- runMaybeT do
+    sess <- MaybeT . Projects.getPersistentSession =<< hoistMaybe (Projects.sessionIdFromCookies $ maybe [] parseCookies cookieM)
+    pid <- hoistMaybe pidM
+    guard . any (>= ProjectMembers.PEdit) =<< lift (ProjectMembers.getSessionPermission pid sess.userId)
+  case (pidM, codeM, guildIdM, installer) of
+    (_, _, _, Nothing) -> Log.logAttention "Discord install without an editor session for the project" (AE.object ["state" AE..= pidM']) $> discordErr
+    (Just pid, Just code, Just guildId, Just ()) -> do
       let body :: [FormParam]
           body =
             [ "client_id" Wreq.:= envCfg.discordClientId
@@ -56,7 +69,8 @@ linkDiscordGetH pidM' codeM guildIdM = do
             , "redirect_uri" Wreq.:= envCfg.discordRedirectUri
             ]
       res <- postWith (defaults & contentTypeHeader "application/x-www-form-urlencoded") "https://discord.com/api/oauth2/token" body
-      if not $ statusIsSuccessful (res ^. Wreq.responseStatus)
+      let grantedGuild = res ^? Wreq.responseBody . AEL.key "guild" . AEL.key "id" . AEL._String
+      if not (statusIsSuccessful (res ^. Wreq.responseStatus)) || any (/= guildId) grantedGuild
         then pure discordErr
         else do
           _ <- insertDiscordData pid guildId
@@ -83,9 +97,26 @@ data DiscordInteraction = Interaction
   , channel_id :: Maybe Text
   , guild_id :: Maybe Text
   , channel :: Maybe DiscordThreadChannel
+  , member :: Maybe DiscordMember
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "interaction_type" "type", DAE.Rename "data_i" "data"]] DiscordInteraction
+
+
+-- | Whether the invoking guild member holds Manage Server (1 << 5) or Administrator (1 << 3),
+-- from the resolved permissions Discord sends with the interaction. Rerouting a project's
+-- alerts used to be open to any member of the guild, including one who joined a minute ago.
+--
+-- >>> map (canManageGuild . Just . DiscordMember) ["32", "8", "2048"]
+-- [True,True,False]
+canManageGuild :: Maybe DiscordMember -> Bool
+canManageGuild member = any ((/= 0) . (.&. 0x28)) (readMaybe @Integer . toString . (.permissions) =<< member)
+
+
+-- | The invoking guild member; Discord sends its resolved permissions as a decimal bit set.
+newtype DiscordMember = DiscordMember {permissions :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON)
 
 
 data DiscordThreadChannel = DiscordThreadChannel
@@ -176,6 +207,7 @@ discordInteractionsH projectTools rawBody signatureM timestampM = do
         -- The guild is implicit: `discordData` was resolved from interaction.guild_id above,
         -- so discordData.projectId IS this guild's project. We only need the channel used.
         "here" -> case interaction.channel_id of
+          _ | not (canManageGuild interaction.member) -> pure $ contentResponse "Only members with Manage Server can choose where Monoscope sends alerts."
           Just channelId -> hereSuccess <$ ProjectMembers.addDiscordChannelToEveryoneTeam discordData.projectId channelId
           Nothing -> pure $ contentResponse "No channel ID provided"
         "dashboard" -> do
@@ -305,7 +337,7 @@ registerDiscordCommands :: HTTP :> es => Text -> Text -> Text -> Eff es ()
 registerDiscordCommands appId botToken guildId =
   for_
     [ cmd "monoscope" "Ask about your project or get reports" ["options" AE..= arr [AE.object ["name" AE..= ("question" :: Text), "description" AE..= ("Your question in natural language" :: Text), "type" AE..= (3 :: Int), "required" AE..= True]]]
-    , cmd "here" "Channel for monoscope to send notifications" []
+    , cmd "here" "Channel for monoscope to send notifications" ["default_member_permissions" AE..= ("32" :: Text)]
     , cmd "dashboard" "Select and share dashboard widget" []
     ]
     $ discordJsonPost botToken ("https://discord.com/api/v10/applications/" <> appId <> "/guilds/" <> guildId <> "/commands")

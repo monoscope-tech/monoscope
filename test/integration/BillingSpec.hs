@@ -143,6 +143,16 @@ spec = around withTestResources do
     project <- projectOf tr pid
     (project.paymentPlan, sort (V.toList project.onboardingStepsCompleted)) `shouldBe` ("Free", ["Info", "Integration", "NotifChannel", "Pricing", "Survey", "created_monitor", "explored_logs"])
     landing <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.entrypointRedirectGetH "_overview.yaml" pid []
+
+    -- The form's order id was spliced into the provider URL, and its subscription could already
+    -- pay for another project: one admin metered their usage onto someone else's bill.
+    other <- createTestProject tr "billed elsewhere"
+    dbExec tr [sql|UPDATE projects.projects SET first_sub_item_id = '7001' WHERE id = ?|] (Only other)
+    -- test/golden/…orders_42… answers with that subscription item.
+    let pricing o = call tr $ CreateProject.pricingUpdateH pid def{CreateProject.orderIdM = Just o}
+    pricing "42/../x" `shouldReturn` Left CreateProject.SubscriptionLookupFailed
+    pricing "42" `shouldReturn` Left CreateProject.SubscriptionBilledElsewhere
+    (.paymentPlan) <$> projectOf tr pid `shouldReturn` "Free"
     lookupResponseHeader @"Location" landing `shouldSatisfy` \case Header l -> ("/p/" <> pid.toText <> "/dashboards/") `T.isPrefixOf` l; _ -> False
 
   it "project settings: defaults, alert toggles, members, storage, super-admin notice and an unbilled deletion" \tr0 -> do
@@ -341,7 +351,9 @@ spec = around withTestResources do
   it "a Lemon Squeezy subscription: created, locally-cycled, cancelled, expired, resumed and deleted by webhook" \tr0 -> do
     (tr, pid) <- onboarded tr0
     let webhook event = do
-          (reqs, _) <- runAsBaseRecordingHTTP tr $ Settings.webhookPostH Nothing $ toStrict $ AE.encode $ lsEvent event pid
+          let body = toStrict $ AE.encode $ lsEvent event pid
+              sig = decodeUtf8 $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 @Text @ByteString tr.trATCtx.env.lemonSqueezyWebhookSecret) body :: HMAC.HMAC SHA256)
+          (reqs, _) <- runAsBaseRecordingHTTP tr $ Settings.webhookPostH (Just sig) body
           -- No billing-provider call; the plan-change email now goes through the HTTP effect too.
           filter (not . T.isInfixOf "postmarkapp.com" . fst) reqs `shouldBe` []
         plan = (.paymentPlan) <$> projectOf tr pid

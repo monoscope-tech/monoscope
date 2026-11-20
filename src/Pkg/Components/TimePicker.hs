@@ -30,7 +30,7 @@ import System.Clock (TimeSpec (TimeSpec))
 import Text.Megaparsec (Parsec, parse, some)
 import Text.Megaparsec.Char (letterChar, space)
 import Text.Megaparsec.Char.Lexer (decimal)
-import Utils (faSprite_, nonEmptyT, parseTime, popoverPanel_, popoverTrigger_, sinceWindows, toUriStr)
+import Utils (faSprite_, nonEmptyT, parseTime, popoverPanel_, popoverTrigger_, scriptJson, sinceWindows, toUriStr)
 
 
 -- $setup
@@ -69,7 +69,7 @@ rangePairs tp = [(k, v) | (k, Just v) <- [("since", tp.since), ("from", tp.from)
 -- >>> rangeJson (TimePicker Nothing (Just "2026-01-01T00:00:00Z") (Just ""))
 -- "{\"from\":\"2026-01-01T00:00:00Z\"}"
 rangeJson :: TimePicker -> Text
-rangeJson = T.replace "<" "\\u003c" . decodeUtf8 . AE.encode . Map.fromList . rangePairs
+rangeJson = scriptJson . Map.fromList . rangePairs
 
 
 -- | 'rangePairs' as query params, each already prefixed with @&@.

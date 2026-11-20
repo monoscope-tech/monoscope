@@ -14,6 +14,8 @@ module Web.Auth (
   APItoolkitAuthContext,
   authorizeUserAndPersist,
   demoGuestSessionId,
+  principalRefusal,
+  targetsDemoProject,
   errorPageHtml,
   htmlServerError,
   servantRejection,
@@ -31,9 +33,9 @@ import Control.Error (note)
 import Control.Lens qualified as L
 import Control.Monad.Except qualified as T
 import Data.Aeson qualified as AE
-import Data.Aeson.Lens (key, _String)
+import Data.Aeson.Lens (key, _Bool, _String)
 import Data.Aeson.Types (ToJSON)
-import Data.ByteArray qualified as BA
+import Data.Bits (shiftR, (.&.))
 import Data.ByteString qualified as BS
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
@@ -66,10 +68,11 @@ import Log (Logger)
 import Lucid (Html, renderBS, toHtml)
 import Lucid.Html5
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (craftSessionCookie, emptySessionCookie)
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie, hUserAgent, urlEncode)
-import Network.Wai (Request (queryString, rawPathInfo, rawQueryString, requestHeaders))
+import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie, hUserAgent, methodGet, methodHead, methodPost, parseQueryText, urlEncode)
+import Network.Wai (Request (pathInfo, queryString, rawPathInfo, rawQueryString, requestHeaders, requestMethod))
 import Network.Wreq (FormParam ((:=)), defaults, header, responseBody)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.AdConversions qualified as AdConversions
@@ -82,9 +85,9 @@ import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), DB, RespHeaders, addRespHeaders)
-import Utils (escapedQueryPartial, hostPath, nonEmptyT, toUriStr)
+import Utils (constEqText, escapedQueryPartial, hostPath, nonEmptyT, toUriStr)
 import Web.ApiTypes (ApiError (..), refusal)
-import Web.Cookie (SetCookie, parseCookies)
+import Web.Cookie (SetCookie (..), defaultSetCookie, parseCookies, sameSiteLax)
 import Web.I18n qualified as I18n
 import Web.Wire (DeviceCodeResponse (..), DeviceTokenResponse (..), ProjectInfo (..))
 import "base64" Data.ByteString.Base64 qualified as B64
@@ -109,16 +112,14 @@ stripBearer t = fromMaybe t (T.stripPrefix "Bearer " t)
 
 
 -- | The configured basic-auth user, if the header carries its credentials.
--- Compared with 'BA.constEq' so a wrong password cannot be narrowed down by
+-- Compared with 'constEqText' so a wrong password cannot be narrowed down by
 -- timing the response.
 validateBasicAuth :: EnvConfig -> ByteString -> Maybe Text
 validateBasicAuth config authHeader = do
   stripped <- T.stripPrefix "Basic " (decodeUtf8 authHeader)
   case T.splitOn ":" (decodeUtf8 $ B64.decodeBase64Lenient (encodeUtf8 stripped)) of
-    [username, password] -> username <$ guard (eq username config.basicAuthUsername && eq password config.basicAuthPassword)
+    [username, password] -> username <$ guard (constEqText username config.basicAuthUsername && constEqText password config.basicAuthPassword)
     _ -> Nothing
-  where
-    eq a b = BA.constEq (encodeUtf8 a :: ByteString) (encodeUtf8 b :: ByteString)
 
 
 authHandler :: Logger -> AuthContext -> APItoolkitAuthContext
@@ -139,7 +140,7 @@ authHandler logger env =
     handler req = do
       let headers = requestHeaders req
           cookies = maybe [] parseCookies (L.lookup hCookie headers)
-          cookieSessId = Projects.PersistentSessionId <$> (UUID.fromASCIIBytes =<< L.lookup "monoscope_session" cookies)
+          cookieSessId = Projects.sessionIdFromCookies cookies
           cookieSession = join <$> traverse Projects.getPersistentSession cookieSessId
           scope k = nonEmptyT $ decodeUtf8 <$> join (L.lookup k req.queryString)
           session sessIdM url = do
@@ -152,6 +153,10 @@ authHandler logger env =
         then cookieAuth
         else case L.lookup hAuthorization headers >>= validateBasicAuth env.config of
           Just username -> do
+            -- Browsers attach cached Basic credentials to cross-site form posts, and SameSite
+            -- does not cover them, so a page elsewhere could act as this sudo user (approve its
+            -- own CLI device code, add members). Refuse state changes from other sites.
+            when (crossSiteWrite req) $ throwError Servant.err403{errBody = "Cross-site requests may not change state"}
             let basicEmail = username <> "@basic-auth.local"
             -- Browsers resend `Authorization: Basic` on every request, so minting a
             -- session here unconditionally wrote one users.persistent_sessions row per
@@ -162,11 +167,16 @@ authHandler logger env =
             sessId <-
               cookieSession >>= \case
                 Just ps | ps.user.getUser.email == CI.mk basicEmail -> pure ps.id
-                _ -> fst <$> authorizeUserAndPersist Nothing "Basic" "Auth" "" basicEmail
+                _ -> fst <$> authorizeUserAndPersist Nothing True "Basic" "Auth" "" basicEmail
             session (Just sessId) Nothing
           -- Without credentials only a live cookie session gets in; anything else is
           -- challenged for basic auth instead of being redirected to Auth0.
           Nothing -> cookieSession >>= maybe (throwError basicAuthChallenge) (const cookieAuth)
+
+
+-- | An unsafe-method request a browser marks as coming from another site.
+crossSiteWrite :: Request -> Bool
+crossSiteWrite req = requestMethod req `notElem` [methodGet, methodHead, "OPTIONS"] && L.lookup "Sec-Fetch-Site" (requestHeaders req) == Just "cross-site"
 
 
 -- | How to tell an unauthenticated request to authenticate.
@@ -227,8 +237,7 @@ sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang environme
   where
     guest = case url of
       Just u
-        | any (\prefix -> T.isInfixOf (prefix <> Projects.demoProjectId.toText) (decodeUtf8 u)) ["/p/", "pid="] ->
-            demoGuestSession >>= maybe (throwError $ unauthenticated "/to_login") pure
+        | targetsDemoProject u -> demoGuestSession >>= maybe (throwError $ unauthenticated "/to_login") pure
         | otherwise -> throwError $ unauthenticated "/login"
       Nothing -> throwError $ unauthenticated "/to_login"
     -- The whole URL is one query *value*, so it needs value-escaping, not
@@ -245,6 +254,23 @@ sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang environme
           { errBody = AE.encode $ AE.object ["error" AE..= ("unauthenticated" :: Text), "login" AE..= loginUrl path]
           , errHeaders = [("Content-Type", "application/json")]
           }
+
+
+-- | Whether an anonymous request is for the demo project: its path names the demo project, or
+-- it names no project and its @pid@ parameter is the demo. Matching the id anywhere in the URL
+-- handed the guest session to @/p/<any>/widget?pid=<demo>@ and @/p/new?pid=<demo>@.
+--
+-- >>> map targetsDemoProject ["/p/00000000-0000-0000-0000-000000000000/log_explorer", "/chart_data?pid=00000000-0000-0000-0000-000000000000&since=1H"]
+-- [True,True]
+-- >>> map targetsDemoProject ["/p/0a1b2c3d-0000-4000-8000-000000000000/widget?pid=00000000-0000-0000-0000-000000000000", "/p/new?pid=00000000-0000-0000-0000-000000000000", "/x?q=/p/00000000-0000-0000-0000-000000000000", "/p/00000000-0000-0000-0000-0000000000001"]
+-- [False,False,False,False]
+targetsDemoProject :: ByteString -> Bool
+targetsDemoProject url = case filter (not . T.null) (T.splitOn "/" path) of
+  "p" : project : _ -> project == demo
+  _ -> any (\(k, v) -> k == "pid" && v == Just demo) (parseQueryText $ encodeUtf8 query)
+  where
+    (path, query) = T.breakOn "?" $ decodeUtf8 url
+    demo = Projects.demoProjectId.toText
 
 
 -- | The one session every anonymous demo visitor shares.
@@ -268,7 +294,7 @@ demoGuestSession =
   Projects.getPersistentSession demoGuestSessionId >>= \case
     Just sess -> pure $ Just sess
     Nothing -> do
-      uid <- (.userId) <$> userIdForEmail "Guest" "User" "" guestEmail
+      uid <- (.userId) <$> userIdForEmail False "Guest" "User" "" guestEmail
       -- Two concurrent first-requests would both insert; the id is the primary key, so the
       -- loser is a no-op rather than a 500 on a page that is meant to need no account.
       Projects.insertSession demoGuestSessionId uid (Projects.SessionData Map.empty)
@@ -304,47 +330,106 @@ apiKeyAuthHandler logger env = mkAuthHandler \req -> do
           & Effectful.Reader.Static.runReader env
           & runEff
   authed <- join <$> traverse (runEffs . (`resolveApiKeyProject` mbHeaderPid)) mbAuth
-  case (mbHeaderPid, authed) of
+  let member pid =
+        maybe (pure Nothing) (runEffs . (`sessionBearerRole` pid)) mbAuth <&> \case
+          Just r | r < ProjectMembers.PEdit -> Viewer pid
+          Just r | r < ProjectMembers.PAdmin -> Editor pid
+          _ -> Authenticated pid
+  principal <- case (mbHeaderPid, authed) of
     -- Demo project: world-readable, mirrors the web UI bypass in `sessionByID`.
-    (Just pid, _) | pid == Projects.demoProjectId -> pure $ bool DemoReader Authenticated (authed == Just pid) pid
-    (_, Just pid) -> pure $ Authenticated pid
+    (Just pid, _) | pid == Projects.demoProjectId, authed /= Just pid -> pure $ DemoReader pid
+    (_, Just pid) -> member pid
     _ -> T.throwError $ refusal $ maybe MissingAuthorization (const InvalidCredentials) mbAuth
+  maybe (pure principal) (T.throwError . refusal) (principalRefusal principal req)
 
 
-logoutH :: ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
-logoutH = do
+-- | The role behind a session-token bearer on @pid@; 'Nothing' for an API key.
+sessionBearerRole :: DB es => Text -> Projects.ProjectId -> Eff es (Maybe ProjectMembers.Permissions)
+sessionBearerRole bearer pid = runMaybeT do
+  sid <- hoistMaybe $ UUID.fromText $ stripBearer bearer
+  sess <- MaybeT $ Projects.getPersistentSession $ Projects.PersistentSessionId sid
+  fromMaybe ProjectMembers.PView <$> lift (ProjectMembers.getSessionPermission pid sess.userId)
+
+
+-- | Why @principal@ may not make this request, if it may not. A session token carries its
+-- member's role, which every handler ignores (a viewer could PATCH themselves to admin), and
+-- every handler sees only the project id (an anonymous demo caller could mint keys). So the
+-- demo reader and a viewer only read, search and speak MCP, whose tool calls come back through
+-- here one by one ('Web.Routes.apiV1App'), and only an admin writes members, API keys, teams or
+-- the project. Matched by path segment, since MCP calls arrive without the @/api/v1@ prefix.
+--
+-- >>> import Network.Wai (defaultRequest)
+-- >>> let req m ps = defaultRequest{requestMethod = m, pathInfo = ps}
+-- >>> map (principalRefusal (Editor Projects.demoProjectId)) [req "PATCH" ["members", "x"], req "POST" ["api", "v1", "api_keys"], req "GET" ["members"], req "POST" ["projects", "x"]]
+-- [Just InsufficientRole,Just InsufficientRole,Nothing,Nothing]
+principalRefusal :: ApiPrincipal -> Request -> Maybe ApiError
+principalRefusal principal req = case principal of
+  Authenticated _ -> Nothing
+  Editor _ -> InsufficientRole <$ guard (write && any (`elem` ["members", "api_keys", "teams", "project"]) (viaNonEmpty head unprefixed))
+  Viewer _ -> InsufficientRole <$ guard (not readOnly)
+  DemoReader _ -> DemoReadOnly <$ guard (not readOnly)
+  where
+    write = requestMethod req `notElem` [methodGet, methodHead]
+    readOnly = not write || requestMethod req == methodPost && any (`BS.isSuffixOf` rawPathInfo req) ["/events/query", "/mcp"]
+    unprefixed = case pathInfo req of "api" : "v1" : rest -> rest; ps -> ps
+
+
+-- | Clearing the cookie alone left the session row valid forever: a copied cookie or a CLI
+-- token kept working after logout. The shared demo guest session is never deleted.
+logoutH :: Maybe ByteString -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+logoutH cookieM = do
+  whenJust (Projects.sessionIdFromCookies $ maybe [] parseCookies cookieM) \sid ->
+    unless (sid == demoGuestSessionId) $ EHasql.interpExecute_ [HI.sql| DELETE FROM users.persistent_sessions WHERE id = #{sid.getPersistentSessionId} |]
   envCfg <- asks env
   let redirectTo = envCfg.auth0Domain <> "/v2/logout?client_id=" <> envCfg.auth0ClientId <> "&returnTo=" <> envCfg.auth0LogoutRedirect
   pure $ addHeader redirectTo $ addHeader Projects.emptySessionCookie NoContent
+
+
+-- | A post-login or post-switch destination, kept on this site: a path, never a scheme,
+-- @//host@ or @/\\host@ (browsers treat both as another origin).
+--
+-- >>> map (safeRedirect . Just) ["/p/x/log_explorer?since=1H", "https://evil.example", "//evil.example", "/\\evil.example", "javascript:alert(1)", ""]
+-- ["/p/x/log_explorer?since=1H","/","/","/","/","/"]
+safeRedirect :: Maybe Text -> Text
+safeRedirect = \case
+  Just p | Just rest <- T.stripPrefix "/" p, not ("/" `T.isPrefixOf` rest || "\\" `T.isPrefixOf` rest) -> p
+  _ -> "/"
 
 
 -- | Persist the user-selected language as a long-lived cookie, then bounce
 -- back to wherever they came from. Accessible without auth (the language
 -- switcher in the public auth pages must work pre-login).
 setLanguageH :: Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
-setLanguageH langText redirectToM = pure $ addHeader (fromMaybe "/" redirectToM) $ addHeader (I18n.languageSetCookieBS $ I18n.parseLanguage langText) NoContent
+setLanguageH langText redirectToM = pure $ addHeader (safeRedirect redirectToM) $ addHeader (I18n.languageSetCookieBS $ I18n.parseLanguage langText) NoContent
 
 
 loginRedirectH :: Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
 loginRedirectH redirectToM = do
   envCfg <- asks env
   when envCfg.basicAuthEnabled $ throwError basicAuthChallenge
-  pure $ addHeader ("/login?redirect_to=" <> fromMaybe "/" redirectToM) $ addHeader emptySessionCookie NoContent
+  pure $ addHeader ("/login?redirect_to=" <> toUriStr (safeRedirect redirectToM)) $ addHeader emptySessionCookie NoContent
 
 
 loginH
   :: Maybe Text
   -> Maybe Text -- screen_hint: "signup" opens Auth0's sign-up tab (invite emails)
   -> Maybe Text -- login_hint: pre-fills the email field
-  -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+  -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] NoContent)
 loginH redirectToM screenHintM loginHintM = do
   envCfg <- asks env
   when envCfg.basicAuthEnabled $ throwError basicAuthChallenge
   stateVar <- UUID.toText <$> genUUID
-  let escapedUri = escapedQueryPartial $ envCfg.auth0Callback <> "?redirect_to=" <> fromMaybe "/" redirectToM
+  let escapedUri = escapedQueryPartial $ envCfg.auth0Callback <> "?redirect_to=" <> toUriStr (safeRedirect redirectToM)
       hintParam name = maybe "" (\v -> "&" <> name <> "=" <> decodeUtf8 (urlEncode True $ encodeUtf8 v))
       redirectTo = envCfg.auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg.auth0ClientId <> "&redirect_uri=" <> escapedUri <> "&state=" <> stateVar <> "&scope=openid profile email" <> hintParam "screen_hint" screenHintM <> hintParam "login_hint" loginHintM
-  pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
+  pure $ addHeader redirectTo $ addHeader emptySessionCookie $ addHeader (oauthStateCookie stateVar) NoContent
+
+
+-- | The browser that starts a login carries its @state@ back to 'authCallbackH'. Unchecked, any
+-- valid code was accepted from any browser: a link to the callback with the attacker's own
+-- code silently signed the victim into the attacker's account (login CSRF).
+oauthStateCookie :: Text -> SetCookie
+oauthStateCookie st = defaultSetCookie{setCookieName = "monoscope_oauth_state", setCookieValue = encodeUtf8 st, setCookiePath = Just "/", setCookieHttpOnly = True, setCookieSecure = True, setCookieSameSite = Just sameSiteLax, setCookieMaxAge = Just 600}
 
 
 -- authCallbackH will accept a request with code and state, and use that code to queery auth- for an auth token, and then for user info
@@ -358,11 +443,13 @@ authCallbackH
   -> Maybe ByteString -- User-Agent
   -> Maybe ByteString -- CF-IPCountry
   -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] (Html ()))
-authCallbackH codeM _ redirectToM cookieM userAgentM countryM = do
+authCallbackH codeM stateM redirectToM cookieM userAgentM countryM = do
   envCfg <- ask @AuthContext
   pool <- asks pool
   resp <- runExceptT do
     code <- hoistEither $ note "invalid code " codeM
+    unless (or $ liftA2 constEqText stateM (decodeUtf8 <$> L.lookup "monoscope_oauth_state" (maybe [] parseCookies cookieM)))
+      $ hoistEither (Left ("oauth state does not match this browser's login" :: Text))
     r <-
       lift
         $ W.post
@@ -379,33 +466,39 @@ authCallbackH codeM _ redirectToM cookieM userAgentM countryM = do
     let opts = defaults & header "Authorization" L..~ ["Bearer " <> encodeUtf8 @Text @ByteString accessToken]
     resp <- lift $ W.getWith opts (toString $ envCfg.config.auth0Domain <> "/userinfo")
     let field k = fromMaybe "" $ resp L.^? responseBody . key k . _String
+    -- Accounts are keyed by email, so an IdP login whose email is unverified could claim
+    -- whoever already holds that address (or an invite pre-created for it). It may still
+    -- create a fresh account: that reaches nobody else's data.
+    when (resp L.^? responseBody . key "email_verified" . _Bool == Just False)
+      $ whenJustM (lift $ Projects.userByEmail $ field "email") \_ -> hoistEither $ Left ("unverified email for an existing account" :: Text)
     lift do
-      (sessId, signin) <- authorizeUserAndPersist (Just envCfg.config.convertkitApiKey) (field "given_name") (field "family_name") (field "picture") (field "email")
+      (sessId, signin) <- authorizeUserAndPersist (Just envCfg.config.convertkitApiKey) False (field "given_name") (field "family_name") (field "picture") (field "email")
       (sessId,) <$> case signin of
         Existing _ -> pure Nothing
         Created uid -> AdConversions.recordSignup uid $ catMaybes [(hCookie,) <$> cookieM, (hUserAgent,) <$> userAgentM, ("CF-IPCountry",) <$> countryM]
   case resp of
     Left err -> Logging.logAttention "unable to process auth callback page" err >> throwError err302{errHeaders = [("Location", "/login?auth0_callback_failure")]}
-    Right (persistentSessId, signupCookieM) -> pure $ addHeader (fromMaybe "/" redirectToM) $ addHeader (craftSessionCookie persistentSessId True) $ maybe noHeader addHeader signupCookieM do
+    Right (persistentSessId, signupCookieM) -> pure $ addHeader (safeRedirect redirectToM) $ addHeader (craftSessionCookie persistentSessId True) $ maybe noHeader addHeader signupCookieM do
       html_ do
         head_ $ meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
-        body_ $ a_ [href_ $ fromMaybe "/" redirectToM] "Continue to Monoscope"
+        body_ $ a_ [href_ $ safeRedirect redirectToM] "Continue to Monoscope"
 
 
 -- | The user behind an email address, created on first sight.
 --
 -- Split out of 'authorizeUserAndPersist' so the demo guest can resolve its user without also
 -- minting a session row — the whole point of 'demoGuestSession' is that it does not.
-userIdForEmail :: (DB es, Time :> es, UUIDEff :> es) => Text -> Text -> Text -> Text -> Eff es Signin
-userIdForEmail firstName lastName picture email =
+userIdForEmail :: (DB es, Time :> es, UUIDEff :> es) => Bool -> Text -> Text -> Text -> Text -> Eff es Signin
+userIdForEmail sudo firstName lastName picture email =
   Projects.userByEmail email >>= \case
     Just user -> pure $ Existing user.id
     Nothing -> do
       user <- Projects.createUser firstName lastName picture email
-      -- Basic-auth users are admins of their own deployment. The annotation disambiguates
-      -- 'isSudo', which 'Projects.PersistentSession' also has.
+      -- Basic-auth users are admins of their own deployment. Only the basic-auth channel says
+      -- so: an IdP sign-up as x@basic-auth.local used to be minted sudo from the email text.
+      -- The annotation disambiguates 'isSudo', which 'Projects.PersistentSession' also has.
       let userWithSudo :: Projects.User
-          userWithSudo = if T.isSuffixOf "@basic-auth.local" email then user{Projects.isSudo = True} else user
+          userWithSudo = if sudo then user{Projects.isSudo = True} else user
       Projects.insertUser userWithSudo
       pure $ Created userWithSudo.id
 
@@ -413,9 +506,9 @@ userIdForEmail firstName lastName picture email =
 data Signin = Existing {userId :: Projects.UserId} | Created {userId :: Projects.UserId}
 
 
-authorizeUserAndPersist :: (DB es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es (Projects.PersistentSessionId, Signin)
-authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
-  signin <- userIdForEmail firstName lastName picture email
+authorizeUserAndPersist :: (DB es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Text -> Bool -> Text -> Text -> Text -> Text -> Eff es (Projects.PersistentSessionId, Signin)
+authorizeUserAndPersist convertkitApiKeyM sudo firstName lastName picture email = do
+  signin <- userIdForEmail sudo firstName lastName picture email
   persistentSessId <- Projects.newPersistentSessionId
   Projects.insertSession persistentSessId signin.userId (Projects.SessionData Map.empty)
   _ <- whenJust convertkitApiKeyM \ckKey -> addConvertKitUser ckKey email firstName lastName
@@ -512,13 +605,26 @@ deviceCodeH = do
   rowId <- genUUID
   now <- currentTime
   let expiresAt = addUTCTime 300 now
-      chars = V.fromList ("ABCDEFGHJKLMNPQRSTUVWXYZ23456789" :: [Char])
-      userCode = toText [chars V.! (fromIntegral w `mod` V.length chars) | w <- [w1, w2, w3, w4, w1 `xor` w3, w2 `xor` w4]]
+      userCode = deviceUserCode (w1, w2, w3, w4)
       verificationUri = hostPath envCfg.hostUrl ("device?code=" <> userCode)
   void
     $ EHasql.interpExecute
       [HI.sql| INSERT INTO users.device_auth_codes (id, device_code, user_code, expires_at) VALUES (#{rowId}, #{deviceCode}, #{userCode}, #{expiresAt}) |]
   pure DeviceCodeResponse{expiresIn = 300, ..}
+
+
+-- | Eight independent characters (40 bits) from a v4 UUID's random bits. The old code derived
+-- its last two characters from the first four, leaving 2^20 codes that any logged-in user
+-- could enumerate to bind someone else's waiting CLI to their own account.
+--
+-- >>> T.length (deviceUserCode (0, 0, 0, 0))
+-- 8
+-- >>> deviceUserCode (1, 0x00210000, 3, 0x001f0000)
+-- "BAABDAA9"
+deviceUserCode :: (Word32, Word32, Word32, Word32) -> Text
+deviceUserCode (w1, w2, w3, w4) = toText [chars V.! fromIntegral ((w `shiftR` s) .&. 31) | w <- [w1, w2, w3, w4], s <- [0, 16]]
+  where
+    chars = V.fromList ("ABCDEFGHJKLMNPQRSTUVWXYZ23456789" :: [Char])
 
 
 deviceTokenH :: Maybe Text -> ATBaseCtx DeviceTokenResponse
@@ -554,6 +660,9 @@ deviceApproveH approve codeM = do
     userCode <- hoistEither $ note "Invalid request: no code provided" codeM
     if approve
       then do
+        -- Check before minting: each failed guess used to leave a live, orphaned session row.
+        pending <- lift $ EHasql.interpOne @(HI.OneColumn Bool) [HI.sql| SELECT true FROM users.device_auth_codes WHERE user_code = #{userCode} AND session_id IS NULL AND expires_at > now() |]
+        when (isNothing pending) $ hoistEither $ Left "Invalid, expired, or already used code."
         persistentSessId <- lift Projects.newPersistentSessionId
         lift $ Projects.insertSession persistentSessId sess.user.id (Projects.SessionData Map.empty)
         let sessUuid = persistentSessId.getPersistentSessionId

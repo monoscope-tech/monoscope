@@ -706,7 +706,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
 
   -- An alert ID pre-fills the query box and selects the alert's viz type. A view that
   -- can't draw the query's result (a log list for a `summarize`) yields to one that can.
-  alertDM <- lookupAlert alertM
+  alertDM <- lookupAlert pid alertM
   let parseViz = rightToMaybe . parseQueryParam
       effectiveVizType = Widget.vizFor (resultShape queryAST) $ (parseViz =<< vizTypeM) <|> (alertDM <&> fromMaybe Widget.VizTimeseries . parseViz . (.visualizationType))
 
@@ -1026,7 +1026,7 @@ logSessionsH pid queryM' sinceM fromM toM skipM sortByM cursorM = do
 alertFormH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders AlertForm)
 alertFormH pid alertM = do
   (session, project) <- Projects.sessionAndProject pid
-  alertDM <- lookupAlert alertM
+  alertDM <- lookupAlert pid alertM
   teams <- V.fromList <$> ManageMembers.getTeams pid
   addRespHeaders $ AlertForm project session.environment alertDM teams
 
@@ -1035,8 +1035,8 @@ data AlertForm = AlertForm Projects.Project (Maybe Text) (Maybe Monitors.QueryMo
 
 
 -- | Resolve an @?alert=<uuid>@ query param to its monitor, if it parses and exists.
-lookupAlert :: DB es => Maybe Text -> Eff es (Maybe Monitors.QueryMonitor)
-lookupAlert = maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMonitorId) . (>>= UUID.fromText)
+lookupAlert :: DB es => Projects.ProjectId -> Maybe Text -> Eff es (Maybe Monitors.QueryMonitor)
+lookupAlert pid = maybe (pure Nothing) (Monitors.queryMonitorByProjectId pid . Monitors.QueryMonitorId) . (>>= UUID.fromText)
 
 
 -- | One-decimal percent formatter; positive rates never round down to zero.

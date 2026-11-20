@@ -55,7 +55,7 @@ module Pages.Projects (
   ProjectDeleted (..),
   DemoProjectProtected (..),
   PricingUpdated (..),
-  SubscriptionLookupFailed (..),
+  PricingRejection (..),
 )
 where
 
@@ -938,7 +938,7 @@ instance Refusal TeamsDeleteRejection where
 
 manageTeamBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> Maybe Text -> ATAuthCtx (ActionResult TeamsDeleteRejection TeamsDeleted)
 manageTeamBulkActionH pid action TBulkActionForm{itemId} listViewM = act do
-  (sess, _) <- Projects.sessionAndProject pid
+  (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   case action of
     "delete" -> do
       teamVm <- ProjectMembers.getTeamsById pid $ V.fromList $ coerce itemId
@@ -1289,7 +1289,7 @@ instance Refusal BillingRejection where
 
 manageSubGetH :: Projects.ProjectId -> ATAuthCtx (ActionResult BillingRejection BillingRedirect)
 manageSubGetH pid = act do
-  (_, project) <- Projects.sessionAndProject pid
+  (_, project) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   case Projects.projectProvider project of
@@ -1552,14 +1552,19 @@ instance Outcome PricingUpdated where
     PricingSaved -> Just "Pricing updated successfully"
 
 
-data SubscriptionLookupFailed = SubscriptionLookupFailed
+data PricingRejection = SubscriptionLookupFailed | SubscriptionBilledElsewhere
   deriving stock (Eq, Generic, Show)
-  deriving (Refusal) via Says "Something went wrong while fetching subscription id" SubscriptionLookupFailed
 
 
-pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (ActionResult SubscriptionLookupFailed PricingUpdated)
+instance Refusal PricingRejection where
+  refusalMessage = \case
+    SubscriptionLookupFailed -> "Something went wrong while fetching subscription id"
+    SubscriptionBilledElsewhere -> "This subscription already belongs to another project"
+
+
+pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (ActionResult PricingRejection PricingUpdated)
 pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = act do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, project) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
       apiKey = envCfg.lemonSqueezyApiKey
@@ -1584,17 +1589,22 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = act do
       handleOnboarding
       Right () <$ ProjectMembers.activateAllMembers pid
     _ -> case orderIdM of
+      -- The order id comes from the form: it must be a number (it is spliced into the provider
+      -- URL), and its subscription must not already pay for another project, or one admin could
+      -- meter their usage onto someone else's subscription.
+      Just orderId | T.null orderId || not (T.all isDigit orderId) -> pure $ Left SubscriptionLookupFailed
       Just orderId ->
         lsGet @[SubDataVals] apiKey ("https://api.lemonsqueezy.com/v1/orders/" <> orderId <> "/subscriptions") >>= \case
           Just sub | Just target <- viaNonEmpty head sub.dataVal -> do
             let subId = show target.attributes.firstSubscriptionItem.subscriptionId
                 firstSubId = show target.attributes.firstSubscriptionItem.id
                 productName = target.attributes.productName
-            _ <- updatePricing productName subId firstSubId orderId
-            auditPlan productName
-            handleOnboarding
-            void $ ProjectMembers.activateAllMembers pid
-            Right () <$ Settings.notifyPlanChange envCfg project (ET.planUpgradedEmail productName)
+            ifM (Projects.subItemBilledElsewhere pid firstSubId) (pure $ Left SubscriptionBilledElsewhere) do
+              _ <- updatePricing productName subId firstSubId orderId
+              auditPlan productName
+              handleOnboarding
+              void $ ProjectMembers.activateAllMembers pid
+              Right () <$ Settings.notifyPlanChange envCfg project (ET.planUpgradedEmail productName)
           _ -> pure $ Left SubscriptionLookupFailed
       Nothing -> do
         -- Free clears sub_id below; cancel first, or the provider keeps billing a sub nothing points at.

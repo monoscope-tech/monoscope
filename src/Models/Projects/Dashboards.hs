@@ -81,11 +81,12 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (SortField (..), SortOrder (..), UUIDId (..), WrappedEnumSC (..), selectFrom)
 import Pkg.Parser (TemplateLang (..), fillQueryTemplate, variablePresets, variablePresetsKQL)
 import Relude
-import Servant (FromHttpApiData, ServerError (..), ToHttpApiData (..), err404)
+import Servant (FromHttpApiData, ServerError (..), ToHttpApiData (..), err400, err404)
 import System.Directory (listDirectory)
 import System.FilePath (isExtensionOf, (</>))
 import System.Types (DB)
 import Text.Slugify (slugify)
+import Utils (safeScrapeUrl)
 
 
 data DashboardVM = DashboardVM
@@ -277,6 +278,7 @@ readDashboardsFromDisk dir = yamlFiles dir >>= mapMaybeM (readDashboardFile dir)
 
 readDashboardEndpoint :: (Error ServerError :> es, HTTP :> es) => Text -> Eff es Dashboard
 readDashboardEndpoint uri = do
+  unless (safeScrapeUrl uri) $ throwError err400{errBody = "Dashboard file URL must be a public http(s) address"}
   fileResp <- W.get (toString uri)
   either (\e -> throwError err404{errBody = "Error decoding dashboard: " <> show e}) pure
     $ first show (Yml.decodeEither' $ toStrict $ fileResp ^. W.responseBody)

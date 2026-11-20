@@ -48,6 +48,7 @@ module Models.Projects.Projects (
   CustomerId (..),
   projectById,
   activeProjectById,
+  subItemBilledElsewhere,
   projectByOrderId,
   projectByCustomerId,
   UserBilling (..),
@@ -139,6 +140,7 @@ module Models.Projects.Projects (
   PSProjects (..),
   addCookie,
   emptySessionCookie,
+  sessionIdFromCookies,
   getSession,
   insertSession,
   getPersistentSession,
@@ -167,7 +169,7 @@ import Data.Default
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.HashMap.Strict qualified as HM
-import Data.List (unzip4)
+import Data.List (lookup, unzip4)
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToParamSchema, ToSchema)
 import Data.Text qualified as T
@@ -597,6 +599,11 @@ setIncludeAlertUserIdentity pid includeIdentity =
   EHasql.interpExecute_ [HI.sql| UPDATE projects.projects SET include_user_identity_in_alerts = #{includeIdentity} WHERE id = #{pid} |]
 
 
+-- | Whether a live project other than @pid@ is already billed to this subscription item.
+subItemBilledElsewhere :: DB es => ProjectId -> Text -> Eff es Bool
+subItemBilledElsewhere pid itemId = isJust <$> EHasql.interpOne @(HI.OneColumn Bool) [HI.sql| SELECT true FROM projects.projects WHERE first_sub_item_id = #{itemId} AND id <> #{pid} AND deleted_at IS NULL LIMIT 1 |]
+
+
 -- | The project only if it is live. A deactivated or soft-deleted project reads
 -- as absent, which is the right answer for delivery (alerts, reports), for
 -- unauthenticated surfaces (share links) and for authenticating a key against
@@ -656,7 +663,7 @@ getProjectByPhoneNumber number =
   EHasql.interpOne
     [HI.sql| SELECT p.* FROM projects.projects p
              JOIN projects.teams t ON t.project_id = p.id
-             WHERE t.is_everyone = TRUE AND t.deleted_at IS NULL
+             WHERE t.is_everyone = TRUE AND t.deleted_at IS NULL AND p.active AND p.deleted_at IS NULL
                AND #{number} = ANY(t.phone_numbers)
              LIMIT 1 |]
 
@@ -1709,6 +1716,11 @@ craftSessionCookie (PersistentSessionId content) rememberSession =
     , setCookieMaxAge = if rememberSession then Just 604800 else Nothing
     , setCookieSecure = True
     }
+
+
+-- | The session a request's cookies carry.
+sessionIdFromCookies :: [(ByteString, ByteString)] -> Maybe PersistentSessionId
+sessionIdFromCookies = fmap PersistentSessionId . (UUID.fromASCIIBytes <=< lookup "monoscope_session")
 
 
 emptySessionCookie :: SetCookie

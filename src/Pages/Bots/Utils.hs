@@ -4,7 +4,6 @@ module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPay
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
-import Data.ByteArray qualified as BA
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isDigit, isSpace)
@@ -59,7 +58,7 @@ import System.Logging qualified as Log
 import System.Tracing (Tracing)
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (onException, throwIO)
-import Utils (faSprite_, formatUTC, hostPath, prettyPrintCount, toUriStr)
+import Utils (constEqText, faSprite_, formatUTC, hostPath, prettyPrintCount, toUriStr)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), ProjectsRoutes' (..), logExplorerLinks, urls)
 
 
@@ -268,7 +267,7 @@ buildIssuePrompt pid issue now = do
       let twoDaysAgo = addUTCTime (-172800) now
       monitorM <- runMaybeT do
         monitorId <- hoistMaybe $ UUID.fromText alertData.queryId
-        MaybeT $ Monitors.queryMonitorById (Monitors.QueryMonitorId monitorId)
+        MaybeT $ Monitors.queryMonitorByProjectId pid (Monitors.QueryMonitorId monitorId)
       metricsData <- Charts.queryProjectMetrics Nothing (Just Charts.DTMetric) pid (Just alertData.queryExpression) Nothing Nothing (Just $ show twoDaysAgo) (Just $ show now) Nothing Nothing []
       pure $ Just (alertData, monitorM, metricsData)
     (Nothing; Just Issues.ApiChangeP{}; Just Issues.RuntimeExceptionP{}; Just Issues.LogPatternP{}; Just Issues.LogPatternRateChangeP{}; Just Issues.PerformanceP{}; Just Issues.FrontendP{}; Just Issues.FeedbackP{}; Just Issues.UptimeP{}; Just Issues.CronP{}) -> pure Nothing
@@ -470,7 +469,7 @@ freshWebhookTimestamp now ts =
 
 verifyWidgetSignature :: Text -> Projects.ProjectId -> Text -> Maybe Text -> Either LBS.ByteString ()
 verifyWidgetSignature secret pid widgetJson = maybe (Left "Missing signature") \sig ->
-  unless (BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 (Widget.signWidgetUrl secret pid widgetJson) :: ByteString)) $ Left "Invalid signature"
+  unless (constEqText sig (Widget.signWidgetUrl secret pid widgetJson)) $ Left "Invalid signature"
 
 
 -- | A rendered bot reply. The payload is already platform-shaped; the constructor

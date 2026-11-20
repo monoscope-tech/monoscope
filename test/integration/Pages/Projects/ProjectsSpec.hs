@@ -76,7 +76,7 @@ spec = around withTestResources do
     setRole tr testPid PView
     traverse (httpStatus tr) [void $ Pages.createProjectPostH testPid (form "Forbidden"), void $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm [] [] [] [] Nothing), void $ Pages.deleteProjectGetH testPid, void $ Pages.pagerdutyConnectH testPid (Pages.PagerdutyConnectForm "viewer-key-0123456789abcdef"), void $ Pages.pagerdutyDisconnectH testPid, void $ Pages.slackDisconnectH testPid] `shouldReturn` [403, 403, 403, 403, 403, 403]
     setRole tr testPid PEdit
-    httpStatus tr (Pages.deleteProjectGetH testPid) `shouldReturn` 403
+    traverse (httpStatus tr) [void $ Pages.deleteProjectGetH testPid, void $ Pages.manageSubGetH testPid, void $ Pages.manageTeamBulkActionH testPid "delete" (Pages.TBulkActionForm []) Nothing] `shouldReturn` [403, 403, 403]
     setRole tr ownPid PView
     traverse (`httpStatus` Pages.deleteProjectGetH ownPid) [nonSudo, tr] `shouldReturn` [403, 403]
     setRole tr testPid PAdmin

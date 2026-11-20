@@ -195,6 +195,12 @@ spec = do
       OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto traceReq) `shouldThrow` unauthenticated
       OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createGaugeMetricAtTime "definitely-not-a-valid-key" [] [] "rejected.metric" 99.9 frozenTime) `shouldThrow` unauthenticated
       runTestBg frozenTime tr (OtlpServer.processLogsRequest (Just "invalid-header-key") (createOtelLogAtTime "" ["Should not be stored"] frozenTime)) `shouldThrow` unauthenticated
+      -- An at-project-id alone wrote into any project whose UUID was known; only OTLP_KEYLESS_PROJECT_IDS keep it.
+      legacy <- createTestProject tr "legacy sender"
+      let keylessCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.otlpKeylessProjectIds = [legacy]}}
+          byIdOnly p = OtlpServer.logsServiceExport tr.trLogger keylessCtx tr.trTracerProvider (Proto $ createOtelLogAtTime "" ["by id only"] frozenTime & LSF.resourceLogs %~ map (PLF.resource . PRF.attributes .~ [mkAttr "at-project-id" p.toText]))
+      byIdOnly pid `shouldThrow` unauthenticated
+      void $ byIdOnly legacy
       drainExtractionWorker tr
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       logRows <- queryLogs tr pid (Just "kind == \"log\"")

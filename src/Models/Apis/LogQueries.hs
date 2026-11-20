@@ -42,7 +42,7 @@ where
 import Control.Exception.Annotated (checkpoint, try)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
-import Data.Char (isAlpha, isAlphaNum, isDigit)
+import Data.Char (isAlpha, isAlphaNum, isDigit, isSpace)
 import Data.Default
 import Data.Effectful.Hasql (Hasql, SecuredSql (..), SqlSource (..))
 import Data.Effectful.Hasql qualified as Hasql
@@ -288,10 +288,22 @@ data SqlTok = SqlLit Text | SqlName [Text] Text | SqlOther Char
 -- Right "WITH otel_metrics AS (SELECT * FROM otel_metrics WHERE project_id = '00000000-0000-0000-0000-000000000000') SELECT 1  \nFROM otel_metrics  "
 -- >>> map (isLeft . scopeUserSql False pid) (["SELECT * FROM users.users", "SELECT * FROM \"public\".otel_logs_and_spans", "SELECT * FROM datafusion.public.otel_logs_and_spans", "SELECT * FROM background_jobs", "WITH RECURSIVE r AS (SELECT 1) SELECT * FROM r", "SELECT 1 FROM users/**/.users"] :: [Text])
 -- [True,True,True,True,True,True]
+--
+-- What the tokenizer cannot model is refused too, since each was a way out of the scoping:
+-- a second statement (chart SQL runs over the simple protocol, which executes it unscoped),
+-- E'' / U&'' strings and dollar quoting (mis-lexed, so code passed as a literal), and
+-- functions that run SQL text or reach the server (query_to_xml('select … from users.users')).
+--
+-- >>> map (isLeft . scopeUserSql False pid) (["SELECT 1 FROM otel_metrics; SELECT * FROM otel_logs_and_spans", "SELECT E'\\'' FROM otel_metrics", "SELECT U&'a' FROM otel_metrics", "SELECT $$x$$ FROM otel_metrics", "SELECT query_to_xml('select 1', true, true, '') FROM otel_metrics", "SELECT pg_read_file('/etc/passwd') FROM otel_metrics", "SELECT dblink('x', 'y')"] :: [Text])
+-- [True,True,True,True,True,True,True]
+-- >>> isRight (scopeUserSql False pid "SELECT 'it''s; fine' AS e FROM otel_metrics;")
+-- True
 scopeUserSql :: Bool -> Projects.ProjectId -> Text -> Either Text Text
 scopeUserSql postgres pid sql = do
-  let toks = tokenizeSql sql
+  let toks = dropTrailingSemicolon $ tokenizeSql sql
       names = [ps | SqlName ps _ <- toks]
+  Relude.when (any isSemicolon toks) $ Left "Only one statement is allowed"
+  Relude.when (or $ zipWith unlexable toks (drop 1 toks)) $ Left "E'', U&'' and dollar-quoted strings are not supported"
   Relude.when (["with", "recursive"] `elem` zipWith (<>) names (drop 1 names)) $ Left "Recursive queries are not supported"
   whenJust (find disallowed names) \ps -> Left $ T.intercalate "." ps <> " is not available to queries"
   let used = filter (\t -> any ((== t) . T.intercalate ".") names) tenantTables
@@ -309,10 +321,17 @@ scopeUserSql postgres pid sql = do
       | (SqlName ["with"] w : more) <- rest -> render lead <> w <> " " <> ctes <> "," <> render more
       | otherwise -> "WITH " <> ctes <> " " <> render toks
   where
+    isSemicolon = \case SqlOther ';' -> True; _ -> False
+    dropTrailingSemicolon ts = case dropWhile (\case SqlOther c -> isSpace c; _ -> False) (reverse ts) of SqlOther ';' : rest -> reverse rest; _ -> ts
+    unlexable a b = case (a, b) of
+      (SqlName ["e"] _, SqlLit _) -> True
+      (SqlName ["u"] _, SqlOther '&') -> True
+      (SqlOther '$', _) -> True
+      _ -> False
     alias t = bool t ("tenant_" <> T.replace "." "_" t) ("." `T.isInfixOf` t)
     schemas = ["apis", "monitors", "projects", "telemetry", "tests", "users", "public", "information_schema"]
     disallowed = \case
-      [n] -> n `elem` ["background_jobs", "otel_metrics_meta", "query_cache", "rum_panel_cache", "schema_migrations"] || ("otel_" `T.isPrefixOf` n && n `notElem` tenantTables)
+      [n] -> n `elem` ["background_jobs", "background_jobs_long", "otel_metrics_meta", "query_cache", "rum_panel_cache", "schema_migrations", "current_setting", "set_config"] || ("otel_" `T.isPrefixOf` n && n `notElem` tenantTables) || (n /= "pg_sleep" && any (`T.isPrefixOf` n) ["pg_", "lo_", "dblink", "query_to_xml", "table_to_xml", "schema_to_xml", "database_to_xml", "cursor_to_xml"])
       [q, n] -> (q `elem` schemas || any (`T.isPrefixOf` q) ["pg_", "_timescaledb", "timescaledb"]) && (q <> "." <> n) `notElem` tenantTables
       _ -> True
 
