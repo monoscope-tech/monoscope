@@ -36,7 +36,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Bool, _String)
 import Data.Aeson.Types (ToJSON)
 import Data.Bits (shiftR, (.&.))
-import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
@@ -86,7 +85,7 @@ import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), DB, RespHeaders, addRespHeaders)
-import Utils (escapedQueryPartial, hostPath, nonEmptyT, toUriStr)
+import Utils (constEqText, escapedQueryPartial, hostPath, nonEmptyT, toUriStr)
 import Web.ApiTypes (ApiError (..), refusal)
 import Web.Cookie (SetCookie (..), defaultSetCookie, parseCookies, sameSiteLax)
 import Web.I18n qualified as I18n
@@ -113,16 +112,14 @@ stripBearer t = fromMaybe t (T.stripPrefix "Bearer " t)
 
 
 -- | The configured basic-auth user, if the header carries its credentials.
--- Compared with 'BA.constEq' so a wrong password cannot be narrowed down by
+-- Compared with 'constEqText' so a wrong password cannot be narrowed down by
 -- timing the response.
 validateBasicAuth :: EnvConfig -> ByteString -> Maybe Text
 validateBasicAuth config authHeader = do
   stripped <- T.stripPrefix "Basic " (decodeUtf8 authHeader)
   case T.splitOn ":" (decodeUtf8 $ B64.decodeBase64Lenient (encodeUtf8 stripped)) of
-    [username, password] -> username <$ guard (eq username config.basicAuthUsername && eq password config.basicAuthPassword)
+    [username, password] -> username <$ guard (constEqText username config.basicAuthUsername && constEqText password config.basicAuthPassword)
     _ -> Nothing
-  where
-    eq a b = BA.constEq (encodeUtf8 a :: ByteString) (encodeUtf8 b :: ByteString)
 
 
 authHandler :: Logger -> AuthContext -> APItoolkitAuthContext
@@ -451,7 +448,7 @@ authCallbackH codeM stateM redirectToM cookieM userAgentM countryM = do
   pool <- asks pool
   resp <- runExceptT do
     code <- hoistEither $ note "invalid code " codeM
-    unless (or $ liftA2 BA.constEq (encodeUtf8 @Text @ByteString <$> stateM) (L.lookup "monoscope_oauth_state" $ maybe [] parseCookies cookieM))
+    unless (or $ liftA2 constEqText stateM (decodeUtf8 <$> L.lookup "monoscope_oauth_state" (maybe [] parseCookies cookieM)))
       $ hoistEither (Left ("oauth state does not match this browser's login" :: Text))
     r <-
       lift

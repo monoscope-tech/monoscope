@@ -2,6 +2,7 @@ module Utils (
   safeScrapeUrl,
   internalAddress,
   scriptJson,
+  constEqText,
   Icon (..),
   lookupIcon,
   queryStringFrom,
@@ -113,6 +114,7 @@ import Data.Aeson.Extra.Merge (lodashMerge)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Types qualified as AET
+import Data.ByteArray qualified as BA
 import Data.Char (isAlpha, isAlphaNum, isDigit, isHexDigit)
 import Data.Default (Default (..))
 import Data.Digest.XXHash (xxHash)
@@ -693,6 +695,11 @@ fmtDate f = toText . formatTime defaultTimeLocale f
 -- "https://app.monoscope.tech/"
 hostPath :: Text -> Text -> Text
 hostPath host path = T.dropWhileEnd (== '/') host <> "/" <> T.dropWhile (== '/') path
+
+
+-- | Equality whose time does not depend on where the inputs differ: for secrets and signatures.
+constEqText :: Text -> Text -> Bool
+constEqText a b = BA.constEq (encodeUtf8 @Text @ByteString a) (encodeUtf8 @Text @ByteString b)
 
 
 -- | Encode a value as JSON Text (data attributes, widget JSON, etc.)

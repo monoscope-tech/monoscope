@@ -26,7 +26,7 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (forkBackground)
 import System.Types (ATBaseCtx)
-import Utils (hostPath, toUriStr)
+import Utils (constEqText, hostPath, toUriStr)
 import Web.Internal.FormUrlEncoded
 import "base64" Data.Base64.Types qualified as B64
 import "base64" Data.ByteString.Base64 qualified as B64
@@ -57,7 +57,7 @@ whatsappIncomingPostH projectTools sigM form = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = authCtx.config
       expected = twilioSignature envCfg.twilioAuthToken (hostPath envCfg.hostUrl "whatsapp/incoming") form
-  unless (not (T.null envCfg.twilioAuthToken) && any (\s -> BA.constEq (encodeUtf8 s :: ByteString) (encodeUtf8 expected :: ByteString)) sigM) do
+  unless (not (T.null envCfg.twilioAuthToken) && any (constEqText expected) sigM) do
     Log.logAttention "WhatsApp webhook rejected: bad or missing X-Twilio-Signature" $ AE.object ["hasSignature" AE..= isJust sigM]
     throwError err403
   val <- either (\e -> throwError err400{errBody = encodeUtf8 e}) pure $ fromForm @TwilioWhatsAppMessage form

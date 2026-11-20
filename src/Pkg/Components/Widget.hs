@@ -725,7 +725,7 @@ sqlSignature secret pid sql rollup = signWidgetUrl secret pid $ "sql\0" <> fold 
 
 -- | Constant-time check of a signature the browser echoed back.
 verifySqlSignature :: Text -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Bool
-verifySqlSignature secret pid sql rollup = maybe False \sig -> BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 (sqlSignature secret pid sql rollup) :: ByteString)
+verifySqlSignature secret pid sql rollup = maybe False (constEqText (sqlSignature secret pid sql rollup))
 
 
 -- | Stamp 'sqlSig' on a widget and its children, for those carrying SQL.
