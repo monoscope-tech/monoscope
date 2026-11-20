@@ -48,6 +48,8 @@ spec = around withTestResources $ describe "Home screen" do
     -- Home skipped the dashboard's SQL signing, so /widget 403'd a viewer's "Near memory limit" and it stayed a skeleton.
     pid <- createTestProject tr "Acme Shop"
     dbExec tr [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ?|] (Only pid)
+    -- The glance is Golden Signals only; "Near memory limit" reaches Home through a starred overview.
+    dbExec tr [sql|INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, title, starred_since) VALUES (gen_random_uuid(), ?, now(), now(), '00000000-0000-0000-0000-000000000001', '_overview.yaml', 'Overview', now())|] (Only pid)
     Home.HomePage (PageCtx _ d) <- call tr (Home.homeGetH pid)
     let flat w = w : foldMap (concatMap flat) w.children
         sqlWidgets = concatMap (filter (isJust . (.sql)) . flat) (d.glance <> foldMap snd d.starred)
