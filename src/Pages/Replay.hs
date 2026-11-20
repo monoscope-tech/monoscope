@@ -774,12 +774,17 @@ saveReplayMinio manager envCfg jobsPool ackId payload =
                   user_email = COALESCE(EXCLUDED.user_email, projects.replay_sessions.user_email),
                   user_name = COALESCE(EXCLUDED.user_name, projects.replay_sessions.user_name),
                   updated_at = #{now}
+                -- session_id is unique on its own: without this another project (or the
+                -- anonymous demo reader) appended its events and identity to a victim's session.
+                WHERE projects.replay_sessions.project_id = EXCLUDED.project_id
                 RETURNING event_file_count
               |]
                   `withException` \(e :: SomeException) ->
                     Log.logAttention
                       "Replay object saved but recording its key failed; object is orphaned"
                       (HM.fromList [("session", session), ("projectId", payload.projectId.toText), ("orphaned_key", objKeyText), ("error", toText (displayException e))])
+              when (null countRows)
+                $ Log.logAttention "Replay session id belongs to another project; events not recorded" (HM.fromList [("session", session), ("projectId", payload.projectId.toText), ("orphaned_key", objKeyText)])
               let fileCount = fromMaybe 0 (listToMaybe countRows)
               -- Enqueue at exact multiples of the threshold so a busy session
               -- with N events past 14/28/42/... fires at most one merge per

@@ -9,6 +9,7 @@ import Data.Char (isHexDigit)
 import Data.Default (Default (..))
 import Data.Effectful.LLM (GenAIContentCapture)
 import Data.GeoIP2 qualified as GeoIP2
+import Data.IP qualified as IP
 import Data.Map.Strict qualified as M
 import Data.Pool as Pool (Pool, defaultPoolConfig, newPool, setNumStripes)
 import Data.Pool qualified as Pool
@@ -30,7 +31,9 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ContainerTypes qualified as Containers
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Client qualified as HC
+import Network.HTTP.Client.Internal qualified as HCI
 import Network.HTTP.Client.TLS qualified as HCTLS
+import Network.Socket qualified as NS
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils qualified as DeriveUtils
 import Pkg.ExtractionWorker qualified as ExtractionWorker
@@ -44,8 +47,10 @@ import Relude
 import System.Clock (TimeSpec (TimeSpec))
 import System.Directory (getDirectoryContents)
 import System.Envy (DefConfig (..), FromEnv (..), Var (..), decodeWithDefaults, fromVar, toVar)
+import System.IO.Error (userError)
 import System.Logging qualified as Logging
 import Text.Show (showString, showsPrec)
+import Utils (internalAddress)
 import "base64" Data.ByteString.Base64 qualified as B64
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
@@ -335,6 +340,10 @@ instance DefConfig EnvConfig where
   defConfig =
     (def :: EnvConfig)
       { port = 8080
+      , -- Unsigned billing events used to be applied with only a log line, so anyone could put
+        -- a project on a paid plan or cancel someone else's. LS_WEBHOOK_SIG_ENFORCE=false
+        -- restores logging-only while a signing secret is being rolled out.
+        lsWebhookSigEnforce = True
       , grpcHosts = ["0.0.0.0"]
       , httpHost = "*4"
       , environment = Dev
@@ -543,10 +552,28 @@ instance Default DeploymentEnv where
 newProbeManagers :: IO (HC.Manager, HC.Manager)
 newProbeManagers = (,) <$> HC.newManager settings <*> HC.newManager settings{HC.managerModifyResponse = capBody}
   where
-    settings = HCTLS.tlsManagerSettings{HC.managerResponseTimeout = HC.responseTimeoutMicro 10_000_000}
+    tls = HCTLS.tlsManagerSettings
+    settings =
+      tls
+        { HC.managerResponseTimeout = HC.responseTimeoutMicro 10_000_000
+        , HC.managerRawConnection = publicOnly <$> HC.managerRawConnection tls
+        , HC.managerTlsConnection = publicOnly <$> HC.managerTlsConnection tls
+        }
     capBody response = do
       left <- newIORef (1_048_576 :: Int)
       pure response{HC.responseBody = readIORef left >>= \n -> if n <= 0 then pure mempty else HC.brRead (HC.responseBody response) >>= \chunk -> BS.take n chunk <$ writeIORef left (n - BS.length chunk)}
+
+
+-- | Probe and scrape targets are user-supplied. 'Utils.safeScrapeUrl' vets the URL's literal
+-- host when it is saved; this vets every address the name resolves to when it connects, so an
+-- internal DNS name, a wildcard name like 127.0.0.1.nip.io, or a rebinding answer is refused.
+-- IPv4 is pinned to the address that was checked.
+publicOnly :: (Maybe NS.HostAddress -> String -> Int -> IO HCI.Connection) -> Maybe NS.HostAddress -> String -> Int -> IO HCI.Connection
+publicOnly connect _ host port = do
+  addrs <- map NS.addrAddress <$> NS.getAddrInfo (Just NS.defaultHints{NS.addrSocketType = NS.Stream}) (Just host) (Just $ show port)
+  let ips = mapMaybe (fmap fst . IP.fromSockAddr) addrs
+  when (null ips || any internalAddress ips) $ Safe.throwIO $ userError $ "refusing to connect to an internal address for " <> host
+  connect (listToMaybe [a | NS.SockAddrInet _ a <- addrs]) host port
 
 
 configToEnv :: IOE :> es => EnvConfig -> Eff es AuthContext

@@ -8,6 +8,7 @@ import { copyParams } from './time-range-utils';
 import debounce from 'lodash/debounce';
 import { legendLayout } from './chart-legend';
 import { dayBarsOptions } from './day-bars';
+import { reviveFunction } from './chart-functions';
 import { geomapOptions, registerWorld } from './geomap';
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
@@ -1586,12 +1587,7 @@ function initializeChartWidgets() {
     if (chartConfigurations.get(host) === signature) return;
     chartConfigurations.set(host, signature);
     const config = JSON.parse(configJSON);
-    const opt = JSON.parse(config.echartOpt, (_key, value) => {
-      if (typeof value === 'string' && value.trim().startsWith('function(')) {
-        try { return (0, eval)('(' + value + ')'); } catch { return value; }
-      }
-      return value;
-    });
+    const opt = JSON.parse(config.echartOpt, reviveFunction);
     const widgetData = { ...config, opt };
     if (!opt.dataset.source) prefetchChartData(widgetData);
     queueChartInit(() => {

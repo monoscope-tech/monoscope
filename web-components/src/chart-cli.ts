@@ -6,6 +6,7 @@
 import { createCanvas } from "@napi-rs/canvas";
 import * as echarts from "echarts";
 import { preparePngOptions, type PngProfile, type PngMode } from "./chart-png-options";
+import { reviveFunctions } from "./chart-functions";
 import { geomapOptions, registerWorld } from "./geomap";
 import world from "../../static/public/assets/deps/world-110m.json";
 
@@ -51,20 +52,6 @@ interface RenderInput {
   return ns.toFixed(0) + "ns";
 };
 
-// Convert function strings to actual functions (Haskell sends formatters as strings)
-function convertFunctionStrings(obj: any): any {
-  if (obj === null || obj === undefined) return obj;
-  if (typeof obj === "string" && obj.startsWith("function")) {
-    try { return new Function("return " + obj)(); } catch { return obj; }
-  }
-  if (Array.isArray(obj)) return obj.map(convertFunctionStrings);
-  if (typeof obj === "object") {
-    const result: any = {};
-    for (const [k, v] of Object.entries(obj)) result[k] = convertFunctionStrings(v);
-    return result;
-  }
-  return obj;
-}
 
 async function main() {
   const chunks: Buffer[] = [];
@@ -77,7 +64,7 @@ async function main() {
   const canvas = createCanvas(Math.min(Math.max(width, 100), 2000), Math.min(Math.max(height, 100), 2000));
   const chart = echarts.init(canvas as any, darkMode ? "dark" : theme);
 
-  let finalOptions = mode === "table" ? options : convertFunctionStrings(options);
+  let finalOptions = mode === "table" ? options : reviveFunctions(options);
   finalOptions.animation = false;
   preparePngOptions(finalOptions, canvas.width, canvas.height, darkMode, profile, mode);
   // The page's theme tokens, as hex: there is no stylesheet to read them from here.

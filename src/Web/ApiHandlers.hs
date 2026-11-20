@@ -102,6 +102,7 @@ import Control.Lens ((%~), (.~), (?~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
+import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
@@ -849,13 +850,24 @@ apiKeyActivate pid kid = withRefetch (apiKeyGet pid kid) (ProjectApiKeys.activat
 apiKeyDeactivate :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATBaseCtx ApiKeySummary
 apiKeyDeactivate pid kid = do
   s <- apiKeyGet pid kid
-  _ <- ProjectApiKeys.revokeApiKey kid
+  _ <- revokeKey pid kid
   -- getProjectApiKey filters to active keys, so return pre-fetched summary with active=False
   pure $ s & #active .~ False
 
 
 apiKeyDelete :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATBaseCtx NoContent
-apiKeyDelete pid kid = withRefetchNoContent (apiKeyGet pid kid) (ProjectApiKeys.revokeApiKey kid)
+apiKeyDelete pid kid = withRefetchNoContent (apiKeyGet pid kid) (revokeKey pid kid)
+
+
+-- | Revoking in the database alone left the key authenticating from 'projectKeyCache' for up
+-- to its 30-minute TTL, so a leaked key revoked from the CLI kept working.
+revokeKey :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATBaseCtx Int64
+revokeKey pid kid = do
+  key <- find ((== kid) . (.id)) <$> ProjectApiKeys.projectApiKeysByProjectId pid
+  n <- ProjectApiKeys.revokeApiKey kid
+  cache <- (.projectKeyCache) <$> ask @AuthContext
+  whenJust key \k -> liftIO $ Cache.insert cache k.keyPrefix Nothing
+  pure n
 
 
 apiEventsQuery :: EventsSearchHandler -> Projects.ProjectId -> EventsQuery -> ATBaseCtx LogResult

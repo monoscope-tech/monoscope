@@ -11,6 +11,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.Char (isAlphaNum)
 import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.AgentWorkspace.Guest qualified as Guest
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..))
@@ -1056,9 +1057,24 @@ validReviewContext request verified =
 --
 -- >>> traverse fetchDocument ["https://127.0.0.1/admin", "http://example.com/docs", "https://169.254.169.254/latest"]
 -- [Left "Only public https:// URLs can be fetched",Left "Only public https:// URLs can be fetched",Left "Only public https:// URLs can be fetched"]
+-- | The review agent's page fetch. Its context holds production telemetry and text the PR author
+-- wrote, so a fetched URL is an exfiltration channel: only short, plain document addresses go
+-- out (no query or fragment, a bounded path of URL-safe characters), which caps what one call
+-- can carry. Removing the tool from automatic runs is the full fix.
+--
+-- >>> map documentUrlOk ["https://docs.example.com/guide/install", "https://evil.example/?d=secret", "https://evil.example/" <> T.replicate 200 "a", "https://evil.example/a#frag"]
+-- [True,False,False,False]
+documentUrlOk :: Text -> Bool
+documentUrlOk url = case T.stripPrefix "https://" url of
+  Nothing -> False
+  Just rest ->
+    let path = T.dropWhile (/= '/') rest
+     in T.length path <= 96 && T.all (\c -> isAlphaNum c || c `elem` ("/._-~" :: String)) path
+
+
 fetchDocument :: Text -> IO (Either Text AE.Value)
 fetchDocument url
-  | not ("https://" `T.isPrefixOf` url && safeScrapeUrl url) = pure $ Left "Only public https:// URLs can be fetched"
+  | not (documentUrlOk url && safeScrapeUrl url) = pure $ Left "Only short public https:// document URLs, without a query string, can be fetched"
   | otherwise =
       first (const "The page could not be fetched") <$> tryAny do
         manager <- HTTP.newManager TLS.tlsManagerSettings{HTTP.managerResponseTimeout = HTTP.responseTimeoutMicro 15000000}

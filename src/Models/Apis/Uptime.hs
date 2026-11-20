@@ -289,7 +289,7 @@ statusPageById pid sid = Hasql.interpOne (statusPageCols <> [HI.sql| WHERE proje
 
 
 statusPageBySlug :: DB es => Text -> Eff es (Maybe StatusPage)
-statusPageBySlug slug = Hasql.interpOne (statusPageCols <> [HI.sql| WHERE slug = #{slug} |])
+statusPageBySlug slug = Hasql.interpOne (statusPageCols <> [HI.sql| WHERE slug = #{slug} AND EXISTS (SELECT 1 FROM projects.projects lp WHERE lp.id = apis.status_pages.project_id AND lp.active AND lp.deleted_at IS NULL) |])
 
 
 -- | 0 when the slug is taken: slugs are global, being public URLs.

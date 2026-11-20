@@ -1122,7 +1122,9 @@ processWidget prefill pid now timeRange allParams widgetBase = do
       resolveLogsQuery
         | widgetBase.wType == Widget.WTLogs = fmap (fillQueryTemplate KqlTemplate (variablePresetsKQL def pid.toText fromD toD allParams now))
         | otherwise = Relude.id
-      widget = Widget.signWidgetSql secret pid $ widgetBase & #id %~ (<|> (slugify <$> widgetBase.title)) & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #query %~ fmap (replacePlaceholders kqlConstants) . resolveLogsQuery
+      -- `html` is only ever the server's own render (see 'processEagerWidget'); a stored one came
+      -- from a client write (any member or API-key holder) and reached every viewer raw.
+      widget = Widget.signWidgetSql secret pid $ widgetBase & #html .~ Nothing & #id %~ (<|> (slugify <$> widgetBase.title)) & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #query %~ fmap (replacePlaceholders kqlConstants) . resolveLogsQuery
 
   -- The prefill is best-effort: past the budget we hand back the widget with no
   -- html/dataset and no `eager` flag, which is precisely the shape whose renderer
@@ -1509,6 +1511,10 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr hxRequest allParams = do
       let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
           scopedParams = dashboardScopedParams session.environment allParams
 
+      -- A remote ?file= dashboard is rendered (and its SQL signed and run) as if the server wrote
+      -- it, so loading one is an editor's preview, not a viewer's: a viewer, or the anonymous
+      -- demo guest, could otherwise run any SQL through it.
+      whenJust fileM \_ -> void $ ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
       (dashVM, dash) <- getDashAndVM pid dashId fileM
       Projects.recordView session.user.id pid Projects.VKDashboard dashId.toText dashVM.title (dashboardUrl pid dashId Nothing [])
 
@@ -1591,7 +1597,7 @@ instance ToHtml WidgetEditor where
         drawerStateCheckbox = if isJust existingWidgetM then "global-data-drawer" else "page-data-drawer"
         alertFormId = widPrefix <> "-alert-form"
         alertEndpoint = urls.widgetAlertUpsert pid sourceWid (Just dashId)
-        widgetJSON = encodeText widgetToUse
+        widgetJSON = scriptJson widgetToUse
         thresholdField_ key label inputName value color required =
           Components.formField_
             Components.FieldSm
@@ -2685,7 +2691,7 @@ dashboardStarPostH pid dashId = do
 -- After deletion, redirects to the dashboard list page.
 dashboardDeleteH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardDeleteH pid dashId = do
-  (sess, _) <- Projects.sessionAndProject pid
+  (sess, _) <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   dashVM <- Dashboards.getDashboardByProjectId pid dashId `whenNothingM` throwError err404{errBody = "Dashboard not found or does not belong to this project"}
   _ <- Dashboards.deleteDashboardsByIds pid (V.singleton dashId)
   Projects.logAudit pid Projects.AEDashboardDeleted sess (Just $ Projects.AuditTarget Projects.ATDashboard dashId.toText dashVM.title) Nothing
@@ -2704,7 +2710,7 @@ data DashboardBulkActionForm = DashboardBulkActionForm
 
 dashboardBulkActionPostH :: Projects.ProjectId -> DashboardBulkAction -> DashboardBulkActionForm -> ATAuthCtx (RespHeaders NoContent)
 dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   case action of
     BADelete -> do
       _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList itemId
@@ -3074,6 +3080,10 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxTarget allP
       let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
           scopedParams = dashboardScopedParams session.environment allParams
 
+      -- A remote ?file= dashboard is rendered (and its SQL signed and run) as if the server wrote
+      -- it, so loading one is an editor's preview, not a viewer's: a viewer, or the anonymous
+      -- demo guest, could otherwise run any SQL through it.
+      whenJust fileM \_ -> void $ ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
       (dashVM, dash) <- getDashAndVM pid dashId fileM
 
       -- Find the active tab by slug

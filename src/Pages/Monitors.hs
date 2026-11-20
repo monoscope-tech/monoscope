@@ -188,7 +188,7 @@ minsToInterval = \case
 
 alertUpsertPostH :: Projects.ProjectId -> AlertUpsertForm -> ATAuthCtx (RespHeaders Alert)
 alertUpsertPostH pid form = do
-  (sess, _) <- Projects.sessionAndProject pid
+  (sess, _) <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   everyoneM <- ManageMembers.getEveryoneTeam pid
   let alertId = form.alertId >>= UUID.fromText
       emailAll = null form.teams || maybe False (\team -> team.id `elem` form.teams) everyoneM
@@ -196,7 +196,7 @@ alertUpsertPostH pid form = do
   now <- Time.currentTime
 
   -- For widget-tied alerts, preserve the query from the widget (can't edit directly)
-  existingMonitor <- maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMonitorId) alertId
+  existingMonitor <- maybe (pure Nothing) (Monitors.queryMonitorByProjectId pid . Monitors.QueryMonitorId) alertId
 
   -- A widget-tied monitor's query, scope and title follow its widget, not this form.
   let input = alertFormInput form{recipientEmailAll = Just emailAll}
@@ -224,7 +224,7 @@ alertSingleToggleActiveH pid monitorId = do
 alertSingleGetH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)
 alertSingleGetH pid monitorId = do
   _ <- Projects.sessionAndProject pid
-  monitor <- Monitors.queryMonitorById monitorId
+  monitor <- Monitors.queryMonitorByProjectId pid monitorId
   addRespHeaders $ AlertSingle pid monitor
 
 
@@ -388,7 +388,7 @@ teamAlertsGetH pid teamId = do
 
 alertBulkActionH :: Projects.ProjectId -> MonitorBulkAction -> TBulkActionForm -> ATAuthCtx (RespHeaders (PageCtx (Table UnifiedMonitorItem)))
 alertBulkActionH pid action form = do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   let monitorIds = Monitors.QueryMonitorId <$> form.itemId
   unless (null monitorIds) do
     void $ Monitors.monitorsBulkUpdate pid action Nothing monitorIds
@@ -578,8 +578,8 @@ instance Outcome MonitorActed where
 -- | One bulk action on a single monitor, audited with the monitor's title as it was.
 monitorActionH :: MonitorBulkAction -> Maybe Int -> Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Done MonitorActed))
 monitorActionH action durationM pid monitorId = do
-  (sess, _) <- Projects.sessionAndProject pid
-  titleM <- fmap (.alertConfig.title) <$> Monitors.queryMonitorById monitorId
+  (sess, _) <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
+  titleM <- fmap (.alertConfig.title) <$> Monitors.queryMonitorByProjectId pid monitorId
   void $ Monitors.monitorsBulkUpdate pid action durationM [monitorId]
   let event = case action of
         BADelete -> Projects.AEMonitorDeleted
@@ -646,7 +646,7 @@ unifiedMonitorOverviewH pid monitorId = do
   (freeTierStatus, alertM) <-
     concurrently
       (checkFreeTierStatus pid project.paymentPlan)
-      (maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMonitorId) (UUID.fromText monitorId))
+      (maybe (pure Nothing) (Monitors.queryMonitorByProjectId pid . Monitors.QueryMonitorId) (UUID.fromText monitorId))
   whenJust alertM \alert -> Projects.recordView sess.user.id pid Projects.VKMonitor monitorId alert.alertConfig.title ((urls.monitors pid).overviewGet monitorId)
 
   let baseBwconf =

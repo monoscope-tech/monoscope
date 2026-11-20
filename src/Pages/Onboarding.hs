@@ -75,7 +75,12 @@ onboardingGetH pid stepM = do
           slackUrl = urls.slackInstallGet pid True
           discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands&state=" <> pid.toText <> "__onboarding&redirect_uri=" <> appCtx.env.discordRedirectUri
       pure $ NotifChannelStep pid slackUrl discordUrl phone (maybe mempty (.notify_emails) everyoneTeamM) hasSlack hasDiscord
-    Integration -> IntegrationStep pid . maybe "<API_KEY>" (.keyPrefix) . listToMaybe <$> ProjectApiKeys.projectApiKeysByProjectId pid
+    -- The key is a full API credential, and Settings shows it only to editors: viewers (and the
+    -- demo guest) get the placeholder here too.
+    Integration -> do
+      canSeeKey <- maybe sess.user.isSudo (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid sess.user.id
+      keys <- bool (pure []) (filter (.active) <$> ProjectApiKeys.projectApiKeysByProjectId pid) canSeeKey
+      pure $ IntegrationStep pid $ maybe "<API_KEY>" (.keyPrefix) $ listToMaybe keys
     Pricing -> do
       billing <- Projects.userBilling sess.user.id
       let checkout u = u <> "&checkout[custom][project_id]=" <> pid.toText

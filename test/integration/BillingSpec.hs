@@ -341,7 +341,9 @@ spec = around withTestResources do
   it "a Lemon Squeezy subscription: created, locally-cycled, cancelled, expired, resumed and deleted by webhook" \tr0 -> do
     (tr, pid) <- onboarded tr0
     let webhook event = do
-          (reqs, _) <- runAsBaseRecordingHTTP tr $ Settings.webhookPostH Nothing $ toStrict $ AE.encode $ lsEvent event pid
+          let body = toStrict $ AE.encode $ lsEvent event pid
+              sig = decodeUtf8 $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 @Text @ByteString tr.trATCtx.env.lemonSqueezyWebhookSecret) body :: HMAC.HMAC SHA256)
+          (reqs, _) <- runAsBaseRecordingHTTP tr $ Settings.webhookPostH (Just sig) body
           -- No billing-provider call; the plan-change email now goes through the HTTP effect too.
           filter (not . T.isInfixOf "postmarkapp.com" . fst) reqs `shouldBe` []
         plan = (.paymentPlan) <$> projectOf tr pid

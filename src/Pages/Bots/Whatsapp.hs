@@ -1,12 +1,15 @@
-module Pages.Bots.Whatsapp (whatsappIncomingPostH, TwilioWhatsAppMessage (..), BodyType (..), parseWhatsappBody, getWhatsappList) where
+module Pages.Bots.Whatsapp (whatsappIncomingPostH, twilioSignature, TwilioWhatsAppMessage (..), BodyType (..), parseWhatsappBody, getWhatsappList) where
 
 import Control.Lens ((.~), (?~), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEYM
 import Data.Aeson.Lens qualified as AEL
+import Data.ByteArray qualified as BA
 import Data.Effectful.Wreq qualified as Wreq
+import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Vector qualified as V
+import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Models.Apis.Integrations (getDashboardsForWhatsapp)
@@ -17,29 +20,55 @@ import Pages.Bots.Utils (BotReply (..), BotType (..), runBotQueryWithTools, with
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..))
 import Relude
+import Servant.Server (ServerError (errBody), err400, err403)
 import System.Config (AuthContext (backgroundScope))
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (forkBackground)
 import System.Types (ATBaseCtx)
-import Utils (toUriStr)
+import Utils (hostPath, toUriStr)
 import Web.Internal.FormUrlEncoded
+import "base64" Data.Base64.Types qualified as B64
+import "base64" Data.ByteString.Base64 qualified as B64
+import "cryptonite" Crypto.Hash (SHA1)
+import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
 joiner :: Text
 joiner = "___"
 
 
-whatsappIncomingPostH :: Maybe AI.ProjectTools -> TwilioWhatsAppMessage -> ATBaseCtx AE.Value
-whatsappIncomingPostH projectTools val = do
-  Log.logTrace ("WhatsApp interaction received" :: Text) $ AE.object ["from" AE..= val.from, "body" AE..= val.body]
+-- | Twilio's request signature: base64 HMAC-SHA1, keyed by the auth token, of the webhook URL
+-- followed by every POST parameter name and value, sorted by name.
+--
+-- >>> twilioSignature "tok" "https://app.example.com/whatsapp/incoming" (Form $ HM.fromList [("From", ["whatsapp:+15550001"]), ("Body", ["hi"])])
+-- "Jw51FmvSIRHu7gCm41+iUsQCvto="
+twilioSignature :: Text -> Text -> Form -> Text
+twilioSignature token url form =
+  let signed = url <> foldMap (\(k, vs) -> foldMap (k <>) vs) (sortWith fst $ HM.toList $ unForm form)
+   in B64.extractBase64 $ B64.encodeBase64 $ BA.convert (HMAC.hmac (encodeUtf8 token :: ByteString) (encodeUtf8 signed :: ByteString) :: HMAC.HMAC SHA1)
+
+
+-- | Unsigned, anyone could post as any registered number: run the paid agent on that
+-- project's telemetry and make Monoscope's sender message the number's owner. Only Twilio,
+-- for this account, may.
+whatsappIncomingPostH :: Maybe AI.ProjectTools -> Maybe Text -> Form -> ATBaseCtx AE.Value
+whatsappIncomingPostH projectTools sigM form = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = authCtx.config
-      fromN = T.dropWhile (/= '+') val.from
-      -- Plain-text template (Body) vs chart template (ContentVariables).
-      send = \case
-        ReplyText v -> sendWhatsappResponse (AE.object []) val.from envCfg.whatsappBotText (v ^? AEL.key "body" . AEL._String)
-        ReplyChart v -> sendWhatsappResponse v val.from envCfg.whatsappBotChart Nothing
+      expected = twilioSignature envCfg.twilioAuthToken (hostPath envCfg.hostUrl "whatsapp/incoming") form
+  unless (not (T.null envCfg.twilioAuthToken) && maybe False (\s -> BA.constEq (encodeUtf8 s :: ByteString) (encodeUtf8 expected :: ByteString)) sigM) do
+    Log.logAttention "WhatsApp webhook rejected: bad or missing X-Twilio-Signature" $ AE.object ["hasSignature" AE..= isJust sigM]
+    throwError err403
+  val <- either (\e -> throwError err400{errBody = encodeUtf8 e}) pure $ fromForm @TwilioWhatsAppMessage form
+  when (val.accountSid /= envCfg.twilioAccountSid) $ throwError err403
+  Log.logTrace ("WhatsApp interaction received" :: Text) $ AE.object ["from" AE..= val.from, "body" AE..= val.body]
+  let
+    fromN = T.dropWhile (/= '+') val.from
+    -- Plain-text template (Body) vs chart template (ContentVariables).
+    send = \case
+      ReplyText v -> sendWhatsappResponse (AE.object []) val.from envCfg.whatsappBotText (v ^? AEL.key "body" . AEL._String)
+      ReplyChart v -> sendWhatsappResponse v val.from envCfg.whatsappBotChart Nothing
   projectM <- Projects.getProjectByPhoneNumber fromN
   Log.logTrace ("WhatsApp project lookup" :: Text) $ AE.object ["fromN" AE..= fromN, "found" AE..= isJust projectM]
   whenJust projectM $ \p -> case parseWhatsappBody val.body of

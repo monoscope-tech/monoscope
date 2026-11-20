@@ -82,7 +82,12 @@ runMonoscope tp =
       -- App-lifetime scope for fire-and-forget handler work (Slack/Twilio). The scope
       -- lives until shutdown, then ki reaps any still-running background fibers.
       envWithLiveTail <- liftIO (withLiveTailTransport env)
-      withLogger \l -> runServer l envWithLiveTail{backgroundScope = Just backgroundScope} tp
+      withLogger \l -> do
+        -- The quick-start compose publishes these values; a deployment still using them lets
+        -- anyone forge chart links and API keys, or sign in as sudo.
+        let published = [("API_KEY_ENCRYPTION_SECRET_KEY", env.config.apiKeyEncryptionSecretKey == "monoscope123456monoscope12345678"), ("BASIC_AUTH_PASSWORD", env.config.basicAuthEnabled && env.config.basicAuthPassword `elem` ["changeme", ""])]
+        for_ [k | (k, True) <- published] \k -> runLogT "startup" l LogInfo $ LogBase.logAttention "Insecure default configuration: change it before exposing this deployment" (AE.object ["setting" AE..= (k :: Text)])
+        runServer l envWithLiveTail{backgroundScope = Just backgroundScope} tp
 
 
 -- | One log shape for every Live Tail fiber.

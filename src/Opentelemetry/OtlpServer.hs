@@ -1573,21 +1573,26 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
   currentTime <- Time.currentTime
   appCtx <- ask @AuthContext
 
-  let atIds = V.catMaybes $ Projects.projectIdFromText <$> V.fromList atIds'
-      -- Combine API key from metadata with keys from resource attributes
-      !allApiKeys = maybe projectKeys (`V.cons` projectKeys) metadataApiKey
+  let
+    -- Combine API key from metadata with keys from resource attributes
+    !allApiKeys = maybe projectKeys (`V.cons` projectKeys) metadataApiKey
 
   projectIdsAndKeys <-
     checkpoint (toAnnotation $ "processList:" <> signal <> ":getProjectIds")
       $ ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
-  let allProjectIds = hashNub $ V.toList atIds <> map snd (V.toList projectIdsAndKeys)
+  -- These are the public gRPC/HTTP endpoints, so only a presented key names a project. An
+  -- @at-project-id@ attribute alone used to be enough to write into any project whose UUID was
+  -- known, and it outranked the caller's own key; it now only picks among the key's projects.
+  -- (The internal Kafka path, fed by our collector, still routes on it: 'processBatchPipeline'.)
+  let keyPids = hashNub $ map snd (V.toList projectIdsAndKeys)
+      atIds = V.filter (`elem` keyPids) $ V.catMaybes $ Projects.projectIdFromText <$> V.fromList atIds'
+      allProjectIds = keyPids
 
-  -- Verify authentication: if project keys or IDs are present, they must resolve to valid projects
-  when (not (V.null allApiKeys) || not (V.null atIds)) do
-    when (null allProjectIds) $ throwGrpc GrpcUnauthenticated "Invalid or missing project API key"
+  when (null allProjectIds) $ throwGrpc GrpcUnauthenticated "Invalid or missing project API key"
+  do
     Log.logTrace
       (label <> ": Authentication successful")
-      (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
+      (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "at_project_ids" AE..= V.map unUUIDId atIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
 
   projectCaches <- checkpoint (toAnnotation $ "processList:" <> signal <> ":getProjectCaches") $ fetchIngestCaches allProjectIds
   let routing = ProjectRouting (metadataApiKey >>= \key -> snd <$> find ((== key) . fst) projectIdsAndKeys) projectIdsAndKeys
@@ -1652,7 +1657,8 @@ processMetricsRequest metadataApiKey req = do
 
   -- Try metadata API key first, then resource attribute key, then project ID
   keyPidM <- asum <$> traverse ProjectApiKeys.getProjectIdByApiKey (maybeToList metadataApiKey <> maybeToList projectKey)
-  let pidM = keyPidM <|> (Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" resourceMetrics)
+  -- Only a presented key names the project: see 'processSignalRequest'.
+  let pidM = keyPidM
 
   case pidM of
     Just pid -> do

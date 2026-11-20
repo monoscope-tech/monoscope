@@ -333,6 +333,19 @@ renderProof clip cast = renderMedia cast \directory run -> do
     run "ffmpeg" (quiet <> ["-i", "card.gif", "-update", "1", "card.png"])
 
 
+-- | The demuxer for a guest's recording, pinned from its magic bytes. Left to ffmpeg's probe,
+-- bytes the reviewed code wrote could select a playlist demuxer (HLS, concat) that opens
+-- other files on this host.
+--
+-- >>> map videoDemuxer ["\x1A\x45\xDF\xA3webm", "\0\0\0\x18" <> "ftypisom", "#EXTM3U\n#EXT-X-TARGETDURATION:1"]
+-- [Just "matroska",Just "mov",Nothing]
+videoDemuxer :: ByteString -> Maybe String
+videoDemuxer bytes
+  | "\x1A\x45\xDF\xA3" `BS.isPrefixOf` bytes = Just "matroska"
+  | "ftyp" `BS.isPrefixOf` BS.drop 4 bytes = Just "mov"
+  | otherwise = Nothing
+
+
 -- | A browser recording's full video, each chapter captioned as it plays, and a preview that plays
 -- inline at full comment width, both inside a drawn browser window showing the page's title and
 -- URL. The preview is the deciding few seconds ('previewWindow') as an animated WebP (a GIF of a
@@ -341,6 +354,7 @@ renderProof clip cast = renderMedia cast \directory run -> do
 -- part in yellow, filling as it plays, and the full length to watch.
 renderVideo :: Maybe (Text, Text) -> [(Double, Text)] -> ByteString -> IO (Either Text (ByteString, ByteString, Maybe ByteString))
 renderVideo page chapters video = renderMedia video \directory run -> do
+  demuxer <- maybe (throwIO $ userError "proof video is neither WebM nor MP4") pure (videoDemuxer video)
   -- Text goes to drawtext as UTF-8 files the worker's locale need not encode; expansion=none keeps a URL's % literal.
   for_ ([("proof.title", maybe "" fst page), ("proof.url", maybe "" snd page), ("proof.nav", "←    →    ↻"), ("proof.dot", "●")] <> [("caption." <> show n, label) | (n, (_, label)) <- zip [0 :: Int ..] chapters]) \(name, text) -> writeFileBS (directory </> name) (encodeUtf8 text)
   let text = ("drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:expansion=none:" <>)
@@ -360,7 +374,7 @@ renderVideo page chapters video = renderMedia video \directory run -> do
           , text "textfile=proof.url:fontcolor=white@0.85:fontsize=14:x=150:y=75"
           ]
       framed = "[0:v]scale=1280:800:force_original_aspect_ratio=decrease,pad=1280:800:(ow-iw)/2:(oh-ih)/2[page];[1:v]" <> window <> "[frame];[frame][page]overlay=24:102:shortest=1" <> foldMap ("," <>) captions
-  run "ffmpeg" (quiet <> ["-t", "120", "-i", "proof.input", "-f", "lavfi", "-i", "color=c=0xDCE1EA:s=1328x926", "-filter_complex", framed, "-an", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-crf", "24", "-fs", show mediaLimit, "proof.mp4"])
+  run "ffmpeg" (quiet <> ["-t", "120", "-f", demuxer, "-i", "proof.input", "-f", "lavfi", "-i", "color=c=0xDCE1EA:s=1328x926", "-filter_complex", framed, "-an", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-crf", "24", "-fs", show mediaLimit, "proof.mp4"])
   probed <- readProcessStdout_ (proc "ffprobe" ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", directory </> "proof.mp4"])
   let total = max 1 $ fromMaybe 30 $ readMaybe @Double $ toString $ T.strip $ decodeUtf8 probed
       shown = previewWindow total chapters

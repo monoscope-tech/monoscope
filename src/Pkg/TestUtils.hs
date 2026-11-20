@@ -558,7 +558,7 @@ testSessionHeader :: MonadIO m => Pool Connection -> OHasql.TracedPool -> m (Ser
 testSessionHeader pool hpool = do
   pSessId <-
     fst
-      <$> Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@monoscope.tech"
+      <$> Auth.authorizeUserAndPersist Nothing False "firstName" "lastName" "https://placehold.it/500x500" "test@monoscope.tech"
       & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 100])
       & runHTTPGolden "./test/golden/"
       & runHasqlPool hpool

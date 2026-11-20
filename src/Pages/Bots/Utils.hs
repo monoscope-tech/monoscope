@@ -268,7 +268,7 @@ buildIssuePrompt pid issue now = do
       let twoDaysAgo = addUTCTime (-172800) now
       monitorM <- runMaybeT do
         monitorId <- hoistMaybe $ UUID.fromText alertData.queryId
-        MaybeT $ Monitors.queryMonitorById (Monitors.QueryMonitorId monitorId)
+        MaybeT $ Monitors.queryMonitorByProjectId pid (Monitors.QueryMonitorId monitorId)
       metricsData <- Charts.queryProjectMetrics Nothing (Just Charts.DTMetric) pid (Just alertData.queryExpression) Nothing Nothing (Just $ show twoDaysAgo) (Just $ show now) Nothing Nothing []
       pure $ Just (alertData, monitorM, metricsData)
     (Nothing; Just Issues.ApiChangeP{}; Just Issues.RuntimeExceptionP{}; Just Issues.LogPatternP{}; Just Issues.LogPatternRateChangeP{}; Just Issues.PerformanceP{}; Just Issues.FrontendP{}; Just Issues.FeedbackP{}; Just Issues.UptimeP{}; Just Issues.CronP{}) -> pure Nothing

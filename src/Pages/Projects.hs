@@ -116,7 +116,7 @@ import Relude hiding (ask, asks)
 import Servant (addHeader)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
-import Servant.Server (err302, err500, err503, errBody, errHeaders)
+import Servant.Server (err302, err403, err500, err503, errBody, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, done, redirectCS)
@@ -938,7 +938,7 @@ instance Refusal TeamsDeleteRejection where
 
 manageTeamBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> Maybe Text -> ATAuthCtx (ActionResult TeamsDeleteRejection TeamsDeleted)
 manageTeamBulkActionH pid action TBulkActionForm{itemId} listViewM = act do
-  (sess, _) <- Projects.sessionAndProject pid
+  (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   case action of
     "delete" -> do
       teamVm <- ProjectMembers.getTeamsById pid $ V.fromList $ coerce itemId
@@ -1289,7 +1289,7 @@ instance Refusal BillingRejection where
 
 manageSubGetH :: Projects.ProjectId -> ATAuthCtx (ActionResult BillingRejection BillingRedirect)
 manageSubGetH pid = act do
-  (_, project) <- Projects.sessionAndProject pid
+  (_, project) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   case Projects.projectProvider project of
@@ -1559,7 +1559,7 @@ data SubscriptionLookupFailed = SubscriptionLookupFailed
 
 pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (ActionResult SubscriptionLookupFailed PricingUpdated)
 pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = act do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, project) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
       apiKey = envCfg.lemonSqueezyApiKey
@@ -1584,12 +1584,17 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = act do
       handleOnboarding
       Right () <$ ProjectMembers.activateAllMembers pid
     _ -> case orderIdM of
+      -- The order id comes from the form: it must be a number (it is spliced into the provider
+      -- URL), and its subscription must not already pay for another project, or one admin could
+      -- meter their usage onto someone else's subscription.
+      Just orderId | T.null orderId || not (T.all isDigit orderId) -> pure $ Left SubscriptionLookupFailed
       Just orderId ->
         lsGet @[SubDataVals] apiKey ("https://api.lemonsqueezy.com/v1/orders/" <> orderId <> "/subscriptions") >>= \case
           Just sub | Just target <- viaNonEmpty head sub.dataVal -> do
             let subId = show target.attributes.firstSubscriptionItem.subscriptionId
                 firstSubId = show target.attributes.firstSubscriptionItem.id
                 productName = target.attributes.productName
+            whenM (Projects.subItemBilledElsewhere pid firstSubId) $ throwError err403{errBody = "This subscription already belongs to another project"}
             _ <- updatePricing productName subId firstSubId orderId
             auditPlan productName
             handleOnboarding

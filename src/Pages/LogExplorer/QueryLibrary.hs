@@ -16,7 +16,7 @@ import Pkg.Components.LogQueryBox (queryLibraryContent_)
 import Pkg.Parser (parseQueryToAST, toQText)
 import Relude
 import System.Types
-import Utils (nonEmptyT)
+import Utils (nonEmptyT, scriptJson)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -31,7 +31,7 @@ newtype QueryLibraryView = QueryLibraryView (V.Vector Projects.QueryLibItem, V.V
 instance ToHtml QueryLibraryView where
   toHtml (QueryLibraryView (saved, recent)) = toHtml do
     queryLibraryContent_ saved recent
-    let json = T.replace "<" "\\u003c" $ decodeUtf8 $ AE.encode $ recent <> saved
+    let json = scriptJson $ recent <> saved
     script_ $ "window.queryLibraryData=" <> json <> ";document.getElementById('filterElement')?.setQueryLibrary?.(window.queryLibraryData);"
   toHtmlRaw = toHtml
 

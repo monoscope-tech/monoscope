@@ -140,6 +140,8 @@ data ApiError
   | InvalidCredentials
   | ProjectInactive
   | InvalidRequest Text
+  | DemoReadOnly
+  | InsufficientRole
   deriving stock (Eq, Show)
 
 
@@ -167,6 +169,8 @@ refusal e = problem status ApiProblem{code = c, message = msg, field = fieldM, s
       InvalidCredentials -> (err401, PUnauthorized, "Invalid API key, session, or project access", Nothing)
       ProjectInactive -> (err403, PProjectInactive, "Project is deactivated or deleted", Nothing)
       InvalidRequest m -> (err400, PInvalidRequest, m, Nothing)
+      DemoReadOnly -> (err401, PAuthenticationRequired, "The demo project is read-only without credentials", Nothing)
+      InsufficientRole -> (err403, PUnauthorized, "Your role on this project does not allow this", Nothing)
     resource = \case
       RMonitor -> "Monitor"
       RDashboard -> "Dashboard"

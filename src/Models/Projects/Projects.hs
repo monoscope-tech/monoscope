@@ -48,6 +48,7 @@ module Models.Projects.Projects (
   CustomerId (..),
   projectById,
   activeProjectById,
+  subItemBilledElsewhere,
   projectByOrderId,
   projectByCustomerId,
   UserBilling (..),
@@ -601,6 +602,11 @@ setIncludeAlertUserIdentity pid includeIdentity =
 -- as absent, which is the right answer for delivery (alerts, reports), for
 -- unauthenticated surfaces (share links) and for authenticating a key against
 -- the project that owns it.
+-- | Whether a live project other than @pid@ is already billed to this subscription item.
+subItemBilledElsewhere :: DB es => ProjectId -> Text -> Eff es Bool
+subItemBilledElsewhere pid itemId = isJust <$> EHasql.interpOne @(HI.OneColumn Bool) [HI.sql| SELECT true FROM projects.projects WHERE first_sub_item_id = #{itemId} AND id <> #{pid} AND deleted_at IS NULL LIMIT 1 |]
+
+
 activeProjectById :: DB es => ProjectId -> Eff es (Maybe Project)
 activeProjectById pid = EHasql.interpOne [HI.sql| SELECT p.* FROM projects.projects p WHERE id=#{pid} AND active=TRUE AND deleted_at IS NULL |]
 
@@ -656,7 +662,7 @@ getProjectByPhoneNumber number =
   EHasql.interpOne
     [HI.sql| SELECT p.* FROM projects.projects p
              JOIN projects.teams t ON t.project_id = p.id
-             WHERE t.is_everyone = TRUE AND t.deleted_at IS NULL
+             WHERE t.is_everyone = TRUE AND t.deleted_at IS NULL AND p.active AND p.deleted_at IS NULL
                AND #{number} = ANY(t.phone_numbers)
              LIMIT 1 |]
 

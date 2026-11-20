@@ -10,6 +10,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Hasql.Interpolate qualified as HI
 import Lucid qualified
+import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (Query, RequestHeaders, hAuthorization, hCookie, status200)
 import Network.Wai qualified as Wai
@@ -23,6 +24,7 @@ import Servant.Server qualified as Servant
 import Servant.Server.Experimental.Auth (unAuthHandler)
 import System.Config (AuthContext (hasqlPool))
 import System.Config qualified as Config
+import System.Types (ApiPrincipal (..))
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie, parseSetCookie, setCookieName, setCookieValue)
 import Web.I18n qualified as I18n
@@ -93,6 +95,32 @@ spec = around withTestResources do
     dbExec tr [sql| UPDATE projects.projects SET deleted_at = now(), active = false WHERE id = ? |] (Only victim)
     for_ [Just "invalid-api-key", Just (T.drop 1 key), Just deletedKey, Nothing] \k -> base (Auth.clientMetadataH k) >>= (`shouldBe` Just 401) . leftToMaybe . first errHTTPCode
 
+  it "roles: demo and viewer bearers only read, editors cannot administer, cross-site basic-auth writes and logged-out sessions are refused" \tr -> do
+    let sid = UUID.toASCIIBytes (getResponse tr.trSessAndHeader).sessionId.getPersistentSessionId
+        api hs m p = Servant.runHandler $ unAuthHandler (Auth.apiKeyAuthHandler tr.trLogger tr.trATCtx) Wai.defaultRequest{Wai.requestMethod = m, Wai.rawPathInfo = p, Wai.requestHeaders = hs}
+        outcome = fmap (bimap errHTTPCode \case Authenticated _ -> rw; DemoReader _ -> ro)
+        rw, ro :: Text
+        (rw, ro) = ("rw", "ro")
+        asMember = api [(hAuthorization, "Bearer " <> sid), ("X-Project-Id", encodeUtf8 testPid.toText)]
+        demo = api [("X-Project-Id", encodeUtf8 Projects.demoProjectId.toText)]
+    -- The demo project's world-readable bypass also took writes, e.g. minting its API keys.
+    traverse outcome [demo "GET" "/api/v1/events", demo "POST" "/api/v1/events/query", demo "POST" "/api/v1/api_keys"] `shouldReturn` ([Right ro, Right ro, Left 401] :: [Either Int Text])
+    -- A session token ignored the member's role: a viewer could PATCH themselves to admin.
+    let probes = [asMember "GET" "/api/v1/members", asMember "PATCH" "/api/v1/members/self", asMember "POST" "/api/v1/api_keys", asMember "POST" "/api/v1/monitors"]
+    for_ [(PM.PView, [Right ro, Left 403, Left 403, Left 403] :: [Either Int Text]), (PM.PEdit, [Right rw, Left 403, Left 403, Right rw]), (PM.PAdmin, replicate 4 (Right rw))] \(role, want) ->
+      setRole tr testPid role >> (traverse outcome probes `shouldReturn` want)
+
+    -- Basic auth rides every request, so a cross-site form could write as the operator.
+    let basicCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.basicAuthEnabled = True, Config.basicAuthUsername = "tester", Config.basicAuthPassword = "s3cret"}}
+        basic m site = fmap (leftToMaybe . first errHTTPCode) . Servant.runHandler $ unAuthHandler (Auth.authHandler tr.trLogger basicCtx) Wai.defaultRequest{Wai.requestMethod = m, Wai.requestHeaders = [(hAuthorization, "Basic dGVzdGVyOnMzY3JldA=="), ("Sec-Fetch-Site", site)]}
+    traverse (uncurry basic) ([("POST", "cross-site"), ("GET", "cross-site"), ("POST", "same-origin")] :: [(ByteString, ByteString)]) `shouldReturn` [Just 403, Nothing, Nothing]
+
+    -- Logout only cleared the cookie: the session row, and so a copied cookie or CLI token, lived on.
+    let alive = dbOne @_ @Bool tr [sql| SELECT EXISTS (SELECT 1 FROM users.persistent_sessions WHERE id = ?::uuid) |] (Only $ decodeUtf8 @Text sid)
+    alive `shouldReturn` True
+    void $ toBaseServantResponse tr $ Auth.logoutH (Just $ "monoscope_session=" <> sid)
+    alive `shouldReturn` False
+
   it "ad attribution: a consenting landing becomes one signup conversion, tags wait for consent, a first ingest is reported once" \tr -> do
     let adCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.auth0Domain = "https://auth0.test", Config.metaCapiAccessToken = Just "capi-token", Config.metaCapiPixelId = Just "123", Config.redditConversionsToken = Just "rdt-token", Config.redditPixelId = Just "t2_px"}}
         -- Dequeue the ad conversion jobs and run them as the worker would, recording what they send.
@@ -105,11 +133,14 @@ spec = around withTestResources do
         setCookies hs = [parseSetCookie v | ("Set-Cookie", v) <- hs]
         granted = [(hCookie, "ms_consent=granted")]
         -- Fresh ids: the static test supply restarts at ...0001, the template user's id.
-        callback cookie = replicateM 4 UUIDV4.nextRandom >>= writeIORef tr.trUUIDRef >> setCookies . getHeaders <$> toBaseServantResponse tr{trATCtx = adCtx} (Auth.authCallbackH (Just "code") Nothing Nothing (Just cookie) (Just "UA") Nothing)
+        callbackWith st cookie = replicateM 4 UUIDV4.nextRandom >>= writeIORef tr.trUUIDRef >> setCookies . getHeaders <$> toBaseServantResponse tr{trATCtx = adCtx} (Auth.authCallbackH (Just "code") st Nothing (Just $ cookie <> "; monoscope_oauth_state=st-1") (Just "UA") Nothing)
+        callback = callbackWith (Just "st-1")
     land granted "/p/x" >>= (`shouldBe` []) . setCookies . WT.simpleHeaders
     land [("CF-IPCountry", "DE")] "/?gclid=G1" >>= (`shouldBe` []) . setCookies . WT.simpleHeaders
     [stash] <- setCookies . WT.simpleHeaders <$> land granted "/?gclid=G1&utm_source=google&fbclid=F1&rdt_cid=R1&page=2"
     let cookie = "ms_consent=granted; _fbp=fb.1.1.2; monoscope_attribution=" <> setCookieValue stash
+    -- Regression (login CSRF): a callback whose state was not issued to this browser signs no one in.
+    for_ [Nothing, Just ("st-other" :: Text)] \st -> (callbackWith st cookie `shouldThrow` anyException)
     [_, signup] <- callback cookie
     Just (uid :: Projects.UserId) <- runQueryEffect tr $ Hasql.interpOne [HI.sql| SELECT id FROM users.users WHERE email = 'callback@example.com' |]
     (setCookieName signup, setCookieValue signup) `shouldBe` ("monoscope_signup", encodeUtf8 uid.toText)

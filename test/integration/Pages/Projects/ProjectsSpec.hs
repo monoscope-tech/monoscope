@@ -76,7 +76,7 @@ spec = around withTestResources do
     setRole tr testPid PView
     traverse (httpStatus tr) [void $ Pages.createProjectPostH testPid (form "Forbidden"), void $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm [] [] [] [] Nothing), void $ Pages.deleteProjectGetH testPid, void $ Pages.pagerdutyConnectH testPid (Pages.PagerdutyConnectForm "viewer-key-0123456789abcdef"), void $ Pages.pagerdutyDisconnectH testPid, void $ Pages.slackDisconnectH testPid] `shouldReturn` [403, 403, 403, 403, 403, 403]
     setRole tr testPid PEdit
-    httpStatus tr (Pages.deleteProjectGetH testPid) `shouldReturn` 403
+    traverse (httpStatus tr) [void $ Pages.deleteProjectGetH testPid, void $ Pages.manageSubGetH testPid, void $ Pages.manageTeamBulkActionH testPid "delete" (Pages.TBulkActionForm []) Nothing] `shouldReturn` [403, 403, 403]
     setRole tr ownPid PView
     traverse (`httpStatus` Pages.deleteProjectGetH ownPid) [nonSudo, tr] `shouldReturn` [403, 403]
     setRole tr testPid PAdmin
@@ -294,9 +294,10 @@ spec = around withTestResources do
     -- A team routes Slack and PagerDuty to its own targets until it is deleted.
     dbExec tr [sql|DELETE FROM apis.discord WHERE project_id = ?|] (Only testPid)
     let teamKey = "svc-key-12345678901234567890abcd"
-        teams = call tr (Pages.manageTeamsGetH testPid (Just "")) >>= \case
-          Pages.ManageTeamsGet' (_, _, _, _, ts) -> pure ts
-          _ -> fail "expected ManageTeamsGet'"
+        teams =
+          call tr (Pages.manageTeamsGetH testPid (Just "")) >>= \case
+            Pages.ManageTeamsGet' (_, _, _, _, ts) -> pure ts
+            _ -> fail "expected ManageTeamsGet'"
     Right (Pages.TeamCreated _) <- call tr $ Pages.manageTeamPostH testPid Pages.TeamForm{teamName = "Routing Team", teamDescription = "Owns customer alerts", teamHandle = "routing-team", teamMembers = [(getResponse tr.trSessAndHeader).user.id], notifEmails = V.empty, slackChannels = ["#team-alerts"], discordChannels = V.empty, phoneNumbers = V.empty, pagerdutyServices = [teamKey], teamId = Nothing} Nothing
     Just team <- V.find ((== "routing-team") . (.handle)) <$> teams
     map (.memberEmail) (V.toList team.members) `shouldBe` ["test@monoscope.tech"]

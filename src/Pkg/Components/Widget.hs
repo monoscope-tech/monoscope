@@ -8,6 +8,7 @@ import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as AE.KeyMap
 import Data.Base64.Types qualified as B64
 import Data.ByteArray qualified as BA
+import Data.ByteString.Lazy qualified as BL
 import Data.Char (isAlpha, isDigit, isHexDigit)
 import Data.Default
 import Data.Effectful.Hasql qualified as Hasql
@@ -661,10 +662,23 @@ encodeWidgetZ = B64.extractBase64 . B64URL.encodeBase64 . toStrict . GZip.compre
 -- | Inverse of 'encodeWidgetZ'; 'Nothing' for anything that isn't a well-formed blob.
 -- Forced here so a corrupt payload fails as a decode miss rather than as a lazy
 -- 'GZip.decompress' bomb detonating deep inside the handler.
+-- | Capped at 'maxWidgetJsonBytes': widget.png decodes before it can check the signature, and
+-- gzip of zeros expands ~1000x, so an unsigned 50 KB request line used to inflate to ~38 MB.
+--
+-- >>> decodeWidgetZ (encodeWidgetZ "{}")
+-- Just "{}"
+-- >>> decodeWidgetZ (encodeWidgetZ (T.replicate (maxWidgetJsonBytes + 1) "a"))
+-- Nothing
 decodeWidgetZ :: MonadIO m => Text -> m (Maybe Text)
 decodeWidgetZ z = case B64URL.decodeBase64Untyped (encodeUtf8 z) of
   Left _ -> pure Nothing
-  Right bs -> liftIO $ Safe.handleAny (const $ pure Nothing) $ Just <$> evaluateWHNF (decodeUtf8 @Text $ toStrict $ GZip.decompress $ fromStrict bs)
+  Right bs -> liftIO $ Safe.handleAny (const $ pure Nothing) do
+    let out = BL.take (fromIntegral maxWidgetJsonBytes + 1) $ GZip.decompress $ fromStrict bs
+    evaluateWHNF $ guard (BL.length out <= fromIntegral maxWidgetJsonBytes) $> decodeUtf8 @Text (toStrict out)
+
+
+maxWidgetJsonBytes :: Int
+maxWidgetJsonBytes = 1024 * 1024
 
 
 -- Used when converting a widget json to its html representation. Eg in a query chart builder
@@ -1231,7 +1245,7 @@ renderWidgetHeader actions widget valueM subValueM expandBtnFn ctaM = div_ [clas
             -- has to stay hyperscript because it appends to whatever query string the
             -- page already has, which the server can't know. Reloading that URL now
             -- reopens the drawer server-side — Pages.Dashboards renders the trigger.
-            term "_" [text|on click js { const url = new URL(window.location); url.searchParams.set('expand', '${wId}'); history.replaceState({}, '', url); } end|]
+            term "_" [text|on click js { const url = new URL(window.location); url.searchParams.set('expand', ${wIdJson}); history.replaceState({}, '', url); } end|]
           , term "hx-disabled-elt" "this"
           ]
             <> Utils.drawerLoadAttrs_ (urls.dashboardWidgetExpandGet p d wId Nothing)
@@ -1340,6 +1354,7 @@ renderWidgetHeader actions widget valueM subValueM expandBtnFn ctaM = div_ [clas
               "Delete widget"
   where
     wId = maybeToMonoid widget.id
+    wIdJson = scriptJson wId
     configured = ("text-iconNeutral", "bell", "Monitor configured", "opacity-0 group-hover/wgt:opacity-100 touch:opacity-50")
     menuItem_ :: Text -> [Attribute] -> Html () -> Html ()
     menuItem_ tip extraAttrs = li_ . a_ ([class_ "p-2 w-full text-left block cursor-pointer", data_ "tippy-content" tip] <> extraAttrs)
@@ -2200,8 +2215,11 @@ renderLongTextOr widget linkSubs col value
       | not (isNumericCol col), Just t <- parseTimestamp value = span_ [class_ "tabular-nums whitespace-nowrap", term "data-tippy-content" (toText $ iso8601Show t)] $ localTimeFmt_ "MMM d HH:mm:ss" t
       | code = code_ [class_ "font-mono text-xs"] $ toHtml formatted
       | otherwise = toHtml formatted
-    cell = maybe content (\template -> a_ [href_ $ tableLink template, class_ "text-textBrand hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong rounded-sm"] content) col.link
+    cell = maybe content (\template -> a_ [href_ $ safeHref $ tableLink template, class_ "text-textBrand hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong rounded-sm"] content) col.link
     tableLink = replacePlaceholders linkSubs
+    -- Column links come from stored widget JSON, which API-key holders write: only web and
+    -- same-site targets, never javascript:.
+    safeHref h = if any (`T.isPrefixOf` T.toLower (T.strip h)) ["http://", "https://", "/", "?", "#"] && not ("//" `T.isPrefixOf` T.strip h) then h else "#"
 
 
 -- | A SQL statement broken before its clauses, for reading in a tooltip. Display only: a word

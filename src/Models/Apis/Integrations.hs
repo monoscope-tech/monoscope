@@ -904,7 +904,7 @@ selectDiscord = [HI.sql|SELECT project_id, guild_id FROM apis.discord |]
 
 
 getDiscordData :: DB es => Text -> Eff es (Maybe DiscordData)
-getDiscordData guildId = Hasql.interpOne (selectDiscord <> [HI.sql|WHERE guild_id = #{guildId}|])
+getDiscordData guildId = Hasql.interpOne (selectDiscord <> [HI.sql|WHERE guild_id = #{guildId} AND EXISTS (SELECT 1 FROM projects.projects lp WHERE lp.id = apis.discord.project_id AND lp.active AND lp.deleted_at IS NULL)|])
 
 
 getDiscordDataByProjectId :: DB es => Projects.ProjectId -> Eff es (Maybe DiscordData)
@@ -926,11 +926,11 @@ getDashboardsForWhatsapp number =
   dashboardsByProjectJoin
     [HI.sql|JOIN projects.teams t ON t.project_id = d.project_id
             WHERE t.is_everyone = TRUE AND t.deleted_at IS NULL
-              AND #{number} = ANY(t.phone_numbers)|]
+              AND #{number} = ANY(t.phone_numbers) AND EXISTS (SELECT 1 FROM projects.projects lp WHERE lp.id = d.project_id AND lp.active AND lp.deleted_at IS NULL)|]
 
 
 getDashboardsForDiscord :: DB es => Text -> Eff es [(Text, Text)]
-getDashboardsForDiscord guildId = dashboardsByProjectJoin [HI.sql|JOIN apis.discord dd ON d.project_id = dd.project_id WHERE dd.guild_id = #{guildId}|]
+getDashboardsForDiscord guildId = dashboardsByProjectJoin [HI.sql|JOIN apis.discord dd ON d.project_id = dd.project_id WHERE dd.guild_id = #{guildId} AND EXISTS (SELECT 1 FROM projects.projects lp WHERE lp.id = d.project_id AND lp.active AND lp.deleted_at IS NULL)|]
 
 
 deleteSlackData :: DB es => Projects.ProjectId -> Eff es Int64

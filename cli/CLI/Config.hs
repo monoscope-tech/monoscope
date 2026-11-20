@@ -110,10 +110,15 @@ resolveConfig = do
   envProject <- Env.lookupEnv "MONOSCOPE_PROJECT"
   storedKey <- loadToken
   let merged = mergeConfigs [global, projCfg]
+      trustedUrl = fromMaybe "https://api.monoscope.tech" $ (toText <$> envApiUrl) <|> global.api_url
+      apiUrl = fromMaybe trustedUrl $ (toText <$> envApiUrl) <|> merged.api_url
   pure
     CLIConfig
-      { apiUrl = fromMaybe "https://api.monoscope.tech" $ (toText <$> envApiUrl) <|> merged.api_url
-      , credential = parseCredential <$> ((toText <$> envApiKey) <|> merged.api_key <|> storedKey)
+      { apiUrl
+      , -- A cloned repo's .monoscope.yaml can point api_url anywhere, and the stored login was
+        -- then sent there as a bearer token. The login and the global key go only to the URL
+        -- they were configured for; a key in the repo's own file goes where that file says.
+        credential = parseCredential <$> ((toText <$> envApiKey) <|> projCfg.api_key <|> (guard (apiUrl == trustedUrl) *> (global.api_key <|> storedKey)))
       , projectId = (toText <$> envProject) <|> merged.project
       }
 

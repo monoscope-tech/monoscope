@@ -220,6 +220,8 @@ queryMonitorUpsertSql qm =
                   deactivated_at=EXCLUDED.deactivated_at,
                   environment=EXCLUDED.environment,
                   service=EXCLUDED.service
+    -- Keyed on id alone, a caller authorised on one project overwrote another project's monitor.
+    WHERE monitors.query_monitors.project_id = EXCLUDED.project_id
       |]
 
 
@@ -421,7 +423,7 @@ claimDueCronMonitors :: DB es => Int -> Eff es [CronMonitor]
 claimDueCronMonitors limit =
   Hasql.interp
     ( [HI.sql| UPDATE apis.cron_monitors SET next_eval_at = now() + interval '1 minute'
-               WHERE id IN (SELECT id FROM apis.cron_monitors WHERE next_eval_at <= now() ORDER BY next_eval_at FOR UPDATE SKIP LOCKED LIMIT #{limit})
+               WHERE id IN (SELECT id FROM apis.cron_monitors cm WHERE next_eval_at <= now() AND EXISTS (SELECT 1 FROM projects.projects lp WHERE lp.id = cm.project_id AND lp.active AND lp.deleted_at IS NULL) ORDER BY next_eval_at FOR UPDATE SKIP LOCKED LIMIT #{limit})
                RETURNING |]
         <> cronCols
     )

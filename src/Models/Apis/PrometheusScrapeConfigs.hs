@@ -289,8 +289,9 @@ claimDueConfigs region limit =
   Hasql.interp
     ( [HI.sql|UPDATE apis.prometheus_scrape_configs SET last_scraped_at = now()
               WHERE id IN (
-                SELECT id FROM apis.prometheus_scrape_configs
-                WHERE enabled AND (regions = '{}' OR #{region} = ANY(regions)) AND (last_scraped_at IS NULL
+                SELECT id FROM apis.prometheus_scrape_configs psc
+                -- A deleted project's checks kept probing its URLs (with stored auth headers) and alerting.
+                WHERE enabled AND EXISTS (SELECT 1 FROM projects.projects lp WHERE lp.id = psc.project_id AND lp.active AND lp.deleted_at IS NULL) AND (regions = '{}' OR #{region} = ANY(regions)) AND (last_scraped_at IS NULL
                       OR last_scraped_at < now() - make_interval(secs => scrape_interval_seconds))
                 ORDER BY last_scraped_at ASC NULLS FIRST
                 FOR UPDATE SKIP LOCKED
