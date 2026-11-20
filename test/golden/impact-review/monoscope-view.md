@@ -12,9 +12,16 @@ The second retry sent a new key, so the provider saw two charges.
 
 [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
 
-**Also checked** · 1 match · 1 not verified
+**Also checked** · 1 match · 1 differs · 1 not verified
+⚠️ Gives up after three timeouts
 ✅ Retries a timed-out capture once · [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s)
 👀 Shows the retry count in the receipt
+
+> **Doesn't do what was asked**
+>
+> **Gives up after three timeouts**
+>
+> It retried a fourth time before giving up.
 
 #### 🟡 Merge risk: medium
 

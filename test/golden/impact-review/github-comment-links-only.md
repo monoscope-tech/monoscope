@@ -12,7 +12,14 @@ The second retry sent a new key, so the provider saw two charges.
 
 [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
 
-**Also checked** · 1 match · 1 not verified<br><img src="https://app.monoscope.tech/public/assets/proof/matches.svg" alt="Matches" width="16" height="16" align="absmiddle"> Retries a timed-out capture once · [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s)<br><img src="https://app.monoscope.tech/public/assets/proof/unverified.svg" alt="Unverified" width="16" height="16" align="absmiddle"> Shows the retry count in the receipt
+**Also checked** · 1 match · 1 differs · 1 not verified<br><img src="https://app.monoscope.tech/public/assets/proof/differs.svg" alt="Differs" width="16" height="16" align="absmiddle"> Gives up after three timeouts<br><img src="https://app.monoscope.tech/public/assets/proof/matches.svg" alt="Matches" width="16" height="16" align="absmiddle"> Retries a timed-out capture once · [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s)<br><img src="https://app.monoscope.tech/public/assets/proof/unverified.svg" alt="Unverified" width="16" height="16" align="absmiddle"> Shows the retry count in the receipt
+
+> [!WARNING]
+> **Doesn't do what was asked**
+>
+> **Gives up after three timeouts**
+>
+> It retried a fourth time before giving up.
 
 #### 🟡 Merge risk: medium
 

@@ -26,7 +26,7 @@ fi
 printf %s "$1" | base64 -d > /tmp/monoscope-proof.sh
 # `run 'curl -si …'` shows a step like a reviewer's terminal screenshot: the command, its output, its exit status.
 cat > /tmp/monoscope-proof-lib.sh <<'SH'
-run() { printf '\033[36m$ %s\033[0m\n' "$1"; eval "$1"; local status=$?; printf '\033[90mexit %s\033[0m\n' "$status"; return "$status"; }
+run() { printf '\033[36m$ %s\033[0m\n' "$1"; local status=0; eval "$1" || status=$?; printf '\033[90mexit %s\033[0m\n' "$status"; return "$status"; }
 SH
 asciinema rec --quiet --overwrite --cols 110 --rows 32 --idle-time-limit 2 \
   --command 'BASH_ENV=/tmp/monoscope-proof-lib.sh bash /tmp/monoscope-proof.sh; echo $? > /tmp/monoscope-proof.status' \

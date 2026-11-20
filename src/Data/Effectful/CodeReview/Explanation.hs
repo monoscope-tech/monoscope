@@ -17,6 +17,7 @@ import Data.Map.Strict qualified as Map
 import Data.Scientific (toRealFloat)
 import Data.Text qualified as T
 import GHC.Clock (getMonotonicTimeNSec)
+import Numeric (showFFloat)
 import Relude
 import System.Directory (canonicalizePath, createDirectoryIfMissing, doesFileExist, getFileSize, removePathForcibly, renameDirectory)
 import System.Environment (getEnvironment)
@@ -344,7 +345,7 @@ renderVideo page chapters video = renderMedia video \directory run -> do
   -- Text goes to drawtext as UTF-8 files the worker's locale need not encode; expansion=none keeps a URL's % literal.
   for_ ([("proof.title", maybe "" fst page), ("proof.url", maybe "" snd page), ("proof.nav", "←    →    ↻"), ("proof.dot", "●")] <> [("caption." <> show n, label) | (n, (_, label)) <- zip [0 :: Int ..] chapters]) \(name, text) -> writeFileBS (directory </> name) (encodeUtf8 text)
   let text = ("drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:expansion=none:" <>)
-      captions = [text $ "textfile=caption." <> show n <> ":fontcolor=white:fontsize=24:box=1:boxcolor=0x3A3A3A@0.92:boxborderw=12:x=(w-tw)/2:y=h-118:enable='between(t," <> show at <> "," <> show next <> ")'" | (n, (at, _), next) <- zip3 [0 :: Int ..] chapters (map fst (drop 1 chapters) <> [1e6])]
+      captions = [text $ "textfile=caption." <> show n <> ":fontcolor=white:fontsize=24:box=1:boxcolor=0x3A3A3A@0.92:boxborderw=12:x=(w-tw)/2:y=h-118:enable='between(t," <> fixed at <> "," <> fixed next <> ")'" | (n, (at, _), next) <- zip3 [0 :: Int ..] chapters (map fst (drop 1 chapters) <> [1e6])]
       window =
         intercalate
           ","
@@ -366,7 +367,7 @@ renderVideo page chapters video = renderMedia video \directory run -> do
       shown = previewWindow total chapters
       clock t = let n = round t :: Int in show (n `div` 60) <> ":" <> T.justifyRight 2 '0' (show (n `mod` 60))
   -- The left clock counts the whole video's time as the preview plays (drawtext expands it per frame).
-  writeFileBS (directory </> "proof.clock") $ encodeUtf8 $ "%{eif:floor((t+" <> show shown.start <> ")/60):d}:%{eif:mod(floor(t+" <> show shown.start <> ")\\,60):d:2}"
+  writeFileBS (directory </> "proof.clock") $ encodeUtf8 $ "%{eif:floor((t+" <> fixed shown.start <> ")/60):d}:%{eif:mod(floor(t+" <> fixed shown.start <> ")\\,60):d:2}"
   for_ [("proof.end", clock total), ("proof.label", "▶  Watch full video")] \(name, label) -> writeFileBS (directory </> name) (encodeUtf8 label)
   let preview (fps, width, quality) = do
         -- A player bar: the whole video's track with the preview's part bracketed in yellow; a bright
@@ -386,8 +387,8 @@ renderVideo page chapters video = renderMedia video \directory run -> do
                 , text "textfile=proof.label:fontcolor=0x111111:fontsize=17:box=1:boxcolor=white:boxborderw=8:x=w-tw-18:y=h-32"
                 ]
             bar colour = ["-f", "lavfi", "-i", "color=c=" <> colour <> ":s=" <> show span' <> "x8:r=" <> fps]
-            duration = show (shown.end - shown.start)
-        run "ffmpeg" (quiet <> ["-ss", show shown.start, "-t", duration, "-i", "proof.mp4"] <> bar "0x77772E" <> bar "0xF5F56A" <> ["-filter_complex", "[0:v]fps=" <> fps <> ",scale=" <> show width <> ":-2:flags=lanczos," <> timeline <> "[v];[1:v][2:v]overlay=x=-W+W*t/" <> duration <> ":shortest=1[fill];[v][fill]overlay=x=" <> show from <> ":y=H-27:shortest=1", "-c:v", "libwebp_anim", "-quality", quality, "-loop", "0", "-f", "webp", "proof.gif"])
+            duration = fixed (shown.end - shown.start)
+        run "ffmpeg" (quiet <> ["-ss", fixed shown.start, "-t", duration, "-i", "proof.mp4"] <> bar "0x77772E" <> bar "0xF5F56A" <> ["-filter_complex", "[0:v]fps=" <> fps <> ",scale=" <> show width <> ":-2:flags=lanczos," <> timeline <> "[v];[1:v][2:v]overlay=x=-W+W*t/" <> duration <> ":shortest=1[fill];[v][fill]overlay=x=" <> show from <> ":y=H-27:shortest=1", "-c:v", "libwebp_anim", "-quality", quality, "-loop", "0", "-f", "webp", "proof.gif"])
         (<= 4718592) <$> getFileSize (directory </> "proof.gif")
   unlessM (anyM preview [("15", 1200, "70"), ("10", 1200, "60"), ("8", 960, "50")]) $ throwIO $ userError "the preview exceeds GitHub's image size limit"
 
@@ -409,6 +410,11 @@ renderMedia input steps = do
     Right (Just media) -> Right media
     Right Nothing -> Left "Rendering the proof recording timed out"
     Left failure -> Left $ "The proof recording could not be rendered: " <> toText (displayException failure)
+
+
+-- Fixed-point, as ffmpeg's time and expression parsers need ('show' writes 0.05 as 5.0e-2).
+fixed :: IsString s => Double -> s
+fixed x = fromString $ showFFloat (Just 3) x ""
 
 
 quiet :: [String]
