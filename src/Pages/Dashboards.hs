@@ -233,19 +233,12 @@ apiDashboardData pid did tabM widgetM sinceM fromM toM allParams = do
           }
 
 
--- | Dashboard critical grid geometry. SQL-preview dependencies are loaded only
--- when a preview is requested from the widget editor.
+-- | Preload the chart runtime every widget fetches. SQL-preview dependencies are loaded
+-- only when a preview is requested from the widget editor.
 dashboardHeadContent_ :: Html ()
 dashboardHeadContent_ = do
   forM_ ["/public/assets/deps/echarts/echarts.min.js", "/public/assets/roma-echarts.js"] \path ->
     link_ [rel_ "preload", term "as" "script", href_ $ assetUrl path]
-  style_
-    """
-    .grid-stack{position:relative}
-    .grid-stack.grid-stack-preloaded:not(.grid-stack-initialized){visibility:visible}
-    .grid-stack.grid-stack-preloaded:not(.grid-stack-initialized)>.grid-stack-item{position:absolute;left:var(--grid-preload-left,0%)!important;top:var(--grid-preload-top,0rem)!important;width:var(--grid-preload-width,8.3333333333%)!important;height:var(--grid-preload-height,5rem)!important}
-    @container dashboard (max-width:400px){.grid-stack{display:flex!important;flex-direction:column;gap:.5rem;height:auto!important}.grid-stack.grid-stack-preloaded:not(.grid-stack-initialized)>.grid-stack-item{position:relative!important;left:auto!important;top:auto!important;width:100%!important}.grid-stack>.grid-stack-item:not([data-mobile-autofit]){height:180px!important}.grid-stack>.grid-stack-item[data-mobile-autofit]{height:auto!important}.nested-grid>.grid-stack-item{height:120px!important}}
-    """
 
 
 folderFromPath :: Maybe Text -> Text
@@ -549,7 +542,9 @@ dashboardPage_ pid dashId dash dashVM allParams = do
 
     script_
       [text|
-      document.addEventListener('DOMContentLoaded', () => {
+      // Runs on a full load and again when a boosted link swaps this page in; loadGridStack
+      // waits for both the DOM and GridStack, which a swap from another page never brought.
+      window.loadGridStack().then(() => {
         // Measure the experience that matters: the shell, its swap (if any), and grid
         // hydration have all completed. This is deliberately a same-origin, bounded
         // aggregate; dashboard/project ids are validated server-side but never become
@@ -749,18 +744,14 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           });
         }
 
-        // The page shell resolves this promise from the GridStack script's load
-        // event. No polling and no timer-dependent hydration ordering.
-        window.gridStackReady.then(function() {
-          initializeGrids();
-          const navigation = performance.getEntriesByType('navigation')[0];
-          requestAnimationFrame(() => requestAnimationFrame(() => reportDashboardSettled('initial', navigation?.transferSize || navigation?.encodedBodySize || 0)));
-        });
+        initializeGrids();
+        const navigation = performance.getEntriesByType('navigation')[0];
+        requestAnimationFrame(() => requestAnimationFrame(() => reportDashboardSettled('initial', navigation?.transferSize || navigation?.encodedBodySize || 0)));
 
         // Keep attributed dashboard CLS samples available to browser telemetry
         // and tests. User-initiated shifts are excluded by the web-vitals spec.
-        window.__dashboardLayoutShifts = window.__dashboardLayoutShifts || [];
-        if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('layout-shift')) {
+        if (!window.__dashboardLayoutShifts && typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('layout-shift')) {
+          window.__dashboardLayoutShifts = [];
           new PerformanceObserver(list => {
             for (const entry of list.getEntries()) {
               if (entry.hadRecentInput) continue;
@@ -791,10 +782,8 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             document.addEventListener(name, function(event) {
               const el = event.target;
               if (!(el instanceof Element) || !(el.matches('.grid-stack') || el.querySelector('.grid-stack'))) return;
-              window.gridStackReady.then(function() {
-                window.initializeGrids();
-                window.interpolateVarTemplates();
-              });
+              window.initializeGrids();
+              window.interpolateVarTemplates();
             });
           });
           document.addEventListener('htmx:before:request', function(event) {
@@ -808,10 +797,8 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             if (!(target instanceof Element) || target.id !== 'dashboard-tabs-content') return;
             const resource = performance.getEntriesByType('resource').filter(entry => entry.name.includes('/dashboards/') && entry.name.includes('/tab/')).at(-1);
             const bytes = resource?.transferSize || resource?.encodedBodySize || 0;
-            window.gridStackReady.then(() => {
-              window.initializeGrids();
-              requestAnimationFrame(() => requestAnimationFrame(() => reportDashboardSettled('tab', bytes)));
-            });
+            window.initializeGrids();
+            requestAnimationFrame(() => requestAnimationFrame(() => reportDashboardSettled('tab', bytes)));
           });
         }
       });
@@ -1455,7 +1442,6 @@ dashboardBWConf bw pid dashId title tabM currentRange readOnly freeTierStatus =
       pageTitleSwitcherUrl = Just $ urls.dashboardSwitcherGet pid dashId
     , freeTierStatus = freeTierStatus
     , headContent = Just dashboardHeadContent_
-    , needsGridStack = True
     , serviceOptions = V.empty
     , pageActions = Just $ div_ [class_ "flex gap-3 max-md:gap-1 items-center"] do
         TimePicker.liveDataControls_ Nothing currentRange Nothing TimePicker.RefreshOnly

@@ -407,3 +407,17 @@ test.describe("dashboard gridstack", () => {
     await restore(page, before);
   });
 });
+
+// Regression: Home → sidebar flyout → dashboard rendered an uninitialised, overlapping grid
+// until a hard refresh. Boosted nav swaps only #main-content, so GridStack (a head asset on
+// dashboard pages only) never arrived, and the page's DOMContentLoaded-gated init never ran.
+test("a dashboard reached by boosted nav from Home hydrates its grid", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(`/p/${DEMO_PROJECT}/`);
+  await page.locator(`#main-sidenav .nav-flyout a[href^="/p/${DEMO_PROJECT}/dashboards/"]`).first().evaluate((a: HTMLElement) => a.click());
+  await page.waitForURL(/\/dashboards\/[0-9a-f-]{36}/i);
+  await page.waitForSelector(`${ROOT_GRID}.grid-stack-initialized`, { timeout: 15000 });
+  expect(await page.locator(ROOT_ITEMS).first().evaluate((el: any) => Boolean(el.gridstackNode))).toBe(true);
+  expect(errors).toEqual([]);
+});
