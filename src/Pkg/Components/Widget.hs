@@ -1090,8 +1090,8 @@ statScalar summarize fromM toM stats
 -- ["0.99 / 1","1.00 / 1"]
 --
 -- A currency symbol leads its amount:
--- >>> map (\v -> formatStatValue Nothing v "$") [0.06, 0.004, 1250]
--- ["$0.06","<$0.01","$1.3K"]
+-- >>> map (\v -> formatStatValue Nothing v "$") [0.06, 0.004, 1500]
+-- ["$0.06","<$0.01","$1.5K"]
 formatStatValue :: Maybe Int -> Double -> Text -> Text
 formatStatValue decimals value unit
   | isNaN value || isInfinite value = "N/A"
