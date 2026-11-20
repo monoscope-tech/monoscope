@@ -635,12 +635,18 @@ newtype RefreshingDeferred a = RefreshingDeferred (Deferred a)
 
 instance ToHtml a => ToHtml (RefreshingDeferred a) where
   toHtml (RefreshingDeferred (DeferredBody body)) = toHtml body
-  toHtml (RefreshingDeferred (DeferredShell cid url skeleton)) = toHtmlRaw (div_ ([id_ cid, class_ "w-full", data_ "deferred-shell" ""] <> timeRefreshAttrs cid url "load, update-query from:window") skeleton :: Html ())
+  toHtml (RefreshingDeferred (DeferredShell cid url skeleton)) = toHtmlRaw (div_ ([id_ cid, class_ "w-full", data_ "deferred-shell" ""] <> timeRefreshAttrs cid url ("load, " <> timeRefreshTrigger)) skeleton :: Html ())
   toHtmlRaw = toHtml
 
 
 timeRefreshListener_ :: Text -> Text -> Html ()
-timeRefreshListener_ cid url = div_ ([class_ "hidden", term "_" [text|on htmx:after:settle from #${cid} send input to <input[type=text]/> in #${cid}|]] <> timeRefreshAttrs cid url "update-query from:window") mempty
+timeRefreshListener_ cid url = div_ ([class_ "hidden", term "_" [text|on htmx:after:settle from #${cid} send input to <input[type=text]/> in #${cid}|]] <> timeRefreshAttrs cid url timeRefreshTrigger) mempty
+
+
+-- | A picker change replaces an in-flight body; the auto-refresh tick leaves it to finish, or a body
+-- slower than the tick would be cancelled and restarted forever.
+timeRefreshTrigger :: Text
+timeRefreshTrigger = "update-query[event.detail?.source != 'auto-refresh' || !this.classList.contains('htmx-request')] from:window"
 
 
 timeRefreshAttrs :: Text -> Text -> Text -> [Attribute]

@@ -5,6 +5,7 @@ module Opentelemetry.GenAISpec (spec) where
 import Control.Lens ((^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, values, _Number, _String)
+import Data.Effectful.Hasql (setTestTime)
 import Data.Effectful.LLM qualified as ELLM
 import Data.List (lookup)
 import Data.Text qualified as T
@@ -24,7 +25,6 @@ import Pages.Telemetry qualified as TelemetryPage
 import Pkg.AI qualified as AI
 import Pkg.Components.Table (Table (..))
 import Pkg.GenAI qualified as GenAI
-import Data.Effectful.Hasql (setTestTime)
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Logs.V1.Logs qualified as PL
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -124,6 +124,22 @@ spec = around withTestResources do
       setTestTime tr.trTestClock (addUTCTime 60 now)
       LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody refreshed))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing (Just "") (Just "") (Just "") (Just "1")
       sort (map (.key) (toList refreshed.rows)) `shouldBe` ["sess-a", "sess-b", "sess-c"]
+
+    it "aggregates a settled hour once and merges a trace across it and the live hour" \tr -> do
+      pid <- createTestProject tr "LLM hours"
+      apiKey <- createTestAPIKey tr pid "hours"
+      now <- getCurrentTime
+      setTestTime tr.trTestClock now
+      let chat n ago = ingestSpanLinked tr apiKey "8c4e" ("c" <> show n) Nothing "chat gpt-4o" [("gen_ai.operation.name", "chat"), ("gen_ai.request.model", "gpt-4o"), ("gen_ai.conversation.id", "conv-h"), ("gen_ai.usage.input_tokens", "10")] (addUTCTime (negate ago) now)
+          calls = do
+            LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody t))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "24H") (Just "1")
+            pure [(c.key, c.llmCalls, length c.units) | c <- toList t.rows]
+      chat (1 :: Int) 7200 >> chat 2 60
+      calls `shouldReturn` [("conv-h", 2, 1)]
+      dbQuery @_ @(Only Int) tr [sql| SELECT count(*)::int FROM apis.llm_unit_hours WHERE project_id = ? AND jsonb_array_length(units) > 0 |] (Only pid) `shouldReturn` [Only 1]
+      -- The settled hour is read from the store, not rescanned.
+      chat 3 7199
+      calls `shouldReturn` [("conv-h", 2, 1)]
 
     it "prices Pi's durable sessions from pi-otel: one conversation per routine run, input counted with its cache" \tr -> do
       pid <- createTestProject tr "Pi"

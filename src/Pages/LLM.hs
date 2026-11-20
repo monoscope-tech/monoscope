@@ -59,7 +59,7 @@ import Lucid.Hyperscript (__)
 import Models.Ids qualified as Projects
 import Models.Projects.DashboardTemplates qualified as DashboardTemplates
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Telemetry.Telemetry qualified as Telemetry
+import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), llmCallsUrl, mkPageCtx, navTabAttrs)
 import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), FieldCfg (..), FieldSize (..), RefreshingDeferred (..), callout_, formField_, localTimeFmt_, primaryButton_, tableSkeleton_, tonePill_, withDeferredBody)
 import Pages.Containers (mkWindow, windowed)
@@ -130,9 +130,10 @@ data Conversation = Conversation
   deriving stock (Generic, Show)
 
 
--- | One trace's GenAI spans aggregated in the store; a trace-less record (a log) is its own unit.
+-- | One trace's GenAI spans within an hour, aggregated in the store; a trace-less record (a log) is its own unit.
 data Unit = Unit
-  { unit :: Text
+  { hour :: UTCTime
+  , unit :: Text
   , conversation :: Maybe Text
   , agent :: Maybe Text
   , model :: Maybe Text
@@ -157,7 +158,41 @@ data Unit = Unit
   , firstTool :: Maybe Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
+
+
+-- | One trace's hours as one unit. Repeats are summed per hour, so a tool call repeated across an
+-- hour boundary goes uncounted.
+instance Semigroup Unit where
+  a <> b =
+    Unit
+      { hour = min a.hour b.hour
+      , unit = a.unit
+      , conversation = max a.conversation b.conversation
+      , agent = max a.agent b.agent
+      , model = max a.model b.model
+      , user = max a.user b.user
+      , service = max a.service b.service
+      , started = min a.started b.started
+      , lastSeen = max a.lastSeen b.lastSeen
+      , endUs = max a.endUs b.endUs
+      , llmCalls = a.llmCalls + b.llmCalls
+      , toolCalls = a.toolCalls + b.toolCalls
+      , agentRuns = a.agentRuns + b.agentRuns
+      , tokens = a.tokens + b.tokens
+      , cost = both (+) a.cost b.cost
+      , errors = a.errors + b.errors
+      , toolErrors = a.toolErrors + b.toolErrors
+      , modelErrors = a.modelErrors + b.modelErrors
+      , truncated = a.truncated + b.truncated
+      , filtered = a.filtered + b.filtered
+      , repeats = a.repeats + b.repeats
+      , maxInput = max a.maxInput b.maxInput
+      , firstPreview = both min a.firstPreview b.firstPreview
+      , firstTool = both min a.firstTool b.firstTool
+      }
+    where
+      both f x y = liftA2 f x y <|> x <|> y
 
 
 -- | A conversation with no captured prompt is named after its first tool call, else its agent.
@@ -183,7 +218,7 @@ toolOpening raw =
 --
 -- >>> import Relude.Unsafe qualified as Unsafe
 -- >>> let t = Unsafe.read @UTCTime "2026-01-01 00:00:00 UTC"
--- >>> let u name conv runs = Unit name conv Nothing (Just "gpt-4o") Nothing Nothing t t 0 1 0 runs 15 (Just 0.01) 0 0 0 0 0 0 Nothing (Just "1767225600|hi") Nothing
+-- >>> let u name conv runs = Unit t name conv Nothing (Just "gpt-4o") Nothing Nothing t t 0 1 0 runs 15 (Just 0.01) 0 0 0 0 0 0 Nothing (Just "1767225600|hi") Nothing
 -- >>> map (\c -> (c.key, c.turns, c.llmCalls, c.title)) $ conversationsOf [u "t1" (Just "conv") 1, u "t2" (Just "conv") 0, u "t3" Nothing 0, u "t4" Nothing 1]
 -- [("conv",2,2,Just "hi"),("t4",1,1,Just "hi")]
 conversationsOf :: [Unit] -> [Conversation]
@@ -224,37 +259,36 @@ conversationsOf units = sortOn (Down . (.lastSeen)) $ mapMaybe conversation $ M.
       pure $ used >= 0.8 * fromIntegral window
 
 
--- | The window's GenAI spans aggregated per trace in the store: one bounded scan of the
--- ingest-stamped @kind=ai@ summary element, and every total covers the whole window.
-selectUnits :: (DB es, Labeled "timefusion" Hasql :> es, Reader AuthContext :> es) => Projects.ProjectId -> TimePicker.TimeWindow -> HI.Sql -> Eff es [Unit]
-selectUnits pid window scope = do
+-- | GenAI spans in @[from, to)@ aggregated per trace and hour in the store. Only the promoted gen_ai
+-- columns and three @attributes@ paths are read: the @summary@ array and the rest of the blob cost
+-- seconds to decode across a day (all of a project's rows are scanned to find the GenAI ones).
+-- Rows ingested before the columns were promoted (2026-11-16) have none and are not listed.
+selectUnits :: (DB es, Labeled "timefusion" Hasql :> es, Reader AuthContext :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [Unit]
+selectUnits pid from to = do
   tf <- useTfReads
+  -- OR'd rather than LIKE ANY, which TimeFusion plans only over a literal array.
+  let finished a = "(" <> mconcat (intersperse " OR " [[HI.sql|finish LIKE #{"%\"" <> r <> "\"%"}|] | r <- GenAI.abnormalReasons a]) <> ")"
   Hasql.withHasqlTimefusion tf
     $ Hasql.interp
-    $ [HI.sql|
+      [HI.sql|
       WITH spans AS (
-        SELECT CASE WHEN COALESCE(context___trace_id, '') = '' THEN id::text ELSE context___trace_id END AS unit,
+        SELECT date_trunc('hour', timestamp) AS hour, CASE WHEN COALESCE(context___trace_id, '') = '' THEN id::text ELSE context___trace_id END AS unit,
           timestamp, COALESCE(duration, 0) AS dur, COALESCE(status_code = 'ERROR', false) AS failed,
-          attributes -> 'gen_ai' -> 'operation' ->> 'name' AS op,
-          COALESCE(attributes -> 'gen_ai' -> 'operation' ->> 'name' = ANY(#{V.fromList GenAI.inferenceOps}), false) AS model_op,
-          COALESCE(attributes -> 'gen_ai' -> 'operation' ->> 'name' = ANY(#{V.fromList GenAI.agentRunOps}), false) AS agent_op,
-          attributes -> 'gen_ai' -> 'conversation' ->> 'id' AS conv,
-          attributes -> 'gen_ai' -> 'agent' ->> 'name' AS agent,
-          COALESCE(attributes -> 'gen_ai' -> 'response' ->> 'model', attributes -> 'gen_ai' -> 'request' ->> 'model') AS model,
-          (attributes -> 'gen_ai' -> 'usage' ->> 'input_tokens')::float8 AS input_tokens,
-          (attributes -> 'gen_ai' -> 'usage' ->> 'output_tokens')::float8 AS output_tokens,
-          (attributes -> 'gen_ai' -> 'usage' ->> 'cost')::float8 AS cost,
-          attributes -> 'gen_ai' -> 'tool' ->> 'name' AS tool,
+          attributes___gen_ai___operation___name AS op,
+          attributes___gen_ai___operation___name = ANY(#{V.fromList GenAI.inferenceOps}) AS model_op,
+          attributes___gen_ai___operation___name = ANY(#{V.fromList GenAI.agentRunOps}) AS agent_op,
+          attributes___gen_ai___conversation___id AS conv, attributes___gen_ai___agent___name AS agent, attributes___gen_ai___request___model AS model,
+          CAST(attributes___gen_ai___usage___input_tokens AS DOUBLE PRECISION) AS input_tokens,
+          CAST(attributes___gen_ai___usage___output_tokens AS DOUBLE PRECISION) AS output_tokens,
+          attributes___gen_ai___usage___cost AS cost, attributes___gen_ai___tool___name AS tool,
           left(attributes -> 'gen_ai' -> 'tool' -> 'call' ->> 'arguments', 300) AS tool_args,
           attributes -> 'gen_ai' -> 'input' ->> 'preview' AS preview,
-          summary AS tags, attributes___user___id AS usr, resource___service___name AS svc
+          CAST(attributes -> 'gen_ai' -> 'response' -> 'finish_reasons' AS TEXT) AS finish,
+          attributes___user___id AS usr, resource___service___name AS svc
         FROM otel_logs_and_spans
-        WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{window.fromTime} AND #{window.toTime}
-          AND #{Telemetry.genAIMarker} = ANY(summary) |]
-    <> scope
-    <> [HI.sql|
+        WHERE project_id = #{pid.toText} AND timestamp >= #{from} AND timestamp < #{to} AND attributes___gen_ai___operation___name IS NOT NULL
       )
-      SELECT unit, max(conv) AS conv, max(agent) AS agent, max(model) AS model, max(usr) AS usr, max(svc) AS svc,
+      SELECT hour, unit, max(conv) AS conv, max(agent) AS agent, max(model) AS model, max(usr) AS usr, max(svc) AS svc,
         min(timestamp) AS started, max(timestamp) AS last_ts, max(CAST(EXTRACT(EPOCH FROM timestamp) * 1000000 AS BIGINT) + dur / 1000) AS end_us,
         sum(CASE WHEN model_op THEN 1 ELSE 0 END) AS llm_calls,
         sum(CASE WHEN op = 'execute_tool' THEN 1 ELSE 0 END) AS tool_calls,
@@ -264,13 +298,13 @@ selectUnits pid window scope = do
         sum(CASE WHEN failed THEN 1 ELSE 0 END) AS errors,
         sum(CASE WHEN failed AND op = 'execute_tool' THEN 1 ELSE 0 END) AS tool_errors,
         sum(CASE WHEN failed AND model_op THEN 1 ELSE 0 END) AS model_errors,
-        sum(CASE WHEN #{Telemetry.genAIFinishMarker GenAI.Truncated} = ANY(tags) THEN 1 ELSE 0 END) AS truncated,
-        sum(CASE WHEN #{Telemetry.genAIFinishMarker GenAI.Filtered} = ANY(tags) THEN 1 ELSE 0 END) AS filtered,
+        sum(CASE WHEN ^{finished GenAI.Truncated} THEN 1 ELSE 0 END) AS truncated,
+        sum(CASE WHEN ^{finished GenAI.Filtered} THEN 1 ELSE 0 END) AS filtered,
         sum(CASE WHEN op = 'execute_tool' THEN 1 ELSE 0 END) - count(DISTINCT CASE WHEN op = 'execute_tool' THEN COALESCE(tool, '') || COALESCE(tool_args, '') END) AS repeats,
         max(input_tokens) AS max_input,
         min(CASE WHEN preview IS NOT NULL THEN CAST(CAST(EXTRACT(EPOCH FROM timestamp) AS BIGINT) AS TEXT) || '|' || preview END) AS first_preview,
         min(CASE WHEN op = 'execute_tool' AND tool IS NOT NULL THEN CAST(CAST(EXTRACT(EPOCH FROM timestamp) AS BIGINT) AS TEXT) || '|' || tool || chr(9) || COALESCE(tool_args, '') END) AS first_tool
-      FROM spans GROUP BY unit ORDER BY last_ts DESC LIMIT #{unitCap}
+      FROM spans GROUP BY hour, unit ORDER BY last_ts DESC LIMIT #{unitCap}
     |]
 
 
@@ -278,46 +312,59 @@ unitCap :: Int64
 unitCap = 10000
 
 
+-- | The window's units, one per trace. Each settled hour (closed 10 minutes ago, so late spans have
+-- landed) is aggregated once into @apis.llm_unit_hours@; only the window's unsettled edges are read
+-- from the store per request, so a day costs about what its last hour does.
+windowUnits :: (DB es, Labeled "timefusion" Hasql :> es, Reader AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> TimePicker.TimeWindow -> Eff es [Unit]
+windowUnits pid window = do
+  now <- Time.currentTime
+  let ceilHour t = posixSecondsToUTCTime $ fromIntegral (3600 * ceiling (utcTimeToPOSIXSeconds t / 3600) :: Int64)
+      settled = takeWhile (\h -> addUTCTime 3600 h <= window.toTime && addUTCTime 4200 h <= now) $ iterate (addUTCTime 3600) (ceilHour window.fromTime)
+  cached <- M.fromList . map (\(h, HI.AsJsonb us) -> (h, us)) <$> bool (Hasql.interp [HI.sql| SELECT hour, units FROM apis.llm_unit_hours WHERE project_id = #{pid} AND hour = ANY(#{V.fromList settled}) AND computed_at >= hour + interval '70 minutes' |]) (pure []) (null settled)
+  fresh <- case nonEmpty (filter (`M.notMember` cached) settled) of
+    Nothing -> pure M.empty
+    Just missing -> do
+      let (lo, hi) = (F1.minimum missing, addUTCTime 3600 $ F1.maximum missing)
+      -- An hour with no GenAI spans is stored empty, so it is not scanned again.
+      computed <- M.unionWith (<>) (M.fromList [(h, []) | h <- takeWhile (< hi) (iterate (addUTCTime 3600) lo)]) . M.fromListWith (<>) . map (\u -> (u.hour, [u])) <$> selectUnits pid lo hi
+      Hasql.interpExecute_
+        [HI.sql| INSERT INTO apis.llm_unit_hours (project_id, hour, units, computed_at)
+          SELECT #{pid}, h, u, #{now} FROM unnest(#{V.fromList $ M.keys computed}::timestamptz[], #{V.fromList $ map AE.toJSON $ M.elems computed}::jsonb[]) AS v(h, u)
+          ON CONFLICT (project_id, hour) DO UPDATE SET units = EXCLUDED.units, computed_at = EXCLUDED.computed_at |]
+      pure computed
+  edges <- case (settled, viaNonEmpty last settled) of
+    (h0 : _, Just hN) -> (<>) <$> live window.fromTime h0 <*> live (addUTCTime 3600 hN) window.toTime
+    _ -> live window.fromTime window.toTime
+  pure $ M.elems $ M.fromListWith (flip (<>)) [(u.unit, u) | u <- concat (M.elems cached <> M.elems fresh) <> edges]
+  where
+    live from to = bool (selectUnits pid from to) (pure []) (from >= to)
+
+
 -- | A conversation's spans with their attributes, oldest first, for the transcript and timeline.
-selectCalls :: (DB es, Labeled "timefusion" Hasql :> es, Reader AuthContext :> es) => Projects.ProjectId -> TimePicker.TimeWindow -> Int64 -> HI.Sql -> Eff es [Call]
-selectCalls pid window limit scope = do
+selectCalls :: (DB es, Labeled "timefusion" Hasql :> es, Reader AuthContext :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Int64 -> [Text] -> Eff es [Call]
+selectCalls pid from to limit units = do
   tf <- useTfReads
   Hasql.withHasqlTimefusion tf
     $ Hasql.interp
-    $ [HI.sql|
+      [HI.sql|
       SELECT id::text, COALESCE(context___trace_id, ''), timestamp, COALESCE(duration, 0), COALESCE(status_code = 'ERROR', false), COALESCE(name, '') AS span_name, resource___service___name,
-        attributes -> 'gen_ai' -> 'operation' ->> 'name' AS operation,
-        attributes -> 'gen_ai' -> 'conversation' ->> 'id' AS conversation,
-        attributes -> 'gen_ai' -> 'agent' ->> 'name' AS agent,
-        COALESCE(attributes -> 'gen_ai' -> 'response' ->> 'model', attributes -> 'gen_ai' -> 'request' ->> 'model') AS model,
-        (attributes -> 'gen_ai' -> 'usage' ->> 'input_tokens')::float8 AS input_tokens,
-        (attributes -> 'gen_ai' -> 'usage' ->> 'output_tokens')::float8 AS output_tokens,
-        (attributes -> 'gen_ai' -> 'usage' ->> 'cost')::float8 AS cost,
-        attributes -> 'gen_ai' -> 'tool' ->> 'name' AS tool,
+        attributes___gen_ai___operation___name AS operation,
+        attributes___gen_ai___conversation___id AS conversation,
+        attributes___gen_ai___agent___name AS agent,
+        COALESCE(attributes -> 'gen_ai' -> 'response' ->> 'model', attributes___gen_ai___request___model) AS model,
+        CAST(attributes___gen_ai___usage___input_tokens AS DOUBLE PRECISION) AS input_tokens,
+        CAST(attributes___gen_ai___usage___output_tokens AS DOUBLE PRECISION) AS output_tokens,
+        attributes___gen_ai___usage___cost AS cost,
+        attributes___gen_ai___tool___name AS tool,
         left(attributes -> 'gen_ai' -> 'tool' -> 'call' ->> 'arguments', 300) AS tool_args,
         attributes -> 'gen_ai' -> 'input' ->> 'preview' AS preview,
         attributes -> 'gen_ai' -> 'response' -> 'finish_reasons' AS finish,
         attributes___user___id, COALESCE(context___span_id, '') AS span_id, NULLIF(parent_id, '') AS parent_span_id,
         (attributes -> 'gen_ai' -> 'usage' -> 'cache_read' ->> 'input_tokens')::float8 AS cache_read, attributes
       FROM otel_logs_and_spans
-      WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{window.fromTime} AND #{window.toTime}
-        AND #{Telemetry.genAIMarker} = ANY(summary) |]
-    <> scope
-    <> [HI.sql| ORDER BY timestamp ASC LIMIT #{limit}|]
-
-
--- | One conversation's spans: those naming its id, the trace it is keyed by, and traces that name it.
-conversationScope :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> HI.Sql
-conversationScope pid window key =
-  [HI.sql| AND (context___trace_id = #{key} OR attributes -> 'gen_ai' -> 'conversation' ->> 'id' = #{key} OR context___trace_id IN (
-    SELECT context___trace_id FROM otel_logs_and_spans
-    WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{window.fromTime} AND #{window.toTime} AND context___trace_id <> ''
-      AND #{Telemetry.genAIMarker} = ANY(summary) AND attributes -> 'gen_ai' -> 'conversation' ->> 'id' = #{key})) |]
-
-
--- | The spans of these units (trace ids, or a trace-less record's own id): what 'Unit' groups by.
-unitsScope :: [Text] -> HI.Sql
-unitsScope units = [HI.sql| AND (CASE WHEN COALESCE(context___trace_id, '') = '' THEN id::text ELSE context___trace_id END) = ANY(#{V.fromList units}) |]
+      WHERE project_id = #{pid.toText} AND timestamp >= #{from} AND timestamp <= #{to} AND attributes___gen_ai___operation___name IS NOT NULL
+        AND (CASE WHEN COALESCE(context___trace_id, '') = '' THEN id::text ELSE context___trace_id END) = ANY(#{V.fromList units})
+      ORDER BY timestamp ASC LIMIT #{limit} |]
 
 
 -- | Appends each conversation's judged plain-language signals to its built-in flags.
@@ -388,7 +435,17 @@ instance ToHtml LLMBody where
 
 
 newtype LLMGet = LLMPage (PageCtx (Deferred LLMBody))
-  deriving (ToHtml) via (PageCtx (RefreshingDeferred LLMBody))
+
+
+-- | The overview widgets sit outside the deferred container, so they fetch while the list loads.
+instance ToHtml LLMGet where
+  toHtml (LLMPage (PageCtx bw body)) = toHtml $ PageCtx bw $ whenJust bw.currProject (overview_ . (.id)) >> toHtml (RefreshingDeferred body)
+  toHtmlRaw = toHtml
+
+
+-- | The LLM dashboard template's opening widgets: one definition serves this page and the dashboard.
+overview_ :: Projects.ProjectId -> Html ()
+overview_ pid = div_ [class_ "px-4 pt-3"] $ Widget.embeddedWidgets_ pid $ take 3 $ DashboardTemplates.templateTab "llm-observability.yaml" "Overview" []
 
 
 llmGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LLMGet)
@@ -401,12 +458,12 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
       url = link view agentM modelM signalM topicM (Just "1")
       want m xs = maybe True (`elem` xs) m
   body <- withDeferredBody deferredM "llmContainer" url (tableSkeleton_ 8) do
-    let conversationsIn = selectUnits pid window [HI.sql||] >>= \units -> (,bool "" (" (newest " <> show unitCap <> " traces)") (length units >= fromIntegral unitCap)) <$> withJudged pid (conversationsOf units)
+    let conversationsIn = windowUnits pid window >>= \units -> (,bool "" (" (newest " <> show unitCap <> " traces)") (length units >= fromIntegral unitCap)) <$> withJudged pid (conversationsOf units)
         reset = link view Nothing Nothing Nothing Nothing Nothing
         zero = ZeroState{icon = "sparkles", title = "No LLM or agent telemetry yet", description = "Send OpenTelemetry GenAI spans from any SDK or framework — OpenLLMetry, OpenInference, Vercel AI SDK, Pydantic AI, LangChain, the OpenAI Agents SDK, Claude Code — and conversations, cost and tool calls appear here.", action = ESLink "https://monoscopehq.com/docs/sdks/llm-observability/" "Instrument your agent"}
         table, base :: Table a
         table = inventoryTable "llm" url
-        base = table{features = table.features{header = Just overview, zeroState = Just zero, searchPlaceholder = Just $ "Search " <> viewParam view}}
+        base = table{features = table.features{zeroState = Just zero, searchPlaceholder = Just $ "Search " <> viewParam view}}
     case view of
       ConversationsView -> do
         (conversations, capped) <- conversationsIn
@@ -539,10 +596,6 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
       , ("assistant", "Leaked instructions or data", "The assistant reveals its system prompt, internal instructions, credentials, or data belonging to another user.")
       ]
 
-    overview :: Html ()
-    -- The LLM dashboard template's opening widgets: one definition serves this page and the dashboard.
-    overview = div_ [class_ "pt-3"] $ Widget.embeddedWidgets_ pid $ take 3 $ DashboardTemplates.templateTab "llm-observability.yaml" "Overview" []
-
     conversationColumns :: [Column Conversation]
     conversationColumns =
       [ col "Conversation" titleCell & fillCol
@@ -607,8 +660,8 @@ conversationGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Ma
 conversationGetH pid key fromP toP sinceP = do
   (_, _, bw) <- mkPageCtx pid
   window <- llmWindow fromP toP sinceP
-  summary <- viaNonEmpty head <$> (withJudged pid . conversationsOf =<< selectUnits pid window (conversationScope pid window key))
-  steps <- maybe (pure []) (\c -> selectCalls pid window 2000 (unitsScope c.units)) summary
+  summary <- viaNonEmpty head <$> (withJudged pid . filter ((== key) . (.key)) . conversationsOf =<< windowUnits pid window)
+  steps <- maybe (pure []) (\c -> selectCalls pid c.started c.lastSeen 2000 c.units) summary
   addRespHeaders
     $ ConversationPage
     $ PageCtx
@@ -872,14 +925,15 @@ parseVerdicts = bimap toText (Drain.answeredOnce (.key)) . AE.eitherDecodeStrict
 
 
 -- | Judges the day's conversations each signal has not judged yet (at most 20 per signal per run):
--- one window scan and one span fetch for the project, then one model call per signal.
+-- one window read and one span fetch for the project, then one model call per signal.
 evaluateSignals :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Reader AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> Eff es ()
 evaluateSignals pid = do
+  window <- llmWindow Nothing Nothing Nothing
+  -- Run hourly, this also aggregates the day's newly settled hours before anyone opens the pages.
+  convs <- conversationsOf <$> windowUnits pid window
   signals <- selectSignals pid
   unless (null signals) do
     ctx <- ask @AuthContext
-    window <- llmWindow Nothing Nothing Nothing
-    convs <- conversationsOf <$> selectUnits pid window [HI.sql||]
     judged <-
       fromList
         <$> Hasql.interp @[(UUIDId "llm_signal", Text)]
@@ -888,7 +942,7 @@ evaluateSignals pid = do
     let pending :: LLMSignal -> [Conversation]
         pending sig = take 20 [c | c <- convs, not $ (sig.id, c.key) `S.member` judged]
         wanted = ordNubOn (.key) $ concatMap pending signals
-    calls <- if null wanted then pure [] else selectCalls pid window 5000 (unitsScope $ concatMap (.units) wanted)
+    calls <- maybe (pure []) (\ws -> selectCalls pid (F1.minimum $ fmap (.started) ws) (F1.maximum $ fmap (.lastSeen) ws) 5000 (concatMap (.units) ws)) (nonEmpty wanted)
     let byUnit = M.fromListWith (flip (<>)) [(bool c.traceId c.id (T.null c.traceId), [c]) | c <- calls]
         texts = M.fromList [(c.key, conversationText c.title $ sortOn (.timestamp) $ concatMap (\u -> M.findWithDefault [] u byUnit) c.units) | c <- wanted]
     forM_ signals \sig -> whenNotNull (pending sig) \(toList -> todo) -> do
