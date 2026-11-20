@@ -39,6 +39,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
 import Data.Foldable1 qualified as F1
 import Data.HashSet qualified as HS
+import Data.List.Extra (chunksOf)
 import Data.Map.Strict qualified as M
 import Data.Set qualified as S
 import Data.Text qualified as T
@@ -314,29 +315,33 @@ unitCap = 10000
 -- | The window's units, one per trace. Each settled hour (closed 10 minutes ago, so late spans have
 -- landed) is aggregated once into @apis.llm_unit_hours@; only the window's unsettled edges are read
 -- from the store per request, so a day costs about what its last hour does.
-windowUnits :: (DB es, Labeled "timefusion" Hasql :> es, Reader AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> TimePicker.TimeWindow -> Eff es [Unit]
+windowUnits :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Reader AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> TimePicker.TimeWindow -> Eff es [Unit]
 windowUnits pid window = do
   now <- Time.currentTime
   let ceilHour t = posixSecondsToUTCTime $ fromIntegral (3600 * ceiling (utcTimeToPOSIXSeconds t / 3600) :: Int64)
       settled = takeWhile (\h -> addUTCTime 3600 h <= window.toTime && addUTCTime 4200 h <= now) $ iterate (addUTCTime 3600) (ceilHour window.fromTime)
   cached <- M.fromList . map (\(h, HI.AsJsonb us) -> (h, us)) <$> bool (Hasql.interp [HI.sql| SELECT hour, units FROM apis.llm_unit_hours WHERE project_id = #{pid} AND hour = ANY(#{V.fromList settled}) AND computed_at >= hour + interval '70 minutes' |]) (pure []) (null settled)
-  fresh <- case nonEmpty (filter (`M.notMember` cached) settled) of
-    Nothing -> pure M.empty
-    Just missing -> do
-      let (lo, hi) = (F1.minimum missing, addUTCTime 3600 $ F1.maximum missing)
-      -- An hour with no GenAI spans is stored empty, so it is not scanned again.
-      computed <- M.unionWith (<>) (M.fromList [(h, []) | h <- takeWhile (< hi) (iterate (addUTCTime 3600) lo)]) . M.fromListWith (<>) . map (\u -> (u.hour, [u])) <$> selectUnits pid lo hi
-      Hasql.interpExecute_
-        [HI.sql| INSERT INTO apis.llm_unit_hours (project_id, hour, units, computed_at)
-          SELECT #{pid}, h, u, #{now} FROM unnest(#{V.fromList $ M.keys computed}::timestamptz[], #{V.fromList $ map AE.toJSON $ M.elems computed}::jsonb[]) AS v(h, u)
-          ON CONFLICT (project_id, hour) DO UPDATE SET units = EXCLUDED.units, computed_at = EXCLUDED.computed_at |]
-      pure computed
+  -- A day per query, persisted as it lands, so a cold week makes progress even if the page gives up.
+  fresh <- M.unions <$> traverse (fill now) (mapMaybe nonEmpty $ chunksOf 24 $ filter (`M.notMember` cached) settled)
   edges <- case (settled, viaNonEmpty last settled) of
     (h0 : _, Just hN) -> (<>) <$> live window.fromTime h0 <*> live (addUTCTime 3600 hN) window.toTime
     _ -> live window.fromTime window.toTime
   pure $ M.elems $ M.fromListWith (flip (<>)) [(u.unit, u) | u <- concat (M.elems cached <> M.elems fresh) <> edges]
   where
     live from to = bool (selectUnits pid from to) (pure []) (from >= to)
+    fill now hours = do
+      units <- selectUnits pid (F1.minimum hours) (addUTCTime 3600 $ F1.maximum hours)
+      -- The range can span hours already stored; an hour with no GenAI spans is stored empty.
+      let computed = M.fromListWith (<>) $ [(h, []) | h <- toList hours] <> [(u.hour, [u]) | u <- units, u.hour `elem` hours]
+          -- Newest first, so at the cap only the oldest hour returned (and those before it) may be incomplete.
+          oldest = guard (length units >= fromIntegral unitCap) *> viaNonEmpty F1.minimum (map (.hour) units)
+          complete = maybe computed (\o -> M.filterWithKey (\h _ -> h > o) computed) oldest
+      whenJust oldest \o -> Log.logAttention "LLM hour fill hit the unit cap; older hours are left unstored" (AE.object ["project_id" AE..= pid, "oldest_complete_after" AE..= o])
+      Hasql.interpExecute_
+        [HI.sql| INSERT INTO apis.llm_unit_hours (project_id, hour, units, computed_at)
+          SELECT #{pid}, h, u, #{now} FROM unnest(#{V.fromList $ M.keys complete}::timestamptz[], #{V.fromList $ map AE.toJSON $ M.elems complete}::jsonb[]) AS v(h, u)
+          ON CONFLICT (project_id, hour) DO UPDATE SET units = EXCLUDED.units, computed_at = EXCLUDED.computed_at |]
+      pure computed
 
 
 -- | A conversation's spans with their attributes, oldest first, for the transcript and timeline.

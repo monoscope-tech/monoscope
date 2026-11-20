@@ -132,13 +132,13 @@ spec = around withTestResources do
       setTestTime tr.trTestClock now
       let chat n ago = ingestSpanLinked tr apiKey "8c4e" ("c" <> show n) Nothing "chat gpt-4o" [("gen_ai.operation.name", "chat"), ("gen_ai.request.model", "gpt-4o"), ("gen_ai.conversation.id", "conv-h"), ("gen_ai.usage.input_tokens", "10")] (addUTCTime (negate ago) now)
           calls = do
-            LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.ConversationsBody t))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "24H") (Just "1")
+            LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.ConversationsBody t))) <- call (viaTf tr) $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "24H") (Just "1")
             pure [(c.key, c.llmCalls, length c.units) | c <- toList t.rows]
       chat (1 :: Int) 7200 >> chat 2 60
       calls `shouldReturn` [("conv-h", 2, 1)]
       dbQuery @_ @(Only Int) tr [sql| SELECT count(*)::int FROM apis.llm_unit_hours WHERE project_id = ? AND jsonb_array_length(units) > 0 |] (Only pid) `shouldReturn` [Only 1]
       -- The settled hour is read from the store, not rescanned.
-      chat 3 7199
+      chat 3 7200
       calls `shouldReturn` [("conv-h", 2, 1)]
 
     it "prices Pi's durable sessions from pi-otel: one conversation per routine run, input counted with its cache" \tr -> do
