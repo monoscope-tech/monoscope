@@ -53,8 +53,9 @@ processors:
         action: upsert
   # The sender's address. A browser SDK's sender is the visitor, so ingest adopts it as client.address
   # for browser resources and drops it from every other (OtlpServer.placeRecords). Only X-Real-IP:
-  # CapRover's nginx overwrites it with the connecting address, while X-Forwarded-For and
-  # CF-Connecting-IP (no Cloudflare in front) pass through whatever a browser sends.
+  # CapRover's nginx overwrites it with the connecting address (for HTTP and gRPC-on-443), after
+  # real_ip has swapped in CF-Connecting-IP for connections from Cloudflare's ranges only. Raw
+  # X-Forwarded-For / CF-Connecting-IP headers pass through whatever a browser sends.
   # Logs and traces only: on a metric resource it would split every series by sender.
   resource/sender:
     attributes:
