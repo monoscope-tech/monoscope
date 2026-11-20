@@ -126,9 +126,12 @@ Write `chapters.tsv` and close the context before any `process.exit`, or the vid
 script records both sides, and the comment pairs the merge-base and pull-request stills by file name,
 so name screenshots for what they frame (`Survey menu.png`), never for the outcome you expect, and take
 each with the same locator on both sides (`locator.screenshot()`; a `clip` rectangle drifts when the
-change moves things). Frame the component that changed with enough around it to place it (the menu
-and its row, the whole top bar), not one word: a 60x16 crop of a label tells a reviewer nothing. Show
-the whole page only when the claim is about the page.
+change moves things). Frame the component that changed with enough around it to place it, never the
+changed element alone: for a label, the toolbar or form row it sits in; for a menu item, the open menu
+and its row; for a badge, the card. Locate that container (`page.getByRole('button', { name: 'Clear'
+}).locator('..')`, or the nearest landmark) and screenshot it. A still under 240 pixels wide (480 at
+device pixel ratio 2) shows a word, not where it sits, and record_proof asks you to retake it. Show the
+whole page only when the claim is about the page.
 
 For a state the sample traffic cannot produce, `web-components/bench/` mounts one component on
 synthetic data without the server (`cd web-components && npx vite --config
