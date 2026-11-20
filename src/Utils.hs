@@ -2138,8 +2138,8 @@ internalAddress = \case
 
 -- | Reject non-http(s) schemes and hosts that resolve to the internal network
 -- (loopback, link-local, RFC-1918, ULA, IPv4-mapped IPv6, and obfuscated numeric
--- literals — octal/decimal/short forms), to blunt SSRF via the scrape URL. DNS-rebinding
--- remains a known gap (we only vet the literal host; resolve-and-pin is the full fix).
+-- literals — octal/decimal/short forms), to blunt SSRF via the scrape URL. This vets the
+-- literal host; 'System.Config.publicOnly' vets every address a name resolves to at connect.
 --
 -- >>> map safeScrapeUrl ["https://metrics.example.com/m", "http://10.0.0.1/m", "http://[::ffff:127.0.0.1]/m", "file:///etc/passwd"]
 -- [True,False,False,False]
@@ -2166,13 +2166,8 @@ safeScrapeUrl u = case parseURI (toString (T.strip u)) of
             -- [0:0:0:0:0:ffff:7f00:1].
             || maybe False (maybe True (internalAddress . IP.IPv6) . readMaybe @IP.IPv6 . toString) (T.stripPrefix "[" h >>= T.stripSuffix "]")
             || any internalAddress (readMaybe @IP.IP (toString h))
-            || internalIPv4 h
             || obfuscatedNumericHost h
             || hexNumericHost h
-    -- A clean dotted-decimal quad whose address is loopback/RFC-1918/link-local/unspecified.
-    internalIPv4 h = case traverse octet (T.splitOn "." h) of
-      Just [a, b, _, _] -> a `elem` [0, 127] || a == 10 || (a == 169 && b == 254) || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168)
-      _ -> False
     -- Any all-numeric host that is not a clean 4-octet quad: bare integer (2130706433),
     -- octal octets (0177.0.0.1), or short forms (127.1) — all of which an OS resolver
     -- expands to an internal address.
