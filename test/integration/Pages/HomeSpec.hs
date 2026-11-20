@@ -1,6 +1,7 @@
 module Pages.HomeSpec (spec) where
 
 import BackgroundJobs qualified as Jobs
+import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.Wreq (runHTTPRecordWith)
 import Data.Text qualified as T
@@ -11,8 +12,11 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Pages.Dashboards qualified as Dashboards
 import Pages.Home qualified as Home
+import Pages.BodyWrapper (PageCtx (..))
 import Pages.Settings qualified as Settings
+import Pkg.Components.Widget qualified as Widget
 import Pkg.TestUtils
+import Web.Routes qualified as Routes
 
 
 spec :: Spec
@@ -39,6 +43,16 @@ spec = around withTestResources $ describe "Home screen" do
     void $ call tr $ Home.highlightDismissPostH pid (fromOnly hid)
     dismissed <- renderT <$> call tr (Home.homeGetH pid)
     T.isInfixOf "Checkout 5xx up 4.8x" dismissed `shouldBe` False
+
+  it "home_rawSqlWidgets_loadForAViewer" \tr -> do
+    -- Home skipped the dashboard's SQL signing, so /widget 403'd a viewer's "Near memory limit" and it stayed a skeleton.
+    pid <- createTestProject tr "Acme Shop"
+    dbExec tr [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ?|] (Only pid)
+    Home.HomePage (PageCtx _ d) <- call tr (Home.homeGetH pid)
+    let flat w = w : foldMap (concatMap flat) w.children
+        sqlWidgets = filter (isJust . (.sql)) $ concatMap flat $ d.glance <> foldMap snd d.starred
+    map (.title) sqlWidgets `shouldSatisfy` elem (Just "Near memory limit")
+    for_ sqlWidgets \w -> void $ call tr $ Routes.widgetGetH pid (Just $ decodeUtf8 $ AE.encode w) Nothing Nothing Nothing Nothing []
 
   it "auditTrail_recordsWhoChangedWhatAndJumpBackInRemembersWhatTheyOpened" \tr -> do
     pid <- createTestProject tr "Acme Shop"
