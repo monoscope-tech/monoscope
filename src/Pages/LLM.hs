@@ -515,7 +515,6 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
         , pageActions = Just $ div_ [class_ "inline-flex items-center gap-2", data_ "default-window" "24H"] do
             a_ [class_ "btn btn-sm", href_ $ urls.llmDashboardRedirect pid []] $ faSprite_ "dashboard" "regular" "h-3.5 w-3.5" >> "Dashboard"
             TimePicker.liveDataControls_ Nothing window.currentRange Nothing TimePicker.RefreshOnly
-        , needsGridStack = True
         }
       body
   where

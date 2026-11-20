@@ -260,7 +260,6 @@ data BWConfig = BWConfig
   , isSettingsPage :: Bool
   , freeTierStatus :: FreeTierStatus
   , hideNavbar :: Bool -- When True, hides the entire navbar
-  , needsGridStack :: Bool
   , needsTagify :: Bool
   , headContent :: Maybe (Html ()) -- Optional HTML content to include in the head
   , pageProvidesLogDetails :: Bool -- Explorer supplies its resizable panel; other project pages use the shell drawer.
@@ -356,17 +355,14 @@ bodyWrapper bcfg child = do
             link_ [rel_ "preload", term "as" "style", href_ href, onload_ "this.onload=null;this.rel='stylesheet'"]
           -- A late extension must bind the DOM that HTMX may already have processed.
           deferScript src = script_ ([src_ src, defer_ "true"] <> [onload_ "htmx.process(document.body)" | src == assetUrl "/public/assets/deps/htmx/hx-live-4.js"]) ("" :: Text)
-          gridStackScript src = do
-            void $ script_ "window.gridStackReady = new Promise(resolve => { window.__resolveGridStack = resolve; });"
-            script_ [src_ src, defer_ "true", onload_ "window.__resolveGridStack?.(window.GridStack)"] ("" :: Text)
       deferredCss $ assetUrl "/public/assets/css/thirdparty/rrweb.css"
       -- main.ts fetches Tagify on demand or retries if the deferred script fails.
       meta_ [name_ "tagify-js", content_ $ assetUrl "/public/assets/deps/tagify/tagify.min.js"]
       meta_ [name_ "tagify-css", content_ $ assetUrl "/public/assets/css/thirdparty/tagify.min.css"]
       mapM_ css
         $ [assetUrl "/public/assets/css/thirdparty/tagify.min.css" | bcfg.needsTagify]
-        <> [assetUrl "/public/assets/deps/gridstack/gridstack.min.css" | bcfg.needsGridStack]
-        <> [ assetUrl "/public/assets/css/tailwind.min.css"
+        <> [ assetUrl "/public/assets/deps/gridstack/gridstack.min.css" -- every rule is scoped under .grid-stack
+           , assetUrl "/public/assets/css/tailwind.min.css"
            , assetUrl "/public/assets/web-components/dist/css/index.css"
            ]
 
@@ -394,7 +390,16 @@ bodyWrapper bcfg child = do
           ]
         <> [assetUrl "/public/assets/deps/tagify/tagify.min.js" | bcfg.needsTagify]
       script_ [src_ (assetUrl "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
-      when bcfg.needsGridStack $ gridStackScript $ assetUrl "/public/assets/deps/gridstack/gridstack-all.js"
+      -- On first use, never per page: boosted navigation swaps #main-content only, so an asset
+      -- this head held back for "pages that need it" never reaches a page entered by a link.
+      let gridStackJs = assetUrl "/public/assets/deps/gridstack/gridstack-all.js"
+      script_
+        [text|
+        window.loadGridStack = () => window.gridStackReady ??= Promise.all([
+          new Promise(r => document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', r, {once: true}) : r()),
+          new Promise((onload, onerror) => document.head.append(Object.assign(document.createElement('script'), {src: '${gridStackJs}', onload, onerror})))
+        ]).catch(e => { window.gridStackReady = null; throw e; });
+        |]
       mapM_
         deferScript
         [ assetUrl "/public/assets/deps/easepick/bundle.min.js"

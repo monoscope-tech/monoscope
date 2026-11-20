@@ -116,7 +116,6 @@ infrastructureBW pid title window bw =
     , pageActions = Just $ div_ [class_ "inline-flex items-center gap-2", data_ "default-window" "5M"] do
         TimePicker.liveDataControls_ Nothing window.currentRange Nothing TimePicker.RefreshOnly
     , serviceOptions = V.empty
-    , needsGridStack = True
     }
 
 

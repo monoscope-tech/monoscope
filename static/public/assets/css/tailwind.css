@@ -1206,10 +1206,17 @@ body, :host {
   .grid-stack:not(.grid-stack-initialized) { visibility: hidden; }
   .grid-stack.grid-stack-preloaded:not(.grid-stack-initialized) { visibility: visible; }
   .grid-stack.grid-stack-preloaded:not(.grid-stack-initialized) > .grid-stack-item {
-    left: var(--grid-preload-left, 0%);
-    top: var(--grid-preload-top, 0rem);
-    width: var(--grid-preload-width, var(--gs-column-width));
-    height: var(--grid-preload-height, var(--gs-cell-height));
+    left: var(--grid-preload-left, 0%) !important;
+    top: var(--grid-preload-top, 0rem) !important;
+    width: var(--grid-preload-width, var(--gs-column-width)) !important;
+    height: var(--grid-preload-height, var(--gs-cell-height)) !important;
+  }
+  @container dashboard (max-width: 400px) {
+    .grid-stack { display: flex !important; flex-direction: column; gap: .5rem; height: auto !important; }
+    .grid-stack.grid-stack-preloaded:not(.grid-stack-initialized) > .grid-stack-item { position: relative !important; left: auto !important; top: auto !important; width: 100% !important; }
+    .grid-stack > .grid-stack-item:not([data-mobile-autofit]) { height: 180px !important; }
+    .grid-stack > .grid-stack-item[data-mobile-autofit] { height: auto !important; }
+    .nested-grid > .grid-stack-item { height: 120px !important; }
   }
   /* ECharts owns everything inside this reserved slot. Its HTML canvas and
      loading/error paint cannot invalidate the surrounding dashboard layout. */
