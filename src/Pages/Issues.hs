@@ -135,7 +135,7 @@ import Models.Projects.Projects (User (id))
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, navTabAttrs)
+import Pages.BodyWrapper (BWConfig (..), Dep (..), PageCtx (..), checkFreeTierStatus, loadDeps, mkPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
 import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), SavedView (..), SavedViewsMenu (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, localTimeFmt_, metadataChip_, options_, periodToggle_, resetFormOnRefusalAttr_, resizer_, savedViewsMenu_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
@@ -479,7 +479,6 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
             baseBwconf
               { prePageTitle = Just "Issues"
               , pageTitle = "#" <> show issue.seqNum
-              , headContent = Just do highlightJsHead_; style_ "#crisp-chatbox { display: none !important; }"
               }
       -- Every trace lookup carries the point-in-time the issue is known to have
       -- happened, so the query stays a ±5min window instead of a multi-day
@@ -1010,6 +1009,8 @@ issueEventsQuery v = case schemaSubjectFor v of
 -- whose navigator stays pinned while its sections scroll under it.
 issueDetailPage :: IssueView -> Html ()
 issueDetailPage v@IssueView{..} = div_ [class_ "flex h-full overflow-hidden relative group/ai"] do
+  highlightJs_
+  style_ "#crisp-chatbox { display: none !important; }"
   div_ [class_ "flex-1 min-w-0 min-h-0 overflow-y-auto"] do
     issueHeader_ v
     div_ [class_ "grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_18rem] xl:grid-cols-[minmax(0,1fr)_20rem]"] do
@@ -2391,7 +2392,6 @@ issueListGetH pid filterTM sortM _since pageM perPageM loadM periodM serviceFilt
           { pageTitle = "Issues"
           , menuItem = Just "Issues"
           , freeTierStatus = freeTierStatus
-          , headContent = Just highlightJsHead_
           , navTabs = Just $ div_ [class_ "flex items-center gap-1.5"] do
               toHtml
                 $ TabFilter
@@ -2646,34 +2646,26 @@ issueColumns pid period names toggleM =
             button_ [type_ "button", class_ "cursor-pointer text-textBrand tap-target font-medium", hxSwap_ "none", hxPost_ archiveUrl] $ toHtml $ bool "Archive" "Unarchive" isArchived
 
 
-highlightJsHead_ :: Monad m => HtmlT m ()
-highlightJsHead_ = do
-  link_ [rel_ "stylesheet", href_ (assetUrl "/public/assets/deps/highlightjs/atom-one-light.min.css"), media_ "screen", id_ "hljs-light"]
-  link_ [rel_ "stylesheet", href_ (assetUrl "/public/assets/deps/highlightjs/atom-one-dark.min.css"), media_ "screen", id_ "hljs-dark"]
-  script_ [src_ (assetUrl "/public/assets/deps/highlightjs/highlight.min.js")] ("" :: Text)
-  script_ [src_ (assetUrl "/public/assets/deps/highlightjs/sql.min.js")] ("" :: Text)
+-- | Highlights the page's code snippets in the reader's theme, including ones swapped in later.
+highlightJs_ :: Monad m => HtmlT m ()
+highlightJs_ = do
+  link_ [rel_ "stylesheet", href_ (assetUrl "/public/assets/deps/highlightjs/atom-one-light.min.css"), id_ "hljs-light"]
+  link_ [rel_ "stylesheet", href_ (assetUrl "/public/assets/deps/highlightjs/atom-one-dark.min.css"), id_ "hljs-dark"]
   script_
-    """
-    function setHljsTheme() {
-      const dark = document.body.getAttribute('data-theme') === 'dark';
-      document.getElementById('hljs-light').disabled = dark;
-      document.getElementById('hljs-dark').disabled = !dark;
-    }
-    function highlightSnippets(root) { root.querySelectorAll('code:not(.hljs)').forEach(el => hljs.highlightElement(el)); }
-    document.addEventListener('DOMContentLoaded', () => {
-      setHljsTheme();
-      highlightSnippets(document);
-      // The theme is a data-theme attribute on body, written by the toggle, the cookie
-      // restore and the OS-preference listener alike. Observing the attribute keeps the
-      // stylesheet in step with all three; setHljsTheme used to run once at load, so
-      // toggling the theme afterwards left the wrong sheet enabled.
-      new MutationObserver(setHljsTheme).observe(document.body, { attributeFilter: ['data-theme'] });
-    });
-    // htmx 4's native event detail has no `elt` (see the comment on the chat container's
-    // hx-on::after:swap), so `e.detail.elt` was undefined and highlighting never re-ran
-    // after a swap.
-    document.addEventListener('htmx:after:swap', e => highlightSnippets(e.target));
-    """
+    $ loadDeps [HighlightJs]
+    <> """
+       .then(() => {
+         const theme = () => { const dark = document.body.dataset.theme === 'dark'; for (const [id, off] of [['hljs-light', dark], ['hljs-dark', !dark]]) { const el = document.getElementById(id); if (el) el.disabled = off; } };
+         const highlight = root => document.getElementById('hljs-light') && root.querySelectorAll('code:not(.hljs)').forEach(el => hljs.highlightElement(el));
+         theme();
+         highlight(document);
+         // Once per document; the theme toggle, cookie restore and OS preference all write body's data-theme.
+         if (window.__hljsHooked) return;
+         window.__hljsHooked = true;
+         new MutationObserver(theme).observe(document.body, { attributeFilter: ['data-theme'] });
+         document.addEventListener('htmx:after:swap', e => highlight(e.target));
+       });
+       """
 
 
 renderLogContent_ :: Monad m => Text -> HtmlT m ()

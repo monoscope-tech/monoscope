@@ -119,7 +119,8 @@ test('retained run widgets open inside the conversation inspector', async ({ pag
       await expect(charts.getByText('Synthetic request count', { exact: true })).toBeVisible();
       await expect(charts.locator('strong[id$="Value"]')).toHaveText('44');
       await expect(charts.locator('strong[id$="Value"]')).toBeVisible();
-      await expect(charts.locator('[data-chart-widget]')).toHaveAttribute('aria-busy', 'false');
+      // The chart lazy-loads the widgets chunk and echarts first; a parallel sign-off has run past 5s.
+      await expect(charts.locator('[data-chart-widget]')).toHaveAttribute('aria-busy', 'false', { timeout: 15000 });
       await expect(charts.locator('[data-chart-widget] canvas').first()).toBeVisible();
       await page.screenshot({ path: testInfo.outputPath(`retained-widgets-${theme}-${width}-${zoom}.png`) });
       expect(await inspector.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);

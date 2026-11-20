@@ -47,7 +47,7 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (OnboardingStep (..))
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, stepUrl)
+import Pages.BodyWrapper (BWConfig (..), Dep (..), PageCtx (..), loadDeps, mkPageCtx, stepUrl)
 import Pages.Components
 import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (ask)
@@ -551,12 +551,11 @@ integrationsPage pid apikey =
         ]
 
     link_ [rel_ "stylesheet", href_ (assetUrl "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
-    forM_ ["highlight", "javascript", "python", "go", "java", "csharp", "php", "elixir", "bash", "shell", "yaml", "json"] \f ->
-      script_ [src_ (assetUrl $ "/public/assets/deps/highlightjs/" <> f <> ".min.js")] ("" :: Text)
 
+    let hljsDeps = loadDeps [HighlightJs]
     script_
       [text|
-        hljs.highlightAll();
+        ${hljsDeps}.then(() => hljs.highlightAll());
 
         function initAIMenu(container) {
           var trigger = container.querySelector('#ai-menu-trigger');
@@ -611,9 +610,7 @@ integrationsPage pid apikey =
         document.body.addEventListener('htmx:after:process', function(event) {
           const target = event.target.closest('[id^="fw-content-"]');
           if (target) {
-            target.querySelectorAll('pre code').forEach((block) => {
-              hljs.highlightElement(block);
-            });
+            ${hljsDeps}.then(() => target.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block)));
             initAIMenu(target);
           }
         });

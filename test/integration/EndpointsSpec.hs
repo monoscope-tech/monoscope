@@ -29,7 +29,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Endpoints qualified as ApiCatalog
 import Pkg.Components.Table qualified as Table
-import Pkg.DeriveUtils (AesonText (..), assetUrl)
+import Pkg.DeriveUtils (AesonText (..))
 import Pkg.OpenApi qualified as OpenApi
 import Pkg.SchemaLearning qualified as SchemaLearning
 import Pkg.TestUtils
@@ -65,6 +65,7 @@ spec = around withTestResources do
       , ([(m, "/api/v1/items/provider|item00" <> i) | m <- ["GET", "POST"], i <- ["1", "2"]], ["GET /api/v1/items/{param}", "POST /api/v1/items/{param}"])
       , -- A customer keyed on "SB-<hex>" once got 18,213 endpoint rows for ~1,900 routes:
         -- prefixed, encoded and mid-path ids must collapse while route words survive.
+
         ( viaGet
             $ map ("/v1/shipments/tracking/" <>) sb
             <> map ("/v1/wallet/complete-fund/WALLET_" <>) ["3D16EFF38182", "A1B2C3D4E5F6"]
@@ -134,11 +135,12 @@ spec = around withTestResources do
           , ("/v1/invoices", hours frozenTime 30 3, frozenTime, False) -- acking would swallow its alert
           ]
     -- One export: a request per span overflows the extraction queue and drops spans.
-    ingestSpanReq tr $ mergeSpanRequests
-      [ mkSpanRequest (UUID.toText UUID.nil) (T.take 8 (toXXHash path) <> toText (printf "%08d" i :: String)) Nothing ("GET " <> path) [] Nothing [mkAttr k v | (k, v) <- [("http.method", "GET"), ("http.route", path), ("http.response.status_code", "200"), ("server.address", host)]] (mkResource apiKey []) ts
-      | (path, times, _, _) <- paths
-      , (i, ts) <- zip [1 :: Int ..] times
-      ]
+    ingestSpanReq tr
+      $ mergeSpanRequests
+        [ mkSpanRequest (UUID.toText UUID.nil) (T.take 8 (toXXHash path) <> toText (printf "%08d" i :: String)) Nothing ("GET " <> path) [] Nothing [mkAttr k v | (k, v) <- [("http.method", "GET"), ("http.route", path), ("http.response.status_code", "200"), ("server.address", host)]] (mkResource apiKey []) ts
+        | (path, times, _, _) <- paths
+        , (i, ts) <- zip [1 :: Int ..] times
+        ]
     drainExtractionWorker tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}, config = tr.trATCtx.config{enableTimefusionWrites = True}}}
     void $ runAllBackgroundJobs frozenTime tr.trATCtx
     -- Evidence only counts from the issue's own hour, and the sweep only takes notified (or
@@ -384,7 +386,7 @@ spec = around withTestResources do
               [ ("metadata", evidence (stringField $ HS.singleton "{uuid}") [AE.String "legacy-id"])
               , ("metadata.state", evidence (stringField $ HS.fromList ["text", "{uuid}"]) [AE.String "ready", AE.String "550e8400-e29b-41d4-a716-446655440000"])
               ]
-              ^? key "properties"
+            ^? key "properties"
               . key "metadata"
         alternatives = maybe [] V.toList $ metadata ^? key "anyOf" . _Array
         stateSchema = fromMaybe AE.Null $ find (isJust . (^? key "properties")) alternatives ^? traverse . key "properties" . key "state"
@@ -425,8 +427,11 @@ spec = around withTestResources do
     (email ^? key "format" . _String, email ^? key "x-monoscope-observed-formats" . _Array, email ^? key "examples" . _Array) `shouldBe` (Just "email", Just (V.singleton "{email}"), Just (V.singleton "a@b.co"))
     (reqSchema ^? key "items" . key "type" . _String, reqSchema ^? key "items" . key "items" . key "properties" . key "qty" . key "type" . _String) `shouldBe` (Just "array", Just "number")
     -- The observed status carries the response; its schema lives in components so statuses can share it.
-    resp ^? key "headers" . key "content-type" . key "schema"
-      `shouldBe` Just (AE.object ["type" AE..= ("string" :: Text), "example" AE..= ("application/json" :: Text), "examples" AE..= V.singleton ("application/json" :: Text), "x-monoscope-observed-formats" AE..= V.singleton ("text" :: Text)])
+    resp
+      ^? key "headers"
+        . key "content-type"
+        . key "schema"
+        `shouldBe` Just (AE.object ["type" AE..= ("string" :: Text), "example" AE..= ("application/json" :: Text), "examples" AE..= V.singleton ("application/json" :: Text), "x-monoscope-observed-formats" AE..= V.singleton ("text" :: Text)])
     resp ^? key "content" . key "application/json" . key "schema" . key "$ref" . _String `shouldBe` Just ("#/components/schemas/" <> opHash <> "Response")
     doc ^? key "components" . key "schemas" . key (fromString $ toString $ opHash <> "Response") . key "type" . _String `shouldBe` Just "array"
 
@@ -439,10 +444,11 @@ spec = around withTestResources do
     project <- fetch Nothing Nothing
     (isJust (project ^? key "paths" . key "/v1/stores/{store_id}/orders"), project ^? key "servers" . _Array) `shouldBe` (True, Just (V.singleton (AE.object ["url" AE..= ("https://" <> host)])))
 
-    ApiCatalog.ApiDocsPage (PageCtx bw vm) <- call tr (ApiCatalog.apiDocsH testPid (Just host) (Just "Incoming") (Just opHash))
+    ApiCatalog.ApiDocsPage (PageCtx _ vm) <- call tr (ApiCatalog.apiDocsH testPid (Just host) (Just "Incoming") (Just opHash))
     let specUrl ext = "/p/" <> testPid.toText <> "/api_catalog/openapi." <> ext <> "?host=api.example.com&request_type=Incoming&endpoint=" <> opHash
     (vm.specJsonUrl, vm.specYamlUrl, vm.operations, vm.truncated, vm.inlineYaml) `shouldBe` (specUrl "json", specUrl "yaml", 1, False, Just yaml)
-    tagsWith ["swagger-ui-bundle"] (foldMap renderT bw.headContent) `shouldBe` ["<script src=\"" <> assetUrl "/public/assets/deps/swagger-ui/swagger-ui-bundle.js" <> "\" defer=\"true\""]
+    -- Swagger UI arrives with the page content, so a link into the page (a #main-content swap) loads it too.
+    renderT vm `shouldContainAll` ["window.loadDeps('SwaggerUi')"]
     goldenParts "api-docs-swagger-mount" $ elementsWith ["id=\"swagger-ui\""] (renderT vm)
 
 
@@ -500,10 +506,29 @@ observation pid method path status leaves =
 serverSpan :: Int -> Telemetry.OtelLogsAndSpans
 serverSpan ix =
   Telemetry.OtelLogsAndSpans
-    { id = UUID.toText UUID.nil, project_id = testPid.toText, timestamp = frozenTime, parent_id = Nothing, observed_timestamp = Nothing, hashes = Just V.empty
-    , name = Just ("GET " <> route), kind = Just "server", status_code = Just "200", status_message = Nothing, level = Nothing, severity = Nothing, body = Nothing
-    , duration = Just 1, start_time = frozenTime, end_time = Nothing, context = Nothing, events = Nothing, links = Nothing, summary = V.empty, date = frozenTime
-    , errors = Nothing, message_size_bytes = 0
+    { id = UUID.toText UUID.nil
+    , project_id = testPid.toText
+    , timestamp = frozenTime
+    , parent_id = Nothing
+    , observed_timestamp = Nothing
+    , hashes = Just V.empty
+    , name = Just ("GET " <> route)
+    , kind = Just "server"
+    , status_code = Just "200"
+    , status_message = Nothing
+    , level = Nothing
+    , severity = Nothing
+    , body = Nothing
+    , duration = Just 1
+    , start_time = frozenTime
+    , end_time = Nothing
+    , context = Nothing
+    , events = Nothing
+    , links = Nothing
+    , summary = V.empty
+    , date = frozenTime
+    , errors = Nothing
+    , message_size_bytes = 0
     , attributes = Just $ AesonText $ Map.fromList [("http.request.method", AE.String "GET"), ("http.response.status_code", AE.Number 200), ("url.path", AE.String route), ("db.operation.name", AE.String "SELECT")]
     , resource = Just $ AesonText $ Map.singleton "service.name" (AE.String $ "svc-" <> show (ix `mod` 5))
     }

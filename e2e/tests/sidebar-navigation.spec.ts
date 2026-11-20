@@ -134,3 +134,14 @@ test('time picker load retry stops after its root is removed', async ({ page }) 
   await page.waitForTimeout(200);
   expect(errors).toEqual([]);
 });
+
+// Regression: pages put their libraries in <head>, which a sidebar link (a #main-content swap)
+// never delivers, so API docs reached that way had no Swagger UI.
+test('API docs reached from the sidebar renders Swagger UI', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto(project + '/');
+  await page.locator(`#main-sidenav .nav-flyout a[href^="${project}/api_catalog/docs"]`).first().evaluate((a: HTMLElement) => a.click());
+  await expect(page.locator('#swagger-ui .swagger-ui')).toBeAttached();
+  expect(errors).toEqual([]);
+});
