@@ -24,8 +24,12 @@ if [ -n "${2:-}" ]; then
   fi
 fi
 printf %s "$1" | base64 -d > /tmp/monoscope-proof.sh
+# `run 'curl -si …'` shows a step like a reviewer's terminal screenshot: the command, its output, its exit status.
+cat > /tmp/monoscope-proof-lib.sh <<'SH'
+run() { printf '\033[36m$ %s\033[0m\n' "$1"; eval "$1"; local status=$?; printf '\033[90mexit %s\033[0m\n' "$status"; return "$status"; }
+SH
 asciinema rec --quiet --overwrite --cols 110 --rows 32 --idle-time-limit 2 \
-  --command 'bash /tmp/monoscope-proof.sh; echo $? > /tmp/monoscope-proof.status' \
+  --command 'BASH_ENV=/tmp/monoscope-proof-lib.sh bash /tmp/monoscope-proof.sh; echo $? > /tmp/monoscope-proof.status' \
   /tmp/monoscope-proof.cast </dev/null >/dev/null 2>/tmp/monoscope-proof.err || cat /tmp/monoscope-proof.err
 status=$(cat /tmp/monoscope-proof.status 2>/dev/null || echo 125)
 if [ -s /tmp/monoscope-proof.cast ] && [ "$(stat -c %s /tmp/monoscope-proof.cast)" -le 524288 ]; then

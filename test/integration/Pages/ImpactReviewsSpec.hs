@@ -3031,6 +3031,27 @@ spec = around withTestResources $ describe "Production impact reviews" do
     void $ runQueryEffect tr $ Reviews.receiveEvent (Just Reviews.Ask{login = "ada", commentId = 78, command = Reviews.Prove, focus = Nothing}) (event 7)
     dbQuery tr "SELECT state, progress_comment_id FROM projects.pr_review_runs WHERE revision = ?" (Only $ T.replicate 40 "7") `shouldReturn` [("queued" :: Text, Nothing :: Maybe Int64)]
 
+  -- Like a reviewer's terminal screenshot: plain output is one still of everything printed, at 2x.
+  it "proofMedia_plainTerminalOutputBecomesAStillCard" \_ -> do
+    let cast = "{\"version\":2,\"width\":110,\"height\":32}\n[0.2,\"o\",\"\\u001b[36m$ curl -si localhost:8080/auth_callback\\u001b[0m\\r\\nHTTP/1.1 302 Found\\r\\nLocation: /\\r\\n\\u001b[90mexit 0\\u001b[0m\\r\\n\"]\n"
+        pixels at bytes = foldl' (\n b -> n * 256 + fromIntegral b) (0 :: Int) $ BS.unpack $ BS.take 4 $ BS.drop at bytes
+    (_, _, card) <- either (fail . toString) pure =<< Media.renderProof cast cast
+    png <- maybe (fail "no card") pure card
+    BS.take 4 png `shouldBe` "\137PNG"
+    (pixels 16 png > 1500, pixels 20 png < 400) `shouldBe` (True, True)
+    (_, _, tui) <- either (fail . toString) pure =<< Media.renderProof "{\"version\":2,\"width\":20,\"height\":4}\n[0.2,\"o\",\"\\u001b[2Jtop\"]\n" "{\"version\":2,\"width\":20,\"height\":4}\n[0.2,\"o\",\"\\u001b[2Jtop\"]\n"
+    isNothing tui `shouldBe` True
+
+  it "proofMedia_previewPlaysTheLastChapterNotTheWholeVideo" \_ -> withTemp "proof-video" \directory -> do
+    drawtext <- T.isInfixOf "drawtext" . decodeUtf8 <$> readProcessStdout_ (proc "ffmpeg" ["-hide_banner", "-filters"])
+    unless drawtext $ pendingWith "this ffmpeg has no drawtext; CI's Debian build does"
+    void $ readProcessStdout_ $ proc "ffmpeg" ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=1280x800:rate=10", "-t", "12", "-pix_fmt", "yuv420p", directory <> "/in.mp4"]
+    video <- readFileBS (directory <> "/in.mp4")
+    (preview, _, card) <- either (fail . toString) pure =<< Media.renderVideo (Just ("Explorer", "127.0.0.1:8080/p/x")) [(0, "Open the explorer"), (9, "Check the chart toggle")] video
+    let frames bytes = case BS.breakSubstring "ANMF" bytes of (_, rest) | BS.null rest -> 0 :: Int; (_, rest) -> 1 + frames (BS.drop 4 rest)
+    -- Seconds 8 to 12 at 15 frames a second; the whole recording would be about 180 frames.
+    (BS.take 4 preview, frames preview > 20 && frames preview < 70, isNothing card) `shouldBe` ("RIFF", True, True)
+
   it "reviewComment_leadsWithMergeRiskAndShowsProductionDetailOnlyWhereAllowed" \_ -> do
     let pid = UUIDId UUID.nil
         run = Reviews.ReviewRun{id = UUIDId UUID.nil, threadId = UUIDId UUID.nil, projectId = pid, owner = "acme", repo = "checkout", number = 42, revision = T.replicate 40 "a", state = Reviews.Completed, result = Nothing, error = Nothing, commentId = Nothing, latestRevision = T.replicate 40 "a", createdAt = frozenTime, request = Nothing, base = Nothing}
@@ -3059,7 +3080,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 , Impact.Claim "Shows the retry count in the receipt" Impact.Unverified "The receipt page needs a browser, which this review cannot record." []
                 ]
             )
-            (Just [Impact.ProofLink key side (T.replicate 40 (if side == Agent.Base then "d" else "a")) (Just $ if side == Agent.Base then 1 else 0) (media "gif") (media "mp4") (media "cast") (Just browser) (Just [Impact.Shot label (media (show n <> ".png")) | browser, (n, label) <- zip [1 :: Int ..] (if side == Agent.Base then ["Receipt without retries"] else ["Receipt with retry count", "Retry history"])]) (Just [(t, step) | browser, (t, step) <- [(0, "Open the receipt"), (6.4, "Retry the charge"), (14.2, "Read the retry count")]]) | (key, browser) <- [("proof-1", True), ("proof-2", False)], side <- [Agent.Base, Agent.Head], let media ext = "https://app.monoscope.tech/p/x/reviews/r/proofs/" <> key <> "-" <> T.toLower (show side) <> (if "png" `T.isSuffixOf` ext then "-" else ".") <> ext <> "?sig=s"])
+            (Just [Impact.ProofLink key side (T.replicate 40 (if side == Agent.Base then "d" else "a")) (Just $ if side == Agent.Base then 1 else 0) (media "gif") (media "mp4") (media "cast") (Just browser) (Just [Impact.Shot label (media (show n <> ".png")) (Just width) | (n, (label, width)) <- zip [1 :: Int ..] (if browser then take (if side == Agent.Base then 1 else 2) [("Receipt card", 720), ("Retry history", 2560)] else [("Capture retried twice", 1904)])]) (Just [(t, step) | browser, (t, step) <- [(0, "Open the receipt"), (6.4, "Retry the charge"), (14.2, "Read the retry count")]]) | (key, browser) <- [("proof-1", True), ("proof-2", False)], side <- [Agent.Base, Agent.Head], let media ext = "https://app.monoscope.tech/p/x/reviews/r/proofs/" <> key <> "-" <> T.toLower (show side) <> (if "png" `T.isSuffixOf` ext then "-" else ".") <> ext <> "?sig=s"])
             Nothing
             Nothing
         render audience = Impact.renderReview "https://app.monoscope.tech" run audience result

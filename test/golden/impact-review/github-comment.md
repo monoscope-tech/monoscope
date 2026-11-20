@@ -2,13 +2,15 @@
 
 The second retry sent a new key, so the provider saw two charges.
 
-<a href="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s"><img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.gif?sig=s" alt="Recording" width="100%"></a>
-
-[Watch full video](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
-
 <sub>Merge-base · exit 1</sub>
 
-<img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base.gif?sig=s" alt="Merge-base" width="100%">
+<img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base-1.png?sig=s" alt="Capture retried twice" width="952">
+
+<sub>This PR <code>aaaaaaaa</code></sub>
+
+<img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head-1.png?sig=s" alt="Capture retried twice" width="952">
+
+[Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
 
 **Also checked** · 1 match · 1 not verified<br><img src="https://app.monoscope.tech/public/assets/proof/matches.svg" alt="Matches" width="16" height="16" align="absmiddle"> Retries a timed-out capture once · [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s)<br><img src="https://app.monoscope.tech/public/assets/proof/unverified.svg" alt="Unverified" width="16" height="16" align="absmiddle"> Shows the retry count in the receipt
 

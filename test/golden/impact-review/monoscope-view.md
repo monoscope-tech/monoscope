@@ -2,13 +2,15 @@
 
 The second retry sent a new key, so the provider saw two charges.
 
-![Recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.gif?sig=s)
-
-[Watch full video](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
-
 *Merge-base · exit 1*
 
-![Merge-base](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base.gif?sig=s)
+![Capture retried twice](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base-1.png?sig=s)
+
+*This PR `aaaaaaaa`*
+
+![Capture retried twice](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head-1.png?sig=s)
+
+[Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
 
 **Also checked** · 1 match · 1 not verified
 ✅ Retries a timed-out capture once · [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s)

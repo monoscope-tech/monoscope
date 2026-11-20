@@ -578,8 +578,9 @@ priorRepositoryKnowledge pid ref service =
 |]
 
 
--- | Metadata of one recorded side; the media stays in the database until a viewer asks.
-data ProofSide = ProofSide {key :: Text, side :: Agent.RevisionSide, revision :: Text, exitCode :: Maybe Int32, browser :: Bool, chapters :: Aeson [(Double, Text)], shots :: Aeson [Text]}
+-- | Metadata of one recorded side; the media stays in the database until a viewer asks. Each
+-- screenshot carries its label and pixel width, read from its PNG header.
+data ProofSide = ProofSide {key :: Text, side :: Agent.RevisionSide, revision :: Text, exitCode :: Maybe Int32, browser :: Bool, chapters :: Aeson [(Double, Text)], shots :: Aeson [(Text, Maybe Int)]}
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
 
@@ -688,7 +689,7 @@ proofSides :: DB es => ReviewRun -> UUIDId "agent_attempt" -> Eff es [ProofSide]
 proofSides run attempt =
   Hasql.interp
     [HI.sql|SELECT key, side, revision, exit_code, browser, chapters,
-      coalesce((SELECT jsonb_agg(s.label ORDER BY s.n) FROM projects.pr_review_proof_shots s WHERE s.run_id = p.run_id AND s.key = p.key AND s.side = p.side), '[]')
+      coalesce((SELECT jsonb_agg(jsonb_build_array(s.label, CASE WHEN length(s.png) >= 24 THEN (get_byte(s.png, 16) << 24) + (get_byte(s.png, 17) << 16) + (get_byte(s.png, 18) << 8) + get_byte(s.png, 19) END) ORDER BY s.n) FROM projects.pr_review_proof_shots s WHERE s.run_id = p.run_id AND s.key = p.key AND s.side = p.side), '[]')
     FROM projects.pr_review_proofs p WHERE run_id = #{run.id} AND attempt_id = #{attempt} ORDER BY key, side|]
 
 

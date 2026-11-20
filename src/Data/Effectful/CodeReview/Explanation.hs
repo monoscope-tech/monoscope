@@ -18,7 +18,7 @@ import Data.Scientific (toRealFloat)
 import Data.Text qualified as T
 import GHC.Clock (getMonotonicTimeNSec)
 import Relude
-import System.Directory (canonicalizePath, createDirectoryIfMissing, getFileSize, removePathForcibly, renameDirectory)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesFileExist, getFileSize, removePathForcibly, renameDirectory)
 import System.Environment (getEnvironment)
 import System.FileLock (SharedExclusive (..), withFileLock)
 import System.FilePath ((</>))
@@ -246,10 +246,9 @@ clipCast highlight cast = case BS8.lines cast of
               | Just m <- moment = let from = max 0 (min (m - 1) (total - 8)) in Window from (from + 8) total
               | otherwise = Window (total - 8) total total
             width = floor columns :: Int
-            -- Plain output (colours at most, no cursor movement) only fills the rows it printed, so
-            -- the clip drops the empty terminal below it; anything else keeps its full screen.
-            plain = all (\escape -> "[" `T.isPrefixOf` escape && T.all (\c -> isDigit c || c == ';') (T.drop 1 (T.takeWhile (/= 'm') escape)) && "m" `T.isInfixOf` escape) (drop 1 (T.splitOn "\ESC" printed))
-            row = 1 + if plain then min (floor rows) (max 3 (length (lines printed) + 1)) else floor rows :: Int
+            -- Plain output only fills the rows it printed, so the clip drops the empty terminal
+            -- below it; anything else keeps its full screen.
+            row = 1 + if plainOutput printed then min (floor rows) (max 3 (length (lines printed) + 1)) else floor rows :: Int
             clock seconds = let whole = floor seconds :: Int in show (whole `div` 60) <> ":" <> T.justifyRight 2 '0' (show (whole `mod` 60))
             timeline now =
               let cells = max 10 (width - 2 - T.length (clock now) - T.length (clock total))
@@ -271,26 +270,81 @@ clipCast highlight cast = case BS8.lines cast of
   _ -> Left "The proof recording is not an asciinema cast"
 
 
--- | The clip ('clipCast') as an animated preview (GitHub inlines GIFs) and the whole recording as a
--- video. Both tools read guest-recorded bytes, so they run unprivileged with bounded time, input
--- duration and output size.
-renderProof :: ByteString -> ByteString -> IO (Either Text (ByteString, ByteString))
+-- | Whether terminal output only prints and colours text, never moving the cursor.
+plainOutput :: Text -> Bool
+plainOutput printed = all (\escape -> "[" `T.isPrefixOf` escape && T.all (\c -> isDigit c || c == ';') (T.drop 1 (T.takeWhile (/= 'm') escape)) && "m" `T.isInfixOf` escape) (drop 1 (T.splitOn "\ESC" printed))
+
+
+-- | Everything a plain recording printed as one frame, as tall as the rows it fills (wrapped lines
+-- included, at most 60), for a card read at a glance like a reviewer's terminal screenshot.
+-- Output that moves the cursor (a TUI, a progress bar) has no such frame.
+--
+-- >>> let cast body = "{\"version\":2,\"width\":10,\"height\":24}\n" <> body
+-- >>> cardCast $ cast "[0.5,\"o\",\"$ ls\\r\\n\"]\n[3,\"o\",\"\\u001b[32m0123456789abc\\u001b[0m\\r\\n\"]"
+-- Just "{\"height\":4,\"version\":2,\"width\":10}\n[0,\"o\",\"\\u001b[?25l$ ls\\r\\n\\u001b[32m0123456789abc\\u001b[0m\\r\\n\"]\n[0.5,\"o\",\"\"]\n"
+-- >>> cardCast $ cast "[0.5,\"o\",\"\\u001b[2J\"]"
+-- Nothing
+-- >>> cardCast "not a cast"
+-- Nothing
+cardCast :: ByteString -> Maybe ByteString
+cardCast cast = case BS8.lines cast of
+  header : rest
+    | Just meta <- AE.decodeStrict @AE.Object header
+    , Just (AE.Number (toRealFloat @Double -> columns)) <- KM.lookup "width" meta -> do
+        let printed = T.concat [text | Just (AE.Array (toList -> [_, AE.String "o", AE.String text])) <- map AE.decodeStrict rest]
+            visible line = T.length $ T.concat $ take 1 parts <> map (T.drop 1 . T.dropWhile (/= 'm')) (drop 1 parts) where parts = T.splitOn "\ESC" line
+            rows = sum [max 1 (ceiling (fromIntegral (visible line) / max 1 columns)) | line <- lines (T.replace "\r" "" printed)] :: Int
+        guard $ plainOutput printed && not (T.null (T.strip printed))
+        pure $ encodeUtf8 $ unlines [decodeUtf8 $ AE.encode $ KM.insert "height" (AE.toJSON (min 60 rows + 1)) meta, decodeUtf8 $ AE.encode (0 :: Int, "o" :: Text, "\ESC[?25l" <> printed), decodeUtf8 $ AE.encode (0.5 :: Double, "o" :: Text, "" :: Text)]
+  _ -> Nothing
+
+
+-- | The part of a browser recording its preview plays: six seconds from the last chapter, where a
+-- proof's deciding step starts, but at least four, so a last step near the end starts earlier.
+-- Without chapters, the last six seconds.
+--
+-- >>> previewWindow 37.4 [(0, "Open the menu"), (34.3, "Open the closed survey")]
+-- Window {start = 33.4, end = 37.4, total = 37.4}
+-- >>> previewWindow 107.4 [(0, "Submit"), (95.2, "Approve")]
+-- Window {start = 95.2, end = 101.2, total = 107.4}
+-- >>> previewWindow 20 []
+-- Window {start = 14.0, end = 20.0, total = 20.0}
+-- >>> previewWindow 3 [(1, "Open"), (5, "Past the end")]
+-- Window {start = 0.0, end = 3.0, total = 3.0}
+previewWindow :: Double -> [(Double, Text)] -> Window
+previewWindow total chapters =
+  let from = maybe (total - 6) fst $ viaNonEmpty last $ filter ((< total) . fst) chapters
+      end = min total (max 0 from + 6)
+   in Window (max 0 (min from (end - 4))) end total
+
+
+-- | The clip ('clipCast') as an animated preview (GitHub inlines GIFs), the whole recording as a
+-- video, and, for plain output, a still card of everything printed ('cardCast'). The tools read
+-- guest-recorded bytes, so they run unprivileged with bounded time, input duration and output size.
+renderProof :: ByteString -> ByteString -> IO (Either Text (ByteString, ByteString, Maybe ByteString))
 renderProof clip cast = renderMedia cast \directory run -> do
   writeFileBS (directory </> "clip.cast") clip
   for_ [("proof.input", "full.gif"), ("clip.cast", "proof.gif")] \(input, output) -> run "agg" ["--idle-time-limit", "2", "--fps-cap", "12", "--font-size", "16", "--theme", "github-dark", input, output]
   run "ffmpeg" (quiet <> ["-t", "120", "-i", "full.gif", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-crf", "26", "-fs", show mediaLimit, "proof.mp4"])
+  -- Twice the comment's font size, shown at half its width, like a screenshot at device pixel ratio 2.
+  for_ (cardCast cast) \card -> do
+    writeFileBS (directory </> "card.cast") card
+    run "agg" ["--font-size", "28", "--theme", "github-dark", "card.cast", "card.gif"]
+    run "ffmpeg" (quiet <> ["-i", "card.gif", "-update", "1", "card.png"])
 
 
--- | A browser recording's full video and a preview that plays inline at full comment width, both
--- inside a drawn browser window showing the page's title and URL. The preview is the first 30
--- seconds as an animated WebP (a GIF of a scrolling UI runs to several megabytes), at the sharpest
--- setting that fits under GitHub's image proxy limit. Like a player, it shows a timeline of the
--- whole video, the part it covers, its own position, and the full length to play.
-renderVideo :: Maybe (Text, Text) -> ByteString -> IO (Either Text (ByteString, ByteString))
-renderVideo page video = renderMedia video \directory run -> do
+-- | A browser recording's full video, each chapter captioned as it plays, and a preview that plays
+-- inline at full comment width, both inside a drawn browser window showing the page's title and
+-- URL. The preview is the deciding few seconds ('previewWindow') as an animated WebP (a GIF of a
+-- scrolling UI runs to several megabytes), at the sharpest setting that fits under GitHub's image
+-- proxy limit. Like a player, it shows the time in the whole video, its track with the preview's
+-- part in yellow, filling as it plays, and the full length to watch.
+renderVideo :: Maybe (Text, Text) -> [(Double, Text)] -> ByteString -> IO (Either Text (ByteString, ByteString, Maybe ByteString))
+renderVideo page chapters video = renderMedia video \directory run -> do
   -- Text goes to drawtext as UTF-8 files the worker's locale need not encode; expansion=none keeps a URL's % literal.
-  for_ [("proof.title", maybe "" fst page), ("proof.url", maybe "" snd page), ("proof.nav", "←    →    ↻"), ("proof.dot", "●")] \(name, text) -> writeFileBS (directory </> name) (encodeUtf8 text)
+  for_ ([("proof.title", maybe "" fst page), ("proof.url", maybe "" snd page), ("proof.nav", "←    →    ↻"), ("proof.dot", "●")] <> [("caption." <> show n, label) | (n, (_, label)) <- zip [0 :: Int ..] chapters]) \(name, text) -> writeFileBS (directory </> name) (encodeUtf8 text)
   let text = ("drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:expansion=none:" <>)
+      captions = [text $ "textfile=caption." <> show n <> ":fontcolor=white:fontsize=24:box=1:boxcolor=0x3A3A3A@0.92:boxborderw=12:x=(w-tw)/2:y=h-118:enable='between(t," <> show at <> "," <> show next <> ")'" | (n, (at, _), next) <- zip3 [0 :: Int ..] chapters (map fst (drop 1 chapters) <> [1e6])]
       window =
         intercalate
           ","
@@ -305,33 +359,42 @@ renderVideo page video = renderMedia video \directory run -> do
           , "drawbox=x=134:y=68:w=1156:h=28:color=0x202124:t=fill"
           , text "textfile=proof.url:fontcolor=white@0.85:fontsize=14:x=150:y=75"
           ]
-  run "ffmpeg" (quiet <> ["-t", "120", "-i", "proof.input", "-f", "lavfi", "-i", "color=c=0xDCE1EA:s=1328x926", "-filter_complex", "[0:v]scale=1280:800:force_original_aspect_ratio=decrease,pad=1280:800:(ow-iw)/2:(oh-ih)/2[page];[1:v]" <> window <> "[frame];[frame][page]overlay=24:102:shortest=1", "-an", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-crf", "24", "-fs", show mediaLimit, "proof.mp4"])
+      framed = "[0:v]scale=1280:800:force_original_aspect_ratio=decrease,pad=1280:800:(ow-iw)/2:(oh-ih)/2[page];[1:v]" <> window <> "[frame];[frame][page]overlay=24:102:shortest=1" <> foldMap ("," <>) captions
+  run "ffmpeg" (quiet <> ["-t", "120", "-i", "proof.input", "-f", "lavfi", "-i", "color=c=0xDCE1EA:s=1328x926", "-filter_complex", framed, "-an", "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-crf", "24", "-fs", show mediaLimit, "proof.mp4"])
   probed <- readProcessStdout_ (proc "ffprobe" ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", directory </> "proof.mp4"])
   let total = max 1 $ fromMaybe 30 $ readMaybe @Double $ toString $ T.strip $ decodeUtf8 probed
-      shown = min 30 total
-  let clock t = let n = round t :: Int in show (n `div` 60) <> ":" <> T.justifyRight 2 '0' (show (n `mod` 60))
-  for_ [("proof.start", "0:00"), ("proof.end", clock total), ("proof.label", "▶  Watch full video")] \(name, label) -> writeFileBS (directory </> name) (encodeUtf8 label)
+      shown = previewWindow total chapters
+      clock t = let n = round t :: Int in show (n `div` 60) <> ":" <> T.justifyRight 2 '0' (show (n `mod` 60))
+  -- The left clock counts the whole video's time as the preview plays (drawtext expands it per frame).
+  writeFileBS (directory </> "proof.clock") $ encodeUtf8 $ "%{eif:floor((t+" <> show shown.start <> ")/60):d}:%{eif:mod(floor(t+" <> show shown.start <> ")\\,60):d:2}"
+  for_ [("proof.end", clock total), ("proof.label", "▶  Watch full video")] \(name, label) -> writeFileBS (directory </> name) (encodeUtf8 label)
   let preview (fps, width, quality) = do
-        -- A player bar: the whole video's track, its clip bracketed in blue, and a moving playhead.
-        let clip = "(iw-420)*" <> show (shown / total)
+        -- A player bar: the whole video's track with the preview's part bracketed in yellow; a bright
+        -- yellow bar slides across a dim one to fill that part as the preview plays.
+        let track = fromIntegral (width - 420) :: Double
+            span' = max 2 (round (track * (shown.end - shown.start) / total)) :: Int
+            from = 72 + round (track * shown.start / total) :: Int
             timeline =
               intercalate
                 ","
-                [ "drawbox=x=0:y=ih-46:w=iw:h=46:color=0x0B1220@0.82:t=fill"
-                , text "textfile=proof.start:fontcolor=white:fontsize=18:x=16:y=h-33"
-                , "drawbox=x=72:y=ih-27:w=iw-420:h=8:color=white@0.22:t=fill"
-                , "drawbox=x=72:y=ih-27:w=" <> clip <> ":h=8:color=0x2F6FED@0.55:t=fill"
-                , "drawbox=x=69:y=ih-35:w=3:h=24:color=0x2F6FED:t=fill"
-                , "drawbox=x=72+" <> clip <> ":y=ih-35:w=3:h=24:color=0x2F6FED:t=fill"
+                [ "drawbox=x=0:y=ih-46:w=iw:h=46:color=0x0B0B0B@0.82:t=fill"
+                , "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:textfile=proof.clock:fontcolor=white:fontsize=18:x=16:y=h-33"
+                , "drawbox=x=72:y=ih-27:w=iw-420:h=8:color=black:t=fill"
+                , "drawbox=x=" <> show (from - 3) <> ":y=ih-33:w=3:h=20:color=0xF5F56A:t=fill"
+                , "drawbox=x=" <> show (from + span') <> ":y=ih-33:w=3:h=20:color=0xF5F56A:t=fill"
                 , text "textfile=proof.end:fontcolor=white:fontsize=18:x=w-334:y=h-33"
-                , text "textfile=proof.label:fontcolor=white:fontsize=17:box=1:boxcolor=white@0.16:boxborderw=8:x=w-tw-18:y=h-32"
+                , text "textfile=proof.label:fontcolor=0x111111:fontsize=17:box=1:boxcolor=white:boxborderw=8:x=w-tw-18:y=h-32"
                 ]
-        run "ffmpeg" (quiet <> ["-t", "30", "-i", "proof.mp4", "-f", "lavfi", "-i", "color=c=white:s=4x18:r=" <> fps, "-filter_complex", "[0:v]fps=" <> fps <> ",scale='min(" <> width <> ",iw)':-2:flags=lanczos," <> timeline <> "[v];[v][1:v]overlay=x=72+(W-420)*t/" <> show total <> ":y=H-32:shortest=1", "-c:v", "libwebp_anim", "-quality", quality, "-loop", "0", "-f", "webp", "proof.gif"])
+            bar colour = ["-f", "lavfi", "-i", "color=c=" <> colour <> ":s=" <> show span' <> "x8:r=" <> fps]
+            duration = show (shown.end - shown.start)
+        run "ffmpeg" (quiet <> ["-ss", show shown.start, "-t", duration, "-i", "proof.mp4"] <> bar "0x77772E" <> bar "0xF5F56A" <> ["-filter_complex", "[0:v]fps=" <> fps <> ",scale=" <> show width <> ":-2:flags=lanczos," <> timeline <> "[v];[1:v][2:v]overlay=x=-W+W*t/" <> duration <> ":shortest=1[fill];[v][fill]overlay=x=" <> show from <> ":y=H-27:shortest=1", "-c:v", "libwebp_anim", "-quality", quality, "-loop", "0", "-f", "webp", "proof.gif"])
         (<= 4718592) <$> getFileSize (directory </> "proof.gif")
-  unlessM (anyM preview [("8", "1200", "60"), ("6", "960", "50"), ("4", "800", "40")]) $ throwIO $ userError "the preview exceeds GitHub's image size limit"
+  unlessM (anyM preview [("15", 1200, "70"), ("10", 1200, "60"), ("8", 960, "50")]) $ throwIO $ userError "the preview exceeds GitHub's image size limit"
 
 
-renderMedia :: ByteString -> (FilePath -> (String -> [String] -> IO ()) -> IO ()) -> IO (Either Text (ByteString, ByteString))
+-- | Runs @steps@ in a private directory holding @input@ as @proof.input@, then returns the
+-- @proof.gif@ and @proof.mp4@ they made, and @card.png@ when they made one.
+renderMedia :: ByteString -> (FilePath -> (String -> [String] -> IO ()) -> IO ()) -> IO (Either Text (ByteString, ByteString, Maybe ByteString))
 renderMedia input steps = do
   outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-proof" \directory -> do
     environment <- filter ((== "PATH") . fst) <$> getEnvironment
@@ -340,7 +403,8 @@ renderMedia input steps = do
     steps directory \program args ->
       readProcessStderr (setStdin nullStream $ setStdout nullStream $ setEnv environment $ setWorkingDir directory $ proc "nice" (["-n", "19", program] <> args)) >>= \(code, err) ->
         unless (code == ExitSuccess) $ throwIO $ userError $ program <> " exited with " <> show code <> ": " <> toString (T.takeEnd 600 $ T.strip $ decodeUtf8 err)
-    join bitraverse (\name -> readPrivateArtifact directory name mediaLimit) ("proof.gif", "proof.mp4")
+    let artifact name = readPrivateArtifact directory name mediaLimit
+    (,,) <$> artifact "proof.gif" <*> artifact "proof.mp4" <*> (doesFileExist (directory </> "card.png") >>= bool (pure Nothing) (Just <$> artifact "card.png"))
   pure $ case outcome of
     Right (Just media) -> Right media
     Right Nothing -> Left "Rendering the proof recording timed out"

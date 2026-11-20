@@ -699,9 +699,11 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             (cast, output) <- except $ Media.proofCast logBytes
                             let browser = Media.browserMedia logBytes
                             (clip, window) <- except $ Media.clipCast proof.highlight cast
-                            (gif, mp4) <- ExceptT $ maybe (Media.renderProof clip cast) (Media.renderVideo browser.page) browser.video
-                            let summary = AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "clip" AE..= (window <$ guard @Maybe (isNothing browser.video)), "output" AE..= T.takeEnd 3000 output, "screenshots" AE..= map fst browser.shots, "video" AE..= isJust browser.video]
-                            pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4, browser = isJust browser.video, shots = browser.shots, chapters = browser.chapters}, summary)
+                            (gif, mp4, card) <- ExceptT $ maybe (Media.renderProof clip cast) (Media.renderVideo browser.page browser.chapters) browser.video
+                            -- Screenshots are the stills; without them, a plain terminal recording is one card.
+                            let shots = if null browser.shots then [(T.take 80 proof.claim, png) | Just png <- [card]] else browser.shots
+                            let summary = AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "clip" AE..= (window <$ guard @Maybe (isNothing browser.video)), "output" AE..= T.takeEnd 3000 output, "screenshots" AE..= map fst shots, "video" AE..= isJust browser.video]
+                            pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4, browser = isJust browser.video, shots, chapters = browser.chapters}, summary)
                         sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty $ map fst recorded
                         key <- ExceptT $ hooks.save proof.setup sides
                         lift $ hooks.progress $ Recorded (proof.claim :| fold proof.covers) key

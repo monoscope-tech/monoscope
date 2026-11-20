@@ -9,6 +9,31 @@ Record nothing when the diff shows the whole change: docs and the README, commen
 `.github/` workflows, `docker-compose.yml` and other deployment config the VM never runs, and test-only
 changes the test run already checks. A recording that only prints the changed lines proves nothing.
 
+## Choosing the evidence
+
+Prove a claim with the fewest pieces of evidence that settle it, each the kind a reviewer would
+pick for that change:
+
+| Change | Evidence |
+| --- | --- |
+| A flow of user actions (open, click, submit, see the result) | Browser recording with chapters, plus a still of the deciding state on each side |
+| A static visual (label, icon, badge, menu entry, modal field) | Stills only, no video, cropped to the part that changed |
+| Layout or responsive behaviour | One still per width, plus a printed dump of the measured boxes (`boundingBox()` of each column or card) |
+| An HTTP endpoint, redirect, auth or header | `run 'curl -si …'` steps, a `# comment` on each saying what it sends |
+| Stored data or a migration | `run "psql -h /tmp -U postgres -d monoscope -c 'select …'"` before and after, on rows that existed before the change |
+| A background job, worker or engine | A scenario script printing `== 1. case` headings and each resulting state |
+| Telemetry | The emitted span or log, printed with only the attributes the claim is about |
+
+A terminal proof that only prints (colours are fine; no progress bars or full-screen tools) is shown
+as a still card of everything it printed, base above head, so print what proves the claim and little
+else. `run 'cmd'` prints the command, its output and its exit status as the card shows them; print a
+heading first saying which side and what it shows (`echo 'After: reused code on /auth_callback'`).
+Redact secrets (`sed 's/session=[^;]*/session=<redacted>/'`).
+
+When the app or a third-party service cannot run in the VM, prove what can be proved against a stub or
+a direct call, and say in the claim's summary what was stubbed or not run and why ("WorkOS stubbed:
+needs WORKOS_API_KEY"). A claim nothing could exercise stays unverified, with the reason.
+
 ## Haskell changes
 
 A cold build of this repository takes over an hour, so never build it from scratch in a proof. The
@@ -44,8 +69,9 @@ read-only, so it fails the setup).
 
 Command: write the Playwright script into `web-components/` (so `playwright` resolves; the file is
 untracked) with a quoted heredoc, so nothing in it needs escaping, then run it. Record the whole
-window, sidebar included, at 1280x800. The host draws a browser window around the recording from
-`page.tsv` (title and URL), and the dot below shows where each click lands:
+window, sidebar included, at 1280x800, with `deviceScaleFactor: 2` so stills are sharp. The host
+draws a browser window around the recording from `page.tsv` (title and URL), and the dot below shows
+where each click lands:
 
 ```bash
 cd web-components && cat > proof.mjs <<'JS'
@@ -54,7 +80,7 @@ import { writeFileSync } from 'node:fs';
 const out = process.env.PROOF_MEDIA, t0 = Date.now(), chapters = [];
 const step = (label) => { chapters.push(((Date.now() - t0) / 1000).toFixed(1) + '\t' + label); console.log('== ' + label); };
 const browser = await chromium.launch();
-const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, recordVideo: { dir: out, size: { width: 1280, height: 800 } } });
+const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2, recordVideo: { dir: out, size: { width: 1280, height: 800 } } });
 await context.addInitScript(() => addEventListener('DOMContentLoaded', () => {
   const dot = document.documentElement.appendChild(document.createElement('div'));
   dot.style.cssText = 'position:fixed;z-index:2147483647;left:-40px;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;background:#2f6fedaa;border:2px solid #fff;pointer-events:none;transition:scale .1s';
@@ -68,7 +94,7 @@ writeFileSync(`${out}/page.tsv`, `${await page.title()}\t${page.url().replace(/^
 step('Open Live Tail');
 await page.getByRole('link', { name: 'Live Tail' }).click();
 await page.waitForTimeout(2000);
-await page.screenshot({ path: `${out}/Live Tail toolbar at 1280px.png`, clip: { x: 0, y: 80, width: 1280, height: 60 } });
+await page.getByRole('button', { name: 'Clear' }).locator('..').screenshot({ path: `${out}/Live Tail toolbar.png` });
 // …the steps that show the change, each behind step('…'), then an assertion that exits 1 on the base.
 await context.close(); await browser.close();
 writeFileSync(`${out}/chapters.tsv`, chapters.join('\n') + '\n');
@@ -88,12 +114,21 @@ if (Math.abs(c.y - p.y) > 4) { console.log('Clear wrapped onto its own row'); pr
 
 The recording is the first thing a reviewer sees, so pace it like a demo: hold about two seconds on
 each state worth seeing (`await page.waitForTimeout(2000)`), and chapter only the steps a user would
-take, never setup or teardown. Aim for 10 to 30 seconds.
+take, never setup or teardown. Aim for 10 to 30 seconds. Each chapter is captioned in the video as it
+plays, so word it as the step ("End the survey"). The comment's preview plays about six seconds from
+the last chapter, so make the last chapter the step whose result proves the claim, and hold on that
+result.
+
+Skip the video when nothing moves: for a static visual change, take the stills and close the context
+without `recordVideo`.
 
 Write `chapters.tsv` and close the context before any `process.exit`, or the video is lost. The same
-script records both sides, so name screenshots for what they frame (`Live Tail toolbar at
-1280px.png`), never for the outcome you expect. Crop them to the part that changed: the recording
-shows the whole window, the stills show the detail.
+script records both sides, and the comment pairs the merge-base and pull-request stills by file name,
+so name screenshots for what they frame (`Survey menu.png`), never for the outcome you expect, and take
+each with the same locator on both sides (`locator.screenshot()`; a `clip` rectangle drifts when the
+change moves things). Frame the component that changed with enough around it to place it (the menu
+and its row, the whole top bar), not one word: a 60x16 crop of a label tells a reviewer nothing. Show
+the whole page only when the claim is about the page.
 
 For a state the sample traffic cannot produce, `web-components/bench/` mounts one component on
 synthetic data without the server (`cd web-components && npx vite --config
