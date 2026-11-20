@@ -7,9 +7,7 @@ import Data.Bits ((.&.))
 import Data.ByteString qualified as BS
 import Data.Default (Default (def))
 import Data.Effectful.Wreq (HTTP, defaults, getWith, postWith, responseBody)
-import Data.List qualified as L
 import Data.Text qualified as T
-import Data.UUID qualified as UUID
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Error.Static (throwError)
@@ -56,8 +54,7 @@ linkDiscordGetH pidM' codeM guildIdM cookieM = do
       bwconf = (def :: BWConfig){sessM = Nothing, currProject = Nothing, pageTitle = "Discord app installed", config = envCfg}
       discordErr = addHeader "" $ DiscordError $ PageCtx def ()
   installer <- runMaybeT do
-    sessId <- hoistMaybe $ Projects.PersistentSessionId <$> (UUID.fromASCIIBytes =<< L.lookup "monoscope_session" (maybe [] parseCookies cookieM))
-    sess <- MaybeT $ Projects.getPersistentSession sessId
+    sess <- MaybeT . Projects.getPersistentSession =<< hoistMaybe (Projects.sessionIdFromCookies $ maybe [] parseCookies cookieM)
     pid <- hoistMaybe pidM
     perm <- lift $ ProjectMembers.getUserPermission pid sess.userId
     guard $ maybe sess.isSudo (>= ProjectMembers.PEdit) perm

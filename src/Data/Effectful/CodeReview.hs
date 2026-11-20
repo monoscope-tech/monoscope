@@ -1059,17 +1059,13 @@ validReviewContext request verified =
 -- [Left "Only public https:// URLs can be fetched",Left "Only public https:// URLs can be fetched",Left "Only public https:// URLs can be fetched"]
 -- | The review agent's page fetch. Its context holds production telemetry and text the PR author
 -- wrote, so a fetched URL is an exfiltration channel: only short, plain document addresses go
--- out (no query or fragment, a bounded path of URL-safe characters), which caps what one call
--- can carry. Removing the tool from automatic runs is the full fix.
+-- out (at most 160 URL-safe characters: no query, fragment or userinfo), which caps what one
+-- call can carry. Removing the tool from automatic runs is the full fix.
 --
--- >>> map documentUrlOk ["https://docs.example.com/guide/install", "https://evil.example/?d=secret", "https://evil.example/" <> T.replicate 200 "a", "https://evil.example/a#frag"]
--- [True,False,False,False]
+-- >>> map documentUrlOk ["https://docs.example.com/guide/install", "https://evil.example/?d=secret", "https://evil.example?d=secret", "https://evil.example/" <> T.replicate 200 "a", "https://evil.example/a#frag", "https://user:pw@evil.example/"]
+-- [True,False,False,False,False,False]
 documentUrlOk :: Text -> Bool
-documentUrlOk url = case T.stripPrefix "https://" url of
-  Nothing -> False
-  Just rest ->
-    let path = T.dropWhile (/= '/') rest
-     in T.length path <= 96 && T.all (\c -> isAlphaNum c || c `elem` ("/._-~" :: String)) path
+documentUrlOk = maybe False (\rest -> T.length rest <= 160 && T.all (\c -> isAlphaNum c || c `elem` ("/._-~:" :: String)) rest) . T.stripPrefix "https://"
 
 
 fetchDocument :: Text -> IO (Either Text AE.Value)

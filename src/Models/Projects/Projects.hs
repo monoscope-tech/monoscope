@@ -140,6 +140,7 @@ module Models.Projects.Projects (
   PSProjects (..),
   addCookie,
   emptySessionCookie,
+  sessionIdFromCookies,
   getSession,
   insertSession,
   getPersistentSession,
@@ -168,7 +169,7 @@ import Data.Default
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.HashMap.Strict qualified as HM
-import Data.List (unzip4)
+import Data.List (lookup, unzip4)
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToParamSchema, ToSchema)
 import Data.Text qualified as T
@@ -1715,6 +1716,11 @@ craftSessionCookie (PersistentSessionId content) rememberSession =
     , setCookieMaxAge = if rememberSession then Just 604800 else Nothing
     , setCookieSecure = True
     }
+
+
+-- | The session a request's cookies carry.
+sessionIdFromCookies :: [(ByteString, ByteString)] -> Maybe PersistentSessionId
+sessionIdFromCookies = fmap PersistentSessionId . (UUID.fromASCIIBytes <=< lookup "monoscope_session")
 
 
 emptySessionCookie :: SetCookie

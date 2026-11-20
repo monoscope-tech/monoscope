@@ -3080,9 +3080,6 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxTarget allP
       let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
           scopedParams = dashboardScopedParams session.environment allParams
 
-      -- A remote ?file= dashboard is rendered (and its SQL signed and run) as if the server wrote
-      -- it, so loading one is an editor's preview, not a viewer's: a viewer, or the anonymous
-      -- demo guest, could otherwise run any SQL through it.
       whenJust fileM \_ -> void $ ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
       (dashVM, dash) <- getDashAndVM pid dashId fileM
 

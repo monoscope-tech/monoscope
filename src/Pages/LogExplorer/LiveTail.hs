@@ -216,8 +216,6 @@ liveTailDeleteH pid rawSid = do
 -- body never needs a database.
 liveTailStreamH :: Projects.ProjectId -> Text -> ATAuthCtx (SseHeaders (Servant.SourceIO Builder))
 liveTailStreamH pid rawSid = do
-  -- Membership is rechecked on every renew and stream, not only at register: a removed
-  -- member, or a deleted project, kept receiving the project's live telemetry otherwise.
   (sess, _) <- Projects.sessionAndProject pid
   appCtx <- Reader.ask @AuthContext
   sid <- maybe (refuse NoSuchTail) pure (idFromText rawSid)

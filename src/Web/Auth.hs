@@ -143,7 +143,7 @@ authHandler logger env =
     handler req = do
       let headers = requestHeaders req
           cookies = maybe [] parseCookies (L.lookup hCookie headers)
-          cookieSessId = Projects.PersistentSessionId <$> (UUID.fromASCIIBytes =<< L.lookup "monoscope_session" cookies)
+          cookieSessId = Projects.sessionIdFromCookies cookies
           cookieSession = join <$> traverse Projects.getPersistentSession cookieSessId
           scope k = nonEmptyT $ decodeUtf8 <$> join (L.lookup k req.queryString)
           session sessIdM url = do
@@ -374,8 +374,8 @@ adminRequest req = requestMethod req `notElem` [methodGet, methodHead] && any (`
 -- token kept working after logout. The shared demo guest session is never deleted.
 logoutH :: Maybe ByteString -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
 logoutH cookieM = do
-  whenJust (UUID.fromASCIIBytes =<< L.lookup "monoscope_session" (maybe [] parseCookies cookieM)) \sid ->
-    unless (Projects.PersistentSessionId sid == demoGuestSessionId) $ EHasql.interpExecute_ [HI.sql| DELETE FROM users.persistent_sessions WHERE id = #{sid} |]
+  whenJust (Projects.sessionIdFromCookies $ maybe [] parseCookies cookieM) \sid ->
+    unless (sid == demoGuestSessionId) $ EHasql.interpExecute_ [HI.sql| DELETE FROM users.persistent_sessions WHERE id = #{sid.getPersistentSessionId} |]
   envCfg <- asks env
   let redirectTo = envCfg.auth0Domain <> "/v2/logout?client_id=" <> envCfg.auth0ClientId <> "&returnTo=" <> envCfg.auth0LogoutRedirect
   pure $ addHeader redirectTo $ addHeader Projects.emptySessionCookie NoContent

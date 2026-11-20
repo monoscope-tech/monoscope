@@ -1650,12 +1650,10 @@ processMetricsRequest metadataApiKey req = do
   let !resourceMetrics = V.fromList $ req ^. PMF.resourceMetrics
       !projectKey = getMetricApiKey resourceMetrics
 
-  -- Try metadata API key first, then resource attribute key, then project ID
+  -- Metadata API key first, then the resource attribute key: only a presented key names the
+  -- project (see 'processSignalRequest').
   keyPidM <- asum <$> traverse ProjectApiKeys.getProjectIdByApiKey (maybeToList metadataApiKey <> maybeToList projectKey)
-  -- Only a presented key names the project: see 'processSignalRequest'.
-  let pidM = keyPidM
-
-  case pidM of
+  case keyPidM of
     Just pid -> do
       Log.logTrace
         "Metrics: Authentication successful"
