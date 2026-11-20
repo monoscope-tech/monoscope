@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), pinWidget, ChartScope (..), VizType (..), vizWidget, widgetWith_, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, embeddedWidgets_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, assignWidgetIds, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), monitorChartType, vizChart, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, withoutClientHtml, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
+module Pkg.Components.Widget (Widget (..), pinWidget, ChartScope (..), VizType (..), vizWidget, widgetWith_, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, embeddedWidgets_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, assignWidgetIds, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), monitorChartType, vizChart, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -731,12 +731,6 @@ verifySqlSignature secret pid sql rollup = maybe False \sig -> BA.constEq (encod
 -- | Stamp 'sqlSig' on a widget and its children, for those carrying SQL.
 signWidgetSql :: Text -> Projects.ProjectId -> Widget -> Widget
 signWidgetSql secret pid = transformOf (#children . _Just . traverse) \w -> w{sqlSig = sqlSignature secret pid w.sql w.rollupSql <$ (w.sql <|> w.rollupSql)}
-
-
--- | `html` is only ever the server's own render ('processEagerWidget') and is emitted raw, so a
--- client-supplied one, at any depth, is dropped.
-withoutClientHtml :: Widget -> Widget
-withoutClientHtml = transformOf (#children . _Just . traverse) (#html .~ Nothing)
 
 
 -- | Standalone timeseries panel with the shared infrastructure-page chrome:

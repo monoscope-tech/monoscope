@@ -78,9 +78,8 @@ onboardingGetH pid stepM = do
     -- The key is a full API credential, and Settings shows it only to editors: viewers (and the
     -- demo guest) get the placeholder here too.
     Integration -> do
-      canSeeKey <- maybe sess.user.isSudo (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid sess.user.id
-      keys <- bool (pure []) (filter (.active) <$> ProjectApiKeys.projectApiKeysByProjectId pid) canSeeKey
-      pure $ IntegrationStep pid $ maybe "<API_KEY>" (.keyPrefix) $ listToMaybe keys
+      canSeeKey <- any (>= ProjectMembers.PEdit) <$> ProjectMembers.getSessionPermission pid sess.user.id
+      IntegrationStep pid . maybe "<API_KEY>" (.keyPrefix) . find (.active) <$> bool (pure []) (ProjectApiKeys.projectApiKeysByProjectId pid) canSeeKey
     Pricing -> do
       billing <- Projects.userBilling sess.user.id
       let checkout u = u <> "&checkout[custom][project_id]=" <> pid.toText

@@ -56,8 +56,7 @@ linkDiscordGetH pidM' codeM guildIdM cookieM = do
   installer <- runMaybeT do
     sess <- MaybeT . Projects.getPersistentSession =<< hoistMaybe (Projects.sessionIdFromCookies $ maybe [] parseCookies cookieM)
     pid <- hoistMaybe pidM
-    perm <- lift $ ProjectMembers.getUserPermission pid sess.userId
-    guard $ maybe sess.isSudo (>= ProjectMembers.PEdit) perm
+    guard . any (>= ProjectMembers.PEdit) =<< lift (ProjectMembers.getSessionPermission pid sess.userId)
   case (pidM, codeM, guildIdM, installer) of
     (_, _, _, Nothing) -> Log.logAttention "Discord install without an editor session for the project" (AE.object ["state" AE..= pidM']) $> discordErr
     (Just pid, Just code, Just guildId, Just ()) -> do

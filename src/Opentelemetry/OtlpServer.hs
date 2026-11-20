@@ -194,8 +194,6 @@ projectSecretKeys :: [Text]
 projectSecretKeys = ["at-project-key", "at-project-id", "x-api-key"]
 
 
--- tt
-
 -- | Extract a string attribute by key from a KeyValue list
 getAttr :: Text -> [PC.KeyValue] -> Maybe Text
 getAttr !key kvs = (^. PCF.value . PCF.stringValue) <$> find ((== key) . (^. PCF.key)) kvs

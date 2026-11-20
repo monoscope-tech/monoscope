@@ -259,8 +259,7 @@ sessionAndProjectAtLeast
   -> Eff es (Projects.Session, Projects.Project)
 sessionAndProjectAtLeast perm pid = do
   sp@(sess, _) <- Projects.sessionAndProject pid
-  granted <- getUserPermission pid sess.user.id
-  unless (maybe sess.user.isSudo (>= perm) granted) $ EffError.throwError err403
+  unlessM (any (>= perm) <$> getSessionPermission pid sess.user.id) $ EffError.throwError err403
   pure sp
 
 

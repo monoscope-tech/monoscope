@@ -1111,9 +1111,13 @@ authorizeClientSql pid sql rollup sig = when (isJust $ nonEmptyT sql <|> nonEmpt
   unless (Widget.verifySqlSignature secret pid sql rollup sig) $ void $ ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
 
 
--- | 'authorizeClientSql' for a client-sent widget and every widget nested in it.
-authorizeClientWidget :: Projects.ProjectId -> Widget.Widget -> ATAuthCtx ()
-authorizeClientWidget pid = traverse_ (\w -> authorizeClientSql pid w.sql w.rollupSql w.sqlSig) . universeOf (#children . _Just . folded)
+-- | A client-sent widget, once 'authorizeClientSql' passes it and every widget nested in it.
+-- @html@ is only ever the server's own render ('processEagerWidget'), emitted raw, so a
+-- client-supplied one is dropped at every depth.
+authorizeClientWidget :: Projects.ProjectId -> Widget.Widget -> ATAuthCtx Widget.Widget
+authorizeClientWidget pid w = do
+  traverse_ (\c -> authorizeClientSql pid c.sql c.rollupSql c.sqlSig) $ universeOf (#children . _Just . folded) w
+  pure $ transformOf (#children . _Just . traverse) (#html .~ Nothing) w
 
 
 processWidget :: Prefill -> Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget

@@ -86,6 +86,7 @@ import Servant
 import Servant.HTML.Lucid (HTML)
 import Servant.QueryParam.Server.Record ()
 import Servant.Server.Generic (AsServerT, genericServeTWithContext)
+import Servant.Server.Internal.ServerError (responseServerError)
 import System.Config (AuthContext (..), DeploymentEnv (..), EnvConfig (..))
 import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
@@ -308,14 +309,9 @@ apiV1ServerAs actor principal = ApiH.apiV1Server actor principal Log.queryEvents
 
 
 apiV1App :: ProjectToolCtx es => (forall a. Eff es a -> IO a) -> ApiActor -> ApiPrincipal -> Servant.Application
-apiV1App run actor principal = case principal of
-  -- MCP tool calls reach handlers through here, not through the auth handler.
-  DemoReader _ -> \req reply -> if Auth.demoReaderAllows req then app req reply else reply $ Wai.responseLBS H.status401 [(H.hContentType, "application/json")] "{\"error\":\"The demo project is read-only without credentials\"}"
-  Viewer _ -> \req reply -> if Auth.demoReaderAllows req then app req reply else reply roleRefused
-  Editor _ -> \req reply -> if Auth.adminRequest req then reply roleRefused else app req reply
-  Authenticated _ -> app
+-- MCP tool calls reach handlers through here, not through the auth handler.
+apiV1App run actor principal req reply = maybe (app req reply) (reply . responseServerError . ApiT.refusal) (Auth.principalRefusal principal req)
   where
-    roleRefused = Wai.responseLBS H.status403 [(H.hContentType, "application/json")] "{\"error\":\"Your role on this project does not allow this\"}"
     app =
       genericServeTWithContext
         (Handler . ExceptT . run . Error.runErrorNoCallStack @ServerError . Eff.inject)
@@ -836,8 +832,7 @@ chartScopeParams pid params = case pid of
 widgetPostH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
 widgetPostH pid sinceM fromM toM widget = do
   _ <- Projects.sessionAndProject pid
-  Dashboards.authorizeClientWidget pid widget
-  Widget.widgetPostH pid sinceM fromM toM (Widget.withoutClientHtml widget)
+  Widget.widgetPostH pid sinceM fromM toM =<< Dashboards.authorizeClientWidget pid widget
 
 
 widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders Widget.Widget)
@@ -848,14 +843,14 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
   widget <-
     AE.eitherDecode (encodeUtf8 $ fromMaybe "" widgetJson)
       & either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure
-  Dashboards.authorizeClientWidget pid widget
+        >>= Dashboards.authorizeClientWidget pid
   now <- Time.currentTime
   let scopeMarkers = [("dashboard_id", Just d) | Just d <- [widget._dashboardId]] <> [("pinned_scope", Just $ decodeUtf8 $ AE.encode sc) | Just sc <- [widget.scope]]
   scopedParams <- chartScopeParams (Just pid) $ scopeMarkers <> allParams
   -- The page's query filters the widget's own, as the browser composes them for /chart_data:
   -- the explorer's top list has no query but the page's.
   let pageQuery = Utils.nonEmptyT $ join $ L.lookup "query" allParams
-      widgetWithPid = Widget.withoutClientHtml widget & #_projectId ?~ pid & #query .~ Utils.nonEmptyT (Just $ T.intercalate " | " $ catMaybes [pageQuery, widget.query])
+      widgetWithPid = widget & #_projectId ?~ pid & #query .~ Utils.nonEmptyT (Just $ T.intercalate " | " $ catMaybes [pageQuery, widget.query])
       isEager = widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTTopList, Widget.WTStat, Widget.WTAnomalies]
   processedWidget <-
     if isEager

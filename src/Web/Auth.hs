@@ -14,8 +14,7 @@ module Web.Auth (
   APItoolkitAuthContext,
   authorizeUserAndPersist,
   demoGuestSessionId,
-  adminRequest,
-  demoReaderAllows,
+  principalRefusal,
   targetsDemoProject,
   errorPageHtml,
   htmlServerError,
@@ -310,13 +309,6 @@ demoGuestSession =
 type ApiKeyAuthContext = AuthHandler Request ApiPrincipal
 
 
--- | What the credential-less demo reader may do: read, search, and speak MCP (whose tool
--- calls are re-checked one by one, see 'Web.Routes.apiV1App'). Every handler sees only the
--- project id, so without this an anonymous caller could mint keys or add members on demo.
-demoReaderAllows :: Request -> Bool
-demoReaderAllows req = requestMethod req `elem` [methodGet, methodHead] || requestMethod req == methodPost && any (`BS.isSuffixOf` rawPathInfo req) ["/events/query", "/mcp"]
-
-
 resolveApiKeyProject :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Log :> es) => Text -> Maybe Projects.ProjectId -> Eff es (Maybe Projects.ProjectId)
 resolveApiKeyProject bearerToken pidM =
   runMaybeT $ MaybeT (ProjectApiKeys.getProjectIdByApiKey token) <|> do
@@ -341,21 +333,17 @@ apiKeyAuthHandler logger env = mkAuthHandler \req -> do
           & Effectful.Reader.Static.runReader env
           & runEff
   authed <- join <$> traverse (runEffs . (`resolveApiKeyProject` mbHeaderPid)) mbAuth
-  -- A member's session token carries that member's role, which every handler below ignores:
-  -- a viewer could make themselves admin with PATCH /members/{self}. So a viewer reads only,
-  -- and only an admin manages members, keys, teams and the project. API keys are unchanged.
-  let principal pid =
-        maybe (pure Nothing) (runEffs . (`sessionBearerRole` pid)) mbAuth >>= \case
-          Just r | r < ProjectMembers.PEdit -> if demoReaderAllows req then pure $ Viewer pid else T.throwError $ refusal InsufficientRole
-          Just r | r < ProjectMembers.PAdmin -> if adminRequest req then T.throwError $ refusal InsufficientRole else pure $ Editor pid
-          _ -> pure $ Authenticated pid
-  case (mbHeaderPid, authed) of
+  let member pid =
+        maybe (pure Nothing) (runEffs . (`sessionBearerRole` pid)) mbAuth <&> \case
+          Just r | r < ProjectMembers.PEdit -> Viewer pid
+          Just r | r < ProjectMembers.PAdmin -> Editor pid
+          _ -> Authenticated pid
+  principal <- case (mbHeaderPid, authed) of
     -- Demo project: world-readable, mirrors the web UI bypass in `sessionByID`.
-    (Just pid, _)
-      | pid == Projects.demoProjectId, authed == Just pid -> principal pid
-      | pid == Projects.demoProjectId -> if demoReaderAllows req then pure $ DemoReader pid else T.throwError $ refusal DemoReadOnly
-    (_, Just pid) -> principal pid
+    (Just pid, _) | pid == Projects.demoProjectId, authed /= Just pid -> pure $ DemoReader pid
+    (_, Just pid) -> member pid
     _ -> T.throwError $ refusal $ maybe MissingAuthorization (const InvalidCredentials) mbAuth
+  maybe (pure principal) (T.throwError . refusal) (principalRefusal principal req)
 
 
 -- | The role behind a session-token bearer on @pid@; 'Nothing' for an API key.
@@ -366,12 +354,27 @@ sessionBearerRole bearer pid = runMaybeT do
   fromMaybe ProjectMembers.PView <$> lift (ProjectMembers.getSessionPermission pid sess.userId)
 
 
--- | Writes to what only an admin may change: members, API keys, teams, project settings. By
--- path segment, since MCP tool calls reach the API app without the @/api/v1@ prefix.
-adminRequest :: Request -> Bool
-adminRequest req = requestMethod req `notElem` [methodGet, methodHead] && any (`elem` ["members", "api_keys", "teams", "project"]) (viaNonEmpty head $ unprefixed $ pathInfo req)
+-- | Why @principal@ may not make this request, if it may not. A session token carries its
+-- member's role, which every handler ignores (a viewer could PATCH themselves to admin), and
+-- every handler sees only the project id (an anonymous demo caller could mint keys). So the
+-- demo reader and a viewer only read, search and speak MCP, whose tool calls come back through
+-- here one by one ('Web.Routes.apiV1App'), and only an admin writes members, API keys, teams or
+-- the project. Matched by path segment, since MCP calls arrive without the @/api/v1@ prefix.
+--
+-- >>> import Network.Wai (defaultRequest)
+-- >>> let req m ps = defaultRequest{requestMethod = m, pathInfo = ps}
+-- >>> map (principalRefusal (Editor Projects.demoProjectId)) [req "PATCH" ["members", "x"], req "POST" ["api", "v1", "api_keys"], req "GET" ["members"], req "POST" ["projects", "x"]]
+-- [Just InsufficientRole,Just InsufficientRole,Nothing,Nothing]
+principalRefusal :: ApiPrincipal -> Request -> Maybe ApiError
+principalRefusal principal req = case principal of
+  Authenticated _ -> Nothing
+  Editor _ -> InsufficientRole <$ guard (write && any (`elem` ["members", "api_keys", "teams", "project"]) (viaNonEmpty head unprefixed))
+  Viewer _ -> InsufficientRole <$ guard (not readOnly)
+  DemoReader _ -> DemoReadOnly <$ guard (not readOnly)
   where
-    unprefixed = \case "api" : "v1" : rest -> rest; ps -> ps
+    write = requestMethod req `notElem` [methodGet, methodHead]
+    readOnly = not write || requestMethod req == methodPost && any (`BS.isSuffixOf` rawPathInfo req) ["/events/query", "/mcp"]
+    unprefixed = case pathInfo req of "api" : "v1" : rest -> rest; ps -> ps
 
 
 -- | Clearing the cookie alone left the session row valid forever: a copied cookie or a CLI
@@ -407,7 +410,7 @@ loginRedirectH :: Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text, Hea
 loginRedirectH redirectToM = do
   envCfg <- asks env
   when envCfg.basicAuthEnabled $ throwError basicAuthChallenge
-  pure $ addHeader ("/login?redirect_to=" <> decodeUtf8 (urlEncode True $ encodeUtf8 $ safeRedirect redirectToM)) $ addHeader emptySessionCookie NoContent
+  pure $ addHeader ("/login?redirect_to=" <> toUriStr (safeRedirect redirectToM)) $ addHeader emptySessionCookie NoContent
 
 
 loginH
@@ -419,7 +422,7 @@ loginH redirectToM screenHintM loginHintM = do
   envCfg <- asks env
   when envCfg.basicAuthEnabled $ throwError basicAuthChallenge
   stateVar <- UUID.toText <$> genUUID
-  let escapedUri = escapedQueryPartial $ envCfg.auth0Callback <> "?redirect_to=" <> decodeUtf8 (urlEncode True $ encodeUtf8 $ safeRedirect redirectToM)
+  let escapedUri = escapedQueryPartial $ envCfg.auth0Callback <> "?redirect_to=" <> toUriStr (safeRedirect redirectToM)
       hintParam name = maybe "" (\v -> "&" <> name <> "=" <> decodeUtf8 (urlEncode True $ encodeUtf8 v))
       redirectTo = envCfg.auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg.auth0ClientId <> "&redirect_uri=" <> escapedUri <> "&state=" <> stateVar <> "&scope=openid profile email" <> hintParam "screen_hint" screenHintM <> hintParam "login_hint" loginHintM
   pure $ addHeader redirectTo $ addHeader emptySessionCookie $ addHeader (oauthStateCookie stateVar) NoContent
@@ -448,10 +451,8 @@ authCallbackH codeM stateM redirectToM cookieM userAgentM countryM = do
   pool <- asks pool
   resp <- runExceptT do
     code <- hoistEither $ note "invalid code " codeM
-    let started = L.lookup "monoscope_oauth_state" (maybe [] parseCookies cookieM)
-    case (encodeUtf8 @Text @ByteString <$> stateM, started) of
-      (Just st, Just expected) | BA.constEq st expected -> pass
-      _ -> hoistEither $ Left ("oauth state does not match this browser's login" :: Text)
+    unless (or $ liftA2 BA.constEq (encodeUtf8 @Text @ByteString <$> stateM) (L.lookup "monoscope_oauth_state" $ maybe [] parseCookies cookieM))
+      $ hoistEither (Left ("oauth state does not match this browser's login" :: Text))
     r <-
       lift
         $ W.post

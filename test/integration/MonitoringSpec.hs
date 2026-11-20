@@ -53,9 +53,9 @@ import Pages.Dashboards qualified as Dashboards
 import Pages.Issues qualified as IssuesPage
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Monitors qualified as Alerts
+import Pages.Uptime qualified as Uptime
 import Pages.Projects qualified as ProjectPages
 import Pages.Settings qualified as Settings
-import Pages.Uptime qualified as Uptime
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
