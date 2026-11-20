@@ -1,0 +1,13 @@
+{
+  "statusCode": 200,
+  "statusMessage": "OK",
+  "respBody": "{\"data\":[{\"attributes\":{\"first_subscription_item\":{\"id\":7001,\"subscription_id\":70},\"product_name\":\"Pro\"}}]}",
+  "responseHeaders": [
+    [
+      "Content-Type",
+      "application/json"
+    ]
+  ],
+  "originalRequest": "",
+  "responseEarlyHints": []
+}

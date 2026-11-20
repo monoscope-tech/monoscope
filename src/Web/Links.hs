@@ -628,7 +628,7 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , onboardingDismissChecklist :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "dismiss-checklist" :> Unrefusable 'POST (Opaque "Onboarding.ChecklistDismissed")
   , onboardingSkipped :: mode :- "p" :> ProjectId :> "onboarding" :> "skip" :> LenientQP "step" Projects.OnboardingStep :> Unrefusable 'POST (Opaque "Onboarding.OnboardingStepPost")
   , -- Pricing routes
-    onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] (Opaque "CreateProject.PricingUpdateForm") :> Action 'POST (Opaque "CreateProject.SubscriptionLookupFailed") (Opaque "CreateProject.PricingUpdated")
+    onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] (Opaque "CreateProject.PricingUpdateForm") :> Action 'POST (Opaque "CreateProject.PricingRejection") (Opaque "CreateProject.PricingUpdated")
   }
   deriving stock (Generic)
 

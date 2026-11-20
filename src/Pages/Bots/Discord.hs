@@ -98,7 +98,7 @@ data DiscordInteraction = Interaction
   , channel_id :: Maybe Text
   , guild_id :: Maybe Text
   , channel :: Maybe DiscordThreadChannel
-  , member :: Maybe AE.Value
+  , member :: Maybe DiscordMember
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "interaction_type" "type", DAE.Rename "data_i" "data"]] DiscordInteraction
@@ -108,10 +108,16 @@ data DiscordInteraction = Interaction
 -- from the resolved permissions Discord sends with the interaction. Rerouting a project's
 -- alerts used to be open to any member of the guild, including one who joined a minute ago.
 --
--- >>> map (canManageGuild . Just) [AE.object ["permissions" AE..= ("32" :: Text)], AE.object ["permissions" AE..= ("8" :: Text)], AE.object ["permissions" AE..= ("2048" :: Text)]]
+-- >>> map (canManageGuild . Just . DiscordMember) ["32", "8", "2048"]
 -- [True,True,False]
-canManageGuild :: Maybe AE.Value -> Bool
-canManageGuild member = maybe False (\p -> (p .&. 0x28) /= 0) $ readMaybe @Integer . toString =<< (member >>= (^? AEL.key "permissions" . AEL._String))
+canManageGuild :: Maybe DiscordMember -> Bool
+canManageGuild member = maybe False ((/= 0) . (.&. 0x28)) (readMaybe @Integer . toString . (.permissions) =<< member)
+
+
+-- | The invoking guild member; Discord sends its resolved permissions as a decimal bit set.
+newtype DiscordMember = DiscordMember {permissions :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON)
 
 
 data DiscordThreadChannel = DiscordThreadChannel

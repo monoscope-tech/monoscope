@@ -55,7 +55,7 @@ module Pages.Projects (
   ProjectDeleted (..),
   DemoProjectProtected (..),
   PricingUpdated (..),
-  SubscriptionLookupFailed (..),
+  PricingRejection (..),
 )
 where
 
@@ -116,7 +116,7 @@ import Relude hiding (ask, asks)
 import Servant (addHeader)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
-import Servant.Server (err302, err403, err500, err503, errBody, errHeaders)
+import Servant.Server (err302, err500, err503, errBody, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, done, redirectCS)
@@ -1552,12 +1552,17 @@ instance Outcome PricingUpdated where
     PricingSaved -> Just "Pricing updated successfully"
 
 
-data SubscriptionLookupFailed = SubscriptionLookupFailed
+data PricingRejection = SubscriptionLookupFailed | SubscriptionBilledElsewhere
   deriving stock (Eq, Generic, Show)
-  deriving (Refusal) via Says "Something went wrong while fetching subscription id" SubscriptionLookupFailed
 
 
-pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (ActionResult SubscriptionLookupFailed PricingUpdated)
+instance Refusal PricingRejection where
+  refusalMessage = \case
+    SubscriptionLookupFailed -> "Something went wrong while fetching subscription id"
+    SubscriptionBilledElsewhere -> "This subscription already belongs to another project"
+
+
+pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (ActionResult PricingRejection PricingUpdated)
 pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = act do
   (sess, project) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   appCtx <- ask @AuthContext
@@ -1594,12 +1599,12 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = act do
             let subId = show target.attributes.firstSubscriptionItem.subscriptionId
                 firstSubId = show target.attributes.firstSubscriptionItem.id
                 productName = target.attributes.productName
-            whenM (Projects.subItemBilledElsewhere pid firstSubId) $ throwError err403{errBody = "This subscription already belongs to another project"}
-            _ <- updatePricing productName subId firstSubId orderId
-            auditPlan productName
-            handleOnboarding
-            void $ ProjectMembers.activateAllMembers pid
-            Right () <$ Settings.notifyPlanChange envCfg project (ET.planUpgradedEmail productName)
+            ifM (Projects.subItemBilledElsewhere pid firstSubId) (pure $ Left SubscriptionBilledElsewhere) do
+              _ <- updatePricing productName subId firstSubId orderId
+              auditPlan productName
+              handleOnboarding
+              void $ ProjectMembers.activateAllMembers pid
+              Right () <$ Settings.notifyPlanChange envCfg project (ET.planUpgradedEmail productName)
           _ -> pure $ Left SubscriptionLookupFailed
       Nothing -> do
         -- Free clears sub_id below; cancel first, or the provider keeps billing a sub nothing points at.
