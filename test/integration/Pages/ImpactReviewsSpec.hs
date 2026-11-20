@@ -83,7 +83,7 @@ import Pkg.TestUtils qualified as Test
 import Servant (ServerError (..), getResponse)
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Directory (canonicalizePath, copyFile, createDirectoryIfMissing, createFileLink, doesDirectoryExist, doesFileExist, listDirectory, removeFile, removePathForcibly, renameDirectory)
+import System.Directory (canonicalizePath, copyFile, createDirectoryIfMissing, createFileLink, doesDirectoryExist, doesFileExist, findExecutable, listDirectory, removeFile, removePathForcibly, renameDirectory)
 import System.Environment (getEnvironment)
 import System.Environment qualified as Environment
 import System.Exit (ExitCode (..))
@@ -3033,6 +3033,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
 
   -- Like a reviewer's terminal screenshot: plain output is one still of everything printed, at 2x.
   it "proofMedia_plainTerminalOutputBecomesAStillCard" \_ -> do
+    whenNothingM_ (findExecutable "agg") $ pendingWith "agg (the proof worker's cast renderer) is not installed here"
     let cast = "{\"version\":2,\"width\":110,\"height\":32}\n[0.2,\"o\",\"\\u001b[36m$ curl -si localhost:8080/auth_callback\\u001b[0m\\r\\nHTTP/1.1 302 Found\\r\\nLocation: /\\r\\n\\u001b[90mexit 0\\u001b[0m\\r\\n\"]\n"
         pixels at bytes = foldl' (\n b -> n * 256 + fromIntegral b) (0 :: Int) $ BS.unpack $ BS.take 4 $ BS.drop at bytes
     (_, _, card) <- either (fail . toString) pure =<< Media.renderProof cast cast
