@@ -238,7 +238,14 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
         let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
         pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
         let messages = fromMaybe [] (pullResp L.^. field @"receivedMessages")
-        let !validMsgs = mapMaybe (\msg -> (,) <$> msg.ackId <*> msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64) messages
+        let !(unreadable, validMsgs) = readablePubsubMessages messages
+        -- Never acknowledged, so Pub/Sub redelivers them: say so instead of dropping them silently.
+        unless (null unreadable)
+          . liftIO
+          . runLogT "pubsub-service" appLogger LogAttention
+          $ LogBase.logAttention
+            "pubsubService: skipped messages with no ackId or data"
+            (AE.object ["topic" AE..= topic, "skipped" AE..= length unreadable, "received" AE..= length messages, "message_ids" AE..= mapMaybe (^? field @"message" . _Just . field @"messageId" . _Just) unreadable])
         let msgAttrs = maybeToMonoid $ messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
 
         msgIds <-
@@ -271,6 +278,16 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
   where
     pubSubScope :: Proxy '["https://www.googleapis.com/auth/pubsub"]
     pubSubScope = Proxy
+
+
+-- | Split a pull into the messages the pipeline can read and those it cannot: no ackId or no data.
+--
+-- >>> import Gogol.Data.Base64 (Base64 (..))
+-- >>> let msg ack body = PubSub.newReceivedMessage & field @"ackId" L..~ ack & field @"message" L..~ Just (PubSub.newPubsubMessage & field @"data'" L..~ (Base64 <$> body))
+-- >>> bimap length (map fst) $ readablePubsubMessages [msg (Just "a1") (Just "{}"), msg Nothing (Just "{}"), msg (Just "a3") Nothing]
+-- (2,["a1"])
+readablePubsubMessages :: [PubSub.ReceivedMessage] -> ([PubSub.ReceivedMessage], [(Text, ByteString)])
+readablePubsubMessages = partitionWith \msg -> maybeToRight msg $ (,) <$> msg.ackId <*> msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
 
 
 -- | Publish a value to a Kafka topic verbatim, with the given headers. The
