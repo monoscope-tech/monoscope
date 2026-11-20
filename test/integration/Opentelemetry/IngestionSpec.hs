@@ -26,6 +26,7 @@ import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrent
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
+import Data.UUID.Quasi (uuid)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Query, execute_)
@@ -195,6 +196,12 @@ spec = do
       OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto traceReq) `shouldThrow` unauthenticated
       OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createGaugeMetricAtTime "definitely-not-a-valid-key" [] [] "rejected.metric" 99.9 frozenTime) `shouldThrow` unauthenticated
       runTestBg frozenTime tr (OtlpServer.processLogsRequest (Just "invalid-header-key") (createOtelLogAtTime "" ["Should not be stored"] frozenTime)) `shouldThrow` unauthenticated
+      -- An at-project-id alone wrote into any project whose UUID was known; only legacy senders keep it.
+      let legacy = UUIDId [uuid|dcad860a-9a98-4c9e-9e69-20d52dcf90e2|]
+          byIdOnly p = OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime "" ["by id only"] frozenTime & LSF.resourceLogs %~ map (PLF.resource . PRF.attributes .~ [mkAttr "at-project-id" p.toText]))
+      dbExec tr [sql| INSERT INTO projects.projects (id, title, payment_plan, active, weekly_notif, daily_notif) VALUES (?, 'legacy sender', 'GraduatedPricing', true, true, true) |] (Only legacy)
+      byIdOnly pid `shouldThrow` unauthenticated
+      void $ byIdOnly legacy
       drainExtractionWorker tr
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       logRows <- queryLogs tr pid (Just "kind == \"log\"")
@@ -246,12 +253,20 @@ spec = do
           uncredentialed = defMessage & PRF.attributes .~ [mkAttr "service.name" siblingService, mkAttr "qa.sibling" "uncredentialed"]
           siblingLogs =
             createOtelLogAtTime key ["Resource-only log"] frozenTime
-              & LSF.resourceLogs . traverse . PLF.resource .~ mkResource key [mkAttr "service.name" siblingService]
-              & LSF.resourceLogs %~ (\resources -> resources <> map (PLF.resource .~ uncredentialed) resources)
+              & LSF.resourceLogs
+              . traverse
+              . PLF.resource
+              .~ mkResource key [mkAttr "service.name" siblingService]
+                & LSF.resourceLogs
+              %~ (\resources -> resources <> map (PLF.resource .~ uncredentialed) resources)
           siblingTraces =
             createOtelSpanAtTime key "abc124" "def457" Nothing "GET /resource-only" frozenTime
-              & TSF.resourceSpans . traverse . PTF.resource .~ mkResource key [mkAttr "service.name" siblingService]
-              & TSF.resourceSpans %~ (\resources -> resources <> map ((PTF.scopeSpans . traverse . PTF.spans . traverse . PTF.spanId .~ "sibling") . (PTF.resource .~ uncredentialed)) resources)
+              & TSF.resourceSpans
+              . traverse
+              . PTF.resource
+              .~ mkResource key [mkAttr "service.name" siblingService]
+                & TSF.resourceSpans
+              %~ (\resources -> resources <> map ((PTF.scopeSpans . traverse . PTF.spans . traverse . PTF.spanId .~ "sibling") . (PTF.resource .~ uncredentialed)) resources)
       sendBoth Nothing siblingLogs siblingTraces
       assertRows pid siblingService 2
       assertRows other siblingService 0
@@ -328,7 +343,8 @@ spec = do
       export $ resourceWith $ defMessage & PMF.name .~ "request.size.exp" & PMF.exponentialHistogram .~ (defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_DELTA & PMF.dataPoints .~ [expPoint])
       -- The int4 columns are cast to bigint so hasql's Int64 decoder matches the column OID.
       expRows <- tf tr [HI.sql| SELECT distribution_count, distribution_sum, exp_hist_scale::bigint, exp_hist_zero_count, exp_hist_zero_threshold, exp_hist_pos_offset::bigint, exp_hist_pos_buckets::text, exp_hist_neg_offset::bigint, exp_hist_neg_buckets::text, aggregation_temporality FROM otel_metrics WHERE project_id = #{mpid.toText} AND metric_name = 'request.size.exp' |]
-      (\(c, s, scale, zc, zt, posOff, posB, negOff, negB, temporality) -> ((c, s, scale, zc, zt, posOff, negOff, temporality), parseNumArray posB, parseNumArray negB)) <$> V.toList expRows
+      (\(c, s, scale, zc, zt, posOff, posB, negOff, negB, temporality) -> ((c, s, scale, zc, zt, posOff, negOff, temporality), parseNumArray posB, parseNumArray negB))
+        <$> V.toList expRows
         `shouldBe` [((20 :: Int64, 55.0 :: Double, 4 :: Int64, 3 :: Int64, 0.001 :: Double, 2 :: Int64, -1 :: Int64, "DELTA" :: Text), [1, 3, 5], [2, 4])]
       let quantile q v = defMessage & PMF.quantile .~ q & PMF.value .~ v :: PM.SummaryDataPoint'ValueAtQuantile
       export $ resourceWith $ defMessage & PMF.name .~ "request.latency.summary" & PMF.summary .~ (defMessage & PMF.dataPoints .~ [defMessage & PMF.timeUnixNano .~ toNanos frozenTime & PMF.count .~ 12 & PMF.sum .~ 640.0 & PMF.quantileValues .~ [quantile 0.5 100, quantile 0.99 250]])
@@ -426,8 +442,11 @@ spec = do
       expand400 (Just "invalid") (Just "some-key")
       -- A user filter must not erase project_id scoping in fetchSessions / fetchEventExamples.
       other <- createTestProject tr "sessions-other"
-      dbExec tr [sql| INSERT INTO otel_logs_and_spans (project_id, timestamp, name, context___trace_id, attributes___session___id, attributes___user___email, attributes___user___id, summary)
-                      VALUES (?, ?, 'GET /leak', 'trace-leak', 'cross-project-leak-sess', 'leak@external.com', 'leak-user', '{}'::TEXT[]) |] (other, frozenTime)
+      dbExec
+        tr
+        [sql| INSERT INTO otel_logs_and_spans (project_id, timestamp, name, context___trace_id, attributes___session___id, attributes___user___email, attributes___user___id, summary)
+                      VALUES (?, ?, 'GET /leak', 'trace-leak', 'cross-project-leak-sess', 'leak@external.com', 'leak-user', '{}'::TEXT[]) |]
+        (other, frozenTime)
       session "GET /own" [("session.id", "cross-project-leak-sess"), ("user.email", "own@example.com")] False
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       Log.SessionsView leakTotal leakRows _ <- sessionsView tr spid (Just "attributes.user.email == \"leak@external.com\"") Nothing
@@ -443,8 +462,12 @@ spec = do
     it "trace sessions: identity spreads across batches via the cache, never overwrites, merges partial info, backfills rows the cache missed" \tr -> do
       key <- createTestAPIKey tr testPid "sess-prop"
       let send trId spanId name attrs ts = ingestSpanReq tr $ mkSpanRequest trId spanId Nothing name [] Nothing (uncurry mkAttr <$> attrs) (mkResource key []) ts
-          columns trId = dbQuery tr [sql| SELECT name, attributes___session___id, attributes___user___id, attributes___user___email, attributes___user___name, attributes___user___full_name
-                                         FROM otel_logs_and_spans WHERE project_id = ? AND context___trace_id = ? ORDER BY name |] (testPid, trId)
+          columns trId =
+            dbQuery
+              tr
+              [sql| SELECT name, attributes___session___id, attributes___user___id, attributes___user___email, attributes___user___name, attributes___user___full_name
+                                         FROM otel_logs_and_spans WHERE project_id = ? AND context___trace_id = ? ORDER BY name |]
+              (testPid, trId)
           sessionAndUser trId = map (\(n, s, u, _, _, _) -> (n, s, u)) <$> (columns trId :: IO [(Text, Maybe Text, Maybe Text, Maybe Text, Maybe Text, Maybe Text)])
           fullIdentity = [("session.id", "sess-100"), ("user.id", "usr-200"), ("user.email", "u@test.com"), ("user.name", "uname"), ("user.full_name", "User Full")]
       send "aabbccdd11223344aabbccdd11223344" "span1aabbccdd" "frontend-span" fullIdentity frozenTime
@@ -494,8 +517,11 @@ spec = do
       -- A browser exporting straight to /v1/traces is placed by the address it connected from.
       let direct = mkSpanRequest "c0ffee00c0ffee00c0ffee00c0ffee00" "c0ffee00c0ffee01" Nothing "geo-direct" [] Nothing [] (mkResource apiKey [mkAttr "user_agent.original" "Mozilla/5.0"]) frozenTime
       OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider Nothing (Just "81.2.69.142") (encodeMessage direct) `shouldReturn` (Right "" :: Either Text ByteString)
-      dbQuery tr [sql| SELECT name, attributes #>> '{client,address}', attributes___geo___country___iso_code, attributes #>> '{geo,locality,name}', resource -> 'monoscope' IS NOT NULL
-                       FROM otel_logs_and_spans WHERE project_id = ? AND name LIKE '%geo-%' ORDER BY name |] (Only testPid)
+      dbQuery
+        tr
+        [sql| SELECT name, attributes #>> '{client,address}', attributes___geo___country___iso_code, attributes #>> '{geo,locality,name}', resource -> 'monoscope' IS NOT NULL
+                       FROM otel_logs_and_spans WHERE project_id = ? AND name LIKE '%geo-%' ORDER BY name |]
+        (Only testPid)
         `shouldReturn` ( [ ("Pageview geo-otelweb", Just "89.160.20.112", Just "SE", Just "Linköping", False)
                          , ("geo-browser", Just "89.160.20.112", Just "SE", Just "Linköping", False)
                          , ("geo-direct", Just "81.2.69.142", Just "GB", Just "London", False)
@@ -529,8 +555,11 @@ spec = do
         )
         \(language, kind, attrs, path, host, method, endpointPath) -> do
           export kind (language <> " HTTP") attrs (mkResource apiKey [mkAttr "telemetry.sdk.language" language, mkAttr "service.name" "fallback-svc"])
-          dbQuery tr [sql| SELECT attributes___url___path, attributes___http___route, attributes___server___address, attributes___http___request___method, attributes->'monoscope'->'endpoint'->>'route'
-                           FROM otel_logs_and_spans WHERE project_id = ? AND name = ? |] (testPid, language <> " HTTP")
+          dbQuery
+            tr
+            [sql| SELECT attributes___url___path, attributes___http___route, attributes___server___address, attributes___http___request___method, attributes->'monoscope'->'endpoint'->>'route'
+                           FROM otel_logs_and_spans WHERE project_id = ? AND name = ? |]
+            (testPid, language <> " HTTP")
             `shouldReturn` [(Just path, Just endpointPath, Just host, Just method, Just endpointPath)]
       -- A missing method is recovered from the span name, never assumed to be GET.
       for_ ([("POST /orders/{id}", "POST", "/orders/{id}", True, True), ("HTTP /orders/{id}", "_OTHER", "/orders/{id}", True, True), ("HTTP /orders/42", "_OTHER", "/orders/{number}", False, True), ("PATCH /orders/{id}", "PATCH", "/orders/{id}", False, False)] :: [(Text, Text, Text, Bool, Bool)]) \(name, method, endpointRoute, hasRoute, hasPath) -> do
@@ -576,7 +605,8 @@ spec = do
       endpointsLike "/identity%" `shouldReturn` [("POST", "identity-svc", "/identity/login")]
       dbQuery tr [sql| SELECT attributes___server___address FROM otel_logs_and_spans WHERE project_id = ? AND name IN ('POST', 'request handler - /identity/:id') ORDER BY name |] (Only testPid)
         `shouldReturn` replicate 2 (Only (Just ("identity-svc" :: Text)))
-      map (\(_, _, p) -> p) <$> dbQuery @_ @(Text, Text, Text) tr [sql| SELECT method, host, url_path FROM apis.endpoints WHERE project_id = ? AND host = 'orders.example.com' ORDER BY url_path |] (Only testPid)
+      map (\(_, _, p) -> p)
+        <$> dbQuery @_ @(Text, Text, Text) tr [sql| SELECT method, host, url_path FROM apis.endpoints WHERE project_id = ? AND host = 'orders.example.com' ORDER BY url_path |] (Only testPid)
         `shouldReturn` ["/api/orders/{number}", "/api/payments"]
       dbQuery tr [sql| SELECT url_path FROM apis.endpoints WHERE project_id = ? AND host = 'admin.example.com' |] (Only testPid) `shouldReturn` [Only ("/admin/companies/{uuid}/employee-details" :: Text)]
       dbQuery tr [sql| SELECT url_path, hash FROM apis.endpoints WHERE project_id = ? AND url_path LIKE '/api/stores%' |] (Only testPid) `shouldReturn` [(canonical, storesHash)]
@@ -628,11 +658,17 @@ spec = do
             , ExtractionWorker.BufferedSpan "10000000-0000-4000-8000-000000000003" "" "" frozenTime "Connected to database <*> <*>" False
             ]
       for_ spans \s ->
-        dbExec tr [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, context___span_id, context___trace_id, summary)
-                        VALUES (?::uuid, ?, ?, ?, 'SERVER', NULLIF(?::text, ''), NULLIF(?::text, ''), ARRAY[?]::text[]) |] (s.eventId, pid.toText, frozenTime, frozenTime, s.spanCtxId, s.traceId, s.summary)
+        dbExec
+          tr
+          [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, context___span_id, context___trace_id, summary)
+                        VALUES (?::uuid, ?, ?, ?, 'SERVER', NULLIF(?::text, ''), NULLIF(?::text, ''), ARRAY[?]::text[]) |]
+          (s.eventId, pid.toText, frozenTime, frozenTime, s.spanCtxId, s.traceId, s.summary)
       for_ worker.shards \shard -> runTestBg frozenTime (withConfig \c -> c{enableTimefusionWrites = False, enableHashUpdates = True}) $ BackgroundJobs.flushDrainTask shard ExtractionWorker.DrainFlushTask{projectId = pid, serviceName = service, spans, flushedAt = frozenTime}
-      dbQuery tr [sql| SELECT lp.occurrence_count::int, lp.is_error, count(*)::int FROM apis.log_patterns lp JOIN otel_logs_and_spans o ON o.project_id = lp.project_id::text AND o.hashes @> ARRAY['pat:' || lp.pattern_hash]
-                       WHERE lp.project_id = ? AND lp.service_name = ? GROUP BY lp.pattern_hash, lp.occurrence_count, lp.is_error |] (pid, service)
+      dbQuery
+        tr
+        [sql| SELECT lp.occurrence_count::int, lp.is_error, count(*)::int FROM apis.log_patterns lp JOIN otel_logs_and_spans o ON o.project_id = lp.project_id::text AND o.hashes @> ARRAY['pat:' || lp.pattern_hash]
+                       WHERE lp.project_id = ? AND lp.service_name = ? GROUP BY lp.pattern_hash, lp.occurrence_count, lp.is_error |]
+        (pid, service)
         `shouldReturn` [(3 :: Int, True, 3 :: Int)]
       apiKey <- createTestAPIKey tr pid "extraction-worker"
       replicateM_ 3 $ ingestTrace tr apiKey "GET /api/parity/check" frozenTime
@@ -772,14 +808,16 @@ spec = do
       send tr [corruptMsg "ack-poison"] logsAttrs >>= right <&> second (map fst) >>= (`shouldBe` ([], ["ack-poison"]))
       send tr [validLogMsg key "ack-good", corruptMsg "ack-poison"] logsAttrs >>= right <&> second (map fst) >>= (`shouldBe` (["ack-good"], ["ack-poison"]))
       -- An unsupported ce-type once returned Right ([], []): never committed, a hot redelivery loop.
-      send tr [validLogMsg key "ack-unsup-1", corruptMsg "ack-unsup-2"] (HM.singleton "ce-type" "org.rrweb.events.v1") >>= right
+      send tr [validLogMsg key "ack-unsup-1", corruptMsg "ack-unsup-2"] (HM.singleton "ce-type" "org.rrweb.events.v1")
+        >>= right
         >>= (`shouldBe` ([], [("ack-unsup-1", "unsupported ce-type"), ("ack-unsup-2", "unsupported ce-type")]))
       -- 2026-07-27: during a 9-minute TimeFusion OOM ~200k rows vanished with no DLQ entry. A
       -- key projectIdsByProjectApiKeys can't resolve drops out of keyToId, convert yields zero
       -- records for a payload that carried spans, and the allEmpty branch acked every offset.
       -- Converted to zero rows is a DROP: it must surface as poison or a failure, never a clean ack.
       unresolvedBefore <- countDemoSpans tr "ack-unresolvable"
-      send tr [validLogMsg "no-such-project-key-2026-07-27" "ack-unresolvable"] logsAttrs >>= right
+      send tr [validLogMsg "no-such-project-key-2026-07-27" "ack-unresolvable"] logsAttrs
+        >>= right
         >>= (`shouldBe` ([], [("ack-unresolvable", "unresolved project: payload carried telemetry but did not resolve or convert")]))
       countDemoSpans tr "ack-unresolvable" `shouldReturn` unresolvedBefore
       -- DLQ replay rewrites ONLY the failed leg: the durable leg already holds the row and PG
