@@ -315,6 +315,7 @@ extra-source-files:
     static/migrations/0297_slack_connect_invite_status.sql
     static/migrations/0298_dashboards_project_index.sql
     static/migrations/0299_slack_connect_invite_attempts.sql
+    static/migrations/0300_llm_unit_hours.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb
     test/fixtures/github-app-test.pem

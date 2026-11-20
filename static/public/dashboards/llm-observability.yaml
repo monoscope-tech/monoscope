@@ -7,7 +7,7 @@ description: Model calls, cost, tokens, latency, tools, agents and errors from O
 refresh_interval: 60s
 # Queries filter on the promoted attributes.gen_ai.* columns. Token, cost and latency figures read
 # inference spans only: an agent span may carry its run's aggregate usage, which would count every call twice.
-# The first tab's first widgets also open the LLM & Agents page (Pages.LLM.overviewWidgets).
+# The first tab's first widgets also open the LLM & Agents page (Pages.LLM.overview_).
 # SQL tables filter through {{query_ast_filters}}: the widget's KQL (scope + variables) compiled to SQL.
 
 variables:

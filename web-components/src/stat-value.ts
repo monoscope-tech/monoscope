@@ -102,13 +102,17 @@ export const statScalar = (stats: Partial<StatAggregates>, summarizeBy: string, 
   }
 };
 
-/** Format a stat scalar for display, appending the unit (duration-aware). */
+/** Currency symbols lead their amount: "$0.06", not "0.06 $". */
+const CURRENCY_UNITS = new Set(['$', '€', '£']);
+
+/** Format a stat scalar for display, with its unit (duration-aware). */
 export const formatStatValue = (value: number, unit: string, decimals?: number | null): string => {
   if (DURATION_UNITS.has(unit)) return formatDuration(convertToNanoseconds(value, unit));
   if (BYTE_UNITS.has(unit)) return formatBytes(value);
-  const suffix = ({ '': '', '1': '', '{}': '', By: ' bytes' } as Record<string, string>)[unit] ?? ` ${unit}`;
-  if (decimals != null) return `${value.toFixed(decimals)}${suffix}`;
+  const prefix = CURRENCY_UNITS.has(unit) ? unit : '';
+  const suffix = prefix ? '' : (({ '': '', '1': '', '{}': '', By: ' bytes' } as Record<string, string>)[unit] ?? ` ${unit}`);
+  if (decimals != null) return `${prefix}${value.toFixed(decimals)}${suffix}`;
   if (value === 1 && /^[a-z]{2,}s$/i.test(unit)) return `1 ${unit.slice(0, -1)}`;
   // A non-zero value below the display precision (a rare error rate) must not read as 0.
-  return `${value > 0 && value < 0.01 ? '<0.01' : formatNumber(value)}${suffix}`;
+  return value > 0 && value < 0.01 ? `<${prefix}0.01${suffix}` : `${prefix}${formatNumber(value)}${suffix}`;
 };

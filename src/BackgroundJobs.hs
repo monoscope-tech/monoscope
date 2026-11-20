@@ -1553,7 +1553,14 @@ runHourlyJob scheduledTime hour = do
   Hasql.interpExecute [HI.sql| DELETE FROM projects.ingest_sampling WHERE hour < now() - interval '3 days' |] >>= logDeleted "Cleaned up old free-tier sampling counters"
 
   enqueueJobs ctx [Jobs.CompressReplaySessions, Jobs.DashboardsAutoProvision scheduledTime]
-  tryStep "llm-signals" $ Hasql.interp @[Projects.ProjectId] [HI.sql| SELECT DISTINCT project_id FROM apis.llm_signals WHERE project_id = ANY(#{V.fromList activeProjects}) |] >>= enqueueJobs ctx . map Jobs.EvaluateLLMSignals
+  -- Projects with signals, or whose LLM pages were opened this week (they keep hours cached).
+  tryStep "llm-signals"
+    $ Hasql.interp @[Projects.ProjectId]
+      [HI.sql| SELECT project_id FROM apis.llm_signals WHERE project_id = ANY(#{V.fromList activeProjects})
+        UNION SELECT project_id FROM apis.llm_unit_hours WHERE project_id = ANY(#{V.fromList activeProjects}) AND hour > #{addUTCTime (-(7 * nominalDay)) scheduledTime} |]
+    >>= enqueueJobs ctx
+    . map Jobs.EvaluateLLMSignals
+  Hasql.interpExecute [HI.sql| DELETE FROM apis.llm_unit_hours WHERE hour < #{addUTCTime (-(30 * nominalDay)) scheduledTime} |] >>= logDeleted "Cleaned up old LLM hour aggregates"
 
   checkFreeTierUsageNotifications activeProjects scheduledTime
 

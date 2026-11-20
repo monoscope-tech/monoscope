@@ -18,6 +18,7 @@ module Pkg.GenAI (
   FinishReasons (..),
   Abnormal (..),
   abnormalFinish,
+  abnormalReasons,
 ) where
 
 import Data.Aeson ((.=))
@@ -140,18 +141,21 @@ instance AE.FromJSON FinishReasons where
 
 
 data Abnormal = Truncated | Filtered
-  deriving stock (Eq, Show)
+  deriving stock (Bounded, Enum, Eq, Show)
 
 
--- | A finish reason that means the reply is incomplete, across providers' spellings.
---
+-- | The finish reasons that mean a reply is incomplete, across providers' spellings.
+abnormalReasons :: Abnormal -> [Text]
+abnormalReasons = \case
+  Truncated -> ["length", "max_tokens", "MAX_TOKENS"]
+  Filtered -> ["content_filter", "refusal", "SAFETY"]
+
+
+-- |
 -- >>> map abnormalFinish ["length", "MAX_TOKENS", "content_filter", "SAFETY", "stop", "end_turn"]
 -- [Just Truncated,Just Truncated,Just Filtered,Just Filtered,Nothing,Nothing]
 abnormalFinish :: Text -> Maybe Abnormal
-abnormalFinish r
-  | r `elem` ["length", "max_tokens", "MAX_TOKENS"] = Just Truncated
-  | r `elem` ["content_filter", "refusal", "SAFETY"] = Just Filtered
-  | otherwise = Nothing
+abnormalFinish r = find ((r `elem`) . abnormalReasons) universe
 
 
 -- | Operations that call a model: the only spans that carry tokens and cost.
