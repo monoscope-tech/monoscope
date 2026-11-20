@@ -338,6 +338,8 @@ path refuses a dirty tree and records who built it; the deploy job prints
 
 ## Testing
 
+**In a fix or review sandbox VM** (no Docker, no tmux, no running database) the watcher rules below do not apply. Run one suite directly, with `USE_EXTERNAL_DB` unset so the tests start their own TimescaleDB through tmp-postgres (the VM has `initdb`/`postgres` on PATH): `cabal test integration-tests --test-options='--match "…"'`. Run `cabal build test:integration-tests` first: it is incremental, while each recorded check costs a full run.
+
 ### NEVER run `cabal test` / `stack test` to verify tests
 
 **Read `build-test-dev.log`.** `make live-test-dev` is the way to run and iterate on the test suite in this repo. It runs as a ghcid watcher (in a tmux pane or as a backgrounded process), compiles `src/` + `test/integration/` as a single GHCi target (no library re-link between edits), and re-runs the suite automatically on every file save, streaming results into `build-test-dev.log`.
