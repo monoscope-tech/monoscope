@@ -62,7 +62,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Ids qualified as Projects
 import Models.Projects.Activation qualified as Activation
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Pkg.DeriveUtils (SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), selectFrom)
+import Pkg.DeriveUtils (SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), liveProjectSql, selectFrom)
 import Relude
 import Servant (FromHttpApiData, ToHttpApiData (..))
 import System.Types (DB)
@@ -423,7 +423,7 @@ claimDueCronMonitors :: DB es => Int -> Eff es [CronMonitor]
 claimDueCronMonitors limit =
   Hasql.interp
     ( [HI.sql| UPDATE apis.cron_monitors SET next_eval_at = now() + interval '1 minute'
-               WHERE id IN (SELECT id FROM apis.cron_monitors cm WHERE next_eval_at <= now() AND EXISTS (SELECT 1 FROM projects.projects lp WHERE lp.id = cm.project_id AND lp.active AND lp.deleted_at IS NULL) ORDER BY next_eval_at FOR UPDATE SKIP LOCKED LIMIT #{limit})
+               WHERE id IN (SELECT id FROM apis.cron_monitors cm WHERE next_eval_at <= now() AND ^{liveProjectSql "cm.project_id"} ORDER BY next_eval_at FOR UPDATE SKIP LOCKED LIMIT #{limit})
                RETURNING |]
         <> cronCols
     )

@@ -97,18 +97,20 @@ spec = around withTestResources do
 
   it "roles: demo and viewer bearers only read, editors cannot administer, cross-site basic-auth writes and logged-out sessions are refused" \tr -> do
     let sid = UUID.toASCIIBytes (getResponse tr.trSessAndHeader).sessionId.getPersistentSessionId
-        api hs m p = Servant.runHandler $ unAuthHandler (Auth.apiKeyAuthHandler tr.trLogger tr.trATCtx) Wai.defaultRequest{Wai.requestMethod = m, Wai.rawPathInfo = p, Wai.requestHeaders = hs}
-        outcome = fmap (bimap errHTTPCode \case Authenticated _ -> rw; DemoReader _ -> ro)
-        rw, ro :: Text
-        (rw, ro) = ("rw", "ro")
+        api hs m p = Servant.runHandler $ unAuthHandler (Auth.apiKeyAuthHandler tr.trLogger tr.trATCtx) (WT.setPath Wai.defaultRequest p){Wai.requestMethod = m, Wai.requestHeaders = hs}
+        outcome = fmap (bimap errHTTPCode \case Authenticated _ -> rw; Editor _ -> ed; DemoReader _ -> ro)
+        rw, ed, ro :: Text
+        (rw, ed, ro) = ("rw", "ed", "ro")
         asMember = api [(hAuthorization, "Bearer " <> sid), ("X-Project-Id", encodeUtf8 testPid.toText)]
         demo = api [("X-Project-Id", encodeUtf8 Projects.demoProjectId.toText)]
     -- The demo project's world-readable bypass also took writes, e.g. minting its API keys.
     traverse outcome [demo "GET" "/api/v1/events", demo "POST" "/api/v1/events/query", demo "POST" "/api/v1/api_keys"] `shouldReturn` ([Right ro, Right ro, Left 401] :: [Either Int Text])
     -- A session token ignored the member's role: a viewer could PATCH themselves to admin.
     let probes = [asMember "GET" "/api/v1/members", asMember "PATCH" "/api/v1/members/self", asMember "POST" "/api/v1/api_keys", asMember "POST" "/api/v1/monitors"]
-    for_ [(PM.PView, [Right ro, Left 403, Left 403, Left 403] :: [Either Int Text]), (PM.PEdit, [Right rw, Left 403, Left 403, Right rw]), (PM.PAdmin, replicate 4 (Right rw))] \(role, want) ->
+    for_ [(PM.PView, [Right ro, Left 403, Left 403, Left 403] :: [Either Int Text]), (PM.PEdit, [Right ed, Left 403, Left 403, Right ed]), (PM.PAdmin, replicate 4 (Right rw))] \(role, want) ->
       setRole tr testPid role >> (traverse outcome probes `shouldReturn` want)
+    -- MCP tool calls reach the API app as unprefixed paths, where 'Editor' is re-checked.
+    map (\(m, p) -> Auth.adminRequest (WT.setPath Wai.defaultRequest p){Wai.requestMethod = m}) ([("PATCH", "/members/x"), ("POST", "/api/v1/api_keys"), ("GET", "/members"), ("POST", "/projects/x")] :: [(ByteString, ByteString)]) `shouldBe` [True, True, False, False]
 
     -- Basic auth rides every request, so a cross-site form could write as the operator.
     let basicCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.basicAuthEnabled = True, Config.basicAuthUsername = "tester", Config.basicAuthPassword = "s3cret"}}

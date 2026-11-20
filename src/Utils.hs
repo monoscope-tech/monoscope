@@ -2114,6 +2114,28 @@ embeddedIcons =
    )
 
 
+-- | Addresses an outbound fetch must never reach: loopback, unspecified, RFC 1918, CGNAT,
+-- link-local (incl. cloud metadata), benchmarking, multicast/reserved, ULA, and IPv4 spelt
+-- as IPv6 (mapped or compatible). Shared by 'safeScrapeUrl' (the literal host) and the probe
+-- managers' connect hook (every address the name resolves to).
+--
+-- >>> map (maybe False internalAddress . readMaybe @IP.IP . toString @Text) ["127.0.0.1", "100.64.0.1", "169.254.169.254", "198.18.0.1", "8.8.8.8", "::", "::ffff:7f00:1", "fe80::1", "2606:4700::1111"]
+-- [True,True,True,True,False,True,True,True,False]
+internalAddress :: IP.IP -> Bool
+internalAddress = \case
+  IP.IPv4 a -> any (IP.isMatchedTo a) v4
+  IP.IPv6 a -> any (IP.isMatchedTo a) v6 || any (internalAddress . IP.IPv4) (embeddedV4 a)
+  where
+    v4 :: [IP.AddrRange IP.IPv4]
+    v4 = mapMaybe (readMaybe . toString @Text) ["0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15", "224.0.0.0/3"]
+    v6 :: [IP.AddrRange IP.IPv6]
+    v6 = mapMaybe (readMaybe . toString @Text) ["::/127", "fc00::/7", "fe80::/10", "ff00::/8", "64:ff9b::/96"]
+    embeddedV4 a = case IP.fromIPv6w a of
+      (0, 0, 0xffff, w) -> Just (IP.toIPv4w w)
+      (0, 0, 0, w) | w > 1 -> Just (IP.toIPv4w w)
+      _ -> Nothing
+
+
 -- | Reject non-http(s) schemes and hosts that resolve to the internal network
 -- (loopback, link-local, RFC-1918, ULA, IPv4-mapped IPv6, and obfuscated numeric
 -- literals — octal/decimal/short forms), to blunt SSRF via the scrape URL. DNS-rebinding
@@ -2127,28 +2149,6 @@ embeddedIcons =
 -- [False,False]
 -- >>> map safeScrapeUrl ["http://[fe9f::1]/m", "http://[fc00::1]/m", "http://[2001:db8::1]/m"]
 -- [False,False,True]
--- | Addresses an outbound fetch must never reach: loopback, unspecified, RFC 1918, CGNAT,
--- link-local (incl. cloud metadata), benchmarking, multicast/reserved, ULA, and IPv4 spelt
--- as IPv6 (mapped or compatible). Shared by 'safeScrapeUrl' (the literal host) and the probe
--- managers' connect hook (every address the name resolves to).
---
--- >>> map (maybe False internalAddress . readMaybe @IP.IP . toString @Text) ["127.0.0.1", "100.64.0.1", "169.254.169.254", "198.18.0.1", "8.8.8.8", "::", "::ffff:7f00:1", "fe80::1", "2606:4700::1111"]
--- [True,True,True,True,False,True,True,True,False]
-internalAddress :: IP.IP -> Bool
-internalAddress = \case
-  IP.IPv4 a -> any (IP.isMatchedTo a) v4
-  IP.IPv6 a -> any (IP.isMatchedTo a) v6 || maybe False (internalAddress . IP.IPv4) (embeddedV4 a)
-  where
-    v4 :: [IP.AddrRange IP.IPv4]
-    v4 = mapMaybe (readMaybe . toString @Text) ["0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15", "224.0.0.0/3"]
-    v6 :: [IP.AddrRange IP.IPv6]
-    v6 = mapMaybe (readMaybe . toString @Text) ["::/127", "fc00::/7", "fe80::/10", "ff00::/8", "64:ff9b::/96"]
-    embeddedV4 a = case IP.fromIPv6w a of
-      (0, 0, 0xffff, w) -> Just (IP.toIPv4w w)
-      (0, 0, 0, w) | w > 1 -> Just (IP.toIPv4w w)
-      _ -> Nothing
-
-
 safeScrapeUrl :: Text -> Bool
 safeScrapeUrl u = case parseURI (toString (T.strip u)) of
   Nothing -> False
@@ -2165,7 +2165,7 @@ safeScrapeUrl u = case parseURI (toString (T.strip u)) of
             -- A bracketed literal must parse as IPv6; textual prefixes missed [::], [0::1] and
             -- [0:0:0:0:0:ffff:7f00:1].
             || maybe False (maybe True (internalAddress . IP.IPv6) . readMaybe @IP.IPv6 . toString) (T.stripPrefix "[" h >>= T.stripSuffix "]")
-            || maybe False internalAddress (readMaybe @IP.IP (toString h))
+            || any internalAddress (readMaybe @IP.IP (toString h))
             || internalIPv4 h
             || obfuscatedNumericHost h
             || hexNumericHost h

@@ -566,8 +566,9 @@ newProbeManagers refused = (,) <$> HC.newManager settings <*> HC.newManager sett
 
 -- | Probe and scrape targets are user-supplied. 'Utils.safeScrapeUrl' vets the URL's literal
 -- host when it is saved; this vets every address the name resolves to when it connects, so an
--- internal DNS name, a wildcard name like 127.0.0.1.nip.io, or a rebinding answer is refused.
--- IPv4 is pinned to the address that was checked.
+-- internal DNS name or a wildcard name like 127.0.0.1.nip.io is refused. Plain HTTP connects to
+-- the IPv4 address that was checked; http-client-tls ignores it and resolves again, so a
+-- rebinding answer between the two lookups still reaches an https target.
 publicOnly :: (IP.IP -> Bool) -> (Maybe NS.HostAddress -> String -> Int -> IO HCI.Connection) -> Maybe NS.HostAddress -> String -> Int -> IO HCI.Connection
 publicOnly refused connect _ host port = do
   addrs <- map NS.addrAddress <$> NS.getAddrInfo (Just NS.defaultHints{NS.addrSocketType = NS.Stream}) (Just host) (Just $ show port)

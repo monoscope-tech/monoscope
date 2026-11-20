@@ -599,15 +599,15 @@ setIncludeAlertUserIdentity pid includeIdentity =
   EHasql.interpExecute_ [HI.sql| UPDATE projects.projects SET include_user_identity_in_alerts = #{includeIdentity} WHERE id = #{pid} |]
 
 
--- | The project only if it is live. A deactivated or soft-deleted project reads
--- as absent, which is the right answer for delivery (alerts, reports), for
--- unauthenticated surfaces (share links) and for authenticating a key against
--- the project that owns it.
 -- | Whether a live project other than @pid@ is already billed to this subscription item.
 subItemBilledElsewhere :: DB es => ProjectId -> Text -> Eff es Bool
 subItemBilledElsewhere pid itemId = isJust <$> EHasql.interpOne @(HI.OneColumn Bool) [HI.sql| SELECT true FROM projects.projects WHERE first_sub_item_id = #{itemId} AND id <> #{pid} AND deleted_at IS NULL LIMIT 1 |]
 
 
+-- | The project only if it is live. A deactivated or soft-deleted project reads
+-- as absent, which is the right answer for delivery (alerts, reports), for
+-- unauthenticated surfaces (share links) and for authenticating a key against
+-- the project that owns it.
 activeProjectById :: DB es => ProjectId -> Eff es (Maybe Project)
 activeProjectById pid = EHasql.interpOne [HI.sql| SELECT p.* FROM projects.projects p WHERE id=#{pid} AND active=TRUE AND deleted_at IS NULL |]
 

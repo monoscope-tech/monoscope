@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), pinWidget, ChartScope (..), VizType (..), vizWidget, widgetWith_, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, embeddedWidgets_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, assignWidgetIds, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), monitorChartType, vizChart, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
+module Pkg.Components.Widget (Widget (..), pinWidget, ChartScope (..), VizType (..), vizWidget, widgetWith_, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, embeddedWidgets_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, assignWidgetIds, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), monitorChartType, vizChart, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, withoutClientHtml, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -661,8 +661,7 @@ encodeWidgetZ = B64.extractBase64 . B64URL.encodeBase64 . toStrict . GZip.compre
 
 -- | Inverse of 'encodeWidgetZ'; 'Nothing' for anything that isn't a well-formed blob.
 -- Forced here so a corrupt payload fails as a decode miss rather than as a lazy
--- 'GZip.decompress' bomb detonating deep inside the handler.
--- | Capped at 'maxWidgetJsonBytes': widget.png decodes before it can check the signature, and
+-- 'GZip.decompress' bomb detonating deep inside the handler. Capped at 'maxWidgetJsonBytes': widget.png decodes before it can check the signature, and
 -- gzip of zeros expands ~1000x, so an unsigned 50 KB request line used to inflate to ~38 MB.
 --
 -- >>> decodeWidgetZ (encodeWidgetZ "{}")
@@ -732,6 +731,12 @@ verifySqlSignature secret pid sql rollup = maybe False \sig -> BA.constEq (encod
 -- | Stamp 'sqlSig' on a widget and its children, for those carrying SQL.
 signWidgetSql :: Text -> Projects.ProjectId -> Widget -> Widget
 signWidgetSql secret pid = transformOf (#children . _Just . traverse) \w -> w{sqlSig = sqlSignature secret pid w.sql w.rollupSql <$ (w.sql <|> w.rollupSql)}
+
+
+-- | `html` is only ever the server's own render ('processEagerWidget') and is emitted raw, so a
+-- client-supplied one, at any depth, is dropped.
+withoutClientHtml :: Widget -> Widget
+withoutClientHtml = transformOf (#children . _Just . traverse) (#html .~ Nothing)
 
 
 -- | Standalone timeseries panel with the shared infrastructure-page chrome:
@@ -2219,7 +2224,7 @@ renderLongTextOr widget linkSubs col value
     tableLink = replacePlaceholders linkSubs
     -- Column links come from stored widget JSON, which API-key holders write: only web and
     -- same-site targets, never javascript:.
-    safeHref h = if any (`T.isPrefixOf` T.toLower (T.strip h)) ["http://", "https://", "/", "?", "#"] && not ("//" `T.isPrefixOf` T.strip h) then h else "#"
+    safeHref h = let t = T.toLower (T.strip h) in if any (`T.isPrefixOf` t) ["http://", "https://", "/", "?", "#"] && not (any (`T.isPrefixOf` t) ["//", "/\\"]) then h else "#"
 
 
 -- | A SQL statement broken before its clauses, for reading in a tooltip. Display only: a word

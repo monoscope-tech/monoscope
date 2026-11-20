@@ -71,7 +71,7 @@ linkDiscordGetH pidM' codeM guildIdM cookieM = do
             ]
       res <- postWith (defaults & contentTypeHeader "application/x-www-form-urlencoded") "https://discord.com/api/oauth2/token" body
       let grantedGuild = res ^? Wreq.responseBody . AEL.key "guild" . AEL.key "id" . AEL._String
-      if not (statusIsSuccessful (res ^. Wreq.responseStatus)) || maybe False (/= guildId) grantedGuild
+      if not (statusIsSuccessful (res ^. Wreq.responseStatus)) || any (/= guildId) grantedGuild
         then pure discordErr
         else do
           _ <- insertDiscordData pid guildId
@@ -111,7 +111,7 @@ data DiscordInteraction = Interaction
 -- >>> map (canManageGuild . Just . DiscordMember) ["32", "8", "2048"]
 -- [True,True,False]
 canManageGuild :: Maybe DiscordMember -> Bool
-canManageGuild member = maybe False ((/= 0) . (.&. 0x28)) (readMaybe @Integer . toString . (.permissions) =<< member)
+canManageGuild member = any ((/= 0) . (.&. 0x28)) (readMaybe @Integer . toString . (.permissions) =<< member)
 
 
 -- | The invoking guild member; Discord sends its resolved permissions as a decimal bit set.

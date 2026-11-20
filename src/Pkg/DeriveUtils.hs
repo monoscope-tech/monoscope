@@ -34,6 +34,7 @@ module Pkg.DeriveUtils (
   mkHasqlPool,
   mkHasqlPoolWithIdleTimeout,
   rawSql,
+  liveProjectSql,
   SqlEnum (..),
   selectFrom,
   -- Text-backed enum helpers, for types whose stored spelling is not the snake-cased
@@ -515,6 +516,11 @@ mkHasqlPoolWithIdleTimeout idleTimeout sz cstr =
 -- Use only for column/table names and other trusted fragments, never user input.
 rawSql :: Text -> HI.Sql
 rawSql = fromString . toString
+
+
+-- | The project @col@ names is live: active and not deleted. Rows a deleted project owns are dead.
+liveProjectSql :: Text -> HI.Sql
+liveProjectSql col = "EXISTS (SELECT 1 FROM projects.projects lp WHERE lp.id = " <> rawSql col <> " AND lp.active AND lp.deleted_at IS NULL)"
 
 
 -- | An enum's stored spelling as an inline SQL string literal, so the query text keeps

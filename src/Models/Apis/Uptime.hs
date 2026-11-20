@@ -46,7 +46,7 @@ import Data.Vector qualified as V
 import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Models.Ids qualified as Projects
-import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..))
+import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..), liveProjectSql)
 import Relude
 import System.Types (DB)
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
@@ -289,7 +289,7 @@ statusPageById pid sid = Hasql.interpOne (statusPageCols <> [HI.sql| WHERE proje
 
 
 statusPageBySlug :: DB es => Text -> Eff es (Maybe StatusPage)
-statusPageBySlug slug = Hasql.interpOne (statusPageCols <> [HI.sql| WHERE slug = #{slug} AND EXISTS (SELECT 1 FROM projects.projects lp WHERE lp.id = apis.status_pages.project_id AND lp.active AND lp.deleted_at IS NULL) |])
+statusPageBySlug slug = Hasql.interpOne (statusPageCols <> [HI.sql| WHERE slug = #{slug} AND ^{liveProjectSql "apis.status_pages.project_id"} |])
 
 
 -- | 0 when the slug is taken: slugs are global, being public URLs.

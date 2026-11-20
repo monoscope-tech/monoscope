@@ -57,7 +57,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Client (Manager)
 import Network.Wreq (defaults, header)
 import Network.Wreq qualified as Wreq
-import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..), unUUIDId)
+import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..), liveProjectSql, unUUIDId)
 import Pkg.Prometheus qualified as Prom
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -291,7 +291,7 @@ claimDueConfigs region limit =
               WHERE id IN (
                 SELECT id FROM apis.prometheus_scrape_configs psc
                 -- A deleted project's checks kept probing its URLs (with stored auth headers) and alerting.
-                WHERE enabled AND EXISTS (SELECT 1 FROM projects.projects lp WHERE lp.id = psc.project_id AND lp.active AND lp.deleted_at IS NULL) AND (regions = '{}' OR #{region} = ANY(regions)) AND (last_scraped_at IS NULL
+                WHERE enabled AND ^{liveProjectSql "psc.project_id"} AND (regions = '{}' OR #{region} = ANY(regions)) AND (last_scraped_at IS NULL
                       OR last_scraped_at < now() - make_interval(secs => scrape_interval_seconds))
                 ORDER BY last_scraped_at ASC NULLS FIRST
                 FOR UPDATE SKIP LOCKED

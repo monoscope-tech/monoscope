@@ -1,5 +1,6 @@
 module Pages.Dashboards (
   authorizeClientSql,
+  authorizeClientWidget,
   dashboardGetH,
   DashboardViewForm (..),
   dashboardViewPostH,
@@ -1110,6 +1111,11 @@ authorizeClientSql pid sql rollup sig = when (isJust $ nonEmptyT sql <|> nonEmpt
   unless (Widget.verifySqlSignature secret pid sql rollup sig) $ void $ ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
 
 
+-- | 'authorizeClientSql' for a client-sent widget and every widget nested in it.
+authorizeClientWidget :: Projects.ProjectId -> Widget.Widget -> ATAuthCtx ()
+authorizeClientWidget pid = traverse_ (\w -> authorizeClientSql pid w.sql w.rollupSql w.sqlSig) . universeOf (#children . _Just . folded)
+
+
 processWidget :: Prefill -> Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processWidget prefill pid now timeRange allParams widgetBase = do
   secret <- (.env.apiKeyEncryptionSecretKey) <$> ask @AuthContext
@@ -1122,8 +1128,6 @@ processWidget prefill pid now timeRange allParams widgetBase = do
       resolveLogsQuery
         | widgetBase.wType == Widget.WTLogs = fmap (fillQueryTemplate KqlTemplate (variablePresetsKQL def pid.toText fromD toD allParams now))
         | otherwise = Relude.id
-      -- `html` is only ever the server's own render (see 'processEagerWidget'); a stored one came
-      -- from a client write (any member or API-key holder) and reached every viewer raw.
       widget = Widget.signWidgetSql secret pid $ widgetBase & #html .~ Nothing & #id %~ (<|> (slugify <$> widgetBase.title)) & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #query %~ fmap (replacePlaceholders kqlConstants) . resolveLogsQuery
 
   -- The prefill is best-effort: past the budget we hand back the widget with no

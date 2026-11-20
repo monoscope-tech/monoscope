@@ -14,6 +14,7 @@ module Web.Auth (
   APItoolkitAuthContext,
   authorizeUserAndPersist,
   demoGuestSessionId,
+  adminRequest,
   demoReaderAllows,
   targetsDemoProject,
   errorPageHtml,
@@ -73,7 +74,7 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (craftSessionCookie, emptySessionCookie)
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie, hUserAgent, methodGet, methodHead, methodPost, parseQueryText, urlEncode)
-import Network.Wai (Request (queryString, rawPathInfo, rawQueryString, requestHeaders, requestMethod))
+import Network.Wai (Request (pathInfo, queryString, rawPathInfo, rawQueryString, requestHeaders, requestMethod))
 import Network.Wreq (FormParam ((:=)), defaults, header, responseBody)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.AdConversions qualified as AdConversions
@@ -346,7 +347,7 @@ apiKeyAuthHandler logger env = mkAuthHandler \req -> do
   let principal pid =
         maybe (pure Nothing) (runEffs . (`sessionBearerRole` pid)) mbAuth >>= \case
           Just r | r < ProjectMembers.PEdit -> if demoReaderAllows req then pure $ DemoReader pid else T.throwError $ refusal InsufficientRole
-          Just r | r < ProjectMembers.PAdmin, adminRequest req -> T.throwError $ refusal InsufficientRole
+          Just r | r < ProjectMembers.PAdmin -> if adminRequest req then T.throwError $ refusal InsufficientRole else pure $ Editor pid
           _ -> pure $ Authenticated pid
   case (mbHeaderPid, authed) of
     -- Demo project: world-readable, mirrors the web UI bypass in `sessionByID`.
@@ -362,12 +363,15 @@ sessionBearerRole :: DB es => Text -> Projects.ProjectId -> Eff es (Maybe Projec
 sessionBearerRole bearer pid = runMaybeT do
   sid <- hoistMaybe $ UUID.fromText $ stripBearer bearer
   sess <- MaybeT $ Projects.getPersistentSession $ Projects.PersistentSessionId sid
-  fromMaybe (bool ProjectMembers.PView ProjectMembers.PAdmin sess.isSudo) <$> lift (ProjectMembers.getUserPermission pid sess.userId)
+  fromMaybe ProjectMembers.PView <$> lift (ProjectMembers.getSessionPermission pid sess.userId)
 
 
--- | Writes to what only an admin may change: members, API keys, teams, project settings.
+-- | Writes to what only an admin may change: members, API keys, teams, project settings. By
+-- path segment, since MCP tool calls reach the API app without the @/api/v1@ prefix.
 adminRequest :: Request -> Bool
-adminRequest req = requestMethod req `notElem` [methodGet, methodHead] && any (`BS.isInfixOf` rawPathInfo req) ["/api/v1/members", "/api/v1/api_keys", "/api/v1/teams", "/api/v1/project"]
+adminRequest req = requestMethod req `notElem` [methodGet, methodHead] && any (`elem` ["members", "api_keys", "teams", "project"]) (viaNonEmpty head $ unprefixed $ pathInfo req)
+  where
+    unprefixed = \case "api" : "v1" : rest -> rest; ps -> ps
 
 
 -- | Clearing the cookie alone left the session row valid forever: a copied cookie or a CLI

@@ -1052,11 +1052,6 @@ validReviewContext request verified =
         /= result.attemptId
 
 
--- | A documentation page for the agent, fetched by the host so the guest stays off the web: public
--- https:// only (the scrape-target SSRF guard), no redirects, the first 512 KB, HTML reduced to text.
---
--- >>> traverse fetchDocument ["https://127.0.0.1/admin", "http://example.com/docs", "https://169.254.169.254/latest"]
--- [Left "Only public https:// URLs can be fetched",Left "Only public https:// URLs can be fetched",Left "Only public https:// URLs can be fetched"]
 -- | The review agent's page fetch. Its context holds production telemetry and text the PR author
 -- wrote, so a fetched URL is an exfiltration channel: only short, plain document addresses go
 -- out (at most 160 URL-safe characters: no query, fragment or userinfo), which caps what one
@@ -1068,6 +1063,11 @@ documentUrlOk :: Text -> Bool
 documentUrlOk = maybe False (\rest -> T.length rest <= 160 && T.all (\c -> isAlphaNum c || c `elem` ("/._-~:" :: String)) rest) . T.stripPrefix "https://"
 
 
+-- | A documentation page for the agent, fetched by the host so the guest stays off the web: public
+-- https:// only ('documentUrlOk' and the scrape-target SSRF guard), no redirects, the first 512 KB, HTML reduced to text.
+--
+-- >>> traverse fetchDocument ["https://127.0.0.1/admin", "http://example.com/docs", "https://169.254.169.254/latest"]
+-- [Left "Only short public https:// document URLs, without a query string, can be fetched",Left "Only short public https:// document URLs, without a query string, can be fetched",Left "Only short public https:// document URLs, without a query string, can be fetched"]
 fetchDocument :: Text -> IO (Either Text AE.Value)
 fetchDocument url
   | not (documentUrlOk url && safeScrapeUrl url) = pure $ Left "Only short public https:// document URLs, without a query string, can be fetched"

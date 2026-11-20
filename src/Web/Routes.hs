@@ -311,6 +311,7 @@ apiV1App :: ProjectToolCtx es => (forall a. Eff es a -> IO a) -> ApiActor -> Api
 apiV1App run actor principal = case principal of
   -- MCP tool calls reach handlers through here, not through the auth handler.
   DemoReader _ -> \req reply -> if Auth.demoReaderAllows req then app req reply else reply $ Wai.responseLBS H.status401 [(H.hContentType, "application/json")] "{\"error\":\"The demo project is read-only without credentials\"}"
+  Editor _ -> \req reply -> if Auth.adminRequest req then reply $ Wai.responseLBS H.status403 [(H.hContentType, "application/json")] "{\"error\":\"Your role on this project does not allow this\"}" else app req reply
   Authenticated _ -> app
   where
     app =
@@ -833,8 +834,8 @@ chartScopeParams pid params = case pid of
 widgetPostH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
 widgetPostH pid sinceM fromM toM widget = do
   _ <- Projects.sessionAndProject pid
-  Dashboards.authorizeClientSql pid widget.sql widget.rollupSql widget.sqlSig
-  Widget.widgetPostH pid sinceM fromM toM (widget & #html .~ Nothing)
+  Dashboards.authorizeClientWidget pid widget
+  Widget.widgetPostH pid sinceM fromM toM (Widget.withoutClientHtml widget)
 
 
 widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders Widget.Widget)
@@ -845,14 +846,14 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
   widget <-
     AE.eitherDecode (encodeUtf8 $ fromMaybe "" widgetJson)
       & either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure
-  Dashboards.authorizeClientSql pid widget.sql widget.rollupSql widget.sqlSig
+  Dashboards.authorizeClientWidget pid widget
   now <- Time.currentTime
   let scopeMarkers = [("dashboard_id", Just d) | Just d <- [widget._dashboardId]] <> [("pinned_scope", Just $ decodeUtf8 $ AE.encode sc) | Just sc <- [widget.scope]]
   scopedParams <- chartScopeParams (Just pid) $ scopeMarkers <> allParams
   -- The page's query filters the widget's own, as the browser composes them for /chart_data:
   -- the explorer's top list has no query but the page's.
   let pageQuery = Utils.nonEmptyT $ join $ L.lookup "query" allParams
-      widgetWithPid = widget & #html .~ Nothing & #_projectId ?~ pid & #query .~ Utils.nonEmptyT (Just $ T.intercalate " | " $ catMaybes [pageQuery, widget.query])
+      widgetWithPid = Widget.withoutClientHtml widget & #_projectId ?~ pid & #query .~ Utils.nonEmptyT (Just $ T.intercalate " | " $ catMaybes [pageQuery, widget.query])
       isEager = widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTTopList, Widget.WTStat, Widget.WTAnomalies]
   processedWidget <-
     if isEager
