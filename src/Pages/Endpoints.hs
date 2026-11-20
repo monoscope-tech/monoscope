@@ -15,7 +15,7 @@ import Models.Apis.Endpoints (HostBulkAction (..))
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, navTabAttrs)
+import Pages.BodyWrapper (BWConfig (..), Dep (..), PageCtx (..), checkFreeTierStatus, loadDeps, mkPageCtx, navTabAttrs)
 import Pages.Components (RowAction (..), copyButton_, detailTab_, eventsCountCell_, lastSeenCell_, periodToggle_, rowActions_, sparkline_, tabPanel_)
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), EmptyStateAction (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableResponse (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
 import Pkg.DeriveUtils (assetUrl, bulkActionSlug)
@@ -254,9 +254,7 @@ renderCatalogMainCol pid vm = do
         (V.toList he.services)
     rowActions_
       [ RowAction{icon = "explore", label = "Logs", href = logExplorerHref pid ("attributes.server.address==\"" <> he.host <> "\""), attrs = navTabAttrs}
-      , -- Plain link: the docs page loads Swagger UI from headContent, which an
-        -- HTMX content-only swap would never fetch.
-        RowAction{icon = "brackets-curly", label = "API docs", href = docsHref pid he.host reqTypeLabel Nothing, attrs = []}
+      , RowAction{icon = "brackets-curly", label = "API docs", href = docsHref pid he.host reqTypeLabel Nothing, attrs = navTabAttrs}
       ]
 
 
@@ -467,10 +465,6 @@ apiDocsH pid hostM reqTypeM endpointM = do
           { prePageTitle = Just "API Catalog"
           , pageTitle = "Learned API docs" <> if T.null host then "" else " for " <> host
           , freeTierStatus
-          , headContent = Just do
-              link_ [rel_ "stylesheet", type_ "text/css", href_ $ assetUrl "/public/assets/deps/swagger-ui/swagger-ui.css"]
-              link_ [rel_ "stylesheet", type_ "text/css", href_ $ assetUrl "/public/assets/css/swagger-ui-theme.css"]
-              script_ [src_ $ assetUrl "/public/assets/deps/swagger-ui/swagger-ui-bundle.js", defer_ "true"] ("" :: Text)
           }
   addRespHeaders
     $ ApiDocsPage
@@ -518,21 +512,21 @@ instance ToHtml ApiDocsVM where
       -- The spec URL travels as an attribute rather than interpolated into the
       -- script: it carries a customer-controlled host, and Lucid escapes attributes.
       div_ [id_ "swagger-ui", data_ "spec-url" vm.specJsonUrl] ""
-      -- A module script is deferred by definition, so it runs after the head's
-      -- deferred swagger-ui-bundle.js has defined SwaggerUIBundle. Submit methods
-      -- are empty on purpose: the servers block is the customer's real production
-      -- host, and "Try it out" would fire live requests at it from our UI.
+      -- Submit methods are empty on purpose: the servers block is the customer's real
+      -- production host, and "Try it out" would fire live requests at it from our UI.
       script_
-        [type_ "module"]
-        """
-        const el = document.getElementById('swagger-ui');
-        SwaggerUIBundle({
-          domNode: el, url: el.dataset.specUrl,
-          presets: [SwaggerUIBundle.presets.apis], deepLinking: true,
-          supportedSubmitMethods: [], tryItOutEnabled: false,
-          docExpansion: 'list', defaultModelsExpandDepth: -1, defaultModelExpandDepth: 4
-        });
-        """
+        $ loadDeps [SwaggerUi]
+        <> """
+           .then(() => {
+             const el = document.getElementById('swagger-ui');
+             SwaggerUIBundle({
+               domNode: el, url: el.dataset.specUrl,
+               presets: [SwaggerUIBundle.presets.apis], deepLinking: true,
+               supportedSubmitMethods: [], tryItOutEnabled: false,
+               docExpansion: 'list', defaultModelsExpandDepth: -1, defaultModelExpandDepth: 4
+             });
+           });
+           """
 
     tabPanel_ "group-has-[.apidocs-yaml:checked]/apidocs:block grow min-h-0 overflow-auto" "apidocs-spec" case vm.inlineYaml of
       Just yaml -> div_ [class_ "relative"] do

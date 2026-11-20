@@ -750,21 +750,13 @@ function syncFacetCheckboxes(root: Document | Element = document) {
 }
 window.addEventListener('update-query', () => syncFacetCheckboxes());
 
-// Pages that don't ship Tagify (the log explorer, for load time) still receive tag inputs
-// in lazily swapped fragments such as the monitor form; fetch it the first time one appears.
-let tagifyLoading: Promise<unknown> | null = null;
-const loadTagify = () =>
-  (tagifyLoading ??= new Promise((resolve, reject) => {
-    const src = (name: string) => document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`)?.content || '';
-    document.head.append(Object.assign(document.createElement('link'), { rel: 'stylesheet', href: src('tagify-css') }));
-    document.head.append(Object.assign(document.createElement('script'), { src: src('tagify-js'), onload: resolve, onerror: reject }));
-  }).catch(e => { tagifyLoading = null; throw e; }));
-
 function initAllTagifyInputs(root: Document | Element = document) {
   const els = [...root.querySelectorAll<HTMLElement>('[data-tagify]')];
   const pending = (window as any).Tagify ? [] : els.filter((el) => !(el as any)._tagifyInstance);
   els.filter((el) => !pending.includes(el)).forEach(initTagifyElement);
-  if (pending.length) loadTagify().catch(() => loadTagify()).then(() => pending.forEach(initTagifyElement), (e) => console.error('[Tagify] failed to load', e));
+  // Fetched the first time a tag input appears (BodyWrapper's Dep); a failed load is retried once.
+  const loadTagify = () => (window as any).loadDeps('Tagify');
+  if (pending.length) loadTagify().catch(loadTagify).then(() => pending.forEach(initTagifyElement), (e: unknown) => console.error('[Tagify] failed to load', e));
 }
 
 window.getTagValues = (selector: string): string[] => {

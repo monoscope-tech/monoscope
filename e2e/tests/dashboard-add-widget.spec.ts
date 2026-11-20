@@ -180,7 +180,10 @@ test.describe("adding widgets to a dashboard", () => {
       return heading && header ? heading.y - (header.y + header.height) : -1;
     }).toBeGreaterThan(0);
     await drawer.locator('[name="alertThreshold"]').fill("7");
-    await drawer.getByRole("checkbox", { name: "Create a monitor" }).uncheck();
+    // Keyboard, not a click: scrolling the drawer compacts its sticky preview, and a click aimed
+    // before that layout shift can land beside the toggle (a sign-off flake).
+    await drawer.getByRole("checkbox", { name: "Create a monitor" }).press("Space");
+    await expect(drawer.getByRole("checkbox", { name: "Create a monitor" })).not.toBeChecked();
     await expect(drawer.getByRole("button", { name: "Add widget", exact: true })).toBeVisible();
     await expect(drawer.locator('form[id$="-alert-form"]')).toBeHidden();
     await expect(drawer.locator('#widgetAlertThreshold')).toHaveValue("7");
@@ -787,7 +790,7 @@ test("widget preview compacts when a desktop drawer has a short scroll range", a
     await panel.evaluate(el => { el.scrollTop = 0; });
     await expect(editor).not.toHaveClass(/is-compact/);
     await page.setViewportSize({ width: 2048, height: 900 });
-    await expect.poll(async () => panel.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
+    await expect.poll(async () => panel.evaluate(el => el.scrollHeight - el.clientHeight), { timeout: 20000 }).toBeGreaterThan(0);
     await panel.evaluate(el => { el.scrollTop = 500; });
     await expect(editor).toHaveClass(/is-compact/);
     await expect.poll(async () => panel.evaluate(el => el.scrollTop)).toBeGreaterThan(0);

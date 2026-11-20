@@ -1,5 +1,6 @@
-module Pages.BodyWrapper (bodyWrapper, frontendBuild, BWConfig (..), llmCallsUrl, apiCatalogUrl, stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus, externalHeadScripts_) where
+module Pages.BodyWrapper (bodyWrapper, Dep (..), loadDeps, frontendBuild, BWConfig (..), llmCallsUrl, apiCatalogUrl, stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus, externalHeadScripts_) where
 
+import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
 import Data.Effectful.Hasql qualified as Hasql
@@ -69,7 +70,7 @@ mkPageCtxWithScope withScope pid = do
           (Issues.listVisibleConversations pid viewerPermission (Investigations.MemberViewer sess.user.id))
       )
   let options field = V.fromList $ sort [v.value | SchemaCatalog.FacetData m <- (.facetJson) <$> maybeToList facetsM, v <- HM.findWithDefault [] field m, not (T.null v.value)]
-  pure (sess, project, bw{activationProgressM, conversations, navDashboards, envOptions = options envField, serviceOptions = options serviceField, needsTagify = True})
+  pure (sess, project, bw{activationProgressM, conversations, navDashboards, envOptions = options envField, serviceOptions = options serviceField})
   where
     envField = "resource.deployment.environment.name"
     serviceField = "resource.service.name"
@@ -242,6 +243,28 @@ navigationResponse hxRequest page fragment =
   maybe (NavigationFull page) (const $ NavigationPartial page.content fragment) hxRequest
 
 
+-- | A library pages load on first use. The shell's @<head>@ is the same on every page because a
+-- boosted link swaps #main-content only: whatever a page put in its own head never reached a page
+-- entered by link (dashboards rendered un-hydrated until a hard refresh).
+data Dep = GridStack | HighlightJs | SqlFormatter | SwaggerUi | Tagify
+  deriving stock (Bounded, Enum, Eq, Show)
+
+
+-- | Loaded in order: a language pack registers on the core that precedes it.
+depAssets :: Dep -> [Text]
+depAssets = \case
+  GridStack -> ["/public/assets/deps/gridstack/gridstack-all.js"]
+  HighlightJs -> ["/public/assets/deps/highlightjs/highlight.min.js", "/public/assets/deps/highlightjs/elixir.min.js"]
+  SqlFormatter -> ["/public/assets/deps/highlightjs/sql-formatter.min.js"]
+  SwaggerUi -> ["/public/assets/deps/swagger-ui/swagger-ui.css", "/public/assets/css/swagger-ui-theme.css", "/public/assets/deps/swagger-ui/swagger-ui-bundle.js"]
+  Tagify -> ["/public/assets/css/thirdparty/tagify.min.css", "/public/assets/deps/tagify/tagify.min.js"]
+
+
+-- | A JS promise that settles once the DOM is parsed and every dep has loaded; each dep loads once.
+loadDeps :: [Dep] -> Text
+loadDeps ds = "window.loadDeps(" <> T.intercalate ", " ["'" <> show d <> "'" | d <- ds] <> ")"
+
+
 -- TODO: Rename to pageCtx
 data BWConfig = BWConfig
   { sessM :: Maybe Projects.Session
@@ -260,8 +283,6 @@ data BWConfig = BWConfig
   , isSettingsPage :: Bool
   , freeTierStatus :: FreeTierStatus
   , hideNavbar :: Bool -- When True, hides the entire navbar
-  , needsTagify :: Bool
-  , headContent :: Maybe (Html ()) -- Optional HTML content to include in the head
   , pageProvidesLogDetails :: Bool -- Explorer supplies its resizable panel; other project pages use the shell drawer.
   , globalDrawerContent :: Maybe (Html ())
   , config :: EnvConfig -- Environment configuration for telemetry
@@ -348,57 +369,52 @@ bodyWrapper bcfg child = do
         """
 
       let css href = link_ [rel_ "stylesheet", type_ "text/css", href_ href]
-          -- Toasts and the session replayer are post-interaction UI. Tagify is not:
-          -- dashboard filters are above the fold, and upgrading them before their CSS
-          -- arrives produces an unstyled wrapper followed by a visible resize.
+          -- Toasts and the session replayer are post-interaction UI.
           deferredCss href =
             link_ [rel_ "preload", term "as" "style", href_ href, onload_ "this.onload=null;this.rel='stylesheet'"]
           -- A late extension must bind the DOM that HTMX may already have processed.
           deferScript src = script_ ([src_ src, defer_ "true"] <> [onload_ "htmx.process(document.body)" | src == assetUrl "/public/assets/deps/htmx/hx-live-4.js"]) ("" :: Text)
       deferredCss $ assetUrl "/public/assets/css/thirdparty/rrweb.css"
-      -- main.ts fetches Tagify on demand or retries if the deferred script fails.
-      meta_ [name_ "tagify-js", content_ $ assetUrl "/public/assets/deps/tagify/tagify.min.js"]
-      meta_ [name_ "tagify-css", content_ $ assetUrl "/public/assets/css/thirdparty/tagify.min.css"]
-      mapM_ css
-        $ [assetUrl "/public/assets/css/thirdparty/tagify.min.css" | bcfg.needsTagify]
-        <> [ assetUrl "/public/assets/deps/gridstack/gridstack.min.css" -- every rule is scoped under .grid-stack
-           , assetUrl "/public/assets/css/tailwind.min.css"
-           , assetUrl "/public/assets/web-components/dist/css/index.css"
-           ]
-
-      fold bcfg.headContent
+      mapM_
+        css
+        [ assetUrl "/public/assets/deps/gridstack/gridstack.min.css" -- every rule is scoped under .grid-stack
+        , assetUrl "/public/assets/css/tailwind.min.css"
+        , assetUrl "/public/assets/web-components/dist/css/index.css"
+        ]
 
       mapM_
         deferScript
-        $ [ assetUrl "/public/assets/deps/htmx/htmx-4.0.0.min.js"
-          , -- Must load immediately after htmx: restores implicit attribute inheritance
-            -- (v4 requires `:inherited` otherwise) and 4xx/5xx no-swap. The app's own
-            -- listeners use v4 event names directly, so the shim's legacy-name replay is
-            -- only load-bearing for third-party code (hyperscript binds the legacy load event).
-            assetUrl "/public/assets/deps/htmx/htmx-2-compat.js"
-          , assetUrl "/public/assets/deps/htmx/hx-preload-4.js"
-          , -- Reactive DOM bindings (`:checked="…"`, `:class`, …) so UI state that CSS
-            -- can't derive on its own stays declarative instead of scripted.
-            assetUrl "/public/assets/deps/htmx/hx-live-4.js"
-          , assetUrl "/public/assets/js/main.js"
-          , -- Dropped with the htmx 4 upgrade: multi-swap and response-targets had no
-            -- users (no `multi:` swaps, no hx-target-4xx/5xx) and no v4 port; idiomorph
-            -- is superseded by built-in outerMorph; preload.js and json-enc-2.js call the
-            -- removed defineExtension API (v4 preload ships above; json-enc and
-            -- forward-page-params are re-registered in main.ts via registerExtension).
-            assetUrl "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js"
-          ]
-        <> [assetUrl "/public/assets/deps/tagify/tagify.min.js" | bcfg.needsTagify]
+        [ assetUrl "/public/assets/deps/htmx/htmx-4.0.0.min.js"
+        , -- Must load immediately after htmx: restores implicit attribute inheritance
+          -- (v4 requires `:inherited` otherwise) and 4xx/5xx no-swap. The app's own
+          -- listeners use v4 event names directly, so the shim's legacy-name replay is
+          -- only load-bearing for third-party code (hyperscript binds the legacy load event).
+          assetUrl "/public/assets/deps/htmx/htmx-2-compat.js"
+        , assetUrl "/public/assets/deps/htmx/hx-preload-4.js"
+        , -- Reactive DOM bindings (`:checked="…"`, `:class`, …) so UI state that CSS
+          -- can't derive on its own stays declarative instead of scripted.
+          assetUrl "/public/assets/deps/htmx/hx-live-4.js"
+        , assetUrl "/public/assets/js/main.js"
+        , -- Dropped with the htmx 4 upgrade: multi-swap and response-targets had no
+          -- users (no `multi:` swaps, no hx-target-4xx/5xx) and no v4 port; idiomorph
+          -- is superseded by built-in outerMorph; preload.js and json-enc-2.js call the
+          -- removed defineExtension API (v4 preload ships above; json-enc and
+          -- forward-page-params are re-registered in main.ts via registerExtension).
+          assetUrl "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js"
+        ]
       script_ [src_ (assetUrl "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
-      -- On first use, never per page: boosted navigation swaps #main-content only, so an asset
-      -- this head held back for "pages that need it" never reaches a page entered by a link.
-      let gridStackJs = assetUrl "/public/assets/deps/gridstack/gridstack-all.js"
+      let deps = decodeUtf8 $ AE.encode $ HM.fromList [(show @Text d, map assetUrl $ depAssets d) | d <- universe @Dep]
       script_
         [text|
-        window.loadGridStack = () => window.gridStackReady ??= Promise.all([
-          new Promise(r => document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', r, {once: true}) : r()),
-          new Promise((onload, onerror) => document.head.append(Object.assign(document.createElement('script'), {src: '${gridStackJs}', onload, onerror})))
-        ]).catch(e => { window.gridStackReady = null; throw e; });
+        {
+          const urls = ${deps}, loading = {};
+          const dom = new Promise(r => document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', r, {once: true}) : r());
+          const inject = url => new Promise((onload, onerror) => document.head.append(Object.assign(document.createElement(url.endsWith('.css') ? 'link' : 'script'), url.endsWith('.css') ? {rel: 'stylesheet', href: url} : {src: url}, {onload, onerror})));
+          // One retry per asset: a deploy or a flaky network fails single requests.
+          const load = url => inject(url).catch(() => inject(url));
+          const dep = name => loading[name] ??= urls[name].reduce((p, url) => p.then(() => load(url)), dom).catch(e => { delete loading[name]; throw e; });
+          window.loadDeps = (...names) => Promise.all(names.map(dep));
+        }
         |]
       mapM_
         deferScript

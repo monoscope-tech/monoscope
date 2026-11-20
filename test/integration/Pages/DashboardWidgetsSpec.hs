@@ -1306,7 +1306,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     filter (`T.isInfixOf` tabs) ["hx-select=\"", "/content", "remove .tab-active"] `shouldBe` []
     -- The settle probe accepts only its closed navigation vocabulary, and only from members.
     let sample n = AE.eitherDecode @Dashboards.DashboardSettleSample $ "{\"duration_ms\":1,\"response_bytes\":2,\"navigation\":\"" <> n <> "\"}"
-    (sample "initial", sample "tab", isLeft (sample "typo")) `shouldBe` (Right (Dashboards.DashboardSettleSample 1 2 Dashboards.DashboardInitial), Right (Dashboards.DashboardSettleSample 1 2 Dashboards.DashboardTab), True)
+    (map sample ["initial", "link", "tab"], isLeft (sample "typo")) `shouldBe` (map (Right . Dashboards.DashboardSettleSample 1 2) [Dashboards.DashboardInitial, Dashboards.DashboardLink, Dashboards.DashboardTab], True)
     victim <- createTestProject tr "victim"
     _ <- testServant tr $ Dashboards.dashboardsPostH victim Dashboards.DashboardForm{Dashboards.title = "Victim", Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}
     victimDash <- runTestBg frozenTime tr (DashboardModel.selectDashboardsSortedBy victim DashboardModel.Asc DashboardModel.DSTitle) >>= maybe (fail "no victim dashboard") pure . viaNonEmpty head

@@ -1,4 +1,18 @@
 <div class="flex h-full overflow-hidden relative group/ai">
+<link rel="stylesheet" href="/public/assets/deps/highlightjs/atom-one-light.min.ca8cb173.css" id="hljs-light">
+<link rel="stylesheet" href="/public/assets/deps/highlightjs/atom-one-dark.min.66f174ae.css" id="hljs-dark">
+<script>window.loadDeps('HighlightJs').then(() => {
+  const theme = () => { const dark = document.body.dataset.theme === 'dark'; for (const [id, off] of [['hljs-light', dark], ['hljs-dark', !dark]]) { const el = document.getElementById(id); if (el) el.disabled = off; } };
+  const highlight = root => document.getElementById('hljs-light') && root.querySelectorAll('code:not(.hljs)').forEach(el => hljs.highlightElement(el));
+  theme();
+  highlight(document);
+  // Once per document; the theme toggle, cookie restore and OS preference all write body's data-theme.
+  if (window.__hljsHooked) return;
+  window.__hljsHooked = true;
+  new MutationObserver(theme).observe(document.body, { attributeFilter: ['data-theme'] });
+  document.addEventListener('htmx:after:swap', e => highlight(e.target));
+});</script>
+<style>#crisp-chatbox { display: none !important; }</style>
 <div class="flex-1 min-w-0 min-h-0 overflow-y-auto">
 <header class="max-md:px-3 px-4 max-md:pt-4 pt-6 pb-3 border-b border-strokeWeak space-y-3">
 <div class="flex gap-6 items-start pr-10">
@@ -913,6 +927,20 @@
 </div>
 </div>
 <div class="flex h-full overflow-hidden relative group/ai">
+<link rel="stylesheet" href="/public/assets/deps/highlightjs/atom-one-light.min.ca8cb173.css" id="hljs-light">
+<link rel="stylesheet" href="/public/assets/deps/highlightjs/atom-one-dark.min.66f174ae.css" id="hljs-dark">
+<script>window.loadDeps('HighlightJs').then(() => {
+  const theme = () => { const dark = document.body.dataset.theme === 'dark'; for (const [id, off] of [['hljs-light', dark], ['hljs-dark', !dark]]) { const el = document.getElementById(id); if (el) el.disabled = off; } };
+  const highlight = root => document.getElementById('hljs-light') && root.querySelectorAll('code:not(.hljs)').forEach(el => hljs.highlightElement(el));
+  theme();
+  highlight(document);
+  // Once per document; the theme toggle, cookie restore and OS preference all write body's data-theme.
+  if (window.__hljsHooked) return;
+  window.__hljsHooked = true;
+  new MutationObserver(theme).observe(document.body, { attributeFilter: ['data-theme'] });
+  document.addEventListener('htmx:after:swap', e => highlight(e.target));
+});</script>
+<style>#crisp-chatbox { display: none !important; }</style>
 <div class="flex-1 min-w-0 min-h-0 overflow-y-auto">
 <header class="max-md:px-3 px-4 max-md:pt-4 pt-6 pb-3 border-b border-strokeWeak space-y-3">
 <div class="flex gap-6 items-start pr-10">
@@ -1823,6 +1851,20 @@
 </div>
 </div>
 <div class="flex h-full overflow-hidden relative group/ai">
+<link rel="stylesheet" href="/public/assets/deps/highlightjs/atom-one-light.min.ca8cb173.css" id="hljs-light">
+<link rel="stylesheet" href="/public/assets/deps/highlightjs/atom-one-dark.min.66f174ae.css" id="hljs-dark">
+<script>window.loadDeps('HighlightJs').then(() => {
+  const theme = () => { const dark = document.body.dataset.theme === 'dark'; for (const [id, off] of [['hljs-light', dark], ['hljs-dark', !dark]]) { const el = document.getElementById(id); if (el) el.disabled = off; } };
+  const highlight = root => document.getElementById('hljs-light') && root.querySelectorAll('code:not(.hljs)').forEach(el => hljs.highlightElement(el));
+  theme();
+  highlight(document);
+  // Once per document; the theme toggle, cookie restore and OS preference all write body's data-theme.
+  if (window.__hljsHooked) return;
+  window.__hljsHooked = true;
+  new MutationObserver(theme).observe(document.body, { attributeFilter: ['data-theme'] });
+  document.addEventListener('htmx:after:swap', e => highlight(e.target));
+});</script>
+<style>#crisp-chatbox { display: none !important; }</style>
 <div class="flex-1 min-w-0 min-h-0 overflow-y-auto">
 <header class="max-md:px-3 px-4 max-md:pt-4 pt-6 pb-3 border-b border-strokeWeak space-y-3">
 <div class="flex gap-6 items-start pr-10">

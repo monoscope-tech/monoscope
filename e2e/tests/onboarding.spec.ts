@@ -19,7 +19,8 @@ test.describe("Onboarding flow", () => {
 
   test("loads integration docs with HTML negotiation and switches framework guides", async ({ page }) => {
     const initialDocs = page.waitForResponse(response => new URL(response.url()).pathname === "/proxy/docs/sdks/nodejs/expressjs");
-    await page.goto(`${ONBOARDING_URL}?step=Integration`);
+    // Not "load": the page embeds YouTube walkthroughs, and a stalled third-party iframe held it past the timeout.
+    await page.goto(`${ONBOARDING_URL}?step=Integration`, { waitUntil: "domcontentloaded" });
     // Guides load when their panel scrolls into view, not with the page.
     await page.locator("#check-js").check();
     expect((await initialDocs).status()).toBe(200);

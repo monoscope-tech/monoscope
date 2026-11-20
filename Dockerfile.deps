@@ -78,8 +78,9 @@ RUN npm ci --prefer-offline --no-audit
 COPY web-components/package*.json ./web-components/
 RUN cd web-components && npm ci --prefer-online --no-audit
 
-# Build chart-cli (pre-compiled for faster deployments)
+# Build chart-cli (pre-compiled for faster deployments); it bundles the geomap's country shapes.
 COPY web-components ./web-components
+COPY static/public/assets/deps/world-110m.json ./static/public/assets/deps/
 RUN cd web-components && bun build --compile src/chart-cli.ts --outfile /usr/local/bin/chart-cli && \
   chmod +x /usr/local/bin/chart-cli
 

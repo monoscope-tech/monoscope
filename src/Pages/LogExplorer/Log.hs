@@ -751,12 +751,10 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
           , pageProvidesLogDetails = True
           , docsLink = Just "https://monoscopehq.com/docs/dashboard/dashboard-pages/api-log-explorer/"
           , freeTierStatus = freeTierStatus
-          , headContent = Nothing
           , -- One freshness control for row streaming and periodic query refresh; their
             -- independent switches stay in the popover.
             pageActions = Just $ Components.liveDataControls_ (Just "log_explorer_form") currentRange Nothing (Components.RowStreaming $ effectiveVizType `notElem` [Widget.VizSessions, Widget.VizPatterns])
           , navTabs = Just $ explorerNavTabs_ pid "Events"
-          , needsTagify = False
           }
 
   let page =

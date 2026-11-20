@@ -233,14 +233,6 @@ apiDashboardData pid did tabM widgetM sinceM fromM toM allParams = do
           }
 
 
--- | Preload the chart runtime every widget fetches. SQL-preview dependencies are loaded
--- only when a preview is requested from the widget editor.
-dashboardHeadContent_ :: Html ()
-dashboardHeadContent_ = do
-  forM_ ["/public/assets/deps/echarts/echarts.min.js", "/public/assets/roma-echarts.js"] \path ->
-    link_ [rel_ "preload", term "as" "script", href_ $ assetUrl path]
-
-
 folderFromPath :: Maybe Text -> Text
 folderFromPath = maybe "" \path -> case takeDirectory (toString path) of
   "." -> ""
@@ -292,7 +284,7 @@ data DashboardSettleSample = DashboardSettleSample
   deriving (AE.FromJSON) via DAE.Snake DashboardSettleSample
 
 
-data DashboardNavigation = DashboardInitial | DashboardTab
+data DashboardNavigation = DashboardInitial | DashboardLink | DashboardTab
   deriving stock (Eq, Generic, Read, Show)
   deriving (AE.FromJSON) via WrappedEnumSC 'Nothing "Dashboard" DashboardNavigation
 
@@ -306,6 +298,7 @@ dashboardSettledPostH pid dashId sample = do
       -- initial dashboard gets enough room for grid hydration and its first widget wave.
       (mode, budgetMs) = case sample.navigation of
         DashboardInitial -> ("initial" :: Text, 8000)
+        DashboardLink -> ("link", 8000)
         DashboardTab -> ("tab", 1500)
   unless valid $ throwError err400{errBody = "invalid dashboard performance sample"}
   Metrics.recordMs Metrics.dashboardTimeToSettled (fromIntegral sample.durationMs) [("navigation", OA.toAttribute mode)]
@@ -473,7 +466,11 @@ dashboardViews_ pid did dash vm params extraAttrs =
 
 dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> [(Text, Maybe Text)] -> Html ()
 dashboardPage_ pid dashId dash dashVM allParams = do
+  -- The chart runtime every widget fetches.
+  forM_ ["/public/assets/deps/echarts/echarts.min.js", "/public/assets/roma-echarts.js"] \path ->
+    link_ [rel_ "preload", term "as" "script", href_ $ assetUrl path]
   let dashIdText = dashId.toText
+      gridStack = loadDeps [GridStack]
       allTabs = fold dash.tabs
       activeTabSlug = join (lookup activeTabSlugKey allParams)
       activeTabInfo = activeTabSlug >>= findTabBySlug allTabs
@@ -542,14 +539,17 @@ dashboardPage_ pid dashId dash dashVM allParams = do
 
     script_
       [text|
-      // Runs on a full load and again when a boosted link swaps this page in; loadGridStack
-      // waits for both the DOM and GridStack, which a swap from another page never brought.
-      window.loadGridStack().then(() => {
+      // Runs on a full load and again on every link into a dashboard (a swap of #main-content).
+      // A block, not top-level consts: a second run would redeclare them and throw.
+      {
+      const fullLoad = document.readyState === 'loading';
+      ${gridStack}.then(() => {
         // Measure the experience that matters: the shell, its swap (if any), and grid
         // hydration have all completed. This is deliberately a same-origin, bounded
         // aggregate; dashboard/project ids are validated server-side but never become
-        // metric dimensions.
-        let dashboardStartedAt = performance.now();
+        // metric dimensions. A link is timed from its request, a full load from this parse.
+        const request = fullLoad ? null : performance.getEntriesByType('resource').filter(e => e.initiatorType === 'fetch' && e.name.includes('/dashboards/') && !e.name.includes('/settled')).at(-1);
+        let dashboardStartedAt = request?.startTime ?? performance.now();
         let dashboardSettledSent = false;
         function reportDashboardSettled(navigation, responseBytes) {
           if (dashboardSettledSent) return;
@@ -745,8 +745,8 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         }
 
         initializeGrids();
-        const navigation = performance.getEntriesByType('navigation')[0];
-        requestAnimationFrame(() => requestAnimationFrame(() => reportDashboardSettled('initial', navigation?.transferSize || navigation?.encodedBodySize || 0)));
+        const loaded = request ?? performance.getEntriesByType('navigation')[0];
+        requestAnimationFrame(() => requestAnimationFrame(() => reportDashboardSettled(fullLoad ? 'initial' : 'link', loaded?.transferSize || loaded?.encodedBodySize || 0)));
 
         // Keep attributed dashboard CLS samples available to browser telemetry
         // and tests. User-initiated shifts are excluded by the web-vitals spec.
@@ -802,7 +802,11 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           });
         }
       });
+      }
 
+      // Once per document, unlike the block above: each run would add another copy.
+      if (!window.__dashboardDocHooked) {
+      window.__dashboardDocHooked = true;
       // Listen for widget-remove-requested custom events
       document.addEventListener('widget-remove-requested', function(e) {
         const widgetEl = document.getElementById(e.detail.widgetId + '_widgetEl');
@@ -859,6 +863,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           compactGrid(grid, mainGridEl);
         });
       });
+      }
       |]
 
 
@@ -1441,7 +1446,6 @@ dashboardBWConf bw pid dashId title tabM currentRange readOnly freeTierStatus =
     , -- The title switches dashboards; renames live in the ⋯ menu, and the tab strip names the tab.
       pageTitleSwitcherUrl = Just $ urls.dashboardSwitcherGet pid dashId
     , freeTierStatus = freeTierStatus
-    , headContent = Just dashboardHeadContent_
     , serviceOptions = V.empty
     , pageActions = Just $ div_ [class_ "flex gap-3 max-md:gap-1 items-center"] do
         TimePicker.liveDataControls_ Nothing currentRange Nothing TimePicker.RefreshOnly
@@ -2472,7 +2476,6 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filt
             bw
               { pageTitle = "Dashboards"
               , freeTierStatus = freeTierStatus
-              , headContent = Just dashboardHeadContent_
               , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn btn-sm btn-primary gap-2"] do
                   faSprite_ "plus" "regular" "h-4 w-4"
                   "New Dashboard"
@@ -2908,42 +2911,14 @@ instance ToHtml SqlPreview where
         sqlBlock_ "Widget Query" $ fromMaybe qc.finalSqlQuery qc.finalSummarizeQuery
         sqlBlock_ "Table Query" qc.finalSqlQuery
         whenJust qc.finalAlertQuery $ sqlBlock_ "Alert Query"
-        let cssUrl = assetUrl "/public/assets/deps/highlightjs/atom-one-dark.min.css" :: Text
-            hljsUrl = assetUrl "/public/assets/deps/highlightjs/highlight.min.js" :: Text
-            sqlUrl = assetUrl "/public/assets/deps/highlightjs/sql.min.js" :: Text
-            formatterUrl = assetUrl "/public/assets/deps/highlightjs/sql-formatter.min.js" :: Text
+        link_ [rel_ "stylesheet", href_ $ assetUrl "/public/assets/deps/highlightjs/atom-one-dark.min.css"]
+        let deps = loadDeps [HighlightJs, SqlFormatter]
         script_
           [text|
-          (() => {
-            const loadScript = src => new Promise((resolve, reject) => {
-              const existing = document.querySelector('script[src="' + src + '"]');
-              if (existing) {
-                if (existing.dataset.loaded === 'true') resolve();
-                else existing.addEventListener('load', resolve, {once: true});
-                return;
-              }
-              const script = document.createElement('script');
-              script.src = src;
-              script.onload = () => { script.dataset.loaded = 'true'; resolve(); };
-              script.onerror = reject;
-              document.head.appendChild(script);
-            });
-            if (!document.querySelector('link[data-dashboard-sql-theme]')) {
-              const link = document.createElement('link');
-              link.rel = 'stylesheet'; link.href = '${cssUrl}';
-              link.dataset.dashboardSqlTheme = '';
-              document.head.appendChild(link);
-            }
-            (async () => {
-              await loadScript('${hljsUrl}');
-              await loadScript('${sqlUrl}');
-              await loadScript('${formatterUrl}');
-              document.querySelectorAll('.sql-preview-container pre code:not(.hljs)').forEach(el => {
-                el.textContent = sqlFormatter.format(el.textContent, { language: 'postgresql' });
-                hljs.highlightElement(el);
-              });
-            })();
-          })();
+          ${deps}.then(() => document.querySelectorAll('.sql-preview-container pre code:not(.hljs)').forEach(el => {
+            el.textContent = sqlFormatter.format(el.textContent, { language: 'postgresql' });
+            hljs.highlightElement(el);
+          }));
           |]
     where
       sqlBlock_ :: Text -> Text -> Html ()
