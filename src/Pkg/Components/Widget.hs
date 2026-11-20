@@ -1088,16 +1088,24 @@ statScalar summarize fromM toM stats
 -- A fixed precision keeps a bounded index honest near its ceiling (Apdex 0.991 is not "1"):
 -- >>> map (\v -> formatStatValue (Just 2) v "/ 1") [0.991, 1]
 -- ["0.99 / 1","1.00 / 1"]
+--
+-- A currency symbol leads its amount:
+-- >>> map (\v -> formatStatValue Nothing v "$") [0.06, 0.004, 1250]
+-- ["$0.06","<$0.01","$1.3K"]
 formatStatValue :: Maybe Int -> Double -> Text -> Text
 formatStatValue decimals value unit
   | isNaN value || isInfinite value = "N/A"
   | Just factor <- unitNanos unit = formatDuration $ value * factor
   | isByteUnit unit = formatBytes value
-  | Just d <- decimals = showFFloat' d value <> displayUnit unit
-  | value > 0, value < 0.01 = "<0.01" <> displayUnit unit
+  | Just d <- decimals = withUnit $ showFFloat' d value
+  | value > 0, value < 0.01 = "<" <> withUnit "0.01"
   | value == 1, T.length unit > 2, T.all isAlpha unit, Just unitOne <- T.stripSuffix "s" unit = "1 " <> unitOne
-  | otherwise = formatNumber value <> displayUnit unit
+  | otherwise = withUnit $ formatNumber value
   where
+    withUnit n
+      | unit `elem` ["$", "€", "£"] = unit <> n
+      | otherwise = n <> memptyIfFalse (unit `notElem` ["", "1", "{}"]) (" " <> unit)
+
     durationSteps :: [(Double, Text)]
     durationSteps = [(3.6e12, "h"), (6e10, "m"), (1e9, "s"), (1e6, "ms"), (1e3, "μs")]
     formatDuration ns = case find ((<= ns) . fst) durationSteps of
@@ -1114,8 +1122,6 @@ formatStatValue decimals value unit
       | otherwise = trimFixed 2 n
 
     trimFixed places = T.dropWhileEnd (== '.') . T.dropWhileEnd (== '0') . showFFloat' places
-
-    displayUnit u = memptyIfFalse (u `notElem` ["", "1", "{}"]) (" " <> u)
 
 
 isByteUnit :: Text -> Bool

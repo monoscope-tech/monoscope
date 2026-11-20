@@ -59,7 +59,6 @@ import Lucid.Hyperscript (__)
 import Models.Ids qualified as Projects
 import Models.Projects.DashboardTemplates qualified as DashboardTemplates
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), llmCallsUrl, mkPageCtx, navTabAttrs)
 import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), FieldCfg (..), FieldSize (..), RefreshingDeferred (..), callout_, formField_, localTimeFmt_, primaryButton_, tableSkeleton_, tonePill_, withDeferredBody)
 import Pages.Containers (mkWindow, windowed)
@@ -434,12 +433,13 @@ instance ToHtml LLMBody where
   toHtmlRaw = toHtml
 
 
-newtype LLMGet = LLMPage (PageCtx (Deferred LLMBody))
+-- | The project whose overview widgets head the page (none on Signals, where the form leads), and the page.
+data LLMGet = LLMPage (Maybe Projects.ProjectId) (PageCtx (Deferred LLMBody))
 
 
 -- | The overview widgets sit outside the deferred container, so they fetch while the list loads.
 instance ToHtml LLMGet where
-  toHtml (LLMPage (PageCtx bw body)) = toHtml $ PageCtx bw $ whenJust bw.currProject (overview_ . (.id)) >> toHtml (RefreshingDeferred body)
+  toHtml (LLMPage overview (PageCtx bw body)) = toHtml $ PageCtx bw $ whenJust overview overview_ >> toHtml (RefreshingDeferred body)
   toHtmlRaw = toHtml
 
 
@@ -563,7 +563,7 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
               , features = base.features{rowLink = Just \t -> link ConversationsView Nothing Nothing Nothing (Just t.template) Nothing, resultSummary = Just $ show (length topics) <> " topics across " <> show (length conversations) <> " conversations" <> capped}
               }
   addRespHeaders
-    $ LLMPage
+    $ LLMPage (pid <$ guard (view /= SignalsView))
     $ PageCtx
       bw
         { pageTitle = "LLM & Agents"
@@ -602,7 +602,7 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
       , col "Agent" (chips . (.agents)) & withAttrs [class_ "w-36 max-lg:hidden"]
       , col "Models" (chips . (.models)) & withAttrs [class_ "w-40 max-xl:hidden"]
       , col "Turns" (num . fromIntegral . (.turns)) & withAttrs [class_ "w-16 text-right"]
-      , col "Calls" (\c -> span_ [class_ "whitespace-nowrap tabular-nums text-textWeak"] $ toHtml $ show c.llmCalls <> " model · " <> show c.toolCalls <> " tool") & withAttrs [class_ "w-32 text-right max-md:hidden"]
+      , col "Model · tool calls" (\c -> span_ [class_ "whitespace-nowrap tabular-nums text-textWeak"] $ toHtml $ show @Text c.llmCalls <> " · " <> show c.toolCalls) & withAttrs [class_ "w-36 text-right max-md:hidden"]
       , col "Tokens" (num . (.tokens)) & withAttrs [class_ "w-20 text-right"]
       , col "Cost" (\c -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ maybe "—" GenAI.formatUsd c.cost) & withAttrs [class_ "w-20 text-right"]
       , col "Signals" signalsCell & withAttrs [class_ "w-44"]

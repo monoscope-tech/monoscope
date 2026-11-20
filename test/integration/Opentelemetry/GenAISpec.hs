@@ -65,14 +65,14 @@ spec = around withTestResources do
       map (`path` genAI "ai.toolCall") [["tool", "name"], ["tool", "call", "id"]] `shouldBe` [Just "search_logs", Just "call-9"]
       -- Both conv-1 traces are one conversation; the lone OpenLLMetry call is only a call.
       let (from, to) = around' now
-      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
+      LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       map (\c -> (c.key, c.llmCalls, c.toolCalls, c.title, c.signals)) (toList table.rows) `shouldBe` [("conv-1", 2, 1, Just "Why is checkout slow?", [LLM.Detected LLM.Truncated])]
       -- "LLM calls" is the Explorer over the promoted gen_ai.operation.name column, on both read paths.
       let llmCalls aiOnly = def{Log.query = Just $ "attributes.gen_ai.operation.name " <> bool "== null" "!= null" aiOnly, Log.from = from, Log.to = to}
       -- The TimeFusion read path only runs where CI provides a real TimeFusion.
       realTf <- isJust <$> lookupEnv "TIMEFUSION_PG_TEST_URL"
       forM_ (tr : [viaTf tr | realTf]) \t -> forM_ ([(True, 5), (False, 0)] :: [(Bool, Int)]) \(aiOnly, n) -> call t (Log.logExplorerDataH pid (llmCalls aiOnly)) >>= (`shouldBe` n) . V.length . (.logsData)
-      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.TopicsBody topics))) <- call tr $ LLM.llmGetH pid (Just "topics") Nothing Nothing Nothing Nothing from to Nothing (Just "1")
+      LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.TopicsBody topics))) <- call tr $ LLM.llmGetH pid (Just "topics") Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       map (\t -> (t.template, length t.conversations)) (toList topics.rows) `shouldBe` [("Why is checkout slow?", 1)]
       -- A plain-language signal: one judge call over the day's conversations, matches shown as pills and a facet.
       Right LLM.SignalCreated{} <- call tr $ LLM.llmSignalPostH pid (LLM.SignalForm "Slow checkout" "The user asks why checkout is slow.")
@@ -86,11 +86,11 @@ spec = around withTestResources do
       runTestBg (addUTCTime 60 now) tr $ judge $ LLM.evaluateSignals pid
       runTestBg (addUTCTime 60 now) tr $ judge $ LLM.evaluateSignals pid
       readIORef prompts >>= (`shouldSatisfy` \ps -> length ps == 1 && all ("Why is checkout slow?" `T.isInfixOf`) ps)
-      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody flagged))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing (Just "Slow checkout") Nothing from to Nothing (Just "1")
+      LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.ConversationsBody flagged))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing (Just "Slow checkout") Nothing from to Nothing (Just "1")
       (map (.key) (toList flagged.rows), renderT flagged) `shouldSatisfy` \(ks, html) -> ks == ["conv-1"] && "Asks about checkout latency." `T.isInfixOf` html
       -- The verdict reaches the conversation page too.
       renderT <$> call tr (LLM.conversationGetH pid "conv-1" from to Nothing) >>= (`shouldContainAll` ["Slow checkout", "Asks about checkout latency."])
-      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.SignalsBody signals))) <- call tr $ LLM.llmGetH pid (Just "signals") Nothing Nothing Nothing Nothing from to Nothing (Just "1")
+      LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.SignalsBody signals))) <- call tr $ LLM.llmGetH pid (Just "signals") Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       -- Plain-language signals list their verdicts; every built-in rule is listed beside them.
       [(s'.name, s'.matched, s'.judged, s'.builtIn) | s' <- toList signals.rows] `shouldSatisfy` \rs -> take 1 rs == [("Slow checkout", 1, 1, False)] && map (\(n, _, _, _) -> n) (drop 1 rs) == map LLM.signalLabel universe
       -- Rows open the full span view in the drawer: a partial response is a lone hidden tab panel.
@@ -114,7 +114,7 @@ spec = around withTestResources do
       event 4 "sess-b" "p2" [("event.name", "api_request"), ("model", "claude-sonnet-4-5"), ("input_tokens", "100"), ("output_tokens", "900"), ("cost_usd", "0.5")]
       ingestLogRecord tr apiKey ("ERROR", PL.SEVERITY_NUMBER_ERROR) "checkout failed" [("event.name", "api_error"), ("session.id", "sess-a")] (addUTCTime 5 now)
       let (from, to) = around' now
-      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
+      LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       map (\c -> (c.key, c.title, c.llmCalls, c.tokens, c.cost)) (toList table.rows) `shouldBe` [("sess-b", Just "Write the tests", 1, 1000, Just 0.5), ("sess-a", Just "Fix the failing build", 1, 5030, Just 0.0021)]
       renderT <$> call tr (LLM.conversationGetH pid "sess-a" from to Nothing) >>= (`shouldContainAll` ["Fix the failing build", "$0.0021"])
       -- The refreshing shell resends an unset picker as since=&from=&to=; that list read the app-wide
@@ -122,7 +122,7 @@ spec = around withTestResources do
       event (-7200) "sess-c" "p3" [("event.name", "user_prompt"), ("prompt", "Two hours ago")]
       event (-7199) "sess-c" "p3" [("event.name", "api_request"), ("model", "claude-sonnet-4-5"), ("input_tokens", "1"), ("output_tokens", "1"), ("cost_usd", "0.01")]
       setTestTime tr.trTestClock (addUTCTime 60 now)
-      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody refreshed))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing (Just "") (Just "") (Just "") (Just "1")
+      LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.ConversationsBody refreshed))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing (Just "") (Just "") (Just "") (Just "1")
       sort (map (.key) (toList refreshed.rows)) `shouldBe` ["sess-a", "sess-b", "sess-c"]
 
     it "aggregates a settled hour once and merges a trace across it and the live hour" \tr -> do
@@ -132,7 +132,7 @@ spec = around withTestResources do
       setTestTime tr.trTestClock now
       let chat n ago = ingestSpanLinked tr apiKey "8c4e" ("c" <> show n) Nothing "chat gpt-4o" [("gen_ai.operation.name", "chat"), ("gen_ai.request.model", "gpt-4o"), ("gen_ai.conversation.id", "conv-h"), ("gen_ai.usage.input_tokens", "10")] (addUTCTime (negate ago) now)
           calls = do
-            LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody t))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "24H") (Just "1")
+            LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.ConversationsBody t))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "24H") (Just "1")
             pure [(c.key, c.llmCalls, length c.units) | c <- toList t.rows]
       chat (1 :: Int) 7200 >> chat 2 60
       calls `shouldReturn` [("conv-h", 2, 1)]
@@ -150,7 +150,7 @@ spec = around withTestResources do
       piSpan (0 :: Int) "invoke_agent pi" [("gen_ai.operation.name", "invoke_agent"), ("gen_ai.agent.name", "pi")]
       chat 1 >> piSpan 2 "execute_tool submit_review" [("gen_ai.operation.name", "execute_tool"), ("gen_ai.tool.name", "submit_review"), ("gen_ai.tool.call.arguments", "{\"summary\":\"Retry budget\\noutlasts the deploy\"}")] >> chat 3
       let (from, to) = around' now
-      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
+      LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       map (\c -> (c.key, c.llmCalls, c.toolCalls, c.tokens, c.cost)) (toList table.rows) `shouldBe` [("routine-run", 2, 1, 2130, Just 0.0246)]
       -- Pi sends each turn's delta, so the prompt is rarely captured: the run is named by its first tool call, not "pi run".
       map LLM.displayTitle (toList table.rows) `shouldBe` ["submit_review: Retry budget outlasts the deploy"]
@@ -183,7 +183,7 @@ spec = around withTestResources do
       -- The same run, read back through the pages a user would open.
       -- Through TimeFusion reads, which CI points at a real TimeFusion.
       (from, to) <- around' <$> getCurrentTime
-      LLM.LLMPage (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call (viaTf tr) $ LLM.llmGetH testPid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
+      LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call (viaTf tr) $ LLM.llmGetH testPid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       run <- maybe (fail "the assistant run is not listed as a conversation") pure $ viaNonEmpty head $ toList table.rows
       (run.agents, run.title, run.llmCalls >= 2, run.toolCalls >= 1) `shouldBe` (["monoscope"], Just "plot error trend over time", True, True)
       detail <- call (viaTf tr) $ LLM.conversationGetH testPid run.key from to Nothing
