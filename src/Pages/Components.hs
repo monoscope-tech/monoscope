@@ -1,4 +1,4 @@
-module Pages.Components (codeContextUrl, drawer_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (codeContextUrl, drawer_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, floatingCard_, floatingScrim, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -1005,24 +1005,35 @@ dangerAction_ modalId icon label title description confirmAttrs confirmText = do
       button_ ([type_ "button", class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText
 
 
--- | Native @<dialog>@ prompt floating over a blurred backdrop: white title strip, a card holding
--- @body@ above Cancel/@submit@, and a keyboard-hint row. Open with @showModal()@; the title id is
--- @dialogId-title@. Children may style on @group-has-[…]/dialog@.
+-- | Native @<dialog>@ prompt over a dimmed backdrop, as a 'floatingCard_'. Open with @showModal()@;
+-- the title id is @dialogId-title@. Children may style on @group-has-[…]/dialog@.
 floatingDialog_ :: Text -> Html () -> (Text, [Text]) -> [Attribute] -> Html () -> Html () -> Html ()
 floatingDialog_ dialogId title submitHint formAttrs body submit =
-  with (makeElement "dialog") [id_ dialogId, class_ "modal !items-start px-4 pt-[15vh] backdrop:backdrop-blur-sm", term "aria-labelledby" (dialogId <> "-title")] do
+  with (makeElement "dialog") [id_ dialogId, class_ $ "modal !items-start px-4 pt-[15vh] " <> floatingScrim, term "aria-labelledby" (dialogId <> "-title")] do
     form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close"] "close"
-    form_ (formAttrs <> [class_ "modal-box group/dialog !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none flex flex-col"]) do
-      div_ [class_ "mb-2 flex items-center justify-between px-3"] do
-        h2_ [id_ $ dialogId <> "-title", class_ "text-xs font-medium uppercase tracking-wider text-white"] title
-        button_ [type_ "button", Aria.label_ "Close", class_ "inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white active:scale-[0.96] transition-[color,background-color,scale]", onclick_ "this.closest('dialog').close()"]
-          $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
-      div_ [class_ "w-full overflow-hidden rounded-lg border border-base-300 bg-bgBase shadow-2xl"] do
-        body
-        div_ [class_ "flex justify-end gap-1.5 p-2"] do
-          button_ [type_ "button", class_ "btn btn-sm btn-ghost cursor-pointer shadow-none active:scale-[0.96] transition-transform", onclick_ "this.closest('dialog').close()"] "Cancel"
-          button_ [type_ "submit", class_ "btn btn-sm btn-primary cursor-pointer gap-1.5 shadow-none active:scale-[0.96] transition-transform"] submit
-      kbdHints_ [submitHint, ("Close", ["esc"])]
+    form_ (formAttrs <> [class_ "modal-box group/dialog !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none"])
+      $ floatingCard_ [id_ $ dialogId <> "-title"] title (\attrs -> button_ ([type_ "button", onclick_ "this.closest('dialog').close()"] <> attrs)) [submitHint, ("Close", ["esc"])] body submit
+
+
+-- | The backdrop behind a floating prompt: dark enough in both themes that the card reads as the only surface.
+floatingScrim :: Text
+floatingScrim = "bg-black/40 dark:bg-black/65 backdrop:backdrop-blur-[2px] [&_.modal-backdrop]:backdrop-blur-[2px]"
+
+
+-- | A floating prompt's card: the title and close control, @body@, then keyboard hints beside
+-- Cancel and @submit@. @closer@ renders the element that dismisses the prompt.
+floatingCard_ :: [Attribute] -> Html () -> ([Attribute] -> Html () -> Html ()) -> [(Text, [Text])] -> Html () -> Html () -> Html ()
+floatingCard_ titleAttrs title closer hints body submit =
+  div_ [class_ "w-full overflow-hidden rounded-xl border border-strokeWeak bg-bgOverlay shadow-2xl"] do
+    div_ [class_ "flex items-center justify-between gap-3 border-b border-strokeWeak py-1.5 ps-4 pe-1.5"] do
+      h2_ (class_ "text-sm font-semibold text-textStrong" : titleAttrs) title
+      closer [Aria.label_ "Close", class_ "inline-flex size-8 cursor-pointer items-center justify-center rounded-lg text-iconNeutral transition-[color,background-color,scale] hover:bg-fillHover hover:text-textStrong active:scale-[0.96]"]
+        $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
+    body
+    div_ [class_ "flex items-center gap-1.5 p-2"] do
+      kbdHints_ hints
+      closer [class_ "btn btn-sm btn-ghost ms-auto cursor-pointer shadow-none transition-transform active:scale-[0.96]"] "Cancel"
+      button_ [type_ "submit", class_ "btn btn-sm btn-primary cursor-pointer gap-1.5 shadow-none transition-transform active:scale-[0.96]"] submit
 
 
 -- | Single labelled text input inside a 'floatingDialog_' card.
@@ -1033,10 +1044,10 @@ dialogField_ fieldId name label placeholder extra =
     input_ $ [id_ fieldId, name_ name, autofocus_, autocomplete_ "off", placeholder_ placeholder, class_ "no-focus-ring w-full bg-transparent py-2 text-sm font-normal outline-none placeholder:text-textDisabled"] <> extra
 
 
--- | White hint row under dark-backdrop prompts: @(label, keys)@ pairs.
+-- | A floating surface's footer hints, @(label, keys)@ pairs; hidden where there is no keyboard.
 kbdHints_ :: [(Text, [Text])] -> Html ()
-kbdHints_ hints = div_ [class_ "cmd-palette-hints mt-3 flex items-center justify-center gap-6 text-xs text-white drop-shadow dark:text-white/80"]
-  $ forM_ hints \(label, keys) -> div_ [class_ "flex items-center gap-1.5"] $ toHtml label >> traverse_ (kbd_ [class_ "kbd kbd-xs"] . toHtml) keys
+kbdHints_ hints = div_ [class_ "flex items-center gap-4 ps-2 text-xs text-textWeak max-sm:hidden"]
+  $ forM_ hints \(label, keys) -> div_ [class_ "flex items-center gap-1"] $ traverse_ (kbd_ [class_ "kbd kbd-xs border-strokeWeak bg-fillWeaker font-sans text-textWeak shadow-none"] . toHtml) keys >> span_ (toHtml label)
 
 
 -- | Segmented two-or-more-way radio switch; the first option starts checked. Input ids are

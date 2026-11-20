@@ -7,10 +7,11 @@ import Data.Text qualified as T
 import Data.UUID (UUID)
 import Hasql.Interpolate qualified as HI
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
-import Pages.Components (kbdHints_, listboxNavAttr_, logExplorerUrl)
+import Pages.Components (floatingScrim, kbdHints_, listboxNavAttr_, logExplorerUrl)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Servant (NoContent (..))
@@ -92,24 +93,21 @@ paletteShell_ pid = do
   -- Backdrop (hidden by default, shown on Cmd+K / search click)
   div_
     [ id_ "cmd-palette-backdrop"
-    , class_ "cmd-palette-backdrop hidden fixed inset-0 flex flex-col items-center pt-[15vh] bg-black/40"
+    , class_ $ "cmd-palette-backdrop hidden fixed inset-0 flex flex-col items-center px-4 pt-[15vh] " <> floatingScrim
     , style_ "z-index:99999"
     , [__|on click if event.target is me add .hidden to me end
           on htmx:before:request from <body/> if event.target.id is not 'cmd-palette-dynamic' add .hidden to me end|]
     ]
     do
-      -- Header
-      div_ [class_ "w-full max-w-lg flex items-center justify-between mb-2 px-3"] do
-        span_ [class_ "text-xs font-medium text-white dark:text-white/70 uppercase tracking-wider"] "Quick Search"
-        span_ [class_ "cmd-palette-count text-xs text-white/80 dark:text-white/50", term "hx-live:text" "(n => (q('#cmd-palette-input').value ? q('#cmd-palette-results a.cmd-item:not([hidden])').count + ' of ' : '') + n + ' items')(q('#cmd-palette-results a.cmd-item').count)"] ""
       -- Panel
-      div_ [class_ "cmd-palette w-full max-w-lg bg-base-100 rounded-lg shadow-2xl border border-base-300 overflow-hidden", data_ "pid" pid.toText, data_ "current-category" "", listboxNavAttr_] do
+      div_ [class_ "cmd-palette w-full max-w-lg overflow-hidden rounded-xl border border-strokeWeak bg-bgOverlay shadow-2xl", data_ "pid" pid.toText, data_ "current-category" "", listboxNavAttr_] do
         -- Search input
         div_ [class_ "px-3 border-b border-base-300"] do
           input_
             [ type_ "text"
             , id_ "cmd-palette-input"
             , class_ "w-full py-2.5 bg-transparent outline-none text-sm"
+            , Aria.label_ "Search or ask AI"
             , placeholder_ "Ask AI, or search pages, issues, actions\x2026"
             , term "hx-live:placeholder" "(c => c ? 'Search ' + c + '\x2026' : 'Ask AI, or search pages, issues, actions\x2026')(closest('.cmd-palette').data.currentCategory)"
             , inputScript
@@ -158,7 +156,9 @@ paletteShell_ pid = do
           div_
             [class_ "px-3 py-8 text-center text-sm text-base-content/40", hidden_ "", term "hx-live:hidden" "!q('#cmd-palette-input').value || q('#cmd-palette-results a.cmd-item:not([hidden])').count > 0"]
             "No matching results"
-      kbdHints_ [("Navigate", ["\x2191", "\x2193"]), ("Open", ["\x21B5", "\x2192"]), ("Back", ["\x2190"]), ("Close", ["esc"])]
+        div_ [class_ "flex items-center gap-3 border-t border-strokeWeak px-2 py-1.5"] do
+          kbdHints_ [("Navigate", ["\x2191", "\x2193"]), ("Open", ["\x21B5", "\x2192"]), ("Back", ["\x2190"]), ("Close", ["esc"])]
+          span_ [class_ "cmd-palette-count ms-auto text-xs tabular-nums text-textWeak", term "hx-live:text" "(n => (q('#cmd-palette-input').value ? q('#cmd-palette-results a.cmd-item:not([hidden])').count + ' of ' : '') + n + ' items')(q('#cmd-palette-results a.cmd-item').count)"] ""
   where
     -- Global Cmd+K listener — on a visible element so it is processed. A letter typed where
     -- no field or player takes it opens the palette with that letter.

@@ -321,20 +321,12 @@ dashboardSettledPostH pid dashId sample = do
   pure NoContent
 
 
--- | The dark rename prompt: a titled card of fields over Cancel / Save.
+-- | A rename prompt: a 'Components.floatingCard_' of fields over Cancel / Save changes.
 actionPickerModal_ :: Text -> Text -> [Attribute] -> Html () -> Html ()
 actionPickerModal_ modalId title formAttrs fields =
-  Components.modalWith_ modalId def{boxClass = "!w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none", wrapperClass = "!items-start pt-[15vh] px-4 [&_.modal-backdrop]:backdrop-blur-sm", hideClose = True} Nothing
-    $ form_ ([class_ "flex flex-col", hxTrigger_ "submit"] <> formAttrs) do
-      div_ [class_ "mb-2 flex items-center justify-between px-3"] do
-        h2_ [class_ "text-xs font-medium uppercase tracking-wider text-white"] $ toHtml title
-        label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white active:scale-[0.96] transition-[color,background-color,scale]"]
-          $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
-      div_ [class_ "w-full overflow-hidden rounded-lg border border-base-300 bg-bgBase shadow-2xl"] do
-        fields
-        div_ [class_ "flex justify-end gap-1.5 border-t border-strokeWeak p-2"] do
-          label_ [Lucid.for_ modalId, class_ "btn btn-sm btn-ghost cursor-pointer shadow-none active:scale-[0.96] transition-transform"] "Cancel"
-          button_ [type_ "submit", class_ "btn btn-sm btn-primary shadow-none active:scale-[0.96] transition-transform"] "Save changes"
+  Components.modalWith_ modalId def{boxClass = "!w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none", wrapperClass = "!items-start pt-[15vh] px-4 " <> Components.floatingScrim, hideClose = True} Nothing
+    $ form_ ([hxTrigger_ "submit"] <> formAttrs)
+    $ Components.floatingCard_ [] (toHtml title) (\attrs -> label_ (Lucid.for_ modalId : attrs)) [("Save", ["↵"])] fields "Save changes"
 
 
 actionPickerField_ :: Text -> Text -> Text -> Text -> Html ()
