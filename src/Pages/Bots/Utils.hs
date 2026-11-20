@@ -650,7 +650,7 @@ withBotThread target pid convId convType meta backfill = do
 withDashboardTemplate :: DB es => Projects.ProjectId -> Text -> (Dashboards.Dashboard -> Eff es ()) -> Eff es ()
 withDashboardTemplate pid dashboardId act = whenJust (idFromText dashboardId) \did ->
   whenJustM (Dashboards.getDashboardByProjectId pid did) \vm ->
-    mapM_ act $ loadDashboardFromVM dashboardTemplatesCompiled vm <|> find ((== Just "_overview.yaml") . (.file)) dashboardTemplatesCompiled
+    mapM_ act $ loadDashboardFromVM dashboardTemplatesCompiled vm <|> find ((== Just Dashboards.overviewTemplate) . (.file)) dashboardTemplatesCompiled
 
 
 -- | OAuth install state/redirect param: @"projectId"@ or @"projectId__onboarding"@.

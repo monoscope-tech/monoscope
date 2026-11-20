@@ -32,6 +32,7 @@ import Log (Logger)
 import Lucid
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Projects.Dashboards (overviewTemplate)
 import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.IssueFixes qualified as IssueFixes
 import Models.Projects.Projects qualified as Projects
@@ -352,7 +353,7 @@ cookieProtectedServer projectTools runNow =
     , auditLogCsvGet = Settings.auditLogCsvGetH
     , homeHighlightDismissPost = Home.highlightDismissPostH
     , slackConnectPost = Home.slackConnectPostH
-    , dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml"
+    , dashboardRedirectGet = Dashboards.entrypointRedirectGetH overviewTemplate
     , slackInstallGet = Slack.startInstallGetH
     , slackEvidenceGet = Slack.startEvidenceGetH
     , slackEvidenceDisconnectPost = Slack.disconnectEvidencePostH
