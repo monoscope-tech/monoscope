@@ -323,9 +323,7 @@ windowUnits pid window = do
   cached <- M.fromList . map (\(h, HI.AsJsonb us) -> (h, us)) <$> bool (Hasql.interp [HI.sql| SELECT hour, units FROM apis.llm_unit_hours WHERE project_id = #{pid} AND hour = ANY(#{V.fromList settled}) AND computed_at >= hour + interval '70 minutes' |]) (pure []) (null settled)
   -- A day per query, persisted as it lands, so a cold week makes progress even if the page gives up.
   fresh <- M.unions <$> traverse (fill now) (mapMaybe nonEmpty $ chunksOf 24 $ filter (`M.notMember` cached) settled)
-  edges <- case (settled, viaNonEmpty last settled) of
-    (h0 : _, Just hN) -> (<>) <$> live window.fromTime h0 <*> live (addUTCTime 3600 hN) window.toTime
-    _ -> live window.fromTime window.toTime
+  edges <- maybe (live window.fromTime window.toTime) (\hs -> (<>) <$> live window.fromTime (F1.head hs) <*> live (addUTCTime 3600 $ F1.last hs) window.toTime) (nonEmpty settled)
   pure $ M.elems $ M.fromListWith (flip (<>)) [(u.unit, u) | u <- concat (M.elems cached <> M.elems fresh) <> edges]
   where
     live from to = bool (selectUnits pid from to) (pure []) (from >= to)
