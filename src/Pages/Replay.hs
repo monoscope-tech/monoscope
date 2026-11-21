@@ -43,6 +43,7 @@ import Pkg.Metrics qualified as Metrics
 import Pkg.Minio qualified as Storage
 import Pkg.Queue (chunksByBytes, publishJSONToKafka, runSharedProducer)
 import Relude
+import Relude.Extra.Bifunctor (bimapF)
 import Relude.Extra.Tuple (traverseToFst)
 import System.Config (AuthContext (config, jobsPool, s3HttpManager), EnvConfig (..))
 import System.Logging qualified as Log
@@ -654,7 +655,7 @@ sessionKeys :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es (Maybe ([Text]
 sessionKeys pid sessionId = do
   rows :: [(V.Vector Text, V.Vector Text)] <-
     Hasql.interp [HI.sql| SELECT COALESCE(shard_keys, '{}'::text[]), COALESCE(file_keys, '{}'::text[]) FROM projects.replay_sessions WHERE session_id = #{sessionId} AND project_id = #{pid} LIMIT 1 |]
-  pure $ bimap V.toList V.toList <$> listToMaybe rows
+  pure $ bimapF V.toList V.toList (listToMaybe rows)
 
 
 sessionFileKeys :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [Text]
