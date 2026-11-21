@@ -542,7 +542,7 @@ slackConnectCard_ c = div_ [id_ "slack-connect-card", class_ "flex flex-wrap ite
 
 slackConnectPostH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (System.Types.Done SlackConnectCard))
 slackConnectPostH pid = do
-  (sess, _) <- Projects.sessionAndProject pid
+  (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   appCtx <- ask @AuthContext
   let email = T.toLower $ CI.original sess.user.email
   -- Rate limits and HTTP failures throw from the Slack client; the card answers with them instead.

@@ -1005,8 +1005,11 @@ syncProjectSlackConnect cfg pid create resend =
   ProjectsM.activeProjectById pid >>= \case
     Nothing -> pure $ Right Nothing
     Just project -> do
+      -- Member emails are typed by an admin, unverified; a sign-in (a session) proves the address.
       users <- ProjectsM.usersByProjectId pid
-      syncSlackConnect cfg.slackConnectBotToken (filter (not . T.null) cfg.slackConnectTeamUserIds) pid project.title (create && pid /= ProjectsM.demoProjectId) (map (CI.original . (.email)) users) resend
+      signedIn <- map HI.getOneColumn <$> Hasql.interp [HI.sql| SELECT DISTINCT user_id FROM users.persistent_sessions WHERE user_id = ANY(#{V.fromList $ map (.id) users}) |]
+      let emails = [CI.original u.email | u <- users, u.id `elem` signedIn]
+      syncSlackConnect cfg.slackConnectBotToken (filter (not . T.null) cfg.slackConnectTeamUserIds) pid project.title (create && pid /= ProjectsM.demoProjectId) emails resend
 
 
 -- | Opens the channel in the viewer's Slack client (web or desktop).

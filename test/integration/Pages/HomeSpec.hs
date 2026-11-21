@@ -105,9 +105,13 @@ spec = around withTestResources $ describe "Home screen" do
     methods created `shouldBe` ["conversations.create", "chat.postMessage", "conversations.inviteShared"]
     foldMap (decodeUtf8 . snd) (viaNonEmpty head created) `shouldContainAll` ["name=monoscope-acme-shop-" <> T.take 6 pid.toText]
     foldMap (decodeUtf8 . snd) (viaNonEmpty last created) `shouldContainAll` ["channel=C0HOME", "emails=" <> T.replace "@" "%40" owner, "external_limited=false"]
-    -- A later member gets one invite; members already invited are not re-sent.
-    dbExec tr [sql|INSERT INTO users.users (id, first_name, last_name, email) VALUES ('00000000-0000-0000-0000-00000000a11c', 'Ada', 'L', 'ada@acme.test')|] ()
-    dbExec tr [sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (?, '00000000-0000-0000-0000-00000000a11c', 'edit')|] (Only pid)
+    -- slackConnect_unconsentedMemberEmails: any typed address became a member, so Monoscope's
+    -- workspace sent Slack Connect invites to strangers. Only members who have signed in are invited.
+    dbExec tr [sql|INSERT INTO users.users (id, first_name, last_name, email) VALUES ('00000000-0000-0000-0000-00000000a11c', 'Ada', 'L', 'ada@acme.test'), ('00000000-0000-0000-0000-00000000a11d', '', '', 'stranger@elsewhere.test')|] ()
+    dbExec tr [sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (?, '00000000-0000-0000-0000-00000000a11c', 'edit'), (?, '00000000-0000-0000-0000-00000000a11d', 'view')|] (pid, pid)
+    (methods <$> sync False) `shouldReturn` []
+    -- A later member gets one invite once signed in; members already invited are not re-sent.
+    dbExec tr [sql|INSERT INTO users.persistent_sessions (user_id) VALUES ('00000000-0000-0000-0000-00000000a11c')|] ()
     later <- sync False
     methods later `shouldBe` ["conversations.inviteShared"]
     foldMap (decodeUtf8 . snd) (viaNonEmpty last later) `shouldContainAll` ["emails=ada%40acme.test"]
@@ -120,6 +124,8 @@ spec = around withTestResources $ describe "Home screen" do
     (methods <$> sync False) `shouldReturn` []
     swept `shouldReturn` 0
     page `shouldContainAll` ["#monoscope-acme-shop", "Shared with the Monoscope team", "slack.com/app_redirect?channel=C0HOME&amp;team=T0MONO"]
+    setRole tr pid ProjectMembers.PView
+    httpStatus tr (void $ Home.slackConnectPostH pid) `shouldReturn` 403
 
   it "slackConnect_nameTaken_reusesTheProjectsOwnChannelInsteadOfASecond" \tr -> do
     -- A concurrent sync, or one whose save was lost, already created this project's channel.
