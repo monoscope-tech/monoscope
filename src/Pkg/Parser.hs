@@ -1096,11 +1096,20 @@ templateBindings params template =
 -- "{{custom}} AND project_id = 'p'"
 -- >>> fillQueryTemplate SqlTemplate (variablePresets def "p" Nothing Nothing [("var-s", Just "{{zz}}"), ("var-a", Just "{"), ("var-b", Just "{zz}}"), ("table-search", Just "{{zz}}"), ("zz", Just "' OR 1=1 --")] fixedUTCTime) "s = '{{var-s}}' AND '{{var-a}}{{var-b}}' AND {{table_search}}"
 -- "s = '' AND '' AND ''"
+--
+-- A signed constant keeps single braces (path templates) but never a placeholder:
+--
+-- >>> fillQueryTemplate SqlTemplate (variablePresets def "p" Nothing Nothing [("const-f", Just "url_path = '/users/{uuid}'"), ("const-g", Just "'/a/{{zz}}'"), ("zz", Just "' OR 1=1 --")] fixedUTCTime) "{{const-f}} AND {{const-g}}"
+-- "url_path = '/users/{uuid}' AND {{const-g}}"
 variablePresets :: BinDensity -> Text -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Map.Map Text Text
 variablePresets density pid mf mt allParams currentTime =
   let fmtUTC = maybe "" formatUTC
       andPrefix = (" AND " <>)
-      params = filter (\(k, v) -> not $ T.any (`elem` ['{', '}']) (k <> fold v)) allParams
+      params = filter (\(k, v) -> not (T.any (`elem` ['{', '}']) k) && valueOk k (fold v)) allParams
+      -- Server-resolved constants (signed with the template) carry endpoint paths such as @/users/{uuid}@.
+      valueOk k v
+        | "const-" `T.isPrefixOf` k = not (any (`T.isInfixOf` v) ["{{", "}}"])
+        | otherwise = not (T.any (`elem` ['{', '}']) v)
       audience = audienceFilters params
       audienceSessions = audienceSessionsSql audience
       bound op t field' = field' <> " " <> op <> " '" <> formatUTC t <> "'"
