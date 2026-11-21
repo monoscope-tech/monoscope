@@ -15,6 +15,8 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (Query, RequestHeaders, hAuthorization, hCookie, status200)
 import Network.Wai qualified as Wai
 import Network.Wai.Test qualified as WT
+import Models.Apis.Issues qualified as Issues
+import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper qualified as BodyWrapper
 import Pages.Home qualified as Home
 import Pages.Projects qualified as ProjectsP
@@ -30,6 +32,7 @@ import System.Config qualified as Config
 import System.Types (ApiPrincipal (..))
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie, parseSetCookie, setCookieName, setCookieValue)
+import Web.FormUrlEncoded (urlDecodeAsForm)
 import Web.I18n qualified as I18n
 
 
@@ -135,6 +138,11 @@ spec = around withTestResources do
     runQueryEffect tr (PM.getSessionPermission demoPid (getResponse guest).user.id) `shouldReturn` Just PM.PView
     traverse (httpStatus asGuest) [void $ Settings.apiPostH demoPid (Settings.GenerateAPIKeyForm "guest" Nothing), void $ ProjectsP.manageMembersPostH demoPid Nothing (ProjectsP.ManageMembersForm ["x@example.test"] [PM.PAdmin]), void $ ProjectsP.pricingUpdateH demoPid (ProjectsP.PricingUpdateForm Nothing Nothing Nothing)] `shouldReturn` [403, 403, 403]
     httpStatus asGuest (void $ Home.homeGetH demoPid) `shouldReturn` 200
+    -- Chat stays open to the guest: its turn is admitted and runs, read-only.
+    call asGuest (AIThreads.startThreadPostHWithTools Nothing demoPid $ fromRightShow $ urlDecodeAsForm "query=What+failed%3F&mode=chat") >>= (`shouldSatisfy` isRight)
+    runId <- dbOne tr [sql| SELECT id FROM apis.ai_routine_runs WHERE project_id = ? AND requested_by = ? |] (demoPid, (getResponse guest).user.id)
+    run <- runQueryEffect tr (Issues.runContextFor demoPid (Issues.ConversationClaim runId)) >>= maybe (fail "guest run missing") pure
+    fmap (.policy) <$> runQueryEffect tr (Issues.runContextAuthority run) `shouldReturn` Just Issues.Observe
     let guestBearer (m, p) = Servant.runHandler $ unAuthHandler (Auth.apiKeyAuthHandler tr.trLogger tr.trATCtx) (WT.setPath Wai.defaultRequest p){Wai.requestMethod = m, Wai.requestHeaders = [(hAuthorization, "Bearer " <> UUID.toASCIIBytes Auth.demoGuestSessionId.getPersistentSessionId), ("X-Project-Id", encodeUtf8 demoPid.toText)]}
     traverse (fmap (bimap errHTTPCode \case Viewer _ -> True; _ -> False) . guestBearer) [("GET", "/api/v1/events"), ("POST", "/api/v1/api_keys")] `shouldReturn` ([Right True, Left 403] :: [Either Int Bool])
 

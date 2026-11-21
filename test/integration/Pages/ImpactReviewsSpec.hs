@@ -2949,6 +2949,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     downVote <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest{Wai.requestMethod = "POST"} $ encodeUtf8 $ rateUrl Reviews.Down) app
     traverse (fmap (H.statusCode . (.simpleStatus)) . fetch) [link.preview, rateUrl Reviews.Down] `shouldReturn` [404, 404]
     (H.statusCode downVote.simpleStatus, ) <$> dbOne tr "SELECT rating FROM projects.pr_review_runs WHERE id = ?" (Only run.id) `shouldReturn` (404, "up" :: Text)
+    dbExec tr "UPDATE projects.projects SET deleted_at = NULL, active = true WHERE id = ?" (Only testPid)
 
   it "sandbox_installsFromPackageRegistriesButReachesNothingElse" \_ -> withTemp "registry-egress" \directory -> do
     image <- guestImage
