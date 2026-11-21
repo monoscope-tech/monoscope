@@ -16,6 +16,9 @@ import Network.HTTP.Types (Query, RequestHeaders, hAuthorization, hCookie, statu
 import Network.Wai qualified as Wai
 import Network.Wai.Test qualified as WT
 import Pages.BodyWrapper qualified as BodyWrapper
+import Pages.Home qualified as Home
+import Pages.Projects qualified as ProjectsP
+import Pages.Settings qualified as Settings
 import Pkg.AdConversions qualified as AdConversions
 import Pkg.TestUtils
 import Servant.API (Header, Headers, ResponseHeader (..), getHeaders, getResponse, lookupResponseHeader)
@@ -121,6 +124,18 @@ spec = around withTestResources do
     alive `shouldReturn` True
     void $ toBaseServantResponse tr $ Auth.logoutH (Just $ "monoscope_session=" <> sid)
     alive `shouldReturn` False
+
+  -- demoGuestSeededAdmin: migration 0001 seeds the guest identity as the demo project's admin, so
+  -- every anonymous visitor (and its public session id as a bearer) passed PEdit/PAdmin gates.
+  it "demoGuestSeededAdmin_cappedAtView: the anonymous demo guest reads but cannot mint keys, invite or change plan" \tr -> do
+    Right guest <- runTestEffect tr.trPool tr.trATCtx.hasqlPool tr.trLogger tr.trTracerProvider $ Auth.sessionByID Nothing "requestID" False "light" I18n.En Nothing Nothing (Just "/p/00000000-0000-0000-0000-000000000000/") Auth.ChallengeRedirect
+    let demoPid = Projects.demoProjectId
+        asGuest = tr{trSessAndHeader = guest}
+    runQueryEffect tr (PM.getSessionPermission demoPid (getResponse guest).user.id) `shouldReturn` Just PM.PView
+    traverse (httpStatus asGuest) [void $ Settings.apiPostH demoPid (Settings.GenerateAPIKeyForm "guest" Nothing), void $ ProjectsP.manageMembersPostH demoPid Nothing (ProjectsP.ManageMembersForm ["x@example.test"] [PM.PAdmin]), void $ ProjectsP.pricingUpdateH demoPid (ProjectsP.PricingUpdateForm Nothing Nothing Nothing)] `shouldReturn` [403, 403, 403]
+    httpStatus asGuest (void $ Home.homeGetH demoPid) `shouldReturn` 200
+    let guestBearer m = Servant.runHandler $ unAuthHandler (Auth.apiKeyAuthHandler tr.trLogger tr.trATCtx) (WT.setPath Wai.defaultRequest "/api/v1/api_keys"){Wai.requestMethod = m, Wai.requestHeaders = [(hAuthorization, "Bearer " <> UUID.toASCIIBytes Auth.demoGuestSessionId.getPersistentSessionId), ("X-Project-Id", encodeUtf8 demoPid.toText)]}
+    traverse (fmap (bimap errHTTPCode \case Viewer _ -> True; _ -> False) . guestBearer) ["GET", "POST"] `shouldReturn` ([Right True, Left 403] :: [Either Int Bool])
 
   it "ad attribution: a consenting landing becomes one signup conversion, tags wait for consent, a first ingest is reported once" \tr -> do
     let adCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.auth0Domain = "https://auth0.test", Config.metaCapiAccessToken = Just "capi-token", Config.metaCapiPixelId = Just "123", Config.redditConversionsToken = Just "rdt-token", Config.redditPixelId = Just "t2_px"}}

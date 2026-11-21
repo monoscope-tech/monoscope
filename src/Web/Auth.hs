@@ -294,13 +294,11 @@ demoGuestSession =
   Projects.getPersistentSession demoGuestSessionId >>= \case
     Just sess -> pure $ Just sess
     Nothing -> do
-      uid <- (.userId) <$> userIdForEmail False "Guest" "User" "" guestEmail
+      uid <- (.userId) <$> userIdForEmail False "Guest" "User" "" Projects.demoGuestEmail
       -- Two concurrent first-requests would both insert; the id is the primary key, so the
       -- loser is a no-op rather than a 500 on a page that is meant to need no account.
       Projects.insertSession demoGuestSessionId uid (Projects.SessionData Map.empty)
       Projects.getPersistentSession demoGuestSessionId
-  where
-    guestEmail = "hello@monoscope.tech"
 
 
 type ApiKeyAuthContext = AuthHandler Request ApiPrincipal

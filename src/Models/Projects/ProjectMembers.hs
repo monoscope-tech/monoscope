@@ -219,7 +219,9 @@ activeMembership =
 
 memberPermissionsSql :: HI.Sql -> HI.Sql
 memberPermissionsSql scope =
-  [HI.sql|SELECT member.project_id, member.user_id, member.permission FROM projects.project_members member
+  [HI.sql|SELECT member.project_id, member.user_id,
+      CASE WHEN account.email = #{Projects.demoGuestEmail} THEN #{PView} ELSE member.permission END AS permission
+    FROM projects.project_members member
     JOIN users.users account ON account.id = member.user_id
     JOIN projects.projects project ON project.id = member.project_id WHERE (|]
     <> scope
