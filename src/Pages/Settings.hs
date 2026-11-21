@@ -289,7 +289,7 @@ data GenerateAPIKeyForm = GenerateAPIKeyForm
 
 apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (RespHeaders (Done ApiMut))
 apiPostH pid apiKeyForm = do
-  sess <- requireSettingsWrite pid
+  sess <- fst <$> ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PEdit pid
   authCtx <- ask @AuthContext
   projectKeyUUID <- UUIDEff.genUUID
   let encryptedKeyB64 = ProjectApiKeys.encodeApiKeyB64 authCtx.config.apiKeyEncryptionSecretKey projectKeyUUID
@@ -322,7 +322,7 @@ data ApiKeyNotFound = ApiKeyNotFound
 
 apiKeySetActive :: Projects.ProjectId -> ApiKeyMutation -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (ActionResult ApiKeyNotFound ApiMut)
 apiKeySetActive pid mutation keyid = act do
-  sess <- requireSettingsWrite pid
+  sess <- fst <$> ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PEdit pid
   currentKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
   let ownedKey = find ((== keyid) . (.id)) currentKeys
       (apply, event, cachedProject) = case mutation of

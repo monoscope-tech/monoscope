@@ -17,6 +17,7 @@ module Models.Projects.ProjectMembers (
   getSessionPermission,
   sessionPermissionSql,
   sessionAndProjectAtLeast,
+  sessionAndProjectAtLeastMember,
   updateProjectMembersPermissons,
   softDeleteProjectMembers,
   deactivateNonOwnerMembers,
@@ -218,10 +219,14 @@ activeMembership =
     <> ")"
 
 
--- | A membership's effective role: the shared demo guest reads as view wherever it is a member.
+-- | A membership's effective role. The shared demo guest is anyone on the internet: it edits the
+-- public demo sandbox and reads as view anywhere else it was invited, never admin.
 -- Requires the @member@ and @account@ aliases of 'activeMembership'.
 memberPermission :: HI.Sql
-memberPermission = [HI.sql|CASE WHEN account.email = #{Projects.demoGuestEmail} THEN #{PView} ELSE member.permission END|]
+memberPermission =
+  [HI.sql|CASE WHEN account.email = #{Projects.demoGuestEmail}
+    THEN (CASE WHEN member.project_id = #{Projects.demoProjectId} THEN #{PEdit} ELSE #{PView} END)
+    ELSE member.permission END|]
 
 
 memberPermissionsSql :: HI.Sql -> HI.Sql
@@ -268,6 +273,19 @@ sessionAndProjectAtLeast
 sessionAndProjectAtLeast perm pid = do
   sp@(sess, _) <- Projects.sessionAndProject pid
   unlessM (any (>= perm) <$> getSessionPermission pid sess.user.id) $ EffError.throwError err403
+  pure sp
+
+
+-- | 'sessionAndProjectAtLeast' for writes that mint credentials or send through operator accounts,
+-- which the public demo guest never gets even on the demo it may edit.
+sessionAndProjectAtLeastMember
+  :: (DB es, EffError.Error ServerError :> es, EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Projects.Session) :> es)
+  => Permissions
+  -> Projects.ProjectId
+  -> Eff es (Projects.Session, Projects.Project)
+sessionAndProjectAtLeastMember perm pid = do
+  sp@(sess, _) <- sessionAndProjectAtLeast perm pid
+  when (CI.original sess.user.email == Projects.demoGuestEmail) $ EffError.throwError err403
   pure sp
 
 

@@ -378,7 +378,7 @@ data SlackNotInstalled = SlackNotInstalled
 
 updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (ActionResult ChannelsRejection IntegrationsSaved)
 updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, slackChannels, includeUserIdentityInAlerts} = act do
-  void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
+  void $ ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PEdit pid
   validateNotificationChannels pid enabledChannels phones >>= traverse \() -> do
     projectM <- Projects.projectById pid
     slackInfoM <- getProjectSlackData pid
@@ -488,7 +488,7 @@ logIntegrationAudit pid event name = do
 
 pagerdutyConnectH :: Projects.ProjectId -> PagerdutyConnectForm -> ATAuthCtx (ActionResult PagerdutyKeyTooShort IntegrationsSaved)
 pagerdutyConnectH pid form = act do
-  void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
+  void $ ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PEdit pid
   let key = T.strip form.integrationKey
   if T.length key < 20
     then pure $ Left PagerdutyKeyTooShort
@@ -508,7 +508,7 @@ pagerdutyDisconnectH pid = do
 
 slackDisconnectH :: Projects.ProjectId -> ATAuthCtx (ActionResult SlackNotInstalled IntegrationsSaved)
 slackDisconnectH pid = act do
-  void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
+  void $ ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PEdit pid
   deleted <- Integrations.deleteSlackData pid
   if deleted > 0
     then do

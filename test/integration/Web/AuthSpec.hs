@@ -133,11 +133,11 @@ spec = around withTestResources do
 
   -- demoGuestSeededAdmin: migration 0001 seeds the guest identity as the demo project's admin, so
   -- every anonymous visitor (and its public session id as a bearer) passed PEdit/PAdmin gates.
-  it "demoGuestSeededAdmin_cappedAtView: the anonymous demo guest reads but cannot mint keys, invite or change plan" \tr -> do
+  it "demoGuestSeededAdmin_cappedAtEdit: the anonymous demo guest edits the demo sandbox but cannot mint keys, invite or change plan" \tr -> do
     Right guest <- runTestEffect tr.trPool tr.trATCtx.hasqlPool tr.trLogger tr.trTracerProvider $ Auth.sessionByID Nothing "requestID" False "light" I18n.En Nothing Nothing (Just "/p/00000000-0000-0000-0000-000000000000/") Auth.ChallengeRedirect
     let demoPid = Projects.demoProjectId
         asGuest = tr{trSessAndHeader = guest}
-    runQueryEffect tr (PM.getSessionPermission demoPid (getResponse guest).user.id) `shouldReturn` Just PM.PView
+    runQueryEffect tr (PM.getSessionPermission demoPid (getResponse guest).user.id) `shouldReturn` Just PM.PEdit
     traverse (httpStatus asGuest) [void $ Settings.apiPostH demoPid (Settings.GenerateAPIKeyForm "guest" Nothing), void $ ProjectsP.manageMembersPostH demoPid Nothing (ProjectsP.ManageMembersForm ["x@example.test"] [PM.PAdmin]), void $ ProjectsP.pricingUpdateH demoPid (ProjectsP.PricingUpdateForm Nothing Nothing Nothing)] `shouldReturn` [403, 403, 403]
     httpStatus asGuest (void $ Home.homeGetH demoPid) `shouldReturn` 200
     -- Chat stays open to the guest: its turn is admitted and runs, read-only.
@@ -146,7 +146,7 @@ spec = around withTestResources do
     run <- runQueryEffect tr (Issues.runContextFor demoPid (Issues.ConversationClaim runId)) >>= maybe (fail "guest run missing") pure
     fmap (.policy) <$> runQueryEffect tr (Issues.runContextAuthority run) `shouldReturn` Just Issues.Observe
     let guestBearer (m, p) = Servant.runHandler $ unAuthHandler (Auth.apiKeyAuthHandler tr.trLogger tr.trATCtx) (WT.setPath Wai.defaultRequest p){Wai.requestMethod = m, Wai.requestHeaders = [(hAuthorization, "Bearer " <> UUID.toASCIIBytes Auth.demoGuestSessionId.getPersistentSessionId), ("X-Project-Id", encodeUtf8 demoPid.toText)]}
-    traverse (fmap (bimap errHTTPCode \case Viewer _ -> True; _ -> False) . guestBearer) [("GET", "/api/v1/events"), ("POST", "/api/v1/api_keys")] `shouldReturn` ([Right True, Left 403] :: [Either Int Bool])
+    traverse (fmap (bimap errHTTPCode \case Editor _ -> True; _ -> False) . guestBearer) [("GET", "/api/v1/events"), ("POST", "/api/v1/api_keys")] `shouldReturn` ([Right True, Left 403] :: [Either Int Bool])
 
   -- 2026-11 audit: session pages carried no cache policy, so an edge caching by extension could
   -- store a member's page fetched as /p/<pid>/repositories/services/x.css and serve it to anyone.

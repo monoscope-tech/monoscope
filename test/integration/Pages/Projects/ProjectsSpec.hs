@@ -181,8 +181,8 @@ spec = around withTestResources do
     dbExec tr [sql|INSERT INTO apis.slack (project_id, team_id, channel_id, team_name, bot_token) VALUES (?, 'T_FREE', 'C_FREE', 'Free project', 'test-token') ON CONFLICT (project_id) DO UPDATE SET team_id = 'T_FREE'|] (Only testPid)
     runQueryEffect tr (Integrations.slackLinkProjects "T_FREE" invitee.userId) >>= (`shouldBe` 0) . length
     map (.userId) <$> runQueryEffect tr (ProjectMembers.selectActiveProjectMembers testPid) `shouldReturn` [owner.userId]
-    -- The template owner is the demo guest, whose role reads as view however it is seeded.
-    runQueryEffect tr (ProjectMembers.getUserPermission testPid owner.userId) `shouldReturn` Just PView
+    -- The template owner is the demo guest, which edits the demo sandbox however it is seeded.
+    runQueryEffect tr (ProjectMembers.getUserPermission testPid owner.userId) `shouldReturn` Just PEdit
     map (.id) <$> runQueryEffect tr (Projects.usersByProjectId testPid) `shouldReturn` [owner.userId]
     setPlan "PAID"
     runQueryEffect tr (ProjectMembers.getUserPermission testPid invitee.userId) `shouldReturn` Just PView

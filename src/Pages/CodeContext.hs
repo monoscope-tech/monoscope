@@ -1567,6 +1567,7 @@ repositoryTokenGetH pid = addRespHeaders =<< repositoryTokenPage pid
 
 repositoryTokenPostH :: Projects.ProjectId -> RepositoryTokenForm -> ATAuthCtx (RespHeaders (PageCtx RepositoryTokenGet))
 repositoryTokenPostH pid form = do
+  void $ ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PEdit pid
   page <- repositoryTokenPage pid
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
