@@ -1,0 +1,6 @@
+[Unit]
+Description=Reclaim disk and manage ballast before / fills
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/disk-guard.sh
