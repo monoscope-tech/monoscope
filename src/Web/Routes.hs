@@ -38,6 +38,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types qualified as H
 import Network.Wai (Request)
 import Network.Wai qualified as Wai
+import Network.Wreq qualified as W
 import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (NavigationResponse, PageCtx)
 import Pages.Bots.Discord qualified as Discord
@@ -692,16 +693,19 @@ statusH = Status <$> Hasql.interpOne [HI.sql| select version() |] <*> envOr "GIT
 avatarGetH :: Projects.UserId -> Request -> (Wai.Response -> IO Wai.ResponseReceived) -> ATBaseCtx Wai.ResponseReceived
 avatarGetH userId _ send = do
   userM <- Projects.userById userId
+  ctx <- ask @AuthContext
   let name = foldMap (\u -> u.firstName <> " " <> u.lastName) userM
       initialsImg = pure ("image/svg+xml", "public, max-age=60", avatarInitialsSvg name)
-      fetchImage url ct cache fallback = handle (\(_ :: SomeException) -> fallback) $ Wreq.get (toString url) <&> \r -> (ct, cache, r ^. Wreq.responseBody)
+      -- The picture URL is an IdP claim this anonymous route fetches: the probe manager refuses
+      -- internal addresses (redirects included), times out and caps the body.
+      fetchImage url ct cache fallback = handle (\(_ :: SomeException) -> fallback) $ Wreq.getWith (Wreq.defaults & W.manager .~ Right ctx.probeManager) (toString url) <&> \r -> (ct, cache, r ^. Wreq.responseBody)
       gravatar u = fetchImage (gravatarUrl (CI.original u.email)) "image/png" "public, max-age=604800" initialsImg
   (ct, cache, body) <- case userM of
     Nothing -> initialsImg
     Just u
       | T.null u.displayImageUrl -> gravatar u
       | otherwise -> fetchImage u.displayImageUrl "image/jpeg" "public, max-age=604800, immutable" (gravatar u)
-  liftIO $ send $ Wai.responseLBS H.status200 [(H.hContentType, ct), (H.hCacheControl, cache)] body
+  liftIO $ send $ Wai.responseLBS H.status200 [(H.hContentType, ct), (H.hCacheControl, cache), ("X-Content-Type-Options", "nosniff")] body
 
 
 -- | Missing Gravatars fall back to locally rendered initials.
