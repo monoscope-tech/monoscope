@@ -34,6 +34,8 @@ import Pkg.TestUtils
 import Servant (getResponse)
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, Done (..))
+import Web.ApiHandlers qualified as ApiH
+import Web.ApiTypes qualified as ApiT
 
 
 -- | Set one text[] column of the project's @everyone team.
@@ -210,6 +212,14 @@ spec = around withTestResources do
     let team = Pages.TeamForm{teamName = "Hello", teamDescription = "", teamHandle = "hello", notifEmails = V.empty, teamMembers = [uid], discordChannels = V.empty, slackChannels = V.empty, phoneNumbers = V.empty, pagerdutyServices = V.empty, teamId = Nothing}
     traverse (\f -> call tr (Pages.manageTeamPostH testPid f Nothing)) [team, team, team{Pages.teamName = ""}, team{Pages.teamHandle = "invalid handle"}, team{Pages.notifEmails = ["not-an-email"]}]
       `shouldReturn` [Right (Pages.TeamCreated testPid), Left Pages.DuplicateHandle, Left Pages.TeamNameRequired, Left Pages.HandleInvalidChars, Left (Pages.InvalidTeamEmail "not-an-email")]
+    -- teamDiscordChannels_outsideTheInstalledGuild_areRefused (2026-11 audit): ids were stored
+    -- unchecked and alerts posted to them with the operator's bot token, reaching any guild it is in.
+    let discordTeam ids = team{Pages.teamHandle = "discord-team", Pages.discordChannels = ids}
+        saveDiscordTeam ids = call tr (Pages.manageTeamPostH testPid (discordTeam ids) Nothing)
+    saveDiscordTeam ["1111"] `shouldReturn` Left (Pages.ForeignDiscordChannels ["1111"])
+    dbExec tr [sql|INSERT INTO apis.discord (project_id, guild_id) VALUES (?, 'G_TEAM_GUILD')|] (Only testPid)
+    traverse saveDiscordTeam [["1111", "2222"], ["1111"]] `shouldReturn` [Left (Pages.ForeignDiscordChannels ["2222"]), Right (Pages.TeamCreated testPid)]
+    (toBaseServantResponse tr (ApiH.apiTeamCreate testPid $ ApiT.TeamInput "api" "api-discord" Nothing Nothing Nothing Nothing (Just ["2222"]) Nothing Nothing) >>= evaluateWHNF_) `shouldThrow` anyException
 
     -- `INSERT … ON CONFLICT DO NOTHING RETURNING id` returns no row for an existing email, and
     -- the invite handler `error`ed on that: two people inviting one new address was a 500.

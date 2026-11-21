@@ -19,7 +19,6 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Effectful.Labeled (Labeled)
@@ -28,6 +27,7 @@ import Effectful.Reader.Static (Reader, ask)
 import Effectful.Time qualified as Time
 import Lucid hiding (for_)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Apis.Integrations (Channel (..))
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
@@ -203,17 +203,6 @@ installedSuccess botPlatform pidM = do
             span_ [class_ $ "monospace px-3 py-1 rounded-lg font-semibold " <> cmdCls] $ toHtml cmd
             span_ [class_ $ "text-white text-xs px-2 py-1 rounded-full " <> accentCls] $ toHtml badge
           p_ [class_ "text-textStrong text-sm"] $ toHtml desc
-
-
-data Channel = Channel
-  { channelName :: Text
-  , channelId :: Text
-  , channelType :: Maybe Int
-  }
-  deriving (Generic, Show)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "channel", DAE.CamelToSnake]] Channel
 
 
 processAIQuery :: ProjectToolCtx es => Maybe EnvConfig -> Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)

@@ -17,7 +17,7 @@ import Effectful.Error.Static (throwError)
 import Effectful.Ki qualified as Ki
 import Effectful.Reader.Static (asks)
 import Effectful.Time qualified as Time
-import Models.Apis.Integrations (DiscordData (..), getDashboardsForDiscord, getDiscordData, insertDiscordData)
+import Models.Apis.Integrations (DiscordData (..), getDashboardsForDiscord, getDiscordChannels, getDiscordData, insertDiscordData)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards (Dashboard (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -26,7 +26,7 @@ import Network.HTTP.Types (renderSimpleQuery, statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Bots.Utils (BotEmoji (..), BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, freshWebhookTimestamp, installedResponse, parseInstallState, runBotQueryWithTools, withBotThread, withDashboardTemplate)
+import Pages.Bots.Utils (BotEmoji (..), BotErrorType (..), BotResponse (..), BotType (..), authHeader, botEmoji, botReplyPayload, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, freshWebhookTimestamp, installedResponse, parseInstallState, runBotQueryWithTools, withBotThread, withDashboardTemplate)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (idFromText)
@@ -180,12 +180,6 @@ instance AE.FromJSON InteractionData where
     v AE..:? "component_type" >>= \case
       Just (3 :: Int) -> MessageComponentData <$> v AE..: "component_type" <*> v AE..: "custom_id" <*> v AE..: "values"
       _ -> CommandData <$> v AE..: "name" <*> v AE..:? "options"
-
-
-getDiscordChannels :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Eff es [Channel]
-getDiscordChannels token guildId = do
-  r <- getWith (defaults & authHeader "Bot" token) (toString $ "https://discord.com/api/v10/guilds/" <> guildId <> "/channels")
-  either (\err -> [] <$ Log.logAttention ("Error decoding discord channels response: " <> toText err) ()) pure $ AE.eitherDecode (r ^. responseBody)
 
 
 data DiscordRefusal = InvalidInteraction | InvalidSignature | NoCommandData | MissingGuild

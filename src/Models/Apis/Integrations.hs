@@ -10,6 +10,9 @@ module Models.Apis.Integrations (
   getSlackDataByTeamId,
   insertDiscordData,
   getDiscordDataByProjectId,
+  Channel (..),
+  getDiscordChannels,
+  foreignDiscordChannels,
   getProjectSlackData,
   updateSlackDefaultChannel,
   getDashboardsForDiscord,
@@ -909,6 +912,33 @@ getDiscordData guildId = Hasql.interpOne (selectDiscord <> [HI.sql|WHERE guild_i
 
 getDiscordDataByProjectId :: DB es => Projects.ProjectId -> Eff es (Maybe DiscordData)
 getDiscordDataByProjectId pid = Hasql.interpOne (selectDiscord <> [HI.sql|WHERE project_id = #{pid}|])
+
+
+data Channel = Channel
+  { channelName :: Text
+  , channelId :: Text
+  , channelType :: Maybe Int
+  }
+  deriving (Generic, Show)
+  deriving
+    (AE.FromJSON, AE.ToJSON)
+    via AE.CustomJSON '[AE.OmitNothingFields, AE.FieldLabelModifier '[AE.StripPrefix "channel", AE.CamelToSnake]] Channel
+
+
+getDiscordChannels :: (HTTP.HTTP :> es, Log :> es) => Text -> Text -> Eff es [Channel]
+getDiscordChannels token guildId = do
+  r <- HTTP.getWith (Wreq.defaults & Wreq.header "Authorization" .~ [encodeUtf8 $ "Bot " <> token]) (toString $ "https://discord.com/api/v10/guilds/" <> guildId <> "/channels")
+  either (\err -> [] <$ Log.logAttention ("Error decoding discord channels response: " <> toText err) ()) pure $ Aeson.eitherDecode (r ^. Wreq.responseBody)
+
+
+-- | The submitted channel ids that are not channels of the project's installed guild (all of them
+-- without an install). Alerts post with the operator's bot token, so an unbound id would reach any
+-- guild the bot belongs to.
+foreignDiscordChannels :: (DB es, HTTP.HTTP :> es, Log :> es) => Text -> Projects.ProjectId -> [Text] -> Eff es [Text]
+foreignDiscordChannels _ _ [] = pure []
+foreignDiscordChannels token pid ids = do
+  owned <- getDiscordDataByProjectId pid >>= maybe (pure []) (fmap (map (.channelId)) . getDiscordChannels token . (.guildId))
+  pure $ filter (`notElem` owned) ids
 
 
 -- | Shared (d.title, d.id::text) dashboard lookup; each caller supplies the

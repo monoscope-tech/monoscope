@@ -92,7 +92,7 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Models.Apis.Integrations (SlackData, getDiscordDataByProjectId, getProjectSlackData)
+import Models.Apis.Integrations (SlackData, foreignDiscordChannels, getDiscordDataByProjectId, getProjectSlackData)
 import Models.Apis.Integrations qualified as Integrations
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
@@ -834,6 +834,7 @@ data TeamRejection
   | HandleInvalidChars
   | HandleNotLowercaseStart
   | InvalidTeamEmail Text
+  | ForeignDiscordChannels [Text]
   deriving stock (Eq, Show)
 
 
@@ -851,6 +852,7 @@ instance Refusal TeamRejection where
     HandleInvalidChars -> "Handle must be lowercase, no spaces, and hyphens only"
     HandleNotLowercaseStart -> "Handle must start with a lowercase letter"
     InvalidTeamEmail email -> "Invalid email format: " <> email
+    ForeignDiscordChannels ids -> "Not a channel of this project's Discord server: " <> T.intercalate ", " ids
 
 
 -- | The page a team save lands on: the team itself when edited from its own view.
@@ -897,9 +899,12 @@ manageTeamPostH pid form tmView = act do
   let validMemberIds = V.map (.userId) projMembers
       teamDetails = ProjectMembers.TeamDetails form.teamName form.teamDescription form.teamHandle form.teamMembers form.notifEmails form.slackChannels form.discordChannels form.phoneNumbers form.pagerdutyServices V.empty
       saved outcome = Right outcome <$ addTriggerEvent "closeModal" ""
+  appCtx <- ask @AuthContext
+  unbound <- foreignDiscordChannels appCtx.env.discordBotToken pid (V.toList form.discordChannels)
   case (V.all (`V.elem` validMemberIds) form.teamMembers, validateTeamDetails form.teamName form.teamHandle form.notifEmails, form.teamId) of
     (False, _, _) -> pure $ Left NonMemberInTeam
     (_, Left e, _) -> pure $ Left e
+    _ | not (null unbound) -> pure $ Left $ ForeignDiscordChannels unbound
     (_, _, Just tid) -> do
       _ <- ProjectMembers.updateTeam pid tid teamDetails
       saved $ TeamUpdated pid (form.teamHandle <$ tmView)

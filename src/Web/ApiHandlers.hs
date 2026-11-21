@@ -125,6 +125,7 @@ import GHC.Records (HasField)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
+import Models.Apis.Integrations (foreignDiscordChannels)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.MonitorDefinitions (monitorConfig, monitorFromInput, monitorToInput)
@@ -1280,10 +1281,11 @@ apiTeamsList pid = fmap toTeamSummary <$> PM.getTeams pid
 
 
 -- | Validate an input and build 'PM.TeamDetails', resolving optional collections to empty.
-teamDetailsFromInput :: TeamInput -> ATBaseCtx PM.TeamDetails
-teamDetailsFromInput inp = do
+teamDetailsFromInput :: Projects.ProjectId -> TeamInput -> ATBaseCtx PM.TeamDetails
+teamDetailsFromInput pid inp = do
   when (T.null inp.name) $ refuse $ Required "name"
   assertHandleAllowed inp.handle
+  assertDiscordChannelsOwned pid (fold inp.discordChannels)
   pure
     PM.TeamDetails
       { name = inp.name
@@ -1311,16 +1313,20 @@ assertHandleAllowed h
   | otherwise = pass
 
 
+assertDiscordChannelsOwned :: Projects.ProjectId -> [Text] -> ATBaseCtx ()
+assertDiscordChannelsOwned pid ids = ask @AuthContext >>= \ctx -> foreignDiscordChannels ctx.env.discordBotToken pid ids >>= \unbound -> unless (null unbound) $ refuse $ InvalidRequest $ "Not a channel of this project's Discord server: " <> T.intercalate ", " unbound
+
+
 apiTeamCreate :: Projects.ProjectId -> TeamInput -> ATBaseCtx TeamFull
 apiTeamCreate pid inp = do
-  createdM <- PM.createTeam pid Nothing =<< teamDetailsFromInput inp
+  createdM <- PM.createTeam pid Nothing =<< teamDetailsFromInput pid inp
   maybe (refuse $ HandleInUse inp.handle) (apiTeamGet pid) createdM
 
 
 apiTeamUpdate :: Projects.ProjectId -> TeamId -> TeamInput -> ATBaseCtx TeamFull
 apiTeamUpdate pid tid inp = do
   _ <- fetchEditableTeam pid tid
-  _ <- PM.updateTeam pid tid =<< teamDetailsFromInput inp
+  _ <- PM.updateTeam pid tid =<< teamDetailsFromInput pid inp
   apiTeamGet pid tid
 
 
@@ -1328,6 +1334,7 @@ apiTeamPatch :: Projects.ProjectId -> TeamId -> TeamPatch -> ATBaseCtx TeamFull
 apiTeamPatch pid tid p = do
   t <- fetchEditableTeam pid tid
   whenJust p.handle assertHandleAllowed
+  assertDiscordChannelsOwned pid (fold p.discordChannels)
   let merged =
         (PM.teamToDetails t)
           { PM.name = fromMaybe t.name p.name
