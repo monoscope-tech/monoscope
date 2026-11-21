@@ -7,6 +7,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
+import Data.Conduit.Combinators qualified as CC
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
@@ -14,9 +15,12 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import GHC.Conc (getAllocationCounter, setAllocationCounter)
-import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplayPost (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, compressAndMergeReplaySessions, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, releaseMergeLease, replayObjectPrefix, replayPostH, replaySessionGetH, sessionFileKeys, splitReplayPayload)
+import Network.Minio qualified as Minio
+import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplayPost (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, compressAndMergeReplaySessions, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, projectMinioConn, releaseMergeLease, replayObjectPrefix, replayPostH, replaySessionGetH, sessionFileKeys, splitReplayPayload)
 import Pkg.Metrics (wireTypeErrorsRef)
+import Pkg.Minio qualified as Storage
 import Pkg.TestUtils
+import System.Config (AuthContext (..))
 import System.Mem (performGC)
 
 
@@ -180,3 +184,20 @@ spec = around withTestResources do
 
     -- Nothing recorded: a well-formed empty answer, not an exception.
     readBack absent `shouldReturn` Just (AE.Array V.empty)
+
+  -- 2026-11 audit: legacy flat keys ("<sid>.json", "<sid>/…") carry no project segment, so naming
+  -- another tenant's session id read its recording from the shared bucket.
+  it "legacyReplayKeys_otherProject_isNotServed: flat keys need the route project's own session row" \tr -> requireMinio tr pendingWith do
+    owner <- projectOf tr testPid
+    other <- projectOf tr =<< createTestProject tr "replay-legacy-other"
+    sid <- nextRandom
+    let blob = "[{\"type\":4,\"timestamp\":1}]"
+        legacyKey = UUID.toText sid <> ".json"
+        (conn, bucket) = projectMinioConn tr.trATCtx.env owner
+        frozen = UTCTime (fromGregorian 2026 5 8) 0
+    Storage.runMinio tr.trATCtx.s3HttpManager conn (Minio.putObject bucket legacyKey (CC.sourceLazy blob) (Just $ BL.length blob) Minio.defaultPutObjectOptions) >>= (`shouldSatisfy` isRight)
+    dbExec tr [sql| INSERT INTO projects.replay_sessions (session_id, project_id, last_event_at) VALUES (?, ?, now()) |] (sid, testPid)
+    let shard p = runTestBg frozen tr (fetchReplayShard p sid (Just legacyKey)) <&> \(RawJson raw) -> raw
+        events p = runTestBg frozen tr (fetchReplaySession p sid) <&> \resp -> AE.decode @AE.Object (AE.encode resp) >>= AEKM.lookup "events"
+    (,) <$> shard owner <*> shard other `shouldReturn` (blob, "[]")
+    (,) <$> events owner <*> events other `shouldReturn` (AE.decode blob, Just (AE.Array V.empty))

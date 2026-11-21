@@ -520,22 +520,24 @@ migratedReplayKey pid at sid oldKey
 
 -- | Does object key @k@ belong to session @sid@ of project @pid@? Guards the
 -- shard endpoint so a crafted key can't read another session's (or another
--- bucket's) objects. Accepts the current namespace plus both legacy shapes still
--- in flight behind the online migration; legacy flat keys carry no project
--- segment, so session scoping is all they can be checked against.
+-- bucket's) objects. Legacy flat keys ('legacyReplayKey') carry no project segment,
+-- so they are never accepted here.
 --
--- >>> map (replayKeyScoped "p1" "s1") ["rrweb/p1/2026-05-08/s1/shard-000001-10.json.gz", "p1/rrweb/2026-05-08/s1/shard-000001-10.json.gz", "s1/merged.json.gz", "s1.json"]
--- [True,True,True,True]
--- >>> map (replayKeyScoped "p1" "s1") ["rrweb/p1/2026-05-08/s2/shard-000001-10.json.gz", "rrweb/p2/2026-05-08/s1/shard-000001-10.json.gz", "rrweb/p1/s1", "s11/x.json"]
--- [False,False,False,False]
+-- >>> map (replayKeyScoped "p1" "s1") ["rrweb/p1/2026-05-08/s1/shard-000001-10.json.gz", "p1/rrweb/2026-05-08/s1/shard-000001-10.json.gz"]
+-- [True,True]
+-- >>> map (replayKeyScoped "p1" "s1") ["rrweb/p1/2026-05-08/s2/shard-000001-10.json.gz", "rrweb/p2/2026-05-08/s1/shard-000001-10.json.gz", "rrweb/p1/s1", "s1/merged.json.gz", "s1.json"]
+-- [False,False,False,False,False]
 replayKeyScoped :: Text -> Text -> Text -> Bool
-replayKeyScoped pid sid k =
-  (any (`T.isPrefixOf` k) [replayObjectRoot <> pid <> "/", pid <> "/rrweb/"] && ("/" <> sid <> "/") `T.isInfixOf` k)
-    || (sid <> "/")
-    `T.isPrefixOf` k
-    || k
-    == sid
-    <> ".json"
+replayKeyScoped pid sid k = any (`T.isPrefixOf` k) [replayObjectRoot <> pid <> "/", pid <> "/rrweb/"] && ("/" <> sid <> "/") `T.isInfixOf` k
+
+
+-- | The pre-namespace flat shapes. The URL's session id is no tenant binding in a shared bucket,
+-- so they are served only for a session the route project has a row for.
+--
+-- >>> map (legacyReplayKey "s1") ["s1/merged.json.gz", "s1.json", "s11/x.json", "rrweb/p1/s1"]
+-- [True,True,False,False]
+legacyReplayKey :: Text -> Text -> Bool
+legacyReplayKey sid k = (sid <> "/") `T.isPrefixOf` k || k == sid <> ".json"
 
 
 -- | One batch of per-key object fetches, split by how each one ended. Every read path in
@@ -616,7 +618,8 @@ getSessionEvents manager conn pid bucket sessionId = do
   -- Shards (incl. the legacy monolith, registered as a shard) and the unmerged
   -- individual tail both come from the DB — never from listing S3 (minio-hs can't
   -- list R2). Fetch each key by getObject, gzip-decoding by suffix.
-  (shardKeys, fileKeys) <- sessionKeys pid sessionId
+  tracked <- sessionKeys pid sessionId
+  let (shardKeys, fileKeys) = fold tracked
   shards <- classifyFetches <$> liftIO (forM shardKeys \sk -> (sk,) <$> Storage.runMinio manager conn (fetchRawForMerge bucket sk (".gz" `T.isSuffixOf` sk)))
   -- A corrupt shard is surfaced (not silently dropped); a transient fetch failure
   -- flags the recording partial, same contract as a missing individual file.
@@ -634,7 +637,7 @@ getSessionEvents manager conn pid bucket sessionId = do
   if
     | shardCorrupt -> pure corruptedErr
     | combined /= "[]" -> pure $ Right (combined, partial)
-    | null fileKeys && null shardKeys -> legacy "new_or_pre_migration_session"
+    | null fileKeys && null shardKeys -> if isJust tracked then legacy "pre_migration_session" else noEvents "no_session_row"
     | partial -> pure $ Left transientMsg
     | otherwise -> do
         Log.logAttention
@@ -643,19 +646,19 @@ getSessionEvents manager conn pid bucket sessionId = do
         pure $ Left notFoundErr
 
 
--- | Tracked object keys for a session as @(sealed shards, unmerged tail)@, both
--- empty if the row doesn't exist (new session) or the columns are NULL. Always
--- read from Postgres, never listed from S3 (minio-hs can't list R2); each shard
--- key embeds its first-event ts so readers order shards without opening a blob.
-sessionKeys :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es ([Text], [Text])
+-- | Tracked object keys for a session as @(sealed shards, unmerged tail)@: Nothing if the
+-- project has no row for it (new session, or another project's), both empty if the columns
+-- are NULL. Always read from Postgres, never listed from S3 (minio-hs can't list R2); each
+-- shard key embeds its first-event ts so readers order shards without opening a blob.
+sessionKeys :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es (Maybe ([Text], [Text]))
 sessionKeys pid sessionId = do
   rows :: [(V.Vector Text, V.Vector Text)] <-
     Hasql.interp [HI.sql| SELECT COALESCE(shard_keys, '{}'::text[]), COALESCE(file_keys, '{}'::text[]) FROM projects.replay_sessions WHERE session_id = #{sessionId} AND project_id = #{pid} LIMIT 1 |]
-  pure $ maybe ([], []) (bimap V.toList V.toList) (listToMaybe rows)
+  pure $ bimap V.toList V.toList <$> listToMaybe rows
 
 
 sessionFileKeys :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [Text]
-sessionFileKeys pid = fmap snd . sessionKeys pid
+sessionFileKeys pid = fmap (foldMap snd) . sessionKeys pid
 
 
 -- | Identity + timing metadata for a session, surfaced in the player header.
@@ -869,7 +872,7 @@ buildReplayManifest p sessionId = do
   let pid = p.id
       summaryCtx = HM.fromList [("session", UUID.toText sessionId), ("projectId", pid.toText)]
   meta <- sessionMetadata pid sessionId summaryCtx
-  (shardKeys, tailKeys) <- sessionKeys pid sessionId
+  (shardKeys, tailKeys) <- fold <$> sessionKeys pid sessionId
   -- Order shards by embedded first-event ts (the legacy monolith key doesn't
   -- parse → 0 → sorts first, which is correct: it's the oldest). gzip by suffix.
   let shardSegs = sortOn (.firstTs) [ReplaySegment{key = k, firstTs = fromIntegral (maybe 0 snd (parseShardKey k))} | k <- shardKeys]
@@ -889,13 +892,18 @@ replaySessionManifestGetH pid sessionId = do
 -- is scoped to this session's prefix so a crafted key can't read another
 -- session's (or another bucket's) objects.
 fetchReplayShard
-  :: (Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Log :> es)
+  :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Log :> es)
   => Projects.Project -> UUID.UUID -> Maybe Text -> Eff es RawJson
 fetchReplayShard p sessionId mkey = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let (conn, bucket) = projectMinioConn ctx.config p
-  case mkey of
-    Just k | replayKeyScoped p.id.toText (UUID.toText sessionId) k -> do
+      sid = UUID.toText sessionId
+  scoped <- case mkey of
+    Just k | replayKeyScoped p.id.toText sid k -> pure $ Just k
+    Just k | legacyReplayKey sid k -> (k <$) <$> sessionKeys p.id sessionId
+    _ -> pure Nothing
+  case scoped of
+    Just k -> do
       liftIO (Storage.runMinio ctx.s3HttpManager conn $ fetchRawObject bucket k (".gz" `T.isSuffixOf` k)) >>= \case
         Right raw -> pure $ RawJson raw
         -- NoSuchKey = a concurrent seal/merge already removed this source; tolerate
@@ -962,7 +970,7 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge =
     mergeUnderLease p = do
       ctx <- Effectful.Reader.Static.ask @AuthContext
       let (s3Conn, bucket) = projectMinioConn ctx.config p
-      (existingShards, allFileKeys) <- sessionKeys pid sessionId
+      (existingShards, allFileKeys) <- fold <$> sessionKeys pid sessionId
       let fileKeys = take maxFilesPerMerge allFileKeys
       if null fileKeys
         then do
