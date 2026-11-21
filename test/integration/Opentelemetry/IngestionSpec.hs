@@ -724,11 +724,18 @@ spec = do
             Left wf -> expectationFailure $ "expected " <> what <> "; got " <> toString (Telemetry.writeFailureSummary wf)
             Right (acks, poison) -> expectationFailure $ "expected " <> what <> "; got Right acks=" <> show acks <> " poison=" <> show (map (\(a, _, _) -> a) poison)
           retried = logsNamed "retryHasqlWrite: transient error, retrying"
-      -- A batch identified by project id alone, no API key, is persisted.
+      -- kafkaAtProjectId_withoutKey_refused: the collector feeding Kafka is the public, unauthenticated
+      -- edge, so a project id alone wrote into any project whose UUID was known. It is now dropped
+      -- (acked, logged, counted) unless the project is in OTLP_KEYLESS_PROJECT_IDS.
       let ackProjectOnly = "ack-project-id-only"
           projectOnly = createOtelLogAtTime "" ["valid record from " <> ackProjectOnly] frozenTime & LSF.resourceLogs %~ map (PLF.resource . PRF.attributes .~ [mkAttr "at-project-id" testPid.toText])
+          keyless = tr{trATCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.otlpKeylessProjectIds = [testPid]}}}
       before <- countDemoSpans tr ackProjectOnly
-      send tr [(ackProjectOnly, encodeMessage projectOnly)] logsAttrs >>= right >>= (`shouldBe` ([ackProjectOnly], []))
+      (forged, refusedLogs) <- withCapturedLogs tr \logged -> send logged [("ack-project-id-forged", encodeMessage projectOnly)] logsAttrs
+      right forged >>= (`shouldBe` (["ack-project-id-forged"], []))
+      countDemoSpans tr ackProjectOnly `shouldReturn` before
+      map (logField "project_id") (logsNamed "processList: at-project-id without an API key refused" refusedLogs) `shouldBe` [Just (AE.toJSON testPid)]
+      send keyless [(ackProjectOnly, encodeMessage projectOnly)] logsAttrs >>= right >>= (`shouldBe` ([ackProjectOnly], []))
       countDemoSpans tr ackProjectOnly `shouldReturn` (before + 1)
       -- Two TF write attempts fail like a draining TimeFusion; both batches still ack under one
       -- batch id shared by the retries and the acknowledgment.
