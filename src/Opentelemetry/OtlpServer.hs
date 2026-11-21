@@ -380,6 +380,7 @@ processList msgs !attrs =
       -- DLQ replay stamps monoscope-write-failure; rewrite only the failed leg
       -- so the durable store isn't duplicated. Live ingest has no header → both.
       let target = Telemetry.writeTargetFor appCtx.env (HM.lookup "monoscope-write-failure" attrs >>= Telemetry.parseWriteFailureKind)
+          keyless = keylessSet appCtx
           concatRecs perMsg = V.concat [recs | (_, _, recs) <- perMsg]
           spansInsert label caches perMsg = checkpoint (fromString $ "processList:" <> label <> ":bulkInsert") $ ingestOtelRecords appCtx target caches (concatRecs perMsg)
       case HM.lookup "ce-type" attrs of
@@ -395,7 +396,7 @@ processList msgs !attrs =
             ( \ft caches keyToId req ->
                 let !rls = V.fromList $ req ^. PLF.resourceLogs
                     !pids = pidsForKeys keyToId (getLogApiKey rls)
-                 in V.concatMap (V.fromList . convertResourceLogsToOtelLogs ft caches (ProjectRouting Nothing pids)) rls
+                 in V.concatMap (V.fromList . convertResourceLogsToOtelLogs ft caches (ProjectRouting Nothing pids keyless)) rls
             )
             (spansInsert "logs")
         Just "org.opentelemetry.otlp.traces.v1" ->
@@ -409,7 +410,7 @@ processList msgs !attrs =
             (const Nothing)
             ( \ft caches keyToId req ->
                 let !rss = V.fromList $ req ^. PTF.resourceSpans
-                 in V.fromList $ convertResourceSpansToOtelLogs ft caches (ProjectRouting Nothing (pidsForKeys keyToId (getSpanApiKey rss))) rss
+                 in V.fromList $ convertResourceSpansToOtelLogs ft caches (ProjectRouting Nothing (pidsForKeys keyToId (getSpanApiKey rss)) keyless) rss
             )
             (spansInsert "traces")
         Just "org.opentelemetry.otlp.metrics.v1" ->
@@ -424,7 +425,7 @@ processList msgs !attrs =
             ( \ft caches keyToId req ->
                 let !rms = V.fromList $ req ^. PMF.resourceMetrics
                     !pidM = getMetricApiKey rms >>= (`HM.lookup` keyToId)
-                    !pid2M = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" rms
+                    !pid2M = parseKeylessId keyless (getMetricAttributeValue "at-project-id" rms)
                  in maybe V.empty (\pid -> V.fromList $ convertResourceMetricsToMetricRecords ft caches pid rms) (pidM <|> pid2M)
             )
             ( \caches perMsg ->
@@ -456,10 +457,13 @@ processBatchPipeline
   -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
 processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds invalidReason convert dbInsert =
   checkpoint (cp "") do
-    let !decodedMsgs = [(ackId, msg, decodeMessage msg :: Either String req) | (ackId, msg) <- msgs]
-        !allProjectKeys = V.concat [extractKeys req | (_, _, Right req) <- decodedMsgs]
-        !uniqueProjectKeys = V.fromList $ hashNub $ V.toList allProjectKeys
-        !atIds = concatMap extractIds [req | (_, _, Right req) <- decodedMsgs]
+    -- The collector feeding Kafka is the public, unauthenticated edge: as on the direct path, an
+    -- @at-project-id@ names a project without a key only for 'Config.otlpKeylessProjectIds'.
+    let !keyless = keylessSet appCtx
+        !decodedMsgs = [(ackId, msg, decodeMessage msg :: Either String req) | (ackId, msg) <- msgs]
+        !msgMeta = [(ackId, raw, req, extractKeys req, L.partition (`HS.member` keyless) (hashNub (extractIds req))) | (ackId, raw, Right req) <- decodedMsgs]
+        !uniqueProjectKeys = V.fromList $ hashNub $ V.toList $ V.concat [keys | (_, _, _, keys, _) <- msgMeta]
+        !atIds = concat [allowed | (_, _, _, _, (allowed, _)) <- msgMeta]
 
     (!keyToIdMap, !projectCachesMap) <-
       if V.null uniqueProjectKeys && null atIds
@@ -475,25 +479,37 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
           !projectCaches <- checkpoint (cp ":getProjectCaches") $ fetchIngestCaches projectIds
           pure (keyToId, projectCaches)
 
+    let refused =
+          HM.fromListWith
+            (+)
+            [ (pid, 1 :: Int)
+            | (_, _, _, keys, (_, unkeyed)) <- msgMeta
+            , let keyed = mapMaybe (`HM.lookup` keyToIdMap) (V.toList keys)
+            , pid <- unkeyed
+            , pid `notElem` keyed
+            ]
+    forM_ (HM.toList refused) \(pid, n) -> do
+      Log.logWarn "processList: at-project-id without an API key refused" (AE.object ["label" AE..= label, "project_id" AE..= pid, "messages" AE..= n])
+      Metrics.count Metrics.unkeyedProjectRefused n [("otlp.signal", OA.toAttribute label)]
     let !decodePoison = [(ackId, raw, toText err) | (ackId, raw, Left err) <- decodedMsgs]
         -- invalidReason can be a full-request scan (metrics overflow) — evaluate once per message.
-        !checked = [(ackId, raw, req, invalidReason req) | (ackId, raw, Right req) <- decodedMsgs]
-        !invalidPoison = [(ackId, raw, err) | (ackId, raw, _, Just err) <- checked]
-        !converted = [(ackId, raw, req, convert fallbackTime projectCachesMap keyToIdMap req) | (ackId, raw, req, Nothing) <- checked]
+        !checked = [(ackId, raw, req, keys, allowed, invalidReason req) | (ackId, raw, req, keys, (allowed, _)) <- msgMeta]
+        !invalidPoison = [(ackId, raw, err) | (ackId, raw, _, _, _, Just err) <- checked]
+        !converted = [(ackId, raw, keys, allowed, convert fallbackTime projectCachesMap keyToIdMap req) | (ackId, raw, req, keys, allowed, Nothing) <- checked]
         -- DLQ, never ack, a payload naming an unresolved project, or one converting to zero rows
         -- unless every project it names is capped (2026-07-27: an ack lost ~200k rows). A mixed
         -- payload goes whole, resolved rows included, so the unresolved part survives.
         !dropPoison =
           [ (ackId, raw, "unresolved project: payload carried telemetry but did not resolve or convert")
-          | (ackId, raw, req, recs) <- converted
-          , let resolved = (<> extractIds req) <$> traverse (`HM.lookup` keyToIdMap) (V.toList (extractKeys req))
+          | (ackId, raw, keys, allowed, recs) <- converted
+          , let resolved = (<> allowed) <$> traverse (`HM.lookup` keyToIdMap) (V.toList keys)
                 -- 'all capped []' holds, so a payload naming nothing is accounted for either way.
                 accounted pids = all (`HM.member` projectCachesMap) pids && (not (V.null recs) || all capped pids)
                 capped p = any overFreeTierQuota (HM.lookup p projectCachesMap)
           , maybe True (not . accounted) resolved
           ]
         !dropAckIds = HS.fromList [ackId | (ackId, _, _) <- dropPoison]
-        !writeReady = [(ackId, raw, recs) | (ackId, raw, _, recs) <- converted, not (HS.member ackId dropAckIds)]
+        !writeReady = [(ackId, raw, recs) | (ackId, raw, _, _, recs) <- converted, not (HS.member ackId dropAckIds)]
         !writeAckIds = [ackId | (ackId, _, _) <- writeReady]
         !allEmpty = all (\(_, _, recs) -> V.null recs) writeReady
         poison = decodePoison <> invalidPoison <> dropPoison
@@ -1120,13 +1136,23 @@ forKnownProject projectCaches pid records = bool [] records (HM.member pid proje
 data ProjectRouting = ProjectRouting
   { metadataProject :: Maybe Projects.ProjectId
   , resourceProjects :: V.Vector (Text, Projects.ProjectId)
+  , keylessProjects :: HS.HashSet Projects.ProjectId
+  -- ^ The only projects a resource's @at-project-id@ alone may route to ('Config.otlpKeylessProjectIds').
   }
+
+
+keylessSet :: AuthContext -> HS.HashSet Projects.ProjectId
+keylessSet = HS.fromList . (.config.otlpKeylessProjectIds)
+
+
+parseKeylessId :: HS.HashSet Projects.ProjectId -> Maybe Text -> Maybe Projects.ProjectId
+parseKeylessId keyless = mfilter (`HS.member` keyless) . (Projects.projectIdFromText =<<)
 
 
 resourceProject :: ProjectRouting -> Maybe Text -> Maybe Text -> Maybe Projects.ProjectId
 resourceProject routing key projectId =
   (key >>= \k -> snd <$> find ((== k) . fst) routing.resourceProjects)
-    <|> (Projects.projectIdFromText =<< projectId)
+    <|> parseKeylessId routing.keylessProjects projectId
     <|> routing.metadataProject
 
 
@@ -1581,8 +1607,9 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
       $ ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
   -- These are the public gRPC/HTTP endpoints, so a presented key names a project; an
   -- @at-project-id@ alone does only for 'Config.otlpKeylessProjectIds'. It used to for any project whose
-  -- UUID was known. (The internal Kafka path, fed by our collector, still routes on it.)
-  let legacyIds = filter (`elem` appCtx.config.otlpKeylessProjectIds) $ mapMaybe Projects.projectIdFromText atIds'
+  -- UUID was known. The Kafka path ('processBatchPipeline') applies the same rule.
+  let keyless = keylessSet appCtx
+      legacyIds = mapMaybe (parseKeylessId keyless . Just) atIds'
       allProjectIds = hashNub $ map snd (V.toList projectIdsAndKeys) <> legacyIds
   when (null allProjectIds) $ throwGrpc GrpcUnauthenticated "Invalid or missing project API key"
   Log.logTrace
@@ -1590,7 +1617,7 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
     (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "at_project_ids" AE..= atIds', "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
 
   projectCaches <- checkpoint (toAnnotation $ "processList:" <> signal <> ":getProjectCaches") $ fetchIngestCaches allProjectIds
-  let routing = ProjectRouting (metadataApiKey >>= \key -> snd <$> find ((== key) . fst) projectIdsAndKeys) projectIdsAndKeys
+  let routing = ProjectRouting (metadataApiKey >>= \key -> snd <$> find ((== key) . fst) projectIdsAndKeys) projectIdsAndKeys keyless
       !records = convert currentTime projectCaches routing
 
   Log.logTrace
@@ -1653,8 +1680,7 @@ processMetricsRequest metadataApiKey req = do
   -- Metadata API key first, then the resource attribute key, then a legacy sender's project id
   -- (see 'processSignalRequest').
   keyPidM <- asum <$> traverse ProjectApiKeys.getProjectIdByApiKey (maybeToList metadataApiKey <> maybeToList projectKey)
-  keyless <- (.config.otlpKeylessProjectIds) <$> ask @AuthContext
-  case keyPidM <|> mfilter (`elem` keyless) (Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" resourceMetrics) of
+  case keyPidM <|> parseKeylessId (keylessSet appCtx) (getMetricAttributeValue "at-project-id" resourceMetrics) of
     Just pid -> do
       Log.logTrace
         "Metrics: Authentication successful"
