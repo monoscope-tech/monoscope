@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs disk-guard on the CapRover host. Alerts need SLACK_WEBHOOK_URL in
+# Installs disk-guard on the CapRover host. Alerts need ALERT_WEBHOOK_URL (Slack or Discord webhook) in
 # /etc/default/disk-guard there (left untouched if it exists).
 set -euo pipefail
 HOST=${HOST:-ubuntu@captain.s.past3.tech}

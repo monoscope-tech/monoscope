@@ -7,15 +7,15 @@
 set -uo pipefail
 MOUNT=/ RESERVE=/home/ubuntu/disk-reserve BALLAST=10
 WARN=85 RECLAIM=90 RELEASE=95 REFILL=80
-SLACK_WEBHOOK_URL=
+ALERT_WEBHOOK_URL=  # Slack or Discord incoming webhook
 [ -f /etc/default/disk-guard ] && . /etc/default/disk-guard
 STATE=/var/lib/disk-guard/level
 
 used() { df --output=pcent "$MOUNT" | tail -1 | tr -dc 0-9; }
 say() {
   logger -t disk-guard -p "user.$1" "$2"
-  [ -n "$SLACK_WEBHOOK_URL" ] && curl -fsS -m 10 -H 'Content-Type: application/json' \
-    -d "$(jq -nc --arg t "captain disk-guard: $2" '{text:$t}')" "$SLACK_WEBHOOK_URL" >/dev/null
+  [ -n "$ALERT_WEBHOOK_URL" ] && curl -fsS -m 10 -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg t "captain disk-guard: $2" '{text:$t,content:$t}')" "$ALERT_WEBHOOK_URL" >/dev/null
 }
 
 u=$(used)
