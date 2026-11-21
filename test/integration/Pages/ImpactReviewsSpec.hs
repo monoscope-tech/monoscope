@@ -117,6 +117,10 @@ revision :: Text
 revision = T.replicate 40 "a"
 
 
+routesApp :: TestResources -> Wai.Application
+routesApp tr = genericServeTWithContext (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider) (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused") OtlpServer.collectUsageReport \_ _ -> pass) (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+
+
 setup :: TestResources -> IO ()
 setup tr = setupProject tr testPid
 
@@ -2690,6 +2694,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     tried <- readIORef attempts
     map isJust tried `shouldBe` [True, False, True, False]
     for_ (catMaybes tried) \urls -> (urls.video, urls.diagram) `shouldSatisfy` \(video, diagram) -> all (T.isInfixOf ("/issue-fixes/" <> result.runId.toText <> "/shared/")) [video, diagram] && "/shared/video?sig=" `T.isInfixOf` video && "/shared/cause?sig=" `T.isInfixOf` diagram
+    -- A deleted project's signed fix media is gone too.
+    dbExec tr "UPDATE projects.projects SET deleted_at = now(), active = false WHERE id = ?" (Only testPid)
+    for_ (take 1 $ catMaybes tried) \urls -> (H.statusCode . (.simpleStatus) <$> WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ snd $ T.breakOn "/p/" urls.video) (routesApp tr)) `shouldReturn` 404
+    dbExec tr "UPDATE projects.projects SET deleted_at = NULL, active = true WHERE id = ?" (Only testPid)
     dbOne tr "SELECT count(*)::int FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'linked' AND metadata->>'url' = ?" (result.issueId, opened.url) `shouldReturn` (1 :: Int)
     publication <- either (fail . show) pure $ Publication.requestFor completed "main" Publication.Private "https://monoscope.example"
     credential <- either (fail . show) pure $ Publication.uploadCredential $ GitSync.PersonalToken "ghp_fixture"
@@ -2912,7 +2920,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let attempt = UUIDId UUID.nil
     dbExec tr "INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, revision, exit_code, cast_bytes, gif, mp4) VALUES (?, ?, 'proof-1', 'head', ?, 0, convert_to('cast', 'UTF8'), convert_to('GIF89a fixture', 'UTF8'), convert_to('mp4 fixture', 'UTF8'))" (run.id, attempt, revision)
     [link] <- map (Impact.proofLink tr.trATCtx run) <$> runQueryEffect tr (Reviews.proofSides run attempt)
-    let app = genericServeTWithContext (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider) (Routes.server (\_ _ _ -> pure $ Left "unused") (\_ _ _ -> pure $ Left "unused") OtlpServer.collectUsageReport \_ _ -> pass) (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+    let app = routesApp tr
         fetchWith headers url = WT.runSession (WT.request $ WT.setPath Wai.defaultRequest{Wai.requestHeaders = headers} $ encodeUtf8 $ fromMaybe url $ T.stripPrefix tr.trATCtx.config.hostUrl url) app
         fetch = fetchWith []
     preview <- fetch link.preview
@@ -2936,6 +2944,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
     posted <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest{Wai.requestMethod = "POST"} $ encodeUtf8 $ rateUrl Reviews.Up) app
     H.statusCode posted.simpleStatus `shouldBe` 200
     dbOne tr "SELECT rating FROM projects.pr_review_runs WHERE id = ?" (Only run.id) `shouldReturn` ("up" :: Text)
+    -- nonMemberSurfacesSkipActiveProject: signed links never expire, so a deleted project's proofs kept serving and taking ratings.
+    dbExec tr "UPDATE projects.projects SET deleted_at = now(), active = false WHERE id = ?" (Only testPid)
+    downVote <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest{Wai.requestMethod = "POST"} $ encodeUtf8 $ rateUrl Reviews.Down) app
+    traverse (fmap (H.statusCode . (.simpleStatus)) . fetch) [link.preview, rateUrl Reviews.Down] `shouldReturn` [404, 404]
+    (H.statusCode downVote.simpleStatus, ) <$> dbOne tr "SELECT rating FROM projects.pr_review_runs WHERE id = ?" (Only run.id) `shouldReturn` (404, "up" :: Text)
 
   it "sandbox_installsFromPackageRegistriesButReachesNothingElse" \_ -> withTemp "registry-egress" \directory -> do
     image <- guestImage

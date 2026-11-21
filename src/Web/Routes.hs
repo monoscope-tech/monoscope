@@ -867,6 +867,7 @@ proofMediaGetH :: Projects.ProjectId -> UUIDId "pr_review" -> ImpactReviews.Proo
 proofMediaGetH pid rid file sigM request send = do
   ctx <- ask @AuthContext
   whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid (ImpactReviews.proofSignedPath rid file) sigM) \err -> Error.throwError err403{errBody = err}
+  whenNothingM_ (Projects.activeProjectById pid) $ Error.throwError err404
   bytes <- maybe (Error.throwError err404) pure =<< ImpactReviews.proofFile pid rid file
   let mime = case file.asset of ImpactReviews.Recording ImpactReviews.Gif -> if "RIFF" `BS.isPrefixOf` bytes then "image/webp" else "image/gif"; ImpactReviews.Recording ImpactReviews.Mp4 -> "video/mp4"; ImpactReviews.Recording ImpactReviews.Cast -> "application/x-asciicast"; ImpactReviews.Screenshot _ -> "image/png"
   liftIO $ send $ PageCodeContext.rangedMedia request [(H.hContentType, mime), (H.hCacheControl, "public, max-age=31536000, immutable")] (toLazy bytes)
@@ -878,6 +879,7 @@ proofRatingH :: Bool -> Projects.ProjectId -> UUIDId "pr_review" -> ImpactReview
 proofRatingH record pid rid rating sigM = do
   ctx <- ask @AuthContext
   whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid (ImpactReviews.ratingSignedPath rid rating) sigM) \err -> Error.throwError err403{errBody = err}
+  whenNothingM_ (Projects.activeProjectById pid) $ Error.throwError err404
   when record $ unlessM (ImpactReviews.rateRun pid rid rating) $ Error.throwError err404
   let verdict = case rating of ImpactReviews.Up -> "got it right"; ImpactReviews.Down -> "got it wrong"
   pure
@@ -892,6 +894,7 @@ fixMediaGetH :: Projects.ProjectId -> UUIDId "issue_fix" -> Artifacts.Asset -> M
 fixMediaGetH pid fid asset sigM request send = do
   ctx <- ask @AuthContext
   whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid (IssueFixes.fixMediaSignedPath fid asset) sigM) \err -> Error.throwError err403{errBody = err}
+  whenNothingM_ (Projects.activeProjectById pid) $ Error.throwError err404
   (_, explanation) <- maybe (Error.throwError err404) pure =<< IssueFixes.mediaFor pid fid IssueFixes.SignedLink
   bytes <- either (const $ Error.throwError err503) (pure . Artifacts.verifiedBytes) =<< Artifacts.readFixMedia explanation asset
   liftIO $ send $ PageCodeContext.rangedMedia request [(H.hContentType, Artifacts.assetMime asset), (H.hCacheControl, "public, max-age=31536000, immutable")] bytes
