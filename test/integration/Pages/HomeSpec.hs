@@ -9,6 +9,7 @@ import Data.UUID qualified as UUID
 import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Issues qualified as Issues
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Dashboards qualified as Dashboards
@@ -40,6 +41,10 @@ spec = around withTestResources $ describe "Home screen" do
     page `shouldContainAll` ["Today&#39;s issues", "Checkout fails on a null cart", "Today&#39;s improvements", "Payment gateway timeout", "Resolved", "p95 latency on /cart down 38%", "Flagged by AI", "Checkout 5xx up 4.8x since deploy v3.2.1", "Error regression radar", "Talk to Monoscope engineers in Slack", "home-ask-form", "Connect your coding agent", "/api/v1/mcp", "Nothing is being watched yet.", "Your stack", "Just you so far", "monoscope config set project " <> pid.toText]
 
     [hid] <- dbQuery tr [sql|SELECT id FROM apis.home_highlights WHERE project_id = ? AND kind = 'insight'|] (Only pid)
+    -- A viewer could clear what the agent flagged for the whole team.
+    setRole tr pid ProjectMembers.PView
+    httpStatus tr (void $ Home.highlightDismissPostH pid (fromOnly hid)) `shouldReturn` 403
+    setRole tr pid ProjectMembers.PAdmin
     void $ call tr $ Home.highlightDismissPostH pid (fromOnly hid)
     dismissed <- renderT <$> call tr (Home.homeGetH pid)
     T.isInfixOf "Checkout 5xx up 4.8x" dismissed `shouldBe` False

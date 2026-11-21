@@ -1923,9 +1923,16 @@ spec = around withTestResources do
           sendAs mode = runTestBgRecordingHTTP frozenTime tr $ slackOk $ echo (fn "send_to_slack" [("message", "Do not send")]) $ AI.runAgenticChatWithHistory (slackAccess $ durable tr (conversation 3) mode) "Send this to Slack" "model" "api-key-never-store"
       runTestBg frozenTime tr (echo (fn "create_monitor" []) $ chat (durable tr (conversation 2) writes){AI.projectTools = Just monitorOnly} "Create a monitor") >>= (`shouldSatisfy` answered (T.isInfixOf "project role"))
       readIORef monitorRan `shouldReturn` False
+      -- highlightOnHomeClassedConversationWrite: a viewer's read-only chat posted to every member's Home.
+      let highlight n mode = void $ runTestBg frozenTime tr $ echo (fn "highlight_on_home" [("title", "Flagged"), ("kind", "insight"), ("detail", "X")]) $ chat (durable tr (conversation n) mode) "Flag this"
+          highlights = dbOne @_ @Int tr [sql|SELECT count(*)::int FROM apis.home_highlights WHERE project_id = ?|] (Only testPid)
+      interactiveInvocation tr testPid (conversation 4) "Flag this" Issues.Observe >>= highlight 4
+      highlights `shouldReturn` 0
       sendAs sends >>= (`shouldSatisfy` \(requests, a) -> null requests && answered (T.isInfixOf "edit permission") a)
       setRole tr testPid PM.PEdit
       resumed <- interactiveInvocation tr testPid (conversation 3) "Send this to Slack" Issues.Autonomous
+      interactiveInvocation tr testPid (conversation 5) "Flag this" Issues.Autonomous >>= highlight 5
+      highlights `shouldReturn` 1
       sendAs resumed >>= (`shouldSatisfy` \(requests, a) -> map fst requests == ["https://slack.com/api/chat.postMessage"] && answered (T.isInfixOf "Slack message sent") a)
       -- Administrative operations need the role, the policy, and an audience that may see the result.
       for_ (zip [10 ..] [("get_api_key", PM.PView, Issues.Autonomous, Left "project role"), ("get_api_key", PM.PAdmin, Issues.Autonomous, Left "destination"), ("create_api_key", PM.PAdmin, Issues.Autonomous, Left "destination"), ("delete_dashboard", PM.PView, Issues.Autonomous, Left "project role"), ("delete_dashboard", PM.PAdmin, Issues.Observe, Left "execution policy"), ("delete_dashboard", PM.PAdmin, Issues.Autonomous, Right ())]) \(n, (operation, role, policy, expected :: Either Text ())) -> do

@@ -564,6 +564,6 @@ instance Outcome HighlightDismissed
 
 highlightDismissPostH :: Projects.ProjectId -> UUIDId "home_highlight" -> ATAuthCtx (RespHeaders (System.Types.Done HighlightDismissed))
 highlightDismissPostH pid hid = do
-  _ <- Projects.sessionAndProject pid
+  _ <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   Issues.dismissHighlight pid hid
   done HighlightDismissed

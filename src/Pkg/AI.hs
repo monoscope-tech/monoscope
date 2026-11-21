@@ -1170,7 +1170,7 @@ initialLocalOperations config =
     <> [operation | SlackInvestigationAccess{} <- [config.access], operation <- [GetInvestigationHistory, GetRelatedIncidents, GetIncidentContext]]
     <> [operation | isJust config.sourceConfig, operation <- [GetCodeContext, ListRunbooks, ReadRunbook, GetLinkedRepositories, GetDeployments]]
     <> [SaveArtifact | isJust $ documentConversation config, isJust $ invocationContext config.invocationMode]
-    <> [HighlightOnHome | isJust $ invocationContext config.invocationMode]
+    <> [HighlightOnHome | writes, isJust $ invocationContext config.invocationMode]
     <> [ReadArtifact | isJust $ documentConversation config]
     <> [operation | isJust $ pageContext config, operation <- [OpenPage, ReadPage] <> [operation' | writes, operation' <- [Click, Fill]]]
   where
