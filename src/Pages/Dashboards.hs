@@ -1412,8 +1412,9 @@ getDashWithAccess pid dashId fileM =
 loadDashWithAccess :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, IOE :> es, Wreq.HTTP :> es) => Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Eff es (Maybe (Either ReadOnly Editable, Dashboards.DashboardVM, Dashboards.Dashboard))
 loadDashWithAccess pid dashId fileM = do
   templates <- askTemplates
+  manager <- (.scrapeManager) <$> ask @AuthContext
   Dashboards.getDashboardByProjectId pid dashId >>= traverse \dashVM -> do
-    dash <- maybe (pure $ fromMaybe def (loadDashboardFromVM (templateList templates) dashVM)) Dashboards.readDashboardEndpoint fileM
+    dash <- maybe (pure $ fromMaybe def (loadDashboardFromVM (templateList templates) dashVM)) (Dashboards.readDashboardEndpoint manager) fileM
     pure (editableIn templates dashVM, dashVM, dash)
 
 
