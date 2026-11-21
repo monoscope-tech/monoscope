@@ -652,7 +652,8 @@ configToEnv config = do
   hasqlJobsPool <- liftIO $ DeriveUtils.mkHasqlPool 10 mainHasqlSettings
   hasqlTimefusionPool <- liftIO $ DeriveUtils.mkHasqlPoolWithIdleTimeout (fromIntegral timefusionIdleSeconds) 30 tfHasqlSettings
   projectCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
-  projectKeyCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
+  -- Revocation clears only this process's entry; other replicas keep a revoked key until it expires.
+  projectKeyCache <- liftIO $ newCache (Just $ TimeSpec (5 * 60) 0)
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   hostStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
   endpointStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
