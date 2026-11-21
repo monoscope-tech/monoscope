@@ -112,6 +112,7 @@
 - servant-htmx
 - servant-lucid
 - servant-server
+- servant-client
 - servant-queryparam-core
 - servant-queryparam-server
 - tagsoup
@@ -156,6 +157,10 @@
 - hs-opentelemetry-exporter-otlp
 - hs-opentelemetry-api
 - hs-opentelemetry-instrumentation-wai
+- hs-opentelemetry-instrumentation-http-client
+- hs-opentelemetry-instrumentation-postgresql-simple
+- hs-opentelemetry-instrumentation-hw-kafka-client
+- hs-opentelemetry-propagator-w3c
 - hs-opentelemetry-instrumentation-auto
 - postgresql-libpq
 - ki-effectful

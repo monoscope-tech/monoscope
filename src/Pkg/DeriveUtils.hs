@@ -32,6 +32,7 @@ module Pkg.DeriveUtils (
   bulkActionSlug,
   showPGFloatArray,
   mkHasqlPool,
+  pgSpan,
   mkHasqlPoolWithIdleTimeout,
   rawSql,
   liveProjectSql,
@@ -84,6 +85,7 @@ import Language.Haskell.TH qualified as TH
 import Language.Haskell.TH.Syntax qualified as TH
 import Numeric (showHex)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
+import OpenTelemetry.Instrumentation.PostgresqlSimple (pgsSpan)
 import Pkg.AssetManifestFingerprint (assetManifestFingerprint)
 import Pkg.Deriving
 import Refined (FromTo, Refined, unrefine)
@@ -510,6 +512,13 @@ mkHasqlPoolWithIdleTimeout idleTimeout sz cstr =
         ]
     )
     cstr
+
+
+-- | A postgresql-simple call under the Client span hasql calls get. It records the query
+-- template: the upstream wrappers record 'formatQuery' output, i.e. the bound values, and
+-- their @_@ variants format with no parameters, so a literal @?@ throws.
+pgSpan :: Connection -> Query -> IO a -> IO a
+pgSpan conn = pgsSpan conn . fromQuery
 
 
 -- | Embed a raw @Text@ value as a literal SQL fragment (no escaping/parameterization).

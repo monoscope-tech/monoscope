@@ -42,6 +42,7 @@ import System.IO (hClose)
 import System.IO.Error (isDoesNotExistError, isEOFError, tryIOError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
+import System.Tracing qualified as Tracing
 import Text.HTML.TagSoup qualified as TagSoup
 import UnliftIO.Async (forConcurrently)
 import UnliftIO.Exception (catch, finally, throwIO, tryAny)
@@ -1071,7 +1072,7 @@ fetchDocument url
   | not (documentUrlOk url && safeScrapeUrl url) = pure $ Left "Only short public https:// document URLs, without a query string, can be fetched"
   | otherwise =
       first (const "The page could not be fetched") <$> tryAny do
-        manager <- HTTP.newManager TLS.tlsManagerSettings{HTTP.managerResponseTimeout = HTTP.responseTimeoutMicro 15000000}
+        manager <- Tracing.newTracedManager TLS.tlsManagerSettings{HTTP.managerResponseTimeout = HTTP.responseTimeoutMicro 15000000}
         request <- HTTP.parseRequest (toString url)
         HTTP.withResponse request{HTTP.redirectCount = 0, HTTP.requestHeaders = [("User-Agent", "monoscope-review")]} manager \response -> do
           body <- toStrict <$> HTTP.brReadSome (HTTP.responseBody response) 524288

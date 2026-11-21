@@ -13,6 +13,7 @@ module Data.Effectful.Wreq (
   requestWith,
   W.header,
   runHTTPWreq,
+  runHTTPWreqVia,
   runHTTPGolden,
   runHTTPRecord,
   runHTTPRecordWith,
@@ -26,18 +27,19 @@ module Data.Effectful.Wreq (
   withGoldenCache,
 ) where
 
+import Control.Lens ((%~))
 import Data.Aeson qualified as AE
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.TH
-import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), RequestBody (..), createCookieJar, defaultRequest, requestBody)
+import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), Manager, RequestBody (..), createCookieJar, defaultRequest, requestBody)
 import Network.HTTP.Client.Internal (Response (..), ResponseClose (..))
 import Network.HTTP.Types.Status (Status (..), statusCode, statusMessage)
 import Network.HTTP.Types.Version (http11)
 import Network.Wreq qualified as W
-import Network.Wreq.Types qualified as W
+import Network.Wreq.Types qualified as W hiding (manager)
 import Relude hiding (get, put)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
@@ -79,18 +81,31 @@ makeEffect ''HTTP
 
 -- Interpreters
 runHTTPWreq :: IOE :> es => Eff (HTTP ': es) a -> Eff es a
-runHTTPWreq = interpret $ \_ -> \case
-  Get url -> liftIO $ W.get url
-  Post url body -> liftIO $ W.post url body
-  Put url body -> liftIO $ W.put url body
-  Patch url body -> liftIO $ W.patch url body
-  Delete url -> liftIO $ W.delete url
-  GetWith opts url -> liftIO $ W.getWith opts url
-  PostWith opts url body -> liftIO $ W.postWith opts url body
-  PutWith opts url body -> liftIO $ W.putWith opts url body
-  PatchWith opts url body -> liftIO $ W.patchWith opts url body
-  DeleteWith opts url -> liftIO $ W.deleteWith opts url
-  RequestWith m opts url body -> liftIO $ maybe (W.customMethodWith m opts url) (W.customPayloadMethodWith m opts url) body
+runHTTPWreq = runHTTPWreqWith id
+
+
+-- | 'runHTTPWreq' on a shared manager. wreq's default builds a fresh manager per request, so
+-- nothing is pooled and an instrumented manager never sees the call. A @Right@ manager in the
+-- options is kept; @Left@ settings are replaced, so a caller with its own timeout passes @Right@.
+runHTTPWreqVia :: IOE :> es => Manager -> Eff (HTTP ': es) a -> Eff es a
+runHTTPWreqVia mgr = runHTTPWreqWith (W.manager %~ Right . fromRight mgr)
+
+
+runHTTPWreqWith :: IOE :> es => (Options -> Options) -> Eff (HTTP ': es) a -> Eff es a
+runHTTPWreqWith f = interpret $ \_ -> \case
+  Get url -> liftIO $ W.getWith d url
+  Post url body -> liftIO $ W.postWith d url body
+  Put url body -> liftIO $ W.putWith d url body
+  Patch url body -> liftIO $ W.patchWith d url body
+  Delete url -> liftIO $ W.deleteWith d url
+  GetWith opts url -> liftIO $ W.getWith (f opts) url
+  PostWith opts url body -> liftIO $ W.postWith (f opts) url body
+  PutWith opts url body -> liftIO $ W.putWith (f opts) url body
+  PatchWith opts url body -> liftIO $ W.patchWith (f opts) url body
+  DeleteWith opts url -> liftIO $ W.deleteWith (f opts) url
+  RequestWith m opts url body -> liftIO $ maybe (W.customMethodWith m (f opts) url) (W.customPayloadMethodWith m (f opts) url) body
+  where
+    d = f W.defaults
 
 
 -- | Record outgoing requests as @(url, rendered body)@ instead of performing

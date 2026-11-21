@@ -50,6 +50,8 @@ import Network.GRPC.Common (GrpcError (..), GrpcException (..))
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Network.Socket qualified as NS
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
+import OpenTelemetry.Trace (SpanKind (Consumer))
+import OpenTelemetry.Trace.Core (SpanHot (hotName))
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
@@ -815,7 +817,8 @@ spec = do
           seeded = newTVarIO $ appendRecords "otlp_logs" (K.headersFromList []) (offsets [0 .. 4]) emptyBroker
       bVar <- seeded
       receivedVar <- newTVarIO ([] :: [ByteString])
-      b <- drive tr bVar ["otlp_logs"] Queue.KafkaPrimary (\tuples attrs -> atomically (modifyTVar' receivedVar (<> map snd tuples)) >> ackAll tuples attrs) (committedTo 5 bVar)
+      (b, spans) <- withCapturedSpans \tp -> drive tr{trTracerProvider = tp} bVar ["otlp_logs"] Queue.KafkaPrimary (\tuples attrs -> atomically (modifyTVar' receivedVar (<> map snd tuples)) >> ackAll tuples attrs) (committedTo 5 bVar)
+      [(k, textAttr h "messaging.system", textAttr h "messaging.destination.name") | (k, h) <- spans, hotName h == "kafka.process_batch"] `shouldSatisfy` \bs -> not (null bs) && all (== (Consumer, Just "kafka", Just "otlp_logs")) bs
       sort <$> readTVarIO receivedVar `shouldReturn` sort (map (encodeUtf8 . show) [0 .. 4 :: Int64])
       Map.lookup ("otlp_logs", 0) b.committed `shouldBe` Just 5
       -- Every record poisoned: the DLQ records become durable (leave `pending`) only when the
