@@ -1,4 +1,4 @@
-module Pages.Bots.Discord (linkDiscordGetH, discordInteractionsH, getDiscordChannels, DiscordInteraction) where
+module Pages.Bots.Discord (startInstallGetH, linkDiscordGetH, discordInteractionsH, getDiscordChannels, DiscordInteraction) where
 
 import Control.Lens ((^.), (^?))
 import Data.Aeson qualified as AE
@@ -6,7 +6,9 @@ import Data.Aeson.Lens qualified as AEL
 import Data.Bits ((.&.))
 import Data.ByteString qualified as BS
 import Data.Default (Default (def))
+import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP, defaults, getWith, postWith, responseBody)
+import Data.List qualified as L
 import Data.Text qualified as T
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
@@ -19,7 +21,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards (Dashboard (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (statusIsSuccessful)
+import Network.HTTP.Types (renderSimpleQuery, statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
@@ -30,35 +32,56 @@ import Pkg.DeriveUtils (idFromText)
 import Pkg.Mail (arr)
 import Relude hiding (ask, asks)
 import Servant.API (Header)
+import Servant.API qualified as Servant
 import Servant.API.ResponseHeaders (Headers, addHeader)
-import Servant.Server (ServerError (errBody), err400, err401, err404)
+import Servant.Server (ServerError (errBody), err400, err401, err403, err404)
 import System.Config (AuthContext (env), EnvConfig (..))
 import System.Logging qualified as Log
-import System.Types (ATBaseCtx)
-import Utils (hostPath)
-import Web.Cookie (parseCookies)
+import System.Types (ATAuthCtx, ATBaseCtx)
+import Utils (constEqText, hostPath)
+import Web.Cookie (SetCookie (..), defaultSetCookie, parseCookies, sameSiteLax)
 import Web.Links (CookieProtectedRoutes (..), urls)
 import "base16-bytestring" Data.ByteString.Base16 qualified as Base16
 import "cryptonite" Crypto.Error qualified as Crypto
 import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
 
 
--- | The OAuth @state@ is only the project id, so anyone who knew a project's UUID could bind
--- their own guild to it: answer its alerts in their channel and query its telemetry from Discord.
--- The browser finishing the install must therefore carry the session of an editor of that
--- project, and the guild must be the one Discord issued the code for.
+-- | An editor starts the install here: a fresh nonce rides in the OAuth @state@ and in a cookie
+-- on this browser, which 'linkDiscordGetH' requires back.
+startInstallGetH :: Projects.ProjectId -> Bool -> ATAuthCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] Servant.NoContent)
+startInstallGetH pid onboarding = do
+  sess <- Projects.getSession
+  unlessM (any (>= ProjectMembers.PEdit) <$> ProjectMembers.getSessionPermission pid sess.user.id) $ throwError err403
+  nonce <- UUID.toText <$> UUID.genUUID
+  envCfg <- asks env
+  let oauthState = T.intercalate "__" $ [pid.toText] <> ["onboarding" | onboarding] <> [nonce]
+      params = [("response_type", "code"), ("client_id", envCfg.discordClientId), ("permissions", "277025392640"), ("integration_type", "0"), ("scope", "bot applications.commands"), ("state", oauthState), ("redirect_uri", envCfg.discordRedirectUri)]
+      cookie = defaultSetCookie{setCookieName = discordStateCookie, setCookieValue = encodeUtf8 oauthState, setCookiePath = Just "/discord", setCookieHttpOnly = True, setCookieSecure = True, setCookieSameSite = Just sameSiteLax, setCookieMaxAge = Just 600}
+  pure $ addHeader ("https://discord.com/oauth2/authorize" <> decodeUtf8 (renderSimpleQuery True $ map (bimap encodeUtf8 encodeUtf8) params)) $ addHeader cookie Servant.NoContent
+
+
+discordStateCookie :: ByteString
+discordStateCookie = "monoscope_discord_state"
+
+
+-- | Anyone who knew a project's UUID could put it in @state@ and bind their own guild to it:
+-- answer its alerts in their channel and query its telemetry from Discord. The browser
+-- finishing the install must be the one that started it ('startInstallGetH'), carry the session
+-- of an editor of that project, and the guild must be the one Discord issued the code for.
 linkDiscordGetH :: Maybe Text -> Maybe Text -> Maybe Text -> Maybe ByteString -> ATBaseCtx (Headers '[Header "Location" Text] BotResponse)
 linkDiscordGetH pidM' codeM guildIdM cookieM = do
   envCfg <- asks env
   let (pidM, isOnboarding) = parseInstallState pidM'
       bwconf = (def :: BWConfig){sessM = Nothing, currProject = Nothing, pageTitle = "Discord app installed", config = envCfg}
       discordErr = addHeader "" $ DiscordError $ PageCtx def ()
+      cookies = maybe [] parseCookies cookieM
   installer <- runMaybeT do
-    sess <- MaybeT . Projects.getPersistentSession =<< hoistMaybe (Projects.sessionIdFromCookies $ maybe [] parseCookies cookieM)
+    guard $ or $ liftA2 constEqText pidM' (decodeUtf8 <$> L.lookup discordStateCookie cookies)
+    sess <- MaybeT . Projects.getPersistentSession =<< hoistMaybe (Projects.sessionIdFromCookies cookies)
     pid <- hoistMaybe pidM
     guard . any (>= ProjectMembers.PEdit) =<< lift (ProjectMembers.getSessionPermission pid sess.userId)
   case (pidM, codeM, guildIdM, installer) of
-    (_, _, _, Nothing) -> Log.logAttention "Discord install without an editor session for the project" (AE.object ["state" AE..= pidM']) $> discordErr
+    (_, _, _, Nothing) -> Log.logAttention "Discord install not started by this browser, or without an editor session for the project" (AE.object ["state" AE..= pidM']) $> discordErr
     (Just pid, Just code, Just guildId, Just ()) -> do
       let body :: [FormParam]
           body =

@@ -653,9 +653,14 @@ withDashboardTemplate pid dashboardId act = whenJust (idFromText dashboardId) \d
     mapM_ act $ loadDashboardFromVM dashboardTemplatesCompiled vm <|> find ((== Just "_overview.yaml") . (.file)) dashboardTemplatesCompiled
 
 
--- | OAuth install state/redirect param: @"projectId"@ or @"projectId__onboarding"@.
+-- | OAuth install state: @"projectId[__onboarding]__nonce"@.
+--
+-- >>> snd $ parseInstallState (Just "00000000-0000-0000-0000-000000000000__onboarding__n1")
+-- True
+-- >>> snd $ parseInstallState (Just "00000000-0000-0000-0000-000000000000__n1")
+-- False
 parseInstallState :: Maybe Text -> (Maybe Projects.ProjectId, Bool)
-parseInstallState stateM = (Projects.projectIdFromText =<< viaNonEmpty head parts, length parts > 1)
+parseInstallState stateM = (Projects.projectIdFromText =<< viaNonEmpty head parts, "onboarding" `elem` drop 1 parts)
   where
     parts = maybe [] (T.splitOn "__") stateM
 

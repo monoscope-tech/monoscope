@@ -57,14 +57,14 @@ import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), RequestBody (..), defaultRequest, requestBody, responseStatus)
-import Network.HTTP.Types (Status, parseSimpleQuery, renderSimpleQuery, status202, status204, status401, status403, status429, status503)
+import Network.HTTP.Types (Status, parseQuery, parseSimpleQuery, renderSimpleQuery, status202, status204, status401, status403, status429, status503)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types qualified as WreqTypes
 import OddJobs.Job qualified as OddJobs
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (PageCtx (..))
-import Pages.Bots.Discord (discordInteractionsH)
+import Pages.Bots.Discord (discordInteractionsH, linkDiscordGetH, startInstallGetH)
 import Pages.Bots.Slack (processSlackEvent, slackEventsPostH, slackInteractionsH)
 import Pages.Bots.Slack qualified as SlackPage
 import Pages.Bots.Utils qualified as Bot
@@ -89,6 +89,7 @@ import UnliftIO.Async (concurrently, concurrently_, wait, withAsync)
 import UnliftIO.Exception (tryAny)
 import Utils (hostPath)
 import Web.ApiTypes (ApiActor (..))
+import Web.Cookie (parseSetCookie, setCookieValue)
 import Web.FormUrlEncoded (Form (..), FromForm, urlDecodeAsForm)
 import Web.MCP qualified as MCP
 import Web.Routes qualified as Routes
@@ -5224,6 +5225,24 @@ spec = around withTestResources do
         publication <- dbOne tr [sql|SELECT publication_id FROM apis.slack_reply_publications WHERE project_id = ? AND conversation_id = ? AND part = 0|] (testPid, turn.conversationId)
         traverse (\ts -> runQueryEffect tr $ Investigations.confirmReplyPublication publication ts) (["1735689610.000001", "1735689619.000001"] :: [Text]) `shouldReturn` [True, False]
         work receipt >>= (`shouldSatisfy` noop)
+
+  -- discordInstall_callbackFromAnotherBrowser_doesNotLink: the state was only the project id, so an
+  -- attacker's own callback URL, opened by an editor, bound the editor's project to the attacker's guild.
+  it "Discord install links only from the browser that started it" \tr -> do
+    pid <- createTestProject tr "discord-install"
+    headers <- getHeaders <$> runAuthHandler tr (startInstallGetH pid False)
+    let location = maybe "" decodeUtf8 $ lookup "Location" headers
+        oauthState = maybe "" decodeUtf8 $ join $ lookup "state" $ parseQuery $ encodeUtf8 $ T.drop 1 $ snd $ T.breakOn "?" location
+        session = "monoscope_session=" <> UUID.toText (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId
+        granted _ url = pure $ AE.encode (AE.object ["guild" .= AE.object ["id" .= ("G_ATTACKER" :: Text)]]) <$ guard ("oauth2/token" `T.isInfixOf` toText url)
+        callback cookie = fst <$> runAsBaseRecordingHTTP tr (withHTTPResponses granted $ linkDiscordGetH (Just oauthState) (Just "code") (Just "G_ATTACKER") (Just cookie))
+        linked = (.guildId) <<$>> runQueryEffect tr (Slack.getDiscordDataByProjectId pid)
+    (setCookieValue . parseSetCookie <$> lookup "Set-Cookie" headers, T.isPrefixOf (pid.toText <> "__") oauthState) `shouldBe` (Just (encodeUtf8 oauthState), True)
+    -- The editor's session alone, or with a oauthState cookie from another install, redeems no code.
+    for_ @[] [session, session <> "; monoscope_discord_state=" <> pid.toText <> "__other"] \cookie -> callback (encodeUtf8 cookie) `shouldReturn` []
+    linked `shouldReturn` Nothing
+    void $ callback $ encodeUtf8 $ session <> "; monoscope_discord_state=" <> oauthState
+    linked `shouldReturn` Just "G_ATTACKER"
 
   it "Discord: signed interactions answer ping, /here, deferred /monoscope in channels and threads, and /dashboard" \tr -> do
     setupDiscordData tr testPid "1234567890123456789"
