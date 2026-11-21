@@ -191,12 +191,12 @@ acknowledgeIssueGetH pid enable issueId durationM = do
         -- Every swept sibling, not just the one clicked: the cascade acknowledges
         -- them all, so they all owe their timeline an entry saying why.
         acked <- Issues.ackCascade pid sess.user.id window [issueId]
-        forM_ acked \i -> Issues.logIssueActivity i Issues.IEAcknowledged (Just sess.user.id) (Just $ AE.object ["until" AE..= until'])
+        forM_ acked \i -> Issues.logIssueActivity pid i Issues.IEAcknowledged (Just sess.user.id) (Just $ AE.object ["until" AE..= until'])
         addSuccessToast (untilLabel "Acknowledged" now until' <> " \x2014 notifications paused") Nothing
         pure $ Just until'
       else do
         void $ Issues.setAckState pid [issueId] Nothing
-        Issues.logIssueActivity issueId Issues.IEUnacknowledged (Just sess.user.id) Nothing
+        Issues.logIssueActivity pid issueId Issues.IEUnacknowledged (Just sess.user.id) Nothing
         addSuccessToast "Back in the Inbox \x2014 notifications resumed" Nothing
         pure Nothing
   addTriggerEvent "issuesListChanged" AE.Null
@@ -226,7 +226,7 @@ setArchived pid issueId windowM event toast = do
   (sess, _) <- Projects.sessionAndProject pid
   now <- Time.currentTime
   void $ Issues.setArchiveState pid [issueId] ((now,) <$> windowM)
-  Issues.logIssueActivity issueId event (Just sess.user.id) Nothing
+  Issues.logIssueActivity pid issueId event (Just sess.user.id) Nothing
   addSuccessToast toast Nothing
   addTriggerEvent "issuesListChanged" AE.Null
   addRespHeaders $ Archive pid issueId (isJust windowM)
@@ -303,7 +303,7 @@ assignIssues :: Projects.ProjectId -> Projects.UserId -> [Issues.Issue] -> Maybe
 assignIssues pid actor issues assigneeM = do
   let changed = filter ((/= assigneeM) . (.assigneeId)) issues
   void $ Issues.setIssueAssignee pid ((.id) <$> changed) assigneeM
-  forM_ changed \i -> Issues.logIssueActivity i.id (maybe Issues.IEUnassigned (const Issues.IEAssigned) assigneeM) (Just actor) (assigneeM <&> \u -> AE.object ["assignee_id" AE..= u])
+  forM_ changed \i -> Issues.logIssueActivity pid i.id (maybe Issues.IEUnassigned (const Issues.IEAssigned) assigneeM) (Just actor) (assigneeM <&> \u -> AE.object ["assignee_id" AE..= u])
   issueErrors pid changed >>= traverse_ (assignError pid assigneeM . snd)
 
 
@@ -405,7 +405,7 @@ issueBulkActionsPostH pid action durationM valueM items = do
             ids -> ([], Nothing, "Unmerged " <> show (length ids) <> " \x2014 back in the Inbox")
         BASpam -> Issues.setSpamState pid issueIds (Just now) $> (issueIds, Just Issues.IESpam, "Marked as spam")
         BAUnspam -> Issues.setSpamState pid issueIds Nothing $> (issueIds, Just Issues.IENotSpam, "No longer spam")
-      forM_ eventM \ev -> forM_ logIds \u -> Issues.logIssueActivity u ev (Just sess.user.id) Nothing
+      forM_ eventM \ev -> forM_ logIds \u -> Issues.logIssueActivity pid u ev (Just sess.user.id) Nothing
       addSuccessToast msg Nothing
       addTriggerEvent "issuesListChanged" AE.Null
       addRespHeaders Bulk
@@ -3115,7 +3115,7 @@ logTimelineEntry pid issueId entry = act do
   (sess, _) <- Projects.sessionAndProject pid
   Issues.selectIssueById pid issueId >>= \case
     Nothing -> pure $ Left TimelineIssueMissing
-    Just _ -> forM entry \(ev, meta) -> TimelineLogged <$ (Issues.logIssueActivity issueId ev (Just sess.user.id) (Just $ AE.object meta) >> addTriggerEvent "issueActivityChanged" AE.Null)
+    Just _ -> forM entry \(ev, meta) -> TimelineLogged <$ (Issues.logIssueActivity pid issueId ev (Just sess.user.id) (Just $ AE.object meta) >> addTriggerEvent "issueActivityChanged" AE.Null)
 
 
 data ErrorGroupMembers = ErrorGroupMembers {projectId :: Projects.ProjectId, members :: [ErrorPatterns.ErrorPattern]}

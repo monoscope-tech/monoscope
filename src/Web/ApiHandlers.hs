@@ -1177,7 +1177,7 @@ issueMutate :: ApiActor -> Projects.ProjectId -> Issues.IssueId -> Issues.IssueE
 issueMutate principal pid iid event meta op = do
   void $ fetchIssue pid iid
   changed <- op [iid]
-  when (changed > 0) $ Issues.logIssueActivity iid event (principalUser principal) meta
+  when (changed > 0) $ Issues.logIssueActivity pid iid event (principalUser principal) meta
   apiIssueGet pid iid
 
 
@@ -1218,7 +1218,7 @@ apiIssuesBulk :: ApiActor -> Projects.ProjectId -> BulkAction Issues.IssueId -> 
 apiIssuesBulk principal pid ba = do
   now <- Time.currentTime
   ackSet <- mkAckSet principal ba.durationMinutes
-  let logged event meta op = count op <* forM_ ba.ids \i -> Issues.logIssueActivity i event (principalUser principal) meta
+  let logged event meta op = count op <* forM_ ba.ids \i -> Issues.logIssueActivity pid i event (principalUser principal) meta
   bulkExec
     ba
     [ ("acknowledge", logged Issues.IEAcknowledged (ackMeta ackSet) $ Issues.setAckState pid ba.ids (Just ackSet))

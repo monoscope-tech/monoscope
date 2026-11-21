@@ -1906,7 +1906,7 @@ spec = around withTestResources do
           answered p = either (const False) (p . (.response))
       issueId <- dbOne @_ @Issues.IssueId tr [sql|INSERT INTO apis.issues (project_id, issue_type, target_hash, service, environment) VALUES (?, 'runtime_exception'::apis.issue_type, gen_random_uuid()::text, 'checkout', 'production') RETURNING id|] (Only testPid)
       acknowledge <- interactiveInvocation tr testPid (conversation 1) "Acknowledge this issue" Issues.Autonomous
-      runTestBg frozenTime tr $ Issues.logIssueActivity issueId Issues.IEViewed (Just $ uid tr) Nothing
+      runTestBg frozenTime tr $ Issues.logIssueActivity testPid issueId Issues.IEViewed (Just $ uid tr) Nothing
       answer <-
         runTestBg frozenTime tr (agent (\h _ -> pure $ case toolResults h of [] -> invoking [fn "ack_issue" [("issue_id", AE.toJSON issueId)], newDashboard "Agent attribution regression"]; [_, _] -> invoking [fn "get_issue" [("issue_id", AE.toJSON issueId)]]; _ -> said "Issue acknowledged.") $ chat (tooled $ durable tr (conversation 1) acknowledge) "Acknowledge this issue")
           >>= either (fail . toString) pure

@@ -33,6 +33,8 @@ import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Config (AuthContext (..), EnvConfig (..))
+import Web.ApiHandlers qualified as ApiH
+import Web.ApiTypes qualified as ApiT
 
 
 spec :: Spec
@@ -174,7 +176,7 @@ spec = around withTestResources $ describe "Issues" do
     -- Timed archive expires; until-escalating wakes only on escalation.
     void $ call tr $ IssuesPage.archiveIssueGetH testPid a (Just (Issues.ArchiveFor 60))
     runTestBg frozenTime tr (Issues.expireArchives (addUTCTime 1800 frozenTime)) `shouldReturn` []
-    runTestBg frozenTime tr (Issues.expireArchives (addUTCTime 7200 frozenTime)) `shouldReturn` [a]
+    runTestBg frozenTime tr (Issues.expireArchives (addUTCTime 7200 frozenTime)) `shouldReturn` [(testPid, a)]
     err <- seedIssue tr (issueSeed Issues.RuntimeException "triage-err")
     void $ call tr $ IssuesPage.archiveIssueGetH testPid err (Just Issues.ArchiveUntilEscalating)
     runTestBg frozenTime tr (Issues.expireArchives (addUTCTime 86400 frozenTime)) `shouldReturn` []
@@ -184,7 +186,7 @@ spec = around withTestResources $ describe "Issues" do
     void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid True err (Just 1)
     again <- seedIssue tr (issueSeed Issues.RuntimeException "triage-err")
     void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid True again (Just 1)
-    expired <- runTestBg frozenTime tr (Issues.expireAcks (addUTCTime 120 frozenTime))
+    expired <- map snd <$> runTestBg frozenTime tr (Issues.expireAcks (addUTCTime 120 frozenTime))
     length (filter (`elem` [err, again]) expired) `shouldBe` 1
     length . filter id <$> forM [err, again] (inTab "Inbox") `shouldReturn` 1
 
@@ -330,6 +332,14 @@ spec = around withTestResources $ describe "Issues" do
     theirs <- seed otherPid "arch-shared"
     void $ runTestBg frozenTime tr $ Issues.setArchiveState testPid [own, theirs] (Just (frozenTime, Issues.ArchiveIndefinite))
     mapM (stamped tr "archived_at") [own, theirs] `shouldReturn` [True, False]
+    -- activityLogUnboundIssueId: the state change was scoped, its activity row was not, so acting
+    -- on another project's issue id wrote this user into its audit log, timeline and Slack thread.
+    void $ call tr $ IssuesPage.resolveIssueGetH testPid theirs
+    void $ call tr $ IssuesPage.archiveIssueGetH testPid theirs Nothing
+    void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid False theirs Nothing
+    for_ [IssuesPage.BAResolve, IssuesPage.BASpam] \a -> void $ call tr $ IssuesPage.issueBulkActionsPostH testPid a Nothing Nothing IssuesPage.IssueBulk{itemId = [theirs.toText]}
+    void $ toBaseServantResponse tr $ ApiH.apiIssuesBulk ApiT.ApiKeyPrincipal testPid ApiT.BulkAction{ApiT.action = "archive", ApiT.ids = [theirs], ApiT.durationMinutes = Nothing, ApiT.reason = Nothing}
+    dbOne tr [sql| SELECT count(*)::int FROM apis.issue_activity_log WHERE issue_id = ? |] (Only theirs) `shouldReturn` (0 :: Int)
 
     -- Error-group reads and unmerges are scoped to the caller's project.
     [canonical, member] <- replicateM 2 UUID.nextRandom
