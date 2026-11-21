@@ -97,7 +97,7 @@ import OpenTelemetry.Trace qualified as Trace
 import OpenTelemetry.Trace.Id.Generator.Default (defaultIdGenerator)
 import Options.Applicative (Parser, help, long, maybeReader, metavar, option)
 import Pages.Charts.Types (MetricsData (..))
-import Pkg.CLIFormat (cleanSummaryValue, evalCond, extractColIdxMap, extractInt, extractRawRows, extractRows, extractTextArray, renderSummaryCell, valToText)
+import Pkg.CLIFormat (cleanSummaryValue, escapeControls, evalCond, extractColIdxMap, extractInt, extractRawRows, extractRows, extractTextArray, renderSummaryCell, valToText)
 import Pkg.Deriving (decodeEnumSC)
 import System.IO (hPutStrLn)
 import System.Process (spawnProcess)
@@ -281,7 +281,7 @@ runServicesList cfg opts mode = do
     renderWith mode normalized
       $ if null services
         then putTextLn "No services found"
-        else renderTable ["service", "events"] [[s.name, show s.events] | s <- services]
+        else renderTable ["service", "events"] [[escapeControls s.name, show s.events] | s <- services]
 
 
 -- | One row of @services list@ output.
@@ -987,8 +987,8 @@ renderEventsTable val mFields = case val of
         picked = [(c, i) | c <- filteredCols, Just i <- [Map.lookup c idxMap]]
         cell c i r =
           let v = fromMaybe "" $ listToMaybe (drop i r)
-           in if c `elem` (["summary", "latency_breakdown"] :: [Text]) then renderSummaryCell v else v
-    renderTable (map fst picked) [[cell c i r | (c, i) <- picked] | r <- rows]
+           in if c `elem` (["summary", "latency_breakdown"] :: [Text]) then renderSummaryCell v else escapeControls v
+    renderTable (map (escapeControls . fst) picked) [[cell c i r | (c, i) <- picked] | r <- rows]
     putTextLn $ "\n" <> show count <> " results"
   _ -> renderJSON val
 
@@ -1429,7 +1429,7 @@ withMetricsData val onFail onOk = case AE.fromJSON val of
 renderMetricsTable :: IOE :> es => MetricsData -> Eff es ()
 renderMetricsTable md@MetricsData{headers, dataText}
   | V.null headers = renderJSON md
-  | otherwise = renderTable (V.toList headers) (V.toList (V.toList <$> dataText))
+  | otherwise = renderTable (escapeControls <$> V.toList headers) (V.toList (V.toList . fmap escapeControls <$> dataText))
 
 
 checkAssertion :: IOE :> es => MetricsData -> Text -> Eff es ()
