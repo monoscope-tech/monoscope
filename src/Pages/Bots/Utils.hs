@@ -46,7 +46,7 @@ import Pkg.CLIFormat qualified as CLIFormat
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
-import Pkg.Mail (arr, dcGallery, plainTxt, slackActions, slackContext, slackEscape, slackHeader, slackImage, slackSection)
+import Pkg.Mail (arr, dcGallery, inertCode, plainTxt, slackActions, slackContext, slackEscape, slackHeader, slackImage, slackSection)
 import Pkg.Parser (parseQueryToAST)
 import Pkg.SchemaLearning (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude hiding (Reader, ask)
@@ -605,7 +605,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
         let rows = V.toList (V.take 15 requestVecs)
             shownCount = length rows
             cells = map (map $ T.take 60 . unwords . words) $ colNames : map (map CLIFormat.valToText . V.toList) rows
-            tableData = "```\n" <> T.take 1200 (unlines $ map (CLIFormat.formatRow $ CLIFormat.colWidths cells) cells) <> "\n```"
+            tableData = "```\n" <> inertCode (T.take 1200 (unlines $ map (CLIFormat.formatRow $ CLIFormat.colWidths cells) cells)) <> "\n```"
             url' = hostPath envCfg.hostUrl $ explore (urls.logExplorer pid) Nothing query
             moreText = if resultCount > shownCount then "\n_" <> show (resultCount - shownCount) <> " more results in Log Explorer_" else ""
             content = botEmoji EmojiTable <> " **Query Results** (showing " <> show shownCount <> " of " <> show resultCount <> " rows)\n`" <> query <> "`\n" <> tableData <> moreText <> "\n"

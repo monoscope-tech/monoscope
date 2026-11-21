@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, activityReply, withOwner, Card, card, logPatternCard, rateChangeCard, cardMessages, uptimeMessages, cronMessages, recoveredMessages, uptimeName, cronName, RateChange (..), slackNewEndpointsAlert, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, addConvertKitUser, addConvertKitUserOrganization, arr, mrkdwn, plainTxt, slackEscape, slackSection, slackHeader, slackContext, slackImage, dcGallery, slackActions) where
+module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, activityReply, withOwner, Card, card, logPatternCard, rateChangeCard, cardMessages, uptimeMessages, cronMessages, recoveredMessages, uptimeName, cronName, RateChange (..), slackNewEndpointsAlert, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, addConvertKitUser, addConvertKitUserOrganization, arr, mrkdwn, plainTxt, slackEscape, inertCode, slackSection, slackHeader, slackContext, slackImage, dcGallery, slackActions) where
 
 import Control.Lens (Traversal', ix, (%~), (.~), (^..), (^?))
 import Data.Aeson qualified as AE
@@ -224,7 +224,7 @@ topStackFrame = fmap (T.take 160) . viaNonEmpty last . take 2 . filter (not . T.
 errRoute :: ErrorPatterns.ATError -> Text
 errRoute err = case filter (not . T.null) (catMaybes [err.requestMethod, err.requestPath]) of
   [] -> ""
-  parts -> "`" <> unwords parts <> "`"
+  parts -> "`" <> inertCode (unwords parts) <> "`"
 
 
 errFirstSeen :: ErrorPatterns.ATError -> Text
@@ -302,7 +302,7 @@ reply s title details = oneLine title $ dots (statusText s : details)
 
 
 oneLine :: Text -> Text -> Incidents.SlackPayload
-oneLine title line = Incidents.SlackPayload $ KEM.fromList ["text" AE..= (T.take 120 title <> ": " <> T.filter (/= '*') (T.takeWhile (/= '\n') line)), "blocks" AE..= arr [slackSection line]]
+oneLine title line = Incidents.SlackPayload $ KEM.fromList ["text" AE..= (slackEscape (T.take 120 title) <> ": " <> T.filter (/= '*') (T.takeWhile (/= '\n') line)), "blocks" AE..= arr [slackSection line]]
 
 
 -- | The root states who holds the issue now, so the channel can see someone is on it.
@@ -349,7 +349,7 @@ errorCard status err projectUrl issueUrl chartUrl rate footer =
   (statusCard status (errorAlertTitle err) issueUrl)
     { facts = errorFacts err <> foldMap (pure . ("*" <>) . (<> "*")) rate
     , -- The title already carries the message; the frames are the new evidence.
-      body = [tagged "evidence" $ slackSection $ maybe (errorSnippet 600 err) (\fs -> "```" <> T.replace "```" "'''" (T.intercalate "\n" (toList fs)) <> "```") (frames <* guard (T.isInfixOf (T.take 40 $ unwords $ words err.message) (errorAlertTitle err)))]
+      body = [tagged "evidence" $ slackSection $ slackEscape $ maybe (errorSnippet 600 err) (\fs -> "```" <> inertCode (T.intercalate "\n" (toList fs)) <> "```") (frames <* guard (T.isInfixOf (T.take 40 $ unwords $ words err.message) (errorAlertTitle err)))]
     , chart = Just ("Error occurrences · " <> errorAlertTitle err, chartUrl)
     , footer
     , actions = ("Open issue", issueUrl) : maybeToList ((err.traceId >>= guarded (not . T.null)) <&> \tid -> ("View trace", traceExplorerUrl projectUrl tid err.when))
@@ -360,7 +360,7 @@ errorCard status err projectUrl issueUrl chartUrl rate footer =
 
 -- | Where an error came from: service, environment, route.
 errorFacts :: ErrorPatterns.ATError -> [Text]
-errorFacts err = catMaybes [bold <$> err.serviceName, slackEscape <$> err.environment, guarded (not . T.null) (errRoute err)]
+errorFacts err = catMaybes [bold <$> err.serviceName, slackEscape <$> err.environment, slackEscape <$> guarded (not . T.null) (errRoute err)]
 
 
 -- | Readings print as people write them: grouped thousands, at most two decimals.
@@ -580,7 +580,7 @@ slackNewEndpointsAlert projectName endpoints targetUrl projectUrl =
   card
     (statusCard (Status ":large_blue_circle:" (countNoun (V.length endpoints) "new endpoint") Calm) title targetUrl)
       { facts = case groups of [((host, ctx), _)] -> catMaybes [bold <$> host, ctx]; _ -> []
-      , body = [tagged "evidence" $ slackSection $ T.intercalate "\n\n" $ groups <&> \((host, ctx), labels) -> foldMap (\h -> bold h <> foldMap ("  ·  " <>) ctx <> "\n") (host <* guard (length groups > 1)) <> bulletList labels]
+      , body = [tagged "evidence" $ slackSection $ T.intercalate "\n\n" $ groups <&> \((host, ctx), labels) -> foldMap (\h -> bold h <> foldMap ("  ·  " <>) ctx <> "\n") (host <* guard (length groups > 1)) <> slackEscape (bulletList labels)]
       , footer = ["Project " <> slackEscape projectName]
       , actions = [("Open issue", targetUrl), ("View in Explorer", newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints))]
       }
@@ -593,7 +593,7 @@ logPatternCard :: NewLogPattern -> Text -> Card
 logPatternCard NewLogPattern{..} project =
   (statusCard status (stripSummaryBadges patternText) issueUrl)
     { facts = catMaybes [bold <$> serviceName, T.toUpper . slackEscape <$> logLevel, Just $ "matched " <> countNoun occurrenceCount "time"]
-    , body = [tagged "evidence" $ slackSection $ snippet 400 $ fromMaybe patternText sampleMessage]
+    , body = [tagged "evidence" $ slackSection $ slackEscape $ snippet 400 $ fromMaybe patternText sampleMessage]
     , footer = ["Field `" <> slackEscape sourceField <> "`" | sourceField /= "body"] <> ["Project " <> slackEscape project]
     , actions = [("Open issue", issueUrl)]
     }
@@ -625,13 +625,24 @@ slackEscape :: Text -> Text
 slackEscape = T.replace ">" "&gt;" . T.replace "<" "&lt;" . T.replace "&" "&amp;"
 
 
+-- | Telemetry text bound for a chat code fence or span: no backtick survives to close it early and
+-- let a log line or route post live markup (Slack sinks also apply 'slackEscape').
+--
+-- >>> snippet 400 "x```<!channel> <https://attacker.example|Sign in>```"
+-- "```x'''<!channel> <https://attacker.example|Sign in>'''```"
+-- >>> slackEscape (bulletList ["GET /a`<!channel>`"])
+-- "\8226 `GET /a'&lt;!channel&gt;'`"
+inertCode :: Text -> Text
+inertCode = T.replace "`" "'"
+
+
 -- | Raw exception messages are evidence, not the notification's hierarchy.
 -- Collapse arbitrary whitespace and fence them so a multi-kilobyte HTTP request
 -- or database plan cannot dominate Slack's alert view or escape its code block.
 errorSnippet :: Int -> ErrorPatterns.ATError -> Text
 errorSnippet limit err = "```" <> bounded <> "```"
   where
-    message = unwords $ words $ T.replace "```" "'''" err.message
+    message = unwords $ words $ inertCode err.message
     withFrame = maybe message ((message <>) . ("\n" <>)) $ topStackFrame err.stackTrace
     bounded
       | T.length withFrame <= limit = withFrame
@@ -668,7 +679,7 @@ errorTitle errorType raw
 
 -- | Markdown bullet list shared by Slack + Discord new-endpoint renderers.
 bulletList :: [Text] -> Text
-bulletList = T.intercalate "\n" . fmap (\x -> "• `" <> x <> "`")
+bulletList = T.intercalate "\n" . fmap (\x -> "• `" <> inertCode x <> "`")
 
 
 -- | Build an explorer URL filtering by the given "METHOD /path" endpoint strings.
@@ -700,7 +711,7 @@ discordErrorAlert alertType err project projectUrl url chartUrlM occTextM firstS
   discordEmbedMsg (maybe msgs.discordContent (\d -> "⏳ **Still firing · " <> d <> "**") ongoingForM)
     $ AE.object
     $ [ "title" AE..= (err.errorType <> " · " <> project)
-      , "description" AE..= ("```" <> T.take 600 err.message <> maybe "" ("\n" <>) (topStackFrame err.stackTrace) <> "```")
+      , "description" AE..= ("```" <> inertCode (T.take 600 err.message <> maybe "" ("\n" <>) (topStackFrame err.stackTrace)) <> "```")
       , "color" AE..= msgs.discordColor
       , "fields" AE..= arr (uncurry (discordField True) <$> fields)
       , "url" AE..= url
@@ -899,7 +910,7 @@ arr = AE.Array . V.fromList
 
 -- | Fenced code snippet, badge-stripped and length-capped, as used in every alert body.
 snippet :: Int -> Text -> Text
-snippet n t = "```" <> T.take n (stripSummaryBadges t) <> "```"
+snippet n t = "```" <> inertCode (T.take n (stripSummaryBadges t)) <> "```"
 
 
 mrkdwn, plainTxt :: Text -> AE.Value

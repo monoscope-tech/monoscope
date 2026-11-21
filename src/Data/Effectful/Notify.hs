@@ -32,6 +32,7 @@ module Data.Effectful.Notify (
   whatsappNotification,
   discordNotification,
   discordThreadedNotification,
+  discordNoMentions,
   pagerdutyNotification,
 ) where
 
@@ -217,6 +218,16 @@ withSlackContext _ _ n = n
 
 discordNotification :: Text -> AE.Value -> Notification
 discordNotification channelId payload = discordThreadedNotification channelId payload Nothing
+
+
+-- | Discord messages carry telemetry text, so the bot never pings @everyone, roles or users from them.
+--
+-- >>> AE.encode $ discordNoMentions $ AE.object ["content" AE..= ("@everyone" :: Text)]
+-- "{\"allowed_mentions\":{\"parse\":[]},\"content\":\"@everyone\"}"
+discordNoMentions :: AE.Value -> AE.Value
+discordNoMentions = \case
+  AE.Object o -> AE.Object $ AEK.insert "allowed_mentions" (AE.object ["parse" AE..= ([] :: [Text])]) o
+  other -> other
 
 
 discordThreadedNotification :: Text -> AE.Value -> Maybe Text -> Notification
@@ -448,10 +459,10 @@ runNotifyProduction = interpret $ \_ -> \case
           -- A rejection is answered, not thrown: wreq's exception dumped the whole request and
           -- response (cookies included) and hid Discord's reason, e.g. 50001 Missing Access.
           opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bot " <> appCtx.config.discordBotToken] & checkResponse ?~ (\_ _ -> pass)
-          payloadWithReply = case (replyToMessageId, payload) of
+          payloadWithReply = case (replyToMessageId, discordNoMentions payload) of
             (Just msgId, AE.Object obj) ->
               AE.Object $ AEK.insert "message_reference" (AE.object ["message_id" AE..= msgId]) obj
-            _ -> payload
+            (_, quiet) -> quiet
       result <- tryAny $ postWith opts url payloadWithReply
       case result of
         Right re

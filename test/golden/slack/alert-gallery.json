@@ -1063,7 +1063,7 @@
                         "type": "section"
                     }
                 ],
-                "text": "connection reset by peer <*>: :large_orange_circle: Log spike  ·  gateway  ·  WARN  ·  1.9K/hr  ·  baseline 140/hr  ·  +1,271%"
+                "text": "connection reset by peer &lt;*&gt;: :large_orange_circle: Log spike  ·  gateway  ·  WARN  ·  1.9K/hr  ·  baseline 140/hr  ·  +1,271%"
             }
         ]
     },

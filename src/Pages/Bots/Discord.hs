@@ -6,6 +6,7 @@ import Data.Aeson.Lens qualified as AEL
 import Data.Bits ((.&.))
 import Data.ByteString qualified as BS
 import Data.Default (Default (def))
+import Data.Effectful.Notify qualified as Notify
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP, defaults, getWith, postWith, responseBody)
 import Data.List qualified as L
@@ -309,7 +310,7 @@ deferAck envCfg i = discordJsonPost envCfg.discordBotToken ("https://discord.com
 followup :: (HTTP :> es, Log.Log :> es) => EnvConfig -> DiscordInteraction -> AE.Value -> Eff es ()
 followup envCfg i content = do
   Log.logTrace ("Discord followup response" :: Text) content
-  discordJsonPost envCfg.discordBotToken ("https://discord.com/api/v10/webhooks/" <> envCfg.discordClientId <> "/" <> i.token) content
+  discordJsonPost envCfg.discordBotToken ("https://discord.com/api/v10/webhooks/" <> envCfg.discordClientId <> "/" <> i.token) (Notify.discordNoMentions content)
 
 
 verifyDiscordSignature :: Log.Log :> es => ByteString -> ByteString -> ByteString -> ByteString -> Eff es Bool
