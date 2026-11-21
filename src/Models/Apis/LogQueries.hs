@@ -252,7 +252,7 @@ executeSecuredQuery useTimefusion pid (SecuredSql source userQuery) limit
             routeToTimefusion = case source of
               SqlPostgres -> False
               SqlTimefusion -> useTimefusion
-        resultE <- try @Hasql.HasqlException $ Hasql.withHasqlTimefusion routeToTimefusion (jsonArrayRows <$> Hasql.interp wrapped)
+        resultE <- try @Hasql.HasqlException $ Hasql.withHasqlTimefusion routeToTimefusion (jsonArrayRows <$> Hasql.interpUser wrapped)
         pure $ first (\e -> "Query execution failed: " <> toText (displayException e)) resultE
 
 
@@ -438,7 +438,7 @@ selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedC
       $ try @SomeException
       $ Hasql.retryTransientEff 500_000 "log-explorer.data"
       $ checkpoint (toAnnotation ("selectLogTable", q))
-      $ Hasql.withHasqlTimefusion useTimefusion (jsonArrayRows <$> Hasql.interp (rawSql q))
+      $ Hasql.withHasqlTimefusion useTimefusion (jsonArrayRows <$> Hasql.interpUser (rawSql q))
   let paged :: Either Text (V.Vector (V.Vector AE.Value), [Text], Int)
       paged = case result of
         Left e -> Left $ show e

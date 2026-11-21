@@ -1749,17 +1749,14 @@ ingestTraceWithExceptionAttrs tr apiKey extra spanName excType excMessage excSta
 
 -- | Ingest a span with arbitrary extra attributes (e.g. session.id, user.id, user.email).
 -- Unlike ingestTrace, which hard-codes http.method via createOtelSpanAtTime, this helper
--- threads custom attributes straight through mkSpanRequest. When `isError` is True the
--- span is marked with STATUS_CODE_ERROR so the Sessions aggregator counts it as an error.
-ingestSessionEvent :: TestResources -> Text -> Text -> [(Text, Text)] -> Bool -> UTCTime -> IO ()
-ingestSessionEvent tr apiKey spanName extras isError timestamp = do
+-- threads custom attributes straight through mkSpanRequest. A status message marks the span
+-- STATUS_CODE_ERROR with it, so the Sessions aggregator counts it as an error.
+ingestSessionEvent :: TestResources -> Text -> Text -> [(Text, Text)] -> Maybe Text -> UTCTime -> IO ()
+ingestSessionEvent tr apiKey spanName extras errorM timestamp = do
   trIdText <- UUID.toText <$> nextRandom
   spanIdText <- UUID.toText <$> nextRandom
   let attrs = [mkAttr k v | (k, v) <- extras]
-      statusM =
-        if isError
-          then Just (defMessage & PTF.code .~ PT.Status'STATUS_CODE_ERROR & PTF.message .~ ("error" :: Text))
-          else Nothing
+      statusM = errorM <&> \msg -> defMessage & PTF.code .~ PT.Status'STATUS_CODE_ERROR & PTF.message .~ msg
       req = mkSpanRequest trIdText spanIdText Nothing spanName [] statusM attrs (mkResource apiKey []) timestamp
   void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
 

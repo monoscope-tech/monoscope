@@ -1,0 +1,9 @@
+{
+  "statusCode": 403,
+  "statusMessage": "Forbidden",
+  "respBody": "{\"error\":\"invalid_grant\",\"error_description\":\"Invalid authorization code\"}",
+  "responseHeaders": [],
+  "originalRequest": "",
+  "responseEarlyHints": [],
+  "thrown": true
+}

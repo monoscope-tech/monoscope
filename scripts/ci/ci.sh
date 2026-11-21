@@ -447,7 +447,7 @@ run_integration() {
   [ -n "${CI_INTEGRATION_BIN:-}" ] || cabal build integration-tests -j $CABAL_FLAGS "$CABAL_OPTS"
   # Same flags as the build above: list-bin resolves against a plan, and a
   # different one points at a path the build never wrote.
-  bin=${CI_INTEGRATION_BIN:-$(cabal list-bin integration-tests $CABAL_FLAGS)}
+  bin=${CI_INTEGRATION_BIN:-$(cabal list-bin integration-tests $CABAL_FLAGS | tail -n 1)}
   rm -f build-shard-*.log
   for i in $(seq 0 $((shards - 1))); do
     ( start=$(date +%s); SHARD_INDEX=$i SHARD_TOTAL=$shards "$bin" +RTS -N1 -RTS --color > "build-shard-$i.log" 2>&1
@@ -593,11 +593,13 @@ cmd_run() {
     if CAPS="$CAPS" "$0" body "$c"; then
       note "passed $c in $((SECONDS - started))s"
       if [ "$c" = build ] && [ -n "${CI_ATTEST_OUT:-}" ]; then
-        CI_UNIT_BIN=$(cabal list-bin unit-tests $CABAL_FLAGS)
-        CI_CLI_BIN=$(cabal list-bin monoscope-cli:cli-tests $CABAL_FLAGS)
-        CI_INTEGRATION_BIN=$(cabal list-bin integration-tests $CABAL_FLAGS)
-        CI_DOCTESTS_BIN=$(cabal list-bin doctests $CABAL_FLAGS)
-        E2E_SERVER_BIN=$(cabal list-bin monoscope-server $CABAL_FLAGS)
+        # The path is the last line: cabal's first sync of a source-repository-package prints
+        # git's "HEAD is now at …" to stdout ahead of it.
+        CI_UNIT_BIN=$(cabal list-bin unit-tests $CABAL_FLAGS | tail -n 1)
+        CI_CLI_BIN=$(cabal list-bin monoscope-cli:cli-tests $CABAL_FLAGS | tail -n 1)
+        CI_INTEGRATION_BIN=$(cabal list-bin integration-tests $CABAL_FLAGS | tail -n 1)
+        CI_DOCTESTS_BIN=$(cabal list-bin doctests $CABAL_FLAGS | tail -n 1)
+        E2E_SERVER_BIN=$(cabal list-bin monoscope-server $CABAL_FLAGS | tail -n 1)
         export CI_UNIT_BIN CI_CLI_BIN CI_INTEGRATION_BIN CI_DOCTESTS_BIN E2E_SERVER_BIN
         for bin in "$CI_UNIT_BIN" "$CI_CLI_BIN" "$CI_INTEGRATION_BIN" "$CI_DOCTESTS_BIN" "$E2E_SERVER_BIN"; do
           [ -x "$bin" ] || die "build did not produce $bin"

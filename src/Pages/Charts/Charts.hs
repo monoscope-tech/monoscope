@@ -175,7 +175,7 @@ queryProjectMetrics dbSource (maybeToMonoid -> respDataType) pid queryM querySQL
        in nameCategories cfg queryAST
             . convertTimestampsToMs
             . coerceBinnedScalar respDataType actualDataType
-            <$> queryMetricsWithCache authCtx dbSource actualDataType pid source queryAST cfg query now fromD toD
+            <$> queryMetricsWithCache authCtx dbSource actualDataType pid source queryAST cfg query now liveRange
 
 
 data ChartQuery = ChartQuery
@@ -349,11 +349,10 @@ queryMetricsWithCache
   -> SqlQueryCfg
   -> Text
   -> UTCTime
-  -> Maybe UTCTime
-  -> Maybe UTCTime
+  -> Bool
   -> Eff es MetricsData
-queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQueryCfg originalQuery now fromD toD =
-  queryMetricsWithCacheUsing executeQueryWith Nothing respDataType pid source queryAST sqlQueryCfg originalQuery now fromD toD
+queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQueryCfg originalQuery now live =
+  queryMetricsWithCacheUsing executeQueryWith Nothing respDataType pid source queryAST sqlQueryCfg originalQuery now live
   where
     executeQueryWith cfg ast _ = do
       let (_, qc) = queryASTToComponents cfg ast
@@ -367,6 +366,7 @@ queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQuery
         sqlQuery
         (emptyMetricsFor now fromD toD)
         (runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource)
+    (fromD, toD) = sqlQueryCfg.dateRange
 
 
 -- | Shared cache policy for complete and streaming responses. Only successful
@@ -382,20 +382,20 @@ queryMetricsWithCacheUsing
   -> SqlQueryCfg
   -> Text
   -> UTCTime
-  -> Maybe UTCTime
-  -> Maybe UTCTime
+  -> Bool
   -> Eff es MetricsData
-queryMetricsWithCacheUsing fetch progress respDataType pid source queryAST sqlQueryCfg originalQuery now fromD toD
+queryMetricsWithCacheUsing fetch progress respDataType pid source queryAST sqlQueryCfg originalQuery now live
   | respDataType /= DTMetric = executeQueryWith sqlQueryCfg queryAST
   | resultShape queryAST /= TimeSeries = executeQueryWith sqlQueryCfg queryAST
   | otherwise = do
       let cacheKey = QC.generateCacheKey pid source queryAST sqlQueryCfg
+          (fromD, toD) = sqlQueryCfg.dateRange
       -- A live range slides on every refresh. Starting it on a bucket boundary keeps
-      -- its first bucket whole, so a refresh never re-reads a sub-bucket sliver.
-      let live = isNothing toD
+      -- its first bucket whole, so a refresh never re-reads a sub-bucket sliver. It is the
+      -- picker's word, not @toD@: a @since@ window resolves its end to @now@.
       let reqFrom = (if live then QC.bucketStart cacheKey.binInterval else id) $ fromMaybe (addUTCTime (-86400) now) fromD
       let reqTo = fromMaybe now toD
-      let missCfg = if live then sqlQueryCfg{dateRange = (Just reqFrom, snd sqlQueryCfg.dateRange)} else sqlQueryCfg
+      let missCfg = if live then sqlQueryCfg{dateRange = (Just reqFrom, toD)} else sqlQueryCfg
       cacheResult <- QC.lookupCache cacheKey (reqFrom, reqTo)
       case cacheResult of
         QC.CacheHit entry -> do
@@ -803,7 +803,7 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
               runEff
                 $ Time.runTime
                 $ runHasqlPool authCtx.hasqlPool
-                $ queryMetricsWithCacheUsing fetch (Just $ emit . convert) actual pid source ast cfg query now fromD toD
+                $ queryMetricsWithCacheUsing fetch (Just $ emit . convert) actual pid source ast cfg query now liveRange
           pure $ first (Utils.sanitizeBackendError . toText . displayException) $ convert <$> result
       frame kind value = AE.object ["type" AE..= (kind :: Text), "data" AE..= value]
       body = SourceT \consume -> do
