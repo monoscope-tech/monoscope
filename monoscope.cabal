@@ -947,6 +947,7 @@ test-suite integration-tests
     , hs-opentelemetry-exporter-in-memory
     , hs-opentelemetry-instrumentation-auto
     , hs-opentelemetry-instrumentation-hasql
+    , hs-opentelemetry-propagator-w3c
     , hs-opentelemetry-sdk
     , hspec
     , http-api-data

@@ -239,6 +239,8 @@ tests:
       - hs-opentelemetry-api
       - hs-opentelemetry-sdk
       - hs-opentelemetry-exporter-in-memory
+      # TracingSpec installs the W3C propagator the SDK's initializer would.
+      - hs-opentelemetry-propagator-w3c
       - hspec
       - log-base
       - servant-queryparam-core
