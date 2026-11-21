@@ -765,7 +765,7 @@ migrateHttpSemanticConventions !keyVals =
     -- Copy a legacy attribute onto its canonical semconv key, additively: the original
     -- stays queryable and an existing canonical value is never overwritten.
     pick k = HM.lookup k kvMap
-    emit target src = [(target, v) | not (HM.member target kvMap), Just v <- [src]]
+    emit target src = [(target, v) | not (HM.member target kvMap), Just v <- [src], v /= AE.String ""]
 
     -- Browser SDKs use attributes.error.*; copy into OTel attributes.exception.*
     -- so the Issues pipeline has a single canonical namespace. Keeps the

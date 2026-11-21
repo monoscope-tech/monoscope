@@ -5006,10 +5006,12 @@ dispatchServiceMapRollups authCtx scheduledTime = when authCtx.config.enableServ
 
 -- | Worker (ServiceMapRollup). Derives one bucket's service dependency edges and upserts
 -- them. Errors are logged rather than rethrown: a rollup miss leaves a gap in one bucket of
--- one project's map, which must not fail sibling projects' work.
+-- one project's map, which must not fail sibling projects' work. Transient refusals are
+-- waited out first: the whole fan-out lands on TF at once, and its admission gate turned
+-- 11 projects' buckets away in one burst (2026-11-20 16:48). Both upserts are idempotent.
 rollUpServiceMap :: Config.AuthContext -> Projects.ProjectId -> UTCTime -> ATBackgroundCtx ()
 rollUpServiceMap authCtx pid bucket = withSpan_ "service_map.rollup" [("monoscope.project.id", OA.toAttribute pid.toText)] do
-  result <- tryAny do
+  result <- tryAny $ Hasql.retryTransientEff 120_000_000 "service-map.rollup" do
     edges <- ServiceGraph.rollupServiceEdges authCtx.env.enableTimefusionReads pid bucket (addUTCTime 300 bucket)
     endpointEdges <- ServiceGraph.rollupEndpointDependencyEdges authCtx.env.enableTimefusionReads pid bucket (addUTCTime 300 bucket)
     ServiceGraph.upsertServiceDependencyEdges pid bucket edges

@@ -524,7 +524,7 @@ spec = describe "Monitoring" do
       [m] <- runQueryEffect tr (Monitors.cronMonitorsByProject pid)
       apiKey <- createTestAPIKey tr pid "cron-key"
       let at dt = addUTCTime dt frozenTime
-          checkin status dt = ingestSessionEvent tr apiKey "cron.checkin" [("monitor.slug", "nightly-billing"), ("monitor.status", status)] False (at dt)
+          checkin status dt = ingestSessionEvent tr apiKey "cron.checkin" [("monitor.slug", "nightly-billing"), ("monitor.status", status)] Nothing (at dt)
           evaluateAt dt = do
             fresh <- runQueryEffect tr (Monitors.cronMonitorsByProject pid) >>= maybe (fail "monitor gone") pure . listToMaybe
             runTestBg (at dt) tr $ Jobs.evaluateCronMonitor (at dt) fresh

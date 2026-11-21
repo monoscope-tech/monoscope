@@ -140,7 +140,7 @@ runHTTPRecordWith reply ref = interpret $ \_ -> \case
     record url getBody = liftIO do
       body <- getBody
       modifyIORef' ref ((toText url, body) :)
-      pure $ toWreqResponse $ WreqResponse 200 "OK" (reply $ toText url) [] "" []
+      pure $ toWreqResponse $ WreqResponse 200 "OK" (reply $ toText url) [] "" [] Nothing
 
 
 runHTTPGolden :: IOE :> es => FilePath -> Eff (HTTP ': es) a -> Eff es a
@@ -179,6 +179,9 @@ data WreqResponse = WreqResponse
   , responseHeaders :: [(Text, Text)]
   , originalRequest :: Text
   , responseEarlyHints :: [(Text, Text)]
+  , thrown :: Maybe Bool
+  -- ^ The live call threw a 'StatusCodeException' (wreq's default for a non-2xx), so the
+  -- replay throws it too. Absent in goldens recorded before the field: those replay as responses.
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -203,6 +206,7 @@ fromWreqResponse r =
     , responseHeaders = convertHeaders r.responseHeaders
     , originalRequest = redactSecretsT $ fromString (show r.responseOriginalRequest)
     , responseEarlyHints = convertHeaders r.responseEarlyHints
+    , thrown = Nothing
     }
 
 
@@ -271,14 +275,12 @@ withGoldenCache goldenDir fileName decodeErr decodeResult action = do
 
 
 getOrCreateGoldenResponse :: FilePath -> String -> IO (W.Response LBS.ByteString) -> IO (W.Response LBS.ByteString)
-getOrCreateGoldenResponse goldenDir fileName action =
-  withGoldenCache goldenDir fileName ("Failed to decode response from file: " <>) toWreqResponse $ do
-    -- Catch HTTP exceptions and convert them to responses
-    result <- try action
-    response <- case result of
-      Right resp -> return resp
+getOrCreateGoldenResponse goldenDir fileName action = do
+  (wasThrown, response) <- withGoldenCache goldenDir fileName ("Failed to decode response from file: " <>) (\wr -> (or wr.thrown, toWreqResponse wr)) do
+    try action >>= \case
+      Right resp -> pure (fromWreqResponse resp, (False, resp))
       Left (HttpExceptionRequest _ (StatusCodeException resp body)) ->
-        -- Convert 4xx/5xx responses to normal responses for golden files
-        return resp{responseBody = fromStrict body}
-      Left (ex :: HttpException) -> throwIO ex -- Re-throw other exceptions
-    pure (fromWreqResponse response, response)
+        let full = resp{responseBody = fromStrict body} in pure ((fromWreqResponse full){thrown = Just True}, (True, full))
+      Left (ex :: HttpException) -> throwIO ex
+  when wasThrown $ throwIO $ HttpExceptionRequest defaultRequest $ StatusCodeException (void response) (toStrict response.responseBody)
+  pure response

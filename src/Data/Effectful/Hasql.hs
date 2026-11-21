@@ -22,6 +22,9 @@ module Data.Effectful.Hasql (
   labeledSession,
   labeledTransaction,
   interp,
+  interpUser,
+  userQueryOrigin,
+  isQueryRejection,
   interpTimefusion,
   interpOne,
   interpScalar,
@@ -124,8 +127,8 @@ instance AE.FromJSON SecuredSql where
 data Hasql :: Effect where
   UseSession :: Session a -> Hasql m (Either UsageError a)
   -- | Run a single Statement so the instrumentation wrapper can attach
-  -- db.statement / db.operation.name to the span.
-  UseStatement :: params -> Statement params a -> Hasql m (Either UsageError a)
+  -- db.statement / db.operation.name (plus the given attributes) to the span.
+  UseStatement :: HM.HashMap Text Attribute -> params -> Statement params a -> Hasql m (Either UsageError a)
   -- | Run an opaque Session under a caller-chosen span name + extra attributes.
   -- Use for transactions and multi-statement scripts where SQL can't be auto-extracted.
   UseLabeledSession :: Text -> HM.HashMap Text Attribute -> Session a -> Hasql m (Either UsageError a)
@@ -177,10 +180,18 @@ instance Exception HasqlException where
 -- True
 -- >>> isTransientUsageError (tfPoolExhausted "Arrow error: invalid UTF-8")
 -- False
+--
+-- A driver error is hasql giving up on a connection mid-statement (cleanup after an
+-- interruption failed when TF restarted under it). As with a reset connection, a retry is the
+-- recovery; a replayed ingest batch is deduplicated by TF:
+--
+-- >>> isTransientUsageError (SessionUsageError (DriverSessionError "Failed to clean up after interruption"))
+-- True
 isTransientUsageError :: UsageError -> Bool
 isTransientUsageError = \case
   AcquisitionTimeoutUsageError -> True
   ConnectionUsageError _ -> True
+  SessionUsageError DriverSessionError{} -> True
   SessionUsageError e -> isTransient e || emptySqlState e
   where
     -- A real PG/TimescaleDB execution error always carries a 5-char SQLSTATE.
@@ -291,7 +302,7 @@ isUniqueViolation = (== Just "23505") . serverErrorCode
 runHasqlPool :: IOE :> es => TracedPool -> Eff (Hasql ': es) a -> Eff es a
 runHasqlPool pool = interpret \_ -> \case
   UseSession s -> waited \pre -> OHasql.use pool (pre *> s)
-  UseStatement p st -> waited \pre -> uncurry (OHasql.useSession pool) (statementSpan pool st) (pre *> Session.statement p st)
+  UseStatement xs p st -> waited \pre -> uncurry (OHasql.useSession pool) ((<> xs) <$> statementSpan pool st) (pre *> Session.statement p st)
   UseLabeledSession n xs s -> waited \pre -> OHasql.useSession pool n xs (pre *> s)
   where
     waited run = liftIO do
@@ -312,16 +323,45 @@ statementSpan pool st = (fromMaybe "hasql.statement" op <> foldMap (" " <>) (OHa
 -- | Run a `Session`, throwing `HasqlException` on `UsageError`. Mirrors
 -- `Hasql.Pool.use` — opaque sessions get the generic `hasql.session <db>` span.
 use :: Hasql :> es => Session a -> Eff es a
-use s = send (UseSession s) >>= either (EE.throwIO . HasqlException) pure
+use s = send (UseSession s) >>= throwUsage
 
 
 statement :: Hasql :> es => params -> Statement params a -> Eff es a
-statement p st = send (UseStatement p st) >>= either (EE.throwIO . HasqlException) pure
+statement p st = send (UseStatement mempty p st) >>= throwUsage
 
 
 -- | Run a `hasql-interpolate` `Sql` value as a prepared statement.
 interp :: (HI.DecodeResult a, Hasql :> es) => HI.Sql -> Eff es a
 interp s = statement () (HI.interp True s)
+
+
+-- | 'interp' for SQL a user wrote: the log explorer's KQL and secured user SQL. Its span is
+-- tagged with 'userQueryOrigin', so a statement refused for what it says files no runtime issue.
+-- Chart widgets run on postgresql-simple and are not tagged.
+interpUser :: (HI.DecodeResult a, Hasql :> es) => HI.Sql -> Eff es a
+interpUser s = send (UseStatement (one (toAttribute <$> userQueryOrigin)) () (HI.interp True s)) >>= throwUsage
+
+
+throwUsage :: Either UsageError a -> Eff es a
+throwUsage = either (EE.throwIO . HasqlException) pure
+
+
+userQueryOrigin :: (Text, Text)
+userQueryOrigin = ("monoscope.query.origin", "user")
+
+
+-- | A statement the database refused for what it says rather than because it failed: SQLSTATE
+-- classes 22 (data) and 42 (syntax or access), and the planner and cast errors TimeFusion
+-- reports as XX000. On a user's query that is their mistake, answered with a 4xx.
+--
+-- >>> map (uncurry isQueryRejection) [("XX000", "XX000: Arrow error: Cast error: Cannot cast string 'x' to value of Float32 type"), ("42703", "column \"ur\" does not exist"), ("22P02", "invalid input syntax for type double precision")]
+-- [True,True,True]
+-- >>> map (uncurry isQueryRejection) [("XX000", "Resources exhausted: too many concurrent heavy queries"), ("57014", "canceling statement due to statement timeout"), ("", ": ")]
+-- [False,False,False]
+isQueryRejection :: Text -> Text -> Bool
+isQueryRejection code msg =
+  (T.take 2 code `elem` ["22", "42"])
+    || (code == "XX000" && any (`T.isInfixOf` msg) ["Arrow error: Cast error", "Schema error", "Error during planning", "SQL error"])
 
 
 -- | TimeFusion plans named prepared statements before seeing parameters, missing partition
@@ -532,7 +572,7 @@ runMutableTime clock = interpret $ \_ -> \case
 runHasqlPoolSynced :: forall es a. IOE :> es => TestClock -> TracedPool -> Eff (Hasql ': es) a -> Eff es a
 runHasqlPoolSynced clock pool = interpret \_ -> \case
   UseSession s -> withClock $ \pre -> OHasql.use pool (pre *> s)
-  UseStatement p st -> withClock $ \pre -> OHasql.use pool (pre *> Session.statement p st)
+  UseStatement _ p st -> withClock $ \pre -> OHasql.use pool (pre *> Session.statement p st)
   UseLabeledSession n xs s -> withClock $ \pre -> OHasql.useSession pool n xs (pre *> s)
   where
     withClock :: forall r. (Session.Session () -> IO r) -> Eff es r

@@ -755,13 +755,14 @@ spec = around withTestResources $ describe "Dashboard widgets" do
   -- The probe counts real executions (each run advances the sequence), so a hit repeats a value.
   it "chart cache: refreshing a live range never sends a query narrower than one bucket" \tr -> do
     -- The partial-first-bucket re-read sent TimeFusion a 1-6s sliver per widget per 15s refresh.
+    -- A `since` window ends at `now`, not Nothing (parseSince), which once disabled the alignment.
     let query = "summarize count(*) by bin(timestamp, 10s)"
     ast <- either (fail . show) pure $ parseQueryToAST query
     windows <- newIORef []
     let fetch cfg _ _ = liftIO (modifyIORef' windows (cfg.dateRange :)) $> def
         refresh now =
           let from = addUTCTime (-3600) now
-           in runTestBg frozenTime tr $ Charts.queryMetricsWithCacheUsing fetch Nothing Charts.DTMetric testPid Nothing ast (defSqlQueryCfg testPid now Nothing Nothing){dateRange = (Just from, Nothing)} query now (Just from) Nothing
+           in runTestBg frozenTime tr $ Charts.queryMetricsWithCacheUsing fetch Nothing Charts.DTMetric testPid Nothing ast (defSqlQueryCfg testPid now Nothing Nothing){dateRange = (Just from, Just now)} query now True
     for_ @[] [4.5, 19.5, 34.5] \offset -> void $ refresh $ addUTCTime offset frozenTime
     ranges <- readIORef windows
     length ranges `shouldSatisfy` (>= 3)

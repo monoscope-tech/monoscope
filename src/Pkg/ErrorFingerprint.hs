@@ -479,6 +479,12 @@ isFrameworkTransportError exceptionType normalizedMessage =
 -- >>> map (uncurry isExpectedControlFlow) [("SomeAsyncException", "AsyncCancelled"), ("SyncExceptionWrapper", "AsyncCancelled"), ("Error", "thread killed"), ("AsyncCancelled", "")]
 -- [True,True,True,True]
 --
+-- @System.Timeout.timeout@ firing is its owner's control flow, handled where the @Nothing@ is
+-- (a dashboard's render budget falling back to a client fetch, prod issue ce206f07):
+--
+-- >>> map (uncurry isExpectedControlFlow) [("Error", "<<timeout>>"), ("SomeAsyncException", "<<timeout>>")]
+-- [True,True]
+--
 -- A 5xx stays an error even when its body quotes a downstream 404, and an application error
 -- rethrown as async stays visible:
 --
@@ -491,7 +497,7 @@ isExpectedControlFlow :: Text -> Text -> Bool
 isExpectedControlFlow typ msg = any (\d -> ("ServerError {errHTTPCode = " <> d) `T.isInfixOf` msg) ["1", "2", "3", "4"] || any (`S.member` cancels) [norm typ, norm msg]
   where
     norm = T.toLower . T.strip
-    cancels = S.fromList ["asynccancelled" :: Text, "threadkilled", "thread killed", "thread killed by timeout manager"]
+    cancels = S.fromList ["asynccancelled" :: Text, "threadkilled", "thread killed", "thread killed by timeout manager", "<<timeout>>"]
 
 
 -- | A literal prefix and suffix around a part that varies, learned from a group the

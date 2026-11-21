@@ -121,6 +121,12 @@ spec = around withTestResources do
     void $ toBaseServantResponse tr $ Auth.logoutH (Just $ "monoscope_session=" <> sid)
     alive `shouldReturn` False
 
+  it "auth0 callback: a refused code exchange sends the user back to login, not a 500 page" \tr -> do
+    -- Prod 2026-11-20 (24c4fdfc): Auth0 answered 403 invalid_grant and wreq's exception escaped the handler.
+    let ctx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.auth0Domain = "https://auth0-denied.test"}}
+    toBaseServantResponse tr{trATCtx = ctx} (Auth.authCallbackH (Just "code") (Just "st-1") Nothing (Just "monoscope_oauth_state=st-1") Nothing Nothing)
+      `shouldThrow` \(e :: SomeException) -> "auth0_callback_failure" `T.isInfixOf` show e
+
   it "ad attribution: a consenting landing becomes one signup conversion, tags wait for consent, a first ingest is reported once" \tr -> do
     let adCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.auth0Domain = "https://auth0.test", Config.metaCapiAccessToken = Just "capi-token", Config.metaCapiPixelId = Just "123", Config.redditConversionsToken = Just "rdt-token", Config.redditPixelId = Just "t2_px"}}
         -- Dequeue the ad conversion jobs and run them as the worker would, recording what they send.

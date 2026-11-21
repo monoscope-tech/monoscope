@@ -76,6 +76,7 @@ import Network.Wai (Request (pathInfo, queryString, rawPathInfo, rawQueryString,
 import Network.Wreq (FormParam ((:=)), defaults, header, responseBody)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.AdConversions qualified as AdConversions
+import Pkg.Git (tryHttp)
 import Pkg.Mail (addConvertKitUser)
 import Relude hiding (ask, asks)
 import Servant (Header, Headers, NoContent (..), addHeader, noHeader)
@@ -451,7 +452,8 @@ authCallbackH codeM stateM redirectToM cookieM userAgentM countryM = do
     unless (or $ liftA2 constEqText stateM (decodeUtf8 <$> L.lookup "monoscope_oauth_state" (maybe [] parseCookies cookieM)))
       $ hoistEither (Left ("oauth state does not match this browser's login" :: Text))
     r <-
-      lift
+      ExceptT
+        $ tryHttp
         $ W.post
           (toString $ envCfg.config.auth0Domain <> "/oauth/token")
           ( [ "grant_type" := ("authorization_code" :: String)
@@ -464,7 +466,7 @@ authCallbackH codeM stateM redirectToM cookieM userAgentM countryM = do
           )
     accessToken <- hoistEither $ note "invalid access_token in response" $ r L.^? responseBody . key "access_token" . _String
     let opts = defaults & header "Authorization" L..~ ["Bearer " <> encodeUtf8 @Text @ByteString accessToken]
-    resp <- lift $ W.getWith opts (toString $ envCfg.config.auth0Domain <> "/userinfo")
+    resp <- ExceptT $ tryHttp $ W.getWith opts (toString $ envCfg.config.auth0Domain <> "/userinfo")
     let field k = fromMaybe "" $ resp L.^? responseBody . key k . _String
     -- Accounts are keyed by email, so an IdP login whose email is unverified could claim
     -- whoever already holds that address (or an invite pre-created for it). It may still
