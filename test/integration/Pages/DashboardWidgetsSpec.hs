@@ -62,7 +62,7 @@ import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Servant qualified
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Config qualified as Config
-import System.Directory (listDirectory, withCurrentDirectory)
+import System.Directory (getPermissions, listDirectory, setOwnerExecutable, setPermissions, withCurrentDirectory)
 import System.IO.Error (userError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Timeout (timeout)
@@ -417,6 +417,19 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         groupOf kid = Utils.encodeText (def :: Widget.Widget){Widget.wType = Widget.WTGroup, Widget.children = Just [kid]}
     grouped <- call tr $ Routes.widgetGetH testPid (Just $ groupOf child) Nothing Nothing Nothing Nothing []
     (grouped.html, map (.html) <$> grouped.children) `shouldBe` (Nothing, Just [Nothing])
+    -- clientDataset_neverSigned: a posted widget's dataset was signed into its PNG link, and widget.png
+    -- handed a `formatter` cell in it to chart-cli's function reviver as server-written options.
+    let formatterCell = (def :: Widget.WidgetDataset){Widget.source = AE.toJSON ([AE.object ["formatter" AE..= ("function(){}, 1" :: Text)]] :: [AE.Value])}
+    posted <- call tr $ Widget.widgetPostH testPid Nothing Nothing Nothing =<< Dashboards.authorizeClientWidget testPid (def :: Widget.Widget){Widget.wType = Widget.WTTimeseries, Widget.dataset = Just formatterCell, Widget.children = Just [(def :: Widget.Widget){Widget.dataset = Just formatterCell}]}
+    (isJust posted.dataset, any (isJust . (.dataset)) (fold posted.children), isJust posted.pngUrl) `shouldBe` (False, False, True)
+    -- chartCli_inheritsNoSecrets: the renderer evaluates option strings, and it ran with every server secret in its environment.
+    withSystemTempDirectory "chart-cli-env" \dir -> do
+      let script = dir <> "/chart-cli"
+          encoded = decodeUtf8 @Text $ AE.encode (def :: Widget.Widget){Widget.wType = Widget.WTStat, Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.value = Just 1}}
+      writeFileText script "#!/bin/sh\nenv\n"
+      getPermissions script >>= setPermissions script . setOwnerExecutable True
+      childEnv <- decodeUtf8 @Text . toStrict . Servant.getResponse <$> toBaseServantResponse tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.chartCliPath = Just (toText script)}}} (Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing Nothing Nothing Nothing Nothing (Just $ Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid encoded) [])
+      (any (T.isPrefixOf "PATH=") (lines childEnv), any (T.isPrefixOf "HOME=") (lines childEnv)) `shouldBe` (True, False)
     setRole tr testPid ProjectMembers.PView
     httpStatus tr (Routes.widgetGetH testPid (Just $ groupOf child{Widget.sql = Just "SELECT 1 FROM otel_logs_and_spans"}) Nothing Nothing Nothing Nothing []) `shouldReturn` 403
     setRole tr testPid ProjectMembers.PAdmin

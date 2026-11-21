@@ -90,7 +90,7 @@ import Servant.Server.Internal.ServerError (responseServerError)
 import System.Config (AuthContext (..), DeploymentEnv (..), EnvConfig (..))
 import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
-import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
+import System.Process.Typed (byteStringInput, proc, readProcess, setEnv, setStdin)
 import System.Timeout (timeout)
 import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), HXRedirectDest, HXReswap (..), Mime, ProjectToolCtx, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, atAuthToBase)
 import UnliftIO (withRunInIO)
@@ -951,8 +951,10 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
               "darkMode" AE..= darkMode
             ]
 
+  -- The renderer evaluates option strings; it gets PATH, never the server's secrets.
+  path <- lookupEnv "PATH"
   pngBytes <-
-    liftIO (timeout 30000000 $ readProcess $ setStdin (byteStringInput input) $ proc (maybe "./chart-cli" toString ctx.env.chartCliPath) []) >>= \case
+    liftIO (timeout 30000000 $ readProcess $ setEnv [("PATH", p) | Just p <- [path]] $ setStdin (byteStringInput input) $ proc (maybe "./chart-cli" toString ctx.env.chartCliPath) []) >>= \case
       Nothing -> Log.logAttention "widgetPngGetH: chart render timed out" (AE.object ["widgetId" AE..= widget.id, "width" AE..= width, "height" AE..= height]) *> Error.throwError err504{errBody = "Chart rendering timed out"}
       Just (ExitSuccess, bytes, _) -> pure bytes
       Just (ExitFailure code, _, errOut) -> Log.logAttention "widgetPngGetH: chart render failed" (AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (toStrict errOut), "widgetId" AE..= widget.id]) *> Error.throwError err500{errBody = "Chart rendering failed"}
