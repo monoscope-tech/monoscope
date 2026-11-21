@@ -425,7 +425,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     -- clientDataset_neverSigned: a posted widget's dataset was signed into its PNG link, and widget.png
     -- handed a `formatter` cell in it to chart-cli's function reviver as server-written options.
     let formatterCell = (def :: Widget.WidgetDataset){Widget.source = AE.toJSON ([AE.object ["formatter" AE..= ("function(){}, 1" :: Text)]] :: [AE.Value])}
-    posted <- call tr $ Widget.widgetPostH testPid Nothing Nothing Nothing =<< Dashboards.authorizeClientWidget testPid (def :: Widget.Widget){Widget.wType = Widget.WTTimeseries, Widget.dataset = Just formatterCell, Widget.children = Just [(def :: Widget.Widget){Widget.dataset = Just formatterCell}]}
+    posted <- call tr $ Widget.widgetPostH testPid Nothing Nothing Nothing =<< Dashboards.authorizeClientWidget testPid [] (def :: Widget.Widget){Widget.wType = Widget.WTTimeseries, Widget.dataset = Just formatterCell, Widget.children = Just [(def :: Widget.Widget){Widget.dataset = Just formatterCell}]}
     (isJust posted.dataset, any (isJust . (.dataset)) (fold posted.children), isJust posted.pngUrl) `shouldBe` (False, False, True)
     -- chartCli_inheritsNoSecrets: the renderer evaluates option strings, and it ran with every server secret in its environment.
     withSystemTempDirectory "chart-cli-env" \dir -> do
@@ -755,7 +755,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         userId = (Servant.getResponse tr.trSessAndHeader).user.id
         setPermission p = dbExec tr "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (p, testPid, userId)
         chart source ps = toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Routes.chartsDataGetH (Just source) (Just Charts.DTText) (Just testPid) Nothing (Just clientSql) (Just "24H") Nothing Nothing Nothing Nothing ps
-        signed = [("sql_sig", Just $ Widget.sqlSignature tr.trATCtx.env.apiKeyEncryptionSecretKey testPid (Just clientSql) Nothing)]
+        signed = [("sql_sig", Just $ Widget.sqlSignature tr.trATCtx.env.apiKeyEncryptionSecretKey testPid [] (Just clientSql) Nothing)]
     original <- dbOne tr "SELECT permission FROM projects.project_members WHERE project_id = ? AND user_id = ?" (testPid, userId)
     for_ [Hasql.SqlPostgres, Hasql.SqlTimefusion] \source -> do
       (.error) <$> chart source [] `shouldReturn` Nothing
@@ -988,6 +988,16 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     full <- getTab tr dashId "overview" Nothing selected
     eagerOnes (renderedWidgets $ tabDashboard full) `shouldSatisfy` not . null
     T.count "id=\"log_details_container\"" (renderT full) `shouldBe` 1
+    -- signedTemplate_forgedConst_refused: the signature covered only the template, so a viewer or the
+    -- demo guest replayed the page's signed Apdex SQL with their own SQL as {{const-endpointFilter}}.
+    let Dashboards.DashboardGet _ _ _ _ pageParams = tabDashboard full
+    apdex <- maybe (fail "no signed const-endpointFilter SQL") pure $ find (\w -> isJust w.sqlSig && maybe False (T.isInfixOf "{{const-endpointFilter}}") w.sql) (renderedWidgets $ tabDashboard full)
+    let apdexAs consts = Routes.chartsDataGetH (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing apdex.sql (Just "24H") Nothing Nothing Nothing Nothing (("sql_sig", apdex.sqlSig) : selected <> consts)
+        pageConsts = filter (T.isPrefixOf "const-" . fst) pageParams
+    setRole tr testPid ProjectMembers.PView
+    (.error) <$> call tr (addRespHeaders =<< apdexAs pageConsts) `shouldReturn` Nothing
+    httpStatus tr (apdexAs [("const-endpointFilter", Just "TRUE OR project_id IS NOT NULL")]) `shouldReturn` 403
+    setRole tr testPid ProjectMembers.PAdmin
     swapped <- getTab tr dashId "overview" tabsContent selected
     renderedWidgets (tabDashboard swapped) `shouldSatisfy` not . null
     eagerOnes (renderedWidgets $ tabDashboard swapped) `shouldBe` []

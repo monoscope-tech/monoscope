@@ -733,16 +733,22 @@ avatarInitialsSvg name =
 -- 'Charts.queryMetrics' is about to and ask the question of the result.
 --
 -- >>> let pid = UUIDId UUID.nil :: Projects.ProjectId
--- >>> clientPostgresSqlRejection (Just Hasql.SqlTimefusion) (Just pid) (Just "select 1 from otel_logs_and_spans")
+-- >>> clientPostgresSqlRejection (Just Hasql.SqlTimefusion) (Just pid) [] (Just "select 1 from otel_logs_and_spans")
 -- Nothing
--- >>> clientPostgresSqlRejection (Just Hasql.SqlPostgres) (Just pid) (Just "select hash::text from apis.endpoints limit 5")
+-- >>> clientPostgresSqlRejection (Just Hasql.SqlPostgres) (Just pid) [] (Just "select hash::text from apis.endpoints limit 5")
 -- Just "Query must filter by project_id"
--- >>> clientPostgresSqlRejection (Just Hasql.SqlPostgres) (Just pid) (Just "select hash::text from apis.endpoints where project_id='{{project_id}}'")
+-- >>> clientPostgresSqlRejection (Just Hasql.SqlPostgres) (Just pid) [] (Just "select hash::text from apis.endpoints where project_id='{{project_id}}'")
 -- Nothing
-clientPostgresSqlRejection :: Maybe Hasql.SqlSource -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text
-clientPostgresSqlRejection dbSource pidM querySqlM = case (dbSource, pidM, Utils.nonEmptyT querySqlM) of
+--
+-- The verbatim placeholders are filled from the request first: checking only the template let
+-- a @const-*@ value carry what the check refuses.
+--
+-- >>> clientPostgresSqlRejection (Just Hasql.SqlPostgres) (Just pid) [("const-f", Just "TRUE; drop table users --")] (Just "select 1 from apis.endpoints where project_id='{{project_id}}' and {{const-f}}")
+-- Just "Query contains disallowed operations"
+clientPostgresSqlRejection :: Maybe Hasql.SqlSource -> Maybe Projects.ProjectId -> [(Text, Maybe Text)] -> Maybe Text -> Maybe Text
+clientPostgresSqlRejection dbSource pidM params querySqlM = case (dbSource, pidM, Utils.nonEmptyT querySqlM) of
   (Just Hasql.SqlPostgres, Just pid, Just sql)
-    | let resolved = T.replace "{{project_id}}" pid.toText sql ->
+    | let resolved = Parser.replacePlaceholders (Map.fromList $ ("project_id", pid.toText) : Parser.templateBindings params sql) sql ->
         if
           | not (LogQueries.validateSqlQuery resolved) -> Just "Query contains disallowed operations"
           | not (LogQueries.hasProjectIdFilter resolved pid) -> Just "Query must filter by project_id"
@@ -799,13 +805,13 @@ chartsDataStreamGetH = chartDataH Charts.queryMetricsStream
 chartDataH :: ChartDataH a -> ChartDataH a
 chartDataH run dbSource0 dt pid q qSql0 since fromD toD src density params = do
   let param k = join $ L.lookup k params
-  case pid of
-    Just p -> Dashboards.authorizeClientSql p qSql0 (param "rollup_sql") (param "sql_sig")
-    Nothing -> when (isJust $ Utils.nonEmptyT qSql0 <|> Utils.nonEmptyT (param "rollup_sql")) $ Error.throwError err400{errBody = "SQL needs a project"}
   scopedParams <- chartScopeParams pid params
+  case pid of
+    Just p -> Dashboards.authorizeClientSql p scopedParams qSql0 (param "rollup_sql") (param "sql_sig")
+    Nothing -> when (isJust $ Utils.nonEmptyT qSql0 <|> Utils.nonEmptyT (param "rollup_sql")) $ Error.throwError err400{errBody = "SQL needs a project"}
   now <- Time.currentTime
   let (dbSource, qSql) = rollupRoute now (TimePicker.TimePicker since fromD toD) scopedParams (dbSource0, qSql0)
-  whenJust (clientPostgresSqlRejection dbSource pid qSql) \msg -> Error.throwError err400{errBody = toLazy (encodeUtf8 msg)}
+  whenJust (clientPostgresSqlRejection dbSource pid scopedParams qSql) \msg -> Error.throwError err400{errBody = toLazy (encodeUtf8 msg)}
   -- The browser names the widget it draws and the query is shaped for it here, as for a
   -- server-rendered one, so a grouped `summarize` stays categorical on a top list.
   let shaped = maybe q (\wt -> fst $ Widget.chartQuery def{Widget.wType = wt, Widget.query = q <|> Just ""}) (rightToMaybe . parseQueryParam =<< param "widget_type")
@@ -832,7 +838,7 @@ chartScopeParams pid params = case pid of
 widgetPostH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
 widgetPostH pid sinceM fromM toM widget = do
   _ <- Projects.sessionAndProject pid
-  Widget.widgetPostH pid sinceM fromM toM =<< Dashboards.authorizeClientWidget pid widget
+  Widget.widgetPostH pid sinceM fromM toM =<< Dashboards.authorizeClientWidget pid [] widget
 
 
 widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders Widget.Widget)
@@ -843,7 +849,7 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
   widget <-
     AE.eitherDecode (encodeUtf8 $ fromMaybe "" widgetJson)
       & either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure
-        >>= Dashboards.authorizeClientWidget pid
+        >>= Dashboards.authorizeClientWidget pid allParams
   now <- Time.currentTime
   let scopeMarkers = [("dashboard_id", Just d) | Just d <- [widget._dashboardId]] <> [("pinned_scope", Just $ decodeUtf8 $ AE.encode sc) | Just sc <- [widget.scope]]
   scopedParams <- chartScopeParams (Just pid) $ scopeMarkers <> allParams
@@ -917,7 +923,10 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
   chart <- case widget.dataset of
     Just _ -> pure $ Right widget
     Nothing -> do
-      md <- Dashboards.widgetMetrics pid (sinceStr, fromDStr, toDStr) allParams $ widget & #_projectId ?~ pid & #eager ?~ True
+      -- The signature covers the widget, not the query string: a param filling a verbatim
+      -- placeholder of its SQL (a @const-*@ filter) would put the requester's SQL in it.
+      let verbatim = [k | w <- universeOf (#children . _Just . folded) widget, (k, _) <- Parser.templateBindings [] (fold w.sql <> "\n" <> fold w.rollupSql)]
+      md <- Dashboards.widgetMetrics pid (sinceStr, fromDStr, toDStr) (filter ((`notElem` verbatim) . fst) allParams) $ widget & #_projectId ?~ pid & #eager ?~ True
       pure $ case md.error of
         Just queryError -> Left queryError
         Nothing ->

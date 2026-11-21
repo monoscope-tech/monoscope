@@ -906,7 +906,7 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
       variable' = Dashboards.replaceDashboardVariables pid fromD toD allParams now variableBase
       variable = variable'{Dashboards.value = maybe variable'.value nonEmptyT $ Map.lookup ("var-" <> variable'.key) paramsMap}
       template = (.statement) <$> variableBase.sql
-      withTemplateStatement v = v & #sql .~ variableBase.sql & #query .~ variableBase.query & #sqlSig .~ (Widget.sqlSignature secret pid template Nothing <$ template)
+      withTemplateStatement v = v & #sql .~ variableBase.sql & #query .~ variableBase.query & #sqlSig .~ (Widget.sqlSignature secret pid allParams template Nothing <$ template)
 
   -- Prefer the precomputed facet catalog (a single indexed jsonb read) over a
   -- live DISTINCT scan of the day partition — the latter blocks page render for
@@ -1102,22 +1102,23 @@ prefillFor hxRequest = if isJust hxRequest then WidgetsFetchThemselves else Pref
 
 -- | Process a widget and its children. Keeps sql/query @{{var-*}}@ templates intact so
 -- they are interpolated at fetch time with the current URL params.
--- | SQL from the browser runs only when the server signed it for this project, or for an
--- editor previewing their own: otherwise a viewer, or the anonymous demo guest, could hand
--- the executor any statement and only a @project_id@ substring check stood in the way.
-authorizeClientSql :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx ()
-authorizeClientSql pid sql rollup sig = when (isJust $ nonEmptyT sql <|> nonEmptyT rollup) do
+-- | SQL from the browser runs only when the server signed it for this project, with the
+-- verbatim placeholder values @params@ now carry, or for an editor previewing their own:
+-- otherwise a viewer, or the anonymous demo guest, could hand the executor any statement (or a
+-- signed one with their own @const-*@) and only a @project_id@ substring check stood in the way.
+authorizeClientSql :: Projects.ProjectId -> [(Text, Maybe Text)] -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx ()
+authorizeClientSql pid params sql rollup sig = when (isJust $ nonEmptyT sql <|> nonEmptyT rollup) do
   secret <- (.env.apiKeyEncryptionSecretKey) <$> ask @AuthContext
-  unless (Widget.verifySqlSignature secret pid sql rollup sig) $ void $ ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
+  unless (Widget.verifySqlSignature secret pid params sql rollup sig) $ void $ ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
 
 
 -- | A client-sent widget, once 'authorizeClientSql' passes it and every widget nested in it.
 -- @html@ and @dataset@ are only ever the server's own (a render, a query result): html is
 -- emitted raw, and a signed dataset reached widget.png's renderer as trusted options. Both
 -- are dropped at every depth.
-authorizeClientWidget :: Projects.ProjectId -> Widget.Widget -> ATAuthCtx Widget.Widget
-authorizeClientWidget pid w = do
-  traverse_ (\c -> authorizeClientSql pid c.sql c.rollupSql c.sqlSig) $ universeOf (#children . _Just . folded) w
+authorizeClientWidget :: Projects.ProjectId -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
+authorizeClientWidget pid params w = do
+  traverse_ (\c -> authorizeClientSql pid params c.sql c.rollupSql c.sqlSig) $ universeOf (#children . _Just . folded) w
   pure $ transformOf (#children . _Just . traverse) ((#html .~ Nothing) . (#dataset .~ Nothing)) w
 
 
@@ -1133,7 +1134,7 @@ processWidget prefill pid now timeRange allParams widgetBase = do
       resolveLogsQuery
         | widgetBase.wType == Widget.WTLogs = fmap (fillQueryTemplate KqlTemplate (variablePresetsKQL def pid.toText fromD toD allParams now))
         | otherwise = Relude.id
-      widget = Widget.signWidgetSql secret pid $ widgetBase & #html .~ Nothing & #id %~ (<|> (slugify <$> widgetBase.title)) & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #query %~ fmap (replacePlaceholders kqlConstants) . resolveLogsQuery
+      widget = Widget.signWidgetSql secret pid allParams $ widgetBase & #html .~ Nothing & #id %~ (<|> (slugify <$> widgetBase.title)) & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #query %~ fmap (replacePlaceholders kqlConstants) . resolveLogsQuery
 
   -- The prefill is best-effort: past the budget we hand back the widget with no
   -- html/dataset and no `eager` flag, which is precisely the shape whose renderer

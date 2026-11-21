@@ -45,7 +45,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), copyButton_, emDash_, emptyState_, localTimeFmt_, searchInput_)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.DeriveUtils (JsonValueSchema (..), UUIDId (..), WrappedEnumSC (..))
-import Pkg.Parser (ResultShape (..), ToQueryText (..), parseQueryToAST, replacePlaceholders, resultShape)
+import Pkg.Parser (ResultShape (..), ToQueryText (..), parseQueryToAST, replacePlaceholders, resultShape, templateBindings)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
 import Relude
@@ -707,30 +707,33 @@ signWidgetUrl secret pid widgetJson =
    in decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
 
 
--- | Proof that the server rendered this SQL for @pid@. The browser echoes it back with the
--- statement, and only an editor may run SQL that does not carry it.
+-- | Proof that the server rendered this SQL for @pid@, with the values @params@ give the
+-- placeholders it splices in verbatim ('templateBindings'). The browser echoes it back with
+-- the statement and those params, and only an editor may run SQL that does not carry it.
 --
 -- >>> import Data.UUID qualified as UUID
 -- >>> import Pkg.DeriveUtils (UUIDId (..))
--- >>> let pid = UUIDId UUID.nil
--- >>> sqlSignature "k" pid (Just "SELECT 1") Nothing == sqlSignature "k" pid (Just "SELECT 1") Nothing
+-- >>> let pid = UUIDId UUID.nil; sig ps = sqlSignature "k" pid ps (Just "SELECT 1 WHERE {{const-f}} AND '{{var-s}}' = ''") Nothing
+-- >>> sqlSignature "k" pid [] (Just "SELECT 1") Nothing == sqlSignature "k" pid [] (Just "SELECT 1") Nothing
 -- True
--- >>> sqlSignature "k" pid (Just "SELECT 1") Nothing == sqlSignature "k" pid (Just "SELECT 2") Nothing
+-- >>> sqlSignature "k" pid [] (Just "SELECT 1") Nothing == sqlSignature "k" pid [] (Just "SELECT 2") Nothing
 -- False
--- >>> sqlSignature "k" pid (Just "a") (Just "b") == sqlSignature "k" pid (Just "ab") Nothing
+-- >>> sqlSignature "k" pid [] (Just "a") (Just "b") == sqlSignature "k" pid [] (Just "ab") Nothing
 -- False
-sqlSignature :: Text -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Text
-sqlSignature secret pid sql rollup = signWidgetUrl secret pid $ "sql\0" <> fold sql <> "\0" <> fold rollup
+-- >>> (sig [("const-f", Just "TRUE")] == sig [("const-f", Just "TRUE"), ("var-s", Just "x")], sig [("const-f", Just "TRUE")] == sig [("const-f", Just "TRUE OR 1=1")])
+-- (True,False)
+sqlSignature :: Text -> Projects.ProjectId -> [(Text, Maybe Text)] -> Maybe Text -> Maybe Text -> Text
+sqlSignature secret pid params sql rollup = signWidgetUrl secret pid $ "sql\0" <> fold sql <> "\0" <> fold rollup <> "\0" <> encodeText (templateBindings params $ fold sql <> "\n" <> fold rollup)
 
 
 -- | Constant-time check of a signature the browser echoed back.
-verifySqlSignature :: Text -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Bool
-verifySqlSignature secret pid sql rollup = maybe False (constEqText (sqlSignature secret pid sql rollup))
+verifySqlSignature :: Text -> Projects.ProjectId -> [(Text, Maybe Text)] -> Maybe Text -> Maybe Text -> Maybe Text -> Bool
+verifySqlSignature secret pid params sql rollup = maybe False (constEqText (sqlSignature secret pid params sql rollup))
 
 
 -- | Stamp 'sqlSig' on a widget and its children, for those carrying SQL.
-signWidgetSql :: Text -> Projects.ProjectId -> Widget -> Widget
-signWidgetSql secret pid = transformOf (#children . _Just . traverse) \w -> w{sqlSig = sqlSignature secret pid w.sql w.rollupSql <$ (w.sql <|> w.rollupSql)}
+signWidgetSql :: Text -> Projects.ProjectId -> [(Text, Maybe Text)] -> Widget -> Widget
+signWidgetSql secret pid params = transformOf (#children . _Just . traverse) \w -> w{sqlSig = sqlSignature secret pid params w.sql w.rollupSql <$ (w.sql <|> w.rollupSql)}
 
 
 -- | Standalone timeseries panel with the shared infrastructure-page chrome:
