@@ -60,13 +60,12 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (renderSimpleQuery, statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, pageTitle, sessM)
 import Pages.Bots.SlackProgress qualified as Progress
 import Pages.Bots.Utils (BotEmoji (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, freshWebhookTimestamp, installedResponse, runBotQueryWithTools, slackResponse, withBotThread)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
-import Pkg.DeriveUtils (UUIDId (..), idFromText)
+import Pkg.DeriveUtils (UUIDId (..), idFromText, pgSpan)
 import Pkg.Mail (arr, mrkdwn, slackContext, slackHeader, slackImage, slackSection)
 import Pkg.Slack qualified as Slack
 import PyF
@@ -304,7 +303,7 @@ linkProjectGetH slack_code stateM = do
           void $ insertAccessToken pid token'.team.id token'.incomingWebhook.channelId token'.team.name token'.accessToken token'.incomingWebhook.channel token'.incomingWebhook.url (Just $ V.fromList $ filter (not . T.null) $ map T.strip $ T.splitOn "," token'.scope)
           -- Event routines have no schedule to enqueue.
           void $ Issues.ensureRoutineTemplate installer pid project'.timeZone Issues.slackInvestigationTemplate
-          void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
+          void $ liftIO $ withResource pool $ \conn -> BgJobs.enqueueJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
           wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
           when wasAdded do
             -- Bot isn't auto-joined to the picked channel (esp. private ones),
@@ -1369,7 +1368,7 @@ withEventLock :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
 withEventLock lockKey action = do
   connectionPool <- asks pool
   withRunInIO \run -> withResource connectionPool \conn -> PGS.withTransaction conn do
-    acquired <- PGS.query conn "SELECT pg_try_advisory_xact_lock(hashtextextended(?, 0))" (PGS.Only lockKey)
+    acquired <- let q = "SELECT pg_try_advisory_xact_lock(hashtextextended(?, 0))" in pgSpan conn q (PGS.query conn q (PGS.Only lockKey))
     unless (acquired == [PGS.Only True]) $ throwIO SlackWorkerBusy
     stopped <- newEmptyMVar
     (_, outcome) <-

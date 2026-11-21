@@ -56,7 +56,7 @@ import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
 import Data.Effectful.Sleep (Sleep, runNoSleep, runSleep)
 import Data.Effectful.UUID (UUIDEff, runStaticUUIDRef, runUUID)
-import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreq)
+import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreqVia)
 import Data.Map qualified as Map
 import Data.UUID qualified as UUID
 import Effectful
@@ -192,11 +192,11 @@ effToServantHandler :: AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx 
 effToServantHandler env logger tp app =
   app
     & Artifacts.runAgentArtifactsReal env
-    & ELLM.runLLMReal (ELLM.LLMTelemetry tp env.config.otelInstrumentationGenaiCaptureContent)
+    & ELLM.runLLMReal (ELLM.LLMTelemetry tp env.config.otelInstrumentationGenaiCaptureContent env.httpManager)
     & Effectful.Reader.Static.runReader env
     & runUUID
     & runSleep
-    & runHTTPWreq
+    & runHTTPWreqVia env.httpManager
     & runHasqlPool env.hasqlPool
     & runLabeled @"timefusion" (runHasqlPool env.hasqlTimefusionPool)
     & runTime
@@ -224,7 +224,7 @@ effToServantHandlerTestHTTP :: (forall x hes. IOE :> hes => Eff (HTTP ': hes) x 
 effToServantHandlerTestHTTP http clock uuidRef env logger tp app =
   app
     & Artifacts.runAgentArtifactsTest (const $ Left Artifacts.StorageUnavailable) (\_ _ -> Left Artifacts.ArtifactUnavailable)
-    & ELLM.runLLMGolden (ELLM.LLMTelemetry tp ELLM.SpanOnly) "./test/golden/"
+    & ELLM.runLLMGolden (ELLM.LLMTelemetry tp ELLM.SpanOnly env.httpManager) "./test/golden/"
     & Effectful.Reader.Static.runReader env
     & runStaticUUIDRef uuidRef
     & runNoSleep
@@ -291,8 +291,8 @@ runBackground logger appCtx tp process =
     & Tracing.runTracing tp
     & runUUID
     & runSleep
-    & runHTTPWreq
-    & ELLM.runLLMReal (ELLM.LLMTelemetry tp appCtx.config.otelInstrumentationGenaiCaptureContent)
+    & runHTTPWreqVia appCtx.httpManager
+    & ELLM.runLLMReal (ELLM.LLMTelemetry tp appCtx.config.otelInstrumentationGenaiCaptureContent appCtx.httpManager)
     & CodeReview.runCodeReviewReal (CodeReview.ArtifactStore <$> appCtx.config.impactReviewUsageDir <*> appCtx.config.impactReviewCacheDir) (sequenceA $ CodeReview.workerHost (map toString appCtx.config.impactReviewSkills) appCtx.config.impactReviewPrepareScript appCtx.config.impactReviewDependencyArchive appCtx.config.impactReviewWorkspaceRemote <$> appCtx.config.impactReviewGuestImage <*> appCtx.config.impactReviewAgent) appCtx.config.impactReviewAgent (map toString appCtx.config.impactReviewSkills)
     & Workspace.runWorkspaceReal
     & Artifacts.runAgentArtifactsReal appCtx

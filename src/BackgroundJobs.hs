@@ -50,6 +50,7 @@ import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple qualified as SimplePG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.Types (QualifiedIdentifier (..))
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Concurrent qualified as EC
@@ -107,7 +108,7 @@ import Network.HTTP.Types (urlEncode)
 import Network.HTTP.Types qualified as HT
 import Network.Wreq qualified as Wreq
 import OddJobs.ConfigBuilder (mkConfig)
-import OddJobs.Job (ConcurrencyControl (..), Config (cfgConcurrencyControl, cfgDefaultJobTimeout, cfgJobOrdering, cfgOnJobFailed, cfgOnJobTimeout, cfgTableName), Job (..), JobErrHandler (..), JobOrdering (EarliestRunAtFirst), LogEvent (..), LogLevel, Seconds (..), Status (Failed), createJob, scheduleJob, startJobRunner, throwParsePayload)
+import OddJobs.Job (ConcurrencyControl (..), Config (cfgConcurrencyControl, cfgDefaultJobTimeout, cfgJobOrdering, cfgOnJobFailed, cfgOnJobTimeout, cfgTableName), Job (..), JobErrHandler (..), JobOrdering (EarliestRunAtFirst), LogEvent (..), LogLevel, Seconds (..), Status (Failed), startJobRunner, throwParsePayload)
 import OddJobs.Types (FailureMode (FailPermanent), TableName)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
@@ -119,7 +120,7 @@ import Pkg.AI qualified as AI
 import Pkg.AdConversions qualified as AdConversions
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (AesonText (..), BaselineState (..), UUIDId (..), WrappedEnumSC (..), liveProjectSql, rawSql, unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), BaselineState (..), UUIDId (..), WrappedEnumSC (..), liveProjectSql, pgSpan, rawSql, unAesonTextMaybe)
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.ErrorFingerprint qualified as EF
@@ -144,7 +145,7 @@ import System.Config qualified as Config
 import System.Directory (findExecutable)
 import System.Logging qualified as Log
 import System.Random (randomRIO)
-import System.Tracing (SpanStatus (..), Tracing, addEvent, forkWithCtx, setStatus, withSpan, withSpan_)
+import System.Tracing (MessagingOp (Process), MessagingSystem (OddJobs), SpanKind (Consumer), SpanStatus (..), Tracing, addEvent, forkWithCtx, messagingAttrs, setStatus, withSpan, withSpanKind, withSpan_)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
@@ -168,12 +169,16 @@ jobsRunner logger authCtx tp projectTools job = when authCtx.config.enableBackgr
   bgJob <- throwParsePayload job
   void $ runBackground logger authCtx tp $ do
     let jobType = jobTypeName bgJob
-    withSpan
+        QualifiedIdentifier _ queue = jobTable bgJob
+    withSpanKind
+      Consumer
       ("background_job." <> jobType)
-      [ ("job.id", OA.toAttribute job.jobId)
-      , ("job.type", OA.toAttribute jobType)
-      , ("job.attempts", OA.toAttribute job.jobAttempts)
-      ]
+      ( [ ("job.id", OA.toAttribute job.jobId)
+        , ("job.type", OA.toAttribute jobType)
+        , ("job.attempts", OA.toAttribute job.jobAttempts)
+        ]
+          <> messagingAttrs OddJobs queue Process
+      )
       $ \sp -> do
         addEvent sp "job.started" []
         result <- try $ processBackgroundJobWithTools projectTools authCtx bgJob
@@ -192,7 +197,7 @@ jobsRunner logger authCtx tp projectTools job = when authCtx.config.enableBackgr
 -- | Enqueue background jobs for immediate execution. The pool checkout and the
 -- @"background_jobs"@ queue name were respelled at 22 call sites before this.
 enqueueJobs :: MonadIO m => Config.AuthContext -> [BgJobs] -> m ()
-enqueueJobs ctx jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (\j -> void $ createJob conn (jobTable j) j) jobs
+enqueueJobs ctx jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (\j -> Jobs.enqueueJob conn (jobTable j) j) jobs
 
 
 jobTable :: BgJobs -> TableName
@@ -201,12 +206,12 @@ jobTable job = if Jobs.longJob job then "background_jobs_long" else "background_
 
 -- | Enqueue background jobs to run at a given time.
 enqueueAt :: MonadIO m => Config.AuthContext -> UTCTime -> [BgJobs] -> m ()
-enqueueAt ctx at jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (\j -> void $ scheduleJob conn (jobTable j) j at) jobs
+enqueueAt ctx at jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (\j -> Jobs.enqueueJobAt conn (jobTable j) at j) jobs
 
 
 -- | Enqueue each job independently; a failed enqueue does not abort the rest and is returned under its label.
 enqueueEach :: MonadIO m => Config.AuthContext -> [(a, BgJobs)] -> m [(a, SomeException)]
-enqueueEach ctx jobs = liftIO $ withResource ctx.jobsPool \conn -> lefts <$> forM jobs \(k, j) -> first (k,) <$> tryAny (void $ createJob conn "background_jobs" j)
+enqueueEach ctx jobs = liftIO $ withResource ctx.jobsPool \conn -> lefts <$> forM jobs \(k, j) -> first (k,) <$> tryAny (Jobs.enqueueJob conn "background_jobs" j)
 
 
 enqueueAIRoutine :: MonadIO m => Config.AuthContext -> UUIDId "ai_routine" -> UTCTime -> m ()
@@ -1012,7 +1017,7 @@ runDailyJobScheduling authCtx =
     seedJobs :: SimplePG.Connection -> UTCTime -> Int -> Int -> (UTCTime -> BgJobs) -> IO ()
     seedJobs conn from count step mkJob = forM_ ([0 .. count - 1] :: [Int]) \i -> do
       let at = addUTCTime (fromIntegral @Int $ i * step) from
-      void $ scheduleJob conn (jobTable $ mkJob at) (mkJob at) at
+      Jobs.enqueueJobAt conn (jobTable $ mkJob at) at (mkJob at)
 
     schedule = do
       Log.logInfo "Running daily job" ()
@@ -1051,7 +1056,7 @@ runDailyJobScheduling authCtx =
             -- ticks so a single restart can't leave a gap when the chain broke.
             forM_ ([0 .. 23] :: [Int]) \i -> do
               let at = addUTCTime (fromIntegral @Int $ i * 3600) currentTime
-              void $ scheduleJob conn "background_jobs" (Jobs.HourlyJob at i) at
+              Jobs.enqueueJobAt conn "background_jobs" at (Jobs.HourlyJob at i)
             let sched = seedJobs conn currentTime
             sched 24 3600 Jobs.ProcessIssuesEnhancement
             sched 1440 60 (const Jobs.QueryMonitorsCheck)
@@ -3958,7 +3963,7 @@ withXactLease :: Config.AuthContext -> Text -> ATBackgroundCtx a -> ATBackground
 withXactLease authCtx lockName action = withRunInIO \run ->
   withResource authCtx.pool \conn ->
     SimplePG.withTransaction conn do
-      [SimplePG.Only acquired] <- SimplePG.query conn [sql|SELECT pg_try_advisory_xact_lock(hashtext(?))|] (SimplePG.Only lockName)
+      [SimplePG.Only acquired] <- let q = [sql|SELECT pg_try_advisory_xact_lock(hashtext(?))|] in pgSpan conn q (SimplePG.query conn q (SimplePG.Only lockName))
       if not acquired
         then pure Nothing
         else do

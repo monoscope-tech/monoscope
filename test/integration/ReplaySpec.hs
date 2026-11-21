@@ -195,7 +195,7 @@ spec = around withTestResources do
         legacyKey = UUID.toText sid <> ".json"
         (conn, bucket) = projectMinioConn tr.trATCtx.env owner
         frozen = UTCTime (fromGregorian 2026 5 8) 0
-    Storage.runMinio tr.trATCtx.s3HttpManager conn (Minio.putObject bucket legacyKey (CC.sourceLazy blob) (Just $ BL.length blob) Minio.defaultPutObjectOptions) >>= (`shouldSatisfy` isRight)
+    Storage.runMinio tr.trATCtx.httpManager conn (Minio.putObject bucket legacyKey (CC.sourceLazy blob) (Just $ BL.length blob) Minio.defaultPutObjectOptions) >>= (`shouldSatisfy` isRight)
     dbExec tr [sql| INSERT INTO projects.replay_sessions (session_id, project_id, last_event_at) VALUES (?, ?, now()) |] (sid, testPid)
     let shard p = runTestBg frozen tr (fetchReplayShard p sid (Just legacyKey)) <&> \(RawJson raw) -> raw
         events p = runTestBg frozen tr (fetchReplaySession p sid) <&> \resp -> AE.decode @AE.Object (AE.encode resp) >>= AEKM.lookup "events"

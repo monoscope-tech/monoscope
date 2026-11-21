@@ -106,6 +106,8 @@ module Pkg.TestUtils (
   ingestSpanLinked,
   ingestSpanReq,
   withOwnTelemetry,
+  withCapturedSpans,
+  textAttr,
   withSpanKind,
   withSpanStatus,
   withTraceId,
@@ -212,7 +214,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Network.HTTP.Client (createCookieJar, defaultRequest)
-import Network.HTTP.Client qualified as HC
 import Network.HTTP.Client.Internal (Response (..), ResponseClose (..))
 import Network.HTTP.Client.TLS qualified as HCTLS
 import Network.HTTP.Types.Status (ok200)
@@ -222,11 +223,12 @@ import Network.Minio qualified as Minio
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wreq qualified as W
 import OddJobs.Job (Job (..))
+import OpenTelemetry.Attributes (Attribute (..), PrimitiveAttribute (..), lookupAttribute)
 import OpenTelemetry.Exporter.InMemory.Span (inMemoryListExporter)
 import OpenTelemetry.Exporter.OTLP.Span (immutableSpansToProtobuf)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
-import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
-import OpenTelemetry.Trace.Core (ImmutableSpan (spanTracer), Tracer (tracerName), createTracerProvider, emptyTracerProviderOptions)
+import OpenTelemetry.Trace (SpanKind, TracerProvider, getGlobalTracerProvider, setGlobalTracerProvider)
+import OpenTelemetry.Trace.Core (ImmutableSpan (spanHot, spanKind, spanTracer), SpanHot (hotAttributes), Tracer (tracerName), createTracerProvider, emptyTracerProviderOptions)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Slack qualified as SlackBot
@@ -694,7 +696,7 @@ runTestBackgroundWithHTTP http tp clock logger appCtx process = do
       & runUUID
       & runNoSleep
       & http
-      & ELLM.runLLMGolden (ELLM.LLMTelemetry tp ELLM.SpanOnly) "./test/golden/"
+      & ELLM.runLLMGolden (ELLM.LLMTelemetry tp ELLM.SpanOnly appCtx.httpManager) "./test/golden/"
       & CodeReview.runCodeReviewTest (const $ Left "No review agent fixture configured") (const $ Left "No fix agent fixture configured") (const $ Left "No admission agent fixture configured") (const $ Left "No artifact verification fixture configured") (const $ Left "No explanation fixture configured") (const $ Left "No independent fix review fixture configured")
       & Workspace.runWorkspaceTest (\_ _ _ -> Left "No workspace fixture") (\_ _ -> Left Workspace.RegressionUnavailable) (\_ _ -> Left "No prune fixture") (const $ Left "No maintenance fixture")
       & Artifacts.runAgentArtifactsTest (const $ Left Artifacts.StorageUnavailable) (\_ _ -> Left Artifacts.ArtifactUnavailable)
@@ -983,14 +985,14 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   liveTailBuffer <- LiveTail.newRelayBuffer
   let liveTail = LiveTail.Runtime{transport = LiveTail.PostgresRelay, cache = liveTailCache, hub = liveTailHub, relayBuffer = liveTailBuffer, emit = LiveTail.deliver liveTailHub}
 
-  s3HttpManager <- HC.newManager HCTLS.tlsManagerSettings
+  httpManager <- Tracing.newTracedManager HCTLS.tlsManagerSettings
   (scrapeManager, probeManager) <- Config.newProbeManagers internalAddress
   -- MaxMind's published test database: 81.2.69.142 is London, 89.160.20.112 Linköping.
   geoDb <- GeoIP2.openGeoDB "test/fixtures/GeoIP2-City-Test.mmdb"
   let atAuthCtx =
         AuthContext
           envConfig
-          s3HttpManager
+          httpManager
           scrapeManager
           probeManager
           pool
@@ -1796,6 +1798,22 @@ withOwnTelemetry tr apiKey act = do
   req <- either (fail . ("re-decoding exported spans: " <>)) pure $ decodeMessage $ encodeMessage exported
   ingestSpanReq tr $ req & TSF.resourceSpans . traverse . PTF.resource .~ mkResource apiKey []
   pure result
+
+
+-- | Run @act@ under a tracer provider that keeps every span it ends, installed as the global one
+-- too: the http-client, postgresql-simple and odd-jobs enqueue spans read the global provider.
+withCapturedSpans :: (TracerProvider -> IO a) -> IO (a, [(SpanKind, SpanHot)])
+withCapturedSpans act = do
+  (processor, ended) <- inMemoryListExporter
+  tp <- createTracerProvider [processor] emptyTracerProviderOptions
+  result <- bracket getGlobalTracerProvider setGlobalTracerProvider \_ -> setGlobalTracerProvider tp >> act tp
+  (result,) <$> (traverse (\imm -> (spanKind imm,) <$> readIORef (spanHot imm)) =<< readIORef ended)
+
+
+textAttr :: SpanHot -> Text -> Maybe Text
+textAttr h k = case lookupAttribute (hotAttributes h) k of
+  Just (AttributeValue (TextAttribute t)) -> Just t
+  _ -> Nothing
 
 
 withSpanKind :: PT.Span'SpanKind -> TS.ExportTraceServiceRequest -> TS.ExportTraceServiceRequest

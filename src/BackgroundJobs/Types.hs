@@ -1,13 +1,16 @@
 {-# LANGUAGE OrPatterns #-}
 
-module BackgroundJobs.Types (BgJobs (..), Conversion (..), JobTiming (..), insertJob, scheduleJob, longJob, reviewOperation, deferOperationReview, wakeStoppedReviews, startConversation, startCommand) where
+module BackgroundJobs.Types (BgJobs (..), Conversion (..), JobTiming (..), enqueueJob, enqueueJobAt, insertJob, scheduleJob, longJob, reviewOperation, deferOperationReview, wakeStoppedReviews, startConversation, startCommand) where
 
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as HTTP
+import Data.HashMap.Strict qualified as HM
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple (Connection)
+import Database.PostgreSQL.Simple.Types (QualifiedIdentifier (..))
 import Effectful (Eff, (:>))
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
@@ -18,8 +21,13 @@ import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Ids qualified as Projects
+import OddJobs.Job (Job, createJob)
+import OddJobs.Job qualified as OddJobs
+import OddJobs.Types (TableName)
+import OpenTelemetry.Trace qualified as Trace
 import Pkg.DeriveUtils (DB, UUIDId)
 import Relude
+import System.Tracing (MessagingOp (Send), MessagingSystem (OddJobs), messagingAttrs, monoscopeTracer)
 
 
 data BgJobs
@@ -154,6 +162,22 @@ data BgJobs
 data Conversion = Signup Projects.UserId | Activated Projects.ProjectId
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | 'createJob' under 'sendJob'. With 'enqueueJobAt', the one way to enqueue on a raw connection.
+enqueueJob :: AE.ToJSON a => Connection -> TableName -> a -> IO ()
+enqueueJob conn table = sendJob table . createJob conn table
+
+
+enqueueJobAt :: AE.ToJSON a => Connection -> TableName -> UTCTime -> a -> IO ()
+enqueueJobAt conn table at job = sendJob table $ OddJobs.scheduleJob conn table job at
+
+
+-- | One enqueue under a Producer span, pairing with the Consumer span the job runner opens.
+sendJob :: TableName -> IO Job -> IO ()
+sendJob (QualifiedIdentifier _ queue) enqueue = do
+  tracer <- monoscopeTracer <$> Trace.getGlobalTracerProvider
+  void $ Trace.inSpan tracer ("send " <> queue) Trace.defaultSpanArguments{Trace.kind = Trace.Producer, Trace.attributes = HM.fromList $ messagingAttrs OddJobs queue Send} enqueue
 
 
 -- | Queue a job on the request's own DB connection: the odd-jobs row 'BackgroundJobs.enqueueJobs'

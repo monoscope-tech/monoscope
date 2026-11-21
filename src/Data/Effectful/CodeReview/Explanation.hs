@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Explanation (renderExplanation, readExplanationMedia, proofScript, proofCast, proofFailure, Window (..), clipCast, renderProof, BrowserMedia (..), browserMedia, renderVideo) where
+module Data.Effectful.CodeReview.Explanation (renderExplanation, readExplanationMedia, proofScript, proofCast, proofFailure, Window (..), clipCast, proofAdvice, renderProof, BrowserMedia (..), browserMedia, renderVideo) where
 
 import Conduit (runConduit, (.|))
 import Data.Aeson qualified as AE
@@ -280,6 +280,31 @@ clipCast highlight cast = case BS8.lines cast of
   _ -> Left "The proof recording is not an asciinema cast"
 
 
+-- | What a recorded side should redo before it is cited: a still under 240 CSS pixels wide (at
+-- device pixel ratio 2) shows a word, not where it sits, and a terminal card is read like a
+-- reviewer's screenshot, so it must show the commands that ran.
+--
+-- >>> let png width = "\137PNG\r\n\SUB\n\0\0\0\rIHDR" <> BS.pack [0, 0, fromIntegral (width `div` 256), fromIntegral width] <> "\0\0\0\64"
+-- >>> proofAdvice [("Chart toggle", png 208), ("Query toolbar", png 2392)] Nothing ""
+-- ["Screenshot \"Chart toggle\" is too tight to place the change; retake it framing the row, card or panel around it, with the same locator on both sides."]
+-- >>> length $ proofAdvice [] (Just "card") "Check GET /ping\r\nresponse=pong ok\r\n"
+-- 1
+-- >>> proofAdvice [] (Just "card") "\ESC[36m$ curl -si /ping\ESC[0m\r\npong ok\r\n"
+-- []
+proofAdvice :: [(Text, ByteString)] -> Maybe ByteString -> Text -> [Text]
+proofAdvice shots card output =
+  ["Screenshot \"" <> label <> "\" is too tight to place the change; retake it framing the row, card or panel around it, with the same locator on both sides." | (label, png) <- shots, BS.length png >= 24, foldl' (\n b -> n * 256 + fromIntegral b) (0 :: Int) (BS.unpack $ BS.take 4 $ BS.drop 16 png) < 480]
+    <> ["The terminal card shows no command; show each step with run 'cmd' (curl, psql, the script) so the card prints the command beside its output." | null shots, isJust card, not (any (T.isPrefixOf "$ " . stripSgr) (lines output))]
+
+
+-- | Terminal text without its colour codes.
+--
+-- >>> stripSgr "\ESC[36m$ curl -si /ping\ESC[0m"
+-- "$ curl -si /ping"
+stripSgr :: Text -> Text
+stripSgr text = let parts = T.splitOn "\ESC" text in T.concat $ take 1 parts <> map (T.drop 1 . T.dropWhile (/= 'm')) (drop 1 parts)
+
+
 -- | Whether terminal output only prints and colours text, never moving the cursor.
 plainOutput :: Text -> Bool
 plainOutput printed = all (\escape -> "[" `T.isPrefixOf` escape && T.all (\c -> isDigit c || c == ';') (T.drop 1 (T.takeWhile (/= 'm') escape)) && "m" `T.isInfixOf` escape) (drop 1 (T.splitOn "\ESC" printed))
@@ -302,7 +327,7 @@ cardCast cast = case BS8.lines cast of
     | Just meta <- AE.decodeStrict @AE.Object header
     , Just (AE.Number (toRealFloat @Double -> columns)) <- KM.lookup "width" meta -> do
         let printed = T.concat [text | Just (AE.Array (toList -> [_, AE.String "o", AE.String text])) <- map AE.decodeStrict rest]
-            visible line = T.length $ T.concat $ take 1 parts <> map (T.drop 1 . T.dropWhile (/= 'm')) (drop 1 parts) where parts = T.splitOn "\ESC" line
+            visible = T.length . stripSgr
             rows = sum [max 1 (ceiling (fromIntegral (visible line) / max 1 columns)) | line <- lines (T.replace "\r" "" printed)] :: Int
         guard $ plainOutput printed && not (T.null (T.strip printed))
         pure $ encodeUtf8 $ unlines [decodeUtf8 $ AE.encode $ KM.insert "height" (AE.toJSON (min 60 rows + 1)) meta, decodeUtf8 $ AE.encode (0 :: Int, "o" :: Text, "\ESC[?25l" <> printed), decodeUtf8 $ AE.encode (0.5 :: Double, "o" :: Text, "" :: Text)]

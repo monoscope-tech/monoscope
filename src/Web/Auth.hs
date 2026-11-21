@@ -41,7 +41,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.UUID (UUIDEff, genUUID, runUUID)
-import Data.Effectful.Wreq (HTTP, runHTTPWreq)
+import Data.Effectful.Wreq (HTTP, runHTTPWreqVia)
 import Data.Effectful.Wreq qualified as W
 import Data.List qualified as L
 import Data.Map.Strict qualified as Map
@@ -128,7 +128,7 @@ authHandler logger env =
     handler request
       & Logging.runLog (show env.config.environment) logger env.config.logLevel
       & EHasql.runHasqlPool env.hasqlPool
-      & runHTTPWreq
+      & runHTTPWreqVia env.httpManager
       & runUUID
       & runTime
       & runErrorNoCallStack @ServerError

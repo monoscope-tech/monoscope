@@ -42,6 +42,7 @@ import System.IO (hClose)
 import System.IO.Error (isDoesNotExistError, isEOFError, tryIOError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
+import System.Tracing qualified as Tracing
 import Text.HTML.TagSoup qualified as TagSoup
 import UnliftIO.Async (forConcurrently)
 import UnliftIO.Exception (catch, finally, throwIO, tryAny)
@@ -703,9 +704,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             (gif, mp4, card) <- ExceptT $ maybe (Media.renderProof clip cast) (Media.renderVideo browser.page browser.chapters) browser.video
                             -- Screenshots are the stills; without them, a plain terminal recording is one card.
                             let shots = if null browser.shots then [(T.take 80 proof.claim, png) | Just png <- [card]] else browser.shots
-                            -- Under 240 CSS pixels at device pixel ratio 2, a still shows a word, not where it sits.
-                            let tight = ["Screenshot \"" <> label <> "\" is too tight to place the change; retake it framing the row, card or panel around it, with the same locator on both sides." | (label, png) <- browser.shots, BS.length png >= 24, foldl' (\n b -> n * 256 + ord b) 0 (BS.unpack $ BS.take 4 $ BS.drop 16 png) < 480]
-                            let summary = AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "clip" AE..= (window <$ guard @Maybe (isNothing browser.video)), "output" AE..= T.takeEnd 3000 output, "screenshots" AE..= map fst shots, "video" AE..= isJust browser.video, "advice" AE..= tight]
+                            let summary = AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "clip" AE..= (window <$ guard @Maybe (isNothing browser.video)), "output" AE..= T.takeEnd 3000 output, "screenshots" AE..= map fst shots, "video" AE..= isJust browser.video, "advice" AE..= Media.proofAdvice browser.shots card output]
                             pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4, browser = isJust browser.video, shots, chapters = browser.chapters}, summary)
                         sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty $ map fst recorded
                         key <- ExceptT $ hooks.save proof.setup sides

@@ -134,7 +134,6 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (User (id))
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
-import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), Dep (..), PageCtx (..), checkFreeTierStatus, loadDeps, mkPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
 import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), SavedView (..), SavedViewsMenu (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, localTimeFmt_, metadataChip_, options_, periodToggle_, resetFormOnRefusalAttr_, resizer_, savedViewsMenu_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
@@ -146,7 +145,7 @@ import Pkg.AI qualified as AI
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableResponse (..), TableRows (..), ZeroState (..), col, multiSelectFilter, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..), assetUrl)
+import Pkg.DeriveUtils (UUIDId (..), assetUrl, pgSpan)
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.Mail qualified as Mail
 import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery)
@@ -313,7 +312,7 @@ assignError pid assigneeM err = do
   now <- Time.currentTime
   appCtx <- ask @AuthContext
   void $ ErrorPatterns.setErrorPatternAssignee err.id assigneeM now
-  whenJust assigneeM \a -> void $ liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.ErrorAssigned pid err.id a
+  whenJust assigneeM \a -> BackgroundJobs.enqueueJobs appCtx [BackgroundJobs.ErrorAssigned pid err.id a]
 
 
 -- | An assignee field: empty means unassigned, anything else must be one of @members@' user ids. A
@@ -653,10 +652,8 @@ issueSampleGetH pid issueId sinceM fromM toM = do
                   (void $ PG.execute conn "SET statement_timeout = ?" (PG.Only ("4s" :: Text)))
                   (void $ PG.execute conn "SET statement_timeout = ?" (PG.Only previousTimeout))
                   ( listToMaybe @(UTCTime, PGArray Text, Maybe Text)
-                      <$> PG.query
-                        conn
-                        "SELECT timestamp, summary, context___trace_id FROM otel_logs_and_spans WHERE project_id = ? AND timestamp BETWEEN ? AND ? AND ? = ANY(hashes) ORDER BY timestamp DESC LIMIT 1"
-                        (pid.toText, from, to, patHash)
+                      <$> let q = "SELECT timestamp, summary, context___trace_id FROM otel_logs_and_spans WHERE project_id = ? AND timestamp BETWEEN ? AND ? AND ? = ANY(hashes) ORDER BY timestamp DESC LIMIT 1"
+                           in pgSpan conn q (PG.query conn q (pid.toText, from, to, patHash))
                   )
               _ -> Exception.throwIO $ userError "Unable to read telemetry statement timeout"
       let sample = maybe SampleUnavailable (maybe SampleEmpty \(at, PGArray summary, sampleTraceId) -> SampleFound at (V.fromList summary) sampleTraceId) result

@@ -71,7 +71,6 @@ import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq
 import Data.Effectful.Wreq qualified as W
 import Data.List.Unique (uniq)
-import Data.Pool (withResource)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (display)
@@ -100,7 +99,6 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (OnboardingStep (Integration, Pricing))
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, stepUrl)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
@@ -766,10 +764,7 @@ manageMembersPostH pid onboardingM form = do
         >>= maybe (Projects.createEmptyUser email) (pure . Just)
         >>= maybe (throwError err500{errBody = "Could not resolve user for " <> encodeUtf8 email}) pure
 
-    when (userId' /= currUserId)
-      $ void
-      $ liftIO
-      $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title
+    when (userId' /= currUserId) $ BackgroundJobs.enqueueJobs appCtx [BackgroundJobs.InviteUserToProject currUserId pid email project.title]
     pure (email, permission, userId')
 
   _ <-
@@ -1505,8 +1500,7 @@ deleteProjectGetH pid = act do
       apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
       _ <- Projects.deleteProject pid
       liftIO $ forM_ apiKeys \key -> Cache.insert appCtx.projectKeyCache key.keyPrefix Nothing
-      _ <- liftIO $ withResource appCtx.pool \conn ->
-        createJob conn "background_jobs" $ BackgroundJobs.DeletedProject pid
+      BackgroundJobs.enqueueJobs appCtx [BackgroundJobs.DeletedProject pid]
       Right ProjectDeleted <$ Projects.logAuditS pid Projects.AEProjectDeleted sess Nothing
 
 
@@ -1575,12 +1569,10 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = act do
       updatePricing name sid fid oid = do
         n <- Projects.updateProjectPricing pid (Projects.PlanName name) (Projects.SubId sid) (Projects.SubItemId fid) (Projects.OrderId oid)
         n <$ Projects.completeOnboardingStep pid (show Pricing)
-      handleOnboarding = when (Projects.isOnboarding project.paymentPlan) $ void $ liftIO $ withResource appCtx.pool \conn -> do
+      handleOnboarding = when (Projects.isOnboarding project.paymentPlan) do
         let fullName = sess.user.firstName <> " " <> sess.user.lastName
             foundUsFrom = fromMaybe "" $ project.questions >>= (`lookupValueText` "foundUsFrom")
-        _ <- createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName [foundUsFrom] foundUsFrom
-        _ <- createJob conn "background_jobs" $ BackgroundJobs.SlackConnectSync pid True
-        createJob conn "background_jobs" $ BackgroundJobs.SyncProjectContacts pid
+        BackgroundJobs.enqueueJobs appCtx [BackgroundJobs.SendDiscordData sess.user.id pid fullName [foundUsFrom] foundUsFrom, BackgroundJobs.SlackConnectSync pid True, BackgroundJobs.SyncProjectContacts pid]
 
   let auditPlan name =
         Projects.logAuditS pid Projects.AEPlanChanged sess

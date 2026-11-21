@@ -39,7 +39,8 @@ import Langchain.Embeddings.Core qualified as EmbCore
 import Langchain.Embeddings.OpenAI qualified as EmbOAI
 import Langchain.LLM.Core qualified as LLMCore
 import Langchain.LLM.OpenAICompatible ()
-import OpenAI.V1 (Methods (..), getClientEnv, makeMethods)
+import Network.HTTP.Client qualified as HC
+import OpenAI.V1 (Methods (..), makeMethods)
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Models qualified as Models
 import OpenAI.V1.Usage qualified as Usage
@@ -48,6 +49,7 @@ import OpenTelemetry.Trace.Core qualified as Trace
 import Pkg.GenAI qualified as GenAI
 import Relude
 import Relude.Extra.Bifunctor (firstF)
+import Servant.Client qualified as Client
 import System.Envy (Var (..))
 import UnliftIO.Exception (tryAny)
 
@@ -221,7 +223,7 @@ instance Var GenAIContentCapture where
     SpanAndEvent -> "SPAN_AND_EVENT"
 
 
-data LLMTelemetry = LLMTelemetry {tracerProvider :: Trace.TracerProvider, capture :: GenAIContentCapture}
+data LLMTelemetry = LLMTelemetry {tracerProvider :: Trace.TracerProvider, capture :: GenAIContentCapture, manager :: HC.Manager}
 
 
 -- | Real interpreter that makes actual OpenAI API calls
@@ -235,8 +237,8 @@ runLLMReal t = interpret $ \_ -> \case
 -- | Golden test interpreter that caches responses
 runLLMGolden :: IOE :> es => LLMTelemetry -> FilePath -> Eff (LLM ': es) a -> Eff es a
 runLLMGolden t goldenDir = interpret $ \_ -> \case
-  CallLLM model prompt apiKey -> liftIO $ inference t (promptParams model prompt) (\r -> contentAttr t "gen_ai.output.messages" ([AE.object ["role" AE..= ("assistant" :: Text), "content" AE..= r]] :: [AE.Value])) $ getOrCreateGoldenResponse goldenDir model prompt apiKey
-  CallAgenticChat history params apiKey -> liftIO $ fmap unmetered <$> inference t (withHistory history params) (contentAttr t "gen_ai.output.messages" . pure @[] . LLMCore.to @(OpenAIV1.Message (V.Vector OpenAIV1.Content))) (getOrCreateAgenticGoldenResponse goldenDir history params apiKey)
+  CallLLM model prompt apiKey -> liftIO $ inference t (promptParams model prompt) (\r -> contentAttr t "gen_ai.output.messages" ([AE.object ["role" AE..= ("assistant" :: Text), "content" AE..= r]] :: [AE.Value])) $ getOrCreateGoldenResponse t.manager goldenDir model prompt apiKey
+  CallAgenticChat history params apiKey -> liftIO $ fmap unmetered <$> inference t (withHistory history params) (contentAttr t "gen_ai.output.messages" . pure @[] . LLMCore.to @(OpenAIV1.Message (V.Vector OpenAIV1.Content))) (getOrCreateAgenticGoldenResponse t.manager goldenDir history params apiKey)
   EmbedDocuments config docs -> liftIO $ getOrCreateEmbeddingGoldenResponse goldenDir config docs
 
 
@@ -278,7 +280,7 @@ contentAttr t k v = [(k, OA.toAttribute $ decodeUtf8 @Text $ AE.encode v) | capt
 
 -- | langchain-hs drops the provider's usage, so call the client directly to keep it.
 completeChat :: LLMTelemetry -> Text -> OpenAIV1.CreateChatCompletion -> IO (Either Text (Reply (OpenAIV1.Message Text)))
-completeChat t apiKey params = (>>= \obj -> (`Reply` Just (usageOf obj)) <$> firstMessage obj) <$> inference t params usageAttrs (requestChat apiKey params)
+completeChat t apiKey params = (>>= \obj -> (`Reply` Just (usageOf obj)) <$> firstMessage obj) <$> inference t params usageAttrs (requestChat t.manager apiKey params)
   where
     usageOf OpenAIV1.ChatCompletionObject{OpenAIV1.usage = Usage.Usage{Usage.prompt_tokens, Usage.completion_tokens, Usage.prompt_tokens_details}} =
       GenAI.Usage (fromIntegral prompt_tokens) (fromIntegral completion_tokens) (fromIntegral $ fromMaybe 0 $ prompt_tokens_details >>= \Usage.PromptTokensDetails{Usage.cached_tokens} -> cached_tokens) 0
@@ -295,9 +297,12 @@ completeChat t apiKey params = (>>= \obj -> (`Reply` Just (usageOf obj)) <$> fir
     tokens = OA.toAttribute @Int . fromIntegral
 
 
-requestChat :: Text -> OpenAIV1.CreateChatCompletion -> IO (Either Text OpenAIV1.ChatCompletionObject)
-requestChat apiKey params = do
-  Methods{createChatCompletion} <- (\env -> makeMethods env apiKey Nothing Nothing) <$> getClientEnv "https://api.openai.com"
+requestChat :: HC.Manager -> Text -> OpenAIV1.CreateChatCompletion -> IO (Either Text OpenAIV1.ChatCompletionObject)
+requestChat mgr apiKey params = do
+  base <- Client.parseBaseUrl "https://api.openai.com"
+  -- No response timeout, as OpenAI.V1.getClientEnv sets: long generations need it.
+  let env = (Client.mkClientEnv mgr base){Client.makeClientRequest = \u r -> (\req -> req{HC.responseTimeout = HC.responseTimeoutNone}) <$> Client.defaultMakeClientRequest u r}
+      Methods{createChatCompletion} = makeMethods env apiKey Nothing Nothing
   first (("LLM Error: " <>) . show) <$> tryAny (createChatCompletion params)
 
 
@@ -329,10 +334,10 @@ data LLMResponse = LLMResponse
 
 
 -- | Get or create a golden response for an LLM call
-getOrCreateGoldenResponse :: FilePath -> Text -> Text -> Text -> IO (Either Text Text)
-getOrCreateGoldenResponse goldenDir model prompt apiKey =
+getOrCreateGoldenResponse :: HC.Manager -> FilePath -> Text -> Text -> Text -> IO (Either Text Text)
+getOrCreateGoldenResponse mgr goldenDir model prompt apiKey =
   withGoldenCache goldenDir (promptToFilename prompt) ("Failed to decode LLM response from file: " <>) (.llmResponse) $ do
-    response <- fmap replyText . (>>= firstMessage) <$> requestChat apiKey (promptParams model prompt)
+    response <- fmap replyText . (>>= firstMessage) <$> requestChat mgr apiKey (promptParams model prompt)
     pure (LLMResponse{llmPrompt = prompt, llmResponse = response}, response)
 
 
@@ -396,11 +401,11 @@ hasToolsInParams p = isJust $ AE.toJSON p ^? key "tools"
 
 
 -- | Get or create a golden response for an agentic chat call
-getOrCreateAgenticGoldenResponse :: FilePath -> LLMCore.ChatHistory -> OpenAIV1.CreateChatCompletion -> Text -> IO (Either Text LLMCore.Message)
-getOrCreateAgenticGoldenResponse goldenDir history params apiKey =
+getOrCreateAgenticGoldenResponse :: HC.Manager -> FilePath -> LLMCore.ChatHistory -> OpenAIV1.CreateChatCompletion -> Text -> IO (Either Text LLMCore.Message)
+getOrCreateAgenticGoldenResponse mgr goldenDir history params apiKey =
   withGoldenCache goldenDir (cacheKeyFromQuery historyMessages hasTools <> ".json") ("Failed to decode agentic chat cache from: " <>) (.accResponse) $ do
     let Models.Model modelName = params.model
-    response <- fmap LLMCore.from . (>>= firstMessage) <$> requestChat apiKey (withHistory history params)
+    response <- fmap LLMCore.from . (>>= firstMessage) <$> requestChat mgr apiKey (withHistory history params)
     pure (AgenticChatCache{accHistory = historyMessages, accModel = modelName, accHasTools = hasTools, accResponse = response}, response)
   where
     historyMessages = toList history

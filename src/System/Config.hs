@@ -49,6 +49,7 @@ import System.Directory (getDirectoryContents)
 import System.Envy (DefConfig (..), FromEnv (..), Var (..), decodeWithDefaults, fromVar, toVar)
 import System.IO.Error (userError)
 import System.Logging qualified as Logging
+import System.Tracing qualified as Tracing
 import Text.Show (showString, showsPrec)
 import Utils (internalAddress)
 import "base64" Data.ByteString.Base64 qualified as B64
@@ -479,7 +480,8 @@ type CodeBlobKey = (DeriveUtils.UUIDId "github_credential", Text, Maybe Text, Te
 
 data AuthContext = AuthContext
   { env :: EnvConfig
-  , s3HttpManager :: HC.Manager
+  , httpManager :: HC.Manager
+  -- ^ Traced, pooled TLS for every outbound call that names no other manager: S3 and the HTTP effect.
   , scrapeManager :: HC.Manager
   -- ^ Prometheus scrapes: pooled, 10s timeout.
   , probeManager :: HC.Manager
@@ -557,7 +559,7 @@ instance Default DeploymentEnv where
 -- | The (scrape, probe) managers: pooled TLS with a 10s timeout; a probe's body stops at 1 MB,
 -- so a huge page cannot bloat the worker. Connections to addresses @refused@ matches are refused.
 newProbeManagers :: (IP.IP -> Bool) -> IO (HC.Manager, HC.Manager)
-newProbeManagers refused = (,) <$> HC.newManager settings <*> HC.newManager settings{HC.managerModifyResponse = capBody}
+newProbeManagers refused = (,) <$> Tracing.newTracedManager settings <*> Tracing.newTracedManager settings{HC.managerModifyResponse = capBody}
   where
     tls = HCTLS.tlsManagerSettings
     settings =
@@ -586,7 +588,7 @@ publicOnly refused connect _ host port = do
 
 configToEnv :: IOE :> es => EnvConfig -> Eff es AuthContext
 configToEnv config = do
-  s3HttpManager <- liftIO $ HC.newManager HCTLS.tlsManagerSettings
+  httpManager <- liftIO $ Tracing.newTracedManager HCTLS.tlsManagerSettings
   (scrapeManager, probeManager) <- liftIO $ newProbeManagers internalAddress
   let createPgConnIO = PG.connectPostgreSQL $ DeriveUtils.addKeepaliveParams $ encodeUtf8 config.databaseUrl
       -- Raise TimescaleDB DML decompression limit for UPDATE queries on compressed hypertables
@@ -712,7 +714,7 @@ configToEnv config = do
       , hasqlTimefusionPool
       , hasqlTimefusionUsesPgTypes = False -- prod TF is a real TimeFusion: bare text→Variant
       , env = config
-      , s3HttpManager
+      , httpManager
       , scrapeManager
       , probeManager
       , projectCache
