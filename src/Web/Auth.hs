@@ -354,20 +354,23 @@ sessionBearerRole bearer pid = runMaybeT do
 -- every handler sees only the project id (an anonymous demo caller could mint keys). So the
 -- demo reader and a viewer only read, search and speak MCP, whose tool calls come back through
 -- here one by one ('Web.Routes.apiV1App'), and only an admin writes members, API keys, teams or
--- the project. Matched by path segment, since MCP calls arrive without the @/api/v1@ prefix,
+-- the project. Neither reads API keys: a key is a fixed-IV encryption of its listed id. Matched by path segment, since MCP calls arrive without the @/api/v1@ prefix,
 -- and on 'rawPathInfo': at Servant's auth check routing has already consumed 'pathInfo'.
 --
 -- >>> import Network.Wai (defaultRequest)
 -- >>> let req m p = defaultRequest{requestMethod = m, rawPathInfo = p}
 -- >>> map (principalRefusal (Editor Projects.demoProjectId)) [req "PATCH" "/members/x", req "POST" "/api/v1/api_keys", req "GET" "/members", req "POST" "/projects/x"]
 -- [Just InsufficientRole,Just InsufficientRole,Nothing,Nothing]
+-- >>> map (principalRefusal (Viewer Projects.demoProjectId)) [req "GET" "/api/v1/api_keys", req "GET" "/api_keys/x", req "GET" "/api/v1/events"]
+-- [Just InsufficientRole,Just InsufficientRole,Nothing]
 principalRefusal :: ApiPrincipal -> Request -> Maybe ApiError
 principalRefusal principal req = case principal of
   Authenticated _ -> Nothing
-  Editor _ -> InsufficientRole <$ guard (write && any (`elem` ["members", "api_keys", "teams", "project"]) (viaNonEmpty head unprefixed))
-  Viewer _ -> InsufficientRole <$ guard (not readOnly)
-  DemoReader _ -> DemoReadOnly <$ guard (not readOnly)
+  Editor _ -> InsufficientRole <$ guard (write && any (`elem` ["members", "api_keys", "teams", "project"]) target)
+  Viewer _ -> InsufficientRole <$ guard (not readOnly || target == Just "api_keys")
+  DemoReader _ -> DemoReadOnly <$ guard (not readOnly || target == Just "api_keys")
   where
+    target = viaNonEmpty head unprefixed
     write = requestMethod req `notElem` [methodGet, methodHead]
     readOnly = not write || requestMethod req == methodPost && any (`BS.isSuffixOf` rawPathInfo req) ["/events/query", "/mcp"]
     unprefixed = case decodePathSegments (rawPathInfo req) of "api" : "v1" : rest -> rest; ps -> ps

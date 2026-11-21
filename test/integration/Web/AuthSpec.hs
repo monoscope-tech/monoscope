@@ -108,10 +108,11 @@ spec = around withTestResources do
         asMember = api [(hAuthorization, "Bearer " <> sid), ("X-Project-Id", encodeUtf8 testPid.toText)]
         demo = api [("X-Project-Id", encodeUtf8 Projects.demoProjectId.toText)]
     -- The demo project's world-readable bypass also took writes, e.g. minting its API keys.
-    traverse outcome [demo "GET" "/api/v1/events", demo "POST" "/api/v1/events/query", demo "POST" "/api/v1/api_keys"] `shouldReturn` ([Right ro, Right ro, Left 401] :: [Either Int Text])
+    -- Key ids are listed too: a token is a fixed-IV encryption of its id, so an id is the key.
+    traverse outcome [demo "GET" "/api/v1/events", demo "POST" "/api/v1/events/query", demo "POST" "/api/v1/api_keys", demo "GET" "/api/v1/api_keys"] `shouldReturn` ([Right ro, Right ro, Left 401, Left 401] :: [Either Int Text])
     -- A session token ignored the member's role: a viewer could PATCH themselves to admin.
-    let probes = [asMember "GET" "/api/v1/members", asMember "PATCH" "/api/v1/members/self", asMember "POST" "/api/v1/api_keys", asMember "POST" "/api/v1/monitors"]
-    for_ [(PM.PView, [Right vw, Left 403, Left 403, Left 403] :: [Either Int Text]), (PM.PEdit, [Right ed, Left 403, Left 403, Right ed]), (PM.PAdmin, replicate 4 (Right rw))] \(role, want) ->
+    let probes = [asMember "GET" "/api/v1/members", asMember "PATCH" "/api/v1/members/self", asMember "POST" "/api/v1/api_keys", asMember "POST" "/api/v1/monitors", asMember "GET" "/api/v1/api_keys"]
+    for_ [(PM.PView, [Right vw, Left 403, Left 403, Left 403, Left 403] :: [Either Int Text]), (PM.PEdit, [Right ed, Left 403, Left 403, Right ed, Right ed]), (PM.PAdmin, replicate 5 (Right rw))] \(role, want) ->
       setRole tr testPid role >> (traverse outcome probes `shouldReturn` want)
 
     -- Basic auth rides every request, so a cross-site form could write as the operator.
@@ -134,8 +135,8 @@ spec = around withTestResources do
     runQueryEffect tr (PM.getSessionPermission demoPid (getResponse guest).user.id) `shouldReturn` Just PM.PView
     traverse (httpStatus asGuest) [void $ Settings.apiPostH demoPid (Settings.GenerateAPIKeyForm "guest" Nothing), void $ ProjectsP.manageMembersPostH demoPid Nothing (ProjectsP.ManageMembersForm ["x@example.test"] [PM.PAdmin]), void $ ProjectsP.pricingUpdateH demoPid (ProjectsP.PricingUpdateForm Nothing Nothing Nothing)] `shouldReturn` [403, 403, 403]
     httpStatus asGuest (void $ Home.homeGetH demoPid) `shouldReturn` 200
-    let guestBearer m = Servant.runHandler $ unAuthHandler (Auth.apiKeyAuthHandler tr.trLogger tr.trATCtx) (WT.setPath Wai.defaultRequest "/api/v1/api_keys"){Wai.requestMethod = m, Wai.requestHeaders = [(hAuthorization, "Bearer " <> UUID.toASCIIBytes Auth.demoGuestSessionId.getPersistentSessionId), ("X-Project-Id", encodeUtf8 demoPid.toText)]}
-    traverse (fmap (bimap errHTTPCode \case Viewer _ -> True; _ -> False) . guestBearer) ["GET", "POST"] `shouldReturn` ([Right True, Left 403] :: [Either Int Bool])
+    let guestBearer (m, p) = Servant.runHandler $ unAuthHandler (Auth.apiKeyAuthHandler tr.trLogger tr.trATCtx) (WT.setPath Wai.defaultRequest p){Wai.requestMethod = m, Wai.requestHeaders = [(hAuthorization, "Bearer " <> UUID.toASCIIBytes Auth.demoGuestSessionId.getPersistentSessionId), ("X-Project-Id", encodeUtf8 demoPid.toText)]}
+    traverse (fmap (bimap errHTTPCode \case Viewer _ -> True; _ -> False) . guestBearer) [("GET", "/api/v1/events"), ("POST", "/api/v1/api_keys")] `shouldReturn` ([Right True, Left 403] :: [Either Int Bool])
 
   it "ad attribution: a consenting landing becomes one signup conversion, tags wait for consent, a first ingest is reported once" \tr -> do
     let adCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.auth0Domain = "https://auth0.test", Config.metaCapiAccessToken = Just "capi-token", Config.metaCapiPixelId = Just "123", Config.redditConversionsToken = Just "rdt-token", Config.redditPixelId = Just "t2_px"}}
