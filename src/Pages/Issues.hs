@@ -573,7 +573,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
         $ PageCtx bwconf
         $ IssueFound
         $ let view = IssueView{pid, issue, requestId, apiEvidence, traceRef = mTraceRef, selectedAt, replaySession, errM = errorM, patternM, now, isFirst, tp, stateEvent, canResolve, members, tagCounts, errHourlyFrom, rollupSqlSig = Nothing}
-           in view{rollupSqlSig = issueRollupSql view <&> \(sql, _) -> Widget.sqlSignature secret pid Nothing (Just sql)}
+           in view{rollupSqlSig = issueRollupSql view <&> \(sql, _) -> Widget.sqlSignature secret pid [] Nothing (Just sql)}
   where
     -- A lookup that only decides whether an optional panel renders: a throw or a 10s stall
     -- degrades to Nothing. A transient TF error used to 500 the whole issue, precisely

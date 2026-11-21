@@ -513,6 +513,12 @@ spec = do
         _ -> expectationFailure "expected SpanDetails anchored on the request span"
       waterfall <- renderT <$> call tr (TelemetryPage.traceH testPid trId (Just rootTs) Nothing Nothing Nothing Nothing)
       (T.isInfixOf "monoscope.http" waterfall, T.isInfixOf "timeline.addEventListener('tab-visible'" waterfall) `shouldBe` (False, True)
+      -- tracePage_spanNameClosesScript: span names went into the inline script as plain aeson JSON, so
+      -- one holding </script> ended it and the rest parsed as HTML, on share links too.
+      (xssTrace, xssSpan) <- (,) <$> hexId <*> hexId
+      ingestSpanLinked tr apiKey xssTrace xssSpan Nothing "</script><img src=x onerror=alert(1)>" [] frozenTime
+      xssPage <- renderT <$> call tr (TelemetryPage.traceH testPid xssTrace (Just frozenTime) Nothing Nothing Nothing Nothing)
+      (T.isInfixOf "onerror=alert(1)" xssPage, T.isInfixOf "</script><img" xssPage) `shouldBe` (True, False)
 
       initial <- renderT <$> item True rootId rootTs Nothing Nothing False
       rawTab <- renderT <$> item True rootId rootTs (Just "tab-raw") Nothing True

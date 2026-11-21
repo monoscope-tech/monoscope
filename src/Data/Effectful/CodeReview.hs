@@ -31,10 +31,10 @@ import Effectful.Dispatch.Dynamic
 import Effectful.TH
 import Models.Projects.ProjectMemory qualified as Memory
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Client.TLS qualified as TLS
 import Network.HTTP.Types.Status qualified as HTTP
 import Pkg.DeriveUtils (UUIDId (..), UpTo, natInt, unrefine, upTo)
 import Relude
+import System.Config (newProbeManagers)
 import System.Directory (doesFileExist, listDirectory, removeFile, removePathForcibly)
 import System.Environment (getEnvironment)
 import System.FilePath (takeDirectory, (</>))
@@ -46,7 +46,7 @@ import Text.HTML.TagSoup qualified as TagSoup
 import UnliftIO.Async (forConcurrently)
 import UnliftIO.Exception (catch, finally, throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
-import Utils (safeScrapeUrl)
+import Utils (internalAddress, safeScrapeUrl)
 
 
 -- JSON-lines protocol: queries, usage, execution receipts, validation, and result.
@@ -1064,7 +1064,8 @@ documentUrlOk = maybe False (\rest -> T.length rest <= 160 && T.all (\c -> isAlp
 
 
 -- | A documentation page for the agent, fetched by the host so the guest stays off the web: public
--- https:// only ('documentUrlOk' and the scrape-target SSRF guard), no redirects, the first 512 KB, HTML reduced to text.
+-- https:// only ('documentUrlOk' and the scrape-target SSRF guard on the literal host, the scrape
+-- manager's on every address the name resolves to), no redirects, the first 512 KB, HTML reduced to text.
 --
 -- >>> traverse fetchDocument ["https://127.0.0.1/admin", "http://example.com/docs", "https://169.254.169.254/latest"]
 -- [Left "Only short public https:// document URLs, without a query string, can be fetched",Left "Only short public https:// document URLs, without a query string, can be fetched",Left "Only short public https:// document URLs, without a query string, can be fetched"]
@@ -1073,7 +1074,7 @@ fetchDocument url
   | not (documentUrlOk url && safeScrapeUrl url) = pure $ Left "Only short public https:// document URLs, without a query string, can be fetched"
   | otherwise =
       first (const "The page could not be fetched") <$> tryAny do
-        manager <- HTTP.newManager TLS.tlsManagerSettings{HTTP.managerResponseTimeout = HTTP.responseTimeoutMicro 15000000}
+        (manager, _) <- newProbeManagers internalAddress
         request <- HTTP.parseRequest (toString url)
         HTTP.withResponse request{HTTP.redirectCount = 0, HTTP.requestHeaders = [("User-Agent", "monoscope-review")]} manager \response -> do
           body <- toStrict <$> HTTP.brReadSome (HTTP.responseBody response) 524288
