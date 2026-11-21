@@ -740,8 +740,10 @@ spec = do
         frames <- streamChart tr{trATCtx = tr.trATCtx{timefusionPgPool = pool}} Hasql.SqlTimefusion (Just "summarize count(*) by bin(timestamp, 1h)") Nothing (timeAt 0) (timeAt 259200)
         (case viaNonEmpty last frames of Just (AE.Object o) -> (AEKM.lookup "type" o, AEKM.lookup "data" o >>= \case AE.Object f -> AEKM.lookup "rows_count" f; _ -> Nothing); _ -> (Nothing, Nothing)) `shouldBe` (Just "complete", Just (AE.Number 1))
         PG.query_ active "SELECT 1" `shouldReturn` [Only (1 :: Int)]
-      -- 6s outlasts the stream's 5s keep-alive, so a partial frame must precede completion.
-      slow <- streamChart tr Hasql.SqlPostgres Nothing (Just "SELECT 1::integer AS bucket, 'wait'::text AS series, count(*)::float AS value FROM pg_sleep(6)") (timeAt 0) (timeAt 3600)
+      -- 6s outlasts the stream's 5s keep-alive, so a partial frame must precede completion. User SQL
+      -- may not call pg_sleep itself, so the wait is a function it cannot see into.
+      dbExec tr "CREATE OR REPLACE FUNCTION spec_wait(seconds float8) RETURNS void LANGUAGE sql AS $$ SELECT pg_sleep(seconds) $$" ()
+      slow <- streamChart tr Hasql.SqlPostgres Nothing (Just "SELECT 1::integer AS bucket, 'wait'::text AS series, count(*)::float AS value FROM spec_wait(6)") (timeAt 0) (timeAt 3600)
       let kind = \case AE.Object o -> AEKM.lookup "type" o; _ -> Nothing
       (kind <$> listToMaybe slow, kind <$> viaNonEmpty last slow) `shouldBe` (Just (Just "partial"), Just (Just "complete"))
 

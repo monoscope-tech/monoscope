@@ -820,13 +820,21 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     second (V.map (V.map T.length)) <$> texts "SELECT repeat('x', 1048576)" `shouldReturn` (Nothing, V.singleton (V.singleton 1048576))
     cached `shouldReturn` 0
 
+    -- rawSql_postgres_runsUnderADeadlineAndRowCap (2026-11 audit): user SQL had no statement deadline
+    -- or result cap on the shared pool, and pg_sleep was explicitly allowed.
+    exec "CREATE FUNCTION spec_statement_timeout() RETURNS text LANGUAGE sql AS $$ SELECT current_setting('statement_timeout') $$"
+    let rawTexts q = (\md -> (md.error, md.dataText)) <$> sqlChart tr (Just Hasql.SqlPostgres) Charts.DTText q []
+    rawTexts "SELECT spec_statement_timeout()" `shouldReturn` (Nothing, V.singleton (V.singleton "30s"))
+    V.length . snd <$> rawTexts "SELECT n::text FROM generate_series(1, 100001) n" `shouldReturn` 100000
+    fst <$> rawTexts "SELECT 1::text FROM pg_sleep(0)" >>= (`shouldSatisfy` isJust)
+
     -- One backend execution per window across a cold request and ten cached ones, streamed or not.
-    let heavy = "SELECT q.call::text, n::text, repeat('x', 80) FROM (SELECT nextval('cache_benchmark_calls') AS call, pg_sleep(0.1)) q CROSS JOIN generate_series(1, 1000) n"
+    let heavy = "SELECT q.call::text, n::text, repeat('x', 80) FROM (SELECT nextval('cache_benchmark_calls') AS call, spec_wait(0.1)) q CROSS JOIN generate_series(1, 1000) n"
         fetch window streaming =
           if streaming
             then completeFrame @Charts.MetricsData =<< runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just heavy) (Just window) Nothing Nothing Nothing Nothing [("var-endpointHash", Just "benchmark")])
             else runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just heavy) (Just window) Nothing Nothing Nothing Nothing [("var-endpointHash", Just "benchmark")]
-    exec "CREATE SEQUENCE cache_benchmark_calls"
+    exec "CREATE SEQUENCE cache_benchmark_calls; CREATE FUNCTION spec_wait(seconds float8) RETURNS void LANGUAGE sql AS $$ SELECT pg_sleep(seconds) $$"
     for_ ["24H", "3D", "7D"] \window -> do
       exec "DELETE FROM query_cache WHERE source = 'raw-sql'; ALTER SEQUENCE cache_benchmark_calls RESTART WITH 1"
       cold <- fetch window True

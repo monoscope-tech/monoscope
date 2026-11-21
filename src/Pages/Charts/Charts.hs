@@ -24,7 +24,7 @@ import Data.Tuple.Extra (fst3, snd3, thd3)
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.LibPQ qualified as PQ
-import Database.PostgreSQL.Simple (Connection, FromRow, SomePostgreSqlException, SqlError (..), query_)
+import Database.PostgreSQL.Simple (Connection, FromRow, SomePostgreSqlException, SqlError (..), execute_, query_)
 import Database.PostgreSQL.Simple.FromField (FromField (..), ResultError (..), typeOid)
 import Database.PostgreSQL.Simple.FromRow (fromRow)
 import Database.PostgreSQL.Simple.Internal qualified as PGI
@@ -231,9 +231,12 @@ runRawQuery authCtx dbSource decoder cfg ast kql template mapping liveRange prog
           <> variablePresets cfg.binDensity cfg.pid.toText from to [(key, Just value) | (key, value) <- M.toList mapping, "var-" `T.isPrefixOf` key || key == "table-search"] cfg.currentTime
           <> mapping
   -- The template names tenant tables; scoping makes each the project's slice before it runs.
-  case LogQueries.scopeUserSql (not $ usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource) cfg.pid (fillQueryTemplate SqlTemplate canonical template) of
+  let postgres = not $ usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
+  case LogQueries.scopeUserSql postgres cfg.pid (fillQueryTemplate SqlTemplate canonical template) of
     Left err -> pure (emptyMetricsFor cfg.currentTime from to){error = Just err}
-    Right sql -> do
+    Right scoped -> do
+      -- User SQL on Postgres returns at most 100k rows, which the decoders hold in memory at once.
+      let sql = bool scoped ("SELECT * FROM (" <> scoped <> ") capped LIMIT 100000") postgres
       let fetch = liftIO $ fetchMetricsDataWithProgress progress decoder sql cfg.currentTime from to authCtx dbSource >>= either throwIO pure
       case (endpoint, from, to) of
         (Just endpointHash, Just start, Just end) ->
@@ -577,8 +580,16 @@ fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCt
   where
     pool = metricsPool authCtx dbSource
     baseMetricsData = emptyMetricsFor now fromD toD
+    -- A chart statement on the shared Postgres pool is cut off after 30s, so one query cannot hold
+    -- a connection every tenant shares. TimeFusion takes no session settings. A failed read
+    -- discards its connection, so the reset only has to follow a success.
+    withConn :: (Connection -> IO a) -> IO a
+    withConn act = withResource pool \conn ->
+      if usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
+        then act conn
+        else execute_ conn "SET statement_timeout = '30s'" *> act conn <* execute_ conn "RESET statement_timeout"
     runQ :: FromRow r => IO [r]
-    runQ = withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
+    runQ = withConn \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
     attempt = retryOnPoolExhaustion $ try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
       DTFloat -> do
         chartData <- runQ :: IO [Only (Maybe ChartNumber)]
@@ -599,7 +610,7 @@ fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCt
         -- Always streamed, so an abandoned read cancels its SQL; @progress@ only reports.
         rowsRef <- newIORef []
         lastEmit <- newIORef 0
-        withResource pool \conn -> streamQuery_ conn (Query $ encodeUtf8 sqlQuery) \row -> do
+        withConn \conn -> streamQuery_ conn (Query $ encodeUtf8 sqlQuery) \row -> do
           modifyIORef' rowsRef (row :)
           forM_ progress \emit -> do
             tick <- getMonotonicTimeNSec

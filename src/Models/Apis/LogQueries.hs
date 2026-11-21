@@ -298,6 +298,11 @@ data SqlTok = SqlLit Text | SqlName [Text] Text | SqlOther Char
 -- [True,True,True,True,True,True,True]
 -- >>> isRight (scopeUserSql False pid "SELECT 'it''s; fine' AS e FROM otel_metrics;")
 -- True
+--
+-- Sleeping only holds a connection every tenant shares.
+--
+-- >>> isLeft (scopeUserSql False pid "SELECT 1 FROM pg_sleep(600)")
+-- True
 scopeUserSql :: Bool -> Projects.ProjectId -> Text -> Either Text Text
 scopeUserSql postgres pid sql = do
   let toks = dropTrailingSemicolon $ tokenizeSql sql
@@ -331,7 +336,7 @@ scopeUserSql postgres pid sql = do
     alias t = bool t ("tenant_" <> T.replace "." "_" t) ("." `T.isInfixOf` t)
     schemas = ["apis", "monitors", "projects", "telemetry", "tests", "users", "public", "information_schema"]
     disallowed = \case
-      [n] -> n `elem` ["background_jobs", "background_jobs_long", "otel_metrics_meta", "query_cache", "rum_panel_cache", "schema_migrations", "current_setting", "set_config"] || ("otel_" `T.isPrefixOf` n && n `notElem` tenantTables) || (n /= "pg_sleep" && any (`T.isPrefixOf` n) ["pg_", "lo_", "dblink", "query_to_xml", "table_to_xml", "schema_to_xml", "database_to_xml", "cursor_to_xml"])
+      [n] -> n `elem` ["background_jobs", "background_jobs_long", "otel_metrics_meta", "query_cache", "rum_panel_cache", "schema_migrations", "current_setting", "set_config"] || ("otel_" `T.isPrefixOf` n && n `notElem` tenantTables) || any (`T.isPrefixOf` n) ["pg_", "lo_", "dblink", "query_to_xml", "table_to_xml", "schema_to_xml", "database_to_xml", "cursor_to_xml"]
       [q, n] -> (q `elem` schemas || any (`T.isPrefixOf` q) ["pg_", "_timescaledb", "timescaledb"]) && (q <> "." <> n) `notElem` tenantTables
       _ -> True
 
