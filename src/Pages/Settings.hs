@@ -1189,9 +1189,17 @@ notifyPlanChange envCfg project mk = do
   Projects.usersByProjectId project.id >>= traverse_ \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
 
 
+-- | An HMAC under the empty key is anyone's to compute: an unset secret refuses every event.
+requireWebhookSecret :: Text -> Text -> ATBaseCtx ()
+requireWebhookSecret provider secret = when (T.null secret) do
+  Log.logAttention "Billing webhook signing secret unset; refusing event" provider
+  throwError err503
+
+
 webhookPostH :: Maybe Text -> ByteString -> ATBaseCtx (Html ())
 webhookPostH sigHeaderM rawBody = do
   envConfig <- asks env
+  requireWebhookSecret "lemon_squeezy" envConfig.lemonSqueezyWebhookSecret
   let secret = encodeUtf8 envConfig.lemonSqueezyWebhookSecret
       sigValid = maybe False (\h -> verifyLemonSqueezySignature h rawBody secret) sigHeaderM
   unless sigValid $ Log.logAttention "ls_webhook_sig_mismatch" (T.take 8 <$> sigHeaderM, BS.length rawBody)
@@ -1234,7 +1242,7 @@ webhookPostH sigHeaderM rawBody = do
               }
       _ <- Projects.addSubscription sub
       -- Safety net: update project billing if frontend checkout callback failed
-      whenJust (Projects.projectIdFromText projectId) \pid -> do
+      whenJust (Projects.projectIdFromText projectId) \pid -> ifM (Projects.subItemBilledElsewhere pid (show subItem.id)) (Log.logAttention "LS subscription_created: subscription already bills another project" (pid, subItem.id)) do
         void $ Projects.updateProjectBilling pid (Projects.PlanName plan) (Projects.SubId $ show subItem.subscriptionId) (Projects.SubItemId $ show subItem.id) (Projects.OrderId $ show orderId)
         whenJustM (Projects.projectById pid) \project ->
           Notify.runNotifyProduction $ notifyPlanChange envConfig project (ET.planUpgradedEmail plan)
@@ -1734,6 +1742,7 @@ jsonField k = parseMaybe (AE.withObject "" (AE..: k))
 stripeWebhookPostH :: Maybe Text -> ByteString -> ATBaseCtx (Html ())
 stripeWebhookPostH sigHeaderM rawBody = do
   envConfig <- asks env
+  requireWebhookSecret "stripe" envConfig.stripeWebhookSecret
   now <- Time.currentTime
   case sigHeaderM of
     Nothing -> do

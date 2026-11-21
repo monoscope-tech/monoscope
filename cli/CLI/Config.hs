@@ -104,21 +104,35 @@ tokensFile = (</> "tokens.json") <$> configDir
 resolveConfig :: (Environment :> es, FileSystem :> es, IOE :> es) => Eff es CLIConfig
 resolveConfig = do
   global <- loadGlobalConfig
-  projCfg <- loadLocalConfig
+  repo <- loadLocalConfig
   envApiUrl <- Env.lookupEnv "MONOSCOPE_API_URL"
   envApiKey <- Env.lookupEnv "MONOSCOPE_API_KEY"
   envProject <- Env.lookupEnv "MONOSCOPE_PROJECT"
   storedKey <- loadToken
-  let merged = mergeConfigs [global, projCfg]
+  let projCfg = maybe emptyConfig snd repo
+      merged = mergeConfigs [global, projCfg]
       trustedUrl = fromMaybe "https://api.monoscope.tech" $ (toText <$> envApiUrl) <|> global.api_url
       apiUrl = fromMaybe trustedUrl $ (toText <$> envApiUrl) <|> merged.api_url
+      trusted = apiUrl == trustedUrl
+  -- A cloned repo's .monoscope.yaml can point api_url anywhere, and the credentials were then
+  -- sent there as a bearer token. The env key, the login and the global key go only to the URL
+  -- they were configured for; a key in the repo's own file goes where that file says.
+  when (isJust envApiKey && not trusted && isNothing projCfg.api_key)
+    $ die
+    $ toString
+    $ "MONOSCOPE_API_KEY is only sent to "
+    <> trustedUrl
+    <> ", but "
+    <> maybe ".monoscope.yaml" (toText . fst) repo
+    <> " sets api_url to "
+    <> apiUrl
+    <> ". Set MONOSCOPE_API_URL="
+    <> apiUrl
+    <> " if you trust it."
   pure
     CLIConfig
       { apiUrl
-      , -- A cloned repo's .monoscope.yaml can point api_url anywhere, and the stored login was
-        -- then sent there as a bearer token. The login and the global key go only to the URL
-        -- they were configured for; a key in the repo's own file goes where that file says.
-        credential = parseCredential <$> ((toText <$> envApiKey) <|> projCfg.api_key <|> (guard (apiUrl == trustedUrl) *> (global.api_key <|> storedKey)))
+      , credential = parseCredential <$> asum [guard trusted *> (toText <$> envApiKey), projCfg.api_key, guard trusted *> (global.api_key <|> storedKey)]
       , projectId = (toText <$> envProject) <|> merged.project
       }
 
@@ -129,17 +143,18 @@ loadGlobalConfig = do
   loadYaml (dir </> "config.yaml")
 
 
-loadLocalConfig :: (FileSystem :> es, IOE :> es) => Eff es FileConfig
+-- | The nearest @.monoscope.yaml@ up from the working directory, with its path.
+loadLocalConfig :: (FileSystem :> es, IOE :> es) => Eff es (Maybe (FilePath, FileConfig))
 loadLocalConfig = getCurrentDirectory >>= traverseUp
   where
     traverseUp dir = do
       let f = dir </> ".monoscope.yaml"
       exists <- doesFileExist f
       if exists
-        then loadYaml f
+        then Just . (f,) <$> loadYaml f
         else
           let parent = takeDirectory dir
-           in if parent == dir then pure emptyConfig else traverseUp parent
+           in if parent == dir then pure Nothing else traverseUp parent
 
 
 loadYaml :: (FileSystem :> es, IOE :> es) => FilePath -> Eff es FileConfig

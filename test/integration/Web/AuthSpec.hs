@@ -166,6 +166,10 @@ spec = around withTestResources do
     let cookie = "ms_consent=granted; _fbp=fb.1.1.2; monoscope_attribution=" <> setCookieValue stash
     -- Regression (login CSRF): a callback whose state was not issued to this browser signs no one in.
     for_ [Nothing, Just ("st-other" :: Text)] \st -> (callbackWith st cookie `shouldThrow` anyException)
+    -- unverifiedEmail_createsNoAccount: an explicitly unverified sign-up minted the account its real owner later logged into.
+    let unverified _ url = pure $ "{\"email\":\"unverified@example.com\",\"email_verified\":false}" <$ guard ("/userinfo" `T.isSuffixOf` toText url)
+    toBaseServantResponse tr{trATCtx = adCtx} (withHTTPResponses unverified $ Auth.authCallbackH (Just "code") (Just "st-1") Nothing (Just "monoscope_oauth_state=st-1") Nothing Nothing) `shouldThrow` anyException
+    runQueryEffect tr (Projects.userByEmail "unverified@example.com") >>= (`shouldSatisfy` isNothing)
     [_, signup] <- callback cookie
     Just (uid :: Projects.UserId) <- runQueryEffect tr $ Hasql.interpOne [HI.sql| SELECT id FROM users.users WHERE email = 'callback@example.com' |]
     (setCookieName signup, setCookieValue signup) `shouldBe` ("monoscope_signup", encodeUtf8 uid.toText)

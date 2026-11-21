@@ -567,7 +567,7 @@ integrationsBody IntegrationsConfig{..} = do
             integrations =
               [ ("email", Settings.TCEmail, "Email", True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
               , ("slack", Settings.TCSlack, "Slack", isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration projectId slackData slackChannels extraSlackChannels existingSlackChannels slackChannelsError alertsOff)
-              , ("discord", Settings.TCDiscord, "Discord", discordConnected, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig projectId)
+              , ("discord", Settings.TCDiscord, "Discord", discordConnected, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration projectId)
               , ("phone", Settings.TCWhatsapp, "WhatsApp", not $ V.null phones, faSprite_ "whatsapp" "solid" "h-4 w-4", renderWhatsappIntegration tgs)
               , ("pagerduty", Settings.TCPagerduty, "PagerDuty", isJust pagerdutyKey, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration projectId (isJust pagerdutyKey))
               ]
@@ -707,10 +707,9 @@ renderSlackIntegration pid slackData channels extraChannels existingChannels cha
       a_ [target_ "_blank", class_ "btn btn-xs", href_ oauthUrl] "Connect Slack agent"
 
 
-renderDiscordIntegration :: EnvConfig -> Projects.ProjectId -> Html ()
-renderDiscordIntegration envCfg pid = do
-  let addQueryParams = "&state=" <> pid.toText <> "&redirect_uri=" <> envCfg.discordRedirectUri
-  a_ [target_ "_blank", class_ "btn btn-xs gap-1.5", href_ $ "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> envCfg.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> addQueryParams] do
+renderDiscordIntegration :: Projects.ProjectId -> Html ()
+renderDiscordIntegration pid =
+  a_ [target_ "_blank", class_ "btn btn-xs gap-1.5", href_ $ Links.urls.discordInstallGet pid False] do
     faSprite_ "discord" "solid" "h-3.5 w-3.5"
     "Add to Discord"
 

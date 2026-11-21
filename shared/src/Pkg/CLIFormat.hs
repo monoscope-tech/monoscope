@@ -11,6 +11,7 @@ module Pkg.CLIFormat (
   evalCond,
   renderSummaryItems,
   cleanSummaryValue,
+  escapeControls,
 ) where
 
 import Relude
@@ -18,6 +19,7 @@ import Relude
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as KM
+import Data.Char (isControl, showLitChar)
 import Data.Map.Strict qualified as Map
 import Data.Scientific (FPFormat (..), Scientific, formatScientific, isInteger)
 import Data.Text qualified as T
@@ -34,7 +36,20 @@ padRight :: Int -> Text -> Text
 padRight n t = t <> T.replicate (max 0 (n - T.length t)) " "
 
 
+-- | Telemetry made terminal-inert: every C0/C1 control except tab (and DEL) becomes its visible
+-- escape, so a log body can't drive the terminal (OSC 52 clipboard writes, OSC 8 links, cursor moves).
+--
+-- >>> escapeControls "x\ESC]52;c;ZQ==\a\ESC[1A\r\n\tok\x9b"
+-- "x\\ESC]52;c;ZQ==\\a\\ESC[1A\\r\\n\tok\\155"
+escapeControls :: Text -> Text
+escapeControls = T.concatMap \c -> if isControl c && c /= '\t' then toText (showLitChar c "") else one c
+
+
 -- | Render summary items from `field;style⇒value` format into ANSI-colored text.
+-- Values are 'escapeControls'-ed before the renderer adds its own SGR.
+--
+-- >>> renderSummaryItems ["body;badge-neutral⇒\ESC[2Jgone\a"]
+-- "\ESC[2m\\ESC[2Jgone\\a\ESC[0m"
 --
 -- >>> renderSummaryItems ["kind;badge-neutral⇒internal", "span_name;badge-neutral⇒runBg"]
 -- "\ESC[2minternal\ESC[0m \ESC[2mrunBg\ESC[0m"
@@ -53,9 +68,9 @@ renderSummaryItems = T.intercalate " " . mapMaybe renderItem
           | field == "attributes" -> Nothing
           | "text-textWeak" `T.isPrefixOf` style -> Nothing
           | "text-weak" `T.isPrefixOf` style -> Nothing
-          | otherwise -> Just $ applyAnsi (stripRight style) value
-        _ -> Just item
-      _ -> Just item
+          | otherwise -> Just $ applyAnsi (stripRight style) (escapeControls value)
+        _ -> Just $ escapeControls item
+      _ -> Just $ escapeControls item
     stripRight s = fromMaybe s $ T.stripPrefix "right-" s
     applyAnsi style val = case styleToAnsi style of
       "" -> val
@@ -169,7 +184,7 @@ extractColIdxMap = \case
 -- >>> renderSummaryCell "not json"
 -- "not json"
 renderSummaryCell :: Text -> Text
-renderSummaryCell cell = either (const cell) renderSummaryItems (AE.eitherDecode @[Text] (encodeUtf8 cell))
+renderSummaryCell cell = either (const $ escapeControls cell) renderSummaryItems (AE.eitherDecode @[Text] (encodeUtf8 cell))
 
 
 -- | Like 'extractRows' but preserves the original JSON values (numbers stay

@@ -468,11 +468,12 @@ authCallbackH codeM stateM redirectToM cookieM userAgentM countryM = do
     let opts = defaults & header "Authorization" L..~ ["Bearer " <> encodeUtf8 @Text @ByteString accessToken]
     resp <- lift $ W.getWith opts (toString $ envCfg.config.auth0Domain <> "/userinfo")
     let field k = fromMaybe "" $ resp L.^? responseBody . key k . _String
-    -- Accounts are keyed by email, so an IdP login whose email is unverified could claim
-    -- whoever already holds that address (or an invite pre-created for it). It may still
-    -- create a fresh account: that reaches nobody else's data.
+    -- Accounts are keyed by email, so an IdP login whose email is explicitly unverified could
+    -- claim whoever holds that address (or an invite pre-created for it), or create the account
+    -- its real owner later signs into while the creator keeps a session. A missing claim (some
+    -- enterprise IdPs omit it) is accepted.
     when (resp L.^? responseBody . key "email_verified" . _Bool == Just False)
-      $ whenJustM (lift $ Projects.userByEmail $ field "email") \_ -> hoistEither $ Left ("unverified email for an existing account" :: Text)
+      $ hoistEither (Left ("unverified email" :: Text))
     lift do
       (sessId, signin) <- authorizeUserAndPersist (Just envCfg.config.convertkitApiKey) False (field "given_name") (field "family_name") (field "picture") (field "email")
       (sessId,) <$> case signin of

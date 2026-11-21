@@ -354,6 +354,7 @@ cookieProtectedServer projectTools runNow =
     , slackConnectPost = Home.slackConnectPostH
     , dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml"
     , slackInstallGet = Slack.startInstallGetH
+    , discordInstallGet = Discord.startInstallGetH
     , slackEvidenceGet = Slack.startEvidenceGetH
     , slackEvidenceDisconnectPost = Slack.disconnectEvidencePostH
     , slackIdentityGet = Slack.linkIdentityGetH
