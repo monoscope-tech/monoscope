@@ -68,9 +68,8 @@ import Servant (Header, Headers, ServerError (errHeaders), addHeader, err403, er
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ActionResult, DB, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, Toast (..), ToastLevel (..), act, addErrorToast, addRespHeaders, addSuccessToast, done, redirectCS)
-import Text.HTML.SanitizeXSS (sanitizeBalance)
 import Text.Slugify (slugify)
-import Utils (LoadingSize (..), TabStrip (..), countNoun, faSprite_, htmxIndicator_, navTabStrip_, nonEmptyT, renderMarkdown, textOnlyHtml)
+import Utils (LoadingSize (..), TabStrip (..), countNoun, faSprite_, htmxIndicator_, navTabStrip_, nonEmptyT, renderMarkdown, sanitizeMarkdownHtml, textOnlyHtml)
 import Web.ApiTypes (readOnlyMessage)
 import Web.Auth (demoGuestSessionId)
 import Web.FormUrlEncoded (FromForm)
@@ -385,7 +384,7 @@ instance ToHtml WikiGet where
         syntax = textOnlyHtml baseSyntax
         pageBody body = div_ [class_ "prose max-w-none break-words text-textStrong [&_pre]:overflow-x-auto"] $ case runIdentity $ Markdown.commonmarkWith syntax "" body of
           Left _ -> toHtml body
-          Right (parsed :: Markdown.Html WikiDoc) -> toHtmlRaw $ sanitizeBalance $ T.replace "href=\"wiki:" ("href=\"" <> base <> "/") $ toStrict $ Markdown.renderHtml parsed
+          Right (parsed :: Markdown.Html WikiDoc) -> toHtmlRaw $ sanitizeMarkdownHtml $ T.replace "href=\"wiki:" ("href=\"" <> base <> "/") $ toStrict $ Markdown.renderHtml parsed
         revisionLines page = ("Title: " <> Memory.memoryText page.document.title) : "" : lines (Memory.memoryText page.document.body)
         revisionDiff old new = pre_ [class_ "overflow-x-auto rounded-lg bg-fillWeak py-2 text-xs leading-relaxed"] $ for_ (Diff.getGroupedDiff (revisionLines old) (revisionLines new)) \case
           Diff.First removed -> diffLines "bg-fillError-weak text-textError" "- " removed

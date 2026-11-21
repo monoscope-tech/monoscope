@@ -867,6 +867,8 @@ spec = do
               , ("<script>alert('wiki')</script>", ["&lt;script&gt;"])
               , ("<form id=\"wiki-injection\"><input name=\"token\" type=\"password\"></form>", ["&lt;form"])
               , ("| Name | Count |\n| --- | ---: |\n| Item | 2 |\n\n- [x] Done\n\nA claim[^1].\n\n[^1]: Evidence", ["<table>", "type=\"checkbox\"", "<sup", "Evidence"])
+              , -- wiki_agentPage_externalImage_doesNotLoadOnSight: an agent-written page could beacon every reader.
+                ("**Beacon** ![x](https://beacon.example/p.gif?d=1) ![y](//beacon.example/q.gif) ![ok](/rel.png) [docs](https://docs.example)", ["<strong>Beacon</strong>", "src=\"/rel.png\"", "href=\"https://docs.example\""])
               ]
           )
           \(n, (body, rendered)) -> do
@@ -878,6 +880,7 @@ spec = do
             status readBack `shouldBe` 200
             has readBack rendered
             T.toLower (html readBack) `shouldNotSatisfy` T.isInfixOf "href=\"javascript:alert"
+            html readBack `shouldNotSatisfy` T.isInfixOf "beacon.example"
             lacks readBack ["src=\"data:text/html", "<script>alert('wiki')</script>", "href=\"script\"", "id=\"wiki-injection\""]
             map (Memory.memoryText . (.document.body)) <$> runQueryEffect tr (Memory.pageHistory testPid formatted) `shouldReturn` [body]
         for_ ["runbooks%2Fretries", "runbooks/%252e%252e/private", "runbooks/%2e%2e/private"] \path -> status <$> visit (wiki $ "/" <> path) `shouldReturn` 404

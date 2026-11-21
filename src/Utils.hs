@@ -82,6 +82,7 @@ module Utils (
   drawerLoadAttrs_,
   drawerRowAttrs_,
   renderMarkdown,
+  sanitizeMarkdownHtml,
   renderMarkdownToc,
   renderMarkdownTocWithPrefix,
   textOnlyHtml,
@@ -1627,7 +1628,7 @@ renderMarkdownToc = renderMarkdownTocWithPrefix ""
 
 renderMarkdownTocWithPrefix :: Text -> Text -> (Html (), [(Text, Text)])
 renderMarkdownTocWithPrefix prefix md = case MMark.parse "" md of
-  Left _ -> (either (const $ toHtml md) (toHtmlRaw . filterTags (balanceTags . safeTagsCustom safeTagName fallbackUrls . clearTags) . toStrict . Markdown.renderHtml @()) $ runIdentity $ Markdown.commonmarkWith (textOnlyHtml $ gfmExtensions <> Markdown.defaultSyntaxSpec) "" md, [])
+  Left _ -> (either (const $ toHtml md) (toHtmlRaw . sanitizeMarkdownHtml . toStrict . Markdown.renderHtml @()) $ runIdentity $ Markdown.commonmarkWith (textOnlyHtml $ gfmExtensions <> Markdown.defaultSyntaxSpec) "" md, [])
   Right parsed ->
     let doc = MMark.useExtension safeUrls $ if T.null prefix then parsed else MMark.useExtension scoped parsed
      in ( toHtmlRaw $ MMark.render doc
@@ -1661,9 +1662,21 @@ renderMarkdownTocWithPrefix prefix md = case MMark.parse "" md of
       MExt.Link label uri _ | not (linkSchemeOk uri) -> foldMap render label
       MExt.Image label uri _ | isJust (URI.uriScheme uri) || isRight (URI.uriAuthority uri) -> toHtml (MExt.asPlainText label)
       inline -> render inline
-    linkSchemeOk uri = maybe True ((`elem` ["http", "https", "mailto"]) . T.toLower . URI.unRText) (URI.uriScheme uri)
-    -- 'safeUrls' for the GFM branch, on its HTML: commonmark escapes every attribute, so the URL reads as written.
-    fallbackUrls attr@(name, value) =
+
+
+linkSchemeOk :: URI.URI -> Bool
+linkSchemeOk uri = maybe True ((`elem` ["http", "https", "mailto"]) . T.toLower . URI.unRText) (URI.uriScheme uri)
+
+
+-- | 'safeUrls' on commonmark HTML (the GFM fallback and project wiki pages): xss-sanitize, plus
+-- images only from this origin and links only to http, https, mailto or relative targets.
+--
+-- >>> sanitizeMarkdownHtml "<img src=\"https://x.test/a.gif\"><img src=\"/a.png\"><a href=\"javascript:x\">j</a>"
+-- "<img><img src=\"/a.png\"><a>j</a>"
+sanitizeMarkdownHtml :: Text -> Text
+sanitizeMarkdownHtml = filterTags (balanceTags . safeTagsCustom safeTagName urls . clearTags)
+  where
+    urls attr@(name, value) =
       sanitizeAttribute attr >>= \kept -> case name of
         "src" -> kept <$ guard (any (\uri -> isNothing (URI.uriScheme uri) && isLeft (URI.uriAuthority uri)) (URI.mkURI @Maybe value))
         "href" -> kept <$ guard (any linkSchemeOk (URI.mkURI @Maybe value))
