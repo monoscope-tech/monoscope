@@ -232,7 +232,7 @@ server otlpTraces otlpLogs collectUsage runNow =
       sender realIp peer = realIp <|> show . fst <$> IP.fromSockAddr peer
    in Routes
         { public = Servant.serveDirectoryWebApp "./static/public"
-        , ping = pure "pong"
+        , ping = pure "pong ok"
         , -- The demo project and share links are public; crawlers walking their dashboards ran
           -- every widget query (SemrushBot: ~500 requests per 3h on deleted demo dashboards).
           robots = pure "User-agent: *\nDisallow: /p/\nDisallow: /share/\n"
