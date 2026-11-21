@@ -1311,7 +1311,7 @@ newtype StripeCheckoutForm = StripeCheckoutForm {plan :: Text}
 
 stripeCheckoutInitH :: Projects.ProjectId -> StripeCheckoutForm -> ATAuthCtx (ActionResult BillingRejection BillingRedirect)
 stripeCheckoutInitH pid form = act do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, project) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
       lapsedSubId = guard (Projects.isFreeTier project.paymentPlan && Projects.projectProvider project == Projects.StripeProvider) *> mfilter (not . T.null) project.subId

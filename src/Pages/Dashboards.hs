@@ -1259,7 +1259,7 @@ instance Outcome WidgetSaved where
 
 dashboardWidgetPutWithMonitorH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (ActionResult WidgetMonitorRejection WidgetSaved)
 dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM widget = act do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   (access, dashVM, dash) <- getDashWithAccess pid dashId Nothing
   uid <- UUID.genUUID <&> UUID.toText
   let normalizedWidgetIdM = normalizeWidgetId <$> widgetIdM
@@ -1347,7 +1347,7 @@ dashboardWidgetReorderPatchH
   -- ^ The ordered list of widget IDs
   -> ATAuthCtx (ActionResult EditRefusal LayoutSaved)
 dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = act do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   withEditableDash pid dashId \ed _ dash ->
     Right <$> do
       let oldWidgets = case (tabSlugM, dash.tabs) of
@@ -1975,7 +1975,7 @@ data WidgetMonitorSaved = WidgetMonitorSaved
 
 widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> WidgetAlertForm -> ATAuthCtx (ActionResult WidgetMonitorRejection WidgetMonitorSaved)
 widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = act do
-  (session, _) <- Projects.sessionAndProject pid
+  (session, _) <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   now <- Time.currentTime
   -- Reuse the widget's existing monitor id when there is one
   existingMonitor <- Monitors.queryMonitorByWidgetId pid dashboardIdM form.widgetId
@@ -2043,7 +2043,7 @@ data WidgetMonitorRemoved = WidgetMonitorRemoved
 
 widgetAlertDeleteH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Done WidgetMonitorRemoved))
 widgetAlertDeleteH pid widgetId dashboardIdM = do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   _ <- Monitors.deleteMonitorsByWidgetIds pid dashboardIdM [widgetId]
   addTriggerEvent "closeModal" ""
   done WidgetMonitorRemoved
@@ -2065,7 +2065,7 @@ instance Outcome WidgetMonitorStatus where
 
 widgetAlertToggleH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Done WidgetMonitorStatus))
 widgetAlertToggleH pid widgetId dashboardIdM = do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   monitor <- Monitors.queryMonitorByWidgetId pid dashboardIdM widgetId `whenNothingM` throwError err404{errBody = "Widget monitor not found"}
   void $ Monitors.monitorToggleActiveById pid monitor.id
   done . WidgetMonitorStatus pid widgetId dashboardIdM =<< Monitors.queryMonitorByWidgetId pid dashboardIdM widgetId
@@ -2529,7 +2529,7 @@ data DashboardForm = DashboardForm
 
 dashboardsPostH :: Projects.ProjectId -> DashboardForm -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardsPostH pid form = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, project) <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   appCtx <- ask @AuthContext
   now <- Time.currentTime
   did <- UUIDId <$> UUID.genUUID
@@ -2622,7 +2622,7 @@ data DashboardRenameForm = DashboardRenameForm
 -- It updates the title and optionally the git file path.
 dashboardRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardRenameForm -> ATAuthCtx (ActionResult EditRefusal DashboardRenamed)
 dashboardRenamePatchH pid dashId form = act do
-  (sess, _) <- Projects.sessionAndProject pid
+  (sess, _) <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   withEditableDash pid dashId \ed dashVM _ ->
     Right <$> do
       _ <- updateTitle ed form.title
@@ -2654,7 +2654,7 @@ instance Outcome DashboardRenamed where
 -- It creates a new dashboard with the same content but with "(Copy)" appended to the title.
 dashboardDuplicatePostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardDuplicatePostH pid dashId = do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   Dashboards.getDashboardByProjectId pid dashId >>= \case
     Nothing -> toastError "Dashboard not found or does not belong to this project" (DashboardPostError "Dashboard not found or does not belong to this project")
     Just dashVM -> do
@@ -2749,7 +2749,7 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
 -- When source_dashboard_id is provided and differs from target dashboard, this copies the widget to a different dashboard.
 dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (ActionResult EditRefusal WidgetCopied)
 dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = act do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   let sourceDashId = fromMaybe targetDashId sourceDashIdM
       isCrossDashboard = sourceDashId /= targetDashId
 
@@ -3204,7 +3204,7 @@ instance Outcome TabRenamed where
 -- | Handler for renaming a tab
 dashboardTabRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> TabRenameForm -> ATAuthCtx (ActionResult EditRefusal TabRenamed)
 dashboardTabRenamePatchH pid dashId tabSlug form = act do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   withEditableDash pid dashId \ed _ dash -> case dash.tabs >>= (`findTabBySlug` tabSlug) of
     Nothing -> pure $ Left $ TabGone tabSlug
     Just (idx, _) ->
@@ -3275,7 +3275,7 @@ instance ToHtml DashboardYaml where
 -- | Save dashboard schema from YAML (validates and saves)
 dashboardYamlPutH :: Projects.ProjectId -> Dashboards.DashboardId -> YamlForm -> ATAuthCtx (RespHeaders (Done YamlSave))
 dashboardYamlPutH pid dashId form = do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   (access, _, _) <- getDashWithAccess pid dashId Nothing
   done =<< case (access, GitSync.yamlToDashboard (encodeUtf8 form.yaml)) of
     (Left ReadOnly, _) -> pure YamlReadOnly
