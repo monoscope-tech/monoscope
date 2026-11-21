@@ -63,13 +63,14 @@ import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogBase
 import Models.Telemetry.Telemetry qualified as Telemetry
 import OpenTelemetry.Attributes qualified as OA
+import OpenTelemetry.Instrumentation.Kafka qualified as OKafka
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.IngestBudget qualified as IngestBudget
 import Relude
 import Relude.Extra.Foldable1 (minimum1)
 import System.Config
 import System.IO.Unsafe (unsafePerformIO)
-import System.Tracing (SpanStatus (..), addEvent, setStatus, withSpan)
+import System.Tracing (MessagingOp (Process), MessagingSystem (..), SpanKind (Consumer), SpanStatus (..), addEvent, batchSpanAttrs, messagingAttrs, setStatus, withSpanKind)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, runBackground)
 import UnliftIO (throwIO)
 import UnliftIO.Concurrent (threadDelay)
@@ -161,7 +162,7 @@ closeSharedKafkaProducer = modifyMVar sharedKafkaProducer $ \case
 -- on enqueue failure, so the caller refuses to advance the offset/ack.
 runSharedKafkaProducer :: (Error K.KafkaError :> es, IOE :> es) => AuthContext -> Eff (KE.KafkaProducer ': es) a -> Eff es a
 runSharedKafkaProducer appCtx = interpret \_ -> \case
-  KEP.ProduceMessage rec -> whenJustM (liftIO (getOrInitKafkaProducer appCtx.config >>= \p -> KP.produceMessage p rec)) throwError
+  KEP.ProduceMessage rec -> whenJustM (liftIO (getOrInitKafkaProducer appCtx.config >>= \p -> OKafka.produceMessage p rec)) throwError
   KEP.FlushProducer -> liftIO (getOrInitKafkaProducer appCtx.config >>= KP.flushProducer)
   KEP.AskProducerHandle -> liftIO (getOrInitKafkaProducer appCtx.config)
   -- The remaining kafka-effectful ops are spelled out rather than caught by a
@@ -195,15 +196,19 @@ runSharedProducer appCtx act =
     Right r -> first (toText . show) r -- enqueue surfaced KafkaError via the Error effect
 
 
--- | Shared batch-processing span for both ingest paths: wraps the fn invocation
--- in a withSpan with batch.started/completed/write_failed events and Ok/Error
--- status. Only the span name and attribute list differ between pubsub and kafka.
+-- | Shared batch-processing span for both ingest paths: a Consumer span over the fn invocation
+-- with batch.started/completed/write_failed events and Ok/Error status. The attribute list carries
+-- what differs between pubsub and kafka.
 runBatchSpan
   :: Text
+  -> MessagingSystem
+  -> Text
+  -> Int
+  -> HM.HashMap Text Text
   -> [(Text, OA.Attribute)]
   -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
   -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
-runBatchSpan spanName attrs run = withSpan spanName attrs \sp -> do
+runBatchSpan spanName system topic n headers attrs run = withSpanKind Consumer spanName (batchSpanAttrs n headers <> messagingAttrs system topic Process <> attrs) \sp -> do
   addEvent sp "batch.started" []
   res <- run
   res <$ case res of
@@ -222,12 +227,10 @@ runBatchSpan spanName attrs run = withSpan spanName attrs \sp -> do
 pubsubService :: Log.Logger -> AuthContext -> TracerProvider -> [Text] -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))) -> IO ()
 pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
   let envConfig = appCtx.config
-  env <- case envConfig.googleServiceAccountB64 of
-    "" -> Google.newEnv <&> (Google.envScopes L..~ pubSubScope)
-    sa -> do
-      let creds = either (error . toText) id $ Google.fromJSONCredentials $ either error id $ LB64.decodeBase64Untyped (LT.encodeUtf8 sa)
-      managerG <- Google.newManager Google.tlsManagerSettings
-      Google.newEnvWith creds (\_ _ -> pass) managerG <&> (Google.envScopes L..~ pubSubScope)
+  creds <- case envConfig.googleServiceAccountB64 of
+    "" -> Google.getApplicationDefault appCtx.httpManager
+    sa -> pure $ either (error . toText) id $ Google.fromJSONCredentials $ either error id $ LB64.decodeBase64Untyped (LT.encodeUtf8 sa)
+  env <- Google.newEnvWith creds (\_ _ -> pass) appCtx.httpManager <&> (Google.envScopes L..~ pubSubScope)
 
   let pullReq = PubSub.newPullRequest & field @"maxMessages" L.?~ fromIntegral envConfig.messagesPerPubsubPullBatch
 
@@ -254,11 +257,11 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
                 $ runBackground appLogger appCtx tp
                 $ runBatchSpan
                   "pubsub.process_batch"
-                  [ ("topic", OA.toAttribute topic)
-                  , ("message_count", OA.toAttribute (length validMsgs))
-                  , ("subscription", OA.toAttribute subscription)
-                  , ("ce-type", OA.toAttribute (HM.findWithDefault "" "ce-type" msgAttrs))
-                  ]
+                  GcpPubsub
+                  topic
+                  (length validMsgs)
+                  msgAttrs
+                  [("messaging.destination.subscription.name", OA.toAttribute subscription)]
                   (fn validMsgs msgAttrs)
             )
             >>= \batchRes ->
@@ -694,7 +697,11 @@ decoupledLoop appCtx role batchSize clientId dlqBase fn = do
               $ inject
               $ runBatchSpan
                 "kafka.process_batch"
-                [("topic", OA.toAttribute topic), ("message_count", OA.toAttribute (length payloads)), ("client_id", OA.toAttribute clientId)]
+                Kafka
+                topic
+                (length payloads)
+                attrs
+                [("messaging.client.id", OA.toAttribute clientId)]
                 (fn payloads attrs)
           acks <- routeBatchOutcome dlqBase "kafka-service" topic payloads attrs result
           atomically do

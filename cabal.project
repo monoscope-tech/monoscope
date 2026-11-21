@@ -103,6 +103,10 @@ source-repository-package
   subdir: propagators/jaeger
   subdir: propagators/xray
   subdir: instrumentation/wai
+  subdir: instrumentation/conduit
+  subdir: instrumentation/http-client
+  subdir: instrumentation/postgresql-simple
+  subdir: instrumentation/hw-kafka-client
   subdir: utils/exceptions
 
 source-repository-package

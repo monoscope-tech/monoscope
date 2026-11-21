@@ -1,5 +1,6 @@
 module Pages.Replay (SessionMeta (..), sessionMetadata, replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, ReplaySessionResp (..), RawJson (..), compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, replayObjectPrefix, migratedReplayKey, concatRawJsonArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), firstEventTimestampRaw, claimMergeLease, releaseMergeLease, ReplayManifest (..), ReplaySegment (..), replaySessionManifestGetH, replaySessionShardGetH, buildReplayManifest, fetchReplayShard, projectMinioConn) where
 
+import BackgroundJobs.Types qualified as Jobs
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
 import Control.Exception (throwIO, try)
@@ -38,13 +39,12 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Client (Manager)
 import Network.Minio (MinioErr (..), ServiceErr (..))
 import Network.Minio qualified as Minio
-import OddJobs.Job (createJob)
 import Pkg.Metrics qualified as Metrics
 import Pkg.Minio qualified as Storage
 import Pkg.Queue (chunksByBytes, publishJSONToKafka, runSharedProducer)
 import Relude
 import Relude.Extra.Tuple (traverseToFst)
-import System.Config (AuthContext (config, jobsPool, s3HttpManager), EnvConfig (..))
+import System.Config (AuthContext (config, httpManager, jobsPool), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import UnliftIO.Exception (finally, tryAny, withException)
@@ -326,7 +326,7 @@ processReplayEvents msgs _attrs = do
       (oversized, valid) = partition (\(_, b) -> BS.length b > maxReplayMessageBytes) msgs
       oversizePoison = [(ackId, body, "replay:oversize_message") | (ackId, body) <- oversized]
   replicateM_ (length oversized) $ Metrics.bumpErrorCounter "replay:oversize_message"
-  (acks, decodePoison) <- foldMapM (handleChunk ctx.s3HttpManager envCfg ctx.jobsPool) (chunksByBytes replayBatchByteBudget (BS.length . snd) valid)
+  (acks, decodePoison) <- foldMapM (handleChunk ctx.httpManager envCfg ctx.jobsPool) (chunksByBytes replayBatchByteBudget (BS.length . snd) valid)
   pure $ Right (acks, oversizePoison <> decodePoison)
   where
     -- Returns @(acks, poison)@ for one chunk so the caller can DLQ poison and
@@ -360,7 +360,7 @@ sessionLogCtx pid sid = HM.fromList [("session_id", UUID.toText sid), ("project_
 -- import its job sum type here.
 enqueueBgJob :: IOE :> es => Pool Connection -> Text -> [AE.Value] -> Eff es ()
 enqueueBgJob pool tag contents =
-  liftIO $ withResource pool \c -> void $ createJob c "background_jobs" (AE.object ["tag" AE..= tag, "contents" AE..= contents])
+  liftIO $ withResource pool \c -> Jobs.enqueueJob c "background_jobs" (AE.object ["tag" AE..= tag, "contents" AE..= contents])
 
 
 markMerged :: DB es => Projects.ProjectId -> UUID.UUID -> UTCTime -> Eff es ()
@@ -820,7 +820,7 @@ fetchReplaySession p sessionId = do
       summaryCtx = HM.fromList [("session", sessionStr), ("projectId", pid.toText)]
   meta <- sessionMetadata pid sessionId summaryCtx
   let emptyResp userMsg = ReplaySessionResp{events = RawJson "[]", partial = Nothing, errorMsg = Just userMsg, meta}
-  tryAny (getSessionEvents ctx.s3HttpManager conn pid bucket sessionId) >>= \case
+  tryAny (getSessionEvents ctx.httpManager conn pid bucket sessionId) >>= \case
     Right (Right (replayEvents, partial)) -> do
       Log.logInfo
         "Replay session served"
@@ -896,7 +896,7 @@ fetchReplayShard p sessionId mkey = do
   let (conn, bucket) = projectMinioConn ctx.config p
   case mkey of
     Just k | replayKeyScoped p.id.toText (UUID.toText sessionId) k -> do
-      liftIO (Storage.runMinio ctx.s3HttpManager conn $ fetchRawObject bucket k (".gz" `T.isSuffixOf` k)) >>= \case
+      liftIO (Storage.runMinio ctx.httpManager conn $ fetchRawObject bucket k (".gz" `T.isSuffixOf` k)) >>= \case
         Right raw -> pure $ RawJson raw
         -- NoSuchKey = a concurrent seal/merge already removed this source; tolerate
         -- as empty (the sealed shard carries its events). Any other error
@@ -993,7 +993,7 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge =
           let startIdx = 1 + foldl' max 0 (mapMaybe (fmap fst . parseShardKey) existingShards)
           nowForKey <- Time.currentTime
           let shardPrefix = replayObjectPrefix pid nowForKey sessionId
-          liftIO (try @MergeError $ mergeOneSession ctx.s3HttpManager s3Conn bucket shardPrefix startIdx fileKeys) >>= \case
+          liftIO (try @MergeError $ mergeOneSession ctx.httpManager s3Conn bucket shardPrefix startIdx fileKeys) >>= \case
             Left merr -> do
               let ctxWithErr = Log.withError merr logCtx
               case merr of
@@ -1175,7 +1175,7 @@ expireOldReplayData = do
       -- Separate `runMinio` per key so one transport error doesn't abort siblings;
       -- mirrors the `fetchIndividuals` pattern elsewhere in this module.
       perKey <- liftIO $ forM keyObjs $ \o ->
-        (o,) <$> Storage.runMinio ctx.s3HttpManager conn (Minio.removeObject bucket o)
+        (o,) <$> Storage.runMinio ctx.httpManager conn (Minio.removeObject bucket o)
       let fatal = [(o, e) | (o, Left e) <- perKey, not (isNoSuchKey e)]
       if null fatal
         then do

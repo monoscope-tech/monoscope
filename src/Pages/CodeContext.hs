@@ -56,7 +56,6 @@ import Network.HTTP.Types qualified as H
 import Network.HTTP.Types.Header qualified as Header
 import Network.Wai qualified as Wai
 import Numeric (showFFloat)
-import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx)
 import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), callout_, colorChip_, dialogTrigger_, disclosure_, emptyState_, filterInputAttr_, formField_, formSelectField_, installationSettingsLink_, localTimeFmt_, nativeDialog_, options_, panel_, settingsH2_)
 import Pkg.Components.Table qualified as Table
@@ -197,7 +196,7 @@ codeContextH pid fileM lineM svcM revM = do
   _ <- Projects.sessionAndProject pid
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   addRespHeaders =<< case (nonEmptyT fileM, lineM) of
-    (Just path, Just n) -> either (SnippetUnavailable pid) SnippetFound <$> W.runHTTPWreq (CodeContext.fetchSnippet authCtx.codeBlobCache authCtx.config pid svcM (nonEmptyT revM) path n)
+    (Just path, Just n) -> either (SnippetUnavailable pid) SnippetFound <$> W.runHTTPWreqVia authCtx.httpManager (CodeContext.fetchSnippet authCtx.codeBlobCache authCtx.config pid svcM (nonEmptyT revM) path n)
     _ -> pure NoFrameLine
 
 
@@ -914,7 +913,7 @@ repositoryAnalyzePostH pid rid = do
   requireReviewWrite pid
   _ <- GitSync.getRepository pid rid >>= maybe (throwError err404) pure
   ctx <- Effectful.Reader.Static.ask @AuthContext
-  liftIO $ withResource ctx.jobsPool \conn -> void $ createJob conn "background_jobs" $ Jobs.AnalyzeRepository pid rid
+  liftIO $ withResource ctx.jobsPool \conn -> Jobs.enqueueJob conn "background_jobs" $ Jobs.AnalyzeRepository pid rid
   addSuccessToast "Analysis queued" (Just "Existing settings and disabled capabilities are preserved.")
   repositoryGetH pid rid
 
@@ -930,7 +929,7 @@ repositoryResumePostH pid rid = do
       Right () -> do
         Hasql.interpExecute_ [HI.sql| UPDATE projects.git_sync SET export_paused = false, last_export_hash = NULL WHERE project_id = #{pid} AND id = #{sync.id} |]
         ctx <- Effectful.Reader.Static.ask @AuthContext
-        liftIO $ withResource ctx.jobsPool \conn -> void $ createJob conn "background_jobs" $ Jobs.GitSyncRepository pid sync.id
+        liftIO $ withResource ctx.jobsPool \conn -> Jobs.enqueueJob conn "background_jobs" $ Jobs.GitSyncRepository pid sync.id
   repositoryGetH pid rid
 
 
@@ -951,7 +950,7 @@ repositoryFolderPostH pid rid form = do
     Right () -> do
       RepositorySync.registerResource pid sync.id candidate.kind candidate.localId path
       ctx <- Effectful.Reader.Static.ask @AuthContext
-      liftIO $ withResource ctx.jobsPool \conn -> void $ createJob conn "background_jobs" $ Jobs.GitSyncRepository pid sync.id
+      liftIO $ withResource ctx.jobsPool \conn -> Jobs.enqueueJob conn "background_jobs" $ Jobs.GitSyncRepository pid sync.id
   repositoryGetH pid rid
 
 
@@ -981,7 +980,7 @@ repositoryConflictPostH pid rid resourceId form = do
           whenLeftM_ (RepositorySync.importDefinition resource observed definition) (addErrorToast "Could not apply Git version" . Just)
     else Hasql.interpExecute_ [HI.sql| UPDATE projects.repository_resources SET merged_definition = remote_definition, local_baseline = remote_definition, remote_definition = NULL, conflicted = false WHERE id = #{resource.id} AND project_id = #{pid} AND conflicted AND remote_definition IS NOT DISTINCT FROM #{resource.remoteDefinition}::jsonb |]
   ctx <- Effectful.Reader.Static.ask @AuthContext
-  liftIO $ withResource ctx.jobsPool \conn -> void $ createJob conn "background_jobs" $ Jobs.GitSyncRepository pid resource.syncId
+  liftIO $ withResource ctx.jobsPool \conn -> Jobs.enqueueJob conn "background_jobs" $ Jobs.GitSyncRepository pid resource.syncId
   repositoryGetH pid rid
 
 
@@ -1482,7 +1481,7 @@ repositoryConnectPostH pid cid form = do
       connected <- ExceptT $ maybeToRight "This account is no longer connected. Choose another account and try again." <$> GitSync.connectRepository pid account.id repository
       unless (any ((== connected.id) . (.id)) existing) $ lift do
         ctx <- Effectful.Reader.Static.ask @AuthContext
-        liftIO $ withResource ctx.jobsPool \jobsConn -> void $ createJob jobsConn "background_jobs" $ Jobs.AnalyzeRepository pid connected.id
+        liftIO $ withResource ctx.jobsPool \jobsConn -> Jobs.enqueueJob jobsConn "background_jobs" $ Jobs.AnalyzeRepository pid connected.id
   case result of
     Left err -> addRespHeaders page{content = page.content{selected, connectionError = guard (isRight page.content.repositories) $> err}}
     Right () -> do
@@ -1593,7 +1592,7 @@ repositoryTokenPostH pid form = do
     account <- ExceptT $ maybeToRight "This account changed while connecting. Reload and check its saved connection before trying again." <$> GitSync.saveTokenCredential encKey pid form.host origin accountName token observed
     existing <- lift $ GitSync.getRepositories pid
     connected <- ExceptT $ maybeToRight "This account is no longer available. Try connecting again." <$> GitSync.connectRepository pid account.id repository
-    unless (any ((== connected.id) . (.id)) existing) $ lift $ liftIO $ withResource ctx.jobsPool \jobsConn -> void $ createJob jobsConn "background_jobs" $ Jobs.AnalyzeRepository pid connected.id
+    unless (any ((== connected.id) . (.id)) existing) $ lift $ liftIO $ withResource ctx.jobsPool \jobsConn -> Jobs.enqueueJob jobsConn "background_jobs" $ Jobs.AnalyzeRepository pid connected.id
     lift $ liftIO $ Cache.delete ctx.repoListCache account.id
     pure connected
   case result of
@@ -1717,8 +1716,9 @@ saveCodeMapping pid form = do
     -- then spells out, not a path they would have to compare by eye.
     deriveFromRepo :: GitSync.GitHubCredential -> GitSync.RepoRef -> Text -> ATAuthCtx (Either MappingRejection (Text, Text))
     deriveFromRepo cred repoRef sample = do
-      cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
-      W.runHTTPWreq $ runExceptT do
+      ctx <- Effectful.Reader.Static.ask @AuthContext
+      let cfg = ctx.config
+      W.runHTTPWreqVia ctx.httpManager $ runExceptT do
         let unreadable :: Either Text b -> Either MappingRejection b
             unreadable = first (RepositoryUnreadable repoRef.repo)
         conn <- ExceptT $ unreadable <$> runExceptT (repoConn cfg cred)

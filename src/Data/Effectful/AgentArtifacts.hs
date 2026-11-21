@@ -123,7 +123,7 @@ runAgentArtifactsReal ctx = interpret_ \case
         action bucket connection
       pure $ case result of Right (Just value) -> value; _ -> Left StorageUnavailable
     storage :: Minio.ConnectInfo -> Minio.Minio a -> ExceptT ArtifactFailure IO a
-    storage connection action = ExceptT $ first (const StorageUnavailable) <$> Storage.runMinio ctx.s3HttpManager connection action
+    storage connection action = ExceptT $ first (const StorageUnavailable) <$> Storage.runMinio ctx.httpManager connection action
     load explanation asset = case ctx.config.impactReviewUsageDir of
       Nothing -> pure $ Left ArtifactUnavailable
       Just directory -> do

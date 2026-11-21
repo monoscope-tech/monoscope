@@ -188,7 +188,7 @@ saveGitSyncH pid existingM form = act do
     -- back to "main" rather than asking the host with a credential it does not have.
     branch <- case (T.null form.branch, Git.mkGitConn host form.apiBase form.accessToken) of
       (False, _) -> pure form.branch
-      (True, Right conn) -> W.runHTTPWreq $ Git.defaultBranchOf conn (Git.RepoRef form.owner form.repo "HEAD")
+      (True, Right conn) -> W.runHTTPWreqVia ctx.httpManager $ Git.defaultBranchOf conn (Git.RepoRef form.owner form.repo "HEAD")
       -- No usable token, so nothing to ask the host with; "main" is what the field would
       -- have defaulted to anyway.
       (True, Left _) -> pure "main"

@@ -1,6 +1,7 @@
 module System.Tracing (
   Tracing,
   runTracing,
+  monoscopeTracer,
   withSpan,
   withSpanKind,
   withSpan_,
@@ -17,20 +18,31 @@ module System.Tracing (
 
   -- * Common attribute builders
   batchSpanAttrs,
+  messagingAttrs,
+  MessagingSystem (..),
+  MessagingOp (..),
+
+  -- * Outbound HTTP
+  newTracedManager,
+  redactUrl,
 ) where
 
 import Data.Aeson qualified as AE
+import Data.Char (isAsciiLower)
 import Data.HashMap.Strict qualified as HM
+import Data.Text qualified as T
 import Effectful
 import Effectful.Concurrent (Concurrent, forkIO)
 import Effectful.Dispatch.Dynamic
 import Effectful.Ki qualified as Ki
 import Effectful.Log (Log)
 import Effectful.TH
+import Network.HTTP.Client qualified as HC
 import OpenTelemetry.Attributes (Attribute)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Context qualified as Context
 import OpenTelemetry.Context.ThreadLocal qualified as Context
+import OpenTelemetry.Instrumentation.HttpClient.Raw qualified as OHC
 import OpenTelemetry.Trace (
   Span,
   SpanKind (..),
@@ -62,7 +74,7 @@ makeEffect ''Tracing
 runTracing :: IOE :> es => TracerProvider -> Eff (Tracing ': es) a -> Eff es a
 runTracing tp = interpret $ \env -> \case
   WithSpanKind kind name attrs f -> do
-    let tracer = Trace.makeTracer tp "monoscope" Trace.tracerOptions
+    let tracer = monoscopeTracer tp
         attrMap = HM.fromList attrs
     -- Properly propagate context through the span lifecycle
     localSeqUnliftIO env $ \unlift -> liftIO $ do
@@ -80,8 +92,12 @@ runTracing tp = interpret $ \env -> \case
   SetStatus span status -> liftIO $ Trace.setStatus span status
 
 
+monoscopeTracer :: TracerProvider -> Trace.Tracer
+monoscopeTracer tp = Trace.makeTracer tp "monoscope" Trace.tracerOptions
+
+
 withSpan :: Tracing :> es => Text -> [(Text, Attribute)] -> (Span -> Eff es a) -> Eff es a
-withSpan = withSpanKind Server
+withSpan = withSpanKind Internal
 
 
 withSpan_ :: Tracing :> es => Text -> [(Text, Attribute)] -> Eff es a -> Eff es a
@@ -140,6 +156,67 @@ forkBackgroundFor capMicros scopeM label action =
 -- | Wall-clock cap for a single 'forkBackground' task (Slack/Twilio/WhatsApp).
 backgroundTaskTimeoutMicros :: Int
 backgroundTaskTimeoutMicros = 30_000_000 -- 30s
+
+
+-- | A pooled manager whose every request is an OTel Client span that sends @traceparent@. The
+-- tracer is captured when the manager is built, so build it after the global provider is set.
+-- URLs carry credentials (webhook tokens, signed ids), so the URL attributes the
+-- instrumentation recorded are overwritten, in both semconv spellings, with 'redactUrl'ed copies.
+newTracedManager :: HC.ManagerSettings -> IO HC.Manager
+newTracedManager settings = do
+  traced <- OHC.instrumentManagerSettings OHC.httpClientInstrumentationConfig settings
+  HC.newManager
+    traced
+      { HC.managerModifyRequest = \r -> do
+          r' <- HC.managerModifyRequest traced r
+          let host = decodeUtf8 (HC.host r')
+              target = redactUrl host $ decodeUtf8 (HC.path r' <> HC.queryString r')
+              full = (if HC.secure r' then "https://" else "http://") <> host <> ":" <> show (HC.port r') <> target
+              attrs :: [(Text, Text)]
+              attrs = [("url.full", full), ("http.url", full), ("http.target", target), ("url.path", T.takeWhile (/= '?') target), ("url.query", T.dropWhile (/= '?') target)]
+          whenJustM (Context.lookupSpan <$> Context.getContext) \sp -> traverse_ (uncurry (Trace.addAttribute sp)) attrs
+          pure r'
+      }
+
+
+-- | A request target fit for a span. Only the first-party APIs we call keep their path, and even
+-- there a 16+ character segment that is not a lowercase slug and every query value are masked.
+-- Any other host is a customer's (webhooks, probes, scrapes, self-hosted git), where a secret of
+-- any length can sit in the path, so it keeps nothing.
+--
+-- >>> redactUrl "api.stripe.com" "/v1/invoices?limit=12&subscription=sub_1Abc"
+-- "/v1/invoices?limit={redacted}&subscription={redacted}"
+-- >>> redactUrl "discord.com" "/api/v10/webhooks/1234567890123456789/aW50ZXJhY3Rpb246MTIzNDU2Nzg5"
+-- "/api/v10/webhooks/{redacted}/{redacted}"
+-- >>> redactUrl "api.github.com" "/repos/monoscope-tech/monoscope-web-components/issues/12/comments"
+-- "/repos/monoscope-tech/monoscope-web-components/issues/12/comments"
+-- >>> map (redactUrl "hooks.slack.com") ["/services/T0AB12CD3/B0EF45GH6/xoxbAbCdEfGh", "/hook/s3cret?x=1"]
+-- ["/{redacted}","/{redacted}"]
+redactUrl :: Text -> Text -> Text
+redactUrl host target
+  | host `notElem` firstParty = "/{redacted}"
+  | otherwise = T.intercalate "/" (map segment $ T.splitOn "/" path) <> bool ("?" <> T.intercalate "&" (map value $ T.splitOn "&" $ T.drop 1 query)) "" (T.null query)
+  where
+    firstParty = ["api.stripe.com", "api.github.com", "api.lemonsqueezy.com", "slack.com", "discord.com", "api.openai.com", "api.twilio.com", "api.convertkit.com", "api.bitbucket.org", "gitlab.com", "pubsub.googleapis.com", "oauth2.googleapis.com"] :: [Text]
+    (path, query) = T.breakOn "?" target
+    segment s = if T.length s >= 16 && not (T.all (\c -> isAsciiLower c || c == '-') s) then "{redacted}" else s
+    value kv = fst (T.breakOn "=" kv) <> "={redacted}"
+
+
+-- | OTel messaging semconv for a span that sends to or processes from one queue, so the service
+-- graph draws the queue as a peer.
+messagingAttrs :: MessagingSystem -> Text -> MessagingOp -> [(Text, Attribute)]
+messagingAttrs system destination op =
+  [ ("messaging.system", case system of Kafka -> "kafka"; GcpPubsub -> "gcp_pubsub"; OddJobs -> "odd_jobs")
+  , ("messaging.destination.name", OA.toAttribute destination)
+  , ("messaging.operation.type", case op of Send -> "send"; Process -> "process")
+  ]
+
+
+data MessagingSystem = Kafka | GcpPubsub | OddJobs
+
+
+data MessagingOp = Send | Process
 
 
 -- | Standard attributes for batch-processing root spans (queue consumers,

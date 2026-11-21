@@ -2013,11 +2013,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
             objectKey = remotePrefix <> "/" <> relocatedHash <> ".qcow2"
             connection = minioFor config
             overwrite key bytes = do
-              uploaded <- Storage.runMinio tr.trATCtx.s3HttpManager connection $ Minio.putObject config.s3Bucket key (CC.sourceLazy bytes) (Just $ LBS.length bytes) Minio.defaultPutObjectOptions
+              uploaded <- Storage.runMinio tr.trATCtx.httpManager connection $ Minio.putObject config.s3Bucket key (CC.sourceLazy bytes) (Just $ LBS.length bytes) Minio.defaultPutObjectOptions
               uploaded `shouldSatisfy` isRight
             replace = withKey
             remoteConfiguration = AE.object ["endpoint" AE..= config.s3Endpoint, "bucket" AE..= config.s3Bucket, "region" AE..= config.s3Region, "accessKey" AE..= config.s3AccessKey, "secretKey" AE..= config.s3SecretKey, "maxBytes" AE..= (BS.length relocatedBytes * 3 + 1024)]
-            removeObjects = readIORef remoteObjects >>= \keys -> void $ Storage.runMinio tr.trATCtx.s3HttpManager connection $ traverse_ (Minio.removeObject config.s3Bucket) keys
+            removeObjects = readIORef remoteObjects >>= \keys -> void $ Storage.runMinio tr.trATCtx.httpManager connection $ traverse_ (Minio.removeObject config.s3Bucket) keys
         writeIORef remoteObjects [objectKey, remotePrefix <> "/manifest.json", remotePrefix <> "/" <> relocatedHash <> ".json"]
         writeFileLBS remote $ AE.encode remoteConfiguration
         Posix.setFileMode remote 0o600
@@ -2167,7 +2167,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   report <- either fail pure $ AE.eitherDecodeStrict @Workspace.MaintenanceReport $ encodeUtf8 maintenanceOutput
                   maintenanceStatus `shouldBe` if Workspace.maintenanceBudgetMet report then ExitSuccess else ExitFailure 1
                   pure $ AE.toJSON report
-            void $ Storage.runMinio tr.trATCtx.s3HttpManager connection $ traverse_ (Minio.removeObject config.s3Bucket) [otherPrefix <> "/" <> otherHash <> ".qcow2", otherPrefix <> "/" <> otherHash <> ".json", otherPrefix <> "/manifest.json"]
+            void $ Storage.runMinio tr.trATCtx.httpManager connection $ traverse_ (Minio.removeObject config.s3Bucket) [otherPrefix <> "/" <> otherHash <> ".qcow2", otherPrefix <> "/" <> otherHash <> ".json", otherPrefix <> "/manifest.json"]
             pinned <- runEff $ Workspace.runWorkspaceReal $ Workspace.withWorkspace options request $ \lease -> liftIO do
               isJust lease `shouldBe` True
               report <- maintain 0
@@ -4687,7 +4687,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       let config = minioFor readCtx.config
           keyFor name digest = T.intercalate "/" ["agent-explanations", "v1", manifest.projectId.toText, manifest.runId.toText, manifest.candidateId.toText, manifest.source, digest, name]
           cleanup = for_ (Map.toList manifest.files) \(name, digest) ->
-            void $ Storage.runMinio readCtx.s3HttpManager config $ Minio.removeObject readCtx.config.s3Bucket (keyFor name digest)
+            void $ Storage.runMinio readCtx.httpManager config $ Minio.removeObject readCtx.config.s3Bucket (keyFor name digest)
       flip finally cleanup do
         stored <- runEff $ Artifacts.runAgentArtifactsReal storeCtx $ Artifacts.retainFixMedia explained
         isRight stored `shouldBe` True
@@ -4697,7 +4697,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         videoDigest <- maybe (fail "Video digest missing") pure $ Map.lookup "explanation.mp4" manifest.files
         let videoKey = keyFor "explanation.mp4" videoDigest
         unsigned <- HC.parseRequest $ toString $ readCtx.config.s3Endpoint <> "/" <> readCtx.config.s3Bucket <> "/" <> videoKey
-        privateResponse <- HC.httpLbs unsigned{HC.checkResponse = \_ _ -> pass} readCtx.s3HttpManager
+        privateResponse <- HC.httpLbs unsigned{HC.checkResponse = \_ _ -> pass} readCtx.httpManager
         H.statusCode (HC.responseStatus privateResponse) `shouldBe` 403
         let withMedia :: Text -> ATBaseCtx a -> ATBaseCtx a
             withMedia mode = interpose @Artifacts.AgentArtifacts \_ -> \case
@@ -4788,7 +4788,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           H.statusCode denied.simpleStatus `shouldBe` 404
         permission ProjectMembers.PAdmin
         let corrupted = LBS.map (const 0) $ bytesFor Artifacts.Video
-        overwritten <- Storage.runMinio readCtx.s3HttpManager config $ Minio.putObject readCtx.config.s3Bucket videoKey (CC.sourceLazy corrupted) (Just $ LBS.length corrupted) Minio.defaultPutObjectOptions
+        overwritten <- Storage.runMinio readCtx.httpManager config $ Minio.putObject readCtx.config.s3Bucket videoKey (CC.sourceLazy corrupted) (Just $ LBS.length corrupted) Minio.defaultPutObjectOptions
         isRight overwritten `shouldBe` True
         damaged <- fetch "normal" H.methodGet (path <> "/media/video") [authorization]
         H.statusCode damaged.simpleStatus `shouldBe` 503

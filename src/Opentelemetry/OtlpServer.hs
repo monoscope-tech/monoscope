@@ -115,7 +115,7 @@ import Servant (NoContent (..), err400, err404)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Log
-import System.Tracing (Tracing, batchSpanAttrs, withSpan_)
+import System.Tracing (SpanKind (Server), Tracing, batchSpanAttrs, withSpanKind, withSpan_)
 import System.Types (ATBackgroundCtx, ATBaseCtx, DB, runBackground)
 import UnliftIO.Async (forConcurrently_)
 import UnliftIO.Exception (throwIO, tryAny)
@@ -1755,7 +1755,7 @@ mkOtlpRpcHandler appLogger appCtx tp label reject process = mkRpcHandler $ \call
 -- client will resend rather than seeing an INTERNAL status.
 grpcRunBackground :: Logger -> AuthContext -> TracerProvider -> Text -> ATBackgroundCtx () -> IO ()
 grpcRunBackground appLogger appCtx tp label task =
-  tryAny (runBackground appLogger appCtx tp $ withSpan_ ("otlp.grpc." <> label) [("otlp.signal", OA.toAttribute label)] task) >>= \case
+  tryAny (runBackground appLogger appCtx tp $ withSpanKind Server ("otlp.grpc." <> label) [("otlp.signal", OA.toAttribute label), ("rpc.system", "grpc")] (const task)) >>= \case
     Right _ -> pass
     Left e ->
       let kind = if isJust (fromException @Hasql.HasqlException e) then "hasql" else "other" :: Text

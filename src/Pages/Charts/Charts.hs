@@ -42,7 +42,7 @@ import Models.Ids qualified as Projects
 import OpenTelemetry.Attributes qualified as OA
 import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
-import Pkg.DeriveUtils (DB)
+import Pkg.DeriveUtils (DB, pgSpan)
 import Pkg.Metrics qualified as Metrics
 import Pkg.Parser (BinDensity, QueryComponents (finalColumns, finalSummarizeQuery, whereClause), RangeEnd (..), ResultShape (..), SqlQueryCfg (..), TemplateLang (..), applyScopedQuery, buildDateRange, buildEnvFilter, buildServiceFilter, defSqlQueryCfg, fillQueryTemplate, listToColNames, mkScopedQuery, pSource, queryASTToComponents, resultShape, variablePresets, variablePresetsKQL)
 import Pkg.Parser.Expr (Subject (..))
@@ -578,7 +578,7 @@ fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCt
     pool = metricsPool authCtx dbSource
     baseMetricsData = emptyMetricsFor now fromD toD
     runQ :: FromRow r => IO [r]
-    runQ = withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
+    runQ = withResource pool \conn -> let q = Query (encodeUtf8 sqlQuery) in pgSpan conn q (query_ conn q)
     attempt = retryOnPoolExhaustion $ try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
       DTFloat -> do
         chartData <- runQ :: IO [Only (Maybe ChartNumber)]
@@ -707,7 +707,7 @@ instance Exception StreamDesynced where
 -- The caller owns the connection exclusively for the duration of the stream.
 -- On abandonment, cancel the server query and let withResource discard the connection.
 streamQuery_ :: FromRow row => Connection -> Query -> (row -> IO ()) -> IO ()
-streamQuery_ conn (Query sql) emit = run `E.onException` cancel
+streamQuery_ conn q@(Query sql) emit = pgSpan conn q $ run `E.onException` cancel
   where
     cancel = PGI.withConnection conn \handle -> do
       token <- PQ.getCancel handle

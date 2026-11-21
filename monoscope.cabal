@@ -651,7 +651,11 @@ library
     , hs-opentelemetry-exporter-otlp
     , hs-opentelemetry-instrumentation-auto
     , hs-opentelemetry-instrumentation-hasql
+    , hs-opentelemetry-instrumentation-http-client
+    , hs-opentelemetry-instrumentation-hw-kafka-client
+    , hs-opentelemetry-instrumentation-postgresql-simple
     , hs-opentelemetry-instrumentation-wai
+    , hs-opentelemetry-propagator-w3c
     , hs-opentelemetry-sdk
     , hspec
     , http-api-data
@@ -721,6 +725,7 @@ library
     , scientific
     , scotty
     , servant
+    , servant-client
     , servant-htmx
     , servant-lucid
     , servant-openapi3
@@ -880,6 +885,7 @@ test-suite integration-tests
       SpecHook
       System.LoggingSpec
       System.MigrationRunnerSpec
+      System.TracingSpec
       Web.ApiV1Spec
       Web.AuthSpec
   hs-source-dirs:
@@ -1176,6 +1182,7 @@ test-suite test-dev
       SpecHook
       System.LoggingSpec
       System.MigrationRunnerSpec
+      System.TracingSpec
       Web.ApiV1Spec
       Web.AuthSpec
       Proto.Opentelemetry.Proto.Common.V1.Common
@@ -1317,7 +1324,11 @@ test-suite test-dev
     , hs-opentelemetry-exporter-otlp
     , hs-opentelemetry-instrumentation-auto
     , hs-opentelemetry-instrumentation-hasql
+    , hs-opentelemetry-instrumentation-http-client
+    , hs-opentelemetry-instrumentation-hw-kafka-client
+    , hs-opentelemetry-instrumentation-postgresql-simple
     , hs-opentelemetry-instrumentation-wai
+    , hs-opentelemetry-propagator-w3c
     , hs-opentelemetry-sdk
     , hspec
     , http-api-data
@@ -1387,6 +1398,7 @@ test-suite test-dev
     , scientific
     , scotty
     , servant
+    , servant-client
     , servant-htmx
     , servant-lucid
     , servant-openapi3
