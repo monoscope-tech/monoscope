@@ -264,7 +264,7 @@ markStepCompleted pid = void . Projects.completeOnboardingStep pid
 
 phoneEmailPostH :: Projects.ProjectId -> NotifChannelForm -> ATAuthCtx (RespHeaders OnboardingPhoneEmailsPost)
 phoneEmailPostH pid form = do
-  void $ Projects.sessionAndProject pid
+  void $ ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PEdit pid
   appCtx <- ask @AuthContext
   memberEmails <- map (CI.original . (.email)) <$> Projects.usersByProjectId pid
   markStepCompleted pid $ show NotifChannel

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { Page, expect } from "@playwright/test";
 
 export const REAL_PROVIDERS = process.env.E2E_REAL_PROVIDERS === "true";
@@ -26,6 +27,18 @@ export function sql(query: string) {
     '-p', process.env.E2E_PGPORT ?? process.env.DB_PORT ?? '5432', '-U', 'postgres',
     '-d', process.env.E2E_DB ?? 'monoscope_e2e', '-v', 'ON_ERROR_STOP=1', '-c', query],
   { env: { ...process.env, PGPASSWORD: process.env.E2E_PGPASSWORD ?? 'postgres' }, stdio: 'pipe' });
+}
+
+/**
+ * Signs the page in as a fresh admin of the demo project. The anonymous demo guest edits the
+ * demo but may not manage teams, members or notification targets.
+ */
+export async function asDemoAdmin(page: Page, baseURL: string): Promise<void> {
+  const [uid, sid] = [randomUUID(), randomUUID()];
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');
+       INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
+       INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${DEMO_PROJECT}', '${uid}', 'admin');`);
+  await page.context().addCookies([{ name: "monoscope_session", value: sid, url: baseURL }]);
 }
 
 export type Dash = { id: string; title: string };

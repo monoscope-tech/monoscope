@@ -20,6 +20,7 @@ import Models.Apis.Issues qualified as Issues
 import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper qualified as BodyWrapper
 import Pages.Home qualified as Home
+import Pages.Onboarding qualified as Onboarding
 import Pages.Projects qualified as ProjectsP
 import Pages.Settings qualified as Settings
 import Pkg.AdConversions qualified as AdConversions
@@ -133,12 +134,12 @@ spec = around withTestResources do
 
   -- demoGuestSeededAdmin: migration 0001 seeds the guest identity as the demo project's admin, so
   -- every anonymous visitor (and its public session id as a bearer) passed PEdit/PAdmin gates.
-  it "demoGuestSeededAdmin_cappedAtEdit: the anonymous demo guest edits the demo sandbox but cannot mint keys, invite or change plan" \tr -> do
+  it "demoGuestSeededAdmin_cappedAtEdit: the anonymous demo guest edits the demo sandbox but cannot mint keys, invite, change plan or set notification targets" \tr -> do
     Right guest <- runTestEffect tr.trPool tr.trATCtx.hasqlPool tr.trLogger tr.trTracerProvider $ Auth.sessionByID Nothing "requestID" False "light" I18n.En Nothing Nothing (Just "/p/00000000-0000-0000-0000-000000000000/") Auth.ChallengeRedirect
     let demoPid = Projects.demoProjectId
         asGuest = tr{trSessAndHeader = guest}
     runQueryEffect tr (PM.getSessionPermission demoPid (getResponse guest).user.id) `shouldReturn` Just PM.PEdit
-    traverse (httpStatus asGuest) [void $ Settings.apiPostH demoPid (Settings.GenerateAPIKeyForm "guest" Nothing), void $ ProjectsP.manageMembersPostH demoPid Nothing (ProjectsP.ManageMembersForm ["x@example.test"] [PM.PAdmin]), void $ ProjectsP.pricingUpdateH demoPid (ProjectsP.PricingUpdateForm Nothing Nothing Nothing)] `shouldReturn` [403, 403, 403]
+    traverse (httpStatus asGuest) [void $ Settings.apiPostH demoPid (Settings.GenerateAPIKeyForm "guest" Nothing), void $ ProjectsP.manageMembersPostH demoPid Nothing (ProjectsP.ManageMembersForm ["x@example.test"] [PM.PAdmin]), void $ ProjectsP.pricingUpdateH demoPid (ProjectsP.PricingUpdateForm Nothing Nothing Nothing), void $ Onboarding.phoneEmailPostH demoPid (Onboarding.NotifChannelForm "+15550100" ["x@example.test"])] `shouldReturn` [403, 403, 403, 403]
     httpStatus asGuest (void $ Home.homeGetH demoPid) `shouldReturn` 200
     -- Chat stays open to the guest: its turn is admitted and runs, read-only.
     call asGuest (AIThreads.startThreadPostHWithTools Nothing demoPid $ fromRightShow $ urlDecodeAsForm "query=What+failed%3F&mode=chat") >>= (`shouldSatisfy` isRight)

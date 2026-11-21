@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { DEMO_PROJECT, assertStripeCheckout } from "./helpers";
+import { DEMO_PROJECT, asDemoAdmin, assertStripeCheckout } from "./helpers";
 
 const ONBOARDING_URL = `/p/${DEMO_PROJECT}/onboarding`;
 
@@ -35,7 +35,8 @@ test.describe("Onboarding flow", () => {
     await expect(article.getByRole("heading", { level: 1 })).toContainText(/Fastify/i);
   });
 
-  test("moves from profile setup to an instrumentable project", async ({ page }) => {
+  test("moves from profile setup to an instrumentable project", async ({ page, baseURL }) => {
+    await asDemoAdmin(page, baseURL!);
     await page.goto(ONBOARDING_URL);
     await expect(page.getByText("Step 1 of 5")).toBeVisible();
     await page.locator('input[name="firstName"]').fill("E2E");

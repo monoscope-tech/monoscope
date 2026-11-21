@@ -185,6 +185,12 @@ test('one repository list owns service links and independent capabilities in bot
       await expect(panel.locator('input[name="repo"]')).toHaveValue(`team-${index === 0 ? 'a' : 'b'}/checkout`);
       await panel.locator('input[name="service"]').fill('checkout');
       await panel.getByRole('button', { name: 'Link service', exact: true }).press('Enter');
+      // The fixture installations are unreachable, and a mapping needs a credential that reads the repo.
+      await expect(page.getByText('Could not work out the mapping').first()).toBeVisible();
+      await expect(panel.getByRole('button', { name: /Unlink/ })).toHaveCount(0);
+      sql(`INSERT INTO projects.code_mappings (project_id, credential_id, owner, repo, ref, service, path_prefix, source_root)
+           VALUES ('${pid}', '${accounts[index]}', 'team-${index === 0 ? 'a' : 'b'}', 'checkout', 'main', 'checkout', '', '')`);
+      await page.reload();
       await expect(panel.getByRole('button', { name: /Unlink/ })).toHaveCount(1);
       expect(sql(`SELECT credential_id FROM projects.code_mappings WHERE project_id = '${pid}' AND owner = 'team-${index === 0 ? 'a' : 'b'}'`).toString().trim()).toBe(accounts[index]);
     }
