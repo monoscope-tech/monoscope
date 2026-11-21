@@ -11,5 +11,5 @@ export async function* jsonLines(stream, limitBytes = 16 * 1024 * 1024) {
     chunks.push(chunk); size += chunk.length;
     if (size > limitBytes) throw new Error('Protocol record exceeds its size limit');
   }
-  if (size) yield Buffer.concat(chunks).toString('utf8');
+  if (size) yield Buffer.concat(chunks).toString('utf8').replace(/\r$/, '');
 }
