@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { DEMO_PROJECT, sql } from "./helpers";
+import { DEMO_PROJECT, asDemoAdmin, sql } from "./helpers";
 
 // Tab switching used to run through a global `navigatable()` that toggled `hidden`
 // from JS. It is now DOM state — a checked radio — read by CSS, so an htmx morph
@@ -32,7 +32,8 @@ test("api key tabs swap between active and archived", async ({ page }) => {
   await expect(revoked).toBeHidden();
 });
 
-test("an API key can be created, copied, revoked, and reactivated", async ({ page, context }) => {
+test("an API key can be created, copied, revoked, and reactivated", async ({ page, context, baseURL }) => {
+  await asDemoAdmin(page, baseURL!);
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   const title = `E2E collector ${Date.now()}`;
   await page.goto(`/p/${DEMO_PROJECT}/apis`);
