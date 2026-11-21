@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { createServer as createNetServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -205,23 +207,59 @@ test('sandbox bridge loads its real SDK imports and answers without creating a V
 });
 
 
-test('resolving a guest evicts the superseded guest images it cannot run (2026-11-21: 8 kept, 105 GB)', async () => {
+test('resolving a guest evicts superseded untagged images only when no VM is live and survives concurrent resolves (2026-11-21: 8 kept, 105 GB)', async () => {
   const root = await mkdtemp(join(tmpdir(), 'impact-image-store-'));
+  const socketPath = `/tmp/impact-sess-${randomUUID().slice(0, 8)}.sock`;
+  const env = { ...process.env, XDG_CACHE_HOME: join(root, 'cache') };
+  const objectsDir = join(root, 'cache', 'gondolin', 'images', 'objects');
+  let liveServer;
   try {
-    const resolve = async (buildId) => {
+    const makeGuest = async (buildId) => {
       const guest = join(root, buildId);
-      await mkdir(guest);
+      await mkdir(guest, { recursive: true });
       await Promise.all(['vmlinuz', 'initramfs', 'rootfs.ext4'].map((name) => writeFile(join(guest, name), name)));
       await writeFile(join(guest, 'manifest.json'), JSON.stringify({ version: 1, buildId, config: { arch: 'x86_64' }, assets: { kernel: 'vmlinuz', initramfs: 'initramfs', rootfs: 'rootfs.ext4' } }));
-      const bridge = exec(process.execPath, [fileURLToPath(new URL('./sandbox.mjs', import.meta.url))], { timeout: 10000, env: { ...process.env, XDG_CACHE_HOME: join(root, 'cache') } });
-      bridge.child.stdin.end(JSON.stringify({ tag: 'Resolve', contents: guest }) + '\n');
-      assert.equal(JSON.parse((await bridge).stdout).Right.buildId, buildId);
-      return readdir(join(root, 'cache', 'gondolin', 'images', 'objects'));
+      return guest;
     };
-    const [old, current] = ['bf102ad2-19de-5d56-802a-53ac05d11108', '5df490c7-ccb8-509e-aafe-2601b862b599'];
-    assert.deepEqual(await resolve(old), [old]);
-    assert.deepEqual(await resolve(current), [current]);
+    const resolveGuest = async (selector) => {
+      const bridge = exec(process.execPath, [fileURLToPath(new URL('./sandbox.mjs', import.meta.url))], { timeout: 10000, env });
+      bridge.child.stdin.end(JSON.stringify({ tag: 'Resolve', contents: selector }) + '\n');
+      return JSON.parse((await bridge).stdout).Right;
+    };
+    const [tagged, old, current] = ['11111111-2222-4333-8444-555555555555', 'bf102ad2-19de-5d56-802a-53ac05d11108', '5df490c7-ccb8-509e-aafe-2601b862b599'];
+    const [taggedDir, oldDir, currentDir] = await Promise.all([tagged, old, current].map(makeGuest));
+    await exec(process.execPath, ['--input-type=module', '-e', 'import { importImageFromDirectory, tagImage } from "@earendil-works/gondolin"; const img = importImageFromDirectory(process.argv[1]); tagImage(img.buildId, "pinned:keep", "x86_64");', taggedDir], { env });
+    const inflightTmp = `.tmp-${current}-inflight`;
+    await mkdir(join(objectsDir, inflightTmp), { recursive: true });
+
+    assert.equal((await resolveGuest(oldDir)).buildId, old);
+    assert.deepEqual((await readdir(objectsDir)).sort(), [inflightTmp, tagged, old].sort());
+
+    // Resolving an already-imported buildId or in-store path does not evict other untagged builds.
+    assert.equal((await resolveGuest(tagged)).buildId, tagged);
+    assert.equal((await resolveGuest(join(objectsDir, tagged))).buildId, tagged);
+    assert.deepEqual((await readdir(objectsDir)).sort(), [inflightTmp, tagged, old].sort());
+
+    // A live Gondolin VM session blocks eviction so in-flight checkpoints/rebases keep their backing rootfs.
+    liveServer = createNetServer();
+    await new Promise((res) => liveServer.listen(socketPath, res));
+    const sessionsDir = join(root, 'cache', 'gondolin', 'sessions');
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(join(sessionsDir, 'live.json'), JSON.stringify({ id: 'live', pid: process.pid, socketPath, createdAt: new Date().toISOString() }));
+    assert.equal((await resolveGuest(currentDir)).buildId, current);
+    assert.deepEqual((await readdir(objectsDir)).sort(), [inflightTmp, tagged, current, old].sort());
+
+    // Once the live VM closes, concurrent Resolve calls both succeed and evict `old` while preserving tagged & .tmp entries.
+    await new Promise((res) => liveServer.close(res));
+    liveServer = null;
+    await rm(join(sessionsDir, 'live.json'), { force: true });
+    const [r1, r2] = await Promise.all([resolveGuest(currentDir), resolveGuest(currentDir)]);
+    assert.equal(r1.buildId, current);
+    assert.equal(r2.buildId, current);
+    assert.deepEqual((await readdir(objectsDir)).sort(), [inflightTmp, tagged, current].sort());
   } finally {
+    if (liveServer) await new Promise((res) => liveServer.close(res));
+    await rm(socketPath, { force: true });
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -394,9 +394,9 @@ run_body() { # <check>
       done
       weeder --config weeder.toml --hie-directory dist-newstyle
       ;;
-    release-tests) node --test scripts/ci/release-test.mjs ;;
+    release-tests) node --test scripts/ci/release-test.mjs scripts/disk-guard/disk-guard.test.mjs ;;
     hlint)   hlint -j src/ shared/src cli ;;
-    repo-lint) actionlint -shellcheck= -pyflakes= && make -s hpack-check ;;
+    repo-lint) actionlint -shellcheck= -pyflakes= && make -s hpack-check && bash -n scripts/disk-guard/*.sh && { ! command -v shellcheck >/dev/null || shellcheck scripts/disk-guard/*.sh; } ;;
     ui-tests) prepare_web_deps; (cd web-components && npm test) ;;
     # Drives the real server in a real browser. scripts/e2e.sh starts that server itself on
     # 8081 against a throwaway database, so this only has to supply the binary and chromium.

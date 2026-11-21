@@ -4,8 +4,8 @@
 import { jsonLines } from './jsonl.mjs';
 import { open } from 'node:fs/promises';
 import { constants, readdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { DEFAULT_GUEST_TMPFS, RealFSProvider, ReadonlyProvider, VM, VmCheckpoint, createHttpHooks, getImageStoreDirectory, importImageFromDirectory, listImageRefs, removeImage, resolveImageSelector } from '@earendil-works/gondolin';
+import { dirname, resolve } from 'node:path';
+import { DEFAULT_GUEST_TMPFS, RealFSProvider, ReadonlyProvider, VM, VmCheckpoint, createHttpHooks, getImageStoreDirectory, importImageFromDirectory, listImageRefs, listSessions, removeImage, resolveImageSelector } from '@earendil-works/gondolin';
 // Guests run pull request code, so they reach only package registries and GitHub, only to read: GET
 // and HEAD with a fixed User-Agent, plus git's upload-pack POST so git dependencies fetch. GitHub is an
 // accepted risk (2026-11-19): a repository's traffic insights list the paths its visitors fetched, so
@@ -33,14 +33,16 @@ try {
     try {
       switch (tag) {
         case 'Resolve': {
-          const selected = resolveImageSelector(contents);
+          const selected = resolveImageSelector(contents), objects = resolve(getImageStoreDirectory(), 'objects');
           let image = selected;
-          if (selected.source === 'path') {
+          if (selected.source === 'path' && dirname(selected.assetDir) !== objects) {
             image = importImageFromDirectory(selected.assetDir);
-            // Sessions only run the configured guest's build, so every other untagged
-            // import is unreachable; without this each guest rebuild kept 9-25 GB.
-            const kept = new Set([image.buildId, ...listImageRefs().flatMap((ref) => Object.values(ref.targets))]);
-            for (const id of readdirSync(join(getImageStoreDirectory(), 'objects'))) if (/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id) && !kept.has(id)) removeImage(id);
+            // Sessions only run the configured guest's build; once no VM is live, every
+            // other untagged import is unreachable (without this each rebuild kept 9-25 GB).
+            if (!(await listSessions()).some((s) => s.alive)) {
+              const kept = new Set([image.buildId, ...listImageRefs().flatMap((ref) => Object.values(ref.targets))]);
+              for (const id of readdirSync(objects)) if (/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id) && !kept.has(id)) try { removeImage(id); } catch {}
+            }
           }
           result = { assetDir: image.assetDir, buildId: image.buildId }; break;
         }
