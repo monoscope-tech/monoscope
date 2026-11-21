@@ -386,13 +386,16 @@ logoutH cookieM = do
 
 
 -- | A post-login or post-switch destination, kept on this site: a path, never a scheme,
--- @//host@ or @/\\host@ (browsers treat both as another origin).
+-- @//host@ or @/\\host@ (browsers treat both as another origin). Browsers also drop tab, CR and
+-- LF from a URL, so @/\t/host@ was @//host@: no control character, space or backslash passes.
 --
 -- >>> map (safeRedirect . Just) ["/p/x/log_explorer?since=1H", "https://evil.example", "//evil.example", "/\\evil.example", "javascript:alert(1)", ""]
 -- ["/p/x/log_explorer?since=1H","/","/","/","/","/"]
+-- >>> map (safeRedirect . Just) ["/\t/evil.example", "/\t\\evil.example", "/\n/evil.example", "/\r/evil.example", "/ /evil.example", "/p/x\\y"]
+-- ["/","/","/","/","/","/"]
 safeRedirect :: Maybe Text -> Text
 safeRedirect = \case
-  Just p | Just rest <- T.stripPrefix "/" p, not ("/" `T.isPrefixOf` rest || "\\" `T.isPrefixOf` rest) -> p
+  Just p | Just rest <- T.stripPrefix "/" p, not ("/" `T.isPrefixOf` rest), T.all (\c -> c > ' ' && c /= '\\' && c /= '\DEL') p -> p
   _ -> "/"
 
 
