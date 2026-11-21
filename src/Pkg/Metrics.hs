@@ -36,6 +36,7 @@ module Pkg.Metrics (
   extractionBatchesDropped,
   freeTierBatchesDropped,
   freeTierSampledOut,
+  unkeyedProjectRefused,
   drainFlushesCompleted,
   drainSpansFlushed,
   drainPatternsPersisted,
@@ -319,6 +320,13 @@ freeTierBatchesDropped = mkCounter "monoscope.ingest.free_tier.batches_dropped" 
 freeTierSampledOut :: Counter Int64
 freeTierSampledOut = mkCounter "monoscope.ingest.free_tier.sampled_out" Nothing
 {-# NOINLINE freeTierSampledOut #-}
+
+
+-- | Kafka messages whose @at-project-id@ named a project without an API key and outside
+-- OTLP_KEYLESS_PROJECT_IDS; their rows for that project are dropped.
+unkeyedProjectRefused :: Counter Int64
+unkeyedProjectRefused = mkCounter "monoscope.ingest.unkeyed_project.refused" Nothing
+{-# NOINLINE unkeyedProjectRefused #-}
 
 
 drainFlushesCompleted :: Counter Int64
