@@ -106,8 +106,8 @@ dashboardTemplatesCompiled = rights [Dashboards.decodeDashboard f bs | (f, bs) <
 
 -- | One tab of a template for a page that shows that view of the dashboard: @{{var-*}}@ filled and
 -- escaped as the dashboard fills them, unset ones blank; groups' children too.
-templateTab :: FilePath -> Text -> [(Text, Text)] -> [Widget.Widget]
-templateTab file tabName vars = [fill w | d <- dashboardTemplatesCompiled, d.file == Just (toText file), t <- fold d.tabs, t.name == tabName, w <- t.widgets]
+templateTab :: Text -> Text -> [(Text, Text)] -> [Widget.Widget]
+templateTab file tabName vars = [fill w | d <- dashboardTemplatesCompiled, d.file == Just file, t <- fold d.tabs, t.name == tabName, w <- t.widgets]
   where
     fill w = w{Widget.query = fillQueryTemplate KqlTemplate params <$> w.query, Widget.sql = fillQueryTemplate SqlTemplate params <$> w.sql, Widget.children = map fill <$> w.children}
     params = Map.fromList [("var-" <> k, v) | (k, v) <- vars]
