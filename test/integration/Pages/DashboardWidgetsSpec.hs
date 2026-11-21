@@ -337,6 +337,11 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         html = renderT . Widget.widget_
         gridTags = tagsWith ["class=\"grid-stack"] . html
     html sqlWidget `shouldSatisfy` T.isInfixOf "SELECT &#39;&lt;script&gt;&#39;"
+    -- widgetHeader_storedIdBreaksOutOfScript: a dashboard writer's widget id was spliced into the copy
+    -- hyperscript and the delete onpointerdown as a string literal, so a quote in it ran code for a reader.
+    let hostile = chart{Widget.id = Just "x\" then set window.pwned to 1 then set y to \"');pwned=2;//", Widget._dashboardId = Just "00000000-0000-0000-0000-000000000001"}
+        hostileHtml = html hostile
+    map (`T.isInfixOf` hostileHtml) ["my.dataset.widgetId", "getElementById(&quot;x\\&quot; then", "to &quot;x&quot; then", "&#39;x&quot;"] `shouldBe` [True, True, False, False]
     -- A naked widget (expanded viewer, shared link) is on no grid, so carries no grid chrome.
     gridTags standalone `shouldBe` []
     goldenParts "dashboard-widgets" $ foldMap gridTags (canvas <> [groupW, widthless]) <> [html chart{Widget.id = Just "requests-chart"}] <> elementsWith ["aria-label=\"Expand widget\"", "query-preview language"] (html sqlWidget)

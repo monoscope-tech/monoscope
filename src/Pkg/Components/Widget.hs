@@ -1268,6 +1268,9 @@ renderWidgetHeader actions widget valueM subValueM expandBtnFn ctaM = div_ [clas
           (bool "Add this widget to a dashboard" "Copy this widget to another dashboard" onDashboard)
           [ id_ $ wId <> "_copy_link"
           , data_ "widget-title" $ maybeToMonoid widget.title
+          , -- Read from data attributes: a stored id spliced into the script's string literal broke out of it.
+            data_ "widget-id" wId
+          , data_ "source-dashboard-id" dashId
           , term
               "_"
               [text|
@@ -1276,8 +1279,8 @@ renderWidgetHeader actions widget valueM subValueM expandBtnFn ctaM = div_ [clas
               then set #dashboards-modal-title.textContent to "${modalTitle}"
               then set #dashboards-modal-widget-title.textContent to my.dataset.widgetTitle
               then set #dashboards-modal-search.value to ''
-              then set #dashboards-modal-widget-id.value to "${wId}"
-              then set #dashboards-modal-source-dashboard-id.value to "${dashId}"
+              then set #dashboards-modal-widget-id.value to my.dataset.widgetId
+              then set #dashboards-modal-source-dashboard-id.value to my.dataset.sourceDashboardId
               then set #dashboards-modal-widget-json.value to (widgetEl.dataset.widget or '')
               then set #dashboards-modal.checked to true then send change to #dashboards-modal
               then trigger loadDashboards on #dashboards-modal-content
@@ -1344,8 +1347,8 @@ renderWidgetHeader actions widget valueM subValueM expandBtnFn ctaM = div_ [clas
               , onpointerdown_
                   [text|
                   if (confirm('Are you sure you want to delete this widget? This action cannot be undone.')) {
-                    document.getElementById('${wId}_widgetEl')?.dispatchEvent(
-                      new CustomEvent('widget-remove-requested', { bubbles: true, detail: { widgetId: '${wId}' } }));
+                    document.getElementById(${wIdJson} + '_widgetEl')?.dispatchEvent(
+                      new CustomEvent('widget-remove-requested', { bubbles: true, detail: { widgetId: ${wIdJson} } }));
                   }
                   return false;
                 |]
