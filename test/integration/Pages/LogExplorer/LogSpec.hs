@@ -801,6 +801,8 @@ spec = do
       let blank = AE.object ["input" AE..= ("" :: Text)]
       dbExec tr [sql|DELETE FROM projects.project_members WHERE project_id = ?|] (Only Projects.demoProjectId)
       httpStatus tr (AIThreads.aiSearchH Projects.demoProjectId blank) `shouldReturn` 400
+      -- aiSearch_oversizedInput_isRefusedBeforeTheModel: the composer's 4,000-char cap applies here too.
+      httpStatus tr (AIThreads.aiSearchH Projects.demoProjectId (AE.object ["input" AE..= T.replicate 4001 "a"])) `shouldReturn` 400
       victim <- createTestProject tr "ai-search-victim"
       assertNonMemberDenied tr victim $ AIThreads.aiSearchH victim blank
 
