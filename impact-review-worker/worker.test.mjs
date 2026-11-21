@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -202,6 +202,28 @@ test('sandbox bridge loads its real SDK imports and answers without creating a V
   bridge.child.stdin.end(JSON.stringify({ tag: 'Resolve', contents: '/nonexistent-monoscope-guest' }) + '\n');
   const { stdout } = await bridge;
   assert.equal(typeof JSON.parse(stdout).Left, 'string');
+});
+
+
+test('resolving a guest evicts the superseded guest images it cannot run (2026-11-21: 8 kept, 105 GB)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'impact-image-store-'));
+  try {
+    const resolve = async (buildId) => {
+      const guest = join(root, buildId);
+      await mkdir(guest);
+      await Promise.all(['vmlinuz', 'initramfs', 'rootfs.ext4'].map((name) => writeFile(join(guest, name), name)));
+      await writeFile(join(guest, 'manifest.json'), JSON.stringify({ version: 1, buildId, config: { arch: 'x86_64' }, assets: { kernel: 'vmlinuz', initramfs: 'initramfs', rootfs: 'rootfs.ext4' } }));
+      const bridge = exec(process.execPath, [fileURLToPath(new URL('./sandbox.mjs', import.meta.url))], { timeout: 10000, env: { ...process.env, XDG_CACHE_HOME: join(root, 'cache') } });
+      bridge.child.stdin.end(JSON.stringify({ tag: 'Resolve', contents: guest }) + '\n');
+      assert.equal(JSON.parse((await bridge).stdout).Right.buildId, buildId);
+      return readdir(join(root, 'cache', 'gondolin', 'images', 'objects'));
+    };
+    const [old, current] = ['bf102ad2-19de-5d56-802a-53ac05d11108', '5df490c7-ccb8-509e-aafe-2601b862b599'];
+    assert.deepEqual(await resolve(old), [old]);
+    assert.deepEqual(await resolve(current), [current]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 

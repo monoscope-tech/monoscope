@@ -2,8 +2,9 @@
 // SDK bridge only. Haskell selects commands, paths, resources and cache publication.
 import { jsonLines } from './jsonl.mjs';
 import { open } from 'node:fs/promises';
-import { constants } from 'node:fs';
-import { DEFAULT_GUEST_TMPFS, RealFSProvider, ReadonlyProvider, VM, VmCheckpoint, createHttpHooks, importImageFromDirectory, resolveImageSelector } from '@earendil-works/gondolin';
+import { constants, readdirSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { DEFAULT_GUEST_TMPFS, RealFSProvider, ReadonlyProvider, VM, VmCheckpoint, createHttpHooks, getImageObjectDirectory, importImageFromDirectory, listImageRefs, removeImage, resolveImageSelector } from '@earendil-works/gondolin';
 // Guests run pull request code, so they reach only package registries and GitHub, only to read: GET
 // and HEAD with a fixed User-Agent, plus git's upload-pack POST so git dependencies fetch. GitHub is an
 // accepted risk (2026-11-19): a repository's traffic insights list the paths its visitors fetched, so
@@ -33,6 +34,12 @@ try {
         case 'Resolve': {
           const selected = resolveImageSelector(contents);
           const image = selected.source === 'path' ? importImageFromDirectory(selected.assetDir) : selected;
+          // Sessions only run the configured guest's build, so every other untagged
+          // import is unreachable; without this each guest rebuild kept 9-25 GB.
+          if (selected.source === 'path') {
+            const kept = new Set([image.buildId, ...listImageRefs().flatMap((ref) => Object.values(ref.targets))]);
+            for (const id of readdirSync(dirname(getImageObjectDirectory(image.buildId)))) if (!id.startsWith('.') && !kept.has(id)) removeImage(id);
+          }
           result = { assetDir: image.assetDir, buildId: image.buildId }; break;
         }
         case 'Resume':
