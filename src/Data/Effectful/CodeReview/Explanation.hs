@@ -196,6 +196,8 @@ castLimit = 524288
 --
 -- >>> proofCast $ logged $ extractBase64 $ Base64.encodeBase64' "{\"version\": 2, \"width\": 1000000000, \"height\": 24}\n"
 -- Left "The proof recording's terminal exceeds 110x32"
+-- >>> fmap snd $ proofCast $ logged $ extractBase64 $ Base64.encodeBase64' "{\"version\": 2, \"width\": 110, \"height\": 32}\n"
+-- Right ""
 proofCast :: ByteString -> Either Text (ByteString, Text)
 proofCast logBytes = do
   encoded <- maybeToRight ("The proof produced no recording. Log tail: " <> decodeUtf8 (BS.takeEnd 600 logBytes)) $ find (not . BS.null) $ map snd $ logSections "cast" logBytes

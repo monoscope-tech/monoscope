@@ -66,6 +66,8 @@ import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Ids qualified as Projects
 import OpenTelemetry.Attributes qualified as OA
@@ -252,7 +254,11 @@ executeSecuredQuery useTimefusion pid (SecuredSql source userQuery) limit
             routeToTimefusion = case source of
               SqlPostgres -> False
               SqlTimefusion -> useTimefusion
-        resultE <- try @Hasql.HasqlException $ Hasql.withHasqlTimefusion routeToTimefusion (jsonArrayRows <$> Hasql.interp wrapped)
+            -- On the shared Postgres pool the statement gets the same 30s deadline as chart SQL.
+            run
+              | routeToTimefusion = Hasql.withHasqlTimefusion True (Hasql.interp wrapped)
+              | otherwise = Hasql.transaction TxS.ReadCommitted TxS.Read (Tx.sql "SET LOCAL statement_timeout = '30s'" *> Hasql.queryTx wrapped)
+        resultE <- try @Hasql.HasqlException $ jsonArrayRows <$> run
         pure $ first (\e -> "Query execution failed: " <> toText (displayException e)) resultE
 
 
@@ -352,7 +358,7 @@ scopeUserSql postgres pid sql = do
         n
           `elem` ["background_jobs", "background_jobs_long", "otel_metrics_meta", "query_cache", "rum_panel_cache", "schema_migrations", "current_setting", "set_config", "connectby", "ts_stat", "ts_rewrite", "drop_chunks", "compress_chunk", "decompress_chunk", "alter_job", "delete_job", "run_job", "add_job", "add_dimension", "create_hypertable", "move_chunk", "reorder_chunk", "refresh_continuous_aggregate", "set_chunk_time_interval", "set_integer_now_func", "set_number_partitions", "set_adaptive_chunking"]
           || ("otel_" `T.isPrefixOf` n && n `notElem` tenantTables)
-          || (any (`T.isPrefixOf` n) ["pg_", "lo_", "dblink", "query_to_xml", "table_to_xml", "schema_to_xml", "database_to_xml", "cursor_to_xml", "crosstab", "timescaledb_", "_timescaledb"])
+          || any (`T.isPrefixOf` n) ["pg_", "lo_", "dblink", "query_to_xml", "table_to_xml", "schema_to_xml", "database_to_xml", "cursor_to_xml", "crosstab", "timescaledb_", "_timescaledb"]
           || (any (`T.isPrefixOf` n) ["add_", "remove_"] && "_policy" `T.isSuffixOf` n)
       [q, n] -> (q `elem` schemas || any (`T.isPrefixOf` q) ["pg_", "_timescaledb", "timescaledb"]) && (q <> "." <> n) `notElem` tenantTables
       _ -> True

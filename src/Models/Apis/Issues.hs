@@ -2682,11 +2682,10 @@ getEventRoutineFor pid event scope = do
   Investigations.classifyLegacyEvidence pid Nothing
   Hasql.interpOne
     $ [HI.sql|SELECT r.id, r.project_id, r.schedule_kind, r.conversation_id, r.requested_by, r.instructions, r.template_version::bigint
-      FROM apis.ai_routines r JOIN projects.project_members member ON member.project_id = r.project_id AND member.user_id = r.requested_by
-      JOIN users.users account ON account.id = member.user_id
-      JOIN projects.projects project ON project.id = member.project_id
+      FROM apis.ai_routines r JOIN (|]
+    <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id = #{pid}|]
+    <> [HI.sql|) member ON member.user_id = r.requested_by
       WHERE r.project_id = #{pid} AND r.schedule_kind = #{event} AND r.active AND member.permission IN ('admin', 'edit') |]
-    <> ProjectMembers.activeMembership
     <> scope
 
 

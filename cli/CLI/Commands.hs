@@ -1170,7 +1170,7 @@ drawMetrics opts md = do
 -- | @(label, value)@ pairs for a bar chart: first column labels, second sizes.
 labelledRows :: MetricsData -> [(Text, Double)]
 labelledRows md =
-  [ (fromMaybe "" (r V.!? 0), fromMaybe 0 (readMaybe . toString =<< r V.!? 1))
+  [ (maybe "" escapeControls (r V.!? 0), fromMaybe 0 (readMaybe . toString =<< r V.!? 1))
   | r <- V.toList md.dataText
   ]
 
@@ -1233,13 +1233,13 @@ runStatus cfg opts mode = do
       Left err -> Chart.colorize color (Chart.seriesColor 6) ("  unavailable: " <> renderAPIError err)
       Right page -> case mapMaybe (^? AL.key "title" . AL._String) page.items of
         [] -> Chart.dim color "  none"
-        ts -> unlines ["  " <> Chart.ellipsize (w - 2) t | t <- ts]
+        ts -> unlines ["  " <> Chart.ellipsize (w - 2) (escapeControls t) | t <- ts]
     let alerting = alertingMonitors monitors
     section "Monitors"
     putTextLn
       $ if null alerting
         then Chart.dim color "  all quiet"
-        else unlines ["  " <> Chart.colorize color (Chart.seriesColor 6) ("ALERTING  " <> t) | t <- alerting]
+        else unlines ["  " <> Chart.colorize color (Chart.seriesColor 6) ("ALERTING  " <> escapeControls t) | t <- alerting]
 
 
 -- | Titles of monitors currently in an alerting state.

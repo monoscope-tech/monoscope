@@ -1087,16 +1087,21 @@ templateBindings params template =
     presets = Map.insert "query_ast_filters" "" $ variablePresets def "" Nothing Nothing [] fixedUTCTime
 
 
--- | A request param with braces in its key is dropped: one spanning @{{a}} … {{b}}@ replaced
--- everything between them, server presets included, with a raw value.
+-- | A request param with braces in its key or value is dropped. A key spanning @{{a}} … {{b}}@
+-- replaced everything between them, server presets included, with a raw value. Substitution
+-- rescans what it inserted, so a value (an escaped @var-@ one too, or two adjacent ones split
+-- brace by brace) naming a placeholder the signature does not bind spliced that param in raw.
 --
 -- >>> fillQueryTemplate SqlTemplate (variablePresets def "p" Nothing Nothing [("custom}} AND project_id = '{{project_id", Just "TRUE OR '")] fixedUTCTime) "{{custom}} AND project_id = '{{project_id}}'"
 -- "{{custom}} AND project_id = 'p'"
+-- >>> fillQueryTemplate SqlTemplate (variablePresets def "p" Nothing Nothing [("var-s", Just "{{zz}}"), ("var-a", Just "{"), ("var-b", Just "{zz}}"), ("table-search", Just "{{zz}}"), ("zz", Just "' OR 1=1 --")] fixedUTCTime) "s = '{{var-s}}' AND '{{var-a}}{{var-b}}' AND {{table_search}}"
+-- "s = '' AND '' AND ''"
 variablePresets :: BinDensity -> Text -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Map.Map Text Text
 variablePresets density pid mf mt allParams currentTime =
   let fmtUTC = maybe "" formatUTC
       andPrefix = (" AND " <>)
-      audience = audienceFilters allParams
+      params = filter (\(k, v) -> not $ T.any (`elem` ['{', '}']) (k <> fold v)) allParams
+      audience = audienceFilters params
       audienceSessions = audienceSessionsSql audience
       bound op t field' = field' <> " " <> op <> " '" <> formatUTC t <> "'"
       clause endOp field = case catMaybes [bound ">=" <$> mf, bound endOp <$> mt] of
@@ -1105,7 +1110,7 @@ variablePresets density pid mf mt allParams currentTime =
    in Map.fromList
         -- Request params first: fromList keeps the last duplicate, so a request can never
         -- re-point a server preset such as @project_id@ or @time_filter@.
-        $ [(k, maybeToMonoid v) | (k, v) <- allParams, not (T.any (`elem` ['{', '}']) k)]
+        $ (params <&> second maybeToMonoid)
         <> Map.toList kqlConstants
         <> [ ("project_id", pid)
            , ("from", andPrefix $ fmtUTC mf)
@@ -1120,7 +1125,7 @@ variablePresets density pid mf mt allParams currentTime =
            , ("client_request_filter", clientRequestSql)
            , ("audience_sessions", audienceSessions)
            , ("audience_kql_literal", sqlStringLit $ audienceKql audience)
-           , ("table_search", sqlStringLit $ maybeToMonoid $ join $ Map.lookup "table-search" $ Map.fromList allParams)
+           , ("table_search", sqlStringLit $ maybeToMonoid $ join $ Map.lookup "table-search" $ Map.fromList params)
            , ("audience_filter", if any isJust [audience.browser, audience.os, audience.device] || audience.errored then "attributes___session___id IN (" <> audienceSessions <> "SELECT session FROM audience_sessions)" else "TRUE")
            ]
   where

@@ -271,7 +271,7 @@ card :: Card -> Incidents.SlackPayload
 card c =
   Incidents.SlackPayload $ KEM.fromList ["text" AE..= fallback, "attachments" AE..= arr [AE.object ["color" AE..= color, "fallback" AE..= fallback, "blocks" AE..= blocks]]]
   where
-    fallback = c.status.label <> " · " <> T.take 160 title
+    fallback = c.status.label <> " · " <> incidentHeadline title
     color :: Text = case c.status.tone of
       Critical -> "#E5484D"
       Elevated -> "#F5A524"
@@ -579,8 +579,8 @@ slackNewEndpointsAlert :: Text -> V.Vector EndpointAlertRow -> Text -> Text -> I
 slackNewEndpointsAlert projectName endpoints targetUrl projectUrl =
   card
     (statusCard (Status ":large_blue_circle:" (countNoun (V.length endpoints) "new endpoint") Calm) title targetUrl)
-      { facts = case groups of [((host, ctx), _)] -> catMaybes [bold <$> host, ctx]; _ -> []
-      , body = [tagged "evidence" $ slackSection $ T.intercalate "\n\n" $ groups <&> \((host, ctx), labels) -> foldMap (\h -> bold h <> foldMap ("  ·  " <>) ctx <> "\n") (host <* guard (length groups > 1)) <> slackEscape (bulletList labels)]
+      { facts = case groups of [((host, ctx), _)] -> catMaybes [bold <$> host, slackEscape <$> ctx]; _ -> []
+      , body = [tagged "evidence" $ slackSection $ T.intercalate "\n\n" $ groups <&> \((host, ctx), labels) -> foldMap (\h -> bold h <> foldMap (("  ·  " <>) . slackEscape) ctx <> "\n") (host <* guard (length groups > 1)) <> slackEscape (bulletList labels)]
       , footer = ["Project " <> slackEscape projectName]
       , actions = [("Open issue", targetUrl), ("View in Explorer", newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints))]
       }

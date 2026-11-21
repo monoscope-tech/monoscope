@@ -440,8 +440,13 @@ instance ToHtml Widget where
 -- >>> let wire = "{\"type\":\"stat\",\"query\":\"summarize count()\",\"title\":\"Requests\"}"
 -- >>> fmap AE.toJSON (AE.eitherDecode @ModelWidget wire) == AE.eitherDecode @AE.Value wire
 -- True
--- >>> map (isLeft . AE.eitherDecode @ModelWidget) ["{\"type\":\"timeseries\",\"dataset\":{\"source\":[{\"formatter\":\"function(){}\"}]}}", "{\"type\":\"stat\",\"sql\":\"SELECT 1\"}", "{\"type\":\"stat\",\"html\":\"<b>untrusted</b>\"}", "{\"type\":\"timeseries\",\"queries\":[{\"sql\":\"SELECT 1\"}]}", "{\"type\":\"group\",\"children\":[{\"type\":\"stat\",\"sql\":\"SELECT 1\"}]}", "{\"type\":\"stat\",\"_project_id\":\"00000000-0000-0000-0000-000000000000\"}"]
--- [True,True,True,True,True,True]
+-- >>> map (isLeft . AE.eitherDecode @ModelWidget) ["{\"type\":\"stat\",\"sql\":\"SELECT 1\"}", "{\"type\":\"stat\",\"html\":\"<b>untrusted</b>\"}", "{\"type\":\"timeseries\",\"queries\":[{\"sql\":\"SELECT 1\"}]}", "{\"type\":\"group\",\"children\":[{\"type\":\"stat\",\"sql\":\"SELECT 1\"}]}", "{\"type\":\"stat\",\"_project_id\":\"00000000-0000-0000-0000-000000000000\"}"]
+-- [True,True,True,True,True]
+--
+-- A dataset is data the model made up, so it is dropped at every depth and the chart runs its query.
+--
+-- >>> (\w -> (w.dataset, (.dataset) <$> fold w.children)) . modelWidget <$> AE.eitherDecode @ModelWidget "{\"type\":\"group\",\"dataset\":{\"source\":[]},\"children\":[{\"type\":\"timeseries\",\"query\":\"summarize count()\",\"dataset\":{\"source\":[{\"formatter\":\"function(){}\"}]}}]}"
+-- Right (Nothing,[Nothing])
 -- >>> isRight $ AE.eitherDecode @ModelWidget "{\"type\":\"timeseries\",\"queries\":[{\"query\":\"summarize count()\"}]}"
 -- True
 -- >>> isLeft $ AE.eitherDecode @ModelWidget "{\"type\":\"table\",\"columns\":[{\"field\":\"name\",\"title\":\"Name\",\"link\":\"javascript:alert(1)\"}]}"
@@ -454,11 +459,11 @@ newtype ModelWidget = ModelWidget Widget
 instance AE.FromJSON ModelWidget where
   parseJSON value = do
     widget <- AE.parseJSON value
-    unless (safe widget) $ fail "Model widgets cannot contain SQL, data, executable content, or server context"
-    pure $ ModelWidget widget
+    unless (safe widget) $ fail "Model widgets cannot contain SQL, executable content, or server context"
+    pure $ ModelWidget $ transformOf (#children . _Just . traverse) (#dataset .~ Nothing) widget
     where
       safe widget =
-        not (or [isJust widget.sql, isJust widget.rollupSql, isJust widget.sqlSig, isJust widget.html, isJust widget.dataset, isJust widget.expandBtnFn, isJust widget.expandPushUrl, isJust widget.groupByUrl, isJust widget.groupByTarget, isJust widget.onRowClick, isJust widget.cta, isJust widget._projectId, isJust widget._dashboardId, isJust widget._tabSlug, isJust widget.dbSource, isJust widget.pngUrl])
+        not (or [isJust widget.sql, isJust widget.rollupSql, isJust widget.sqlSig, isJust widget.html, isJust widget.expandBtnFn, isJust widget.expandPushUrl, isJust widget.groupByUrl, isJust widget.groupByTarget, isJust widget.onRowClick, isJust widget.cta, isJust widget._projectId, isJust widget._dashboardId, isJust widget._tabSlug, isJust widget.dbSource, isJust widget.pngUrl])
           && all (isNothing . (.sql)) (fold widget.queries)
           && all (isNothing . (.link)) (fold widget.columns)
           && all safe (fold widget.children)

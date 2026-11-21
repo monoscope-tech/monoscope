@@ -138,7 +138,7 @@ quietMentions = T.replace "<@" "<\x200B@" . T.replace "<!" "<\x200B!"
 
 -- | Model or user text as inline code: no backticks or newlines to break out of it.
 codeSpan :: Text -> Text
-codeSpan t = "`" <> T.take 300 (unwords $ words $ T.replace "`" "'" t) <> "`"
+codeSpan t = "`" <> T.take 300 (unwords $ words $ inertCode t) <> "`"
 
 
 -- | Slack in-channel response replacing the ephemeral loading message.
@@ -566,7 +566,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
                     dcContainer 26879
                       $ [dcText $ botEmoji EmojiChart <> " **" <> title <> "**"]
                       <> dcGallery [(imageUrl, "Chart visualization: " <> title)]
-                      <> [ dcText $ "**Query:** `" <> query <> "`"
+                      <> [ dcText $ "**Query:** " <> codeSpan query
                          , dcLinkButton (botEmoji EmojiSearch <> " " <> viewLabel) queryUrl
                          ]
                   -- Twilio content-template variables: WhatsApp renders the chart itself, so
@@ -597,7 +597,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
             tableData = "```\n" <> inertCode (T.take 1200 (unlines $ map (CLIFormat.formatRow $ CLIFormat.colWidths cells) cells)) <> "\n```"
             url' = hostPath envCfg.hostUrl $ explore (urls.logExplorer pid) Nothing query
             moreText = if resultCount > shownCount then "\n_" <> show (resultCount - shownCount) <> " more results in Log Explorer_" else ""
-            content = botEmoji EmojiTable <> " **Query Results** (showing " <> show shownCount <> " of " <> show resultCount <> " rows)\n`" <> query <> "`\n" <> tableData <> moreText <> "\n"
+            content = botEmoji EmojiTable <> " **Query Results** (showing " <> show shownCount <> " of " <> show resultCount <> " rows)\n" <> codeSpan query <> "\n" <> tableData <> moreText <> "\n"
          in case target of
               Discord -> AE.object ["content" AE..= (content <> "\n[View in Log Explorer →](" <> url' <> ")")]
               WhatsApp -> AE.object ["body" AE..= (content <> "\n" <> url')]

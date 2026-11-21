@@ -1073,7 +1073,7 @@ fetchDocument url
   | not (documentUrlOk url && safeScrapeUrl url) = pure $ Left "Only short public https:// document URLs, without a query string, can be fetched"
   | otherwise =
       first (const "The page could not be fetched") <$> tryAny do
-        (manager, _) <- newProbeManagers internalAddress
+        (_, manager) <- newProbeManagers internalAddress
         request <- HTTP.parseRequest (toString url)
         HTTP.withResponse request{HTTP.redirectCount = 0, HTTP.requestHeaders = [("User-Agent", "monoscope-review")]} manager \response -> do
           body <- toStrict <$> HTTP.brReadSome (HTTP.responseBody response) 524288

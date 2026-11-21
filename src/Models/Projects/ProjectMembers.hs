@@ -12,6 +12,7 @@ module Models.Projects.ProjectMembers (
   selectAllProjectMembers,
   getUserPermission,
   activeMembership,
+  memberPermission,
   memberPermissionsSql,
   getSessionPermission,
   sessionPermissionSql,
@@ -217,10 +218,15 @@ activeMembership =
     <> ")"
 
 
+-- | A membership's effective role: the shared demo guest reads as view wherever it is a member.
+-- Requires the @member@ and @account@ aliases of 'activeMembership'.
+memberPermission :: HI.Sql
+memberPermission = [HI.sql|CASE WHEN account.email = #{Projects.demoGuestEmail} THEN #{PView} ELSE member.permission END|]
+
+
 memberPermissionsSql :: HI.Sql -> HI.Sql
 memberPermissionsSql scope =
-  [HI.sql|SELECT member.project_id, member.user_id,
-      CASE WHEN account.email = #{Projects.demoGuestEmail} THEN #{PView} ELSE member.permission END AS permission
+  [HI.sql|SELECT member.project_id, member.user_id, ^{memberPermission} AS permission
     FROM projects.project_members member
     JOIN users.users account ON account.id = member.user_id
     JOIN projects.projects project ON project.id = member.project_id WHERE (|]

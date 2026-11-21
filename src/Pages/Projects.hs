@@ -259,7 +259,6 @@ integrationsSettingsGetH = addRespHeaders <=< integrationsPage
 integrationsPage :: Projects.ProjectId -> ATAuthCtx (PageCtx IntegrationsConfig)
 integrationsPage pid = do
   (_, _, bw) <- mkPageCtx pid
-  appCtx <- ask @AuthContext
   slackInfo <- getProjectSlackData pid
   discordInfo <- getDiscordDataByProjectId pid
   channelsE <- resolveSlackChannels slackInfo
@@ -283,7 +282,6 @@ integrationsPage pid = do
       bw{pageTitle = "Integrations", isSettingsPage = True}
       IntegrationsConfig
         { projectId = pid
-        , envConfig = appCtx.env
         , disabledChannels = maybe V.empty (.disabled_channels) everyoneTeamM
         , phones = maybe V.empty (.phone_numbers) everyoneTeamM
         , emails = maybe V.empty (.notify_emails) everyoneTeamM
@@ -522,7 +520,6 @@ slackDisconnectH pid = act do
 
 data IntegrationsConfig = IntegrationsConfig
   { projectId :: Projects.ProjectId
-  , envConfig :: EnvConfig
   , disabledChannels :: V.Vector Text
   , phones :: V.Vector Text
   , emails :: V.Vector Text
