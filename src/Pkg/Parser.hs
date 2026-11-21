@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, TemplateLang (..), fillQueryTemplate, browserKql, requestKql, kqlConstants, isBrowserRecord, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds, AudienceFilters (..), audienceFilters, audienceKql, ResultShape (..), resultShape) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, TemplateLang (..), fillQueryTemplate, browserKql, requestKql, kqlConstants, isBrowserRecord, variablePresets, variablePresetsKQL, templateBindings, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds, AudienceFilters (..), audienceFilters, audienceKql, ResultShape (..), resultShape) where
 
 import Control.Error (hush)
 import Data.Aeson qualified as AE
@@ -1075,11 +1075,49 @@ browserExpr :: Maybe Expr
 browserExpr = filterExpr =<< hush (parseQueryToAST browserKql)
 
 
+-- | The request values a SQL template splices in verbatim: every placeholder that is neither a
+-- server preset nor an escaped @var-@ value, the dashboard's resolved @const-*@ filters above
+-- all. A signature over the template covers these too, or anyone holding it replays the
+-- statement with their own SQL in their place.
+--
+-- >>> templateBindings [("const-f", Just "TRUE"), ("var-s", Just "x")] "WHERE {{const-f}} AND s = '{{var-s}}' {{time_filter}} {{custom}} {{const-f}}"
+-- [("const-f","TRUE"),("custom","")]
+templateBindings :: [(Text, Maybe Text)] -> Text -> [(Text, Text)]
+templateBindings params template =
+  [ (k, maybeToMonoid $ join $ Map.lookup k given)
+  | k <- sortNub [k | chunk <- drop 1 (T.splitOn "{{" template), let (k, close) = T.breakOn "}}" chunk, not (T.null close)]
+  , not ("var-" `T.isPrefixOf` k)
+  , k `Map.notMember` presets
+  ]
+  where
+    given = Map.fromList params
+    presets = Map.insert "query_ast_filters" "" $ variablePresets def "" Nothing Nothing [] fixedUTCTime
+
+
+-- | A request param with braces in its key or value is dropped. A key spanning @{{a}} … {{b}}@
+-- replaced everything between them, server presets included, with a raw value. Substitution
+-- rescans what it inserted, so a value (an escaped @var-@ one too, or two adjacent ones split
+-- brace by brace) naming a placeholder the signature does not bind spliced that param in raw.
+--
+-- >>> fillQueryTemplate SqlTemplate (variablePresets def "p" Nothing Nothing [("custom}} AND project_id = '{{project_id", Just "TRUE OR '")] fixedUTCTime) "{{custom}} AND project_id = '{{project_id}}'"
+-- "{{custom}} AND project_id = 'p'"
+-- >>> fillQueryTemplate SqlTemplate (variablePresets def "p" Nothing Nothing [("var-s", Just "{{zz}}"), ("var-a", Just "{"), ("var-b", Just "{zz}}"), ("table-search", Just "{{zz}}"), ("zz", Just "' OR 1=1 --")] fixedUTCTime) "s = '{{var-s}}' AND '{{var-a}}{{var-b}}' AND {{table_search}}"
+-- "s = '' AND '' AND ''"
+--
+-- A signed constant keeps single braces (path templates) but never a placeholder:
+--
+-- >>> fillQueryTemplate SqlTemplate (variablePresets def "p" Nothing Nothing [("const-f", Just "url_path = '/users/{uuid}'"), ("const-g", Just "'/a/{{zz}}'"), ("zz", Just "' OR 1=1 --")] fixedUTCTime) "{{const-f}} AND {{const-g}}"
+-- "url_path = '/users/{uuid}' AND {{const-g}}"
 variablePresets :: BinDensity -> Text -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Map.Map Text Text
 variablePresets density pid mf mt allParams currentTime =
   let fmtUTC = maybe "" formatUTC
       andPrefix = (" AND " <>)
-      audience = audienceFilters allParams
+      params = filter (\(k, v) -> not (T.any (`elem` ['{', '}']) k) && valueOk k (fold v)) allParams
+      -- Server-resolved constants (signed with the template) carry endpoint paths such as @/users/{uuid}@.
+      valueOk k v
+        | "const-" `T.isPrefixOf` k = not (any (`T.isInfixOf` v) ["{{", "}}"])
+        | otherwise = not (T.any (`elem` ['{', '}']) v)
+      audience = audienceFilters params
       audienceSessions = audienceSessionsSql audience
       bound op t field' = field' <> " " <> op <> " '" <> formatUTC t <> "'"
       clause endOp field = case catMaybes [bound ">=" <$> mf, bound endOp <$> mt] of
@@ -1088,7 +1126,7 @@ variablePresets density pid mf mt allParams currentTime =
    in Map.fromList
         -- Request params first: fromList keeps the last duplicate, so a request can never
         -- re-point a server preset such as @project_id@ or @time_filter@.
-        $ (allParams <&> second maybeToMonoid)
+        $ (params <&> second maybeToMonoid)
         <> Map.toList kqlConstants
         <> [ ("project_id", pid)
            , ("from", andPrefix $ fmtUTC mf)
@@ -1103,7 +1141,7 @@ variablePresets density pid mf mt allParams currentTime =
            , ("client_request_filter", clientRequestSql)
            , ("audience_sessions", audienceSessions)
            , ("audience_kql_literal", sqlStringLit $ audienceKql audience)
-           , ("table_search", sqlStringLit $ maybeToMonoid $ join $ Map.lookup "table-search" $ Map.fromList allParams)
+           , ("table_search", sqlStringLit $ maybeToMonoid $ join $ Map.lookup "table-search" $ Map.fromList params)
            , ("audience_filter", if any isJust [audience.browser, audience.os, audience.device] || audience.errored then "attributes___session___id IN (" <> audienceSessions <> "SELECT session FROM audience_sessions)" else "TRUE")
            ]
   where

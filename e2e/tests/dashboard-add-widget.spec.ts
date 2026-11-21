@@ -1,5 +1,5 @@
 import { test, expect, Page } from "@playwright/test";
-import { DEMO_PROJECT, Dash, makeDashboard, deleteDashboard } from "./helpers";
+import { DEMO_PROJECT, Dash, asDemoAdmin, makeDashboard, deleteDashboard } from "./helpers";
 
 // Covers getting a widget *onto* a dashboard, which dashboard-grid.spec.ts assumes has
 // already happened. Three routes in:
@@ -533,8 +533,9 @@ test("a dashboard needing a variable asks for it instead of covering itself", as
 });
 
 
-test("dashboard teams default to @everyone and support bulk add and removal", async ({ page }) => {
+test("dashboard teams default to @everyone and support bulk add and removal", async ({ page, baseURL }) => {
   test.slow(); // Two dashboard lifecycles plus three bulk team changes; ran out of time under sign-off load.
+  await asDemoAdmin(page, baseURL!);
   const title = `E2E Teams ${Date.now()}`;
   for (const suffix of ["A", "B"]) await makeDashboard(page, `${title} ${suffix}`);
   const team = `e2e-team-${Date.now()}`;

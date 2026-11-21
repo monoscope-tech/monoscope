@@ -71,8 +71,8 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (craftSessionCookie, emptySessionCookie)
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie, hUserAgent, methodGet, methodHead, methodPost, parseQueryText, urlEncode)
-import Network.Wai (Request (pathInfo, queryString, rawPathInfo, rawQueryString, requestHeaders, requestMethod))
+import Network.HTTP.Types (RequestHeaders, decodePathSegments, hAuthorization, hCookie, hUserAgent, methodGet, methodHead, methodPost, parseQueryText, urlEncode)
+import Network.Wai (Request (queryString, rawPathInfo, rawQueryString, requestHeaders, requestMethod))
 import Network.Wreq (FormParam ((:=)), defaults, header, responseBody)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.AdConversions qualified as AdConversions
@@ -295,13 +295,11 @@ demoGuestSession =
   Projects.getPersistentSession demoGuestSessionId >>= \case
     Just sess -> pure $ Just sess
     Nothing -> do
-      uid <- (.userId) <$> userIdForEmail False "Guest" "User" "" guestEmail
+      uid <- (.userId) <$> userIdForEmail False "Guest" "User" "" Projects.demoGuestEmail
       -- Two concurrent first-requests would both insert; the id is the primary key, so the
       -- loser is a no-op rather than a 500 on a page that is meant to need no account.
       Projects.insertSession demoGuestSessionId uid (Projects.SessionData Map.empty)
       Projects.getPersistentSession demoGuestSessionId
-  where
-    guestEmail = "hello@monoscope.tech"
 
 
 type ApiKeyAuthContext = AuthHandler Request ApiPrincipal
@@ -357,22 +355,27 @@ sessionBearerRole bearer pid = runMaybeT do
 -- every handler sees only the project id (an anonymous demo caller could mint keys). So the
 -- demo reader and a viewer only read, search and speak MCP, whose tool calls come back through
 -- here one by one ('Web.Routes.apiV1App'), and only an admin writes members, API keys, teams or
--- the project. Matched by path segment, since MCP calls arrive without the @/api/v1@ prefix.
+-- the project. Neither reads API keys: a key is a fixed-IV encryption of its listed id.
+-- Matched by path segment, since MCP calls arrive without the @/api/v1@ prefix, and on
+-- 'rawPathInfo': at Servant's auth check routing has already consumed 'pathInfo'.
 --
 -- >>> import Network.Wai (defaultRequest)
--- >>> let req m ps = defaultRequest{requestMethod = m, pathInfo = ps}
--- >>> map (principalRefusal (Editor Projects.demoProjectId)) [req "PATCH" ["members", "x"], req "POST" ["api", "v1", "api_keys"], req "GET" ["members"], req "POST" ["projects", "x"]]
+-- >>> let req m p = defaultRequest{requestMethod = m, rawPathInfo = p}
+-- >>> map (principalRefusal (Editor Projects.demoProjectId)) [req "PATCH" "/members/x", req "POST" "/api/v1/api_keys", req "GET" "/members", req "POST" "/projects/x"]
 -- [Just InsufficientRole,Just InsufficientRole,Nothing,Nothing]
+-- >>> map (principalRefusal (Viewer Projects.demoProjectId)) [req "GET" "/api/v1/api_keys", req "GET" "/api_keys/x", req "GET" "/api/v1/events", req "GET" "/api_keys/", req "GET" "/api/v1/api%5Fkeys"]
+-- [Just InsufficientRole,Just InsufficientRole,Nothing,Just InsufficientRole,Just InsufficientRole]
 principalRefusal :: ApiPrincipal -> Request -> Maybe ApiError
 principalRefusal principal req = case principal of
   Authenticated _ -> Nothing
-  Editor _ -> InsufficientRole <$ guard (write && any (`elem` ["members", "api_keys", "teams", "project"]) (viaNonEmpty head unprefixed))
-  Viewer _ -> InsufficientRole <$ guard (not readOnly)
-  DemoReader _ -> DemoReadOnly <$ guard (not readOnly)
+  Editor _ -> InsufficientRole <$ guard (write && any (`elem` ["members", "api_keys", "teams", "project"]) target)
+  Viewer _ -> InsufficientRole <$ guard (not readOnly || target == Just "api_keys")
+  DemoReader _ -> DemoReadOnly <$ guard (not readOnly || target == Just "api_keys")
   where
+    target = viaNonEmpty head unprefixed
     write = requestMethod req `notElem` [methodGet, methodHead]
     readOnly = not write || requestMethod req == methodPost && any (`BS.isSuffixOf` rawPathInfo req) ["/events/query", "/mcp"]
-    unprefixed = case pathInfo req of "api" : "v1" : rest -> rest; ps -> ps
+    unprefixed = case decodePathSegments (rawPathInfo req) of "api" : "v1" : rest -> rest; ps -> ps
 
 
 -- | Clearing the cookie alone left the session row valid forever: a copied cookie or a CLI
@@ -387,13 +390,16 @@ logoutH cookieM = do
 
 
 -- | A post-login or post-switch destination, kept on this site: a path, never a scheme,
--- @//host@ or @/\\host@ (browsers treat both as another origin).
+-- @//host@ or @/\\host@ (browsers treat both as another origin). Browsers also drop tab, CR and
+-- LF from a URL, so @/\t/host@ was @//host@: no control character, space or backslash passes.
 --
 -- >>> map (safeRedirect . Just) ["/p/x/log_explorer?since=1H", "https://evil.example", "//evil.example", "/\\evil.example", "javascript:alert(1)", ""]
 -- ["/p/x/log_explorer?since=1H","/","/","/","/","/"]
+-- >>> map (safeRedirect . Just) ["/\t/evil.example", "/\t\\evil.example", "/\n/evil.example", "/\r/evil.example", "/ /evil.example", "/p/x\\y"]
+-- ["/","/","/","/","/","/"]
 safeRedirect :: Maybe Text -> Text
 safeRedirect = \case
-  Just p | Just rest <- T.stripPrefix "/" p, not ("/" `T.isPrefixOf` rest || "\\" `T.isPrefixOf` rest) -> p
+  Just p | Just rest <- T.stripPrefix "/" p, not ("/" `T.isPrefixOf` rest), T.all (\c -> c > ' ' && c /= '\\' && c /= '\DEL') p -> p
   _ -> "/"
 
 
@@ -468,11 +474,12 @@ authCallbackH codeM stateM redirectToM cookieM userAgentM countryM = do
     let opts = defaults & header "Authorization" L..~ ["Bearer " <> encodeUtf8 @Text @ByteString accessToken]
     resp <- ExceptT $ tryHttp $ W.getWith opts (toString $ envCfg.config.auth0Domain <> "/userinfo")
     let field k = fromMaybe "" $ resp L.^? responseBody . key k . _String
-    -- Accounts are keyed by email, so an IdP login whose email is unverified could claim
-    -- whoever already holds that address (or an invite pre-created for it). It may still
-    -- create a fresh account: that reaches nobody else's data.
+    -- Accounts are keyed by email, so an IdP login whose email is explicitly unverified could
+    -- claim whoever holds that address (or an invite pre-created for it), or create the account
+    -- its real owner later signs into while the creator keeps a session. A missing claim (some
+    -- enterprise IdPs omit it) is accepted.
     when (resp L.^? responseBody . key "email_verified" . _Bool == Just False)
-      $ whenJustM (lift $ Projects.userByEmail $ field "email") \_ -> hoistEither $ Left ("unverified email for an existing account" :: Text)
+      $ hoistEither (Left ("unverified email" :: Text))
     lift do
       (sessId, signin) <- authorizeUserAndPersist (Just envCfg.config.convertkitApiKey) False (field "given_name") (field "family_name") (field "picture") (field "email")
       (sessId,) <$> case signin of

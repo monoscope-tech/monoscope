@@ -215,7 +215,7 @@ alertUpsertPostH pid form = do
 
 alertSingleToggleActiveH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)
 alertSingleToggleActiveH pid monitorId = do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   void $ Monitors.monitorToggleActiveById pid monitorId
   redirectCS $ (urls.monitors pid).listGet Nothing Nothing
   addRespHeaders $ AlertNoContent ""
@@ -264,7 +264,7 @@ instance ToHtml Alert where
 
 alertTeamDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ManageMembers.TeamId -> ATAuthCtx (RespHeaders Alert)
 alertTeamDeleteH pid monitorId teamId = do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   _ <- Monitors.monitorRemoveTeam pid monitorId teamId
   addSuccessToast "Team removed from monitor successfully" Nothing
   addRespHeaders $ AlertNoContent ""

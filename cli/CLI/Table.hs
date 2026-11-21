@@ -42,6 +42,7 @@ import CLI.Core (OutputMode (..), getOutputMode, isJsonOutput)
 import Data.Char (toUpper)
 import Data.Text qualified as T
 import Effectful
+import Pkg.CLIFormat (escapeControls)
 import System.Console.ANSI qualified as ANSI
 import System.IO (hIsTerminalDevice)
 import Text.Layout.Table (LineStyle (SingleLine), center, column, columnHeaderTableS, expand, expandUntil, fullH, headerColumn, left, noAlign, right, rowsG, simpleTableStyleSpec, singleCutMark, tableLines, unicodeTableStyleFromSpec, withRoundCorners)
@@ -114,10 +115,12 @@ defaultRichTableOpts = RichTableOpts{alignments = [], maxWidth = Nothing}
 -- - In table mode but a non-TTY stdout (e.g. @--table | cat@), ANSI is
 --   still emitted because the user explicitly asked for the table view.
 renderRichTableWith :: IOE :> es => RichTableOpts -> [Text] -> [[Cell]] -> Eff es ()
-renderRichTableWith opts headers rows = whenM ((== OutputTable) <$> getOutputMode) do
+renderRichTableWith opts headers0 rows0 = whenM ((== OutputTable) <$> getOutputMode) do
   ansi <- not <$> isJsonOutput
   cap <- maybe (liftIO termWidth) pure opts.maxWidth
-  let natural = [foldl' max (T.length h) [T.length (snd c) | Just c <- map (!!? i) rows] | (i, h) <- zip [0 ..] headers]
+  let headers = map escapeControls headers0
+      rows = map (map (second escapeControls)) rows0
+      natural = [foldl' max (T.length h) [T.length (snd c) | Just c <- map (!!? i) rows] | (i, h) <- zip [0 ..] headers]
       widest = maybe 0 fst (viaNonEmpty head (sortWith (Down . snd) (zip [0 :: Int ..] natural)))
       -- The widest column absorbs the overflow (│ x │ y │ costs 3n + 1 columns of chrome).
       fitW = max 8 (cap - 3 * length headers - 1 - sum natural + fromMaybe 0 (natural !!? widest))

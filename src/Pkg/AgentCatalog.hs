@@ -231,8 +231,8 @@ data LocalOperation
 
 -- | Native callers and catalogued tools cannot disagree about local authority.
 --
--- >>> map localPolicy [ReadProjectMemory, WriteProjectMemory, SaveArtifact, SendToSlack]
--- [ReadOnly PView,ProjectMemoryWrite,ConversationWrite,ExternalPublication]
+-- >>> map localPolicy [ReadProjectMemory, WriteProjectMemory, SaveArtifact, SendToSlack, HighlightOnHome]
+-- [ReadOnly PView,ProjectMemoryWrite,ConversationWrite,ExternalPublication,ProjectWrite]
 --
 -- Click and Fill change nothing on this server: the requester's own tab acts with their own
 -- session, and the agent is offered them only when the turn permits changes.
@@ -240,8 +240,8 @@ localPolicy :: LocalOperation -> AgentPolicy
 localPolicy = \case
   SendToSlack -> ExternalPublication
   SaveArtifact -> ConversationWrite
-  -- Dismissable and self-expiring, so routines may flag without a review step.
-  HighlightOnHome -> ConversationWrite
+  -- Every member's Home shows it, so it is a project write, not the conversation's own.
+  HighlightOnHome -> ProjectWrite
   WriteProjectMemory -> ProjectMemoryWrite
   (GetFieldValues; GetServices; CountQuery; SampleLogs; GetFacets; RunQuery; RunSqlQuery; GetInvestigationHistory; GetRelatedIncidents; GetIncidentContext; ReadArtifact; SearchProjectTools; GetProjectToolSchema; GetCodeContext; ListRunbooks; ReadRunbook; GetLinkedRepositories; GetDeployments; ListProjectMemory; ReadProjectMemory; OpenPage; ReadPage; Click; Fill) -> ReadOnly ProjectMembers.PView
 

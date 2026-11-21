@@ -24,7 +24,7 @@ import Data.Tuple.Extra (fst3, snd3, thd3)
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.LibPQ qualified as PQ
-import Database.PostgreSQL.Simple (Connection, FromRow, SomePostgreSqlException, SqlError (..), query_)
+import Database.PostgreSQL.Simple (Connection, FromRow, SomePostgreSqlException, SqlError (..), execute, execute_, query_)
 import Database.PostgreSQL.Simple.FromField (FromField (..), ResultError (..), typeOid)
 import Database.PostgreSQL.Simple.FromRow (fromRow)
 import Database.PostgreSQL.Simple.Internal qualified as PGI
@@ -231,10 +231,13 @@ runRawQuery authCtx dbSource decoder cfg ast kql template mapping liveRange prog
           <> variablePresets cfg.binDensity cfg.pid.toText from to [(key, Just value) | (key, value) <- M.toList mapping, "var-" `T.isPrefixOf` key || key == "table-search"] cfg.currentTime
           <> mapping
   -- The template names tenant tables; scoping makes each the project's slice before it runs.
-  case LogQueries.scopeUserSql (not $ usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource) cfg.pid (fillQueryTemplate SqlTemplate canonical template) of
+  let postgres = not $ usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
+  case LogQueries.scopeUserSql postgres cfg.pid (fillQueryTemplate SqlTemplate canonical template) of
     Left err -> pure (emptyMetricsFor cfg.currentTime from to){error = Just err}
-    Right sql -> do
-      let fetch = liftIO $ fetchMetricsDataWithProgress progress decoder sql cfg.currentTime from to authCtx dbSource >>= either throwIO pure
+    Right scoped -> do
+      -- User SQL on Postgres returns at most 100k rows, which the decoders hold in memory at once.
+      let sql = bool scoped ("SELECT * FROM (" <> scoped <> ") capped LIMIT 100000") postgres
+      let fetch = liftIO $ fetchMetricsDataWithProgress ("30s" <$ guard postgres) progress decoder sql cfg.currentTime from to authCtx dbSource >>= either throwIO pure
       case (endpoint, from, to) of
         (Just endpointHash, Just start, Just end) ->
           QC.cachedRawQuery
@@ -533,7 +536,7 @@ withChartSpan tbl attrs sqlQuery fallback action =
 
 
 fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe SqlSource -> IO (Either SomePostgreSqlException MetricsData)
-fetchMetricsData = fetchMetricsDataWithProgress Nothing
+fetchMetricsData = fetchMetricsDataWithProgress Nothing Nothing
 
 
 -- | Is this failure TimeFusion's shared query pool being momentarily full,
@@ -567,8 +570,8 @@ metricsPool :: AuthContext -> Maybe SqlSource -> Pool Connection
 metricsPool authCtx dbSource = bool authCtx.pool authCtx.timefusionPgPool $ usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
 
 
-fetchMetricsDataWithProgress :: Maybe (MetricsData -> IO ()) -> DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe SqlSource -> IO (Either SomePostgreSqlException MetricsData)
-fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCtx dbSource =
+fetchMetricsDataWithProgress :: Maybe Text -> Maybe (MetricsData -> IO ()) -> DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe SqlSource -> IO (Either SomePostgreSqlException MetricsData)
+fetchMetricsDataWithProgress deadline progress respDataType sqlQuery now fromD toD authCtx dbSource =
   -- A connection that died idle, or a stream out of step with its query, fails at once; drop the
   -- idle connections and retry once. Queries still checked out and the query cache are unaffected.
   attempt >>= \case
@@ -577,8 +580,15 @@ fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCt
   where
     pool = metricsPool authCtx dbSource
     baseMetricsData = emptyMetricsFor now fromD toD
+    -- @deadline@ cuts user SQL on the shared Postgres pool off, so one statement cannot hold a
+    -- connection every tenant shares (TimeFusion takes no session settings). A failed read
+    -- discards its connection, so the reset only has to follow a success.
+    withConn :: (Connection -> IO a) -> IO a
+    withConn act = withResource pool \conn -> case deadline of
+      Nothing -> act conn
+      Just d -> execute conn "SET statement_timeout = ?" (Only d) *> act conn <* execute_ conn "RESET statement_timeout"
     runQ :: FromRow r => IO [r]
-    runQ = withResource pool \conn -> let q = Query (encodeUtf8 sqlQuery) in pgSpan conn q (query_ conn q)
+    runQ = withConn \conn -> let q = Query (encodeUtf8 sqlQuery) in pgSpan conn q (query_ conn q)
     attempt = retryOnPoolExhaustion $ try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
       DTFloat -> do
         chartData <- runQ :: IO [Only (Maybe ChartNumber)]
@@ -599,7 +609,7 @@ fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCt
         -- Always streamed, so an abandoned read cancels its SQL; @progress@ only reports.
         rowsRef <- newIORef []
         lastEmit <- newIORef 0
-        withResource pool \conn -> streamQuery_ conn (Query $ encodeUtf8 sqlQuery) \row -> do
+        withConn \conn -> streamQuery_ conn (Query $ encodeUtf8 sqlQuery) \row -> do
           modifyIORef' rowsRef (row :)
           forM_ progress \emit -> do
             tick <- getMonotonicTimeNSec
@@ -770,7 +780,7 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
                     (start, end) = cfg'.dateRange
                     key = QC.generateCacheKey pid source ast' cfg'
                     fixed = QC.rewriteBinAutoToFixed key.binInterval ast'
-                    readMetrics callback statement lower upper = liftIO $ fetchMetricsDataWithProgress callback actual statement now lower upper authCtx dbSource
+                    readMetrics callback statement lower upper = liftIO $ fetchMetricsDataWithProgress Nothing callback actual statement now lower upper authCtx dbSource
                     runChunk chunkCfg = do
                       let (_, chunkParts) = queryASTToComponents chunkCfg fixed
                           (chunkFrom, chunkTo) = chunkCfg.dateRange

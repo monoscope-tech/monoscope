@@ -10,6 +10,9 @@ module Models.Apis.Integrations (
   getSlackDataByTeamId,
   insertDiscordData,
   getDiscordDataByProjectId,
+  Channel (..),
+  getDiscordChannels,
+  foreignDiscordChannels,
   getProjectSlackData,
   updateSlackDefaultChannel,
   getDashboardsForDiscord,
@@ -287,7 +290,7 @@ resolveSlackPrincipalTx teamId slackUserId threadProject = Hasql.queryTx $ slack
 
 slackPrincipalSql :: Text -> Text -> Maybe Projects.ProjectId -> HI.Sql
 slackPrincipalSql teamId slackUserId threadProject =
-  [HI.sql|SELECT identity.user_id, member.project_id, member.permission FROM apis.slack_identities identity
+  [HI.sql|SELECT identity.user_id, member.project_id, ^{ProjectMembers.memberPermission} FROM apis.slack_identities identity
     JOIN projects.project_members member ON member.project_id = COALESCE(#{threadProject}, identity.project_id) AND member.user_id = identity.user_id
     JOIN users.users account ON account.id = identity.user_id
     JOIN projects.projects project ON project.id = member.project_id
@@ -523,7 +526,7 @@ createSlackAuthorization stateId userId projectId purpose = do
       LEFT JOIN apis.slack_identities identity ON identity.team_id = installation.team_id
         AND identity.slack_user_id = #{slackUser} AND identity.user_id = member.user_id
       WHERE member.project_id = #{projectId} AND member.user_id = #{userId}
-        AND ((#{slackUser}::text IS NULL AND member.permission = ^{enumLit ProjectMembers.PAdmin})
+        AND ((#{slackUser}::text IS NULL AND ^{ProjectMembers.memberPermission} = ^{enumLit ProjectMembers.PAdmin})
           OR (#{slackUser}::text IS NOT NULL AND identity.slack_user_id IS NOT NULL))|]
       <> ProjectMembers.activeMembership
   pure $ affected == 1
@@ -574,7 +577,7 @@ consumeSlackAuthorization stateId userId = do
       AND request.consumed_at IS NULL
       AND member.project_id = request.project_id AND member.user_id = request.user_id
       AND project.id = member.project_id AND account.id = member.user_id
-      AND ((request.team_id IS NULL AND member.permission = ^{enumLit ProjectMembers.PAdmin})
+      AND ((request.team_id IS NULL AND ^{ProjectMembers.memberPermission} = ^{enumLit ProjectMembers.PAdmin})
         OR EXISTS (SELECT 1 FROM apis.slack_identities identity JOIN apis.slack installation
           ON installation.team_id = identity.team_id AND installation.project_id = request.project_id
           WHERE identity.team_id = request.team_id AND identity.slack_user_id = request.slack_user_id AND identity.user_id = request.user_id))|]
@@ -911,6 +914,33 @@ getDiscordDataByProjectId :: DB es => Projects.ProjectId -> Eff es (Maybe Discor
 getDiscordDataByProjectId pid = Hasql.interpOne (selectDiscord <> [HI.sql|WHERE project_id = #{pid}|])
 
 
+data Channel = Channel
+  { channelName :: Text
+  , channelId :: Text
+  , channelType :: Maybe Int
+  }
+  deriving (Generic, Show)
+  deriving
+    (AE.FromJSON, AE.ToJSON)
+    via AE.CustomJSON '[AE.OmitNothingFields, AE.FieldLabelModifier '[AE.StripPrefix "channel", AE.CamelToSnake]] Channel
+
+
+getDiscordChannels :: (HTTP.HTTP :> es, Log :> es) => Text -> Text -> Eff es [Channel]
+getDiscordChannels token guildId = do
+  r <- HTTP.getWith (Wreq.defaults & Wreq.header "Authorization" .~ [encodeUtf8 $ "Bot " <> token]) (toString $ "https://discord.com/api/v10/guilds/" <> guildId <> "/channels")
+  either (\err -> [] <$ Log.logAttention ("Error decoding discord channels response: " <> toText err) ()) pure $ Aeson.eitherDecode (r ^. Wreq.responseBody)
+
+
+-- | The submitted channel ids that are not channels of the project's installed guild (all of them
+-- without an install). Alerts post with the operator's bot token, so an unbound id would reach any
+-- guild the bot belongs to.
+foreignDiscordChannels :: (DB es, HTTP.HTTP :> es, Log :> es) => Text -> Projects.ProjectId -> [Text] -> Eff es [Text]
+foreignDiscordChannels _ _ [] = pure []
+foreignDiscordChannels token pid ids = do
+  owned <- getDiscordDataByProjectId pid >>= maybe (pure []) (fmap (map (.channelId)) . getDiscordChannels token . (.guildId))
+  pure $ filter (`notElem` owned) ids
+
+
 -- | Shared (d.title, d.id::text) dashboard lookup; each caller supplies the
 -- platform-specific JOIN + WHERE fragment (Slack/Discord share the same shape).
 dashboardsByProjectJoin :: DB es => HI.Sql -> Eff es [(Text, Text)]
@@ -1005,8 +1035,11 @@ syncProjectSlackConnect cfg pid create resend =
   ProjectsM.activeProjectById pid >>= \case
     Nothing -> pure $ Right Nothing
     Just project -> do
+      -- Member emails are typed by an admin, unverified; a sign-in (a session) proves the address.
       users <- ProjectsM.usersByProjectId pid
-      syncSlackConnect cfg.slackConnectBotToken (filter (not . T.null) cfg.slackConnectTeamUserIds) pid project.title (create && pid /= ProjectsM.demoProjectId) (map (CI.original . (.email)) users) resend
+      signedIn <- map HI.getOneColumn <$> Hasql.interp [HI.sql| SELECT DISTINCT user_id FROM users.persistent_sessions WHERE user_id = ANY(#{V.fromList $ map (.id) users}) |]
+      let emails = [CI.original u.email | u <- users, u.id `elem` signedIn]
+      syncSlackConnect cfg.slackConnectBotToken (filter (not . T.null) cfg.slackConnectTeamUserIds) pid project.title (create && pid /= ProjectsM.demoProjectId) emails resend
 
 
 -- | Opens the channel in the viewer's Slack client (web or desktop).

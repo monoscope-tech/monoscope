@@ -117,7 +117,8 @@ test('retained run widgets open inside the conversation inspector', async ({ pag
       await charts.scrollIntoViewIfNeeded();
       await expect(charts.getByText('Synthetic request volume', { exact: true })).toBeVisible();
       await expect(charts.getByText('Synthetic request count', { exact: true })).toBeVisible();
-      await expect(charts.locator('strong[id$="Value"]')).toHaveText('44');
+      // The model's inline dataset (value 44) is dropped; the stat shows what its query returns.
+      await expect(charts.locator('strong[id$="Value"]')).not.toHaveText('44');
       await expect(charts.locator('strong[id$="Value"]')).toBeVisible();
       // The chart lazy-loads the widgets chunk and echarts first; a parallel sign-off has run past 5s.
       await expect(charts.locator('[data-chart-widget]')).toHaveAttribute('aria-busy', 'false', { timeout: 15000 });

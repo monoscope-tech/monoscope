@@ -513,6 +513,12 @@ spec = do
         _ -> expectationFailure "expected SpanDetails anchored on the request span"
       waterfall <- renderT <$> call tr (TelemetryPage.traceH testPid trId (Just rootTs) Nothing Nothing Nothing Nothing)
       (T.isInfixOf "monoscope.http" waterfall, T.isInfixOf "timeline.addEventListener('tab-visible'" waterfall) `shouldBe` (False, True)
+      -- tracePage_spanNameClosesScript: span names went into the inline script as plain aeson JSON, so
+      -- one holding </script> ended it and the rest parsed as HTML, on share links too.
+      (xssTrace, xssSpan) <- (,) <$> hexId <*> hexId
+      ingestSpanLinked tr apiKey xssTrace xssSpan Nothing "</script><img src=x onerror=alert(1)>" [] frozenTime
+      xssPage <- renderT <$> call tr (TelemetryPage.traceH testPid xssTrace (Just frozenTime) Nothing Nothing Nothing Nothing)
+      (T.isInfixOf "onerror=alert(1)" xssPage, T.isInfixOf "</script><img" xssPage) `shouldBe` (True, False)
 
       initial <- renderT <$> item True rootId rootTs Nothing Nothing False
       rawTab <- renderT <$> item True rootId rootTs (Just "tab-raw") Nothing True
@@ -726,7 +732,7 @@ spec = do
       sharedKey <- ("shared-cache-spec-" <>) . show <$> getMonotonicTimeNSec
       let read' = runQueryEffect tr $ QC.withSharedCache sharedKey 300 (liftIO $ atomicModifyIORef' calls \n -> (n + 1, n + 1))
       (,) <$> read' <*> read' `shouldReturn` (1, 1)
-      dbExec tr "UPDATE rum_panel_cache SET expires_at = now() - interval '1 minute' WHERE cache_key = ?" (Only $ toXXHash sharedKey)
+      dbExec tr "UPDATE rum_panel_cache SET expires_at = now() - interval '1 minute' WHERE cache_key = ?" (Only $ QC.sharedCacheKey sharedKey)
       read' `shouldReturn` 2
 
       clearAllTestData tr
@@ -740,8 +746,10 @@ spec = do
         frames <- streamChart tr{trATCtx = tr.trATCtx{timefusionPgPool = pool}} Hasql.SqlTimefusion (Just "summarize count(*) by bin(timestamp, 1h)") Nothing (timeAt 0) (timeAt 259200)
         (case viaNonEmpty last frames of Just (AE.Object o) -> (AEKM.lookup "type" o, AEKM.lookup "data" o >>= \case AE.Object f -> AEKM.lookup "rows_count" f; _ -> Nothing); _ -> (Nothing, Nothing)) `shouldBe` (Just "complete", Just (AE.Number 1))
         PG.query_ active "SELECT 1" `shouldReturn` [Only (1 :: Int)]
-      -- 6s outlasts the stream's 5s keep-alive, so a partial frame must precede completion.
-      slow <- streamChart tr Hasql.SqlPostgres Nothing (Just "SELECT 1::integer AS bucket, 'wait'::text AS series, count(*)::float AS value FROM pg_sleep(6)") (timeAt 0) (timeAt 3600)
+      -- 6s outlasts the stream's 5s keep-alive, so a partial frame must precede completion. User SQL
+      -- may not call pg_sleep itself, so the wait is a function it cannot see into.
+      dbExec tr "CREATE OR REPLACE FUNCTION spec_wait(seconds float8) RETURNS void LANGUAGE sql AS $$ SELECT pg_sleep(seconds) $$" ()
+      slow <- streamChart tr Hasql.SqlPostgres Nothing (Just "SELECT 1::integer AS bucket, 'wait'::text AS series, count(*)::float AS value FROM spec_wait(6)") (timeAt 0) (timeAt 3600)
       let kind = \case AE.Object o -> AEKM.lookup "type" o; _ -> Nothing
       (kind <$> listToMaybe slow, kind <$> viaNonEmpty last slow) `shouldBe` (Just (Just "partial"), Just (Just "complete"))
 
@@ -801,6 +809,8 @@ spec = do
       let blank = AE.object ["input" AE..= ("" :: Text)]
       dbExec tr [sql|DELETE FROM projects.project_members WHERE project_id = ?|] (Only Projects.demoProjectId)
       httpStatus tr (AIThreads.aiSearchH Projects.demoProjectId blank) `shouldReturn` 400
+      -- aiSearch_oversizedInput_isRefusedBeforeTheModel: the composer's 4,000-char cap applies here too.
+      httpStatus tr (AIThreads.aiSearchH Projects.demoProjectId (AE.object ["input" AE..= T.replicate 4001 "a"])) `shouldReturn` 400
       victim <- createTestProject tr "ai-search-victim"
       assertNonMemberDenied tr victim $ AIThreads.aiSearchH victim blank
 

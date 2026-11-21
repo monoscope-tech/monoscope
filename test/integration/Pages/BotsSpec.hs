@@ -57,14 +57,14 @@ import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), RequestBody (..), defaultRequest, requestBody, responseStatus)
-import Network.HTTP.Types (Status, parseSimpleQuery, renderSimpleQuery, status202, status204, status401, status403, status429, status503)
+import Network.HTTP.Types (Status, parseQuery, parseSimpleQuery, renderSimpleQuery, status202, status204, status401, status403, status429, status503)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types qualified as WreqTypes
 import OddJobs.Job qualified as OddJobs
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (PageCtx (..))
-import Pages.Bots.Discord (discordInteractionsH)
+import Pages.Bots.Discord (discordInteractionsH, linkDiscordGetH, startInstallGetH)
 import Pages.Bots.Slack (processSlackEvent, slackEventsPostH, slackInteractionsH)
 import Pages.Bots.Slack qualified as SlackPage
 import Pages.Bots.Utils qualified as Bot
@@ -89,6 +89,7 @@ import UnliftIO.Async (concurrently, concurrently_, wait, withAsync)
 import UnliftIO.Exception (tryAny)
 import Utils (hostPath)
 import Web.ApiTypes (ApiActor (..))
+import Web.Cookie (parseSetCookie, setCookieValue)
 import Web.FormUrlEncoded (Form (..), FromForm, urlDecodeAsForm)
 import Web.MCP qualified as MCP
 import Web.Routes qualified as Routes
@@ -987,7 +988,7 @@ spec = around withTestResources do
       let revision = T.replicate 40 "a"
           config = (AI.defaultAgenticConfig testPid){AI.access = investigation tr "T_SOURCE" "CSOURCE", AI.sourceConfig = Just tr.trATCtx.config}
       linkCheckoutRepo tr "ghp_source_fixture"
-      Cache.insert tr.trATCtx.codeBlobCache ("acme", "checkout-service", revision, "checkout.py") "source cached under another credential"
+      Cache.insert tr.trATCtx.codeBlobCache (UUIDId UUID.nil, "github", Nothing, "acme", "checkout-service", revision, "checkout.py") "source cached under another credential"
       for_ ([(revision, "checkout", 1, True), ("main", "checkout", 1, False), (revision, "other-service", 1, False), (revision, "checkout", -1, False)] :: [(Text, Text, Int, Bool)]) \(ref, service, line, shouldRead) -> do
         evidence <- newIORef ([] :: [Text])
         let provider = agent \history _ -> do
@@ -1906,7 +1907,7 @@ spec = around withTestResources do
           answered p = either (const False) (p . (.response))
       issueId <- dbOne @_ @Issues.IssueId tr [sql|INSERT INTO apis.issues (project_id, issue_type, target_hash, service, environment) VALUES (?, 'runtime_exception'::apis.issue_type, gen_random_uuid()::text, 'checkout', 'production') RETURNING id|] (Only testPid)
       acknowledge <- interactiveInvocation tr testPid (conversation 1) "Acknowledge this issue" Issues.Autonomous
-      runTestBg frozenTime tr $ Issues.logIssueActivity issueId Issues.IEViewed (Just $ uid tr) Nothing
+      runTestBg frozenTime tr $ Issues.logIssueActivity testPid issueId Issues.IEViewed (Just $ uid tr) Nothing
       answer <-
         runTestBg frozenTime tr (agent (\h _ -> pure $ case toolResults h of [] -> invoking [fn "ack_issue" [("issue_id", AE.toJSON issueId)], newDashboard "Agent attribution regression"]; [_, _] -> invoking [fn "get_issue" [("issue_id", AE.toJSON issueId)]]; _ -> said "Issue acknowledged.") $ chat (tooled $ durable tr (conversation 1) acknowledge) "Acknowledge this issue")
           >>= either (fail . toString) pure
@@ -1923,9 +1924,16 @@ spec = around withTestResources do
           sendAs mode = runTestBgRecordingHTTP frozenTime tr $ slackOk $ echo (fn "send_to_slack" [("message", "Do not send")]) $ AI.runAgenticChatWithHistory (slackAccess $ durable tr (conversation 3) mode) "Send this to Slack" "model" "api-key-never-store"
       runTestBg frozenTime tr (echo (fn "create_monitor" []) $ chat (durable tr (conversation 2) writes){AI.projectTools = Just monitorOnly} "Create a monitor") >>= (`shouldSatisfy` answered (T.isInfixOf "project role"))
       readIORef monitorRan `shouldReturn` False
+      -- highlightOnHomeClassedConversationWrite: a viewer's read-only chat posted to every member's Home.
+      let highlight n mode = void $ runTestBg frozenTime tr $ echo (fn "highlight_on_home" [("title", "Flagged"), ("kind", "insight"), ("detail", "X")]) $ chat (durable tr (conversation n) mode) "Flag this"
+          highlights = dbOne @_ @Int tr [sql|SELECT count(*)::int FROM apis.home_highlights WHERE project_id = ?|] (Only testPid)
+      interactiveInvocation tr testPid (conversation 4) "Flag this" Issues.Observe >>= highlight 4
+      highlights `shouldReturn` 0
       sendAs sends >>= (`shouldSatisfy` \(requests, a) -> null requests && answered (T.isInfixOf "edit permission") a)
       setRole tr testPid PM.PEdit
       resumed <- interactiveInvocation tr testPid (conversation 3) "Send this to Slack" Issues.Autonomous
+      interactiveInvocation tr testPid (conversation 5) "Flag this" Issues.Autonomous >>= highlight 5
+      highlights `shouldReturn` 1
       sendAs resumed >>= (`shouldSatisfy` \(requests, a) -> map fst requests == ["https://slack.com/api/chat.postMessage"] && answered (T.isInfixOf "Slack message sent") a)
       -- Administrative operations need the role, the policy, and an audience that may see the result.
       for_ (zip [10 ..] [("get_api_key", PM.PView, Issues.Autonomous, Left "project role"), ("get_api_key", PM.PAdmin, Issues.Autonomous, Left "destination"), ("create_api_key", PM.PAdmin, Issues.Autonomous, Left "destination"), ("delete_dashboard", PM.PView, Issues.Autonomous, Left "project role"), ("delete_dashboard", PM.PAdmin, Issues.Observe, Left "execution policy"), ("delete_dashboard", PM.PAdmin, Issues.Autonomous, Right ())]) \(n, (operation, role, policy, expected :: Either Text ())) -> do
@@ -5224,6 +5232,24 @@ spec = around withTestResources do
         publication <- dbOne tr [sql|SELECT publication_id FROM apis.slack_reply_publications WHERE project_id = ? AND conversation_id = ? AND part = 0|] (testPid, turn.conversationId)
         traverse (\ts -> runQueryEffect tr $ Investigations.confirmReplyPublication publication ts) (["1735689610.000001", "1735689619.000001"] :: [Text]) `shouldReturn` [True, False]
         work receipt >>= (`shouldSatisfy` noop)
+
+  -- discordInstall_callbackFromAnotherBrowser_doesNotLink: the state was only the project id, so an
+  -- attacker's own callback URL, opened by an editor, bound the editor's project to the attacker's guild.
+  it "Discord install links only from the browser that started it" \tr -> do
+    pid <- createTestProject tr "discord-install"
+    headers <- getHeaders <$> runAuthHandler tr (startInstallGetH pid False)
+    let location = maybe "" decodeUtf8 $ lookup "Location" headers
+        oauthState = maybe "" decodeUtf8 $ join $ lookup "state" $ parseQuery $ encodeUtf8 $ T.drop 1 $ snd $ T.breakOn "?" location
+        session = "monoscope_session=" <> UUID.toText (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId
+        granted _ url = pure $ AE.encode (AE.object ["guild" .= AE.object ["id" .= ("G_ATTACKER" :: Text)]]) <$ guard ("oauth2/token" `T.isInfixOf` toText url)
+        callback cookie = fst <$> runAsBaseRecordingHTTP tr (withHTTPResponses granted $ linkDiscordGetH (Just oauthState) (Just "code") (Just "G_ATTACKER") (Just cookie))
+        linked = (.guildId) <<$>> runQueryEffect tr (Slack.getDiscordDataByProjectId pid)
+    (setCookieValue . parseSetCookie <$> lookup "Set-Cookie" headers, T.isPrefixOf (pid.toText <> "__") oauthState) `shouldBe` (Just (encodeUtf8 oauthState), True)
+    -- The editor's session alone, or with a oauthState cookie from another install, redeems no code.
+    for_ @[] [session, session <> "; monoscope_discord_state=" <> pid.toText <> "__other"] \cookie -> callback (encodeUtf8 cookie) `shouldReturn` []
+    linked `shouldReturn` Nothing
+    void $ callback $ encodeUtf8 $ session <> "; monoscope_discord_state=" <> oauthState
+    linked `shouldReturn` Just "G_ATTACKER"
 
   it "Discord: signed interactions answer ping, /here, deferred /monoscope in channels and threads, and /dashboard" \tr -> do
     setupDiscordData tr testPid "1234567890123456789"

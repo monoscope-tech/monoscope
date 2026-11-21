@@ -22,6 +22,7 @@ module Models.Projects.Projects (
   insertProject,
   projectIdFromText,
   demoProjectId,
+  demoGuestEmail,
   usersByProjectId,
   projectEmailRecipients,
   accessibleMembership,
@@ -310,6 +311,12 @@ projectIdFromText = idFromText
 -- ('Utils.isDemoAndNotSudo') and 'sessionAndProject' below cannot drift apart.
 demoProjectId :: ProjectId
 demoProjectId = UUIDId UUID.nil
+
+
+-- | The shared identity behind every anonymous demo visitor, seeded as a demo admin by
+-- migration 0001; 'Models.Projects.ProjectMembers.memberPermissionsSql' caps it at view.
+demoGuestEmail :: Text
+demoGuestEmail = "hello@monoscope.tech"
 
 
 data Project = Project

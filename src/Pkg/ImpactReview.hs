@@ -1316,7 +1316,7 @@ publishIssueFix pid fid = do
           Right () <$ do
             let link = AE.object ["url" AE..= receipt.url, "title" AE..= ("Draft fix PR #" <> show @Text receipt.number)]
             unlessM (Hasql.interpScalar [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.issue_activity_log WHERE issue_id = #{run.issueId} AND event = #{Issues.IELinked} AND metadata->>'url' = #{receipt.url})|])
-              $ Issues.logIssueActivity run.issueId Issues.IELinked (Just owner) (Just link)
+              $ Issues.logIssueActivity pid run.issueId Issues.IELinked (Just owner) (Just link)
         publishWith (token, credential) = runExceptT do
           conn <- hoistEither $ first (RepositoryUnreadable . Git.gitConnErrorMessage) $ Git.mkGitConn Git.GitHub Nothing token
           access <- ExceptT $ first RepositoryUnreadable <$> Git.getRepositoryAccess conn (Git.RepoRef run.setup.owner run.setup.repo mapping.ref)

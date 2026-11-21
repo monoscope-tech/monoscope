@@ -368,6 +368,11 @@ spec = around withTestResources do
     -- The provider is stored explicitly, not guessed at read time.
     dbOne @_ @Text tr [sql|SELECT billing_provider::text FROM projects.projects WHERE id = ?|] (Only pid) `shouldReturn` "lemon_squeezy_provider"
     plan `shouldReturn` "Test Plan"
+    -- The subscription_created safety net must not move a subscription already billing one project onto another.
+    other <- createTestProject tr "ls-billed-elsewhere"
+    let otherBody = toStrict $ AE.encode $ lsEvent "subscription_created" other
+    void $ runAsBaseRecordingHTTP tr $ Settings.webhookPostH (Just $ decodeUtf8 $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 @Text @ByteString tr.trATCtx.env.lemonSqueezyWebhookSecret) otherBody :: HMAC.HMAC SHA256)) otherBody
+    (.firstSubItemId) <$> projectOf tr other `shouldReturn` Nothing
     -- A Lemon Squeezy project keeps the locally-derived cycle, with no Stripe call made for it.
     (billingReqs, d) <- billing
     (billingReqs, d.cycleEnd, (.total) <$> d.currentInvoice) `shouldBe` ([], Nothing, Nothing)
@@ -390,6 +395,19 @@ spec = around withTestResources do
     banner `shouldReturn` []
     (deleteReqs, _) <- runAsBaseRecordingHTTP tr $ atAuthToBase tr.trSessAndHeader $ CreateProject.deleteProjectGetH pid
     map fst deleteReqs `shouldContain` ["https://api.lemonsqueezy.com/v1/subscriptions/12345"]
+
+  -- Anyone can compute an HMAC under the empty key: an unset secret must refuse, before the
+  -- forged checkout cancels the victim's subscription or pays invoices out of band.
+  it "billing webhooks refuse every event when their signing secret is unset" \tr0 -> do
+    pid <- createTestProject tr0 "webhook-empty-secret"
+    now <- getTestTime tr0.trTestClock
+    let tr = tr0{trATCtx = tr0.trATCtx{Config.env = tr0.trATCtx.env{Config.stripeWebhookSecret = "", Config.lemonSqueezyWebhookSecret = ""}}}
+        checkout = stripeEvent "checkout.session.completed" $ AE.object ["client_reference_id" AE..= pid.toText, "subscription" AE..= ("sub_forged" :: Text), "customer" AE..= ("cus_forged" :: Text), "payment_status" AE..= ("paid" :: Text), "metadata" AE..= AE.object ["settles_invoices" AE..= ("in_victim" :: Text)]]
+        created = toStrict $ AE.encode $ lsEvent "subscription_created" pid
+        lsForged = decodeUtf8 $ B16.encode $ BA.convert (HMAC.hmac ("" :: ByteString) created :: HMAC.HMAC SHA256)
+    stripeDeliver tr (\_ _ -> pure Nothing) (Just $ stripeSig "" now checkout) checkout `shouldReturn` ([], 503)
+    runAsBaseRecordingHTTP tr (catchError @ServantS.ServerError (Settings.webhookPostH (Just lsForged) created $> 200) (\_ err -> pure err.errHTTPCode)) `shouldReturn` ([], 503 :: Int)
+    ((.subId) &&& (.firstSubItemId)) <$> projectOf tr pid `shouldReturn` (Nothing, Nothing)
 
   -- ReportUsage bills people. It must never charge wrongly: no submission for a project it
   -- can't attribute, no window reaching back before the current cycle, an auditable failed

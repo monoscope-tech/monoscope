@@ -45,7 +45,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), copyButton_, emDash_, emptyState_, localTimeFmt_, searchInput_)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.DeriveUtils (JsonValueSchema (..), UUIDId (..), WrappedEnumSC (..))
-import Pkg.Parser (ResultShape (..), ToQueryText (..), parseQueryToAST, replacePlaceholders, resultShape)
+import Pkg.Parser (ResultShape (..), ToQueryText (..), parseQueryToAST, replacePlaceholders, resultShape, templateBindings)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
 import Relude
@@ -442,6 +442,11 @@ instance ToHtml Widget where
 -- True
 -- >>> map (isLeft . AE.eitherDecode @ModelWidget) ["{\"type\":\"stat\",\"sql\":\"SELECT 1\"}", "{\"type\":\"stat\",\"html\":\"<b>untrusted</b>\"}", "{\"type\":\"timeseries\",\"queries\":[{\"sql\":\"SELECT 1\"}]}", "{\"type\":\"group\",\"children\":[{\"type\":\"stat\",\"sql\":\"SELECT 1\"}]}", "{\"type\":\"stat\",\"_project_id\":\"00000000-0000-0000-0000-000000000000\"}"]
 -- [True,True,True,True,True]
+--
+-- A dataset is data the model made up, so it is dropped at every depth and the chart runs its query.
+--
+-- >>> (\w -> (w.dataset, (.dataset) <$> fold w.children)) . modelWidget <$> AE.eitherDecode @ModelWidget "{\"type\":\"group\",\"dataset\":{\"source\":[]},\"children\":[{\"type\":\"timeseries\",\"query\":\"summarize count()\",\"dataset\":{\"source\":[{\"formatter\":\"function(){}\"}]}}]}"
+-- Right (Nothing,[Nothing])
 -- >>> isRight $ AE.eitherDecode @ModelWidget "{\"type\":\"timeseries\",\"queries\":[{\"query\":\"summarize count()\"}]}"
 -- True
 -- >>> isLeft $ AE.eitherDecode @ModelWidget "{\"type\":\"table\",\"columns\":[{\"field\":\"name\",\"title\":\"Name\",\"link\":\"javascript:alert(1)\"}]}"
@@ -455,7 +460,7 @@ instance AE.FromJSON ModelWidget where
   parseJSON value = do
     widget <- AE.parseJSON value
     unless (safe widget) $ fail "Model widgets cannot contain SQL, executable content, or server context"
-    pure $ ModelWidget widget
+    pure $ ModelWidget $ transformOf (#children . _Just . traverse) (#dataset .~ Nothing) widget
     where
       safe widget =
         not (or [isJust widget.sql, isJust widget.rollupSql, isJust widget.sqlSig, isJust widget.html, isJust widget.expandBtnFn, isJust widget.expandPushUrl, isJust widget.groupByUrl, isJust widget.groupByTarget, isJust widget.onRowClick, isJust widget.cta, isJust widget._projectId, isJust widget._dashboardId, isJust widget._tabSlug, isJust widget.dbSource, isJust widget.pngUrl])
@@ -707,30 +712,33 @@ signWidgetUrl secret pid widgetJson =
    in decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
 
 
--- | Proof that the server rendered this SQL for @pid@. The browser echoes it back with the
--- statement, and only an editor may run SQL that does not carry it.
+-- | Proof that the server rendered this SQL for @pid@, with the values @params@ give the
+-- placeholders it splices in verbatim ('templateBindings'). The browser echoes it back with
+-- the statement and those params, and only an editor may run SQL that does not carry it.
 --
 -- >>> import Data.UUID qualified as UUID
 -- >>> import Pkg.DeriveUtils (UUIDId (..))
--- >>> let pid = UUIDId UUID.nil
--- >>> sqlSignature "k" pid (Just "SELECT 1") Nothing == sqlSignature "k" pid (Just "SELECT 1") Nothing
+-- >>> let pid = UUIDId UUID.nil; sig ps = sqlSignature "k" pid ps (Just "SELECT 1 WHERE {{const-f}} AND '{{var-s}}' = ''") Nothing
+-- >>> sqlSignature "k" pid [] (Just "SELECT 1") Nothing == sqlSignature "k" pid [] (Just "SELECT 1") Nothing
 -- True
--- >>> sqlSignature "k" pid (Just "SELECT 1") Nothing == sqlSignature "k" pid (Just "SELECT 2") Nothing
+-- >>> sqlSignature "k" pid [] (Just "SELECT 1") Nothing == sqlSignature "k" pid [] (Just "SELECT 2") Nothing
 -- False
--- >>> sqlSignature "k" pid (Just "a") (Just "b") == sqlSignature "k" pid (Just "ab") Nothing
+-- >>> sqlSignature "k" pid [] (Just "a") (Just "b") == sqlSignature "k" pid [] (Just "ab") Nothing
 -- False
-sqlSignature :: Text -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Text
-sqlSignature secret pid sql rollup = signWidgetUrl secret pid $ "sql\0" <> fold sql <> "\0" <> fold rollup
+-- >>> (sig [("const-f", Just "TRUE")] == sig [("const-f", Just "TRUE"), ("var-s", Just "x")], sig [("const-f", Just "TRUE")] == sig [("const-f", Just "TRUE OR 1=1")])
+-- (True,False)
+sqlSignature :: Text -> Projects.ProjectId -> [(Text, Maybe Text)] -> Maybe Text -> Maybe Text -> Text
+sqlSignature secret pid params sql rollup = signWidgetUrl secret pid $ "sql\0" <> fold sql <> "\0" <> fold rollup <> "\0" <> encodeText (templateBindings params $ fold sql <> "\n" <> fold rollup)
 
 
 -- | Constant-time check of a signature the browser echoed back.
-verifySqlSignature :: Text -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Bool
-verifySqlSignature secret pid sql rollup = maybe False (constEqText (sqlSignature secret pid sql rollup))
+verifySqlSignature :: Text -> Projects.ProjectId -> [(Text, Maybe Text)] -> Maybe Text -> Maybe Text -> Maybe Text -> Bool
+verifySqlSignature secret pid params sql rollup = maybe False (constEqText (sqlSignature secret pid params sql rollup))
 
 
 -- | Stamp 'sqlSig' on a widget and its children, for those carrying SQL.
-signWidgetSql :: Text -> Projects.ProjectId -> Widget -> Widget
-signWidgetSql secret pid = transformOf (#children . _Just . traverse) \w -> w{sqlSig = sqlSignature secret pid w.sql w.rollupSql <$ (w.sql <|> w.rollupSql)}
+signWidgetSql :: Text -> Projects.ProjectId -> [(Text, Maybe Text)] -> Widget -> Widget
+signWidgetSql secret pid params = transformOf (#children . _Just . traverse) \w -> w{sqlSig = sqlSignature secret pid params w.sql w.rollupSql <$ (w.sql <|> w.rollupSql)}
 
 
 -- | Standalone timeseries panel with the shared infrastructure-page chrome:
@@ -1268,6 +1276,9 @@ renderWidgetHeader actions widget valueM subValueM expandBtnFn ctaM = div_ [clas
           (bool "Add this widget to a dashboard" "Copy this widget to another dashboard" onDashboard)
           [ id_ $ wId <> "_copy_link"
           , data_ "widget-title" $ maybeToMonoid widget.title
+          , -- Read from data attributes: a stored id spliced into the script's string literal broke out of it.
+            data_ "widget-id" wId
+          , data_ "source-dashboard-id" dashId
           , term
               "_"
               [text|
@@ -1276,8 +1287,8 @@ renderWidgetHeader actions widget valueM subValueM expandBtnFn ctaM = div_ [clas
               then set #dashboards-modal-title.textContent to "${modalTitle}"
               then set #dashboards-modal-widget-title.textContent to my.dataset.widgetTitle
               then set #dashboards-modal-search.value to ''
-              then set #dashboards-modal-widget-id.value to "${wId}"
-              then set #dashboards-modal-source-dashboard-id.value to "${dashId}"
+              then set #dashboards-modal-widget-id.value to my.dataset.widgetId
+              then set #dashboards-modal-source-dashboard-id.value to my.dataset.sourceDashboardId
               then set #dashboards-modal-widget-json.value to (widgetEl.dataset.widget or '')
               then set #dashboards-modal.checked to true then send change to #dashboards-modal
               then trigger loadDashboards on #dashboards-modal-content
@@ -1344,8 +1355,8 @@ renderWidgetHeader actions widget valueM subValueM expandBtnFn ctaM = div_ [clas
               , onpointerdown_
                   [text|
                   if (confirm('Are you sure you want to delete this widget? This action cannot be undone.')) {
-                    document.getElementById('${wId}_widgetEl')?.dispatchEvent(
-                      new CustomEvent('widget-remove-requested', { bubbles: true, detail: { widgetId: '${wId}' } }));
+                    document.getElementById(${wIdJson} + '_widgetEl')?.dispatchEvent(
+                      new CustomEvent('widget-remove-requested', { bubbles: true, detail: { widgetId: ${wIdJson} } }));
                   }
                   return false;
                 |]

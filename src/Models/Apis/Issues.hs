@@ -1279,7 +1279,7 @@ ackCascade pid uid window iids
 -- | Clear acknowledgements whose window has closed, returning the affected ids so
 -- the caller can log 'IEAckExpired'. Nothing else clears a timed ack, so this is
 -- what stops one from silently rotting out of sight forever.
-expireAcks :: DB es => UTCTime -> Eff es [IssueId]
+expireAcks :: DB es => UTCTime -> Eff es [(Projects.ProjectId, IssueId)]
 expireAcks now = do
   -- Expired recurrences can share a signal key. Archive all but the newest before
   -- reopening it, or the open-issue partial index rejects the whole expiry sweep.
@@ -1319,7 +1319,7 @@ expireAcks now = do
             archived_at = NULL, updated_at = #{now}
         FROM keepers k
         WHERE i.id = k.id
-        RETURNING i.id |]
+        RETURNING i.project_id, i.id |]
     )
 
 
@@ -1405,7 +1405,7 @@ mergeIssues pid actor reason issues = do
       let ids = (.id) . fst <$> rest
       for_ canonError \c -> PatternMerge.mergeErrorPatterns pid c.id [e.id | (_, Just e) <- rest]
       void $ setArchiveState pid ids (Just (now, ArchiveIndefinite))
-      forM_ ids \i -> logIssueActivity i IEMerged actor $ Just $ AE.object ["into" AE..= canon.id, "reason" AE..= (T.take 500 <$> reason)]
+      forM_ ids \i -> logIssueActivity pid i IEMerged actor $ Just $ AE.object ["into" AE..= canon.id, "reason" AE..= (T.take 500 <$> reason)]
       pure $ Just (canon, ids)
     _ -> pure Nothing
 
@@ -1419,7 +1419,7 @@ unmergeIssues pid actor issues = do
       ids = (.id) <$> merged
   forM_ merged $ issueError pid >=> traverse_ (PatternMerge.unmergePattern pid . (.id))
   void $ setArchiveState pid ids Nothing
-  ids <$ forM_ ids \i -> logIssueActivity i IEUnmerged actor Nothing
+  ids <$ forM_ ids \i -> logIssueActivity pid i IEUnmerged actor Nothing
 
 
 -- | Drops issues a person unmerged since their last merge, so automatic merging cannot undo that call.
@@ -1446,13 +1446,13 @@ issueError pid i = if i.issueType == RuntimeException then ErrorPatterns.getErro
 resolveIssueTx :: UTCTime -> Projects.ProjectId -> IssueId -> Maybe AE.Value -> Tx.Transaction ()
 resolveIssueTx now pid iid meta = do
   Hasql.executeTx [HI.sql| UPDATE apis.issues SET archived_at = #{now}, updated_at = #{now}, archived_until = NULL, archive_until_escalating = FALSE WHERE project_id = #{pid} AND id = #{iid} |]
-  Hasql.executeTx $ activitySql now iid IEResolved Nothing meta
+  Hasql.executeTx $ activitySql now pid iid IEResolved Nothing meta
 
 
 -- | Lift archives, returning the reopened ids. A reopen must not collide with an
 -- already-open recurrence of the same signal (the open-issue partial unique index),
 -- so such rows stay archived.
-liftArchives :: DB es => HI.Sql -> Eff es [IssueId]
+liftArchives :: DB es => HI.Sql -> Eff es [(Projects.ProjectId, IssueId)]
 liftArchives cond =
   Hasql.interp
     [HI.sql|
@@ -1462,17 +1462,17 @@ liftArchives cond =
         AND NOT EXISTS (SELECT 1 FROM apis.issues o
                         WHERE o.project_id = i.project_id AND o.target_hash = i.target_hash AND o.issue_type = i.issue_type
                           AND o.id <> i.id AND o.archived_at IS NULL AND o.acknowledged_at IS NULL)
-      RETURNING i.id |]
+      RETURNING i.project_id, i.id |]
 
 
 -- | Timed archives whose window has closed.
-expireArchives :: DB es => UTCTime -> Eff es [IssueId]
+expireArchives :: DB es => UTCTime -> Eff es [(Projects.ProjectId, IssueId)]
 expireArchives now = liftArchives [HI.sql| i.archived_until <= #{now} |]
 
 
 -- | Runtime-exception issues archived "until escalating" for an error that just escalated.
 wakeOnEscalation :: DB es => Projects.ProjectId -> Text -> Eff es [IssueId]
-wakeOnEscalation pid errHash = liftArchives [HI.sql| i.archive_until_escalating AND i.project_id = #{pid} AND i.target_hash = #{errHash} AND i.issue_type = ^{enumLit RuntimeException} |]
+wakeOnEscalation pid errHash = map snd <$> liftArchives [HI.sql| i.archive_until_escalating AND i.project_id = #{pid} AND i.target_hash = #{errHash} AND i.issue_type = ^{enumLit RuntimeException} |]
 
 
 -- | A saved issue-list view: a name for a query string of list parameters.
@@ -2682,11 +2682,10 @@ getEventRoutineFor pid event scope = do
   Investigations.classifyLegacyEvidence pid Nothing
   Hasql.interpOne
     $ [HI.sql|SELECT r.id, r.project_id, r.schedule_kind, r.conversation_id, r.requested_by, r.instructions, r.template_version::bigint
-      FROM apis.ai_routines r JOIN projects.project_members member ON member.project_id = r.project_id AND member.user_id = r.requested_by
-      JOIN users.users account ON account.id = member.user_id
-      JOIN projects.projects project ON project.id = member.project_id
+      FROM apis.ai_routines r JOIN (|]
+    <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id = #{pid}|]
+    <> [HI.sql|) member ON member.user_id = r.requested_by
       WHERE r.project_id = #{pid} AND r.schedule_kind = #{event} AND r.active AND member.permission IN ('admin', 'edit') |]
-    <> ProjectMembers.activeMembership
     <> scope
 
 
@@ -4220,14 +4219,15 @@ stateEventSql :: HI.Sql
 stateEventSql = [HI.sql|a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated', 'ack_expired')|]
 
 
-logIssueActivity :: (DB es, Time :> es) => IssueId -> IssueEvent -> Maybe Projects.UserId -> Maybe AE.Value -> Eff es ()
-logIssueActivity issueId event createdBy metadataM = do
+-- | Logged only when @issueId@ is @pid@'s: handlers pass request ids straight through.
+logIssueActivity :: (DB es, Time :> es) => Projects.ProjectId -> IssueId -> IssueEvent -> Maybe Projects.UserId -> Maybe AE.Value -> Eff es ()
+logIssueActivity pid issueId event createdBy metadataM = do
   now <- Time.currentTime
-  Hasql.interpExecute_ $ activitySql now issueId event createdBy metadataM
+  Hasql.interpExecute_ $ activitySql now pid issueId event createdBy metadataM
 
 
-activitySql :: UTCTime -> IssueId -> IssueEvent -> Maybe Projects.UserId -> Maybe AE.Value -> HI.Sql
-activitySql now issueId event createdBy metadataM = case slackRelay event of
+activitySql :: UTCTime -> Projects.ProjectId -> IssueId -> IssueEvent -> Maybe Projects.UserId -> Maybe AE.Value -> HI.Sql
+activitySql now pid issueId event createdBy metadataM = case slackRelay event of
   NotRelayed -> logged
   Relayed -> relayed ["post_activity"]
   RelayedWithOwner -> relayed ["post_activity", "update_root"]
@@ -4239,7 +4239,7 @@ activitySql now issueId event createdBy metadataM = case slackRelay event of
     logged =
       [HI.sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, metadata, created_at)
         SELECT #{issueId}, #{event}, #{createdBy}, #{Aeson <$> metadataM}, #{now}
-        WHERE EXISTS (SELECT 1 FROM apis.issues WHERE id = #{issueId}) |]
+        WHERE EXISTS (SELECT 1 FROM apis.issues WHERE id = #{issueId} AND project_id = #{pid}) |]
     relayed (operations :: [Text]) =
       [HI.sql| WITH logged AS (|]
         <> logged

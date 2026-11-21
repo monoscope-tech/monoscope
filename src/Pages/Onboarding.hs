@@ -73,7 +73,7 @@ onboardingGetH pid stepM = do
       everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
       let phone = fromMaybe "" $ everyoneTeamM >>= (V.!? 0) . (.phone_numbers)
           slackUrl = urls.slackInstallGet pid True
-          discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands&state=" <> pid.toText <> "__onboarding&redirect_uri=" <> appCtx.env.discordRedirectUri
+          discordUrl = urls.discordInstallGet pid True
       pure $ NotifChannelStep pid slackUrl discordUrl phone (maybe mempty (.notify_emails) everyoneTeamM) hasSlack hasDiscord
     -- The key is a full API credential, and Settings shows it only to editors: viewers (and the
     -- demo guest) get the placeholder here too.
@@ -264,7 +264,7 @@ markStepCompleted pid = void . Projects.completeOnboardingStep pid
 
 phoneEmailPostH :: Projects.ProjectId -> NotifChannelForm -> ATAuthCtx (RespHeaders OnboardingPhoneEmailsPost)
 phoneEmailPostH pid form = do
-  void $ Projects.sessionAndProject pid
+  void $ ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PEdit pid
   appCtx <- ask @AuthContext
   memberEmails <- map (CI.original . (.email)) <$> Projects.usersByProjectId pid
   markStepCompleted pid $ show NotifChannel

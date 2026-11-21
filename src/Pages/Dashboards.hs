@@ -906,7 +906,7 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
       variable' = Dashboards.replaceDashboardVariables pid fromD toD allParams now variableBase
       variable = variable'{Dashboards.value = maybe variable'.value nonEmptyT $ Map.lookup ("var-" <> variable'.key) paramsMap}
       template = (.statement) <$> variableBase.sql
-      withTemplateStatement v = v & #sql .~ variableBase.sql & #query .~ variableBase.query & #sqlSig .~ (Widget.sqlSignature secret pid template Nothing <$ template)
+      withTemplateStatement v = v & #sql .~ variableBase.sql & #query .~ variableBase.query & #sqlSig .~ (Widget.sqlSignature secret pid allParams template Nothing <$ template)
 
   -- Prefer the precomputed facet catalog (a single indexed jsonb read) over a
   -- live DISTINCT scan of the day partition — the latter blocks page render for
@@ -1102,22 +1102,24 @@ prefillFor hxRequest = if isJust hxRequest then WidgetsFetchThemselves else Pref
 
 -- | Process a widget and its children. Keeps sql/query @{{var-*}}@ templates intact so
 -- they are interpolated at fetch time with the current URL params.
--- | SQL from the browser runs only when the server signed it for this project, or for an
--- editor previewing their own: otherwise a viewer, or the anonymous demo guest, could hand
--- the executor any statement and only a @project_id@ substring check stood in the way.
-authorizeClientSql :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx ()
-authorizeClientSql pid sql rollup sig = when (isJust $ nonEmptyT sql <|> nonEmptyT rollup) do
+-- | SQL from the browser runs only when the server signed it for this project, with the
+-- verbatim placeholder values @params@ now carry, or for an editor previewing their own:
+-- otherwise a viewer, or the anonymous demo guest, could hand the executor any statement (or a
+-- signed one with their own @const-*@) and only a @project_id@ substring check stood in the way.
+authorizeClientSql :: Projects.ProjectId -> [(Text, Maybe Text)] -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx ()
+authorizeClientSql pid params sql rollup sig = when (isJust $ nonEmptyT sql <|> nonEmptyT rollup) do
   secret <- (.env.apiKeyEncryptionSecretKey) <$> ask @AuthContext
-  unless (Widget.verifySqlSignature secret pid sql rollup sig) $ void $ ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
+  unless (Widget.verifySqlSignature secret pid params sql rollup sig) $ void $ ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
 
 
 -- | A client-sent widget, once 'authorizeClientSql' passes it and every widget nested in it.
--- @html@ is only ever the server's own render ('processEagerWidget'), emitted raw, so a
--- client-supplied one is dropped at every depth.
-authorizeClientWidget :: Projects.ProjectId -> Widget.Widget -> ATAuthCtx Widget.Widget
-authorizeClientWidget pid w = do
-  traverse_ (\c -> authorizeClientSql pid c.sql c.rollupSql c.sqlSig) $ universeOf (#children . _Just . folded) w
-  pure $ transformOf (#children . _Just . traverse) (#html .~ Nothing) w
+-- @html@ and @dataset@ are only ever the server's own (a render, a query result): html is
+-- emitted raw, and a signed dataset reached widget.png's renderer as trusted options. Both
+-- are dropped at every depth.
+authorizeClientWidget :: Projects.ProjectId -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
+authorizeClientWidget pid params w = do
+  traverse_ (\c -> authorizeClientSql pid params c.sql c.rollupSql c.sqlSig) $ universeOf (#children . _Just . folded) w
+  pure $ transformOf (#children . _Just . traverse) ((#html .~ Nothing) . (#dataset .~ Nothing)) w
 
 
 processWidget :: Prefill -> Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
@@ -1132,7 +1134,7 @@ processWidget prefill pid now timeRange allParams widgetBase = do
       resolveLogsQuery
         | widgetBase.wType == Widget.WTLogs = fmap (fillQueryTemplate KqlTemplate (variablePresetsKQL def pid.toText fromD toD allParams now))
         | otherwise = Relude.id
-      widget = Widget.signWidgetSql secret pid $ widgetBase & #html .~ Nothing & #id %~ (<|> (slugify <$> widgetBase.title)) & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #query %~ fmap (replacePlaceholders kqlConstants) . resolveLogsQuery
+      widget = Widget.signWidgetSql secret pid allParams $ widgetBase & #html .~ Nothing & #id %~ (<|> (slugify <$> widgetBase.title)) & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #query %~ fmap (replacePlaceholders kqlConstants) . resolveLogsQuery
 
   -- The prefill is best-effort: past the budget we hand back the widget with no
   -- html/dataset and no `eager` flag, which is precisely the shape whose renderer
@@ -1259,7 +1261,7 @@ instance Outcome WidgetSaved where
 
 dashboardWidgetPutWithMonitorH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (ActionResult WidgetMonitorRejection WidgetSaved)
 dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM widget = act do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   (access, dashVM, dash) <- getDashWithAccess pid dashId Nothing
   uid <- UUID.genUUID <&> UUID.toText
   let normalizedWidgetIdM = normalizeWidgetId <$> widgetIdM
@@ -1347,7 +1349,7 @@ dashboardWidgetReorderPatchH
   -- ^ The ordered list of widget IDs
   -> ATAuthCtx (ActionResult EditRefusal LayoutSaved)
 dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = act do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   withEditableDash pid dashId \ed _ dash ->
     Right <$> do
       let oldWidgets = case (tabSlugM, dash.tabs) of
@@ -1411,8 +1413,9 @@ getDashWithAccess pid dashId fileM =
 loadDashWithAccess :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, IOE :> es, Wreq.HTTP :> es) => Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Eff es (Maybe (Either ReadOnly Editable, Dashboards.DashboardVM, Dashboards.Dashboard))
 loadDashWithAccess pid dashId fileM = do
   templates <- askTemplates
+  manager <- (.scrapeManager) <$> ask @AuthContext
   Dashboards.getDashboardByProjectId pid dashId >>= traverse \dashVM -> do
-    dash <- maybe (pure $ fromMaybe def (loadDashboardFromVM (templateList templates) dashVM)) Dashboards.readDashboardEndpoint fileM
+    dash <- maybe (pure $ fromMaybe def (loadDashboardFromVM (templateList templates) dashVM)) (Dashboards.readDashboardEndpoint manager) fileM
     pure (editableIn templates dashVM, dashVM, dash)
 
 
@@ -1975,7 +1978,7 @@ data WidgetMonitorSaved = WidgetMonitorSaved
 
 widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> WidgetAlertForm -> ATAuthCtx (ActionResult WidgetMonitorRejection WidgetMonitorSaved)
 widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = act do
-  (session, _) <- Projects.sessionAndProject pid
+  (session, _) <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   now <- Time.currentTime
   -- Reuse the widget's existing monitor id when there is one
   existingMonitor <- Monitors.queryMonitorByWidgetId pid dashboardIdM form.widgetId
@@ -2043,7 +2046,7 @@ data WidgetMonitorRemoved = WidgetMonitorRemoved
 
 widgetAlertDeleteH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Done WidgetMonitorRemoved))
 widgetAlertDeleteH pid widgetId dashboardIdM = do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   _ <- Monitors.deleteMonitorsByWidgetIds pid dashboardIdM [widgetId]
   addTriggerEvent "closeModal" ""
   done WidgetMonitorRemoved
@@ -2065,7 +2068,7 @@ instance Outcome WidgetMonitorStatus where
 
 widgetAlertToggleH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Done WidgetMonitorStatus))
 widgetAlertToggleH pid widgetId dashboardIdM = do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   monitor <- Monitors.queryMonitorByWidgetId pid dashboardIdM widgetId `whenNothingM` throwError err404{errBody = "Widget monitor not found"}
   void $ Monitors.monitorToggleActiveById pid monitor.id
   done . WidgetMonitorStatus pid widgetId dashboardIdM =<< Monitors.queryMonitorByWidgetId pid dashboardIdM widgetId
@@ -2529,7 +2532,7 @@ data DashboardForm = DashboardForm
 
 dashboardsPostH :: Projects.ProjectId -> DashboardForm -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardsPostH pid form = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, project) <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   appCtx <- ask @AuthContext
   now <- Time.currentTime
   did <- UUIDId <$> UUID.genUUID
@@ -2622,7 +2625,7 @@ data DashboardRenameForm = DashboardRenameForm
 -- It updates the title and optionally the git file path.
 dashboardRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardRenameForm -> ATAuthCtx (ActionResult EditRefusal DashboardRenamed)
 dashboardRenamePatchH pid dashId form = act do
-  (sess, _) <- Projects.sessionAndProject pid
+  (sess, _) <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   withEditableDash pid dashId \ed dashVM _ ->
     Right <$> do
       _ <- updateTitle ed form.title
@@ -2654,7 +2657,7 @@ instance Outcome DashboardRenamed where
 -- It creates a new dashboard with the same content but with "(Copy)" appended to the title.
 dashboardDuplicatePostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardDuplicatePostH pid dashId = do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   Dashboards.getDashboardByProjectId pid dashId >>= \case
     Nothing -> toastError "Dashboard not found or does not belong to this project" (DashboardPostError "Dashboard not found or does not belong to this project")
     Just dashVM -> do
@@ -2749,7 +2752,7 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
 -- When source_dashboard_id is provided and differs from target dashboard, this copies the widget to a different dashboard.
 dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (ActionResult EditRefusal WidgetCopied)
 dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = act do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   let sourceDashId = fromMaybe targetDashId sourceDashIdM
       isCrossDashboard = sourceDashId /= targetDashId
 
@@ -3204,7 +3207,7 @@ instance Outcome TabRenamed where
 -- | Handler for renaming a tab
 dashboardTabRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> TabRenameForm -> ATAuthCtx (ActionResult EditRefusal TabRenamed)
 dashboardTabRenamePatchH pid dashId tabSlug form = act do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   withEditableDash pid dashId \ed _ dash -> case dash.tabs >>= (`findTabBySlug` tabSlug) of
     Nothing -> pure $ Left $ TabGone tabSlug
     Just (idx, _) ->
@@ -3275,7 +3278,7 @@ instance ToHtml DashboardYaml where
 -- | Save dashboard schema from YAML (validates and saves)
 dashboardYamlPutH :: Projects.ProjectId -> Dashboards.DashboardId -> YamlForm -> ATAuthCtx (RespHeaders (Done YamlSave))
 dashboardYamlPutH pid dashId form = do
-  _ <- Projects.sessionAndProject pid
+  _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   (access, _, _) <- getDashWithAccess pid dashId Nothing
   done =<< case (access, GitSync.yamlToDashboard (encodeUtf8 form.yaml)) of
     (Left ReadOnly, _) -> pure YamlReadOnly

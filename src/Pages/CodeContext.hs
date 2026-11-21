@@ -67,9 +67,8 @@ import Servant (Header, Headers, ServerError (errHeaders), addHeader, err403, er
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ActionResult, DB, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, Toast (..), ToastLevel (..), act, addErrorToast, addRespHeaders, addSuccessToast, done, redirectCS)
-import Text.HTML.SanitizeXSS (sanitizeBalance)
 import Text.Slugify (slugify)
-import Utils (LoadingSize (..), TabStrip (..), countNoun, faSprite_, htmxIndicator_, navTabStrip_, nonEmptyT, renderMarkdown, textOnlyHtml)
+import Utils (LoadingSize (..), TabStrip (..), countNoun, faSprite_, htmxIndicator_, navTabStrip_, nonEmptyT, renderMarkdown, sanitizeMarkdownHtml, textOnlyHtml)
 import Web.ApiTypes (readOnlyMessage)
 import Web.Auth (demoGuestSessionId)
 import Web.FormUrlEncoded (FromForm)
@@ -384,7 +383,7 @@ instance ToHtml WikiGet where
         syntax = textOnlyHtml baseSyntax
         pageBody body = div_ [class_ "prose max-w-none break-words text-textStrong [&_pre]:overflow-x-auto"] $ case runIdentity $ Markdown.commonmarkWith syntax "" body of
           Left _ -> toHtml body
-          Right (parsed :: Markdown.Html WikiDoc) -> toHtmlRaw $ sanitizeBalance $ T.replace "href=\"wiki:" ("href=\"" <> base <> "/") $ toStrict $ Markdown.renderHtml parsed
+          Right (parsed :: Markdown.Html WikiDoc) -> toHtmlRaw $ sanitizeMarkdownHtml $ T.replace "href=\"wiki:" ("href=\"" <> base <> "/") $ toStrict $ Markdown.renderHtml parsed
         revisionLines page = ("Title: " <> Memory.memoryText page.document.title) : "" : lines (Memory.memoryText page.document.body)
         revisionDiff old new = pre_ [class_ "overflow-x-auto rounded-lg bg-fillWeak py-2 text-xs leading-relaxed"] $ for_ (Diff.getGroupedDiff (revisionLines old) (revisionLines new)) \case
           Diff.First removed -> diffLines "bg-fillError-weak text-textError" "- " removed
@@ -1255,7 +1254,7 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
   selected <- if canEdit then codeContextCredential pid requested else pure Nothing
   let credM = selected >>= \c -> guard (any ((== c.id) . (.id)) accounts && (isNothing repositoryM || isJust requested)) $> c
   mappings <- filter (\m -> maybe True (\r -> mappingInRepository accounts r m) repositoryM) <$> CodeContext.getCodeMappings pid
-  repoResult <- maybe (pure $ Right []) (credentialRepos repositoryM) credM
+  repoResult <- maybe (pure $ Right []) (credentialRepos ((\r -> (r.owner, r.repo)) <$> repositoryM)) credM
   reviewSettings <- filter (\settings -> maybe True (\r -> r.host == Git.GitHub && isNothing r.apiBase && (settings.owner, settings.repo) == (T.toLower r.owner, T.toLower r.repo)) repositoryM) <$> ImpactReviews.repositorySettings pid
   authConfig <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
   pure $ div_ [class_ "space-y-6"] do
@@ -1408,13 +1407,14 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
 
 
 -- | Cache successful provider listings; an unavailable account is distinct from an empty one.
-credentialRepos :: Maybe GitSync.Repository -> GitSync.GitHubCredential -> ATAuthCtx (Either Text [Git.GitRepo])
+-- With an @(owner, repo)@, that one repository as the credential reads it.
+credentialRepos :: Maybe (Text, Text) -> GitSync.GitHubCredential -> ATAuthCtx (Either Text [Git.GitRepo])
 credentialRepos repositoryM cred = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   cached <- liftIO $ Cache.lookup ctx.repoListCache cred.id
   let known = case repositoryM of
         Nothing -> cached
-        Just repository -> pure <$> find ((== repository.owner <> "/" <> repository.repo) . (.fullName)) (fold cached)
+        Just (owner, repo) -> pure <$> find ((== owner <> "/" <> repo) . (.fullName)) (fold cached)
   case known of
     Just repos -> pure $ Right repos
     Nothing ->
@@ -1422,7 +1422,7 @@ credentialRepos repositoryM cred = do
           conn <- repoConn ctx.config cred
           case repositoryM of
             Nothing -> ExceptT $ maybe (Git.listTokenRepos conn) (const $ Git.listRepos conn) cred.installationId
-            Just repository -> pure <$> ExceptT (Git.fetchRepository conn $ Git.RepoRef repository.owner repository.repo "HEAD")
+            Just (owner, repo) -> pure <$> ExceptT (Git.fetchRepository conn $ Git.RepoRef owner repo "HEAD")
       )
         >>= \case
           Left err -> Left err <$ Log.logWarn "Could not list repositories" (cred.projectId, Git.hostSlug cred.host, err)
@@ -1567,6 +1567,7 @@ repositoryTokenGetH pid = addRespHeaders =<< repositoryTokenPage pid
 
 repositoryTokenPostH :: Projects.ProjectId -> RepositoryTokenForm -> ATAuthCtx (RespHeaders (PageCtx RepositoryTokenGet))
 repositoryTokenPostH pid form = do
+  void $ ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PEdit pid
   page <- repositoryTokenPage pid
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
@@ -1702,8 +1703,11 @@ saveCodeMapping pid form = do
           (owner, name) = case Git.splitFullName repo of ("", shortName) -> (cred.account, shortName); fullName -> fullName
           repoRef = GitSync.RepoRef owner name ref
           typed = (fromMaybe "" form.pathPrefix, fromMaybe "" form.sourceRoot)
-      derived <- case sample of
-        Just s | typed == ("", "") -> deriveFromRepo cred repoRef s
+      -- The credential must read the repo itself: its blobs are fetched and served under it.
+      readable <- credentialRepos (Just (owner, name)) cred
+      derived <- case (readable, sample) of
+        (Left err, _) -> pure $ Left $ RepositoryUnreadable repo err
+        (_, Just s) | typed == ("", "") -> deriveFromRepo cred repoRef s
         _ -> pure $ Right typed
       forM derived \(prefix, root) -> do
         CodeContext.insertCodeMapping pid cred.id repoRef (nonEmptyT form.service) prefix root

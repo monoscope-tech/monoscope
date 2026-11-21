@@ -21,10 +21,11 @@ import Relude
 import CLI.Chart (colorize, dim, ellipsize, formatValue, padTo, stripAnsi, visibleWidth)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
+import Data.Char (isControl)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Pkg.CLIFormat (extractColIdxMap, extractRows, renderSummaryCell)
+import Pkg.CLIFormat (escapeControls, extractColIdxMap, extractRows, renderSummaryCell)
 import System.Console.ANSI qualified as ANSI
 
 
@@ -127,15 +128,15 @@ renderEventLine color width r =
       " "
       [ dim color (padTo 12 (clockTime r.timestamp))
       , levelTag color r
-      , colorize color ANSI.Cyan (padTo 18 (ellipsize 18 (fromMaybe "-" r.service)))
+      , colorize color ANSI.Cyan (padTo 18 (ellipsize 18 (maybe "-" escapeControls r.service)))
       , dim color (padTo 7 (maybe "" (formatValue "ms" . (/ 1e6)) r.durationNs))
       , ellipsize msgWidth message
       ]
     <> trailer
   where
     msgWidth = max 20 (width - 12 - 5 - 18 - 7 - 5 - visibleWidth trailer)
-    message = maybe (fromMaybe "" r.spanName) renderSummaryCell r.summary
-    trailer = mconcat [dim color ("  " <> k <> "=" <> v) | (k, v) <- take 4 r.extras] <> maybe "" (\t -> dim color ("  trace=" <> T.take 12 t)) r.traceId
+    message = maybe (maybe "" escapeControls r.spanName) renderSummaryCell r.summary
+    trailer = mconcat [dim color ("  " <> escapeControls (k <> "=" <> v)) | (k, v) <- take 4 r.extras] <> maybe "" (\t -> dim color ("  trace=" <> escapeControls (T.take 12 t))) r.traceId
 
 
 -- | Severity badge. Spans have no severity of their own, so an error span shows
@@ -165,8 +166,16 @@ levelTag color r
 --     }
 -- :}
 -- "ts=2026-08-06T01:02:03Z level=error service=api kind=log msg=\"boom now\" id=e1"
+--
+-- Telemetry reaches no terminal as control characters (OSC 52, OSC 8, cursor moves), in either view:
+--
+-- >>> let hostile = emptyEventRow{service = Just "api\ESC]52;c;ZQ==\a", spanName = Just "\ESC[2K", summary = Just "x\ESC]8;;http://e\a\r", extras = [("k\ESC[1A", "\x9b")], traceId = Just "\ESC[H"}
+-- >>> T.any isControl (renderEventLine False 120 hostile <> renderLogfmt hostile <> mconcat (renderWaterfall False 120 [hostile]))
+-- False
+-- >>> renderLogfmt emptyEventRow{service = Just "a\ESC]0\a"}
+-- "level=info service=\"a\\ESC]0\\a\""
 renderLogfmt :: EventRow -> Text
-renderLogfmt r = unwords [k <> "=" <> quote v | (k, Just v) <- pairs <> map (second Just) r.extras]
+renderLogfmt r = unwords [escapeControls k <> "=" <> quote v | (k, Just v) <- pairs <> map (second Just) r.extras]
   where
     pairs =
       [ ("ts", r.timestamp)
@@ -185,7 +194,7 @@ renderLogfmt r = unwords [k <> "=" <> quote v | (k, Just v) <- pairs <> map (sec
     -- backslash or a newline has to be escaped rather than emitted raw — an
     -- unescaped log body would otherwise split one event across several lines.
     quote v
-      | T.any (`elem` (" \"\\\n\r\t" :: [Char])) v = "\"" <> T.concatMap esc v <> "\""
+      | T.any (\c -> c `elem` (" \"\\" :: [Char]) || isControl c) v = "\"" <> T.concatMap esc v <> "\""
       | otherwise = v
     esc = \case
       '"' -> "\\\""
@@ -193,7 +202,7 @@ renderLogfmt r = unwords [k <> "=" <> quote v | (k, Just v) <- pairs <> map (sec
       '\n' -> "\\n"
       '\r' -> "\\r"
       '\t' -> "\\t"
-      c -> one c
+      c -> escapeControls (one c)
 
 
 -- | Trace waterfall: one row per span, indented by depth, with a bar showing
@@ -224,7 +233,7 @@ renderWaterfall color width rows
         <> padTo barW (barFor r)
         <> " "
         <> dim color (maybe "" (formatValue "ms" . (/ 1e6)) r.durationNs)
-    label r = fromMaybe "-" (r.spanName <|> r.service)
+    label r = maybe "-" escapeControls (r.spanName <|> r.service)
     barFor r = case (r.startNs, r.durationNs) of
       (Just s, Just d) ->
         let lead = floor ((s - t0) / total * fromIntegral barW)
