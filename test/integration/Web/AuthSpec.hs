@@ -12,7 +12,8 @@ import Hasql.Interpolate qualified as HI
 import Lucid qualified
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (Query, RequestHeaders, hAuthorization, hCookie, status200)
+import Network.HTTP.Types (Query, RequestHeaders, hAuthorization, hCacheControl, hCookie, statusCode, status200)
+import Network.HTTP.Types.Header (hVary)
 import Network.Wai qualified as Wai
 import Network.Wai.Test qualified as WT
 import Models.Apis.Issues qualified as Issues
@@ -29,6 +30,7 @@ import Servant.Server qualified as Servant
 import Servant.Server.Experimental.Auth (unAuthHandler)
 import System.Config (AuthContext (hasqlPool))
 import System.Config qualified as Config
+import System.Server qualified as Server
 import System.Types (ApiPrincipal (..))
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie, parseSetCookie, setCookieName, setCookieValue)
@@ -145,6 +147,15 @@ spec = around withTestResources do
     fmap (.policy) <$> runQueryEffect tr (Issues.runContextAuthority run) `shouldReturn` Just Issues.Observe
     let guestBearer (m, p) = Servant.runHandler $ unAuthHandler (Auth.apiKeyAuthHandler tr.trLogger tr.trATCtx) (WT.setPath Wai.defaultRequest p){Wai.requestMethod = m, Wai.requestHeaders = [(hAuthorization, "Bearer " <> UUID.toASCIIBytes Auth.demoGuestSessionId.getPersistentSessionId), ("X-Project-Id", encodeUtf8 demoPid.toText)]}
     traverse (fmap (bimap errHTTPCode \case Viewer _ -> True; _ -> False) . guestBearer) [("GET", "/api/v1/events"), ("POST", "/api/v1/api_keys")] `shouldReturn` ([Right True, Left 403] :: [Either Int Bool])
+
+  -- 2026-11 audit: session pages carried no cache policy, so an edge caching by extension could
+  -- store a member's page fetched as /p/<pid>/repositories/services/x.css and serve it to anyone.
+  it "privatePages_assetLikePath_carryNoStore: pages default to private, no-store; static assets keep their own policy" \tr -> do
+    let cookie = (hCookie, "monoscope_session=" <> UUID.toASCIIBytes (getResponse tr.trSessAndHeader).sessionId.getPersistentSessionId)
+        fetch path = WT.runSession (WT.request (WT.setPath Wai.defaultRequest path){Wai.requestHeaders = [cookie]}) (Server.mkServer tr.trLogger tr.trATCtx tr.trTracerProvider)
+        policy r = (statusCode r.simpleStatus, L.lookup hCacheControl r.simpleHeaders, L.lookup hVary r.simpleHeaders)
+    policy <$> fetch ("/p/" <> encodeUtf8 testPid.toText <> "/repositories/services/x.css") `shouldReturn` (200, Just "private, no-store", Just "Cookie, Authorization")
+    (\(_, cache, _) -> cache /= Just "private, no-store") . policy <$> fetch "/public/favicon.ico" `shouldReturn` True
 
   it "ad attribution: a consenting landing becomes one signup conversion, tags wait for consent, a first ingest is reported once" \tr -> do
     let adCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.auth0Domain = "https://auth0.test", Config.metaCapiAccessToken = Just "capi-token", Config.metaCapiPixelId = Just "123", Config.redditConversionsToken = Just "rdt-token", Config.redditPixelId = Just "t2_px"}}
