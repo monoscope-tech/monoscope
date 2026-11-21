@@ -471,11 +471,10 @@ type HostStatsKey = (Projects.ProjectId, Endpoints.HostQuery)
 type EndpointStatsKey = (Projects.ProjectId, Endpoints.EndpointQuery)
 
 
--- | Identifies a source blob: @(owner, repo, ref, path)@. Deliberately NOT project-scoped —
--- the same public repo linked by two projects is the same bytes, and the credential that
--- fetched it is not part of the file's identity. Access is still checked per request before
--- a lookup happens; this caches the fetch, never the authorization.
-type CodeBlobKey = (Text, Text, Text, Text)
+-- | Identifies a source blob as fetched: @(credential, host, apiBase, owner, repo, ref, path)@.
+-- The credential is part of the key, so a blob is only served under the grant that read it:
+-- another project naming the same owner/repo, or another host spelling it alike, misses.
+type CodeBlobKey = (DeriveUtils.UUIDId "github_credential", Text, Maybe Text, Text, Text, Text, Text)
 
 
 data AuthContext = AuthContext

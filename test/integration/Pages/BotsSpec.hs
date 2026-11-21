@@ -988,7 +988,7 @@ spec = around withTestResources do
       let revision = T.replicate 40 "a"
           config = (AI.defaultAgenticConfig testPid){AI.access = investigation tr "T_SOURCE" "CSOURCE", AI.sourceConfig = Just tr.trATCtx.config}
       linkCheckoutRepo tr "ghp_source_fixture"
-      Cache.insert tr.trATCtx.codeBlobCache ("acme", "checkout-service", revision, "checkout.py") "source cached under another credential"
+      Cache.insert tr.trATCtx.codeBlobCache (UUIDId UUID.nil, "github", Nothing, "acme", "checkout-service", revision, "checkout.py") "source cached under another credential"
       for_ ([(revision, "checkout", 1, True), ("main", "checkout", 1, False), (revision, "other-service", 1, False), (revision, "checkout", -1, False)] :: [(Text, Text, Int, Bool)]) \(ref, service, line, shouldRead) -> do
         evidence <- newIORef ([] :: [Text])
         let provider = agent \history _ -> do

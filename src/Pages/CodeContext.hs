@@ -1256,7 +1256,7 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
   selected <- if canEdit then codeContextCredential pid requested else pure Nothing
   let credM = selected >>= \c -> guard (any ((== c.id) . (.id)) accounts && (isNothing repositoryM || isJust requested)) $> c
   mappings <- filter (\m -> maybe True (\r -> mappingInRepository accounts r m) repositoryM) <$> CodeContext.getCodeMappings pid
-  repoResult <- maybe (pure $ Right []) (credentialRepos repositoryM) credM
+  repoResult <- maybe (pure $ Right []) (credentialRepos ((\r -> (r.owner, r.repo)) <$> repositoryM)) credM
   reviewSettings <- filter (\settings -> maybe True (\r -> r.host == Git.GitHub && isNothing r.apiBase && (settings.owner, settings.repo) == (T.toLower r.owner, T.toLower r.repo)) repositoryM) <$> ImpactReviews.repositorySettings pid
   authConfig <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
   pure $ div_ [class_ "space-y-6"] do
@@ -1409,13 +1409,14 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
 
 
 -- | Cache successful provider listings; an unavailable account is distinct from an empty one.
-credentialRepos :: Maybe GitSync.Repository -> GitSync.GitHubCredential -> ATAuthCtx (Either Text [Git.GitRepo])
+-- With an @(owner, repo)@, that one repository as the credential reads it.
+credentialRepos :: Maybe (Text, Text) -> GitSync.GitHubCredential -> ATAuthCtx (Either Text [Git.GitRepo])
 credentialRepos repositoryM cred = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   cached <- liftIO $ Cache.lookup ctx.repoListCache cred.id
   let known = case repositoryM of
         Nothing -> cached
-        Just repository -> pure <$> find ((== repository.owner <> "/" <> repository.repo) . (.fullName)) (fold cached)
+        Just (owner, repo) -> pure <$> find ((== owner <> "/" <> repo) . (.fullName)) (fold cached)
   case known of
     Just repos -> pure $ Right repos
     Nothing ->
@@ -1423,7 +1424,7 @@ credentialRepos repositoryM cred = do
           conn <- repoConn ctx.config cred
           case repositoryM of
             Nothing -> ExceptT $ maybe (Git.listTokenRepos conn) (const $ Git.listRepos conn) cred.installationId
-            Just repository -> pure <$> ExceptT (Git.fetchRepository conn $ Git.RepoRef repository.owner repository.repo "HEAD")
+            Just (owner, repo) -> pure <$> ExceptT (Git.fetchRepository conn $ Git.RepoRef owner repo "HEAD")
       )
         >>= \case
           Left err -> Left err <$ Log.logWarn "Could not list repositories" (cred.projectId, Git.hostSlug cred.host, err)
@@ -1703,8 +1704,11 @@ saveCodeMapping pid form = do
           (owner, name) = case Git.splitFullName repo of ("", shortName) -> (cred.account, shortName); fullName -> fullName
           repoRef = GitSync.RepoRef owner name ref
           typed = (fromMaybe "" form.pathPrefix, fromMaybe "" form.sourceRoot)
-      derived <- case sample of
-        Just s | typed == ("", "") -> deriveFromRepo cred repoRef s
+      -- The credential must read the repo itself: its blobs are fetched and served under it.
+      readable <- credentialRepos (Just (owner, name)) cred
+      derived <- case (readable, sample) of
+        (Left err, _) -> pure $ Left $ RepositoryUnreadable repo err
+        (_, Just s) | typed == ("", "") -> deriveFromRepo cred repoRef s
         _ -> pure $ Right typed
       forM derived \(prefix, root) -> do
         CodeContext.insertCodeMapping pid cred.id repoRef (nonEmptyT form.service) prefix root
