@@ -93,10 +93,11 @@ aggregationAliases :: QueryComponents -> Map.Map Text Text
 aggregationAliases qc = Map.fromList [(alias, expr) | agg <- qc.aggregations, (expr, Just alias) <- [splitTrailingAlias agg]]
 
 
--- | Build ORDER BY clause with fallback logic
+-- | Build ORDER BY clause with fallback logic. Every alias resolves to its expression:
+-- the rows are projected through @jsonb_build_array@, which drops the @AS@ names.
 buildOrderBy :: QueryComponents -> Text
 buildOrderBy qc = case qc.sortFields of
-  Just fields -> "ORDER BY " <> T.intercalate ", " (map (displaySortFieldWith (aggregationAliases qc)) fields)
+  Just fields -> "ORDER BY " <> T.intercalate ", " (map (displaySortFieldWith aliases) fields)
   Nothing -> case qc.finalSummarizeQuery of
     Just binInterval -> bucketOrder binInterval
     Nothing
@@ -104,6 +105,7 @@ buildOrderBy qc = case qc.sortFields of
       | otherwise -> "ORDER BY " <> fromMaybe timestampCol (listToMaybe qc.groupByClause) <> " desc"
   where
     bucketOrder interval = "ORDER BY " <> timeBucketExpr interval <> " desc"
+    aliases = Map.fromList (qc.extendedColumns <> [(a, e) | c <- qc.select <> qc.aggregations, (e, Just a) <- [splitTrailingAlias c]])
 
 
 defaultQueryLimit :: Int
@@ -676,6 +678,11 @@ resultShape ast = case listToMaybe [(aggs, by) | SummarizeCommand aggs by <- ast
 -- True
 -- >>> T.isInfixOf "count_ > 1" q5
 -- False
+--
+-- Sorting by a `project` or `extend` alias sorts its expression; the alias itself is
+-- gone once the row is projected (prod issue e9b523e9, "No field named ts"):
+-- >>> [snd (T.breakOn "ORDER BY" q) | Right (q, _) <- map (parseQueryToComponents cfg) ["project ts = timestamp, msg = name | sort by ts desc", "extend slow = duration | sort by slow asc"]]
+-- ["ORDER BY timestamp desc limit 501 ","ORDER BY duration asc limit 501 "]
 --
 -- An `extend` alias is not an aggregate, so it stays in the WHERE:
 -- >>> let Right (_, c6) = parseQueryToComponents cfg "kind == \"log\" | extend slow = duration"

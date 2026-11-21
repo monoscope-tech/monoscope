@@ -355,7 +355,7 @@ spec = around withTestResources do
             database = interpose @Hasql.Hasql \_ effect -> do
               whenM (readIORef revoked) $ modifyIORef' queriesAfterRevocation (+ 1)
               case effect of
-                Hasql.UseStatement params statement -> send $ Hasql.UseStatement params statement
+                Hasql.UseStatement attrs params statement -> send $ Hasql.UseStatement attrs params statement
                 Hasql.UseSession session -> send $ Hasql.UseSession session
                 Hasql.UseLabeledSession label attributes session -> send $ Hasql.UseLabeledSession label attributes session
         runTestBg frozenTime tr (database $ provider $ AI.runAgenticQuery config "revocation check" "model" "key")

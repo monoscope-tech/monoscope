@@ -256,8 +256,8 @@ executeSecuredQuery useTimefusion pid (SecuredSql source userQuery) limit
               SqlTimefusion -> useTimefusion
             -- On the shared Postgres pool the statement gets the same 30s deadline as chart SQL.
             run
-              | routeToTimefusion = Hasql.withHasqlTimefusion True (Hasql.interp wrapped)
-              | otherwise = Hasql.transaction TxS.ReadCommitted TxS.Read (Tx.sql "SET LOCAL statement_timeout = '30s'" *> Hasql.queryTx wrapped)
+              | routeToTimefusion = Hasql.withHasqlTimefusion True (Hasql.interpUser wrapped)
+              | otherwise = Hasql.labeledSession "user_sql" (one (OA.toAttribute <$> Hasql.userQueryOrigin)) (TxS.transaction TxS.ReadCommitted TxS.Read (Tx.sql "SET LOCAL statement_timeout = '30s'" *> Hasql.queryTx wrapped))
         resultE <- try @Hasql.HasqlException $ jsonArrayRows <$> run
         pure $ first (\e -> "Query execution failed: " <> toText (displayException e)) resultE
 
@@ -466,7 +466,7 @@ selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedC
       $ try @SomeException
       $ Hasql.retryTransientEff 500_000 "log-explorer.data"
       $ checkpoint (toAnnotation ("selectLogTable", q))
-      $ Hasql.withHasqlTimefusion useTimefusion (jsonArrayRows <$> Hasql.interp (rawSql q))
+      $ Hasql.withHasqlTimefusion useTimefusion (jsonArrayRows <$> Hasql.interpUser (rawSql q))
   let paged :: Either Text (V.Vector (V.Vector AE.Value), [Text], Int)
       paged = case result of
         Left e -> Left $ show e

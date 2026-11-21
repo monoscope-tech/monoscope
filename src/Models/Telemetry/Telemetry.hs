@@ -129,6 +129,7 @@ import Data.Aeson.Types qualified as AET
 import Data.Bits (shiftL, (.&.), (.|.))
 import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
+import Data.Char (isAlphaNum)
 import Data.Default (Default (..))
 import Data.Effectful.Hasql (Hasql, retryTransientLoop)
 import Data.Effectful.Hasql qualified as Hasql
@@ -2463,15 +2464,22 @@ isErrorRecord s =
 -- Prefers OTel @exception.*@ events; falls back to record-level extraction for
 -- error-severity records that lack an exception event (e.g. OTLP log records,
 -- which always have @events = Nothing@). Expected control flow is dropped whichever
--- producer marked it, including the auto-instrument plugin that bypasses 'runTracing'.
+-- producer marked it, including the auto-instrument plugin that bypasses 'runTracing'. So is a
+-- user's query the database refused for what it says ('Hasql.interpUser'): the request answered
+-- 4xx, and the statement's span is the only part that failed (prod issue 649bcf4c).
 getAllATErrors :: V.Vector OtelLogsAndSpans -> V.Vector ErrorPatterns.ATError
-getAllATErrors = V.filter (\e -> not $ EF.isExpectedControlFlow e.errorType e.message) . V.concatMap extractErrorsFromSpan
+getAllATErrors = V.filter (\e -> not $ EF.isExpectedControlFlow e.errorType e.message) . V.concatMap extractErrorsFromSpan . V.filter (not . userQueryRejected)
   where
     extractErrorsFromSpan spanObj =
       let fromEvents = V.mapMaybe (extractATError spanObj) (getErrorEvents spanObj)
        in if V.null fromEvents && isErrorRecord spanObj
             then maybe V.empty V.singleton (extractATErrorFromRecord spanObj)
             else fromEvents
+    userQueryRejected s =
+      let attrs = unAesonTextMaybe s.attributes
+       in atMapText (fst Hasql.userQueryOrigin) attrs
+            == Just (snd Hasql.userQueryOrigin)
+            && Hasql.isQueryRejection (fold $ atMapText "db.response.status_code" attrs) (fold s.status_message)
 
 
 -- | Extract error details from an OpenTelemetry exception event.
@@ -2500,18 +2508,18 @@ handledOf = fmap not . \case AE.Bool b -> Just b; AE.String t -> readMaybe (toSt
 -- 'nestedJsonFromDotNotation'). Browser SDK variants (@attributes.error.*@) are
 -- copied into @exception.*@ at ingest by 'migrateHttpSemanticConventions', so
 -- only the canonical namespace needs to be checked here. Message falls back to
--- body (log records) / @status_message@ (spans). Returns Nothing when neither
--- message nor stack exists — prevents empty, unhelpful issues.
+-- body (log records) / @status_message@ (spans). Returns Nothing when there is no stack
+-- and the message says nothing (a dropped connection reports @": "@, prod issue 15efe6c1).
 extractATErrorFromRecord :: OtelLogsAndSpans -> Maybe ErrorPatterns.ATError
 extractATErrorFromRecord spanObj =
   let attrs = unAesonTextMaybe spanObj.attributes
       excVal k = Map.lookup k =<< jsonToMap =<< Map.lookup "exception" =<< attrs
       excAttr = asTextRaw <=< excVal
       bodyTxt = asTextRaw =<< unAesonTextMaybe spanObj.body
-      typ = fromMaybe "Error" (excAttr "type")
+      typ = fromMaybe "Error" (nonEmptyT (excAttr "type"))
       msg = fromMaybe "" $ excAttr "message" <|> bodyTxt <|> spanObj.status_message
       stack = fromMaybe "" (excAttr "stacktrace")
-   in atErrorFrom spanObj (bool ErrorPatterns.CMSpanStatus ErrorPatterns.CMLogRecord (isJust spanObj.severity || spanObj.kind == Just "log")) (handledOf =<< excVal "escaped") typ msg stack <$ guard (not (T.null msg && T.null stack))
+   in atErrorFrom spanObj (bool ErrorPatterns.CMSpanStatus ErrorPatterns.CMLogRecord (isJust spanObj.severity || spanObj.kind == Just "log")) (handledOf =<< excVal "escaped") typ msg stack <$ guard (T.any isAlphaNum msg || not (T.null stack))
 
 
 -- | Build an 'ErrorPatterns.ATError' from a span/log plus the extracted

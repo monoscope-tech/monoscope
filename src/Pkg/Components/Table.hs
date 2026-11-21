@@ -652,7 +652,9 @@ renderTableRow tbl row =
     -- Lucid joins duplicate class_ attributes with no separator, so the row class is space-padded for rowAttrs classes.
     -- Controls inside the row, and a drag that selects text, keep their own click. No @[@ in
     -- the selector: htmx ends the trigger filter at the first @]@ and the click never fires.
-    linkHandler = maybe [] (\getLink -> [hxGet_ (getLink row), hxPushUrl_ "true", hxTrigger_ "click[!target.closest('a,button,input,label,td:has(>.bulkactionItemCheckbox)') && window.getSelection().isCollapsed]"] <> navTabAttrs) tbl.features.rowLink
+    -- Preload on press, not the body's hover: a cursor crossing a list loaded every row's page
+    -- (one sweep of the LLM list sent TimeFusion six conversation scans in 600 ms, 2026-11-20).
+    linkHandler = maybe [] (\getLink -> [hxGet_ (getLink row), hxPushUrl_ "true", hxTrigger_ "click[!target.closest('a,button,input,label,td:has(>.bulkactionItemCheckbox)') && window.getSelection().isCollapsed]", term "hx-preload" "mousedown, touchstart"] <> navTabAttrs) tbl.features.rowLink
 
 
 -- | Bulk action button: enabled (via CSS) only while some row checkbox is checked.

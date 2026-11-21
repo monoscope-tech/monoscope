@@ -33,6 +33,7 @@ module Models.Projects.Dashboards (
   selectDashboardsSortedBy,
   NavDashboard (..),
   selectNavDashboards,
+  overviewTemplate,
   DashboardSort (..),
   SortOrder (..),
   readOnlyTemplate,
@@ -381,8 +382,9 @@ selectDashboardsByTeam :: DB es => Projects.ProjectId -> ProjectMembers.TeamId -
 selectDashboardsByTeam pid teamId =
   Hasql.interp
     ( selectFrom @DashboardVM
-        <> [HI.sql| WHERE project_id = #{pid} AND teams @> ARRAY[#{teamId}::uuid]
-           ORDER BY starred_since DESC NULLS LAST, updated_at DESC |]
+        <> [HI.sql| WHERE project_id = #{pid} AND teams @> ARRAY[#{teamId}::uuid] |]
+        <> listOrder
+        <> "updated_at DESC"
     )
 
 
@@ -400,7 +402,8 @@ selectDashboardsSortedBy :: DB es => Projects.ProjectId -> SortOrder -> Dashboar
 selectDashboardsSortedBy pid order key =
   Hasql.interp
     $ selectFrom @DashboardVM
-    <> [HI.sql| WHERE project_id = #{pid} ORDER BY starred_since DESC NULLS LAST, |]
+    <> [HI.sql| WHERE project_id = #{pid} |]
+    <> listOrder
     <> fromString (toString (SortField (display key) order).toSql)
 
 
@@ -410,12 +413,21 @@ data NavDashboard = NavDashboard {id :: DashboardId, title :: Text, starred :: B
   deriving anyclass (HI.DecodeRow)
 
 
--- | Starred first, then by title.
 selectNavDashboards :: DB es => Projects.ProjectId -> Eff es [NavDashboard]
 selectNavDashboards pid =
   Hasql.interp
-    [HI.sql| SELECT id, title, starred_since IS NOT NULL FROM projects.dashboards
-             WHERE project_id = #{pid} ORDER BY starred_since DESC NULLS LAST, title |]
+    $ [HI.sql| SELECT id, title, starred_since IS NOT NULL FROM projects.dashboards WHERE project_id = #{pid} |]
+    <> listOrder
+    <> "title"
+
+
+overviewTemplate :: Text
+overviewTemplate = "_overview.yaml"
+
+
+-- | Every dashboard list leads with the Overview, then starred; callers append their tie-break column.
+listOrder :: HI.Sql
+listOrder = [HI.sql| ORDER BY base_template IS DISTINCT FROM #{overviewTemplate}, starred_since DESC NULLS LAST, |]
 
 
 dashTitle :: Text -> Text

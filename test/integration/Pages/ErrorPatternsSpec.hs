@@ -68,6 +68,14 @@ spec = around withTestResources $ describe "Error patterns" do
     exc "dashboard.render" "Error" "Effectful.Error.Static.ErrorWrapper: ServerError {errHTTPCode = 302, errReasonPhrase = \"Found\", errBody = \"\", errHeaders = [(\"Location\",\"/p/x\")]}" "" (at 300)
     exc "GET /p/x" "Error" "Effectful.Error.Static.ErrorWrapper: ServerError {errHTTPCode = 403, errReasonPhrase = \"Forbidden\"}" "" (at 300)
     exc "supervise" "SomeAsyncException" "AsyncCancelled" "" (at 300)
+    exc "processEagerWidget" "Error" "<<timeout>>" "" (at 300)
+    -- Nor is a user's query the database refused (a 4xx): only its DB span carried the error.
+    -- The same refusal of the app's own SQL is a fault.
+    let dbRefusal origin msg = ingestSessionEvent tr apiKey "SELECT postgres" ([("db.response.status_code", "XX000"), ("error.type", "XX000")] <> origin) (Just $ "XX000: " <> msg) (at 300)
+    dbRefusal [("monoscope.query.origin", "user")] "Arrow error: Cast error: Cannot cast string 'x' to value of Float32 type"
+    dbRefusal [] "Schema error: No field named ts."
+    -- A connection dropped mid-statement reports an empty code and message (15efe6c1): nothing to file.
+    ingestSessionEvent tr apiKey "INSERT postgres" [("db.response.status_code", ""), ("error.type", "")] (Just ": ") (at 300)
     -- Log records carry no exception event: OTel's exception.* and the browser SDK's error.*.
     ingestErrorLog tr apiKey "user is not defined" [("exception.type", "ReferenceError"), ("exception.message", "user is not defined"), ("exception.stacktrace", "ReferenceError: user is not defined\n    at (/app.js:123:5)")] (at (-5))
     ingestErrorLog tr apiKey "" [("error.name", "TypeError"), ("error.type", "uncaught_exception"), ("error.message", "Cannot read properties of null"), ("error.stack", "TypeError: Cannot read properties of null\n    at handleClick (app.bundle.js:42:11)"), ("exception.escaped", "false")] (at (-4))
@@ -77,7 +85,7 @@ spec = around withTestResources $ describe "Error patterns" do
 
     -- IPs normalise into one fingerprint, one message across span names is pre-merged, and nothing leaks across projects.
     pats <- patterns tr testPid
-    sort (map (.errorType) pats) `shouldBe` ["ConnectionError", "ConnectionRefusedError", "ContextError", "IOException", "ReferenceError", "TimeoutError", "TypeError", "TypeError"]
+    sort (map (.errorType) pats) `shouldBe` ["ConnectionError", "ConnectionRefusedError", "ContextError", "IOException", "ReferenceError", "TimeoutError", "TypeError", "TypeError", "XX000"]
     map (.errorType) <$> patterns tr otherPid `shouldReturn` ["IsolationError"]
     sort [(p.message, "handleClick" `T.isInfixOf` p.stacktrace) | p <- pats, p.errorType `elem` ["ReferenceError", "TypeError"]]
       `shouldBe` [("Cannot read properties of null", True), (undefinedMsg, False), ("user is not defined", False)]

@@ -370,7 +370,7 @@ spec = do
       key <- createTestAPIKey tr spid "sessions-key"
       let alice = [("session.id", "abc"), ("user.id", "u1"), ("user.email", "alice@example.com")]
           bob = [("session.id", "xyz"), ("user.id", "u2"), ("user.email", "bob@example.com")]
-          session name attrs isError = ingestSessionEvent tr key name attrs isError frozenTime
+          session name attrs isError = ingestSessionEvent tr key name attrs ("error" <$ guard isError) frozenTime
           rowsOf (Log.SessionsView _ rows _) = rows
           find' sid view = V.find ((== sid) . (.sessionId)) (rowsOf view)
           expand sessionKey q = do
@@ -401,7 +401,7 @@ spec = do
       session "GET /derived/boom" derived True
       let ctxAttrs = [("session.id", "ctx-sess"), ("user.email", "ctx@example.com"), ("url.path", "/login"), ("user_agent.original", "Mozilla/5.0 ContextProbe")]
       session "GET /login" ctxAttrs False
-      ingestSessionEvent tr key "POST /login" ctxAttrs True (addUTCTime 1 frozenTime)
+      ingestSessionEvent tr key "POST /login" ctxAttrs (Just "error") (addUTCTime 1 frozenTime)
       -- The Replay action shows only for sessions with a recording, matched on the parsed UUID
       -- whatever case the SDK chose.
       [recorded, plain, shouty] <- replicateM 3 UUIDV4.nextRandom

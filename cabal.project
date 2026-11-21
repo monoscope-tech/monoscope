@@ -139,6 +139,13 @@ source-repository-package
   tag: bb90850a0eeed02a0b03244283a1236b5ce03471
   subdir: .
 
+-- 1.4.2.1+ discards a connection hasql closed after a failed interruption cleanup; 1.4.2
+-- returned it to the pool (prod 2026-11-20 03:45). Past the pinned index-state.
+source-repository-package
+  type: git
+  location: https://github.com/nikita-volkov/hasql-pool
+  tag: aa55681c21e4b5183878ae2a9959b59a936cbb3e
+
 -- Upstream merge of haskell-src-meta -> ghc-hs-meta (PR #32) not yet on
 -- Hackage; pin to the merge commit until next release.
 source-repository-package

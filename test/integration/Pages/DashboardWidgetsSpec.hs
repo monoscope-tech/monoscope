@@ -773,13 +773,14 @@ spec = around withTestResources $ describe "Dashboard widgets" do
   -- The probe counts real executions (each run advances the sequence), so a hit repeats a value.
   it "chart cache: refreshing a live range never sends a query narrower than one bucket" \tr -> do
     -- The partial-first-bucket re-read sent TimeFusion a 1-6s sliver per widget per 15s refresh.
+    -- A `since` window ends at `now`, not Nothing (parseSince), which once disabled the alignment.
     let query = "summarize count(*) by bin(timestamp, 10s)"
     ast <- either (fail . show) pure $ parseQueryToAST query
     windows <- newIORef []
     let fetch cfg _ _ = liftIO (modifyIORef' windows (cfg.dateRange :)) $> def
         refresh now =
           let from = addUTCTime (-3600) now
-           in runTestBg frozenTime tr $ Charts.queryMetricsWithCacheUsing fetch Nothing Charts.DTMetric testPid Nothing ast (defSqlQueryCfg testPid now Nothing Nothing){dateRange = (Just from, Nothing)} query now (Just from) Nothing
+           in runTestBg frozenTime tr $ Charts.queryMetricsWithCacheUsing fetch Nothing Charts.DTMetric testPid Nothing ast (defSqlQueryCfg testPid now Nothing Nothing){dateRange = (Just from, Just now)} query now True
     for_ @[] [4.5, 19.5, 34.5] \offset -> void $ refresh $ addUTCTime offset frozenTime
     ranges <- readIORef windows
     length ranges `shouldSatisfy` (>= 3)
@@ -1234,18 +1235,20 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     for_ ["Errors", "errors", "Errors"] \title -> void $ toBaseServantResponse tr $ Api.apiDashboardWidgetUpsert testPid dashId (widgetOf Widget.WTTimeseries title)
     map (.id) <$> storedWidgets tr dashId `shouldReturn` [Just "errors", Just "errors-2", Just "errors-3"]
 
-  it "dashboard switcher and sidebar flyout: list the project's dashboards, starred first and marked, linking each" \tr -> do
+  it "dashboard switcher and sidebar flyout: list the project's dashboards, Overview then starred first and marked, linking each" \tr -> do
     alpha <- newDashboard tr "" "Alpha"
     _ <- testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Beta", Dashboards.file = "", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}
-    dbExec tr "UPDATE projects.dashboards SET starred_since = now() WHERE project_id = ? AND title = 'Beta'" (Only testPid)
+    _ <- runAuthHandler tr $ Dashboards.entrypointRedirectGetH DashboardModel.overviewTemplate testPid []
+    -- An unstarred Overview still leads a starred Beta.
+    dbExec tr "UPDATE projects.dashboards SET starred_since = CASE title WHEN 'Beta' THEN now() END WHERE project_id = ?" (Only testPid)
     switcher <- renderT <$> call tr (Dashboards.dashboardSwitcherGetH testPid alpha)
     let at t = T.length . fst $ T.breakOn t switcher
-    (at "Beta</span>" < at "Alpha</span>", T.count "aria-current=\"page\"" switcher) `shouldBe` (True, 1)
+    (at "Overview</span>" < at "Beta</span>", at "Beta</span>" < at "Alpha</span>", T.count "aria-current=\"page\"" switcher) `shouldBe` (True, True, 1)
     switcher `shouldContainAll` ["/dashboards/" <> alpha.toText <> "\"", "Browse all dashboards"]
-    -- The sidebar's Dashboards flyout lists the same set, starred first and marked, on every page.
+    -- The sidebar's Dashboards flyout lists the same set in the same order, starred marked, on every page.
     nav <- fst . T.breakOn "</nav>" . snd . T.breakOn "id=\"main-sidenav\"" . renderT <$> call tr (Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing (Dashboards.DashboardFilters []))
     let navAt t = T.length . fst $ T.breakOn t nav
-    (navAt "text-iconWarning" < navAt ">Beta<", navAt ">Beta<" < navAt ">Alpha<", T.count "text-iconWarning" nav) `shouldBe` (True, True, 1)
+    (navAt ">Overview<" < navAt ">Beta<", navAt "text-iconWarning" < navAt ">Beta<", navAt ">Beta<" < navAt ">Alpha<", T.count "text-iconWarning" nav) `shouldBe` (True, True, True, 1)
     nav `shouldContainAll` ["/dashboards/" <> alpha.toText <> "\"", "All dashboards"]
     -- The page's title opens it on demand; the tab strip, not a breadcrumb suffix, names the tab.
     overview <- newDashboard tr "_overview.yaml" "Overview"
