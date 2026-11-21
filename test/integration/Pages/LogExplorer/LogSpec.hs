@@ -726,7 +726,7 @@ spec = do
       sharedKey <- ("shared-cache-spec-" <>) . show <$> getMonotonicTimeNSec
       let read' = runQueryEffect tr $ QC.withSharedCache sharedKey 300 (liftIO $ atomicModifyIORef' calls \n -> (n + 1, n + 1))
       (,) <$> read' <*> read' `shouldReturn` (1, 1)
-      dbExec tr "UPDATE rum_panel_cache SET expires_at = now() - interval '1 minute' WHERE cache_key = ?" (Only $ toXXHash sharedKey)
+      dbExec tr "UPDATE rum_panel_cache SET expires_at = now() - interval '1 minute' WHERE cache_key = ?" (Only $ QC.sharedCacheKey sharedKey)
       read' `shouldReturn` 2
 
       clearAllTestData tr

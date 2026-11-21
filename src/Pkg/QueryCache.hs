@@ -9,6 +9,7 @@ module Pkg.QueryCache (
   newQueryFlights,
   coalesceQuery,
   withSharedCache,
+  sharedCacheKey,
   cachedRawQuery,
   lookupRawCache,
   updateRawCache,
@@ -50,6 +51,7 @@ import Data.Map.Strict qualified as M
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
+import "cryptonite" Crypto.Hash (Digest, SHA256, hash)
 
 -- Merge, not Intro: the sort MUST be stable. 'mergeTimeseriesData' dedupes keeping the last
 -- occurrence, and the delta is appended after the cached rows, so stability is
@@ -555,7 +557,7 @@ withSharedCache :: (AE.FromJSON a, AE.ToJSON a, DB es) => Text -> Int64 -> Eff e
 withSharedCache rawKey ttl compute =
   Hasql.interpOne [HI.sql|SELECT payload FROM rum_panel_cache WHERE cache_key = #{key} AND expires_at > now()|] >>= maybe publish (pure . unAesonText . HI.getOneColumn)
   where
-    key = toXXHash rawKey
+    key = sharedCacheKey rawKey
     publish = do
       fresh <- compute
       Hasql.interpExecute_
@@ -564,6 +566,18 @@ withSharedCache rawKey ttl compute =
           ON CONFLICT (cache_key) DO UPDATE SET payload = EXCLUDED.payload, expires_at = EXCLUDED.expires_at|]
       Hasql.interpExecute_ [HI.sql|DELETE FROM rum_panel_cache WHERE expires_at < now() - interval '12 hours'|]
       pure fresh
+
+
+-- | The shared cache table is fleet-wide with no project column, so the key is a full SHA-256:
+-- a short hash would let a member grind @rawKey@ text into another project's row.
+--
+-- >>> import Data.Text qualified as T
+-- >>> T.length (sharedCacheKey "endpointStats:(a,q)")
+-- 64
+-- >>> sharedCacheKey "endpointStats:(a,q)" == sharedCacheKey "endpointStats:(b,q)"
+-- False
+sharedCacheKey :: Text -> Text
+sharedCacheKey rawKey = show (hash (encodeUtf8 rawKey :: ByteString) :: Digest SHA256)
 
 
 -- In-memory cache for propagating session/user identity across all spans in a trace.
