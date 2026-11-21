@@ -91,7 +91,7 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Models.Apis.Integrations (SlackData, getDiscordDataByProjectId, getProjectSlackData)
+import Models.Apis.Integrations (SlackData, foreignDiscordChannels, getDiscordDataByProjectId, getProjectSlackData)
 import Models.Apis.Integrations qualified as Integrations
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
@@ -259,7 +259,6 @@ integrationsSettingsGetH = addRespHeaders <=< integrationsPage
 integrationsPage :: Projects.ProjectId -> ATAuthCtx (PageCtx IntegrationsConfig)
 integrationsPage pid = do
   (_, _, bw) <- mkPageCtx pid
-  appCtx <- ask @AuthContext
   slackInfo <- getProjectSlackData pid
   discordInfo <- getDiscordDataByProjectId pid
   channelsE <- resolveSlackChannels slackInfo
@@ -283,7 +282,6 @@ integrationsPage pid = do
       bw{pageTitle = "Integrations", isSettingsPage = True}
       IntegrationsConfig
         { projectId = pid
-        , envConfig = appCtx.env
         , disabledChannels = maybe V.empty (.disabled_channels) everyoneTeamM
         , phones = maybe V.empty (.phone_numbers) everyoneTeamM
         , emails = maybe V.empty (.notify_emails) everyoneTeamM
@@ -380,7 +378,7 @@ data SlackNotInstalled = SlackNotInstalled
 
 updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (ActionResult ChannelsRejection IntegrationsSaved)
 updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, slackChannels, includeUserIdentityInAlerts} = act do
-  void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
+  void $ ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PEdit pid
   validateNotificationChannels pid enabledChannels phones >>= traverse \() -> do
     projectM <- Projects.projectById pid
     slackInfoM <- getProjectSlackData pid
@@ -490,7 +488,7 @@ logIntegrationAudit pid event name = do
 
 pagerdutyConnectH :: Projects.ProjectId -> PagerdutyConnectForm -> ATAuthCtx (ActionResult PagerdutyKeyTooShort IntegrationsSaved)
 pagerdutyConnectH pid form = act do
-  void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
+  void $ ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PEdit pid
   let key = T.strip form.integrationKey
   if T.length key < 20
     then pure $ Left PagerdutyKeyTooShort
@@ -510,7 +508,7 @@ pagerdutyDisconnectH pid = do
 
 slackDisconnectH :: Projects.ProjectId -> ATAuthCtx (ActionResult SlackNotInstalled IntegrationsSaved)
 slackDisconnectH pid = act do
-  void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
+  void $ ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PEdit pid
   deleted <- Integrations.deleteSlackData pid
   if deleted > 0
     then do
@@ -522,7 +520,6 @@ slackDisconnectH pid = act do
 
 data IntegrationsConfig = IntegrationsConfig
   { projectId :: Projects.ProjectId
-  , envConfig :: EnvConfig
   , disabledChannels :: V.Vector Text
   , phones :: V.Vector Text
   , emails :: V.Vector Text
@@ -565,7 +562,7 @@ integrationsBody IntegrationsConfig{..} = do
             integrations =
               [ ("email", Settings.TCEmail, "Email", True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
               , ("slack", Settings.TCSlack, "Slack", isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration projectId slackData slackChannels extraSlackChannels existingSlackChannels slackChannelsError alertsOff)
-              , ("discord", Settings.TCDiscord, "Discord", discordConnected, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig projectId)
+              , ("discord", Settings.TCDiscord, "Discord", discordConnected, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration projectId)
               , ("phone", Settings.TCWhatsapp, "WhatsApp", not $ V.null phones, faSprite_ "whatsapp" "solid" "h-4 w-4", renderWhatsappIntegration tgs)
               , ("pagerduty", Settings.TCPagerduty, "PagerDuty", isJust pagerdutyKey, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration projectId (isJust pagerdutyKey))
               ]
@@ -705,10 +702,9 @@ renderSlackIntegration pid slackData channels extraChannels existingChannels cha
       a_ [target_ "_blank", class_ "btn btn-xs", href_ oauthUrl] "Connect Slack agent"
 
 
-renderDiscordIntegration :: EnvConfig -> Projects.ProjectId -> Html ()
-renderDiscordIntegration envCfg pid = do
-  let addQueryParams = "&state=" <> pid.toText <> "&redirect_uri=" <> envCfg.discordRedirectUri
-  a_ [target_ "_blank", class_ "btn btn-xs gap-1.5", href_ $ "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> envCfg.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> addQueryParams] do
+renderDiscordIntegration :: Projects.ProjectId -> Html ()
+renderDiscordIntegration pid =
+  a_ [target_ "_blank", class_ "btn btn-xs gap-1.5", href_ $ Links.urls.discordInstallGet pid False] do
     faSprite_ "discord" "solid" "h-3.5 w-3.5"
     "Add to Discord"
 
@@ -830,6 +826,7 @@ data TeamRejection
   | HandleInvalidChars
   | HandleNotLowercaseStart
   | InvalidTeamEmail Text
+  | ForeignDiscordChannels [Text]
   deriving stock (Eq, Show)
 
 
@@ -847,6 +844,7 @@ instance Refusal TeamRejection where
     HandleInvalidChars -> "Handle must be lowercase, no spaces, and hyphens only"
     HandleNotLowercaseStart -> "Handle must start with a lowercase letter"
     InvalidTeamEmail email -> "Invalid email format: " <> email
+    ForeignDiscordChannels ids -> "Not a channel of this project's Discord server: " <> T.intercalate ", " ids
 
 
 -- | The page a team save lands on: the team itself when edited from its own view.
@@ -893,9 +891,12 @@ manageTeamPostH pid form tmView = act do
   let validMemberIds = V.map (.userId) projMembers
       teamDetails = ProjectMembers.TeamDetails form.teamName form.teamDescription form.teamHandle form.teamMembers form.notifEmails form.slackChannels form.discordChannels form.phoneNumbers form.pagerdutyServices V.empty
       saved outcome = Right outcome <$ addTriggerEvent "closeModal" ""
+  appCtx <- ask @AuthContext
+  unbound <- foreignDiscordChannels appCtx.env.discordBotToken pid (V.toList form.discordChannels)
   case (V.all (`V.elem` validMemberIds) form.teamMembers, validateTeamDetails form.teamName form.teamHandle form.notifEmails, form.teamId) of
     (False, _, _) -> pure $ Left NonMemberInTeam
     (_, Left e, _) -> pure $ Left e
+    _ | not (null unbound) -> pure $ Left $ ForeignDiscordChannels unbound
     (_, _, Just tid) -> do
       _ <- ProjectMembers.updateTeam pid tid teamDetails
       saved $ TeamUpdated pid (form.teamHandle <$ tmView)
@@ -1306,7 +1307,7 @@ newtype StripeCheckoutForm = StripeCheckoutForm {plan :: Text}
 
 stripeCheckoutInitH :: Projects.ProjectId -> StripeCheckoutForm -> ATAuthCtx (ActionResult BillingRejection BillingRedirect)
 stripeCheckoutInitH pid form = act do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, project) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
       lapsedSubId = guard (Projects.isFreeTier project.paymentPlan && Projects.projectProvider project == Projects.StripeProvider) *> mfilter (not . T.null) project.subId

@@ -19,7 +19,6 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Effectful.Labeled (Labeled)
@@ -28,6 +27,7 @@ import Effectful.Reader.Static (Reader, ask)
 import Effectful.Time qualified as Time
 import Lucid hiding (for_)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Apis.Integrations (Channel (..))
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
@@ -46,7 +46,7 @@ import Pkg.CLIFormat qualified as CLIFormat
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
-import Pkg.Mail (arr, dcGallery, plainTxt, slackActions, slackContext, slackEscape, slackHeader, slackImage, slackSection)
+import Pkg.Mail (arr, dcGallery, inertCode, plainTxt, slackActions, slackContext, slackEscape, slackHeader, slackImage, slackSection)
 import Pkg.Parser (parseQueryToAST)
 import Pkg.SchemaLearning (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude hiding (Reader, ask)
@@ -138,7 +138,7 @@ quietMentions = T.replace "<@" "<\x200B@" . T.replace "<!" "<\x200B!"
 
 -- | Model or user text as inline code: no backticks or newlines to break out of it.
 codeSpan :: Text -> Text
-codeSpan t = "`" <> T.take 300 (unwords $ words $ T.replace "`" "'" t) <> "`"
+codeSpan t = "`" <> T.take 300 (unwords $ words $ inertCode t) <> "`"
 
 
 -- | Slack in-channel response replacing the ephemeral loading message.
@@ -203,17 +203,6 @@ installedSuccess botPlatform pidM = do
             span_ [class_ $ "monospace px-3 py-1 rounded-lg font-semibold " <> cmdCls] $ toHtml cmd
             span_ [class_ $ "text-white text-xs px-2 py-1 rounded-full " <> accentCls] $ toHtml badge
           p_ [class_ "text-textStrong text-sm"] $ toHtml desc
-
-
-data Channel = Channel
-  { channelName :: Text
-  , channelId :: Text
-  , channelType :: Maybe Int
-  }
-  deriving (Generic, Show)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "channel", DAE.CamelToSnake]] Channel
 
 
 processAIQuery :: ProjectToolCtx es => Maybe EnvConfig -> Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
@@ -577,7 +566,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
                     dcContainer 26879
                       $ [dcText $ botEmoji EmojiChart <> " **" <> title <> "**"]
                       <> dcGallery [(imageUrl, "Chart visualization: " <> title)]
-                      <> [ dcText $ "**Query:** `" <> query <> "`"
+                      <> [ dcText $ "**Query:** " <> codeSpan query
                          , dcLinkButton (botEmoji EmojiSearch <> " " <> viewLabel) queryUrl
                          ]
                   -- Twilio content-template variables: WhatsApp renders the chart itself, so
@@ -605,10 +594,10 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
         let rows = V.toList (V.take 15 requestVecs)
             shownCount = length rows
             cells = map (map $ T.take 60 . unwords . words) $ colNames : map (map CLIFormat.valToText . V.toList) rows
-            tableData = "```\n" <> T.take 1200 (unlines $ map (CLIFormat.formatRow $ CLIFormat.colWidths cells) cells) <> "\n```"
+            tableData = "```\n" <> inertCode (T.take 1200 (unlines $ map (CLIFormat.formatRow $ CLIFormat.colWidths cells) cells)) <> "\n```"
             url' = hostPath envCfg.hostUrl $ explore (urls.logExplorer pid) Nothing query
             moreText = if resultCount > shownCount then "\n_" <> show (resultCount - shownCount) <> " more results in Log Explorer_" else ""
-            content = botEmoji EmojiTable <> " **Query Results** (showing " <> show shownCount <> " of " <> show resultCount <> " rows)\n`" <> query <> "`\n" <> tableData <> moreText <> "\n"
+            content = botEmoji EmojiTable <> " **Query Results** (showing " <> show shownCount <> " of " <> show resultCount <> " rows)\n" <> codeSpan query <> "\n" <> tableData <> moreText <> "\n"
          in case target of
               Discord -> AE.object ["content" AE..= (content <> "\n[View in Log Explorer →](" <> url' <> ")")]
               WhatsApp -> AE.object ["body" AE..= (content <> "\n" <> url')]
@@ -653,9 +642,14 @@ withDashboardTemplate pid dashboardId act = whenJust (idFromText dashboardId) \d
     mapM_ act $ loadDashboardFromVM dashboardTemplatesCompiled vm <|> find ((== Just Dashboards.overviewTemplate) . (.file)) dashboardTemplatesCompiled
 
 
--- | OAuth install state/redirect param: @"projectId"@ or @"projectId__onboarding"@.
+-- | OAuth install state: @"projectId[__onboarding]__nonce"@.
+--
+-- >>> snd $ parseInstallState (Just "00000000-0000-0000-0000-000000000000__onboarding__n1")
+-- True
+-- >>> snd $ parseInstallState (Just "00000000-0000-0000-0000-000000000000__n1")
+-- False
 parseInstallState :: Maybe Text -> (Maybe Projects.ProjectId, Bool)
-parseInstallState stateM = (Projects.projectIdFromText =<< viaNonEmpty head parts, length parts > 1)
+parseInstallState stateM = (Projects.projectIdFromText =<< viaNonEmpty head parts, "onboarding" `elem` drop 1 parts)
   where
     parts = maybe [] (T.splitOn "__") stateM
 

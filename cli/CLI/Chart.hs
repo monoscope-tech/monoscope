@@ -44,6 +44,7 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Vector qualified as V
 import Granite qualified as G
 import Pages.Charts.Types (MetricsData (..))
+import Pkg.CLIFormat (escapeControls)
 import System.Console.ANSI qualified as ANSI
 
 
@@ -108,7 +109,7 @@ seriesFrom headers grid = [Series h [(x, join (row !!? i)) | (x, row) <- rows] |
 
 
 seriesFromMetrics :: MetricsData -> [Series]
-seriesFromMetrics md = seriesFrom (V.toList md.headers) (V.toList (V.toList <$> md.dataset))
+seriesFromMetrics md = seriesFrom (escapeControls <$> V.toList md.headers) (V.toList (V.toList <$> md.dataset))
 
 
 -- | Does this column hold the x-axis timestamps? The one place that knows the

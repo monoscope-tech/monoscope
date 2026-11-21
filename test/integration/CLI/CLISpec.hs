@@ -139,6 +139,12 @@ spec = around withCliResources $ describe "CLI" do
       (ec, out, err) <- run ("config" : args)
       (ec, out) `shouldBe` (ExitFailure 1, "")
       err `shouldSatisfy` T.isInfixOf "message"
+    -- repoConfigApiUrl_doesNotReceiveEnvApiKey: a cloned repo's api_url got the exported MONOSCOPE_API_KEY as a bearer token.
+    writeFileText (dir <> "/.monoscope.yaml") "api_url: http://127.0.0.1:9\n"
+    let withKey extra = runBin (Proc.proc bin ["--json", "config", "get"]){Proc.cwd = Just dir, Proc.env = Just $ extra <> (("MONOSCOPE_API_KEY", "env-secret") : isolated)}
+    (ec, out, err) <- withKey []
+    (ec, out, "/.monoscope.yaml sets api_url to http://127.0.0.1:9" `T.isInfixOf` err, "env-secret" `T.isInfixOf` err) `shouldBe` (ExitFailure 1, "", True, False)
+    (\(e, o, _) -> (e, "********" `T.isInfixOf` o)) <$> withKey [("MONOSCOPE_API_URL", "http://127.0.0.1:9")] `shouldReturn` (ExitSuccess, True)
 
   -- Wire-format regressions (URL paths, KQL operators, kind mapping, envelopes) only
   -- show against a real HTTP server. MONOSCOPE_API_KEY (+ MONOSCOPE_API_URL,

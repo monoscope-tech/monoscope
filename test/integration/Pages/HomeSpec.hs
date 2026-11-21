@@ -9,6 +9,7 @@ import Data.UUID qualified as UUID
 import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Issues qualified as Issues
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Dashboards qualified as Dashboards
@@ -40,6 +41,10 @@ spec = around withTestResources $ describe "Home screen" do
     page `shouldContainAll` ["Today&#39;s issues", "Checkout fails on a null cart", "Today&#39;s improvements", "Payment gateway timeout", "Resolved", "p95 latency on /cart down 38%", "Flagged by AI", "Checkout 5xx up 4.8x since deploy v3.2.1", "Error regression radar", "Talk to Monoscope engineers in Slack", "home-ask-form", "Connect your coding agent", "/api/v1/mcp", "Nothing is being watched yet.", "Your stack", "Just you so far", "monoscope config set project " <> pid.toText]
 
     [hid] <- dbQuery tr [sql|SELECT id FROM apis.home_highlights WHERE project_id = ? AND kind = 'insight'|] (Only pid)
+    -- A viewer could clear what the agent flagged for the whole team.
+    setRole tr pid ProjectMembers.PView
+    httpStatus tr (void $ Home.highlightDismissPostH pid (fromOnly hid)) `shouldReturn` 403
+    setRole tr pid ProjectMembers.PAdmin
     void $ call tr $ Home.highlightDismissPostH pid (fromOnly hid)
     dismissed <- renderT <$> call tr (Home.homeGetH pid)
     T.isInfixOf "Checkout 5xx up 4.8x" dismissed `shouldBe` False
@@ -100,9 +105,13 @@ spec = around withTestResources $ describe "Home screen" do
     methods created `shouldBe` ["conversations.create", "chat.postMessage", "conversations.inviteShared"]
     foldMap (decodeUtf8 . snd) (viaNonEmpty head created) `shouldContainAll` ["name=monoscope-acme-shop-" <> T.take 6 pid.toText]
     foldMap (decodeUtf8 . snd) (viaNonEmpty last created) `shouldContainAll` ["channel=C0HOME", "emails=" <> T.replace "@" "%40" owner, "external_limited=false"]
-    -- A later member gets one invite; members already invited are not re-sent.
-    dbExec tr [sql|INSERT INTO users.users (id, first_name, last_name, email) VALUES ('00000000-0000-0000-0000-00000000a11c', 'Ada', 'L', 'ada@acme.test')|] ()
-    dbExec tr [sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (?, '00000000-0000-0000-0000-00000000a11c', 'edit')|] (Only pid)
+    -- slackConnect_unconsentedMemberEmails: any typed address became a member, so Monoscope's
+    -- workspace sent Slack Connect invites to strangers. Only members who have signed in are invited.
+    dbExec tr [sql|INSERT INTO users.users (id, first_name, last_name, email) VALUES ('00000000-0000-0000-0000-00000000a11c', 'Ada', 'L', 'ada@acme.test'), ('00000000-0000-0000-0000-00000000a11d', '', '', 'stranger@elsewhere.test')|] ()
+    dbExec tr [sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (?, '00000000-0000-0000-0000-00000000a11c', 'edit'), (?, '00000000-0000-0000-0000-00000000a11d', 'view')|] (pid, pid)
+    (methods <$> sync False) `shouldReturn` []
+    -- A later member gets one invite once signed in; members already invited are not re-sent.
+    dbExec tr [sql|INSERT INTO users.persistent_sessions (user_id) VALUES ('00000000-0000-0000-0000-00000000a11c')|] ()
     later <- sync False
     methods later `shouldBe` ["conversations.inviteShared"]
     foldMap (decodeUtf8 . snd) (viaNonEmpty last later) `shouldContainAll` ["emails=ada%40acme.test"]
@@ -115,6 +124,8 @@ spec = around withTestResources $ describe "Home screen" do
     (methods <$> sync False) `shouldReturn` []
     swept `shouldReturn` 0
     page `shouldContainAll` ["#monoscope-acme-shop", "Shared with the Monoscope team", "slack.com/app_redirect?channel=C0HOME&amp;team=T0MONO"]
+    setRole tr pid ProjectMembers.PView
+    httpStatus tr (void $ Home.slackConnectPostH pid) `shouldReturn` 403
 
   it "slackConnect_nameTaken_reusesTheProjectsOwnChannelInsteadOfASecond" \tr -> do
     -- A concurrent sync, or one whose save was lost, already created this project's channel.

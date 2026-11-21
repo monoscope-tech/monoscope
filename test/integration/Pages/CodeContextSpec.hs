@@ -146,6 +146,11 @@ blobOf :: Text -> LBS.ByteString
 blobOf body = AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 $ encodeUtf8 body)]
 
 
+-- | A host that answers every repository read: a mapping is saved only for a repo its credential reads.
+readableRepository :: (IOE :> es, W.HTTP :> es) => Eff es a -> Eff es a
+readableRepository = getOnly Nothing "{\"full_name\":\"acme/repository\",\"private\":true,\"default_branch\":\"main\"}"
+
+
 withUnavailableRepositoryAPI :: (IOE :> es, W.HTTP :> es) => Eff es a -> Eff es a
 withUnavailableRepositoryAPI = interpose @W.HTTP \_ _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Fixture account is unavailable"
 
@@ -451,7 +456,7 @@ spec = do
             syncForm = GitSyncPage.GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner = "attacker", repo = "evil", branch = "main", accessToken = "ghp_x", webhookSecret = Nothing, pathPrefix = Nothing}
             mappingIds = map (.id) <$> runQueryEffect tr (CodeContext.getCodeMappings victim)
             syncState = map (\s -> (s.owner, s.repo, s.installationId)) <$> runQueryEffect tr (GitSync.getGitSyncs victim)
-        _ <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH victim (mappingForm "checkout-service" "/srv/app/")
+        _ <- call tr $ readableRepository $ PageCodeContext.codeMappingsPostH victim (mappingForm "checkout-service" "/srv/app/")
         seeded <- mappingIds
         length seeded `shouldBe` 1
         syncs <- syncState
@@ -663,7 +668,7 @@ spec = do
         for_ ["aaa-stray", "zzz-ours"] \name -> grantOf tr testPid Git.GitHub Nothing name (Just 222) Nothing >>= \c -> Cache.insert tr.trATCtx.repoListCache c.id []
         accounts <- forM ["team-a", "team-b"] \name -> do
           credential <- appAccount tr name
-          credential <$ Cache.insert tr.trATCtx.repoListCache credential.id []
+          credential <$ Cache.insert tr.trATCtx.repoListCache credential.id [Git.GitRepo (name <> "/checkout") "checkout" True "main"]
         page <- renderT . (.content) <$> call tr (withUnavailableRepositoryAPI $ PageCodeContext.repositoryConnectGetH testPid Nothing)
         for_ (["zzz-ours", "aaa-stray", "team-a", "team-b", "Choose an account"] :: [Text]) \label -> page `shouldSatisfy` T.isInfixOf label
         -- The newest grant is never picked for you.
@@ -686,7 +691,7 @@ spec = do
       -- "the panel never fills". The cache is per blob, so a second frame of one file is free.
       it "fetches a blob once however many frames ask for it" \tr -> do
         void $ syncOf tr testPid Nothing "acme" "checkout-service" (GitSync.PersonalToken "ghp_test") ""
-        _ <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout-service") (Just "main") (Just "checkout") Nothing (Just "/srv/app/") (Just "") Nothing)
+        _ <- call tr $ readableRepository $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout-service") (Just "main") (Just "checkout") Nothing (Just "/srv/app/") (Just "") Nothing)
         -- A PAT needs no token exchange, so the one request is the blob read, and a read is a bodiless GET.
         let fetch n = runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ _ -> pure $ Just $ blobOf "one\ntwo\nthree\nfour\n") $ CodeContext.fetchSnippet tr.trATCtx.codeBlobCache tr.trATCtx.config testPid (Just "checkout") Nothing "/srv/app/checkout.py" n
         (firstRequests, first_) <- fetch 2
@@ -696,6 +701,15 @@ spec = do
         fmap (.focusLine) first_ `shouldBe` Right 2
         fmap (.focusLine) second_ `shouldBe` Right 3
         fmap (.body) second_ `shouldBe` Right ["one", "two", "three", "four"]
+        -- codeBlobCache_otherCredential_isNeverServedAnotherTenantsSource (2026-11 audit): blobs were
+        -- keyed by (owner, repo, ref, path) alone, so a project naming acme/checkout-service with its
+        -- own credential read this cached source, and a mapping saved without reading the repo.
+        attacker <- createTestProject tr "blob-attacker"
+        mallory <- grantOf tr attacker Git.GitHub Nothing "mallory" Nothing (Just "ghp_mallory")
+        runQueryEffect tr $ CodeContext.insertCodeMapping attacker mallory.id (Git.RepoRef "acme" "checkout-service" "main") (Just "checkout") "/srv/app/" ""
+        runQueryEffect tr (W.runHTTPWreq $ withUnavailableRepositoryAPI $ CodeContext.fetchSnippet tr.trATCtx.codeBlobCache tr.trATCtx.config attacker (Just "checkout") Nothing "/srv/app/checkout.py" 2) >>= (`shouldSatisfy` isLeft)
+        refused <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "victimorg/private") (Just "main") (Just "checkout") Nothing (Just "/srv/app/") (Just "") Nothing)
+        (case refused of Left PageCodeContext.RepositoryUnreadable{} -> True; _ -> False) `shouldBe` True
 
       it "sourceContextPages_guideAnUnconfiguredProjectFromFrameToMapping" \tr -> do
         connection <- call tr $ PageCodeContext.repositoryConnectGetH testPid Nothing
@@ -719,7 +733,7 @@ spec = do
       it "maps several services onto several repos, and resolves each frame to its own" \tr -> do
         -- The config-sync repo is the project's monoscope YAML, not where the services live.
         void $ syncOf tr testPid Nothing "acme" "monoscope-config" (GitSync.PersonalToken "ghp_test") ""
-        let add repo svc prefix root = call tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just repo) (Just "main") svc Nothing (Just prefix) (Just root) Nothing)
+        let add repo svc prefix root = call tr $ readableRepository $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just repo) (Just "main") svc Nothing (Just prefix) (Just root) Nothing)
         _ <- add "checkout-service" (Just "checkout") "/srv/app/" "src"
         added <- renderT . fromRightShow <$> add "billing-service" (Just "billing") "/opt/billing/" ""
         -- The account came from the config-sync installation; the row says what it covers in frame-path terms.
@@ -853,6 +867,8 @@ spec = do
               , ("<script>alert('wiki')</script>", ["&lt;script&gt;"])
               , ("<form id=\"wiki-injection\"><input name=\"token\" type=\"password\"></form>", ["&lt;form"])
               , ("| Name | Count |\n| --- | ---: |\n| Item | 2 |\n\n- [x] Done\n\nA claim[^1].\n\n[^1]: Evidence", ["<table>", "type=\"checkbox\"", "<sup", "Evidence"])
+              , -- wiki_agentPage_externalImage_doesNotLoadOnSight: an agent-written page could beacon every reader.
+                ("**Beacon** ![x](https://beacon.example/p.gif?d=1) ![y](//beacon.example/q.gif) ![ok](/rel.png) [docs](https://docs.example)", ["<strong>Beacon</strong>", "src=\"/rel.png\"", "href=\"https://docs.example\""])
               ]
           )
           \(n, (body, rendered)) -> do
@@ -864,6 +880,7 @@ spec = do
             status readBack `shouldBe` 200
             has readBack rendered
             T.toLower (html readBack) `shouldNotSatisfy` T.isInfixOf "href=\"javascript:alert"
+            html readBack `shouldNotSatisfy` T.isInfixOf "beacon.example"
             lacks readBack ["src=\"data:text/html", "<script>alert('wiki')</script>", "href=\"script\"", "id=\"wiki-injection\""]
             map (Memory.memoryText . (.document.body)) <$> runQueryEffect tr (Memory.pageHistory testPid formatted) `shouldReturn` [body]
         for_ ["runbooks%2Fretries", "runbooks/%252e%252e/private", "runbooks/%2e%2e/private"] \path -> status <$> visit (wiki $ "/" <> path) `shouldReturn` 404

@@ -62,7 +62,7 @@ import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Servant qualified
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Config qualified as Config
-import System.Directory (listDirectory, withCurrentDirectory)
+import System.Directory (getPermissions, listDirectory, setOwnerExecutable, setPermissions, withCurrentDirectory)
 import System.IO.Error (userError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Timeout (timeout)
@@ -337,6 +337,11 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         html = renderT . Widget.widget_
         gridTags = tagsWith ["class=\"grid-stack"] . html
     html sqlWidget `shouldSatisfy` T.isInfixOf "SELECT &#39;&lt;script&gt;&#39;"
+    -- widgetHeader_storedIdBreaksOutOfScript: a dashboard writer's widget id was spliced into the copy
+    -- hyperscript and the delete onpointerdown as a string literal, so a quote in it ran code for a reader.
+    let hostile = chart{Widget.id = Just "x\" then set window.pwned to 1 then set y to \"');pwned=2;//", Widget._dashboardId = Just "00000000-0000-0000-0000-000000000001"}
+        hostileHtml = html hostile
+    map (`T.isInfixOf` hostileHtml) ["my.dataset.widgetId", "getElementById(&quot;x\\&quot; then", "to &quot;x&quot; then", "&#39;x&quot;"] `shouldBe` [True, True, False, False]
     -- A naked widget (expanded viewer, shared link) is on no grid, so carries no grid chrome.
     gridTags standalone `shouldBe` []
     goldenParts "dashboard-widgets" $ foldMap gridTags (canvas <> [groupW, widthless]) <> [html chart{Widget.id = Just "requests-chart"}] <> elementsWith ["aria-label=\"Expand widget\"", "query-preview language"] (html sqlWidget)
@@ -417,6 +422,19 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         groupOf kid = Utils.encodeText (def :: Widget.Widget){Widget.wType = Widget.WTGroup, Widget.children = Just [kid]}
     grouped <- call tr $ Routes.widgetGetH testPid (Just $ groupOf child) Nothing Nothing Nothing Nothing []
     (grouped.html, map (.html) <$> grouped.children) `shouldBe` (Nothing, Just [Nothing])
+    -- clientDataset_neverSigned: a posted widget's dataset was signed into its PNG link, and widget.png
+    -- handed a `formatter` cell in it to chart-cli's function reviver as server-written options.
+    let formatterCell = (def :: Widget.WidgetDataset){Widget.source = AE.toJSON ([AE.object ["formatter" AE..= ("function(){}, 1" :: Text)]] :: [AE.Value])}
+    posted <- call tr $ Widget.widgetPostH testPid Nothing Nothing Nothing =<< Dashboards.authorizeClientWidget testPid [] (def :: Widget.Widget){Widget.wType = Widget.WTTimeseries, Widget.dataset = Just formatterCell, Widget.children = Just [(def :: Widget.Widget){Widget.dataset = Just formatterCell}]}
+    (isJust posted.dataset, any (isJust . (.dataset)) (fold posted.children), isJust posted.pngUrl) `shouldBe` (False, False, True)
+    -- chartCli_inheritsNoSecrets: the renderer evaluates option strings, and it ran with every server secret in its environment.
+    withSystemTempDirectory "chart-cli-env" \dir -> do
+      let script = dir <> "/chart-cli"
+          encoded = decodeUtf8 @Text $ AE.encode (def :: Widget.Widget){Widget.wType = Widget.WTStat, Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.value = Just 1}}
+      writeFileText script "#!/bin/sh\nenv\n"
+      getPermissions script >>= setPermissions script . setOwnerExecutable True
+      childEnv <- decodeUtf8 @Text . toStrict . Servant.getResponse <$> toBaseServantResponse tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.chartCliPath = Just (toText script)}}} (Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing Nothing Nothing Nothing Nothing (Just $ Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid encoded) [])
+      (any (T.isPrefixOf "PATH=") (lines childEnv), any (T.isPrefixOf "HOME=") (lines childEnv)) `shouldBe` (True, False)
     setRole tr testPid ProjectMembers.PView
     httpStatus tr (Routes.widgetGetH testPid (Just $ groupOf child{Widget.sql = Just "SELECT 1 FROM otel_logs_and_spans"}) Nothing Nothing Nothing Nothing []) `shouldReturn` 403
     setRole tr testPid ProjectMembers.PAdmin
@@ -737,7 +755,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         userId = (Servant.getResponse tr.trSessAndHeader).user.id
         setPermission p = dbExec tr "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (p, testPid, userId)
         chart source ps = toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Routes.chartsDataGetH (Just source) (Just Charts.DTText) (Just testPid) Nothing (Just clientSql) (Just "24H") Nothing Nothing Nothing Nothing ps
-        signed = [("sql_sig", Just $ Widget.sqlSignature tr.trATCtx.env.apiKeyEncryptionSecretKey testPid (Just clientSql) Nothing)]
+        signed = [("sql_sig", Just $ Widget.sqlSignature tr.trATCtx.env.apiKeyEncryptionSecretKey testPid [] (Just clientSql) Nothing)]
     original <- dbOne tr "SELECT permission FROM projects.project_members WHERE project_id = ? AND user_id = ?" (testPid, userId)
     for_ [Hasql.SqlPostgres, Hasql.SqlTimefusion] \source -> do
       (.error) <$> chart source [] `shouldReturn` Nothing
@@ -821,13 +839,21 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     second (V.map (V.map T.length)) <$> texts "SELECT repeat('x', 1048576)" `shouldReturn` (Nothing, V.singleton (V.singleton 1048576))
     cached `shouldReturn` 0
 
+    -- rawSql_postgres_runsUnderADeadlineAndRowCap (2026-11 audit): user SQL had no statement deadline
+    -- or result cap on the shared pool, and pg_sleep was explicitly allowed.
+    exec "CREATE FUNCTION spec_statement_timeout() RETURNS text LANGUAGE sql AS $$ SELECT current_setting('statement_timeout') $$"
+    let rawTexts q = (\md -> (md.error, md.dataText)) <$> sqlChart tr (Just Hasql.SqlPostgres) Charts.DTText q []
+    rawTexts "SELECT spec_statement_timeout()" `shouldReturn` (Nothing, V.singleton (V.singleton "30s"))
+    V.length . snd <$> rawTexts "SELECT n::text FROM generate_series(1, 100001) n" `shouldReturn` 100000
+    fst <$> rawTexts "SELECT 1::text FROM pg_sleep(0)" >>= (`shouldSatisfy` isJust)
+
     -- One backend execution per window across a cold request and ten cached ones, streamed or not.
-    let heavy = "SELECT q.call::text, n::text, repeat('x', 80) FROM (SELECT nextval('cache_benchmark_calls') AS call, pg_sleep(0.1)) q CROSS JOIN generate_series(1, 1000) n"
+    let heavy = "SELECT q.call::text, n::text, repeat('x', 80) FROM (SELECT nextval('cache_benchmark_calls') AS call, spec_wait(0.1)) q CROSS JOIN generate_series(1, 1000) n"
         fetch window streaming =
           if streaming
             then completeFrame @Charts.MetricsData =<< runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just heavy) (Just window) Nothing Nothing Nothing Nothing [("var-endpointHash", Just "benchmark")])
             else runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just heavy) (Just window) Nothing Nothing Nothing Nothing [("var-endpointHash", Just "benchmark")]
-    exec "CREATE SEQUENCE cache_benchmark_calls"
+    exec "CREATE SEQUENCE cache_benchmark_calls; CREATE FUNCTION spec_wait(seconds float8) RETURNS void LANGUAGE sql AS $$ SELECT pg_sleep(seconds) $$"
     for_ ["24H", "3D", "7D"] \window -> do
       exec "DELETE FROM query_cache WHERE source = 'raw-sql'; ALTER SEQUENCE cache_benchmark_calls RESTART WITH 1"
       cold <- fetch window True
@@ -971,6 +997,16 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     full <- getTab tr dashId "overview" Nothing selected
     eagerOnes (renderedWidgets $ tabDashboard full) `shouldSatisfy` not . null
     T.count "id=\"log_details_container\"" (renderT full) `shouldBe` 1
+    -- signedTemplate_forgedConst_refused: the signature covered only the template, so a viewer or the
+    -- demo guest replayed the page's signed Apdex SQL with their own SQL as {{const-endpointFilter}}.
+    let Dashboards.DashboardGet _ _ _ _ pageParams = tabDashboard full
+    apdex <- maybe (fail "no signed const-endpointFilter SQL") pure $ find (\w -> isJust w.sqlSig && maybe False (T.isInfixOf "{{const-endpointFilter}}") w.sql) (renderedWidgets $ tabDashboard full)
+    let apdexAs consts = Routes.chartsDataGetH (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing apdex.sql (Just "24H") Nothing Nothing Nothing Nothing (("sql_sig", apdex.sqlSig) : selected <> consts)
+        pageConsts = filter (T.isPrefixOf "const-" . fst) pageParams
+    setRole tr testPid ProjectMembers.PView
+    (.error) <$> call tr (addRespHeaders =<< apdexAs pageConsts) `shouldReturn` Nothing
+    httpStatus tr (apdexAs [("const-endpointFilter", Just "TRUE OR project_id IS NOT NULL")]) `shouldReturn` 403
+    setRole tr testPid ProjectMembers.PAdmin
     swapped <- getTab tr dashId "overview" tabsContent selected
     renderedWidgets (tabDashboard swapped) `shouldSatisfy` not . null
     eagerOnes (renderedWidgets $ tabDashboard swapped) `shouldBe` []

@@ -7,7 +7,7 @@ import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Lens (key, _Array, _Number, _Object, _String)
 import Data.Aeson.Types qualified as AET
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPRecord, withGoldenCache)
+import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPRecord, runHTTPWreq, withGoldenCache)
 import Data.List qualified as List
 import Data.Map qualified as Map
 import Data.OpenApi (OpenApi, info, title, version)
@@ -29,6 +29,7 @@ import Models.Telemetry.Schema qualified as Schema
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Network.HTTP.Types qualified as H
 import Network.Wai qualified as Wai
+import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Test qualified as WT
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts
@@ -217,6 +218,13 @@ spec = describe "API v1" do
       let sid = UUID.toText (Servant.getResponse tr.trSessAndHeader).sessionId.getPersistentSessionId
           createKeyAs role = setRole tr testPid role >> request app H.methodPost "/api/v1/mcp" [json, bearer sid, ("X-Project-Id", encodeUtf8 testPid.toText)] (AE.encode $ toolCall "create_api_key" ["body" AE..= AE.object ["title" AE..= ("mcp-" <> show role :: Text)]]) <&> \r -> AE.decode @AE.Value (WT.simpleBody r) ^? _Just . key "result" . key "isError"
       traverse createKeyAs [PM.PEdit, PM.PAdmin] `shouldReturn` [Just (AE.Bool True), Just (AE.Bool False)]
+      -- principalRefusalReadsConsumedPathInfo: the editor guard read Servant's routed pathInfo, which is
+      -- empty at the auth check, so a direct REST editor could mint keys and PATCH itself to admin.
+      let uid = (Servant.getResponse tr.trSessAndHeader).persistentSession.user.getUser.id
+          asEditor m p b = status <$> request app m p [json, bearer sid, ("X-Project-Id", encodeUtf8 testPid.toText)] (AE.encode b)
+      setRole tr testPid PM.PEdit
+      sequence [asEditor H.methodPost "/api/v1/api_keys" (AE.object ["title" AE..= ("direct" :: Text)]), asEditor H.methodPatch ("/api/v1/members/" <> encodeUtf8 uid.toText) (AE.object ["permission" AE..= ("admin" :: Text)])] `shouldReturn` [403, 403]
+      runQueryEffect tr (PM.getSessionPermission testPid uid) `shouldReturn` Just PM.PEdit
 
     it "HTTP pages: dashboard form fragment, onboarding fallback, avatars, proxied docs" \tr -> do
       newForm <- getPath tr "/p/00000000-0000-0000-0000-000000000000/dashboards/new" []
@@ -235,6 +243,14 @@ spec = describe "API v1" do
       status avatar `shouldBe` 200
       (map fst <$> readIORef requests) >>= (`shouldSatisfy` \case [url] -> "https://www.gravatar.com/avatar/" `T.isPrefixOf` url && "?d=404" `T.isSuffixOf` url; _ -> False)
       List.lookup H.hCacheControl (WT.simpleHeaders avatar) `shouldBe` Just "public, max-age=604800"
+      -- 2026-11 audit: this anonymous route fetched the IdP picture URL with no address policy and
+      -- returned the body, so a picture claim naming an internal host read it.
+      Warp.testWithApplication (pure \_ respond -> respond $ Wai.responseLBS H.status200 [] "internal-secret") \port -> do
+        let internalUrl = "http://127.0.0.1:" <> show port <> "/secret" :: Text
+        runHasqlEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE users.users SET display_image_url = #{internalUrl} WHERE id = #{uid} |]
+        internal <- request (topAppWithHTTP runHTTPWreq tr) H.methodGet (encodeUtf8 $ "/api/avatar/" <> uid.toText) [] ""
+        (status internal, WT.simpleBody internal == "internal-secret", List.lookup "X-Content-Type-Options" (WT.simpleHeaders internal)) `shouldBe` (200, False, Just "nosniff")
+        runHasqlEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE users.users SET display_image_url = '' WHERE id = #{uid} |]
       -- nginx keeps the first of duplicate Content-Types, which served the SVG fallback as octet-stream.
       unknown <- getPath tr "/api/avatar/00000000-0000-0000-0000-00000000dead" []
       status unknown `shouldBe` 200

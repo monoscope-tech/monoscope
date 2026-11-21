@@ -12,10 +12,17 @@ import Hasql.Interpolate qualified as HI
 import Lucid qualified
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (Query, RequestHeaders, hAuthorization, hCookie, status200)
+import Network.HTTP.Types (Query, RequestHeaders, hAuthorization, hCacheControl, hCookie, statusCode, status200)
+import Network.HTTP.Types.Header (hVary)
 import Network.Wai qualified as Wai
 import Network.Wai.Test qualified as WT
+import Models.Apis.Issues qualified as Issues
+import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper qualified as BodyWrapper
+import Pages.Home qualified as Home
+import Pages.Onboarding qualified as Onboarding
+import Pages.Projects qualified as ProjectsP
+import Pages.Settings qualified as Settings
 import Pkg.AdConversions qualified as AdConversions
 import Pkg.TestUtils
 import Servant.API (Header, Headers, ResponseHeader (..), getHeaders, getResponse, lookupResponseHeader)
@@ -24,9 +31,11 @@ import Servant.Server qualified as Servant
 import Servant.Server.Experimental.Auth (unAuthHandler)
 import System.Config (AuthContext (hasqlPool))
 import System.Config qualified as Config
+import System.Server qualified as Server
 import System.Types (ApiPrincipal (..))
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie, parseSetCookie, setCookieName, setCookieValue)
+import Web.FormUrlEncoded (urlDecodeAsForm)
 import Web.I18n qualified as I18n
 
 
@@ -97,17 +106,19 @@ spec = around withTestResources do
 
   it "roles: demo and viewer bearers only read, editors cannot administer, cross-site basic-auth writes and logged-out sessions are refused" \tr -> do
     let sid = UUID.toASCIIBytes (getResponse tr.trSessAndHeader).sessionId.getPersistentSessionId
-        api hs m p = Servant.runHandler $ unAuthHandler (Auth.apiKeyAuthHandler tr.trLogger tr.trATCtx) (WT.setPath Wai.defaultRequest p){Wai.requestMethod = m, Wai.requestHeaders = hs}
+        -- Servant runs the auth check at the routed leaf, where pathInfo is already consumed.
+        api hs m p = Servant.runHandler $ unAuthHandler (Auth.apiKeyAuthHandler tr.trLogger tr.trATCtx) (WT.setPath Wai.defaultRequest p){Wai.requestMethod = m, Wai.requestHeaders = hs, Wai.pathInfo = []}
         outcome = fmap (bimap errHTTPCode \case Authenticated _ -> rw; Editor _ -> ed; Viewer _ -> vw; DemoReader _ -> ro)
         rw, ed, vw, ro :: Text
         (rw, ed, vw, ro) = ("rw", "ed", "vw", "ro")
         asMember = api [(hAuthorization, "Bearer " <> sid), ("X-Project-Id", encodeUtf8 testPid.toText)]
         demo = api [("X-Project-Id", encodeUtf8 Projects.demoProjectId.toText)]
     -- The demo project's world-readable bypass also took writes, e.g. minting its API keys.
-    traverse outcome [demo "GET" "/api/v1/events", demo "POST" "/api/v1/events/query", demo "POST" "/api/v1/api_keys"] `shouldReturn` ([Right ro, Right ro, Left 401] :: [Either Int Text])
+    -- Key ids are listed too: a token is a fixed-IV encryption of its id, so an id is the key.
+    traverse outcome [demo "GET" "/api/v1/events", demo "POST" "/api/v1/events/query", demo "POST" "/api/v1/api_keys", demo "GET" "/api/v1/api_keys"] `shouldReturn` ([Right ro, Right ro, Left 401, Left 401] :: [Either Int Text])
     -- A session token ignored the member's role: a viewer could PATCH themselves to admin.
-    let probes = [asMember "GET" "/api/v1/members", asMember "PATCH" "/api/v1/members/self", asMember "POST" "/api/v1/api_keys", asMember "POST" "/api/v1/monitors"]
-    for_ [(PM.PView, [Right vw, Left 403, Left 403, Left 403] :: [Either Int Text]), (PM.PEdit, [Right ed, Left 403, Left 403, Right ed]), (PM.PAdmin, replicate 4 (Right rw))] \(role, want) ->
+    let probes = [asMember "GET" "/api/v1/members", asMember "PATCH" "/api/v1/members/self", asMember "POST" "/api/v1/api_keys", asMember "POST" "/api/v1/monitors", asMember "GET" "/api/v1/api_keys"]
+    for_ [(PM.PView, [Right vw, Left 403, Left 403, Left 403, Left 403] :: [Either Int Text]), (PM.PEdit, [Right ed, Left 403, Left 403, Right ed, Right ed]), (PM.PAdmin, replicate 5 (Right rw))] \(role, want) ->
       setRole tr testPid role >> (traverse outcome probes `shouldReturn` want)
 
     -- Basic auth rides every request, so a cross-site form could write as the operator.
@@ -120,6 +131,32 @@ spec = around withTestResources do
     alive `shouldReturn` True
     void $ toBaseServantResponse tr $ Auth.logoutH (Just $ "monoscope_session=" <> sid)
     alive `shouldReturn` False
+
+  -- demoGuestSeededAdmin: migration 0001 seeds the guest identity as the demo project's admin, so
+  -- every anonymous visitor (and its public session id as a bearer) passed PEdit/PAdmin gates.
+  it "demoGuestSeededAdmin_cappedAtEdit: the anonymous demo guest edits the demo sandbox but cannot mint keys, invite, change plan or set notification targets" \tr -> do
+    Right guest <- runTestEffect tr.trPool tr.trATCtx.hasqlPool tr.trLogger tr.trTracerProvider $ Auth.sessionByID Nothing "requestID" False "light" I18n.En Nothing Nothing (Just "/p/00000000-0000-0000-0000-000000000000/") Auth.ChallengeRedirect
+    let demoPid = Projects.demoProjectId
+        asGuest = tr{trSessAndHeader = guest}
+    runQueryEffect tr (PM.getSessionPermission demoPid (getResponse guest).user.id) `shouldReturn` Just PM.PEdit
+    traverse (httpStatus asGuest) [void $ Settings.apiPostH demoPid (Settings.GenerateAPIKeyForm "guest" Nothing), void $ ProjectsP.manageMembersPostH demoPid Nothing (ProjectsP.ManageMembersForm ["x@example.test"] [PM.PAdmin]), void $ ProjectsP.pricingUpdateH demoPid (ProjectsP.PricingUpdateForm Nothing Nothing Nothing), void $ Onboarding.phoneEmailPostH demoPid (Onboarding.NotifChannelForm "+15550100" ["x@example.test"])] `shouldReturn` [403, 403, 403, 403]
+    httpStatus asGuest (void $ Home.homeGetH demoPid) `shouldReturn` 200
+    -- Chat stays open to the guest: its turn is admitted and runs, read-only.
+    call asGuest (AIThreads.startThreadPostHWithTools Nothing demoPid $ fromRightShow $ urlDecodeAsForm "query=What+failed%3F&mode=chat") >>= (`shouldSatisfy` isRight)
+    runId <- dbOne tr [sql| SELECT id FROM apis.ai_routine_runs WHERE project_id = ? AND requested_by = ? |] (demoPid, (getResponse guest).user.id)
+    run <- runQueryEffect tr (Issues.runContextFor demoPid (Issues.ConversationClaim runId)) >>= maybe (fail "guest run missing") pure
+    fmap (.policy) <$> runQueryEffect tr (Issues.runContextAuthority run) `shouldReturn` Just Issues.Observe
+    let guestBearer (m, p) = Servant.runHandler $ unAuthHandler (Auth.apiKeyAuthHandler tr.trLogger tr.trATCtx) (WT.setPath Wai.defaultRequest p){Wai.requestMethod = m, Wai.requestHeaders = [(hAuthorization, "Bearer " <> UUID.toASCIIBytes Auth.demoGuestSessionId.getPersistentSessionId), ("X-Project-Id", encodeUtf8 demoPid.toText)]}
+    traverse (fmap (bimap errHTTPCode \case Editor _ -> True; _ -> False) . guestBearer) [("GET", "/api/v1/events"), ("POST", "/api/v1/api_keys")] `shouldReturn` ([Right True, Left 403] :: [Either Int Bool])
+
+  -- 2026-11 audit: session pages carried no cache policy, so an edge caching by extension could
+  -- store a member's page fetched as /p/<pid>/repositories/services/x.css and serve it to anyone.
+  it "privatePages_assetLikePath_carryNoStore: pages default to private, no-store; static assets keep their own policy" \tr -> do
+    let cookie = (hCookie, "monoscope_session=" <> UUID.toASCIIBytes (getResponse tr.trSessAndHeader).sessionId.getPersistentSessionId)
+        fetch path = WT.runSession (WT.request (WT.setPath Wai.defaultRequest path){Wai.requestHeaders = [cookie]}) (Server.mkServer tr.trLogger tr.trATCtx tr.trTracerProvider)
+        policy r = (statusCode r.simpleStatus, L.lookup hCacheControl r.simpleHeaders, L.lookup hVary r.simpleHeaders)
+    policy <$> fetch ("/p/" <> encodeUtf8 testPid.toText <> "/repositories/services/x.css") `shouldReturn` (200, Just "private, no-store", Just "Cookie, Authorization")
+    (\(_, cache, _) -> cache /= Just "private, no-store") . policy <$> fetch "/public/favicon.ico" `shouldReturn` True
 
   it "auth0 callback: a refused code exchange sends the user back to login, not a 500 page" \tr -> do
     -- Prod 2026-11-20 (24c4fdfc): Auth0 answered 403 invalid_grant and wreq's exception escaped the handler.
@@ -147,6 +184,10 @@ spec = around withTestResources do
     let cookie = "ms_consent=granted; _fbp=fb.1.1.2; monoscope_attribution=" <> setCookieValue stash
     -- Regression (login CSRF): a callback whose state was not issued to this browser signs no one in.
     for_ [Nothing, Just ("st-other" :: Text)] \st -> (callbackWith st cookie `shouldThrow` anyException)
+    -- unverifiedEmail_createsNoAccount: an explicitly unverified sign-up minted the account its real owner later logged into.
+    let unverified _ url = pure $ "{\"email\":\"unverified@example.com\",\"email_verified\":false}" <$ guard ("/userinfo" `T.isSuffixOf` toText url)
+    toBaseServantResponse tr{trATCtx = adCtx} (withHTTPResponses unverified $ Auth.authCallbackH (Just "code") (Just "st-1") Nothing (Just "monoscope_oauth_state=st-1") Nothing Nothing) `shouldThrow` anyException
+    runQueryEffect tr (Projects.userByEmail "unverified@example.com") >>= (`shouldSatisfy` isNothing)
     [_, signup] <- callback cookie
     Just (uid :: Projects.UserId) <- runQueryEffect tr $ Hasql.interpOne [HI.sql| SELECT id FROM users.users WHERE email = 'callback@example.com' |]
     (setCookieName signup, setCookieValue signup) `shouldBe` ("monoscope_signup", encodeUtf8 uid.toText)

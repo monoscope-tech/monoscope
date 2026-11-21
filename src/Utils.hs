@@ -82,6 +82,7 @@ module Utils (
   drawerLoadAttrs_,
   drawerRowAttrs_,
   renderMarkdown,
+  sanitizeMarkdownHtml,
   renderMarkdownToc,
   renderMarkdownTocWithPrefix,
   textOnlyHtml,
@@ -151,7 +152,7 @@ import Pkg.IngestBudget qualified as IngestBudget
 import Relude hiding (notElem)
 import Relude.Extra.Tuple (toSnd)
 import Servant hiding ((:>))
-import Text.HTML.SanitizeXSS (sanitizeBalance)
+import Text.HTML.SanitizeXSS (balanceTags, clearTags, filterTags, safeTagName, safeTagsCustom, sanitizeAttribute)
 import Text.MMark qualified as MMark
 import Text.MMark.Extension qualified as MExt
 import Text.Parsec qualified as Parsec
@@ -1615,13 +1616,19 @@ renderMarkdown = fst . renderMarkdownToc
 -- >>> let html = toStrict $ renderText $ renderMarkdown "### Merge risk\n\nA <b>tag</b> ![Before](https://x.test/a.gif?sig=1) <sub>base</sub>\n\n| Check | Verdict |\n| :-- | :-- |\n| **Impact** | small |\n"
 -- >>> map (`T.isInfixOf` html) ["<h3", "<table", "<strong>Impact", "&lt;b&gt;", "| :--"]
 -- [True,True,True,True,False]
+--
+-- The fallback keeps the same URL policy: an external image there loaded on sight.
+--
+-- >>> let gfm = toStrict $ renderText $ renderMarkdown "| a |\n| - |\n| b |\n\n![x](https://example.invalid/p.gif?d=1) ![y](//example.invalid/q.gif) ![z](/rel.png) [ok](https://docs.example) [bad](javascript:alert(1)) [m](mailto:a@b.c)"
+-- >>> map (`T.isInfixOf` gfm) ["<table", "example.invalid", "src=\"/rel.png\"", "href=\"https://docs.example\"", "javascript:", "href=\"mailto:a@b.c\""]
+-- [True,False,True,True,False,True]
 renderMarkdownToc :: Text -> (Html (), [(Text, Text)])
 renderMarkdownToc = renderMarkdownTocWithPrefix ""
 
 
 renderMarkdownTocWithPrefix :: Text -> Text -> (Html (), [(Text, Text)])
 renderMarkdownTocWithPrefix prefix md = case MMark.parse "" md of
-  Left _ -> (either (const $ toHtml md) (toHtmlRaw . sanitizeBalance . toStrict . Markdown.renderHtml @()) $ runIdentity $ Markdown.commonmarkWith (textOnlyHtml $ gfmExtensions <> Markdown.defaultSyntaxSpec) "" md, [])
+  Left _ -> (either (const $ toHtml md) (toHtmlRaw . sanitizeMarkdownHtml . toStrict . Markdown.renderHtml @()) $ runIdentity $ Markdown.commonmarkWith (textOnlyHtml $ gfmExtensions <> Markdown.defaultSyntaxSpec) "" md, [])
   Right parsed ->
     let doc = MMark.useExtension safeUrls $ if T.null prefix then parsed else MMark.useExtension scoped parsed
      in ( toHtmlRaw $ MMark.render doc
@@ -1655,7 +1662,25 @@ renderMarkdownTocWithPrefix prefix md = case MMark.parse "" md of
       MExt.Link label uri _ | not (linkSchemeOk uri) -> foldMap render label
       MExt.Image label uri _ | isJust (URI.uriScheme uri) || isRight (URI.uriAuthority uri) -> toHtml (MExt.asPlainText label)
       inline -> render inline
-    linkSchemeOk uri = maybe True ((`elem` ["http", "https", "mailto"]) . T.toLower . URI.unRText) (URI.uriScheme uri)
+
+
+linkSchemeOk :: URI.URI -> Bool
+linkSchemeOk uri = maybe True ((`elem` ["http", "https", "mailto"]) . T.toLower . URI.unRText) (URI.uriScheme uri)
+
+
+-- | 'safeUrls' on commonmark HTML (the GFM fallback and project wiki pages): xss-sanitize, plus
+-- images only from this origin and links only to http, https, mailto or relative targets.
+--
+-- >>> sanitizeMarkdownHtml "<img src=\"https://x.test/a.gif\"><img src=\"/a.png\"><a href=\"javascript:x\">j</a>"
+-- "<img><img src=\"/a.png\"><a>j</a>"
+sanitizeMarkdownHtml :: Text -> Text
+sanitizeMarkdownHtml = filterTags (balanceTags . safeTagsCustom safeTagName urls . clearTags)
+  where
+    urls attr@(name, value) =
+      sanitizeAttribute attr >>= \kept -> case name of
+        "src" -> kept <$ guard (any (\uri -> isNothing (URI.uriScheme uri) && isLeft (URI.uriAuthority uri)) (URI.mkURI @Maybe value))
+        "href" -> kept <$ guard (any linkSchemeOk (URI.mkURI @Maybe value))
+        _ -> Just kept
 
 
 -- | Embedded HTML is text; only Markdown constructs may create markup.

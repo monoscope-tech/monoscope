@@ -521,7 +521,7 @@ fetchSourceEvidence blobCache cfg pid svc revM path lineNo = runExceptT do
   let repoRef = GitSync.RepoRef cm.owner cm.repo (fromMaybe cm.ref revM)
       located = cm.owner <> "/" <> cm.repo <> "/" <> repoPath <> " at " <> repoRef.ref
   (cred, conn) <- ExceptT $ mappingConnection cfg pid cm
-  let blobKey = (cm.owner, cm.repo, repoRef.ref, repoPath)
+  let blobKey = (cred.id, Git.hostSlug cred.host, cred.apiBase, cm.owner, cm.repo, repoRef.ref, repoPath)
   cached <- liftIO $ join <$> traverse (`Cache.lookup` blobKey) blobCache
   blob <- case cached of
     Just b -> pure b

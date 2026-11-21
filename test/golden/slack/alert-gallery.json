@@ -983,10 +983,10 @@
                         }
                     ],
                     "color": "#E5484D",
-                    "fallback": "New error log pattern · payment provider timeout after <*> ms"
+                    "fallback": "New error log pattern · payment provider timeout after &lt;*&gt; ms"
                 }
             ],
-            "text": "New error log pattern · payment provider timeout after <*> ms"
+            "text": "New error log pattern · payment provider timeout after &lt;*&gt; ms"
         },
         "thread": []
     },
@@ -1047,10 +1047,10 @@
                         }
                     ],
                     "color": "#F5A524",
-                    "fallback": "Log spike · connection reset by peer <*>"
+                    "fallback": "Log spike · connection reset by peer &lt;*&gt;"
                 }
             ],
-            "text": "Log spike · connection reset by peer <*>"
+            "text": "Log spike · connection reset by peer &lt;*&gt;"
         },
         "thread": [
             {
@@ -1063,7 +1063,7 @@
                         "type": "section"
                     }
                 ],
-                "text": "connection reset by peer <*>: :large_orange_circle: Log spike  ·  gateway  ·  WARN  ·  1.9K/hr  ·  baseline 140/hr  ·  +1,271%"
+                "text": "connection reset by peer &lt;*&gt;: :large_orange_circle: Log spike  ·  gateway  ·  WARN  ·  1.9K/hr  ·  baseline 140/hr  ·  +1,271%"
             }
         ]
     },

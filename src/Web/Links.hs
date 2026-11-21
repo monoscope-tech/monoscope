@@ -280,6 +280,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , slackConnectPost :: mode :- "p" :> ProjectId :> "slack-connect" :> Unrefusable 'POST (Opaque "Home.SlackConnectCard")
   , dashboardRedirectGet :: mode :- "p" :> ProjectId :> "overview" :> AllQueryParams :> LocationRedirect NoContent
   , slackInstallGet :: mode :- "p" :> ProjectId :> "slack" :> "install" :> QueryFlag "onboarding" :> LocationRedirect NoContent
+  , discordInstallGet :: mode :- "p" :> ProjectId :> "discord" :> "install" :> QueryFlag "onboarding" :> SessionRedirect NoContent
   , slackEvidenceGet :: mode :- "p" :> ProjectId :> "slack" :> "evidence" :> Capture "slackUser" Text :> LocationRedirect NoContent
   , slackEvidenceDisconnectPost :: mode :- "p" :> ProjectId :> "slack" :> "evidence" :> "disconnect" :> Verb 'POST 303 '[HTML] (Headers '[Header "Location" Text] NoContent)
   , slackIdentityGet :: mode :- "slack" :> "link" :> Capture "linkId" (UUIDId "slack_link") :> Get '[HTML] (RespHeaders (Html ()))

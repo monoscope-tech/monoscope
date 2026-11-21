@@ -76,7 +76,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, nonEmptyT, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, nonEmptyT, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, scriptJson, toUriStr, utcTimeToNanoseconds)
 import Web.Links hiding (explorerUrl)
 
 
@@ -1414,9 +1414,10 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
           , "hasErrors" AE..= sp.hasErrors
           , "totalSpans" AE..= (1 :: Int)
           ]
-      spanJson = encodeText $ spanMinToFlame <$> flattenTrees rootSpans
-      colorsJson = encodeText serviceColors
-      trId = traceItem.traceId
+      -- Span and service names are telemetry; aeson leaves '<' alone, so </script> closed the element.
+      spanJson = scriptJson $ spanMinToFlame <$> flattenTrees rootSpans
+      colorsJson = scriptJson serviceColors
+      trId = scriptJson traceItem.traceId
   script_
     [text|
     function navigateSpans(direction) {
@@ -1435,14 +1436,14 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
       if (typeof waterFallGraphChart === 'undefined' || !tabs) return;
       if (!tabs.dataset.waterfallInit) {
         tabs.dataset.waterfallInit = '1';
-        waterFallGraphChart("$trId", $colorsJson);
+        waterFallGraphChart($trId, $colorsJson);
       }
       if (timeline && !timeline.dataset.timelineListener) {
         timeline.dataset.timelineListener = '1';
         timeline.addEventListener('tab-visible', () => {
           if (typeof flameGraphChart === 'undefined' || timeline.dataset.timelineInit) return;
           timeline.dataset.timelineInit = '1';
-          flameGraphChart($spanJson, "$trId", $colorsJson);
+          flameGraphChart($spanJson, $trId, $colorsJson);
         }, {once: true});
       }
     }

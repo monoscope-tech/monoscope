@@ -66,6 +66,8 @@ import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Ids qualified as Projects
 import OpenTelemetry.Attributes qualified as OA
@@ -252,7 +254,11 @@ executeSecuredQuery useTimefusion pid (SecuredSql source userQuery) limit
             routeToTimefusion = case source of
               SqlPostgres -> False
               SqlTimefusion -> useTimefusion
-        resultE <- try @Hasql.HasqlException $ Hasql.withHasqlTimefusion routeToTimefusion (jsonArrayRows <$> Hasql.interpUser wrapped)
+            -- On the shared Postgres pool the statement gets the same 30s deadline as chart SQL.
+            run
+              | routeToTimefusion = Hasql.withHasqlTimefusion True (Hasql.interpUser wrapped)
+              | otherwise = Hasql.labeledSession "user_sql" (one (OA.toAttribute <$> Hasql.userQueryOrigin)) (TxS.transaction TxS.ReadCommitted TxS.Read (Tx.sql "SET LOCAL statement_timeout = '30s'" *> Hasql.queryTx wrapped))
+        resultE <- try @Hasql.HasqlException $ jsonArrayRows <$> run
         pure $ first (\e -> "Query execution failed: " <> toText (displayException e)) resultE
 
 
@@ -262,7 +268,7 @@ tenantTables :: [Text]
 tenantTables = ["otel_logs_and_spans", "otel_metrics", "apis.endpoints", "apis.endpoint_dependency_edges", "apis.error_hourly_stats", "apis.log_pattern_hourly_stats", "apis.prometheus_scrape_configs", "apis.check_results", "projects.replay_sessions"]
 
 
-data SqlTok = SqlLit Text | SqlName [Text] Text | SqlOther Char
+data SqlTok = SqlLit Text | SqlName [Text] Text | SqlOther Char | SqlNestedComment
 
 
 -- | Scope a user statement to its project at every tenant table it reads: a CTE filtering the
@@ -298,11 +304,27 @@ data SqlTok = SqlLit Text | SqlName [Text] Text | SqlOther Char
 -- [True,True,True,True,True,True,True]
 -- >>> isRight (scopeUserSql False pid "SELECT 'it''s; fine' AS e FROM otel_metrics;")
 -- True
+--
+-- Sleeping only holds a connection every tenant shares.
+--
+-- >>> isLeft (scopeUserSql False pid "SELECT 1 FROM pg_sleep(600)")
+-- True
+--
+-- Postgres nests block comments, so one holding @/*@ ran on past where this lexer ended it, and a
+-- quote read here as opening a literal was code there. Tablefunc's crosstab/connectby, text
+-- search's ts_stat/ts_rewrite and TimescaleDB's job and chunk functions run SQL text from a
+-- literal or change the database.
+--
+-- >>> map (isLeft . scopeUserSql False pid) (["SELECT 1 /* /* */ ' */ FROM users.users --'", "SELECT * FROM crosstab('select 1 from users.users') AS t(a int)", "SELECT * FROM crosstab3('select 1')", "SELECT * FROM connectby('users.users', 'id', 'p', '1', 0)", "SELECT ts_stat('select 1')", "SELECT ts_rewrite('a', 'select 1')", "SELECT drop_chunks('otel_metrics', now())", "SELECT add_retention_policy('x', interval '1d')", "SELECT remove_compression_policy('x')", "SELECT compress_chunk('x')", "SELECT decompress_chunk('x')", "SELECT set_chunk_time_interval('x', interval '1d')", "SELECT alter_job(1, scheduled => false)", "SELECT delete_job(1)", "SELECT run_job(1)", "SELECT add_job('f', '1h')"] :: [Text])
+-- [True,True,True,True,True,True,True,True,True,True,True,True,True,True,True,True]
+-- >>> isRight (scopeUserSql False pid "SELECT set_name, add_count, ts_start FROM otel_metrics /* a */")
+-- True
 scopeUserSql :: Bool -> Projects.ProjectId -> Text -> Either Text Text
 scopeUserSql postgres pid sql = do
   let toks = dropTrailingSemicolon $ tokenizeSql sql
       names = [ps | SqlName ps _ <- toks]
   Relude.when (any isSemicolon toks) $ Left "Only one statement is allowed"
+  Relude.when (any (\case SqlNestedComment -> True; _ -> False) toks) $ Left "Nested comments are not supported"
   Relude.when (or $ zipWith unlexable toks (drop 1 toks)) $ Left "E'', U&'' and dollar-quoted strings are not supported"
   Relude.when (["with", "recursive"] `elem` zipWith (<>) names (drop 1 names)) $ Left "Recursive queries are not supported"
   whenJust (find disallowed names) \ps -> Left $ T.intercalate "." ps <> " is not available to queries"
@@ -311,6 +333,7 @@ scopeUserSql postgres pid sql = do
       render = foldMap \case
         SqlLit l -> l
         SqlOther c -> one c
+        SqlNestedComment -> " "
         SqlName ps raw -> let t = T.intercalate "." ps in if length ps > 1 && t `elem` tenantTables then alias t else raw
       (lead, rest) = break isName toks
       isName = \case SqlName{} -> True; _ -> False
@@ -331,7 +354,12 @@ scopeUserSql postgres pid sql = do
     alias t = bool t ("tenant_" <> T.replace "." "_" t) ("." `T.isInfixOf` t)
     schemas = ["apis", "monitors", "projects", "telemetry", "tests", "users", "public", "information_schema"]
     disallowed = \case
-      [n] -> n `elem` ["background_jobs", "background_jobs_long", "otel_metrics_meta", "query_cache", "rum_panel_cache", "schema_migrations", "current_setting", "set_config"] || ("otel_" `T.isPrefixOf` n && n `notElem` tenantTables) || (n /= "pg_sleep" && any (`T.isPrefixOf` n) ["pg_", "lo_", "dblink", "query_to_xml", "table_to_xml", "schema_to_xml", "database_to_xml", "cursor_to_xml"])
+      [n] ->
+        n
+          `elem` ["background_jobs", "background_jobs_long", "otel_metrics_meta", "query_cache", "rum_panel_cache", "schema_migrations", "current_setting", "set_config", "connectby", "ts_stat", "ts_rewrite", "drop_chunks", "compress_chunk", "decompress_chunk", "alter_job", "delete_job", "run_job", "add_job", "add_dimension", "create_hypertable", "move_chunk", "reorder_chunk", "refresh_continuous_aggregate", "set_chunk_time_interval", "set_integer_now_func", "set_number_partitions", "set_adaptive_chunking"]
+          || ("otel_" `T.isPrefixOf` n && n `notElem` tenantTables)
+          || any (`T.isPrefixOf` n) ["pg_", "lo_", "dblink", "query_to_xml", "table_to_xml", "schema_to_xml", "database_to_xml", "cursor_to_xml", "crosstab", "timescaledb_", "_timescaledb"]
+          || (any (`T.isPrefixOf` n) ["add_", "remove_"] && "_policy" `T.isSuffixOf` n)
       [q, n] -> (q `elem` schemas || any (`T.isPrefixOf` q) ["pg_", "_timescaledb", "timescaledb"]) && (q <> "." <> n) `notElem` tenantTables
       _ -> True
 
@@ -343,7 +371,7 @@ tokenizeSql t = case T.uncons t of
   Nothing -> []
   Just ('\'', _) -> let (lit, rest) = quoted '\'' t in SqlLit lit : tokenizeSql rest
   _ | Just rest <- T.stripPrefix "--" t -> SqlOther ' ' : tokenizeSql (T.dropWhile (/= '\n') rest)
-  _ | Just rest <- T.stripPrefix "/*" t -> SqlOther ' ' : tokenizeSql (T.drop 2 $ snd $ T.breakOn "*/" rest)
+  _ | Just rest <- T.stripPrefix "/*" t, (body, end) <- T.breakOn "*/" rest -> bool (SqlOther ' ') SqlNestedComment ("/*" `T.isInfixOf` body) : tokenizeSql (T.drop 2 end)
   Just (c, rest)
     | c == '"' || isAlpha c || c == '_' -> let (ps, rest') = dotted t in SqlName ps (T.take (T.length t - T.length rest') t) : tokenizeSql rest'
     | otherwise -> SqlOther c : tokenizeSql rest
@@ -366,7 +394,7 @@ tokenizeSql t = case T.uncons t of
     -- What SQL treats as whitespace around a dot: spaces and comments alike.
     gap s
       | Just c <- T.stripPrefix "--" s' = gap (T.dropWhile (/= '\n') c)
-      | Just c <- T.stripPrefix "/*" s' = gap (T.drop 2 $ snd $ T.breakOn "*/" c)
+      | Just c <- T.stripPrefix "/*" s', (body, end) <- T.breakOn "*/" c, not ("/*" `T.isInfixOf` body) = gap (T.drop 2 end)
       | otherwise = s'
       where
         s' = T.stripStart s

@@ -100,7 +100,7 @@ homeGetH pid = do
   let slackConfigured = not $ T.null appCtx.config.slackConnectBotToken
   -- Every tile states the same window, so a number on Home always means "the last 24 hours".
   -- Signed like a dashboard's, or /widget refuses a viewer the raw-SQL tiles.
-  let window = Widget.signWidgetSql appCtx.env.apiKeyEncryptionSecretKey pid . Widget.pinWidget (dayAgo, now)
+  let window = Widget.signWidgetSql appCtx.env.apiKeyEncryptionSecretKey pid [] . Widget.pinWidget (dayAgo, now)
       glance = map window $ take 1 (templateTab Dashboards.overviewTemplate "Overview" []) <> stackWidgets pid
       -- A widget's id names its DOM elements, so one shown twice (a starred overview repeats the
       -- golden signals) loads into the first copy and leaves the second a skeleton forever.
@@ -542,7 +542,7 @@ slackConnectCard_ c = div_ [id_ "slack-connect-card", class_ "flex flex-wrap ite
 
 slackConnectPostH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (System.Types.Done SlackConnectCard))
 slackConnectPostH pid = do
-  (sess, _) <- Projects.sessionAndProject pid
+  (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   appCtx <- ask @AuthContext
   let email = T.toLower $ CI.original sess.user.email
   -- Rate limits and HTTP failures throw from the Slack client; the card answers with them instead.
@@ -564,6 +564,6 @@ instance Outcome HighlightDismissed
 
 highlightDismissPostH :: Projects.ProjectId -> UUIDId "home_highlight" -> ATAuthCtx (RespHeaders (System.Types.Done HighlightDismissed))
 highlightDismissPostH pid hid = do
-  _ <- Projects.sessionAndProject pid
+  _ <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   Issues.dismissHighlight pid hid
   done HighlightDismissed

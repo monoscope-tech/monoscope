@@ -55,7 +55,7 @@ import Web.MCP qualified as MCP
 
 
 -- | Refusals of the JSON search endpoint; status and body are what the query box reads.
-data AISearchError = MalformedSearch | EmptySearch | SearchFailed Text
+data AISearchError = MalformedSearch | SearchPrompt PromptError | SearchFailed Text
 
 
 aiSearchH :: Projects.ProjectId -> AE.Value -> ATAuthCtx (RespHeaders AE.Value)
@@ -64,15 +64,16 @@ aiSearchH pid requestBody = do
   authCtx <- ask @AuthContext
   let parsed = AET.parseMaybe (AE.withObject "request" \o -> liftA2 (,) (o AE..: "input") (o AE..:? "timezone")) requestBody
   (inputText, timezoneM) <- parsed `whenNothing` refuse MalformedSearch
-  when (T.null (T.strip inputText)) $ refuse EmptySearch
-  either (refuse . SearchFailed) addRespHeaders =<< AI.runNlSearch pid authCtx.env timezoneM inputText
+  prompt <- either (refuse . SearchPrompt) pure $ normalizeQuery inputText
+  either (refuse . SearchFailed) addRespHeaders =<< AI.runNlSearch pid authCtx.env timezoneM prompt
   where
     refuse :: AISearchError -> ATAuthCtx a
     refuse e = addErrorToast toast detail >> throwError status{Servant.errBody = body}
       where
         (toast, detail, status, body) = case e of
           MalformedSearch -> ("Invalid AI search input", Nothing, Servant.err400, "Invalid input format")
-          EmptySearch -> ("Please enter a search query", Nothing, Servant.err400, "Empty input")
+          SearchPrompt EmptyPrompt -> ("Please enter a search query", Nothing, Servant.err400, "Empty input")
+          SearchPrompt PromptTooLong -> ("Search is limited to 4,000 characters", Nothing, Servant.err400, "Input too long")
           SearchFailed msg -> ("AI search failed", Just msg, Servant.err502, encodeUtf8 msg)
 
 

@@ -236,6 +236,41 @@ spec = describe "Monitoring" do
       traverse (httpStatus tr) [void $ Alerts.alertUpsertPostH testPid alertForm, void $ Alerts.alertBulkActionH testPid Monitors.BADelete (ProjectPages.TBulkActionForm [])] `shouldReturn` [403, 403]
       setRole tr testPid ProjectMembers.PAdmin
 
+    -- viewerRoleNotEnforcedOnWrites: these routes checked membership only, so a viewer (or its
+    -- read-only CLI token as a web bearer) created, rewrote, paused and deleted monitors.
+    it "viewerRoleNotEnforcedOnWrites: a viewer is refused every dashboard, widget-monitor and checkout write; an editor still writes" \tr -> do
+      let dashForm t = Dashboards.DashboardForm{Dashboards.title = t, Dashboards.file = "", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}
+          mid = Monitors.QueryMonitorId [uuid|0000ffff-0000-0000-0000-00000000beef|]
+      void $ testServant tr $ Dashboards.dashboardsPostH testPid (dashForm "Viewer writes")
+      did <- dbOne tr [sql|SELECT id FROM projects.dashboards WHERE project_id = ? AND title = 'Viewer writes'|] (Only testPid)
+      saved <- (.widget) . fromRightShow <$> call tr (Dashboards.dashboardWidgetPutH testPid did Nothing Nothing def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "W", Widget.query = Just "name == \"x\""})
+      wid <- maybe (fail "the saved widget has no id") pure saved.id
+      void $ runTestBgNoReset tr $ Monitors.queryMonitorUpsert def{Monitors.id = mid, Monitors.projectId = testPid, Monitors.logQuery = "status_code == 200", Monitors.alertThreshold = 1, Monitors.checkIntervalMins = 5, Monitors.timeWindowMins = 5}
+      let widgetAlert = Dashboards.WidgetAlertForm{widgetId = wid, query = "name == \"x\"", vizType = Just "timeseries", unit = Nothing, alertThreshold = Just "1", warningThreshold = Nothing, direction = Issues.Above, alertRecoveryThreshold = Nothing, warningRecoveryThreshold = Nothing, frequency = Just "5m", timeWindow = Just "1h", severity = Nothing, subject = Nothing, message = Nothing, notifyAfterCheck = Nothing, notifyAfter = Nothing, stopAfterCheck = Nothing, stopAfter = Nothing, teams = []}
+          rename = Dashboards.dashboardRenamePatchH testPid did Dashboards.DashboardRenameForm{Dashboards.title = "Renamed", Dashboards.fileDir = Nothing}
+          writes =
+            [ void $ Dashboards.dashboardsPostH testPid (dashForm "Viewer's own")
+            , void $ Dashboards.dashboardWidgetPutH testPid did (Just wid) Nothing saved
+            , void $ Dashboards.dashboardWidgetReorderPatchH testPid did Nothing mempty
+            , void $ Dashboards.widgetAlertUpsertH testPid wid (Just did) widgetAlert
+            , void $ Dashboards.widgetAlertToggleH testPid wid (Just did)
+            , void $ Dashboards.widgetAlertDeleteH testPid wid (Just did)
+            , void rename
+            , void $ Dashboards.dashboardDuplicatePostH testPid did
+            , void $ Dashboards.dashboardDuplicateWidgetPostH testPid did wid Nothing
+            , void $ Dashboards.dashboardTabRenamePatchH testPid did "overview" (Dashboards.TabRenameForm "Mine")
+            , void $ Dashboards.dashboardYamlPutH testPid did (Dashboards.YamlForm "title: Mine\nwidgets: []\n")
+            , void $ Alerts.alertSingleToggleActiveH testPid mid
+            , void $ Alerts.alertTeamDeleteH testPid mid (UUIDId UUID.nil)
+            , void $ ProjectPages.stripeCheckoutInitH testPid (ProjectPages.StripeCheckoutForm "GraduatedPricing")
+            ]
+      setRole tr testPid PM.PView
+      traverse (httpStatus tr) writes `shouldReturn` (403 <$ writes)
+      (.deactivatedAt) <$> fetchMonitor tr mid `shouldReturn` Nothing
+      setRole tr testPid PM.PEdit
+      traverse (httpStatus tr) [void $ Alerts.alertSingleToggleActiveH testPid mid, void rename, void $ Dashboards.widgetAlertUpsertH testPid wid (Just did) widgetAlert] `shouldReturn` [200, 200, 200]
+      setRole tr testPid PM.PAdmin
+
     it "widget monitor: alerts and recovers for the saved widget, follows renames, links copies to their dashboard, deletes with the widget" \tr -> do
       void $ testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Widget Monitor Lifecycle", Dashboards.file = "widget-monitor.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}
       dashboardId <-

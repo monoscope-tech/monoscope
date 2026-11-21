@@ -190,6 +190,14 @@ castLimit = 524288
 -- True
 -- >>> proofCast $ logged $ BS.replicate 800000 65
 -- Left "The proof recording exceeds its size limit"
+--
+-- The guest can forge the cast, and its terminal size sizes every frame clipCast and agg draw, so
+-- it may not exceed the 110x32 terminal proof.sh records.
+--
+-- >>> proofCast $ logged $ extractBase64 $ Base64.encodeBase64' "{\"version\": 2, \"width\": 1000000000, \"height\": 24}\n"
+-- Left "The proof recording's terminal exceeds 110x32"
+-- >>> fmap snd $ proofCast $ logged $ extractBase64 $ Base64.encodeBase64' "{\"version\": 2, \"width\": 110, \"height\": 32}\n"
+-- Right ""
 proofCast :: ByteString -> Either Text (ByteString, Text)
 proofCast logBytes = do
   encoded <- maybeToRight ("The proof produced no recording. Log tail: " <> decodeUtf8 (BS.takeEnd 600 logBytes)) $ find (not . BS.null) $ map snd $ logSections "cast" logBytes
@@ -197,7 +205,11 @@ proofCast logBytes = do
   cast <- first ("The proof recording is not valid base64: " <>) $ Base64.decodeBase64Untyped encoded
   case BS8.lines cast of
     header : events
-      | Just (_ :: AE.Object) <- AE.decodeStrict header ->
+      | Just (meta :: AE.Object) <- AE.decodeStrict header -> do
+          let within bound key = case KM.lookup key meta of
+                Just (AE.Number n) -> n > 0 && n <= bound
+                _ -> False
+          unless (within 110 "width" && within 32 "height") $ Left "The proof recording's terminal exceeds 110x32"
           Right (cast, T.concat [output | Just (AE.Array (toList -> [_, AE.String "o", AE.String output])) <- map AE.decodeStrict events])
     _ -> Left "The proof recording is not an asciinema cast"
 

@@ -2038,11 +2038,11 @@ expireLapsedAcks = do
   now <- Time.currentTime
   expired <- Issues.expireAcks now
   unless (null expired) do
-    forM_ expired \iid -> Issues.logIssueActivity iid Issues.IEAckExpired Nothing Nothing
+    forM_ expired \(pid, iid) -> Issues.logIssueActivity pid iid Issues.IEAckExpired Nothing Nothing
     Log.logInfo "issue_acks_expired" (AE.object ["count" AE..= length expired])
   -- "Archive for N hours" ends the same way.
   unarchived <- Issues.expireArchives now
-  forM_ unarchived \iid -> Issues.logIssueActivity iid Issues.IEUnarchived Nothing Nothing
+  forM_ unarchived \(pid, iid) -> Issues.logIssueActivity pid iid Issues.IEUnarchived Nothing Nothing
 
 
 -- | Flush the digest queue once per hour. Groups pending rows by project and
@@ -2509,14 +2509,14 @@ processProjectErrors pid errors now = do
     createIssueForError pid' err' = do
       issue <- Issues.createNewErrorIssue pid' err'
       Issues.insertIssue issue
-      Issues.logIssueActivity issue.id Issues.IECreated Nothing Nothing
+      Issues.logIssueActivity pid' issue.id Issues.IECreated Nothing Nothing
       pure issue
     handleRegression pid' err' existing = do
       let wasClosed = isJust existing.acknowledgedAt || isJust existing.archivedAt
       if wasClosed
         then do
           Issues.reopenIssue existing.id
-          Issues.logIssueActivity existing.id Issues.IERegressed Nothing Nothing
+          Issues.logIssueActivity pid' existing.id Issues.IERegressed Nothing Nothing
           Log.logInfo "Reopened issue for regressed error" (pid', err'.id, existing.id)
         else do
           Issues.bumpIssueUpdatedAt existing.id
@@ -3905,7 +3905,7 @@ autoAckProvenEndpoints pid = do
                      RETURNING id |]
               let ackedSet = HashSet.fromList $ V.toList ackedIds
               forM_ (filter (\(iid, _, _) -> HashSet.member iid ackedSet) proven) \(iid, total, hrs) ->
-                Issues.logIssueActivity iid Issues.IEAcknowledged Nothing
+                Issues.logIssueActivity pid iid Issues.IEAcknowledged Nothing
                   $ Just
                   $ AE.object ["reason" AE..= ("endpoint_proven_by_traffic" :: Text), "requests" AE..= total, "hours_seen" AE..= hrs]
               Log.logInfo "Auto-acknowledged endpoint issues proven by traffic" ("project_id", pid.toText, "acked", V.length ackedIds, "candidates", length candidates)
@@ -5873,7 +5873,7 @@ detectErrorSpikes pid = do
             unless alreadyEscalating do
               void $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESEscalating now
               woken <- Issues.wakeOnEscalation pid errRate.hash
-              forM_ woken \iid -> Issues.logIssueActivity iid Issues.IEEscalated Nothing Nothing
+              forM_ woken \iid -> Issues.logIssueActivity pid iid Issues.IEEscalated Nothing Nothing
               issue <- Issues.createErrorSpikeIssue pid errRate spike.currentRate mean spike.zScore
               Issues.insertIssue issue
               ctx <- ask @Config.AuthContext

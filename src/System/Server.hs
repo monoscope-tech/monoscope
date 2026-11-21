@@ -28,6 +28,7 @@ import Kafka.Types qualified as KT
 import Log (LogLevel (..), runLogT)
 import Log qualified as LogBase
 import Network.HTTP.Types (methodGet, methodHead, status200, status404, status500)
+import Network.HTTP.Types.Header (hCacheControl, hVary)
 import Network.Wai
 import Network.Wai.Handler.Warp (defaultSettings, defaultShouldDisplayException, runSettings, setGracefulShutdownTimeout, setHost, setOnException, setOnExceptionResponse, setPort)
 import Network.Wai.Log qualified as WaiLog
@@ -592,13 +593,27 @@ instance FromHttpApiData ByteString where
 
 
 mkServer :: LogBase.Logger -> AuthContext -> TracerProvider -> Servant.Application
-mkServer logger env tp = do
-  genericServeTWithContext
-    (effToServantHandler env logger tp)
-    -- OTLP/HTTP handlers injected here: Routes can't import OtlpServer
-    -- (proto-lens orphan IsLabel instances clash with generic-lens #labels)
-    (Routes.server (OtlpServer.httpTracesExport logger env tp) (OtlpServer.httpLogsExport logger env tp) OtlpServer.collectUsageReport \pid run -> runBackground logger env tp $ BackgroundJobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) env $ BackgroundJobs.RunConversation pid run)
-    (Routes.genAuthServerContext logger env)
+mkServer logger env tp =
+  privateByDefault
+    $ genericServeTWithContext
+      (effToServantHandler env logger tp)
+      -- OTLP/HTTP handlers injected here: Routes can't import OtlpServer
+      -- (proto-lens orphan IsLabel instances clash with generic-lens #labels)
+      (Routes.server (OtlpServer.httpTracesExport logger env tp) (OtlpServer.httpLogsExport logger env tp) OtlpServer.collectUsageReport \pid run -> runBackground logger env tp $ BackgroundJobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) env $ BackgroundJobs.RunConversation pid run)
+      (Routes.genAuthServerContext logger env)
+
+
+-- | A response that names no cache policy is private: a session page reached under an asset-like
+-- path (@…/services/x.css@) must never land in an edge cache keyed by extension. Static assets
+-- and handlers that set their own Cache-Control keep it.
+privateByDefault :: Middleware
+privateByDefault app req respond =
+  app req
+    $ respond
+    . if take 1 req.pathInfo == ["public"]
+      then id
+      else mapResponseHeaders \hs ->
+        if any ((== hCacheControl) . fst) hs then hs else (hCacheControl, "private, no-store") : (hVary, "Cookie, Authorization") : hs
 
 
 shutdownMonoscope :: AuthContext -> Eff '[IOE] ()

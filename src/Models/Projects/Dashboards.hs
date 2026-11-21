@@ -77,6 +77,8 @@ import Language.Haskell.TH.Syntax qualified as THS
 import Models.Ids qualified as Projects
 import Models.Projects.Activation qualified as Activation
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Network.HTTP.Client qualified as HC
+import Network.Wreq qualified as Wreq
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (SortField (..), SortOrder (..), UUIDId (..), WrappedEnumSC (..), selectFrom)
@@ -277,11 +279,14 @@ readDashboardsFromDisk :: FilePath -> IO [Dashboard]
 readDashboardsFromDisk dir = yamlFiles dir >>= mapMaybeM (readDashboardFile dir)
 
 
-readDashboardEndpoint :: (Error ServerError :> es, HTTP :> es) => Text -> Eff es Dashboard
-readDashboardEndpoint uri = do
+-- | @manager@ refuses internal addresses at connect ('safeScrapeUrl' sees only the literal
+-- host), and no redirect is followed: one to an internal address skipped both checks.
+readDashboardEndpoint :: (Error ServerError :> es, HTTP :> es) => HC.Manager -> Text -> Eff es Dashboard
+readDashboardEndpoint manager uri = do
   unless (safeScrapeUrl uri) $ throwError err400{errBody = "Dashboard file URL must be a public http(s) address"}
-  fileResp <- W.get (toString uri)
-  either (\e -> throwError err404{errBody = "Error decoding dashboard: " <> show e}) pure
+  fileResp <- W.getWith (W.defaults & Wreq.manager .~ Right manager & Wreq.redirects .~ 0 & Wreq.checkResponse ?~ \_ _ -> pass) (toString uri)
+  when (fileResp ^. Wreq.responseStatus . Wreq.statusCode /= 200) $ throwError err404{errBody = "Dashboard file could not be fetched"}
+  either (const $ throwError err404{errBody = "Dashboard file is not a valid dashboard"}) pure
     $ first show (Yml.decodeEither' $ toStrict $ fileResp ^. W.responseBody)
     >>= validateDashboard
 
