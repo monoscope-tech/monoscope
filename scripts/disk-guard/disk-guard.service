@@ -3,4 +3,5 @@ Description=Reclaim disk and manage ballast before / fills
 
 [Service]
 Type=oneshot
+StateDirectory=disk-guard
 ExecStart=/usr/local/bin/disk-guard.sh

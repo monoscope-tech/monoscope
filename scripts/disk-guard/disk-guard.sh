@@ -5,6 +5,7 @@
 # Runs from disk-guard.timer; install: scripts/disk-guard/install.sh.
 # Thresholds are % of the space non-root processes can use (df's pcent).
 set -uo pipefail
+shopt -s nullglob
 MOUNT=/ RESERVE=/home/ubuntu/disk-reserve BALLAST=10
 WARN=85 RECLAIM=90 RELEASE=95 REFILL=80
 ALERT_WEBHOOK_URL=  # Slack or Discord incoming webhook
@@ -18,29 +19,30 @@ say() {
     -d "$(jq -nc --arg t "captain disk-guard: $2" '{text:$t,content:$t}')" "$ALERT_WEBHOOK_URL" >/dev/null
 }
 
-u=$(used)
+u=$(used) ballast=("$RESERVE"/ballast-*.bin)
 if [ "$u" -ge "$RECLAIM" ]; then
   # Only state that is regenerable by construction.
   docker builder prune -af >/dev/null 2>&1
   docker image prune -f >/dev/null 2>&1
-  find /var/lib/docker/volumes/*/_data -path '*/DeferredBrowserMetrics/*' -type f -mmin +60 -delete 2>/dev/null
   say warning "${u}% used, reclaimed caches -> $(used)%"
   u=$(used)
 fi
 if [ "$u" -ge "$RELEASE" ]; then
-  f=$(ls "$RESERVE"/ballast-*.bin 2>/dev/null | tail -1)
-  [ -n "$f" ] && rm -f "$f" && say crit "${u}% used, released $f -> $(used)%; find the writer now"
-  [ -z "$f" ] && say crit "${u}% used and NO ballast left"
-elif [ "$u" -lt "$REFILL" ]; then
+  if [ ${#ballast[@]} -gt 0 ]; then
+    rm -f "${ballast[-1]}"
+    say crit "${u}% used, released ${ballast[-1]} -> $(used)%; find the writer now"
+  else
+    say crit "${u}% used and NO ballast left"
+  fi
+elif [ "$u" -lt "$REFILL" ] && [ ${#ballast[@]} -lt "$BALLAST" ]; then
   mkdir -p "$RESERVE"
-  for i in $(seq -w 1 "$BALLAST"); do
-    [ -f "$RESERVE/ballast-$i.bin" ] || { fallocate -l 10G "$RESERVE/ballast-$i.bin"; break; }
-  done
+  for i in $(seq -w 1 "$BALLAST"); do [ -f "$RESERVE/ballast-$i.bin" ] || { fallocate -l 10G "$RESERVE/ballast-$i.bin"; break; }; done
 fi
 
-level=$(( $(used) >= RELEASE ? 3 : $(used) >= RECLAIM ? 2 : $(used) >= WARN ? 1 : 0 ))
-mkdir -p "${STATE%/*}"
+u=$(used) ballast=("$RESERVE"/ballast-*.bin)
+level=$((u >= RELEASE ? 3 : u >= RECLAIM ? 2 : u >= WARN ? 1 : 0))
 prev=$(cat "$STATE" 2>/dev/null || echo 0)
-[ "$level" != "$prev" ] && say "$([ "$level" -gt "$prev" ] && echo warning || echo notice)" \
-  "level $prev -> $level ($(used)% used, $(ls "$RESERVE"/ballast-*.bin 2>/dev/null | wc -l)/$BALLAST ballast)"
+sev=notice
+((level > prev)) && sev=warning
+[ "$level" != "$prev" ] && say "$sev" "level $prev -> $level (${u}% used, ${#ballast[@]}/$BALLAST ballast)"
 echo "$level" >"$STATE"
