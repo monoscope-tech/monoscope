@@ -71,8 +71,8 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (craftSessionCookie, emptySessionCookie)
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie, hUserAgent, methodGet, methodHead, methodPost, parseQueryText, urlEncode)
-import Network.Wai (Request (pathInfo, queryString, rawPathInfo, rawQueryString, requestHeaders, requestMethod))
+import Network.HTTP.Types (RequestHeaders, decodePathSegments, hAuthorization, hCookie, hUserAgent, methodGet, methodHead, methodPost, parseQueryText, urlEncode)
+import Network.Wai (Request (queryString, rawPathInfo, rawQueryString, requestHeaders, requestMethod))
 import Network.Wreq (FormParam ((:=)), defaults, header, responseBody)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.AdConversions qualified as AdConversions
@@ -356,11 +356,12 @@ sessionBearerRole bearer pid = runMaybeT do
 -- every handler sees only the project id (an anonymous demo caller could mint keys). So the
 -- demo reader and a viewer only read, search and speak MCP, whose tool calls come back through
 -- here one by one ('Web.Routes.apiV1App'), and only an admin writes members, API keys, teams or
--- the project. Matched by path segment, since MCP calls arrive without the @/api/v1@ prefix.
+-- the project. Matched by path segment, since MCP calls arrive without the @/api/v1@ prefix,
+-- and on 'rawPathInfo': at Servant's auth check routing has already consumed 'pathInfo'.
 --
 -- >>> import Network.Wai (defaultRequest)
--- >>> let req m ps = defaultRequest{requestMethod = m, pathInfo = ps}
--- >>> map (principalRefusal (Editor Projects.demoProjectId)) [req "PATCH" ["members", "x"], req "POST" ["api", "v1", "api_keys"], req "GET" ["members"], req "POST" ["projects", "x"]]
+-- >>> let req m p = defaultRequest{requestMethod = m, rawPathInfo = p}
+-- >>> map (principalRefusal (Editor Projects.demoProjectId)) [req "PATCH" "/members/x", req "POST" "/api/v1/api_keys", req "GET" "/members", req "POST" "/projects/x"]
 -- [Just InsufficientRole,Just InsufficientRole,Nothing,Nothing]
 principalRefusal :: ApiPrincipal -> Request -> Maybe ApiError
 principalRefusal principal req = case principal of
@@ -371,7 +372,7 @@ principalRefusal principal req = case principal of
   where
     write = requestMethod req `notElem` [methodGet, methodHead]
     readOnly = not write || requestMethod req == methodPost && any (`BS.isSuffixOf` rawPathInfo req) ["/events/query", "/mcp"]
-    unprefixed = case pathInfo req of "api" : "v1" : rest -> rest; ps -> ps
+    unprefixed = case decodePathSegments (rawPathInfo req) of "api" : "v1" : rest -> rest; ps -> ps
 
 
 -- | Clearing the cookie alone left the session row valid forever: a copied cookie or a CLI

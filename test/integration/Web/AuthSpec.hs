@@ -97,7 +97,8 @@ spec = around withTestResources do
 
   it "roles: demo and viewer bearers only read, editors cannot administer, cross-site basic-auth writes and logged-out sessions are refused" \tr -> do
     let sid = UUID.toASCIIBytes (getResponse tr.trSessAndHeader).sessionId.getPersistentSessionId
-        api hs m p = Servant.runHandler $ unAuthHandler (Auth.apiKeyAuthHandler tr.trLogger tr.trATCtx) (WT.setPath Wai.defaultRequest p){Wai.requestMethod = m, Wai.requestHeaders = hs}
+        -- Servant runs the auth check at the routed leaf, where pathInfo is already consumed.
+        api hs m p = Servant.runHandler $ unAuthHandler (Auth.apiKeyAuthHandler tr.trLogger tr.trATCtx) (WT.setPath Wai.defaultRequest p){Wai.requestMethod = m, Wai.requestHeaders = hs, Wai.pathInfo = []}
         outcome = fmap (bimap errHTTPCode \case Authenticated _ -> rw; Editor _ -> ed; Viewer _ -> vw; DemoReader _ -> ro)
         rw, ed, vw, ro :: Text
         (rw, ed, vw, ro) = ("rw", "ed", "vw", "ro")

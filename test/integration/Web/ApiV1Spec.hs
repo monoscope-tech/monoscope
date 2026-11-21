@@ -217,6 +217,13 @@ spec = describe "API v1" do
       let sid = UUID.toText (Servant.getResponse tr.trSessAndHeader).sessionId.getPersistentSessionId
           createKeyAs role = setRole tr testPid role >> request app H.methodPost "/api/v1/mcp" [json, bearer sid, ("X-Project-Id", encodeUtf8 testPid.toText)] (AE.encode $ toolCall "create_api_key" ["body" AE..= AE.object ["title" AE..= ("mcp-" <> show role :: Text)]]) <&> \r -> AE.decode @AE.Value (WT.simpleBody r) ^? _Just . key "result" . key "isError"
       traverse createKeyAs [PM.PEdit, PM.PAdmin] `shouldReturn` [Just (AE.Bool True), Just (AE.Bool False)]
+      -- principalRefusalReadsConsumedPathInfo: the editor guard read Servant's routed pathInfo, which is
+      -- empty at the auth check, so a direct REST editor could mint keys and PATCH itself to admin.
+      let uid = (Servant.getResponse tr.trSessAndHeader).persistentSession.user.getUser.id
+          asEditor m p b = status <$> request app m p [json, bearer sid, ("X-Project-Id", encodeUtf8 testPid.toText)] (AE.encode b)
+      setRole tr testPid PM.PEdit
+      sequence [asEditor H.methodPost "/api/v1/api_keys" (AE.object ["title" AE..= ("direct" :: Text)]), asEditor H.methodPatch ("/api/v1/members/" <> encodeUtf8 uid.toText) (AE.object ["permission" AE..= ("admin" :: Text)])] `shouldReturn` [403, 403]
+      runQueryEffect tr (PM.getSessionPermission testPid uid) `shouldReturn` Just PM.PEdit
 
     it "HTTP pages: dashboard form fragment, onboarding fallback, avatars, proxied docs" \tr -> do
       newForm <- getPath tr "/p/00000000-0000-0000-0000-000000000000/dashboards/new" []
