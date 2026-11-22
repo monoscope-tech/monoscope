@@ -2223,6 +2223,8 @@ otelColumns =
   let attrText nm key = column nm (\r -> atMapText key r.attrs)
       attrInt nm key = column nm (\r -> fromIntegral @Int @Int32 <$> atMapInt key r.attrs)
       attrBigInt nm key = column nm (\r -> fromIntegral @Int @Int64 <$> atMapInt key r.attrs)
+      attrJson nm path f = column nm (\r -> f <$> (r.attrs >>= getNestedValue path))
+      jsonText = decodeUtf8 @Text . AE.encode
       resourceText nm key = column nm (\r -> atMapText key r.resource)
       textField nm g = column nm (\r -> scrubNulText <$> g r.row)
       contextText nm f = column nm (\r -> scrubNulText <$> (r.row.context >>= f))
@@ -2308,8 +2310,8 @@ otelColumns =
       , -- The LLM pages' text fields, as Pages.LLM.selectUnits reads them: arguments as written (an object as
         -- JSON, capped), finish reasons as JSON text. TF storage widened 2026-11-22; 0303 is the Postgres half.
         attrText "attributes___gen_ai___input___preview" "gen_ai.input.preview"
-      , column "attributes___gen_ai___tool___call___arguments" (\r -> T.take 300 . (\case AE.String t -> t; v -> decodeUtf8 (AE.encode v)) <$> (r.attrs >>= getNestedValue ["gen_ai", "tool", "call", "arguments"]))
-      , column "attributes___gen_ai___response___finish_reasons" (\r -> decodeUtf8 @Text . AE.encode <$> (r.attrs >>= getNestedValue ["gen_ai", "response", "finish_reasons"]))
+      , attrJson "attributes___gen_ai___tool___call___arguments" ["gen_ai", "tool", "call", "arguments"] (T.take 300 . \case AE.String t -> t; v -> jsonText v)
+      , attrJson "attributes___gen_ai___response___finish_reasons" ["gen_ai", "response", "finish_reasons"] jsonText
       , attrInt "attributes___http___response___status_code" "http.response.status_code"
       , attrInt "attributes___http___request___resend_count" "http.request.resend_count"
       , attrBigInt "attributes___http___request___body___size" "http.request.body.size"

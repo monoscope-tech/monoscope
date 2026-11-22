@@ -43,7 +43,7 @@ import Data.List.Extra (chunksOf)
 import Data.Map.Strict qualified as M
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, diffUTCTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -311,6 +311,11 @@ unitCap :: Int64
 unitCap = 10000
 
 
+-- | Windows at least this long start on the hour (see 'windowUnits').
+wholeHourWindow :: NominalDiffTime
+wholeHourWindow = 6 * 3600
+
+
 -- | The window's units, one per trace. Each settled hour (closed 10 minutes ago, so late spans have
 -- landed) is aggregated once into @apis.llm_unit_hours@; only the window's unsettled edges are read
 -- from the store per request, so a day costs about what its last hour does.
@@ -320,7 +325,7 @@ windowUnits pid window = do
   let toHour r t = posixSecondsToUTCTime $ fromIntegral (3600 * r (utcTimeToPOSIXSeconds t / 3600) :: Int64)
       -- A window of six hours or more starts on its hour: its oldest partial hour would otherwise be
       -- read live on every refresh, and a week back that is a 10-60s scan of cold storage.
-      start = bool window.fromTime (toHour floor window.fromTime) (diffUTCTime window.toTime window.fromTime >= 6 * 3600)
+      start = if diffUTCTime window.toTime window.fromTime >= wholeHourWindow then toHour floor window.fromTime else window.fromTime
       settled = takeWhile (\h -> addUTCTime 3600 h <= window.toTime && addUTCTime 4200 h <= now) $ iterate (addUTCTime 3600) (toHour ceiling start)
   cached <- M.fromList . map (\(h, HI.AsJsonb us) -> (h, us)) <$> bool (Hasql.interp [HI.sql| SELECT hour, units FROM apis.llm_unit_hours WHERE project_id = #{pid} AND hour = ANY(#{V.fromList settled}) AND computed_at >= hour + interval '70 minutes' |]) (pure []) (null settled)
   -- A day per query, persisted as it lands, so a cold week makes progress even if the page gives up.
