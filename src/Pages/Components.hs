@@ -1477,7 +1477,8 @@ pickerPopover_ :: Text -> Text -> [Attribute] -> Html () -> Html ()
 pickerPopover_ popId cls extraAttrs =
   div_
     ( popoverPanel_ popId
-        <> [ [__|on toggle if event.newState is 'open' set i to the first <[data-picker-input]/> in me then if i call i.focus() end end|]
+        <> [ [__|on toggle if event.newState is 'open' set i to the first <[data-picker-input]/> in me then if i call i.focus() end end
+                 on htmx:after:swap set i to the first <[data-picker-input]/> in me then if i call i.focus() end|]
            , class_ $ "dropdown z-50 max-w-[calc(100vw-2rem)] border-0 bg-transparent p-0 shadow-none " <> cls
            ]
         <> extraAttrs

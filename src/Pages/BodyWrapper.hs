@@ -1224,7 +1224,6 @@ navbar bcfg menuL =
                 , hxGet_ switcherUrl
                 , hxTrigger_ "toggle once"
                 , hxSwap_ "innerHTML"
-                , [__|on htmx:after:swap set i to the first <[data-picker-input]/> in me then if i call i.focus() end|]
                 ]
                 $ div_ [class_ "flex justify-center rounded-xl border border-strokeWeak bg-bgOverlay py-8 shadow-2xl"]
                 $ loadingIndicatorWith_ LdSM LdDots ""

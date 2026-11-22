@@ -758,7 +758,7 @@ serviceOptions_ current services =
         label
         [ type_ "button"
         , data_ "service" service
-        , [__|on click send htmx:abort to <#metric-service-picker [data-picker-input]/> then set <#metric-service-picker [data-picker-input]/>.value to '' then set #metric-source-input.value to my.dataset.service then call #metric-service-picker.hidePopover() then call (closest <form/>).requestSubmit()|]
+        , [__|on click send htmx:abort to <#metric-service-picker [data-picker-input]/> then set the value of <#metric-service-picker [data-picker-input]/> to '' then set #metric-source-input.value to my.dataset.service then call #metric-service-picker.hidePopover() then call (closest <form/>).requestSubmit()|]
         ]
     when (null services) $ p_ [class_ "px-3 py-4 text-center text-xs text-textWeak"] "No matching services."
     when (length services >= serviceOptionsLimit) $ p_ [class_ "px-3 py-1.5 text-xs text-textWeak"] $ toHtml $ "Showing the first " <> show @Text serviceOptionsLimit <> " services \x2014 type to narrow."
