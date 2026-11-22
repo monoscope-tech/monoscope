@@ -316,6 +316,7 @@ extra-source-files:
     static/migrations/0298_dashboards_project_index.sql
     static/migrations/0299_slack_connect_invite_attempts.sql
     static/migrations/0300_llm_unit_hours.sql
+    static/migrations/0301_routine_report_writes.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb
     test/fixtures/github-app-test.pem
