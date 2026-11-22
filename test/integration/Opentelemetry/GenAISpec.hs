@@ -56,6 +56,9 @@ spec = around withTestResources do
       -- The canonical identity and usage land in the promoted columns, queryable without the attributes blob.
       dbQuery @_ @(Text, Maybe Text, Maybe Text, Maybe Int64, Maybe Double) tr [sql| SELECT name, attributes___gen_ai___operation___name, attributes___gen_ai___request___model, attributes___gen_ai___usage___input_tokens, attributes___gen_ai___usage___cost FROM otel_logs_and_spans WHERE project_id = ? AND name IN ('openinference llm', 'ai.toolCall') ORDER BY name |] (Only pid)
         `shouldReturn` [("ai.toolCall", Just "execute_tool", Nothing, Nothing, Nothing), ("openinference llm", Just "chat", Just "gpt-4o", Just 1000, Just 0.0035)]
+      -- The LLM pages' text fields land in promoted columns: arguments as written, finish reasons as JSON.
+      dbQuery @_ @(Text, Maybe Text, Maybe Text, Maybe Text) tr [sql| SELECT name, attributes___gen_ai___input___preview, attributes___gen_ai___tool___call___arguments, attributes___gen_ai___response___finish_reasons FROM otel_logs_and_spans WHERE project_id = ? AND name IN ('ai.toolCall', 'ai.generateText.doGenerate') ORDER BY name |] (Only pid)
+        `shouldReturn` [("ai.generateText.doGenerate", Just "Summarise", Nothing, Just "[\"length\"]"), ("ai.toolCall", Nothing, Just "{\"q\":\"timeout\"}", Nothing)]
       path ["conversation", "id"] (genAI "openinference llm") `shouldBe` Just "conv-1"
       path ["conversation", "id"] (genAI "ai.generateText") `shouldBe` Just "conv-1"
       path ["provider", "name"] (genAI "ai.generateText.doGenerate") `shouldBe` Just "openai"
@@ -140,7 +143,10 @@ spec = around withTestResources do
       -- The settled hour is read from the store, not rescanned.
       chat 3 7200
       calls `shouldReturn` [("conv-h", 2, 1)]
-
+      -- The hourly job keeps a week settled, so a 7D window opens on stored hours only.
+      runTestBg now tr $ LLM.evaluateSignals pid
+      [Only stored] <- dbQuery @_ @(Only Int) tr [sql| SELECT count(*)::int FROM apis.llm_unit_hours WHERE project_id = ? |] (Only pid)
+      stored `shouldSatisfy` (>= 7 * 24 - 2) -- the unsettled last hour or two stay live
     it "prices Pi's durable sessions from pi-otel: one conversation per routine run, input counted with its cache" \tr -> do
       pid <- createTestProject tr "Pi"
       apiKey <- createTestAPIKey tr pid "pi"

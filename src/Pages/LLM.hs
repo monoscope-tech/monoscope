@@ -43,7 +43,7 @@ import Data.List.Extra (chunksOf)
 import Data.Map.Strict qualified as M
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, diffUTCTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -259,10 +259,10 @@ conversationsOf units = sortOn (Down . (.lastSeen)) $ mapMaybe conversation $ M.
       pure $ used >= 0.8 * fromIntegral window
 
 
--- | GenAI spans in @[from, to)@ aggregated per trace and hour in the store. Only the promoted gen_ai
--- columns and three @attributes@ paths are read: the @summary@ array and the rest of the blob cost
--- seconds to decode across a day (all of a project's rows are scanned to find the GenAI ones).
--- Rows ingested before the columns were promoted (2026-11-16) have none and are not listed.
+-- | GenAI spans in @[from, to)@ aggregated per trace and hour in the store. Only promoted gen_ai columns
+-- are read: @summary@ and @attributes@ cost seconds to decode across a day (all of a project's rows are
+-- scanned to find the GenAI ones). Rows from before the columns were promoted (identity 2026-11-16,
+-- text fields 2026-11-22) lack them: unlisted, or listed without a title.
 selectUnits :: (DB es, Labeled "timefusion" Hasql :> es, Reader AuthContext :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [Unit]
 selectUnits pid from to = do
   tf <- useTfReads
@@ -281,9 +281,8 @@ selectUnits pid from to = do
           CAST(attributes___gen_ai___usage___input_tokens AS DOUBLE PRECISION) AS input_tokens,
           CAST(attributes___gen_ai___usage___output_tokens AS DOUBLE PRECISION) AS output_tokens,
           attributes___gen_ai___usage___cost AS cost, attributes___gen_ai___tool___name AS tool,
-          left(attributes -> 'gen_ai' -> 'tool' -> 'call' ->> 'arguments', 300) AS tool_args,
-          attributes -> 'gen_ai' -> 'input' ->> 'preview' AS preview,
-          CAST(attributes -> 'gen_ai' -> 'response' -> 'finish_reasons' AS TEXT) AS finish,
+          attributes___gen_ai___tool___call___arguments AS tool_args, attributes___gen_ai___input___preview AS preview,
+          attributes___gen_ai___response___finish_reasons AS finish,
           attributes___user___id AS usr, resource___service___name AS svc
         FROM otel_logs_and_spans
         WHERE project_id = #{pid.toText} AND timestamp >= #{from} AND timestamp < #{to} AND attributes___gen_ai___operation___name IS NOT NULL
@@ -312,18 +311,26 @@ unitCap :: Int64
 unitCap = 10000
 
 
+-- | Windows at least this long start on the hour (see 'windowUnits').
+wholeHourWindow :: NominalDiffTime
+wholeHourWindow = 6 * 3600
+
+
 -- | The window's units, one per trace. Each settled hour (closed 10 minutes ago, so late spans have
 -- landed) is aggregated once into @apis.llm_unit_hours@; only the window's unsettled edges are read
 -- from the store per request, so a day costs about what its last hour does.
 windowUnits :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Reader AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> TimePicker.TimeWindow -> Eff es [Unit]
 windowUnits pid window = do
   now <- Time.currentTime
-  let ceilHour t = posixSecondsToUTCTime $ fromIntegral (3600 * ceiling (utcTimeToPOSIXSeconds t / 3600) :: Int64)
-      settled = takeWhile (\h -> addUTCTime 3600 h <= window.toTime && addUTCTime 4200 h <= now) $ iterate (addUTCTime 3600) (ceilHour window.fromTime)
+  let toHour r t = posixSecondsToUTCTime $ fromIntegral (3600 * r (utcTimeToPOSIXSeconds t / 3600) :: Int64)
+      -- A window of six hours or more starts on its hour: its oldest partial hour would otherwise be
+      -- read live on every refresh, and a week back that is a 10-60s scan of cold storage.
+      start = if diffUTCTime window.toTime window.fromTime >= wholeHourWindow then toHour floor window.fromTime else window.fromTime
+      settled = takeWhile (\h -> addUTCTime 3600 h <= window.toTime && addUTCTime 4200 h <= now) $ iterate (addUTCTime 3600) (toHour ceiling start)
   cached <- M.fromList . map (\(h, HI.AsJsonb us) -> (h, us)) <$> bool (Hasql.interp [HI.sql| SELECT hour, units FROM apis.llm_unit_hours WHERE project_id = #{pid} AND hour = ANY(#{V.fromList settled}) AND computed_at >= hour + interval '70 minutes' |]) (pure []) (null settled)
   -- A day per query, persisted as it lands, so a cold week makes progress even if the page gives up.
   fresh <- M.unions <$> traverse (fill now) (mapMaybe nonEmpty $ chunksOf 24 $ filter (`M.notMember` cached) settled)
-  edges <- maybe (live window.fromTime window.toTime) (\hs -> (<>) <$> live window.fromTime (F1.head hs) <*> live (addUTCTime 3600 $ F1.last hs) window.toTime) (nonEmpty settled)
+  edges <- maybe (live start window.toTime) (\hs -> (<>) <$> live start (F1.head hs) <*> live (addUTCTime 3600 $ F1.last hs) window.toTime) (nonEmpty settled)
   pure $ M.elems $ M.fromListWith (flip (<>)) [(u.unit, u) | u <- concat (M.elems cached <> M.elems fresh) <> edges]
   where
     live from to = bool (selectUnits pid from to) (pure []) (from >= to)
@@ -935,8 +942,9 @@ parseVerdicts = bimap toText (Drain.answeredOnce (.key)) . AE.eitherDecodeStrict
 -- one window read and one span fetch for the project, then one model call per signal.
 evaluateSignals :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Reader AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> Eff es ()
 evaluateSignals pid = do
+  -- Run hourly, this also keeps a week of settled hours aggregated, so no window up to 7D opens cold.
+  void $ windowUnits pid =<< llmWindow Nothing Nothing (Just "7D")
   window <- llmWindow Nothing Nothing Nothing
-  -- Run hourly, this also aggregates the day's newly settled hours before anyone opens the pages.
   convs <- conversationsOf <$> windowUnits pid window
   signals <- selectSignals pid
   unless (null signals) do
