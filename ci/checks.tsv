@@ -32,7 +32,7 @@ integration-tests	ghc node bun python3 pg pg-cli minio tf-real	@hs @fe impact-re
 weeder	ghc	@hs @fe
 hlint	hlint	src shared/src cli .hlint.yaml
 # CI regenerates monoscope.cabal and never parses the workflows, so nothing else checks either.
-repo-lint	actionlint hpack	.github @hs monoscope.cabal auto-instrument-config.toml
+repo-lint	actionlint hpack	.github @hs monoscope.cabal auto-instrument-config.toml scripts/disk-guard
 ui-tests	node	@fe @uisrc
 e2e	ghc node pg	@hs @fe e2e scripts/e2e.sh
-release-tests	node docker	scripts/ci/release.sh scripts/ci/release-test.mjs Dockerfile
+release-tests	node docker	scripts/ci/release.sh scripts/ci/release-test.mjs Dockerfile scripts/disk-guard

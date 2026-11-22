@@ -35,7 +35,7 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, work
   const root = await mkdtemp(join(tmpdir(), 'monoscope-review-'));
   try {
     return await withNativeSession({
-      host: { image: image.assetDir, bridge: fileURLToPath(new URL('./sandbox.mjs', import.meta.url)), skills: [...skillPaths, fileURLToPath(new URL('./skills/superpowers', import.meta.url))], workspace: workspaceCache ? { dependencyArchive: workspaceCache.dependencyArchive ?? null } : null },
+      host: { image: guestImage, bridge: fileURLToPath(new URL('./sandbox.mjs', import.meta.url)), skills: [...skillPaths, fileURLToPath(new URL('./skills/superpowers', import.meta.url))], workspace: workspaceCache ? { dependencyArchive: workspaceCache.dependencyArchive ?? null } : null },
       expectedImageBuildId: image.buildId, checkout, base: request.base, head: request.head, readOnly,
       lease: workspaceCache ? { cacheDir: workspaceCache.cacheDir, request: { projectId: request.projectId, repository: request.repository, base: request.base, expectedImageBuildId: image.buildId } } : null,
       projectId: request.projectId, runId: z.uuid().parse(input.runId), attemptId, artifactDir,

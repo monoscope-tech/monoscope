@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-// SDK bridge only. Haskell selects commands, paths, resources and cache publication.
+// SDK bridge only. Haskell selects commands, paths, resources and cache publication;
+// the bridge only evicts guest images that the resolved guest has superseded.
 import { jsonLines } from './jsonl.mjs';
 import { open } from 'node:fs/promises';
-import { constants } from 'node:fs';
-import { DEFAULT_GUEST_TMPFS, RealFSProvider, ReadonlyProvider, VM, VmCheckpoint, createHttpHooks, importImageFromDirectory, resolveImageSelector } from '@earendil-works/gondolin';
+import { constants, readdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { DEFAULT_GUEST_TMPFS, RealFSProvider, ReadonlyProvider, VM, VmCheckpoint, createHttpHooks, getImageStoreDirectory, importImageFromDirectory, listImageRefs, listSessions, removeImage, resolveImageSelector } from '@earendil-works/gondolin';
 // Guests run pull request code, so they reach only package registries and GitHub, only to read: GET
 // and HEAD with a fixed User-Agent, plus git's upload-pack POST so git dependencies fetch. GitHub is an
 // accepted risk (2026-11-19): a repository's traffic insights list the paths its visitors fetched, so
@@ -31,8 +33,17 @@ try {
     try {
       switch (tag) {
         case 'Resolve': {
-          const selected = resolveImageSelector(contents);
-          const image = selected.source === 'path' ? importImageFromDirectory(selected.assetDir) : selected;
+          const selected = resolveImageSelector(contents), objects = resolve(getImageStoreDirectory(), 'objects');
+          let image = selected;
+          if (selected.source === 'path' && dirname(selected.assetDir) !== objects) {
+            image = importImageFromDirectory(selected.assetDir);
+            // Sessions only run the configured guest's build; once no VM is live, every
+            // other untagged import is unreachable (without this each rebuild kept 9-25 GB).
+            if (!(await listSessions()).some((s) => s.alive)) {
+              const kept = new Set([image.buildId, ...listImageRefs().flatMap((ref) => Object.values(ref.targets))]);
+              for (const id of readdirSync(objects)) if (/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id) && !kept.has(id)) try { removeImage(id); } catch {}
+            }
+          }
           result = { assetDir: image.assetDir, buildId: image.buildId }; break;
         }
         case 'Resume':
