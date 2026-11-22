@@ -1558,7 +1558,8 @@ renderStatContent widget valueM = do
     ]
     $ div_ [class_ "flex flex-col gap-1"] do
       strong_ [class_ "text-textStrong text-lg font-semibold tabular-nums", id_ $ chartId <> "Value"]
-        $ if hasData then whenJust valueM toHtml else span_ [class_ "skeleton-shimmer inline-block h-[0.9em] w-[4em] rounded-md align-middle", role_ "status", Aria.label_ "Loading"] ""
+        -- No value is a dash, as the client renders it ('NO_DATA_VALUE'), never an empty headline.
+        $ if hasData then toHtml (fromMaybe "—" valueM) else span_ [class_ "skeleton-shimmer inline-block h-[0.9em] w-[4em] rounded-md align-middle", role_ "status", Aria.label_ "Loading"] ""
       div_ [class_ "stat-label inline-flex gap-1 items-center text-xs"] do
         whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "stat-icon w-4 h-4 text-iconBrand"
         toHtml $ maybeToMonoid widget.title
