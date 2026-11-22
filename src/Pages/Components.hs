@@ -1472,7 +1472,9 @@ pickerPopover_ :: Text -> Text -> [Attribute] -> Html () -> Html ()
 pickerPopover_ popId cls extraAttrs =
   div_
     ( popoverPanel_ popId
-        <> [ [__|on toggle if event.newState is 'open' set i to the first <[data-picker-input]/> in me then if i call i.focus() end end|]
+        -- Newline-fenced: Lucid joins a caller's own @_@ to this one with no separator, which ran
+        -- "end" into the next "on" and broke both handlers.
+        <> [ term "_" "\non toggle if event.newState is 'open' set i to the first <[data-picker-input]/> in me then if i call i.focus() end end\n"
            , class_ $ "dropdown z-50 max-w-[calc(100vw-2rem)] border-0 bg-transparent p-0 shadow-none " <> cls
            ]
         <> extraAttrs
