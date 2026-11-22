@@ -160,7 +160,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, done, successToast, useTfReads)
-import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, faSprite_, fmtDate, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, kqlQuoted, loadingIndicator_, lookupValueText, navTabStrip_, nonEmptyT, popoverPanel_, popoverTrigger_, renderMarkdown, summaryWords)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, faSprite_, fmtDate, fmtInt, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, kqlQuoted, loadingIndicator_, lookupValueText, navTabStrip_, nonEmptyT, popoverPanel_, popoverTrigger_, renderMarkdown, summaryWords)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseQueryParamMaybe)
 import Web.Links (CookieProtectedRoutes (..), IssuesRoutes' (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), explorerUrl, urls)
@@ -1110,7 +1110,7 @@ issueHeader_ v@IssueView{..} = header_ [class_ "max-md:px-3 px-4 max-md:pt-4 pt-
       when (isJust $ issueEventsQuery v)
         $ statFigure_ "items-end" [term "data-tippy-content" "Events in the selected range"] "Events · this range" (Widget.widgetValueSlotAs_ (issueChartId issue) Nothing)
       -- Distinct users by user.id / user.email / client.address, all time.
-      whenJust errM \errL -> statFigure_ "items-end" [term "data-tippy-content" "Distinct users affected, all time"] "Users · all time" $ toHtml $ formatWithCommas (fromIntegral errL.base.usersCount :: Double)
+      whenJust errM \errL -> statFigure_ "items-end" [term "data-tippy-content" "Distinct users affected, all time"] "Users · all time" $ toHtml $ fmtInt errL.base.usersCount
   div_ [class_ "flex flex-wrap items-center gap-2"] do
     issueAcknowledgeButton pid issue.id now ackUntil
     issueArchiveButton pid issue.id (isJust issue.archivedAt)
@@ -1619,7 +1619,7 @@ eventCard_ view@IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflo
                             _ -> toHtml $ decodeUtf8 @Text (AE.encode value)
                     samples (V.take 3 snapshot.examples)
                     when (V.length snapshot.examples > 3) $ details_ do
-                      summary_ [class_ "cursor-pointer text-xs text-textBrand py-1"] $ toHtml $ "Show " <> show (V.length snapshot.examples - 3) <> " more sample values"
+                      summary_ [class_ "cursor-pointer text-xs text-textBrand py-1"] $ toHtml $ "Show " <> countNoun (V.length snapshot.examples - 3) "more sample value"
                       samples (V.drop 3 snapshot.examples)
                 -- One tbody per detection time, headed by that time.
                 detectedBatches :: [(Maybe UTCTime, a)] -> (a -> Html ()) -> Html ()
@@ -2142,7 +2142,7 @@ aiChatResponse_ artifactLinkAttrs pid userQuery explanation widgetsM toolCallsM 
     -- Collapsed debug info (tool calls + system prompt)
     let toolCalls = fromMaybe [] toolCallsM
     unless (null toolCalls && isNothing systemPromptM)
-      $ disclosure_ [class_ "mt-2 ml-[2.125rem] border border-strokeWeak rounded-lg text-xs", data_ "chat-indent" ""] "px-2.5 py-1.5 text-textWeak hover:bg-fillWeaker" (toHtml @Text $ bool "System context" (show (length toolCalls) <> " tool calls") (not (null toolCalls)))
+      $ disclosure_ [class_ "mt-2 ml-[2.125rem] border border-strokeWeak rounded-lg text-xs", data_ "chat-indent" ""] "px-2.5 py-1.5 text-textWeak hover:bg-fillWeaker" (toHtml @Text $ bool "System context" (countNoun (length toolCalls) "tool call") (not (null toolCalls)))
       $ div_ [class_ "px-2.5 py-2 border-t border-strokeWeak bg-fillWeaker/50"] do
         forM_ toolCalls toolCallView_
         whenJust systemPromptM
@@ -2926,7 +2926,7 @@ instance ToHtml IssueActivityFeed where
             summary_ [class_ "flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden rounded focus-visible:outline-2 focus-visible:outline-offset-2"] do
               span_ [class_ "flex -space-x-1"] $ forM_ (take 5 $ participants <> viewers) \uid ->
                 img_ [src_ $ "/api/avatar/" <> uid.toText, alt_ $ name uid, title_ $ name uid, loading_ "lazy", width_ "24", height_ "24", class_ "h-6 w-6 rounded-full bg-fillWeak outline outline-1 outline-black/10 dark:outline-white/10"]
-              span_ $ toHtml $ let n = length participants + length viewers in show n <> bool " people" " person" (n == 1)
+              span_ $ toHtml $ let n = length participants + length viewers in fmtInt n <> bool " people" " person" (n == 1)
               faSprite_ "chevron-down" "regular" "w-3 h-3 group-open/people:rotate-180"
             div_ [class_ "pt-2 space-y-1"] do
               unless (null participants) $ p_ $ toHtml $ "Participating: " <> T.intercalate ", " (name <$> participants)

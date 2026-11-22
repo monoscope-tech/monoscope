@@ -60,6 +60,7 @@ describe('formatStatValue', () => {
     expect(formatStatValue(1, 'ms')).toBe('1.0ms');
     // Apdex 0.995 rounded to "1 / 1"; a fixed precision keeps the dip visible.
     expect([0.991, 1].map((n) => formatStatValue(n, '/ 1', 2))).toEqual(['0.99 / 1', '1.00 / 1']);
+    expect(formatStatValue(1250.5, '$', 2)).toBe('$1,250.50');
     expect(formatStatValue(0, '%')).toBe('0 %');
   });
 
@@ -85,6 +86,7 @@ describe('formatNumber NaN/null guard', () => {
   });
   test('finite values are unaffected', () => {
     expect(formatNumber(1500)).toBe('1.5K');
+    expect(formatNumber(-1500)).toBe('-1.5K');
     expect(formatNumber(42)).toBe('42');
   });
   test('K/M/B branches round rather than truncate', () => {

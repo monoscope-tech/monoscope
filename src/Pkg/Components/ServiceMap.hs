@@ -18,7 +18,7 @@ import Models.Ids qualified as Projects
 import Models.Telemetry.ServiceGraph (MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), drawnEdges, drawnNodes)
 import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), disclosure_, emptyState_)
 import Relude
-import Utils (faSprite_, getDurationNSMS, prettyPrintCount, scriptJson, showFFloat')
+import Utils (countNoun, faSprite_, fmtInt, getDurationNSMS, prettyPrintCount, scriptJson, showFFloat')
 import Web.Links (CookieProtectedRoutes (..), TelemetryRoutes' (..), urls)
 
 
@@ -275,7 +275,7 @@ serviceMapLegend_ graph colors = div_ [class_ "flex flex-col gap-2"] do
 
 -- | The no-JS, screen-reader and small-screen representation of the same graph.
 dependencyTable_ :: ServiceGraph -> Html ()
-dependencyTable_ graph = disclosure_ [class_ "border border-strokeStrong rounded-2xl overflow-hidden"] "px-3 py-2 text-sm text-textStrong" (toHtml $ "Dependencies (" <> show (V.length (drawnEdges graph)) <> ")")
+dependencyTable_ graph = disclosure_ [class_ "border border-strokeStrong rounded-2xl overflow-hidden"] "px-3 py-2 text-sm text-textStrong" (toHtml $ "Dependencies (" <> fmtInt (V.length (drawnEdges graph)) <> ")")
   $ div_ [class_ "overflow-x-auto"]
   $ table_ [class_ "w-full text-xs"] do
     thead_ [class_ "text-textWeak border-b border-strokeWeak"]
@@ -293,7 +293,7 @@ dependencyTable_ graph = disclosure_ [class_ "border border-strokeStrong rounded
   where
     -- Edges reference node keys; show the human label the node carries. Built once rather
     -- than searched per row: a capped map is 150 nodes and the table is one row per edge.
-    labels = HM.fromList [(n.key, n.label <> maybe "" (\c -> " (" <> show c <> " endpoints)") n.memberCount) | n <- V.toList graph.nodes]
+    labels = HM.fromList [(n.key, n.label <> maybe "" (\c -> " (" <> countNoun c "endpoint" <> ")") n.memberCount) | n <- V.toList graph.nodes]
     nodeDisplay k = if T.null k then "Entry point" else HM.lookupDefault k k labels
 
 

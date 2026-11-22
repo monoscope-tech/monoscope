@@ -41,7 +41,7 @@ import Network.Wai (Request)
 import Network.Wai qualified as Wai
 import Network.Wreq qualified as W
 import Pages.AIThreads qualified as AIThreads
-import Pages.BodyWrapper (NavigationResponse, PageCtx)
+import Pages.BodyWrapper (NavigationResponse, PageCtx, navSearchGetH)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils qualified as BotUtils
@@ -473,9 +473,10 @@ cookieProtectedServer projectTools runNow =
     , apiCatalogDocs = ApiCatalog.apiDocsH
     , apiCatalogSpecJson = ApiCatalog.apiSpecJsonH
     , apiCatalogSpecYaml = ApiCatalog.apiSpecYamlH
-    , -- Command palette
+    , -- Command palette & nav search
       commandPaletteGet = CommandPalette.commandPaletteItemsH
     , commandPaletteRecentPost = CommandPalette.commandPaletteRecentPostH
+    , navSearchGet = navSearchGetH
     , aiRoutinesGet = AIThreads.routinesGetH
     , aiRoutineInstallPost = AIThreads.routineInstallPostH
     , aiThreadsGet = AIThreads.threadsGetH

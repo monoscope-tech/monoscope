@@ -17,7 +17,7 @@ import Pkg.ErrorFingerprint qualified as EF
 import PyF qualified
 import Relude
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), copyToClipboardAttr_, countNoun, deleteParam, faSprite_, formatUTC, formatWithCommas, loadingIndicator_, navTabAttrs, navTabStrip_, nonEmptyT, popoverPanel_, popoverTrigger_)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), copyToClipboardAttr_, countNoun, deleteParam, faSprite_, fmtInt, formatUTC, loadingIndicator_, navTabAttrs, navTabStrip_, nonEmptyT, popoverPanel_, popoverTrigger_)
 import Web.Links
 
 
@@ -1152,7 +1152,7 @@ emDash_ = span_ [class_ "text-textWeak"] $ span_ [Aria.hidden_ "true"] "—" >> 
 -- | Table cell for an event count; zero reads as a dash. @windowed@: only a count over the
 -- current period is coloured by volume — an all-time total says nothing about heat.
 eventsCountCell_ :: Bool -> Int -> Html ()
-eventsCountCell_ windowed n = span_ [class_ $ "tabular-nums font-medium text-sm " <> color] $ toHtml $ bool (formatWithCommas (fromIntegral n)) "\x2014" (n == 0)
+eventsCountCell_ windowed n = span_ [class_ $ "tabular-nums font-medium text-sm " <> color] $ toHtml $ bool (fmtInt n) "\x2014" (n == 0)
   where
     color
       | windowed && n >= 100 = "text-fillError-strong"
@@ -1311,6 +1311,11 @@ keyboardActivateAttr_ = [__|on keydown[key=='Enter' or key==' '] halt the event 
 listboxNavAttr_ :: Attribute
 listboxNavAttr_ =
   [__|on input call htmx.live.refresh() then wait 0ms
+        remove .active from <[role=option]/> in me
+        set f to the first <[role=option]:not([hidden])/> in me
+        if f add .active to f end
+      end
+      on htmx:after:swap
         remove .active from <[role=option]/> in me
         set f to the first <[role=option]:not([hidden])/> in me
         if f add .active to f end

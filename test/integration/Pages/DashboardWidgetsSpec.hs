@@ -1249,7 +1249,13 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     nav <- fst . T.breakOn "</nav>" . snd . T.breakOn "id=\"main-sidenav\"" . renderT <$> call tr (Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing (Dashboards.DashboardFilters []))
     let navAt t = T.length . fst $ T.breakOn t nav
     (navAt ">Overview<" < navAt ">Beta<", navAt "text-iconWarning" < navAt ">Beta<", navAt ">Beta<" < navAt ">Alpha<", T.count "text-iconWarning" nav) `shouldBe` (True, True, True, 1)
-    nav `shouldContainAll` ["/dashboards/" <> alpha.toText <> "\"", "All dashboards"]
+    nav `shouldContainAll` ["/dashboards/" <> alpha.toText <> "\"", "All dashboards", "data-picker-input", "Filter dashboards", "Filter issues", "All issues"]
+    -- Server-side nav search finds matching dashboards across the full set and renders empty states.
+    dashHits <- renderT <$> call tr (BodyWrapper.navSearchGetH testPid (Just "dashboards") (Just "bet"))
+    dashHits `shouldSatisfy` T.isInfixOf ">Beta<"
+    dashHits `shouldNotSatisfy` T.isInfixOf ">Alpha<"
+    renderT <$> call tr (BodyWrapper.navSearchGetH testPid (Just "dashboards") (Just "zz-none")) >>= (`shouldSatisfy` T.isInfixOf "No matching dashboards")
+    renderT <$> call tr (BodyWrapper.navSearchGetH testPid (Just "issues") (Just "zz-none")) >>= (`shouldSatisfy` T.isInfixOf "No matching issues")
     -- The page's title opens it on demand; the tab strip, not a breadcrumb suffix, names the tab.
     overview <- newDashboard tr "_overview.yaml" "Overview"
     page <- renderT <$> getTab tr overview "service" Nothing []

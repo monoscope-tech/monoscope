@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, Dep (..), loadDeps, frontendBuild, BWConfig (..), llmCallsUrl, apiCatalogUrl, stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus, externalHeadScripts_) where
+module Pages.BodyWrapper (bodyWrapper, Dep (..), loadDeps, frontendBuild, BWConfig (..), llmCallsUrl, apiCatalogUrl, stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus, externalHeadScripts_, navSearchGetH) where
 
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
@@ -36,8 +36,8 @@ import Pkg.DeriveUtils (DB, UUIDId (..), assetUrl, viteAssetFile)
 import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
-import System.Types (ATAuthCtx)
-import Utils (FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, fieldMenuActions, freeTierUsageBanner, freeTierUsageStatus, loadingIndicatorWith_, navTabAttrs, popoverPanel_, popoverTrigger_, scriptJson)
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import Utils (FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, fieldMenuActions, fmtInt, freeTierUsageBanner, freeTierUsageStatus, loadingIndicatorWith_, navTabAttrs, popoverPanel_, popoverTrigger_, scriptJson)
 import Web.I18n qualified as I18n
 import Web.Links
 
@@ -59,18 +59,21 @@ mkPageCtxWithScope withScope pid = do
   (sess, project, bw) <- mkAIPageCtx pid
   viewerPermission <- fromMaybe ProjectMembers.PView <$> ProjectMembers.getSessionPermission pid sess.user.id
   let now = bw.shellNow
-  ((facetsM, navDashboards), (activationProgressM, conversations)) <-
+  ((facetsM, (navDashboards, navIssues)), (activationProgressM, conversations)) <-
     concurrently
       ( concurrently
           (if withScope then SchemaCatalog.getFacetSummary (Just [envField, serviceField]) pid "otel_logs_and_spans" now now else pure Nothing)
-          (Dashboards.selectNavDashboards pid)
+          ( concurrently
+              (Dashboards.searchNavDashboards pid Nothing (navFlyoutLimit + 1))
+              (Issues.searchNavIssues pid Nothing (navFlyoutLimit + 1))
+          )
       )
       ( concurrently
           (if V.elem "checklist_dismissed" project.onboardingStepsCompleted then pure Nothing else Just <$> activationProgress pid (V.elem (show Integration) project.onboardingStepsCompleted))
           (Issues.listVisibleConversations pid viewerPermission (Investigations.MemberViewer sess.user.id))
       )
   let options field = V.fromList $ sort [v.value | SchemaCatalog.FacetData m <- (.facetJson) <$> maybeToList facetsM, v <- HM.findWithDefault [] field m, not (T.null v.value)]
-  pure (sess, project, bw{activationProgressM, conversations, navDashboards, envOptions = options envField, serviceOptions = options serviceField})
+  pure (sess, project, bw{activationProgressM, conversations, navDashboards, navIssues, envOptions = options envField, serviceOptions = options serviceField})
   where
     envField = "resource.deployment.environment.name"
     serviceField = "resource.service.name"
@@ -293,6 +296,7 @@ data BWConfig = BWConfig
   , serviceOptions :: V.Vector Text
   , activationProgressM :: Maybe ActivationProgress
   , navDashboards :: [Dashboards.NavDashboard]
+  , navIssues :: [Issues.NavIssue]
   , conversations :: [Issues.ConversationSummary]
   , activeConversationId :: Maybe (UUIDId "conversation")
   , composerRequestId :: Maybe (UUIDId "ai_routine_run")
@@ -870,25 +874,45 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
       ]
     nav_ [id_ "main-sidenav", class_ "mt-2 min-h-0 overflow-x-hidden overflow-y-auto flex flex-col gap-1 text-textWeak group-has-[#nav-view-ai:checked]/nav:hidden [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end|]] do
       let flyoutLink (label, link) =
-            a_ ([href_ link, class_ "flex gap-2.5 items-center px-3 py-2 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong whitespace-nowrap"] <> navTabAttrs) label
-          -- Starred first; the list is capped so the flyout stays a menu, with the rest one click away.
-          dashboardFlyout ds =
-            [ (span_ [class_ "flex w-3 shrink-0"] (when d.starred $ faSprite_ "star" "solid" "size-3 text-iconWarning") >> span_ [class_ "max-w-64 truncate"] (toHtml $ Dashboards.dashTitle d.title), urls.dashboardsGet project.id d.id Nothing Nothing Nothing Nothing [])
-            | d <- take 15 ds
-            ]
-              <> [(span_ [class_ "w-3 shrink-0"] "" >> "All dashboards", dashboardsUrl project.id) | not (null ds)]
+            a_ ([href_ link, class_ "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong whitespace-nowrap transition-colors duration-75"] <> navTabAttrs) label
+          searchableFlyoutBody kind listId placeholder footerLabel footerHref beforeList initialRows = do
+            div_ [class_ "flex items-center gap-2 border-b border-strokeWeak px-2.5"] do
+              faSprite_ "sidebar-search" "regular" "size-3.5 shrink-0 text-textWeak"
+              input_
+                [ type_ "search"
+                , name_ "q"
+                , data_ "picker-input" ""
+                , autocomplete_ "off"
+                , placeholder_ placeholder
+                , Aria.label_ (T.dropWhileEnd (== '…') placeholder)
+                , class_ "no-focus-ring min-w-0 flex-1 bg-transparent py-2 text-xs text-textStrong outline-none placeholder:text-textWeak"
+                , hxGet_ $ urls.navSearchGet project.id (Just kind) Nothing
+                , hxTrigger_ "input changed delay:150ms, search"
+                , hxTarget_ $ "#" <> listId
+                , hxSwap_ "innerHTML"
+                , term "hx-preload" "false"
+                , [__|on keydown[key is 'Escape'] if my value set my value to '' then send input to me else call me.blur() end|]
+                ]
+            beforeList
+            div_ [id_ listId, role_ "listbox", Aria.label_ footerLabel, class_ "max-h-72 overflow-y-auto overscroll-contain p-1 flex flex-col gap-0.5"] initialRows
+            div_ [class_ "border-t border-strokeWeak p-1"]
+              $ flyoutLink (faSprite_ "grid" "regular" "size-3 shrink-0 text-iconNeutral" >> span_ (toHtml footerLabel), footerHref)
           renderNavItem mTitle mUrl fIcon = do
             -- Page handlers name the section in English; labels may be translated.
             let sectionTitle = fromMaybe mTitle $ lookup mUrl [(url, title) | (title, url, _) <- menu I18n.En project.id]
                 isActive = fromMaybe pageTitle menuItem == sectionTitle
                 activeCls = bool "" " active" isActive
-                flyoutItems = if sectionTitle == "Dashboards" then dashboardFlyout bcfg.navDashboards else first toHtml <$> navFlyoutItems project.id sectionTitle
-                hasFlyout = not (null flyoutItems)
+                isDashboards = sectionTitle == "Dashboards"
+                isIssues = sectionTitle == "Issues"
+                isSearchable = isDashboards || isIssues
+                standardItems = navFlyoutItems project.id sectionTitle
+                hasFlyout = if isDashboards then not (null bcfg.navDashboards) else isIssues || not (null standardItems)
             ( if hasFlyout
                 then
                   div_
                     [ class_ "relative group/flyout"
                     , [__|on mouseenter
+                        if document.activeElement and document.activeElement.closest('.nav-flyout') and not my.contains(document.activeElement) call document.activeElement.blur() end
                         set flyout to my.querySelector('.nav-flyout')
                         set sidebarBounds to my.closest('aside').getBoundingClientRect()
                         set workspaceBounds to my.closest('aside').parentElement.getBoundingClientRect()
@@ -921,8 +945,28 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                 -- Shown only once placed: a morph after clicking a link resets the inline position while the
                 -- pointer is still over the item, which used to flash the flyout at the viewport's corner.
                 when hasFlyout
-                  $ div_ [class_ "nav-flyout max-md:hidden invisible opacity-0 group-hover/flyout:data-placed:visible group-hover/flyout:data-placed:opacity-100 max-h-[70vh] overflow-y-auto fixed top-0 left-0 z-50 min-w-44 bg-bgRaised border border-strokeWeak rounded-lg shadow-md py-1.5 transition-[opacity,visibility] duration-100"]
-                  $ mapM_ flyoutLink flyoutItems
+                  $ div_
+                    ( [class_ $ "nav-flyout max-md:hidden invisible opacity-0 group-hover/flyout:data-placed:visible group-hover/flyout:data-placed:opacity-100 [&:focus-within]:data-placed:visible [&:focus-within]:data-placed:opacity-100 max-h-[70vh] flex flex-col fixed top-0 left-0 z-50 bg-bgOverlay border border-strokeWeak rounded-xl shadow-lg transition-[opacity,visibility] duration-100 before:content-[''] before:absolute before:-left-2 before:inset-y-0 before:w-2 " <> bool "min-w-48" "picker-card w-68" isSearchable]
+                        <> [Components.listboxNavAttr_ | isSearchable]
+                    )
+                  $ if
+                    | isDashboards ->
+                        searchableFlyoutBody "dashboards" "nav-dashboards-list" "Filter dashboards\x2026" "All dashboards" (dashboardsUrl project.id) mempty (navDashboardRows_ project.id bcfg.navDashboards)
+                    | isIssues ->
+                        searchableFlyoutBody
+                          "issues"
+                          "nav-issues-list"
+                          "Filter issues\x2026"
+                          "All issues"
+                          (issuesUrl project.id Nothing)
+                          ( div_ [class_ "flex items-center gap-1 border-b border-strokeWeak px-1.5 py-1"]
+                              $ forM_ ["Inbox", "Acknowledged", "Archived"] \tab ->
+                                a_ ([href_ $ issuesUrl project.id (Just tab), class_ "flex-1 rounded-md px-1.5 py-1 text-center text-2xs font-medium text-textWeak hover:bg-fillWeak hover:text-textStrong transition-colors"] <> navTabAttrs) $ toHtml tab
+                          )
+                          (navIssueRows_ project.id bcfg.navIssues)
+                    | otherwise -> do
+                        div_ [class_ "px-3 pt-2 pb-1 text-2xs font-medium text-textWeak"] $ toHtml mTitle
+                        div_ [class_ "overflow-y-auto overscroll-contain p-1 pt-0.5 flex flex-col gap-0.5"] $ mapM_ (flyoutLink . first toHtml) standardItems
       let (primary, secondary) = splitAt 5 $ menu sess.lang project.id
       mapM_ (uncurry3 renderNavItem) primary
       div_ [class_ "border-t border-strokeWeak/50 my-1.5 mx-2"] ""
@@ -982,7 +1026,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
           sectionLink :: Text -> Text -> Int -> Html ()
           sectionLink href label count = a_ [href_ href, class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center justify-between rounded-md px-2 py-1.5 text-2xs font-medium text-textWeak hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-1 transition-colors"] do
             span_ [] $ toHtml label
-            span_ [class_ "text-2xs tabular-nums text-textDisabled"] $ toHtml $ show count
+            span_ [class_ "text-2xs tabular-nums text-textDisabled"] $ toHtml $ fmtInt count
           timeGroupLabel label = div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block px-2 pb-0.5 pt-1 text-2xs font-medium text-textDisabled"] $ toHtml label
           threadLink c =
             let isActive = bcfg.activeConversationId == Just c.conversationId
@@ -1391,6 +1435,57 @@ navBottomList pid =
   ]
 
 
+navFlyoutLimit :: Int
+navFlyoutLimit = 20
+
+
+navDashboardRows_ :: Projects.ProjectId -> [Dashboards.NavDashboard] -> Html ()
+navDashboardRows_ pid ds
+  | null ds = p_ [class_ "px-3 py-5 text-center text-xs text-textWeak"] "No matching dashboards"
+  | otherwise = do
+      forM_ (take navFlyoutLimit ds) \d -> do
+        let title = Dashboards.dashTitle d.title
+        Components.pickerItem_
+          a_
+          def
+            { Components.extraClass = "!py-1.5 !px-2.5"
+            , Components.filterable = False
+            , Components.leading = if d.starred then faSprite_ "star" "solid" "size-3 shrink-0 text-iconWarning" else faSprite_ "dashboard" "regular" "size-3 shrink-0 text-iconNeutral"
+            }
+          title
+          (href_ (urls.dashboardsGet pid d.id Nothing Nothing Nothing Nothing []) : title_ title : navTabAttrs)
+      when (length ds > navFlyoutLimit)
+        $ p_ [class_ "px-2.5 py-1.5 text-center text-2xs text-textWeak"] "Showing top 20 \xb7 type to search all"
+
+
+navIssueRows_ :: Projects.ProjectId -> [Issues.NavIssue] -> Html ()
+navIssueRows_ pid is
+  | null is = p_ [class_ "px-3 py-5 text-center text-xs text-textWeak"] "No matching issues"
+  | otherwise = do
+      forM_ (take navFlyoutLimit is) \i ->
+        Components.pickerItem_
+          a_
+          def
+            { Components.extraClass = "!py-1.5 !px-2.5"
+            , Components.filterable = False
+            , Components.leading = faSprite_ "bug" "regular" $ "size-3 shrink-0 " <> bool "text-iconNeutral" "text-iconError" i.critical
+            , Components.trailing = maybe mempty (span_ [class_ "max-w-20 shrink-0 truncate text-2xs text-textWeak"] . toHtml) (mfilter (not . T.null) i.service)
+            }
+          i.title
+          (href_ ((urls.issues pid).detailGet i.id Nothing Nothing Nothing Nothing Nothing) : title_ i.title : navTabAttrs)
+      when (length is > navFlyoutLimit)
+        $ p_ [class_ "px-2.5 py-1.5 text-center text-2xs text-textWeak"] "Showing top 20 \xb7 type to search all"
+
+
+navSearchGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+navSearchGetH pid kindM qM = do
+  _ <- Projects.sessionAndProject pid
+  addRespHeaders =<< case kindM of
+    Just "dashboards" -> navDashboardRows_ pid <$> Dashboards.searchNavDashboards pid qM (navFlyoutLimit + 1)
+    Just "issues" -> navIssueRows_ pid <$> Issues.searchNavIssues pid qM (navFlyoutLimit + 1)
+    _ -> pure mempty
+
+
 navFlyoutItems :: Projects.ProjectId -> Text -> [(Text, Text)]
 navFlyoutItems pid = \case
   "Explorer" -> [(label, link pid) | (label, link) <- Components.explorerTabs]
@@ -1400,7 +1495,6 @@ navFlyoutItems pid = \case
   -- API Docs carries no host: it is the whole project's learned spec. The
   -- per-host and per-endpoint scopes are reached from the catalog rows.
   "API Catalog" -> [("Incoming", apiCatalogUrl pid (Just "Incoming")), ("Outgoing", apiCatalogUrl pid (Just "Outgoing")), ("API Docs", urls.apiCatalogDocs pid Nothing (Just "Incoming") Nothing)]
-  "Issues" -> [(f, issuesUrl pid (Just f)) | f <- ["Inbox", "Acknowledged", "Archived"]]
   "Monitors" -> [("Uptime checks", (urls.monitors pid).uptimeGet), ("Cron monitors", (urls.monitors pid).cronGet), ("Status pages", (urls.monitors pid).statusPagesGet), ("Alerts", (urls.monitors pid).listGet Nothing Nothing), ("New alert", Components.logExplorerUrl pid <> "#create-alert-toggle")]
   "Settings" -> [(t, l) | (t, l, _) <- navBottomList pid]
   _ -> []

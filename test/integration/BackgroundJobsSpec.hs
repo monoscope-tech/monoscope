@@ -43,7 +43,6 @@ import Servant qualified
 import System.Config qualified as Config
 import System.Timeout qualified as Timeout
 import UnliftIO.Async (concurrently)
-import Utils (formatWithCommas)
 
 
 spec :: Spec

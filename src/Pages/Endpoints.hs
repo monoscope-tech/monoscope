@@ -25,7 +25,7 @@ import Relude hiding (ask, asks)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging (logAttention, logWarn)
 import System.Types (ATAuthCtx, ActionResult, Outcome (..), Refusal (..), RespHeaders, act, addRespHeaders, addTriggerEvent, successToast)
-import Utils (faSprite_)
+import Utils (countNoun, faSprite_)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseUrlPiece)
 import Web.Links
@@ -500,7 +500,7 @@ instance ToHtml ApiDocsVM where
         detailTab_ "apidocsTab" "apidocs-ref" "" True "Reference"
         detailTab_ "apidocsTab" "apidocs-yaml" "" False "OpenAPI 3.1"
       div_ [class_ "ml-auto flex items-center gap-2 py-1.5"] do
-        span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml (show vm.operations <> " learned operation" <> bool "s" "" (vm.operations == 1) :: Text)
+        span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml $ countNoun vm.operations "learned operation"
         when vm.truncated
           $ span_ [class_ "badge badge-sm badge-warning", term "data-tippy-content" "Only the most recently seen operations are documented. Open a single endpoint's docs for the rest."] "truncated"
         forM_ [("YAML" :: Text, vm.specYamlUrl, "openapi.yaml" :: Text), ("JSON", vm.specJsonUrl, "openapi.json")] \(label, url, fname) ->

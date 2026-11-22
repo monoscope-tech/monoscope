@@ -58,7 +58,7 @@ import Lucid
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
 import Relude
-import Utils (fmtDate, formatWithCommas, isoT, nonEmptyT, truncateText)
+import Utils (countNoun, fmtDate, fmtInt, isoT, nonEmptyT, truncateText)
 import Web.Links (LogExplorerRoutes' (..), logExplorerLinks)
 
 
@@ -537,7 +537,7 @@ errorCard projectUrl errorsUrl chartUrlM e =
       when (length traceLines > 2)
         $ p_ [style_ "margin: 8px 0 0; font-size: 12px;"]
         $ a_ [href_ (projectUrl <> "/issues/by_hash/" <> e.hash), style_ linkStyle]
-        $ toHtml @Text ("View full stack trace (" <> show (length traceLines) <> " lines) \8594")
+        $ toHtml @Text ("View full stack trace (" <> countNoun (length traceLines) "line" <> ") \8594")
     -- Mirrors Slack's "View trace" button: jumps to Log Explorer scoped to this trace id.
     whenJust (nonEmptyT e.traceId) \tid ->
       tr_
@@ -831,9 +831,9 @@ freeTierUsageEmail projectName billingUrl seen kept limit notice =
         h1_ $ toHtml $ T.toTitle subject
         richP_ ["Your ", projectName, sentence]
         emailStatRow
-          [ ("Events Today", formatWithCommas (fromIntegral seen), Nothing)
-          , ("Kept", formatWithCommas (fromIntegral kept), Just colour)
-          , ("Daily Budget", formatWithCommas (fromIntegral limit), Nothing)
+          [ ("Events Today", fmtInt seen, Nothing)
+          , ("Kept", fmtInt kept, Just colour)
+          , ("Daily Budget", fmtInt limit, Nothing)
           ]
     )
     "Upgrade Plan"
@@ -933,4 +933,4 @@ paymentFailedEmail projectName =
 
 
 freeTierCap :: Text
-freeTierCap = formatWithCommas (fromIntegral Projects.freeTierDailyMaxEvents)
+freeTierCap = fmtInt Projects.freeTierDailyMaxEvents

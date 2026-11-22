@@ -73,7 +73,7 @@ import System.Logging qualified as Log
 import System.Tracing (Tracing)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB)
 import UnliftIO.Exception (bracket, throwIO, tryAny)
-import Utils (formatWithCommas, hostPath, prettyPrintCount)
+import Utils (countNoun, fmtInt, formatWithCommas, hostPath, prettyPrintCount)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), fixMediaPath, proofMediaPath, proofRatingPath, urls)
 
 
@@ -904,7 +904,7 @@ evidenceTable service o =
         AE.Null -> "—"
         v -> esc $ T.take 120 $ decodeUtf8 $ AE.encode v
       total = V.length o.dataset
-      counted = if total > length rows then "showing " <> show (length rows) <> " of " <> show total <> " rows" else show total <> bool " rows" " row" (total == 1)
+      counted = if total > length rows then "showing " <> fmtInt (length rows) <> " of " <> fmtInt total <> " rows" else countNoun total "row"
    in T.intercalate "\n" (["<table>", "<tr>" <> foldMap (\h -> "<th" <> right h <> ">" <> esc h <> "</th>") headers <> "</tr>"] <> ["<tr>" <> mconcat (zipWith (\h v -> "<td" <> right h <> ">" <> cell h v <> "</td>") headers (V.toList r)) <> "</tr>" | r <- rows] <> ["</table>"])
         <> "\n\n<sub>"
         <> T.intercalate " · " (maybeToList (esc <$> service) <> [counted] <> ["times in UTC" | any isTime headers] <> ["result limit reached" | o.limitReached])

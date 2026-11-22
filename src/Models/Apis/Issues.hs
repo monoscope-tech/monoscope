@@ -56,6 +56,8 @@ module Models.Apis.Issues (
   reopenOrInsertIssueTx,
   selectIssueById,
   selectIssues,
+  NavIssue (..),
+  searchNavIssues,
   IssueProjection (..),
   IssueFilters (..),
   NullFilter (..),
@@ -664,6 +666,20 @@ data QueryAlertData = QueryAlertData
   deriving anyclass (NFData)
   deriving (FromField, ToField) via Aeson QueryAlertData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake QueryAlertData
+
+
+data NavIssue = NavIssue {id :: IssueId, title :: Text, service :: Maybe Text, critical :: Bool}
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+searchNavIssues :: DB es => Projects.ProjectId -> Maybe Text -> Int -> Eff es [NavIssue]
+searchNavIssues pid qM lim =
+  let pat = ("%" <>) . (<> "%") <$> mfilter (not . T.null) (T.strip <$> qM)
+   in Hasql.interp
+        $ [HI.sql| SELECT id, title, service, critical FROM apis.issues WHERE project_id = #{pid} AND archived_at IS NULL |]
+        <> foldMap (\p -> [HI.sql| AND (title ILIKE #{p} OR COALESCE(service, '') ILIKE #{p}) |]) pat
+        <> [HI.sql| ORDER BY updated_at DESC LIMIT #{lim} |]
 
 
 -- | Main Issue type

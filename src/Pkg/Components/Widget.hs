@@ -1109,16 +1109,18 @@ statScalar summarize fromM toM stats
 -- A fixed precision keeps a bounded index honest near its ceiling (Apdex 0.991 is not "1"):
 -- >>> map (\v -> formatStatValue (Just 2) v "/ 1") [0.991, 1]
 -- ["0.99 / 1","1.00 / 1"]
+-- >>> formatStatValue (Just 2) 1250.5 "$"
+-- "$1,250.50"
 --
 -- A currency symbol leads its amount:
--- >>> map (\v -> formatStatValue Nothing v "$") [0.06, 0.004, 1500]
--- ["$0.06","<$0.01","$1.5K"]
+-- >>> map (\v -> formatStatValue Nothing v "$") [0.06, 0.004, 1500, -1500]
+-- ["$0.06","<$0.01","$1.5K","$-1.5K"]
 formatStatValue :: Maybe Int -> Double -> Text -> Text
 formatStatValue decimals value unit
   | isNaN value || isInfinite value = "N/A"
   | Just factor <- unitNanos unit = formatDuration $ value * factor
   | isByteUnit unit = formatBytes value
-  | Just d <- decimals = withUnit $ showFFloat' d value
+  | Just d <- decimals = withUnit $ formatFixedCommas (Just d) value
   | value > 0, value < 0.01 = "<" <> withUnit "0.01"
   | value == 1, T.length unit > 2, T.all isAlpha unit, Just unitOne <- T.stripSuffix "s" unit = "1 " <> unitOne
   | otherwise = withUnit $ formatNumber value
@@ -1134,12 +1136,12 @@ formatStatValue decimals value unit
       Nothing -> show (round ns :: Integer) <> "ns"
 
     formatNumber n
-      | n >= 1e9 = showFFloat' 1 (n / 1e9) <> "B"
-      | n >= 1e6 = showFFloat' 1 (n / 1e6) <> "M"
-      | n >= 1e3 = showFFloat' 1 (n / 1e3) <> "K"
+      | abs n >= 1e9 = showFFloat' 1 (n / 1e9) <> "B"
+      | abs n >= 1e6 = showFFloat' 1 (n / 1e6) <> "M"
+      | abs n >= 1e3 = showFFloat' 1 (n / 1e3) <> "K"
       | n == fromInteger (truncate n) = show (truncate n :: Integer)
-      | n >= 100 = show (round n :: Integer)
-      | n >= 10 = trimFixed 1 n
+      | abs n >= 100 = show (round n :: Integer)
+      | abs n >= 10 = trimFixed 1 n
       | otherwise = trimFixed 2 n
 
     trimFixed places = T.dropWhileEnd (== '.') . T.dropWhileEnd (== '0') . showFFloat' places

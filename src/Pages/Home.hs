@@ -42,7 +42,7 @@ import System.Types (ATAuthCtx, Outcome (..), RespHeaders, Toast (..), ToastLeve
 import System.Types qualified
 import Text.Slugify (slugify)
 import UnliftIO.Exception (catch)
-import Utils (countNoun, faSprite_, navTabAttrs, popoverPanel_, popoverTrigger_)
+import Utils (countNoun, faSprite_, fmtInt, formatWithCommas, navTabAttrs, popoverPanel_, popoverTrigger_)
 import Web.Links (CookieProtectedRoutes (..), MonitorsRoutes' (..), ProjectsRoutes' (..), TelemetryRoutes' (..), urls)
 
 
@@ -268,7 +268,7 @@ alerts_ d = section_ [class_ "flex flex-col gap-3", Aria.label_ "Alerts"] do
         span_ [class_ $ "size-2 shrink-0 rounded-full " <> bool "bg-fillWarning-strong" "bg-fillError-strong" alerting] ""
         span_ [class_ $ "shrink-0 text-xs font-medium " <> bool "text-textWarning" "text-textError" alerting] $ bool "Warning" "Alerting" alerting
         span_ [class_ "min-w-0 truncate text-sm font-medium text-textStrong"] $ toHtml m.alertConfig.title
-        span_ [class_ "ms-auto shrink-0 text-xs text-textWeak tabular-nums"] $ toHtml $ show @Text (round @Double @Int m.currentValue) <> foldMap (" " <>) m.alertConfig.unit <> foldMap ((" · since " <>) . agoText d.now) (m.alertLastTriggered <|> m.warningLastTriggered)
+        span_ [class_ "ms-auto shrink-0 text-xs text-textWeak tabular-nums"] $ toHtml $ formatWithCommas m.currentValue <> foldMap (" " <>) m.alertConfig.unit <> foldMap ((" · since " <>) . agoText d.now) (m.alertLastTriggered <|> m.warningLastTriggered)
 
 
 -- | The people on this project and where to go next, in one quiet row.
@@ -315,7 +315,7 @@ statusBar_ d = div_ [class_ "grid grid-cols-2 sm:grid-cols-5 gap-px overflow-hid
   where
     stat_ :: Text -> Int -> Html () -> Text -> Html ()
     stat_ href n label tone = a_ ([href_ href, class_ "flex flex-col gap-0.5 surface-raised px-4 py-3 hover:bg-fillWeak transition-colors"] <> navTabAttrs) do
-      span_ [class_ $ "text-xl font-semibold tabular-nums text-textStrong " <> tone] $ toHtml (show @Text n)
+      span_ [class_ $ "text-xl font-semibold tabular-nums text-textStrong " <> tone] $ toHtml (fmtInt n)
       span_ [class_ "text-xs text-textWeak"] label
 
 
@@ -326,7 +326,7 @@ windowNote_ = span_ [class_ "text-xs font-normal text-textWeak"] "· last 24 hou
 sectionHead_ :: Html () -> Maybe Int -> Maybe (Text, Text) -> Html ()
 sectionHead_ title countM linkM = div_ [class_ "flex items-center gap-2"] do
   h2_ [class_ "inline-flex items-center gap-1.5 text-base font-semibold text-textStrong"] title
-  whenJust countM $ span_ [class_ "rounded-md bg-fillWeak px-1.5 text-xs font-medium tabular-nums text-textWeak"] . show
+  whenJust countM $ span_ [class_ "rounded-md bg-fillWeak px-1.5 text-xs font-medium tabular-nums text-textWeak"] . toHtml . fmtInt
   whenJust linkM \(label, href) -> a_ ([href_ href, class_ "ml-auto inline-flex items-center gap-1 text-xs text-textWeak hover:text-textBrand"] <> navTabAttrs) do
     toHtml label
     faSprite_ "arrow-right" "regular" "w-3 h-3"

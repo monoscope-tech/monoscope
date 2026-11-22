@@ -150,7 +150,7 @@ import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
 import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny, withException)
-import Utils (FreeTierStatus (..), calculateCycleStartDate, formatUTC, formatWithCommas, freeTierUsageStatus, hostPath, jsonToMap, nestedJsonFromDotNotation, nonEmptyT, prettyPrintCount, toXXHash, truncateHour, usageWindowStart)
+import Utils (FreeTierStatus (..), calculateCycleStartDate, fmtInt, formatUTC, freeTierUsageStatus, hostPath, jsonToMap, nestedJsonFromDotNotation, nonEmptyT, prettyPrintCount, toXXHash, truncateHour, usageWindowStart)
 import Web.Links
 
 
@@ -1941,7 +1941,7 @@ monitorTrendChartUrl ctx pid monitor from to currentValue = do
 -- >>> percentChange 4 38
 -- "850"
 percentChange :: Double -> Double -> Text
-percentChange baseline current = formatWithCommas $ fromIntegral (round ((current - baseline) / baseline * 100) :: Int)
+percentChange baseline current = fmtInt (round ((current - baseline) / baseline * 100) :: Int)
 
 
 -- | The last day of hourly volume for each fired pattern, in one query, keyed by

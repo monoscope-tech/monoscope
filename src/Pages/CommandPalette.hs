@@ -15,7 +15,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Servant (NoContent (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_)
+import Utils (faSprite_, fmtInt)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links
 
@@ -233,7 +233,7 @@ renderDynamicItems pid recents issues monitors dashboards =
         do
           pickerIcon_ icon
           span_ [class_ "truncate flex-1"] $ toHtml label
-          span_ [class_ "badge badge-ghost badge-xs text-2xs tabular-nums"] $ toHtml (show count :: Text)
+          span_ [class_ "badge badge-ghost badge-xs text-2xs tabular-nums"] $ toHtml $ fmtInt count
           faSprite_ "chevron-right" "regular" "w-3 h-3 text-iconNeutral shrink-0"
 
     recentItem :: PaletteRecent -> Html ()

@@ -2317,7 +2317,7 @@ dashboardsGet_ dg
               let count = getWidgetCount dash
               span_ [class_ "flex items-center gap-1.5 text-textWeak", data_ "tippy-content" $ countNoun count "widget"] do
                 faSprite_ "grid" "regular" "w-3.5 h-3.5 text-iconNeutral"
-                span_ [class_ "leading-none tabular-nums"] $ toHtml $ show count
+                span_ [class_ "leading-none tabular-nums"] $ toHtml $ fmtInt count
 
         let nameCol =
               Table.col "Name" renderNameCol
@@ -3310,10 +3310,10 @@ instance Outcome YamlSave where
         faSprite_ "circle-check" "solid" "w-4 h-4"
         "Schema saved successfully"
       ul_ [class_ "text-xs text-textWeak mt-2 list-disc pl-5"] do
-        li_ $ toHtml $ show @Text (length dashboard.widgets) <> " widgets"
-        whenJust dashboard.variables \vs -> li_ $ toHtml $ show @Text (length vs) <> " variables"
-        whenJust dashboard.tabs \ts -> li_ $ toHtml $ show @Text (length ts) <> " tabs"
-        whenJust dashboard.constants \cs -> li_ $ toHtml $ show @Text (length cs) <> " constants"
+        li_ $ toHtml $ countNoun (length dashboard.widgets) "widget"
+        whenJust dashboard.variables \vs -> li_ $ toHtml $ countNoun (length vs) "variable"
+        whenJust dashboard.tabs \ts -> li_ $ toHtml $ countNoun (length ts) "tab"
+        whenJust dashboard.constants \cs -> li_ $ toHtml $ countNoun (length cs) "constant"
   outcomeRedirect = \case
     YamlSaved pid dashId _ -> Just $ dashboardUrl pid dashId Nothing []
     YamlRejected _ -> Nothing

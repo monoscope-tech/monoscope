@@ -73,7 +73,7 @@ import Relude hiding (ask)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, DB, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, act, addRespHeaders, addSuccessToast, addTriggerEvent, done, successToast)
-import Utils (TabStrip (..), countNoun, faSprite_, hostPath, navTabStrip_, safeScrapeUrl, showFFloat')
+import Utils (TabStrip (..), countNoun, faSprite_, fmtInt, hostPath, navTabStrip_, safeScrapeUrl, showFFloat')
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (toUrlPiece)
 import Web.Links (CookieProtectedRoutes (..), MonitorsRoutes' (..), urls)
@@ -237,9 +237,9 @@ overallBanner_ noun detailM states = div_ [class_ $ "flex items-center gap-3 rou
     (cls, iconCls, icon, headline, detail)
       | null states = ("border-strokeWeak bg-fillWeak", "text-iconNeutral", "circle-check", "Nothing monitored yet" :: Text, "Add a check to start tracking it." :: Text)
       | active == 0 = ("border-strokeWeak bg-fillWeak", "text-iconNeutral", "clock", "Waiting for first results", "No " <> noun <> " has reported yet")
-      | down == 0 = ("border-strokeSuccess-weak bg-fillSuccess-weak", "text-iconSuccess", "circle-check", "All systems operational", if pending > 0 then countNoun pending noun <> " awaiting a first result" else show active <> " of " <> countNoun (length states) noun <> " reporting")
+      | down == 0 = ("border-strokeSuccess-weak bg-fillSuccess-weak", "text-iconSuccess", "circle-check", "All systems operational", if pending > 0 then countNoun pending noun <> " awaiting a first result" else fmtInt active <> " of " <> countNoun (length states) noun <> " reporting")
       | down == active = ("border-strokeError-weak bg-fillError-weak", "text-iconError", "circle-exclamation", "Major outage", "Every active " <> noun <> " is failing")
-      | otherwise = ("border-strokeError-weak bg-fillError-weak", "text-iconError", "circle-exclamation", "Partial outage", show down <> " of " <> countNoun active noun <> " failing")
+      | otherwise = ("border-strokeError-weak bg-fillError-weak", "text-iconError", "circle-exclamation", "Partial outage", fmtInt down <> " of " <> countNoun active noun <> " failing")
 
 
 -- Uptime list ---------------------------------------------------------------------------
@@ -258,8 +258,8 @@ instance ToHtml UptimeChecks where
         let states = map uptimeState $ V.toList o.checks
             recent = filter (\b -> b.day >= addDays (-29) (utctDay o.now)) o.buckets
             lastDay = filter (\b -> b.day == utctDay o.now) o.buckets
-        statFigure_ "" [] "Checks" $ toHtml (show (V.length o.checks) :: Text)
-        statFigure_ "" [] "Down now" $ toHtml (show (length $ filter (== Failing) states) :: Text)
+        statFigure_ "" [] "Checks" $ toHtml $ fmtInt (V.length o.checks)
+        statFigure_ "" [] "Down now" $ toHtml $ fmtInt (length $ filter (== Failing) states)
         statFigure_ "" [] "Uptime, 30 days" $ toHtml $ maybe "—" showPct $ uncurry Uptime.uptimePercent $ sumCounts [(b.total, b.failed) | b <- recent]
         statFigure_ "" [] "Avg response, today" $ toHtml $ showMs $ weightedAvg lastDay
       div_ [class_ "space-y-1"] do
@@ -500,7 +500,7 @@ windowsGrid_ :: Text -> Uptime.WindowUptime -> Html ()
 windowsGrid_ noun w = div_ [class_ "grid grid-cols-2 gap-3 md:grid-cols-4"] $ forM_ @[] [("Last 24 hours", w.day), ("Last 7 days", w.week), ("Last 30 days", w.month), ("Last 90 days", w.quarter)] \(label :: Text, (total, failed)) ->
   div_ [class_ "surface-raised rounded-xl p-4"] do
     statFigure_ "" [] label $ toHtml $ maybe "—" showPct $ Uptime.uptimePercent total failed
-    p_ [class_ "mt-2 text-xs text-textWeak tabular-nums"] $ toHtml $ if total == 0 then "None yet" else countNoun total noun <> " · " <> show failed <> " failed"
+    p_ [class_ "mt-2 text-xs text-textWeak tabular-nums"] $ toHtml $ if total == 0 then "None yet" else countNoun total noun <> " · " <> fmtInt failed <> " failed"
 
 
 show2 :: Double -> Text

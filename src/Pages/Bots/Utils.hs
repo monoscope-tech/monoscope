@@ -58,7 +58,7 @@ import System.Logging qualified as Log
 import System.Tracing (Tracing)
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (onException, throwIO)
-import Utils (constEqText, faSprite_, formatUTC, hostPath, prettyPrintCount, toUriStr)
+import Utils (constEqText, faSprite_, fmtInt, formatUTC, hostPath, prettyPrintCount, toUriStr)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), ProjectsRoutes' (..), logExplorerLinks, urls)
 
 
@@ -597,7 +597,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
             tableData = "```\n" <> inertCode (T.take 1200 (unlines $ map (CLIFormat.formatRow $ CLIFormat.colWidths cells) cells)) <> "\n```"
             url' = hostPath envCfg.hostUrl $ explore (urls.logExplorer pid) Nothing query
             moreText = if resultCount > shownCount then "\n_" <> show (resultCount - shownCount) <> " more results in Log Explorer_" else ""
-            content = botEmoji EmojiTable <> " **Query Results** (showing " <> show shownCount <> " of " <> show resultCount <> " rows)\n" <> codeSpan query <> "\n" <> tableData <> moreText <> "\n"
+            content = botEmoji EmojiTable <> " **Query Results** (showing " <> fmtInt shownCount <> " of " <> fmtInt resultCount <> " rows)\n" <> codeSpan query <> "\n" <> tableData <> moreText <> "\n"
          in case target of
               Discord -> AE.object ["content" AE..= (content <> "\n[View in Log Explorer →](" <> url' <> ")")]
               WhatsApp -> AE.object ["body" AE..= (content <> "\n" <> url')]

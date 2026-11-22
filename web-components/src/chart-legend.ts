@@ -1,5 +1,5 @@
 import escape from 'lodash/escape';
-const compactNumber = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
+import { formatNumber } from './stat-value';
 // Real glyph widths where a canvas exists; the PNG renderer in Node falls back to an average.
 const ctx = typeof OffscreenCanvas === 'undefined' ? null : new OffscreenCanvas(1, 1).getContext('2d');
 const sides = (p: number | number[] = 5) => (Array.isArray(p) ? [p[0], p[1] ?? p[0], p[2] ?? p[0], p[3] ?? p[1] ?? p[0]] : [p, p, p, p]);
@@ -8,7 +8,7 @@ const sides = (p: number | number[] = 5) => (Array.isArray(p) ? [p[0], p[1] ?? p
 // of scrolling, and the plot gives up exactly the rows it takes. Names shrink before rows grow
 // past ~30% of the height. `orient: 'vertical'` (legend_position: right) becomes a name/value
 // table beside the plot when it fits, and falls back to the wrapped bottom legend when it doesn't.
-export const legendLayout = (options: any, width: number, height: number, format: (v: number) => string = (v) => compactNumber.format(v)): any => {
+export const legendLayout = (options: any, width: number, height: number, format: (v: number) => string = formatNumber): any => {
   const legend = options.legend;
   const names: string[] = (legend?.data ?? (options.series ?? []).map((s: any) => s?.name) ?? []).filter(Boolean);
   if (!legend || legend.show === false || !names.length || !width) return options;

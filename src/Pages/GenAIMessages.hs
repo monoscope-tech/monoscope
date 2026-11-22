@@ -29,7 +29,7 @@ import Pkg.DeriveUtils (AesonText)
 import Pkg.GenAI qualified as GenAI
 import Pkg.Parser.Eval (jsonAsText)
 import Relude
-import Utils (drawerRowAttrs_, faSprite_, getDurationNSMS, nonEmptyT, prettyPrintCount, tokenFlow)
+import Utils (countNoun, drawerRowAttrs_, faSprite_, getDurationNSMS, nonEmptyT, prettyPrintCount, tokenFlow)
 import Web.Links
 
 
@@ -133,7 +133,7 @@ part_ tools p = case (field "type", p) of
         when t.failed $ tonePill_ ErrorBadge "Failed"
     whenJust (fieldV "arguments") $ pre_ [class_ "max-h-48 overflow-auto whitespace-pre-wrap break-all text-textWeak"] . toHtml . prettyJson
   (Just "tool_call_response", _) -> details_ [class_ "rounded-lg border border-strokeWeak px-2.5 py-1.5 text-xs"] do
-    summary_ [class_ "cursor-pointer font-mono text-textWeak"] $ toHtml $ "Result" <> maybe "" ((" · " <>) . (\t -> fromMaybe t.name t.tool)) (field "id" >>= (`M.lookup` tools)) <> " · " <> show (T.length response) <> " chars"
+    summary_ [class_ "cursor-pointer font-mono text-textWeak"] $ toHtml $ "Result" <> maybe "" ((" · " <>) . (\t -> fromMaybe t.name t.tool)) (field "id" >>= (`M.lookup` tools)) <> " · " <> countNoun (T.length response) "char"
     pre_ [class_ "mt-1 max-h-96 overflow-auto whitespace-pre-wrap break-all font-mono text-textWeak"] $ toHtml $ maybe "" prettyJson $ fieldV "response"
   (_, AE.String t) -> textBlock_ t
   _ -> pre_ [class_ "overflow-auto whitespace-pre-wrap break-all font-mono text-xs text-textWeak"] $ toHtml $ jsonAsText p
