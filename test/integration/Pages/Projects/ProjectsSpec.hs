@@ -295,6 +295,11 @@ spec = around withTestResources do
     -- returned no notifications instead of failing, so assertions on them passed vacuously.
     isLeft <$> try @SomeException (testServantWithNotifications tr (Settings.notificationsTestPostH testPid (TestForm "runtime_exception" TCEmail Nothing))) `shouldReturn` True
 
+    -- The endpoint template takes {{1}} project and {{2}} the issue path (also its button URL):
+    -- the third variable it was sent failed every alert with Twilio 21656 (prod 2026-11-22).
+    (wa, _) <- captureNotifs tr $ Mail.sendWhatsAppAlert (Mail.EndpointAlert "Notifications" [] "ep-hash") testPid "Notifications" ["+1234567890"]
+    [d.contentVariables | WhatsAppNotification d <- wa] `shouldBe` [AE.object ["1" AE..= ("*Notifications*" :: Text), "2" AE..= (testPid.toText <> "/issues/by_hash/ep-hash")]]
+
     -- An unavailable runtime trend says so, and stays Slack-valid.
     let alert = Mail.RuntimeErrorAlert{issueId = "issue-trend-fallback", issueTitle = "Upstream timeout", errorData = (def :: ErrorPatterns.ATError){ErrorPatterns.hash = "slack-trend-fallback", ErrorPatterns.errorType = "UpstreamTimeout", ErrorPatterns.message = "The upstream request timed out"}, runtimeAlertType = Mail.NewRuntimeError, chartUrl = Nothing, occurrenceText = Nothing, firstSeenText = Nothing, ongoingFor = Nothing}
     (trend, _) <- captureNotifs tr $ Mail.sendSlackAlert Nothing alert testPid "Notifications" (Just "C_NOTIF_CHANNEL")
