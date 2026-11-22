@@ -145,7 +145,7 @@ import System.Config qualified as Config
 import System.Directory (findExecutable)
 import System.Logging qualified as Log
 import System.Random (randomRIO)
-import System.Tracing (MessagingOp (Process), MessagingSystem (OddJobs), SpanKind (Consumer), SpanStatus (..), Tracing, addEvent, forkWithCtx, messagingAttrs, setStatus, withSpan, withSpanKind, withSpan_)
+import System.Tracing (MessagingOp (Process), MessagingSystem (OddJobs), NotInstrumented, SpanKind (Consumer), SpanStatus (..), Tracing, addEvent, forkWithCtx, messagingAttrs, setStatus, withSpan, withSpanKind, withSpan_)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
@@ -1136,7 +1136,7 @@ tryStep label = (`catch` \(e :: SomeException) -> Log.logAttention ("step failed
 
 -- | IO-flavoured 'tryStep' for fibers that run outside the Eff stack and must
 -- log through 'runLogT'. Swallows + logs failures; never re-throws.
-tryStepIO :: Logger -> Config.AuthContext -> Text -> IO () -> IO ()
+tryStepIO :: Logger -> Config.AuthContext -> Text -> IO () -> NotInstrumented (IO ())
 tryStepIO logger ctx label action =
   whenLeftM_ (tryAny action)
     $ runLogT (show ctx.config.environment) logger ctx.config.logLevel
@@ -2984,7 +2984,7 @@ maybeSpawnRehydration
   -> TracerProvider
   -> ExtractionWorker.ShardState Telemetry.OtelLogsAndSpans
   -> (Projects.ProjectId, Text)
-  -> IO ()
+  -> NotInstrumented (IO ())
 maybeSpawnRehydration logger ctx tp shard key = do
   now <- getCurrentTime
   let rehydrateInterval = fromIntegral ctx.config.drainRehydrateIntervalSecs :: NominalDiffTime

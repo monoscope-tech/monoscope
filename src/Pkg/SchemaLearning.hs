@@ -90,6 +90,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Ids qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude
+import System.Tracing (NotInstrumented)
 import Utils (toXXHash)
 import Web.Wire (FacetValue (..))
 
@@ -707,7 +708,7 @@ observeSpans
   -> DecisionPolicy
   -> Projects.ProjectId
   -> V.Vector ObservationInput
-  -> IO ()
+  -> NotInstrumented (IO ())
 observeSpans ref policy pid inputs
   | V.null inputs = pass
   | otherwise = do

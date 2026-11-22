@@ -65,7 +65,7 @@ import System.Posix.Process (exitImmediately)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT, sigTERM, sigUSR2)
 import System.TimeManager (TimeoutThread)
 import System.Timeout (timeout)
-import System.Tracing (withSpan_)
+import System.Tracing (NotInstrumented, withSpan_)
 import System.Types (ATBackgroundCtx, effToServantHandler, runBackground)
 import Web.Auth qualified as Auth
 import Web.Routes qualified as Routes
@@ -135,7 +135,7 @@ liveTailEvent lg env tp name act = runBackground lg env tp (withSpan_ name [] ac
 -- Extracted from two hand-rolled copies. The hazard it removes is specific: forgetting the
 -- reset write turns a throttle into a busy loop, and nothing about the symptom points at the
 -- missing line.
-everyN :: NominalDiffTime -> IORef UTCTime -> IO () -> IO ()
+everyN :: NominalDiffTime -> IORef UTCTime -> IO () -> NotInstrumented (IO ())
 everyN interval ref act = do
   now <- getCurrentTime
   prev <- readIORef ref
@@ -296,7 +296,7 @@ liveTailConsumer appLogger env tp topic = do
 -- A version mismatch is expected mid-deploy and resolves itself; one that persists means a pod
 -- is stuck on an old build and its users' tails are silently empty. Undecodable messages are
 -- never expected at all.
-reportSkew :: LogBase.Logger -> AuthContext -> TracerProvider -> IORef (Int, Int) -> IORef UTCTime -> IO ()
+reportSkew :: LogBase.Logger -> AuthContext -> TracerProvider -> IORef (Int, Int) -> IORef UTCTime -> NotInstrumented (IO ())
 reportSkew appLogger env tp skewed lastReport = everyN 60 lastReport do
   (vers, bad) <- atomicModifyIORef' skewed ((0, 0),)
   when (vers > 0 || bad > 0) do

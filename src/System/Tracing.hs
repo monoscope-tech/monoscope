@@ -21,6 +21,7 @@ module System.Tracing (
   messagingAttrs,
   MessagingSystem (..),
   MessagingOp (..),
+  NotInstrumented,
 
   -- * Outbound HTTP
   newTracedManager,
@@ -217,6 +218,12 @@ data MessagingSystem = Kafka | GcpPubsub | OddJobs
 
 
 data MessagingOp = Send | Process
+
+
+-- | Excluded in @auto-instrument-config.toml@: wrap a hot helper's result type to keep the
+-- AutoInstrument plugin from opening a span per call.
+type NotInstrumented :: Type -> Type
+type NotInstrumented a = a
 
 
 -- | Standard attributes for batch-processing root spans (queue consumers,
