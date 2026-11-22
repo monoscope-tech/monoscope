@@ -31,7 +31,7 @@ import Pkg.Components.Widget qualified as Widget
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerRowAttrs_, faSprite_, formatBytes, kqlQuoted, showFFloat')
+import Utils (drawerRowAttrs_, faSprite_, formatBytes, formatFixedCommas, kqlQuoted, showFFloat')
 import Web.Links
 
 
@@ -191,7 +191,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
           , (has memPctOfLimit, col "Memory limit" (pctCell "Memory limit used" memPctOfLimit) & withColHeaderExtra (headerHint_ "Share of the memory limit in use") & withAttrs [class_ "min-w-28 max-md:hidden"])
           ,
             ( has (.restarts)
-            , col "Restarts" (numCell (showFFloat' 0) (.restarts))
+            , col "Restarts" (numCell (formatFixedCommas (Just 0)) (.restarts))
                 & withColHeaderExtra (headerHint_ "Latest cumulative restart count reported within the selected time range. This is not the number of restarts during the range.")
                 & withAttrs [class_ "w-20 text-right max-md:hidden"]
             )

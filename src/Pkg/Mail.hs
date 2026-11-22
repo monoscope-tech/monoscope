@@ -33,7 +33,7 @@ import System.Config (AuthContext (env))
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (DB)
-import Utils (countNoun, fmtDate, formatWithCommas, hostPath, prettyPrintCount)
+import Utils (countNoun, fmtDate, fmtInt, formatWithCommas, hostPath, prettyPrintCount)
 import Web.Links (CookieProtectedRoutes (..), IssuesRoutes' (..), LogExplorerRoutes' (..), logExplorerLinks, urls)
 
 
@@ -609,7 +609,7 @@ logPatternCard NewLogPattern{..} project =
 rateChangeCard :: RateChange -> Text -> Card
 rateChangeCard RateChange{..} project =
   (statusCard status (stripSummaryBadges patternText) issueUrl)
-    { facts = catMaybes [bold <$> serviceName, T.toUpper . slackEscape <$> logLevel] <> ["*" <> perHour currentRate <> "*", "baseline " <> perHour baselineMean, "*" <> bool "−" "+" spike <> formatWithCommas (fromIntegral (round (abs changePercent) :: Int)) <> "%*"]
+    { facts = catMaybes [bold <$> serviceName, T.toUpper . slackEscape <$> logLevel] <> ["*" <> perHour currentRate <> "*", "baseline " <> perHour baselineMean, "*" <> bool "−" "+" spike <> fmtInt (round (abs changePercent) :: Int) <> "%*"]
     , chart = Just ("Hourly volume against its baseline", chartUrl)
     , footer = ["Project " <> slackEscape project]
     , actions = [("Open issue", issueUrl)]

@@ -8,6 +8,7 @@ import * as echarts from "echarts";
 import { preparePngOptions, type PngProfile, type PngMode } from "./chart-png-options";
 import { reviveFunctions } from "./chart-functions";
 import { geomapOptions, registerWorld } from "./geomap";
+import { formatNumber, formatBytes, convertToNanoseconds, formatDuration } from "./stat-value";
 import world from "../../static/public/assets/deps/world-110m.json";
 
 interface RenderInput {
@@ -21,36 +22,7 @@ interface RenderInput {
 }
 
 // Global formatters for ECharts callbacks (referenced in Haskell-generated formatter strings)
-(globalThis as any).formatNumber = (value: number): string => {
-  if (value == null || isNaN(value)) return "";
-  if (Math.abs(value) >= 1e9) return (value / 1e9).toFixed(1) + "B";
-  if (Math.abs(value) >= 1e6) return (value / 1e6).toFixed(1) + "M";
-  if (Math.abs(value) >= 1e3) return (value / 1e3).toFixed(1) + "K";
-  return value.toFixed(value % 1 === 0 ? 0 : 1);
-};
-
-(globalThis as any).formatBytes = (value: number): string => {
-  if (value == null || isNaN(value)) return "";
-  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
-  let v = value, i = 0;
-  while (Math.abs(v) >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
-  return `${parseFloat(v.toFixed(1))} ${units[i]}`;
-};
-
-(globalThis as any).convertToNanoseconds = (value: number, unit: string): number => {
-  const conv: Record<string, number> = { ns: 1, us: 1e3, "μs": 1e3, ms: 1e6, s: 1e9, m: 6e10, h: 3.6e12 };
-  return value * (conv[unit] || 1);
-};
-
-(globalThis as any).formatDuration = (ns: number): string => {
-  if (ns == null || isNaN(ns)) return "";
-  if (ns >= 3.6e12) return (ns / 3.6e12).toFixed(1) + "h";
-  if (ns >= 6e10) return (ns / 6e10).toFixed(1) + "m";
-  if (ns >= 1e9) return (ns / 1e9).toFixed(1) + "s";
-  if (ns >= 1e6) return (ns / 1e6).toFixed(1) + "ms";
-  if (ns >= 1e3) return (ns / 1e3).toFixed(1) + "μs";
-  return ns.toFixed(0) + "ns";
-};
+Object.assign(globalThis, { formatNumber, formatBytes, convertToNanoseconds, formatDuration });
 
 
 async function main() {

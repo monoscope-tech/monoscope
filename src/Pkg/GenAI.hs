@@ -34,8 +34,8 @@ import Data.Map.Strict qualified as M
 import Data.Scientific (toRealFloat)
 import Data.Text qualified as T
 import Data.Vector qualified as V
-import Numeric (showFFloat)
 import Relude
+import Utils (formatFixedCommas)
 
 
 -- | Prices are USD per million tokens; a missing cache rate falls back to the input rate.
@@ -122,13 +122,13 @@ estimateCost p u = max 0 $ (uncached * p.input + u.cacheRead * fromMaybe p.input
 
 -- | Sub-cent amounts keep four decimals: a single call usually costs fractions of a cent.
 --
--- >>> map formatUsd [0, 0.00004, 0.0042, 0.42, 12.3456]
--- ["$0","<$0.0001","$0.0042","$0.42","$12.35"]
+-- >>> map formatUsd [0, 0.00004, 0.0042, 0.42, 12.3456, 1234.56]
+-- ["$0","<$0.0001","$0.0042","$0.42","$12.35","$1,234.56"]
 formatUsd :: Double -> Text
 formatUsd c
   | c <= 0 = "$0"
   | c < 0.0001 = "<$0.0001"
-  | otherwise = "$" <> toText (showFFloat (Just $ if c < 0.01 then 4 else 2) c "")
+  | otherwise = "$" <> formatFixedCommas (Just $ if c < 0.01 then 4 else 2) c
 
 
 -- | @gen_ai.response.finish_reasons@: an array by the conventions, a single string from some producers.

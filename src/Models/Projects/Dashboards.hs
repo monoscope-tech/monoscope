@@ -33,6 +33,7 @@ module Models.Projects.Dashboards (
   selectDashboardsSortedBy,
   NavDashboard (..),
   selectNavDashboards,
+  searchNavDashboards,
   overviewTemplate,
   DashboardSort (..),
   SortOrder (..),
@@ -419,6 +420,16 @@ selectNavDashboards pid =
     $ [HI.sql| SELECT id, title, starred_since IS NOT NULL FROM projects.dashboards WHERE project_id = #{pid} |]
     <> listOrder
     <> "title"
+
+
+searchNavDashboards :: DB es => Projects.ProjectId -> Maybe Text -> Int -> Eff es [NavDashboard]
+searchNavDashboards pid qM lim =
+  let pat = ("%" <>) . (<> "%") <$> mfilter (not . T.null) (T.strip <$> qM)
+   in Hasql.interp
+        $ [HI.sql| SELECT id, title, starred_since IS NOT NULL FROM projects.dashboards WHERE project_id = #{pid} |]
+        <> foldMap (\p -> [HI.sql| AND title ILIKE #{p} |]) pat
+        <> listOrder
+        <> [HI.sql| title LIMIT #{lim} |]
 
 
 overviewTemplate :: Text

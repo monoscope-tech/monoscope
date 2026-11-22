@@ -68,7 +68,7 @@ import Pages.BodyWrapper (PageCtx)
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_, filterInputAttr_, keyboardActivateAttr_, searchInput_, timeRefreshListener_)
 import Pkg.DeriveUtils (SortField (..), SortOrder (..))
 import Relude
-import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), deleteParam, faSprite_, loadingIndicator_, navTabAttrs, navTabStrip_, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), deleteParam, faSprite_, fmtInt, loadingIndicator_, navTabAttrs, navTabStrip_, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr)
 
 
 -- Core Types
@@ -584,7 +584,7 @@ renderBody extra tbl
     groupedRows groupOf = iforM_ (groups groupOf) $ \idx ((_, row) :| siblings) ->
       let labelM = groupOf row
           collapsible = isNothing tbl.features.grouping && isJust labelM && not (null siblings)
-          groupLabel label suffix = toHtml label >> span_ [class_ "ms-2 text-xs font-normal text-textWeak tabular-nums"] (toHtml $ show (1 + length siblings) <> suffix)
+          groupLabel label suffix = toHtml label >> span_ [class_ "ms-2 text-xs font-normal text-textWeak tabular-nums"] (toHtml $ fmtInt (1 + length siblings) <> suffix)
        in tbody_
             ([class_ $ if collapsible then "bg-fillWeaker/30 not-has-[.itemsListItem:not(.hidden)]:hidden not-has-[>tr:first-child_.row-group-toggle[open]]:[&>tr:not(:first-child)]:hidden" else if isJust tbl.features.grouping then "not-has-[.itemsListItem:not(.hidden)]:hidden" <> bool "" " bg-fillWeaker/30" (isJust labelM) else ""] <> if idx == 0 then extra else [])
             do
@@ -879,7 +879,7 @@ selectControl_ cfg = label_ [class_ "flex items-center gap-2 whitespace-nowrap t
 renderPaginationFooter :: Pagination -> Html ()
 renderPaginationFooter pg = div_ [class_ "flex items-center justify-between max-md:flex-wrap max-md:gap-2 px-4 py-3"] do
   div_ [class_ "flex items-center gap-4"] do
-    span_ [class_ "text-sm text-textWeak tabular-nums"] $ toHtml $ show startItem <> "-" <> show endItem <> " of " <> show pg.totalCount
+    span_ [class_ "text-sm text-textWeak tabular-nums"] $ toHtml $ fmtInt startItem <> "-" <> fmtInt endItem <> " of " <> fmtInt pg.totalCount
     div_ [class_ "flex gap-1"] do
       navBtn "chevron-left" (pg.currentPage > 0) (mkUrl (pg.currentPage - 1) pg.perPage)
       navBtn "chevron-right" (endItem < pg.totalCount) (mkUrl (pg.currentPage + 1) pg.perPage)

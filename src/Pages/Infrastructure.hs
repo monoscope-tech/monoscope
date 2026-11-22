@@ -45,7 +45,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, nonEmptyT, showFFloat')
+import Utils (countNoun, drawerLoadAttrs_, drawerRowAttrs_, faSprite_, fmtInt, formatBytes, formatFixedCommas, nonEmptyT, showFFloat')
 import Web.Links
 
 
@@ -185,7 +185,7 @@ hostsTable pid window url filters grouping hosts allHosts =
           { rowAttrs = Just \h -> drawerRowAttrs_ $ windowed window ((urls.traces pid).hostDetailGetH (Just h.name))
           , rowGroup = if grouping == GroupNone then Nothing else Just $ Just . hostGroupLabel grouping
           , grouping = Just $ SelectControl "group" "Group by" (hostGroupParam grouping) (map hostGroupOption [minBound ..]) url "hostsContainer"
-          , resultSummary = Just $ "Showing " <> show (V.length hosts) <> " of " <> show (V.length allHosts) <> " hosts"
+          , resultSummary = Just $ "Showing " <> fmtInt (V.length hosts) <> " of " <> countNoun (V.length allHosts) "host"
           , facets =
               Just
                 $ facetActions
@@ -235,7 +235,7 @@ hostsTable pid window url filters grouping hosts allHosts =
         -- The kubelet reports cores in use but not the node's core count, so there is no percentage to draw.
         cpuCell host = maybe (plainCell $ Containers.coresText <$> host.cpuCores) (utilizationCell . Just) host.cpuPct
         uptimeCell = plainCell . fmap formatUptime . (.uptime)
-        containersCell = span_ [class_ "tabular-nums text-textStrong"] . toHtml . show . (.containers)
+        containersCell = span_ [class_ "tabular-nums text-textStrong"] . toHtml . fmtInt . (.containers)
         -- Icons with their names as tooltip and accessible label: the words outgrew the column and were clipped.
         integrationsCell host = div_ [class_ "flex flex-nowrap gap-1"] $ forM_ host.integrations \integration -> span_ [class_ "inline-grid size-6 place-items-center rounded-md border border-strokeWeak bg-fillWeak text-iconNeutral", term "data-tippy-content" $ integrationLabel integration] do
           faSprite_ (case integration of OpenTelemetryIntegration -> "arrows-turn-right"; KubernetesIntegration -> "cube"; DockerIntegration -> "layer-group") "regular" "h-3 w-3"
@@ -399,7 +399,7 @@ imagesTable pid window url runtimeM registryM images allImages =
   table
     { columns =
         [ col "Image" (\image -> div_ [class_ "flex items-center gap-2 min-w-0"] $ faSprite_ "layer-group" "solid" "h-3.5 w-3.5 shrink-0 text-iconNeutral" >> span_ [class_ "truncate font-medium text-textStrong"] (toHtml image.image)) & withAttrs [class_ "min-w-72 w-full max-w-0"]
-        , col "Running" (\image -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ show image.running) & withAttrs [class_ "w-24 text-right"]
+        , col "Running" (\image -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ fmtInt image.running) & withAttrs [class_ "w-24 text-right"]
         , col "Source" (\image -> span_ [class_ "whitespace-nowrap text-textWeak"] $ toHtml image.registry) & withAttrs [class_ "w-36"]
         , col "Tags" renderTags & withAttrs [class_ "w-56 max-lg:hidden"]
         , col "Runtime" (\image -> span_ [class_ "text-textWeak"] $ toHtml $ T.intercalate ", " $ map Containers.runtimeLabel image.runtimes) & withAttrs [class_ "w-28 max-xl:hidden"]
@@ -569,12 +569,12 @@ kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows
         , col "Cluster" (\row -> maybe Containers.emDash_ (\value -> span_ [class_ "block truncate whitespace-nowrap text-textStrong", term "data-tippy-content" value] $ toHtml $ clusterLabel value) row.cluster) & withAttrs [class_ "w-36 max-2xl:hidden"]
         , col "Namespace" (plainCell . (.namespace)) & withAttrs [class_ "w-32 max-lg:hidden"]
         , col "Node" (plainCell . (.node)) & withAttrs [class_ "w-36 max-2xl:hidden"]
-        , col "Containers" (\row -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ show row.containers) & withAttrs [class_ "w-24 text-right max-2xl:hidden"]
+        , col "Containers" (\row -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ fmtInt row.containers) & withAttrs [class_ "w-24 text-right max-2xl:hidden"]
         , col "CPU cores" (plainCell . fmap (showFFloat' 3) . (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
         , col "CPU limit" (utilizationCell . (.cpuPct)) & withColHeaderExtra (headerHint_ "Share of the CPU limit in use") & withAttrs [class_ "min-w-32 max-md:hidden"]
         , col "Memory" (plainCell . fmap formatBytes . (.memoryBytes)) & withAttrs [class_ "w-24 text-right"]
         , col "Memory limit" (utilizationCell . (.memoryPct)) & withColHeaderExtra (headerHint_ "Share of the memory limit in use") & withAttrs [class_ "min-w-32 max-md:hidden"]
-        , col "Restarts" (plainCell . fmap (showFFloat' 0) . (.restarts)) & withAttrs [class_ "w-20 text-right max-md:hidden"]
+        , col "Restarts" (plainCell . fmap (formatFixedCommas (Just 0)) . (.restarts)) & withAttrs [class_ "w-20 text-right max-md:hidden"]
         ]
     , rows
     , features =
@@ -622,7 +622,7 @@ kubernetesDetail_ pid window resource row = div_ [class_ "-mx-8 -mb-4 min-h-full
         , ("CPU", maybe "—" Containers.coresText row.cpuCores)
         , ("CPU / limit", maybe "—" pctText row.cpuPct)
         , ("Memory", maybe "—" formatBytes row.memoryBytes)
-        , ("Restarts", maybe "—" (showFFloat' 0) row.restarts)
+        , ("Restarts", maybe "—" (formatFixedCommas (Just 0)) row.restarts)
         ]
       when (isNothing row.cpuCores || isNothing row.memoryBytes) $ callout_ BrandBadge Nothing "Usage is incomplete in this time range. Enable the kubeletstats receiver's node, pod, and container metric groups to fill the missing signals."
     pivotLinks_
@@ -733,7 +733,7 @@ hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col b
         else div_ [class_ "flex flex-wrap items-start gap-4"] $ forM_ page.groups \(label, hosts) ->
           let enlarged = length hosts <= 12
            in section_ [class_ $ "rounded-lg border border-strokeWeak bg-bgRaised p-3 shadow-sm " <> bool "min-w-80 flex-1" "w-fit min-w-72" enlarged] do
-                h2_ [class_ "mb-3 flex items-center gap-2 text-sm font-semibold text-textStrong"] $ toHtml label >> span_ [class_ "badge badge-xs badge-ghost"] (toHtml $ show (length hosts) <> " hosts")
+                h2_ [class_ "mb-3 flex items-center gap-2 text-sm font-semibold text-textStrong"] $ toHtml label >> span_ [class_ "badge badge-xs badge-ghost"] (toHtml $ countNoun (length hosts) "host")
                 div_ [class_ $ "flex flex-wrap " <> bool "gap-1" "gap-2" enlarged] $ forM_ (sortOn (.name) hosts) $ hostHex enlarged
   where
     mapUrl = windowed page.window ((urls.traces page.pid).hostMapGetH (Just $ display page.fill) (nonEmptyT $ Just $ hostGroupParam page.grouping) page.filters.provider page.filters.region page.filters.osType) Nothing

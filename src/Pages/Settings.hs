@@ -101,7 +101,6 @@ import Data.Text.Display (Display, display)
 import Effectful.Exception (throwIO, try, trySync)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
-import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxSwapOob_, hxSwap_, hxTarget_)
@@ -127,8 +126,7 @@ import Relude hiding (ask, asks)
 import Servant (FromHttpApiData (..), Header, Headers, addHeader, err400, err503, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, done, successToast)
-import Text.Printf (printf)
-import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, formatBytes, formatUTC, hostPath, htmxIndicator_)
+import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, fmtInt, formatBytes, formatFixedCommas, formatUTC, hostPath, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links
 import "cryptonite" Crypto.Hash (SHA256)
@@ -868,7 +866,7 @@ promTargetModal_ pid mcfg = do
 -- | @Nothing@ is the not-yet-tested placeholder the form renders on first paint.
 prometheusTestResult :: Maybe ScrapeProbe -> Html ()
 prometheusTestResult res = div_ [class_ "prom-test-result text-sm"] $ whenJust res \case
-  ProbeScraped{samples, latencyMs} -> statusBadge_ True $ toHtml ("Scraped " <> show samples <> " samples · " <> show latencyMs <> "ms" :: Text)
+  ProbeScraped{samples, latencyMs} -> statusBadge_ True $ toHtml ("Scraped " <> countNoun samples "sample" <> " · " <> fmtInt latencyMs <> "ms")
   ProbeRefused err -> failed $ refusalMessage err
   ProbeFailed err -> failed err
   where
@@ -1448,7 +1446,7 @@ billingPage d = div_ [] do
         span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml d.paymentPlan
         tonePill_ NeutralBadge "Active"
       div_ [class_ "flex items-baseline gap-0.5"] do
-        span_ [class_ "text-2xl text-textStrong font-bold tabular-nums"] $ toHtml $ "$" <> show @Text basePriceNum
+        span_ [class_ "text-2xl text-textStrong font-bold tabular-nums"] $ toHtml $ "$" <> fmtInt basePriceNum
         span_ [class_ "text-textWeak text-sm"] "/mo"
 
     -- Usage section
@@ -1460,14 +1458,13 @@ billingPage d = div_ [] do
         div_ [class_ "text-sm text-textWeak mt-0.5"] $ maybe "Estimated this cycle" (const "Stripe's current invoice total") d.currentInvoice
         let bytesSuffix = bool "" (" · " <> formatBytes d.totalBytes) (d.totalBytes > 0)
             usageLine =
-              fmt (commaizeF reqs)
-                <> " requests"
+              countNoun reqs "request"
                 <> bytesSuffix
-                <> bool "" (" · " <> fmt (commaizeF $ d.aiInputTokens + d.aiOutputTokens) <> " estimated AI tokens") (d.aiInputTokens + d.aiOutputTokens > 0)
+                <> bool "" (" · " <> fmtInt (d.aiInputTokens + d.aiOutputTokens) <> " estimated AI tokens") (d.aiInputTokens + d.aiOutputTokens > 0)
         div_ [class_ "text-xs text-textWeak mt-1 tabular-nums"] $ toHtml usageLine
         when (d.aiInputTokens + d.aiOutputTokens > 0) $ div_ [class_ "mt-3 grid grid-cols-2 gap-x-6 gap-y-1 max-w-md text-xs"] do
           span_ [class_ "text-textWeak"] "AI input / output"
-          span_ [class_ "text-right text-textStrong tabular-nums"] $ toHtml $ fmt (commaizeF d.aiInputTokens) <> " / " <> fmt (commaizeF d.aiOutputTokens)
+          span_ [class_ "text-right text-textStrong tabular-nums"] $ toHtml $ fmtInt d.aiInputTokens <> " / " <> fmtInt d.aiOutputTokens
           span_ [class_ "text-textWeak"] "AI usage charge"
           span_ [class_ "text-right text-textStrong tabular-nums"] $ toHtml $ bool (usd aiCost) "$0.00 on Free" isFree
       unless (T.null d.lastReported)
@@ -1495,7 +1492,7 @@ billingPage d = div_ [] do
 
 
 usd :: Double -> Text
-usd n = "$" <> toText (printf "%.2f" n :: String)
+usd n = "$" <> formatFixedCommas (Just 2) n
 
 
 -- | Stripe reports money in the currency's minor unit.
@@ -1536,7 +1533,7 @@ dailyUsageBreakdown_ isFree cycleStartDay inputRate outputRate rows = div_ [clas
       totalReqs = sum (map (.requests) cycleRows)
       totalBytes = sum [u.eventBytes + u.metricBytes | u <- cycleRows]
       totalAITokens = sum [u.aiInputTokens + u.aiOutputTokens | u <- cycleRows]
-      summaryRight = fmt (commaizeF totalReqs) <> " rows" <> bool "" (" · " <> formatBytes totalBytes) (totalBytes > 0) <> bool "" (" · " <> fmt (commaizeF totalAITokens) <> " AI tokens") (totalAITokens > 0)
+      summaryRight = countNoun totalReqs "row" <> bool "" (" · " <> formatBytes totalBytes) (totalBytes > 0) <> bool "" (" · " <> fmtInt totalAITokens <> " AI tokens") (totalAITokens > 0)
   div_ [class_ "flex items-baseline justify-between"] do
     sectionLabel_ "Daily breakdown"
     span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml @Text summaryRight
@@ -1555,7 +1552,7 @@ dailyUsageBreakdown_ isFree cycleStartDay inputRate outputRate rows = div_ [clas
         $ callout_ NeutralBadge (Just "No metric ingestion this cycle.") "Only logs and traces have been ingested."
       let countCell :: Bool -> (Int64, Int64) -> Html ()
           countCell strong (bytes, n0) = do
-            div_ [class_ (bool "text-textWeak" "text-textStrong" strong)] $ toHtml @Text $ bool (fmt (commaizeF n0)) "—" (n0 <= 0)
+            div_ [class_ (bool "text-textWeak" "text-textStrong" strong)] $ toHtml @Text $ bool (fmtInt n0) "—" (n0 <= 0)
             when (bytes > 0) $ div_ [class_ "text-2xs text-textWeak/80 leading-tight"] $ toHtml @Text (formatBytes bytes)
           num = usageCol "text-right whitespace-nowrap"
       toHtml
@@ -1608,7 +1605,7 @@ pastCyclesSection_ isFree basePrice cycles = div_ [class_ "border-t border-strok
       "past-cycles"
       "overflow-y-hidden"
       [ usageCol "text-left text-textStrong" "Cycle" \c -> toHtml @Text (fmtDate "%b %-d, %Y" c.start <> " – " <> fmtDate "%b %-d" (addDays (-1) c.end))
-      , usageCol "text-right text-textStrong" "Requests" \c -> toHtml @Text (fmt (commaizeF c.requests))
+      , usageCol "text-right text-textStrong" "Requests" \c -> toHtml @Text (fmtInt c.requests)
       , usageCol "text-right text-textWeak" "Volume" \c -> toHtml @Text (bool "—" (formatBytes c.bytes) (c.bytes > 0))
       , usageCol "text-right text-textWeak" (bool "Est. cost" "Charged" invoiced) \c -> case c.invoice of
           -- The amount is the link: an invoice the customer can open is the

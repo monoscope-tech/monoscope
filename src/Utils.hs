@@ -57,6 +57,8 @@ module Utils (
   nestedJsonFromDotNotation,
   prettyPrintCount,
   tokenFlow,
+  fmtInt,
+  formatFixedCommas,
   formatWithCommas,
   formatBytes,
   showFFloat',
@@ -133,7 +135,6 @@ import Data.Time.Format (FormatTime, formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Time.LocalTime (timeOfDayToTime, timeToTimeOfDay)
 import Data.Vector qualified as V
-import Fmt (commaizeF, fmt)
 import GHC.Generics (Rep)
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Lucid
@@ -629,14 +630,12 @@ utcTimeToNanoseconds :: UTCTime -> Integer
 utcTimeToNanoseconds = round . (* 1e9) . utcTimeToPOSIXSeconds
 
 
--- | A count with its noun, pluralized.
+-- | A count with its noun, pluralized and comma-formatted.
 --
--- >>> countNoun (1 :: Int) "view"
--- "1 view"
--- >>> countNoun (3 :: Int) "view"
--- "3 views"
-countNoun :: (Eq n, Num n, Show n) => n -> Text -> Text
-countNoun n noun = show n <> " " <> noun <> bool "s" "" (n == 1)
+-- >>> map (`countNoun` "view") [1 :: Int, 3, 12500]
+-- ["1 view","3 views","12,500 views"]
+countNoun :: Integral n => n -> Text -> Text
+countNoun n noun = fmtInt n <> " " <> noun <> bool "s" "" (n == 1)
 
 
 -- | Nanoseconds as a one-decimal human duration; minutes spell @min@ so they cannot be
@@ -726,7 +725,7 @@ data FreeTierStatus = NotFreeTier | FreeTierOk | FreeTierSampled Int Int | FreeT
 
 freeTierUsageBanner :: Text -> FreeTierStatus -> Html ()
 freeTierUsageBanner billingHref = \case
-  FreeTierSampled oneIn limit -> banner "bg-fillWarning-weak text-textWarning" ("Free tier: today\x2019s events are sampled, about 1 in " <> toHtml (formatWithCommas $ fromIntegral oneIn) <> " kept, to stay within " <> toHtml (formatWithCommas $ fromIntegral limit) <> " a day.") "Upgrade to keep every event \x2192"
+  FreeTierSampled oneIn limit -> banner "bg-fillWarning-weak text-textWarning" ("Free tier: today\x2019s events are sampled, about 1 in " <> toHtml (fmtInt oneIn) <> " kept, to stay within " <> toHtml (fmtInt limit) <> " a day.") "Upgrade to keep every event \x2192"
   FreeTierExceeded{} -> banner "bg-fillError-weak text-textError" "Daily cap reached \x2014 new events are dropped until 00:00 UTC." "Upgrade to keep sending events \x2192"
   NotFreeTier -> pass
   FreeTierOk -> pass
@@ -926,19 +925,21 @@ formatBytes = go "B" ["KiB", "MiB", "GiB", "TiB", "PiB"] . realToFrac
 -- | Pretty print count numbers, converting large values to K/M/B format.
 -- A whole multiple prints without a trailing tenth.
 --
--- >>> map prettyPrintCount [999, 1000, 1500, 200000, 1534999, 2000000000]
--- ["999","1K","1.5K","200K","1.5M","2B"]
+-- >>> map prettyPrintCount [-1500, 999, 1000, 1500, 200000, 1534999, 2000000000]
+-- ["-1.5K","999","1K","1.5K","200K","1.5M","2B"]
 prettyPrintCount :: Int -> Text
-prettyPrintCount n
+prettyPrintCount n0
   | n >= 1_000_000_000 = scaled 1_000_000_000 "B"
   | n >= 1_000_000 = scaled 1_000_000 "M"
   | n >= 1_000 = scaled 1_000 "K"
-  | otherwise = T.show n
+  | otherwise = sign <> T.show n
   where
+    sign = bool "" "-" (n0 < 0)
+    n = abs (toInteger n0)
     -- Drop a .0 tenth rather than print it: "200.0K" is noise on a scanning surface.
     scaled unit suffix =
       let (whole, tenth) = (n `div` unit, (n `mod` unit) `div` (unit `div` 10))
-       in T.show whole <> memptyIfFalse (tenth /= 0) ("." <> T.show tenth) <> suffix
+       in sign <> T.show whole <> memptyIfFalse (tenth /= 0) ("." <> T.show tenth) <> suffix
 
 
 -- | A model call's input and output tokens, as every LLM surface prints them.
@@ -989,13 +990,46 @@ sanitizeBackendError raw
         || (has "connection" && any has ["refused", "closed"])
 
 
--- | Format a Double with thousand separators.
--- Example: 1000 -> "1,000", 1000.55 -> "1,000.55", 0.5 -> "0.5"
+insertCommas :: Text -> Text
+insertCommas = T.reverse . T.intercalate "," . T.chunksOf 3 . T.reverse
+
+
+-- | Format an integer with thousand separators.
+--
+-- >>> map fmtInt [0 :: Int, -42, 999, 1000, -1234567]
+-- ["0","-42","999","1,000","-1,234,567"]
+fmtInt :: Integral a => a -> Text
+fmtInt n = bool "" "-" (n < 0) <> insertCommas (T.show (abs (toInteger n)))
+
+
+-- | Format a Double with thousand separators, optionally to a fixed number of
+-- decimal places. Handles negatives (including @-0.5@), small values without
+-- scientific notation, @NaN@, and @Infinity@.
+--
+-- >>> map (formatFixedCommas Nothing) [0, -0.5, 1000, -1234.56, 1e-5, 0/0, 1/0]
+-- ["0","-0.5","1,000","-1,234.56","0.00001","NaN","Infinity"]
+-- >>> map (formatFixedCommas (Just 2)) [0, -0.001, 1250.5, -1234.567]
+-- ["0.00","0.00","1,250.50","-1,234.57"]
+formatFixedCommas :: Maybe Int -> Double -> Text
+formatFixedCommas decimals d
+  | isNaN d || isInfinite d = T.show d
+  | otherwise =
+      let raw = toText $ showFFloat decimals (abs d) ""
+          (whole, frac) = T.breakOn "." raw
+          sign = bool "" "-" (d < 0 && not (T.all (\c -> c == '0' || c == '.') raw))
+       in sign <> insertCommas whole <> case decimals of
+            Just _ -> frac
+            Nothing -> case T.dropWhileEnd (== '0') frac of
+              "." -> ""
+              r -> r
+
+
+-- | Format a Double with thousand separators, trimming trailing decimal zeros.
+--
+-- >>> map formatWithCommas [0, -0.5, 1000, 1000.55]
+-- ["0","-0.5","1,000","1,000.55"]
 formatWithCommas :: Double -> Text
-formatWithCommas d =
-  let (intPart, fracPart) = properFraction d :: (Int, Double)
-      intFormatted = fmt (commaizeF intPart)
-   in if fracPart == 0 then intFormatted else intFormatted <> T.dropWhile (/= '.') (T.show d)
+formatWithCommas = formatFixedCommas Nothing
 
 
 messageKeys :: [Text]

@@ -47,7 +47,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Tracing (forkBackgroundFor)
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, done)
-import Utils (encodeText, faSprite_, popoverPanel_, popoverTrigger_, renderMarkdownTocWithPrefix, toUriStr)
+import Utils (countNoun, encodeText, faSprite_, fmtInt, popoverPanel_, popoverTrigger_, renderMarkdownTocWithPrefix, toUriStr)
 import Web.FormUrlEncoded (FromForm (..), parseAll, parseUnique)
 import Web.HttpApiData (FromHttpApiData (..))
 import Web.Links
@@ -286,7 +286,7 @@ routinesGetH pid = do
         section_ [Aria.label_ "Installed routines"] do
           div_ [class_ "mb-2 flex items-baseline justify-between"] do
             h2_ [class_ "text-sm font-semibold text-textStrong"] "Installed"
-            span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml $ show (length installedRoutines) <> " routine" <> bool "s" "" (length installedRoutines == 1)
+            span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml $ countNoun (length installedRoutines) "routine"
           if null installedRoutines
             then emptyState_ def{icon = Just "clock", size = ESCompact} "No routines installed" "Add a built-in routine below or create one from a conversation."
             else
@@ -653,7 +653,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                             span_ [class_ "text-xs font-normal tabular-nums text-textWeak"] $ localTimeFmt_ "d MMM, HH:mm" latest.createdAt
                             -- Runs that found nothing publish no result, so say why the newest run is not shown here.
                             let quiet = length $ takeWhile ((> latest.createdAt) . (.startedAt)) $ filter ((== Issues.RunNoFindings) . (.status)) runs
-                            when (quiet > 0) $ span_ [class_ "basis-full text-xs font-normal text-textWeak sm:basis-auto sm:before:me-2 sm:before:text-textDisabled sm:before:content-['·']"] $ toHtml $ show @Text quiet <> bool " later runs" " later run" (quiet == 1) <> " had no findings"
+                            when (quiet > 0) $ span_ [class_ "basis-full text-xs font-normal text-textWeak sm:basis-auto sm:before:me-2 sm:before:text-textDisabled sm:before:content-['·']"] $ toHtml $ countNoun quiet "later run" <> " had no findings"
                         IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId shown
                     | otherwise -> foldMap routineEmpty_ routineM
                 when (isRoutine && not (null docs)) documentsNav_
@@ -1108,7 +1108,7 @@ operationReviewPostH pid identifier form = do
 failedRuns_ :: [Issues.RoutineRun] -> Html ()
 failedRuns_ runs =
   let failed = length $ filter (Issues.runFailed . (.status)) runs
-   in when (failed > 0) $ span_ [class_ "text-textError"] $ toHtml $ show @Text failed <> " of the last " <> show @Text (length runs) <> " runs failed"
+   in when (failed > 0) $ span_ [class_ "text-textError"] $ toHtml $ fmtInt failed <> " of the last " <> fmtInt (length runs) <> " runs failed"
 
 
 -- | Bordered disclosure with a turning chevron, shared by routine settings and run evidence.
@@ -1128,7 +1128,7 @@ showMore_ n render xs = do
   render False shown
   unless (null more) $ details_ [class_ "group/more mt-1", term "hx-morph-skip" ""] do
     summary_ [class_ "cursor-pointer list-none rounded-md px-1 py-1 text-xs font-medium text-textBrand hover:underline [&::-webkit-details-marker]:hidden"] do
-      span_ [class_ "group-open/more:hidden"] $ toHtml $ "Show " <> show @Text (length more) <> " more"
+      span_ [class_ "group-open/more:hidden"] $ toHtml $ "Show " <> fmtInt (length more) <> " more"
       span_ [class_ "hidden group-open/more:inline"] "Show fewer"
     div_ [class_ "mt-1"] $ render True more
 
@@ -1353,7 +1353,7 @@ copilotDock_ dock =
         whenNotNull (filter (.dismissed) dock.sessions) \dismissed -> do
           button_ ([type_ "button", class_ "flex shrink-0 cursor-pointer items-center gap-1 rounded-full px-2.5 py-1.5 text-xs text-textWeak transition-[scale,background-color] hover:bg-fillHover active:scale-[0.97]", title_ "Dismissed conversations"] <> popoverTrigger_ "ai-dock-dismissed") do
             faSprite_ "clock" "regular" "size-3"
-            toHtml $ show @Text (length dismissed)
+            toHtml $ fmtInt (length dismissed)
           ul_ ([class_ "dropdown dropdown-top dropdown-end menu menu-sm mb-2 w-72 rounded-box border border-strokeWeak bg-bgRaised p-1 shadow-lg", Aria.label_ "Dismissed conversations"] <> popoverPanel_ "ai-dock-dismissed")
             $ for_ dismissed \session -> li_ $ button_ [type_ "button", class_ "flex items-center gap-2", title_ "Pin back to the island", hxPost_ $ urls.aiDockVisibilityPost pid session.conversationId Issues.DockShown selectedId, hxTarget_ "#ai-dock", hxSwap_ "outerMorph"] do
               statusIcon_ session.status

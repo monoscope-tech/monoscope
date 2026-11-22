@@ -406,9 +406,10 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , githubAppCallback :: mode :- "github" :> "callback" :> QueryParam "installation_id" Int64 :> QueryParam "setup_action" Text :> QueryParam "state" Text :> QueryParam "code" Text :> Get '[HTML] (RespHeaders (Opaque1 "PageCtx" (Opaque "GitSync.GitHubConnect")))
   , githubAppRepos :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "repos" :> QueryParam "installationId" Int64 :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppSelectRepo :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "select" :> ReqBody '[FormUrlEncoded] (Opaque "GitSync.RepoSelectForm") :> Action 'POST (Opaque "GitSync.SelectRejection") (Opaque "GitSync.SyncPanels")
-  , -- Command palette
+  , -- Command palette & nav search
     commandPaletteGet :: mode :- "p" :> ProjectId :> "command-palette" :> Get '[HTML] (RespHeaders (Html ())) -- dynamic items only
   , commandPaletteRecentPost :: mode :- "p" :> ProjectId :> "command-palette" :> "recents" :> ReqBody '[FormUrlEncoded] (Opaque "CommandPalette.RecentForm") :> Post '[HTML] (RespHeaders NoContent)
+  , navSearchGet :: mode :- "p" :> ProjectId :> "nav" :> "search" :> QPT "kind" :> QPT "q" :> Get '[HTML] (RespHeaders (Html ()))
   , aiRoutinesGet :: mode :- "p" :> ProjectId :> "ai" :> "routines" :> Get '[HTML] (RespHeaders (Opaque1 "PageCtx" (Html ())))
   , aiRoutineInstallPost :: mode :- "p" :> ProjectId :> "ai" :> "routines" :> "install" :> ReqBody '[FormUrlEncoded] (Opaque "AIThreads.RoutineTemplateForm") :> Action 'POST (Opaque "AIThreads.UnknownTemplate") (Opaque "AIThreads.AIPage")
   , aiThreadsGet :: mode :- "p" :> ProjectId :> "ai" :> Get '[HTML] (RespHeaders (Opaque1 "PageCtx" (Html ())))
