@@ -1,4 +1,4 @@
-module Pages.Components (codeContextUrl, drawer_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, floatingCard_, floatingScrim, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (codeContextUrl, drawer_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, floatingModal_, formActionsModal_, dangerAction_, floatingDialog_, floatingCard_, floatingScrim, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerHints_, pickerPopover_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -1005,6 +1005,13 @@ dangerAction_ modalId icon label title description confirmAttrs confirmText = do
       button_ ([type_ "button", class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText
 
 
+-- | Checkbox-toggled floating prompt shell ('modalWith_' at @pt-[15vh]@ over 'floatingScrim',
+-- with no outer box chrome so a 'floatingCard_' or 'pickerCard_' inside is the sole surface).
+floatingModal_ :: Text -> Html () -> Html ()
+floatingModal_ modalId =
+  modalWith_ modalId def{boxClass = "!w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none", wrapperClass = "!items-start pt-[15vh] px-4 " <> floatingScrim, hideClose = True} Nothing
+
+
 -- | Native @<dialog>@ prompt over a dimmed backdrop, as a 'floatingCard_'. Open with @showModal()@;
 -- the title id is @dialogId-title@. Children may style on @group-has-[…]/dialog@.
 floatingDialog_ :: Text -> Html () -> (Text, [Text]) -> [Attribute] -> Html () -> Html () -> Html ()
@@ -1318,6 +1325,158 @@ listboxNavAttr_ =
       on keydown[key=='Enter'] set a to the first <[role=option].active:not([hidden])/> in me
         if a halt the event then call a.click() end
       end|]
+
+
+data PickerCfg = PickerCfg
+  { cardClass :: Text
+  , cardAttrs :: [Attribute]
+  , inputType :: Text
+  , inputLabel :: Maybe Text
+  , placeholder :: Text
+  , inputAttrs :: [Attribute]
+  , inputTrailing :: Html ()
+  , beforeList :: Html ()
+  , afterList :: Html ()
+  , hints :: [(Text, [Text])]
+  }
+
+
+instance Default PickerCfg where
+  def = PickerCfg "" [] "text" Nothing "Search\x2026" [] mempty mempty mempty []
+
+
+-- | Listbox body of a 'pickerCard_': inline options rendered in a scrollable @[role=listbox]@,
+-- or an async container slot that swaps its own @[role=listbox]@ in on demand.
+data PickerList
+  = PickerItems Text [Attribute] (Html ())
+  | PickerSlot (Html ())
+
+
+data PickerItem = PickerItem
+  { extraClass :: Text
+  , active :: Bool
+  , selected :: Bool
+  , leading :: Html ()
+  , labelAttrs :: [Attribute]
+  , trailing :: Html ()
+  , filterable :: Bool
+  }
+
+
+instance Default PickerItem where
+  def = PickerItem "" False False mempty [] mempty True
+
+
+-- | Command-palette style picker card: borderless top search input (with optional trailing pill
+-- or status indicator), keyboard-navigable @[role=listbox]@ options, optional secondary slot,
+-- and a footer with 'kbdHints_' beside the live option count.
+--
+-- >>> let items = toStrict $ renderText $ pickerCard_ def{hints = pickerHints_ "Select" False} $ PickerItems "max-h-80" [] $ pickerItem_ a_ def{active = True, selected = True, leading = pickerIcon_ "cube"} "Alpha" []
+-- >>> all (`T.isInfixOf` items) ["data-picker-input", "role=\"listbox\"", "role=\"option\"", "picker-count", "<kbd", "hx-live:hidden"]
+-- True
+-- >>> let slot = toStrict $ renderText $ pickerCard_ def $ PickerSlot $ div_ [id_ "lazy-slot"] ""
+-- >>> ("id=\"lazy-slot\"" `T.isInfixOf` slot, "role=\"listbox\"" `T.isInfixOf` slot)
+-- (True,False)
+pickerCard_ :: PickerCfg -> PickerList -> Html ()
+pickerCard_ cfg list =
+  div_ ([class_ $ "picker-card overflow-hidden rounded-xl border border-strokeWeak bg-bgOverlay text-textStrong shadow-2xl " <> cfg.cardClass] <> cfg.cardAttrs) do
+    div_ [listboxNavAttr_] do
+      div_ [class_ "flex items-center gap-2 border-b border-strokeWeak px-3"] do
+        input_
+          $ [ type_ cfg.inputType
+            , data_ "picker-input" ""
+            , autocomplete_ "off"
+            , placeholder_ cfg.placeholder
+            , Aria.label_ (fromMaybe (T.dropWhileEnd (== '…') cfg.placeholder) cfg.inputLabel)
+            , class_ "no-focus-ring min-w-0 flex-1 bg-transparent py-2.5 text-sm text-textStrong outline-none placeholder:text-textWeak max-md:text-base"
+            ]
+          <> cfg.inputAttrs
+        cfg.inputTrailing
+      cfg.beforeList
+      case list of
+        PickerItems cls attrs items -> div_ ([role_ "listbox", class_ $ "overflow-y-auto overscroll-contain p-1 " <> cls] <> attrs) items
+        PickerSlot slot -> slot
+    cfg.afterList
+    div_ [class_ "flex items-center gap-3 border-t border-strokeWeak px-2 py-1.5"] do
+      unless (null cfg.hints) $ kbdHints_ cfg.hints
+      span_
+        [ class_ "picker-count ms-auto pe-1 text-xs tabular-nums text-textWeak"
+        , term "hx-live:text" "((p, s) => { const n = p.q('[role=option]').count, v = p.q('[role=option]:not([hidden])').count; return !n && !s ? '' : (s ? v + ' of ' : '') + n + (n === 1 ? ' item' : ' items'); })(closest('.picker-card'), (closest('.picker-card').q('[data-picker-input]').value ?? '').trim())"
+        ]
+        ""
+
+
+-- | One selectable row inside 'pickerCard_'. @el@ is the interactive element ('a_' or 'button_');
+-- @extraCls@ carries state/group modifiers without emitting a duplicate @class_@ attribute.
+pickerOption_ :: ([Attribute] -> Html () -> Html ()) -> Text -> [Attribute] -> Html () -> Html ()
+pickerOption_ el extraCls attrs =
+  el
+    $ [ role_ "option"
+      , class_ $ "picker-option flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-textStrong transition-colors hover:not-[.active]:bg-fillHover focus-visible:bg-fillWeak focus-visible:outline-none [&.active]:bg-fillWeak [&[hidden]]:hidden " <> extraCls
+      ]
+    <> attrs
+
+
+-- | Standard picker row: optional leading icon/avatar, truncated label, optional trailing badge,
+-- selected checkmark, and client-side search filtering.
+pickerItem_ :: ([Attribute] -> Html () -> Html ()) -> PickerItem -> Text -> [Attribute] -> Html ()
+pickerItem_ el cfg label attrs =
+  pickerOption_
+    el
+    (unwords $ filter (not . T.null) [cfg.extraClass, memptyIfFalse cfg.active "active", memptyIfFalse cfg.selected "font-medium text-textBrand"])
+    ([pickerFilterAttr_ | cfg.filterable] <> attrs)
+    do
+      cfg.leading
+      span_ (class_ "truncate flex-1 text-left" : cfg.labelAttrs) $ toHtml label
+      cfg.trailing
+      when cfg.selected $ faSprite_ "check" "regular" "w-3.5 h-3.5 shrink-0 text-iconBrand"
+
+
+pickerIcon_ :: Text -> Html ()
+pickerIcon_ icon = faSprite_ icon "regular" "w-3.5 h-3.5 shrink-0 text-textWeak"
+
+
+pickerBadge_ :: Text -> Html ()
+pickerBadge_ = span_ [class_ "badge badge-ghost badge-xs shrink-0 text-2xs"] . toHtml
+
+
+pickerSeparator_ :: Html ()
+pickerSeparator_ = div_ [class_ "my-1 border-t border-strokeWeak", role_ "separator"] ""
+
+
+pickerHints_ :: Text -> Bool -> [(Text, [Text])]
+pickerHints_ verb closable = [("Navigate", ["\x2191", "\x2193"]), (verb, ["\x21B5"])] <> [("Close", ["esc"]) | closable]
+
+
+-- | Client-side substring filter on a 'pickerOption_', matching @data-search@ (or textContent)
+-- against the enclosing 'pickerCard_''s @[data-picker-input]@.
+pickerFilterAttr_ :: Attribute
+pickerFilterAttr_ =
+  term "hx-live:hidden" "!((this.dataset.search ?? this.textContent).toLowerCase().includes((closest('.picker-card').q('[data-picker-input]').value ?? '').trim().toLowerCase()))"
+
+
+-- | No-match placeholder inside a 'pickerCard_' listbox, shown only when a non-empty query matches zero options.
+pickerEmpty_ :: Text -> Html ()
+pickerEmpty_ msg =
+  div_
+    [ class_ "picker-empty px-3 py-8 text-center text-sm text-textWeak [&[hidden]]:hidden"
+    , hidden_ ""
+    , term "hx-live:hidden" "!(closest('.picker-card').q('[data-picker-input]').value ?? '').trim() || closest('.picker-card').q('[role=option]:not([hidden])').count > 0"
+    ]
+    $ toHtml msg
+
+
+-- | Chromeless popover container hosting a 'pickerCard_' so the card itself is the sole surface,
+-- focusing the search input whenever opened.
+pickerPopover_ :: Text -> Text -> [Attribute] -> Html () -> Html ()
+pickerPopover_ popId cls extraAttrs =
+  div_
+    ( popoverPanel_ popId
+        <> [ [__|on toggle if event.newState is 'open' set i to the first <[data-picker-input]/> in me then if i call i.focus() end end|]
+           , class_ $ "dropdown z-50 max-w-[calc(100vw-2rem)] border-0 bg-transparent p-0 shadow-none " <> cls
+           ]
+        <> extraAttrs
+    )
 
 
 -- | Click-to-copy for the element named by the JS expression @el@: copies its innerText,

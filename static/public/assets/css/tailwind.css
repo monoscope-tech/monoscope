@@ -2313,31 +2313,6 @@ code, pre, .code, .monospace {
   @apply border-strokeWeak;
 }
 
-/* Command palette */
-.cmd-palette-backdrop { backdrop-filter: blur(4px); }
-.cmd-item.active { background-color: var(--color-fillWeak); }
-.cmd-item:hover:not(.active) { background-color: var(--color-fillHover); }
-.cmd-palette-hints kbd.kbd {
-  color: inherit;
-  border-color: currentColor;
-  background: transparent;
-  opacity: 0.5;
-  box-shadow: none;
-}
-
-/* Variable picker modal */
-.var-picker-backdrop { backdrop-filter: blur(4px); }
-.var-opt.active { background-color: var(--color-fillWeak); }
-.var-opt.var-opt-current { color: var(--color-primary); font-weight: 500; }
-.var-opt.var-opt-current:not(.active) { background-color: color-mix(in oklch, var(--color-primary) 6%, transparent); }
-.var-picker-hints kbd.kbd {
-  color: inherit;
-  border-color: currentColor;
-  background: transparent;
-  opacity: 0.5;
-  box-shadow: none;
-}
-
 /* Dashboard variable selectors */
 .dash-variable {
   /* Tagify replaces the text input after first paint; the fixed row height and

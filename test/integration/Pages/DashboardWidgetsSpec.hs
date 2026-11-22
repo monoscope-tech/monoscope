@@ -1244,7 +1244,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     switcher <- renderT <$> call tr (Dashboards.dashboardSwitcherGetH testPid alpha)
     let at t = T.length . fst $ T.breakOn t switcher
     (at "Overview</span>" < at "Beta</span>", at "Beta</span>" < at "Alpha</span>", T.count "aria-current=\"page\"" switcher) `shouldBe` (True, True, 1)
-    switcher `shouldContainAll` ["/dashboards/" <> alpha.toText <> "\"", "Browse all dashboards"]
+    switcher `shouldContainAll` ["/dashboards/" <> alpha.toText <> "\"", "Browse all dashboards", "picker-card", "data-picker-input", "role=\"listbox\"", "role=\"option\"", "picker-count"]
     -- The sidebar's Dashboards flyout lists the same set in the same order, starred marked, on every page.
     nav <- fst . T.breakOn "</nav>" . snd . T.breakOn "id=\"main-sidenav\"" . renderT <$> call tr (Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing (Dashboards.DashboardFilters []))
     let navAt t = T.length . fst $ T.breakOn t nav
@@ -1253,7 +1253,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     -- The page's title opens it on demand; the tab strip, not a breadcrumb suffix, names the tab.
     overview <- newDashboard tr "_overview.yaml" "Overview"
     page <- renderT <$> getTab tr overview "service" Nothing []
-    page `shouldContainAll` ["popovertarget=\"page-title-switcher\"", "/dashboards/" <> overview.toText <> "/switcher"]
+    page `shouldContainAll` ["popovertarget=\"page-title-switcher\"", "/dashboards/" <> overview.toText <> "/switcher", "id=\"dashboards-modal\"", "id=\"projectsContainer\""]
     page `shouldNotSatisfy` T.isInfixOf "pageTitleSuffixText"
 
   it "built-in dashboards are read-only: render the shipped YAML over a frozen row, refuse every edit, duplicate into an editable copy" \tr -> do

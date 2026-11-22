@@ -9,6 +9,7 @@ import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.ByteString.Base16 qualified as B16
 import Data.Cache qualified as Cache
+import Data.Effectful.Hasql (setTestTime)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List (lookup)
 import Data.List qualified as L
@@ -42,9 +43,8 @@ import Pages.ServiceMap qualified as ServiceMap
 import Pages.Settings (PrometheusForm (..))
 import Pages.Settings qualified as Settings
 import Pages.Telemetry qualified as Trace
-import Pkg.Components.Table (Features (customizeColumns, exportName, resultSummary), Column (..), Table (..))
+import Pkg.Components.Table (Column (..), Features (customizeColumns, exportName, resultSummary), Table (..))
 import Pkg.Components.Widget qualified as Widget
-import Data.Effectful.Hasql (setTestTime)
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
@@ -490,7 +490,8 @@ spec = do
 
       -- The dispatcher fans out over projects that sent spans in the bucket, never all active ones (1726 in prod).
       runTestBg frozenTime tr (traverse (uncurry (projectsWithSpansInRange False)) [(addUTCTime (-300) frozenTime, addUTCTime 300 frozenTime), (addUTCTime (-3600) frozenTime, addUTCTime (-3300) frozenTime)])
-        >>= (`shouldBe` [L.sort [main', errs, envs], []]) . map L.sort
+        >>= (`shouldBe` [L.sort [main', errs, envs], []])
+        . map L.sort
 
       -- What a user meets: the dependency table is legible without JavaScript, and the canvas
       -- hydrates from the embedded payload.
@@ -641,7 +642,7 @@ spec = do
       services <- metaProject tr "metric-services" $ ("svc.metric", "billing-api", [], Nothing) : [("svc.metric", "checkout-" <> show @Text i, [], Nothing) | i <- [1 .. 80 :: Int]]
       [allSvcs, matched] <- runTestBg frozenTime tr $ traverse (\q -> Telemetry.getMetricServiceNames services q 50) ([Nothing, Just "billing"] :: [Maybe Text])
       (length allSvcs, matched) `shouldBe` (50, ["billing-api"])
-      (shellHtml tr (Trace.metricServicesGetH services (Just "billing") Nothing)) >>= (`shouldContainAll` ["billing-api", "All Services"])
+      (shellHtml tr (Trace.metricServicesGetH services (Just "billing") Nothing)) >>= (`shouldContainAll` ["billing-api", "All Services", "id=\"metric-service-options\"", "role=\"listbox\"", "role=\"option\""])
       chartsHtml <- renderT <$> overview services "charts" Nothing Nothing Nothing Nothing
       T.count "checkout-" chartsHtml `shouldBe` 0
       goldenParts "metrics-charts" . ordNub $ tagsWith ["/metrics/services", "gap-x-4 gap-y-5 pb-4", "h-60"] chartsHtml
@@ -676,8 +677,11 @@ spec = do
       -- A histogram card averages sum/count over non-empty buckets, scoped to its service, and groups by
       -- the most useful dimension available unless one is chosen ("all" turns grouping off).
       cards <- createTestProject tr "metric-cards"
-      dbExec tr [sql| INSERT INTO otel_metrics_meta (project_id,metric_name,metric_type,metric_unit,metric_description,service_name,scope_name,metric_labels,first_seen_at,last_seen_at,first_timestamp,last_timestamp)
-                      VALUES (?,'request.duration','HISTOGRAM','s','latency','checkout','test','{}',now(),now(),now(),now()) |] (Only cards)
+      dbExec
+        tr
+        [sql| INSERT INTO otel_metrics_meta (project_id,metric_name,metric_type,metric_unit,metric_description,service_name,scope_name,metric_labels,first_seen_at,last_seen_at,first_timestamp,last_timestamp)
+                      VALUES (?,'request.duration','HISTOGRAM','s','latency','checkout','test','{}',now(),now(),now(),now()) |]
+        (Only cards)
       let dimensions = ["name", "resource.host.name", "resource.service.name", "attributes.zone", "attributes.region"] :: [Text]
       for_
         ( [ (dimensions, Nothing, Just "attributes.region")
@@ -796,7 +800,7 @@ spec = do
         , void $ Settings.prometheusTestH viewer replacement
         ]
         \mutation -> runAuthHandler tr $ withHTTPResponses (\_ _ -> modifyIORef' requests (+ 1) $> Just promBody) $ catchError @ServerError (mutation $> 200) (\_ err -> pure err.errHTTPCode)
-      (statuses, ) <$> readIORef requests `shouldReturn` (replicate 5 403, 0)
+      (statuses,) <$> readIORef requests `shouldReturn` (replicate 5 403, 0)
       ((\c -> (c.name, c.url, c.enabled, c.authHeader)) <<$>> configs viewer) `shouldReturn` [(saved.name, saved.url, saved.enabled, saved.authHeader)]
       viewerHtml <- shellHtml tr $ Settings.prometheusGetH viewer
       (T.isInfixOf "Saved target" viewerHtml, filter (`T.isInfixOf` viewerHtml) ["Add target", "Edit Prometheus target", "hx-patch", "hx-delete", "saved-secret"]) `shouldBe` (True, [])
@@ -976,4 +980,3 @@ promBody =
   "# HELP http_requests_total Total requests\n# TYPE http_requests_total counter\n\
   \http_requests_total{method=\"get\",code=\"200\"} 42\nhttp_requests_total{method=\"post\",code=\"500\"} 7\n\
   \# TYPE temperature_celsius gauge\ntemperature_celsius 21.5\nbroken_metric +Inf\n"
-

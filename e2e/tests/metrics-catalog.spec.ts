@@ -74,8 +74,8 @@ test.describe('metrics catalog', () => {
     const servicePicker = page.getByRole('button', { name: 'Filter by service', exact: true });
     await servicePicker.focus();
     await page.keyboard.press('Enter');
-    const radio = page.getByRole('radio', { name: 'ux-checkout', exact: true });
-    await expect(radio).toBeVisible();
+    const searchbox = page.getByRole('searchbox', { name: 'Search services', exact: true });
+    await expect(page.getByRole('option', { name: 'ux-checkout', exact: true })).toBeVisible();
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     await page.route('**/metrics/services?**', async route => {
@@ -83,16 +83,13 @@ test.describe('metrics catalog', () => {
       await gate;
       await route.fulfill({ response });
     });
-    await page.getByRole('searchbox', { name: 'Search services', exact: true }).fill('ux-checkout');
-    await expect(page.getByRole('searchbox', { name: 'Search services', exact: true })).toHaveClass(/htmx-request/);
-    await radio.focus();
-    await page.keyboard.press('Space');
+    await searchbox.fill('ux-checkout');
+    await expect(searchbox).toHaveClass(/htmx-request/);
+    while (!(await page.locator('#metric-service-options [role="option"].active').textContent())?.includes('ux-checkout')) {
+      await searchbox.press('ArrowDown');
+    }
+    await searchbox.press('Enter');
     release();
-    await page.waitForLoadState('networkidle');
-    await expect(radio).toBeChecked();
-    await servicePicker.focus();
-    await page.keyboard.press('Enter');
-    await page.locator('#metric-filters').getByRole('button', { name: 'Search', exact: true }).click();
     await expect(page).toHaveURL(/metric_source=ux-checkout/);
     await expect(servicePicker).toContainText('ux-checkout');
     await expect.poll(() => page.evaluate(() => {

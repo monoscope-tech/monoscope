@@ -311,7 +311,7 @@ dashboardSettledPostH pid dashId sample = do
 -- | A rename prompt: a 'Components.floatingCard_' of fields over Cancel / Save changes.
 actionPickerModal_ :: Text -> Text -> [Attribute] -> Html () -> Html ()
 actionPickerModal_ modalId title formAttrs fields =
-  Components.modalWith_ modalId def{boxClass = "!w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none", wrapperClass = "!items-start pt-[15vh] px-4 " <> Components.floatingScrim, hideClose = True} Nothing
+  Components.floatingModal_ modalId
     $ form_ ([hxTrigger_ "submit"] <> formAttrs)
     $ Components.floatingCard_ [] (toHtml title) (\attrs -> label_ (Lucid.for_ modalId : attrs)) [("Save", ["↵"])] fields "Save changes"
 
@@ -962,33 +962,28 @@ variablePickerModal_ pid dashId activeTabSlug allParams var = do
       varKey = "var-" <> var.key
       baseParams = filter (\(k, _) -> k /= varKey && k /= activeTabSlugKey) allParams
       opts = fold var.options
-      optCount = length opts
-  div_ [class_ "var-picker-page flex flex-col items-center px-4 py-12", term "hx-live:data-search" "this.querySelector('input')?.value.trim().toLowerCase() ?? ''"] do
-    div_ [class_ "w-full max-w-lg flex items-center justify-between mb-2 px-3"] do
-      span_ [class_ "text-2xs font-medium text-textWeak uppercase tracking-wider"] $ toHtml $ "Select " <> varTitle
-      span_ [class_ "var-picker-count text-xs text-textWeak", term "hx-live:text" "closest('.var-picker-page').q('a.var-opt').filter(a => a.textContent.toLowerCase().includes(closest('.var-picker-page').data.search)).length + ' items'"] $ toHtml $ show optCount <> " items"
-    -- Nothing to choose from is a different answer than "search found nothing", and a
-    -- search box over an empty list reads as a broken page. Say why instead.
-    if optCount == 0
-      then
-        div_ [class_ "var-picker-none w-full max-w-lg surface-raised rounded-lg border border-strokeWeak px-6 py-10 text-center"]
+  -- Nothing to choose from is a different answer than "search found nothing", and a
+  -- search box over an empty list reads as a broken page. Say why instead.
+  div_ [class_ "var-picker-page flex flex-col items-center px-4 py-12"]
+    $ if null opts
+      then div_ [class_ "var-picker-none w-full max-w-lg overflow-hidden rounded-xl border border-strokeWeak bg-bgOverlay shadow-2xl"] do
+        div_ [class_ "border-b border-strokeWeak px-3 py-2 text-sm font-semibold text-textStrong"] $ toHtml $ "Select " <> varTitle
+        div_ [class_ "px-6 py-8 text-center"]
           $ emptyState_
             def{size = ESCompact}
             ("No " <> T.toLower varTitle <> " to choose from yet")
             "This dashboard reports on one at a time, so it has nothing to show until data arrives."
-      else div_ [class_ "var-picker group/picker w-full max-w-lg surface-raised rounded-lg border border-strokeWeak overflow-hidden", Components.listboxNavAttr_] do
-        div_ [class_ "px-3 border-b border-base-300 flex items-center gap-2"] do
-          input_
-            [ id_ $ "var-picker-search-" <> var.key
-            , type_ "text"
-            , class_ "flex-1 min-w-0 py-2.5 bg-transparent outline-none text-sm"
-            , placeholder_ $ "Search " <> T.toLower varTitle <> "s..."
-            , autofocus_
-            ]
-          -- At the end of the search field: the global progress bar is too far away to register.
-          span_ [class_ "hidden group-has-[.htmx-request]/picker:inline-flex shrink-0 text-iconNeutral", role_ "status", Aria.label_ "Loading"] reloadSpinner_
-        -- While a choice is in flight: no further clicks, and only the chosen row stays lit.
-        div_ [role_ "listbox", class_ "max-h-80 overflow-y-auto p-1 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&_.var-opt:not(.htmx-request)]:opacity-40"] do
+      else Components.pickerCard_
+        def
+          { Components.cardClass = "var-picker group/picker w-full max-w-lg"
+          , Components.placeholder = "Search " <> T.toLower varTitle <> "s\x2026"
+          , Components.inputAttrs = [id_ $ "var-picker-search-" <> var.key, autofocus_]
+          , Components.inputTrailing = do
+              span_ [class_ "badge badge-ghost badge-xs shrink-0 text-2xs text-textWeak group-has-[.htmx-request]/picker:hidden"] $ toHtml $ "Select " <> varTitle
+              span_ [class_ "hidden group-has-[.htmx-request]/picker:inline-flex shrink-0 text-iconNeutral", role_ "status", Aria.label_ "Loading"] reloadSpinner_
+          , Components.hints = Components.pickerHints_ "Select" False
+          }
+        $ Components.PickerItems "max-h-80 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&_[role=option]:not(.htmx-request)]:opacity-40" [] do
           forM_ (zip [0 :: Int ..] opts) \(idx, opt) -> do
             let optVal = maybeToMonoid (opt !!? 0)
                 optLbl = fromMaybe optVal (opt !!? 1)
@@ -996,32 +991,21 @@ variablePickerModal_ pid dashId activeTabSlug allParams var = do
                 optUrl = dashboardUrl pid dashId activeTabSlug $ baseParams <> [(varKey, Just optVal)]
             -- Boosted, not a plain href: a full navigation paints nothing for the seconds
             -- this render takes. '.htmx-request' on the anchor drives the states above.
-            a_
-              ( [ class_
-                    $ "var-opt [&[hidden]]:hidden flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
-                    <> bool "" " active" (idx == 0)
-                    <> bool "" " var-opt-current" isCurrent
-                , role_ "option"
-                , href_ optUrl
+            Components.pickerItem_
+              a_
+              def{Components.extraClass = "var-opt", Components.active = idx == 0, Components.selected = isCurrent}
+              optLbl
+              ( [ href_ optUrl
                 , name_ "dashboard-variable-option"
                 , data_ "variable-key" var.key
                 , data_ "variable-value" optVal
                 , data_ "variable-label" optLbl
-                , term "hx-live:hidden" "!this.textContent.toLowerCase().includes(closest('.var-picker-page').data.search)"
                 , term "hx-on:htmx:before:request" "syncDashboardVariable(this, true)"
                 , term "hx-on:htmx:finally:request" "syncDashboardVariable(this, false)"
                 ]
                   <> maybe navTabAttrs (const $ dashboardContentNavAttrs TabPanel optUrl) activeTabSlug
               )
-              do
-                span_ [class_ "truncate flex-1"] $ toHtml optLbl
-                when isCurrent $ faSprite_ "check" "regular" "w-3 h-3 text-primary shrink-0"
-          div_ [class_ "var-picker-empty px-3 py-8 text-center", hidden_ "", term "hx-live:hidden" "closest('.var-picker').q('a.var-opt:not([hidden])').count > 0"] $ emptyState_ def{size = ESCompact} "No matching results" ""
-    div_ [class_ "var-picker-hints flex items-center gap-6 mt-3 text-xs text-textWeak"]
-      $ forM_ ([("Navigate", ["\x2191", "\x2193"]), ("Select", ["\x21B5"])] :: [(Text, [Text])]) \(label, keys) ->
-        div_ [class_ "flex items-center gap-1.5"] do
-          toHtml label
-          forM_ keys $ kbd_ [class_ "kbd kbd-xs"] . toHtml
+          Components.pickerEmpty_ "No matching results"
 
 
 -- | Wall-clock budget for a single TimeFusion-backed query run *during page render*
@@ -2241,38 +2225,38 @@ dashboardsGet_ dg
       -- and new-dashboard form; this is the list it swaps in. Favourites first, read-only last.
       let readOnly = isJust . Dashboards.readOnlyTemplate dg.dashTemplates
           verb = bool "Copy" "Add" (isNothing sourceDashIdM)
+          sorted = sortOn (\d -> (readOnly d, isNothing d.starredSince)) $ V.toList dg.dashboards
+          firstEditable = (.id) <$> find (not . readOnly) sorted
       -- Keyboard nav (Components.listboxNavAttr_) sits on the shell around the search, so focus
       -- stays in the search while arrows move .active between [role=option] rows.
       div_
         [ id_ "dashboard-picker"
         , role_ "listbox"
         , Aria.label_ "Dashboards"
-        , class_ "max-h-[min(24rem,55vh)] overflow-y-auto overscroll-contain p-2 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&_[data-dash]:not(.htmx-request)]:opacity-40"
+        , class_ "max-h-80 overflow-y-auto overscroll-contain p-1 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&_[data-dash]:not(.htmx-request)]:opacity-40"
         ]
         do
-          forM_ (sortOn (\d -> (readOnly d, isNothing d.starredSince)) $ V.toList dg.dashboards) \dash -> do
+          forM_ sorted \dash -> do
             let ro = readOnly dash
-                meta = T.intercalate " · " $ countNoun (getWidgetCount dash) "widget" : ["Built-in, read-only" | ro] <> [T.intercalate ", " (V.toList dash.tags) | not (V.null dash.tags)]
+                meta = T.intercalate " · " $ countNoun (getWidgetCount dash) "widget" : ["Built-in" | ro] <> [T.intercalate ", " (V.toList dash.tags) | not (V.null dash.tags)]
                 body = do
-                  span_ [class_ "grid size-8 shrink-0 place-items-center rounded-md bg-fillWeak text-iconNeutral"] $ faSprite_ (getDashIcon dash) "regular" "size-4"
-                  span_ [class_ "min-w-0 grow"] do
-                    span_ [class_ "flex items-center gap-1.5"] do
-                      span_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml $ dashTitle dash.title
-                      when (isJust dash.starredSince) $ faSprite_ "star" "solid" "size-3 shrink-0 text-iconWarning"
-                      when (sourceDashIdM == Just dash.id) $ span_ [class_ "shrink-0 rounded bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] "This dashboard"
-                    span_ [class_ "block truncate text-xs text-textWeak tabular-nums"] $ toHtml meta
-                filterAttr = term "hx-live:hidden" "!this.textContent.toLowerCase().includes(q('#dashboards-modal-search').value.trim().toLowerCase())"
+                  Components.pickerIcon_ (getDashIcon dash)
+                  span_ [class_ "min-w-0 flex-1 flex items-center gap-1.5"] do
+                    span_ [class_ "truncate font-medium"] $ toHtml $ dashTitle dash.title
+                    when (isJust dash.starredSince) $ faSprite_ "star" "solid" "size-3 shrink-0 text-iconWarning"
+                    when (sourceDashIdM == Just dash.id) $ span_ [class_ "shrink-0 rounded bg-fillWeak px-1.5 py-0.5 text-2xs text-textWeak"] "This dashboard"
+                  span_ [class_ "shrink-0 text-xs text-textWeak tabular-nums max-w-44 truncate"] $ toHtml meta
             -- Read-only rows are not options: nothing to pick, but the tooltip still says why.
             if ro
-              then div_ [data_ "dash" "", filterAttr, Aria.disabled_ "true", data_ "tippy-content" "Built-in dashboards are read-only. Duplicate one to add widgets to it.", class_ "group/pick flex w-full cursor-not-allowed items-center gap-3 rounded-lg px-2 py-2 text-left opacity-60 [&[hidden]]:hidden"] do
+              then div_ [data_ "dash" "", Components.pickerFilterAttr_, Aria.disabled_ "true", data_ "tippy-content" "Built-in dashboards are read-only. Duplicate one to add widgets to it.", class_ "flex w-full cursor-not-allowed items-center gap-2 rounded-lg px-3 py-2 text-left text-sm opacity-55 [&[hidden]]:hidden"] do
                 body
                 faSprite_ "lock" "regular" "size-3.5 shrink-0 text-iconNeutral"
-              else button_
+              else Components.pickerOption_
+                button_
+                ("group/pick" <> bool "" " active" (firstEditable == Just dash.id))
                 ( [ type_ "button"
-                  , role_ "option"
                   , data_ "dash" ""
-                  , filterAttr
-                  , class_ "group/pick flex w-full cursor-pointer items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-fillWeak active:bg-fillHover focus-visible:bg-fillWeak focus-visible:outline-none [&.active]:bg-fillWeak [&[hidden]]:hidden"
+                  , Components.pickerFilterAttr_
                   , hxSwap_ "none"
                   ]
                     <> case sourceDashIdM of
@@ -2290,9 +2274,9 @@ dashboardsGet_ dg
                 )
                 do
                   body
-                  span_ [class_ "shrink-0 text-xs font-medium text-textBrand opacity-0 transition-opacity duration-100 group-hover/pick:opacity-100 group-[.active]/pick:opacity-100 group-focus-visible/pick:opacity-100 group-[.htmx-request]/pick:hidden"] verb
+                  span_ [class_ "shrink-0 text-xs font-medium text-textBrand hidden group-hover/pick:inline group-[.active]/pick:inline group-focus-visible/pick:inline group-[.htmx-request]/pick:hidden"] verb
                   span_ [class_ "loading loading-spinner loading-xs hidden shrink-0 text-iconNeutral group-[.htmx-request]/pick:inline-block", Aria.label_ "Adding"] ""
-          div_ [class_ "[&[hidden]]:hidden", term "hx-live:hidden" "q('#dashboard-picker [data-dash]:not([hidden])').count > 0"]
+          div_ [class_ "[&[hidden]]:hidden", term "hx-live:hidden" "closest('#dashboard-picker').q('[data-dash]:not([hidden])').count > 0"]
             $ if V.null dg.dashboards then emptyState_ def{size = ESCompact} "No dashboards yet" "Create one below with this widget." else emptyState_ def{size = ESCompact} "No dashboards match" "Try another name, or create a dashboard below."
   | otherwise = do
       unless dg.embedded
@@ -3247,21 +3231,35 @@ data DashboardSwitcher = DashboardSwitcher
 
 instance ToHtml DashboardSwitcher where
   toHtmlRaw = toHtml
-  toHtml s = toHtml @(Html ()) do
-    when (length s.dashboards > 6)
-      $ div_ [class_ "p-1 pb-2"]
-      $ Components.searchInput_ "w-full bg-fillWeak border-0 outline-none focus-within:outline-none" "Search dashboards" [filterInputAttr_ "#dashboard-switcher-list .dashboard_item", autofocus_]
-    div_ [class_ "max-h-[50vh] space-y-0.5 overflow-y-auto", id_ "dashboard-switcher-list"] $ forM_ s.dashboards \d -> do
-      let isCurrent = d.id == s.current
-      a_ ([class_ $ "dashboard_item flex min-w-0 items-center gap-2 rounded-lg px-2.5 py-2 text-sm " <> bool "hover:bg-fillHover" "bg-fillWeak font-medium" isCurrent, href_ $ urls.dashboardsGet s.pid d.id Nothing Nothing Nothing Nothing [], data_ "filter" (dashTitle d.title)] <> [term "aria-current" "page" | isCurrent]) do
-        span_ [class_ "flex w-3.5 shrink-0"] $ when d.starred $ faSprite_ "star" "solid" "size-3.5 text-iconWarning"
-        span_ [class_ "grow truncate"] $ toHtml (dashTitle d.title)
-        when isCurrent $ faSprite_ "check" "regular" "size-3.5 shrink-0 text-textBrand"
-    p_ [class_ "hidden py-4 text-center text-sm text-textWeak", term "hx-live:.hidden" "q('.dashboard_item:not(.hidden) in #dashboard-switcher-list').count > 0"] "No matching dashboards"
-    div_ [class_ "mt-1 border-t border-strokeWeak pt-1"]
-      $ a_ [class_ "flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm hover:bg-fillHover", href_ $ urls.dashboardsGetList s.pid Nothing Nothing Nothing Nothing Nothing Nothing def] do
-        faSprite_ "grid" "regular" "size-3.5 text-textWeak"
-        "Browse all dashboards"
+  toHtml s =
+    toHtml @(Html ())
+      $ Components.pickerCard_
+        def
+          { Components.cardClass = "w-full"
+          , Components.placeholder = "Search dashboards\x2026"
+          , Components.inputAttrs = [autofocus_]
+          , Components.hints = Components.pickerHints_ "Open" True
+          }
+      $ Components.PickerItems "max-h-72" [id_ "dashboard-switcher-list"] do
+        forM_ (zip [0 :: Int ..] s.dashboards) \(idx, d) -> do
+          let isCurrent = d.id == s.current
+              title = dashTitle d.title
+          Components.pickerItem_
+            a_
+            def
+              { Components.active = idx == 0
+              , Components.selected = isCurrent
+              , Components.leading = if d.starred then faSprite_ "star" "solid" "w-3.5 h-3.5 shrink-0 text-iconWarning" else Components.pickerIcon_ "dashboard"
+              }
+            title
+            ([href_ $ urls.dashboardsGet s.pid d.id Nothing Nothing Nothing Nothing [], data_ "search" (T.toLower title)] <> [term "aria-current" "page" | isCurrent])
+        unless (null s.dashboards) Components.pickerSeparator_
+        Components.pickerItem_
+          a_
+          def{Components.active = null s.dashboards, Components.leading = Components.pickerIcon_ "grid"}
+          "Browse all dashboards"
+          [href_ $ urls.dashboardsGetList s.pid Nothing Nothing Nothing Nothing Nothing Nothing def, data_ "search" "browse all dashboards"]
+        Components.pickerEmpty_ "No matching dashboards"
 
 
 dashboardSwitcherGetH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardSwitcher)

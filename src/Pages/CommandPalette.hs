@@ -7,11 +7,10 @@ import Data.Text qualified as T
 import Data.UUID (UUID)
 import Hasql.Interpolate qualified as HI
 import Lucid
-import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
-import Pages.Components (floatingScrim, kbdHints_, listboxNavAttr_, logExplorerUrl)
+import Pages.Components (PickerCfg (..), PickerItem (..), PickerList (..), floatingScrim, logExplorerUrl, pickerBadge_, pickerCard_, pickerEmpty_, pickerIcon_, pickerItem_, pickerOption_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Servant (NoContent (..))
@@ -98,67 +97,61 @@ paletteShell_ pid = do
     , [__|on click if event.target is me add .hidden to me end
           on htmx:before:request from <body/> if event.target.id is not 'cmd-palette-dynamic' add .hidden to me end|]
     ]
-    do
-      -- Panel
-      div_ [class_ "cmd-palette w-full max-w-lg overflow-hidden rounded-xl border border-strokeWeak bg-bgOverlay shadow-2xl", data_ "pid" pid.toText, data_ "current-category" "", listboxNavAttr_] do
-        -- Search input
-        div_ [class_ "px-3 border-b border-base-300"] do
-          input_
-            [ type_ "text"
-            , id_ "cmd-palette-input"
-            , class_ "w-full py-2.5 bg-transparent outline-none text-sm"
-            , Aria.label_ "Search or ask AI"
-            , placeholder_ "Ask AI, or search pages, issues, actions\x2026"
+    $ pickerCard_
+      def
+        { cardClass = "cmd-palette w-full max-w-lg"
+        , cardAttrs = [data_ "pid" pid.toText, data_ "current-category" ""]
+        , inputLabel = Just "Search or ask AI"
+        , placeholder = "Ask AI, or search pages, issues, actions\x2026"
+        , inputAttrs =
+            [ id_ "cmd-palette-input"
             , term "hx-live:placeholder" "(c => c ? 'Search ' + c + '\x2026' : 'Ask AI, or search pages, issues, actions\x2026')(closest('.cmd-palette').data.currentCategory)"
             , inputScript
             ]
-        -- Back breadcrumb (hidden by default)
-        div_ [hidden_ "", term "hx-live:hidden" "!closest('.cmd-palette').data.currentCategory", class_ "cmd-breadcrumb flex [&[hidden]]:hidden items-center gap-1.5 px-3 py-1.5 border-b border-base-300 text-xs text-base-content/60 cursor-pointer hover:text-base-content/80", [__|on click send cmdNav(cat:'') to #cmd-palette-input|]] do
-          faSprite_ "chevron-left" "regular" "w-3 h-3"
-          span_ [term "hx-live:text" "(c => c.charAt(0).toUpperCase() + c.slice(1))(closest('.cmd-palette').data.currentCategory || '')"] ""
-        -- Results container
-        div_ [id_ "cmd-palette-results", role_ "listbox", class_ "max-h-80 overflow-y-auto p-1"] do
-          -- The assistant leads the palette, so typing then Enter asks it; ↓ reaches logs and pages.
-          cmdLink_
-            ""
-            CKAiAction
-            [ hxPost_ $ urls.aiDockPost pid
-            , hxTrigger_ "click[document.getElementById('cmd-palette-input').value.trim()]"
-            , hxVals_ "js:{query: document.getElementById('cmd-palette-input').value, allowActions: true, path: location.pathname + location.search, title: document.title}"
-            , hxTarget_ "#ai-dock"
-            , hxSwap_ "outerMorph"
-            , [__|on htmx:after:request set #ai-dock-open.checked to true then if #ai-dock-input exists call #ai-dock-input.focus() end|]
-            ]
-            do
-              faSprite_ "sparkles" "regular" "w-3.5 h-3.5 shrink-0 text-iconBrand"
-              span_ [class_ "truncate flex-1 font-medium text-textStrong", term "hx-live:text" "(v => v.trim() ? 'Ask AI: \"' + v + '\"' : 'Ask AI to find, create or change anything')(q('#cmd-palette-input').value)"] "Ask AI to find, create or change anything"
-              span_ [class_ "badge badge-xs border-0 bg-fillBrand-weak text-2xs text-textBrand"] "AI"
-          -- Logs shortcut
-          cmdLink_ "search logs" CKLogShortcut [href_ $ logExplorerUrl pid, term "hx-live:href" "'/p/' + closest('.cmd-palette').dataset.pid + '/log_explorer?query=' + encodeURIComponent(q('#cmd-palette-input').value)"]
-            $ itemBody_ "explore" [term "hx-live:text" "'Search logs for: \"' + q('#cmd-palette-input').value + '\"'"] "Search logs for: \"\"" "Logs"
-          -- Lazy-loaded dynamic items placeholder
-          div_ [id_ "cmd-palette-dynamic", hxGet_ (urls.commandPaletteGet pid), hxTrigger_ "palette:open from:body", hxSwap_ "outerHTML", class_ "text-center text-xs text-textWeak py-2"] "Loading..."
-          -- Direct page links (static, always present)
-          forM_ @[] @_ @(Text, Text, Text) [(logExplorerUrl pid, "explore", "Log Explorer"), (urls.apiCatalogGet pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing, "swap", "API Catalog"), (urls.aiRoutinesGet pid, "clock", "Routines and reports"), (urls.repositoriesGet pid Nothing Nothing, "code-branch", "Repositories"), (urls.projects.settingsGet pid, "gear", "Settings")] \(href, icon, label) ->
-            cmdItem pid CKDirect href [] icon label "Page"
-          -- Actions
-          cmdItem pid CKDirect (logExplorerUrl pid <> "#create-alert-toggle") [] "plus" "Create monitor" "Action"
-          cmdItem pid CKDirect (urls.dashboardsGetList pid Nothing Nothing Nothing Nothing Nothing (Just "true") def) [] "plus" "Create dashboard" "Action"
-          cmdLink_ "switch project" CKDirect [href_ "/"] $ itemBody_ "grid" [] "Switch project" "Action"
-          cmdLink_
-            "copy current url"
-            CKDirect
-            [ data_ "action" "copy-url"
-            , [__|on click call navigator.clipboard.writeText(window.location.href) then add .hidden to #cmd-palette-backdrop|]
-            ]
-            $ itemBody_ "copy" [] "Copy current URL" "Action"
-          -- Empty state
-          div_
-            [class_ "px-3 py-8 text-center text-sm text-base-content/40", hidden_ "", term "hx-live:hidden" "!q('#cmd-palette-input').value || q('#cmd-palette-results a.cmd-item:not([hidden])').count > 0"]
-            "No matching results"
-        div_ [class_ "flex items-center gap-3 border-t border-strokeWeak px-2 py-1.5"] do
-          kbdHints_ [("Navigate", ["\x2191", "\x2193"]), ("Open", ["\x21B5", "\x2192"]), ("Back", ["\x2190"]), ("Close", ["esc"])]
-          span_ [class_ "cmd-palette-count ms-auto text-xs tabular-nums text-textWeak", term "hx-live:text" "(n => (q('#cmd-palette-input').value ? q('#cmd-palette-results a.cmd-item:not([hidden])').count + ' of ' : '') + n + ' items')(q('#cmd-palette-results a.cmd-item').count)"] ""
+        , beforeList =
+            div_ [hidden_ "", term "hx-live:hidden" "!closest('.cmd-palette').data.currentCategory", class_ "cmd-breadcrumb flex [&[hidden]]:hidden items-center gap-1.5 px-3 py-1.5 border-b border-strokeWeak text-xs text-textWeak cursor-pointer hover:text-textStrong", [__|on click send cmdNav(cat:'') to #cmd-palette-input|]] do
+              faSprite_ "chevron-left" "regular" "w-3 h-3"
+              span_ [term "hx-live:text" "(c => c.charAt(0).toUpperCase() + c.slice(1))(closest('.cmd-palette').data.currentCategory || '')"] ""
+        , hints = [("Navigate", ["\x2191", "\x2193"]), ("Open", ["\x21B5", "\x2192"]), ("Back", ["\x2190"]), ("Close", ["esc"])]
+        }
+    $ PickerItems "max-h-80" [id_ "cmd-palette-results"] do
+      -- The assistant leads the palette, so typing then Enter asks it; ↓ reaches logs and pages.
+      cmdLink_
+        ""
+        CKAiAction
+        [ hxPost_ $ urls.aiDockPost pid
+        , hxTrigger_ "click[document.getElementById('cmd-palette-input').value.trim()]"
+        , hxVals_ "js:{query: document.getElementById('cmd-palette-input').value, allowActions: true, path: location.pathname + location.search, title: document.title}"
+        , hxTarget_ "#ai-dock"
+        , hxSwap_ "outerMorph"
+        , [__|on htmx:after:request set #ai-dock-open.checked to true then if #ai-dock-input exists call #ai-dock-input.focus() end|]
+        ]
+        do
+          faSprite_ "sparkles" "regular" "w-3.5 h-3.5 shrink-0 text-iconBrand"
+          span_ [class_ "truncate flex-1 font-medium text-textStrong", term "hx-live:text" "(v => v.trim() ? 'Ask AI: \"' + v + '\"' : 'Ask AI to find, create or change anything')(q('#cmd-palette-input').value)"] "Ask AI to find, create or change anything"
+          span_ [class_ "badge badge-xs border-0 bg-fillBrand-weak text-2xs text-textBrand"] "AI"
+      -- Logs shortcut
+      cmdRow_ "search logs" CKLogShortcut [href_ $ logExplorerUrl pid, term "hx-live:href" "'/p/' + closest('.cmd-palette').dataset.pid + '/log_explorer?query=' + encodeURIComponent(q('#cmd-palette-input').value)"] "explore" [term "hx-live:text" "'Search logs for: \"' + q('#cmd-palette-input').value + '\"'"] "Search logs for: \"\"" "Logs"
+      -- Lazy-loaded dynamic items placeholder
+      div_ [id_ "cmd-palette-dynamic", hxGet_ (urls.commandPaletteGet pid), hxTrigger_ "palette:open from:body", hxSwap_ "outerHTML", class_ "text-center text-xs text-textWeak py-2"] "Loading..."
+      -- Direct page links (static, always present)
+      forM_ @[] @_ @(Text, Text, Text) [(logExplorerUrl pid, "explore", "Log Explorer"), (urls.apiCatalogGet pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing, "swap", "API Catalog"), (urls.aiRoutinesGet pid, "clock", "Routines and reports"), (urls.repositoriesGet pid Nothing Nothing, "code-branch", "Repositories"), (urls.projects.settingsGet pid, "gear", "Settings")] \(href, icon, label) ->
+        cmdItem pid CKDirect href [] icon label "Page"
+      -- Actions
+      cmdItem pid CKDirect (logExplorerUrl pid <> "#create-alert-toggle") [] "plus" "Create monitor" "Action"
+      cmdItem pid CKDirect (urls.dashboardsGetList pid Nothing Nothing Nothing Nothing Nothing (Just "true") def) [] "plus" "Create dashboard" "Action"
+      cmdRow_ "switch project" CKDirect [href_ "/"] "grid" [] "Switch project" "Action"
+      cmdRow_
+        "copy current url"
+        CKDirect
+        [ data_ "action" "copy-url"
+        , [__|on click call navigator.clipboard.writeText(window.location.href) then add .hidden to #cmd-palette-backdrop|]
+        ]
+        "copy"
+        []
+        "Copy current URL"
+        "Action"
+      pickerEmpty_ "No matching results"
   where
     -- Global Cmd+K listener — on a visible element so it is processed. A letter typed where
     -- no field or player takes it opens the palette with that letter.
@@ -238,15 +231,14 @@ renderDynamicItems pid recents issues monitors dashboards =
         , [__|on click halt the event then send cmdNav(cat: my.dataset.cmdCategory) to #cmd-palette-input|]
         ]
         do
-          faSprite_ icon "regular" "w-3.5 h-3.5 text-textWeak shrink-0"
+          pickerIcon_ icon
           span_ [class_ "truncate flex-1"] $ toHtml label
           span_ [class_ "badge badge-ghost badge-xs text-2xs tabular-nums"] $ toHtml (show count :: Text)
-          faSprite_ "chevron-right" "regular" "w-3 h-3 text-base-content/30 shrink-0"
+          faSprite_ "chevron-right" "regular" "w-3 h-3 text-iconNeutral shrink-0"
 
     recentItem :: PaletteRecent -> Html ()
     recentItem r =
-      cmdLink_ (T.toLower r.label) CKRecent (href_ r.url : recentAttrs pid r.label r.itemType)
-        $ itemBody_ icon [] (toHtml r.label) (T.toTitle r.itemType)
+      cmdRow_ (T.toLower r.label) CKRecent (href_ r.url : recentAttrs pid r.label r.itemType) icon [] r.label (T.toTitle r.itemType)
       where
         icon = fromMaybe "clock" $ lookup r.itemType [("page", "file-lines"), ("issue", "bug"), ("monitor", "list-check"), ("dashboard", "dashboard")]
 
@@ -268,18 +260,12 @@ recentAttrs pid label itemType =
 data CmdKind = CKDirect | CKCategory | CKChild | CKRecent | CKLogShortcut | CKAiAction
 
 
--- | Every palette row; its visibility is derived from the current category (@c@) and query (@s@),
--- with each kind emitting only its own rule.
-cmdLink_ :: Text -> CmdKind -> [Attribute] -> Html () -> Html ()
-cmdLink_ search kind attrs =
-  a_
-    $ [ class_ "cmd-item flex [&[hidden]]:hidden items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
-      , role_ "option"
-      , data_ "search" search
-      , term "hx-live:hidden" $ "((c, s, t, d) => " <> hiddenWhen <> ")(closest('.cmd-palette').data.currentCategory, q('#cmd-palette-input').value.toLowerCase(), this.dataset.search, this.dataset)"
-      ]
+cmdAttrs :: Text -> CmdKind -> [Attribute]
+cmdAttrs search kind =
+  [ data_ "search" search
+  , term "hx-live:hidden" $ "((c, s, t, d) => " <> hiddenWhen <> ")(closest('.cmd-palette').data.currentCategory, q('#cmd-palette-input').value.toLowerCase(), this.dataset.search, this.dataset)"
+  ]
     <> [data_ "cmd-type" "category" | isCategory]
-    <> attrs
   where
     fuzzyMiss = "!!c || !(i => [...s].every(ch => (i = t.indexOf(ch, i) + 1)))(0)"
     (hiddenWhen, isCategory) = case kind of
@@ -291,15 +277,22 @@ cmdLink_ search kind attrs =
       CKAiAction -> ("!!c", False)
 
 
-itemBody_ :: Text -> [Attribute] -> Html () -> Text -> Html ()
-itemBody_ icon labelAttrs label badgeText = do
-  faSprite_ icon "regular" "w-3.5 h-3.5 text-textWeak shrink-0"
-  span_ (class_ "truncate flex-1" : labelAttrs) label
-  span_ [class_ "badge badge-ghost badge-xs text-2xs"] $ toHtml badgeText
+-- | Every palette row; its visibility is derived from the current category (@c@) and query (@s@),
+-- with each kind emitting only its own rule.
+cmdLink_ :: Text -> CmdKind -> [Attribute] -> Html () -> Html ()
+cmdLink_ search kind attrs = pickerOption_ a_ "cmd-item" (cmdAttrs search kind <> attrs)
+
+
+cmdRow_ :: Text -> CmdKind -> [Attribute] -> Text -> [Attribute] -> Text -> Text -> Html ()
+cmdRow_ search kind attrs icon labelAttrs label badgeText =
+  pickerItem_
+    a_
+    def{extraClass = "cmd-item", leading = pickerIcon_ icon, labelAttrs, trailing = pickerBadge_ badgeText, filterable = False}
+    label
+    (cmdAttrs search kind <> attrs)
 
 
 -- | Base item renderer — unifies direct, child, and action items
 cmdItem :: Projects.ProjectId -> CmdKind -> Text -> [Attribute] -> Text -> Text -> Text -> Html ()
 cmdItem pid kind href extraAttrs icon label badgeText =
-  cmdLink_ (T.toLower label) kind (href_ href : recentAttrs pid label (T.toLower badgeText) <> extraAttrs)
-    $ itemBody_ icon [] (toHtml label) badgeText
+  cmdRow_ (T.toLower label) kind (href_ href : recentAttrs pid label (T.toLower badgeText) <> extraAttrs) icon [] label badgeText
