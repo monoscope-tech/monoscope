@@ -76,7 +76,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, nonEmptyT, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, scriptJson, toUriStr, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, nonEmptyT, onpointerdown_, parseTime, popoverTrigger_, prettyPrintCount, scriptJson, toUriStr, utcTimeToNanoseconds)
 import Web.Links hiding (explorerUrl)
 
 
@@ -714,39 +714,54 @@ metricsToolbar_ pid tab filters status =
 -- only exist once the popover is opened, and only the matching ones.
 servicePicker_ :: Projects.ProjectId -> Text -> Html ()
 servicePicker_ pid current = do
+  input_ [type_ "hidden", name_ "metric_source", id_ "metric-source-input", value_ current]
   button_ ([type_ "button", class_ "btn btn-sm min-w-36 justify-between gap-2 font-normal", Aria.label_ "Filter by service"] <> popoverTrigger_ "metric-service-picker") do
     span_ [class_ "flex items-center gap-1.5 truncate"] do
       faSprite_ "filter" "regular" $ "w-3 h-3 " <> bool "text-iconNeutral" "text-iconBrand" (current /= "all")
       toHtml $ if current == "all" then "All Services" else current
     faSprite_ "chevron-down" "regular" "w-2.5 h-2.5 text-iconNeutral"
-  div_ (popoverPanel_ "metric-service-picker" <> [class_ "dropdown dropdown-start z-30 w-72 bg-bgRaised border border-strokeWeak rounded-lg shadow-lg p-2 mt-1"]) do
-    Components.searchInput_
-      "w-full"
-      "Search services"
-      [ hxGet_ $ (urls.traces pid).metricServicesGetH Nothing Nothing
-      , hxTrigger_ "input changed delay:200ms, toggle from:#metric-service-picker once"
-      , hxTarget_ "#metric-service-options"
-      , hxSwap_ "outerHTML"
-      , hxInclude_ "closest form"
-      , hxSelect_ "#metric-service-options"
-      , hxPushUrl_ "false"
-      , name_ "service_search"
-      ]
-    serviceOptions_ current [current | current /= "all"]
-    p_ [class_ "text-xs text-textWeak mt-2"] "Choose a service, then Search to apply."
+  Components.pickerPopover_ "metric-service-picker" "dropdown-start !z-30 mt-1 w-80" []
+    $ Components.pickerCard_
+      def
+        { Components.cardClass = "w-full"
+        , Components.inputType = "search"
+        , Components.inputLabel = Just "Search services"
+        , Components.placeholder = "Search services\x2026"
+        , Components.inputAttrs =
+            [ hxGet_ $ (urls.traces pid).metricServicesGetH Nothing Nothing
+            , hxTrigger_ "input changed delay:200ms, toggle from:#metric-service-picker once"
+            , hxTarget_ "#metric-service-options"
+            , hxSwap_ "outerHTML"
+            , hxInclude_ "closest form"
+            , hxSelect_ "#metric-service-options"
+            , hxPushUrl_ "false"
+            , name_ "service_search"
+            ]
+        , Components.hints = Components.pickerHints_ "Select" True
+        }
+    $ Components.PickerSlot
+    $ serviceOptions_ current [current | current /= "all"]
 
 
 -- | Options for 'servicePicker_'. Rendered by the server so the picker ships no markup
 -- until it is opened. The wrapper is part of the contract: it is what the picker's
 -- @hx-swap outerHTML@ replaces.
 serviceOptions_ :: Text -> [Text] -> Html ()
-serviceOptions_ current services = div_ [id_ "metric-service-options", class_ "max-h-72 overflow-y-auto", [__|on change send htmx:abort to <#metric-service-picker input[type=search]/>|]] do
-  forM_ (ordNub $ "all" : [current | current /= "all"] <> services) \service ->
-    label_ [class_ "flex items-center gap-2 px-2 py-2 text-sm cursor-pointer hover:bg-fillWeak"] do
-      input_ ([type_ "radio", name_ "metric_source", value_ service, class_ "radio radio-xs"] <> [checked_ | service == current])
-      span_ [class_ "truncate"] $ toHtml $ if service == "all" then "All Services" else service
-  when (null services) $ p_ [class_ "text-xs text-textWeak p-2"] "No matching services."
-  when (length services >= serviceOptionsLimit) $ p_ [class_ "text-xs text-textWeak p-2"] $ toHtml $ "Showing the first " <> show @Text serviceOptionsLimit <> " services — type to narrow."
+serviceOptions_ current services =
+  div_ [id_ "metric-service-options", role_ "listbox", class_ "max-h-72 overflow-y-auto overscroll-contain p-1"] do
+    forM_ (zip [0 :: Int ..] $ ordNub $ "all" : [current | current /= "all"] <> services) \(idx, service) -> do
+      let isCurrent = service == current
+          label = if service == "all" then "All Services" else service
+      Components.pickerItem_
+        button_
+        def{Components.active = idx == 0, Components.selected = isCurrent, Components.leading = Components.pickerIcon_ "cube", Components.filterable = False}
+        label
+        [ type_ "button"
+        , data_ "service" service
+        , [__|on click send htmx:abort to <#metric-service-picker [data-picker-input]/> then set <#metric-service-picker [data-picker-input]/>.value to '' then set #metric-source-input.value to my.dataset.service then call #metric-service-picker.hidePopover() then call (closest <form/>).requestSubmit()|]
+        ]
+    when (null services) $ p_ [class_ "px-3 py-4 text-center text-xs text-textWeak"] "No matching services."
+    when (length services >= serviceOptionsLimit) $ p_ [class_ "px-3 py-1.5 text-xs text-textWeak"] $ toHtml $ "Showing the first " <> show @Text serviceOptionsLimit <> " services \x2014 type to narrow."
 
 
 serviceOptionsLimit :: Int

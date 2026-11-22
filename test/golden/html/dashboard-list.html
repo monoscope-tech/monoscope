@@ -69,26 +69,22 @@
 </div>
 </div>
 </div>
-<div id="dashboard-picker" role="listbox" aria-label="Dashboards" class="max-h-[min(24rem,55vh)] overflow-y-auto overscroll-contain p-2 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&amp;_[data-dash]:not(.htmx-request)]:opacity-40">
-<button type="button" role="option" data-dash hx-live:hidden="!this.textContent.toLowerCase().includes(q(&#39;#dashboards-modal-search&#39;).value.trim().toLowerCase())" class="group/pick flex w-full cursor-pointer items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-fillWeak active:bg-fillHover focus-visible:bg-fillWeak focus-visible:outline-none [&amp;.active]:bg-fillWeak [&amp;[hidden]]:hidden" data-hx-swap="none" hx-put="/p/<uuid>/dashboards/<uuid>" data-hx-ext="json-enc" data-hx-vals="js:{...JSON.parse(document.getElementById(&#39;dashboards-modal-widget-json&#39;).value || &#39;{}&#39;)}">
-<span class="grid size-8 shrink-0 place-items-center rounded-md bg-fillWeak text-iconNeutral">
-<svg class="icon size-4" width="1em" height="1em" viewBox="0 0 448 512">
+<div id="dashboard-picker" role="listbox" aria-label="Dashboards" class="max-h-80 overflow-y-auto overscroll-contain p-1 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&amp;_[data-dash]:not(.htmx-request)]:opacity-40">
+<button role="option" class="picker-option flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-textStrong transition-colors hover:not-[.active]:bg-fillHover focus-visible:bg-fillWeak focus-visible:outline-none [&amp;.active]:bg-fillWeak [&amp;[hidden]]:hidden group/pick active" type="button" data-dash hx-live:hidden="!((this.dataset.search ?? this.textContent).toLowerCase().includes((closest(&#39;.picker-card&#39;).q(&#39;[data-picker-input]&#39;).value ?? &#39;&#39;).trim().toLowerCase()))" data-hx-swap="none" hx-put="/p/<uuid>/dashboards/<uuid>" data-hx-ext="json-enc" data-hx-vals="js:{...JSON.parse(document.getElementById(&#39;dashboards-modal-widget-json&#39;).value || &#39;{}&#39;)}">
+<svg class="icon w-3.5 h-3.5 shrink-0 text-textWeak" width="1em" height="1em" viewBox="0 0 448 512">
 <g>
 <path d="M144 80v96H48V80h96zM48 32C21.5 32 0 53.5 0 80v96c0 26.5 21.5 48 48 48h96c26.5 0 48-21.5 48-48V80c0-26.5-21.5-48-48-48H48zm96 304v96H48V336h96zM48 288c-26.5 0-48 21.5-48 48v96c0 26.5 21.5 48 48 48h96c26.5 0 48-21.5 48-48V336c0-26.5-21.5-48-48-48H48zM304 80h96v96H304V80zm-48 0v96c0 26.5 21.5 48 48 48h96c26.5 0 48-21.5 48-48V80c0-26.5-21.5-48-48-48H304c-26.5 0-48 21.5-48 48zM72 120v16c0 8.8 7.2 16 16 16h16c8.8 0 16-7.2 16-16V120c0-8.8-7.2-16-16-16H88c-8.8 0-16 7.2-16 16zM88 360c-8.8 0-16 7.2-16 16v16c0 8.8 7.2 16 16 16h16c8.8 0 16-7.2 16-16V376c0-8.8-7.2-16-16-16H88zM328 120v16c0 8.8 7.2 16 16 16h16c8.8 0 16-7.2 16-16V120c0-8.8-7.2-16-16-16H344c-8.8 0-16 7.2-16 16zM256 304V464c0 8.8 7.2 16 16 16h32c8.8 0 16-7.2 16-16V400c0-8.8 7.2-16 16-16s16 7.2 16 16s7.2 16 16 16h64c8.8 0 16-7.2 16-16V304c0-8.8-7.2-16-16-16s-16 7.2-16 16s-7.2 16-16 16H368c-8.8 0-16-7.2-16-16s-7.2-16-16-16H272c-8.8 0-16 7.2-16 16zM368 448a16 16 0 1 0 0 32 16 16 0 1 0 0-32zm64 0a16 16 0 1 0 0 32 16 16 0 1 0 0-32z" />
 </g>
 </svg>
+<span class="min-w-0 flex-1 flex items-center gap-1.5">
+<span class="truncate font-medium">Tabbed Count</span>
 </span>
-<span class="min-w-0 grow">
-<span class="flex items-center gap-1.5">
-<span class="truncate text-sm font-medium text-textStrong">Tabbed Count</span>
-</span>
-<span class="block truncate text-xs text-textWeak tabular-nums">89 widgets · overview, http, logs, traces, events</span>
-</span>
-<span class="shrink-0 text-xs font-medium text-textBrand opacity-0 transition-opacity duration-100 group-hover/pick:opacity-100 group-[.active]/pick:opacity-100 group-focus-visible/pick:opacity-100 group-[.htmx-request]/pick:hidden">Add</span>
+<span class="shrink-0 text-xs text-textWeak tabular-nums max-w-44 truncate">89 widgets · overview, http, logs, traces, events</span>
+<span class="shrink-0 text-xs font-medium text-textBrand hidden group-hover/pick:inline group-[.active]/pick:inline group-focus-visible/pick:inline group-[.htmx-request]/pick:hidden">Add</span>
 <span class="loading loading-spinner loading-xs hidden shrink-0 text-iconNeutral group-[.htmx-request]/pick:inline-block" aria-label="Adding">
 </span>
 </button>
-<div class="[&amp;[hidden]]:hidden" hx-live:hidden="q(&#39;#dashboard-picker [data-dash]:not([hidden])&#39;).count &gt; 0">
+<div class="[&amp;[hidden]]:hidden" hx-live:hidden="closest(&#39;#dashboard-picker&#39;).q(&#39;[data-dash]:not([hidden])&#39;).count &gt; 0">
 <section class="max-w-sm my-2 p-4 mx-auto text-center flex flex-col gap-3 empty-state">
 <div>
 <svg class="icon h-6 w-6 text-iconNeutral" width="1em" height="1em" viewBox="0 0 51 51">

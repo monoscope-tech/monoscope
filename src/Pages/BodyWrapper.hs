@@ -565,47 +565,49 @@ bodyWrapper bcfg child = do
                 div_ [class_ "h-0 shrink"] do
                   Components.drawer_ "global-data-drawer" (isJust bcfg.globalDrawerContent) Nothing bcfg.globalDrawerContent ""
                   -- Picks the dashboard a widget is added (from the explorer) or copied (from a dashboard) to.
-                  Components.modalWith_ "dashboards-modal" def{Components.boxClass = "max-w-none p-0 gap-0", Components.boxStyle = "width:min(92vw,30rem)"} Nothing do
-                    div_ [Components.listboxNavAttr_] do
-                      div_ [class_ "space-y-3 px-5 pt-5 pb-3"] do
-                        div_ [class_ "pe-8"] do
-                          h2_ [id_ "dashboards-modal-title", class_ "text-base font-semibold text-textStrong"] "Add to dashboard"
-                          p_ [id_ "dashboards-modal-widget-title", class_ "truncate text-sm text-textWeak empty:hidden"] ""
-                        Components.searchInput_
-                          "w-full"
-                          "Search dashboards…"
-                          [ id_ "dashboards-modal-search"
-                          , autofocus_
-                          , autocomplete_ "off"
-                          ]
-                      div_
-                        [ id_ "dashboards-modal-content"
-                        , class_ "border-t border-strokeWeak"
-                        , hxGet_ (foldMap (\p -> urls.dashboardsGetList p.id Nothing (Just "true") Nothing Nothing Nothing Nothing def) bcfg.currProject)
-                        , hxTrigger_ "loadDashboards"
-                        , hxSelect_ "#dashboard-picker"
-                        , hxSwap_ "innerHTML"
-                        , -- The source id is spread in only when set: a widget that lives on no
-                          -- dashboard would otherwise send `source_dashboard_id=`, which is not
-                          -- a UUID, and the whole request 400s.
-                          hxVals_ "js:{copy_widget_id: document.getElementById('dashboards-modal-widget-id').value, ...(document.getElementById('dashboards-modal-source-dashboard-id').value ? {source_dashboard_id: document.getElementById('dashboards-modal-source-dashboard-id').value} : {})}"
-                        ]
-                        $ div_ [class_ "space-y-1 p-2", Aria.label_ "Loading dashboards", role_ "status"]
-                        $ replicateM_ 4 (div_ [class_ "skeleton h-12 w-full rounded-lg"] "")
-                    forM_ bcfg.currProject \p -> details_ [class_ "group/new border-t border-strokeWeak", [__|on toggle if my.open call #dashboards-modal-new-title.focus() end|]] do
-                      summary_ [class_ "flex cursor-pointer list-none items-center gap-3 px-4 py-3 text-sm font-medium text-textStrong hover:bg-fillWeak focus-visible:bg-fillWeak focus-visible:outline-none [&::-webkit-details-marker]:hidden"] do
-                        span_ [class_ "grid size-8 shrink-0 place-items-center rounded-md border border-dashed border-strokeStrong text-iconNeutral"] $ faSprite_ "plus" "regular" "size-3.5"
-                        "New dashboard with this widget"
-                        faSprite_ "chevron-down" "regular" "ms-auto size-3 text-iconNeutral transition-transform duration-150 group-open/new:rotate-180"
-                      form_ [hxPost_ (urls.dashboardsPost p.id), class_ "flex gap-2 px-4 pb-4"] do
-                        input_ [type_ "hidden", name_ "file", value_ ""]
-                        input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "copyWidgetId"]
-                        input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "sourceDashboardId"]
-                        -- Only set for a widget that lives on no dashboard, whose definition
-                        -- exists solely on the client; the picker rows PUT it as the new widget.
-                        input_ [type_ "hidden", id_ "dashboards-modal-widget-json", name_ "widgetJson"]
-                        input_ [type_ "text", id_ "dashboards-modal-new-title", name_ "title", required_ "", autocomplete_ "off", placeholder_ "Dashboard name", Aria.label_ "New dashboard name", class_ "input input-sm min-w-0 grow max-md:text-base"]
-                        button_ [type_ "submit", class_ "btn btn-sm btn-primary shrink-0", term "hx-disable" "this"] "Create"
+                  Components.floatingModal_ "dashboards-modal"
+                    $ Components.pickerCard_
+                      def
+                        { Components.cardClass = "w-full max-w-lg"
+                        , Components.placeholder = "Search dashboards\x2026"
+                        , Components.inputAttrs = [id_ "dashboards-modal-search", autofocus_]
+                        , Components.inputTrailing = do
+                            span_ [class_ "badge badge-ghost badge-xs max-w-48 shrink-0 gap-1 truncate text-2xs text-textWeak"] do
+                              span_ [id_ "dashboards-modal-title"] "Add to dashboard"
+                              span_ [id_ "dashboards-modal-widget-title", class_ "truncate before:me-1 before:content-['\xb7'] empty:hidden"] ""
+                            label_ [Lucid.for_ "dashboards-modal", Aria.label_ "Close", class_ "inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-iconNeutral transition-colors hover:bg-fillHover hover:text-textStrong"]
+                              $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
+                        , Components.afterList =
+                            forM_ bcfg.currProject \p -> details_ [class_ "group/new border-t border-strokeWeak", [__|on toggle if my.open call #dashboards-modal-new-title.focus() end|]] do
+                              summary_ [class_ "flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm text-textStrong hover:bg-fillHover focus-visible:bg-fillWeak focus-visible:outline-none [&::-webkit-details-marker]:hidden"] do
+                                Components.pickerIcon_ "plus"
+                                span_ [class_ "flex-1"] "New dashboard with this widget"
+                                faSprite_ "chevron-down" "regular" "size-3 text-iconNeutral transition-transform duration-150 group-open/new:rotate-180"
+                              form_ [hxPost_ (urls.dashboardsPost p.id), class_ "flex gap-2 px-3 pb-2.5 pt-1"] do
+                                input_ [type_ "hidden", name_ "file", value_ ""]
+                                input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "copyWidgetId"]
+                                input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "sourceDashboardId"]
+                                -- Only set for a widget that lives on no dashboard, whose definition
+                                -- exists solely on the client; the picker rows PUT it as the new widget.
+                                input_ [type_ "hidden", id_ "dashboards-modal-widget-json", name_ "widgetJson"]
+                                input_ [type_ "text", id_ "dashboards-modal-new-title", name_ "title", required_ "", autocomplete_ "off", placeholder_ "Dashboard name", Aria.label_ "New dashboard name", class_ "input input-sm min-w-0 grow max-md:text-base"]
+                                button_ [type_ "submit", class_ "btn btn-sm btn-primary shrink-0", term "hx-disable" "this"] "Create"
+                        , Components.hints = Components.pickerHints_ "Select" True
+                        }
+                    $ Components.PickerSlot
+                    $ div_
+                      [ id_ "dashboards-modal-content"
+                      , hxGet_ (foldMap (\p -> urls.dashboardsGetList p.id Nothing (Just "true") Nothing Nothing Nothing Nothing def) bcfg.currProject)
+                      , hxTrigger_ "loadDashboards"
+                      , hxSelect_ "#dashboard-picker"
+                      , hxSwap_ "innerHTML"
+                      , -- The source id is spread in only when set: a widget that lives on no
+                        -- dashboard would otherwise send `source_dashboard_id=`, which is not
+                        -- a UUID, and the whole request 400s.
+                        hxVals_ "js:{copy_widget_id: document.getElementById('dashboards-modal-widget-id').value, ...(document.getElementById('dashboards-modal-source-dashboard-id').value ? {source_dashboard_id: document.getElementById('dashboards-modal-source-dashboard-id').value} : {})}"
+                      ]
+                    $ div_ [class_ "space-y-1 p-2", Aria.label_ "Loading dashboards", role_ "status"]
+                    $ replicateM_ 4 (div_ [class_ "skeleton h-9 w-full rounded-lg"] "")
 
       when isProd $ externalHeadScripts_ bcfg.config
       globalTemplates_
@@ -754,28 +756,35 @@ bodyWrapper bcfg child = do
 
 
 projectsDropDown :: Projects.Project -> V.Vector Projects.Project -> Html ()
-projectsDropDown currProject projects = do
-  div_
-    [ term "data-menu" "true"
-    , class_ "origin-top-right z-40 bg-bgRaised p-2 w-[18rem] rounded-xl shadow-lg border border-strokeWeak"
-    ]
-    do
-      when (V.length projects > 1)
-        $ div_ [class_ "p-1 pb-2"] do
-          Components.searchInput_ "w-full bg-fillWeak border-0" "Search projects" [Components.filterInputAttr_ "#projectsContainer .project_item"]
-      div_ [class_ "space-y-0.5 max-h-[50vh] overflow-y-auto", id_ "projectsContainer"] do
-        projects & mapM_ \project -> do
-          let isActive = currProject.id == project.id
-          a_ [class_ $ "flex justify-between items-center py-2 px-2.5 rounded-lg transition-colors duration-100 project_item min-w-0" <> bool " hover:bg-fillHover" " bg-fillWeak font-medium" isActive, href_ $ urls.homeGet project.id] do
-            span_ [class_ "truncate"] $ toHtml project.title
-            when isActive $ faSprite_ "check" "regular" "h-3.5 w-3.5 text-textBrand shrink-0"
-        p_ [class_ "hidden text-textWeak text-sm text-center py-4", term "hx-live:.hidden" "q('.project_item:not(.hidden) in #projectsContainer').count > 0"] "No matching projects"
-      let actionLink attrs icon label = a_ (class_ "flex items-center gap-2 py-2 px-2.5 rounded-lg hover:bg-fillHover cursor-pointer text-sm" : attrs) $ faSprite_ icon "regular" "h-3.5 w-3.5 text-textWeak" >> span_ label
-      div_ [class_ "border-t border-strokeWeak mt-1 pt-1"] do
-        actionLink [href_ urls.projects.listGet] "grid" "All projects"
-        actionLink [href_ urls.projects.onboardingProject] "plus" "New project"
-        when (currProject.paymentPlan `elem` ["UsageBased", "GraduatedPricing"])
-          $ actionLink [term "hx-preload" "false", hxGet_ $ urls.projects.manageSubscriptionGet currProject.id] "dollar-sign" "Manage billing"
+projectsDropDown currProject projects =
+  Components.pickerCard_
+    def
+      { Components.cardClass = "w-full"
+      , Components.cardAttrs = [term "data-menu" "true"]
+      , Components.placeholder = "Search projects\x2026"
+      , Components.hints = Components.pickerHints_ "Open" True
+      }
+    $ Components.PickerItems "max-h-72" [id_ "projectsContainer"] do
+      forM_ (zip [0 :: Int ..] $ V.toList projects) \(idx, project) -> do
+        let isActive = currProject.id == project.id
+        Components.pickerItem_
+          a_
+          def
+            { Components.extraClass = "project_item"
+            , Components.active = idx == 0
+            , Components.selected = isActive
+            , Components.leading = span_ [class_ "flex size-4 shrink-0 items-center justify-center rounded bg-fillBrand-weak text-2xs font-semibold text-textBrand"] $ toHtml $ T.take 1 project.title
+            }
+          project.title
+          ([href_ $ urls.homeGet project.id, data_ "search" (T.toLower project.title)] <> [term "aria-current" "page" | isActive])
+      Components.pickerSeparator_
+      let actionLink attrs icon label =
+            Components.pickerItem_ a_ def{Components.leading = Components.pickerIcon_ icon} label (data_ "search" (T.toLower label) : attrs)
+      actionLink [href_ urls.projects.listGet] "grid" "All projects"
+      actionLink [href_ urls.projects.onboardingProject] "plus" "New project"
+      when (currProject.paymentPlan `elem` ["UsageBased", "GraduatedPricing"])
+        $ actionLink [term "hx-preload" "false", hxGet_ $ urls.projects.manageSubscriptionGet currProject.id] "dollar-sign" "Manage billing"
+      Components.pickerEmpty_ "No matching projects"
 
 
 sideNav :: Projects.Session -> Projects.Project -> BWConfig -> Html ()
@@ -817,7 +826,11 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
             span_ [class_ "w-8 h-8 group-has-[#sidenav-toggle:checked]/pg:w-6 group-has-[#sidenav-toggle:checked]/pg:h-6 rounded-lg group-has-[#sidenav-toggle:checked]/pg:rounded-md bg-fillBrand-weak text-textBrand text-sm group-has-[#sidenav-toggle:checked]/pg:text-xs font-semibold flex items-center justify-center shrink-0"] $ toHtml $ T.take 1 project.title
             span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex shrink-0"] $ faSprite_ "angles-up-down" "regular" "w-4 text-textWeak"
-        div_ ([class_ "dropdown group-has-[#sidenav-toggle:not(:checked)]/pg:dropdown-right group-has-[#sidenav-toggle:not(:checked)]/pg:ml-2", role_ "dialog", Aria.label_ "Project switcher"] <> popoverPanel_ "project-picker-pop") $ projectsDropDown project (Projects.getProjects $ Projects.projects sess.persistentSession)
+        Components.pickerPopover_
+          "project-picker-pop"
+          "group-has-[#sidenav-toggle:not(:checked)]/pg:dropdown-right group-has-[#sidenav-toggle:not(:checked)]/pg:ml-2 w-72"
+          [role_ "dialog", Aria.label_ "Project switcher"]
+          $ projectsDropDown project (Projects.getProjects $ Projects.projects sess.persistentSession)
       -- Toggle sidebar (desktop: toggles sidenav-toggle, mobile: closes mobile-nav-toggle)
       label_
         ( [ term "for" "sidenav-toggle"
@@ -1159,8 +1172,17 @@ navbar bcfg menuL =
                 do
                   span_ [id_ "pageTitleText", class_ $ "max-w-[40ch] truncate" <> cap] $ toHtml bcfg.pageTitle
                   faSprite_ "chevron-down" "regular" "size-3.5 shrink-0 text-iconNeutral"
-              div_ ([class_ "dropdown z-50 mt-1 w-[20rem] rounded-xl border border-strokeWeak bg-bgRaised p-2 shadow-lg", role_ "dialog", Aria.label_ (fromMaybe "Page" bcfg.prePageTitle <> " switcher"), hxGet_ switcherUrl, hxTrigger_ "toggle once", hxSwap_ "innerHTML"] <> popoverPanel_ "page-title-switcher")
-                $ div_ [class_ "flex justify-center py-6"]
+              Components.pickerPopover_
+                "page-title-switcher"
+                "mt-1 w-80"
+                [ role_ "dialog"
+                , Aria.label_ (fromMaybe "Page" bcfg.prePageTitle <> " switcher")
+                , hxGet_ switcherUrl
+                , hxTrigger_ "toggle once"
+                , hxSwap_ "innerHTML"
+                , [__|on htmx:after:swap set i to the first <[data-picker-input]/> in me then if i call i.focus() end|]
+                ]
+                $ div_ [class_ "flex justify-center rounded-xl border border-strokeWeak bg-bgOverlay py-8 shadow-2xl"]
                 $ loadingIndicatorWith_ LdSM LdDots ""
             Nothing -> case targetPageM of
               Just targetPage -> a_ ([class_ $ "max-w-[40ch] truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong hover:bg-fillWeak max-md:text-sm" <> cap, href_ targetPage, id_ "pageTitleText", title_ bcfg.pageTitle] <> navTabAttrs) $ toHtml bcfg.pageTitle
@@ -1231,27 +1253,38 @@ scopePicker_ scope selected options =
         span_ [class_ "hidden group-aria-busy:block"] $ faSprite_ "spinner" "regular" "w-3.5 h-3.5 animate-spin text-iconBrand"
         span_ [class_ "max-w-32 truncate font-normal text-textWeak max-md:hidden", id_ $ popId <> "-label"] $ toHtml $ fromMaybe shortFallback selected
         faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
-    ul_ (popoverPanel_ popId <> [class_ "dropdown menu flex flex-col bg-bgBase border border-strokeWeak w-56 p-1 text-sm rounded-lg shadow"])
+    Components.pickerPopover_ popId "dropdown-end mt-1 w-72" []
+      $ Components.pickerCard_
+        def
+          { Components.cardClass = "w-full"
+          , Components.placeholder = searchPlaceholder
+          , Components.hints = Components.pickerHints_ "Select" True
+          }
       -- Nothing (all) is always offered: a scope value that has gone quiet must not be able
       -- to strand a reader in a view with no data and no way out.
       -- The URL is the scope store. The dataset carries arbitrary service/environment names
       -- without embedding them in executable text; the one-line handler preserves every other
       -- query parameter through the shared URL helper.
-      $ forM_ (Nothing : (Just <$> V.toList options)) \option ->
-        li_ []
-          $ button_
-            [ class_ $ "w-full text-left cursor-pointer rounded-md px-2 py-1 hover:bg-fillWeak " <> bool "" "font-semibold text-textBrand" (option == selected)
-            , type_ "button"
-            , term "aria-pressed" (bool "false" "true" (option == selected))
+      $ Components.PickerItems "max-h-72" [] do
+        forM_ (zip [0 :: Int ..] $ Nothing : (Just <$> V.toList options)) \(idx, option) -> do
+          let isSelected = option == selected
+              label = fromMaybe fallback option
+          Components.pickerItem_
+            button_
+            def{Components.active = idx == 0, Components.selected = isSelected, Components.leading = Components.pickerIcon_ icon}
+            label
+            [ type_ "button"
+            , term "aria-pressed" (bool "false" "true" isSelected)
             , data_ "scope-key" key
             , data_ "scope-value" (fromMaybe "" option)
+            , data_ "search" (T.toLower label)
             , [__|on click call window.setQueryParamAndReload(my.dataset.scopeKey, my.dataset.scopeValue)|]
             ]
-          $ toHtml (fromMaybe fallback option)
+        Components.pickerEmpty_ "No matching results"
   where
-    (popId, icon, noun, key, fallback, shortFallback) = case scope of
-      EnvScope -> ("env-picker", "layer-group", "deployment environment", "environment", "All environments", "All envs")
-      ServiceScope -> ("service-picker", "cube", "service", "service_scope", "All services", "All services")
+    (popId, icon, noun, key, fallback, shortFallback, searchPlaceholder) = case scope of
+      EnvScope -> ("env-picker", "layer-group", "deployment environment", "environment", "All environments", "All envs", "Search environments\x2026")
+      ServiceScope -> ("service-picker", "cube", "service", "service_scope", "All services", "All services", "Search services\x2026")
 
 
 globalTemplates_ :: Html ()
