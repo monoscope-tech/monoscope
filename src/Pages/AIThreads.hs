@@ -401,6 +401,7 @@ routinesGetH pid = do
             p_ [class_ "mt-2 mb-4 text-xs text-textWeak"] $ toHtml $ Issues.routineScheduleLabel template.schedule <> " · " <> case template.reportWhen of
               Issues.ReportAlways -> "reports every run"
               Issues.ReportFindings -> "reports only when it finds something"
+              Issues.ReportWrites -> "reports only when it changes something"
             ul_ [Aria.label_ "Uses", class_ "mt-auto flex flex-wrap gap-1.5 border-t border-strokeWeak pt-3"] $ for_ template.signals \signal -> do
               let (icon, label, color) = signalChip signal
               li_ [class_ "inline-flex items-center gap-1.5 rounded-md bg-fillWeak px-2 py-1 text-xs text-textWeak"] $ faSprite_ icon "regular" ("h-3 w-3 shrink-0 " <> color) >> label

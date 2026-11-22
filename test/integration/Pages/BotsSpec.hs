@@ -1702,6 +1702,10 @@ spec = around withTestResources do
           (timeoutHistory, timeoutRoutine, _) = timedOut
       map outcome [quiet, cancelled, timedOut] `shouldBe` [([Issues.ChatUser], Just "no_findings"), ([], Just "cancelled"), ([Issues.ChatExecutionEvent], Just "timed_out")]
       timeoutHistory `shouldSatisfy` all (isNothing . AI.dbMessageToLLMMessage)
+      -- A writes-only routine reports merges that went through, not a claimed finding (prod triage, 2026-11-19).
+      let triage n preview = fmap (\(_, _, r) -> (\(status, _, _, _) -> status) <$> r) $ scheduleRun n Nothing (\c -> Issues.installRoutineTemplate (uid tr) testPid c "UTC" Issues.issueTriageTemplate{Issues.key = "triage-" <> show n}) \s ->
+            Jobs.runAIRoutineWith 1_000_000 (\_ -> pure $ Right $ AI.AgenticChatResult "{\"explanation\":\"No issues were merged\",\"has_findings\":true}" [AI.ToolCallInfo "bulk_issues" mempty preview Nothing]) (\_ _ -> pass) tr.trATCtx s.id s.scheduledAt
+      runTestBg frozenTime tr (zipWithM triage [5, 6] ["Tool failed: key \"ids\" not found", "{\"succeeded\":[],\"failed\":[]}"]) `shouldReturn` [Just "no_findings", Just "succeeded"]
       ((.routineRunningSince) =<< timeoutRoutine) `shouldBe` Nothing
       length <$> readIORef successors `shouldReturn` 2
       -- Needs attention lists a routine whose newest run failed, and a later success clears it.
