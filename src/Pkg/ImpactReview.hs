@@ -1350,7 +1350,8 @@ runFix :: Projects.ProjectId -> Fixes.FixId -> ATBackgroundCtx ()
 runFix pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob) \claimed -> for_ claimed \lease -> do
   outcome <- tryAny $ Timeout.timeout ((fixSeconds - 60) * 1000000) $ runErrorNoCallStack $ execute lease
   case outcome of
-    Right (Just (Right ())) -> Jobs.scheduleJob Jobs.WakeNow $ Jobs.PublishFix pid fid
+    Right (Just (Right Agent.Fixed{})) -> Jobs.scheduleJob Jobs.WakeNow $ Jobs.PublishFix pid fid
+    Right (Just (Right Agent.Unfixed{})) -> pass
     _ -> do
       let lost = case outcome of Right (Just (Left NativeSessionLost)) -> True; _ -> False
           message = bool "Issue fix failed; retry to collect current evidence" nativeSessionLostMessage lost
@@ -1364,15 +1365,20 @@ runFix pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob) \
     load :: DB es => Eff es (Either Text (Fixes.Run Fixes.Progress))
     load = first show . (>>= maybeToRight Fixes.Unavailable) <$> Fixes.getRun pid fid
     artifactStore cfg = maybeToRight "Issue-fix artifact storage is not configured" $ Agent.ArtifactStore <$> cfg.impactReviewUsageDir <*> cfg.impactReviewCacheDir
-    execute :: Fixes.Lease -> ReviewCtx ()
+    execute :: Fixes.Lease -> ReviewCtx (Agent.FixOutcome ())
     execute lease = do
       ctx <- ask @AuthContext
       store <- require $ artifactStore ctx.config
       _ <- require $ first show $ Artifacts.configuredBucket ctx.config
       run <- require =<< load
       saved <- Fixes.getCheckpoint lease
-      completion <- maybe (Right <$> produce lease run) (pure . Left) saved
-      let (result, snapshot) = either Fixes.checkpointContents (first Agent.reviewedFixResult) completion
+      outcome <- maybe ((\(snapshot, result) -> Right . (snapshot,) <$> result) <$> produce lease run) (pure . Agent.Fixed . Left) saved
+      case outcome of
+        Agent.Unfixed blocker -> Agent.Unfixed blocker <$ unlessM (Fixes.blockJob lease blocker) (throwError $ ReviewFailure "Fix job changed before its findings could be persisted")
+        Agent.Fixed completion -> Agent.Fixed () <$ publishable lease store run completion
+    publishable :: Fixes.Lease -> Agent.ArtifactStore -> Fixes.Run Fixes.Progress -> Either Fixes.Checkpoint (KnowledgeSnapshot, Agent.ReviewedFix) -> ReviewCtx ()
+    publishable lease store run completion = do
+      let (result, snapshot) = either Fixes.checkpointContents (\(captured, reviewed) -> (Agent.reviewedFixResult reviewed, captured)) completion
       unlessM (Fixes.currentJob lease) $ throwError $ ReviewFailure "Fix authorization is no longer available"
       latest <- require =<< load
       let repository = "https://github.com/" <> run.setup.owner <> "/" <> run.setup.repo <> ".git"
@@ -1380,13 +1386,13 @@ runFix pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob) \
       verified <- require =<< Agent.verifyFixArtifacts store artifacts
       checkpoint <- case completion of
         Left checkpoint -> pure checkpoint
-        Right (reviewed, _) -> maybe (throwError $ ReviewFailure "Reviewed fix changed before checkpoint persistence") pure =<< Fixes.saveReviewedJob lease reviewed snapshot
+        Right (_, reviewed) -> maybe (throwError $ ReviewFailure "Reviewed fix changed before checkpoint persistence") pure =<< Fixes.saveReviewedJob lease reviewed snapshot
       unlessM (Fixes.currentJob lease) $ throwError $ ReviewFailure "Fix authorization is no longer available"
       explained <- require =<< Agent.explainVerifiedFix store artifacts verified
       unlessM (Fixes.currentJob lease) $ throwError $ ReviewFailure "Fix authorization is no longer available"
       retained <- require . first show =<< Artifacts.retainFixMedia explained
       unlessM (Fixes.finishJob lease retained checkpoint) $ throwError $ ReviewFailure "Fix job changed before its result could be persisted"
-    produce :: Fixes.Lease -> Fixes.Run Fixes.Progress -> ReviewCtx (Agent.ReviewedFix, KnowledgeSnapshot)
+    produce :: Fixes.Lease -> Fixes.Run Fixes.Progress -> ReviewCtx (KnowledgeSnapshot, Agent.FixOutcome Agent.ReviewedFix)
     produce lease run = do
       ctx <- ask @AuthContext
       context <- maybe (throwError $ ReviewFailure "Fix run is no longer available") pure =<< Fixes.agentRunContext lease
@@ -1505,4 +1511,4 @@ runFix pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob) \
             phase
             validate
       result <- require answer
-      pure (result, KnowledgeSnapshot (Map.elems memory.evidence) memory.notes from until)
+      pure (KnowledgeSnapshot (Map.elems memory.evidence) memory.notes from until, result)

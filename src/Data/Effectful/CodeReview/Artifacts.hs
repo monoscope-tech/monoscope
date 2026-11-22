@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), CandidateCause, CandidatePatch, mkCandidatePatch, CapturedCandidate, candidateMatchesPatch, candidateStep, candidateIdentity, candidateRevision, FixSummary, candidateResult, captureCandidate, CandidateSnapshot, candidateSnapshot, restoreCandidate, verifyReproduction, verifyComparison, retainAdmission, VerifiedArtifacts, artifactCheckout, peerPreparation, verifyArtifacts, withVerifiedArtifacts, readPrivateArtifact, writePrivateArtifact, sha256) where
+module Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), CandidateCause, CandidatePatch, mkCandidatePatch, CapturedCandidate, candidateMatchesPatch, candidateStep, candidateIdentity, candidateRevision, FixSummary, FixBlocker (..), FixOutcome (..), candidateResult, captureCandidate, CandidateSnapshot, candidateSnapshot, restoreCandidate, verifyReproduction, verifyComparison, retainAdmission, VerifiedArtifacts, artifactCheckout, peerPreparation, verifyArtifacts, withVerifiedArtifacts, readPrivateArtifact, writePrivateArtifact, sha256) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Encoding qualified as Encoding
@@ -351,6 +351,27 @@ newtype FixSummary = FixSummary {text :: Text}
 
 instance AE.FromJSON FixSummary where
   parseJSON = parseVisual 180 FixSummary
+
+
+-- | What a fix agent found when the workflow stopped it before a verified candidate.
+-- >>> AE.fromJSON @FixBlocker (AE.object ["rootCause" AE..= ("Timeouts logged on empty lookups" :: Text), "blocker" AE..= ("No regression was admitted" :: Text)])
+-- Success (FixBlocker {rootCause = "Timeouts logged on empty lookups", blocker = "No regression was admitted"})
+-- >>> AE.fromJSON @FixBlocker (AE.object ["rootCause" AE..= T.replicate 241 "x", "blocker" AE..= ("x" :: Text)])
+-- Error "Visual explanation must be nonblank, bounded and free of control characters"
+data FixBlocker = FixBlocker {rootCause :: Text, blocker :: Text}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+instance AE.FromJSON FixBlocker where
+  parseJSON = AE.withObject "Fix blocker" \o -> FixBlocker <$> (o AE..: "rootCause" >>= parseVisual 240 Relude.id) <*> (o AE..: "blocker" >>= parseVisual 600 Relude.id)
+
+
+-- | A fix run ends with a verified fix or with the findings of a blocked one. The guest submits
+-- @FixOutcome FixSummary@; the host validates @FixOutcome FixResult@ and returns @FixOutcome ReviewedFix@.
+data FixOutcome fix = Fixed fix | Unfixed FixBlocker
+  deriving stock (Eq, Foldable, Functor, Generic, Show, Traversable)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 parseVisual :: Int -> (Text -> value) -> AE.Value -> AET.Parser value

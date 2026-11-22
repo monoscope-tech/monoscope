@@ -20,7 +20,9 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Cache qualified as Cache
 import Data.Conduit.Combinators qualified as CC
 import Data.Effectful.AgentArtifacts qualified as Artifacts
+import Control.Lens ((.~))
 import Data.Effectful.AgentWorkspace qualified as Workspace
+import Data.Generics.Product.Fields (field')
 import Data.Effectful.AgentWorkspace.Guest qualified as Guest
 import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Artifacts qualified as Native
@@ -740,7 +742,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         edit path old new = SdkTool "edit" $ AE.object ["path" AE..= (path :: Text), "edits" AE..= V.singleton (AE.object ["oldText" AE..= (old :: Text), "newText" AE..= (new :: Text)])]
         propose = SdkTool "propose_fix" $ AE.object ["rootCause" AE..= rootCause]
         verify = SdkTool "verify_fix" $ AE.object []
-        submit = SdkTool "submit_fix" $ AE.object ["summary" AE..= ("Preserve the retry token." :: Text)]
+        submit = SdkTool "submit_fix" $ AE.toJSON $ Agent.Fixed @Text "Preserve the retry token."
         toolEnds = filter (\value -> AET.parseEither (field "event") value == Right ("tool_execution_end" :: Text)) . mapMaybe (AE.decodeStrict @AE.Value) . BSC.lines <$> readFileBS diagnostic
     initRepo repository
     base <- commit repository [("runtime.sh", encodeUtf8 $ broken <> "\n"), ("template.txt", encodeUtf8 $ T.replace "literal" "LITERAL" scratchContent)]
@@ -896,7 +898,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         doesFileExist (store.usageDir </> "fixes" </> toString request.runId.toText </> "sessions" </> toString (uid 200 :: UUIDId "ai_routine_run").toText </> "checkpoint.json") `shouldReturn` True
       outcome <- resume fixRequest (validate 23)
       readIORef validationFailure >>= traverse_ throwIO
-      reviewed <-
+      Agent.Fixed reviewed <-
         either
           ( \failure -> do
               transcript <- AE.encode <$> readIORef replies
@@ -909,7 +911,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       beforeReplay <- length <$> requests
       cached <- resume fixRequest (validate 24)
       readIORef validationFailure >>= traverse_ throwIO
-      recovered <- either (fail . toString) pure cached
+      Agent.Fixed recovered <- either (fail . toString) pure cached
       Agent.reviewedFixResult recovered `shouldBe` result
       length <$> requests `shouldReturn` beforeReplay
       foreignResult <- resume fixRequest{Agent.request = request{Agent.attemptId = uid 99}} (validate 24)
@@ -2661,7 +2663,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     Agent.validExplanation result cacheRepair `shouldBe` True
     cacheRepair.source `shouldBe` manifest.source
     for_ [" ", "bad\NULcause", T.replicate 241 "x"] \cause -> do
-      let changed = result{Agent.rootCause = cause}
+      let changed = result & field' @"rootCause" .~ cause
       writeFileBS (captured </> "candidate.json") $ toStrict $ AE.encode $ metadata changed
       isLeft <$> Media.renderExplanation store request{Agent.result = changed} `shouldReturn` True
       restore
@@ -4142,7 +4144,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
               validate
         detail <- tryAny $ readFileBS diagnostic
         pure $ first (<> either (const "") (("\n" <>) . decodeUtf8) detail) result
-      if null mode then fmap (\reviewed -> (Agent.reviewedFixResult reviewed).runId) outcome `shouldBe` Right fid else isLeft outcome `shouldBe` True
+      if null mode then fmap (fmap (\reviewed -> (Agent.reviewedFixResult reviewed).runId)) outcome `shouldBe` Right (Agent.Fixed fid) else isLeft outcome `shouldBe` True
       stored <- load fid
       Fixes.phase stored.progress `shouldBe` if mode == "--deny-phase" then Fixes.Reproducing else Fixes.Verified
       stored.version `shouldBe` if mode == "--deny-phase" then 1 else 5
@@ -4246,6 +4248,45 @@ spec = around withTestResources $ describe "Production impact reviews" do
       stopped.status `shouldBe` Issues.RunCancelled
       dbExec tr "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PEdit, testPid, user)
 
+  -- 2026-11-19: every fix run whose regression could not be admitted ended "Saved progress was lost", discarding its root cause.
+  it "nativeFix_blockedByTheWorkflow_completesWithItsFindings" \tr -> withTemp "native-fix-blocked" \directory -> do
+    image <- nativeTestImage
+    store <- storeIn directory
+    let repository = directory </> "repository"
+        fid = UUIDId $ UUID.fromWords 96 0x4000 0x80000000 3
+        blocker = Agent.FixBlocker "retry_token drops its caller's token." "No regression could be admitted."
+        steps = [SdkTool "submit_fix" $ AE.toJSON $ Agent.Unfixed @Text blocker, SdkText "Blocked."]
+    initRepo repository
+    base <- commit repository [("runtime.sh", "retry_token() { printf 'lost\\n'; }\n")]
+    imageId <- readJSON (image </> "manifest.json") >>= parse (field "buildId")
+    (mapping, issue, _) <- fixFixture tr "sdk-job-blocked"
+    baseRevision <- fixRevision base
+    runQueryEffect tr (Fixes.createRun testPid fid issue mapping.id baseRevision imageId) `shouldReturn` Just fid
+    runQueryEffect tr (Fixes.queueJob testPid (getResponse tr.trSessAndHeader).user.id fid) `shouldReturn` True
+    dbExec tr "DELETE FROM background_jobs_long WHERE payload->>'tag' = 'PrepareFixWorkspace'" ()
+    [run] <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
+    appConfig <- githubApp tr
+    let cfg = appConfig{impactReviewUsageDir = Just store.usageDir, impactReviewCacheDir = Just store.cacheDir, impactReviewProvider = "fix-blocked-fixture", openaiModel = "fixture", impactReviewArtifactBucket = Just "fixture-bucket"}
+    void $ withSdkProvider directory "fix-blocked-fixture" (\_ results -> pure $ SdkResponse (fromMaybe (SdkText "Unexpected repeated inference") $ viaNonEmpty head $ drop (length results) steps) (SdkTokens 7 0)) \models _ ->
+      runTestBgRecordingHTTP frozenTime tr
+        $ Reader.local (\ctx -> ctx{config = cfg})
+        $ githubResponses (const $ pure Nothing)
+        $ impose
+          (sdkAgent store [models, image, directory </> "worker.log"])
+          ( \env -> \case
+              Agent.ReadSessionContext subject root -> passthrough env $ Agent.ReadSessionContext subject root
+              Agent.FixRepository selected request queryTelemetry knowledge admit calls usage allocations checks phase validate ->
+                passthrough env $ Agent.FixRepository selected request{Agent.request = request.request{Agent.repository = toText repository}} queryTelemetry knowledge admit calls usage allocations checks phase validate
+              _ -> liftIO $ fail "Unexpected native workflow"
+          )
+        $ BackgroundJobs.processBackgroundJob tr.trATCtx
+        $ Jobs.FixIssue testPid fid
+    ((.status) <$>) <$> runQueryEffect tr (Issues.getRoutineRun testPid run.id) `shouldReturn` Just Issues.RunNoFindings
+    dbOne tr "SELECT blocked FROM projects.issue_fix_jobs WHERE run_id = ?" (Only fid) `shouldReturn` Aeson blocker
+    answers <- dbQuery tr "SELECT content FROM apis.ai_chat_messages WHERE project_id = ? AND role = 'assistant'" (Only testPid)
+    answers `shouldSatisfy` any (\(Only (content :: Text)) -> blocker.rootCause `T.isInfixOf` content && blocker.blocker `T.isInfixOf` content)
+    dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'PublishFix'" () `shouldReturn` (0 :: Int)
+    runQueryEffect tr (isJust <$> Fixes.claimJob testPid fid) `shouldReturn` False
   it "nativeFix_applicationResumesSdkSessionsWithoutReplacingItsRunOrAttempts" \tr -> withTemp "native-fix-job" \directory -> do
     image <- nativeTestImage
     store <- storeIn directory
@@ -4258,7 +4299,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           , SdkTool "write" $ AE.object ["path" AE..= ("runtime.sh" :: Text), "content" AE..= ("retry_token() { printf '%s\\n' \"$1\"; }\n" :: Text)]
           , SdkTool "propose_fix" $ AE.object ["rootCause" AE..= ("retry_token drops its caller's token." :: Text)]
           , SdkTool "verify_fix" $ AE.object []
-          , SdkTool "submit_fix" $ AE.object ["summary" AE..= ("Preserve the caller's retry token." :: Text)]
+          , SdkTool "submit_fix" $ AE.toJSON $ Agent.Fixed @Text "Preserve the caller's retry token."
           , SdkText "Fix complete."
           ]
     initRepo repository
