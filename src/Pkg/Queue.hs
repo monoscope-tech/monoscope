@@ -71,7 +71,7 @@ import Relude
 import Relude.Extra.Foldable1 (minimum1)
 import System.Config
 import System.IO.Unsafe (unsafePerformIO)
-import System.Tracing (MessagingOp (Process), MessagingSystem (..), SpanKind (Consumer), SpanStatus (..), addEvent, batchSpanAttrs, messagingAttrs, setStatus, withSpanKind)
+import System.Tracing (MessagingOp (Process), MessagingSystem (..), NotInstrumented, SpanKind (Consumer), SpanStatus (..), addEvent, batchSpanAttrs, messagingAttrs, setStatus, withSpanKind)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, runBackground)
 import UnliftIO (throwIO)
 import UnliftIO.Concurrent (threadDelay)
@@ -101,7 +101,7 @@ sharedKafkaProducer = unsafePerformIO (newMVar Nothing)
 {-# NOINLINE sharedKafkaProducer #-}
 
 
-getOrInitKafkaProducer :: EnvConfig -> IO KP.KafkaProducer
+getOrInitKafkaProducer :: EnvConfig -> NotInstrumented (IO KP.KafkaProducer)
 getOrInitKafkaProducer envCfg =
   -- Fast path: once initialized, every produce hits a lock-free readMVar rather
   -- than serializing on modifyMVar (librdkafka's produceMessage is already

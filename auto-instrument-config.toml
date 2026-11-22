@@ -31,6 +31,10 @@ value = ["HTTP :> _", "IOE :> _"]
 type = "constraints"
 value = ["Tracing :> _", "IOE :> _"]
 
+[[exclusions]]
+type = "constructor"
+value = "NotInstrumented"
+
 [global]
 service_name = "monoscope"
 

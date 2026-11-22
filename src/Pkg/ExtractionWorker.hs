@@ -38,6 +38,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.Drain qualified as Drain
 import Pkg.SchemaLearning qualified as SchemaLearning
 import Relude
+import System.Tracing (NotInstrumented)
 import UnliftIO (tryAny)
 
 
@@ -53,14 +54,14 @@ newCircuitBreaker :: IO CircuitBreaker
 newCircuitBreaker = newTVarIO (CircuitClosed 0)
 
 
-shouldAttemptCircuit :: CircuitBreaker -> UTCTime -> IO Bool
+shouldAttemptCircuit :: CircuitBreaker -> UTCTime -> NotInstrumented (IO Bool)
 shouldAttemptCircuit cb now =
   atomically $ readTVar cb >>= \case
     CircuitClosed _ -> pure True
     CircuitOpen openedAt -> pure (diffUTCTime now openedAt >= 60)
 
 
-recordCircuitSuccess :: CircuitBreaker -> IO ()
+recordCircuitSuccess :: CircuitBreaker -> NotInstrumented (IO ())
 recordCircuitSuccess cb = atomically $ writeTVar cb (CircuitClosed 0)
 
 
@@ -228,7 +229,7 @@ appendBufferedSpans
   -- ^ droppedFlushTasks counter to bump on queue-full
   -> [(Text, BufferedSpan)]
   -- ^ per-span (serviceName, BufferedSpan) — summary must already be `T.copy`'d.
-  -> IO ()
+  -> NotInstrumented (IO ())
 appendBufferedSpans shard pid flushBatchSize now droppedCounter incoming = do
   toFlush <- atomicModifyIORef' shard.drainBuffers \buffers0 ->
     let (buffers1, flushAcc) = foldl' stepInsert (buffers0, []) incoming
@@ -319,7 +320,7 @@ forceFlushAllBuffers st = flushBuffersWhere st (const True)
 
 -- | Non-blocking enqueue of a buffer into its shard's drainFlushQ.
 -- Returns False if the queue is full (caller may bump drop metric).
-enqueueFlush :: ShardState s -> Projects.ProjectId -> Text -> ServiceBuffer -> UTCTime -> IO Bool
+enqueueFlush :: ShardState s -> Projects.ProjectId -> Text -> ServiceBuffer -> UTCTime -> NotInstrumented (IO Bool)
 enqueueFlush shard pid svcName sb now = atomically do
   full <- isFullTBQueue shard.drainFlushQ
   if full

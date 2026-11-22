@@ -7,6 +7,7 @@ import Data.Effectful.Wreq qualified as W
 import Data.List (lookup)
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
 import Database.PostgreSQL.Simple qualified as PG
 import Effectful (runEff)
 import Network.HTTP.Client (defaultManagerSettings)
@@ -18,6 +19,7 @@ import OpenTelemetry.Propagator.W3CTraceContext (w3cTraceContextPropagator)
 import OpenTelemetry.Trace (SpanKind (..), SpanStatus (..))
 import OpenTelemetry.Trace.Core (SpanHot (..))
 import Pkg.DeriveUtils (pgSpan)
+import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.TestUtils
 import System.Config (AuthContext (..))
 import System.Tracing qualified as Tracing
@@ -63,3 +65,15 @@ spec = around withTestResources do
       mgr <- Tracing.newTracedManager defaultManagerSettings
       void $ try @SomeException $ runEff $ W.runHTTPWreqVia mgr $ W.get ("http://localhost:" <> show port <> "/x")
     [(textAttr h "error.type", hotStatus h) | (Client, h) <- spans] `shouldBe` [(Just "400", Error "Bad Request from localhost")]
+
+  -- 2026-11-22: per-call helpers were ~60% of prod's 620k self-spans/hour.
+  it "AutoInstrument skips NotInstrumented helpers but still wraps the rest" \_ -> do
+    (_, spans) <- withCapturedSpans \_ -> do
+      cb <- ExtractionWorker.newCircuitBreaker
+      now <- getCurrentTime
+      void $ ExtractionWorker.shouldAttemptCircuit cb now
+      ExtractionWorker.recordCircuitSuccess cb
+      void $ ExtractionWorker.recordCircuitFailure cb now
+    let names = map (hotName . snd) spans
+    when (null names) $ pendingWith "library compiled without the AutoInstrument plugin (test-dev)"
+    names `shouldMatchList` ["newCircuitBreaker", "recordCircuitFailure"]

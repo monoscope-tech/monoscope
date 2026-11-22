@@ -227,8 +227,9 @@ import OpenTelemetry.Attributes (Attribute (..), PrimitiveAttribute (..), lookup
 import OpenTelemetry.Exporter.InMemory.Span (inMemoryListExporter)
 import OpenTelemetry.Exporter.OTLP.Span (immutableSpansToProtobuf)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
+import OpenTelemetry.Propagator.W3CTraceContext (w3cTraceContextPropagator)
 import OpenTelemetry.Trace (SpanKind, TracerProvider, getGlobalTracerProvider, setGlobalTracerProvider)
-import OpenTelemetry.Trace.Core (ImmutableSpan (spanHot, spanKind, spanTracer), SpanHot (hotAttributes), Tracer (tracerName), createTracerProvider, emptyTracerProviderOptions)
+import OpenTelemetry.Trace.Core (ImmutableSpan (spanHot, spanKind, spanTracer), SpanHot (hotAttributes), Tracer (tracerName), TracerProviderOptions (tracerProviderOptionsPropagators), createTracerProvider, emptyTracerProviderOptions)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Slack qualified as SlackBot
@@ -1799,10 +1800,11 @@ withOwnTelemetry tr apiKey act = do
 
 -- | Run @act@ under a tracer provider that keeps every span it ends, installed as the global one
 -- too: the http-client, postgresql-simple and odd-jobs enqueue spans read the global provider.
+-- It carries prod's propagator because AutoInstrument opens no span under a provider without one.
 withCapturedSpans :: (TracerProvider -> IO a) -> IO (a, [(SpanKind, SpanHot)])
 withCapturedSpans act = do
   (processor, ended) <- inMemoryListExporter
-  tp <- createTracerProvider [processor] emptyTracerProviderOptions
+  tp <- createTracerProvider [processor] emptyTracerProviderOptions{tracerProviderOptionsPropagators = w3cTraceContextPropagator}
   result <- bracket getGlobalTracerProvider setGlobalTracerProvider \_ -> setGlobalTracerProvider tp >> act tp
   (result,) <$> (traverse (\imm -> (spanKind imm,) <$> readIORef (spanHot imm)) =<< readIORef ended)
 

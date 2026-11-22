@@ -279,7 +279,7 @@ type ATBackgroundCtx :: Type -> Type
 type ATBackgroundCtx = Effectful.Eff ATBackgroundEffects
 
 
-runBackground :: Log.Logger -> AuthContext -> TracerProvider -> ATBackgroundCtx a -> IO a
+runBackground :: Log.Logger -> AuthContext -> TracerProvider -> ATBackgroundCtx a -> Tracing.NotInstrumented (IO a)
 runBackground logger appCtx tp process =
   process
     & Data.Effectful.Notify.runNotifyProduction
