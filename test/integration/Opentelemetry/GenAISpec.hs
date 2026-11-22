@@ -140,6 +140,9 @@ spec = around withTestResources do
       -- The settled hour is read from the store, not rescanned.
       chat 3 7200
       calls `shouldReturn` [("conv-h", 2, 1)]
+      -- The hourly job keeps a week settled, so a 7D window opens on stored hours only.
+      runTestBg now tr $ LLM.evaluateSignals pid
+      dbQuery @_ @(Only Int) tr [sql| SELECT count(*)::int FROM apis.llm_unit_hours WHERE project_id = ? |] (Only pid) >>= (`shouldSatisfy` (> [Only 160]))
 
     it "prices Pi's durable sessions from pi-otel: one conversation per routine run, input counted with its cache" \tr -> do
       pid <- createTestProject tr "Pi"
