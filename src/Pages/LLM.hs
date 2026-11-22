@@ -516,7 +516,7 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
                       "Match rate"
                       ( \s -> div_ [class_ "flex items-center gap-2"] do
                           let rate = if s.judged > 0 then 100 * fromIntegral s.matched / fromIntegral s.judged else 0 :: Double
-                          meter_ "flex-1" rate
+                          shareBar_ "flex-1" rate
                           span_ [class_ "w-10 text-right text-xs tabular-nums text-textWeak"] $ toHtml $ show @Text (round rate :: Int) <> "%"
                       )
                       & withAttrs [class_ "w-48"]
@@ -630,8 +630,8 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
 
 
 -- | A share as a bar. Neutral: it carries no action, and brand blue means clickable.
-meter_ :: Text -> Double -> Html ()
-meter_ cls pct = div_ [class_ $ "h-1.5 overflow-hidden rounded-full bg-fillWeak " <> cls] $ div_ [class_ "h-full rounded-full bg-fillNeutral-strong", style_ $ "width:" <> show pct <> "%"] ""
+shareBar_ :: Text -> Double -> Html ()
+shareBar_ cls pct = div_ [class_ $ "h-1.5 overflow-hidden rounded-full bg-fillWeak " <> cls] $ div_ [class_ "h-full rounded-full bg-fillNeutral-strong", style_ $ "width:" <> show pct <> "%"] ""
 
 
 flagTone :: Flag -> BadgeColor
@@ -729,7 +729,7 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
             div_ [class_ "flex items-baseline gap-2 text-sm"] do
               span_ [class_ "min-w-0 flex-1 truncate font-medium text-textStrong"] $ toHtml model
               span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ if any (isJust . (.cost)) calls then GenAI.formatUsd cost else "unpriced"
-            meter_ "" (share cost)
+            shareBar_ "" (share cost)
             span_ [class_ "text-xs tabular-nums text-textWeak"] $ toHtml $ show (length calls) <> bool " calls" " call" (length calls == 1) <> " · " <> prettyPrintCount (round $ sum $ mapMaybe (\x -> (+) <$> x.inputTokens <*> x.outputTokens <|> x.inputTokens <|> x.outputTokens) calls) <> " tokens"
         unless (null byTool) $ card_ "Tools" $ forM_ byTool \(tool, calls) -> do
           let failed = length (filter (.failed) calls)
