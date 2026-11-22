@@ -436,7 +436,7 @@ data BulkAction a = BulkAction
   , reason :: Maybe Text
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON, ToSchema) via SnakeJSON JsonValueSchema (BulkAction a)
+  deriving (AE.FromJSON, AE.ToJSON, ToSchema) via SnakeJSON SnakeSchema (BulkAction a)
 
 
 -- | One failed id within a 'BulkResult'. Serialises as @{id, error}@ so SDK

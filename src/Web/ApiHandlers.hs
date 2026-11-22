@@ -156,7 +156,7 @@ import System.Types (ATBaseCtx, ApiPrincipal (..), useTfReads)
 import Utils (hostPath)
 import Web.ApiTypes hiding (count)
 import Web.FacetsFallback (facetsFallback)
-import Web.Links (AllQueryParams, QPT)
+import Web.Links (AllQueryParams, QPT, QPage)
 import Web.Wire qualified as Wire
 
 
@@ -299,14 +299,14 @@ data ApiV1Routes mode = ApiV1Routes
         :- "endpoints"
           :> QPT "search"
           :> QueryParam "outgoing" Bool
-          :> QueryParam "page" Int
+          :> QPage
           :> QueryParam "per_page" Int
           :> Get '[JSON] (Paged EndpointSummary)
   , endpointGet :: mode :- Refuses 404 :> "endpoints" :> Capture "endpoint_id" Endpoints.EndpointId :> Get '[JSON] EndpointFull
   , logPatternsList
       :: mode
         :- "log_patterns"
-          :> QueryParam "page" Int
+          :> QPage
           :> QueryParam "per_page" Int
           :> Get '[JSON] (Paged LogPatternSummary)
   , logPatternGet :: mode :- Refuses 404 :> "log_patterns" :> Capture "pattern_id" Int64 :> Get '[JSON] LogPatternFull
@@ -319,7 +319,7 @@ data ApiV1Routes mode = ApiV1Routes
           :> QueryParam "status" IssueStatus
           :> QPT "type"
           :> QPT "service"
-          :> QueryParam "page" Int
+          :> QPage
           :> QueryParam "per_page" Int
           :> Get '[JSON] (Paged IssueApiSummary)
   , issueGet :: mode :- Refuses 404 :> "issues" :> Capture "issue_id" Issues.IssueId :> Get '[JSON] IssueApiFull

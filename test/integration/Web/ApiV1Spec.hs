@@ -565,10 +565,13 @@ spec = describe "API v1" do
                 resolved = resolve schema
                 alternatives = resolved ^.. key "oneOf" . _Array . traverse
             pure $ map resolve $ if null alternatives then [resolved] else alternatives
-      for_ ([("create_monitor", [["title", "query", "alert_threshold"], ["title", "condition", "evaluation", "notify"]]), ("search_events", [["query", "since"]])] :: [(Text, [[Text]])]) $ \(name, variants) -> do
+      for_ ([("create_monitor", [["title", "query", "alert_threshold"], ["title", "condition", "evaluation", "notify"]]), ("search_events", [["query", "since"]]), ("bulk_issues", [["action", "ids", "reason"]])] :: [(Text, [[Text]])]) $ \(name, variants) -> do
         schemas <- maybe (fail $ "Missing body schema: " <> toString name) pure $ body name
         for_ variants $ \fields ->
           schemas `shouldSatisfy` any (\schema -> all (\field -> isJust $ schema ^? key "properties" . key (AEK.fromText field)) fields)
+      -- Agents read "first page" as page 1 and skipped every filtered issue list (prod, 2026-11-19).
+      let page name = find (\tool -> (tool ^? key "name" . _String) == Just name) tools >>= (^? key "inputSchema" . key "properties" . key "page" . key "description" . _String)
+      page "list_issues" `shouldSatisfy` maybe False ("0 is the first page" `T.isInfixOf`)
       for_ (tools ^.. traverse . key "inputSchema") $ \schema ->
         for_ (schema ^.. cosmos . key "$ref" . _String) $ \reference -> do
           definition <- maybe (fail $ "Unbound schema reference: " <> toString reference) pure $ T.stripPrefix "#/$defs/" reference

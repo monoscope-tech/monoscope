@@ -9,6 +9,7 @@ module Web.Links (
   Opaque1,
   ProjectId,
   QPT,
+  QPage,
   QPU,
   QPI,
   LenientQP,
@@ -101,6 +102,7 @@ type ProjectId = Capture "projectID" Projects.ProjectId
 type QPT a = QueryParam a Text
 type QPU a = QueryParam a UTCTime
 type QPI a = QueryParam a Int
+type QPage = QueryParam' '[Optional, Strict, Description "Page number, 0-based: 0 is the first page"] "page" Int
 
 
 -- | Unknown values reach the handler as 'Left' instead of a 400, for links that outlive their enum.
