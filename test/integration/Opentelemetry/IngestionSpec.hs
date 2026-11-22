@@ -12,6 +12,7 @@ import Control.Lens ((%~), (.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString qualified as BS
+import Data.Cache qualified as Cache
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Sleep (sleepMicros)
 import Data.HashMap.Strict qualified as HM
@@ -810,10 +811,25 @@ spec = do
       -- key projectIdsByProjectApiKeys can't resolve drops out of keyToId, convert yields zero
       -- records for a payload that carried spans, and the allEmpty branch acked every offset.
       -- Converted to zero rows is a DROP: it must surface as poison or a failure, never a clean ack.
-      unresolvedBefore <- countDemoSpans tr "ack-unresolvable"
-      send tr [validLogMsg "no-such-project-key-2026-07-27" "ack-unresolvable"] logsAttrs >>= right
-        >>= (`shouldBe` ([], [("ack-unresolvable", "unresolved project: payload carried telemetry but did not resolve or convert")]))
-      countDemoSpans tr "ack-unresolvable" `shouldReturn` unresolvedBefore
+      -- deadKeyClassifiedFresh: a key absent from or revoked in the database is tagged dead, which
+      -- Pkg.Queue drops once the retry tiers run out. A live key behind a cached miss (a key racing
+      -- its own creation) keeps the reason that parks: classifying it from the cache loses its rows.
+      liveBehindMiss <- createTestAPIKey tr testPid "cached-miss-2026-07-27"
+      revoked <- createTestAPIKey tr testPid "revoked-2026-07-27"
+      dbExec tr [sql| UPDATE projects.project_api_keys SET active = false WHERE key_prefix = ? |] (Only revoked)
+      for_ [liveBehindMiss, revoked] \k -> Cache.insert tr.trATCtx.projectKeyCache k Nothing
+      let unresolvable = [("ack-unknown-key", "no-such-project-key-2026-07-27"), ("ack-revoked-key", revoked), ("ack-cached-miss", liveBehindMiss)]
+      unresolvedBefore <- traverse (countDemoSpans tr . fst) unresolvable
+      send tr [validLogMsg k a | (a, k) <- unresolvable] logsAttrs >>= right
+        >>= ( `shouldBe`
+                ( []
+                , [ ("ack-unknown-key", Telemetry.deadIdentityReason <> ": no-such-project-key-2026-07-27")
+                  , ("ack-revoked-key", Telemetry.deadIdentityReason <> ": " <> revoked)
+                  , ("ack-cached-miss", "unresolved project: payload carried telemetry but did not resolve or convert")
+                  ]
+                )
+            )
+      traverse (countDemoSpans tr . fst) unresolvable `shouldReturn` unresolvedBefore
       -- DLQ replay rewrites ONLY the failed leg: the durable leg already holds the row and PG
       -- inserts aren't idempotent. Both pools hit the shared test DB, so a dual-write replay
       -- would add the row twice.
@@ -852,6 +868,12 @@ spec = do
       let deadLetters = Map.findWithDefault [] "otlp_deadletter" dlq.logs
       (length deadLetters, null dlq.pending, Map.lookup ("otlp_logs", 0) dlq.committed) `shouldBe` (5, True, Just 5)
       (snd <$> find ((== "monoscope-attempt-count") . fst) (foldMap (K.headersToList . (.crHeaders)) (take 1 deadLetters))) `shouldBe` Just "1"
+      -- deadIdentityDroppedAtParking: on the attempt that would park, a dead identity is dropped
+      -- (nothing published) while other poison in the same batch still parks; all of it commits.
+      parkVar <- newTVarIO $ appendRecords "otlp_logs" (K.headersFromList [("monoscope-attempt-count", "3")]) (offsets [0 .. 4]) emptyBroker
+      let deadOrParked raw = if raw `elem` offsets [0, 2, 4] then Telemetry.deadIdentityReason <> ": dummy" else "forced poison"
+      parked <- drive tr parkVar ["otlp_logs"] Queue.KafkaPrimary (\tuples _ -> pure (Right ([], [(t, raw, deadOrParked raw) | (t, raw) <- tuples]))) (committedTo 5 parkVar)
+      (sort $ map (.crValue) (Map.findWithDefault [] "otlp_deadletter-parking" parked.logs), Map.lookup ("otlp_logs", 0) parked.committed) `shouldBe` (Just <$> offsets [1, 3], Just 5)
       -- 2026-06-25 commit-starvation wedge: a no-ack chunk pinned the commit base while the poll
       -- cursor moved on, and librdkafka never redelivers in-session (a 7.6M-lag stall). The loop
       -- seeks back to the un-acked base; ≥2 calls proves the retry fired rather than a first-call ack.

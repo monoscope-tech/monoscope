@@ -14,6 +14,7 @@ module Models.Projects.ProjectApiKeys (
   insertProjectApiKey,
   projectApiKeysByProjectId,
   projectIdsByProjectApiKeys,
+  deadApiKeys,
   revokeApiKey,
   getProjectApiKey,
 )
@@ -154,6 +155,20 @@ getProjectIdByApiKey projectKey = do
 projectIdsByProjectApiKeys :: (Effectful.Reader Config.AuthContext :> es, IOE :> es, Log :> es) => V.Vector Text -> Eff es (V.Vector (Text, Projects.ProjectId))
 projectIdsByProjectApiKeys projectKeys =
   V.catMaybes <$> forM projectKeys \key -> fmap (key,) <$> getProjectIdByApiKey key
+
+
+-- | The keys that can never authenticate: absent, revoked, or on a deleted or inactive
+-- project. Reads the database directly; 'projectKeyCache' holds negative entries, so a
+-- cached miss cannot tell a dead key from one that has since been created.
+deadApiKeys :: DB es => [Text] -> Eff es [Text]
+deadApiKeys keys =
+  map HI.getOneColumn
+    <$> Hasql.interp
+      [HI.sql|
+      SELECT u.key_prefix FROM unnest(#{V.fromList keys}::text[]) AS u(key_prefix)
+       WHERE NOT EXISTS (
+         SELECT 1 FROM projects.project_api_keys k JOIN projects.projects p ON p.id = k.project_id
+          WHERE k.key_prefix = u.key_prefix AND k.active AND k.deleted_at IS NULL AND p.active AND p.deleted_at IS NULL) |]
 
 
 -- | AES256-CTR; symmetric, so 'decryptAPIKey' is the same function.

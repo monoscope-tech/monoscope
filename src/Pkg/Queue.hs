@@ -66,6 +66,7 @@ import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Instrumentation.Kafka qualified as OKafka
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.IngestBudget qualified as IngestBudget
+import Pkg.Metrics qualified as Metrics
 import Relude
 import Relude.Extra.Foldable1 (minimum1)
 import System.Config
@@ -371,7 +372,7 @@ stallTicks :: Int
 stallTicks = 300
 
 
-data RetryRoute = RetryTier Text Int | Parking Text
+data RetryRoute = RetryTier Text Int | Parking Text | Drop
   deriving stock (Eq, Show)
 
 
@@ -388,21 +389,19 @@ parkingTopicFor :: Text -> Text
 parkingTopicFor base = base <> "-parking"
 
 
--- | Destination for a message that has now failed @attempt@ times (1-based):
--- the matching tier, or the parking topic once the tiers are exhausted.
+-- | Destination for a message that has now failed @attempt@ times (1-based) for @reason@:
+-- the matching tier, or once the tiers are exhausted the parking topic — unless this
+-- final pass re-read its identity as dead ('Telemetry.deadIdentityReason'): that is dropped.
 --
--- >>> retryDestination (retryTiers "dlq") (parkingTopicFor "dlq") 1
--- RetryTier "dlq" 5
--- >>> retryDestination (retryTiers "dlq") (parkingTopicFor "dlq") 2
--- RetryTier "dlq-retry-60s" 60
--- >>> retryDestination (retryTiers "dlq") (parkingTopicFor "dlq") 3
--- RetryTier "dlq-retry-600s" 600
--- >>> retryDestination (retryTiers "dlq") (parkingTopicFor "dlq") 4
--- Parking "dlq-parking"
--- >>> retryDestination (retryTiers "dlq") (parkingTopicFor "dlq") 99
--- Parking "dlq-parking"
-retryDestination :: [(Text, Int)] -> Text -> Int -> RetryRoute
-retryDestination tiers park attempt = maybe (Parking park) (uncurry RetryTier) (tiers !!? (attempt - 1))
+-- >>> let route = retryDestination (retryTiers "dlq") (parkingTopicFor "dlq")
+-- >>> map (route "unresolved project") [1, 2, 3, 4, 99]
+-- [RetryTier "dlq" 5,RetryTier "dlq-retry-60s" 60,RetryTier "dlq-retry-600s" 600,Parking "dlq-parking",Parking "dlq-parking"]
+-- >>> map (route "unknown api key: dummy") [1, 2, 3, 4, 99]
+-- [RetryTier "dlq" 5,RetryTier "dlq-retry-60s" 60,RetryTier "dlq-retry-600s" 600,Drop,Drop]
+retryDestination :: [(Text, Int)] -> Text -> Text -> Int -> RetryRoute
+retryDestination tiers park reason attempt = maybe exhausted (uncurry RetryTier) (tiers !!? (attempt - 1))
+  where
+    exhausted = if Telemetry.deadIdentityReason `T.isPrefixOf` reason then Drop else Parking park
 
 
 -- | Per-partition commit progress for the decoupled committer. @base@ is the
@@ -901,26 +900,35 @@ subChunksFor chunkTarget role dlqGroupKey nowEpoch byTP =
 -- get DLQ'd again, duplicating in DLQ. The trade — duplicate DLQ entries
 -- vs. losing poison data — favors duplicates: DLQ is rare and replay tooling
 -- can dedupe by 'original-ack-id'.
-publishToDeadLetterQueue :: (KE.KafkaProducer :> es, Time.Time :> es) => Text -> [(Text, ByteString)] -> HM.HashMap Text Text -> Text -> Eff es ()
-publishToDeadLetterQueue base messages attributes errorReason = do
+--
+-- Each message routes by its own reason: one batch can mix a dead identity, which is
+-- dropped and counted at the parking attempt, with poison that must still park.
+publishToDeadLetterQueue :: (IOE :> es, KE.KafkaProducer :> es, Log :> es, Time.Time :> es) => Text -> [Telemetry.PoisonMsg] -> HM.HashMap Text Text -> Eff es ()
+publishToDeadLetterQueue base messages attributes = do
   let tiers = retryTiers base
       park = parkingTopicFor base
   currentTime <- Time.currentTime
   let nowEpoch = floor (utcTimeToPOSIXSeconds currentTime) :: Int
   -- Throws K.KafkaError on the first enqueue failure (via the producer
   -- interpreter); the caller catches it and refuses to advance offsets.
-  for_ messages \(origTopicOrAckId, msgData) -> do
-    -- dlqHeaders bumps monoscope-attempt-count; route by the *new* count to the
-    -- matching retry tier (or parking once exhausted) and stamp the per-message
-    -- due time so the replay consumer enforces the tier's backoff.
-    let baseAttrs = dlqHeaders errorReason (toText $ show currentTime) origTopicOrAckId attributes
-        attempt = fromMaybe 1 (readMaybe . toString =<< HM.lookup "monoscope-attempt-count" baseAttrs)
-        (topic, attrs) = case retryDestination tiers park attempt of
-          RetryTier t delay -> (t, HM.insert "monoscope-next-due-at" (show (nowEpoch + delay)) baseAttrs)
-          Parking t -> (t, baseAttrs)
-    -- Raw message bytes verbatim — NEVER via publishJSONToKafka, which would
-    -- JSON-string-encode the binary protobuf into an undecodable, re-escaping blob.
-    publishRawToKafka topic msgData attrs
+  dropped <-
+    catMaybes <$> forM messages \(origTopicOrAckId, msgData, errorReason) -> do
+      -- dlqHeaders bumps monoscope-attempt-count; route by the *new* count to the
+      -- matching retry tier (or parking once exhausted) and stamp the per-message
+      -- due time so the replay consumer enforces the tier's backoff.
+      let baseAttrs = dlqHeaders errorReason (toText $ show currentTime) origTopicOrAckId attributes
+          attempt = fromMaybe 1 (readMaybe . toString =<< HM.lookup "monoscope-attempt-count" baseAttrs)
+          -- Raw message bytes verbatim — NEVER via publishJSONToKafka, which would
+          -- JSON-string-encode the binary protobuf into an undecodable, re-escaping blob.
+          publish t attrs = Nothing <$ publishRawToKafka t msgData attrs
+      case retryDestination tiers park errorReason attempt of
+        RetryTier t delay -> publish t (HM.insert "monoscope-next-due-at" (show (nowEpoch + delay)) baseAttrs)
+        Parking t -> publish t baseAttrs
+        Drop -> pure $ Just (origTopicOrAckId, errorReason)
+  unless (null dropped) do
+    LogBase.logInfo "publishToDeadLetterQueue: dead identity exhausted its retries, dropped instead of parked"
+      $ AE.object ["dlq_base" AE..= base, "dropped_messages" AE..= length dropped, "ack_ids" AE..= map fst dropped, "reasons" AE..= ordNub (map snd dropped)]
+    Metrics.count Metrics.deadIdentityDropped (length dropped) [("cloudevents.event_type", OA.toAttribute t) | t <- maybeToList (HM.lookup "ce-type" attributes)]
   where
     -- \| Headers stamped on every DLQ publish. Left-biased '<>' keeps first-failure
     -- forensics (original-topic, original-ack-id, failed-at) intact across
@@ -961,7 +969,7 @@ publishToDeadLetterQueue base messages attributes errorReason = do
 --   * Left SomeException (non-write) — Hasql-transient: no commit, broker redelivers.
 --     Otherwise: DLQ the whole batch as opaque poison; commit only if DLQ accepted.
 routeBatchOutcome
-  :: (Error K.KafkaError :> es, KE.KafkaProducer :> es, Log :> es, Time.Time :> es)
+  :: (Error K.KafkaError :> es, IOE :> es, KE.KafkaProducer :> es, Log :> es, Time.Time :> es)
   => Text
   -- ^ dead-letter base topic (per-service: OTLP DLQ vs rrweb DLQ)
   -> Text
@@ -980,21 +988,22 @@ routeBatchOutcome dlqBase svc topic validMsgs attrs = \case
     let firstReason = maybe "" (\(_, _, r) -> r) (listToMaybe poison)
     LogBase.logAttention "routeBatchOutcome: poison messages → DLQ"
       $ AE.object ["service" AE..= svc, "topic" AE..= topic, "poison_count" AE..= length poison, "write_acks" AE..= length writeAcks]
-    dlqThen [(ackId, raw) | (ackId, raw, _) <- poison] (attrs <> one ("monoscope-poison-reason", firstReason)) firstReason (writeAcks <> [ackId | (ackId, _, _) <- poison])
+    dlqThen poison (attrs <> one ("monoscope-poison-reason", firstReason)) (writeAcks <> [ackId | (ackId, _, _) <- poison])
   Right (Left wf) -> do
     let summary = Telemetry.writeFailureSummary wf
     LogBase.logAttention "routeBatchOutcome: write failure → DLQ"
       $ AE.object ["service" AE..= svc, "topic" AE..= topic, "write_failure" AE..= summary, "message_count" AE..= length validMsgs]
-    dlqThen validMsgs (attrs <> Telemetry.writeFailureDlqHeaders wf) summary (map fst validMsgs)
+    dlqThen (withReason summary validMsgs) (attrs <> Telemetry.writeFailureDlqHeaders wf) (map fst validMsgs)
   Left e -> do
     let errText = toText (show e)
     LogBase.logAttention "routeBatchOutcome: non-write exception"
       $ AE.object ["service" AE..= svc, "topic" AE..= topic, "error" AE..= errText, "message_count" AE..= length validMsgs]
     if Hasql.isTransientException e
       then pure []
-      else dlqThen validMsgs attrs errText (map fst validMsgs)
+      else dlqThen (withReason errText validMsgs) attrs (map fst validMsgs)
   where
     -- DLQ publish throws KafkaError on enqueue failure; on failure commit nothing
     -- → broker redelivers (writes repeated on retry; need idempotency downstream).
-    dlqThen msgs dlqAttrs reason acks =
-      tryError @K.KafkaError (publishToDeadLetterQueue dlqBase msgs dlqAttrs reason) <&> either (const []) (const acks)
+    dlqThen msgs dlqAttrs acks =
+      tryError @K.KafkaError (publishToDeadLetterQueue dlqBase msgs dlqAttrs) <&> either (const []) (const acks)
+    withReason reason = map \(ackId, raw) -> (ackId, raw, reason)

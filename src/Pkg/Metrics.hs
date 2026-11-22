@@ -37,6 +37,7 @@ module Pkg.Metrics (
   freeTierBatchesDropped,
   freeTierSampledOut,
   unkeyedProjectRefused,
+  deadIdentityDropped,
   drainFlushesCompleted,
   drainSpansFlushed,
   drainPatternsPersisted,
@@ -327,6 +328,13 @@ freeTierSampledOut = mkCounter "monoscope.ingest.free_tier.sampled_out" Nothing
 unkeyedProjectRefused :: Counter Int64
 unkeyedProjectRefused = mkCounter "monoscope.ingest.unkeyed_project.refused" Nothing
 {-# NOINLINE unkeyedProjectRefused #-}
+
+
+-- | DLQ messages whose every API key re-read as unknown, revoked, or on a deleted project on
+-- each retry tier; dropped instead of parked ('Pkg.Queue.retryDestination').
+deadIdentityDropped :: Counter Int64
+deadIdentityDropped = mkCounter "monoscope.ingest.dead_identity.dropped" Nothing
+{-# NOINLINE deadIdentityDropped #-}
 
 
 drainFlushesCompleted :: Counter Int64
