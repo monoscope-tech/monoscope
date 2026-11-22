@@ -189,9 +189,11 @@ sendWhatsAppAlert alert pid pTitle tos = do
     RuntimeErrorAlert{..} ->
       sendAlert appCtx.config.whatsappErrorTemplate
         $ AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <> stripSummaryBadges issueTitle <> "*"), "3" AE..= ("`" <> errorData.message <> "`"), "4" AE..= (pid.toText <> "/issues/by_hash/" <> errorData.hash)]
+    -- The approved template has two variables, and {{2}} is also its button's URL suffix, so it
+    -- carries the issue path; a third variable, or endpoint labels in {{2}}, is Twilio 21656.
     EndpointAlert{..} ->
       sendAlert appCtx.config.whatsappEndpointTemplate
-        $ AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= T.intercalate "." ((\x -> "`" <> x.label <> "`") <$> V.toList endpoints), "3" AE..= (pid.toText <> "/issues/by_hash/" <> endpointHash)]
+        $ AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= (pid.toText <> "/issues/by_hash/" <> endpointHash)]
     ShapeAlert -> pass
     -- No WhatsApp template carries a digest; reports reach email and team chat instead.
     RoutineReportAlert{} -> pass

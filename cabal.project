@@ -84,10 +84,13 @@ source-repository-package
   tag: f9e1eb14e6e769754130aabc6027ebc3e32e380b
   subdir: .
 
+-- Fork of iand675's 484370c plus one commit: http-client records a low-cardinality error.type
+-- (status code / constructor) and a short status. Upstream set both to the shown exception,
+-- whose per-request headers made every failed call its own issue (prod 2026-11-22).
 source-repository-package
   type: git
-  location: https://github.com/iand675/hs-opentelemetry
-  tag: 484370c7faf8af6ca4cb7bede8f5f29099ede5c0
+  location: https://github.com/tonyalaribe/hs-opentelemetry
+  tag: 6306ddded00cb72d56f71834d651ebcc84a9e4ca
   subdir: api-types
   subdir: semantic-conventions
   subdir: api

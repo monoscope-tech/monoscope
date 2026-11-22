@@ -2,6 +2,7 @@ module System.TracingSpec (spec) where
 
 import BackgroundJobs qualified
 import BackgroundJobs.Types qualified as Jobs
+import Control.Exception (try)
 import Data.Effectful.Wreq qualified as W
 import Data.List (lookup)
 import Data.Pool (withResource)
@@ -9,12 +10,12 @@ import Data.Text qualified as T
 import Database.PostgreSQL.Simple qualified as PG
 import Effectful (runEff)
 import Network.HTTP.Client (defaultManagerSettings)
-import Network.HTTP.Types (status200)
+import Network.HTTP.Types (status200, status400)
 import Network.Wai (requestHeaders, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp
 import OpenTelemetry.Propagator (setGlobalTextMapPropagator)
 import OpenTelemetry.Propagator.W3CTraceContext (w3cTraceContextPropagator)
-import OpenTelemetry.Trace (SpanKind (..))
+import OpenTelemetry.Trace (SpanKind (..), SpanStatus (..))
 import OpenTelemetry.Trace.Core (SpanHot (..))
 import Pkg.DeriveUtils (pgSpan)
 import Pkg.TestUtils
@@ -53,3 +54,12 @@ spec = around withTestResources do
     (jobKind, job) <- spanNamed "send background_jobs"
     (jobKind, textAttr job "messaging.system") `shouldBe` (Producer, Just "odd_jobs")
     fst <$> spanNamed "in.process" `shouldReturn` Internal
+
+  -- Prod 2026-11-22: error.type was the shown exception, per-request headers and all, so each
+  -- failed Twilio/PagerDuty call became its own issue.
+  it "a failed outbound request is one low-cardinality error: its status code, not the rendered exchange" \_ -> do
+    let app _ respond = respond (responseLBS status400 [("Request-Id", "RQ0123")] "nope")
+    (_, spans) <- withCapturedSpans \_ -> Warp.testWithApplication (pure app) \port -> do
+      mgr <- Tracing.newTracedManager defaultManagerSettings
+      void $ try @SomeException $ runEff $ W.runHTTPWreqVia mgr $ W.get ("http://localhost:" <> show port <> "/x")
+    [(textAttr h "error.type", hotStatus h) | (Client, h) <- spans] `shouldBe` [(Just "400", Error "Bad Request from localhost")]
