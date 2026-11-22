@@ -499,14 +499,29 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
         -- DLQ, never ack, a payload naming an unresolved project, or one converting to zero rows
         -- unless every project it names is capped (2026-07-27: an ack lost ~200k rows). A mixed
         -- payload goes whole, resolved rows included, so the unresolved part survives.
-        !dropPoison =
-          [ (ackId, raw, "unresolved project: payload carried telemetry but did not resolve or convert")
+        !unresolved =
+          [ (ackId, raw, keys, allowed)
           | (ackId, raw, keys, allowed, recs) <- converted
           , let resolved = (<> allowed) <$> traverse (`HM.lookup` keyToIdMap) (V.toList keys)
                 -- 'all capped []' holds, so a payload naming nothing is accounted for either way.
                 accounted pids = all (`HM.member` projectCachesMap) pids && (not (V.null recs) || all capped pids)
                 capped p = any overFreeTierQuota (HM.lookup p projectCachesMap)
           , maybe True (not . accounted) resolved
+          ]
+    -- Unresolved keys are re-read past 'projectKeyCache' (it caches misses): only a payload whose
+    -- every identity is dead there gets the reason Pkg.Queue drops once the retry tiers run out.
+    -- A failed read leaves it "unresolved project", so it still parks.
+    dead <- case hashNub [k | (_, _, keys, _) <- unresolved, k <- V.toList keys, not (HM.member k keyToIdMap)] of
+      [] -> pure HS.empty
+      ks ->
+        try @SomeException (ProjectApiKeys.deadApiKeys ks)
+          >>= either (\e -> HS.empty <$ Log.logWarn "processList: dead api key lookup failed" (AE.object ["label" AE..= label, "error" AE..= show @Text e])) (pure . HS.fromList)
+    let !dropPoison =
+          [ (ackId, raw, reason)
+          | (ackId, raw, keys, allowed) <- unresolved
+          , let reason
+                  | null allowed && not (V.null keys) && all (`HS.member` dead) keys = Telemetry.deadIdentityReason <> ": " <> T.intercalate ", " (V.toList keys)
+                  | otherwise = "unresolved project: payload carried telemetry but did not resolve or convert"
           ]
         !dropAckIds = HS.fromList [ackId | (ackId, _, _) <- dropPoison]
         !writeReady = [(ackId, raw, recs) | (ackId, raw, _, _, recs) <- converted, not (HS.member ackId dropAckIds)]

@@ -77,6 +77,7 @@ module Models.Telemetry.Telemetry (
   writeFailureDlqHeaders,
   writeBatchIdentity,
   PoisonMsg,
+  deadIdentityReason,
   BulkInsertResult (..),
   SilentUnderPersistError (..),
   unaccountedRows,
@@ -1613,6 +1614,13 @@ writeTargetFor env = \case
 type PoisonMsg =
   (Text, ByteString, Text)
   -- ^ @(ackId, rawBytes, errorReason)@
+
+
+-- | Reason prefix for a payload whose every API key is unknown, revoked, or on a deleted
+-- project per a fresh database read. The one poison 'Pkg.Queue.retryDestination' drops
+-- (counted and logged) instead of parking once the retry tiers are exhausted.
+deadIdentityReason :: Text
+deadIdentityReason = "unknown api key"
 
 
 -- | Rows inserted by a single-side ('bulkInsertOtelLogsAndSpans') bulk write.
