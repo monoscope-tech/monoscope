@@ -249,11 +249,14 @@ parseAgenticResponse (AgenticChatResult{response, toolCalls = tcs}) = do
   pure LLMResponse{explanation, query, visualization, widgets, timeRange, toolCalls = Just tcs}
 
 
--- | Only an explicit JSON @false@ suppresses a findings-only routine. Missing or
--- malformed metadata reports conservatively rather than hiding a real result.
-agenticResponseHasFindings :: AgenticChatResult -> Bool
-agenticResponseHasFindings answer =
-  fromMaybe True $ AE.decodeStrict' @AE.Value (encodeUtf8 $ fixTrailingCommas $ ELLM.stripCodeBlock answer.response) >>= (^? key "has_findings" . _Bool)
+-- | Whether a run under this report mode has something to report. For 'Issues.ReportFindings' only an
+-- explicit JSON @false@ suppresses it: missing or malformed metadata reports conservatively. A
+-- 'Issues.ReportWrites' run counts only project changes that succeeded, whatever the model claims.
+agenticResponseHasFindings :: Issues.RoutineReport -> AgenticChatResult -> Bool
+agenticResponseHasFindings mode answer = case mode of
+  Issues.ReportAlways -> True
+  Issues.ReportFindings -> fromMaybe True $ AE.decodeStrict' @AE.Value (encodeUtf8 $ fixTrailingCommas $ ELLM.stripCodeBlock answer.response) >>= (^? key "has_findings" . _Bool)
+  Issues.ReportWrites -> any (\call -> not ("Tool failed: " `T.isPrefixOf` call.resultPreview) && any Catalog.requiresAutonomy (join $ Map.lookup call.name Catalog.policiesByName)) answer.toolCalls
 
 
 -- | One widget shape for every chat surface. Older answers emitted a top-level

@@ -544,7 +544,7 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
     AI.requireAgentAccess config.access routine.projectId
     pure $ case result of
       Left err -> Issues.FailedResult $ Issues.RunFailure err (Issues.ConversationNotice $ "Routine failed: " <> err)
-      Right answer -> (if routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer) then Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer else Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer) $ maybe (AI.prepareRunAnswer (Just routine.claimedAt) answer) snd (report answer)
+      Right answer -> (if not (AI.agenticResponseHasFindings routine.reportWhen answer) then Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer else Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer) $ maybe (AI.prepareRunAnswer (Just routine.claimedAt) answer) snd (report answer)
   case outcome of
     Just (Left err)
       | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> do
