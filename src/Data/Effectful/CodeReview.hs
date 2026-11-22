@@ -1,7 +1,7 @@
 {-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Data.Effectful.CodeReview (CodeReview (..), SessionIdentity (..), SessionSubject (..), NativePause, FixContext (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), readSessionContext, prepareRepository, resolveImage, Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), proofBudget, ProofHooks (..), ProofProgress (..), hoistHooks, DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), Revision, mkRevision, revisionText, reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, workerHost, runCodeReviewTest, validExplanation, fetchDocument, pageText) where
+module Data.Effectful.CodeReview (CodeReview (..), SessionIdentity (..), SessionSubject (..), NativePause, FixContext (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), readSessionContext, prepareRepository, resolveImage, Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), Native.FixOutcome (..), Native.FixBlocker (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), proofBudget, ProofHooks (..), ProofProgress (..), hoistHooks, DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), Revision, mkRevision, revisionText, reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, workerHost, runCodeReviewTest, validExplanation, fetchDocument, pageText) where
 
 import Control.Concurrent.STM qualified as STM
 import Control.Monad.Trans.Except (except, throwE)
@@ -230,7 +230,7 @@ data CodeReview :: Effect where
   -- | The configured guest image's build, which a fix run pins before its first check.
   ResolveImage :: CodeReview m (Either Text (UUIDId "guest_image"))
   AdmitRegression :: SessionIdentity m (UUIDId "agent_attempt") -> AdmissionRequest -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> CodeReview m (Either Text AdmissionDecision)
-  FixRepository :: SessionIdentity m FixContext -> FixRequest -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (TestArtifact -> m (Either Text Text)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (PhaseReceipt -> m (Either Text ())) -> (FixResult -> m (Either Text ReviewedFix)) -> CodeReview m (Either Text ReviewedFix)
+  FixRepository :: SessionIdentity m FixContext -> FixRequest -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (TestArtifact -> m (Either Text Text)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (PhaseReceipt -> m (Either Text ())) -> (FixResult -> m (Either Text ReviewedFix)) -> CodeReview m (Either Text (Native.FixOutcome ReviewedFix))
 
 
 type instance DispatchOf CodeReview = 'Dynamic
@@ -382,9 +382,9 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
           , checks = Just $ unlift . recordCheck
           , proofs = Nothing
           , phase = unlift . recordPhase
-          , validate = StructuredDraft $ \value -> case AE.fromJSON @FixResult value of
+          , validate = StructuredDraft $ \value -> case AE.fromJSON @(Native.FixOutcome FixResult) value of
               AE.Error _ -> pure $ Left "Fix result does not match the required schema"
-              AE.Success result -> (>>= matchingReview result) <$> unlift (check result)
+              AE.Success outcome -> sequenceA <$> traverse (\result -> (>>= matchingReview result) <$> unlift (check result)) outcome
           }
   AdmitRegression sessionScope request knowledge recordCall recordUsage recordAllocation -> localSeqUnliftIO env \unlift ->
     liftIO
@@ -882,9 +882,16 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                           , Just outbox <- journal
                           , Just (FixReady session) <- guestSession
                           , submissions > 0 ->
-                              case AET.parseEither (AE.withObject "Fix summary" (AE..: "summary")) draft of
-                                Left _ -> writeMessage (Left "Fix summary does not match the host contract" :: Either Text AE.Value) >> receive supplied guestSession remaining (submissions - 1) Nothing
-                                Right summary -> do
+                              case AE.fromJSON @(Native.FixOutcome Native.FixSummary) draft of
+                                AE.Error _ -> writeMessage (Left "Fix summary does not match the host contract" :: Either Text AE.Value) >> receive supplied guestSession remaining (submissions - 1) Nothing
+                                AE.Success (Native.Unfixed blocker) -> do
+                                  checked <- case session.progress of
+                                    Checked{} -> pure $ Left "A verified candidate exists: submit it as Fixed"
+                                    (NeedsReproduction; Reproduced{}; Captured{}) -> case callbacks.validate of
+                                      StructuredDraft validate -> let unfixed = AE.toJSON $ Native.Unfixed @FixResult blocker in fmap (Accepted draft unfixed) <$> pause remaining submissions guestSession (validate unfixed)
+                                  writeMessage $ void checked
+                                  receive supplied guestSession remaining (submissions - 1) $ rightToMaybe checked
+                                AE.Success (Native.Fixed summary) -> do
                                   (outcome, current) <- State.runStateT (runExceptT $ (workflow request checkout outbox session).finish summary) (FlowState session.progress remaining)
                                   let workflowState = Just $ FixReady session{progress = current.progress}
                                   checked <- case outcome of
@@ -892,7 +899,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                     Left (Fatal failure) -> pure $ Left failure
                                     Left (Paused waiting) -> suspend current.remaining submissions Nothing workflowState >> throwPause waiting
                                     Right result -> case callbacks.validate of
-                                      StructuredDraft validate -> fmap (Accepted draft $ AE.toJSON result) <$> pause current.remaining submissions workflowState (validate $ AE.toJSON result)
+                                      StructuredDraft validate -> let fixed = AE.toJSON $ Native.Fixed result in fmap (Accepted draft fixed) <$> pause current.remaining submissions workflowState (validate fixed)
                                   writeMessage $ void checked
                                   receive supplied workflowState current.remaining (submissions - 1) $ rightToMaybe checked
                           | isNothing supplied && isJust artifactStore -> pure $ Left "Review agent has not acquired its repository checkout"
@@ -1006,7 +1013,7 @@ readNativeCheckpoint directory =
     True -> Native.readPrivateArtifact directory "checkpoint.json" (16 * 1048576) >>= either (const $ fail "Invalid native continuation") (pure . Just) . AE.eitherDecodeStrict
 
 
-runCodeReviewTest :: IOE :> es => (Request "pr_review" -> Either Text Text) -> (FixRequest -> Either Text FixResult) -> (AdmissionRequest -> Either Text AdmissionDecision) -> (ArtifactRequest -> Either Text ()) -> (ArtifactRequest -> Either Text Explanation) -> (FixReviewRequest -> Either Text FixReviewDecision) -> Eff (CodeReview ': es) a -> Eff es a
+runCodeReviewTest :: IOE :> es => (Request "pr_review" -> Either Text Text) -> (FixRequest -> Either Text (Native.FixOutcome FixResult)) -> (AdmissionRequest -> Either Text AdmissionDecision) -> (ArtifactRequest -> Either Text ()) -> (ArtifactRequest -> Either Text Explanation) -> (FixReviewRequest -> Either Text FixReviewDecision) -> Eff (CodeReview ': es) a -> Eff es a
 runCodeReviewTest respond respondFix respondAdmission respondArtifacts respondExplanation respondReview = interpret \env -> \case
   ReadSessionContext _ _ -> pure $ Right Nothing
   ReviewRepository _ request _ _ _ _ _ _ _ check -> localSeqUnliftIO env $ \unlift -> checked (respond request) (first (const "Review agent returned invalid review JSON") . AE.eitherDecodeStrict . encodeUtf8) (unlift . check)
@@ -1015,7 +1022,7 @@ runCodeReviewTest respond respondFix respondAdmission respondArtifacts respondEx
   ReviewPatch request _ _ check -> localSeqUnliftIO env $ \unlift -> checked (respond request) Right (unlift . check)
   FixRepository _ request _ _ _ _ _ _ _ _ check -> case respondFix request of
     Left message -> pure $ Left message
-    Right result -> localSeqUnliftIO env $ \unlift -> (>>= matchingReview result) <$> unlift (check result)
+    Right outcome -> localSeqUnliftIO env $ \unlift -> sequenceA <$> traverse (\result -> (>>= matchingReview result) <$> unlift (check result)) outcome
   PrepareRepository _ -> pure $ Right Workspace.Cached
   ResolveImage -> pure $ Right $ UUIDId UUID.nil
   AdmitRegression _ request _ _ _ _ -> pure $ respondAdmission request

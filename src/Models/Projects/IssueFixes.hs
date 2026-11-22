@@ -1,13 +1,13 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Models.Projects.IssueFixes (FixId, StepId, Revision, mkRevision, revisionText, Setup (..), Candidate (..), Step (..), Phase (..), Progress, phase, verifiedRevision, Run (..), Failure (..), createRun, autofixCandidates, jobOwner, getRun, recordStep, queueJob, Lease, Checkpoint, checkpointContents, getCheckpoint, saveReviewedJob, claimJob, agentRunContext, currentJob, releaseJob, failJob, finishJob, completedResult, completedExplanation, CompletedFix, completedFixContents, publicationForUser, MediaViewer (..), mediaFor, fixMediaSignedPath, latestMediaForUser, validateResult, artifactRequest, recordJobStep) where
+module Models.Projects.IssueFixes (FixId, StepId, Revision, mkRevision, revisionText, Setup (..), Candidate (..), Step (..), Phase (..), Progress, phase, verifiedRevision, Run (..), Failure (..), createRun, autofixCandidates, jobOwner, getRun, recordStep, queueJob, Lease, Checkpoint, checkpointContents, getCheckpoint, saveReviewedJob, claimJob, agentRunContext, currentJob, releaseJob, failJob, blockJob, finishJob, completedResult, completedExplanation, CompletedFix, completedFixContents, publicationForUser, MediaViewer (..), mediaFor, fixMediaSignedPath, latestMediaForUser, validateResult, artifactRequest, recordJobStep) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
 import Data.Char (isHexDigit)
 import Data.Effectful.AgentArtifacts (RetainedFix, retainedFix)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
-import Data.Effectful.CodeReview (ReviewedFix, explainedFixResult, fixExplanation, reviewedFixApproval, reviewedFixResult, validExplanation)
+import Data.Effectful.CodeReview (FixBlocker (..), ReviewedFix, explainedFixResult, fixExplanation, reviewedFixApproval, reviewedFixResult, validExplanation)
 import Data.Effectful.CodeReview.Types (Candidate (..), Failure (..), Revision, Step (..), mkRevision, revisionText)
 import Data.Effectful.CodeReview.Types qualified as Agent
 import Data.Effectful.Hasql qualified as Hasql
@@ -330,7 +330,7 @@ claimJob pid fid = Hasql.transaction TxS.ReadCommitted TxS.Write do
       WHERE job.run_id = #{fid} AND allowed.run_id = job.run_id AND allowed.project_id = #{pid} AND allowed.user_id = job.requested_by
         AND run.id = job.agent_run_id AND run.status IN ('running', 'failed', 'timed_out') AND run.policy_limit = #{Issues.Autonomous}
         AND EXISTS (SELECT 1 FROM apis.ai_conversations conversation WHERE conversation.project_id = run.project_id AND conversation.conversation_id = run.conversation_id)
-        AND job.result IS NULL AND (job.lease_until IS NULL OR job.lease_until < now())
+        AND job.result IS NULL AND job.blocked IS NULL AND (job.lease_until IS NULL OR job.lease_until < now())
       RETURNING allowed.project_id, job.run_id, job.lease_owner|]
   for_ leased $ \(Lease _ _ owner) ->
     Hasql.executeTx
@@ -378,6 +378,25 @@ failJob lease@(Lease _ fid owner) message = do
       [HI.sql|UPDATE projects.issue_fix_jobs SET failure = #{message}, finished_at = now()
       WHERE run_id = #{fid} AND lease_owner = #{owner} AND result IS NULL|]
     for_ context $ \run -> void $ Issues.completeRunTx now Nothing run $ Issues.FailedResult $ Issues.RunFailure message Issues.RunOnly
+
+
+-- | A blocked run is terminal: its findings answer the run's conversation and no claim reopens it.
+blockJob :: (DB es, Time :> es) => Lease -> FixBlocker -> Eff es Bool
+blockJob lease@(Lease _ fid owner) blocked = do
+  now <- Time.currentTime
+  context <- agentRunContext lease
+  Hasql.transaction TxS.ReadCommitted TxS.Write case context of
+    Nothing -> pure False
+    Just authority ->
+      Issues.completeRunTx now Nothing authority (Issues.CompletedResult Issues.ResultNoFindings Issues.PublishAnswer $ Issues.reportAnswer ("**Root cause:** " <> blocked.rootCause <> "\n\n**Not fixed:** " <> blocked.blocker) Nothing) >>= \case
+        Issues.RunCompleted Issues.CompletedNoFindings _ -> do
+          saved <-
+            Hasql.oneTx @Bool
+              [HI.sql| WITH blocked AS (UPDATE projects.issue_fix_jobs SET blocked = #{Aeson blocked}, failure = NULL, finished_at = now()
+              WHERE run_id = #{fid} AND lease_owner = #{owner} AND lease_until > now() AND result IS NULL RETURNING 1) SELECT EXISTS (SELECT 1 FROM blocked) |]
+          unless saved Tx.condemn
+          pure saved
+        (Issues.CompletionRejected; Issues.RunCompleted{}) -> pure False
 
 
 completedResult :: DB es => ProjectId -> FixId -> Eff es (Maybe Agent.FixResult)

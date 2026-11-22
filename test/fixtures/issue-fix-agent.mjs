@@ -59,17 +59,18 @@ for (const observation of observations) {
   assert.ok(Object.hasOwn(await rpc('Check', observation.step.contents), 'Right'));
   assert.ok(Object.hasOwn(await rpc('Phase', observation), 'Right'));
 }
+const fixed = (contents) => ({ tag: 'Fixed', contents });
 const result = { projectId: request.projectId, runId: request.runId, issueId, attemptId: request.attemptId, candidateId: randomUUID(), base: request.base, head: candidate.revision, patchSha256: 'a'.repeat(64), bundleSha256: 'b'.repeat(64), rootCause: candidate.rootCause, checkId: head.checkId, regressionSha256: head.regression.sha256, summary: 'Preserve retry tokens.' };
-assert.ok(Object.hasOwn(await rpc('Validate', { ...result, head: 'branch-name' }), 'Left'), 'invalid revision must fail at the typed boundary');
-assert.ok(Object.hasOwn(await rpc('Validate', { ...result, runId: randomUUID() }), 'Left'));
-assert.ok(Object.hasOwn(await rpc('Validate', { ...result, rootCause: 'Invented after the candidate proposal' }), 'Left'));
-assert.ok(Object.hasOwn(await rpc('Validate', { ...result, checkId: randomUUID() }), 'Left'));
-assert.ok(Object.hasOwn(await rpc('Validate', result), 'Right'));
+assert.ok(Object.hasOwn(await rpc('Validate', fixed({ ...result, head: 'branch-name' })), 'Left'), 'invalid revision must fail at the typed boundary');
+assert.ok(Object.hasOwn(await rpc('Validate', fixed({ ...result, runId: randomUUID() })), 'Left'));
+assert.ok(Object.hasOwn(await rpc('Validate', fixed({ ...result, rootCause: 'Invented after the candidate proposal' })), 'Left'));
+assert.ok(Object.hasOwn(await rpc('Validate', fixed({ ...result, checkId: randomUUID() })), 'Left'));
+assert.ok(Object.hasOwn(await rpc('Validate', fixed(result)), 'Right'));
 if (mode === '--tampered-result' || mode === '--app-job-tampered') result.summary = 'Changed after acceptance';
 if (mode === '--post-phase') assert.ok(Object.hasOwn(await rpc('Phase', observations[1]), 'Right'));
 const allocation = { id: randomUUID(), attemptId: request.attemptId, durationMs: 20, cpus: 2, memoryMiB: 1024, outcome: mode === '--post-phase' ? 'release_failed' : 'released' };
 assert.ok(Object.hasOwn(await rpc('Allocation', allocation), 'Right'));
 assert.ok(Object.hasOwn(await rpc('Allocation', allocation), 'Right'));
-process.stdout.write(JSON.stringify({ tag: 'Result', contents: result }) + '\n');
+process.stdout.write(JSON.stringify({ tag: 'Result', contents: fixed(result) }) + '\n');
 lines.close();
 process.stdin.destroy();
