@@ -7,6 +7,11 @@
         set f to the first &lt;[role=option]:not([hidden])/&gt; in me
         if f add .active to f end
       end
+      on htmx:after:swap
+        remove .active from &lt;[role=option]/&gt; in me
+        set f to the first &lt;[role=option]:not([hidden])/&gt; in me
+        if f add .active to f end
+      end
       on keydown[key==&#39;ArrowDown&#39; or key==&#39;ArrowUp&#39;] halt the event
         set opts to &lt;[role=option]:not([hidden])/&gt; in me
         set d to -1
@@ -65,6 +70,11 @@
 <div class="var-picker-page flex flex-col items-center px-4 py-12">
 <div class="picker-card overflow-hidden rounded-xl border border-strokeWeak bg-bgOverlay text-textStrong shadow-2xl var-picker group/picker w-full max-w-lg">
 <div _="on input call htmx.live.refresh() then wait 0ms
+        remove .active from &lt;[role=option]/&gt; in me
+        set f to the first &lt;[role=option]:not([hidden])/&gt; in me
+        if f add .active to f end
+      end
+      on htmx:after:swap
         remove .active from &lt;[role=option]/&gt; in me
         set f to the first &lt;[role=option]:not([hidden])/&gt; in me
         if f add .active to f end

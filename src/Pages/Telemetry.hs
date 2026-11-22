@@ -76,7 +76,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, nonEmptyT, onpointerdown_, parseTime, popoverTrigger_, prettyPrintCount, scriptJson, toUriStr, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, faSprite_, faSymbolDefs_, faUse_, fmtInt, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, nonEmptyT, onpointerdown_, parseTime, popoverTrigger_, prettyPrintCount, scriptJson, toUriStr, utcTimeToNanoseconds)
 import Web.Links hiding (explorerUrl)
 
 
@@ -773,7 +773,7 @@ chartsPage pid metricList inactive filters activeCount nextUrl =
   div_ [class_ "flex flex-col gap-2 px-4 pb-4", term "hx-preload:inherited" "false"] do
     metricsToolbar_ pid "charts" filters
       $ span_ [class_ "text-xs text-textWeak tabular-nums", role_ "status"]
-      $ toHtml (show activeCount <> " matching metrics · seen in 7d")
+      $ toHtml (countNoun activeCount "matching metric" <> " · seen in 7d")
     if V.null metricList && V.null inactive
       then
         if hasMetricFilters filters
@@ -934,7 +934,7 @@ dataPointsPage pid metrics refCounts countsUrl page filters = do
                       $ when r.isGroup
                       $ div_ [class_ "w-full border border-strokeWeak flex justify-between gap-1 items-center rounded-sm px-1 py-0.5"] do
                         faUse_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-textStrong tree-chevron rotate-90 transition-transform"
-                        span_ [class_ "text-xs"] $ toHtml $ show r.childCount
+                        span_ [class_ "text-xs"] $ toHtml $ fmtInt r.childCount
                     whenJust r.parentPath \p -> span_ [class_ "text-textDisabled"] $ toHtml $ p <> "."
                     case r.metric of
                       Nothing -> span_ [class_ "text-textStrong font-medium"] $ toHtml r.segment
@@ -977,9 +977,9 @@ dataPointsPage pid metrics refCounts countsUrl page filters = do
                 ( \r -> whenJust r.metric \_ -> do
                     let (d, w, a) = fromMaybe (0, 0, 0) $ Map.lookup r.fullPath refCounts
                     div_ [class_ "flex gap-2 items-center text-xs"] do
-                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Dashboards"] do faUse_ "grid" "regular" "w-3 h-3"; toHtml $ show d
-                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Widgets"] do faUse_ "chart-line" "regular" "w-3 h-3"; toHtml $ show w
-                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Monitors"] do faUse_ "bell" "regular" "w-3 h-3"; toHtml $ show a
+                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Dashboards"] do faUse_ "grid" "regular" "w-3 h-3"; toHtml $ fmtInt d
+                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Widgets"] do faUse_ "chart-line" "regular" "w-3 h-3"; toHtml $ fmtInt w
+                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Monitors"] do faUse_ "bell" "regular" "w-3 h-3"; toHtml $ fmtInt a
                 )
                 & Table.withAttrs [class_ "w-40"]
             ]
@@ -994,7 +994,7 @@ dataPointsPage pid metrics refCounts countsUrl page filters = do
     let total = V.length allRows
     when (total > dataPointPageSize)
       $ div_ [class_ "flex items-center justify-between px-4 py-3 text-sm text-textWeak"] do
-        span_ [class_ "tabular-nums"] $ toHtml $ show (page * dataPointPageSize + 1) <> "-" <> show (min total ((page + 1) * dataPointPageSize)) <> " of " <> show total
+        span_ [class_ "tabular-nums"] $ toHtml $ fmtInt (page * dataPointPageSize + 1) <> "-" <> fmtInt (min total ((page + 1) * dataPointPageSize)) <> " of " <> fmtInt total
         div_ [class_ "join"] do
           let pageLink icon target enabled =
                 (if enabled then a_ ([class_ "btn btn-sm join-item", href_ $ metricPageUrl pid "datapoints" filters (Just target) Nothing] <> navTabAttrs) else span_ [class_ "btn btn-sm join-item btn-disabled"])
@@ -1506,12 +1506,12 @@ renderSpanListTable services colors records =
             faSprite_ "chevron-right" "regular" "h-3 w-3 mr-2 text-iconNeutral"
             div_ [class_ $ "w-3 h-3 rounded-sm " <> getServiceColor service colors] pass
             span_ [] $ toHtml service
-          td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] $ toHtml $ show listLen
+          td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] $ toHtml $ fmtInt listLen
           td_ [class_ "px-2 py-1 max-w-48 truncate pl-4 tabular-nums"]
             $ if hasErr
               then span_ [class_ "inline-flex items-center gap-1 text-textError font-semibold", title_ "Spans with exception events"] do
                 span_ [class_ "w-1.5 h-1.5 rounded-full bg-fillError-strong"] pass
-                toHtml $ show errCount
+                toHtml $ fmtInt errCount
               else span_ [class_ "text-textWeak/60"] "—"
           forM_ ([getDurationNSMS avgDuration, getDurationNSMS duration, show pctOfTotal <> "%"] :: [Text]) $ td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] . toHtml
       tr_ [class_ "hidden p-0 m-0", [__|on click halt|]]

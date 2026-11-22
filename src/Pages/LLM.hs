@@ -76,7 +76,7 @@ import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, act, addRespHeaders, done, useTfReads)
-import Utils (TabStrip (..), countNoun, drawerRowAttrs_, faSprite_, getDurationNSMS, navTabStrip_, nonEmptyT, prettyPrintCount, replaceAllFormats, tokenFlow, truncateText)
+import Utils (TabStrip (..), countNoun, drawerRowAttrs_, faSprite_, fmtInt, getDurationNSMS, navTabStrip_, nonEmptyT, prettyPrintCount, replaceAllFormats, tokenFlow, truncateText)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links
 
@@ -611,7 +611,7 @@ llmGetH pid viewM agentM modelM signalM topicM fromP toP sinceP deferredM = do
       , col "Agent" (chips . (.agents)) & withAttrs [class_ "w-36 max-lg:hidden"]
       , col "Models" (chips . (.models)) & withAttrs [class_ "w-40 max-xl:hidden"]
       , col "Turns" (num . fromIntegral . (.turns)) & withAttrs [class_ "w-16 text-right"]
-      , col "Model · tool calls" (\c -> span_ [class_ "whitespace-nowrap tabular-nums text-textWeak"] $ toHtml $ show @Text c.llmCalls <> " · " <> show c.toolCalls) & withAttrs [class_ "w-36 text-right max-md:hidden"]
+      , col "Model · tool calls" (\c -> span_ [class_ "whitespace-nowrap tabular-nums text-textWeak"] $ toHtml $ fmtInt c.llmCalls <> " · " <> fmtInt c.toolCalls) & withAttrs [class_ "w-36 text-right max-md:hidden"]
       , col "Tokens" (num . (.tokens)) & withAttrs [class_ "w-20 text-right"]
       , col "Cost" (\c -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ maybe "—" GenAI.formatUsd c.cost) & withAttrs [class_ "w-20 text-right"]
       , col "Signals" signalsCell & withAttrs [class_ "w-44"]
@@ -713,13 +713,13 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
         <> [toHtml $ T.intercalate ", " c.models | not (null c.models)]
         <> [faSprite_ "user" "regular" "h-3 w-3" >> toHtml u | u <- take 1 c.users]
         <> [localTimeFmt_ "MMM dd, HH:mm:ss" c.started]
-        <> [toHtml $ show @Text c.turns <> bool " turns" " turn" (c.turns == 1)]
+        <> [toHtml $ countNoun c.turns "turn"]
     div_ [class_ "grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-strokeWeak bg-strokeWeak sm:grid-cols-3 xl:grid-cols-6"] do
       stat_ "Cost" (maybe "—" GenAI.formatUsd c.cost) (bool "all calls priced" (show unpriced <> " unpriced calls") (unpriced > 0)) False
       stat_ "Tokens" (prettyPrintCount $ round c.tokens) (T.intercalate " · " $ ["in " <> count (.inputTokens), "out " <> count (.outputTokens)] <> ["cached " <> count (.cacheRead) | any (isJust . (.cacheRead)) inference]) False
       stat_ "Model calls" (show c.llmCalls) (maybe "" (("avg " <>) . toText . getDurationNSMS . round) avgLatency) False
       stat_ "Tool calls" (show c.toolCalls) (bool "none failed" (show failedTools <> " failed") (failedTools > 0)) (failedTools > 0)
-      stat_ "Errors" (show c.errors) ("of " <> show (length d.steps) <> " spans") (c.errors > 0)
+      stat_ "Errors" (fmtInt c.errors) ("of " <> countNoun (length d.steps) "span") (c.errors > 0)
       stat_ "Duration" (toText $ getDurationNSMS $ round $ wall * 1e9) (if abs (fromIntegral c.activeNs - wall * 1e9) < 1e6 then show (length c.units) <> bool " traces" " trace" (length c.units == 1) else "active " <> toText (getDurationNSMS $ fromIntegral c.activeNs)) False
     unless (null c.signals) $ div_ [class_ "flex flex-col gap-1.5"] $ forM_ c.signals \f -> callout_ (flagTone f) Nothing $ strong_ (toHtml $ flagLabel f) >> " — " >> toHtml (flagHelp f)
     div_ [class_ "grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_19rem]"] do
@@ -737,13 +737,13 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
               span_ [class_ "min-w-0 flex-1 truncate font-medium text-textStrong"] $ toHtml model
               span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ if any (isJust . (.cost)) calls then GenAI.formatUsd cost else "unpriced"
             shareBar_ "" (share cost)
-            span_ [class_ "text-xs tabular-nums text-textWeak"] $ toHtml $ show (length calls) <> bool " calls" " call" (length calls == 1) <> " · " <> prettyPrintCount (round $ sum $ mapMaybe (\x -> (+) <$> x.inputTokens <*> x.outputTokens <|> x.inputTokens <|> x.outputTokens) calls) <> " tokens"
+            span_ [class_ "text-xs tabular-nums text-textWeak"] $ toHtml $ countNoun (length calls) "call" <> " · " <> prettyPrintCount (round $ sum $ mapMaybe (\x -> (+) <$> x.inputTokens <*> x.outputTokens <|> x.inputTokens <|> x.outputTokens) calls) <> " tokens"
         unless (null byTool) $ card_ "Tools" $ forM_ byTool \(tool, calls) -> do
           let failed = length (filter (.failed) calls)
           div_ [class_ "flex items-baseline gap-2 text-sm"] do
             span_ [class_ "min-w-0 flex-1 truncate font-mono text-xs text-textStrong"] $ toHtml tool
-            when (failed > 0) $ span_ [class_ "inline-flex items-center gap-1 text-xs text-textError"] $ faSprite_ "alert-triangle" "regular" "h-3 w-3" >> toHtml (show @Text failed <> " failed")
-            span_ [class_ "text-xs tabular-nums text-textWeak"] $ toHtml $ show @Text (length calls) <> "× · " <> toText (getDurationNSMS $ fromIntegral $ sum (map (.duration) calls) `div` fromIntegral (length calls))
+            when (failed > 0) $ span_ [class_ "inline-flex items-center gap-1 text-xs text-textError"] $ faSprite_ "alert-triangle" "regular" "h-3 w-3" >> toHtml (fmtInt failed <> " failed")
+            span_ [class_ "text-xs tabular-nums text-textWeak"] $ toHtml $ fmtInt (length calls) <> "× · " <> toText (getDurationNSMS $ fromIntegral $ sum (map (.duration) calls) `div` fromIntegral (length calls))
   where
     explorer = (urls.logExplorer d.pid).logExplorerGet (Just $ "attributes.gen_ai.conversation.id == \"" <> d.key <> "\" or trace_id == \"" <> d.key <> "\"") Nothing d.window.sinceQuery d.window.fromQuery d.window.toQuery (Just "spans") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
     inference = filter (GenAI.isInferenceOp . (.operation)) d.steps
@@ -811,7 +811,7 @@ conversationDetail_ d = div_ [class_ "mx-auto flex w-full max-w-7xl flex-col gap
       div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-textWeak"] do
         forM_ ([AgentStep, ModelStep, ToolStep] :: [StepKind]) \k -> span_ [class_ "inline-flex items-center gap-1.5"] $ span_ [class_ "w-2.5"] (swatch_ k False) >> toHtml (kindLabel k)
         span_ [class_ "inline-flex items-center gap-1.5"] $ span_ [class_ "w-2.5"] (swatch_ ModelStep True) >> "Error"
-        span_ [class_ "ms-auto tabular-nums"] $ toHtml $ show @Text (length d.steps) <> " spans over " <> toText (getDurationNSMS $ round $ wall * 1e9)
+        span_ [class_ "ms-auto tabular-nums"] $ toHtml $ countNoun (length d.steps) "span" <> " over " <> toText (getDurationNSMS $ round $ wall * 1e9)
       div_ [class_ "overflow-hidden rounded-xl border border-strokeWeak bg-bgRaised"] do
         div_ [class_ "grid grid-cols-[minmax(0,1fr)_6.5rem] items-end gap-3 border-b border-strokeWeak bg-fillWeaker px-3 py-1.5 text-xs font-medium text-textWeak md:grid-cols-[minmax(13rem,2fr)_minmax(10rem,3fr)_5.5rem_6.5rem]"] do
           span_ "Span"

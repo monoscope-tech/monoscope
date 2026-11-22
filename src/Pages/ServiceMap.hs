@@ -19,7 +19,7 @@ import Pkg.Components.ServiceMap (endpointDependencyMapPanel_, serviceMapPanel_)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getServiceColors, nonEmptyT, parseTime)
+import Utils (countNoun, faSprite_, fmtInt, getServiceColors, nonEmptyT, parseTime)
 
 
 newtype ServiceMapGet = ServiceMapPage (PageCtx ServiceMapPageData)
@@ -70,7 +70,7 @@ serviceMapPage_ pd = div_ [class_ "w-full h-full overflow-y-auto c-scroll p-4 pt
     faSprite_ "diagram-project" "regular" "w-3.5 h-3.5 text-iconNeutral"
     toHtml $ case pd.scope of
       EndpointServiceMap{} -> show (V.length (drawnEdges pd.graph)) <> " direct dependencies"
-      GlobalServiceMap{} -> show (V.length (drawnNodes pd.graph)) <> " services · " <> show (V.length (drawnEdges pd.graph)) <> " dependencies"
+      GlobalServiceMap{} -> countNoun (V.length (drawnNodes pd.graph)) "service" <> " · " <> fmtInt (V.length (drawnEdges pd.graph)) <> " dependencies"
     -- Search dims rather than removes, so a filtered view never silently severs a path.
     searchInput_ "ml-auto border-strokeWeak bg-fillWeaker w-56 max-md:w-32" "Filter services" [term "hx-on:input" "window.serviceMapFilter(this.value)"]
   case pd.scope of

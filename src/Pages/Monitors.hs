@@ -75,7 +75,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (FormWithOptional (..), faSprite_, formatWithCommas, popoverPanel_, popoverTrigger_)
+import Utils (FormWithOptional (..), faSprite_, fmtInt, formatWithCommas, popoverPanel_, popoverTrigger_)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), ProjectsRoutes' (..), explorerUrl, urls)
 
@@ -800,9 +800,9 @@ alertSidebar_ display alert currTime = do
         span_ [class_ "text-textStrong"] $ toHtml $ "Last: " <> ago alert.lastEvaluated
         span_ [class_ "text-textWeak"] $ toHtml $ "Last Triggered: " <> ago alert.alertLastTriggered
       sidebarItem_ "Notifications" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
-        span_ [class_ "text-textStrong tabular-nums"] $ toHtml $ "Sent: " <> show @Text alert.notificationCount
-        whenJust alert.renotifyIntervalMins \mins -> span_ [class_ "text-textWeak"] $ toHtml $ "Renotify: " <> show @Text mins <> " min"
-        whenJust alert.stopAfterCount \count -> span_ [class_ "text-textWeak"] $ toHtml $ "Stop after: " <> show @Text count
+        span_ [class_ "text-textStrong tabular-nums"] $ toHtml $ "Sent: " <> fmtInt alert.notificationCount
+        whenJust alert.renotifyIntervalMins \mins -> span_ [class_ "text-textWeak"] $ toHtml $ "Renotify: " <> fmtInt mins <> " min"
+        whenJust alert.stopAfterCount \count -> span_ [class_ "text-textWeak"] $ toHtml $ "Stop after: " <> fmtInt count
   where
     ago = maybe "Never" (toText . prettyTimeAuto currTime)
     direction = bool ">" "<" alert.triggerLessThan
@@ -848,7 +848,7 @@ alertNotificationsTab_ alert teams =
             let destinations = filter (not . V.null . snd) [("Email", team.notify_emails), ("Slack", ("#" <>) <$> team.slack_channels), ("Discord", ("#" <>) <$> team.discord_channels)] :: [(Text, V.Vector Text)]
             when (null destinations) $ p_ [class_ "text-sm text-textWeak"] "No destinations configured for this team."
             forM_ destinations \(provider, entries) -> div_ [class_ "space-y-1.5"] do
-              h5_ [class_ "text-xs font-medium text-textWeak"] $ toHtml $ provider <> " (" <> show (V.length entries) <> ")"
+              h5_ [class_ "text-xs font-medium text-textWeak"] $ toHtml $ provider <> " (" <> fmtInt (V.length entries) <> ")"
               ul_ [class_ "space-y-1 text-sm text-textStrong break-normal [overflow-wrap:anywhere]"] $ forM_ entries $ li_ . toHtml
     section_ [Aria.labelledby_ "monitor-message-heading", class_ "min-w-0 space-y-3"] do
       h3_ [id_ "monitor-message-heading", class_ "text-base font-medium text-textStrong"] "Message preview"

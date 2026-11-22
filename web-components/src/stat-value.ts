@@ -7,12 +7,13 @@
 /** Format numbers with magnitude suffixes for chart/stat display. */
 export const formatNumber = (n: number | null | undefined): string => {
   if (n == null || Number.isNaN(n)) return 'N/A'; // guard first: NaN (e.g. Number(undefined)) must not reach the DOM as "NaN". Loose type matches untyped JS callers.
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   if (!Number.isInteger(n)) {
-    if (n >= 100) return Math.round(n).toString();
-    if (n >= 10) return parseFloat(n.toFixed(1)).toString();
+    if (abs >= 100) return Math.round(n).toString();
+    if (abs >= 10) return parseFloat(n.toFixed(1)).toString();
     return parseFloat(n.toFixed(2)).toString();
   }
   return n.toString();
@@ -111,7 +112,7 @@ export const formatStatValue = (value: number, unit: string, decimals?: number |
   if (BYTE_UNITS.has(unit)) return formatBytes(value);
   const prefix = CURRENCY_UNITS.has(unit) ? unit : '';
   const suffix = prefix ? '' : (({ '': '', '1': '', '{}': '', By: ' bytes' } as Record<string, string>)[unit] ?? ` ${unit}`);
-  if (decimals != null) return `${prefix}${value.toFixed(decimals)}${suffix}`;
+  if (decimals != null) return `${prefix}${value.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}${suffix}`;
   if (value === 1 && /^[a-z]{2,}s$/i.test(unit)) return `1 ${unit.slice(0, -1)}`;
   // A non-zero value below the display precision (a rare error rate) must not read as 0.
   return value > 0 && value < 0.01 ? `<${prefix}0.01${suffix}` : `${prefix}${formatNumber(value)}${suffix}`;

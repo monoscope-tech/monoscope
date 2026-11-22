@@ -318,6 +318,7 @@ extra-source-files:
     static/migrations/0300_llm_unit_hours.sql
     static/migrations/0301_routine_report_writes.sql
     static/migrations/0302_issue_fix_blocked.sql
+    static/migrations/0302_issues_nav_index.sql
     static/migrations/0303_promote_gen_ai_text_columns.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb

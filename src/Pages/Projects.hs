@@ -118,7 +118,7 @@ import Servant.Server (err302, err500, err503, errBody, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, done, redirectCS)
-import Utils (LoadingSize (..), encodeText, faSprite_, htmxIndicator_, isDemoAndNotSudo, lookupValueText)
+import Utils (LoadingSize (..), encodeText, faSprite_, fmtInt, htmxIndicator_, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links qualified as Links
 
@@ -1163,7 +1163,7 @@ teamTabsHeader_ pid active membersCount teamsCount = do
           ]
           do
             toHtml (label :: Text)
-            span_ [class_ "text-textDisabled text-xs font-normal"] $ toHtml $ show count
+            span_ [class_ "text-textDisabled text-xs font-normal"] $ toHtml $ fmtInt count
   div_ [class_ "justify-start items-start gap-4 flex mb-6 text-sm"] do
     tab "Members" "members" membersCount
     tab "Teams" "teams" teamsCount
@@ -1194,7 +1194,7 @@ manageMembersBody pid projMembers paymentPlan teamsCount permission =
 
         div_ [class_ "space-y-3"] do
           headerRow_ [] do
-            h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ "Members (" <> show (V.length projMembers) <> ")"
+            h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ "Members (" <> fmtInt (V.length projMembers) <> ")"
             when (canManage && not (V.null projMembers)) $ button_
               [ class_ "btn btn-sm gap-1.5"
               , disabled_ "true"
