@@ -724,12 +724,36 @@ spec = do
             Left wf -> expectationFailure $ "expected " <> what <> "; got " <> toString (Telemetry.writeFailureSummary wf)
             Right (acks, poison) -> expectationFailure $ "expected " <> what <> "; got Right acks=" <> show acks <> " poison=" <> show (map (\(a, _, _) -> a) poison)
           retried = logsNamed "retryHasqlWrite: transient error, retrying"
-      -- A batch identified by project id alone, no API key, is persisted.
-      let ackProjectOnly = "ack-project-id-only"
-          projectOnly = createOtelLogAtTime "" ["valid record from " <> ackProjectOnly] frozenTime & LSF.resourceLogs %~ map (PLF.resource . PRF.attributes .~ [mkAttr "at-project-id" testPid.toText])
+      -- kafkaAtProjectId_withoutKey_refused: the collector feeding Kafka is the public, unauthenticated
+      -- edge, so a project id alone wrote into any project whose UUID was known. It is now dropped
+      -- (acked, logged at warn, counted) across logs, traces and metrics unless in OTLP_KEYLESS_PROJECT_IDS.
+      forgedPid <- createTestProject tr "forged-kafka-target"
+      traceOnly <- (& (TSF.resourceSpans %~ map (PTF.resource . PRF.attributes .~ [mkAttr "at-project-id" testPid.toText]))) <$> createOtelTraceAtTime "" "keyless-span" frozenTime
+      let ackProjectOnly :: Text
+          ackProjectOnly = "ack-project-id-only"
+          projectOnly p = createOtelLogAtTime "" ["valid record from " <> ackProjectOnly] frozenTime & (LSF.resourceLogs %~ map (PLF.resource . PRF.attributes .~ [mkAttr "at-project-id" p.toText]))
+          metricOnly = createGaugeMetricAtTime "" [] [] "keyless.metric" 1 frozenTime & (MSF.resourceMetrics %~ map (PMF.resource . PRF.attributes .~ [mkAttr "at-project-id" testPid.toText]))
+          signals :: [(Text, HM.HashMap Text Text, BS.ByteString)]
+          signals =
+            [ ("logs", logsAttrs, encodeMessage (projectOnly testPid))
+            , ("traces", HM.singleton "ce-type" "org.opentelemetry.otlp.traces.v1", encodeMessage traceOnly)
+            , ("metrics", HM.singleton "ce-type" "org.opentelemetry.otlp.metrics.v1", encodeMessage metricOnly)
+            ]
+          keyless = tr{trATCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.otlpKeylessProjectIds = [testPid]}}}
       before <- countDemoSpans tr ackProjectOnly
-      send tr [(ackProjectOnly, encodeMessage projectOnly)] logsAttrs >>= right >>= (`shouldBe` ([ackProjectOnly], []))
+      for_ signals \(sig, ceAttrs, payload) -> do
+        (forged, refusedLogs) <- withCapturedLogs tr \logged -> send logged [("ack-forged-" <> sig, payload)] ceAttrs
+        right forged >>= (`shouldBe` (["ack-forged-" <> sig], []))
+        [("warn" `elem` e.lmDomain, logField "label" e, logField "project_id" e) | e <- logsNamed "processList: at-project-id without an API key refused" refusedLogs]
+          `shouldBe` [(True, Just (AE.String sig), Just (AE.toJSON testPid))]
+        logsNamed "telemetry.write_acknowledged" refusedLogs `shouldBe` []
+        (_, allowedLogs) <- withCapturedLogs keyless \logged -> send logged [(ackProjectOnly <> "-" <> sig, payload)] ceAttrs
+        map (logField "record_count") (logsNamed "telemetry.write_acknowledged" allowedLogs) `shouldBe` [Just (AE.Number 1)]
       countDemoSpans tr ackProjectOnly `shouldReturn` (before + 1)
+      (mixed, mixedLogs) <- withCapturedLogs tr \logged -> send logged [validLogMsg key "ack-keyed-sibling", ("ack-forged-sibling", encodeMessage (projectOnly forgedPid))] logsAttrs
+      right mixed >>= (`shouldBe` (["ack-keyed-sibling", "ack-forged-sibling"], []))
+      countDemoSpans tr "ack-keyed-sibling" `shouldReturn` 1
+      map (logField "project_id") (logsNamed "processList: at-project-id without an API key refused" mixedLogs) `shouldBe` [Just (AE.toJSON forgedPid)]
       -- Two TF write attempts fail like a draining TimeFusion; both batches still ack under one
       -- batch id shared by the retries and the acknowledgment.
       let msgs = [validLogMsg key "ack-good-1", validLogMsg key "ack-good-2"]
