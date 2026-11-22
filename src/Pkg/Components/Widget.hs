@@ -1539,7 +1539,11 @@ renderTable widget = do
 
 
 -- | Render stat widget content with HTMX lazy loading support
--- Always includes HTMX attributes so widget can refresh on update-query events
+-- Always includes HTMX attributes so widget can refresh on update-query events. An eager stat with no
+-- value reads as the client's no-data dash (@NO_DATA_VALUE@ in widgets.ts), never an empty headline:
+--
+-- >>> "Value\">—</strong>" `T.isInfixOf` toStrict (renderText $ renderStatContent (def :: Widget){eager = Just True} Nothing)
+-- True
 renderStatContent :: Widget -> Maybe Text -> Html ()
 renderStatContent widget valueM = do
   let chartId = maybeToMonoid widget.id
@@ -1558,7 +1562,6 @@ renderStatContent widget valueM = do
     ]
     $ div_ [class_ "flex flex-col gap-1"] do
       strong_ [class_ "text-textStrong text-lg font-semibold tabular-nums", id_ $ chartId <> "Value"]
-        -- No value is a dash, as the client renders it ('NO_DATA_VALUE'), never an empty headline.
         $ if hasData then toHtml (fromMaybe "—" valueM) else span_ [class_ "skeleton-shimmer inline-block h-[0.9em] w-[4em] rounded-md align-middle", role_ "status", Aria.label_ "Loading"] ""
       div_ [class_ "stat-label inline-flex gap-1 items-center text-xs"] do
         whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "stat-icon w-4 h-4 text-iconBrand"
