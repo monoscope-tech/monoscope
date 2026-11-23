@@ -671,9 +671,9 @@ bodyWrapper bcfg child = do
             syncThemeToggles(newTheme);
           }
 
-          // Match the server default: dark until the user explicitly chooses light.
+          // Match the server default: keep SSR data-theme unless a cookie explicitly overrides it.
           // OS theme changes must not override the dashboard's theme.
-          applyTheme(getCookie('theme') === 'light' ? 'light' : 'dark');
+          applyTheme(getCookie('theme') || document.documentElement.getAttribute('data-theme') || 'dark');
 
           window.addEventListener('DOMContentLoaded', () => syncThemeToggles(document.body.getAttribute('data-theme')));
       |]

@@ -1,0 +1,72 @@
+cabal-version:      3.4
+name:               monoscope-proto
+version:            0.1.0.0
+license:            AGPL-3.0-only
+license-file:       ../LICENSE
+author:             Monoscope
+maintainer:         hello@monoscope.tech
+copyright:          2021-2026 Monoscope
+synopsis:           Generated OpenTelemetry proto-lens bindings for Monoscope
+build-type:         Custom
+
+extra-source-files:
+  opentelemetry/**/*.proto
+
+custom-setup
+  setup-depends:
+    , base
+    , Cabal
+    , proto-lens-setup
+
+library
+  default-language:   GHC2024
+  ghc-options:
+    -Wno-all
+  build-tool-depends:
+    proto-lens-protoc:proto-lens-protoc
+  exposed-modules:
+    Proto.Opentelemetry.Proto.Common.V1.Common
+    Proto.Opentelemetry.Proto.Common.V1.Common_Fields
+    Proto.Opentelemetry.Proto.Resource.V1.Resource
+    Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
+    Proto.Opentelemetry.Proto.Trace.V1.Trace
+    Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
+    Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService
+    Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields
+    Proto.Opentelemetry.Proto.Logs.V1.Logs
+    Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
+    Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService
+    Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields
+    Proto.Opentelemetry.Proto.Metrics.V1.Metrics
+    Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
+    Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
+    Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields
+    Proto.Opentelemetry.Proto.Profiles.V1development.Profiles
+    Proto.Opentelemetry.Proto.Profiles.V1development.Profiles_Fields
+    Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService
+    Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService_Fields
+  autogen-modules:
+    Proto.Opentelemetry.Proto.Common.V1.Common
+    Proto.Opentelemetry.Proto.Common.V1.Common_Fields
+    Proto.Opentelemetry.Proto.Resource.V1.Resource
+    Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
+    Proto.Opentelemetry.Proto.Trace.V1.Trace
+    Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
+    Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService
+    Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields
+    Proto.Opentelemetry.Proto.Logs.V1.Logs
+    Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
+    Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService
+    Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields
+    Proto.Opentelemetry.Proto.Metrics.V1.Metrics
+    Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
+    Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
+    Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields
+    Proto.Opentelemetry.Proto.Profiles.V1development.Profiles
+    Proto.Opentelemetry.Proto.Profiles.V1development.Profiles_Fields
+    Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService
+    Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService_Fields
+  build-depends:
+    , base                >=4.7 && <5
+    , proto-lens
+    , proto-lens-runtime

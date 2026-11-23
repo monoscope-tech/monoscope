@@ -372,14 +372,18 @@ run_body() { # <check>
       npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
       (cd web-components && npm ci --prefer-offline --no-audit && NODE_ENV=production npx vite build --mode production --sourcemap false)
       ;;
-    build)      cabal build all unit-tests monoscope-cli:cli-tests integration-tests doctests -j $CABAL_FLAGS "$CABAL_OPTS" ;;
+    build)
+      # Prune stale Proto.* generated files left in shared dist-newstyle from before the monoscope-proto split.
+      find dist-newstyle -path '*/monoscope-0.1.0.0/*/Proto' -type d -exec rm -rf {} + 2>/dev/null || true
+      cabal build all unit-tests monoscope-cli:cli-tests integration-tests doctests -j $CABAL_FLAGS "$CABAL_OPTS"
+      ;;
     # doctest shells out to GHC with `-package` for each local library.  A fresh
     # runner can legitimately reuse the separate build attestation, but then
     # those libraries are absent from its package database.  Build them here so
     # this check remains independently reproducible when build is skipped.
     doctests)
       if [ -n "${CI_DOCTESTS_BIN:-}" ]; then "$CI_DOCTESTS_BIN"; else
-        cabal build monoscope:lib:monoscope monoscope-shared:lib:monoscope-shared monoscope-cli:lib:monoscope-cli -j $CABAL_FLAGS "$CABAL_OPTS"
+        cabal build monoscope:lib:monoscope monoscope-shared:lib:monoscope-shared monoscope-cli:lib:monoscope-cli monoscope-proto:lib:monoscope-proto -j $CABAL_FLAGS "$CABAL_OPTS"
         cabal test doctests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct
       fi
       ;;
@@ -1057,7 +1061,13 @@ cmd_ship() {
   # shellcheck disable=SC2046
   pin_fingerprints $(selected_checks "$@")
 
-  note "ship: 1/3 checks"
+  note "ship: 1/3 checks (and production image in parallel)"
+  local ship_image_pid='' ship_image_log='.ci/ship-image.log'
+  mkdir -p .ci
+  if ! image_exists "$sha"; then
+    cmd_image "$sha" > "$ship_image_log" 2>&1 &
+    ship_image_pid=$!
+  fi
   # Keep going past a failure. The sweep runs in checks.tsv order, so stopping at
   # the first one would let a red `weeder` — which does not gate the deploy —
   # prevent `e2e`, which does, from ever running. Decide what blocks below, on
@@ -1075,12 +1085,20 @@ cmd_ship() {
     for c in build doctests unit-tests cli-tests integration-tests e2e release-tests; do
       find_attestation "$c" >/dev/null 2>&1 || blocking="$blocking $c"
     done
-    [ -z "$blocking" ] || die "not shipping: unproven deploy-path checks:$blocking"
+    if [ -n "$blocking" ]; then
+      [ -z "$ship_image_pid" ] || { kill "$ship_image_pid" 2>/dev/null || true; wait "$ship_image_pid" 2>/dev/null || true; }
+      die "not shipping: unproven deploy-path checks:$blocking"
+    fi
     note "checks reported a failure, but every deploy-path check is proven — continuing"
   fi
 
   note "ship: 2/3 image"
-  cmd_image "$sha"
+  if [ -n "$ship_image_pid" ]; then
+    wait "$ship_image_pid" || { tail -n 40 "$ship_image_log" >&2; die "production image build failed"; }
+    tail -n 3 "$ship_image_log"
+  else
+    cmd_image "$sha"
+  fi
 
   note "ship: 3/3 deploy"
   cmd_deploy "$sha"

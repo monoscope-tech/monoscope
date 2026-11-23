@@ -1,5 +1,6 @@
 - base
 - monoscope-shared
+- monoscope-proto
 - relude >= 1.2.0.0
 - colourista
 - proto-lens
@@ -133,7 +134,6 @@
 - xxhash
 - parallel
 - pretty-relative-time
-- tmp-postgres
 - directory
 - network
 - network-uri
@@ -175,10 +175,8 @@
 # === extras shared with test-dev (hpack !include cannot splice lists, so these
 # live here too; the library declares them unused, silenced by
 # -Wno-error=unused-packages set globally on ghc-options) ===
-- hspec
 - uuid-quasi
 - ki
-- pg-transact
 - aeson-pretty
 - process
 # CLI (src/CLI/) deps — the monoscope exe is a thin wrapper over CLI.Main

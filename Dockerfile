@@ -35,19 +35,11 @@ RUN rm -rf /var/lib/apt/lists/* || true
 
 WORKDIR /build
 
-# Copy cabal files for dependency caching. cabal.project lists shared/ and cli/
-# as packages, so their .cabal files have to be here too — cabal refuses to
-# resolve anything if a listed package location is missing, and this stage runs
-# before the source COPYs below.
-COPY *.cabal cabal.project* Setup.hs LICENSE README.md auto-instrument-config.toml ./
+COPY *.cabal cabal.project* LICENSE README.md auto-instrument-config.toml ./
 
-# ...and the sources of the other two local packages. `--only-dependencies`
-# below skips the target's own package but still *builds* local packages it
-# depends on, so cabal files alone are not enough — it needs shared/src and
-# cli/ to compile. Both are small and change rarely, and the dist-newstyle /
-# cabal-store cache mounts mean invalidating this layer is cheap.
 COPY shared ./shared
 COPY cli ./cli
+COPY proto ./proto
 
 # Production profiling (Haskell counterpart of timefusion's --features profiling):
 # prof-way build with LATE cost centres on monoscope code only — deps are built
@@ -74,7 +66,6 @@ COPY package.yaml ./
 COPY src ./src
 COPY test ./test
 COPY app ./app
-COPY proto ./proto
 
 # Build frontend assets and the PNG renderer from this checkout. The renderer
 # in the dependency image is only a cache and may predate chart source changes.
@@ -116,6 +107,7 @@ RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/
     flock /cache/lock sh -c '[ ! -d /cache/dist ] || { rm -rf /build/dist-newstyle && cp -a /cache/dist /build/dist-newstyle; }' && \
     (command -v hpack >/dev/null && hpack || echo "hpack not installed, using committed monoscope.cabal") && \
     find /build/dist-newstyle -name 'BodyWrapper.*' -delete && \
+    find /build/dist-newstyle -path '*/monoscope-0.1.0.0/*/Proto' -type d -exec rm -rf {} + && \
     { cabal build exe:monoscope-server -f-devtest -j --semaphore --ghc-options="+RTS -A128m -n4m -V0 -RTS" || \
       (cabal update && cabal build exe:monoscope-server -f-devtest -j --semaphore --ghc-options="+RTS -A128m -n4m -V0 -RTS"); } && \
     mkdir -p /build/dist && \
@@ -143,7 +135,7 @@ COPY cli ./cli
 COPY scripts/cli-bin.sh scripts/package-cli.sh scripts/check-cli-linkage.sh ./scripts/
 RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/.cabal/store \
     --mount=type=cache,id=monoscope-impact-cli-dist-v1,target=/build/dist-newstyle,sharing=locked \
-    sed '/^packages:/s/ \./ /' cabal.project > cabal.project.cli && \
+    sed '/^packages:/s/ \./ /; /^[[:space:]]*proto\/$/d' cabal.project > cabal.project.cli && \
     cabal build --project-file=cabal.project.cli monoscope-cli:exe:monoscope -j --semaphore --ghc-options="-O2 -split-sections -optl-Wl,--gc-sections +RTS -A128m -n4m -V0 -RTS" && \
     scripts/package-cli.sh "$(scripts/cli-bin.sh --project-file=cabal.project.cli --ghc-options="-O2 -split-sections -optl-Wl,--gc-sections +RTS -A128m -n4m -V0 -RTS")" /build/monoscope
 
