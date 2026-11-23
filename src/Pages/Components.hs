@@ -1032,7 +1032,7 @@ floatingDialog_ :: Text -> Html () -> (Text, [Text]) -> [Attribute] -> Html () -
 floatingDialog_ dialogId title submitHint formAttrs body submit =
   with (makeElement "dialog") [id_ dialogId, class_ $ "modal !items-start px-4 pt-[15vh] " <> floatingScrim, term "aria-labelledby" (dialogId <> "-title")] do
     form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close"] "close"
-    form_ (formAttrs <> [class_ "modal-box group/dialog !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none"])
+    form_ (mergedAttrs $ formAttrs <> [class_ "modal-box group/dialog !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none"])
       $ floatingCard_ [id_ $ dialogId <> "-title"] title (\attrs -> button_ (mergedAttrs $ [type_ "button", onclick_ "this.closest('dialog').close()"] <> attrs)) [submitHint, ("Close", ["esc"])] body submit
 
 
@@ -1300,7 +1300,6 @@ installationSettingsLink_ url = externalLink_ [href_ url, target_ "_blank", rel_
 
 
 -- | Brand link with a trailing ↗, for a jump to another view (Explorer, a monitor) or site.
--- @attrs@ must not carry @class_@: Lucid would fuse it into this one.
 externalLink_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
 externalLink_ attrs label = a_ (mergedAttrs $ [class_ "text-xs text-textBrand hover:underline inline-flex items-center gap-1 w-fit"] <> attrs) do
   label
