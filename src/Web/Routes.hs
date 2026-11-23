@@ -166,7 +166,8 @@ data Routes mode = Routes
   , ping :: mode :- "ping" :> Get '[PlainText] Text
   , robots :: mode :- "robots.txt" :> Get '[PlainText] Text
   , status :: mode :- "status" :> Get '[JSON] Status
-  , login :: mode :- "login" :> QPT "redirect_to" :> QPT "screen_hint" :> QPT "login_hint" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] NoContent)
+  , login :: mode :- "login" :> QPT "redirect_to" :> QPT "screen_hint" :> QPT "login_hint" :> QueryFlag "auth0_callback_failure" :> Header "Cookie" ByteString :> Get '[HTML] (PageCtx Auth.AuthPage)
+  , loginStart :: mode :- "login" :> "start" :> QPT "redirect_to" :> QPT "screen_hint" :> QPT "login_hint" :> QPT "connection" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] NoContent)
   , toLogin :: mode :- "to_login" :> QPT "redirect_to" :> SessionRedirect NoContent
   , logout :: mode :- "logout" :> Header "Cookie" ByteString :> SessionRedirect NoContent
   , setLanguage :: mode :- "set_language" :> Capture "lang" Text :> QPT "redirect_to" :> SessionRedirect NoContent
@@ -239,7 +240,8 @@ server otlpTraces otlpLogs collectUsage runNow =
           -- every widget query (SemrushBot: ~500 requests per 3h on deleted demo dashboards).
           robots = pure "User-agent: *\nDisallow: /p/\nDisallow: /share/\n"
         , status = statusH
-        , login = Auth.loginH
+        , login = Auth.loginPageH
+        , loginStart = Auth.loginH
         , toLogin = Auth.loginRedirectH
         , logout = Auth.logoutH
         , setLanguage = Auth.setLanguageH

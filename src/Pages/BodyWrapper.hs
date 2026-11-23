@@ -302,6 +302,7 @@ data BWConfig = BWConfig
   , activeConversationId :: Maybe (UUIDId "conversation")
   , composerRequestId :: Maybe (UUIDId "ai_routine_run")
   , shellNow :: UTCTime
+  , guestTheme :: Maybe Text -- Theme for pages without a session (the session's theme wins otherwise)
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -320,7 +321,7 @@ bodyWrapper bcfg child = do
       -- different conditions, and the constructor's omitted `isProd`: any non-prod deploy
       -- carrying a telemetry key rendered `new Monoscope(...)` with nothing having loaded it.
       browserMonitoring = isProd && bcfg.config.enableBrowserMonitoring && bcfg.config.telemetryApiKey /= ""
-      initialTheme = maybe "dark" (.theme) bcfg.sessM
+      initialTheme = maybe (fromMaybe "dark" bcfg.guestTheme) (.theme) bcfg.sessM
       themeColor = bool "#fbfcfd" "#111316" (initialTheme == "dark")
       projectTimeZone = mfilter (not . T.null) $ (.timeZone) <$> bcfg.currProject
   doctype_
@@ -1383,7 +1384,7 @@ loginBanner = do
     div_ [class_ "flex items-center gap-2 max-md:gap-1.5 max-md:ml-auto"] do
       a_ [class_ "text-textBrand hover:underline underline-offset-2 max-md:hidden", href_ "https://monoscopehq.com/docs/onboarding/"] "Docs"
       a_ [class_ "py-1 px-2.5 rounded-lg bg-fillWeak hover:bg-fillHover text-textStrong border border-strokeWeak text-xs font-medium max-md:hidden", href_ "https://calendar.app.google/1a4HG5GZYv1sjjZG6"] "Book Demo"
-      a_ [class_ "py-1 px-2.5 rounded-lg bg-fillBrand-strong hover:opacity-90 text-textInverse-strong text-xs font-medium", href_ "/login"] "Start Free Trial"
+      a_ [class_ "py-1 px-2.5 rounded-lg bg-fillBrand-strong hover:opacity-90 text-textInverse-strong text-xs font-medium", href_ "/login?screen_hint=signup"] "Start Free Trial"
 
 
 settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()

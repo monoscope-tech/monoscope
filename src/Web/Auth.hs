@@ -2,6 +2,9 @@ module Web.Auth (
   logoutH,
   loginRedirectH,
   loginH,
+  loginPageH,
+  AuthPage (..),
+  AuthMode (..),
   authCallbackH,
   setLanguageH,
   sessionByID,
@@ -65,17 +68,20 @@ import Effectful.Reader.Static qualified
 import Effectful.Time (Time, currentTime, runTime)
 import Hasql.Interpolate qualified as HI
 import Log (Logger)
-import Lucid (Html, renderBS, toHtml)
+import Lucid (Html, ToHtml (..), renderBS, term)
+import Lucid.Aria qualified as Aria
 import Lucid.Html5
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (craftSessionCookie, emptySessionCookie)
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (RequestHeaders, decodePathSegments, hAuthorization, hCookie, hUserAgent, methodGet, methodHead, methodPost, parseQueryText, urlEncode)
+import Network.HTTP.Types (RequestHeaders, decodePathSegments, hAuthorization, hCookie, hUserAgent, methodGet, methodHead, methodPost, parseQueryText, renderSimpleQuery, urlEncode)
 import Network.Wai (Request (queryString, rawPathInfo, rawQueryString, requestHeaders, requestMethod))
 import Network.Wreq (FormParam ((:=)), defaults, header, responseBody)
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper)
+import Pages.Components (brandLogo_)
 import Pkg.AdConversions qualified as AdConversions
+import Pkg.DeriveUtils (assetUrl)
 import Pkg.Git (tryHttp)
 import Pkg.Mail (addConvertKitUser)
 import Relude hiding (ask, asks)
@@ -86,7 +92,7 @@ import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), DB, RespHeaders, addRespHeaders)
-import Utils (constEqText, escapedQueryPartial, hostPath, nonEmptyT, toUriStr)
+import Utils (constEqText, escapedQueryPartial, faSprite_, hostPath, nonEmptyT, toUriStr)
 import Web.ApiTypes (ApiError (..), refusal)
 import Web.Cookie (SetCookie (..), defaultSetCookie, parseCookies, sameSiteLax)
 import Web.I18n qualified as I18n
@@ -419,17 +425,120 @@ loginRedirectH redirectToM = do
 
 loginH
   :: Maybe Text
-  -> Maybe Text -- screen_hint: "signup" opens Auth0's sign-up tab (invite emails)
+  -> Maybe Text -- screen_hint: "signup" opens Auth0's sign-up tab
   -> Maybe Text -- login_hint: pre-fills the email field
+  -> Maybe Text -- connection: an Auth0 connection ("github", "google-oauth2") skips its chooser for that provider
   -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] NoContent)
-loginH redirectToM screenHintM loginHintM = do
+loginH redirectToM screenHintM loginHintM connectionM = do
   envCfg <- asks env
   when envCfg.basicAuthEnabled $ throwError basicAuthChallenge
   stateVar <- UUID.toText <$> genUUID
   let escapedUri = escapedQueryPartial $ envCfg.auth0Callback <> "?redirect_to=" <> toUriStr (safeRedirect redirectToM)
       hintParam name = maybe "" (\v -> "&" <> name <> "=" <> decodeUtf8 (urlEncode True $ encodeUtf8 v))
-      redirectTo = envCfg.auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg.auth0ClientId <> "&redirect_uri=" <> escapedUri <> "&state=" <> stateVar <> "&scope=openid profile email" <> hintParam "screen_hint" screenHintM <> hintParam "login_hint" loginHintM
+      redirectTo = envCfg.auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg.auth0ClientId <> "&redirect_uri=" <> escapedUri <> "&state=" <> stateVar <> "&scope=openid profile email" <> hintParam "screen_hint" screenHintM <> hintParam "login_hint" loginHintM <> hintParam "connection" connectionM
   pure $ addHeader redirectTo $ addHeader emptySessionCookie $ addHeader (oauthStateCookie stateVar) NoContent
+
+
+data AuthMode = LogIn | SignUp
+  deriving stock (Eq, Show)
+
+
+-- | The public log-in / sign-up page, where visitors arrive from the website. Each button ends in
+-- 'loginH': social ones name their Auth0 connection, email continues on Auth0's password step.
+data AuthPage = AuthPage {mode :: AuthMode, redirectTo :: Text, email :: Maybe Text, failed :: Bool}
+  deriving stock (Show)
+
+
+-- | @screen_hint=signup@ (invite emails, "Start for free") opens sign-up; @login_hint@ pre-fills the email.
+loginPageH :: Maybe Text -> Maybe Text -> Maybe Text -> Bool -> Maybe ByteString -> ATBaseCtx (PageCtx AuthPage)
+loginPageH redirectToM screenHintM loginHintM failed cookieM = do
+  envCfg <- asks env
+  when envCfg.basicAuthEnabled $ throwError basicAuthChallenge
+  let mode = bool LogIn SignUp (screenHintM == Just "signup")
+      -- The website is light, so first visits are too; a returning user keeps the theme they picked.
+      theme = bool "light" "dark" (L.lookup "theme" (foldMap parseCookies cookieM) == Just "dark")
+  pure $ PageCtx def{pageTitle = bool "Log in" "Sign up" (mode == SignUp) <> " — Monoscope", config = envCfg, guestTheme = Just theme} AuthPage{mode, redirectTo = safeRedirect redirectToM, email = loginHintM, failed}
+
+
+instance ToHtml AuthPage where
+  toHtmlRaw = toHtml
+  toHtml p = toHtml @(Html ()) $ div_ [class_ "flex min-h-screen gap-4 bg-bgBase p-4 text-textStrong"] do
+    let signup = p.mode == SignUp
+        switchUrl = "/login?" <> decodeUtf8 (renderSimpleQuery False (("redirect_to", encodeUtf8 p.redirectTo) : [("screen_hint", "signup") | not signup]))
+        provider conn cls icon label = a_ [href_ $ "/login/start?" <> decodeUtf8 (renderSimpleQuery False (("redirect_to", encodeUtf8 p.redirectTo) : ("connection", conn) : [("screen_hint", "signup") | signup])), term "hx-preload" "false", class_ $ "btn h-11 w-full gap-2.5 text-sm font-medium " <> cls] $ icon >> label
+    main_ [class_ "flex min-w-0 flex-1 flex-col px-4 py-6 sm:px-8"] do
+      header_ [class_ "flex flex-wrap items-center justify-between gap-4 text-sm text-textWeak"] do
+        a_ [href_ "https://monoscopehq.com", Aria.label_ "Monoscope home"] $ brandLogo_ "h-7 w-auto"
+        p_ $ bool ("New to Monoscope? " >> a_ [href_ switchUrl, class_ "font-medium text-textBrand hover:underline"] "Start for free") ("Already have an account? " >> a_ [href_ switchUrl, class_ "font-medium text-textBrand hover:underline"] "Log in") signup
+      div_ [class_ "flex flex-1 items-center justify-center py-10"] $ div_ [class_ "flex w-full max-w-sm flex-col gap-6"] do
+        div_ [class_ "flex flex-col gap-2"] do
+          h1_ [class_ "text-3xl font-medium tracking-tight"] $ bool "Welcome back" "Start free. See your first trace in minutes." signup
+          p_ [class_ "text-base text-textWeak"] $ bool "Log in to see what happened in production while you were away." "Free up to 10k events a day. No credit card." signup
+        when p.failed $ div_ [role_ "alert", class_ "flex items-center gap-2 rounded-lg border border-strokeError-weak bg-fillError-weak px-3 py-2 text-sm text-textError"] do
+          faSprite_ "circle-exclamation" "solid" "size-4 shrink-0"
+          "We couldn't finish signing you in. Please try again."
+        div_ [class_ "flex flex-col gap-2.5"] do
+          provider "github" "border-0 bg-textStrong text-bgBase hover:opacity-90" (faSprite_ "github" "solid" "size-4.5") $ bool "Continue with GitHub" "Sign up with GitHub" signup
+          provider "google-oauth2" "border-strokeStrong bg-bgRaised text-textStrong hover:bg-fillHover" googleIcon_ $ bool "Continue with Google" "Sign up with Google" signup
+        div_ [class_ "flex items-center gap-3 text-xs uppercase tracking-wider text-textWeak before:h-px before:flex-1 before:bg-strokeWeak after:h-px after:flex-1 after:bg-strokeWeak"] "or with email"
+        form_ [action_ "/login/start", method_ "get", class_ "flex flex-col gap-4"] do
+          input_ [type_ "hidden", name_ "redirect_to", value_ p.redirectTo]
+          when signup $ input_ [type_ "hidden", name_ "screen_hint", value_ "signup"]
+          label_ [class_ "flex flex-col gap-1.5 text-sm font-medium"] do
+            "Work email"
+            input_ ([type_ "email", name_ "login_hint", required_ "", autocomplete_ "email", placeholder_ "you@company.com", class_ "input h-11 w-full text-base font-normal"] <> foldMap (pure . value_) p.email)
+          button_ [type_ "submit", class_ "btn btn-primary h-11 w-full gap-2 text-sm font-medium"] do
+            bool "Continue with email" "Create free account" signup
+            faSprite_ "arrow-right" "regular" "size-3.5"
+          when signup $ p_ [class_ "text-center text-xs text-textWeak"] do
+            "By signing up you agree to the "
+            a_ [href_ "https://monoscopehq.com/terms-and-conditions/", class_ "text-textBrand hover:underline"] "Terms"
+            " and "
+            a_ [href_ "https://monoscopehq.com/privacy-policy/", class_ "text-textBrand hover:underline"] "Privacy Policy"
+            "."
+        a_ [href_ "https://www.trustpilot.com/review/apitoolkit.io", class_ "flex items-center justify-center gap-2 text-sm text-textWeak hover:text-textStrong"] do
+          faSprite_ "star" "solid" "size-3.5 text-[#00B67A]"
+          "Rated 4.5 out of 5 on Trustpilot"
+      footer_ [class_ "flex flex-wrap items-center justify-between gap-3 text-xs text-textWeak"] do
+        a_ [href_ "https://github.com/monoscope-tech/monoscope", class_ "hover:text-textStrong"] "Prefer to self-host? It's open source ↗"
+        div_ [class_ "flex gap-4"] $ forM_ [("Terms", "https://monoscopehq.com/terms-and-conditions/"), ("Privacy", "https://monoscopehq.com/privacy-policy/"), ("Status", "https://status.monoscope.tech/")] \(t, u) -> a_ [href_ u, class_ "hover:text-textStrong"] t
+    -- The website's hero art, so arriving from monoscopehq.com doesn't land on a blank page.
+    aside_ [class_ "relative hidden min-h-[40rem] flex-[1.15] flex-col justify-between overflow-hidden rounded-box p-10 text-white lg:flex"] do
+      img_ [src_ (assetUrl "/public/assets/auth/sky-morning.webp"), alt_ "", class_ "absolute inset-0 size-full object-cover object-[65%_40%] dark:hidden"]
+      img_ [src_ (assetUrl "/public/assets/auth/sky-night.webp"), alt_ "", class_ "absolute inset-0 hidden size-full object-cover object-[70%_50%] dark:block"]
+      div_ [class_ "absolute inset-0 bg-linear-to-b from-[#0e2a6e]/40 via-transparent to-[#000626]/50"] ""
+      h2_ [class_ "relative max-w-lg text-5xl font-medium tracking-tight [text-shadow:0_2px_24px_rgb(0_20_80/0.35)]"]
+        $ bool ("Know what happened." >> br_ [] >> span_ [class_ "text-white/80"] "Fix it. Prove it.") "Catch failures before your customers report them." signup
+      div_ [class_ "relative flex max-w-md flex-col gap-3"] do
+        let card = div_ [class_ "flex flex-col gap-3 rounded-xl border border-strokeWeak bg-bgRaised p-4 text-textStrong shadow-sm"]
+        if signup
+          then do
+            card $ forM_ perks \(t, d) -> div_ [class_ "flex gap-3"] do
+              faSprite_ "circle-check" "solid" "mt-0.5 size-4 shrink-0 text-textBrand"
+              div_ $ p_ [class_ "text-sm font-medium"] t >> p_ [class_ "text-xs text-textWeak"] d
+            div_ [class_ "grid grid-cols-2 gap-3"] $ forM_ [("20x", "faster MTTR at Blockradar"), ("780+", "OpenTelemetry integrations")] \(n, l) ->
+              div_ [class_ "rounded-xl bg-black/40 px-4 py-3"] $ p_ [class_ "text-2xl font-medium"] n >> p_ [class_ "text-xs text-white/85"] l
+          else do
+            card do
+              div_ [class_ "flex flex-wrap items-center gap-2 text-xs"] do
+                span_ [class_ "rounded bg-fillError-weak px-1.5 py-0.5 font-semibold text-textError"] "CRITICAL"
+                span_ [class_ "font-mono text-textWeak"] "checkout · POST /get-quote"
+              p_ [class_ "text-sm font-medium"] "Shipping quote failure in checkout service"
+              p_ [class_ "flex gap-2 rounded-lg bg-fillBrand-weak px-3 py-2 text-xs text-textStrong"] do
+                faSprite_ "sparkles" "regular" "mt-0.5 size-3.5 shrink-0 text-textBrand"
+                span_ $ strong_ "AI SRE " >> "found the root cause and opened a fix PR, with the failing request attached."
+            figure_ [class_ "rounded-xl bg-black/40 p-4"] do
+              blockquote_ [class_ "text-sm"] "“It integrated effortlessly with my application and provided valuable API insights.”"
+              figcaption_ [class_ "mt-2 text-xs text-white/85"] "Odohi David · CTO, Grovepay"
+    where
+      perks :: [(Html (), Html ())]
+      perks =
+        [ ("Logs, traces, metrics and session replay", "Every request and response, unsampled, in one place.")
+        , ("An AI SRE on call from day one", "Finds the cause and opens a fix PR with the failing request as evidence.")
+        , ("Two-minute setup", "Let your coding agent instrument the project, or point any OTel exporter at us.")
+        , ("Cloud or self-hosted", "Open source, with the option to keep data in your own S3 bucket.")
+        ]
+      googleIcon_ = toHtmlRaw @Text "<svg aria-hidden=\"true\" class=\"size-4.5\" viewBox=\"0 0 48 48\"><path fill=\"#FFC107\" d=\"M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z\"/><path fill=\"#FF3D00\" d=\"M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z\"/><path fill=\"#4CAF50\" d=\"M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z\"/><path fill=\"#1976D2\" d=\"M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z\"/></svg>"
 
 
 -- | The browser that starts a login carries its @state@ back to 'authCallbackH'. Unchecked, any

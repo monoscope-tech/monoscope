@@ -74,15 +74,19 @@ spec = around withTestResources do
     Right scoped <- basic [] [("service", Just "checkout"), ("service", Just "catalog"), ("service_scope", Just "frontend-proxy"), ("environment", Just "production")]
     ((getResponse scoped).service, (getResponse scoped).environment) `shouldBe` (Just "frontend-proxy", Just "production")
 
-    -- Invite emails link to /login?screen_hint=signup&login_hint=<email> so invitees land on
-    -- sign-up with their email filled in; without hints neither parameter is sent.
-    let authorizeUrl hint email =
-          toBaseServantResponse tr (Auth.loginH (Just "/p/some-project") hint email) >>= \h -> case lookupResponseHeader @"Location" h of
+    -- Invite emails link to /login?screen_hint=signup&login_hint=<email>: the page opens on sign-up
+    -- with the email filled in, and its buttons carry the hints on to Auth0 through /login/start.
+    page <- toBaseServantResponse tr (Auth.loginPageH (Just "/p/some-project") (Just "signup") (Just "invitee@example.com") False Nothing)
+    (page.content.mode, page.content.email) `shouldBe` (Auth.SignUp, Just "invitee@example.com")
+    toStrict (Lucid.renderText $ Lucid.toHtml page.content) `shouldContainAll` ["value=\"invitee@example.com\"", "/login/start?redirect_to=%2Fp%2Fsome-project&amp;connection=github&amp;screen_hint=signup"]
+    -- Without hints neither parameter is sent; a connection skips Auth0's chooser for that provider.
+    let authorizeUrl hint email conn =
+          toBaseServantResponse tr (Auth.loginH (Just "/p/some-project") hint email conn) >>= \h -> case lookupResponseHeader @"Location" h of
             Header location -> pure location
             _ -> fail "loginH sent no Location"
-    authorizeUrl (Just "signup") (Just "invitee@example.com") >>= (`shouldContainAll` ["/authorize?", "&screen_hint=signup", "&login_hint=invitee%40example.com"])
-    plain <- authorizeUrl Nothing Nothing
-    (T.isInfixOf "/authorize?" plain, T.isInfixOf "screen_hint" plain, T.isInfixOf "login_hint" plain) `shouldBe` (True, False, False)
+    authorizeUrl (Just "signup") (Just "invitee@example.com") (Just "github") >>= (`shouldContainAll` ["/authorize?", "&screen_hint=signup", "&login_hint=invitee%40example.com", "&connection=github"])
+    plain <- authorizeUrl Nothing Nothing Nothing
+    (T.isInfixOf "/authorize?" plain, T.isInfixOf "screen_hint" plain, T.isInfixOf "login_hint" plain, T.isInfixOf "connection" plain) `shouldBe` (True, False, False, False)
 
     -- GET /device?action=approve approved, so any link could bind an attacker's CLI code to the clicker.
     code <- T.take 8 . UUID.toText <$> UUIDV4.nextRandom
