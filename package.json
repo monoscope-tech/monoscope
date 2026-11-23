@@ -1,10 +1,10 @@
 {
   "devDependencies": {
-    "@playwright/test": "^1.65.0",
+    "@playwright/test": "^1.65.1",
     "@tailwindcss/typography": "^0.5.20",
-    "autoprefixer": "^10.6.2",
-    "daisyui": "^5.8.0",
-    "postcss": "^8.5.32",
+    "autoprefixer": "^10.7.0",
+    "daisyui": "^5.8.1",
+    "postcss": "^8.5.33",
     "tailwindcss": "^4.3.5",
     "workbox-cli": "^7.4.1"
   },
