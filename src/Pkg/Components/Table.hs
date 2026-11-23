@@ -65,7 +65,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Pages.BodyWrapper (PageCtx)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_, filterInputAttr_, keyboardActivateAttr_, searchInput_, timeRefreshListener_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_, filterInputAttr_, keyboardActivateAttr_, mergedAttrs, searchInput_, timeRefreshListener_)
 import Pkg.DeriveUtils (SortField (..), SortOrder (..))
 import Relude
 import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), deleteParam, faSprite_, fmtInt, loadingIndicator_, navTabAttrs, navTabStrip_, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, uiToggle_)
@@ -542,15 +542,10 @@ renderRows tbl
                 $ th_ [class_ $ tbl.config.thClasses <> " w-8 max-md:hidden"] selectAllCheckbox_
               forM_ (zip [0 ..] tbl.columns) \(idx, c) -> do
                 let sortable = (,) <$> c.sortField <*> tbl.features.sortableColumns
-                    -- Lucid concatenates duplicate class_ attributes with NO separator, and a
-                    -- column built with `withAttrs [class_ …]` brings its own — so this value
-                    -- leads with a space. Without it the column's last class and thClasses'
-                    -- first class fuse into one nonsense token and both are lost, which is how
-                    -- header widths and `max-md:hidden` silently stopped applying.
-                    thAttrs = [class_ $ " " <> tbl.config.thClasses <> " " <> fromMaybe "" c.align <> bool "" " cursor-pointer hover:bg-fillWeak" (isJust sortable)]
+                    thAttrs = [class_ $ unwords $ filter (not . T.null) [tbl.config.thClasses, fromMaybe "" c.align, bool "" "cursor-pointer hover:bg-fillWeak" (isJust sortable)]]
                     sortAttrs = foldMap (\(field, cfg) -> swapTarget_ cfg.targetId (toggleSortUrl cfg field)) sortable
                     sortOrder = sortable >>= \(field, cfg) -> lookup cfg.currentSort [("-" <> field, Desc), ("+" <> field, Asc)]
-                th_ (c.attrs <> thAttrs <> sortAttrs <> [data_ "column-key" c.name]) do
+                th_ (mergedAttrs $ c.attrs <> thAttrs <> sortAttrs <> [data_ "column-key" c.name]) do
                   span_ [class_ $ "flex items-center gap-2 min-w-0" <> bool "" " flex-wrap" (tbl.config.bulkActionsInHeader == Just idx)] do
                     span_ [class_ $ bool "max-md:hidden" "" (idx > 0 || isNothing tbl.features.rowId)] $ toHtml c.name
                     sequence_ c.headerExtra
@@ -623,7 +618,7 @@ treeRowAttrs row tc =
 -- List mode: render columns in a flex container (no table wrapper/headers)
 {-# INLINE renderListRow #-}
 renderListRow :: Table a -> a -> Html ()
-renderListRow tbl row = div_ (treeAttrs <> rowAttrs <> [class_ " flex gap-4 md:gap-8 items-start itemsListItem py-3 hover:bg-fillWeak transition-colors duration-75 "]) $ forM_ tbl.columns \c -> div_ c.attrs $ c.render row
+renderListRow tbl row = div_ (mergedAttrs $ treeAttrs <> rowAttrs <> [class_ "flex gap-4 md:gap-8 items-start itemsListItem py-3 hover:bg-fillWeak transition-colors duration-75"]) $ forM_ tbl.columns \c -> div_ c.attrs $ c.render row
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
     treeAttrs = maybe [] (treeRowAttrs row) tbl.features.treeConfig
@@ -633,12 +628,12 @@ renderListRow tbl row = div_ (treeAttrs <> rowAttrs <> [class_ " flex gap-4 md:g
 --
 -- >>> import Lucid (class_)
 -- >>> let tbl = Table (def :: Config){renderAsTable = True} [col "c" (const "x")] (V.singleton ()) (def :: Features ()){rowAttrs = Just (const [class_ "hover:bg-fillWeaker"])}
--- >>> "hover:bg-fillWeaker hover:bg-fillWeak" `TL.isInfixOf` renderText (toHtml tbl)
+-- >>> "itemsListItem hover:bg-fillWeaker" `TL.isInfixOf` renderText (toHtml tbl)
 -- True
 {-# INLINE renderTableRow #-}
 renderTableRow :: Table a -> a -> Html ()
 renderTableRow tbl row =
-  tr_ ([class_ $ " hover:bg-fillWeak transition-colors duration-75 itemsListItem" <> bool "" " cursor-pointer" (isTreeGroup || isJust tbl.features.rowLink) <> " "] <> treeAttrs <> rowAttrs <> linkHandler) do
+  tr_ (mergedAttrs $ [class_ $ "hover:bg-fillWeak transition-colors duration-75 itemsListItem" <> bool "" " cursor-pointer" (isTreeGroup || isJust tbl.features.rowLink)] <> treeAttrs <> rowAttrs <> linkHandler) do
     whenJust tbl.features.rowId \getId ->
       td_ [class_ "w-8 align-top pt-4 max-md:hidden"]
         $ input_
@@ -649,7 +644,6 @@ renderTableRow tbl row =
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
     treeAttrs = maybe [] (treeRowAttrs row) tbl.features.treeConfig
     isTreeGroup = maybe False (\tc -> tc.isGroupRow row) tbl.features.treeConfig
-    -- Lucid joins duplicate class_ attributes with no separator, so the row class is space-padded for rowAttrs classes.
     -- Controls inside the row, and a drag that selects text, keep their own click. No @[@ in
     -- the selector: htmx ends the trigger filter at the first @]@ and the click never fires.
     -- Preload on press, not the body's hover: a cursor crossing a list loaded every row's page

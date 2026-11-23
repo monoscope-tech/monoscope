@@ -80,7 +80,7 @@
 <th class="text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap w-8 max-md:hidden">
 <input type="checkbox" autocomplete="off" aria-label="Select All" class="checkbox checkbox-sm checked:checkbox-primary" _="on click set .bulkactionItemCheckbox.checked to my.checked">
 </th>
-<th class=" text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap min-w-0 max-w-0 w-full" data-column-key="Issue">
+<th class="min-w-0 max-w-0 w-full text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap" data-column-key="Issue">
 <span class="flex items-center gap-2 min-w-0 flex-wrap">
 <span class="max-md:hidden">Issue</span>
 <span class="hidden group-has-[.bulkactionItemCheckbox:checked]/grid:md:inline-flex gap-2 ml-2 items-center">
@@ -305,12 +305,12 @@
 </span>
 </span>
 </th>
-<th class=" text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap w-24 max-md:hidden" data-column-key="Last seen">
+<th class="w-24 max-md:hidden text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap" data-column-key="Last seen">
 <span class="flex items-center gap-2 min-w-0">
 <span class>Last seen</span>
 </span>
 </th>
-<th class=" text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap w-40 max-md:hidden" data-column-key="Activity">
+<th class="w-40 max-md:hidden text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap" data-column-key="Activity">
 <span class="flex items-center gap-2 min-w-0">
 <span class>Activity</span>
 <span class="inline-flex rounded-md border border-strokeWeak overflow-hidden" role="group" aria-label="Activity window">
@@ -319,7 +319,7 @@
 </span>
 </span>
 </th>
-<th class=" text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap w-36 min-w-36 max-md:hidden" data-column-key="Count">
+<th class="w-36 min-w-36 max-md:hidden text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap" data-column-key="Count">
 <span class="flex items-center gap-2 min-w-0">
 <span class>Count</span>
 </span>
@@ -335,7 +335,7 @@
 </details>
 </td>
 </tr>
-<tr class="group/row hover:bg-fillWeaker hover:bg-fillWeak transition-colors duration-75 itemsListItem cursor-pointer " style="box-shadow: inset 3px 0 0 var(--color-fillWarning-strong)" data-hx-get="/p/<uuid>/issues/<uuid>" data-hx-push-url="true" data-hx-trigger="click[!target.closest(&#39;a,button,input,label,td:has(&gt;.bulkactionItemCheckbox)&#39;) &amp;&amp; window.getSelection().isCollapsed]" hx-preload="mousedown, touchstart" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
+<tr class="hover:bg-fillWeak transition-colors duration-75 itemsListItem cursor-pointer group/row hover:bg-fillWeaker" style="box-shadow: inset 3px 0 0 var(--color-fillWarning-strong)" data-hx-get="/p/<uuid>/issues/<uuid>" data-hx-push-url="true" data-hx-trigger="click[!target.closest(&#39;a,button,input,label,td:has(&gt;.bulkactionItemCheckbox)&#39;) &amp;&amp; window.getSelection().isCollapsed]" hx-preload="mousedown, touchstart" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
 <td class="w-8 align-top pt-4 max-md:hidden">
 <input aria-label="Select Item" class="bulkactionItemCheckbox checkbox checkbox-sm checked:checkbox-primary" type="checkbox" name="itemId" value="<uuid>">
 </td>
@@ -436,7 +436,7 @@
 <span class="block text-2xs text-textWeak whitespace-nowrap">detections · all time</span>
 </td>
 </tr>
-<tr class="group/row hover:bg-fillWeaker hover:bg-fillWeak transition-colors duration-75 itemsListItem cursor-pointer " style="box-shadow: inset 3px 0 0 var(--color-fillWarning-strong)" data-hx-get="/p/<uuid>/issues/<uuid>" data-hx-push-url="true" data-hx-trigger="click[!target.closest(&#39;a,button,input,label,td:has(&gt;.bulkactionItemCheckbox)&#39;) &amp;&amp; window.getSelection().isCollapsed]" hx-preload="mousedown, touchstart" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
+<tr class="hover:bg-fillWeak transition-colors duration-75 itemsListItem cursor-pointer group/row hover:bg-fillWeaker" style="box-shadow: inset 3px 0 0 var(--color-fillWarning-strong)" data-hx-get="/p/<uuid>/issues/<uuid>" data-hx-push-url="true" data-hx-trigger="click[!target.closest(&#39;a,button,input,label,td:has(&gt;.bulkactionItemCheckbox)&#39;) &amp;&amp; window.getSelection().isCollapsed]" hx-preload="mousedown, touchstart" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
 <td class="w-8 align-top pt-4 max-md:hidden">
 <input aria-label="Select Item" class="bulkactionItemCheckbox checkbox checkbox-sm checked:checkbox-primary" type="checkbox" name="itemId" value="<uuid>">
 </td>
@@ -537,7 +537,7 @@
 <span class="block text-2xs text-textWeak whitespace-nowrap">detections · all time</span>
 </td>
 </tr>
-<tr class="group/row hover:bg-fillWeaker hover:bg-fillWeak transition-colors duration-75 itemsListItem cursor-pointer " style="box-shadow: inset 3px 0 0 var(--color-fillWarning-strong)" data-hx-get="/p/<uuid>/issues/<uuid>" data-hx-push-url="true" data-hx-trigger="click[!target.closest(&#39;a,button,input,label,td:has(&gt;.bulkactionItemCheckbox)&#39;) &amp;&amp; window.getSelection().isCollapsed]" hx-preload="mousedown, touchstart" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
+<tr class="hover:bg-fillWeak transition-colors duration-75 itemsListItem cursor-pointer group/row hover:bg-fillWeaker" style="box-shadow: inset 3px 0 0 var(--color-fillWarning-strong)" data-hx-get="/p/<uuid>/issues/<uuid>" data-hx-push-url="true" data-hx-trigger="click[!target.closest(&#39;a,button,input,label,td:has(&gt;.bulkactionItemCheckbox)&#39;) &amp;&amp; window.getSelection().isCollapsed]" hx-preload="mousedown, touchstart" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
 <td class="w-8 align-top pt-4 max-md:hidden">
 <input aria-label="Select Item" class="bulkactionItemCheckbox checkbox checkbox-sm checked:checkbox-primary" type="checkbox" name="itemId" value="<uuid>">
 </td>
@@ -758,7 +758,7 @@
 <th class="text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap w-8 max-md:hidden">
 <input type="checkbox" autocomplete="off" aria-label="Select All" class="checkbox checkbox-sm checked:checkbox-primary" _="on click set .bulkactionItemCheckbox.checked to my.checked">
 </th>
-<th class=" text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap min-w-0 max-w-0 w-full" data-column-key="Issue">
+<th class="min-w-0 max-w-0 w-full text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap" data-column-key="Issue">
 <span class="flex items-center gap-2 min-w-0 flex-wrap">
 <span class="max-md:hidden">Issue</span>
 <span class="hidden group-has-[.bulkactionItemCheckbox:checked]/grid:md:inline-flex gap-2 ml-2 items-center">
@@ -983,12 +983,12 @@
 </span>
 </span>
 </th>
-<th class=" text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap w-24 max-md:hidden" data-column-key="Last seen">
+<th class="w-24 max-md:hidden text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap" data-column-key="Last seen">
 <span class="flex items-center gap-2 min-w-0">
 <span class>Last seen</span>
 </span>
 </th>
-<th class=" text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap w-40 max-md:hidden" data-column-key="Activity">
+<th class="w-40 max-md:hidden text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap" data-column-key="Activity">
 <span class="flex items-center gap-2 min-w-0">
 <span class>Activity</span>
 <span class="inline-flex rounded-md border border-strokeWeak overflow-hidden" role="group" aria-label="Activity window">
@@ -997,7 +997,7 @@
 </span>
 </span>
 </th>
-<th class=" text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap w-36 min-w-36 max-md:hidden" data-column-key="Count">
+<th class="w-36 min-w-36 max-md:hidden text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap" data-column-key="Count">
 <span class="flex items-center gap-2 min-w-0">
 <span class>Count</span>
 </span>
@@ -1005,7 +1005,7 @@
 </tr>
 </thead>
 <tbody class id="anomalyListForm_tbody">
-<tr class="group/row hover:bg-fillWeaker hover:bg-fillWeak transition-colors duration-75 itemsListItem cursor-pointer " style="box-shadow: inset 3px 0 0 var(--color-fillWarning-strong)" data-hx-get="/p/<uuid>/issues/<uuid>" data-hx-push-url="true" data-hx-trigger="click[!target.closest(&#39;a,button,input,label,td:has(&gt;.bulkactionItemCheckbox)&#39;) &amp;&amp; window.getSelection().isCollapsed]" hx-preload="mousedown, touchstart" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
+<tr class="hover:bg-fillWeak transition-colors duration-75 itemsListItem cursor-pointer group/row hover:bg-fillWeaker" style="box-shadow: inset 3px 0 0 var(--color-fillWarning-strong)" data-hx-get="/p/<uuid>/issues/<uuid>" data-hx-push-url="true" data-hx-trigger="click[!target.closest(&#39;a,button,input,label,td:has(&gt;.bulkactionItemCheckbox)&#39;) &amp;&amp; window.getSelection().isCollapsed]" hx-preload="mousedown, touchstart" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
 <td class="w-8 align-top pt-4 max-md:hidden">
 <input aria-label="Select Item" class="bulkactionItemCheckbox checkbox checkbox-sm checked:checkbox-primary" type="checkbox" name="itemId" value="<uuid>">
 </td>

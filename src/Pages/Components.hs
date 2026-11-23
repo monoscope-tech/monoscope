@@ -1,4 +1,4 @@
-module Pages.Components (codeContextUrl, drawer_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, floatingModal_, formActionsModal_, dangerAction_, floatingDialog_, floatingCard_, floatingScrim, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerHints_, pickerPopover_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (codeContextUrl, drawer_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, floatingModal_, formActionsModal_, dangerAction_, floatingDialog_, floatingCard_, mergedAttrs, floatingScrim, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerHints_, pickerPopover_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -7,7 +7,7 @@ import Data.Time (UTCTime, defaultTimeLocale, diffUTCTime, formatTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Base (makeAttribute, makeElement)
+import Lucid.Base (Attribute (..), makeAttribute, makeElement)
 import Lucid.Htmx (hxGet_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -93,7 +93,7 @@ entityHeader_ icon title badges chips = header_ [class_ "border-b border-strokeW
 
 -- | A titled section of an entity detail drawer; @aside@ sits opposite the title.
 detailSection_ :: [Attribute] -> Text -> Html () -> Html () -> Html ()
-detailSection_ attrs title aside body = section_ ([class_ "space-y-3"] <> attrs) do
+detailSection_ attrs title aside body = section_ (mergedAttrs $ [class_ "space-y-3"] <> attrs) do
   div_ [class_ "flex flex-wrap items-center justify-between gap-2"] $ h3_ [class_ "font-semibold text-textStrong"] (toHtml title) >> aside
   body
 
@@ -347,7 +347,7 @@ priceDisplay_ :: [Attribute] -> Text -> Text -> Html ()
 priceDisplay_ extraAttrs amount subtext = do
   div_ [class_ "flex items-end"] do
     span_ [class_ "text-textStrong text-xl"] "$"
-    span_ ([class_ "text-4xl text-textStrong"] <> extraAttrs) $ toHtml amount
+    span_ (mergedAttrs $ [class_ "text-4xl text-textStrong"] <> extraAttrs) $ toHtml amount
   div_ [class_ "flex flex-col text-textWeak text-sm"] $ span_ [] $ toHtml subtext
 
 
@@ -367,7 +367,7 @@ pricingPostAttrs pid cardId outlineCls extras =
 -- already the current plan — which is also the only case where the label is the caller's.
 pricingButton_ :: Bool -> Text -> [Attribute] -> Text -> Html ()
 pricingButton_ isCurrent normalCls attrs label =
-  button_ ([class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> bool normalCls "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" isCurrent] <> attrs)
+  button_ (mergedAttrs $ [class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> bool normalCls "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" isCurrent] <> attrs)
     $ toHtml
     $ bool label "Current plan" isCurrent
 
@@ -664,32 +664,31 @@ timeWindowVals_ defaultSince = term "hx-vals" $ "js:{...(p=>({since:p.since ?? (
 deferredShell_ :: Text -> Text -> [Attribute] -> Html () -> Html ()
 deferredShell_ containerId url extra =
   div_
-    ( [ id_ containerId
-      , class_ "w-full"
-      , -- Marks the page as still waiting on its body. Tests wait for this to disappear
-        -- instead of a fixed timeout, which is what stops a deferred page from quietly
-        -- passing an assertion it never actually ran against real content.
-        data_ "deferred-shell" ""
-      , hxGet_ url
-      , hxTrigger_ "load"
-      , hxTarget_ "this"
-      , hxSwap_ "outerHTML"
-      , hxSelect_ $ "#" <> containerId
-      , -- The body inherits @hx-preload: mouseover@; without this the shell would also fetch
-        -- itself on hover, doubling the very request it exists to make once.
-        makeAttribute "hx-preload" "false"
-      ]
-        -- Must not carry `class`: Lucid concatenates duplicate class attributes with no
-        -- separator, which would corrupt both this element's classes and the caller's.
-        <> extra
-    )
+    $ mergedAttrs
+      ( [ id_ containerId
+        , class_ "w-full"
+        , -- Marks the page as still waiting on its body. Tests wait for this to disappear
+          -- instead of a fixed timeout, which is what stops a deferred page from quietly
+          -- passing an assertion it never actually ran against real content.
+          data_ "deferred-shell" ""
+        , hxGet_ url
+        , hxTrigger_ "load"
+        , hxTarget_ "this"
+        , hxSwap_ "outerHTML"
+        , hxSelect_ $ "#" <> containerId
+        , -- The body inherits @hx-preload: mouseover@; without this the shell would also fetch
+          -- itself on hover, doubling the very request it exists to make once.
+          makeAttribute "hx-preload" "false"
+        ]
+          <> extra
+      )
 
 
 -- | A panel that fetches @url@ into itself on @trigger@ and shows a loader (announced as
 -- @ariaLabel@) until then. @attrs@ carry the id, classes and htmx extensions.
 lazyPanel_ :: Text -> Text -> Text -> [Attribute] -> Html ()
 lazyPanel_ url trigger ariaLabel attrs =
-  div_ ([hxGet_ url, hxTrigger_ trigger, hxTarget_ "this", hxSwap_ "innerHTML", Aria.busy_ "true"] <> attrs)
+  div_ (mergedAttrs $ [hxGet_ url, hxTrigger_ trigger, hxTarget_ "this", hxSwap_ "innerHTML", Aria.busy_ "true"] <> attrs)
     $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ ariaLabel]
     $ loadingIndicator_ LdSM LdDots
 
@@ -826,7 +825,7 @@ formCheckbox_ size lbl name extraAttrs =
 
 
 tagInput_ :: Monad m => Text -> Text -> [Attribute] -> HtmlT m ()
-tagInput_ inputId ph attrs = textarea_ ([class_ "textarea w-full min-h-12 resize-none", id_ inputId, placeholder_ ph, data_ "tagify" ""] <> attrs) ""
+tagInput_ inputId ph attrs = textarea_ (mergedAttrs $ [class_ "textarea w-full min-h-12 resize-none", id_ inputId, placeholder_ ph, data_ "tagify" ""] <> attrs) ""
 
 
 formActionsModal_ :: Monad m => Text -> HtmlT m () -> HtmlT m ()
@@ -885,7 +884,7 @@ toneDot_ tone label = span_ [class_ "inline-flex items-center gap-1.5 whitespace
 -- | A label over a big number. @value@ is the number's slot (text, or a widget's live value
 -- slot); @cls@ and @attrs@ extend the wrapper (alignment, tooltip).
 statFigure_ :: Text -> [Attribute] -> Text -> Html () -> Html ()
-statFigure_ cls attrs label value = div_ ([class_ $ "flex flex-col gap-1 leading-none " <> cls] <> attrs) do
+statFigure_ cls attrs label value = div_ (mergedAttrs $ [class_ $ "flex flex-col gap-1 leading-none " <> cls] <> attrs) do
   fieldLabel_ "" label
   span_ [class_ "text-2xl font-semibold text-textStrong tabular-nums leading-none"] value
 
@@ -1010,6 +1009,23 @@ floatingModal_ modalId =
   modalWith_ modalId def{boxClass = "!w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none", wrapperClass = "!items-start pt-[15vh] px-4 " <> floatingScrim, hideClose = True} Nothing
 
 
+-- | A component's own attributes followed by its caller's, as one list Lucid renders correctly.
+-- Lucid joins a repeated attribute's values with no separator (newest first), so two classes
+-- fused into one word and two hyperscript handlers ran "end" into "on". Classes join with a
+-- space, @_@ handlers with a newline, styles with @;@; any other repeat keeps the caller's value.
+--
+-- >>> renderText $ div_ (mergedAttrs [class_ "a", term "_" "on click add .x", id_ "own", class_ "b", term "_" "on load add .y", id_ "caller"]) ""
+-- "<div class=\"a b\" _=\"on click add .x\non load add .y\" id=\"caller\"></div>"
+mergedAttrs :: [Attribute] -> [Attribute]
+mergedAttrs attrs = [Attribute k (joined k [v | Attribute k' v <- attrs, k' == k]) | k <- ordNub [k | Attribute k _ <- attrs]]
+  where
+    joined = \case
+      "class" -> unwords
+      "_" -> T.intercalate "\n"
+      "style" -> T.intercalate ";"
+      _ -> fromMaybe "" . viaNonEmpty last
+
+
 -- | Native @<dialog>@ prompt over a dimmed backdrop, as a 'floatingCard_'. Open with @showModal()@;
 -- the title id is @dialogId-title@. Children may style on @group-has-[…]/dialog@.
 floatingDialog_ :: Text -> Html () -> (Text, [Text]) -> [Attribute] -> Html () -> Html () -> Html ()
@@ -1017,7 +1033,7 @@ floatingDialog_ dialogId title submitHint formAttrs body submit =
   with (makeElement "dialog") [id_ dialogId, class_ $ "modal !items-start px-4 pt-[15vh] " <> floatingScrim, term "aria-labelledby" (dialogId <> "-title")] do
     form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close"] "close"
     form_ (formAttrs <> [class_ "modal-box group/dialog !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none"])
-      $ floatingCard_ [id_ $ dialogId <> "-title"] title (\attrs -> button_ ([type_ "button", onclick_ "this.closest('dialog').close()"] <> attrs)) [submitHint, ("Close", ["esc"])] body submit
+      $ floatingCard_ [id_ $ dialogId <> "-title"] title (\attrs -> button_ (mergedAttrs $ [type_ "button", onclick_ "this.closest('dialog').close()"] <> attrs)) [submitHint, ("Close", ["esc"])] body submit
 
 
 -- | The backdrop behind a floating prompt: dark enough in both themes that the card reads as the only surface.
@@ -1112,7 +1128,7 @@ rowActions_ acts = div_ [class_ "flex items-center gap-0.5 shrink-0 max-md:gap-1
 -- | Quiet icon-only row action; @attrs@ carries the request (or a 'popoverTrigger_'), the response swaps nothing.
 inlineIconBtn_ :: Text -> Text -> [Attribute] -> Html ()
 inlineIconBtn_ tip icon attrs =
-  button_ ([type_ "button", term "data-tippy-content" tip, Aria.label_ tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", hxSwap_ "none"] <> attrs)
+  button_ (mergedAttrs $ [type_ "button", term "data-tippy-content" tip, Aria.label_ tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", hxSwap_ "none"] <> attrs)
     $ faSprite_ icon "regular" "h-3.5 w-3.5"
 
 
@@ -1286,7 +1302,7 @@ installationSettingsLink_ url = externalLink_ [href_ url, target_ "_blank", rel_
 -- | Brand link with a trailing ↗, for a jump to another view (Explorer, a monitor) or site.
 -- @attrs@ must not carry @class_@: Lucid would fuse it into this one.
 externalLink_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
-externalLink_ attrs label = a_ ([class_ "text-xs text-textBrand hover:underline inline-flex items-center gap-1 w-fit"] <> attrs) do
+externalLink_ attrs label = a_ (mergedAttrs $ [class_ "text-xs text-textBrand hover:underline inline-flex items-center gap-1 w-fit"] <> attrs) do
   label
   faSprite_ "arrow-up-right-from-square" "regular" "w-3 h-3 shrink-0"
 
@@ -1397,7 +1413,7 @@ pickerCard_ cfg list =
         cfg.inputTrailing
       cfg.beforeList
       case list of
-        PickerItems cls attrs items -> div_ ([role_ "listbox", class_ $ "overflow-y-auto overscroll-contain p-1 " <> cls] <> attrs) items
+        PickerItems cls attrs items -> div_ (mergedAttrs $ [role_ "listbox", class_ $ "overflow-y-auto overscroll-contain p-1 " <> cls] <> attrs) items
         PickerSlot slot -> slot
     cfg.afterList
     div_ [class_ "flex items-center gap-3 border-t border-strokeWeak px-2 py-1.5"] do
@@ -1427,7 +1443,7 @@ pickerItem_ el cfg label attrs =
   pickerOption_
     el
     (unwords $ filter (not . T.null) [cfg.extraClass, memptyIfFalse cfg.active "active", memptyIfFalse cfg.selected "font-medium text-textBrand"])
-    ([pickerFilterAttr_ | cfg.filterable] <> attrs)
+    (mergedAttrs $ [pickerFilterAttr_ | cfg.filterable] <> attrs)
     do
       cfg.leading
       span_ (class_ "truncate flex-1 text-left" : cfg.labelAttrs) $ toHtml label
@@ -1474,13 +1490,14 @@ pickerEmpty_ msg =
 pickerPopover_ :: Text -> Text -> [Attribute] -> Html () -> Html ()
 pickerPopover_ popId cls extraAttrs =
   div_
-    ( popoverPanel_ popId
-        <> [ [__|on toggle if event.newState is 'open' set i to the first <[data-picker-input]/> in me then if i call i.focus() end end
+    $ mergedAttrs
+      ( popoverPanel_ popId
+          <> [ [__|on toggle if event.newState is 'open' set i to the first <[data-picker-input]/> in me then if i call i.focus() end end
                  on htmx:after:swap set i to the first <[data-picker-input]/> in me then if i call i.focus() end|]
-           , class_ $ "dropdown z-50 max-w-[calc(100vw-2rem)] border-0 bg-transparent p-0 shadow-none " <> cls
-           ]
-        <> extraAttrs
-    )
+             , class_ $ "dropdown z-50 max-w-[calc(100vw-2rem)] border-0 bg-transparent p-0 shadow-none " <> cls
+             ]
+          <> extraAttrs
+      )
 
 
 -- | Click-to-copy for the element named by the JS expression @el@: copies its innerText,
@@ -1523,13 +1540,13 @@ savedViewsMenu_ m = do
         span_ [class_ "w-3.5 shrink-0"] $ when isActive $ faSprite_ "check" "regular" "w-3.5 h-3.5"
         toHtml v.name
         when (isActive && m.edited) $ span_ [class_ "ml-auto text-xs px-1.5 rounded bg-fillWarning-weak text-textWarning"] "edited"
-      whenJust v.delete \attrs -> button_ ([type_ "button", class_ "btn btn-ghost btn-xs", Aria.label_ $ "Delete view " <> v.name] <> attrs) $ faSprite_ "xmark" "regular" "h-3 w-3"
+      whenJust v.delete \attrs -> button_ (mergedAttrs $ [type_ "button", class_ "btn btn-ghost btn-xs", Aria.label_ $ "Delete view " <> v.name] <> attrs) $ faSprite_ "xmark" "regular" "h-3 w-3"
     div_ [class_ "h-px bg-strokeWeak my-1"] ""
     form_ ([class_ "flex gap-1.5 p-1"] <> m.save) do
       m.saveFields
       input_ [name_ "name", required_ "", maxlength_ "100", class_ "input input-sm flex-1 min-w-0", placeholder_ "View name", Aria.label_ "View name"]
       button_ [type_ "submit", class_ "btn btn-primary btn-sm"] "Save view"
-    whenJust m.clear \attrs -> a_ ([class_ "px-2 py-1.5 rounded text-textWeak hover:bg-fillWeak"] <> attrs) "Clear filters"
+    whenJust m.clear \attrs -> a_ (mergedAttrs $ [class_ "px-2 py-1.5 rounded text-textWeak hover:bg-fillWeak"] <> attrs) "Clear filters"
 
 
 -- | Save button that activates when its parent form changes.

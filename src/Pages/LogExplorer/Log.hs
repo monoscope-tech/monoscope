@@ -73,7 +73,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, pageActions, pageTitle)
-import Pages.Components (FieldCfg (..), FieldSize (..), explorerNavTabs_, formField_, keyboardActivateAttr_, lazyPanel_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
+import Pages.Components (FieldCfg (..), FieldSize (..), explorerNavTabs_, formField_, keyboardActivateAttr_, lazyPanel_, localTimeFmt_, mergedAttrs, resetFormOnSuccessAttr_, resizer_)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as AlertUI
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), enrichSchemaWithFacets, logQueryBox_)
@@ -1422,10 +1422,9 @@ apiLogsPage page = do
     countText = "Loading"
     suffixText = " events…"
 
-    -- Show/hide-filters label; @attrs@ must not carry a class_ (Lucid concatenates
-    -- duplicate class attributes with no separator).
+    -- Show/hide-filters label.
     filtersLabel_ :: [Attribute] -> Html () -> Html ()
-    filtersLabel_ attrs trailing = label_ ([class_ "gap-1 flex items-center min-h-6 cursor-pointer text-textWeak rounded has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong"] <> attrs) do
+    filtersLabel_ attrs trailing = label_ (mergedAttrs $ [class_ "gap-1 flex items-center min-h-6 cursor-pointer text-textWeak rounded has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong"] <> attrs) do
       faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
       span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
       span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
