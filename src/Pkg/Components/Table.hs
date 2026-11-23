@@ -628,7 +628,7 @@ renderListRow tbl row = div_ (mergedAttrs $ treeAttrs <> rowAttrs <> [class_ "fl
 --
 -- >>> import Lucid (class_)
 -- >>> let tbl = Table (def :: Config){renderAsTable = True} [col "c" (const "x")] (V.singleton ()) (def :: Features ()){rowAttrs = Just (const [class_ "hover:bg-fillWeaker"])}
--- >>> "hover:bg-fillWeaker hover:bg-fillWeak" `TL.isInfixOf` renderText (toHtml tbl)
+-- >>> "itemsListItem hover:bg-fillWeaker" `TL.isInfixOf` renderText (toHtml tbl)
 -- True
 {-# INLINE renderTableRow #-}
 renderTableRow :: Table a -> a -> Html ()
