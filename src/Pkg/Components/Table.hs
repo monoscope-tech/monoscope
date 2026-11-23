@@ -65,7 +65,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Pages.BodyWrapper (PageCtx)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_, filterInputAttr_, keyboardActivateAttr_, mergedAttrs, searchInput_, timeRefreshListener_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), emptyState_, filterInputAttr_, keyboardActivateAttr_, mergedAttrs, pollSelfAttrs_, searchInput_, timeRefreshListener_)
 import Pkg.DeriveUtils (SortField (..), SortOrder (..))
 import Relude
 import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), deleteParam, faSprite_, fmtInt, loadingIndicator_, navTabAttrs, navTabStrip_, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, uiToggle_)
@@ -207,6 +207,7 @@ data Config = Config
   , noSurface :: Bool -- When True, removes surface-raised class from grid wrapper (for embedded tables)
   , noDividers :: Bool -- When True, removes divide-y separators between rows
   , gridClasses :: Text -- The scroll box's y overflow; a height cap here keeps the sticky header in view
+  , zeroStateSize :: EmptyStateSize -- Empty-state scale when the table has no rows
   }
 
 
@@ -368,6 +369,7 @@ instance Default Config where
       , noSurface = False
       , noDividers = False
       , gridClasses = "overflow-y-hidden"
+      , zeroStateSize = ESFull
       }
 
 
@@ -497,15 +499,14 @@ renderTable tbl =
         -- box was a scroll container in both axes before and still is, and the sticky `thead`
         -- resolves against exactly what it did before (verified in-browser).
         div_ [class_ $ "grid overflow-x-auto " <> tbl.config.gridClasses <> " my-0 group/grid" <> if tbl.config.noSurface then "" else " surface-table", id_ $ tbl.config.elemID <> "_grid"] do
-          let divCls = if tbl.config.noDividers then "" else " divide-y"
-          form_ [class_ $ "flex flex-col w-full" <> divCls, id_ tbl.config.elemID, onkeydown_ "return event.key != 'Enter' || event.target.tagName != 'INPUT';"] do
+          form_ [class_ $ "flex flex-col w-full" <> bool " divide-y" "" tbl.config.noDividers, id_ tbl.config.elemID, onkeydown_ "return event.key != 'Enter' || event.target.tagName != 'INPUT';"] do
             when ((isJust tbl.features.rowId || isJust tbl.features.sort) && isNothing tbl.config.bulkActionsInHeader) $ renderToolbar tbl
             when isEmpty $ whenJust tbl.features.zeroState \zs ->
-              emptyState_ def{icon = Just zs.icon, action = zs.action} zs.title zs.description
+              emptyState_ def{icon = mfilter (not . T.null) (Just zs.icon), size = tbl.config.zeroStateSize, action = zs.action} zs.title zs.description
             unless isEmpty
               $ div_ [class_ "w-full flex-col"] do
                 whenJust tbl.features.search \_ -> span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
-                div_ [id_ "rowsContainer", class_ divCls] do
+                div_ [id_ "rowsContainer", class_ $ bool " divide-y" "" tbl.config.noDividers] do
                   renderRows tbl
       -- Room for the floating bulk-action bar; only selectable tables raise it.
       tableContent = div_ ([class_ $ tbl.config.containerClasses <> bool "" " pb-24" (not isEmpty && isJust tbl.features.rowId), id_ $ tbl.config.elemID <> "_page"] <> [data_ "table-columns" tbl.config.elemID | tbl.features.customizeColumns]) do
@@ -522,12 +523,9 @@ renderTable tbl =
       -- A deferred fill-in wins over the event refresh: the response it swaps in carries
       -- its own refreshOnEvent, so the listener is re-established rather than lost.
       refreshAttrs cid = case (tbl.config.deferredUrl, tbl.config.refreshOnEvent) of
-        (Just url, _) -> swapSelf url "load"
-        (Nothing, Just (evt, url)) -> swapSelf url $ evt <> " from:body"
+        (Just url, _) -> pollSelfAttrs_ cid url "load"
+        (Nothing, Just (evt, url)) -> pollSelfAttrs_ cid url $ evt <> " from:body"
         (Nothing, Nothing) -> []
-        where
-          -- hx-preload off: the body preloads on hover, which would refetch this container.
-          swapSelf url trig = [hxGet_ url, hxTrigger_ trig, hxTarget_ "this", hxSwap_ "outerHTML", hxSelect_ $ "#" <> cid, term "hx-preload" "false"]
    in maybe paddedContent (\cid -> div_ ([class_ "w-full table-refresh", id_ cid] <> refreshAttrs cid) paddedContent) tbl.config.containerId
 
 

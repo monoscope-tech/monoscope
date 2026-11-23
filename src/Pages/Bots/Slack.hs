@@ -1078,7 +1078,7 @@ processSlackEventWithTools projectTools receiptId =
       prompts <- case principal of
         Nothing -> pure [("Link your Monoscope account", "Link my Monoscope account")]
         Just member -> do
-          (issues, _) <- Issues.selectIssues member.projectId Issues.PIssue Issues.defIssueFilters{Issues.archive = Issues.IsNull, Issues.spam = Issues.IsNull, Issues.ack = Issues.IsNull, Issues.order = Just "-updated_at", Issues.limit = 2}
+          (issues, _) <- Issues.selectIssues member.projectId Issues.PIssue Issues.inboxFilters{Issues.order = Just "-updated_at", Issues.limit = 2}
           incidents <- Incidents.listEpisodes member.projectId (Just Incidents.EpisodeActive) 1
           lastAlert <- case snd =<< latest of
             Nothing -> pure Nothing

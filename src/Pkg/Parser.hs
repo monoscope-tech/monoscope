@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, TemplateLang (..), fillQueryTemplate, browserKql, requestKql, kqlConstants, isBrowserRecord, variablePresets, variablePresetsKQL, templateBindings, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds, AudienceFilters (..), audienceFilters, audienceKql, ResultShape (..), resultShape) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, scopedWhere, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, TemplateLang (..), fillQueryTemplate, browserKql, requestKql, kqlConstants, isBrowserRecord, variablePresets, variablePresetsKQL, templateBindings, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds, AudienceFilters (..), audienceFilters, audienceKql, ResultShape (..), resultShape) where
 
 import Control.Error (hush)
 import Data.Aeson qualified as AE
@@ -22,7 +22,7 @@ import PyF (fmt)
 import Relude
 import Relude.Extra.Foldable1 (minimumOn1)
 import Text.Megaparsec (parse)
-import Utils (formatUTC, kqlQuoted, nonEmptyT)
+import Utils (formatUTC, nonEmptyT)
 import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 
 
@@ -167,6 +167,20 @@ buildEnvFilter cfg = maybe "" (\e -> "resource___deployment___environment___name
 -- just like the environment predicate, so every generated query shape is scoped.
 buildServiceFilter :: SqlQueryCfg -> Text
 buildServiceFilter cfg = maybe "" (\s -> "resource___service___name = " <> sqlStringLit s) cfg.service
+
+
+-- | Assemble the project, time, environment, service and KQL WHERE predicate.
+scopedWhere :: SqlQueryCfg -> Text -> Text -> Text
+scopedWhere cfg dateClause whereCondition =
+  T.intercalate " and "
+    $ filter
+      (not . T.null)
+      [ "project_id='" <> cfg.pid.toText <> "'"
+      , dateClause
+      , buildEnvFilter cfg
+      , buildServiceFilter cfg
+      , "(" <> whereCondition <> ")"
+      ]
 
 
 sectionsToComponents :: SqlQueryCfg -> [Section] -> QueryComponents
@@ -403,10 +417,9 @@ sqlFromQueryComponents sqlCfg qc =
     limitClause = buildLimit qc
     whereCondition = buildWhereCondition qc.whereClause
     dateRangeClause = buildDateRange sqlCfg
-    scopeFilters = filter (not . T.null) [buildEnvFilter sqlCfg, buildServiceFilter sqlCfg]
 
     -- Build complete WHERE clause for data queries
-    whereWith dateRange = T.intercalate " and " $ filter (not . T.null) (["project_id='" <> sqlCfg.pid.toText <> "'", dateRange] <> scopeFilters <> ["(" <> whereCondition <> ")"])
+    whereWith dateRange = scopedWhere sqlCfg dateRange whereCondition
     buildWhere = whereWith dateRangeClause
 
     -- rate/increase/last need each series' previous point, which may sit before
@@ -561,13 +574,6 @@ sqlFromQueryComponents sqlCfg qc =
     -- returns the all-time peak bucket.
     alertSince mins = timestampCol <> " >= NOW() - INTERVAL '" <> show @Text @Int mins <> " minutes'"
     alertTimeFilter = alertSince sqlCfg.alertLookbackMins
-    -- The alert query is built by hand rather than through 'buildWhere', so every
-    -- persisted scope predicate has to be included here too. A monitor scoped to
-    -- staging or checkout that silently alerts on another scope is worse than one
-    -- that never fires.
-    alertScopeFilters = case scopeFilters of
-      [] -> ""
-      filters -> "AND " <> T.intercalate " AND " filters
     -- One reading over the window the monitor was configured with ("include rows
     -- from the last N minutes", already applied by 'alertTimeFilter'). The chart's
     -- time bucket is deliberately dropped: it exists to draw a series, and taking
@@ -589,7 +595,7 @@ sqlFromQueryComponents sqlCfg qc =
     -- expects float8 even when an aggregate produces float4.
     alertAggregate =
       bool "GREATEST(" "LEAST(" sqlCfg.alertBelow <> T.intercalate ", " (if null qc.aggregations then ["count(*)"] else colsNoAsClause qc.aggregations) <> ")::float8"
-    alertWhere timeFilter = [fmt|project_id='{sqlCfg.pid.toText}' AND {timeFilter} {alertScopeFilters} AND ({whereCondition})|]
+    alertWhere timeFilter = scopedWhere sqlCfg timeFilter whereCondition
     alertQuery =
       [fmt|
           SELECT {alertAggregate} FROM {seriesSourceSQL Nothing (Just $ fromIntegral sqlCfg.alertLookbackMins * 60) fromTable (alertWhere $ alertSince $ sqlCfg.alertLookbackMins + round (seriesLookback / 60)) alertTimeFilter qc.seriesAggs}

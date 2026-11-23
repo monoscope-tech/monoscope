@@ -18,6 +18,7 @@ import Data.Map.Strict qualified as M
 import Data.Pool (Pool, destroyAllResources, withResource)
 import Data.Scientific (Scientific)
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
@@ -44,7 +45,7 @@ import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.DeriveUtils (DB, pgSpan)
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser (BinDensity, QueryComponents (finalColumns, finalSummarizeQuery, whereClause), RangeEnd (..), ResultShape (..), SqlQueryCfg (..), TemplateLang (..), applyScopedQuery, buildDateRange, buildEnvFilter, buildServiceFilter, defSqlQueryCfg, fillQueryTemplate, listToColNames, mkScopedQuery, pSource, queryASTToComponents, resultShape, variablePresets, variablePresetsKQL)
+import Pkg.Parser (BinDensity, QueryComponents (finalColumns, finalSummarizeQuery, whereClause), RangeEnd (..), ResultShape (..), SqlQueryCfg (..), TemplateLang (..), applyScopedQuery, buildDateRange, defSqlQueryCfg, fillQueryTemplate, listToColNames, mkScopedQuery, pSource, queryASTToComponents, resultShape, scopedWhere, variablePresets, variablePresetsKQL)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), Sources (..), SummarizeByClause (..), parseQueryDiagnosed, queryErrorText)
 import Pkg.QueryCache qualified as QC
@@ -63,26 +64,17 @@ import UnliftIO.Exception (catch, throwIO, tryAny)
 import Utils qualified
 
 
-pivot' :: V.Vector (Int, Text, Double) -> (V.Vector Text, V.Vector (V.Vector (Maybe Double)), Double, Double)
+pivot' :: V.Vector (Int, Text, Double) -> (V.Vector Text, V.Vector (V.Vector (Maybe Double)), Double, Double, MetricsStats)
 pivot' rows
-  | V.null rows = (V.empty, V.empty, 0.0, 0.0)
+  | V.null rows = (V.empty, V.empty, 0.0, 0.0, def)
   | otherwise =
-      let extractHeaders = V.uniq . V.map snd3 . V.modify (VA.sortBy (comparing snd3))
-          headers = extractHeaders rows
+      let headers = V.uniq . V.map snd3 . V.modify (VA.sortBy (comparing snd3)) $ rows
           grouped =
             V.groupBy (\a b -> fst3 a == fst3 b)
               $ V.modify (VA.sortBy (comparing fst3)) rows
-          ngrouped = map (transform headers) grouped
-          totalSum = V.sum $ V.map thd3 rows
-
-          -- Calculate rate (rows per minute)
-          timeVec = V.map fst3 rows
-          minTime = V.minimum timeVec
-          maxTime = V.maximum timeVec
-          timeSpanMinutes = fromIntegral (maxTime - minTime) / 60.0
-          numRows = fromIntegral $ V.length rows
-          rate = if timeSpanMinutes > 0 then numRows / timeSpanMinutes else 0.0
-       in (headers, V.fromList ngrouped, totalSum, rate)
+          dataset = V.fromList $ map (transform headers) grouped
+          (totalSum, rate, stats) = QC.summarizeSeries dataset
+       in (headers, dataset, totalSum, rate, stats)
 
 
 transform :: V.Vector Text -> V.Vector (Int, Text, Double) -> V.Vector (Maybe Double)
@@ -92,40 +84,7 @@ transform fields tuples =
     timestamp = fromIntegral $ maybe 0 fst3 (tuples V.!? 0)
 
 
-statsTriple :: V.Vector (Int, Text, Double) -> MetricsStats
-statsTriple v
-  | V.null v = def
-  | otherwise = MetricsStats mn mx tot cnt (tot / fromIntegral cnt) mode maxGroupSum (snd <$> M.lookupMax timestampMap)
-  where
-    d0 = thd3 $ V.head v
-
-    (!mn, !mx, !tot, !cnt, !freq, !timestampMap) =
-      V.foldl'
-        ( \(a, b, c, d, m, tsMap) (ts, _, x) ->
-            ( min a x
-            , max b x
-            , c + x
-            , d + 1
-            , M.insertWith (+) x 1 m
-            , M.insertWith (+) ts x tsMap
-            )
-        )
-        (d0, d0, 0, 0, M.empty, M.empty)
-        v
-
-    maxGroupSum = fromMaybe 0 $ viaNonEmpty (\(x :| xs) -> foldl' max x xs) (M.elems timestampMap)
-
-    -- first (smallest) value wins ties, hence the strict `>`
-    mode = fst $ M.foldlWithKey' (\acc@(_, cnt') k c -> if c > cnt' then (k, c) else acc) (d0, 0) freq
-
-
 type M = Maybe
-
-
-sourceTable :: Maybe Sources -> Text
-sourceTable = \case
-  Just SMetrics -> "otel_metrics"
-  _ -> "otel_logs_and_spans"
 
 
 -- | Select the storage semantics used by both SQL generation and execution.
@@ -161,7 +120,7 @@ queryProjectMetrics dbSource (maybeToMonoid -> respDataType) pid queryM querySQL
   case (parsed, sql) of
     (Left err, _) -> pure (emptyMetricsFor now fromD toD){error = Just err}
     (Right queryAST, Just template) -> do
-      let tbl = sourceTable source
+      let tbl = display (fromMaybe SSpans source)
           sqlQuery = fillQueryTemplate SqlTemplate mapping template
       convertTimestampsToMs
         <$> withChartSpan
@@ -227,7 +186,7 @@ runRawQuery authCtx dbSource decoder cfg ast kql template mapping liveRange prog
       (_, components) = queryASTToComponents cacheCfg ast
       (from, to) = bounds
       canonical =
-        M.fromList [("query_ast_filters", rawAstFilters cacheCfg components)]
+        M.fromList [("query_ast_filters", scopedWhere cacheCfg (buildDateRange cacheCfg) (fromMaybe "TRUE" components.whereClause))]
           <> variablePresets cfg.binDensity cfg.pid.toText from to [(key, Just value) | (key, value) <- M.toList mapping, "var-" `T.isPrefixOf` key || key == "table-search"] cfg.currentTime
           <> mapping
   -- The template names tenant tables; scoping makes each the project's slice before it runs.
@@ -271,22 +230,6 @@ rawSqlScopeError environment service template
   | isJust environment && isNothing service = Just "This raw SQL widget must include {{query_ast_filters}} to respect the selected environment."
   | isNothing environment && isJust service = Just "This raw SQL widget must include {{query_ast_filters}} to respect the selected service."
   | otherwise = Just "This raw SQL widget must include {{query_ast_filters}} to respect the selected environment and service."
-
-
--- | A raw template chooses its own insertion point, but never its scope. The
--- placeholder expands to the same project, time, environment, service and KQL
--- predicates that the generated path uses.
-rawAstFilters :: SqlQueryCfg -> QueryComponents -> Text
-rawAstFilters cfg qc =
-  T.intercalate " AND "
-    $ filter
-      (not . T.null)
-      [ "project_id = '" <> cfg.pid.toText <> "'"
-      , buildDateRange cfg
-      , buildEnvFilter cfg
-      , buildServiceFilter cfg
-      , fromMaybe "TRUE" qc.whereClause
-      ]
 
 
 -- | Pick the result decoder when the caller didn't. @DTMetric@ pivots on a
@@ -360,7 +303,7 @@ queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQuery
     executeQueryWith cfg ast _ = do
       let (_, qc) = queryASTToComponents cfg ast
           sqlQuery = maybeToMonoid qc.finalSummarizeQuery
-          tbl = sourceTable source
+          tbl = display (fromMaybe SSpans source)
       withChartSpan
         tbl
         ( chartSpanAttrs tbl sqlQuery respDataType pid.toText
@@ -604,8 +547,8 @@ fetchMetricsDataWithProgress deadline progress respDataType sqlQuery now fromD t
         -- attribute) is a gap in the series, not a reason to fail the widget.
         let metrics :: V.Vector (BucketEpoch, Text, Maybe ChartNumber) -> MetricsData
             metrics (coerce . V.mapMaybe (\(t, k, v) -> (t,k,) <$> v) -> rows) =
-              let (hdrs, groupedData, rowsCount, rpm) = pivot' rows
-               in baseMetricsData{dataset = groupedData, headers = V.cons "timestamp" hdrs, rowsCount, rowsPerMin = Just rpm, stats = Just $ statsTriple rows}
+              let (hdrs, groupedData, rowsCount, rpm, stats) = pivot' rows
+               in baseMetricsData{dataset = groupedData, headers = V.cons "timestamp" hdrs, rowsCount, rowsPerMin = Just rpm, stats = Just stats}
         -- Always streamed, so an abandoned read cancels its SQL; @progress@ only reports.
         rowsRef <- newIORef []
         lastEmit <- newIORef 0

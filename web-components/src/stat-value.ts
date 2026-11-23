@@ -6,7 +6,7 @@
 
 /** Format numbers with magnitude suffixes for chart/stat display. */
 export const formatNumber = (n: number | null | undefined): string => {
-  if (n == null || Number.isNaN(n)) return 'N/A'; // guard first: NaN (e.g. Number(undefined)) must not reach the DOM as "NaN". Loose type matches untyped JS callers.
+  if (n == null || !Number.isFinite(n)) return 'N/A'; // guard first: NaN/Infinity must not reach the DOM. Loose type matches untyped JS callers.
   const abs = Math.abs(n);
   if (abs >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
   if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -28,7 +28,7 @@ export const formatNumber = (n: number | null | undefined): string => {
  * had declared its unit as bytes.
  */
 export const formatBytes = (n: number | null | undefined): string => {
-  if (n == null || Number.isNaN(n)) return 'N/A';
+  if (n == null || !Number.isFinite(n)) return 'N/A';
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
   let v = n;
   let i = 0;
@@ -66,7 +66,7 @@ export const scaleDuration = (ns: number): [number, string] => {
 
 /** Format a nanosecond duration into a human-readable unit (matches Utils.hs). */
 export const formatDuration = (ns: number): string => {
-  if (ns == null || Number.isNaN(ns)) return 'N/A'; // guard first, mirroring formatNumber, so NaN never renders as "NaNns"
+  if (ns == null || !Number.isFinite(ns)) return 'N/A'; // guard first, mirroring formatNumber, so NaN/Infinity never renders as "NaNns"
   const [v, unit] = scaleDuration(ns);
   return `${v.toFixed(unit === 'ns' ? 0 : 1)}${unit}`;
 };
@@ -108,6 +108,7 @@ const CURRENCY_UNITS = new Set(['$', '€', '£']);
 
 /** Format a stat scalar for display, with its unit (duration-aware). */
 export const formatStatValue = (value: number, unit: string, decimals?: number | null): string => {
+  if (value == null || !Number.isFinite(value)) return 'N/A';
   if (DURATION_UNITS.has(unit)) return formatDuration(convertToNanoseconds(value, unit));
   if (BYTE_UNITS.has(unit)) return formatBytes(value);
   const prefix = CURRENCY_UNITS.has(unit) ? unit : '';

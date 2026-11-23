@@ -62,14 +62,11 @@ logQueryBox_ config = do
     , hxSwap_ "innerHTML"
     , hxPushUrl_ "false"
     , [__|on htmx:after:request
-        set :status to event.detail.ctx.response.status
-        if :status >= 200 and :status < 300
+        if event.detail.ctx.response.status >= 200 and event.detail.ctx.response.status < 300
           set #saveQueryMdl.dataset.pendingQuery to null
           call #saveQueryMdl.close()
-          set #query-title.value to ''
-          set #queryLibId.value to ''
-        end
-      |]
+          call me.reset()
+        end|]
     ]
     (input_ [type_ "hidden", value_ "", name_ "queryLibId", id_ "queryLibId"] >> dialogField_ "query-title" "queryTitle" "Query name" "Checkout errors" [])
     "Save query"
@@ -209,7 +206,7 @@ logQueryBox_ config = do
                     , name_ "target-spans"
                     , id_ "spans-toggle"
                     , Aria.label_ "Search scope"
-                    , onchange_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
+                    , onchange_ "this.form.requestSubmit()"
                     ]
                     $ options_ (Just $ fromMaybe "all-spans" config.targetSpan) [("all-spans", "All spans"), ("root-spans", "Root spans"), ("service-entry-spans", "Service entry spans")]
 

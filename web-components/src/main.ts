@@ -4,7 +4,7 @@
 // lives at `detail.ctx.request`, NOT `detail.request`; reading the wrong one silently no-ops.
 // Registration is global — v4 dropped hx-ext as the activation mechanism — so each hook gates
 // itself on the hx-ext marker attribute the call sites already carry.
-import { copyParams, SCOPE_PARAMS, TIME_PARAMS } from './time-range-utils';
+import { copyParams, getDashboardConstants, parseSince, SCOPE_PARAMS, SINCE_UNITS, TIME_PARAMS } from './time-range-utils';
 import { asShown, logFailure } from './fetch-failures';
 
 const htmx4 = (window as any).htmx;
@@ -32,17 +32,7 @@ const optedIn = (elt: Element | null | undefined, ext: string) => {
   return val.split(/[\s,]+/).includes(ext);
 };
 
-// Helper to get dashboard constants from data attribute
-const getDashboardConstants = (el?: Element | null): Record<string, string> => {
-  const constantsEl = el?.closest('[data-constants]') ?? document.querySelector('[data-constants]');
-  if (!constantsEl) return {};
-  try {
-    return JSON.parse(constantsEl.getAttribute('data-constants') || '{}');
-  } catch {
-    return {};
-  }
-};
-(window as any).getDashboardConstants = getDashboardConstants;
+export { getDashboardConstants };
 
 // HTMX extension to forward current page query parameters and dashboard constants to GET/POST requests
 htmx4.registerExtension('forward-page-params', {
@@ -127,14 +117,12 @@ window.setQueryParamAndReload = (key: string, value: string) => {
 window.downloadJson = function (event: any) {
   event.stopPropagation();
   const json = event.currentTarget.closest('.json-tree-container')?.dataset.reqjson ?? event.currentTarget.dataset.reqjson;
-  var blob = new Blob([json], { type: 'application/json' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'request-data-' + new Date().toString() + '.json';
-  a.textContent = '';
+  const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: 'request-data-' + new Date().toString() + '.json' });
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 };
 
 window.evalScriptsFromContent = function (container: HTMLElement) {
@@ -220,9 +208,8 @@ window.updateTimePicker = function (
   const live = Boolean(timeRange.since);
   if (timeRange.since) {
     if (!opts?.skipSetParams) window.setParams({ since: timeRange.since, from: '', to: '' });
-    const units: Record<string, string> = { S: 'Second', M: 'Minute', H: 'Hour', D: 'Day' };
-    const m = timeRange.since.match(/^(\d+)\s*([SMHD])$/i);
-    displayLabel = opts?.label ?? (m ? `Last ${m[1]} ${units[m[2].toUpperCase()] || m[2]}${m[1] !== '1' ? 's' : ''}` : 'Last ' + timeRange.since);
+    const parsed = parseSince(timeRange.since);
+    displayLabel = opts?.label ?? (parsed ? `Last ${parsed.count} ${SINCE_UNITS[parsed.unit].label}${parsed.count !== 1 ? 's' : ''}` : 'Last ' + timeRange.since);
   } else if (timeRange.from && timeRange.to) {
     if (!opts?.skipSetParams) window.setParams({ from: timeRange.from, to: timeRange.to, since: '' });
     displayLabel = opts?.label ?? window.formatTimeRange(timeRange.from, timeRange.to);
@@ -373,9 +360,8 @@ window.shiftTimeRange = (direction, transport) => {
   const fromParam = Date.parse(params.get('from') || '');
   const toParam = Date.parse(params.get('to') || '');
   const since = params.get('since') || defaultTimeWindow(transport);
-  const match = since.match(/^(\d+)\s*([SMHD])$/i);
-  const unitMs: Record<string, number> = { S: 1000, M: 60000, H: 3600000, D: 86400000 };
-  const relativeMs = match ? Number(match[1]) * unitMs[match[2].toUpperCase()] : 900000;
+  const parsed = parseSince(since);
+  const relativeMs = parsed ? parsed.count * SINCE_UNITS[parsed.unit].ms : 900000;
   const from = Number.isFinite(fromParam) ? fromParam : now - relativeMs;
   const to = Number.isFinite(toParam) ? toParam : now;
   const duration = to - from;

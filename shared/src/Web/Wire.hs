@@ -25,6 +25,13 @@ import Relude
 
 -- | Why an @/api/v1@ request was refused. The snake_case tag (@not_found@, @unknown_field@, …)
 -- is the wire contract the CLI and agents branch on, so renaming a constructor is a breaking change.
+--
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Relude
+-- >>> all (\c -> AE.eitherDecode (AE.encode c) == Right c) (universe @ProblemCode)
+-- True
+-- >>> (AE.toJSON PNotFound, AE.toJSON PUnknownField, AE.toJSON PNoActiveIngestionKey)
+-- (String "not_found",String "unknown_field",String "no_active_ingestion_key")
 data ProblemCode
   = PNotFound
   | PNoActiveIngestionKey

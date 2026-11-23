@@ -2,12 +2,14 @@
 -- Catching malformed input here gives agents a clear, actionable error
 -- message instead of an opaque server-side HTTP 400.
 module CLI.Validate (
+  EventKind (..),
   validateDurationFor,
+  validateSinceFor,
   validateKind,
-  normalizeKind,
   validateOrDie,
   validateDurationOrDie,
-  validateAndNormalizeKind,
+  validateSinceOrDie,
+  validateKindOrDie,
   validateQueryOrDie,
 ) where
 
@@ -20,65 +22,75 @@ import Effectful
 import Pkg.Parser.Stats (parseQueryToAST)
 
 
--- | Validate a relative-duration string of the form @\\d+(ms|s|m|h|d)@.
--- Returns the (already trimmed) input on success or an error message.
--- The @flag@ argument is the user-facing flag name (@--since@, @--window@)
--- so the message points at what the user actually typed.
---
--- >>> validateDurationFor "--since" "10s"
--- Right "10s"
--- >>> validateDurationFor "--since" "1H"
--- Right "1H"
--- >>> validateDurationFor "--window" "1xyz"
--- Left "--window must match Ns|Nm|Nh|Nd|Nms (e.g. 30m, 2h, 7d); got '1xyz'"
--- >>> validateDurationFor "--since" ""
--- Left "--since must not be empty"
---
+-- | Validate a relative-duration string against the allowed unit suffixes.
 -- Suffix matching is case-insensitive — the platform's TimePicker emits
--- uppercase forms ("1H", "24H") and the server accepts either, so the
--- validator should too. Original casing is preserved on success.
-validateDurationFor :: Text -> Text -> Either Text Text
-validateDurationFor flag t
+-- uppercase forms ("1H", "24H") and the server accepts either. Original casing
+-- is preserved on success.
+validateUnitsFor :: [Text] -> Text -> Text -> Either Text Text
+validateUnitsFor units flag t
   | T.null t = Left $ flag <> " must not be empty"
   | otherwise =
       let trimmed = T.strip t
           (digits, suffix) = T.span isDigit trimmed
-       in if T.null digits || T.toLower suffix `notElem` ["ms", "s", "m", "h", "d"]
-            then Left $ flag <> " must match Ns|Nm|Nh|Nd|Nms (e.g. 30m, 2h, 7d); got '" <> t <> "'"
+       in if T.null digits || T.toLower suffix `notElem` units
+            then Left $ flag <> " must match " <> T.intercalate "|" (map ("N" <>) units) <> " (e.g. 30m, 2h, 7d); got '" <> t <> "'"
             else Right trimmed
 
 
--- | Whitelist for @--kind@ values accepted at the CLI surface.
--- Server-side, the @source@ query param accepts only @log@/@span@; we expose
--- @log@/@trace@ in user-facing flags and translate via 'normalizeKind'.
+-- | Validate a client-side duration (@s|m|h|d|ms@) for flags parsed locally
+-- by @parseDurationMs@ (@--interval@, @--window@, @--watch@).
+--
+-- >>> validateDurationFor "--interval" "500ms"
+-- Right "500ms"
+-- >>> validateDurationFor "--window" "1H"
+-- Right "1H"
+-- >>> validateDurationFor "--window" "1xyz"
+-- Left "--window must match Ns|Nm|Nh|Nd|Nms (e.g. 30m, 2h, 7d); got '1xyz'"
+-- >>> validateDurationFor "--window" ""
+-- Left "--window must not be empty"
+validateDurationFor :: Text -> Text -> Either Text Text
+validateDurationFor = validateUnitsFor ["s", "m", "h", "d", "ms"]
+
+
+-- | Validate a server-side @--since@ duration (@s|m|h|d@). The server's
+-- @TimePicker.parseSince@ does not accept @ms@ and treats unknown units as a
+-- zero-width window, so reject sub-second units client-side.
+--
+-- >>> validateSinceFor "--since" "10s"
+-- Right "10s"
+-- >>> validateSinceFor "--since" "1H"
+-- Right "1H"
+-- >>> validateSinceFor "--since" "500ms"
+-- Left "--since must match Ns|Nm|Nh|Nd (e.g. 30m, 2h, 7d); got '500ms'"
+-- >>> validateSinceFor "--since" ""
+-- Left "--since must not be empty"
+validateSinceFor :: Text -> Text -> Either Text Text
+validateSinceFor = validateUnitsFor ["s", "m", "h", "d"]
+
+
+-- | Validated @--kind@ flag: @log@ → 'EKLog', @span@/@trace@ → 'EKSpan'.
+data EventKind = EKLog | EKSpan
+  deriving stock (Eq, Show)
+
+
+-- | Parse and canonicalize @--kind@ values accepted at the CLI surface
+-- (@trace@ aliases @span@). Folded into the KQL query as @kind=="log"@ or
+-- @kind!="log"@ (server @source@ selects the table, not kind).
 --
 -- >>> validateKind "log"
--- Right "log"
+-- Right EKLog
 -- >>> validateKind "trace"
--- Right "trace"
+-- Right EKSpan
 -- >>> validateKind "span"
--- Right "span"
+-- Right EKSpan
 -- >>> validateKind "banana"
 -- Left "--kind must be one of: log, trace, span; got 'banana'"
-validateKind :: Text -> Either Text Text
-validateKind t
-  | t `elem` ["log", "trace", "span"] = Right t
-  | otherwise = Left $ "--kind must be one of: log, trace, span; got '" <> t <> "'"
-
-
--- | Map the user-facing @--kind@ value onto the wire-level @source@ value.
--- The server stores spans, so @trace@ rewrites to @span@; @log@ and @span@
--- pass through unchanged.
---
--- >>> normalizeKind "trace"
--- "span"
--- >>> normalizeKind "log"
--- "log"
--- >>> normalizeKind "span"
--- "span"
-normalizeKind :: Text -> Text
-normalizeKind "trace" = "span"
-normalizeKind k = k
+validateKind :: Text -> Either Text EventKind
+validateKind = \case
+  "log" -> Right EKLog
+  "span" -> Right EKSpan
+  "trace" -> Right EKSpan
+  t -> Left $ "--kind must be one of: log, trace, span; got '" <> t <> "'"
 
 
 -- | Print the error and exit non-zero on Left; return the value on Right.
@@ -87,17 +99,19 @@ validateOrDie :: IOE :> es => Either Text a -> Eff es a
 validateOrDie = either dieWith pure
 
 
--- | Validate an optional duration flag, exiting on failure. The first arg
--- is the user-facing flag name (e.g. @"--since"@, @"--window"@) so error
--- messages point at the right flag.
+-- | Validate an optional client-side duration flag (@s|m|h|d|ms@), exiting on failure.
 validateDurationOrDie :: IOE :> es => Text -> Maybe Text -> Eff es ()
 validateDurationOrDie flag = mapM_ (validateOrDie . validateDurationFor flag)
 
 
--- | Validate an optional @--kind@ flag and apply 'normalizeKind' so callers
--- always get the wire-level @log@/@span@ value. Exits on failure.
-validateAndNormalizeKind :: IOE :> es => Maybe Text -> Eff es (Maybe Text)
-validateAndNormalizeKind = mapM (\k -> normalizeKind k <$ validateOrDie (validateKind k))
+-- | Validate an optional server-side @--since@ duration flag (@s|m|h|d@), exiting on failure.
+validateSinceOrDie :: IOE :> es => Maybe Text -> Eff es ()
+validateSinceOrDie = mapM_ (validateOrDie . validateSinceFor "--since")
+
+
+-- | Validate an optional @--kind@ flag into an 'EventKind', exiting on failure.
+validateKindOrDie :: IOE :> es => Maybe Text -> Eff es (Maybe EventKind)
+validateKindOrDie = traverse (validateOrDie . validateKind)
 
 
 -- | Parse the KQL query client-side; on failure print Megaparsec's pretty

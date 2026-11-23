@@ -16,6 +16,18 @@ import { installStaleChunkReload } from './stale-chunk-reload';
 // races a deploy is the one we miss.
 installStaleChunkReload();
 
+// The small query editor loads as soon as its host exists. The server textarea
+// remains editable during loading; the component adopts its latest text on upgrade.
+let queryEditorLoad: Promise<unknown> | null = null;
+// Initialize shared defaults once, even when several hosts mount together.
+const loadQueryEditor = () =>
+  (queryEditorLoad ??= (async () => {
+    await import('./query-editor/query-editor');
+    const { initializeDefaultSchema } = await import('./query-editor/schema-manager');
+    initializeDefaultSchema();
+    await import('./query-editor/query-builder');
+  })());
+
 const components: Array<[string, () => Promise<unknown>]> = [
   ['[data-chart-widget], [data-widget]', () => import('./widgets')],
   ['log-list', () => import('./log-list')],
@@ -32,6 +44,7 @@ const components: Array<[string, () => Promise<unknown>]> = [
     () => import('./session-replay'),
   ],
   ['[data-service-map]', () => import('./service-map').then(m => m.hydrateServiceMaps())],
+  ['query-editor, query-builder', loadQueryEditor],
 ];
 
 // Hidden preview hosts arrive with the widget; load their highlighter only on opening.
@@ -56,23 +69,8 @@ window.addEventListener(
   { once: true }
 );
 
-// The small query editor loads as soon as its host exists. The server textarea
-// remains editable during loading; the component adopts its latest text on upgrade.
-let queryEditorLoad: Promise<unknown> | null = null;
-// Initialize shared defaults once, even when several hosts mount together.
-const loadQueryEditor = () =>
-  (queryEditorLoad ??= (async () => {
-    await import('./query-editor/query-editor');
-    const { initializeDefaultSchema } = await import('./query-editor/schema-manager');
-    initializeDefaultSchema();
-    await import('./query-editor/query-builder');
-  })());
-
 const deferredComponents: Array<[string, () => Promise<unknown>]> = [
-  ['query-editor, query-builder', loadQueryEditor],
-  ['yaml-editor', async () => {
-    await import('./yaml-editor');
-  }],
+  ['yaml-editor', () => import('./yaml-editor')],
 ];
 
 
@@ -103,8 +101,8 @@ const loadDeferredComponents = () => deferredComponents.forEach(([selector, load
 
   let started = false;
   let focusTarget: Element | null = null;
-  const start = (focusAfter: boolean, target = elements[0]) => {
-    if (focusAfter) focusTarget = target;
+  const start = (target: Element) => {
+    focusTarget = target;
     if (started) return;
     started = true;
     void load().then(() => {
@@ -118,14 +116,12 @@ const loadDeferredComponents = () => deferredComponents.forEach(([selector, load
 
   elements.forEach(el => {
     armed.add(el);
-    ['pointerdown', 'focusin'].forEach(evt => el.addEventListener(evt, () => start(true, el), { once: true }));
+    ['pointerdown', 'focusin'].forEach(evt => el.addEventListener(evt, () => start(el), { once: true }));
   });
-  if (selector.includes('query-editor')) void load();
-
 });
 
 // Hosts created after the initial scan (such as live tail) announce themselves here.
-document.addEventListener('arm-deferred-components', () => loadDeferredComponents());
+document.addEventListener('arm-deferred-components', () => loadComponents());
 
 const loadComponents = () => {
   components.forEach(([selector, load]) => {

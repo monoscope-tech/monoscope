@@ -399,10 +399,7 @@ apiKeysPage settings = do
             h3_ [class_ "text-xl font-semibold text-textStrong"] "Generate an API key"
             p_ [class_ "text-sm text-textWeak text-pretty"] "Keys authenticate the telemetry your services send to this project."
         form_ [hxPost_ $ urls.apiPost pid, class_ "flex flex-col gap-6 pt-4", hxTarget_ settingsContentTarget] do
-          div_ [class_ "flex flex-col gap-1.5"] do
-            label_ [Lucid.for_ "api-key-title", class_ "text-sm font-medium text-textStrong"] "Key title"
-            input_ [id_ "api-key-title", class_ "input w-full", type_ "text", placeholder_ "Production collector", name_ "title", required_ "true", maxlength_ "100", autocomplete_ "off", Aria.describedby_ "api-key-title-hint"]
-            p_ [id_ "api-key-title-hint", class_ "text-xs text-textWeak"] "Name it after the service or environment that uses it."
+          formField_ FieldMd def{placeholder = "Production collector", hint = Just "Name it after the service or environment that uses it.", inputId = Just "api-key-title", extraAttrs = [maxlength_ "100", autocomplete_ "off"]} "Key title" "title" True Nothing
           formActionsModal_ "apikey-modal" $ button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Create key"
     unless canEdit $ p_ [class_ "text-sm text-textWeak mb-4"] "A project editor can create, reveal, and manage API keys."
     apiMainContent pid canEdit settings.keys Nothing
@@ -454,10 +451,11 @@ makeApiKeysTable pid canEdit apiKeys elemId =
                 span_ [id_ ("key-value-" <> apiKey.id.toText), class_ "min-w-0 font-mono text-textStrong hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
                 div_ [class_ "flex items-center gap-1.5 shrink-0 ml-auto"] do
                   -- Wrappers carry the toggle: .tap-target's display (custom layer) outranks `hidden`.
-                  forM_ ([("group-has-[:checked]:hidden", "Show"), ("hidden group-has-[:checked]:inline", "Hide")] :: [(Text, Text)]) \(wrapCls, verb) ->
-                    span_ [class_ wrapCls]
-                      $ label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ verb <> " value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" (verb <> " key"), keyboardActivateAttr_]
-                      $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
+                  let eyeLabel verb =
+                        label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ verb <> " value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" (verb <> " key"), keyboardActivateAttr_]
+                          $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
+                  span_ [class_ "group-has-[:checked]:hidden"] $ eyeLabel "Show"
+                  span_ [class_ "hidden group-has-[:checked]:inline"] $ eyeLabel "Hide"
                   button_
                     [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target"
                     , type_ "button"
@@ -1071,10 +1069,19 @@ notificationsTestHistoryGetH pid = do
 
 
 historyHtml_ :: [TestHistory] -> Html ()
-historyHtml_ [] = emptyState_ def{size = ESCompact} "No test notifications sent yet" "Test your integrations to see results here"
-historyHtml_ tests = div_ [class_ "bg-bgRaised rounded-lg border border-strokeWeak overflow-hidden"] $ table_ [class_ "table table-sm w-full"] (thead_ [class_ "text-xs text-left text-textStrong font-semibold uppercase bg-fillWeaker border-b border-strokeWeak"] (tr_ (th_ [class_ "p-3"] "Status" <> th_ [class_ "p-3"] "Channel" <> th_ [class_ "p-3"] "Alert Type" <> th_ [class_ "p-3 text-right"] "Time")) <> tbody_ [class_ "text-sm divide-y divide-strokeWeak"] (foldMap' renderRow tests))
-  where
-    renderRow t = tr_ [class_ "hover-only:hover:bg-fillWeaker transition-colors"] (td_ [class_ "p-3"] (case t.status of TSSent -> statusBadge_ True "Sent"; TSSkipped -> statusBadge_ False "Failed") <> td_ [class_ "p-3 capitalize font-medium"] (toHtml $ if t.channel == TCAll then "All channels" else display t.channel) <> td_ [class_ "p-3 text-textWeak"] (toHtml $ T.replace "_" " " t.issueType) <> td_ [class_ "p-3 text-right tabular-nums text-textWeak"] (localTimeFmt_ "MMM dd, HH:mm" t.createdAt))
+historyHtml_ tests =
+  toHtml
+    Table.Table
+      { config = def{Table.elemID = "notification-test-history", Table.renderAsTable = True, Table.zeroStateSize = ESCompact, Table.thClasses = "text-xs text-left text-textStrong font-semibold uppercase bg-fillWeaker border-b border-strokeWeak p-3 whitespace-nowrap"}
+      , rows = V.fromList tests
+      , features = def{Table.rowAttrs = Just $ const [class_ "hover-only:hover:bg-fillWeaker transition-colors"], Table.zeroState = Just Table.ZeroState{icon = "", title = "No test notifications sent yet", description = "Test your integrations to see results here", action = Table.ESNone}}
+      , columns =
+          [ Table.col "Status" (\t -> case t.status of TSSent -> statusBadge_ True "Sent"; TSSkipped -> statusBadge_ False "Failed") & Table.withAttrs [class_ "p-3"]
+          , Table.col "Channel" (\t -> toHtml $ if t.channel == TCAll then "All channels" else display t.channel) & Table.withAttrs [class_ "p-3 capitalize font-medium"]
+          , Table.col "Alert Type" (toHtml . T.replace "_" " " . (.issueType)) & Table.withAttrs [class_ "p-3 text-textWeak"]
+          , Table.col "Time" (localTimeFmt_ "MMM dd, HH:mm" . (.createdAt)) & Table.withAttrs [class_ "p-3 text-right tabular-nums text-textWeak"]
+          ]
+      }
 
 
 ----------------------------------------------------------------------

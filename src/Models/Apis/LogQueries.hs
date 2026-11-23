@@ -73,7 +73,7 @@ import Models.Ids qualified as Projects
 import OpenTelemetry.Attributes qualified as OA
 import Pkg.DeriveUtils (DB, WrappedEnumSC (..), WrappedEnumShow (..), rawSql)
 import Pkg.Drain qualified as Drain
-import Pkg.Parser
+import Pkg.Parser hiding (scopedWhere)
 import Pkg.Parser.Expr (flattenedOtelAttributes, isErrorSql, transformFlattenedAttribute)
 import Pkg.Parser.Stats (Section, Sources (..))
 import Relude hiding (many, some)
@@ -448,9 +448,7 @@ selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedC
         ]
     )
 
-  let tbl = case source of
-        Just SMetrics -> "otel_metrics"
-        _ -> "otel_logs_and_spans"
+  let tbl = display (fromMaybe SSpans source)
   result <-
     withSpan_
       ("SELECT " <> tbl)

@@ -76,7 +76,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, faSprite_, faSymbolDefs_, faUse_, fmtInt, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, nonEmptyT, onpointerdown_, parseTime, popoverTrigger_, prettyPrintCount, scriptJson, toUriStr, uiToggle_, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, faSprite_, faSymbolDefs_, faUse_, fmtInt, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, onpointerdown_, popoverTrigger_, prettyPrintCount, scriptJson, toUriStr, uiToggle_, utcTimeToNanoseconds)
 import Web.Links hiding (explorerUrl)
 
 
@@ -400,8 +400,11 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
   (_, _, bw) <- mkPageCtx pid
   now <- Time.currentTime
   let dataPointsTab = any (/= "charts") tabM
-      sinceOrDefault = sinceWithDefault fromM toM sinceM
-      (_, _, currentRange) = parseTime fromM toM sinceOrDefault now
+      tp = TimePicker.TimePicker sinceM fromM toM
+      (_, _, currentRange) = TimePicker.parseTimeRange now tp
+      timeParams = case TimePicker.rangePairs tp of
+        [] -> [("since", TimePicker.defaultSince)]
+        ps -> ps
       bwconf =
         bw
           { prePageTitle = Nothing
@@ -417,7 +420,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
           (fromMaybe "all" sourceM)
           (fromMaybe "all" prefixM)
           (T.strip $ fromMaybe "" queryM)
-          [(k, v) | (k, Just v) <- [("from", fromM), ("to", toM), ("since", sinceOrDefault)], not (T.null v)]
+          timeParams
           groups
       cursor = max 0 $ fromMaybe 0 cursorM
   if dataPointsTab
@@ -463,14 +466,6 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
         else addRespHeaders $ MetricsOVChartsPaginated (pid, metricList, filters.source, nextFetchUrl)
 
 
--- | With no time parameters at all — absent, or blank as a cleared picker submits them —
--- 'parseTime' yields no window, which turns the datapoint COUNT into an unbounded scan over
--- every metric row the project has ever written. Fall back to the time picker's own default
--- so the control and the data agree.
-sinceWithDefault :: Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text
-sinceWithDefault fromM toM sinceM = if all (isNothing . nonEmptyT) [fromM, toM, sinceM] then Just TimePicker.defaultSince else sinceM
-
-
 dataPointCountsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders DataPointCounts)
 dataPointCountsGetH pid fromM toM sinceM = do
   env <- (.env) <$> Reader.ask @AuthContext
@@ -479,7 +474,7 @@ dataPointCountsGetH pid fromM toM sinceM = do
   -- An absolute range can still arrive with one end missing. 'CatalogWithCounts' takes a
   -- required window so it can't reach the COUNT as an unbounded scan; collapsing to now..now
   -- returns no counts, which is the safe way to be wrong here.
-  let (from, to, _) = parseTime fromM toM (sinceWithDefault fromM toM sinceM) now
+  let (from, to, _) = TimePicker.parseTimeRange now $ TimePicker.TimePicker sinceM fromM toM
   dataPoints <- Telemetry.getDataPointsData (Telemetry.CatalogWithCounts env.enableTimefusionReads (fromMaybe now from, fromMaybe now to)) pid
   addRespHeaders $ DataPointCounts dataPoints
 
@@ -496,7 +491,7 @@ metricDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> M
 metricDetailsGetH pid metricName fromM toM sinceM source labelM = do
   void $ Projects.sessionAndProject pid
   now <- Time.currentTime
-  let (_, _, currentRange) = parseTime fromM toM sinceM now
+  let (_, _, currentRange) = TimePicker.parseTimeRange now $ TimePicker.TimePicker sinceM fromM toM
   -- No related candidates passed in: ranking them needs the whole catalogue, so the
   -- Related tab hx-gets 'metricRelatedGetH' when it is first opened instead of every
   -- details render paying for it.
@@ -575,7 +570,7 @@ metricExemplarsGetH pid metricName fromM toM sinceM = do
   void $ Projects.sessionAndProject pid
   env <- (.env) <$> Reader.ask @AuthContext
   now <- Time.currentTime
-  let (fromD, toD, _) = parseTime fromM toM sinceM now
+  let (fromD, toD, _) = TimePicker.parseTimeRange now $ TimePicker.TimePicker sinceM fromM toM
   exemplars <- Telemetry.metricExemplars env.enableTimefusionReads pid (Telemetry.ExemplarsOfMetric metricName) (fromMaybe (addUTCTime (-3600) now) fromD, fromMaybe now toD) exemplarPageSize
   addRespHeaders $ MetricExemplarsGet pid metricName exemplars
 

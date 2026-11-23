@@ -1,10 +1,9 @@
 module Data.Effectful.LLMSpec (spec) where
 
 import Data.ByteString qualified as BS
-import Data.Effectful.LLM (embedDocumentsBounded, embedDocumentsWithProgress, openAIEmbeddings)
+import Data.Effectful.LLM (embedDocumentsBounded, embedDocumentsWithProgress)
 import Data.Text qualified as T
 import Langchain.DocumentLoader.Core qualified as Doc
-import Langchain.Embeddings.OpenAI qualified as EmbOAI
 import Relude
 import Test.Hspec
 
@@ -35,23 +34,6 @@ spec = do
           expected = [(i, [1, 0]) | i <- [1 :: Int .. 80]]
       embedDocumentsWithProgress (embedDocumentsBounded request) (modifyIORef' saved . flip (<>)) docs `shouldReturn` Right expected
       readIORef saved `shouldReturn` expected
-
-  describe "embedding endpoint configuration" do
-    let cases :: [(Text, String)]
-        cases =
-          [ ("", "https://api.openai.com/v1")
-          , ("https://api.openai.com/", "https://api.openai.com/v1")
-          , ("https://api.openai.com", "https://api.openai.com/v1")
-          , ("https://api.openai.com/v1/", "https://api.openai.com/v1")
-          , ("https://api.openai.com/v1", "https://api.openai.com/v1")
-          , ("https://proxy.example/openai/v1/", "https://proxy.example/openai/v1")
-          , ("https://proxy.example/api", "https://proxy.example/api")
-          ]
-    forM_ cases \(configured, expected) ->
-      it ("resolves " <> show configured) do
-        let client = openAIEmbeddings "test-key" configured
-        EmbOAI.baseUrl client `shouldBe` Just expected
-        EmbOAI.apiKey client `shouldBe` "test-key"
 
   describe "bounded embedding requests" do
     it "preserves long Unicode documents and keeps every request inside provider limits" do

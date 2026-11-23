@@ -117,7 +117,7 @@ import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
-import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.ErrorPatterns (ErrorPatternId (..))
@@ -136,7 +136,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), Dep (..), PageCtx (..), checkFreeTierStatus, loadDeps, mkPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
-import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), SavedView (..), SavedViewsMenu (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, localTimeFmt_, metadataChip_, options_, periodToggle_, resetFormOnRefusalAttr_, resizer_, savedViewsMenu_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), SavedView (..), SavedViewsMenu (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, localTimeFmt_, metadataChip_, options_, periodToggle_, pollSelfAttrs_, resetFormOnRefusalAttr_, resizer_, savedViewsMenu_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Replay qualified as Replay
@@ -1175,32 +1175,33 @@ issueAggregate_ v@IssueView{..} = do
     Just (Issues.LogPatternP _) -> issueVolumeChart_ "Pattern Volume"
     Just (Issues.LogPatternRateChangeP _) -> issueVolumeChart_ "Pattern Volume"
     Just (Issues.PerformanceP d) ->
-      contextCard_ "p-4 flex items-start gap-8" "Impact in the sample trace" $ figures_ [("Duration", show @Text (round d.durationImpactMs :: Int) <> " ms"), ("Queries", show d.repeatCount), ("Database", fromMaybe "\x2014" d.dbSystem)]
+      contextCard_ "Impact in the sample trace" $ div_ [class_ "p-4 flex items-start gap-8"] $ figures_ [("Duration", show @Text (round d.durationImpactMs :: Int) <> " ms"), ("Queries", show d.repeatCount), ("Database", fromMaybe "\x2014" d.dbSystem)]
     Just (Issues.FeedbackP d) ->
-      contextCard_ "p-4 flex flex-col gap-3" "What the user said" do
+      contextCard_ "What the user said" $ div_ [class_ "p-4 flex flex-col gap-3"] do
         p_ [class_ "text-sm text-textStrong whitespace-pre-wrap"] $ toHtml d.message
         whenJust d.relatedErrorHash \h -> a_ [href_ $ (urls.issues pid).detailHashGet h Nothing Nothing Nothing Nothing Nothing, class_ "text-xs text-textBrand hover:underline"] "Open the error from this user's trace"
     Just (Issues.CronP d) ->
-      contextCard_ "p-4 flex flex-col gap-2" "Schedule" do
+      contextCard_ "Schedule" $ div_ [class_ "p-4 flex flex-col gap-2"] do
         detailRow_ [("clock", "text-iconError", "Expected by", agoText now d.expectedBy)]
         detailRow_ [("check", "text-textWeak", "Last check-in", maybe "never" (agoText now) d.lastCheckinAt)]
     Just (Issues.UptimeP d) ->
-      contextCard_ "p-4 flex items-start gap-8" "Failing check" $ figures_ [("Status", maybe "\x2014" show d.statusCode), ("Expected", show d.expectedStatus), ("Response", show d.durationMs <> " ms")]
+      contextCard_ "Failing check" $ div_ [class_ "p-4 flex items-start gap-8"] $ figures_ [("Status", maybe "\x2014" show d.statusCode), ("Expected", show d.expectedStatus), ("Response", show d.durationMs <> " ms")]
     Just (Issues.FrontendP d) ->
-      contextCard_ "p-4 flex flex-col gap-2" "Where it happened" do
+      contextCard_ "Where it happened" $ div_ [class_ "p-4 flex flex-col gap-2"] do
         whenJust d.pageUrl \u -> a_ [href_ u, target_ "_blank", rel_ "noopener", class_ "text-sm text-textBrand break-all hover:underline"] $ toHtml u
         detailRow_ [("arrow-pointer", "text-iconBrand", "Clicks in the burst", show d.clickCount)]
     Just (Issues.RuntimeExceptionP d) ->
       sideBySide_ (issueVolumeChart_ "Error Frequency")
         $ whenJust ((,) <$> d.requestMethod <*> d.requestPath) \(method, path) ->
-          contextCard_ "p-4" "Request" do
+          contextCard_ "Request" $ div_ [class_ "p-4"] do
             span_ [class_ $ "relative cbadge-sm whitespace-nowrap " <> Telemetry.methodStyle method] $ toHtml method
             span_ [class_ "ml-2 text-sm text-textWeak break-all"] $ toHtml path
     Just (Issues.QueryAlertP d) -> do
       let below = d.thresholdType == Issues.Below
           meetsThreshold = Issues.meetsThreshold d.thresholdType d.thresholdValue d.actualValue
-      sideBySide_ (issueChartCard_ "Alert Query" "h-56" (Just d.thresholdValue) Nothing d.queryExpression)
-        $ contextCard_ "p-4 flex flex-col gap-4" "Recorded evaluation" do
+      sideBySide_ (issueChartCard_ "Alert Query" True (Just d.thresholdValue) Nothing d.queryExpression)
+        $ contextCard_ "Recorded evaluation"
+        $ div_ [class_ "p-4 flex flex-col gap-4"] do
           div_ [class_ "flex items-start gap-6"] do
             statFigure_ "" [] "Recorded value" $ span_ [class_ $ bool "" "text-textWarning" meetsThreshold] $ toHtml $ formatWithCommas d.actualValue
             statFigure_ "" [] "Threshold" do
@@ -1245,26 +1246,26 @@ issueAggregate_ v@IssueView{..} = do
       div_ [class_ "min-w-0 flex-1"] evidence
       aside
     -- The right-hand context panel every type puts beside its chart.
-    contextCard_ :: Text -> Text -> Html () -> Html ()
-    contextCard_ bodyCls title body = div_ [class_ "surface-raised rounded-2xl overflow-hidden lg:w-72 shrink-0"] do
+    contextCard_ :: Text -> Html () -> Html ()
+    contextCard_ title body = div_ [class_ "surface-raised rounded-2xl overflow-hidden lg:w-72 shrink-0"] do
       div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
         faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-textWeak"
         -- h3, not span: the chart and context cards are reachable by heading navigation.
         sectionLabel_ title
-      div_ [class_ bodyCls] body
+      body
     -- The page's chart. A query alert's total is what the alert measures, not an event
     -- count, so it stays in the chart header; every other type's total is the Events
-    -- figure in 'issueHeader_'. @thresholdM@ draws the alert's breach line; @heightCls@
-    -- is taller when the chart *is* the evidence.
-    issueChartCard_ :: Text -> Text -> Maybe Double -> Maybe (Text, UTCTime) -> Text -> Html ()
-    issueChartCard_ chartTitle heightCls thresholdM rollupM chartQuery = do
+    -- figure in 'issueHeader_'. @thresholdM@ draws the alert's breach line; @tall@
+    -- makes the chart taller when it *is* the evidence.
+    issueChartCard_ :: Text -> Bool -> Maybe Double -> Maybe (Text, UTCTime) -> Text -> Html ()
+    issueChartCard_ chartTitle tall thresholdM rollupM chartQuery = do
       let chartId = issueChartId issue
           total = statFigure_ "" [] "Value" $ Widget.widgetValueSlotAs_ chartId Nothing
       div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
         div_ [class_ "px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-strokeWeak"] do
           sectionLabel_ chartTitle
           when (isNothing $ Issues.hashPrefix issue.issueType) total
-        div_ [class_ heightCls]
+        div_ [class_ $ bool "h-24" "h-56" tall]
           $ Widget.widget_
             (def :: Widget.Widget)
               { Widget.standalone = Just True
@@ -1289,7 +1290,7 @@ issueAggregate_ v@IssueView{..} = do
     -- Volume of the issue's own signal over the selected range.
     issueVolumeChart_ :: Text -> Html ()
     issueVolumeChart_ chartTitle = whenJust (issueHashKey issue) \key ->
-      issueChartCard_ chartTitle "h-24" Nothing issueHourlySql $ "hashes[*]==\"" <> key <> "\" | summarize count(*) by bin_auto(timestamp)"
+      issueChartCard_ chartTitle False Nothing issueHourlySql $ "hashes[*]==\"" <> key <> "\" | summarize count(*) by bin_auto(timestamp)"
     issueHourlySql = issueRollupSql v
 
 
@@ -2112,7 +2113,7 @@ aiChatHistoryGetH pid issueId = do
 issueChatHistory_ :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> [Issues.AIChatMessage] -> Html ()
 issueChatHistory_ pid issueId running systemPrompt messages =
   div_
-    ([id_ "issue-ai-results"] <> if running then [hxGet_ $ (urls.issues pid).aiChatHistoryGet issueId, hxTrigger_ "every 2s", hxSelect_ "#issue-ai-results", hxSwap_ "outerHTML"] else [])
+    ([id_ "issue-ai-results"] <> bool [] (pollSelfAttrs_ "issue-ai-results" ((urls.issues pid).aiChatHistoryGet issueId) "every 2s") running)
     do
       disclosure_ [class_ "my-2 border border-strokeWeak rounded-lg"] "px-2.5 py-1.5 text-xs text-textWeak hover:bg-fillWeaker" (faSprite_ "file-lines" "regular" "w-3 h-3" >> "System Prompt")
         $ div_ [class_ "px-2.5 py-2 border-t border-strokeWeak bg-fillWeaker/50 text-xs font-mono whitespace-pre-wrap text-textWeak max-h-48 overflow-y-auto"]
@@ -2431,13 +2432,11 @@ issueListGetH pid filterTM sortM _since pageM perPageM loadM periodM serviceFilt
     -- Inbox additionally hides severity='low' so demoted silent drops don't clutter it.
     tabIssueFilters :: IssueTab -> Issues.IssueFilters
     tabIssueFilters = \case
-      TabAcknowledged -> notSpam{Issues.ack = Issues.IsNotNull}
-      TabArchived -> notSpam{Issues.archive = Issues.IsNotNull}
-      TabInbox -> notSpam{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.hideLowSeverity = True}
-      TabSpam -> Issues.defIssueFilters{Issues.spam = Issues.IsNotNull}
-      TabSynthetic -> notSpam{Issues.synthetic = True}
-      where
-        notSpam = Issues.defIssueFilters{Issues.spam = Issues.IsNull}
+      TabAcknowledged -> Issues.issueQueueFilters Issues.QAcknowledged
+      TabArchived -> Issues.issueQueueFilters Issues.QArchived
+      TabInbox -> Issues.inboxFilters{Issues.hideLowSeverity = True}
+      TabSpam -> Issues.issueQueueFilters Issues.QSpam
+      TabSynthetic -> Issues.defIssueFilters{Issues.spam = Issues.IsNull, Issues.synthetic = True}
 
 
 -- | Which issues tab is being viewed.

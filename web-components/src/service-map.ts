@@ -687,7 +687,7 @@ async function render(
   const menu = panel.querySelector<HTMLElement>('[data-service-menu]');
   const chip = panel.querySelector<HTMLElement>('[data-map-scope]');
   const pid = el.dataset.mapBase ?? '';
-  const hideMenu = () => menu?.classList.add('hidden');
+  const hideMenu = () => menu?.hidePopover?.();
 
   const showMenu = (key: string, label: string, inferred: boolean, x: number, y: number) => {
     if (!menu) return;
@@ -703,9 +703,8 @@ async function render(
       a.classList.toggle('hidden', (inferred || endpointEntry) && action !== 'inspect' && action !== 'focus');
       a.href = menuHref(pid, action, key);
     }
-    menu.classList.remove('hidden');
-    menu.style.left = `${Math.max(0, Math.min(x, panel.clientWidth - menu.offsetWidth))}px`;
-    menu.style.top = `${Math.max(0, Math.min(y, panel.clientHeight - menu.offsetHeight))}px`;
+    menu.showPopover?.();
+    menu.style.cssText = `position:fixed;inset:auto;left:${Math.max(0, Math.min(x, window.innerWidth - menu.offsetWidth))}px;top:${Math.max(0, Math.min(y, window.innerHeight - menu.offsetHeight))}px`;
   };
 
   const setScope = (key: string | null) => {
@@ -744,11 +743,10 @@ async function render(
     if (node?.member_count) { expanded.add(key); isolated = null; hideMenu(); void rebuild().then(fit); return; }
     isolated = new Set([...reachableFrom(key, reach.up), ...reachableFrom(key, reach.down)]);
     paint();
-    const box = panel.getBoundingClientRect();
     const anchor = card.getBoundingClientRect();
     showMenu(key, node?.label || 'Entry point', !!node?.inferred,
-      (e.detail === 0 ? anchor.left : e.clientX) - box.left,
-      (e.detail === 0 ? anchor.bottom : e.clientY) - box.top);
+      e.detail === 0 ? anchor.left : e.clientX,
+      e.detail === 0 ? anchor.bottom : e.clientY);
     if (e.detail === 0) menu?.querySelector<HTMLAnchorElement>('a:not(.hidden)')?.focus();
     opts.onNodeClick?.(key);
   }, { signal });

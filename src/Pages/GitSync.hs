@@ -42,7 +42,7 @@ import Data.Text qualified as T
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid.Htmx (hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_)
+import Lucid.Htmx (hxIndicator_, hxPost_, hxSwap_, hxTarget_)
 import Models.Projects.DashboardTemplates (askTemplates, loadDashboardFromVM, templateList, updateSchema)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
@@ -53,7 +53,7 @@ import NeatInterpolation (text)
 import Network.HTTP.Types (urlEncode)
 import OpenTelemetry.Attributes qualified as Otel
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), colorChip_, connectionBadge_, copyButton_, copyField_, disclosure_, formField_, formSelectField_, headerRow_, sectionLabel_)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), callout_, colorChip_, connectionBadge_, copyButton_, copyField_, disclosure_, formField_, formSelectField_, headerRow_, morphPostAttrs_, sectionLabel_, submitBtn_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.ImpactReview qualified as ImpactReview
@@ -426,9 +426,7 @@ gitSyncSettingsView GitSyncSettings{hostUrl, projectId = pid, sync = syncM, fail
           unless isViaApp $ p_ [class_ "text-xs text-textWeak"] "Add this to your repository for automatic syncing."
 
         div_ [class_ "flex flex-wrap items-center gap-2 pt-2"] do
-          button_ [class_ "btn btn-sm btn-primary gap-1", type_ "submit"] do
-            if sync.syncEnabled then "Save" else "Resume sync"
-            htmxIndicator_ (targetId <> "-indicator") LdXS
+          submitBtn_ (targetId <> "-indicator") (if sync.syncEnabled then "Save" else "Resume sync")
           when sync.syncEnabled $ button_ [type_ "button", hxPost_ (urls.gitSyncRepositoryPause pid sync.id), hxTarget_ ("#" <> targetId), hxSwap_ "outerMorph", hxIndicator_ ("#" <> targetId <> "-pause-indicator"), class_ "btn btn-sm btn-ghost gap-1"] do
             "Pause sync"
             htmxIndicator_ (targetId <> "-pause-indicator") LdXS
@@ -595,7 +593,7 @@ instance ToHtml RepositoryDashboardGet where
           Nothing | null page.accounts -> do
             p_ [class_ "text-sm text-textWeak"] "Connect an account with access to this repository to enable configuration sync."
             a_ [href_ (urls.repositoryConnectGet repository.projectId Nothing), class_ "btn btn-sm btn-primary"] "Connect an account"
-          Nothing -> form_ [action_ dashboardsUrl, method_ "post", hxPost_ dashboardsUrl, hxTarget_ "#repository-dashboard-content", hxSelect_ "#repository-dashboard-content", hxSwap_ "outerMorph", hxIndicator_ "#repository-dashboard-indicator", class_ "space-y-4"] do
+          Nothing -> form_ (class_ "space-y-4" : morphPostAttrs_ dashboardsUrl "repository-dashboard-content" "repository-dashboard-indicator") do
             formSelectField_ FieldSm "Repository account" "credentialId" True do
               option_ ([value_ "", disabled_ "disabled"] <> [selected_ "selected" | isNothing page.form.credentialId]) "Choose an account"
               forM_ page.accounts \account -> option_ ([value_ account.id.toText] <> [selected_ "selected" | Just account.id == page.form.credentialId]) $ toHtml account.account
@@ -603,9 +601,7 @@ instance ToHtml RepositoryDashboardGet where
               formField_ FieldSm def{value = page.form.branch, placeholder = "Leave blank to detect"} "Branch" "branch" False Nothing
               formField_ FieldSm def{value = fromMaybe "" page.form.pathPrefix, placeholder = "monoscope"} "Folder in repo" "pathPrefix" False Nothing
             p_ [class_ "text-xs text-textWeak"] "This folder contains dashboards/ and monitors/. Move existing resources into the repository folder to include them."
-            button_ [type_ "submit", class_ "btn btn-sm btn-primary gap-2"] do
-              "Enable configuration sync"
-              htmxIndicator_ "repository-dashboard-indicator" LdXS
+            submitBtn_ "repository-dashboard-indicator" "Enable configuration sync"
   toHtmlRaw = toHtml
 
 
@@ -635,7 +631,7 @@ instance ToHtml DashboardRepositoryGet where
       h1_ [class_ "text-xl font-semibold text-textStrong"] "Dashboard repository"
       p_ [class_ "text-sm text-textWeak break-words"] $ toHtml dash.title
     div_ [id_ "dashboard-repository-content", class_ "space-y-4"] do
-      whenJust page.assignmentError \err -> p_ [role_ "alert", class_ "rounded-lg bg-fillError-weak p-3 text-sm text-textError"] $ toHtml @Text case err of
+      whenJust page.assignmentError \err -> callout_ ErrorBadge Nothing $ p_ [role_ "alert"] $ toHtml @Text case err of
         GitSync.DashboardMissing -> "This dashboard is no longer available."
         GitSync.RepositoryMissing -> "That repository is no longer connected to this project. Choose another repository."
         GitSync.OwnedByRepository _ -> "This dashboard already belongs to another repository. Disconnect its dashboard sync before assigning it elsewhere."
@@ -659,32 +655,22 @@ instance ToHtml DashboardRepositoryGet where
         Nothing | null page.repositories -> do
           p_ [class_ "text-sm text-textWeak"] "Connect a repository to version dashboards alongside your team's code."
           a_ [href_ (urls.repositoriesGet pid Nothing Nothing), class_ "btn btn-sm btn-primary"] "Connect a repository"
-        Nothing -> form_
-          [ hxPost_ (urls.dashboardRepositoryPost pid dash.id)
-          , hxTarget_ "#dashboard-repository-content"
-          , hxSelect_ "#dashboard-repository-content"
-          , hxSwap_ "outerMorph"
-          , hxIndicator_ "#dashboard-repository-indicator"
-          , class_ "rounded-xl border border-strokeWeak p-4 sm:p-5 space-y-4"
-          ]
-          do
-            p_ [class_ "text-sm text-textWeak"] "This dashboard is local. Choose the repository that should own its files. Each repository keeps its own dashboards and sync status."
-            formSelectField_ FieldSm "Repository" "repositoryId" True do
-              option_ [value_ "", disabled_ "disabled", selected_ "selected"] "Choose a repository"
-              forM_ page.repositories \repository ->
-                option_ [value_ repository.id.toText]
-                  $ toHtml
-                  $ repository.owner
-                  <> "/"
-                  <> repository.repo
-                  <> " · "
-                  <> fromMaybe (Git.hostLabel repository.host) repository.apiBase
-                  <> " · "
-                  <> repository.branch
-                  <> bool " · paused" "" repository.syncEnabled
-            button_ [type_ "submit", class_ "btn btn-sm btn-primary gap-2"] do
-              "Sync dashboard"
-              htmxIndicator_ "dashboard-repository-indicator" LdXS
+        Nothing -> form_ (class_ "rounded-xl border border-strokeWeak p-4 sm:p-5 space-y-4" : morphPostAttrs_ (urls.dashboardRepositoryPost pid dash.id) "dashboard-repository-content" "dashboard-repository-indicator") do
+          p_ [class_ "text-sm text-textWeak"] "This dashboard is local. Choose the repository that should own its files. Each repository keeps its own dashboards and sync status."
+          formSelectField_ FieldSm "Repository" "repositoryId" True do
+            option_ [value_ "", disabled_ "disabled", selected_ "selected"] "Choose a repository"
+            forM_ page.repositories \repository ->
+              option_ [value_ repository.id.toText]
+                $ toHtml
+                $ repository.owner
+                <> "/"
+                <> repository.repo
+                <> " · "
+                <> fromMaybe (Git.hostLabel repository.host) repository.apiBase
+                <> " · "
+                <> repository.branch
+                <> bool " · paused" "" repository.syncEnabled
+          submitBtn_ "dashboard-repository-indicator" "Sync dashboard"
   toHtmlRaw = toHtml
 
 

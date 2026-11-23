@@ -62,6 +62,9 @@ module Models.Apis.Issues (
   IssueFilters (..),
   NullFilter (..),
   defIssueFilters,
+  IssueQueue (..),
+  issueQueueFilters,
+  inboxFilters,
   applyIssueScope,
   updateIssueWithNewAnomaly,
   updateIssueEnhancement,
@@ -969,6 +972,30 @@ defIssueFilters =
     , limit = 50
     , offset = 0
     }
+
+
+-- | Canonical triage queues for 'selectIssues'. Every non-spam queue filters
+-- out spam, and both 'QInbox' and 'QAcknowledged' exclude archived rows.
+data IssueQueue = QInbox | QAcknowledged | QArchived | QSpam
+  deriving stock (Bounded, Enum, Eq, Ord, Show)
+
+
+-- | Canonical 'IssueFilters' for a triage queue.
+--
+-- >>> map (\q -> let f = issueQueueFilters q in (f.ack, f.archive, f.spam)) [minBound .. maxBound]
+-- [(IsNull,IsNull,IsNull),(IsNotNull,IsNull,IsNull),(AnyValue,IsNotNull,IsNull),(AnyValue,AnyValue,IsNotNull)]
+issueQueueFilters :: IssueQueue -> IssueFilters
+issueQueueFilters = \case
+  QInbox -> notSpam{ack = IsNull, archive = IsNull}
+  QAcknowledged -> notSpam{ack = IsNotNull, archive = IsNull}
+  QArchived -> notSpam{archive = IsNotNull}
+  QSpam -> defIssueFilters{spam = IsNotNull}
+  where
+    notSpam = defIssueFilters{spam = IsNull}
+
+
+inboxFilters :: IssueFilters
+inboxFilters = issueQueueFilters QInbox
 
 
 -- | Adapt the app-wide investigation boundary to the issue store's filter shape.

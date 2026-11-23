@@ -749,6 +749,7 @@ unifiedOverviewPage pid alert currTime teams = do
               , Widget.layout = Just (def{Widget.w = Just 12, Widget.h = Just 6})
               , Widget.alertThreshold = Just alert.alertThreshold
               , Widget.warningThreshold = alert.warningThreshold
+              , Widget.unit = alert.alertConfig.unit
               , Widget.showThresholdLines = Just Widget.TLAlways
               , Widget.scope = Just $ Widget.ChartScope alert.environment alert.service
               }
@@ -779,7 +780,7 @@ alertSidebar_ display alert currTime = do
     div_ [class_ "md:hidden divide-y divide-strokeWeak text-sm"] do
       div_ [class_ "px-3 py-2 flex items-center justify-between"] do
         statusBadge_ True display
-        span_ [class_ $ statusColor <> " tabular-nums text-xl font-bold"] $ toHtml $ formatWithCommas alert.currentValue
+        span_ [class_ $ (statusInfo alert.currentStatus).textColor <> " tabular-nums text-xl font-bold"] $ toHtml $ formatWithCommas alert.currentValue
       mobileRow_ "Trigger" $ span_ [class_ "tabular-nums"] $ toHtml $ direction <> " " <> formatWithCommas alert.alertThreshold
       whenJust alert.warningThreshold \w -> mobileRow_ "Warning" $ span_ [class_ "tabular-nums text-textWarning"] $ toHtml $ direction <> " " <> formatWithCommas w
       label_ [class_ "px-3 py-1.5 flex flex-col gap-1 cursor-pointer"] do
@@ -790,7 +791,7 @@ alertSidebar_ display alert currTime = do
       mobileRow_ "Last triggered" $ span_ [class_ "text-textWeak"] $ toHtml $ ago alert.alertLastTriggered
     div_ [class_ "max-md:hidden divide-y divide-strokeWeak"] do
       sidebarItem_ "Status" $ statusBadge_ True display
-      sidebarItem_ "Current Value" $ span_ [class_ $ statusColor <> " tabular-nums text-lg font-semibold"] $ toHtml $ formatWithCommas alert.currentValue
+      sidebarItem_ "Current Value" $ span_ [class_ $ (statusInfo alert.currentStatus).textColor <> " tabular-nums text-lg font-semibold"] $ toHtml $ formatWithCommas alert.currentValue
       sidebarItem_ "Query" $ pre_ [class_ "text-xs font-mono text-textStrong/70 overflow-x-auto whitespace-pre-wrap max-h-24"] $ toHtml alert.logQuery
       sidebarItem_ "Thresholds" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
         span_ [class_ "text-textStrong tabular-nums"] $ toHtml $ "Trigger: " <> direction <> " " <> formatWithCommas alert.alertThreshold
@@ -806,7 +807,6 @@ alertSidebar_ display alert currTime = do
   where
     ago = maybe "Never" (toText . prettyTimeAuto currTime)
     direction = bool ">" "<" alert.triggerLessThan
-    statusColor = (statusInfo alert.currentStatus).textColor
     mobileRow_ :: Html () -> Html () -> Html ()
     mobileRow_ label val = div_ [class_ "px-3 py-1.5 flex items-center justify-between gap-2"] do
       span_ [class_ "text-xs text-textWeak shrink-0"] label

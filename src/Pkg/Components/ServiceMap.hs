@@ -17,6 +17,7 @@ import Lucid
 import Models.Ids qualified as Projects
 import Models.Telemetry.ServiceGraph (MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), drawnEdges, drawnNodes)
 import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), disclosure_, emptyState_)
+import Pkg.Components.Table qualified as Table
 import Relude
 import Utils (countNoun, faSprite_, fmtInt, getDurationNSMS, prettyPrintCount, scriptJson, showFFloat')
 import Web.Links (CookieProtectedRoutes (..), TelemetryRoutes' (..), urls)
@@ -205,8 +206,9 @@ nodeCardTemplate_ =
 nodeMenu_ :: Text -> Html ()
 nodeMenu_ elId =
   div_
-    [ class_ "absolute hidden z-50 min-w-56 rounded-lg border border-strokeWeak bg-bgRaised shadow-lg py-1 text-sm"
+    [ class_ "m-0 min-w-56 rounded-lg border border-strokeWeak bg-bgRaised shadow-lg py-1 text-sm"
     , id_ $ elId <> "-menu"
+    , term "popover" "auto"
     , term "data-service-menu" ""
     ]
     do
@@ -275,21 +277,21 @@ serviceMapLegend_ graph colors = div_ [class_ "flex flex-col gap-2"] do
 
 -- | The no-JS, screen-reader and small-screen representation of the same graph.
 dependencyTable_ :: ServiceGraph -> Html ()
-dependencyTable_ graph = disclosure_ [class_ "border border-strokeStrong rounded-2xl overflow-hidden"] "px-3 py-2 text-sm text-textStrong" (toHtml $ "Dependencies (" <> fmtInt (V.length (drawnEdges graph)) <> ")")
-  $ div_ [class_ "overflow-x-auto"]
-  $ table_ [class_ "w-full text-xs"] do
-    thead_ [class_ "text-textWeak border-b border-strokeWeak"]
-      $ tr_
-      $ forM_ ["Caller", "Callee", "Requests", "Errors", "p95 latency"]
-      $ \h -> th_ [class_ "text-left font-medium px-3 py-1.5 whitespace-nowrap"] h
-    tbody_ $ forM_ (sortOn (\e -> Down e.stats.requests) $ V.toList (drawnEdges graph)) \e -> tr_ [class_ "border-b border-strokeWeak last:border-0"] do
-      td_ [class_ "px-3 py-1.5 whitespace-nowrap"] $ toHtml $ nodeDisplay e.source
-      td_ [class_ "px-3 py-1.5 whitespace-nowrap"] $ toHtml $ nodeDisplay e.target
-      td_ [class_ "px-3 py-1.5 tabular-nums"] $ toHtml $ prettyPrintCount $ fromIntegral e.stats.requests
-      td_ [class_ $ "px-3 py-1.5 tabular-nums" <> bool "" " text-textError" (e.stats.errors > 0)]
-        $ toHtml
-        $ if e.stats.errors == 0 then "0" else show e.stats.errors <> " (" <> pct e.stats.errorRate <> ")"
-      td_ [class_ "px-3 py-1.5 tabular-nums"] $ toHtml $ bool (getDurationNSMS (fromIntegral e.stats.p95Ns)) "—" (e.stats.p95Ns <= 0)
+dependencyTable_ graph =
+  disclosure_ [class_ "border border-strokeStrong rounded-2xl overflow-hidden"] "px-3 py-2 text-sm text-textStrong" (toHtml $ "Dependencies (" <> fmtInt (V.length (drawnEdges graph)) <> ")")
+    $ toHtml
+      Table.Table
+        { config = def{Table.elemID = "service-map-deps", Table.renderAsTable = True, Table.noSurface = True, Table.tableClasses = "w-full text-xs", Table.thClasses = "text-left font-medium px-3 py-1.5 whitespace-nowrap text-textWeak border-b border-strokeWeak", Table.containerClasses = "w-full"}
+        , rows = V.fromList $ sortOn (\e -> Down e.stats.requests) $ V.toList (drawnEdges graph)
+        , features = def{Table.rowAttrs = Just $ const [class_ "border-b border-strokeWeak last:border-0"]}
+        , columns =
+            [ Table.col "Caller" (toHtml . nodeDisplay . (.source)) & Table.withAttrs [class_ "px-3 py-1.5 whitespace-nowrap"]
+            , Table.col "Callee" (toHtml . nodeDisplay . (.target)) & Table.withAttrs [class_ "px-3 py-1.5 whitespace-nowrap"]
+            , Table.col "Requests" (toHtml . prettyPrintCount . fromIntegral . (.stats.requests)) & Table.withAttrs [class_ "px-3 py-1.5 tabular-nums"]
+            , Table.col "Errors" (\e -> span_ [class_ $ bool "" "text-textError" (e.stats.errors > 0)] $ toHtml $ if e.stats.errors == 0 then "0" else show e.stats.errors <> " (" <> pct e.stats.errorRate <> ")") & Table.withAttrs [class_ "px-3 py-1.5 tabular-nums"]
+            , Table.col "p95 latency" (\e -> toHtml $ bool (getDurationNSMS (fromIntegral e.stats.p95Ns)) "—" (e.stats.p95Ns <= 0)) & Table.withAttrs [class_ "px-3 py-1.5 tabular-nums"]
+            ]
+        }
   where
     -- Edges reference node keys; show the human label the node carries. Built once rather
     -- than searched per row: a capped map is 150 nodes and the table is one row per edge.

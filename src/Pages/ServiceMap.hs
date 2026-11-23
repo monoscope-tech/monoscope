@@ -19,7 +19,7 @@ import Pkg.Components.ServiceMap (endpointDependencyMapPanel_, serviceMapPanel_)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (countNoun, faSprite_, fmtInt, getServiceColors, nonEmptyT, parseTime)
+import Utils (countNoun, faSprite_, fmtInt, getServiceColors, nonEmptyT)
 
 
 newtype ServiceMapGet = ServiceMapPage (PageCtx ServiceMapPageData)
@@ -45,7 +45,7 @@ serviceMapGetH pid fromM toM sinceM envM endpointHashM = do
   (_, _, bw) <- mkPageCtx pid
   now <- Time.currentTime
   -- An empty ?env= is "all environments", so clearing the facet is a link like any other.
-  let (from, to, currentRange) = parseTime fromM toM sinceM now
+  let (from, to, currentRange) = TimePicker.parseTimeRange now $ TimePicker.TimePicker sinceM fromM toM
       env = nonEmptyT envM
       endpointHash = nonEmptyT endpointHashM
       scope = maybe (GlobalServiceMap env) EndpointServiceMap endpointHash
