@@ -230,6 +230,14 @@ timefusion-start:
 timefusion-stop:
 	$(MAKE) -C $(TIMEFUSION_DIR) tf-stop
 
+# Whether a local TimeFusion answers on the PGWire port the TF watcher and tests use.
+timefusion-status:
+	@nc -z 127.0.0.1 12345 && echo "TimeFusion up on :12345" || (echo "TimeFusion is not running — make timefusion-start"; exit 1)
+
+# The usual live-test-dev watcher, reading through a real TimeFusion (make timefusion-start first).
+live-test-dev-tf: timefusion-status
+	@TIMEFUSION_PG_TEST_URL=$(TIMEFUSION_PG_TEST_URL) $(MAKE) live-test-dev
+
 # Run integration tests against a real TimeFusion (started + stopped automatically).
 test-integration-tf: timefusion-start
 	@rc=0; \
