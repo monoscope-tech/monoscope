@@ -585,14 +585,15 @@ TF_REF ?= origin/master
 # NEON), so use the portable Graviton/Neoverse baseline for native Apple
 # Silicon integration images.  Callers can still override this for a known
 # deployment target.
-TF_TARGET_CPU ?= $(shell test "$(shell uname -m)" = arm64 && echo neoverse-n1 || echo x86-64-v3)
+HOST_ARCH := $(shell test "$$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = 1 && echo arm64 || uname -m)
+TF_TARGET_CPU ?= $(shell test "$(HOST_ARCH)" = arm64 && echo neoverse-n1 || echo x86-64-v3)
 tf-image:
 	git -C $(TF_REPO) fetch -q origin
-	@echo "building timefusion:local-$(shell uname -m) ($(TF_TARGET_CPU)) from $(TF_REF) ($$(git -C $(TF_REPO) rev-parse --short $(TF_REF)))"
+	@echo "building timefusion:local-$(HOST_ARCH) ($(TF_TARGET_CPU)) from $(TF_REF) ($$(git -C $(TF_REPO) rev-parse --short $(TF_REF)))"
 	git -C $(TF_REPO) archive --format=tar $(TF_REF) \
-		| docker build --platform linux/$(shell uname -m | sed 's/x86_64/amd64/') \
+		| docker build --platform linux/$(shell echo $(HOST_ARCH) | sed 's/x86_64/amd64/') \
 			--build-arg TARGET_CPU=$(TF_TARGET_CPU) \
-			-t timefusion:local-$(shell uname -m) -
+			-t timefusion:local-$(HOST_ARCH) -
 
 builder-rm:
 	./scripts/ci/ci.sh builder rm

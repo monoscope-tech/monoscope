@@ -32,7 +32,8 @@ import NeatInterpolation (text)
 import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem qualified as LogItem
-import Pkg.DeriveUtils (DB, UUIDId (..), assetUrl, viteAssetFile)
+import Pkg.DeriveUtils (DB, UUIDId (..), assetUrl)
+import Pkg.ViteAsset (viteAssetFile)
 import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
