@@ -39,7 +39,6 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
 import Data.Foldable1 qualified as F1
 import Data.HashSet qualified as HS
-import Data.List.Extra (chunksOf)
 import Data.Map.Strict qualified as M
 import Data.Set qualified as S
 import Data.Text qualified as T
@@ -132,8 +131,7 @@ data Conversation = Conversation
 
 -- | One trace's GenAI spans within an hour, aggregated in the store; a trace-less record (a log) is its own unit.
 data Unit = Unit
-  { hour :: UTCTime
-  , unit :: Text
+  { unit :: Text
   , conversation :: Maybe Text
   , agent :: Maybe Text
   , model :: Maybe Text
@@ -158,7 +156,7 @@ data Unit = Unit
   , firstTool :: Maybe Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
+  deriving anyclass (HI.DecodeRow)
 
 
 -- | One trace's hours as one unit. Repeats are summed per hour, so a tool call repeated across an
@@ -166,8 +164,7 @@ data Unit = Unit
 instance Semigroup Unit where
   a <> b =
     Unit
-      { hour = min a.hour b.hour
-      , unit = a.unit
+      { unit = a.unit
       , conversation = max a.conversation b.conversation
       , agent = max a.agent b.agent
       , model = max a.model b.model
@@ -218,7 +215,7 @@ toolOpening raw =
 --
 -- >>> import Relude.Unsafe qualified as Unsafe
 -- >>> let t = Unsafe.read @UTCTime "2026-01-01 00:00:00 UTC"
--- >>> let u name conv runs = Unit t name conv Nothing (Just "gpt-4o") Nothing Nothing t t 0 1 0 runs 15 (Just 0.01) 0 0 0 0 0 0 Nothing (Just "1767225600|hi") Nothing
+-- >>> let u name conv runs = Unit name conv Nothing (Just "gpt-4o") Nothing Nothing t t 0 1 0 runs 15 (Just 0.01) 0 0 0 0 0 0 Nothing (Just "1767225600|hi") Nothing
 -- >>> map (\c -> (c.key, c.turns, c.llmCalls, c.title)) $ conversationsOf [u "t1" (Just "conv") 1, u "t2" (Just "conv") 0, u "t3" Nothing 0, u "t4" Nothing 1]
 -- [("conv",2,2,Just "hi"),("t4",1,1,Just "hi")]
 conversationsOf :: [Unit] -> [Conversation]
@@ -259,10 +256,9 @@ conversationsOf units = sortOn (Down . (.lastSeen)) $ mapMaybe conversation $ M.
       pure $ used >= 0.8 * fromIntegral window
 
 
--- | GenAI spans in @[from, to)@ aggregated per trace and hour in the store. Only promoted gen_ai columns
--- are read: @summary@ and @attributes@ cost seconds to decode across a day (all of a project's rows are
--- scanned to find the GenAI ones). Rows from before the columns were promoted (identity 2026-11-16,
--- text fields 2026-11-22) lack them: unlisted, or listed without a title.
+-- | The Postgres read: GenAI spans in @[from, to)@ aggregated per trace, live. TimeFusion reads go
+-- through its @llm_1h@ tier instead ('tierUnits'). Rows from before the columns were promoted
+-- (identity 2026-11-16, text fields 2026-11-22) lack them: unlisted, or listed without a title.
 selectUnits :: (DB es, Labeled "timefusion" Hasql :> es, Reader AuthContext :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [Unit]
 selectUnits pid from to = do
   tf <- useTfReads
@@ -272,7 +268,7 @@ selectUnits pid from to = do
     $ Hasql.interp
       [HI.sql|
       WITH spans AS (
-        SELECT date_trunc('hour', timestamp) AS hour, CASE WHEN COALESCE(context___trace_id, '') = '' THEN id::text ELSE context___trace_id END AS unit,
+        SELECT CASE WHEN COALESCE(context___trace_id, '') = '' THEN id::text ELSE context___trace_id END AS unit,
           timestamp, COALESCE(duration, 0) AS dur, COALESCE(status_code = 'ERROR', false) AS failed,
           attributes___gen_ai___operation___name AS op,
           attributes___gen_ai___operation___name = ANY(#{V.fromList GenAI.inferenceOps}) AS model_op,
@@ -287,7 +283,7 @@ selectUnits pid from to = do
         FROM otel_logs_and_spans
         WHERE project_id = #{pid.toText} AND timestamp >= #{from} AND timestamp < #{to} AND attributes___gen_ai___operation___name IS NOT NULL
       )
-      SELECT hour, unit, max(conv) AS conv, max(agent) AS agent, max(model) AS model, max(usr) AS usr, max(svc) AS svc,
+      SELECT unit, max(conv) AS conv, max(agent) AS agent, max(model) AS model, max(usr) AS usr, max(svc) AS svc,
         min(timestamp) AS started, max(timestamp) AS last_ts, max(CAST(EXTRACT(EPOCH FROM timestamp) * 1000000 AS BIGINT) + dur / 1000) AS end_us,
         sum(CASE WHEN model_op THEN 1 ELSE 0 END) AS llm_calls,
         sum(CASE WHEN op = 'execute_tool' THEN 1 ELSE 0 END) AS tool_calls,
@@ -303,7 +299,7 @@ selectUnits pid from to = do
         max(input_tokens) AS max_input,
         min(CASE WHEN preview IS NOT NULL THEN CAST(CAST(EXTRACT(EPOCH FROM timestamp) AS BIGINT) AS TEXT) || '|' || preview END) AS first_preview,
         min(CASE WHEN op = 'execute_tool' AND tool IS NOT NULL THEN CAST(CAST(EXTRACT(EPOCH FROM timestamp) AS BIGINT) AS TEXT) || '|' || tool || chr(9) || COALESCE(tool_args, '') END) AS first_tool
-      FROM spans GROUP BY hour, unit ORDER BY last_ts DESC LIMIT #{unitCap}
+      FROM spans GROUP BY unit ORDER BY last_ts DESC LIMIT #{unitCap}
     |]
 
 
@@ -324,8 +320,8 @@ wholeHourWindow = 6 * 3600
 -- | The window's units, one per trace. A window of six hours or more starts on its hour: its oldest
 -- partial hour would otherwise be read raw on every refresh, and a week back that is a 10-60s scan
 -- of cold storage (2026-11-22's burst).
-windowUnits :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Reader AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> TimePicker.TimeWindow -> Eff es [Unit]
-windowUnits pid window = useTfReads >>= bool (storedUnits pid window{TimePicker.fromTime = start}) (tierUnits pid start window.toTime)
+windowUnits :: (DB es, Labeled "timefusion" Hasql :> es, Reader AuthContext :> es) => Projects.ProjectId -> TimePicker.TimeWindow -> Eff es [Unit]
+windowUnits pid window = useTfReads >>= bool (selectUnits pid start window.toTime) (tierUnits pid start window.toTime)
   where
     start = if diffUTCTime window.toTime window.fromTime >= wholeHourWindow then toHour floor window.fromTime else window.fromTime
 
@@ -390,8 +386,7 @@ tierUnits pid from to =
     stamped at x = (\t v -> show @Text (floor (utcTimeToPOSIXSeconds t) :: Int64) <> "|" <> v) <$> at <*> x
     unit (TierRow trId conv agent model' user service llm tools runs inTok outTok cost costs errs toolErrs modelErrs trunc filt started ended maxIn prev prevAt firstTool firstArgs toolAt distinctArgs) =
       Unit
-        { hour = started
-        , unit = if T.null trId then fromMaybe "" conv else trId
+        { unit = if T.null trId then fromMaybe "" conv else trId
         , conversation = conv
         , agent
         , model = model'
@@ -421,35 +416,6 @@ tierUnits pid from to =
 data TierRow = TierRow Text (Maybe Text) (Maybe Text) (Maybe Text) (Maybe Text) (Maybe Text) Int64 Int64 Int64 (Maybe Double) (Maybe Double) (Maybe Double) Int64 Int64 Int64 Int64 Int64 Int64 UTCTime (Maybe UTCTime) (Maybe Double) (Maybe Text) (Maybe UTCTime) (Maybe Text) (Maybe Text) (Maybe UTCTime) (Maybe Int64)
   deriving stock (Generic)
   deriving anyclass (HI.DecodeRow)
-
-
--- | The Postgres read: settled hours aggregated once into @apis.llm_unit_hours@, the open edges live.
--- TimeFusion reads go through its own tier instead ('tierUnits'); this goes with the Postgres store.
-storedUnits :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Reader AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> TimePicker.TimeWindow -> Eff es [Unit]
-storedUnits pid window = do
-  now <- Time.currentTime
-  let start = window.fromTime
-      settled = takeWhile (\h -> addUTCTime 3600 h <= window.toTime && addUTCTime 4200 h <= now) $ iterate (addUTCTime 3600) (toHour ceiling start)
-  cached <- M.fromList . map (\(h, HI.AsJsonb us) -> (h, us)) <$> bool (Hasql.interp [HI.sql| SELECT hour, units FROM apis.llm_unit_hours WHERE project_id = #{pid} AND hour = ANY(#{V.fromList settled}) AND computed_at >= hour + interval '70 minutes' |]) (pure []) (null settled)
-  -- A day per query, persisted as it lands, so a cold week makes progress even if the page gives up.
-  fresh <- M.unions <$> traverse (fill now) (mapMaybe nonEmpty $ chunksOf 24 $ filter (`M.notMember` cached) settled)
-  edges <- maybe (live start window.toTime) (\hs -> (<>) <$> live start (F1.head hs) <*> live (addUTCTime 3600 $ F1.last hs) window.toTime) (nonEmpty settled)
-  pure $ M.elems $ M.fromListWith (flip (<>)) [(u.unit, u) | u <- concat (M.elems cached <> M.elems fresh) <> edges]
-  where
-    live from to = bool (selectUnits pid from to) (pure []) (from >= to)
-    fill now hours = do
-      units <- selectUnits pid (F1.minimum hours) (addUTCTime 3600 $ F1.maximum hours)
-      -- The range can span hours already stored; an hour with no GenAI spans is stored empty.
-      let computed = M.fromListWith (<>) $ [(h, []) | h <- toList hours] <> [(u.hour, [u]) | u <- units, u.hour `elem` hours]
-          -- Newest first, so at the cap only the oldest hour returned (and those before it) may be incomplete.
-          oldest = guard (length units >= fromIntegral unitCap) *> viaNonEmpty F1.minimum (map (.hour) units)
-          complete = maybe computed (\o -> M.filterWithKey (\h _ -> h > o) computed) oldest
-      whenJust oldest \o -> Log.logAttention "LLM hour fill hit the unit cap; older hours are left unstored" (AE.object ["project_id" AE..= pid, "oldest_complete_after" AE..= o])
-      Hasql.interpExecute_
-        [HI.sql| INSERT INTO apis.llm_unit_hours (project_id, hour, units, computed_at)
-          SELECT #{pid}, h, u, #{now} FROM unnest(#{V.fromList $ M.keys complete}::timestamptz[], #{V.fromList $ map AE.toJSON $ M.elems complete}::jsonb[]) AS v(h, u)
-          ON CONFLICT (project_id, hour) DO UPDATE SET units = EXCLUDED.units, computed_at = EXCLUDED.computed_at |]
-      pure computed
 
 
 -- | A conversation's spans with their attributes, oldest first, for the transcript and timeline.
@@ -1045,9 +1011,6 @@ parseVerdicts = bimap toText (Drain.answeredOnce (.key)) . AE.eitherDecodeStrict
 -- one window read and one span fetch for the project, then one model call per signal.
 evaluateSignals :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Reader AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> Eff es ()
 evaluateSignals pid = do
-  -- Run hourly, this also keeps the Postgres store a week deep, so no window up to 7D opens cold
-  -- there; TimeFusion's tier keeps itself.
-  unlessM useTfReads $ void $ storedUnits pid =<< llmWindow Nothing Nothing (Just "7D")
   window <- llmWindow Nothing Nothing Nothing
   convs <- conversationsOf <$> windowUnits pid window
   signals <- selectSignals pid

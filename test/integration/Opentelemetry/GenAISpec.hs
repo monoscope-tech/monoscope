@@ -128,29 +128,24 @@ spec = around withTestResources do
       LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.ConversationsBody refreshed))) <- call tr $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing (Just "") (Just "") (Just "") (Just "1")
       sort (map (.key) (toList refreshed.rows)) `shouldBe` ["sess-a", "sess-b", "sess-c"]
 
-    it "aggregates a settled hour once and merges a trace across it and the live hour" \tr -> do
+    it "lists a trace spread over hours as one conversation, on both read paths" \tr -> do
       pid <- createTestProject tr "LLM hours"
       apiKey <- createTestAPIKey tr pid "hours"
       now <- getCurrentTime
       setTestTime tr.trTestClock now
-      let chat n ago = ingestSpanLinked tr apiKey "8c4e" ("c" <> show n) Nothing "chat gpt-4o" [("gen_ai.operation.name", "chat"), ("gen_ai.request.model", "gpt-4o"), ("gen_ai.conversation.id", "conv-h"), ("gen_ai.usage.input_tokens", "10")] (addUTCTime (negate ago) now)
+      let emit n ago name attrs = ingestSpanLinked tr apiKey "8c4e" ("c" <> show n) Nothing name attrs (addUTCTime (negate ago) now)
+          chat n ago = emit n ago "chat gpt-4o" [("gen_ai.operation.name", "chat"), ("gen_ai.request.model", "gpt-4o"), ("gen_ai.conversation.id", "conv-h"), ("gen_ai.usage.input_tokens", "10")]
           listed t = do
             LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.ConversationsBody tbl))) <- call t $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "24H") (Just "1")
-            pure [(c.key, c.llmCalls, length c.units) | c <- toList tbl.rows]
-          -- The Postgres read keeps its own store; a TimeFusion read goes through TF's llm_1h tier.
-          calls = listed tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = False}}}
+            pure [(c.key, c.llmCalls, c.toolCalls, length c.units) | c <- toList tbl.rows]
       chat (1 :: Int) 7200 >> chat 2 60
-      calls `shouldReturn` [("conv-h", 2, 1)]
+      -- A tool span in the same trace that does not repeat the conversation id is still its row.
+      emit 3 30 "execute_tool search" [("gen_ai.operation.name", "execute_tool"), ("gen_ai.tool.name", "search")]
+      listed tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = False}}} `shouldReturn` [("conv-h", 2, 1, 1)]
+      -- TimeFusion reads go through its llm_1h tier (whole hours) and raw edges.
       realTf <- isJust <$> lookupEnv "TIMEFUSION_PG_TEST_URL"
-      when realTf $ listed (viaTf tr) `shouldReturn` [("conv-h", 2, 1)]
-      dbQuery @_ @(Only Int) tr [sql| SELECT count(*)::int FROM apis.llm_unit_hours WHERE project_id = ? AND jsonb_array_length(units) > 0 |] (Only pid) `shouldReturn` [Only 1]
-      -- The settled hour is read from the store, not rescanned.
-      chat 3 7200
-      calls `shouldReturn` [("conv-h", 2, 1)]
-      -- The hourly job keeps the Postgres store a week deep, so a 7D window opens on stored hours only.
-      runTestBg now tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = False}}} $ LLM.evaluateSignals pid
-      [Only stored] <- dbQuery @_ @(Only Int) tr [sql| SELECT count(*)::int FROM apis.llm_unit_hours WHERE project_id = ? |] (Only pid)
-      stored `shouldSatisfy` (>= 7 * 24 - 2) -- the unsettled last hour or two stay live
+      when realTf $ listed (viaTf tr) `shouldReturn` [("conv-h", 2, 1, 1)]
+
     it "prices Pi's durable sessions from pi-otel: one conversation per routine run, input counted with its cache" \tr -> do
       pid <- createTestProject tr "Pi"
       apiKey <- createTestAPIKey tr pid "pi"
