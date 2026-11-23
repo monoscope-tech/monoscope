@@ -1108,7 +1108,7 @@ spanRecordInTrace pid trId (lo, hi) match =
 -- 'CatalogWithCounts' carries a **required** window, not @(Maybe, Maybe)@. It used to be
 -- optional and the filter was only emitted when the upper bound was present, so a caller
 -- with no time parameters — which is exactly what @/metrics?tab=datapoints@ was, since
--- 'Utils.parseTime' returns @(Nothing, Nothing)@ when given none — silently ran
+-- the old @Utils.parseTime@ returned @(Nothing, Nothing)@ when given none — silently ran
 -- @SELECT metric_name, COUNT(*) FROM otel_metrics WHERE project_id = ?@ across the project's
 -- entire history. On the demo project (~2.4M metric rows per hour) that never returned: the
 -- page hung until TimeFusion cancelled it with @57014 statement timeout@. Unbounded
@@ -1486,6 +1486,12 @@ projectsWithRecentMetrics since =
   Hasql.interp [HI.sql| SELECT DISTINCT project_id FROM otel_metrics_meta WHERE last_seen_at >= #{since}|]
 
 
+-- | Extract the service name for a metric from OTLP resource attributes (nested or flat
+-- @service.name@, @container.name@, @compose_service@), grouping @system.*@ under @SYSTEM@.
+--
+-- >>> let ex n r = metricServiceNameFromResource n (AE.object r)
+-- >>> [ex "vaults3_requests_total" ["service" AE..= AE.object ["name" AE..= ("vaults3" :: Text)]], ex "http.server.duration" ["service.name" AE..= ("api" :: Text)], ex "container.cpu.utilization" ["container" AE..= AE.object ["name" AE..= ("frigate" :: Text)]], ex "container.memory.usage" ["compose_service" AE..= ("backend" :: Text)], ex "system.cpu.time" [], ex "custom.metric" []] :: [Text]
+-- ["vaults3","api","frigate","backend","SYSTEM","unknown"]
 metricServiceNameFromResource :: Text -> AE.Value -> Text
 metricServiceNameFromResource metricName resource =
   fromMaybe "unknown"
@@ -2126,6 +2132,13 @@ column nm proj =
 -- *truncates*, so an un-rounded sub-µs value lands exactly 1µs apart across
 -- engines. Quantizing here keeps the wire text ≤6 fractional digits so both
 -- parse an identical value (parity plan: end_time sub-µs divergence).
+--
+-- >>> import "monoscope" Opentelemetry.OtlpServer (nanosecondsToUTC)
+-- >>> let wire ns = toText . iso8601Show . roundUTCToMicros . nanosecondsToUTC $ (1768424574000000000 + ns)
+-- >>> (wire 427542900, wire 427542400)
+-- ("2026-01-14T21:02:54.427543Z","2026-01-14T21:02:54.427542Z")
+-- >>> all (\r -> T.length (T.drop 1 (snd (T.breakOn "." (T.dropEnd 1 (wire r))))) <= 6) [427542900, 427542400, 1, 999999999, 500]
+-- True
 roundUTCToMicros :: UTCTime -> UTCTime
 roundUTCToMicros (UTCTime day dt) = UTCTime day (picosecondsToDiffTime us)
   where

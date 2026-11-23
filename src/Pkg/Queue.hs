@@ -585,6 +585,13 @@ logKafkaFetchQueues logger clientId raw = runLogT "kafka-service" logger LogInfo
 
 
 -- | Decode a native sample into timestamp, byte count, message count, and partition count.
+--
+-- >>> parseKafkaFetchQueues "{\"time\":42,\"topics\":{\"first\":{\"partitions\":{\"0\":{\"fetchq_size\":1048576,\"fetchq_cnt\":2},\"1\":{\"fetchq_size\":7,\"fetchq_cnt\":1}}},\"second\":{\"partitions\":{\"3\":{\"fetchq_size\":9,\"fetchq_cnt\":4}}}},\"brokers\":{\"private-host\":{}}}"
+-- Right (42,1048592,7,3)
+-- >>> parseKafkaFetchQueues "{\"time\":43,\"topics\":{}}"
+-- Right (43,0,0,0)
+-- >>> all (isLeft . parseKafkaFetchQueues) ["not json", "{\"time\":42}", "{\"time\":42,\"topics\":{\"t\":{\"partitions\":{\"0\":{\"fetchq_size\":7}}}}}", "{\"time\":42,\"topics\":{\"t\":{\"partitions\":{\"0\":{\"fetchq_size\":-1,\"fetchq_cnt\":2}}}}}"]
+-- True
 parseKafkaFetchQueues :: ByteString -> Either String (Int64, Natural, Natural, Int)
 parseKafkaFetchQueues raw = do
   (sampleTime, queues) <- AE.eitherDecodeStrict' raw >>= AET.parseEither parseFetchQueues

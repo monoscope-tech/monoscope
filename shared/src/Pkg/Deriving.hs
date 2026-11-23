@@ -128,6 +128,17 @@ instance Constructor c => GConstructorName (M1 C c f) where
   gconstructorName = conName
 
 
+-- | Strip @prefix@ and snake_case a constructor name; 'decodeEnumSC' is its
+-- case-insensitive inverse.
+--
+-- >>> import Relude
+-- >>> data Sample = SAlpha | SBetaGamma deriving stock (Bounded, Enum, Eq, Read, Show)
+-- >>> all (\x -> decodeEnumSC @"S" (encodeEnumSC @"S" x) == Just x) ([minBound .. maxBound] :: [Sample])
+-- True
+-- >>> map (encodeEnumSC @"S") ([minBound .. maxBound] :: [Sample])
+-- ["alpha","beta_gamma"]
+-- >>> (decodeEnumSC @"S" @Sample "ALPHA", decodeEnumSC @"S" @Sample "unknown")
+-- (Just SAlpha,Nothing)
 encodeEnumSC :: forall prefix a. (KnownSymbol prefix, Show a) => a -> String
 encodeEnumSC = quietSnake . fromString . drop (length $ symbolVal (Proxy @prefix)) . show
 
@@ -212,6 +223,11 @@ instance Typeable a => ToSchema (JsonValueSchema a) where
 
 -- | Backslash-escape POSIX-regex metacharacters so a literal substring can be
 -- embedded safely in a regex pattern.
+--
+-- >>> escapeRegex "a.b[0]+(c|d)?^$*\\{1}"
+-- "a\\.b\\[0\\]\\+\\(c\\|d\\)\\?\\^\\$\\*\\\\\\{1\\}"
+-- >>> escapeRegex "plain_text-123"
+-- "plain_text-123"
 escapeRegex :: Text -> Text
 escapeRegex = T.concatMap \c -> if c `elem` (".^$*+?()[]{}|\\" :: [Char]) then "\\" <> one c else one c
 

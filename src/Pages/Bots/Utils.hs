@@ -257,7 +257,12 @@ buildIssuePrompt pid issue now = do
       monitorM <- runMaybeT do
         monitorId <- hoistMaybe $ UUID.fromText alertData.queryId
         MaybeT $ Monitors.queryMonitorByProjectId pid (Monitors.QueryMonitorId monitorId)
-      metricsData <- Charts.queryProjectMetrics Nothing (Just Charts.DTMetric) pid (Just alertData.queryExpression) Nothing Nothing (Just $ show twoDaysAgo) (Just $ show now) Nothing Nothing []
+      let scopeParams =
+            catMaybes
+              [ ("environment",) . Just <$> (monitorM >>= (.environment))
+              , ("service",) . Just <$> (monitorM >>= (.service))
+              ]
+      metricsData <- Charts.queryProjectMetrics Nothing (Just Charts.DTMetric) pid (Just alertData.queryExpression) Nothing Nothing (Just $ toText $ iso8601Show twoDaysAgo) (Just $ toText $ iso8601Show now) Nothing Nothing scopeParams
       pure $ Just (alertData, monitorM, metricsData)
     (Nothing; Just Issues.ApiChangeP{}; Just Issues.RuntimeExceptionP{}; Just Issues.LogPatternP{}; Just Issues.LogPatternRateChangeP{}; Just Issues.PerformanceP{}; Just Issues.FrontendP{}; Just Issues.FeedbackP{}; Just Issues.UptimeP{}; Just Issues.CronP{}) -> pure Nothing
   facetSummaryM <- SchemaCatalog.getFacetSummary Nothing pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
@@ -519,7 +524,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
     dispatchAIResponse conversation resp = do
       AI.requireAgentAccess access pid
       now <- Time.currentTime
-      let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
+      let (fromTimeM, toTimeM, _) = TP.parseTimeRange now $ fromMaybe (TP.TimePicker Nothing Nothing Nothing) resp.timeRange
           iso = fmap (toText . iso8601Show)
           renderWidget widget
             | (queryM, Charts.DTText) <- Widget.chartQuery widget = do

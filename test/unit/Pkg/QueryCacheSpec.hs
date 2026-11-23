@@ -10,13 +10,11 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Pages.Charts.Charts (DataType (..), MetricsData (..), convertTimestampsToMs)
 import Pkg.DeriveUtils (UUIDId (..))
-import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), defPid, defSqlQueryCfg, fixedUTCTime)
-import Pkg.Parser.Expr (Subject (..))
-import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
-import Pkg.QueryCache (CacheKey (..), RawCacheKey (..), bucketStart, chartChunks, coalesceQuery, generateCacheKey, mergeTimeseriesData, newQueryFlights, trimOldData, trimToRange)
+import Pkg.Parser (defPid)
+import Pkg.QueryCache (RawCacheKey (..), coalesceQuery, mergeTimeseriesData, newQueryFlights, trimToRange)
 import Relude
 import System.IO.Error (userError)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldReturn, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 
 
 mkTime :: Int -> UTCTime
@@ -42,10 +40,6 @@ mkMetrics rows =
 
 emptyMetrics :: MetricsData
 emptyMetrics = MetricsData V.empty Nothing V.empty V.empty V.empty 0 Nothing Nothing Nothing Nothing Nothing
-
-
-timestampSubject :: Subject
-timestampSubject = Subject "timestamp" "timestamp" []
 
 
 spec :: Spec
@@ -113,92 +107,6 @@ spec = do
         (convertTimestampsToMs fresh{to = Just end}).rowsPerMin `shouldBe` Just 0
       (convertTimestampsToMs fresh{rowsCount = 0, dataset = V.empty}).rowsPerMin `shouldBe` Just 0
       (convertTimestampsToMs fresh{rowsPerMin = Nothing}).rowsPerMin `shouldBe` Nothing
-
-  describe "chart chunk boundaries" do
-    it "covers a range once, newest first, including the inclusive final endpoint" do
-      chartChunks "1 hour" (mkTime 17, mkTime 20000)
-        `shouldBe` [(mkTime 14400, mkTime 20000, InclusiveEnd), (mkTime 17, mkTime 14400, ExclusiveEnd)]
-      chartChunks "1 hour" (mkTime 0, mkTime 0) `shouldBe` []
-      bucketStart "1 hour" (mkTime (-1)) `shouldBe` mkTime (-3600)
-      bucketStart "1w" (mkTime 700000) `shouldBe` mkTime 604800
-      bucketStart "700ms" (mkTime 1) `shouldBe` posixSecondsToUTCTime 0.7
-
-    it "keeps internal boundaries on whole buckets for widths that do not divide a day" do
-      forM_ ["5h", "7h"] \interval -> do
-        let chunks = chartChunks interval (mkTime 17, mkTime 864000)
-        forM_ chunks \(lower, upper, _) -> do
-          when (lower /= mkTime 17) $ bucketStart interval lower `shouldBe` lower
-          when (upper /= mkTime 864000) $ bucketStart interval upper `shouldBe` upper
-        map (\(lower, _, _) -> lower) (take (length chunks - 1) chunks)
-          `shouldBe` map (\(_, upper, _) -> upper) (drop 1 chunks)
-
-  describe "generateCacheKey" do
-    it "produces consistent hash for same query" do
-      let cfg = defSqlQueryCfg defPid fixedUTCTime Nothing Nothing
-      let sections = [SummarizeCommand [] (Just $ SummarizeByClause [ByBinFunc $ Bin timestampSubject "5m"])]
-      let key1 = generateCacheKey defPid Nothing sections cfg
-      let key2 = generateCacheKey defPid Nothing sections cfg
-      key1.queryHash `shouldBe` key2.queryHash
-
-    it "extracts bin interval" do
-      let cfg = defSqlQueryCfg defPid fixedUTCTime Nothing Nothing
-      let sections = [SummarizeCommand [] (Just $ SummarizeByClause [ByBinFunc $ Bin timestampSubject "10m"])]
-      let key = generateCacheKey defPid Nothing sections cfg
-      key.binInterval `shouldBe` "10m"
-
-    it "separates cache entries for distinct environment scopes" do
-      let sections = [SummarizeCommand [] (Just $ SummarizeByClause [ByBinFunc $ Bin timestampSubject "10m"])]
-          cfg = defSqlQueryCfg defPid fixedUTCTime Nothing Nothing
-          prodKey = generateCacheKey defPid Nothing sections cfg{environment = Just "production"}
-          stagingKey = generateCacheKey defPid Nothing sections cfg{environment = Just "staging"}
-      prodKey.queryHash `shouldNotBe` stagingKey.queryHash
-
-  describe "mergeTimeseriesData" do
-    it "merges empty cached with new data" do
-      let new = mkMetrics [(1000, 10), (2000, 20)]
-      let result = mergeTimeseriesData emptyMetrics new
-      V.length result.dataset `shouldBe` 2
-
-    it "merges cached with empty new data" do
-      let cached = mkMetrics [(1000, 10), (2000, 20)]
-      let result = mergeTimeseriesData cached emptyMetrics
-      V.length result.dataset `shouldBe` 2
-
-    it "merges and sorts by timestamp" do
-      let cached = mkMetrics [(1000, 10), (3000, 30)]
-      let new = mkMetrics [(2000, 20), (4000, 40)]
-      let result = mergeTimeseriesData cached new
-      V.length result.dataset `shouldBe` 4
-      (join $ V.headM $ V.head result.dataset) `shouldBe` Just 1000
-      (join $ V.headM $ V.last result.dataset) `shouldBe` Just 4000
-
-    it "deduplicates by timestamp keeping latest" do
-      let cached = mkMetrics [(1000, 10), (2000, 20)]
-      let new = mkMetrics [(2000, 25), (3000, 30)]
-      let result = mergeTimeseriesData cached new
-      V.length result.dataset `shouldBe` 3
-      let vals = V.mapMaybe (\r -> join $ V.headM (V.drop 1 r)) result.dataset
-      V.toList vals `shouldBe` [10, 25, 30]
-
-  describe "trimToRange" do
-    it "filters rows within range" do
-      let metrics = mkMetrics [(1000, 10), (2000, 20), (3000, 30), (4000, 40)]
-      let result = trimToRange metrics (mkTime 1500) (mkTime 3500)
-      V.length result.dataset `shouldBe` 2
-      result.from `shouldBe` Just 1500
-      result.to `shouldBe` Just 3500
-
-    it "returns empty for range with no data" do
-      let metrics = mkMetrics [(1000, 10), (2000, 20)]
-      let result = trimToRange metrics (mkTime 5000) (mkTime 6000)
-      V.length result.dataset `shouldBe` 0
-
-  describe "trimOldData" do
-    it "removes data before window start" do
-      let metrics = mkMetrics [(1000, 10), (2000, 20), (3000, 30)]
-      let result = trimOldData (mkTime 2000) metrics
-      V.length result.dataset `shouldBe` 2
-      (join $ V.headM $ V.head result.dataset) `shouldBe` Just 2000
 
 
 rawKey :: Text -> Maybe Text -> Text -> RawCacheKey

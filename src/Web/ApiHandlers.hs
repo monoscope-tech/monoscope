@@ -1072,22 +1072,19 @@ apiIssuesList
   -> Maybe Int -- per_page
   -> ATBaseCtx (Paged IssueApiSummary)
 apiIssuesList pid statusM typeM svcM pageM perPageM = paged pageM perPageM 200 $ \perPage offset ->
-  -- Map high-level status to ack/archive column filters.
-  let (ackF, archF) = case fromMaybe ISOpen statusM of
-        ISOpen -> (Issues.IsNull, Issues.IsNull)
-        ISAcknowledged -> (Issues.IsNotNull, Issues.IsNull)
-        ISArchived -> (Issues.AnyValue, Issues.IsNotNull)
-        ISAll -> (Issues.AnyValue, Issues.AnyValue)
+  let baseFilters = case fromMaybe ISOpen statusM of
+        ISOpen -> Issues.issueQueueFilters Issues.QInbox
+        ISAcknowledged -> Issues.issueQueueFilters Issues.QAcknowledged
+        ISArchived -> Issues.issueQueueFilters Issues.QArchived
+        ISAll -> Issues.defIssueFilters{Issues.spam = Issues.IsNull}
       -- An empty query param means "no filter", not "match the empty string".
       oneOf = filter (not . T.null) . maybeToList
    in first (fmap issueToSummary)
         <$> Issues.selectIssues
           pid
           Issues.PIssue
-          Issues.defIssueFilters
-            { Issues.ack = ackF
-            , Issues.archive = archF
-            , Issues.types = oneOf typeM
+          baseFilters
+            { Issues.types = oneOf typeM
             , Issues.services = oneOf svcM
             , Issues.order = Just "-last_seen"
             , Issues.limit = perPage

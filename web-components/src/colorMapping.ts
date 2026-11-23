@@ -34,6 +34,7 @@ const LOG_LEVEL_COLORS: Record<string, string> = {
   'failed': '#ee6666',
   'exception': '#ee6666',
   'critical': '#ee6666',
+  'fatal': '#ee6666',
   'warning': '#fac858',
   'warn': '#fac858',
   'success': '#91cc75',
@@ -46,7 +47,7 @@ const LOG_LEVEL_COLORS: Record<string, string> = {
 // CSS token → log level mapping for runtime resolution from the design system.
 // Maps semantic CSS custom properties to the log level keys they should override.
 const LOG_LEVEL_TOKEN_MAP: Record<string, string[]> = {
-  '--color-fillError-strong': ['error', 'fail', 'failed', 'exception', 'critical'],
+  '--color-fillError-strong': ['error', 'fail', 'failed', 'exception', 'critical', 'fatal'],
   '--color-fillWarning-strong': ['warning', 'warn'],
   '--color-fillSuccess-strong': ['success', 'ok'],
   '--color-fillInformation-strong': ['info'],
@@ -64,7 +65,7 @@ export function resolveLogLevelColors(): Record<string, string> {
   for (const [token, keys] of Object.entries(LOG_LEVEL_TOKEN_MAP)) {
     const raw = cs.getPropertyValue(token).trim();
     if (!raw) continue;
-    const hex = _toHex(raw);
+    const hex = toHexColor(raw);
     if (hex) for (const k of keys) resolved[k] = hex;
   }
   _resolvedLogLevelColors = resolved;
@@ -73,15 +74,17 @@ export function resolveLogLevelColors(): Record<string, string> {
 
 export function invalidateLogLevelColors(): void { _resolvedLogLevelColors = null; }
 
-// Minimal oklch/rgb → hex converter using a canvas pixel read
-function _toHex(cssColor: string): string {
-  if (typeof document === 'undefined') return '';
+// Convert any CSS color (including oklch) to hex/rgba using a canvas pixel read.
+export function toHexColor(cssColor: string): string {
+  if (!cssColor || typeof document === 'undefined') return '';
   if (!_hexCanvas) { _hexCanvas = document.createElement('canvas'); _hexCanvas.width = 1; _hexCanvas.height = 1; _hexCtx = _hexCanvas.getContext('2d', { willReadFrequently: true })!; }
   _hexCtx!.clearRect(0, 0, 1, 1);
   _hexCtx!.fillStyle = cssColor;
   _hexCtx!.fillRect(0, 0, 1, 1);
-  const [r, g, b] = _hexCtx!.getImageData(0, 0, 1, 1).data;
-  return '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
+  const [r, g, b, a] = _hexCtx!.getImageData(0, 0, 1, 1).data;
+  return a < 255
+    ? `rgba(${r},${g},${b},${(a / 255).toFixed(2)})`
+    : '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
 }
 let _hexCanvas: HTMLCanvasElement | null = null;
 let _hexCtx: CanvasRenderingContext2D | null = null;
@@ -137,7 +140,7 @@ export function getLogLevelColor(text: string): string {
 // Main function to get deterministic color for any series
 /** collapseLongTail's "Other (k)" series; the colour mapping reads it back, so one definition names it. */
 export const otherBucketLabel = (hidden: number) => `Other (${hidden})`;
-const OTHER_BUCKET = /^Other \(\d+\)$/;
+export const OTHER_BUCKET = /^Other \(\d+\)$/;
 
 // `unhashed` replaces the name-hash fallback: a lone series has no other series to tell apart from,
 // and a hashed red or amber would read as an error or a warning.

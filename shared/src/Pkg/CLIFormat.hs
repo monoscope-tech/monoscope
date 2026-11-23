@@ -9,6 +9,7 @@ module Pkg.CLIFormat (
   extractInt,
   valToText,
   evalCond,
+  parseSummaryEl,
   renderSummaryItems,
   cleanSummaryValue,
   escapeControls,
@@ -45,6 +46,30 @@ escapeControls :: Text -> Text
 escapeControls = T.concatMap \c -> if isControl c && c /= '\t' then toText (showLitChar c "") else one c
 
 
+-- | Parse a @field;style⇒value@ segment. Splits on @⇒@ first so semicolons
+-- inside @value@ (e.g. SQL statements or HTTP headers) don't break the parse.
+-- Returns 'Nothing' for malformed input.
+--
+-- >>> parseSummaryEl "status;badge-2xx⇒200"
+-- Just ("status","badge-2xx","200")
+-- >>> parseSummaryEl "sql;text-textWeak⇒SELECT 1; SELECT 2"
+-- Just ("sql","text-textWeak","SELECT 1; SELECT 2")
+-- >>> parseSummaryEl "plain text without separator"
+-- Nothing
+parseSummaryEl :: Text -> Maybe (Text, Text, Text)
+parseSummaryEl seg = do
+  let (prefix, rest) = T.breakOn "⇒" seg
+  value <- T.stripPrefix "⇒" rest
+  let (field, styleSep) = T.breakOn ";" prefix
+  style <- T.stripPrefix ";" styleSep
+  pure (field, style, value)
+
+
+isHiddenSummaryEl :: Text -> Text -> Bool
+isHiddenSummaryEl field style =
+  field == "attributes" || "text-textWeak" `T.isPrefixOf` style || "text-weak" `T.isPrefixOf` style
+
+
 -- | Render summary items from `field;style⇒value` format into ANSI-colored text.
 -- Values are 'escapeControls'-ed before the renderer adds its own SGR.
 --
@@ -55,6 +80,8 @@ escapeControls = T.concatMap \c -> if isControl c && c /= '\t' then toText (show
 -- "\ESC[2minternal\ESC[0m \ESC[2mrunBg\ESC[0m"
 -- >>> renderSummaryItems ["status;badge-2xx⇒200", "method;badge-GET⇒GET"]
 -- "\ESC[32m200\ESC[0m \ESC[32mGET\ESC[0m"
+-- >>> renderSummaryItems ["sql;badge-neutral⇒SELECT 1; SELECT 2"]
+-- "\ESC[2mSELECT 1; SELECT 2\ESC[0m"
 -- >>> renderSummaryItems ["attributes;text-textWeak⇒{\"foo\":1}"]
 -- ""
 -- >>> renderSummaryItems ["plain text without separator"]
@@ -62,15 +89,11 @@ escapeControls = T.concatMap \c -> if isControl c && c /= '\t' then toText (show
 renderSummaryItems :: [Text] -> Text
 renderSummaryItems = T.intercalate " " . mapMaybe renderItem
   where
-    renderItem item = case T.splitOn ";" item of
-      [field, rest] -> case T.splitOn "⇒" rest of
-        [style, value]
-          | field == "attributes" -> Nothing
-          | "text-textWeak" `T.isPrefixOf` style -> Nothing
-          | "text-weak" `T.isPrefixOf` style -> Nothing
-          | otherwise -> Just $ applyAnsi (stripRight style) (escapeControls value)
-        _ -> Just $ escapeControls item
-      _ -> Just $ escapeControls item
+    renderItem item = case parseSummaryEl item of
+      Just (field, style, value)
+        | isHiddenSummaryEl field style -> Nothing
+        | otherwise -> Just $ applyAnsi (stripRight style) (escapeControls value)
+      Nothing -> Just $ escapeControls item
     stripRight s = fromMaybe s $ T.stripPrefix "right-" s
     applyAnsi style val = case styleToAnsi style of
       "" -> val
@@ -208,6 +231,8 @@ extractRawRows = withArray $ map extractRow . V.toList
 --
 -- >>> cleanSummaryValue (AE.Array (V.fromList [AE.String "method;badge-GET⇒GET", AE.String "attributes;text-textWeak⇒{}"]))
 -- Array [String "GET"]
+-- >>> cleanSummaryValue (AE.Array (V.fromList [AE.String "sql;badge-neutral⇒SELECT 1; SELECT 2"]))
+-- Array [String "SELECT 1; SELECT 2"]
 -- >>> cleanSummaryValue (AE.String "plain")
 -- String "plain"
 cleanSummaryValue :: AE.Value -> AE.Value
@@ -215,15 +240,11 @@ cleanSummaryValue (AE.Array arr) = AE.Array $ V.fromList $ mapMaybe clean (V.toL
   where
     clean (AE.String s) = AE.String . T.strip <$> stripMarkup s
     clean v = Just v
-    stripMarkup item = case T.splitOn ";" item of
-      [field, rest] -> case T.splitOn "⇒" rest of
-        [style, value]
-          | field == "attributes" -> Nothing
-          | "text-textWeak" `T.isPrefixOf` style -> Nothing
-          | "text-weak" `T.isPrefixOf` style -> Nothing
-          | otherwise -> Just value
-        _ -> Just item
-      _ -> Just item
+    stripMarkup item = case parseSummaryEl item of
+      Just (field, style, value)
+        | isHiddenSummaryEl field style -> Nothing
+        | otherwise -> Just value
+      Nothing -> Just item
 cleanSummaryValue v = v
 
 

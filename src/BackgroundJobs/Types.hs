@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module BackgroundJobs.Types (BgJobs (..), Conversion (..), JobTiming (..), enqueueJob, enqueueJobAt, insertJob, scheduleJob, longJob, reviewOperation, deferOperationReview, wakeStoppedReviews, startConversation, startCommand) where
+module BackgroundJobs.Types (BgJobs (..), Conversion (..), JobTiming (..), enqueueJob, enqueueJobAt, insertJob, scheduleJob, longJob, jobTable, jobTableSql, reviewOperation, deferOperationReview, wakeStoppedReviews, startConversation, startCommand) where
 
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
@@ -183,7 +183,7 @@ sendJob (QualifiedIdentifier _ queue) enqueue = do
 -- | Queue a job on the request's own DB connection: the odd-jobs row 'BackgroundJobs.enqueueJobs'
 -- writes, for modules that cannot import 'BackgroundJobs' or hold no 'jobsPool'.
 insertJob :: DB es => BgJobs -> Eff es ()
-insertJob job = Hasql.interpExecute_ [HI.sql| INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued', #{HI.AsJsonb job}) |]
+insertJob job = Hasql.interpExecute_ [HI.sql| INSERT INTO ^{jobTableSql job} (run_at, status, payload) VALUES (now(), 'queued', #{HI.AsJsonb job}) |]
 
 
 scheduleJob :: DB es => JobTiming -> BgJobs -> Eff es ()
@@ -296,13 +296,21 @@ longJob = \case
   _ -> False
 
 
+jobTable :: BgJobs -> TableName
+jobTable job = if longJob job then "background_jobs_long" else "background_jobs"
+
+
+jobTableSql :: BgJobs -> HI.Sql
+jobTableSql job = if longJob job then [HI.sql|background_jobs_long|] else [HI.sql|background_jobs|]
+
+
 queueJobTx :: JobTiming -> BgJobs -> Tx.Transaction ()
 queueJobTx timing payload = do
   let job = HI.AsJsonb payload
       (at, bound) = case timing of
         WakeNow -> ([HI.sql|app_now()|], [HI.sql|LEAST(run_at, app_now())|])
         DeferUntil deadline -> ([HI.sql|#{deadline}|], [HI.sql|GREATEST(run_at, #{deadline})|])
-      table = if longJob payload then [HI.sql|background_jobs_long|] else [HI.sql|background_jobs|]
+      table = jobTableSql payload
   Hasql.executeTx
     [HI.sql|WITH ready AS (
       UPDATE ^{table} SET run_at = ^{bound}

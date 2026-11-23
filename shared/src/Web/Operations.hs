@@ -91,6 +91,15 @@ listingOf :: Text -> Maybe (Text, Text, Listing)
 listingOf segment = listToMaybe [(head c.command, o.path, l) | o <- operations, o.method == GET, o.path == "/" <> segment, c <- o.cli, Just l <- [c.listing]]
 
 
+-- | Public @/api/v1@ operation catalogue: unique names and @"/"@-prefixed paths.
+--
+-- >>> import Data.Text qualified as T
+-- >>> import Relude
+-- >>> let names = map (.name) operations
+-- >>> length (ordNub names) == length names
+-- True
+-- >>> all (T.isPrefixOf "/" . (.path)) operations
+-- True
 operations :: [Operation]
 operations =
   [ op "get_ingestion_key" GET "/ingestion-key" (Just AdminView) "Get the project's telemetry ingestion key" []

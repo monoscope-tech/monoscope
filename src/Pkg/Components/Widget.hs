@@ -782,21 +782,28 @@ pinWidget range@(start, end) w = w{timeFrom = Just $ formatUTCMicros start, time
 -- groups flattened, every widget standalone, so a page can show a view of a dashboard without gridstack.
 embeddedWidgets_ :: Projects.ProjectId -> [Widget] -> Html ()
 embeddedWidgets_ pid ws = div_ [class_ "grid grid-cols-12 gap-3"] $ forM_ (concatMap flat ws) \w ->
-  div_ [class_ $ width (w.layout >>= (.w)) <> " " <> height w] $ widget_ w{_projectId = Just pid, standalone = Just True}
+  div_
+    [ class_
+        $ ( case w.layout >>= (.w) of
+              Just n | n <= 2 -> "col-span-6 md:col-span-4 xl:col-span-2"
+              Just n | n <= 3 -> "col-span-12 md:col-span-6 xl:col-span-3"
+              Just 4 -> "col-span-12 lg:col-span-4"
+              Just n | n <= 6 -> "col-span-12 lg:col-span-6"
+              Just n | n <= 8 -> "col-span-12 lg:col-span-8"
+              _ -> "col-span-12"
+          )
+        <> " "
+        <> if isStatWidget w
+          then "h-28"
+          else case w.wType of
+            WTDayBars -> "h-32"
+            WTLogs -> "h-96"
+            WTTable -> "h-96"
+            _ -> "h-72"
+    ]
+    $ widget_ w{_projectId = Just pid, standalone = Just True}
   where
     flat w = maybe [w] (concatMap flat) w.children
-    width = \case
-      Just n | n <= 2 -> "col-span-6 md:col-span-4 xl:col-span-2"
-      Just n | n <= 3 -> "col-span-12 md:col-span-6 xl:col-span-3"
-      Just 4 -> "col-span-12 lg:col-span-4"
-      Just n | n <= 6 -> "col-span-12 lg:col-span-6"
-      Just n | n <= 8 -> "col-span-12 lg:col-span-8"
-      _ -> "col-span-12"
-    height w
-      | isStatWidget w = "h-28"
-      | w.wType == WTDayBars = "h-32"
-      | w.wType `elem` [WTLogs, WTTable] = "h-96"
-      | otherwise = "h-72"
 
 
 -- | A widget with controls of the page's own in its header, just before the menu: the Explorer's

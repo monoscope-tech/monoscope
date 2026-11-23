@@ -29,6 +29,7 @@ module Pkg.QueryCache (
   nextBucketStart,
   chunkIntervalSupported,
   replaceTimeseriesRange,
+  summarizeSeries,
 
   -- * Trace session identity
   TraceSessionInfo (..),
@@ -78,9 +79,20 @@ import Utils (encodeText, jsonToMap, nestedJsonFromDotNotation, toXXHash)
 
 
 -- $setup
+-- >>> import Data.Default (def)
 -- >>> import Data.Time (UTCTime (..))
 -- >>> import Data.Time.Calendar (fromGregorian)
+-- >>> import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+-- >>> import Data.Vector qualified as V
+-- >>> import Pages.Charts.Types (MetricsData (..))
+-- >>> import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), defPid, defSqlQueryCfg, fixedUTCTime)
+-- >>> import Pkg.Parser.Expr (Subject (..))
+-- >>> import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
+-- >>> import Relude
 -- >>> :set -XOverloadedStrings
+-- >>> let mkTime :: Int -> UTCTime; mkTime = posixSecondsToUTCTime . fromIntegral
+-- >>> let emptyMetrics :: MetricsData; emptyMetrics = def
+-- >>> let mkMetrics :: [(Double, Double)] -> MetricsData; mkMetrics rows = emptyMetrics{dataset = V.fromList [V.fromList [Just ts, Just val] | (ts, val) <- rows], headers = V.fromList ["timestamp", "value"], rowsCount = fromIntegral (length rows), from = floor . fst <$> viaNonEmpty head rows, to = floor . fst <$> viaNonEmpty last rows}
 
 
 data CacheKey = CacheKey
@@ -333,6 +345,13 @@ deltaOverlapSeconds binInterval = min 3600 $ max 900 (parseBinIntervalToSeconds 
 
 
 -- | Epoch-aligned start of a fixed-width bucket, including dates before 1970.
+--
+-- >>> bucketStart "1 hour" (mkTime (-1)) == mkTime (-3600)
+-- True
+-- >>> bucketStart "1w" (mkTime 700000) == mkTime 604800
+-- True
+-- >>> bucketStart "700ms" (mkTime 1) == posixSecondsToUTCTime 0.7
+-- True
 bucketStart :: Text -> UTCTime -> UTCTime
 bucketStart interval timestamp =
   let width = intervalWidth interval
@@ -354,6 +373,14 @@ replaceTimeseriesRange cached fresh start end =
 -- | Recent buckets first. Grow to six hours of work, or one wider bucket, per
 -- query. Adjacent chunks have exclusive upper bounds, so boundary events occur
 -- exactly once. The original request keeps its inclusive final endpoint.
+--
+-- >>> chartChunks "1 hour" (mkTime 17, mkTime 20000) == [(mkTime 14400, mkTime 20000, InclusiveEnd), (mkTime 17, mkTime 14400, ExclusiveEnd)]
+-- True
+-- >>> chartChunks "1 hour" (mkTime 0, mkTime 0)
+-- []
+-- >>> let ok iv = let cs = chartChunks iv (mkTime 17, mkTime 864000) in all (\(lo, hi, _) -> (lo == mkTime 17 || bucketStart iv lo == lo) && (hi == mkTime 864000 || bucketStart iv hi == hi)) cs && map (\(lo, _, _) -> lo) (take (length cs - 1) cs) == map (\(_, hi, _) -> hi) (drop 1 cs)
+-- >>> all ok (["5h", "7h"] :: [Text])
+-- True
 chartChunks :: Text -> (UTCTime, UTCTime) -> [(UTCTime, UTCTime, RangeEnd)]
 chartChunks interval (start, end) = go 1 end InclusiveEnd
   where
@@ -366,7 +393,16 @@ chartChunks interval (start, end) = go 1 end InclusiveEnd
            in (lower, upper, endMode) : go next lower ExclusiveEnd
 
 
--- | Generate a cache key from query components
+-- | Generate a cache key from query components.
+--
+-- >>> let cfg = defSqlQueryCfg defPid fixedUTCTime Nothing Nothing
+-- >>> let secs :: Text -> [Section]; secs iv = [SummarizeCommand [] (Just $ SummarizeByClause [ByBinFunc $ Bin (Subject "timestamp" "timestamp" []) iv])]
+-- >>> (generateCacheKey defPid Nothing (secs "5m") cfg).queryHash == (generateCacheKey defPid Nothing (secs "5m") cfg).queryHash
+-- True
+-- >>> (generateCacheKey defPid Nothing (secs "10m") cfg).binInterval
+-- "10m"
+-- >>> (generateCacheKey defPid Nothing (secs "10m") cfg{environment = Just "production"}).queryHash /= (generateCacheKey defPid Nothing (secs "10m") cfg{environment = Just "staging"}).queryHash
+-- True
 generateCacheKey :: Projects.ProjectId -> Maybe Sources -> [Section] -> SqlQueryCfg -> CacheKey
 generateCacheKey pid sourceM sections sqlCfg =
   -- Scope changes the generated WHERE clause while leaving the user's KQL untouched.
@@ -447,7 +483,21 @@ updateCache key (fromTime, toTime) metricsData originalQuery = do
   |]
 
 
--- | Merge two MetricsData by timestamp, handling different column structures
+-- | Merge two MetricsData by timestamp, handling different column structures.
+-- Empty data is a two-sided identity, merging is idempotent, rows are sorted by
+-- timestamp, and overlapping timestamps are right-biased (fresh data wins).
+--
+-- >>> let a = mkMetrics [(1000, 10), (2000, 20)]
+-- >>> (mergeTimeseriesData emptyMetrics a).dataset == a.dataset && (mergeTimeseriesData a emptyMetrics).dataset == a.dataset
+-- True
+-- >>> (mergeTimeseriesData a a).dataset == a.dataset
+-- True
+-- >>> let sorted = mergeTimeseriesData (mkMetrics [(1000, 10), (3000, 30)]) (mkMetrics [(2000, 20), (4000, 40)])
+-- >>> V.toList $ V.mapMaybe (join . V.headM) sorted.dataset
+-- [1000.0,2000.0,3000.0,4000.0]
+-- >>> let deduped = mergeTimeseriesData a (mkMetrics [(2000, 25), (3000, 30)])
+-- >>> V.toList $ V.mapMaybe (join . V.headM . V.drop 1) deduped.dataset
+-- [10.0,25.0,30.0]
 mergeTimeseriesData :: MetricsData -> MetricsData -> MetricsData
 mergeTimeseriesData cached new
   | V.null cached.dataset = new
@@ -476,43 +526,57 @@ mergeTimeseriesData cached new
 
 -- | Replace the dataset and recompute every figure derived from it.
 withRows :: MetricsData -> V.Vector (V.Vector (Maybe Double)) -> MetricsData
-withRows metrics rows = metrics{dataset = rows, rowsCount = sum $ V.concatMap (V.catMaybes . V.drop 1) rows, rowsPerMin = Just $ timeseriesRate rows, stats = Just $ recalculateStats rows}
+withRows metrics rows =
+  let (rowsCount, rpm, stats) = summarizeSeries rows
+   in metrics{dataset = rows, rowsCount, rowsPerMin = Just rpm, stats = Just stats}
 
 
--- | Recalculate stats from dataset - processes all value columns and calculates maxGroupSum
-recalculateStats :: V.Vector (V.Vector (Maybe Double)) -> MetricsStats
-recalculateStats rows =
-  let
-    -- Extract all non-null values from value columns (skip timestamp at index 0)
+-- | Compute @(rowsCount, rowsPerMin, MetricsStats)@ over pivoted timeseries rows
+-- (@[timestamp, series1, ...]@).
+--
+-- Empty datasets and gap-only rows yield zero totals and 'def' stats ('last' is 'Nothing'):
+--
+-- >>> summarizeSeries V.empty
+-- (0.0,0.0,MetricsStats {min = 0.0, max = 0.0, sum = 0.0, count = 0, mean = 0.0, mode = 0.0, maxGroupSum = 0.0, last = Nothing})
+-- >>> summarizeSeries (V.fromList [V.fromList [Just 60, Nothing]])
+-- (0.0,0.0,MetricsStats {min = 0.0, max = 0.0, sum = 0.0, count = 0, mean = 0.0, mode = 0.0, maxGroupSum = 0.0, last = Nothing})
+--
+-- A trailing gap row leaves 'last' as 'Nothing' rather than fabricating @Just 0@:
+--
+-- >>> let (_, _, st) = summarizeSeries (V.fromList [V.fromList [Just 0, Just 5], V.fromList [Just 60, Nothing]])
+-- >>> (st.maxGroupSum, st.last)
+-- (5.0,Nothing)
+--
+-- >>> let (tot, rpm, st) = summarizeSeries (V.fromList [V.fromList [Just 0, Just 2, Just 3], V.fromList [Just 60, Just 4, Nothing]])
+-- >>> (tot, rpm, st.min, st.max, st.count, st.maxGroupSum, st.last)
+-- (9.0,3.0,2.0,4.0,3,5.0,Just 4.0)
+summarizeSeries :: V.Vector (V.Vector (Maybe Double)) -> (Double, Double, MetricsStats)
+summarizeSeries rows
+  | V.null allValues = (0, 0, def)
+  | otherwise = (sumV, rate, MetricsStats minV maxV sumV cnt (sumV / fromIntegral cnt) mode maxGroupSum lastRowSum)
+  where
     allValues = V.concatMap (V.catMaybes . V.drop 1) rows
-    rowSums = V.map (sum . V.catMaybes . V.drop 1) rows
-   in
-    if V.null allValues
-      then def
-      else
-        let h = V.head allValues
-            maxFreqEntries = 1000 -- cap frequency map to prevent memory issues with high-cardinality data
-            -- Calculate min, max, sum, count and mode frequency in single pass (capped freq map)
-            (!minV, !maxV, !sumV, !cnt, !freq) =
-              V.foldl'
-                ( \(!mn, !mx, !s, !c, !f) x ->
-                    let f' = if M.size f < maxFreqEntries || M.member x f then M.insertWith (+) x 1 f else f
-                     in (min mn x, max mx x, s + x, c + 1, f')
-                )
-                (h, h, h, 1, one (h, 1))
-                (V.tail allValues)
-            maxGroupSum = if V.null rowSums then 0 else V.maximum rowSums
-            mode = fst $ M.foldlWithKey' (\acc@(_, cnt') k c -> if c > cnt' then (k, c) else acc) (h, 0) freq
-         in MetricsStats minV maxV sumV cnt (sumV / fromIntegral cnt) mode maxGroupSum (snd <$> V.unsnoc rowSums)
-
-
-timeseriesRate :: V.Vector (V.Vector (Maybe Double)) -> Double
-timeseriesRate rows =
-  let timestamps = V.mapMaybe rowTimestamp rows
-      count = V.length $ V.concatMap (V.catMaybes . V.drop 1) rows
-   in if V.null timestamps || V.maximum timestamps <= V.minimum timestamps
+    rowSums = V.map (\r -> let vs = V.catMaybes (V.drop 1 r) in V.sum vs <$ guard (not $ V.null vs)) rows
+    nonEmptySums = V.catMaybes rowSums
+    h = V.head allValues
+    maxFreqEntries = 1000 -- cap frequency map to prevent memory issues with high-cardinality data
+    (!minV, !maxV, !sumV, !cnt, !freq) =
+      V.foldl'
+        ( \(!mn, !mx, !s, !c, !f) x ->
+            let f' = if M.size f < maxFreqEntries || M.member x f then M.insertWith (+) x 1 f else f
+             in (min mn x, max mx x, s + x, c + 1, f')
+        )
+        (h, h, h, 1, one (h, 1))
+        (V.tail allValues)
+    maxGroupSum = if V.null nonEmptySums then 0 else V.maximum nonEmptySums
+    lastRowSum = snd =<< V.unsnoc rowSums
+    -- first (smallest) value wins ties, hence the strict `>`
+    mode = fst $ M.foldlWithKey' (\acc@(_, cnt') k c -> if c > cnt' then (k, c) else acc) (h, 0) freq
+    timestamps = V.mapMaybe rowTimestamp rows
+    rate =
+      if V.null timestamps || V.maximum timestamps <= V.minimum timestamps
         then 0
-        else fromIntegral count * 60 / (V.maximum timestamps - V.minimum timestamps)
+        else fromIntegral cnt * 60 / (V.maximum timestamps - V.minimum timestamps)
 
 
 -- | Filter dataset rows by timestamp predicate and recalculate stats
@@ -520,14 +584,24 @@ filterByTimestamp :: (Int -> Bool) -> MetricsData -> MetricsData
 filterByTimestamp p metrics = withRows metrics $ V.filter (maybe False (p . floor) . rowTimestamp) metrics.dataset
 
 
--- | Trim data to a specific time range
+-- | Trim data to a specific time range.
+--
+-- >>> let r = trimToRange (mkMetrics [(1000, 10), (2000, 20), (3000, 30), (4000, 40)]) (mkTime 1500) (mkTime 3500)
+-- >>> (V.length r.dataset, r.from, r.to)
+-- (2,Just 1500,Just 3500)
+-- >>> V.length (trimToRange (mkMetrics [(1000, 10), (2000, 20)]) (mkTime 5000) (mkTime 6000)).dataset
+-- 0
 trimToRange :: MetricsData -> UTCTime -> UTCTime -> MetricsData
 trimToRange metrics fromTime toTime =
   let (fromE, toE) = (toPosix fromTime, toPosix toTime)
    in (filterByTimestamp (\ts -> ts >= fromE && ts <= toE) metrics){from = Just fromE, to = Just toE}
 
 
--- | Trim old data outside the sliding window
+-- | Trim old data outside the sliding window.
+--
+-- >>> let r = trimOldData (mkTime 2000) (mkMetrics [(1000, 10), (2000, 20), (3000, 30)])
+-- >>> (V.length r.dataset, join $ V.headM $ V.head r.dataset)
+-- (2,Just 2000.0)
 trimOldData :: UTCTime -> MetricsData -> MetricsData
 trimOldData windowStart = filterByTimestamp (>= toPosix windowStart)
 

@@ -1187,7 +1187,7 @@ widgetMetrics pid pageRange allParams widget =
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processEagerWidget pid now pageRange allParams widget = case widget.wType of
   Widget.WTAnomalies -> do
-    (issues, _) <- Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.period = "24h", Issues.hideLowSeverity = True, Issues.limit = 2}
+    (issues, _) <- Issues.selectIssues pid Issues.PIssueL Issues.inboxFilters{Issues.period = "24h", Issues.hideLowSeverity = True, Issues.limit = 2}
     pure
       $ widget
       & #html
@@ -1702,12 +1702,14 @@ instance ToHtml WidgetEditor where
                       "Read-only"
                     else button_ [class_ "btn btn-primary btn-sm max-md:min-h-11 hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:inline-flex", type_ "submit", form_ widgetFormId] "Save widget"
               unless (isNewWidget || readOnly) $ when (maybe False (not . T.null . T.strip) widgetToUse.query) $ button_ [class_ "btn btn-primary btn-sm hidden group-has-[.page-drawer-tab-monitors:checked]/wgtexp:inline-flex max-md:min-h-11", type_ "submit", form_ $ widPrefix <> "-alert-form"] $ if isJust monitorM then "Save monitor" else "Create monitor"
-              button_
-                [ type_ "button"
+              label_
+                [ Lucid.for_ drawerStateCheckbox
+                , role_ "button"
+                , tabindex_ "0"
+                , Components.keyboardActivateAttr_
                 , Aria.label_ "Close drawer"
                 , data_ "drawer-close-primary" ""
                 , class_ "btn btn-sm btn-square btn-ghost text-iconNeutral transition-[color,background-color,scale] hover:bg-fillWeak hover:text-iconBrand active:scale-[0.96] max-md:min-h-11 max-md:min-w-11"
-                , term "_" [text|on click set #${drawerStateCheckbox}.checked to false then trigger change on #${drawerStateCheckbox}|]
                 ]
                 $ faSprite_ "xmark" "regular" "size-3.5"
 
@@ -1850,8 +1852,6 @@ instance ToHtml WidgetEditor where
                 strong_ [class_ "text-sm font-semibold text-textStrong"] "Create a monitor"
                 p_ [class_ "text-xs text-textWeak"] "Get alerts when this widget crosses a threshold."
               uiToggle_ [id_ monitorToggleId, class_ "toggle toggle-sm toggle-primary new-widget-monitor", Aria.label_ "Create a monitor", onchange_ $ "for (const [widget, monitor] of [['widgetAlertThreshold', 'alertThreshold'], ['widgetWarningThreshold', 'warningThreshold'], ['widgetUnit', 'unit']]) document.getElementById(this.checked ? monitor : widget).value = document.getElementById(this.checked ? widget : monitor).value; if (this.checked) requestAnimationFrame(() => document.getElementById('" <> monitorSectionId <> "').scrollIntoView({block: 'start'}))"]
-
-      script_ [text|widgetJSON.type = document.getElementById('${widgetPreviewId}')?.closest('[class~="group/wgtexp"]')?.querySelector('#visualizationTabs input:checked')?.value || widgetJSON.type|]
 
     -- Monitor settings
     do

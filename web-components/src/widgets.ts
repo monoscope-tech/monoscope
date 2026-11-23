@@ -1,11 +1,10 @@
 'use strict';
 import { asShown, logFailure, ShownFailure } from './fetch-failures';
-import { getSeriesColor, invalidateLogLevelColors, isDarkTheme, otherBucketLabel } from './colorMapping';
+import { getSeriesColor, invalidateLogLevelColors, isDarkTheme, otherBucketLabel, toHexColor } from './colorMapping';
 import { shouldReloadForStaleChunk } from './stale-chunk-reload';
 import { formatNumber, formatBytes, convertToNanoseconds, formatDuration, durationAxisFormatter, DURATION_UNITS, statScalar, formatStatValue, type StatAggregates } from './stat-value';
 import { echartsUrls } from './assets';
-import { copyParams } from './time-range-utils';
-import debounce from 'lodash/debounce';
+import { copyParams, getDashboardConstants } from './time-range-utils';
 import { legendLayout } from './chart-legend';
 import { dayBarsOptions } from './day-bars';
 import { reviveFunctions } from './chart-functions';
@@ -256,21 +255,7 @@ export const subscribeChartTheme = (cb: ThemeCallback): (() => void) => {
   return () => { themeCallbacks.delete(cb); };
 };
 
-// Convert any CSS color (including oklch) to hex for ECharts.
-// Modern browsers keep oklch in fillStyle, so we render a pixel and read back RGB.
-const _colorCanvas = document.createElement('canvas');
-_colorCanvas.width = 1; _colorCanvas.height = 1;
-const _colorCtx = _colorCanvas.getContext('2d', { willReadFrequently: true })!;
-export const toEChartsColor = (cssColor: string): string => {
-  if (!cssColor) return '';
-  _colorCtx.clearRect(0, 0, 1, 1);
-  _colorCtx.fillStyle = cssColor;
-  _colorCtx.fillRect(0, 0, 1, 1);
-  const [r, g, b, a] = _colorCtx.getImageData(0, 0, 1, 1).data;
-  return a < 255
-    ? `rgba(${r},${g},${b},${(a / 255).toFixed(2)})`
-    : '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
-};
+export { toHexColor as toEChartsColor } from './colorMapping';
 
 // Read chart-related CSS tokens from the design system. Cached per theme: getComputedStyle
 // interleaved with echarts' DOM writes forced a full-page style recalc on every series of
@@ -283,7 +268,7 @@ export const getChartStyles = () => {
 };
 const readChartStyles = () => {
   const cs = getComputedStyle(document.body);
-  const get = (prop: string) => toEChartsColor(cs.getPropertyValue(prop).trim());
+  const get = (prop: string) => toHexColor(cs.getPropertyValue(prop).trim());
   return {
     textColor: get('--color-textWeak'),
     tooltipBg: get('--color-bgRaised'),
@@ -322,7 +307,7 @@ export const showChartError = (chartId: string, message: string, retry?: () => P
   if (!msg) return;
   msg.textContent = message;
   msg.title = message;
-  const button = document.getElementById(`${chartId}_retry`) as HTMLButtonElement | null;
+  const button = $(`${chartId}_retry`) as HTMLButtonElement | null;
   if (button) {
     button.hidden = !retry;
     button.onclick = retry ? async () => {
@@ -330,15 +315,12 @@ export const showChartError = (chartId: string, message: string, retry?: () => P
       try { await retry(); } finally { button.disabled = false; }
     } : null;
   }
-  $(`${chartId}_error`)?.classList.remove('hidden');
+  banner?.classList.remove('hidden');
 };
 
 const hideChartError = (chartId: string) => $(`${chartId}_error`)?.classList.add('hidden');
-
 export const showNoDataOverlay = (chartId: string) => $(`${chartId}_empty`)?.classList.remove('hidden');
-
 export const hideNoDataOverlay = (chartId: string) => $(`${chartId}_empty`)?.classList.add('hidden');
-
 
 // Loader + spotlight border move together, and both writes are deferred to a frame so a
 // fetch never forces layout in the middle of a scroll.
@@ -733,7 +715,7 @@ export const chartDataUrl = ({
   if (dbSource) params.set('db_source', dbSource);
 
   // The swapped panel's resolved constants supersede values carried by older links.
-  const constants = window.getDashboardConstants?.(document.getElementById(chartId)) ?? {};
+  const constants = getDashboardConstants(document.getElementById(chartId));
   Object.entries(constants).forEach(([key, value]) => {
     params.set(key, value as string);
   });
@@ -1018,8 +1000,6 @@ declare global {
     formatBytes: (num: number | null | undefined) => string;
     convertToNanoseconds: (value: number, unit: string) => number;
     formatDuration: (ns: number) => string;
-    // Installed by the dashboard page; supplies the dashboard's constant substitutions.
-    getDashboardConstants?: (el?: Element | null) => Record<string, string>;
   }
 }
 
@@ -1499,8 +1479,6 @@ function getActiveGrid(): HTMLElement | null {
 (window as any).buildWidgetOrder = buildWidgetOrder;
 (window as any).getActiveGrid = getActiveGrid;
 
-(window as any).debounce = debounce;
-
 // Walks only the option's own JSON shape. `tooltip.appendTo` is a DOM element on dashboards, and
 // htmx's `_htmx` expando points back at it: descending into it overflowed the stack.
 export function bindFunctionsToObjects(rootObj: any, obj: any) {
@@ -1583,7 +1561,7 @@ function initializeChartWidgets() {
     const pageParams = new URLSearchParams(location.search);
     // Opening, resizing or closing log details leaves the widgets' data unchanged.
     for (const key of ['target_event', 'details_width', 'showTrace']) pageParams.delete(key);
-    const signature = configJSON + pageParams.toString() + JSON.stringify(window.getDashboardConstants?.(host));
+    const signature = configJSON + pageParams.toString() + JSON.stringify(getDashboardConstants(host));
     if (chartConfigurations.get(host) === signature) return;
     chartConfigurations.set(host, signature);
     const config = JSON.parse(configJSON);

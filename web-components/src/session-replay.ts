@@ -86,6 +86,7 @@ export class SessionReplay extends LitElement {
   private iframeHeight = 927;
   private timer: number | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  private abortController: AbortController | null = null;
   private consoleTypesCounts = { error: 0, warn: 0, info: 0 };
   private metaData: { startTime: number; endTime: number; totalTime: number } = { startTime: 0, endTime: 0, totalTime: 0 };
   constructor() {
@@ -93,15 +94,6 @@ export class SessionReplay extends LitElement {
     // Hydrate console-panel width from prior session so users don't have to re-size it
     const savedWidth = Number(localStorage.getItem('replay-activity-width') ?? '');
     this.activityWidth = Number.isFinite(savedWidth) && savedWidth >= 0 ? Math.min(savedWidth, 600) : 0;
-    document.addEventListener('mouseup', () => {
-      document.body.style.userSelect = '';
-      if (this.startX !== null) {
-        // Persist the panel width, not the cursor position — previous behavior stored
-        // e.clientX which was meaningless to replay on next mount.
-        localStorage.setItem('replay-activity-width', String(Math.max(0, Math.round(this.activityWidth))));
-      }
-      this.startX = null;
-    });
 
     this.updateScale = this.updateScale.bind(this);
     this.handleConsoleEvents = this.handleConsoleEvents.bind(this);
@@ -113,6 +105,24 @@ export class SessionReplay extends LitElement {
     this.fetchNewSessionData = this.fetchNewSessionData.bind(this);
     this.initiatePlayer = this.initiatePlayer.bind(this);
     this.closePlayerWindow = this.closePlayerWindow.bind(this);
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this.abortController?.abort();
+    this.abortController = new AbortController();
+    const { signal } = this.abortController;
+
+    document.addEventListener('mouseup', () => {
+      document.body.style.userSelect = '';
+      if (this.startX !== null) {
+        // Persist the panel width, not the cursor position — previous behavior stored
+        // e.clientX which was meaningless to replay on next mount.
+        localStorage.setItem('replay-activity-width', String(Math.max(0, Math.round(this.activityWidth))));
+      }
+      this.startX = null;
+    }, { signal });
+
     document.addEventListener('mousemove', (e) => {
       if (this.startX !== null) {
         const diff = this.startX - e.clientX;
@@ -121,15 +131,15 @@ export class SessionReplay extends LitElement {
         this.activityWidth = Math.min(600, Math.max(0, this.activityWidth + diff));
         this.startX = e.clientX;
       }
-    });
+    }, { signal });
 
-    document.addEventListener('keydown', this.handleKeydown);
+    document.addEventListener('keydown', this.handleKeydown, { signal });
 
     window.addEventListener('loadSessionReplay', (e) => {
       const { sessionId } = (e as CustomEvent<{ sessionId: string }>).detail;
       this.fetchNewSessionData(sessionId);
       updateUrlState('session_replay', sessionId);
-    });
+    }, { signal });
   }
 
   // Keyboard shortcuts — only fire when the player window is visible and the
@@ -245,6 +255,8 @@ export class SessionReplay extends LitElement {
       clearTimeout(this.trickPlayerCleanupTimer);
       this.trickPlayerCleanupTimer = null;
     }
+    this.abortController?.abort();
+    this.abortController = null;
     document.removeEventListener('keydown', this.handleKeydown);
   }
 
@@ -800,22 +812,7 @@ export class SessionReplay extends LitElement {
   private copyConsoleText = async (event: ConsoleEvent, field: 'message' | 'trace') => {
     const text = (field === 'message' ? event.data.payload.payload : event.data.payload.trace).join('\n');
     try {
-      try {
-        await navigator.clipboard.writeText(text);
-      } catch {
-        const input = document.createElement('textarea');
-        const focused = document.activeElement;
-        input.value = text;
-        input.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
-        document.body.append(input);
-        try {
-          input.select();
-          if (!document.execCommand('copy')) throw new Error('Clipboard copy failed');
-        } finally {
-          input.remove();
-          if (focused instanceof HTMLElement) focused.focus({ preventScroll: true });
-        }
-      }
+      await navigator.clipboard.writeText(text);
       this.consoleCopy = { timestamp: event.timestamp, field, status: 'copied' };
     } catch {
       this.consoleCopy = { timestamp: event.timestamp, field, status: 'failed' };
@@ -1498,6 +1495,7 @@ export class SessionReplay extends LitElement {
     let isDragging = false;
     let offsetX: number, offsetY: number;
 
+    const signal = this.abortController?.signal;
     headers.forEach((h) =>
       h.addEventListener('mousedown', (e: MouseEvent) => {
         isDragging = true;
@@ -1505,10 +1503,10 @@ export class SessionReplay extends LitElement {
         offsetY = e.clientY - element.getBoundingClientRect().top;
 
         // Add temporary event listeners
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', onMouseUp);
+        document.addEventListener('mousemove', onMouseMove, { signal });
+        document.addEventListener('mouseup', onMouseUp, { signal });
         document.body.style.userSelect = 'none';
-      })
+      }, { signal })
     );
 
     const onMouseMove = (e: MouseEvent) => {

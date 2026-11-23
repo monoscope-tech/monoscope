@@ -57,7 +57,7 @@ import Network.HTTP.Types.Header qualified as Header
 import Network.Wai qualified as Wai
 import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx)
-import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), callout_, colorChip_, dialogTrigger_, disclosure_, emptyState_, filterInputAttr_, formField_, formSelectField_, installationSettingsLink_, localTimeFmt_, nativeDialog_, options_, panel_, settingsH2_)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), callout_, colorChip_, dialogTrigger_, disclosure_, emptyState_, filterInputAttr_, formCheckbox_, formField_, formSelectField_, installationSettingsLink_, localTimeFmt_, morphPostAttrs_, nativeDialog_, options_, panel_, searchInput_, settingsH2_, submitBtn_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
@@ -397,9 +397,8 @@ instance ToHtml WikiGet where
         div_ [class_ "flex items-center justify-between gap-2 ps-2"] do
           span_ [class_ "text-xs font-semibold uppercase tracking-wider text-textWeak"] "Pages"
           when canEdit $ a_ ([Aria.label_ "New page", title_ "New page", class_ "btn btn-ghost btn-sm btn-square"] <> repositoryNavAttrs (newPageUrl "")) $ faSprite_ "plus" "regular" "h-3.5 w-3.5"
-        form_ [method_ "get", action_ base, role_ "search", class_ "relative"] do
-          faSprite_ "magnifying-glass" "regular" "pointer-events-none absolute start-2.5 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-iconNeutral"
-          input_ [type_ "search", id_ "wiki-search", name_ "q", value_ $ fromMaybe "" search, placeholder_ "Search pages", Aria.label_ "Search wiki pages", class_ "input input-sm w-full ps-8", hxGet_ base, hxTrigger_ "input changed delay:300ms, search", hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph", hxPushUrl_ "true"]
+        form_ [method_ "get", action_ base, role_ "search"]
+          $ searchInput_ "w-full" "Search pages" [id_ "wiki-search", name_ "q", value_ $ fromMaybe "" search, hxGet_ base, hxTrigger_ "input changed delay:300ms, search", hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph", hxPushUrl_ "true"]
         when (null pages) $ p_ [class_ "px-2 text-sm text-textWeak"] $ maybe "No pages yet." (\q -> toHtml $ "No pages match \x201C" <> q <> "\x201D.") search
         let insert page [] (WikiTree _ children) = WikiTree (Just page) children
             insert page (segment : rest) (WikiTree item children) = WikiTree item $ Map.alter (Just . insert page rest . fromMaybe (WikiTree Nothing mempty)) segment children
@@ -1168,13 +1167,23 @@ repositorySourceGetH pid rid cid sample = do
 newtype RepositorySourceGet = RepositorySourceGet MappingsPanel
 
 
+repoSubPage_ :: Monad m => Text -> Text -> HtmlT m () -> HtmlT m ()
+repoSubPage_ heading intro body = section_ [class_ "w-full min-w-0 space-y-6 p-4 sm:p-6"] do
+  header_ [class_ "space-y-2"] do
+    h1_ [class_ "text-xl font-semibold text-textStrong"] $ toHtml heading
+    p_ [class_ "text-sm text-textWeak max-w-2xl"] $ toHtml intro
+  body
+
+
+morphPostForm_ :: Monad m => Text -> Text -> Text -> HtmlT m () -> HtmlT m ()
+morphPostForm_ url targetId indicatorId = form_ (class_ "space-y-4" : morphPostAttrs_ url targetId indicatorId)
+
+
 instance ToHtml RepositorySourceGet where
   toHtmlRaw = toHtml
-  toHtml (RepositorySourceGet panel) = section_ [class_ "w-full min-w-0 space-y-6 p-4 sm:p-6"] do
-    header_ [class_ "space-y-2"] do
-      h1_ [class_ "text-xl font-semibold text-textStrong"] "Source context"
-      p_ [class_ "text-sm text-textWeak max-w-2xl"] "Link this repository to the services it builds. Stack traces and pull request reviews use these mappings to find the right code and production telemetry."
-    div_ [id_ "code-mappings-content"] $ toHtml panel
+  toHtml (RepositorySourceGet panel) =
+    repoSubPage_ "Source context" "Link this repository to the services it builds. Stack traces and pull request reviews use these mappings to find the right code and production telemetry."
+      $ div_ [id_ "code-mappings-content"] (toHtml panel)
 
 
 repositorySourcePostH :: Projects.ProjectId -> GitSync.RepositoryId -> CodeMappingForm -> ATAuthCtx (ActionResult MappingRejection MappingsPanel)
@@ -1491,11 +1500,8 @@ repositoryConnectPostH pid cid form = do
 
 
 instance ToHtml RepositoryConnectGet where
-  toHtml page = section_ [class_ "w-full min-w-0 space-y-6 p-4 sm:p-6"] do
+  toHtml page = repoSubPage_ "Connect repositories" "Choose repositories to add. Monoscope analyzes their services and enables source context, PR reviews, and dashboard and monitor sync where setup is clear. This can post reviews and open configuration PRs. You can disable each capability at any time." do
     let connectionUrl = urls.repositoryConnectGet page.projectId ((.id) <$> page.credential)
-    header_ [class_ "space-y-2"] do
-      h1_ [class_ "text-xl font-semibold text-textStrong"] "Connect repositories"
-      p_ [class_ "text-sm text-textWeak max-w-2xl"] "Choose repositories to add. Monoscope analyzes their services and enables source context, PR reviews, and dashboard and monitor sync where setup is clear. This can post reviews and open configuration PRs. You can disable each capability at any time."
     div_ [id_ "repository-connect-content", class_ "space-y-5 rounded-xl border border-strokeWeak bg-bgBase p-4 sm:p-5"] do
       unless (null page.accounts) $ form_
         [action_ (urls.repositoryConnectGet page.projectId Nothing), method_ "get", hxGet_ (urls.repositoryConnectGet page.projectId Nothing), hxTrigger_ "change", hxPushUrl_ "true", hxTarget_ "#repository-connect-content", hxSelect_ "#repository-connect-content", hxSwap_ "outerMorph", hxIndicator_ "#repository-account-indicator", class_ "space-y-2"]
@@ -1509,22 +1515,18 @@ instance ToHtml RepositoryConnectGet where
         Nothing -> p_ [class_ "text-sm text-textWeak"] $ if null page.accounts then "Connect an account to choose its repositories." else "Choose an account to see the repositories it can access."
         Just account -> do
           case page.repositories of
-            Left _ -> div_ [role_ "alert", class_ "space-y-3 rounded-lg border border-strokeError-weak bg-fillError-weak p-4"] do
+            Left _ -> callout_ ErrorBadge Nothing $ div_ [role_ "alert", class_ "space-y-2"] do
               p_ [class_ "text-sm text-textError"] "Could not load repositories. Retry, or ask an administrator to check this connection."
               a_ [id_ "repository-connect-retry", href_ connectionUrl, hxGet_ connectionUrl, hxTarget_ "#repository-connect-content", hxSelect_ "#repository-connect-content", hxSwap_ "outerMorph", class_ "btn btn-sm btn-ghost"] "Retry"
             Right [] -> p_ [role_ "status", class_ "text-sm text-textWeak"] "No repositories are available to this account. Grant repository access or connect another account."
-            Right repositories -> form_ [action_ connectionUrl, method_ "post", hxPost_ connectionUrl, hxTarget_ "#repository-connect-content", hxSelect_ "#repository-connect-content", hxSwap_ "outerMorph", hxIndicator_ "#repository-connect-indicator", class_ "space-y-4"] do
-              when (length repositories > 8) $ label_ [class_ "input input-sm w-full"] do
-                faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-iconNeutral"
-                input_ [type_ "search", Aria.label_ "Filter repositories", placeholder_ "Filter repositories", class_ "grow", filterInputAttr_ ".repository-choice"]
+            Right repositories -> morphPostForm_ connectionUrl "repository-connect-content" "repository-connect-indicator" do
+              when (length repositories > 8) $ searchInput_ "w-full" "Filter repositories" [filterInputAttr_ ".repository-choice"]
               div_ [class_ "max-h-96 overflow-y-auto c-scroll rounded-xl border border-strokeWeak divide-y divide-strokeWeak"] $ forM_ repositories \repository ->
                 label_ [class_ "repository-choice flex min-h-11 cursor-pointer items-center gap-3 p-3 hover:bg-fillWeak has-[:checked]:bg-fillBrand-weak", term "data-filter" (T.toLower repository.fullName)] do
                   input_ ([type_ "checkbox", name_ "repoFullName", value_ repository.fullName, class_ "checkbox checkbox-sm shrink-0"] <> [checked_ | repository.fullName `elem` page.selected])
                   span_ [class_ "min-w-0 flex-1 text-sm text-textStrong break-all"] $ toHtml repository.fullName
                   when repository.private $ span_ [class_ "text-xs text-textWeak shrink-0"] "Private"
-              button_ [type_ "submit", class_ "btn btn-sm btn-primary gap-2"] do
-                "Connect selected repositories"
-                htmxIndicator_ "repository-connect-indicator" LdXS
+              submitBtn_ "repository-connect-indicator" "Connect selected repositories"
           whenJust account.installationId $ installationSettingsLink_ . GitSync.installationSettingsUrl
       a_ [href_ (urls.githubAppInstall page.projectId (Just "code")), class_ "btn btn-sm btn-outline"] "Connect GitHub account"
       p_ [class_ "border-t border-strokeWeak pt-4 text-xs text-textWeak"] do
@@ -1605,13 +1607,10 @@ repositoryTokenPostH pid form = do
 
 
 instance ToHtml RepositoryTokenGet where
-  toHtml page = section_ [class_ "w-full min-w-0 space-y-6 p-4 sm:p-6"] do
-    header_ [class_ "space-y-2"] do
-      h1_ [class_ "text-xl font-semibold text-textStrong"] "Connect with a token"
-      p_ [class_ "text-sm text-textWeak"] "Monoscope analyzes this repository and configures source context and configuration sync where supported. Automatic PR reviews require the GitHub App. You can disable each capability later."
+  toHtml page = repoSubPage_ "Connect with a token" "Monoscope analyzes this repository and configures source context and configuration sync where supported. Automatic PR reviews require the GitHub App. You can disable each capability later." do
     div_ [id_ "repository-token-content", class_ "space-y-4 rounded-xl border border-strokeWeak bg-bgBase p-4 sm:p-5"] do
       whenJust page.connectionError $ p_ [role_ "alert", class_ "text-sm text-textError break-words"] . toHtml
-      form_ [action_ (urls.repositoryTokenPost page.projectId), method_ "post", hxPost_ (urls.repositoryTokenPost page.projectId), hxTarget_ "#repository-token-content", hxSelect_ "#repository-token-content", hxSwap_ "outerMorph", hxIndicator_ "#repository-token-indicator", class_ "space-y-4"] do
+      morphPostForm_ (urls.repositoryTokenPost page.projectId) "repository-token-content" "repository-token-indicator" do
         formSelectField_ FieldSm "Git host" "host" True $ forM_ (universe @Git.GitHost) \host ->
           option_ ([value_ (Git.hostSlug host)] <> [selected_ "selected" | host == page.host]) $ toHtml $ Git.hostLabel host
         formField_ FieldSm def{value = fromMaybe "" page.apiBase, placeholder = "https://git.example.com"} "Server URL (for self-hosted Git)" "apiBase" False Nothing
@@ -1620,13 +1619,9 @@ instance ToHtml RepositoryTokenGet where
         p_ [class_ "text-xs text-textWeak"] "The token needs read access to this repository. Dashboard sync will also need write access if you enable it later."
         details_ [class_ "space-y-3 rounded-lg bg-fillWeak p-3"] do
           summary_ [class_ "cursor-pointer text-sm text-textWeak"] "Replacing an existing connection?"
-          label_ [class_ "flex items-start gap-3 text-sm text-textStrong"] do
-            input_ [type_ "checkbox", name_ "replaceToken", value_ "true", class_ "checkbox checkbox-sm shrink-0"]
-            "Replace saved token"
+          formCheckbox_ FieldMd "Replace saved token" "replaceToken" [value_ "true"]
           p_ [class_ "text-xs text-textWeak"] "This updates the source-access token for every repository using this owner’s account on this Git host."
-        button_ [type_ "submit", class_ "btn btn-sm btn-primary gap-2"] do
-          "Connect repository"
-          htmxIndicator_ "repository-token-indicator" LdXS
+        submitBtn_ "repository-token-indicator" "Connect repository"
   toHtmlRaw = toHtml
 
 

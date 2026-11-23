@@ -98,6 +98,12 @@ makeEffect ''LLM
 -- appends /embeddings verbatim, so the base must have no trailing slash.
 -- Accept the official host root as its versioned API base; custom proxy paths
 -- are already API bases and must retain their path.
+--
+-- >>> import Langchain.Embeddings.OpenAI qualified as EmbOAI
+-- >>> import Relude
+-- >>> let check (url, expected) = let c = openAIEmbeddings "test-key" url in EmbOAI.baseUrl c == Just expected && EmbOAI.apiKey c == "test-key"
+-- >>> all check ([("", "https://api.openai.com/v1"), ("https://api.openai.com/", "https://api.openai.com/v1"), ("https://api.openai.com", "https://api.openai.com/v1"), ("https://api.openai.com/v1/", "https://api.openai.com/v1"), ("https://api.openai.com/v1", "https://api.openai.com/v1"), ("https://proxy.example/openai/v1/", "https://proxy.example/openai/v1"), ("https://proxy.example/api", "https://proxy.example/api")] :: [(Text, String)])
+-- True
 openAIEmbeddings :: Text -> Text -> EmbOAI.OpenAIEmbeddings
 openAIEmbeddings apiKey baseUrl =
   EmbOAI.defaultOpenAIEmbeddings

@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CmpOp (..), MatchOp (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, FreeTextMatch (..), freeTextMatch, freeTextRegex, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, flattenedMetricsAttributes, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, isErrorSql, sqlStringLit) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CmpOp (..), MatchOp (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, FreeTextMatch (..), freeTextMatch, freeTextRegex, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, flattenedMetricsAttributes, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, isErrorSql, sqlStringLit, kqlQuoted) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -1886,3 +1886,16 @@ resolveWildcardTimes now = go
 -- | KQL timespan (@1h30m@, @7d@, @500ms@) to seconds, for ago() arithmetic.
 timespanToSeconds :: Text -> NominalDiffTime
 timespanToSeconds = snd . parseTimespan
+
+
+-- | A KQL string literal. Escaping matters: a value carrying a @"@ would close the literal
+-- early, and the parser reads @\\@ as an escape, so backslashes go first.
+--
+-- >>> kqlQuoted "say \"hi\""
+-- "\"say \\\"hi\\\"\""
+-- >>> kqlQuoted "C:\\tmp"
+-- "\"C:\\\\tmp\""
+-- >>> kqlQuoted "a\\\"b"
+-- "\"a\\\\\\\"b\""
+kqlQuoted :: Text -> Text
+kqlQuoted value = "\"" <> T.replace "\"" "\\\"" (T.replace "\\" "\\\\" value) <> "\""

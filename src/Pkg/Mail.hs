@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, activityReply, withOwner, Card, card, logPatternCard, rateChangeCard, cardMessages, uptimeMessages, cronMessages, recoveredMessages, uptimeName, cronName, RateChange (..), slackNewEndpointsAlert, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, addConvertKitUser, addConvertKitUserOrganization, arr, mrkdwn, plainTxt, slackEscape, inertCode, slackSection, slackHeader, slackContext, slackImage, dcGallery, slackActions) where
+module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, activityReply, withOwner, Card, Tone (..), toneColor, card, renderDiscordCard, logPatternCard, rateChangeCard, cardMessages, uptimeMessages, cronMessages, recoveredMessages, uptimeName, cronName, RateChange (..), slackNewEndpointsAlert, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, addConvertKitUser, addConvertKitUserOrganization, arr, mrkdwn, plainTxt, slackEscape, inertCode, slackSection, slackHeader, slackContext, slackImage, dcGallery, slackActions) where
 
 import Control.Lens (Traversal', ix, (%~), (.~), (^..), (^?))
 import Data.Aeson qualified as AE
@@ -112,22 +112,14 @@ sendDiscordAlert replyToMsgIdM alert pid pTitle channelIdM' = do
   case channelIdM of
     Nothing -> Nothing <$ Log.logAttention "Discord alert skipped: no channel configured" (AE.object ["project_id" AE..= pid])
     Just cid -> do
-      let projectUrl = hostPath appCtx.env.hostUrl $ urls.homeGet pid
-          byHash h = hostPath appCtx.env.hostUrl $ (urls.issues pid).detailHashGet h Nothing Nothing Nothing Nothing Nothing
-          mkPayload = \case
-            RuntimeErrorAlert{..} -> Just $ discordErrorAlert runtimeAlertType errorData pTitle projectUrl (byHash errorData.hash) chartUrl occurrenceText firstSeenText ongoingFor
-            EndpointAlert{..} -> Just $ discordNewEndpointAlert project endpoints (byHash endpointHash) projectUrl
-            MonitorsAlert{..} -> Just $ discordMonitorAlert monitorTitle monitorUrl chartUrl
-            MonitorsRecoveryAlert{..} -> Just $ AE.object ["text" AE..= ("✅ *Alert resolved for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")]
-            LogPatternAlert lp -> Just $ mkDiscordLogPatternPayload lp pTitle
-            LogPatternRateChangeAlert rc -> Just $ mkDiscordLogPatternRateChangePayload rc pTitle
+      let mkPayload = \case
             RoutineReportAlert{..} ->
               Just
                 $ discordEmbedMsg ("📊 **" <> headline <> "**")
                 $ AE.object
-                $ ["title" AE..= headline, "url" AE..= reportUrl, "color" AE..= (26879 :: Int), "description" AE..= T.intercalate "\n\n" (period : [("**" <> h.title <> "**\n" <> h.detail) <> foldMap (\l -> "\n[Explore](" <> l <> ")") h.link | h <- highlights])]
+                $ ["title" AE..= headline, "url" AE..= reportUrl, "color" AE..= snd (toneColor Calm), "description" AE..= T.intercalate "\n\n" (period : [("**" <> h.title <> "**\n" <> h.detail) <> foldMap (\l -> "\n[Explore](" <> l <> ")") h.link | h <- highlights])]
                 <> maybeToList (listToMaybe (mapMaybe (.chart) highlights) <&> \c -> "image" AE..= AE.object ["url" AE..= c])
-            ShapeAlert -> Nothing
+            other -> renderDiscordCard <$> alertCard appCtx.env.hostUrl pid pTitle other
       join <$> forM (mkPayload alert) \payload -> Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid payload replyToMsgIdM
 
 
@@ -147,27 +139,19 @@ sendSlackAlert threadTsM alert pid pTitle channelM = do
   slackData <- getProjectSlackData pid
   case (channelM, slackData) of
     (Just cid, Just sd) -> do
-      let projectUrl = hostPath appCtx.env.hostUrl $ urls.homeGet pid
-          byHash h = hostPath appCtx.env.hostUrl $ (urls.issues pid).detailHashGet h Nothing Nothing Nothing Nothing Nothing
-          mkPayload =
-            fmap AE.toJSON . \case
-              RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData pTitle projectUrl (byHash errorData.hash) chartUrl occurrenceText firstSeenText ongoingFor
-              EndpointAlert{..} -> Just $ slackNewEndpointsAlert project endpoints (byHash endpointHash) projectUrl
-              MonitorsAlert{..} -> Just $ slackMonitorAlert sAlerting monitorTitle monitorUrl chartUrl
-              MonitorsRecoveryAlert{..} -> Just $ slackMonitorAlert sRecovered monitorTitle monitorUrl Nothing
-              LogPatternAlert lp -> Just $ card $ logPatternCard lp pTitle
-              LogPatternRateChangeAlert rc -> Just $ card $ rateChangeCard rc pTitle
-              RoutineReportAlert{..} ->
-                Incidents.slackPayload
-                  $ AE.object
-                    [ "text" AE..= headline
-                    , "blocks"
-                        AE..= ( [slackHeader headline, slackContext [period]]
-                                  <> concat [slackSection ("*" <> h.title <> "*\n" <> h.detail <> foldMap (\l -> "\n<" <> l <> "|Explore>") h.link) : maybeToList (slackImage (h.title <> " chart") Nothing <$> h.chart) | h <- highlights]
-                                  <> [slackActions [AE.object ["type" AE..= ("button" :: Text), "text" AE..= plainTxt "Open the report", "url" AE..= reportUrl]]]
-                              )
-                    ]
-              ShapeAlert -> Nothing
+      let mkPayload = \case
+            RoutineReportAlert{..} ->
+              fmap AE.toJSON
+                $ Incidents.slackPayload
+                $ AE.object
+                  [ "text" AE..= headline
+                  , "blocks"
+                      AE..= ( [slackHeader headline, slackContext [period]]
+                                <> concat [slackSection ("*" <> h.title <> "*\n" <> h.detail <> foldMap (\l -> "\n<" <> l <> "|Explore>") h.link) : maybeToList (slackImage (h.title <> " chart") Nothing <$> h.chart) | h <- highlights]
+                                <> [slackActions [AE.object ["type" AE..= ("button" :: Text), "text" AE..= plainTxt "Open the report", "url" AE..= reportUrl]]]
+                            )
+                  ]
+            other -> AE.toJSON . card <$> alertCard appCtx.env.hostUrl pid pTitle other
           isDefaultChannel = cid == sd.channelId
       join <$> forM (mkPayload alert) \payload -> do
         -- Legacy installs (apis.slack row created between migrations 0077 and 0080)
@@ -188,12 +172,12 @@ sendWhatsAppAlert alert pid pTitle tos = do
   case alert of
     RuntimeErrorAlert{..} ->
       sendAlert appCtx.config.whatsappErrorTemplate
-        $ AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <> stripSummaryBadges issueTitle <> "*"), "3" AE..= ("`" <> errorData.message <> "`"), "4" AE..= (pid.toText <> "/issues/by_hash/" <> errorData.hash)]
+        $ AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <> stripSummaryBadges issueTitle <> "*"), "3" AE..= ("`" <> errorData.message <> "`"), "4" AE..= issuePath errorData.hash]
     -- The approved template has two variables, and {{2}} is also its button's URL suffix, so it
     -- carries the issue path; a third variable, or endpoint labels in {{2}}, is Twilio 21656.
     EndpointAlert{..} ->
       sendAlert appCtx.config.whatsappEndpointTemplate
-        $ AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= (pid.toText <> "/issues/by_hash/" <> endpointHash)]
+        $ AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= issuePath endpointHash]
     ShapeAlert -> pass
     -- No WhatsApp template carries a digest; reports reach email and team chat instead.
     RoutineReportAlert{} -> pass
@@ -202,6 +186,7 @@ sendWhatsAppAlert alert pid pTitle tos = do
     LogPatternAlert{} -> pass
     LogPatternRateChangeAlert{} -> pass
   where
+    issuePath h = let p = (urls.issues pid).detailHashGet h Nothing Nothing Nothing Nothing Nothing in fromMaybe p (T.stripPrefix "/p/" p)
     sendAlert template vars = for_ tos \to -> Notify.sendNotification $ Notify.whatsappNotification template to vars
     sendMonitor templateM status title url = case templateM of
       Nothing -> Log.logAttention "WhatsApp monitor alert skipped: WHATSAPP_MONITOR_TEMPLATE is not configured" $ AE.object ["project_id" AE..= pid, "status" AE..= status]
@@ -222,11 +207,9 @@ topStackFrame :: Text -> Maybe Text
 topStackFrame = fmap (T.take 160) . viaNonEmpty last . take 2 . filter (not . T.null) . map T.strip . lines
 
 
--- | "`METHOD /path`" for alert metadata; drops whichever half is missing, empty when both are.
-errRoute :: ErrorPatterns.ATError -> Text
-errRoute err = case filter (not . T.null) (catMaybes [err.requestMethod, err.requestPath]) of
-  [] -> ""
-  parts -> "`" <> inertCode (unwords parts) <> "`"
+-- | "METHOD /path" for alert metadata; drops whichever half is missing, 'Nothing' when both are.
+errRoute :: ErrorPatterns.ATError -> Maybe Text
+errRoute err = guarded (not . T.null) $ unwords $ filter (not . T.null) $ catMaybes [err.requestMethod, err.requestPath]
 
 
 errFirstSeen :: ErrorPatterns.ATError -> Text
@@ -239,7 +222,95 @@ data Tone = Critical | Elevated | Calm | Healthy | Neutral
   deriving stock (Eq, Show)
 
 
-data Status = Status {emoji :: Text, label :: Text, tone :: Tone}
+-- | Slack bar hex and Discord embed colour for each alert tone.
+--
+-- >>> toneColor Critical
+-- ("#E5484D",15026253)
+-- >>> toneColor Healthy
+-- ("#30A46C",3187820)
+toneColor :: Tone -> (Text, Int)
+toneColor = \case
+  Critical -> ("#E5484D", 0xE5484D)
+  Elevated -> ("#F5A524", 0xF5A524)
+  Calm -> ("#3E63DD", 0x3E63DD)
+  Healthy -> ("#30A46C", 0x30A46C)
+  Neutral -> ("#8B8D98", 0x8B8D98)
+
+
+data StatusIcon
+  = RedCircle
+  | OrangeCircle
+  | YellowCircle
+  | GreenCircle
+  | BlueCircle
+  | CheckMark
+  | WhiteCircle
+  deriving stock (Eq, Show)
+
+
+slackIcon :: StatusIcon -> Text
+slackIcon = \case
+  RedCircle -> ":red_circle:"
+  OrangeCircle -> ":large_orange_circle:"
+  YellowCircle -> ":large_yellow_circle:"
+  GreenCircle -> ":large_green_circle:"
+  BlueCircle -> ":large_blue_circle:"
+  CheckMark -> ":white_check_mark:"
+  WhiteCircle -> ":white_circle:"
+
+
+discordIcon :: StatusIcon -> Text
+discordIcon = \case
+  RedCircle -> "🔴"
+  OrangeCircle -> "🟠"
+  YellowCircle -> "🟡"
+  GreenCircle -> "🟢"
+  BlueCircle -> "🔵"
+  CheckMark -> "✅"
+  WhiteCircle -> "⚪"
+
+
+data Status = Status {icon :: StatusIcon, label :: Text, tone :: Tone}
+  deriving stock (Eq, Show)
+
+
+-- | Transport-neutral inline formatting for card metadata (notes, facts, footer).
+data Inline = Plain Text | Bold Text | Code Text | Seq [Inline]
+  deriving stock (Eq, Show)
+
+
+instance Semigroup Inline where
+  Seq xs <> Seq ys = Seq (xs <> ys)
+  Seq xs <> y = Seq (xs <> [y])
+  x <> Seq ys = Seq (x : ys)
+  x <> y = Seq [x, y]
+
+
+instance Monoid Inline where
+  mempty = Seq []
+
+
+renderSlackInline :: Inline -> Text
+renderSlackInline = \case
+  Plain t -> slackEscape t
+  Bold t -> bold t
+  Code t -> "`" <> slackEscape (inertCode t) <> "`"
+  Seq xs -> foldMap renderSlackInline xs
+
+
+renderDiscordInline :: Inline -> Text
+renderDiscordInline = \case
+  Plain t -> t
+  Bold t -> "**" <> t <> "**"
+  Code t -> "`" <> inertCode t <> "`"
+  Seq xs -> foldMap renderDiscordInline xs
+
+
+-- | Transport-neutral evidence block inside a 'Card'.
+data CardBody
+  = CardCode Text
+  | CardText Text
+  | CardGroups [((Maybe Text, Maybe Text), [Text])]
   deriving stock (Eq, Show)
 
 
@@ -250,11 +321,11 @@ data Card = Card
   { status :: Status
   , title :: Text
   , url :: Text
-  , note :: [Text]
-  , facts :: [Text]
-  , body :: [AE.Value]
+  , note :: [Inline]
+  , facts :: [Inline]
+  , body :: Maybe CardBody
   , chart :: Maybe (Text, Maybe Text)
-  , footer :: [Text]
+  , footer :: [Inline]
   , actions :: [(Text, Text)]
   }
 
@@ -262,7 +333,7 @@ data Card = Card
 -- | A card with only a status line; builders fill in what they have, and a root
 -- edit built from one leaves the rest to 'retainSlackSnapshot'.
 statusCard :: Status -> Text -> Text -> Card
-statusCard status title url = Card{status, title, url, note = [], facts = [], body = [], chart = Nothing, footer = [], actions = []}
+statusCard status title url = Card{status, title, url, note = [], facts = [], body = Nothing, chart = Nothing, footer = [], actions = []}
 
 
 bold :: Text -> Text
@@ -274,22 +345,84 @@ card c =
   Incidents.SlackPayload $ KEM.fromList ["text" AE..= fallback, "attachments" AE..= arr [AE.object ["color" AE..= color, "fallback" AE..= fallback, "blocks" AE..= blocks]]]
   where
     fallback = c.status.label <> " · " <> incidentHeadline title
-    color :: Text = case c.status.tone of
-      Critical -> "#E5484D"
-      Elevated -> "#F5A524"
-      Calm -> "#3E63DD"
-      Healthy -> "#30A46C"
-      Neutral -> "#8B8D98"
+    color = fst $ toneColor c.status.tone
     title = if T.null (T.strip c.title) then "Untitled" else c.title
     blocks =
       [tagged "status" $ slackSection $ statusText c.status <> "  <" <> c.url <> "|" <> incidentHeadline title <> ">"]
-        <> [tagged "note" $ slackContext [dots c.note] | not (null c.note)]
-        <> [tagged "facts" $ slackContext [dots c.facts] | not (null c.facts)]
-        <> c.body
+        <> [tagged "note" $ slackContext [dots (renderSlackInline <$> c.note)] | not (null c.note)]
+        <> [tagged "facts" $ slackContext [dots (renderSlackInline <$> c.facts)] | not (null c.facts)]
+        <> maybeToList (renderSlackBody <$> c.body)
         <> foldMap (\(alt, img) -> [tagged "chart" $ maybe (slackContext ["Chart unavailable · <" <> c.url <> "|open the issue>"]) (slackImage alt Nothing) img]) c.chart
-        <> [tagged "footer" $ slackContext [dots c.footer] | not (null c.footer)]
+        <> [tagged "footer" $ slackContext [dots (renderSlackInline <$> c.footer)] | not (null c.footer)]
         -- Slack's primary button is green; beside a red or amber bar it reads as "fine".
         <> [tagged "actions" $ slackActions $ zipWith (\i (l, u) -> slackButton l (Just "primary" <* guard (i == 0 && c.status.tone `notElem` [Critical, Elevated])) u) [0 :: Int ..] c.actions | not (null c.actions)]
+    renderSlackBody =
+      tagged "evidence" . slackSection . \case
+        CardCode t -> slackEscape $ "```" <> inertCode t <> "```"
+        CardText t -> slackEscape t
+        CardGroups groups ->
+          T.intercalate "\n\n" $ groups <&> \((host, ctx), labels) ->
+            foldMap (\h -> bold h <> foldMap (("  ·  " <>) . slackEscape) ctx <> "\n") (host <* guard (length groups > 1)) <> slackEscape (bulletList labels)
+
+
+-- | Render a 'Card' as a Discord message with a single coloured embed.
+-- Secondary actions (whose URL differs from the card's title URL) render as
+-- markdown links in the description rather than Slack button arrays.
+--
+-- >>> import Control.Lens ((^?))
+-- >>> import Data.Aeson.Lens (key, nth, _Integer, _String)
+-- >>> let rc = RateChange "https://app/i/1" "timeout" (Just "warn") (Just "api") Drop 40 100 (-60) False Nothing
+-- >>> let v = renderDiscordCard (rateChangeCard rc "Demo")
+-- >>> (v ^? key "embeds" . nth 0 . key "color" . _Integer, maybe False (T.isInfixOf "60%") (v ^? key "embeds" . nth 0 . key "description" . _String), maybe False (T.isInfixOf "--") (v ^? key "embeds" . nth 0 . key "description" . _String))
+-- (Just 4088797,True,False)
+renderDiscordCard :: Card -> AE.Value
+renderDiscordCard c =
+  discordEmbedMsg (discordIcon c.status.icon <> " **" <> c.status.label <> "**")
+    $ AE.object
+    $ ["title" AE..= T.take 256 title, "url" AE..= c.url, "color" AE..= snd (toneColor c.status.tone)]
+    <> ["description" AE..= description | not (T.null description)]
+    <> maybeToList (c.chart >>= snd <&> \u -> "image" AE..= AE.object ["url" AE..= u])
+    <> ["footer" AE..= AE.object ["text" AE..= dots (renderDiscordInline <$> c.footer)] | not (null c.footer)]
+  where
+    title = if T.null (T.strip c.title) then "Untitled" else c.title
+    extraLinks = T.intercalate "  ·  " ["[" <> l <> "](" <> u <> ")" | (l, u) <- c.actions, u /= c.url]
+    description =
+      T.intercalate "\n\n"
+        $ filter (not . T.null)
+        $ [dots (renderDiscordInline <$> c.note) | not (null c.note)]
+        <> [dots (renderDiscordInline <$> c.facts) | not (null c.facts)]
+        <> maybeToList (renderDiscordBody <$> c.body)
+        <> [extraLinks | not (T.null extraLinks)]
+    renderDiscordBody = \case
+      CardCode t -> "```" <> inertCode t <> "```"
+      CardText t -> t
+      CardGroups groups ->
+        T.intercalate "\n\n" $ groups <&> \((host, ctx), labels) ->
+          foldMap (\h -> "**" <> h <> "**" <> foldMap ((" · " <>) . (\x -> "_" <> x <> "_")) ctx <> "\n") (host <* guard (length groups > 1)) <> bulletList labels
+
+
+-- | Build the transport-neutral alert 'Card' for alerts that share the card
+-- anatomy. Returns 'Nothing' for multi-section digests ('RoutineReportAlert')
+-- and deprecated 'ShapeAlert'.
+alertCard :: Text -> Projects.ProjectId -> Text -> NotificationAlerts -> Maybe Card
+alertCard hostUrl pid pTitle = \case
+  RuntimeErrorAlert{..} -> Just $ runtimeErrorCard runtimeAlertType errorData pTitle projectUrl (byHash errorData.hash) chartUrl occurrenceText firstSeenText ongoingFor
+  EndpointAlert{..} -> Just $ newEndpointsCard project endpoints (byHash endpointHash) projectUrl
+  MonitorsAlert{..} -> Just $ monitorCard sAlerting monitorTitle monitorUrl chartUrl
+  MonitorsRecoveryAlert{..} -> Just $ monitorCard sRecovered monitorTitle monitorUrl Nothing
+  LogPatternAlert lp -> Just $ logPatternCard lp pTitle
+  LogPatternRateChangeAlert rc -> Just $ rateChangeCard rc pTitle
+  RoutineReportAlert{} -> Nothing
+  ShapeAlert -> Nothing
+  where
+    projectUrl = hostPath hostUrl $ urls.homeGet pid
+    byHash h = hostPath hostUrl $ (urls.issues pid).detailHashGet h Nothing Nothing Nothing Nothing Nothing
+    runtimeErrorCard alertType err project projUrl targetUrl chartUrlM occTextM firstSeenM ongoingForM =
+      errorCard status err projUrl targetUrl chartUrlM occTextM [Plain ("First seen " <> fromMaybe (errFirstSeen err) firstSeenM), Plain ("Project " <> project)]
+      where
+        status = maybe (runtimeStatus alertType) (\d -> Status sStillFailing.icon ("Still occurring for " <> d) Critical) ongoingForM
+    monitorCard status monitorTitle monitorUrl chartUrlM =
+      (statusCard status monitorTitle monitorUrl){chart = Just ("Monitor values", chartUrlM) <* guard (status /= sRecovered), actions = [("Open monitor", monitorUrl)]}
 
 
 -- | A card's root message, and its one-line reply for when it happens again.
@@ -299,8 +432,8 @@ cardMessages c = (card c, reply c.status c.title c.facts)
 
 -- | A thread reply is one line: what changed, then the numbers that say how much.
 -- Its notification text names the issue, since a phone shows nothing else.
-reply :: Status -> Text -> [Text] -> Incidents.SlackPayload
-reply s title details = oneLine title $ dots (statusText s : details)
+reply :: Status -> Text -> [Inline] -> Incidents.SlackPayload
+reply s title details = oneLine title $ dots (statusText s : (renderSlackInline <$> details))
 
 
 oneLine :: Text -> Text -> Incidents.SlackPayload
@@ -318,7 +451,7 @@ withOwner owner (Incidents.SlackPayload message) = Incidents.SlackPayload $ mess
 
 
 statusText :: Status -> Text
-statusText s = s.emoji <> " *" <> s.label <> "*"
+statusText s = slackIcon s.icon <> " *" <> s.label <> "*"
 
 
 dots :: [Text] -> Text
@@ -326,16 +459,16 @@ dots = T.intercalate "  ·  " . filter (not . T.null)
 
 
 sNewError, sRegressed, sEscalating, sSpiking, sStillFailing, sAlerting, sWarning, sRecovered, sResolved, sNoData :: Status
-sNewError = Status ":red_circle:" "New error" Critical
-sRegressed = Status ":red_circle:" "Regressed" Critical
-sEscalating = Status ":large_orange_circle:" "Escalating" Elevated
-sSpiking = Status ":large_orange_circle:" "Spiking" Elevated
-sStillFailing = Status ":red_circle:" "Still occurring" Critical
-sAlerting = Status ":red_circle:" "Alerting" Critical
-sWarning = Status ":large_yellow_circle:" "Warning" Elevated
-sRecovered = Status ":large_green_circle:" "Recovered" Healthy
-sResolved = Status ":white_check_mark:" "Resolved" Healthy
-sNoData = Status ":white_circle:" "No data" Neutral
+sNewError = Status RedCircle "New error" Critical
+sRegressed = Status RedCircle "Regressed" Critical
+sEscalating = Status OrangeCircle "Escalating" Elevated
+sSpiking = Status OrangeCircle "Spiking" Elevated
+sStillFailing = Status RedCircle "Still occurring" Critical
+sAlerting = Status RedCircle "Alerting" Critical
+sWarning = Status YellowCircle "Warning" Elevated
+sRecovered = Status GreenCircle "Recovered" Healthy
+sResolved = Status CheckMark "Resolved" Healthy
+sNoData = Status WhiteCircle "No data" Neutral
 
 
 runtimeStatus :: RuntimeAlertType -> Status
@@ -346,12 +479,12 @@ runtimeStatus = \case
   ErrorSpike -> sSpiking
 
 
-errorCard :: Status -> ErrorPatterns.ATError -> Text -> Text -> Maybe Text -> Maybe Text -> [Text] -> Card
+errorCard :: Status -> ErrorPatterns.ATError -> Text -> Text -> Maybe Text -> Maybe Text -> [Inline] -> Card
 errorCard status err projectUrl issueUrl chartUrl rate footer =
   (statusCard status (errorAlertTitle err) issueUrl)
-    { facts = errorFacts err <> foldMap (pure . ("*" <>) . (<> "*")) rate
+    { facts = errorFacts err <> foldMap (pure . Bold) rate
     , -- The title already carries the message; the frames are the new evidence.
-      body = [tagged "evidence" $ slackSection $ slackEscape $ maybe (errorSnippet 600 err) (\fs -> "```" <> inertCode (T.intercalate "\n" (toList fs)) <> "```") (frames <* guard (T.isInfixOf (T.take 40 $ unwords $ words err.message) (errorAlertTitle err)))]
+      body = Just $ CardCode $ maybe (errorSnippetText 600 err) (T.intercalate "\n" . toList) (frames <* guard (T.isInfixOf (T.take 40 $ unwords $ words err.message) (errorAlertTitle err)))
     , chart = Just ("Error occurrences · " <> errorAlertTitle err, chartUrl)
     , footer
     , actions = ("Open issue", issueUrl) : maybeToList ((err.traceId >>= guarded (not . T.null)) <&> \tid -> ("View trace", traceExplorerUrl projectUrl tid err.when))
@@ -361,8 +494,8 @@ errorCard status err projectUrl issueUrl chartUrl rate footer =
 
 
 -- | Where an error came from: service, environment, route.
-errorFacts :: ErrorPatterns.ATError -> [Text]
-errorFacts err = catMaybes [bold <$> err.serviceName, slackEscape <$> err.environment, slackEscape <$> guarded (not . T.null) (errRoute err)]
+errorFacts :: ErrorPatterns.ATError -> [Inline]
+errorFacts err = catMaybes [Bold <$> err.serviceName, Plain <$> err.environment, Code <$> errRoute err]
 
 
 -- | Readings print as people write them: grouped thousands, at most two decimals.
@@ -396,7 +529,7 @@ monitorIncidentMessages project monitor value status observedAt episode issueUrl
       (statusCard st monitor.alertConfig.title issueUrl)
         { facts = measurement
         , chart = Just ("Recorded values for " <> incidentHeadline monitor.alertConfig.title, chart)
-        , footer = ["Started " <> atUtc started, "checked every " <> show monitor.checkIntervalMins <> " min", "Project " <> slackEscape project]
+        , footer = [Plain ("Started " <> atUtc started), Plain ("checked every " <> show monitor.checkIntervalMins <> " min"), Plain ("Project " <> project)]
         , actions = [("Open issue", issueUrl), (if isJust monitor.widgetId && isJust monitor.dashboardId then "Open widget" else "Open monitor", monitorUrl)]
         }
   , reply st monitor.alertConfig.title measurement
@@ -413,18 +546,18 @@ monitorIncidentMessages project monitor value status observedAt episode issueUrl
     -- The side of the threshold the reading is on, in every state.
     comparison = if (status == Monitors.MSNormal) /= monitor.triggerLessThan then "below " else "above "
     measurement =
-      ["*" <> monitorReading monitor value <> "*", comparison <> monitorReading monitor threshold]
-        <> ["lasted " <> lasted (diffUTCTime observedAt started) | status == Monitors.MSNormal]
+      [Bold (monitorReading monitor value), Plain (comparison <> monitorReading monitor threshold)]
+        <> [Plain ("lasted " <> lasted (diffUTCTime observedAt started)) | status == Monitors.MSNormal]
 
 
 monitorReading :: Monitors.QueryMonitor -> Double -> Text
-monitorReading monitor v = reading v <> foldMap ((" " <>) . slackEscape) monitor.alertConfig.unit
+monitorReading monitor v = reading v <> foldMap (" " <>) monitor.alertConfig.unit
 
 
 -- | A missing evaluation preserves the last verified reading, never a synthetic zero.
 monitorDataUnavailableMessage :: Monitors.QueryMonitor -> Monitors.MeasurementFailure -> UTCTime -> Maybe (UTCTime, Double) -> Text -> Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
 monitorDataUnavailableMessage monitor reason now previous incidentUrl _ =
-  (card (statusCard sNoData monitor.alertConfig.title incidentUrl){note = [detail]}, reply sNoData monitor.alertConfig.title [explanation, lastValue])
+  (card (statusCard sNoData monitor.alertConfig.title incidentUrl){note = [Plain detail]}, reply sNoData monitor.alertConfig.title [Plain explanation, Plain lastValue])
   where
     explanation = case reason of
       Monitors.NoMeasurements -> "no measurements in the evaluation window"
@@ -439,12 +572,12 @@ monitorDataUnavailableMessage monitor reason now previous incidentUrl _ =
 errorIncidentMessages :: RuntimeAlertType -> ErrorPatterns.ATError -> UTCTime -> Maybe Incidents.Episode -> Maybe Text -> Text -> Text -> Maybe Text -> Maybe Text -> [Text] -> AlertImpact -> (Incidents.SlackPayload, Incidents.SlackPayload)
 errorIncidentMessages alertType err now episode ongoing projectUrl incidentUrl chart occurrence change impact =
   ( card $ errorCard (runtimeStatus alertType) err projectUrl incidentUrl chart occurrence footer
-  , reply (if isJust ongoing then sStillFailing else runtimeStatus alertType) (errorAlertTitle err) (foldMap (\r -> ["*" <> r <> "*"]) occurrence <> change <> foldMap (\d -> ["ongoing " <> d]) ongoing)
+  , reply (if isJust ongoing then sStillFailing else runtimeStatus alertType) (errorAlertTitle err) (foldMap (pure . Bold) occurrence <> (Plain <$> change) <> foldMap (\d -> [Plain ("ongoing " <> d)]) ongoing)
   )
   where
     -- Who it hit and for which customer; identity is opt-in per project.
     user = (\n -> n <> foldMap (\e -> " (" <> e <> ")") impact.userEmail) <$> impact.userName <|> impact.userEmail
-    footer = ["Started " <> atUtc (maybe now (.startedAt) episode)] <> foldMap (\u -> ["User " <> slackEscape u]) user <> foldMap (\t -> ["Tenant " <> slackEscape t]) impact.tenant <> foldMap (\s -> ["Synthetic " <> slackEscape s]) err.synthetic <> ["Project " <> slackEscape impact.projectName]
+    footer = [Plain ("Started " <> atUtc (maybe now (.startedAt) episode))] <> foldMap (\u -> [Plain ("User " <> u)]) user <> foldMap (\t -> [Plain ("Tenant " <> t)]) impact.tenant <> foldMap (\s -> [Plain ("Synthetic " <> s)]) err.synthetic <> [Plain ("Project " <> impact.projectName)]
 
 
 tagged :: Text -> AE.Value -> AE.Value
@@ -468,7 +601,7 @@ incidentHeadline = slackEscape . T.take 160
 -- | The root keeps its identity and says who resolved it and when; the reply says who.
 resolvedErrorMessage :: ErrorPatterns.ATError -> Text -> UTCTime -> Text -> Maybe Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
 resolvedErrorMessage err actor now projectUrl issueUrl =
-  (card (errorCard sResolved err projectUrl (fromMaybe (projectUrl <> "/issues") issueUrl) Nothing Nothing []){note = ["by " <> bold actor, hhmm now], body = [], chart = Nothing}, reply sResolved{label = "Resolved by " <> slackEscape actor} (errorAlertTitle err) [])
+  (card (errorCard sResolved err projectUrl (fromMaybe (projectUrl <> "/issues") issueUrl) Nothing Nothing []){note = [Plain "by " <> Bold actor, Plain (hhmm now)], body = Nothing, chart = Nothing}, reply sResolved{label = "Resolved by " <> slackEscape actor} (errorAlertTitle err) [])
 
 
 -- | A lifecycle note in an issue's thread: who did what, in one line. A person
@@ -527,11 +660,11 @@ blockId = (^? key "block_id" . _String)
 uptimeMessages :: Issues.UptimeData -> Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
 uptimeMessages d issueUrl =
   cardMessages
-    (statusCard (Status ":red_circle:" "Down" Critical) (uptimeName d) issueUrl)
-      { facts = [bold $ maybe "No response" (("HTTP " <>) . show) d.statusCode, "expected " <> show d.expectedStatus, show d.durationMs <> " ms"]
+    (statusCard (Status RedCircle "Down" Critical) (uptimeName d) issueUrl)
+      { facts = [Bold $ maybe "No response" (("HTTP " <>) . show) d.statusCode, Plain ("expected " <> show d.expectedStatus), Plain (show d.durationMs <> " ms")]
       , -- A status code is already in the facts; only a failed request needs its reason.
-        body = [tagged "evidence" $ slackSection $ "`" <> slackEscape d.url <> "`" <> foldMap (const $ "\n" <> slackEscape d.reason) (guard (isNothing d.statusCode))]
-      , footer = ["Down since " <> atUtc d.downSince]
+        body = Just $ CardText $ "`" <> d.url <> "`" <> foldMap (const $ "\n" <> d.reason) (guard (isNothing d.statusCode))
+      , footer = [Plain ("Down since " <> atUtc d.downSince)]
       , actions = [("Open issue", issueUrl)]
       }
 
@@ -540,8 +673,8 @@ uptimeMessages d issueUrl =
 cronMessages :: Issues.CronData -> Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
 cronMessages d issueUrl =
   cardMessages
-    (statusCard (Status ":red_circle:" (case d.failure of Issues.CFMissed -> "Missed run"; Issues.CFFailed -> "Run failed") Critical) (cronName d) issueUrl)
-      { facts = ["`" <> slackEscape d.slug <> "`", "expected by " <> atUtc d.expectedBy, maybe "no check-in yet" (("last check-in " <>) . atUtc) d.lastCheckinAt]
+    (statusCard (Status RedCircle (case d.failure of Issues.CFMissed -> "Missed run"; Issues.CFFailed -> "Run failed") Critical) (cronName d) issueUrl)
+      { facts = [Code d.slug, Plain ("expected by " <> atUtc d.expectedBy), Plain (maybe "no check-in yet" (("last check-in " <>) . atUtc) d.lastCheckinAt)]
       , actions = [("Open issue", issueUrl)]
       }
 
@@ -562,64 +695,55 @@ orIfBlank name fallback = if T.null (T.strip name) then fallback else name
 -- | A failing check that passed again: the root turns green, and its facts say
 -- how long it was down instead of the failing reading.
 recoveredMessages :: Text -> Text -> NominalDiffTime -> (Incidents.SlackPayload, Incidents.SlackPayload)
-recoveredMessages title issueUrl down = cardMessages (statusCard sRecovered title issueUrl){facts = ["back after " <> lasted down]}
+recoveredMessages title issueUrl down = cardMessages (statusCard sRecovered title issueUrl){facts = [Plain ("back after " <> lasted down)]}
 
 
-slackErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Incidents.SlackPayload
-slackErrorAlert alertType err project projectUrl targetUrl chartUrlM occTextM firstSeenM ongoingForM =
-  card $ errorCard status err projectUrl targetUrl chartUrlM occTextM ["First seen " <> fromMaybe (errFirstSeen err) firstSeenM, "Project " <> slackEscape project]
-  where
-    status = maybe (runtimeStatus alertType) (\d -> Status sStillFailing.emoji ("Still occurring for " <> d) Critical) ongoingForM
-
-
-slackMonitorAlert :: Status -> Text -> Text -> Maybe Text -> Incidents.SlackPayload
-slackMonitorAlert status monitorTitle monitorUrl chartUrlM =
-  card (statusCard status monitorTitle monitorUrl){chart = Just ("Monitor values", chartUrlM) <* guard (status /= sRecovered), actions = [("Open monitor", monitorUrl)]}
-
-
-slackNewEndpointsAlert :: Text -> V.Vector EndpointAlertRow -> Text -> Text -> Incidents.SlackPayload
-slackNewEndpointsAlert projectName endpoints targetUrl projectUrl =
-  card
-    (statusCard (Status ":large_blue_circle:" (countNoun (V.length endpoints) "new endpoint") Calm) title targetUrl)
-      { facts = case groups of [((host, ctx), _)] -> catMaybes [bold <$> host, slackEscape <$> ctx]; _ -> []
-      , body = [tagged "evidence" $ slackSection $ T.intercalate "\n\n" $ groups <&> \((host, ctx), labels) -> foldMap (\h -> bold h <> foldMap (("  ·  " <>) . slackEscape) ctx <> "\n") (host <* guard (length groups > 1)) <> slackEscape (bulletList labels)]
-      , footer = ["Project " <> slackEscape projectName]
-      , actions = [("Open issue", targetUrl), ("View in Explorer", newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints))]
-      }
+newEndpointsCard :: Text -> V.Vector EndpointAlertRow -> Text -> Text -> Card
+newEndpointsCard projectName endpoints targetUrl projectUrl =
+  (statusCard (Status BlueCircle (countNoun (V.length endpoints) "new endpoint") Calm) title targetUrl)
+    { facts = case groups of [((host, ctx), _)] -> catMaybes [Bold <$> host, Plain <$> ctx]; _ -> []
+    , body = Just $ CardGroups groups
+    , footer = [Plain ("Project " <> projectName)]
+    , actions = [("Open issue", targetUrl), ("View in Explorer", newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints))]
+    }
   where
     groups = groupedByContext endpoints
     title = maybe projectName (\e -> e.label <> bool "" (" +" <> show (V.length endpoints - 1)) (V.length endpoints > 1)) (endpoints V.!? 0)
 
 
+slackNewEndpointsAlert :: Text -> V.Vector EndpointAlertRow -> Text -> Text -> Incidents.SlackPayload
+slackNewEndpointsAlert projectName endpoints targetUrl projectUrl = card $ newEndpointsCard projectName endpoints targetUrl projectUrl
+
+
 logPatternCard :: NewLogPattern -> Text -> Card
 logPatternCard NewLogPattern{..} project =
   (statusCard status (stripSummaryBadges patternText) issueUrl)
-    { facts = catMaybes [bold <$> serviceName, T.toUpper . slackEscape <$> logLevel, Just $ "matched " <> countNoun occurrenceCount "time"]
-    , body = [tagged "evidence" $ slackSection $ slackEscape $ snippet 400 $ fromMaybe patternText sampleMessage]
-    , footer = ["Field `" <> slackEscape sourceField <> "`" | sourceField /= "body"] <> ["Project " <> slackEscape project]
+    { facts = catMaybes [Bold <$> serviceName, Plain . T.toUpper <$> logLevel, Just $ Plain ("matched " <> countNoun occurrenceCount "time")]
+    , body = Just $ CardCode $ T.take 400 $ stripSummaryBadges $ fromMaybe patternText sampleMessage
+    , footer = [Plain "Field " <> Code sourceField | sourceField /= "body"] <> [Plain ("Project " <> project)]
     , actions = [("Open issue", issueUrl)]
     }
   where
     status
-      | isError = Status ":red_circle:" "New error log pattern" Critical
-      | any ((`elem` (["warn", "warning"] :: [Text])) . T.toLower) logLevel = Status ":large_yellow_circle:" "New warning log pattern" Elevated
-      | otherwise = Status ":large_blue_circle:" "New log pattern" Calm
+      | isError = Status RedCircle "New error log pattern" Critical
+      | any ((`elem` (["warn", "warning"] :: [Text])) . T.toLower) logLevel = Status YellowCircle "New warning log pattern" Elevated
+      | otherwise = Status BlueCircle "New log pattern" Calm
 
 
 rateChangeCard :: RateChange -> Text -> Card
 rateChangeCard RateChange{..} project =
   (statusCard status (stripSummaryBadges patternText) issueUrl)
-    { facts = catMaybes [bold <$> serviceName, T.toUpper . slackEscape <$> logLevel] <> ["*" <> perHour currentRate <> "*", "baseline " <> perHour baselineMean, "*" <> bool "−" "+" spike <> fmtInt (round (abs changePercent) :: Int) <> "%*"]
+    { facts = catMaybes [Bold <$> serviceName, Plain . T.toUpper <$> logLevel] <> [Bold (perHour currentRate), Plain ("baseline " <> perHour baselineMean), Bold (bool "−" "+" spike <> fmtInt (round (abs changePercent) :: Int) <> "%")]
     , chart = Just ("Hourly volume against its baseline", chartUrl)
-    , footer = ["Project " <> slackEscape project]
+    , footer = [Plain ("Project " <> project)]
     , actions = [("Open issue", issueUrl)]
     }
   where
     spike = direction == Spike
     status
-      | isError = Status ":red_circle:" ("Error log " <> bool "drop" "spike" spike) Critical
-      | spike = Status ":large_orange_circle:" "Log spike" Elevated
-      | otherwise = Status ":large_blue_circle:" "Log drop" Calm
+      | isError = Status RedCircle ("Error log " <> bool "drop" "spike" spike) Critical
+      | spike = Status OrangeCircle "Log spike" Elevated
+      | otherwise = Status BlueCircle "Log drop" Calm
     perHour r = prettyPrintCount (round r) <> "/hr"
 
 
@@ -630,8 +754,8 @@ slackEscape = T.replace ">" "&gt;" . T.replace "<" "&lt;" . T.replace "&" "&amp;
 -- | Telemetry text bound for a chat code fence or span: no backtick survives to close it early and
 -- let a log line or route post live markup (Slack sinks also apply 'slackEscape').
 --
--- >>> snippet 400 "x```<!channel> <https://attacker.example|Sign in>```"
--- "```x'''<!channel> <https://attacker.example|Sign in>'''```"
+-- >>> inertCode "x```<!channel> <https://attacker.example|Sign in>```"
+-- "x'''<!channel> <https://attacker.example|Sign in>'''"
 -- >>> slackEscape (bulletList ["GET /a`<!channel>`"])
 -- "\8226 `GET /a'&lt;!channel&gt;'`"
 inertCode :: Text -> Text
@@ -639,16 +763,15 @@ inertCode = T.replace "`" "'"
 
 
 -- | Raw exception messages are evidence, not the notification's hierarchy.
--- Collapse arbitrary whitespace and fence them so a multi-kilobyte HTTP request
--- or database plan cannot dominate Slack's alert view or escape its code block.
-errorSnippet :: Int -> ErrorPatterns.ATError -> Text
-errorSnippet limit err = "```" <> bounded <> "```"
+-- Collapse arbitrary whitespace and bound them so a multi-kilobyte HTTP request
+-- or database plan cannot dominate the alert view.
+errorSnippetText :: Int -> ErrorPatterns.ATError -> Text
+errorSnippetText limit err
+  | T.length withFrame <= limit = withFrame
+  | otherwise = T.take (max 0 $ limit - 1) withFrame <> "…"
   where
     message = unwords $ words $ inertCode err.message
     withFrame = maybe message ((message <>) . ("\n" <>)) $ topStackFrame err.stackTrace
-    bounded
-      | T.length withFrame <= limit = withFrame
-      | otherwise = T.take (max 0 $ limit - 1) withFrame <> "…"
 
 
 -- | Pull the human-useful route out of the noisy @wreq@ exception rendering.
@@ -706,109 +829,6 @@ newEndpointsExplorerUrl projectUrl endpoints =
       [p] -> field <> " == " <> p
       ps -> field <> " in (" <> T.intercalate "," ps <> ")"
     expr = "(" <> clause "attributes.http.route" <> " OR " <> clause "attributes.url.path" <> ")"
-
-
-discordErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
-discordErrorAlert alertType err project projectUrl url chartUrlM occTextM firstSeenM ongoingForM =
-  discordEmbedMsg (maybe msgs.discordContent (\d -> "⏳ **Still firing · " <> d <> "**") ongoingForM)
-    $ AE.object
-    $ [ "title" AE..= (err.errorType <> " · " <> project)
-      , "description" AE..= ("```" <> inertCode (T.take 600 err.message <> maybe "" ("\n" <>) (topStackFrame err.stackTrace)) <> "```")
-      , "color" AE..= msgs.discordColor
-      , "fields" AE..= arr (uncurry (discordField True) <$> fields)
-      , "url" AE..= url
-      ]
-    <> maybeToList (chartUrlM <&> \u -> "image" AE..= AE.object ["url" AE..= u])
-  where
-    msgs = runtimeAlertMessages alertType
-    firstSeen = fromMaybe (errFirstSeen err) firstSeenM
-    -- Trace is a masked link (renders in embed *field values*): same Log Explorer jump
-    -- as Slack's "View trace" button, since Discord embeds have no button affordance.
-    fields =
-      errMetaPairs "First Seen" err occTextM firstSeen
-        <> maybeToList ((err.traceId >>= guarded (not . T.null)) <&> \tid -> ("Trace", "[" <> T.take 16 tid <> "](" <> traceExplorerUrl projectUrl tid err.when <> ")"))
-
-
-discordMonitorAlert :: Text -> Text -> Maybe Text -> AE.Value
-discordMonitorAlert monitorTitle monitorUrl chartUrlM =
-  discordEmbedMsg ("🚨 **Monitor alerting:** " <> monitorTitle)
-    $ AE.object
-    $ ["title" AE..= ("🚨 Monitor alerting: " <> monitorTitle), "color" AE..= (15684432 :: Int), "url" AE..= monitorUrl]
-    <> maybeToList (chartUrlM <&> \u -> "image" AE..= AE.object ["url" AE..= u])
-
-
-discordNewEndpointAlert :: Text -> V.Vector EndpointAlertRow -> Text -> Text -> AE.Value
-discordNewEndpointAlert projectName endpoints url projectUrl =
-  discordEmbedMsg content
-    $ AE.object
-      [ "title" AE..= title
-      , "description" AE..= description
-      , "color" AE..= (3901174 :: Int)
-      , "fields" AE..= arr [discordField False "\x200b" explorerLink]
-      , "url" AE..= url
-      ]
-  where
-    n = V.length endpoints
-    title = "🔵 " <> countNoun n "new endpoint" <> " · " <> projectName
-    content = if n == 1 then "🔵 **New endpoint detected**" else "🔵 **" <> show n <> " new endpoints detected**"
-    explorerLink = "[View in Explorer](" <> newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints) <> ")"
-    -- Group header: bold globe-prefixed host then dimmed "service · env" caption, each
-    -- on its own line, then the bullets.
-    description =
-      T.intercalate "\n\n" $ groupedByContext endpoints <&> \((hostM, ctxM), labels) ->
-        foldMap (\h -> "🌐 **" <> h <> "**\n") hostM <> foldMap (\c -> "_" <> c <> "_\n") ctxM <> bulletList labels
-
-
-mkDiscordLogPatternPayload :: NewLogPattern -> Text -> AE.Value
-mkDiscordLogPatternPayload NewLogPattern{..} project =
-  discordEmbedMsg (emoji <> " **" <> label <> "**")
-    $ AE.object
-      [ "title" AE..= (emoji <> " " <> label <> " · " <> project)
-      , "description" AE..= snippet 200 patternText
-      , "color" AE..= color
-      , "fields"
-          AE..= arr
-            ( [ discordField True "Level" (fromMaybe "—" logLevel)
-              , discordField True "Service" (fromMaybe "—" serviceName)
-              , discordField True "Source" sourceField
-              , discordField True "Occurrences" (show occurrenceCount)
-              ]
-                <> maybeToList (sampleMessage <&> discordField False "Sample" . snippet 150)
-            )
-      , "url" AE..= issueUrl
-      ]
-  where
-    -- @isError@ is authoritative; @logLevel@ only gates "warning", since drain-derived rows don't set it.
-    (emoji, label, color :: Int)
-      | isError = ("🚨", "New error log pattern", 15278902)
-      | any ((`elem` (["warn", "warning"] :: [Text])) . T.toLower) logLevel = ("⚠️", "New warning log pattern", 15909152)
-      | otherwise = ("🔍", "New log pattern", 3901174)
-
-
-mkDiscordLogPatternRateChangePayload :: RateChange -> Text -> AE.Value
-mkDiscordLogPatternRateChangePayload RateChange{..} project =
-  discordEmbedMsg (icon <> " **" <> label <> "**")
-    $ AE.object
-      [ "title" AE..= (icon <> " " <> label <> " · " <> project)
-      , "description" AE..= snippet 200 patternText
-      , "color" AE..= color
-      , "fields" AE..= arr (uncurry (discordField True) <$> rows)
-      , "url" AE..= issueUrl
-      ]
-  where
-    (icon, color :: Int)
-      | isError = ("🚨", 15278902)
-      | direction == Spike = ("📈", 15381768)
-      | otherwise = ("📉", 3901174)
-    label = (if isError then "Error " else "") <> "Log volume " <> display direction
-    perHour r = show (round r :: Int) <> "/hr"
-    rows =
-      [ ("Now", perHour currentRate)
-      , ("Baseline", perHour baselineMean)
-      , ("Change", (if direction == Spike then "+" else "-") <> show (round changePercent :: Int) <> "%")
-      , ("Level", fromMaybe "—" logLevel)
-      , ("Service", fromMaybe "—" serviceName)
-      ]
 
 
 sendPagerdutyAlertToService :: Notify.Notify :> es => Text -> NotificationAlerts -> Text -> Text -> Eff es ()
@@ -895,24 +915,8 @@ sampleAlertByIssueTypeText issueTypeText title = case issueTypeText of
   _ -> sampleAlert (fromMaybe ApiChange $ parseIssueType issueTypeText) title
 
 
-data AlertMessages = AlertMessages {discordContent :: Text, discordColor :: Int}
-
-
-runtimeAlertMessages :: RuntimeAlertType -> AlertMessages
-runtimeAlertMessages = \case
-  NewRuntimeError -> AlertMessages "**🔴 New error**" 15684432
-  EscalatingErrors -> AlertMessages "**⚠️ Error rate escalating**" 16344086
-  RegressedErrors -> AlertMessages "**↩️ Resolved error returned**" 3901174
-  ErrorSpike -> AlertMessages "**📈 Error rate spiking**" 15381768
-
-
 arr :: [AE.Value] -> AE.Value
 arr = AE.Array . V.fromList
-
-
--- | Fenced code snippet, badge-stripped and length-capped, as used in every alert body.
-snippet :: Int -> Text -> Text
-snippet n t = "```" <> inertCode (T.take n (stripSummaryBadges t)) <> "```"
 
 
 mrkdwn, plainTxt :: Text -> AE.Value
@@ -969,21 +973,8 @@ slackButton label styleM url =
     <> maybeToList (("style" AE..=) <$> styleM)
 
 
-discordField :: Bool -> Text -> Text -> AE.Value
-discordField inline n v = AE.object ["name" AE..= n, "value" AE..= v, "inline" AE..= inline]
-
-
 discordEmbedMsg :: Text -> AE.Value -> AE.Value
 discordEmbedMsg content embed = AE.object ["embeds" AE..= arr [embed], "content" AE..= content]
-
-
--- | Metadata rows shared by the Slack + Discord runtime-error renderers, in display
--- order, with empty values dropped. @firstSeenLabel@ differs per transport.
-errMetaPairs :: Text -> ErrorPatterns.ATError -> Maybe Text -> Text -> [(Text, Text)]
-errMetaPairs firstSeenLabel err occTextM firstSeen =
-  filter (not . T.null . snd) ([("Service", fromMaybe "" err.serviceName), ("Environment", fromMaybe "" err.environment), ("Route", errRoute err)] <> maybeToList (("Rate",) <$> occTextM))
-    <> [(firstSeenLabel, firstSeen)]
-    <> maybeToList (("Runtime",) <$> (err.runtime >>= guarded (not . T.null)))
 
 
 addConvertKitUser :: HTTP :> es => Text -> Text -> Text -> Text -> Eff es ()

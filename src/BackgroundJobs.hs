@@ -63,7 +63,7 @@ import Effectful.Time qualified as Time
 import Effectful.Timeout qualified as Timeout
 import Hasql.Interpolate qualified as HI
 import Hasql.Session qualified as Session
-import Hasql.TH (resultlessStatement, singletonStatement)
+import Hasql.TH (resultlessStatement)
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Kafka.Consumer qualified as KC
@@ -109,7 +109,7 @@ import Network.HTTP.Types qualified as HT
 import Network.Wreq qualified as Wreq
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Config (cfgConcurrencyControl, cfgDefaultJobTimeout, cfgJobOrdering, cfgOnJobFailed, cfgOnJobTimeout, cfgTableName), Job (..), JobErrHandler (..), JobOrdering (EarliestRunAtFirst), LogEvent (..), LogLevel, Seconds (..), Status (Failed), startJobRunner, throwParsePayload)
-import OddJobs.Types (FailureMode (FailPermanent), TableName)
+import OddJobs.Types (FailureMode (FailPermanent))
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Bots.Slack qualified as Slack
@@ -169,7 +169,7 @@ jobsRunner logger authCtx tp projectTools job = when authCtx.config.enableBackgr
   bgJob <- throwParsePayload job
   void $ runBackground logger authCtx tp $ do
     let jobType = jobTypeName bgJob
-        QualifiedIdentifier _ queue = jobTable bgJob
+        QualifiedIdentifier _ queue = Jobs.jobTable bgJob
     withSpanKind
       Consumer
       ("background_job." <> jobType)
@@ -197,21 +197,17 @@ jobsRunner logger authCtx tp projectTools job = when authCtx.config.enableBackgr
 -- | Enqueue background jobs for immediate execution. The pool checkout and the
 -- @"background_jobs"@ queue name were respelled at 22 call sites before this.
 enqueueJobs :: MonadIO m => Config.AuthContext -> [BgJobs] -> m ()
-enqueueJobs ctx jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (\j -> Jobs.enqueueJob conn (jobTable j) j) jobs
-
-
-jobTable :: BgJobs -> TableName
-jobTable job = if Jobs.longJob job then "background_jobs_long" else "background_jobs"
+enqueueJobs ctx jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (\j -> Jobs.enqueueJob conn (Jobs.jobTable j) j) jobs
 
 
 -- | Enqueue background jobs to run at a given time.
 enqueueAt :: MonadIO m => Config.AuthContext -> UTCTime -> [BgJobs] -> m ()
-enqueueAt ctx at jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (\j -> Jobs.enqueueJobAt conn (jobTable j) at j) jobs
+enqueueAt ctx at jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (\j -> Jobs.enqueueJobAt conn (Jobs.jobTable j) at j) jobs
 
 
 -- | Enqueue each job independently; a failed enqueue does not abort the rest and is returned under its label.
 enqueueEach :: MonadIO m => Config.AuthContext -> [(a, BgJobs)] -> m [(a, SomeException)]
-enqueueEach ctx jobs = liftIO $ withResource ctx.jobsPool \conn -> lefts <$> forM jobs \(k, j) -> first (k,) <$> tryAny (Jobs.enqueueJob conn "background_jobs" j)
+enqueueEach ctx jobs = liftIO $ withResource ctx.jobsPool \conn -> lefts <$> forM jobs \(k, j) -> first (k,) <$> tryAny (Jobs.enqueueJob conn (Jobs.jobTable j) j)
 
 
 enqueueAIRoutine :: MonadIO m => Config.AuthContext -> UUIDId "ai_routine" -> UTCTime -> m ()
@@ -1017,7 +1013,8 @@ runDailyJobScheduling authCtx =
     seedJobs :: SimplePG.Connection -> UTCTime -> Int -> Int -> (UTCTime -> BgJobs) -> IO ()
     seedJobs conn from count step mkJob = forM_ ([0 .. count - 1] :: [Int]) \i -> do
       let at = addUTCTime (fromIntegral @Int $ i * step) from
-      Jobs.enqueueJobAt conn (jobTable $ mkJob at) at (mkJob at)
+          job = mkJob at
+      Jobs.enqueueJobAt conn (Jobs.jobTable job) at job
 
     schedule = do
       Log.logInfo "Running daily job" ()
@@ -1056,7 +1053,8 @@ runDailyJobScheduling authCtx =
             -- ticks so a single restart can't leave a gap when the chain broke.
             forM_ ([0 .. 23] :: [Int]) \i -> do
               let at = addUTCTime (fromIntegral @Int $ i * 3600) currentTime
-              Jobs.enqueueJobAt conn "background_jobs" at (Jobs.HourlyJob at i)
+                  job = Jobs.HourlyJob at i
+              Jobs.enqueueJobAt conn (Jobs.jobTable job) at job
             let sched = seedJobs conn currentTime
             sched 24 3600 Jobs.ProcessIssuesEnhancement
             sched 1440 60 (const Jobs.QueryMonitorsCheck)
@@ -3294,8 +3292,8 @@ scheduleTrialReminders pid trialEndEpoch = do
   forM_ past \(runAt, daysLeft) ->
     Log.logAttention "Trial reminder runAt already past; skipping" (pid.toText, daysLeft, runAt)
   forM_ due \(runAt, daysLeft) -> do
-    let payload = AE.toJSON (TrialEndingReminder pid daysLeft)
-    whenLeftM_ (tryAny $ Hasql.interpExecute_ [HI.sql|INSERT INTO background_jobs (run_at, status, payload) VALUES (#{runAt}, 'queued', #{HI.AsJsonb payload})|]) \e ->
+    let job = TrialEndingReminder pid daysLeft
+    whenLeftM_ (tryAny $ Hasql.interpExecute_ [HI.sql|INSERT INTO ^{Jobs.jobTableSql job} (run_at, status, payload) VALUES (#{runAt}, 'queued', #{HI.AsJsonb job})|]) \e ->
       Log.logAttention "Trial reminder enqueue failed" (pid.toText, daysLeft, displayException e)
 
 
@@ -3321,7 +3319,7 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
   let isRecovery = status == Monitors.MSNormal
       threshold = case status of Monitors.MSWarning -> fromMaybe monitor.alertThreshold monitor.warningThreshold; Monitors.MSAlerting -> monitor.alertThreshold; Monitors.MSNormal -> monitor.alertThreshold
       source = Incidents.MonitorIncident monitor.id
-      thresholdDir = if monitor.triggerLessThan then Issues.Below else Issues.Above
+      thresholdDir = thresholdDirection monitor.triggerLessThan
   appCtx <- ask @Config.AuthContext
   project <- Projects.activeProjectById monitor.projectId
   case project of
@@ -4317,27 +4315,23 @@ reviewResidualEndpointGroups pid = do
     let fresh =
           take endpointGroupReviewBatch
             $ sortOn (\(_, _, n, _, _, _) -> negate n) [g | g@(gkey, mhash, _, _, _, _) <- keyed, maybe True (\r -> r.dueForReconfirm || r.membersHash /= mhash) (HM.lookup gkey seen)]
-    unless (null fresh) do
-      reply <- ELLM.callLLM ctx.config.openaiSmallModel (Drain.buildGroupReviewPrompt [(k, p, c) | (k, _, _, p, _, c) <- fresh]) ctx.config.openaiApiKey
-      case reply of
-        Left err -> Log.logAttention "Endpoint group review: LLM call failed" (pid, err)
-        Right txt -> do
-          let verdicts = HM.fromList [(k, (v, sh)) | (k, v, sh) <- Drain.parseGroupReview txt]
-              rows = [(gkey, mhash, n, display v, sh) | (gkey, mhash, n, _, _, _) <- fresh, Just (v, sh) <- [HM.lookup gkey verdicts]]
-          Endpoints.recordGroupReviews pid rows
-          Log.logInfo
-            "Endpoint group review complete"
-            ( "project_id"
-            , pid.toText
-            , "asked"
-            , length fresh
-            , "answered"
-            , length rows
-            , "would_merge"
-            , length [() | (_, _, _, v, _) <- rows, v == "param"]
-            , "shapes"
-            , ordNub [sh | (_, _, _, v, sh) <- rows, v == "param", not (T.null sh)]
-            )
+    unless (null fresh)
+      $ whenJustM (askGroupVerdicts pid "Endpoint group review: LLM call failed" (Drain.buildGroupReviewPrompt [(k, p, c) | (k, _, _, p, _, c) <- fresh])) \verdicts -> do
+        let rows = [(gkey, mhash, n, display v, sh) | (gkey, mhash, n, _, _, _) <- fresh, Just (v, sh) <- [HM.lookup gkey verdicts]]
+        Endpoints.recordGroupReviews pid rows
+        Log.logInfo
+          "Endpoint group review complete"
+          ( "project_id"
+          , pid.toText
+          , "asked"
+          , length fresh
+          , "answered"
+          , length rows
+          , "would_merge"
+          , length [() | (_, _, _, v, _) <- rows, v == "param"]
+          , "shapes"
+          , ordNub [sh | (_, _, _, v, sh) <- rows, v == "param", not (T.null sh)]
+          )
     when ctx.config.enableEndpointGroupAutoApply do
       confirmed <- flip confirmedGroups keyed <$> Endpoints.getGroupReviews pid
       applyConfirmedGroups pid confirmed
@@ -4520,6 +4514,48 @@ reportUnwrittenIdRules = do
       ("shapes", [AE.object ["shape" AE..= s.shape, "groups" AE..= s.groups, "endpoints" AE..= s.endpoints] | s <- shapes])
 
 
+-- | Ask the small model for group verdicts, logging and failing closed on error.
+askGroupVerdicts :: Projects.ProjectId -> Text -> Text -> ATBackgroundCtx (Maybe (HM.HashMap Text (Drain.GroupVerdict, Text)))
+askGroupVerdicts pid failMsg prompt = do
+  ctx <- ask @Config.AuthContext
+  ELLM.callLLM ctx.config.openaiSmallModel prompt ctx.config.openaiApiKey >>= \case
+    Left err -> Log.logAttention failMsg (pid, err) $> Nothing
+    Right txt -> pure $ Just $ HM.fromList [(k, (v, sh)) | (k, v, sh) <- Drain.parseGroupReview txt]
+
+
+data QuarantineSpec a = QuarantineSpec
+  { enabled :: Config.EnvConfig -> Bool
+  , step, prefix, restoredField :: Text
+  , fetch :: Projects.ProjectId -> ATBackgroundCtx [a]
+  , key :: a -> Text
+  , prompt :: [a] -> Text
+  , revert :: Projects.ProjectId -> a -> ATBackgroundCtx Int64
+  }
+
+
+-- | Shared fail-closed quarantine re-check: challenge pending merges via LLM and
+-- revert only keys present in the asked batch that the model now refutes.
+recheckQuarantine :: QuarantineSpec a -> Projects.ProjectId -> ATBackgroundCtx ()
+recheckQuarantine spec pid = do
+  ctx <- ask @Config.AuthContext
+  when (spec.enabled ctx.config && not (T.null ctx.config.openaiApiKey)) $ tryStep spec.step do
+    pending <- spec.fetch pid
+    unless (null pending)
+      $ whenJustM (askGroupVerdicts pid (spec.prefix <> ": LLM call failed, merges stay quarantined") (spec.prompt pending)) \verdicts -> do
+        let refuted = [item | item <- pending, maybe False ((/= Drain.Param) . fst) (HM.lookup (spec.key item) verdicts)]
+        forM_ refuted \item -> do
+          restored <- spec.revert pid item
+          Log.logAttention (spec.prefix <> ": reverted refuted merge") ("project_id", pid.toText, "group", spec.key item, spec.restoredField, restored)
+        Log.logInfo (spec.prefix <> " complete") ("project_id", pid.toText, "challenged", length pending, "reverted", length refuted)
+
+
+-- | Shared baseline evidence for LLM group merges: at least two confirmations,
+-- a recorded starting size, and a population that has not shrunk.
+groupEvidenceStable :: Int64 -> Int64 -> Int64 -> Bool
+groupEvidenceStable confirmations firstCount nowCount =
+  confirmations >= 2 && firstCount > 0 && nowCount >= firstCount
+
+
 -- | Challenge each merge still in quarantine, and undo the ones the model now
 -- says were wrong.
 --
@@ -4532,26 +4568,18 @@ reportUnwrittenIdRules = do
 -- Reverting restores the concrete rows and sets @merge_override@, so a group
 -- the model has both merged and disowned stops being re-litigated every pass.
 recheckQuarantinedMerges :: Projects.ProjectId -> ATBackgroundCtx ()
-recheckQuarantinedMerges pid = do
-  ctx <- ask @Config.AuthContext
-  when (ctx.config.enableEndpointGroupAutoApply && not (T.null ctx.config.openaiApiKey)) $ tryStep "endpointMergeRecheck" do
-    pending <- Endpoints.getQuarantinedMerges pid
-    unless (null pending) do
-      let asked = [(m.groupKey, m.canonicalPath, ordNub (V.toList m.urlPaths)) | m <- pending]
-      reply <- ELLM.callLLM ctx.config.openaiSmallModel (Drain.buildMergeChallengePrompt asked) ctx.config.openaiApiKey
-      case reply of
-        Left err -> Log.logAttention "Quarantine re-check: LLM call failed, merges stay quarantined" (pid, err)
-        Right txt -> do
-          let refuted = [k | (k, v, _) <- Drain.parseGroupReview txt, v /= Drain.Param]
-          forM_ refuted \gkey -> do
-            hashes <- Endpoints.appliedCanonicalHashes pid gkey
-            restored <- Endpoints.revertGroupApply pid gkey hashes
-            Log.logAttention
-              "Reverted an LLM merge the quarantine re-check refuted"
-              ("project_id", pid.toText, "group", gkey, "endpoints_restored", restored)
-          Log.logInfo
-            "Quarantine re-check complete"
-            ("project_id", pid.toText, "challenged", length asked, "reverted", length refuted)
+recheckQuarantinedMerges =
+  recheckQuarantine
+    QuarantineSpec
+      { enabled = (.enableEndpointGroupAutoApply)
+      , step = "endpointMergeRecheck"
+      , prefix = "Quarantine re-check"
+      , fetch = Endpoints.getQuarantinedMerges
+      , key = (.groupKey)
+      , prompt = \pending -> Drain.buildMergeChallengePrompt [(m.groupKey, m.canonicalPath, ordNub (V.toList m.urlPaths)) | m <- pending]
+      , revert = \pid m -> Endpoints.appliedCanonicalHashes pid m.groupKey >>= Endpoints.revertGroupApply pid m.groupKey
+      , restoredField = "endpoints_restored"
+      }
 
 
 -- | Is there enough evidence to let a verdict merge endpoints?
@@ -4618,7 +4646,7 @@ mergeEvidenceMet :: Int64 -> Int64 -> Int64 -> [Text] -> Bool
 mergeEvidenceMet confirmations firstCount nowCount members =
   -- A zero starting size means nobody recorded one, so there is nothing to
   -- compare against and the population condition has no evidence behind it.
-  confirmations >= 2 && firstCount > 0 && nowCount >= firstCount && nowCount >= 8 && routeWordFraction members <= maxRouteWordFraction
+  groupEvidenceStable confirmations firstCount nowCount && nowCount >= 8 && routeWordFraction members <= maxRouteWordFraction
 
 
 -- | Share of a group's members that read as route words. See 'mergeEvidenceMet'
@@ -5575,6 +5603,10 @@ evaluateQueryMonitorValue monitor at value =
 -- MSAlerting
 -- >>> BJ.monitorStatus True Nothing 100 (Just 80) Nothing PM.MSAlerting 101
 -- MSNormal
+thresholdDirection :: Bool -> Issues.ThresholdDirection
+thresholdDirection = bool Issues.Above Issues.Below
+
+
 monitorStatus :: Bool -> Maybe Double -> Double -> Maybe Double -> Maybe Double -> Monitors.MonitorStatus -> Double -> Monitors.MonitorStatus
 monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery prev value
   | breached alertThreshold = Monitors.MSAlerting
@@ -5584,9 +5616,10 @@ monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRec
       Monitors.MSWarning -> holdUnless (recovered warnRecovery (fromMaybe alertThreshold warnThreshold))
       Monitors.MSNormal -> Monitors.MSNormal
   where
+    dir = thresholdDirection triggerLessThan
     holdUnless r = if r then Monitors.MSNormal else prev
-    breached t = if triggerLessThan then t >= value else t <= value
-    recovered r t = if triggerLessThan then value > fromMaybe t r else value < fromMaybe t r
+    breached t = Issues.meetsThreshold dir t value
+    recovered r t = bool (<) (>) triggerLessThan value (fromMaybe t r)
 
 
 -- ============================================================================
@@ -5653,6 +5686,10 @@ calculateLogPatternBaselines pid = do
 
 -- | Pure spike/drop detection for a single pattern.
 -- Uses a MAD floor of 1.0 so perfectly stable patterns (MAD=0) can still trigger.
+--
+-- >>> let run (m, mad, c) = fmap (\r -> (r.direction, r.zScore)) (detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta m mad c)
+-- >>> map run [(100, 5, 200), (200, 5, 100), (100, 50, 110), (100, 1, 140), (100, 0, 200), (100, -1, 200), (100, 10, 181)]
+-- [Just (Spike,20.0),Just (Drop,-20.0),Nothing,Nothing,Just (Spike,100.0),Just (Spike,100.0),Just (Spike,8.1)]
 detectSpikeOrDrop :: Double -> Double -> Double -> Double -> Int64 -> Maybe Issues.SpikeResult
 detectSpikeOrDrop zThreshold minDelta mean mad currentCount
   | z > zThreshold && rate > mean + minDelta = Just $ Issues.SpikeResult rate mean effectiveMad z Issues.Spike
@@ -5665,6 +5702,10 @@ detectSpikeOrDrop zThreshold minDelta mean mad currentCount
 
 
 -- | True if the anomaly clears the direction-specific baseline volume floor.
+--
+-- >>> let mk d m = Issues.SpikeResult (m * 2) m 1 10 d
+-- >>> map (aboveVolumeFloor . uncurry mk) [(Issues.Spike, spikeMinBaselineRate - 1), (Issues.Spike, spikeMinBaselineRate), (Issues.Drop, dropMinBaselineRate - 1), (Issues.Drop, dropMinBaselineRate), (Issues.Spike, 1000), (Issues.Drop, 1000)]
+-- [False,True,False,True,True,False]
 aboveVolumeFloor :: Issues.SpikeResult -> Bool
 aboveVolumeFloor sr = case sr.direction of
   Issues.Spike -> sr.mean >= spikeMinBaselineRate
@@ -5674,6 +5715,11 @@ aboveVolumeFloor sr = case sr.direction of
 -- | Whitelist of log levels that can produce a rate-change issue. Case-insensitive.
 -- Nothing is explicitly rejected: a pattern with no level is not a reliable
 -- incident signal, and was the single biggest source of historical noise.
+--
+-- >>> all (isAlertableLogLevel . Just) ["ERROR", "error", "Warn", "warning", "FATAL", "critical"]
+-- True
+-- >>> any isAlertableLogLevel ([Just "INFO", Just "info", Just "DEBUG", Just "debug", Just "TRACE", Just "notice", Just "", Nothing] :: [Maybe Text])
+-- False
 isAlertableLogLevel :: Maybe Text -> Bool
 isAlertableLogLevel = any ((>= SLWarn) . snd) . (Telemetry.parseSeverity =<<)
 
@@ -5804,6 +5850,12 @@ processNewLogPatterns pid authCtx = do
 -- | Should a new log pattern create an issue? An alertable level (the same gate the
 -- rate-change path applies, so the two can't drift again) or an error status code.
 -- Everything else is acknowledged but no issue created.
+--
+-- >>> let levels = [Just "ERROR", Just "error", Just "Warn", Just "warning", Just "FATAL", Just "critical", Just "INFO", Just "debug", Just "", Nothing]
+-- >>> map (`isIssueWorthy` "plain message") levels == map isAlertableLogLevel levels
+-- True
+-- >>> map (isIssueWorthy Nothing) ["status_code;badge-5xx", "status_code;badge-4xx", "status;badge-error⇒ERROR", "user logged in"]
+-- [True,True,True,False]
 isIssueWorthy :: Maybe Text -> Text -> Bool
 isIssueWorthy logLevel logPattern =
   isAlertableLogLevel logLevel
@@ -6051,7 +6103,7 @@ errorGroupMinMembers = 2
 -- False
 errorGroupEvidenceMet :: Int64 -> Int64 -> Int64 -> Bool -> Bool
 errorGroupEvidenceMet confirmations firstCount nowCount survivedRefute =
-  confirmations >= 2 && survivedRefute && firstCount > 0 && nowCount >= firstCount
+  groupEvidenceStable confirmations firstCount nowCount && survivedRefute
 
 
 -- | Review error groups by shape, refute the proposals, and merge what survives.
@@ -6099,44 +6151,37 @@ reviewErrorGroups pid = do
                 -- happens only inside hashing. This is a vendor call, so the
                 -- substitution has to be made here, explicitly, before the text leaves.
                 pure (gkey, mhash, g, ordNub $ map EF.normalizeMessage $ Map.elems texts)
-              reply <- ELLM.callLLM ctx.config.openaiSmallModel (Drain.buildErrorGroupReviewPrompt [(k, g.errorType, msgs) | (k, _, g, msgs) <- members]) ctx.config.openaiApiKey
-              case reply of
-                Left err -> Log.logAttention "Error group review: LLM call failed" (pid, err)
-                Right txt -> do
-                  -- One pass, verdict and shape together — as the endpoint sibling does.
-                  let verdicts = HM.fromList [(k, (v, sh)) | (k, v, sh) <- Drain.parseGroupReview txt]
-                      rows =
-                        [ (gkey, mhash, g.memberCount, display v, sh)
-                        | (gkey, mhash, g, _) <- members
-                        , Just (v, sh) <- [HM.lookup gkey verdicts]
-                        ]
-                  PatternMergeDB.recordErrorGroupReviews pid rows
-                  -- Refute only what was proposed as one bug. Asking about the
-                  -- "routes" verdicts would spend a call to be told what we already
-                  -- decided to do, which is nothing.
-                  let proposed = [(gkey, g, msgs) | (gkey, _, g, msgs) <- members, (fst <$> HM.lookup gkey verdicts) == Just Drain.Param]
-                  unless (null proposed) $ refuteErrorGroups pid ctx proposed
-                  Log.logInfo
-                    "Error group review complete"
-                    ("project_id", pid.toText, "examined", length groups, "asked", length members, "answered", length rows, "proposed_merges", length proposed)
+              whenJustM (askGroupVerdicts pid "Error group review: LLM call failed" (Drain.buildErrorGroupReviewPrompt [(k, g.errorType, msgs) | (k, _, g, msgs) <- members])) \verdicts -> do
+                -- One pass, verdict and shape together — as the endpoint sibling does.
+                let rows =
+                      [ (gkey, mhash, g.memberCount, display v, sh)
+                      | (gkey, mhash, g, _) <- members
+                      , Just (v, sh) <- [HM.lookup gkey verdicts]
+                      ]
+                PatternMergeDB.recordErrorGroupReviews pid rows
+                -- Refute only what was proposed as one bug. Asking about the
+                -- "routes" verdicts would spend a call to be told what we already
+                -- decided to do, which is nothing.
+                let proposed = [(gkey, g, msgs) | (gkey, _, g, msgs) <- members, (fst <$> HM.lookup gkey verdicts) == Just Drain.Param]
+                unless (null proposed) $ refuteErrorGroups pid proposed
+                Log.logInfo
+                  "Error group review complete"
+                  ("project_id", pid.toText, "examined", length groups, "asked", length members, "answered", length rows, "proposed_merges", length proposed)
       when ctx.config.enableErrorGroupAutoApply $ tryStep "errorGroupApply" $ applyConfirmedErrorGroups pid
       recheckQuarantinedErrorMerges pid
 
 
 -- | Second pass: assert each proposed merge and ask for the fault.
-refuteErrorGroups :: Projects.ProjectId -> Config.AuthContext -> [(Text, PatternMergeDB.ErrorShapeGroup, [Text])] -> ATBackgroundCtx ()
-refuteErrorGroups pid ctx proposed = do
-  reply <- ELLM.callLLM ctx.config.openaiSmallModel (Drain.buildErrorMergeChallengePrompt [(k, g.errorType, msgs) | (k, g, msgs) <- proposed]) ctx.config.openaiApiKey
-  case reply of
-    -- No refutation is not a survived refutation. A failed call leaves the proposals
-    -- unrefuted, which 'errorGroupEvidenceMet' reads as "not eligible" — the whole
-    -- point of storing the two facts separately.
-    Left err -> Log.logAttention "Error merge refutation: LLM call failed, proposals stay ineligible" (pid, err)
-    Right txt -> do
-      let answered = Drain.parseGroupReview txt
-          asked = [k | (k, _, _) <- proposed]
-          refuted = [k | (k, v, _) <- answered, v /= Drain.Param, k `elem` asked]
-          survived = [k | (k, v, _) <- answered, v == Drain.Param, k `elem` asked]
+-- No refutation is not a survived refutation: a failed call leaves proposals
+-- unrefuted, which 'errorGroupEvidenceMet' reads as ineligible.
+refuteErrorGroups :: Projects.ProjectId -> [(Text, PatternMergeDB.ErrorShapeGroup, [Text])] -> ATBackgroundCtx ()
+refuteErrorGroups pid proposed =
+  whenJustM
+    (askGroupVerdicts pid "Error merge refutation: LLM call failed, proposals stay ineligible" (Drain.buildErrorMergeChallengePrompt [(k, g.errorType, msgs) | (k, g, msgs) <- proposed]))
+    \verdicts -> do
+      let asked = [k | (k, _, _) <- proposed]
+          answered = [(k, v) | k <- asked, Just (v, _) <- [HM.lookup k verdicts]]
+          (survived, refuted) = bimap (map fst) (map fst) $ partition ((== Drain.Param) . snd) answered
       PatternMergeDB.markErrorGroupRefuted pid survived True
       PatternMergeDB.markErrorGroupRefuted pid refuted False
       Log.logInfo
@@ -6185,22 +6230,18 @@ applyConfirmedErrorGroups pid = do
 -- restores @canonical_id = NULL@ and sets @merge_override@, so a group the model has
 -- both merged and disowned stops being re-litigated every pass.
 recheckQuarantinedErrorMerges :: Projects.ProjectId -> ATBackgroundCtx ()
-recheckQuarantinedErrorMerges pid = do
-  ctx <- ask @Config.AuthContext
-  when (ctx.config.enableErrorGroupAutoApply && not (T.null ctx.config.openaiApiKey)) $ tryStep "errorMergeRecheck" do
-    pending <- PatternMergeDB.getQuarantinedErrorMerges pid
-    unless (null pending) do
-      reply <- ELLM.callLLM ctx.config.openaiSmallModel (Drain.buildErrorMergeChallengePrompt [(k, et, ordNub $ map EF.normalizeMessage $ V.toList msgs) | (k, et, msgs, _) <- pending]) ctx.config.openaiApiKey
-      case reply of
-        Left err -> Log.logAttention "Error quarantine re-check: LLM call failed, merges stay quarantined" (pid, err)
-        Right txt -> do
-          let refuted = [k | (k, v, _) <- Drain.parseGroupReview txt, v /= Drain.Param]
-          forM_ [(k, cids) | (k, _, _, cids) <- pending, k `elem` refuted] \(gkey, cids) -> do
-            restored <- PatternMergeDB.revertErrorGroupApply pid gkey cids
-            Log.logAttention
-              "Reverted an error merge the quarantine re-check refuted"
-              ("project_id", pid.toText, "group", gkey, "patterns_restored", restored)
-          Log.logInfo "Error quarantine re-check complete" ("project_id", pid.toText, "challenged", length pending, "reverted", length refuted)
+recheckQuarantinedErrorMerges =
+  recheckQuarantine
+    QuarantineSpec
+      { enabled = (.enableErrorGroupAutoApply)
+      , step = "errorMergeRecheck"
+      , prefix = "Error quarantine re-check"
+      , fetch = PatternMergeDB.getQuarantinedErrorMerges
+      , key = \(k, _, _, _) -> k
+      , prompt = \pending -> Drain.buildErrorMergeChallengePrompt [(k, et, ordNub $ map EF.normalizeMessage $ V.toList msgs) | (k, et, msgs, _) <- pending]
+      , revert = \pid (k, _, _, cids) -> PatternMergeDB.revertErrorGroupApply pid k cids
+      , restoredField = "patterns_restored"
+      }
 
 
 -- | Would this mask merge two shapes that are currently distinct?

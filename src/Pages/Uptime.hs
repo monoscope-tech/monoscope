@@ -65,7 +65,8 @@ import Models.Projects.DashboardTemplates qualified as DashboardTemplates
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), ResourceRow (..), agoText, callout_, copyField_, dangerAction_, detailTab_, emptyState_, factGrid_, formCheckbox_, formField_, formSelectField_, options_, panel_, resourceList_, sectionLabel_, statFigure_, tabPanel_, teamPicker_, toneDot_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), ResourceRow (..), agoText, callout_, copyField_, dangerAction_, dangerZone_, detailTab_, emptyState_, factGrid_, formCheckbox_, formField_, formSelectField_, options_, panel_, pollSelfAttrs_, resourceList_, sectionLabel_, statFigure_, tabPanel_, teamPicker_, toneDot_, tonePill_)
+import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
@@ -131,17 +132,23 @@ dayBars_ now days = div_ [class_ "relative z-10 flex h-8 items-end gap-[2px]", r
   let d = addDays (negate ago) today
       (total, failed) = fromMaybe (0, 0) $ lookup d days
       tip = dayText d <> " · " <> maybe "No data" (\p -> showPct p <> " up" <> bool "" (" · " <> show failed <> " failed") (failed > 0)) (Uptime.uptimePercent total failed)
-  span_ [class_ $ barCls (Uptime.dayHealth total failed) (ago >= 30), term "data-tippy-content" tip] mempty
+  span_
+    [ class_
+        $ ( case Uptime.dayHealth total failed of
+              Uptime.NoData -> "h-3/4 flex-1 min-w-[2px] rounded-[2px] bg-fillWeak"
+              Uptime.Healthy -> "h-3/4 flex-1 min-w-[2px] rounded-[2px] bg-fillSuccess-strong hover:opacity-70"
+              Uptime.Degraded -> "h-full flex-1 min-w-[2px] rounded-[2px] bg-fillWarning-strong hover:opacity-70"
+              Uptime.Outage -> "h-full flex-1 min-w-[2px] rounded-[2px] bg-fillError-strong hover:opacity-70"
+          )
+        <> bool "" " max-md:hidden" (ago >= 30)
+    , term "data-tippy-content" tip
+    ]
+    mempty
   where
     today = utctDay now
     dayText = toText . formatTime defaultTimeLocale "%b %e"
     bad = [d <> " (" <> show f <> " failed)" | (day, (_, f)) <- sortWith fst days, f > 0, let d = dayText day]
     summary = maybe "No checks in the last 90 days" (\p -> showPct p <> " uptime over 90 days" <> bool ("; failures on " <> T.intercalate ", " (take 10 bad)) "; no failures" (null bad)) (uncurry Uptime.uptimePercent $ sumCounts $ map snd days)
-    barCls h older = (<> bool "" " max-md:hidden" older) case h of
-      Uptime.NoData -> "h-3/4 flex-1 min-w-[2px] rounded-[2px] bg-fillWeak"
-      Uptime.Healthy -> "h-3/4 flex-1 min-w-[2px] rounded-[2px] bg-fillSuccess-strong hover:opacity-70"
-      Uptime.Degraded -> "h-full flex-1 min-w-[2px] rounded-[2px] bg-fillWarning-strong hover:opacity-70"
-      Uptime.Outage -> "h-full flex-1 min-w-[2px] rounded-[2px] bg-fillError-strong hover:opacity-70"
 
 
 -- | Bars with their scale and the period's uptime underneath.
@@ -275,47 +282,71 @@ weightedAvg bs = case [(fromIntegral (b.total - b.failed), a) | b <- bs, b.total
   xs -> Just $ sum (map (uncurry (*)) xs) / sum (map fst xs)
 
 
--- | The add form and the check rows, swapped together: a successful add returns the form blank,
--- a rejected one swaps nothing so the form keeps what was typed.
+-- | Shared add-form + 90-day-bar row list for uptime checks and cron monitors, swapped together:
+-- a successful add returns the form blank, a rejected one swaps nothing so the form keeps what was typed.
+monitorList_ :: Text -> (Text, Text) -> Html () -> (Text, Text) -> UTCTime -> [(Text, CheckState, Text, Html (), [(Day, (Int, Int))], Html ())] -> Html ()
+monitorList_ listId (formTitle, formSub) addForm (emptyTitle, emptyDesc) now rows =
+  div_ [id_ listId, class_ "space-y-3", term "hx-target:inherited" "this", term "hx-swap:inherited" "outerHTML"] do
+    panel_ (Collapsible $ null rows) def{icon = Just "plus", subtitle = Just formSub} formTitle addForm
+    if null rows
+      then emptyState_ def{size = ESCompact} emptyTitle emptyDesc
+      else ul_ [class_ "surface-raised divide-y divide-strokeWeak overflow-hidden rounded-xl"] $ forM_ rows \(href, st, name, sub, days, right) ->
+        li_ [class_ "relative grid items-center gap-x-6 gap-y-2 px-4 py-3 hover:bg-fillWeak md:grid-cols-[minmax(0,22rem)_minmax(0,1fr)_auto]"] do
+          div_ [class_ "min-w-0"] do
+            a_ [href_ href, class_ "flex items-center gap-2 font-medium text-textStrong after:absolute after:inset-0 hover:text-textBrand"] do
+              stateDot_ st
+              span_ [class_ "truncate"] $ toHtml name
+            sub
+          dayBars_ now days
+          right
+
+
 uptimeChecksList_ :: UptimeOverview -> Html ()
-uptimeChecksList_ o = div_ [id_ "uptime-checks", class_ "space-y-3", term "hx-target:inherited" "this", term "hx-swap:inherited" "outerHTML"] do
-  panel_ (Collapsible $ V.null o.checks) def{icon = Just "plus", subtitle = Just "Requested on its interval; two failures in a row open a downtime issue"} "New uptime check"
-    $ form_ [class_ "space-y-3", hxPost_ (urls.monitors o.pid).uptimePost] do
-      div_ [class_ "grid items-end gap-2 md:grid-cols-[1fr_2fr_1fr_auto_auto_auto]"] do
-        formField_ FieldSm def{placeholder = "Checkout API"} "Name" "name" True Nothing
-        formField_ FieldSm def{inputType = "url", placeholder = "https://shop.example.com/health"} "URL" "url" True Nothing
-        formField_ FieldSm def{placeholder = "e.g. \"status\":\"ok\""} "Response contains" "contains" False Nothing
-        formSelectField_ FieldSm "Every" "interval" False $ options_ Nothing intervalOptions
-        formField_ FieldSm def{inputType = "number", value = "200", extraAttrs = [min_ "100", max_ "599"]} "Expected status" "expectedStatus" False Nothing
-        button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add check"
-      details_ do
-        summary_ [class_ "inline-flex cursor-pointer items-center gap-1.5 text-xs text-textWeak hover:text-textBrand"] $ faSprite_ "code" "regular" "size-3" >> "Customize request and alerts"
-        div_ [class_ "pt-3"] $ requestFields_ o.teams Nothing
-  if V.null o.checks
-    then emptyState_ def{size = ESCompact} "No uptime checks yet" "Add a URL above. Monoscope requests it on its interval and records every result."
-    else ul_ [class_ "surface-raised divide-y divide-strokeWeak overflow-hidden rounded-xl"] $ forM_ o.checks \c -> do
-      let days = daysOf c.id.unUUIDId o.buckets
+uptimeChecksList_ o =
+  monitorList_
+    "uptime-checks"
+    ("New uptime check", "Requested on its interval; two failures in a row open a downtime issue")
+    ( form_ [class_ "space-y-3", hxPost_ (urls.monitors o.pid).uptimePost] do
+        div_ [class_ "grid items-end gap-2 md:grid-cols-[1fr_2fr_1fr_auto_auto_auto]"] do
+          formField_ FieldSm def{placeholder = "Checkout API"} "Name" "name" True Nothing
+          formField_ FieldSm def{inputType = "url", placeholder = "https://shop.example.com/health"} "URL" "url" True Nothing
+          formField_ FieldSm def{placeholder = "e.g. \"status\":\"ok\""} "Response contains" "contains" False Nothing
+          formSelectField_ FieldSm "Every" "interval" False $ options_ Nothing intervalOptions
+          formField_ FieldSm def{inputType = "number", value = "200", extraAttrs = [min_ "100", max_ "599"]} "Expected status" "expectedStatus" False Nothing
+          button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add check"
+        details_ do
+          summary_ [class_ "inline-flex cursor-pointer items-center gap-1.5 text-xs text-textWeak hover:text-textBrand"] $ faSprite_ "code" "regular" "size-3" >> "Customize request and alerts"
+          div_ [class_ "pt-3"] $ requestFields_ o.teams Nothing
+    )
+    ("No uptime checks yet", "Add a URL above. Monoscope requests it on its interval and records every result.")
+    o.now
+    [ let days = daysOf c.id.unUUIDId o.buckets
           recent = sumCounts [n | (d, n) <- days, d >= addDays (-29) (utctDay o.now)]
-      li_ [class_ "relative grid items-center gap-x-6 gap-y-2 px-4 py-3 hover:bg-fillWeak md:grid-cols-[minmax(0,22rem)_minmax(0,1fr)_auto]"] do
-        div_ [class_ "min-w-0"] do
-          a_ [href_ ((urls.monitors o.pid).uptimeCheckGet c.id Nothing), class_ "flex items-center gap-2 font-medium text-textStrong after:absolute after:inset-0 hover:text-textBrand"] do
-            stateDot_ (uptimeState c)
-            span_ [class_ "truncate"] $ toHtml c.name
-          p_ [class_ "mt-0.5 truncate text-xs text-textWeak"] $ toHtml $ c.url <> " · every " <> intervalLabel c.scrapeIntervalSeconds
-        dayBars_ o.now days
-        dl_ [class_ "relative z-10 flex items-center gap-5 text-sm tabular-nums md:w-48 md:justify-end"] do
-          div_ [class_ "md:text-right"] $ dt_ [class_ "text-2xs text-textWeak"] "30d uptime" >> dd_ [class_ "font-medium text-textStrong"] (toHtml $ maybe "—" showPct $ uncurry Uptime.uptimePercent recent)
-          div_ [class_ "md:text-right"] $ dt_ [class_ "text-2xs text-textWeak"] "30d avg" >> dd_ [class_ "text-textStrong"] (toHtml $ showMs $ weightedAvg [b | b <- o.buckets, b.checkId == c.id.unUUIDId, b.day >= addDays (-29) (utctDay o.now)])
+       in ( (urls.monitors o.pid).uptimeCheckGet c.id Nothing
+          , uptimeState c
+          , c.name
+          , p_ [class_ "mt-0.5 truncate text-xs text-textWeak"] $ toHtml $ c.url <> " · every " <> intervalLabel c.scrapeIntervalSeconds
+          , days
+          , dl_ [class_ "relative z-10 flex items-center gap-5 text-sm tabular-nums md:w-48 md:justify-end"] do
+              div_ [class_ "md:text-right"] $ dt_ [class_ "text-2xs text-textWeak"] "30d uptime" >> dd_ [class_ "font-medium text-textStrong"] (toHtml $ maybe "—" showPct $ uncurry Uptime.uptimePercent recent)
+              div_ [class_ "md:text-right"] $ dt_ [class_ "text-2xs text-textWeak"] "30d avg" >> dd_ [class_ "text-textStrong"] (toHtml $ showMs $ weightedAvg [b | b <- o.buckets, b.checkId == c.id.unUUIDId, b.day >= addDays (-29) (utctDay o.now)])
+          )
+    | c <- V.toList o.checks
+    ]
 
 
 stateDot_ :: CheckState -> Html ()
-stateDot_ s = span_ [class_ dotCls, Aria.label_ (snd $ stateTone s), role_ "img"] mempty
-  where
-    dotCls = case s of
-      Operational -> "size-2 shrink-0 rounded-full bg-fillSuccess-strong"
-      Failing -> "size-2 shrink-0 rounded-full bg-fillError-strong ring-4 ring-fillError-weak"
-      Paused -> "size-2 shrink-0 rounded-full bg-fillStrong"
-      Pending -> "size-2 shrink-0 rounded-full border border-strokeStrong"
+stateDot_ s =
+  span_
+    [ class_ case s of
+        Operational -> "size-2 shrink-0 rounded-full bg-fillSuccess-strong"
+        Failing -> "size-2 shrink-0 rounded-full bg-fillError-strong ring-4 ring-fillError-weak"
+        Paused -> "size-2 shrink-0 rounded-full bg-fillStrong"
+        Pending -> "size-2 shrink-0 rounded-full border border-strokeStrong"
+    , Aria.label_ (snd $ stateTone s)
+    , role_ "img"
+    ]
+    mempty
 
 
 intervalOptions :: [(Text, Text)]
@@ -507,24 +538,45 @@ show2 :: Double -> Text
 show2 = showFFloat' 2
 
 
+uptimeTable_ :: Text -> Text -> Text -> [Table.Column a] -> [a] -> Html ()
+uptimeTable_ elemID emptyTitle emptyDesc columns rows =
+  toHtml
+    Table.Table
+      { config = def{Table.elemID, Table.renderAsTable = True, Table.zeroStateSize = ESCompact, Table.tableClasses = "w-full text-sm", Table.thClasses = "text-left text-xs text-textWeak px-4 py-2 font-medium whitespace-nowrap"}
+      , columns
+      , rows = V.fromList rows
+      , features = def{Table.rowAttrs = Just $ const [class_ "border-t border-strokeWeak"], Table.zeroState = Just Table.ZeroState{icon = "", title = emptyTitle, description = emptyDesc, action = Table.ESNone}}
+      }
+
+
 monthsTable_ :: [(Day, Int, Int)] -> Html ()
 monthsTable_ [] = p_ [class_ "text-sm text-textWeak"] "No history yet"
-monthsTable_ ms = table_ [class_ "w-full text-sm"] $ tbody_ $ forM_ ms \(m, total, failed) -> tr_ [class_ "border-b border-strokeWeak last:border-0"] do
-  td_ [class_ "py-1.5 text-textStrong"] $ toHtml $ formatTime defaultTimeLocale "%B %Y" m
-  td_ [class_ "py-1.5 text-right font-medium tabular-nums text-textStrong"] $ toHtml $ maybe "—" showPct $ Uptime.uptimePercent total failed
-  td_ [class_ "py-1.5 pl-4 text-right text-xs text-textWeak tabular-nums"] $ show failed <> " failed"
+monthsTable_ ms =
+  toHtml
+    Table.Table
+      { config = def{Table.elemID = "uptime-months", Table.renderAsTable = True, Table.showHeader = False, Table.noSurface = True, Table.tableClasses = "w-full text-sm", Table.containerClasses = "w-full"}
+      , rows = V.fromList ms
+      , features = def{Table.rowAttrs = Just $ const [class_ "border-b border-strokeWeak last:border-0"]}
+      , columns =
+          [ Table.col "Month" (\(m, _, _) -> toHtml $ formatTime defaultTimeLocale "%B %Y" m) & Table.withAttrs [class_ "py-1.5 text-textStrong"]
+          , Table.col "Uptime" (\(_, total, failed) -> toHtml $ maybe "—" showPct $ Uptime.uptimePercent total failed) & Table.withAttrs [class_ "py-1.5 text-right font-medium tabular-nums text-textStrong"]
+          , Table.col "Failed" (\(_, _, failed) -> show failed <> " failed") & Table.withAttrs [class_ "py-1.5 pl-4 text-right text-xs text-textWeak tabular-nums"]
+          ]
+      }
 
 
 incidentsTable_ :: UTCTime -> Text -> [Uptime.Incident] -> Html ()
-incidentsTable_ _ emptyText [] = emptyState_ def{size = ESCompact} emptyText "Failure runs appear here with how long they lasted and why."
-incidentsTable_ now _ is = div_ [class_ "surface-raised overflow-x-auto rounded-xl"] $ table_ [class_ "w-full text-sm"] do
-  thead_ $ tr_ [class_ "text-left text-xs text-textWeak"] $ forM_ @[] ["Started", "Duration", "Failures", "Last error", "" :: Text] $ th_ [class_ "px-4 py-2 font-medium"] . toHtml
-  tbody_ $ forM_ is \i -> tr_ [class_ "border-t border-strokeWeak"] do
-    td_ [class_ "whitespace-nowrap px-4 py-2 tabular-nums text-textStrong"] $ toHtml $ formatTime defaultTimeLocale "%b %e, %H:%M UTC" i.startedAt
-    td_ [class_ "whitespace-nowrap px-4 py-2 tabular-nums"] $ toHtml $ durationLabel $ diffUTCTime (fromMaybe now i.recoveredAt) i.startedAt
-    td_ [class_ "px-4 py-2 tabular-nums"] $ show i.failures
-    td_ [class_ "max-w-md truncate px-4 py-2 text-textWeak", term "data-tippy-content" (fromMaybe "" i.reason)] $ toHtml $ fromMaybe "" i.reason
-    td_ [class_ "px-4 py-2 text-right"] $ maybe (tonePill_ ErrorBadge "Ongoing") (const $ tonePill_ SuccessBadge "Resolved") i.recoveredAt
+incidentsTable_ now emptyText =
+  uptimeTable_
+    "uptime-incidents"
+    emptyText
+    "Failure runs appear here with how long they lasted and why."
+    [ Table.col "Started" (\i -> toHtml $ formatTime defaultTimeLocale "%b %e, %H:%M UTC" i.startedAt) & Table.withAttrs [class_ "whitespace-nowrap px-4 py-2 tabular-nums text-textStrong"]
+    , Table.col "Duration" (\i -> toHtml $ durationLabel $ diffUTCTime (fromMaybe now i.recoveredAt) i.startedAt) & Table.withAttrs [class_ "whitespace-nowrap px-4 py-2 tabular-nums"]
+    , Table.col "Failures" (show . (.failures)) & Table.withAttrs [class_ "px-4 py-2 tabular-nums"]
+    , Table.col "Last error" (\i -> span_ [class_ "block max-w-md truncate", term "data-tippy-content" (fromMaybe "" i.reason)] $ toHtml $ fromMaybe "" i.reason) & Table.withAttrs [class_ "px-4 py-2 text-textWeak"]
+    , Table.col "" (\i -> maybe (tonePill_ ErrorBadge "Ongoing") (const $ tonePill_ SuccessBadge "Resolved") i.recoveredAt) & Table.withAttrs [class_ "px-4 py-2 text-right"]
+    ]
 
 
 -- | >>> map durationLabel [42, 300, 5400, 90000]
@@ -541,18 +593,22 @@ durationLabel d
 
 
 resultsTable_ :: UTCTime -> Bool -> [Uptime.CheckResult] -> Html ()
-resultsTable_ _ _ [] = emptyState_ def{size = ESCompact} "No results yet" "Each check or check-in is listed here as it happens."
-resultsTable_ now probes rs = div_ [class_ "surface-raised overflow-x-auto rounded-xl"] $ table_ [class_ "w-full text-sm"] do
-  thead_ $ tr_ [class_ "text-left text-xs text-textWeak"] $ forM_ @[] (["Time", "Result"] <> bool ["Detail"] ["Status", "Response", "Region"] probes) $ th_ [class_ "px-4 py-2 font-medium"] . toHtml @Text
-  tbody_ $ forM_ rs \r -> tr_ [class_ "border-t border-strokeWeak"] do
-    td_ [class_ "whitespace-nowrap px-4 py-2 tabular-nums text-textStrong", term "data-tippy-content" (toText $ formatTime defaultTimeLocale "%F %T UTC" r.checkedAt)] $ toHtml $ agoText now r.checkedAt
-    td_ [class_ "px-4 py-2"] $ toneDot_ (bool ErrorBadge SuccessBadge r.ok) (bool "Failed" "OK" r.ok)
-    if probes
-      then do
-        td_ [class_ "px-4 py-2 tabular-nums"] $ toHtml $ maybe "—" show r.statusCode
-        td_ [class_ "px-4 py-2 tabular-nums"] $ toHtml $ showMs $ fromIntegral <$> r.durationMs
-        td_ [class_ "px-4 py-2 text-textWeak"] $ toHtml r.region
-      else td_ [class_ "px-4 py-2 text-textWeak"] $ toHtml $ fromMaybe "" r.message
+resultsTable_ now probes =
+  uptimeTable_
+    "uptime-results"
+    "No results yet"
+    "Each check or check-in is listed here as it happens."
+    ( [ Table.col "Time" (\r -> span_ [term "data-tippy-content" (toText $ formatTime defaultTimeLocale "%F %T UTC" r.checkedAt)] $ toHtml $ agoText now r.checkedAt) & Table.withAttrs [class_ "whitespace-nowrap px-4 py-2 tabular-nums text-textStrong"]
+      , Table.col "Result" (\r -> toneDot_ (bool ErrorBadge SuccessBadge r.ok) (bool "Failed" "OK" r.ok)) & Table.withAttrs [class_ "px-4 py-2"]
+      ]
+        <> if probes
+          then
+            [ Table.col "Status" (toHtml . maybe "—" show . (.statusCode)) & Table.withAttrs [class_ "px-4 py-2 tabular-nums"]
+            , Table.col "Response" (toHtml . showMs . fmap fromIntegral . (.durationMs)) & Table.withAttrs [class_ "px-4 py-2 tabular-nums"]
+            , Table.col "Region" (toHtml . (.region)) & Table.withAttrs [class_ "px-4 py-2 text-textWeak"]
+            ]
+          else [Table.col "Detail" (toHtml . fromMaybe "" . (.message)) & Table.withAttrs [class_ "px-4 py-2 text-textWeak"]]
+    )
 
 
 -- | The request a check sends and who hears when it fails, shared by the add and settings forms.
@@ -590,11 +646,8 @@ uptimeSettings_ d = do
       p_ [class_ "font-medium text-textStrong"] $ bool "Resume checking" "Pause checking" d.check.enabled
       p_ [class_ "text-sm text-textWeak"] "A paused check keeps its history and opens no issues."
     button_ [type_ "button", class_ "btn btn-sm", hxPost_ ((urls.monitors d.pid).uptimeToggle d.check.id), hxSwap_ "none"] $ bool "Resume" "Pause" d.check.enabled
-  section_ [class_ "flex flex-wrap items-center justify-between gap-3 rounded-xl border border-strokeError-weak p-4"] do
-    div_ do
-      p_ [class_ "font-medium text-textStrong"] "Delete this check"
-      p_ [class_ "text-sm text-textWeak"] "Its history stays for 400 days but is no longer shown."
-    dangerAction_ "uc-delete" "trash" "Delete" ("Delete " <> d.check.name <> "?") "The check stops and is removed from status pages." [hxPost_ ((urls.monitors d.pid).uptimeDelete d.check.id), hxSwap_ "none"] "Delete check"
+  dangerZone_ "Delete this check" "Its history stays for 400 days but is no longer shown."
+    $ dangerAction_ "uc-delete" "trash" "Delete" ("Delete " <> d.check.name <> "?") "The check stops and is removed from status pages." [hxPost_ ((urls.monitors d.pid).uptimeDelete d.check.id), hxSwap_ "none"] "Delete check"
 
 
 uptimeCheckGetH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> Maybe Text -> ATAuthCtx (RespHeaders UptimeCheckPage)
@@ -644,27 +697,29 @@ instance ToHtml CronMonitors where
 
 
 cronMonitorsList_ :: CronOverview -> Html ()
-cronMonitorsList_ o = div_ [id_ "cron-monitors", class_ "space-y-3", term "hx-target:inherited" "this", term "hx-swap:inherited" "outerHTML"] do
-  panel_ (Collapsible $ null o.monitors) def{icon = Just "plus", subtitle = Just "A missed window or an error run opens a cron issue"} "New cron monitor"
-    $ form_ [class_ "grid items-end gap-2 md:grid-cols-[1fr_1fr_auto_auto_auto]", hxPost_ (urls.monitors o.pid).cronPost] do
-      -- `-` last: browsers compile `pattern` with the v flag, where a bare `-` mid-class is a syntax error.
-      formField_ FieldSm def{placeholder = "nightly-billing", extraAttrs = [pattern_ "[a-z0-9_.\\-]+"]} "Slug" "slug" True Nothing
-      formField_ FieldSm def{placeholder = "Nightly billing run"} "Name" "name" True Nothing
-      formSelectField_ FieldSm "Runs every" "interval" False $ options_ Nothing cronIntervals
-      formSelectField_ FieldSm "Grace" "grace" False $ options_ Nothing graceOptions
-      button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add monitor"
-  if null o.monitors
-    then emptyState_ def{size = ESCompact} "No cron monitors yet" "Add one above, then send a check-in from the job."
-    else ul_ [class_ "surface-raised divide-y divide-strokeWeak overflow-hidden rounded-xl"] $ forM_ o.monitors \m -> do
-      let days = daysOf m.id o.buckets
-      li_ [class_ "relative grid items-center gap-x-6 gap-y-2 px-4 py-3 hover:bg-fillWeak md:grid-cols-[minmax(0,22rem)_minmax(0,1fr)_auto]"] do
-        div_ [class_ "min-w-0"] do
-          a_ [href_ ((urls.monitors o.pid).cronMonitorGet m.id), class_ "flex items-center gap-2 font-medium text-textStrong after:absolute after:inset-0 hover:text-textBrand"] do
-            stateDot_ (cronState m o.now)
-            span_ [class_ "truncate"] $ toHtml m.name
-          p_ [class_ "mt-0.5 truncate font-mono text-xs text-textWeak"] $ toHtml $ m.slug <> " · every " <> intervalLabel m.intervalSecs
-        dayBars_ o.now days
-        div_ [class_ "relative z-10 text-sm tabular-nums text-textWeak md:w-48 md:text-right"] $ toHtml $ maybe "No check-in yet" (("Last run " <>) . agoText o.now) m.lastCheckinAt
+cronMonitorsList_ o =
+  monitorList_
+    "cron-monitors"
+    ("New cron monitor", "A missed window or an error run opens a cron issue")
+    ( form_ [class_ "grid items-end gap-2 md:grid-cols-[1fr_1fr_auto_auto_auto]", hxPost_ (urls.monitors o.pid).cronPost] do
+        -- `-` last: browsers compile `pattern` with the v flag, where a bare `-` mid-class is a syntax error.
+        formField_ FieldSm def{placeholder = "nightly-billing", extraAttrs = [pattern_ "[a-z0-9_.\\-]+"]} "Slug" "slug" True Nothing
+        formField_ FieldSm def{placeholder = "Nightly billing run"} "Name" "name" True Nothing
+        formSelectField_ FieldSm "Runs every" "interval" False $ options_ Nothing cronIntervals
+        formSelectField_ FieldSm "Grace" "grace" False $ options_ Nothing graceOptions
+        button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add monitor"
+    )
+    ("No cron monitors yet", "Add one above, then send a check-in from the job.")
+    o.now
+    [ ( (urls.monitors o.pid).cronMonitorGet m.id
+      , cronState m o.now
+      , m.name
+      , p_ [class_ "mt-0.5 truncate font-mono text-xs text-textWeak"] $ toHtml $ m.slug <> " · every " <> intervalLabel m.intervalSecs
+      , daysOf m.id o.buckets
+      , div_ [class_ "relative z-10 text-sm tabular-nums text-textWeak md:w-48 md:text-right"] $ toHtml $ maybe "No check-in yet" (("Last run " <>) . agoText o.now) m.lastCheckinAt
+      )
+    | m <- o.monitors
+    ]
 
 
 cronIntervals, graceOptions :: [(Text, Text)]
@@ -781,11 +836,8 @@ instance ToHtml CronMonitorPage where
         formSelectField_ FieldSm "Runs every" "interval" False $ options_ (Just $ show m.intervalSecs) cronIntervals
         formSelectField_ FieldSm "Grace" "grace" False $ options_ (Just $ show m.graceSecs) graceOptions
         button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save changes"
-      section_ [class_ "flex flex-wrap items-center justify-between gap-3 rounded-xl border border-strokeError-weak p-4"] do
-        div_ do
-          p_ [class_ "font-medium text-textStrong"] "Delete this monitor"
-          p_ [class_ "text-sm text-textWeak"] "Check-ins with its slug are then ignored."
-        dangerAction_ "cm-delete" "trash" "Delete" ("Delete " <> m.name <> "?") "The monitor is removed from status pages." [hxPost_ ((urls.monitors d.pid).cronDelete m.id), hxSwap_ "none"] "Delete monitor"
+      dangerZone_ "Delete this monitor" "Check-ins with its slug are then ignored."
+        $ dangerAction_ "cm-delete" "trash" "Delete" ("Delete " <> m.name <> "?") "The monitor is removed from status pages." [hxPost_ ((urls.monitors d.pid).cronDelete m.id), hxSwap_ "none"] "Delete monitor"
   toHtmlRaw = toHtml
 
 
@@ -861,7 +913,7 @@ data StatusBoard = StatusBoard {title :: Text, description :: Text, now :: UTCTi
 
 -- | The page itself, shared by the public URL and the in-app view.
 statusBoard_ :: StatusBoard -> Html ()
-statusBoard_ b = div_ [id_ "status-board", class_ "mx-auto max-w-3xl space-y-6 px-4 py-8", hxGet_ b.refresh, hxTrigger_ "every 120s", hxSelect_ "#status-board", hxSwap_ "outerHTML"] do
+statusBoard_ b = div_ ([id_ "status-board", class_ "mx-auto max-w-3xl space-y-6 px-4 py-8"] <> pollSelfAttrs_ "status-board" b.refresh "every 120s") do
   header_ [class_ "space-y-1"] do
     h1_ [class_ "text-2xl font-semibold text-textStrong"] $ toHtml b.title
     unless (T.null b.description) $ p_ [class_ "text-textWeak"] $ toHtml b.description

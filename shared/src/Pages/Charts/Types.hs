@@ -52,6 +52,19 @@ data MetricsData = MetricsData
   deriving (ToSchema) via SnakeSchema MetricsData
 
 
+-- | Chart series wire type. Forms a join-semilattice with 'DTMetric' as
+-- identity and 'DTText' as absorbing element.
+--
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Relude
+-- >>> all (\d -> mempty <> d == d && d <> mempty == d) (universe @DataType)
+-- True
+-- >>> all (\d -> DTText <> d == DTText && d <> DTText == DTText) (universe @DataType)
+-- True
+-- >>> all (\d -> AE.eitherDecode (AE.encode d) == Right d) (universe @DataType)
+-- True
+-- >>> (mempty :: DataType, AE.toJSON DTMetric, AE.toJSON DTText)
+-- (DTMetric,String "metric",String "text")
 data DataType = DTMetric | DTJson | DTFloat | DTText
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show, THS.Lift)
   deriving anyclass (NFData)

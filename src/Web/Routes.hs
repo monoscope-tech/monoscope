@@ -869,18 +869,23 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
     if isEager
       then Dashboards.processEagerWidget pid now (sinceStr, fromDStr, toDStr) scopedParams widgetWithPid
       else
-        let (since, fromD, toD) = Dashboards.ownWindow widgetWithPid (sinceStr, fromDStr, toDStr)
-         in Charts.queryMetrics widgetWithPid.dbSource (Just Charts.DTMetric) (Just pid) widgetWithPid.query widgetWithPid.sql since fromD toD Nothing (Just $ Parser.binDensityFor $ Just $ Widget.mapWidgetTypeToChartType widgetWithPid.wType) scopedParams
-              <&> \m -> widgetWithPid & #dataset ?~ Widget.toWidgetDataset m
+        Dashboards.widgetMetrics pid (sinceStr, fromDStr, toDStr) scopedParams widgetWithPid
+          <&> \m -> widgetWithPid & #dataset ?~ Widget.toWidgetDataset m
   addRespHeaders processedWidget
+
+
+-- | Signed links never expire, so verify both the HMAC signature and that the project is still active.
+withVerifiedProject :: Projects.ProjectId -> Text -> Maybe Text -> ATBaseCtx ()
+withVerifiedProject pid payload sigM = do
+  ctx <- ask @AuthContext
+  whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid payload sigM) \err -> Error.throwError err403{errBody = err}
+  whenNothingM_ (Projects.activeProjectById pid) $ Error.throwError err404
 
 
 -- | Proof media never changes under a signed name: keys are not reused within a run.
 proofMediaGetH :: Projects.ProjectId -> UUIDId "pr_review" -> ImpactReviews.ProofFile -> Maybe Text -> Request -> (Wai.Response -> IO Wai.ResponseReceived) -> ATBaseCtx Wai.ResponseReceived
 proofMediaGetH pid rid file sigM request send = do
-  ctx <- ask @AuthContext
-  whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid (ImpactReviews.proofSignedPath rid file) sigM) \err -> Error.throwError err403{errBody = err}
-  whenNothingM_ (Projects.activeProjectById pid) $ Error.throwError err404
+  withVerifiedProject pid (ImpactReviews.proofSignedPath rid file) sigM
   bytes <- maybe (Error.throwError err404) pure =<< ImpactReviews.proofFile pid rid file
   let mime = case file.asset of ImpactReviews.Recording ImpactReviews.Gif -> if "RIFF" `BS.isPrefixOf` bytes then "image/webp" else "image/gif"; ImpactReviews.Recording ImpactReviews.Mp4 -> "video/mp4"; ImpactReviews.Recording ImpactReviews.Cast -> "application/x-asciicast"; ImpactReviews.Screenshot _ -> "image/png"
   liftIO $ send $ PageCodeContext.rangedMedia request [(H.hContentType, mime), (H.hCacheControl, "public, max-age=31536000, immutable")] (toLazy bytes)
@@ -890,9 +895,7 @@ proofMediaGetH pid rid file sigM request send = do
 -- so mail scanners and link unfurlers that open every link cannot answer; the button POSTs.
 proofRatingH :: Bool -> Projects.ProjectId -> UUIDId "pr_review" -> ImpactReviews.Rating -> Maybe Text -> ATBaseCtx (Html ())
 proofRatingH record pid rid rating sigM = do
-  ctx <- ask @AuthContext
-  whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid (ImpactReviews.ratingSignedPath rid rating) sigM) \err -> Error.throwError err403{errBody = err}
-  whenNothingM_ (Projects.activeProjectById pid) $ Error.throwError err404
+  withVerifiedProject pid (ImpactReviews.ratingSignedPath rid rating) sigM
   when record $ unlessM (ImpactReviews.rateRun pid rid rating) $ Error.throwError err404
   let verdict = case rating of ImpactReviews.Up -> "got it right"; ImpactReviews.Down -> "got it wrong"
   pure
@@ -905,9 +908,7 @@ proofRatingH record pid rid rating sigM = do
 
 fixMediaGetH :: Projects.ProjectId -> UUIDId "issue_fix" -> Artifacts.Asset -> Maybe Text -> Request -> (Wai.Response -> IO Wai.ResponseReceived) -> ATBaseCtx Wai.ResponseReceived
 fixMediaGetH pid fid asset sigM request send = do
-  ctx <- ask @AuthContext
-  whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid (IssueFixes.fixMediaSignedPath fid asset) sigM) \err -> Error.throwError err403{errBody = err}
-  whenNothingM_ (Projects.activeProjectById pid) $ Error.throwError err404
+  withVerifiedProject pid (IssueFixes.fixMediaSignedPath fid asset) sigM
   (_, explanation) <- maybe (Error.throwError err404) pure =<< IssueFixes.mediaFor pid fid IssueFixes.SignedLink
   bytes <- either (const $ Error.throwError err503) (pure . Artifacts.verifiedBytes) =<< Artifacts.readFixMedia explanation asset
   liftIO $ send $ PageCodeContext.rangedMedia request [(H.hContentType, Artifacts.assetMime asset), (H.hCacheControl, "public, max-age=31536000, immutable")] bytes
@@ -920,9 +921,7 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
   let fallback = fromMaybe "" widgetJsonM
   v <- maybe (pure fallback) (fmap (fromMaybe fallback) . Widget.decodeWidgetZ) widgetZM
   Log.logInfo "widgetPngGetH: request" $ AE.object ["widgetJson_len" AE..= T.length v]
-  whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v sigM) \err -> Error.throwError $ err403{errBody = err}
-  -- Signed links never expire, so a deleted project's charts kept rendering live data for them.
-  whenNothingM_ (Projects.activeProjectById pid) $ Error.throwError err404
+  withVerifiedProject pid v sigM
 
   widget <- either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure $ AE.eitherDecode (encodeUtf8 v)
   let (defaultWidth, defaultHeight) = Widget.pngExportSize widget.pngProfile

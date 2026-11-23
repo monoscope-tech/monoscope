@@ -35,7 +35,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Ids qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), cpuPctOfLimit, memPctOfLimit, ratio, runtimeOf)
 import Pages.BodyWrapper (PageCtx (..), mkPageCtx, navTabAttrs)
-import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), RefreshingDeferred (..), callout_, detailSection_, emptyState_, entityHeader_, factGrid_, metaChip_, pivotLinks_, tableSkeleton_, timeRefreshListener_, tonePill_, withDeferredBody)
+import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), RefreshingDeferred (..), callout_, detailSection_, emptyState_, entityDrawer_, entityHeader_, factGrid_, metaChip_, pivotLinks_, tableSkeleton_, timeRefreshListener_, tonePill_, withDeferredBody)
 import Pages.Containers (infraSnapshot, infrastructureBW, matchesAny, matchesFilter, mkWindow, pctText, utilizationClass, windowed)
 import Pages.Containers qualified as Containers
 import Pages.LogExplorer.Log qualified as Log
@@ -266,23 +266,26 @@ hostDetailGetH pid hostM fromParam toParam sinceParam = do
 
 
 hostDetail_ :: Projects.ProjectId -> TimePicker.TimeWindow -> HostRow -> Html ()
-hostDetail_ pid window host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
-  entityHeader_
-    (faSprite_ "server" "solid" "h-4 w-4 text-iconNeutral")
-    host.name
-    ( a_ ([href_ containersHref, class_ "btn btn-xs ms-auto gap-1.5 text-textBrand max-sm:h-11"] <> navTabAttrs) do
-        faSprite_ "cube" "regular" "h-3.5 w-3.5"
-        "View containers"
-    )
-    do
-      forM_ metadata $ uncurry metaChip_
-      forM_ host.integrations $ span_ [class_ "badge badge-sm badge-ghost"] . toHtml . integrationLabel
-  nav_ [class_ "sticky top-0 z-20 border-b border-strokeWeak bg-bgRaised px-4 py-2", Aria.label_ "Host detail sections"] do
-    div_ [class_ "flex gap-1 overflow-x-auto"] do
-      sectionLink "host-summary" "server" "Summary"
-      sectionLink "host-logs" "file-lines" "Recent logs"
-      sectionLink "host-metrics" "chart-line" "Metrics"
-  main_ [class_ "min-w-0 space-y-5 p-5 [&>*+*]:border-t [&>*+*]:border-strokeWeak [&>*+*]:pt-4"] do
+hostDetail_ pid window host = entityDrawer_
+  ( entityHeader_
+      (faSprite_ "server" "solid" "h-4 w-4 text-iconNeutral")
+      host.name
+      ( a_ ([href_ containersHref, class_ "btn btn-xs ms-auto gap-1.5 text-textBrand max-sm:h-11"] <> navTabAttrs) do
+          faSprite_ "cube" "regular" "h-3.5 w-3.5"
+          "View containers"
+      )
+      do
+        forM_ metadata $ uncurry metaChip_
+        forM_ host.integrations $ span_ [class_ "badge badge-sm badge-ghost"] . toHtml . integrationLabel
+  )
+  ( Just
+      $ nav_ [class_ "sticky top-0 z-20 border-b border-strokeWeak bg-bgRaised px-4 py-2", Aria.label_ "Host detail sections"] do
+        div_ [class_ "flex gap-1 overflow-x-auto"] do
+          sectionLink "host-summary" "server" "Summary"
+          sectionLink "host-logs" "file-lines" "Recent logs"
+          sectionLink "host-metrics" "chart-line" "Metrics"
+  )
+  do
     detailSection_ [id_ "host-summary"] "Host summary" (tonePill_ (bool WarningBadge SuccessBadge (availableSignals == 4)) $ "Metrics coverage: " <> show availableSignals <> " of 4") do
       factGrid_
         (bool "grid-cols-2 bg-bgBase max-sm:grid-cols-1" "grid-cols-6 bg-bgBase max-xl:grid-cols-3 max-sm:grid-cols-2" (availableSignals > 0))
@@ -441,11 +444,13 @@ imageDetailGetH pid imageM fromParam toParam sinceParam = do
 
 
 imageDetail_ :: Projects.ProjectId -> TimePicker.TimeWindow -> ImageRow -> Html ()
-imageDetail_ pid window image = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
-  entityHeader_ (faSprite_ "layer-group" "solid" "h-4 w-4 text-iconNeutral") image.image pass do
-    span_ [class_ "badge badge-sm badge-ghost"] $ toHtml image.registry
-    forM_ image.runtimes $ \runtime -> span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ Containers.runtimeLabel runtime
-  main_ [class_ "space-y-5 p-5 [&>*+*]:border-t [&>*+*]:border-strokeWeak [&>*+*]:pt-4"] do
+imageDetail_ pid window image = entityDrawer_
+  ( entityHeader_ (faSprite_ "layer-group" "solid" "h-4 w-4 text-iconNeutral") image.image pass do
+      span_ [class_ "badge badge-sm badge-ghost"] $ toHtml image.registry
+      forM_ image.runtimes $ \runtime -> span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ Containers.runtimeLabel runtime
+  )
+  Nothing
+  do
     detailSection_ [] "Image summary" pass
       $ factGrid_
         "grid-cols-3 max-sm:grid-cols-1 max-sm:divide-x-0 max-sm:divide-y"
@@ -612,9 +617,10 @@ kubernetesDetailGetH pid resourceM nameM clusterM namespaceM fromParam toParam s
 
 
 kubernetesDetail_ :: Projects.ProjectId -> TimePicker.TimeWindow -> KubeResource -> KubeRow -> Html ()
-kubernetesDetail_ pid window resource row = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
-  entityHeader_ (faSprite_ (kubeIcon resource) "solid" "h-4 w-4 text-iconNeutral") row.name (statusBadge row.status) $ forM_ metadata $ uncurry metaChip_
-  main_ [class_ "space-y-5 p-5 [&>*+*]:border-t [&>*+*]:border-strokeWeak [&>*+*]:pt-4"] do
+kubernetesDetail_ pid window resource row = entityDrawer_
+  (entityHeader_ (faSprite_ (kubeIcon resource) "solid" "h-4 w-4 text-iconNeutral") row.name (statusBadge row.status) $ forM_ metadata $ uncurry metaChip_)
+  Nothing
+  do
     detailSection_ [] (resourceLabel resource <> " summary") pass do
       factGrid_
         "grid-cols-5 max-lg:grid-cols-3 max-sm:grid-cols-2"

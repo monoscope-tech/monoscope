@@ -1,6 +1,7 @@
 module Pkg.Components.TimePicker (
   defaultSince,
   parseTimeRange,
+  parseTimeRangeWith,
   LiveDataMode (..),
   liveDataControls_,
   TimePicker (..),
@@ -17,6 +18,7 @@ import Data.List (lookup)
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime, secondsToNominalDiffTime)
+import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Deriving.Aeson.Stock qualified as DAE
 import Language.Haskell.TH.Syntax qualified as THS
 import Lucid
@@ -30,13 +32,12 @@ import System.Clock (TimeSpec (TimeSpec))
 import Text.Megaparsec (Parsec, parse, some)
 import Text.Megaparsec.Char (letterChar, space)
 import Text.Megaparsec.Char.Lexer (decimal)
-import Utils (faSprite_, nonEmptyT, parseTime, popoverPanel_, popoverTrigger_, scriptJson, sinceWindows, toUriStr, uiToggle_)
+import Utils (faSprite_, formatUTC, nonEmptyT, popoverPanel_, popoverTrigger_, scriptJson, sinceWindows, toUriStr, uiToggle_)
 
 
 -- $setup
 -- >>> import Relude.Unsafe qualified as Unsafe
 -- >>> import Data.Time (UTCTime (UTCTime), fromGregorian)
--- >>> import Utils (parseTime)
 -- >>> let epoch = UTCTime (fromGregorian 2026 1 1) 0
 
 
@@ -116,47 +117,54 @@ defaultSince :: Text
 defaultSince = "1H"
 
 
--- | Parse time range from TimePicker
--- Converts user input (since/from/to) into start and end times. Empty strings
--- are treated as absent, and any range that resolves to nothing falls back to
--- 'defaultSince' — so this can never emit an unbounded scan regardless of what
--- the client sends.
--- 'parseTime' formats absolute bounds in UTC so browser Date parsing retains the instant.
+-- | Parse time range from 'TimePicker', falling back to @fallbackSince@ when no
+-- valid @since@ or ISO-8601 @from@/@to@ bound is present — so callers can never
+-- emit an unbounded scan regardless of what the client sends.
+-- Absolute bounds are formatted in UTC so browser Date parsing retains the instant.
 --
--- Test with since value (uses current time as end)
+-- >>> parseTimeRangeWith epoch "5M" (TimePicker Nothing Nothing Nothing)
+-- (Just 2025-12-31 23:55:00 UTC,Just 2026-01-01 00:00:00 UTC,Just ("5M",""))
+--
+-- @since@ and ISO-8601 @from@/@to@ round-trip to the same bounds:
+-- >>> let (f1, t1, _) = parseTimeRange epoch (TimePicker (Just "2H") Nothing Nothing)
+-- >>> let (f2, t2, _) = parseTimeRange epoch (TimePicker Nothing (formatUTC <$> f1) (formatUTC <$> t1))
+-- >>> (f1, t1) == (f2, t2)
+-- True
+parseTimeRangeWith :: UTCTime -> Text -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
+parseTimeRangeWith now fallbackSince tp = case nonEmptyT tp.since of
+  Just s -> parseSince now s
+  Nothing -> case (parseT tp.from, parseT tp.to) of
+    (Nothing, Nothing) -> parseSince now fallbackSince
+    (f, t) -> (f, t, liftA2 (,) (formatUTC <$> f) (formatUTC <$> t))
+  where
+    parseT = (>>= iso8601ParseM @Maybe @UTCTime . toString)
+
+
+-- | 'parseTimeRangeWith' using 'defaultSince'.
+--
 -- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (TimePicker (Just "2H") Nothing Nothing)
 -- (Just 2024-10-31 10:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("2H",""))
 --
--- Test with from/to values
 -- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (TimePicker Nothing (Just "2024-10-31T08:00:00Z") (Just "2024-10-31T10:00:00Z"))
 -- (Just 2024-10-31 08:00:00 UTC,Just 2024-10-31 10:00:00 UTC,Just ("2024-10-31T08:00:00Z","2024-10-31T10:00:00Z"))
 --
--- Empty since/from/to must fall back to the default range, never an unbounded scan
+-- Empty or invalid inputs fall back to 'defaultSince', never an unbounded scan:
 -- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (TimePicker (Just "") (Just "") (Just ""))
 -- (Just 2024-10-31 11:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("1H",""))
---
--- Absolute and one-sided ranges agree with the other telemetry surfaces:
--- >>> let start = Just "2025-12-31T22:00:00Z"; end = Just "2026-01-01T00:00:00Z"
--- >>> parseTimeRange epoch (TimePicker Nothing start end) == parseTime start end Nothing epoch
--- True
--- >>> parseTimeRange epoch (TimePicker Nothing start Nothing) == parseTime start Nothing Nothing epoch
--- True
+-- >>> parseTimeRange epoch (TimePicker Nothing (Just "2025-12-31T22:00:00Z") Nothing)
+-- (Just 2025-12-31 22:00:00 UTC,Nothing,Nothing)
 -- >>> parseTimeRange epoch (TimePicker Nothing (Just "invalid") Nothing) == parseTimeRange epoch (TimePicker Nothing Nothing Nothing)
 -- True
 parseTimeRange :: UTCTime -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
-parseTimeRange now tp = case nonEmptyT tp.since of
-  Just s -> parseSince now s
-  Nothing -> case parseTime tp.from tp.to Nothing now of
-    (Nothing, Nothing, _) -> parseSince now defaultSince
-    range -> range
+parseTimeRange now = parseTimeRangeWith now defaultSince
 
 
 -----------------------------------------------------------------------------------------------------
 -- Timepicker component. To be used at call site
 -----------------------------------------------------------------------------------------------------
 
--- | Derived from 'Utils.sinceWindows' so the dropdown and the labels
--- 'Utils.parseTime' resolves are the same strings by construction.
+-- | Derived from 'Utils.sinceWindows' so the dropdown and preset window keys
+-- stay in sync by construction.
 timePickerItems :: [(Text, Text)]
 timePickerItems = map (second snd) sinceWindows
 
@@ -435,7 +443,7 @@ timepicker_ submitForm currentRange targetPr = do
 
 
 -- | A resolved time range plus the query params it came from, so a page can query the store
--- and rebuild its own links from one value. Absent params default to the last 15 minutes.
+-- and rebuild its own links from one value. Absent params default to the last 5 minutes ('defaultWindow').
 data TimeWindow = TimeWindow
   { fromTime :: UTCTime
   , toTime :: UTCTime
@@ -455,7 +463,7 @@ defaultWindow = "5M"
 mkTimeWindow :: UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> TimeWindow
 mkTimeWindow now fromQuery toQuery sinceParam =
   let sinceQuery = nonEmptyT sinceParam <|> (defaultWindow <$ guard (all (isNothing . nonEmptyT) [fromQuery, toQuery]))
-      (fromM, toM, currentRange) = parseTimeRange now $ TimePicker sinceQuery fromQuery toQuery
+      (fromM, toM, currentRange) = parseTimeRangeWith now defaultWindow $ TimePicker sinceQuery fromQuery toQuery
       (defaultFrom, _, _) = parseSince now defaultWindow
    in TimeWindow
         { fromTime = fromMaybe (fromMaybe now defaultFrom) fromM

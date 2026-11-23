@@ -17,7 +17,6 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.Newtypes (getAeson)
 import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
@@ -26,7 +25,6 @@ import Models.Apis.IssueEnhancement.Types (IssueEnhancement (..), IssueEnrichmen
 import Models.Apis.Issues qualified as Issues
 import NeatInterpolation (text)
 import Pkg.AI qualified as AI
-import PyF (fmtTrim)
 import Relude hiding (id)
 
 
@@ -100,20 +98,136 @@ generateEnhancedTitle complete issue = fmap (T.take 200 . fst) . (AI.getNormalTu
 generateEnhancedDescription :: (Text -> Eff es (Either Text Text)) -> Issues.Issue -> Eff es (Either Text (Text, Text, Text))
 generateEnhancedDescription complete issue = (parse =<<) <$> askLLMLines complete (buildDescriptionPrompt issue)
   where
+    parse :: [Text] -> Either Text (Text, Text, Text)
     parse [description, action, complexity]
       | not (any T.null [description, action]) && complexity `elem` (["low", "medium", "high"] :: [Text]) = Right (description, action, complexity)
     parse _ = badFormat
 
 
-withIssueData :: AE.FromJSON a => Issues.Issue -> b -> (a -> b) -> b
-withIssueData issue fallback f = case AE.fromJSON (getAeson issue.issueData) of
-  AE.Success d -> f d
-  _ -> fallback
+data PromptDetail = Brief | Full
 
 
 -- | Fence the untrusted issue payload so the system prompt can treat it as data.
 issuePrompt :: Text -> Text -> Text
 issuePrompt systemPrompt ctx = systemPrompt <> "\n\n<issue>\n" <> ctx <> "\n</issue>"
+
+
+renderFacts :: (Text, [(Text, Text)]) -> Text
+renderFacts (heading, facts) = T.intercalate "\n" $ heading : [k <> ": " <> v | (k, v) <- facts]
+
+
+issueTypeLabel :: Issues.IssueType -> Text
+issueTypeLabel = \case
+  Issues.ApiChange -> "API change"
+  Issues.RuntimeException -> "Runtime exception"
+  Issues.QueryAlert -> "Query alert"
+  Issues.LogPattern -> "Log pattern"
+  Issues.LogPatternRateChange -> "Log pattern rate change"
+  Issues.Performance -> "Performance issue"
+  Issues.Frontend -> "Frontend issue"
+  Issues.Uptime -> "Downtime"
+  Issues.Cron -> "Cron monitor"
+  Issues.Feedback -> "User feedback"
+
+
+issueContext :: PromptDetail -> Issues.Issue -> Text
+issueContext detail issue =
+  maybe fallback (renderFacts . payloadFacts) (Issues.issuePayload issue)
+  where
+    fallback =
+      (case detail of Brief -> "Generate a concise title for this "; Full -> "Describe this ")
+        <> T.toLower (issueTypeLabel issue.issueType)
+        <> ". Title: "
+        <> issue.title
+    payloadFacts :: Issues.IssuePayload -> (Text, [(Text, Text)])
+    payloadFacts = \case
+      Issues.ApiChangeP d -> (schemaObservationPrompt d, [])
+      Issues.RuntimeExceptionP d ->
+        ( pick "Generate a concise title for this runtime exception." "Analyze this runtime exception and provide debugging guidance."
+        , case detail of
+            Brief ->
+              [ ("Error type", d.errorType)
+              , ("Error message", T.take 100 d.errorMessage)
+              , ("Service", Issues.serviceLabel issue.service)
+              ]
+            Full ->
+              [ ("Error type", d.errorType)
+              , ("Error message", d.errorMessage)
+              , ("Stack trace", T.take 500 d.stackTrace)
+              , ("Request context", fromMaybe "Unknown" d.requestMethod <> " " <> fromMaybe "Unknown" d.requestPath)
+              , ("Occurrences", show d.occurrenceCount)
+              ]
+        )
+      Issues.QueryAlertP d ->
+        ( pick "Generate a concise title for this query alert." "Describe this query alert and recommended actions."
+        , [("Query", d.queryName)]
+            <> full [("Expression", d.queryExpression)]
+            <> [("Threshold", show d.thresholdValue <> " (" <> display d.thresholdType <> ")"), ("Actual value", show d.actualValue)]
+            <> full [("Triggered at", show d.triggeredAt)]
+        )
+      Issues.LogPatternP d ->
+        ( pick "Generate a concise title for this new log pattern detection." "Describe this new log pattern and its implications."
+        , [ ("Log pattern", d.logPattern)
+          , ("Sample message", fromMaybe "N/A" d.sampleMessage)
+          , ("Log level", fromMaybe "unknown" d.logLevel)
+          , ("Service", Issues.serviceLabel d.serviceName)
+          ]
+            <> full [("Source", d.sourceField)]
+            <> [("Occurrences", show d.occurrenceCount)]
+            <> full [("First seen", show d.firstSeenAt)]
+        )
+      Issues.LogPatternRateChangeP d ->
+        let dir = display d.changeDirection
+         in ( pick ("Generate a concise title for this log pattern volume " <> dir <> ".") ("Describe this log pattern volume " <> dir <> " and its implications.")
+            , [("Log pattern", d.logPattern)]
+                <> full [("Sample message", fromMaybe "N/A" d.sampleMessage)]
+                <> [("Current rate", Issues.showRate d.currentRatePerHour), (pick "Baseline" "Baseline mean", Issues.showRate d.baselineMean)]
+                <> full [("Baseline MAD", Issues.showRate d.baselineMad), ("Z-score", Issues.showRounded "" d.zScore <> " standard deviations")]
+                <> [("Change", Issues.showPct d.changePercent), ("Service", Issues.serviceLabel d.serviceName)]
+                <> full [("Log level", fromMaybe "unknown" d.logLevel)]
+            )
+      Issues.PerformanceP d ->
+        let kind = display d.kind
+         in ( pick ("Generate a concise title for this " <> kind <> " performance issue.") ("Describe this " <> kind <> " performance issue, why it is slow, and how to fix it.")
+            , [("Query", pick (T.take 200 d.query) d.query)]
+                <> full [("Database", fromMaybe "unknown" d.dbSystem)]
+                <> [("Transaction", fromMaybe "unknown" d.transaction)]
+                <> full [("Parent span", fromMaybe "unknown" d.parentSpan)]
+                <> [ (pick "Repeats" "Repeats in one trace", show d.repeatCount)
+                   , ("Duration impact", Issues.showRounded " ms" d.durationImpactMs)
+                   , ("Service", Issues.serviceLabel issue.service)
+                   ]
+            )
+      Issues.FrontendP d ->
+        let kind = display d.kind
+         in ( pick ("Generate a concise title for this " <> kind <> " on a web page.") ("Describe this " <> kind <> ": what the user was likely trying to do and why the page did not respond.")
+            , [("Element", d.element)]
+                <> full [("Selector", fromMaybe "unknown" d.selector)]
+                <> [("Page", fromMaybe "unknown" d.pageUrl), ("Clicks in the burst", show d.clickCount)]
+            )
+      Issues.UptimeP d ->
+        ( pick "Generate a concise title for this failing uptime check." "Describe this failing uptime check and the likely causes to look at first."
+        , [("Check", d.name), ("URL", d.url)]
+            <> full [("Expected status", show d.expectedStatus)]
+            <> [("Failure", d.reason)]
+            <> full [("Response time", show d.durationMs <> " ms")]
+        )
+      Issues.CronP d ->
+        let failure = display d.failure
+         in ( pick ("Generate a concise title for a scheduled job that " <> failure <> ".") ("Describe this scheduled job issue (" <> failure <> ") and what to check first.")
+            , [("Job", d.name <> " (" <> d.slug <> ")")]
+                <> full [("Expected a check-in by", show d.expectedBy), ("Last check-in", maybe "never" show d.lastCheckinAt)]
+            )
+      Issues.FeedbackP d ->
+        ( pick "Summarise this user feedback as a short title naming the problem or request." "Summarise this user feedback in two sentences: what the user hit, and what to check first."
+        , [("Feedback", d.message), ("Page", fromMaybe "unknown" d.pageUrl)]
+            <> full [("An error occurred in the same trace", bool "no" "yes" (isJust d.relatedErrorHash))]
+        )
+      where
+        pick :: a -> a -> a
+        pick b f = case detail of Brief -> b; Full -> f
+        full :: [(Text, Text)] -> [(Text, Text)]
+        full = pick []
 
 
 buildTitlePrompt :: Issues.Issue -> Text
@@ -145,68 +259,7 @@ buildTitlePrompt issue =
           ## Output
           Return only the title text. No quotes, no markdown, no trailing newline beyond the line itself.
           |]
-    case issue.issueType of
-      Issues.ApiChange ->
-        withIssueData @Issues.APIChangeData issue "Generate a concise title for this schema observation." schemaObservationPrompt
-      Issues.RuntimeException ->
-        withIssueData @Issues.RuntimeExceptionData issue "Generate a concise title for this runtime exception." \d ->
-          [fmtTrim|Generate a concise title for this runtime exception.
-            Error type: {d.errorType}
-            Error message: {T.take 100 d.errorMessage}
-            Service: {Issues.serviceLabel issue.service}|]
-      Issues.QueryAlert ->
-        withIssueData @Issues.QueryAlertData issue "Generate a concise title for this query alert." \d ->
-          [fmtTrim|Generate a concise title for this query alert.
-            Query: {d.queryName}
-            Threshold: {d.thresholdValue} ({display d.thresholdType})
-            Actual value: {d.actualValue}|]
-      Issues.LogPattern ->
-        withIssueData @Issues.LogPatternData issue ("Generate a concise title for this log pattern. Title: " <> issue.title) \d ->
-          [fmtTrim|Generate a concise title for this new log pattern detection.
-            Log pattern: {d.logPattern}
-            Sample message: {fromMaybe "N/A" d.sampleMessage}
-            Log level: {fromMaybe "unknown" d.logLevel}
-            Service: {Issues.serviceLabel d.serviceName}
-            Occurrences: {d.occurrenceCount}|]
-      Issues.LogPatternRateChange ->
-        withIssueData @Issues.LogPatternRateChangeData issue ("Generate a concise title for this log pattern rate change. Title: " <> issue.title) \d ->
-          let dir = display d.changeDirection
-           in [fmtTrim|Generate a concise title for this log pattern volume {dir}.
-            Log pattern: {d.logPattern}
-            Current rate: {Issues.showRate d.currentRatePerHour}
-            Baseline: {Issues.showRate d.baselineMean}
-            Change: {Issues.showPct d.changePercent}
-            Service: {Issues.serviceLabel d.serviceName}|]
-      Issues.Performance ->
-        withIssueData @Issues.PerformanceData issue ("Generate a concise title for this performance issue. Title: " <> issue.title) \d ->
-          let impact = show @Text (round d.durationImpactMs :: Int)
-           in [fmtTrim|Generate a concise title for this {display d.kind} performance issue.
-            Query: {T.take 200 d.query}
-            Transaction: {fromMaybe "unknown" d.transaction}
-            Repeats: {d.repeatCount}
-            Duration impact: {impact} ms
-            Service: {Issues.serviceLabel issue.service}|]
-      Issues.Frontend ->
-        withIssueData @Issues.FrontendData issue ("Generate a concise title for this frontend issue. Title: " <> issue.title) \d ->
-          [fmtTrim|Generate a concise title for this {display d.kind} on a web page.
-            Element: {d.element}
-            Page: {fromMaybe "unknown" d.pageUrl}
-            Clicks in the burst: {d.clickCount}|]
-      Issues.Uptime ->
-        withIssueData @Issues.UptimeData issue ("Generate a concise title for this downtime. Title: " <> issue.title) \d ->
-          [fmtTrim|Generate a concise title for this failing uptime check.
-            Check: {d.name}
-            URL: {d.url}
-            Failure: {d.reason}|]
-      Issues.Cron ->
-        withIssueData @Issues.CronData issue ("Generate a concise title for this cron monitor issue. Title: " <> issue.title) \d ->
-          [fmtTrim|Generate a concise title for a scheduled job that {display d.failure}.
-            Job: {d.name} ({d.slug})|]
-      Issues.Feedback ->
-        withIssueData @Issues.FeedbackData issue ("Generate a concise title for this user feedback. Title: " <> issue.title) \d ->
-          [fmtTrim|Summarise this user feedback as a short title naming the problem or request.
-            Feedback: {d.message}
-            Page: {fromMaybe "unknown" d.pageUrl}|]
+    (issueContext Brief issue)
 
 
 buildDescriptionPrompt :: Issues.Issue -> Text
@@ -236,88 +289,7 @@ buildDescriptionPrompt issue =
           high
           </example>
           |]
-    case issue.issueType of
-      Issues.ApiChange ->
-        withIssueData @Issues.APIChangeData issue "Describe this schema observation." schemaObservationPrompt
-      Issues.RuntimeException ->
-        withIssueData @Issues.RuntimeExceptionData issue "Analyze this runtime exception." \d ->
-          [fmtTrim|Analyze this runtime exception and provide debugging guidance.
-            Error type: {d.errorType}
-            Error message: {d.errorMessage}
-            Stack trace: {T.take 500 d.stackTrace}
-            Request context: {fromMaybe "Unknown" d.requestMethod} {fromMaybe "Unknown" d.requestPath}
-            Occurrences: {d.occurrenceCount}|]
-      Issues.QueryAlert ->
-        withIssueData @Issues.QueryAlertData issue "Describe this query alert." \d ->
-          [fmtTrim|Describe this query alert and recommended actions.
-            Query: {d.queryName}
-            Expression: {d.queryExpression}
-            Threshold: {d.thresholdValue} ({display d.thresholdType})
-            Actual value: {d.actualValue}
-            Triggered at: {show d.triggeredAt}|]
-      Issues.LogPattern ->
-        withIssueData @Issues.LogPatternData issue ("Describe this log pattern issue. Title: " <> issue.title) \d ->
-          [fmtTrim|Describe this new log pattern and its implications.
-            Log pattern: {d.logPattern}
-            Sample message: {fromMaybe "N/A" d.sampleMessage}
-            Log level: {fromMaybe "unknown" d.logLevel}
-            Service: {Issues.serviceLabel d.serviceName}
-            Source: {d.sourceField}
-            Occurrences: {d.occurrenceCount}
-            First seen: {show d.firstSeenAt}|]
-      Issues.LogPatternRateChange ->
-        withIssueData @Issues.LogPatternRateChangeData issue ("Describe this log pattern rate change. Title: " <> issue.title) \d ->
-          let dir = display d.changeDirection
-           in [fmtTrim|Describe this log pattern volume {dir} and its implications.
-            Log pattern: {d.logPattern}
-            Sample message: {fromMaybe "N/A" d.sampleMessage}
-            Current rate: {Issues.showRate d.currentRatePerHour}
-            Baseline mean: {Issues.showRate d.baselineMean}
-            Baseline MAD: {Issues.showRate d.baselineMad}
-            Z-score: {Issues.showRounded "" d.zScore} standard deviations
-            Change: {Issues.showPct d.changePercent}
-            Service: {Issues.serviceLabel d.serviceName}
-            Log level: {fromMaybe "unknown" d.logLevel}|]
-      Issues.Performance ->
-        withIssueData @Issues.PerformanceData issue ("Describe this performance issue. Title: " <> issue.title) \d ->
-          let impact = show @Text (round d.durationImpactMs :: Int)
-           in [fmtTrim|Describe this {display d.kind} performance issue, why it is slow, and how to fix it.
-            Query: {d.query}
-            Database: {fromMaybe "unknown" d.dbSystem}
-            Transaction: {fromMaybe "unknown" d.transaction}
-            Parent span: {fromMaybe "unknown" d.parentSpan}
-            Repeats in one trace: {d.repeatCount}
-            Duration impact: {impact} ms
-            Service: {Issues.serviceLabel issue.service}|]
-      Issues.Frontend ->
-        withIssueData @Issues.FrontendData issue ("Describe this frontend issue. Title: " <> issue.title) \d ->
-          [fmtTrim|Describe this {display d.kind}: what the user was likely trying to do and why the page did not respond.
-            Element: {d.element}
-            Selector: {fromMaybe "unknown" d.selector}
-            Page: {fromMaybe "unknown" d.pageUrl}
-            Clicks in the burst: {d.clickCount}|]
-      Issues.Uptime ->
-        withIssueData @Issues.UptimeData issue ("Describe this downtime. Title: " <> issue.title) \d ->
-          [fmtTrim|Describe this failing uptime check and the likely causes to look at first.
-            Check: {d.name}
-            URL: {d.url}
-            Expected status: {d.expectedStatus}
-            Failure: {d.reason}
-            Response time: {d.durationMs} ms|]
-      Issues.Cron ->
-        withIssueData @Issues.CronData issue ("Describe this cron monitor issue. Title: " <> issue.title) \d ->
-          let lastRun = maybe "never" (show @Text) d.lastCheckinAt
-           in [fmtTrim|Describe this scheduled job issue ({display d.failure}) and what to check first.
-            Job: {d.name} ({d.slug})
-            Expected a check-in by: {show @Text d.expectedBy}
-            Last check-in: {lastRun}|]
-      Issues.Feedback ->
-        withIssueData @Issues.FeedbackData issue ("Summarise this user feedback. Title: " <> issue.title) \d ->
-          let related = bool "no" "yes" (isJust d.relatedErrorHash)
-           in [fmtTrim|Summarise this user feedback in two sentences: what the user hit, and what to check first.
-            Feedback: {d.message}
-            Page: {fromMaybe "unknown" d.pageUrl}
-            An error occurred in the same trace: {related}|]
+    (issueContext Full issue)
 
 
 schemaObservationPrompt :: Issues.APIChangeData -> Text
@@ -376,23 +348,18 @@ buildCriticalityPrompt issue =
           1
           </example>
           |]
-    case issue.issueType of
-      Issues.ApiChange ->
-        withIssueData @Issues.APIChangeData issue ("API change: " <> issue.title) \d ->
-          [fmtTrim|API change detected
-            Endpoint: {d.endpointMethod} {d.endpointPath}
-            New fields: {V.length d.newFields}
-            Deleted fields: {V.length d.deletedFields}
-            Modified fields: {V.length d.modifiedFields}|]
-      Issues.RuntimeException -> "Runtime exception: " <> issue.title
-      Issues.QueryAlert -> "Query alert: " <> issue.title
-      Issues.LogPattern -> "Log pattern: " <> issue.title
-      Issues.LogPatternRateChange -> "Log pattern rate change: " <> issue.title
-      Issues.Performance -> "Performance issue: " <> issue.title
-      Issues.Frontend -> "Frontend issue: " <> issue.title
-      Issues.Uptime -> "Downtime: " <> issue.title
-      Issues.Cron -> "Cron monitor: " <> issue.title
-      Issues.Feedback -> "User feedback: " <> issue.title
+    case Issues.issuePayload issue of
+      Just (Issues.ApiChangeP d) ->
+        renderFacts
+          ( "API change detected"
+          ,
+            [ ("Endpoint", d.endpointMethod <> " " <> d.endpointPath)
+            , ("New fields", show $ V.length d.newFields)
+            , ("Deleted fields", show $ V.length d.deletedFields)
+            , ("Modified fields", show $ V.length d.modifiedFields)
+            ]
+          )
+      _ -> issueTypeLabel issue.issueType <> ": " <> issue.title
 
 
 updateIssueClassification :: Issues.IssueId -> Bool -> Natural -> Tx.Transaction ()
@@ -407,16 +374,16 @@ updateIssueClassification issueId isCritical breakingCount =
 -- | Analyze a RuntimeException issue to extract root cause and error category.
 -- Returns (rootCause, category) on success.
 analyzeErrorPattern :: (Text -> Eff es (Either Text Text)) -> Issues.Issue -> Eff es (Either Text (Text, Text))
-analyzeErrorPattern complete issue
-  | issue.issueType /= Issues.RuntimeException = pure $ Left "not a runtime exception"
-  | otherwise = (parse =<<) <$> askLLMLines complete (buildAnalysisPrompt issue)
+analyzeErrorPattern complete issue = case Issues.issuePayload issue of
+  Just (Issues.RuntimeExceptionP d) -> (parse =<<) <$> askLLMLines complete (buildAnalysisPrompt d)
+  _ -> pure $ Left "not a runtime exception"
   where
     parse (rootCause : category : _) = Right (rootCause, T.toLower category)
     parse _ = badFormat
 
 
-buildAnalysisPrompt :: Issues.Issue -> Text
-buildAnalysisPrompt issue = withIssueData @Issues.RuntimeExceptionData issue "" \d ->
+buildAnalysisPrompt :: Issues.RuntimeExceptionData -> Text
+buildAnalysisPrompt d =
   let errType = d.errorType
       msg = T.take 300 d.errorMessage
       stack = T.take 500 d.stackTrace

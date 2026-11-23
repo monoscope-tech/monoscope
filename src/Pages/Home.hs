@@ -84,7 +84,7 @@ homeGetH pid = do
   (sess, _, bw) <- mkPageCtx pid
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now
-      inbox = Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.spam = Issues.IsNull, Issues.hideLowSeverity = True}
+      inbox = Issues.inboxFilters{Issues.hideLowSeverity = True}
   (newIssues, newIssueCount) <- Issues.selectIssues pid Issues.PIssueL inbox{Issues.timeRange = Just (dayAgo, now), Issues.period = "24h", Issues.limit = 6}
   (_, openIssueCount) <- Issues.selectIssues pid Issues.PIssue inbox{Issues.limit = 0}
   resolved <- Issues.resolvedIssuesSince pid dayAgo
@@ -344,8 +344,8 @@ quiet_ icon msg = div_ [class_ "flex items-center gap-3 rounded-2xl border borde
   toHtml msg
 
 
-cardCls :: Text
-cardCls = "group/card relative flex flex-col gap-2.5 min-w-0 rounded-2xl surface-raised p-4 shadow-[0_0_0_1px_var(--color-strokeWeak)] hover:shadow-[0_0_0_1px_var(--color-strokeStrong)] transition-shadow"
+homeCard_ :: ([Attribute] -> Html () -> Html ()) -> [Attribute] -> Html () -> Html ()
+homeCard_ el attrs = el (class_ "group/card relative flex flex-col gap-2.5 min-w-0 rounded-2xl surface-raised p-4 shadow-[0_0_0_1px_var(--color-strokeWeak)] hover:shadow-[0_0_0_1px_var(--color-strokeStrong)] transition-shadow" : attrs)
 
 
 -- | A card's identity row: a toned dot and id (the dot's meaning is repeated in text for screen readers), then context.
@@ -361,7 +361,7 @@ cardMeta_ toneM dotLabel ident context = div_ [class_ "flex items-center gap-2 m
 
 
 issueCard_ :: Projects.ProjectId -> UTCTime -> Issues.IssueL -> Html ()
-issueCard_ pid now i = a_ ([href_ $ issueDetailUrl pid i.base.id, class_ cardCls] <> navTabAttrs) do
+issueCard_ pid now i = homeCard_ a_ (href_ (issueDetailUrl pid i.base.id) : navTabAttrs) do
   let label = T.toTitle $ display i.base.severity
   cardMeta_ (Just $ fromMaybe NeutralBadge $ severityTone i.base.severity) label ("#" <> show i.base.seqNum) do
     span_ [class_ "font-medium text-textStrong"] $ toHtml label
@@ -382,7 +382,7 @@ activityStrip_ fill buckets = div_ [class_ "flex h-6 items-end gap-0.5", role_ "
 
 
 resolvedCard_ :: Projects.ProjectId -> UTCTime -> Issues.ResolvedIssue -> Html ()
-resolvedCard_ pid now r = a_ ([href_ $ issueDetailUrl pid r.id, class_ cardCls] <> navTabAttrs) do
+resolvedCard_ pid now r = homeCard_ a_ (href_ (issueDetailUrl pid r.id) : navTabAttrs) do
   cardMeta_ Nothing "Resolved" ("#" <> show r.seqNum) do
     span_ [class_ "inline-flex items-center gap-1 text-textSuccess"] $ faSprite_ "circle-check" "regular" "w-3 h-3" >> bool "Resolved" "Auto-resolved" (r.event == Issues.IEAutoResolved)
     whenJust r.service $ span_ [class_ "truncate"] . toHtml
@@ -392,7 +392,7 @@ resolvedCard_ pid now r = a_ ([href_ $ issueDetailUrl pid r.id, class_ cardCls] 
 
 -- | An agent-flagged issue or win, in the same card as the issues beside it.
 highlightCard_ :: Projects.ProjectId -> UTCTime -> Issues.HomeHighlight -> Html ()
-highlightCard_ pid now h = div_ [id_ $ "highlight-" <> h.id.toText, class_ cardCls] do
+highlightCard_ pid now h = homeCard_ div_ [id_ $ "highlight-" <> h.id.toText] do
   let (tone, label) = case h.kind of
         Issues.HKIssue -> (ErrorBadge, "Flagged issue")
         Issues.HKImprovement -> (SuccessBadge, "Improvement")

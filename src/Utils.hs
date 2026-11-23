@@ -13,7 +13,6 @@ module Utils (
   truncateMiddle,
   truncateText,
   JSONHttpApiData (..),
-  parseTime,
   copyToClipboardAttr_,
   faSprite_,
   faSymbolDefs_,
@@ -133,7 +132,6 @@ import Data.Time.Calendar (fromGregorian, toGregorian)
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (FormatTime, formatTime)
-import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Time.LocalTime (timeOfDayToTime, timeToTimeOfDay)
 import Data.Vector qualified as V
 import GHC.Generics (Rep)
@@ -149,8 +147,10 @@ import Network.HTTP.Types (urlEncode)
 import Network.HTTP.Types.URI qualified as URI
 import Network.URI (escapeURIString, isUnescapedInURI, parseURI, uriRegName)
 import Numeric (showFFloat, showHex)
+import Pkg.CLIFormat (parseSummaryEl)
 import Pkg.DeriveUtils (embedIconEntries)
 import Pkg.IngestBudget qualified as IngestBudget
+import Pkg.Parser.Expr (kqlQuoted)
 import Relude hiding (notElem)
 import Relude.Extra.Tuple (toSnd)
 import Servant hiding ((:>))
@@ -173,17 +173,6 @@ escapedQueryPartial = toText . escapeURIString isUnescapedInURI . toString
 -- | Drop empty text so \"\" and Nothing collapse to one absent case.
 nonEmptyT :: Maybe Text -> Maybe Text
 nonEmptyT = mfilter (not . T.null)
-
-
--- | A KQL string literal. Escaping matters: a value carrying a @"@ would close the literal
--- early, and the parser reads @\\@ as an escape, so backslashes go first.
---
--- >>> kqlQuoted "say \"hi\""
--- "\"say \\\"hi\\\"\""
--- >>> kqlQuoted "C:\\tmp"
--- "\"C:\\\\tmp\""
-kqlQuoted :: Text -> Text
-kqlQuoted value = "\"" <> T.replace "\"" "\\\"" (T.replace "\\" "\\\\" value) <> "\""
 
 
 onpointerdown_ :: Text -> Attribute
@@ -792,9 +781,9 @@ getSeriesColorHex name
       | code >= 500 = "#ef4444"
       | otherwise = "#a855f7"
     percentileColorHex p = case T.toLower p of
-      v | v `elem` ["p50", "median", "min"] -> "#16a34a"
-      v | v `elem` ["p75", "q1"] -> "#059669"
-      "p90" -> "#bd7d00"
+      v | v `elem` ["p50", "median", "min"] -> "#0d9488"
+      v | v `elem` ["p75", "q1"] -> "#3b82f6"
+      "p90" -> "#b38600"
       v | v `elem` ["p95", "q3"] -> "#ea580c"
       "p99" -> "#ef4444"
       v | v `elem` ["p100", "max"] -> "#f43f5e"
@@ -851,15 +840,6 @@ sinceWindows =
   , ("14D", (3600 * 24 * 14, "Last 14 days"))
   , ("30D", (3600 * 24 * 30, "Last 30 days"))
   ]
-
-
-parseTime :: Maybe Text -> Maybe Text -> Maybe Text -> UTCTime -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
-parseTime fromM toM sinceM now = case (`lookup` sinceWindows) =<< sinceM of
-  Just (secs, label) -> (Just $ addUTCTime (fromIntegral $ negate secs) now, Just now, Just (label, ""))
-  Nothing ->
-    let parseT = (>>= iso8601ParseM @Maybe @UTCTime . toString)
-        (f, t) = (parseT fromM, parseT toM)
-     in (f, t, liftA2 (,) (formatUTC <$> f) (formatUTC <$> t))
 
 
 -- A newtype wrapper that uses the FromJSON instance to implement FromHttpApiData,
@@ -1805,16 +1785,6 @@ summaryFilterPath = \case
 -- the header scannable and surface the full value via tooltip.
 summaryFieldIsLong :: Text -> Bool
 summaryFieldIsLong f = f `elem` ["url", "route", "resource", "target", "db.query.text", "span_name"]
-
-
--- | Parse a `field;style⇒value` segment. Returns Nothing for malformed input.
-parseSummaryEl :: Text -> Maybe (Text, Text, Text)
-parseSummaryEl seg = do
-  let (prefix, rest) = T.breakOn "⇒" seg
-  value <- T.stripPrefix "⇒" rest
-  let (field, styleSep) = T.breakOn ";" prefix
-  style <- T.stripPrefix ";" styleSep
-  pure (field, style, value)
 
 
 -- | Render a single `field;style⇒value` element. When the field maps to a

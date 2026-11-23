@@ -1458,18 +1458,14 @@ test-suite unit-tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
-      BackgroundJobs.SpikeDetectionSpec
       Data.Effectful.HasqlSpec
       Data.Effectful.LLMSpec
       Models.DashboardTemplatesSpec
       Models.Telemetry.DeterministicIdSpec
-      Models.Telemetry.MetricServiceNameSpec
-      Models.Telemetry.TimestampMicrosSpec
       Pages.BodyWrapperSpec
       Pages.OnboardingSpec
       Pkg.DrainSpec
       Pkg.IngestBudgetSpec
-      Pkg.KafkaMetricsSpec
       Pkg.ParserSpec
       Pkg.QueryCacheSpec
       Pkg.WidgetLazySpec

@@ -1,4 +1,4 @@
-module Pages.Components (codeContextUrl, drawer_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, floatingModal_, formActionsModal_, dangerAction_, floatingDialog_, floatingCard_, mergedAttrs, floatingScrim, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerHints_, pickerPopover_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (codeContextUrl, drawer_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityDrawer_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, morphPostAttrs_, pollSelfAttrs_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, floatingModal_, formActionsModal_, dangerAction_, dangerZone_, floatingDialog_, floatingCard_, mergedAttrs, floatingScrim, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerHints_, pickerPopover_, durationMenu_, primaryButton_, submitBtn_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -8,7 +8,7 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (Attribute (..), makeAttribute, makeElement)
-import Lucid.Htmx (hxGet_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
@@ -17,7 +17,7 @@ import Pkg.ErrorFingerprint qualified as EF
 import PyF qualified
 import Relude
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), copyToClipboardAttr_, countNoun, deleteParam, faSprite_, fmtInt, formatUTC, loadingIndicator_, navTabAttrs, navTabStrip_, nonEmptyT, popoverPanel_, popoverTrigger_, uiToggle_)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), copyToClipboardAttr_, countNoun, deleteParam, faSprite_, fmtInt, formatUTC, htmxIndicator_, loadingIndicator_, navTabAttrs, navTabStrip_, nonEmptyT, popoverPanel_, popoverTrigger_, uiToggle_)
 import Web.Links
 
 
@@ -49,14 +49,13 @@ data EmptyStateCfg = EmptyStateCfg
 -- Usage: @emptyState_ def{icon = Just "chart-line", action = ESLink "/setup" "Get started"} "No data" "…"@
 emptyState_ :: EmptyStateCfg -> Text -> Text -> Html ()
 emptyState_ cfg title subTxt =
-  section_ [class_ $ sectionCls <> " mx-auto text-center flex flex-col gap-3 empty-state"] do
-    div_ [] $ faSprite_ (fromMaybe "empty" cfg.icon) "regular" iconCls
+  section_ [class_ $ (case cfg.size of ESFull -> "max-w-max my-8 p-5 sm:py-8 sm:px-12"; ESCompact -> "max-w-sm my-2 p-4") <> " mx-auto text-center flex flex-col gap-3 empty-state"] do
+    div_ [] $ faSprite_ (fromMaybe "empty" cfg.icon) "regular" (case cfg.size of ESFull -> "h-12 w-12 stroke-strokeBrand-strong fill-fillBrand-strong"; ESCompact -> "h-6 w-6 text-iconNeutral")
     div_ [class_ "flex flex-col gap-1.5"] do
       -- p, not h2: an empty state announces a condition, it does not open a document
       -- section. As an h2 it outranked the page's own subject heading in the outline
       -- (a screen reader heard "No stack trace in this event" before the issue title).
-      -- titleCls is unchanged, so nothing moves visually.
-      p_ [class_ titleCls] $ toHtml title
+      p_ [class_ $ case cfg.size of { ESFull -> "text-base text-textStrong font-semibold"; ESCompact -> "text-sm text-textWeak" }] $ toHtml title
       unless (T.null subTxt) $ p_ [class_ "text-sm text-textWeak max-w-md mx-auto"] $ toHtml subTxt
       case cfg.action of
         ESNone -> pass
@@ -65,18 +64,23 @@ emptyState_ cfg title subTxt =
             $ a_ ([href_ u, class_ "btn text-sm w-max mx-auto btn-primary"] <> bool [] [target_ "_blank", rel_ "noopener noreferrer"] ("https://" `T.isPrefixOf` u))
             $ toHtml txt
         ESCustom h -> h
-  where
-    (sectionCls, iconCls, titleCls) = case cfg.size of
-      ESFull -> ("max-w-max my-8 p-5 sm:py-8 sm:px-12", "h-12 w-12 stroke-strokeBrand-strong fill-fillBrand-strong", "text-base text-textStrong font-semibold")
-      ESCompact -> ("max-w-sm my-2 p-4", "h-6 w-6 text-iconNeutral", "text-sm text-textWeak")
 
 
 -- | The search box: magnifying glass + @type=search@ input labelled @ph@. @extra@ sizes
 -- the wrapper; @attrs@ carry the behavior (a 'filterInputAttr_', a form name, htmx).
-searchInput_ :: Text -> Text -> [Attribute] -> Html ()
+searchInput_ :: Monad m => Text -> Text -> [Attribute] -> HtmlT m ()
 searchInput_ extra ph attrs = label_ [class_ $ "input input-sm flex shrink-0 items-center gap-2 " <> extra] do
   faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 shrink-0 text-iconNeutral"
   input_ $ [type_ "search", class_ "min-w-0 grow bg-transparent text-sm max-md:text-base", placeholder_ ph, Aria.label_ (T.dropWhileEnd (== '…') ph)] <> attrs
+
+
+-- | Shell for an entity detail drawer: full-bleed header, optional sticky nav, then
+-- sections separated by rules.
+entityDrawer_ :: Html () -> Maybe (Html ()) -> Html () -> Html ()
+entityDrawer_ hdr navM body = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
+  hdr
+  sequence_ navM
+  main_ [class_ "min-w-0 space-y-5 p-5 [&>*+*]:border-t [&>*+*]:border-strokeWeak [&>*+*]:pt-4"] body
 
 
 -- | Header of an entity detail drawer: icon and title with inline @badges@, then the
@@ -198,7 +202,7 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
             if my.checked then
               add .overflow-hidden to <body/>
               set my._focusTrapCleanup to window.createFocusTrap(my.closest('.drawer').querySelector('.drawer-side > [role=dialog]'))
-              set :closeBtn to my.closest('.drawer').querySelector('[data-drawer-close-primary]') or my.closest('.drawer').querySelector('button[aria-label="Close drawer"]')
+              set :closeBtn to my.closest('.drawer').querySelector('[data-drawer-close-primary]') or my.closest('.drawer').querySelector('button[aria-label="Close drawer"], [role=button][aria-label="Close drawer"]')
               if :closeBtn then call :closeBtn.focus() end
             else
               remove .overflow-hidden from <body/>
@@ -230,11 +234,13 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
       ]
       do
         div_ [class_ "drawer-floating-close sticky top-3 z-30 h-0 flex justify-end"]
-          $ button_
-            [ type_ "button"
+          $ label_
+            [ Lucid.for_ drawerId
+            , role_ "button"
+            , tabindex_ "0"
+            , keyboardActivateAttr_
             , Aria.label_ "Close drawer"
             , class_ "btn btn-sm btn-circle btn-ghost mr-3 text-iconNeutral hover:bg-fillWeak hover:text-iconBrand max-sm:size-11"
-            , term "_" [text|on click set #${drawerId}.checked to false then trigger change on #${drawerId}|]
             ]
           $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
         div_
@@ -503,6 +509,12 @@ primaryButton_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
 primaryButton_ attrs = button_ (class_ " btn btn-primary btn-sm " : attrs)
 
 
+submitBtn_ :: Monad m => Text -> Text -> HtmlT m ()
+submitBtn_ indicatorId label = button_ [type_ "submit", class_ "btn btn-sm btn-primary gap-2"] do
+  toHtml label
+  htmxIndicator_ indicatorId LdXS
+
+
 headerRow_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
 headerRow_ attrs = div_ (class_ " flex items-center justify-between " : attrs)
 
@@ -659,6 +671,17 @@ timeWindowVals_ :: Text -> Attribute
 timeWindowVals_ defaultSince = term "hx-vals" $ "js:{...(p=>({since:p.since ?? (p.from || p.to ? '' : '" <> defaultSince <> "'),from:p.from || '',to:p.to || ''}))(Object.fromEntries(new URLSearchParams(location.search)))}"
 
 
+-- | htmx attrs for a POST form that morphs @#targetId@ in place with @#indicatorId@ spinning.
+morphPostAttrs_ :: Text -> Text -> Text -> [Attribute]
+morphPostAttrs_ url targetId indicatorId = [action_ url, method_ "post", hxPost_ url, hxTarget_ ("#" <> targetId), hxSelect_ ("#" <> targetId), hxSwap_ "outerMorph", hxIndicator_ ("#" <> indicatorId)]
+
+
+-- | htmx attrs that fetch @url@ on @trigger@ and replace this element with @#cid@ from the response.
+-- @hx-preload@ is off because the body preloads on hover, which would refetch the container.
+pollSelfAttrs_ :: Text -> Text -> Text -> [Attribute]
+pollSelfAttrs_ cid url trigger = [hxGet_ url, hxTrigger_ trigger, hxTarget_ "this", hxSwap_ "outerHTML", hxSelect_ $ "#" <> cid, makeAttribute "hx-preload" "false"]
+
+
 -- | The skeleton half of 'Deferred', also usable on its own for a panel whose body is one
 -- fragment of a larger page.
 deferredShell_ :: Text -> Text -> [Attribute] -> Html () -> Html ()
@@ -671,15 +694,8 @@ deferredShell_ containerId url extra =
           -- instead of a fixed timeout, which is what stops a deferred page from quietly
           -- passing an assertion it never actually ran against real content.
           data_ "deferred-shell" ""
-        , hxGet_ url
-        , hxTrigger_ "load"
-        , hxTarget_ "this"
-        , hxSwap_ "outerHTML"
-        , hxSelect_ $ "#" <> containerId
-        , -- The body inherits @hx-preload: mouseover@; without this the shell would also fetch
-          -- itself on hover, doubling the very request it exists to make once.
-          makeAttribute "hx-preload" "false"
         ]
+          <> pollSelfAttrs_ containerId url "load"
           <> extra
       )
 
@@ -731,19 +747,19 @@ instance Default FieldCfg where def = FieldCfg Nothing "text" "" "" [] Nothing N
 -- | Unified form field: auto-generates input from cfg, or uses custom content when provided
 formField_ :: Monad m => FieldSize -> FieldCfg -> Text -> Text -> Bool -> Maybe (HtmlT m ()) -> HtmlT m ()
 formField_ size cfg lbl name required customM =
-  fieldset_ [class_ wrapperCls] do
-    label_ [class_ labelCls, Lucid.for_ fid] do
+  fieldset_ [class_ $ case size of { FieldSm -> "fieldset flex-1 min-w-0"; FieldMd -> "fieldset" }] do
+    label_ [class_ $ case size of { FieldSm -> "label text-xs text-textStrong"; FieldMd -> "label flex w-full items-center gap-1 text-textStrong" }, Lucid.for_ fid] do
       whenJust cfg.dot \color -> div_ [class_ $ "w-1.5 h-1.5 rounded-full shrink-0 " <> color] ""
       whenJust cfg.icon \ic -> faSprite_ ic "solid" "w-4 h-4 text-iconNeutral shrink-0"
       toHtml lbl
-      when required $ span_ [class_ reqCls] "*"
+      when required $ span_ [class_ $ case size of { FieldSm -> "text-textError"; FieldMd -> "text-textWeak" }] "*"
     fromMaybe
       ( case (cfg.inputType, cfg.suffix) of
-          ("textarea", _) -> textarea_ ([class_ textareaCls, name_ name, id_ fid, placeholder_ cfg.placeholder] <> commonAttrs) $ toHtml cfg.value
+          ("textarea", _) -> textarea_ ([class_ $ case size of { FieldSm -> "textarea textarea-sm w-full leading-relaxed"; FieldMd -> "textarea w-full" }, name_ name, id_ fid, placeholder_ cfg.placeholder] <> commonAttrs) $ toHtml cfg.value
           (_, Just sfx) -> div_ [class_ "relative"] do
-            input_ $ [class_ $ inputCls <> " pr-14"] <> inputAttrs
+            input_ $ [class_ $ case size of { FieldSm -> "input input-sm w-full pr-14"; FieldMd -> "input w-full h-12 pr-14" }] <> inputAttrs
             span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] $ toHtml sfx
-          _ -> input_ $ [class_ inputCls] <> inputAttrs
+          _ -> input_ $ [class_ $ case size of { FieldSm -> "input input-sm w-full"; FieldMd -> "input w-full h-12" }] <> inputAttrs
       )
       customM
     whenJust cfg.hint $ p_ [id_ $ fid <> "-hint", class_ "text-xs text-textWeak"] . toHtml
@@ -751,9 +767,6 @@ formField_ size cfg lbl name required customM =
     fid = fromMaybe name cfg.inputId
     commonAttrs = [required_ "true" | required] <> [Aria.describedby_ $ fid <> "-hint" | isJust cfg.hint] <> cfg.extraAttrs
     inputAttrs = [value_ cfg.value, name_ name, id_ fid, type_ cfg.inputType, placeholder_ cfg.placeholder] <> commonAttrs
-    (wrapperCls, labelCls, inputCls, textareaCls, reqCls) = case size of
-      FieldSm -> ("fieldset flex-1 min-w-0", "label text-xs text-textStrong", "input input-sm w-full", "textarea textarea-sm w-full leading-relaxed", "text-textError")
-      FieldMd -> ("fieldset", "label flex w-full items-center gap-1 text-textStrong", "input w-full h-12", "textarea w-full", "text-textWeak")
 
 
 -- | @\<option\>@ list from (value, label) pairs, marking the given value selected.
@@ -765,11 +778,7 @@ formSelectField_ :: Monad m => FieldSize -> Text -> Text -> Bool -> HtmlT m () -
 formSelectField_ size lbl name required options =
   formField_ size def lbl name required
     $ Just
-    $ select_ ([class_ selectCls, name_ name, id_ name] <> [required_ "true" | required]) options
-  where
-    selectCls = case size of
-      FieldSm -> "select select-sm w-full cursor-pointer"
-      FieldMd -> "select w-full h-12 cursor-pointer"
+    $ select_ ([class_ $ case size of { FieldSm -> "select select-sm w-full cursor-pointer"; FieldMd -> "select w-full h-12 cursor-pointer" }, name_ name, id_ name] <> [required_ "true" | required]) options
 
 
 -- | @Collapsible open@ is a details disclosure.
@@ -815,13 +824,9 @@ teamPicker_ teams picked = fieldset_ [class_ "space-y-2"] do
 
 formCheckbox_ :: Monad m => FieldSize -> Text -> Text -> [Attribute] -> HtmlT m ()
 formCheckbox_ size lbl name extraAttrs =
-  label_ [class_ lblCls] do
+  label_ [class_ $ case size of { FieldSm -> "flex items-center gap-2 text-xs cursor-pointer"; FieldMd -> "label cursor-pointer flex items-center gap-2" }] do
     input_ $ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ name] <> extraAttrs
-    span_ [class_ spanCls] $ toHtml lbl
-  where
-    (lblCls, spanCls) = case size of
-      FieldSm -> ("flex items-center gap-2 text-xs cursor-pointer", "")
-      FieldMd -> ("label cursor-pointer flex items-center gap-2", "text-sm")
+    span_ [class_ $ case size of { FieldSm -> ""; FieldMd -> "text-sm" }] $ toHtml lbl
 
 
 tagInput_ :: Monad m => Text -> Text -> [Attribute] -> HtmlT m ()
@@ -1000,6 +1005,15 @@ dangerAction_ modalId icon label title description confirmAttrs confirmText = do
     div_ [class_ "flex justify-end gap-2 mt-6"] do
       label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ modalId] "Cancel"
       button_ ([type_ "button", class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText
+
+
+-- | Error-bordered settings row with title, description, and trailing destructive control.
+dangerZone_ :: Text -> Text -> Html () -> Html ()
+dangerZone_ title desc action = section_ [class_ "flex flex-wrap items-center justify-between gap-3 rounded-xl border border-strokeError-weak p-4"] do
+  div_ do
+    p_ [class_ "font-medium text-textStrong"] $ toHtml title
+    p_ [class_ "text-sm text-textWeak"] $ toHtml desc
+  action
 
 
 -- | Checkbox-toggled floating prompt shell ('modalWith_' at @pt-[15vh]@ over 'floatingScrim',

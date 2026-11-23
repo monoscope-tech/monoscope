@@ -1,4 +1,5 @@
 import escape from 'lodash/escape';
+import { OTHER_BUCKET } from './colorMapping';
 import { formatNumber } from './stat-value';
 // Real glyph widths where a canvas exists; the PNG renderer in Node falls back to an average.
 const ctx = typeof OffscreenCanvas === 'undefined' ? null : new OffscreenCanvas(1, 1).getContext('2d');
@@ -55,7 +56,7 @@ export const legendLayout = (options: any, width: number, height: number, format
   // every name shares (`srv-captain--`) dropped so the part that differs is what shows.
   const side = legend.orient !== 'vertical' && legend.top !== undefined ? 'top' : 'bottom';
   const usable = width - pl - pr - 8;
-  const named = names.filter((n) => !/^Other \(\d+\)$/.test(n));
+  const named = names.filter((n) => !OTHER_BUCKET.test(n));
   const common = named.length > 1 ? named.reduce((p, n) => { let i = 0; while (i < p.length && p[i] === n[i]) i++; return p.slice(0, i); }) : '';
   // Cut at a separator, backing off until every name keeps enough to tell it apart.
   let shared = common.slice(0, common.search(/[^A-Za-z0-9][A-Za-z0-9]*$/) + 1);

@@ -24,7 +24,7 @@ import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, freshnessWindow, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
-import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), RefreshingDeferred (..), callout_, detailSection_, emDash_, emptyState_, entityHeader_, factGrid_, infrastructureNavTabs_, metaChip_, pivotLinks_, tableSkeleton_, withDeferredBody)
+import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), RefreshingDeferred (..), callout_, detailSection_, emDash_, emptyState_, entityDrawer_, entityHeader_, factGrid_, infrastructureNavTabs_, metaChip_, pivotLinks_, tableSkeleton_, withDeferredBody)
 import Pkg.Components.Table (Column, Features (..), Table (..), ZeroState (..), col, countedFilter, facetActions, headerHint_, inventoryTable, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
@@ -316,11 +316,13 @@ containerDetailGetH pid containerM podM scopeM clusterM namespaceM nodeM fromPar
     _ -> emptyState_ def{icon = Just "cube", action = ESLink (windowed window ((urls.traces pid).infrastructureContainersGetH Nothing Nothing Nothing Nothing Nothing) Nothing) "View containers"} "Several containers match this link." "Select a container from the list to view its metrics."
   where
     containerDetail_ :: TimePicker.TimeWindow -> ContainerRow -> Html ()
-    containerDetail_ window r = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
-      entityHeader_ (runtimeIcon_ r "h-4 w-4 text-iconNeutral") r.containerName (readyCell r) do
-        whenJust r.image \image -> span_ [class_ "basis-full break-all text-xs text-textWeak"] $ toHtml $ image <> maybe "" (":" <>) r.imageTag
-        forM_ metadata $ uncurry metaChip_
-      main_ [class_ "space-y-5 p-5 [&>*+*]:border-t [&>*+*]:border-strokeWeak [&>*+*]:pt-4"] do
+    containerDetail_ window r = entityDrawer_
+      ( entityHeader_ (runtimeIcon_ r "h-4 w-4 text-iconNeutral") r.containerName (readyCell r) do
+          whenJust r.image \image -> span_ [class_ "basis-full break-all text-xs text-textWeak"] $ toHtml $ image <> maybe "" (":" <>) r.imageTag
+          forM_ metadata $ uncurry metaChip_
+      )
+      Nothing
+      do
         detailSection_ [] "Container summary" (span_ [class_ "text-xs text-textWeak"] $ toHtml $ "Signal coverage " <> show availableSignals <> "/4") do
           factGrid_
             "grid-cols-4 max-sm:grid-cols-2"

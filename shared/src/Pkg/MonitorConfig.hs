@@ -30,7 +30,7 @@ data MonitorConfig = MonitorConfig
   , notify :: Maybe MonitorNotification
   , visualizationType :: Maybe Text
   }
-  deriving stock (Generic, Show)
+  deriving stock (Eq, Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via ConfigJSON MonitorConfig
   deriving (ToSchema) via SnakeSchema MonitorConfig
 
@@ -44,7 +44,7 @@ data MonitorCondition = MonitorCondition
   , alertRecoveryThreshold :: Maybe Double
   , warningRecoveryThreshold :: Maybe Double
   }
-  deriving stock (Generic, Show)
+  deriving stock (Eq, Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via ConfigJSON MonitorCondition
   deriving (ToSchema) via SnakeSchema MonitorCondition
 
@@ -54,7 +54,7 @@ data MonitorEvaluation = MonitorEvaluation
   , timeWindowMins :: Int
   , thresholdSustainedForMins :: Maybe Int
   }
-  deriving stock (Generic, Show)
+  deriving stock (Eq, Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via ConfigJSON MonitorEvaluation
   deriving (ToSchema) via SnakeSchema MonitorEvaluation
 
@@ -69,7 +69,7 @@ data MonitorNotification = MonitorNotification
   , notifyAfterMins :: Maybe Int
   , stopAfterCount :: Maybe Int
   }
-  deriving stock (Generic, Show)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (Default)
   deriving (AE.FromJSON, AE.ToJSON) via ConfigJSON MonitorNotification
   deriving (ToSchema) via SnakeSchema MonitorNotification
@@ -79,6 +79,14 @@ type ConfigJSON = DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake], D
 
 
 -- | Keep the same reading order in CLI dumps and repository sync exports.
+--
+-- >>> import Data.Yaml qualified as Yaml
+-- >>> import Relude
+-- >>> let c = MonitorConfig "High 5xx" (Just "critical") (Just True) Nothing Nothing (MonitorCondition "status >= 500" Nothing 10 Nothing False Nothing Nothing) (MonitorEvaluation 5 15 Nothing) Nothing Nothing
+-- >>> rightToMaybe (Yaml.decodeEither' (encodeMonitorConfig c)) == Just c
+-- True
+-- >>> isLeft (Yaml.decodeEither' @MonitorConfig (encodeMonitorConfig c <> "bogus_field: 1\n"))
+-- True
 encodeMonitorConfig :: MonitorConfig -> ByteString
 encodeMonitorConfig = Yaml.encodePretty (Yaml.setConfCompare (comparing rank <> compare) Yaml.defConfig)
   where

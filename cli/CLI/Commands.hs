@@ -60,7 +60,7 @@ import CLI.LogView (EventRow (..), LogFormat (..), eventRows, parseLogFormat, re
 import CLI.Resource qualified as CLIResource
 import CLI.Table (termWidth)
 import CLI.UI (Picker, inputForm, selectFromList, withSpinner)
-import CLI.Validate (validateAndNormalizeKind, validateDurationOrDie, validateOrDie, validateQueryOrDie)
+import CLI.Validate (EventKind (..), validateDurationOrDie, validateKindOrDie, validateOrDie, validateQueryOrDie, validateSinceOrDie)
 import Control.Exception (bracket)
 import Control.Lens ((%~), (^..), (^?))
 import Data.Aeson qualified as AE
@@ -99,6 +99,7 @@ import Options.Applicative (Parser, help, long, maybeReader, metavar, option)
 import Pages.Charts.Types (MetricsData (..))
 import Pkg.CLIFormat (cleanSummaryValue, escapeControls, evalCond, extractColIdxMap, extractInt, extractRawRows, extractRows, extractTextArray, renderSummaryCell, valToText)
 import Pkg.Deriving (decodeEnumSC)
+import Pkg.Parser.Expr (kqlQuoted)
 import System.IO (hPutStrLn)
 import System.Process (spawnProcess)
 import UnliftIO.Concurrent (threadDelay)
@@ -273,7 +274,7 @@ newtype ServicesListOpts = ServicesListOpts
 -- of fetching 10k events to aggregate client-side.
 runServicesList :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> ServicesListOpts -> OutputMode -> Eff es ()
 runServicesList cfg opts mode = do
-  validateDurationOrDie "--since" opts.since
+  validateSinceOrDie opts.since
   let params = [("since", fromMaybe "24H" opts.since), ("field", "resource.service.name")]
   withAPIResult cfg "/api/v1/facets" params $ \val -> do
     let services = parseServiceFacets val
@@ -390,10 +391,10 @@ runEventsSearch :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> Ev
 runEventsSearch cfg opts mode = do
   -- D5: Validate user input client-side so agents get a clear, actionable
   -- error instead of an opaque server-side HTTP 400.
-  validatedOpts <- validateEventsOpts opts
-  case planChunks validatedOpts of
-    [] -> withAPIResult cfg "/api/v1/events" (buildSearchParams validatedOpts) (renderSearchResult validatedOpts mode)
-    chunks -> runChunkedSearch cfg validatedOpts mode chunks
+  kindM <- validateEventsOpts opts
+  case planChunks opts of
+    [] -> withAPIResult cfg "/api/v1/events" (buildSearchParams opts kindM) (renderSearchResult opts mode)
+    chunks -> runChunkedSearch cfg opts kindM mode chunks
 
 
 -- | Shared rendering tail for single and chunked searches — the output
@@ -441,8 +442,8 @@ data ChunkMerge = ChunkMerge
 -- following the cursor continues into them without duplicates.
 runChunkedSearch
   :: (Environment :> es, HTTP :> es, IOE :> es)
-  => CLIConfig -> EventsSearchOpts -> OutputMode -> [(Text, Text)] -> Eff es ()
-runChunkedSearch cfg validatedOpts mode slices = do
+  => CLIConfig -> EventsSearchOpts -> Maybe EventKind -> OutputMode -> [(Text, Text)] -> Eff es ()
+runChunkedSearch cfg validatedOpts kindM mode slices = do
   printDebug $ "auto-chunk: " <> show (length slices `div` 2) <> " slices (use --chunk-hours 0 to disable)"
   -- Resolve sentinel offsets ("Nh") to absolute ISO 8601 strings anchored on
   -- one clock so a slow first request can't nudge later slice boundaries.
@@ -452,7 +453,7 @@ runChunkedSearch cfg validatedOpts mode slices = do
       newestFirst = map (resolveOffsetPair now) (chunksOf 2 slices)
       baseOpts :: EventsSearchOpts
       baseOpts = validatedOpts{since = Nothing, from = Nothing, to = Nothing}
-      baseParams = filter (\(k, _) -> k `notElem` ["since", "from", "to", "limit"]) (buildSearchParams baseOpts)
+      baseParams = filter (\(k, _) -> k `notElem` ["since", "from", "to", "limit"]) (buildSearchParams baseOpts kindM)
   ref <- newIORef (ChunkMerge Nothing [] mempty False AE.Null False)
   forM_ newestFirst $ \chunkParams -> do
     st <- readIORef ref
@@ -575,16 +576,15 @@ emitFirstEventId v =
     ^? AL.key "events" . AL.nth 0 . AL.key "id" . AL._String
 
 
--- | Validate every flag on 'EventsSearchOpts' in one pass and apply
--- 'normalizeKind' so the wire-level @source@ value is always @log@/@span@
--- (D2). Failures print a clear message and exit non-zero (D5).
+-- | Validate every flag on 'EventsSearchOpts' in one pass and parse @--kind@
+-- into 'EventKind' (D2). Failures print a clear message and exit non-zero (D5).
 --
 -- Note: EventsTailOpts and EventsContextOpts do not carry a user-supplied KQL
 -- query (tail uses structured --service/--level flags; context uses --at +
 -- structured flags), so validateQueryOrDie is not needed for those commands.
-validateEventsOpts :: IOE :> es => EventsSearchOpts -> Eff es EventsSearchOpts
+validateEventsOpts :: IOE :> es => EventsSearchOpts -> Eff es (Maybe EventKind)
 validateEventsOpts opts = do
-  validateDurationOrDie "--since" opts.since
+  validateSinceOrDie opts.since
   for_ opts.limit \n -> when (n <= 0) $ dieWith "--limit must be positive"
   -- Validate the text that will actually be sent. 'buildSearchParams' rewrites a
   -- bare term into a body/summary full-text predicate, so validating the raw
@@ -592,10 +592,7 @@ validateEventsOpts opts = do
   -- validation landed, `monoscope logs search POISON_ROW_DROPPED` started dying
   -- with `Unknown field "POISON_ROW_DROPPED"` before the rewrite ever ran.
   validateQueryOrDie (rewriteBareQuery (T.strip opts.query))
-  kindNorm <- validateAndNormalizeKind opts.kind
-  -- @kind@ is also a field of EventsTailOpts/EventsContextOpts; naming @idOnly@, which only
-  -- EventsSearchOpts has, picks the record without the type-directed disambiguation GHC is dropping.
-  pure opts{kind = kindNorm, idOnly = opts.idOnly}
+  validateKindOrDie opts.kind
 
 
 -- | 'events get ID' — fetch one event (or full trace tree with --tree).
@@ -606,7 +603,7 @@ validateEventsOpts opts = do
 -- error instead of a slow range-scan fallback that hides the typo.
 runEventsGet :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> EventsGetOpts -> OutputMode -> Eff es ()
 runEventsGet cfg opts mode = do
-  validateDurationOrDie "--since" opts.since
+  validateSinceOrDie opts.since
   case opts.at of
     Nothing -> rangeScan Nothing
     Just raw -> case iso8601ParseM (toString raw) :: Maybe UTCTime of
@@ -625,10 +622,10 @@ runEventsGet cfg opts mode = do
     isTraceId = T.length opts.eventId == 32 && T.all isHexDigit opts.eventId
     rangeScan at = do
       -- Fallback scan, also matching trace_id so bare trace IDs work.
-      let eid = T.replace "\"" "\\\"" (T.replace "\\" "\\\\" opts.eventId)
+      let eid = kqlQuoted opts.eventId
           q
-            | opts.showTree = "context.trace_id==\"" <> eid <> "\""
-            | otherwise = "(id==\"" <> eid <> "\") or (context.trace_id==\"" <> eid <> "\")"
+            | opts.showTree = "context.trace_id==" <> eid
+            | otherwise = "(id==" <> eid <> ") or (context.trace_id==" <> eid <> ")"
           bounds = case at of
             Nothing -> [("since", fromMaybe "90d" opts.since)]
             Just t -> [("from", toText $ iso8601Show t), ("to", toText $ iso8601Show t)]
@@ -663,9 +660,9 @@ runEventsTail :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> Even
 runEventsTail cfg opts kindOverride = do
   -- D2/D5: validate + normalize kind before entering the poll loop so a
   -- typo doesn't burn HTTP requests every 2 seconds.
-  kindNorm <- validateAndNormalizeKind (opts.kind <|> kindOverride)
+  kindNorm <- validateKindOrDie (opts.kind <|> kindOverride)
   validateDurationOrDie "--interval" opts.interval
-  validateDurationOrDie "--since" opts.backfill
+  validateSinceOrDie opts.backfill
   fmt <- resolveFormat opts.format
   (w, color) <- chartCanvas
   let pollMs = maybe 2000 parseDurationMs opts.interval
@@ -673,9 +670,9 @@ runEventsTail cfg opts kindOverride = do
       -- land a row a second or two after its timestamp, and a gapless window
       -- would skip it forever.
       windowSecs = max 5 ((pollMs `div` 1000) * 2)
-      q = foldFiltersIntoQuery "" (maybeToList opts.service) opts.level
+      q = foldFiltersIntoQuery "" (maybeToList opts.service) opts.level kindNorm
       poll since =
-        apiGet cfg "/api/v1/events" (catMaybes [guarded (not . T.null) q <&> ("query",), Just ("since", since), ("source",) <$> kindNorm])
+        apiGet cfg "/api/v1/events" (catMaybes [guarded (not . T.null) q <&> ("query",), Just ("since", since)])
       emit r
         | not (all (`T.isInfixOf` haystack) opts.grep) = pass
         | otherwise = putTextLn $ if fmt == FmtLogfmt then renderLogfmt r else renderEventLine color w r
@@ -703,18 +700,17 @@ runEventsContext :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> E
 runEventsContext cfg opts kindOverride mode = do
   validateDurationOrDie "--window" opts.window
   center <- validateOrDie $ maybeToRight "--at: invalid ISO-8601 timestamp" (iso8601ParseM (toString opts.timestamp))
-  kindNorm <- validateAndNormalizeKind (opts.kind <|> kindOverride)
+  kindNorm <- validateKindOrDie (opts.kind <|> kindOverride)
   let halfWindow = realToFrac (parseDurationMs (fromMaybe "5m" opts.window)) / 2000 :: NominalDiffTime
       windowStart = renderTime (negate halfWindow)
       windowEnd = renderTime halfWindow
       renderTime = toText . iso8601Show . (`addUTCTime` center)
-      q = foldFiltersIntoQuery "" (maybeToList opts.service) Nothing
+      q = foldFiltersIntoQuery "" (maybeToList opts.service) Nothing kindNorm
       params =
         catMaybes
           [ if T.null q then Nothing else Just ("query", q)
           , Just ("from", windowStart)
           , Just ("to", windowEnd)
-          , ("source",) <$> kindNorm
           ]
   fmt <- resolveFormat opts.format
   withAPIResult cfg "/api/v1/events" params $ \val -> do
@@ -785,9 +781,9 @@ data TraceSummary = TraceSummary
 -- the platform's TimePicker default ('Pkg.Components.TimePicker.parseTimeRange').
 -- When --from/--to are explicit, send since="" so the server uses the absolute
 -- range instead of its own 1H fallback.
-buildSearchParams :: EventsSearchOpts -> [(Text, Text)]
-buildSearchParams opts =
-  let q = foldFiltersIntoQuery opts.query opts.service opts.level
+buildSearchParams :: EventsSearchOpts -> Maybe EventKind -> [(Text, Text)]
+buildSearchParams opts mKind =
+  let q = foldFiltersIntoQuery opts.query opts.service opts.level mKind
       includeAttributes = maybe False (any ((\field -> field == "attributes" || "attributes." `T.isPrefixOf` field) . T.strip) . T.splitOn ",") opts.fields
       sinceParam = fromMaybe (if isJust opts.from || isJust opts.to then "" else "1H") opts.since
    in catMaybes
@@ -795,7 +791,6 @@ buildSearchParams opts =
         , Just ("since", sinceParam)
         , ("from",) <$> opts.from
         , ("to",) <$> opts.to
-        , ("source",) <$> opts.kind
         , ("limit",) . show <$> opts.limit
         , ("cursor",) <$> opts.cursor
         , ("with_children", "true") <$ guard opts.withChildren
@@ -822,24 +817,26 @@ buildSearchParams opts =
 -- --level uses the stored severity field and normalizes its enum value to
 -- lower-case, so @--level error@ and @--level ERROR@ select the same rows.
 --
--- >>> foldFiltersIntoQuery "" [] Nothing
+-- >>> foldFiltersIntoQuery "" [] Nothing Nothing
 -- ""
--- >>> foldFiltersIntoQuery "errors > 0" [] Nothing
+-- >>> foldFiltersIntoQuery "errors > 0" [] Nothing Nothing
 -- "errors > 0"
--- >>> foldFiltersIntoQuery "" ["web"] Nothing
+-- >>> foldFiltersIntoQuery "" ["web"] Nothing Nothing
 -- "resource.service.name==\"web\""
--- >>> foldFiltersIntoQuery "" ["web", "worker"] Nothing
+-- >>> foldFiltersIntoQuery "" ["web", "worker"] Nothing Nothing
 -- "resource.service.name in (\"web\", \"worker\")"
--- >>> map (foldFiltersIntoQuery "" []) [Just "warn", Just "WARN"]
+-- >>> map (\l -> foldFiltersIntoQuery "" [] l Nothing) [Just "warn", Just "WARN"]
 -- ["severity.severity_text==\"warn\"","severity.severity_text==\"warn\""]
--- >>> foldFiltersIntoQuery "errors > 0" ["web"] (Just "error")
+-- >>> map (foldFiltersIntoQuery "" [] Nothing . Just) [EKLog, EKSpan]
+-- ["kind==\"log\"","kind!=\"log\""]
+-- >>> foldFiltersIntoQuery "errors > 0" ["web"] (Just "error") Nothing
 -- "resource.service.name==\"web\" and severity.severity_text==\"error\" | errors > 0"
--- >>> foldFiltersIntoQuery "POISON_ROW_DROPPED" [] Nothing
+-- >>> foldFiltersIntoQuery "POISON_ROW_DROPPED" [] Nothing Nothing
 -- "body has \"POISON_ROW_DROPPED\" or summary has \"POISON_ROW_DROPPED\""
 --
 -- Shorthand filters must run before the user's pipeline, including a leading pipe.
 -- >>> import Pkg.Parser.Stats (parseQueryToAST)
--- >>> let withError q = parseQueryToAST (foldFiltersIntoQuery q [] (Just "error"))
+-- >>> let withError q = parseQueryToAST (foldFiltersIntoQuery q [] (Just "error") Nothing)
 -- >>> let expected = parseQueryToAST "severity.severity_text==\"error\" | summarize count()"
 -- >>> map withError ["summarize count()", "| summarize count()"] == replicate 2 expected && isRight expected
 -- True
@@ -847,19 +844,24 @@ buildSearchParams opts =
 -- True
 -- >>> and [withError ("| " <> stage) == parseQueryToAST ("severity.severity_text==\"error\" | " <> stage) | stage <- ["take 10", "sort by timestamp"]]
 -- True
-foldFiltersIntoQuery :: Text -> [Text] -> Maybe Text -> Text
-foldFiltersIntoQuery query services mLevel
+-- >>> all (isRight . parseQueryToAST . foldFiltersIntoQuery "" [] Nothing . Just) [EKLog, EKSpan]
+-- True
+foldFiltersIntoQuery :: Text -> [Text] -> Maybe Text -> Maybe EventKind -> Text
+foldFiltersIntoQuery query services mLevel mKind
   | T.null prefix = rewritten
   | T.null rewritten = prefix
   | otherwise = prefix <> " | " <> T.stripStart (fromMaybe rewritten $ T.stripPrefix "|" rewritten)
   where
-    q v = "\"" <> T.replace "\"" "\\\"" v <> "\""
-    eq field val = field <> "==" <> q val
+    eq field val = field <> "==" <> kqlQuoted val
     serviceFilter = case services of
       [] -> Nothing
       [s] -> Just (eq "resource.service.name" s)
-      ss -> Just ("resource.service.name in (" <> T.intercalate ", " (map q ss) <> ")")
-    filters = catMaybes [serviceFilter, eq "severity.severity_text" . T.toLower <$> mLevel]
+      ss -> Just ("resource.service.name in (" <> T.intercalate ", " (map kqlQuoted ss) <> ")")
+    kindFilter =
+      mKind <&> \case
+        EKLog -> "kind==\"log\""
+        EKSpan -> "kind!=\"log\""
+    filters = catMaybes [kindFilter, serviceFilter, eq "severity.severity_text" . T.toLower <$> mLevel]
     prefix = T.intercalate " and " filters
     rewritten = rewriteBareQuery (T.strip query)
 
@@ -895,8 +897,8 @@ rewriteBareQuery t
   | T.null t = t
   | hasOperator t = t
   | otherwise =
-      let escaped = T.replace "\"" "\\\"" t
-       in "body has \"" <> escaped <> "\" or summary has \"" <> escaped <> "\""
+      let quoted = kqlQuoted t
+       in "body has " <> quoted <> " or summary has " <> quoted
   where
     -- Operators / grouping disable the rewrite; multi-word phrases ("foo
     -- bar") are still rewritten so a phrase search Just Works.
@@ -1056,7 +1058,7 @@ data MetricsChartOpts = MetricsChartOpts
 
 runMetricsQuery :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> MetricsQueryOpts -> OutputMode -> Eff es ()
 runMetricsQuery cfg opts mode = do
-  validateDurationOrDie "--since" opts.since
+  validateSinceOrDie opts.since
   let params = metricsParams opts.expression opts.since opts.from opts.to
   withAPIResult cfg "/api/v1/metrics" params $ \val ->
     withMetricsData val (renderJSON val >> whenJust opts.assert (const $ dieWith "--assert could not be evaluated: the response is not a metrics result (rerun with --debug for the decode error)")) $ \md -> do
@@ -1129,7 +1131,7 @@ runChart :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> ChartCmdO
 runChart cfg opts mode = do
   -- Validate --watch up front so a typo doesn't silently fall back to 5s.
   validateDurationOrDie "--watch" opts.watch
-  validateDurationOrDie "--since" opts.since
+  validateSinceOrDie opts.since
   let params = metricsParams opts.query opts.since opts.from opts.to <> maybe [] (\s -> [("source", s)]) opts.source
       run = withAPIResult cfg "/api/v1/metrics" params \val ->
         withMetricsData val (renderJSON val) \md -> do
@@ -1195,7 +1197,7 @@ newtype StatusOpts = StatusOpts {since :: Maybe Text}
 -- terminal, and it is four requests rather than four commands.
 runStatus :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> StatusOpts -> OutputMode -> Eff es ()
 runStatus cfg opts mode = do
-  validateDurationOrDie "--since" opts.since
+  validateSinceOrDie opts.since
   let since = fromMaybe "1h" opts.since
       -- One panel failing shouldn't take the overview down, but it must not
       -- look like "nothing happened" either: the reason is reported inline.
@@ -1373,7 +1375,7 @@ data DashboardRenderOpts = DashboardRenderOpts
 runDashboardRender :: (Environment :> es, HTTP :> es, IOE :> es, Picker :> es) => CLIConfig -> DashboardRenderOpts -> OutputMode -> Eff es ()
 runDashboardRender cfg opts mode = do
   validateDurationOrDie "--watch" opts.watch
-  validateDurationOrDie "--since" opts.since
+  validateSinceOrDie opts.since
   dashboardId <- CLIResource.selectResourceId cfg "dashboards" mode opts.dashboardId
   let params =
         catMaybes

@@ -35,7 +35,7 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkAIPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
 import Pages.CodeContext qualified as CodeContext
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), emptyState_, iconBadge_, localTimeFmt_, logExplorerUrl, toneDot_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), disclosure_, emptyState_, iconBadge_, localTimeFmt_, logExplorerUrl, toneDot_, tonePill_)
 import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
@@ -488,11 +488,16 @@ threadPageGetH pid convId docM runM hxTarget = do
       (Issues.RunRunning; Issues.RunSucceeded; Issues.RunNoFindings; Issues.RunCancelled) -> "text-textWeak"
     runStatusId :: Issues.RoutineRun -> Text
     runStatusId run = "routine-run-status-" <> run.id.toText
+    -- Like 'Pages.Components.pollSelfAttrs_' but with @outerMorph@ so open disclosures survive polling.
+    morphPollAttrs_ :: Text -> Text -> Text -> [Attribute]
+    morphPollAttrs_ cid url trigger = [hxGet_ url, hxTrigger_ trigger, hxTarget_ "this", hxSelect_ $ "#" <> cid, hxSwap_ "outerMorph", term "hx-preload" "false"]
+    cardDisclosure_ :: [Attribute] -> Text -> Html () -> Html () -> Html ()
+    cardDisclosure_ attrs bodyCls summary = disclosure_ (class_ "rounded-xl border border-strokeWeak bg-bgRaised" : attrs) "gap-2 rounded-xl px-4 py-3 text-sm font-medium text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:-outline-offset-2" summary . div_ [class_ $ "border-t border-strokeWeak p-4" <> bodyCls]
 
     runView_ :: Bool -> Issues.RoutineRun -> Issues.RoutineRunEvidence -> Maybe Projects.User -> [Issues.AIArtifact] -> ProjectMembers.Permissions -> [Investigations.OperationEntry AI.OperationPolicy] -> Maybe (Html ()) -> Html ()
     runView_ retained run evidence requestedBy artifacts viewerPermission operations fixEvidence =
       section_
-        ([id_ "routine-run", class_ "space-y-5"] <> [attribute | run.status == Issues.RunRunning, attribute <- [hxGet_ $ urls.aiRoutineRunGet pid run.id (Just convId), hxTrigger_ "every 5s", hxSelect_ "#routine-run", hxTarget_ "this", hxSwap_ "outerMorph", term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]])
+        ([id_ "routine-run", class_ "space-y-5"] <> bool [] (morphPollAttrs_ "routine-run" (urls.aiRoutineRunGet pid run.id (Just convId)) "every 5s" <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) (run.status == Issues.RunRunning))
         do
           header_ [class_ "space-y-2"] do
             div_ [class_ "flex items-baseline justify-between gap-3"] do
@@ -521,7 +526,7 @@ threadPageGetH pid convId docM runM hxTarget = do
           whenJust (mfilter ((/= evidence.instructions) . Just) evidence.input) $ \input -> section_ [Aria.label_ "Run request"] do
             h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Request"
             p_ [class_ "whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml input
-          disclosure_ [term "hx-morph-skip" ""] (case run.source of Issues.FixRun{} -> "Fix workflow"; (Issues.ScheduledRun; Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}) -> "Instructions used for this run") do
+          cardDisclosure_ [term "hx-morph-skip" ""] "" (case run.source of Issues.FixRun{} -> "Fix workflow"; (Issues.ScheduledRun; Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}) -> "Instructions used for this run") do
             p_ [class_ "whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe (case run.source of Issues.FixRun{} -> "The fix must reproduce the issue, pass the retained regression, and pass independent review."; (Issues.ScheduledRun; Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}) -> "This run predates instruction snapshots.") evidence.instructions
             whenJust evidence.templateVersion $ \version -> p_ [class_ "mt-2 text-xs text-textWeak"] $ toHtml $ "Template version " <> show @Text version
           unless (null operations) $ section_ [Aria.label_ "Action history", class_ "space-y-3"] do
@@ -598,7 +603,7 @@ threadPageGetH pid convId docM runM hxTarget = do
               else for_ artifacts \artifact -> article_ [class_ "border-t border-strokeWeak pt-4"] do
                 h3_ [class_ "font-medium text-textStrong break-words"] $ toHtml artifact.title
                 div_ [class_ "prose prose-sm mt-4 max-w-none break-words overflow-x-auto"] $ fst $ renderMarkdownTocWithPrefix ("ai-run-" <> run.id.toText <> "-" <> toText artifact.key <> "-") $ fromMaybe "" artifact.content
-          for_ ([("Findings", evidence.findings), ("Tool results", evidence.actions)] :: [(Text, Maybe AE.Value)]) \(title, value) -> whenJust value $ disclosure_ [] (toHtml title) . pre_ [class_ "max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs text-textWeak"] . toHtml @Text . decodeUtf8 . AEP.encodePretty
+          for_ ([("Findings", evidence.findings), ("Tool results", evidence.actions)] :: [(Text, Maybe AE.Value)]) \(title, value) -> whenJust value $ cardDisclosure_ [] "" (toHtml title) . pre_ [class_ "max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs text-textWeak"] . toHtml @Text . decodeUtf8 . AEP.encodePretty
           when retained $ p_ [class_ "text-sm text-textWeak"] "This conversation was deleted. Its run and artifacts are retained here."
       where
         preview value =
@@ -629,7 +634,7 @@ threadPageGetH pid convId docM runM hxTarget = do
             -- A chat lists its documents first; a routine leads with its result, then its history.
             unless (null docs || isRoutine) documentsNav_
             div_
-              ([id_ "ai-thread-results", class_ "space-y-8"] <> if any ((== Issues.RunRunning) . (.status)) runs then [hxGet_ threadHref, hxTrigger_ "every 2s", hxSelect_ "#ai-thread-results", term "hx-select-oob" "#pageTitleText:outerHTML", hxSwap_ "outerMorph"] else [])
+              ([id_ "ai-thread-results", class_ "space-y-8"] <> bool [] (morphPollAttrs_ "ai-thread-results" threadHref "every 2s" <> [term "hx-select-oob" "#pageTitleText:outerHTML"]) (any ((== Issues.RunRunning) . (.status)) runs))
               do
                 -- A routine reads as its latest result (plus the question that prompted it); older ones live under Runs below.
                 let definingPrompt m = m.role == Issues.ChatUser && Just (T.strip m.content) == (T.strip <$> instructions)
@@ -676,45 +681,44 @@ threadPageGetH pid convId docM runM hxTarget = do
             when isRoutine do
               when (null runs && isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] "No runs yet. An active routine starts when the next matching event arrives."
               -- Setup, not daily reading: collapsed below the results.
-              disclosure_ [Aria.label_ "Routine configuration"] ("Settings" >> whenJust (conversationM >>= (.routinePolicy)) (span_ [class_ "ms-auto text-xs font-normal text-textWeak"] . toHtml . policyLabel))
-                $ div_ [class_ "space-y-5"] do
-                  for_ (conversationM >>= (.routinePolicy)) \policy -> do
-                    let selection = case policy of Issues.ReviewSelected selected -> Just selected; (Issues.Observe; Issues.Autonomous) -> Nothing
-                    if canEdit
-                      then form_ [hxPost_ $ foldMap (urls.aiRoutinePolicyPost projectId) activeConversationIdM, hxSwap_ "none", class_ "group/policy space-y-2"] do
-                        label_ [Lucid.for_ "routine-policy", class_ "block text-sm font-medium text-textStrong"] "Execution policy"
-                        select_ [id_ "routine-policy", name_ "policy", class_ "select select-sm w-full text-base sm:text-xs"] do
-                          option_ ([value_ "observe"] <> [selected_ "selected" | policy == Issues.Observe]) "Read-only"
-                          option_ ([value_ "autonomous"] <> [selected_ "selected" | policy == Issues.Autonomous]) "Can make changes"
-                          option_ ([value_ "review"] <> [selected_ "selected" | isJust selection]) "Review selected actions"
-                        fieldset_ [class_ "hidden space-y-3 group-has-[option[value=review]:checked]/policy:block"] do
-                          legend_ [class_ "text-sm font-medium text-textStrong"] "Actions requiring review"
-                          for_ [minBound @Catalog.ReviewClass .. maxBound] \actionClass -> label_ [class_ "flex items-center gap-2 text-sm text-textStrong"] do
-                            input_ $ [type_ "checkbox", name_ "reviewClass", value_ $ toText $ encodeEnumSC @"" actionClass, class_ "checkbox checkbox-sm"] <> [checked_ | any (elem actionClass . (.classes)) selection]
-                            toHtml $ reviewClassLabel actionClass
-                          label_ [class_ "block space-y-1 text-sm text-textStrong"] do
-                            span_ "Required reviewer"
-                            select_ [name_ "reviewApprover", class_ "select select-sm w-full text-base sm:text-xs"]
-                              $ for_ @[] [Catalog.ReviewEditors, Catalog.ReviewAdministrators] \approver ->
-                                option_ ([value_ $ toText $ encodeEnumSC @"Review" approver] <> [selected_ "selected" | approver == maybe Catalog.ReviewEditors (.approver) selection]) $ toHtml $ reviewerLabel approver
-                          p_ [class_ "text-xs text-textWeak"] "Only checked action classes require review. Unchecked actions stay automatic. Choose at least one class."
-
-                        p_ [class_ "text-sm text-textWeak"] "Read-only reads evidence and saves results. Can make changes also changes project resources, updates project knowledge, and publishes requested results within the authorizing member's current role, without per-action approval."
-                        p_ [class_ "text-xs text-textWeak"] "Restrictions apply immediately. Greater authority applies to future runs."
-                        button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save policy"
-                      else p_ [class_ "text-sm text-textWeak"] $ toHtml $ case policy of
-                        (Issues.Observe; Issues.Autonomous) -> "Execution policy: " <> policyLabel policy
-                        Issues.ReviewSelected selected -> "Review selected actions: " <> T.intercalate ", " (map reviewClassLabel $ toList selected.classes) <> ". Reviewers: " <> reviewerLabel selected.approver <> "."
+              cardDisclosure_ [Aria.label_ "Routine configuration"] " space-y-5" ("Settings" >> whenJust (conversationM >>= (.routinePolicy)) (span_ [class_ "ms-auto text-xs font-normal text-textWeak"] . toHtml . policyLabel)) do
+                for_ (conversationM >>= (.routinePolicy)) \policy -> do
+                  let selection = case policy of Issues.ReviewSelected selected -> Just selected; (Issues.Observe; Issues.Autonomous) -> Nothing
                   if canEdit
-                    then form_ [hxPost_ $ foldMap (urls.aiRoutineInstructionsPost projectId) activeConversationIdM, hxSwap_ "none", class_ "space-y-2", Aria.label_ "Routine instructions"] do
-                      label_ [Lucid.for_ "routine-instructions", class_ "block text-sm font-medium text-textStrong"] "Instructions"
-                      textarea_ [id_ "routine-instructions", name_ "instructions", required_ "required", maxlength_ "4000", rows_ "8", class_ "textarea w-full text-base sm:text-sm"] $ toHtml $ fromMaybe "" instructions
-                      p_ [class_ "text-xs text-textWeak"] "Changes apply to future runs. Past runs keep the instructions they used."
-                      button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save instructions"
-                    -- A viewer reads them; an inert text box beside no Save button looked editable.
-                    else section_ [Aria.label_ "Routine instructions", class_ "space-y-1"] do
-                      h3_ [class_ "text-sm font-medium text-textStrong"] "Instructions"
-                      p_ [class_ "whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml $ fromMaybe "" instructions
+                    then form_ [hxPost_ $ foldMap (urls.aiRoutinePolicyPost projectId) activeConversationIdM, hxSwap_ "none", class_ "group/policy space-y-2"] do
+                      label_ [Lucid.for_ "routine-policy", class_ "block text-sm font-medium text-textStrong"] "Execution policy"
+                      select_ [id_ "routine-policy", name_ "policy", class_ "select select-sm w-full text-base sm:text-xs"] do
+                        option_ ([value_ "observe"] <> [selected_ "selected" | policy == Issues.Observe]) "Read-only"
+                        option_ ([value_ "autonomous"] <> [selected_ "selected" | policy == Issues.Autonomous]) "Can make changes"
+                        option_ ([value_ "review"] <> [selected_ "selected" | isJust selection]) "Review selected actions"
+                      fieldset_ [class_ "hidden space-y-3 group-has-[option[value=review]:checked]/policy:block"] do
+                        legend_ [class_ "text-sm font-medium text-textStrong"] "Actions requiring review"
+                        for_ [minBound @Catalog.ReviewClass .. maxBound] \actionClass -> label_ [class_ "flex items-center gap-2 text-sm text-textStrong"] do
+                          input_ $ [type_ "checkbox", name_ "reviewClass", value_ $ toText $ encodeEnumSC @"" actionClass, class_ "checkbox checkbox-sm"] <> [checked_ | any (elem actionClass . (.classes)) selection]
+                          toHtml $ reviewClassLabel actionClass
+                        label_ [class_ "block space-y-1 text-sm text-textStrong"] do
+                          span_ "Required reviewer"
+                          select_ [name_ "reviewApprover", class_ "select select-sm w-full text-base sm:text-xs"]
+                            $ for_ @[] [Catalog.ReviewEditors, Catalog.ReviewAdministrators] \approver ->
+                              option_ ([value_ $ toText $ encodeEnumSC @"Review" approver] <> [selected_ "selected" | approver == maybe Catalog.ReviewEditors (.approver) selection]) $ toHtml $ reviewerLabel approver
+                        p_ [class_ "text-xs text-textWeak"] "Only checked action classes require review. Unchecked actions stay automatic. Choose at least one class."
+
+                      p_ [class_ "text-sm text-textWeak"] "Read-only reads evidence and saves results. Can make changes also changes project resources, updates project knowledge, and publishes requested results within the authorizing member's current role, without per-action approval."
+                      p_ [class_ "text-xs text-textWeak"] "Restrictions apply immediately. Greater authority applies to future runs."
+                      button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save policy"
+                    else p_ [class_ "text-sm text-textWeak"] $ toHtml $ case policy of
+                      (Issues.Observe; Issues.Autonomous) -> "Execution policy: " <> policyLabel policy
+                      Issues.ReviewSelected selected -> "Review selected actions: " <> T.intercalate ", " (map reviewClassLabel $ toList selected.classes) <> ". Reviewers: " <> reviewerLabel selected.approver <> "."
+                if canEdit
+                  then form_ [hxPost_ $ foldMap (urls.aiRoutineInstructionsPost projectId) activeConversationIdM, hxSwap_ "none", class_ "space-y-2", Aria.label_ "Routine instructions"] do
+                    label_ [Lucid.for_ "routine-instructions", class_ "block text-sm font-medium text-textStrong"] "Instructions"
+                    textarea_ [id_ "routine-instructions", name_ "instructions", required_ "required", maxlength_ "4000", rows_ "8", class_ "textarea w-full text-base sm:text-sm"] $ toHtml $ fromMaybe "" instructions
+                    p_ [class_ "text-xs text-textWeak"] "Changes apply to future runs. Past runs keep the instructions they used."
+                    button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save instructions"
+                  -- A viewer reads them; an inert text box beside no Save button looked editable.
+                  else section_ [Aria.label_ "Routine instructions", class_ "space-y-1"] do
+                    h3_ [class_ "text-sm font-medium text-textStrong"] "Instructions"
+                    p_ [class_ "whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml $ fromMaybe "" instructions
         unless (isJust runContent && isNothing conversationM) $ form_
           [ class_ "group/composer shrink-0 border-t border-strokeWeak bg-bgBase p-4"
           , hxPost_ $ maybe (urls.aiThreadsPost projectId) (urls.aiThreadPost projectId) activeConversationIdM
@@ -796,7 +800,7 @@ threadPageGetH pid convId docM runM hxTarget = do
           article_
             ( [id_ "ai-document", Aria.label_ doc.title]
                 -- Routines keep appending to today's document; keep an open one current.
-                <> bool [] [hxGet_ $ docHref doc, hxTrigger_ "every 60s", hxSelect_ "#ai-document", hxTarget_ "this", hxSwap_ "outerMorph"] (any ((.routineActive) . fst) routineM)
+                <> bool [] (morphPollAttrs_ "ai-document" (docHref doc) "every 60s") (any ((.routineActive) . fst) routineM)
             )
             do
               h2_ [class_ "text-base font-semibold text-textStrong text-balance break-words"] $ toHtml doc.title
@@ -1111,15 +1115,6 @@ failedRuns_ runs =
    in when (failed > 0) $ span_ [class_ "text-textError"] $ toHtml $ fmtInt failed <> " of the last " <> fmtInt (length runs) <> " runs failed"
 
 
--- | Bordered disclosure with a turning chevron, shared by routine settings and run evidence.
-disclosure_ :: [Attribute] -> Html () -> Html () -> Html ()
-disclosure_ attrs summary body = details_ ([class_ "group/disclosure rounded-xl border border-strokeWeak bg-bgRaised"] <> attrs) do
-  summary_ [class_ "flex cursor-pointer list-none items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:-outline-offset-2 [&::-webkit-details-marker]:hidden"] do
-    faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-iconNeutral transition-transform duration-150 group-open/disclosure:rotate-90 rtl:-scale-x-100"
-    summary
-  div_ [class_ "border-t border-strokeWeak p-4"] body
-
-
 -- | A list that shows its first @n@ (or all of @n + 1@, rather than hide a single one) and folds the rest
 -- under "Show N more". The renderer learns whether it draws the folded part.
 showMore_ :: Int -> (Bool -> [a] -> Html ()) -> [a] -> Html ()
@@ -1380,11 +1375,21 @@ copilotDock_ dock =
         if selected
           then label_ [Lucid.for_ "ai-dock-open", class_ "flex cursor-pointer items-center gap-1.5 py-1.5 ps-3 pe-1 transition-transform active:scale-[0.97]", title_ session.title] content
           else button_ [type_ "button", class_ "flex cursor-pointer items-center gap-1.5 py-1.5 ps-3 pe-1 transition-transform active:scale-[0.97]", title_ session.title, hxGet_ $ urls.aiDockGet pid (Just session.conversationId) Nothing, hxTarget_ "#ai-dock", hxSwap_ "outerMorph", [__|on htmx:after:request set #ai-dock-open.checked to true|]] content
-        dismiss_ session "me-1 grid size-5 shrink-0 cursor-pointer place-items-center rounded-full text-iconNeutral opacity-0 transition-opacity hover:bg-fillWeak hover:text-textStrong focus-visible:opacity-100 group-hover/bubble:opacity-100 pointer-coarse:opacity-100" "size-2.5"
+        dismiss_ True session
 
     -- Takes the conversation off the island; asking it something new brings it back.
-    dismiss_ :: Issues.CopilotSession -> Text -> Text -> Html ()
-    dismiss_ session cls iconCls = button_ [type_ "button", class_ cls, Aria.label_ $ "Dismiss " <> session.title, title_ "Dismiss from the island", hxPost_ $ urls.aiDockVisibilityPost pid session.conversationId Issues.DockDismissed selectedId, hxTarget_ "#ai-dock", hxSwap_ "outerMorph"] $ faSprite_ "xmark" "regular" iconCls
+    dismiss_ :: Bool -> Issues.CopilotSession -> Html ()
+    dismiss_ inBubble session =
+      button_
+        [ type_ "button"
+        , class_ $ bool "btn btn-ghost btn-xs btn-square text-iconNeutral" "me-1 grid size-5 shrink-0 cursor-pointer place-items-center rounded-full text-iconNeutral opacity-0 transition-opacity hover:bg-fillWeak hover:text-textStrong focus-visible:opacity-100 group-hover/bubble:opacity-100 pointer-coarse:opacity-100" inBubble
+        , Aria.label_ $ "Dismiss " <> session.title
+        , title_ "Dismiss from the island"
+        , hxPost_ $ urls.aiDockVisibilityPost pid session.conversationId Issues.DockDismissed selectedId
+        , hxTarget_ "#ai-dock"
+        , hxSwap_ "outerMorph"
+        ]
+        $ faSprite_ "xmark" "regular" (bool "size-3.5" "size-2.5" inBubble)
 
     statusIcon_ :: Issues.RoutineRunStatus -> Html ()
     statusIcon_ = \case
@@ -1410,7 +1415,7 @@ copilotDock_ dock =
             h2_ [class_ "min-w-0 flex-1 truncate text-sm font-medium text-textStrong"] $ toHtml session.title
             a_ ([href_ $ threadUrl pid session.conversationId, class_ "btn btn-ghost btn-xs gap-1 text-textWeak"] <> navTabAttrs) $ "Open thread" >> faSprite_ "arrow-up-right-from-square" "regular" "size-3"
             label_ [Lucid.for_ "ai-dock-open", class_ "btn btn-ghost btn-xs btn-square text-iconNeutral", Aria.label_ "Minimize", title_ "Minimize (Esc)"] $ faSprite_ "chevron-down" "regular" "size-3.5"
-            dismiss_ session "btn btn-ghost btn-xs btn-square text-iconNeutral" "size-3.5"
+            dismiss_ False session
           -- Reversed, the log stays pinned to its newest line as it grows, without script.
           div_ [id_ "ai-dock-log", class_ "flex min-h-0 grow flex-col-reverse overflow-y-auto px-4"] $ div_ do
             IssuePage.aiChatHistoryView_ (\href -> href_ (threadUrl pid session.conversationId <> href) : navTabAttrs) pid messages

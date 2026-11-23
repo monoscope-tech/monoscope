@@ -53,7 +53,7 @@ import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ActionResult, Done, HXRedirectDest, HXReswap, Outcome (..), Refusal (..), RespHeaders, Says (..), TriggerEvents, XWidgetJSON, act, addRespHeaders, addTriggerEvent, done)
-import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, lookupValueText, onpointerdown_)
+import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, lookupValueText)
 import Web.FormUrlEncoded
 import Web.Links
 
@@ -308,16 +308,14 @@ onboardingConfPostH pid form = do
 
 
 onboardingCompleteBody :: Projects.ProjectId -> Html ()
-onboardingCompleteBody pid = do
+onboardingCompleteBody pid =
   div_ [class_ "w-full max-w-xl h-full flex items-center mx-auto relative px-4 md:px-0"] $ do
-    canvas_ [id_ "drawing_canvas", class_ "absolute top-0 left-0  w-full"] pass
     div_ [class_ "flex-col gap-4 flex w-full p-14 my-auto border border-weak rounded-2xl"] $ do
       iconBadge_ IconLg SuccessBadge "circle-check"
       div_ [class_ "flex flex-col gap-2"] do
         h3_ [class_ " text-textStrong  text-2xl"] "Onboarding completed!"
         p_ [class_ " text-textWeak text-sm"] "You're all set! You can now start exploring the monoscope dashboard by clicking the button below."
       a_ [class_ "btn-primary py-2  rounded-lg text-center mt-1", href_ $ urls.homeGet pid] "Go to your project"
-  script_ [src_ "/public/assets/js/confetti.js"] ("" :: Text)
 
 
 pricingPage :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Bool -> Html ()
@@ -446,8 +444,8 @@ integrationsPage pid apikey =
           div_ [class_ "text-textWeak text-lg md:text-xl mb-2"] $ toHtml grp.name
           div_ [class_ "grid grid-cols-2 gap-2"] $ forM_ grp.languages languageItem
 
-        integrationCta_ "max-md:hidden flex items-center gap-4 py-8" "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center" "px-4 py-3 flex items-center underline text-textBrand text-xl cursor-pointer"
-      integrationCta_ "md:hidden fixed bottom-0 left-0 right-0 bg-bgRaised border-t border-strokeWeak pl-4 pr-18 py-3 flex items-center gap-3 z-30" "btn-primary px-6 py-2.5 text-base rounded-xl cursor-pointer flex-1 flex items-center justify-center" "px-3 py-2.5 flex items-center underline text-textBrand text-base cursor-pointer"
+        integrationCta_ False
+      integrationCta_ True
 
     div_ [class_ "w-full md:w-1/2 md:h-full overflow-hidden md:border-l border-weak", id_ "docs-panel"] do
       div_ [class_ "md:hidden sticky top-0 z-20 bg-bgBase border-b border-strokeWeak p-3 hidden", id_ "docs-panel-back"] do
@@ -638,9 +636,10 @@ integrationsPage pid apikey =
       a_ [href_ "https://www.youtube.com/@monoscope", target_ "_blank", class_ "text-textBrand hover:underline text-sm font-medium"] "Watch more tutorials →"
 
     -- "Confirm & Proceed" + "Skip" pair; classes differ between the desktop inline and mobile sticky bars.
-    integrationCta_ wrapCls btnCls skipCls = div_ [class_ wrapCls] do
-      button_ [class_ btnCls, hxGet_ $ urls.projects.onboardingIntegrationCheck pid Nothing, hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
-      a_ [class_ skipCls, type_ "button", hxPost_ $ urls.projects.onboardingSkipped pid (Just Integration)] "Skip"
+    integrationCta_ isMobile =
+      div_ [class_ $ bool "max-md:hidden flex items-center gap-4 py-8" "md:hidden fixed bottom-0 left-0 right-0 bg-bgRaised border-t border-strokeWeak pl-4 pr-18 py-3 flex items-center gap-3 z-30" isMobile] do
+        button_ [class_ $ bool "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center" "btn-primary px-6 py-2.5 text-base rounded-xl cursor-pointer flex-1 flex items-center justify-center" isMobile, hxGet_ $ urls.projects.onboardingIntegrationCheck pid Nothing, hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
+        a_ [class_ $ bool "px-4 py-3 flex items-center underline text-textBrand text-xl cursor-pointer" "px-3 py-2.5 flex items-center underline text-textBrand text-base cursor-pointer" isMobile, type_ "button", hxPost_ $ urls.projects.onboardingSkipped pid (Just Integration)] "Skip"
 
     languageItem l =
       label_ [class_ "group/li h-12 px-3 py-2 bg-transparent rounded-xl border border-strokeWeak justify-start items-center gap-3 inline-flex cursor-pointer"] do
@@ -702,20 +701,6 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
           formField_ FieldMd def "Notify the following email address" "emails" False $ Just $ tagInput_ "emails" "" [data_ "tagify-initial" $ decodeUtf8 $ AE.encode emails]
           div_ [class_ "items-center gap-4 flex"] $ button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center"] "Proceed"
     div_ [id_ "inviteModalContainer"] pass
-    script_
-      """
-      function appendMember() {
-        const input = document.querySelector('#add-member-input'), email = input.value
-        if (!email) return
-        const node = document.querySelector('#member-template').cloneNode(true)
-        node.removeAttribute('id')
-        node.classList.remove('hidden')
-        Object.assign(node.querySelector('input'), {value: email, name: 'emails'})
-        node.querySelector('span').textContent = email
-        document.querySelector('#members-container').appendChild(node)
-        input.value = ''
-      }
-      """
   where
     integrationCard :: Text -> Text -> Bool -> Text -> Html ()
     integrationCard serviceName iconPath isConnected connectUrl =
@@ -787,7 +772,20 @@ inviteTeamMemberModal pid emails enableFreetier =
           when enableFreetier $ callout_ BrandBadge Nothing "Only the project owner can access a Free project. Invited members remain disabled until you upgrade."
           div_ [class_ "w-full gap-2 flex items-center"] $ do
             input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]
-            button_ [class_ "btn-primary rounded-xl px-4 py-2 text-white text-sm cursor-pointer whitespace-nowrap", onpointerdown_ "appendMember()"] "Invite"
+            button_
+              [ type_ "button"
+              , class_ "btn-primary rounded-xl px-4 py-2 text-white text-sm cursor-pointer whitespace-nowrap"
+              , [__|on click
+                  set email to #add-member-input.value
+                  if email is empty exit end
+                  set node to #member-template.cloneNode(true)
+                  remove @id from node then remove .hidden from node
+                  set inp to first <input/> in node then set inp.value to email then set inp.name to 'emails'
+                  set sp to first <span/> in node then set sp.textContent to email
+                  call #members-container.appendChild(node)
+                  set #add-member-input.value to ''|]
+              ]
+              "Invite"
           form_
             [ class_ "flex-col flex"
             , id_ "members-container"
@@ -801,7 +799,7 @@ inviteTeamMemberModal pid emails enableFreetier =
         button_ [class_ "btn-primary px-8 py-2 text-lg rounded-xl cursor-pointer flex items-center", type_ "submit", term "form" "members-container"] "Proceed"
         label_ [Lucid.for_ "inviteModal", class_ "text-textWeak text-sm underline cursor-pointer"] "Close"
   where
-    -- 'Nothing' renders the hidden @#member-template@ that appendMember() clones.
+    -- 'Nothing' renders the hidden @#member-template@ that the Invite button clones.
     inviteMemberItem :: Maybe Text -> Html ()
     inviteMemberItem emailM = do
       let (email, isTemplate) = (fromMaybe "" emailM, isNothing emailM)
@@ -811,7 +809,7 @@ inviteTeamMemberModal pid emails enableFreetier =
           span_ [class_ "text-textStrong text-sm font-normal"] $ toHtml email
         select_ [name_ "permissions", class_ "select select-xs"] $ roleOptions_ Nothing
         button_
-          [ onclick_ "this.closest('div').remove()"
+          [ [__|on click remove closest <div/>|]
           , class_ "text-textBrand ml-4 text-sm underline"
           , type_ "button"
           ]

@@ -1240,7 +1240,7 @@ requestKnowledge context attempt ref currentServices initial = \case
     AE.toJSON
       . map (\issue -> AE.object ["id" AE..= issue.id, "title" AE..= issue.title, "type" AE..= issue.issueType, "service" AE..= issue.service, "severity" AE..= issue.severity, "critical" AE..= issue.critical, "updatedAt" AE..= issue.updatedAt])
       . fst
-      <$> Issues.selectIssues context.projectId Issues.PIssue Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.spam = Issues.IsNull, Issues.services = services, Issues.limit = 20}
+      <$> Issues.selectIssues context.projectId Issues.PIssue Issues.inboxFilters{Issues.services = services, Issues.limit = 20}
   Agent.ServiceMonitors -> scoped \services ->
     AE.toJSON
       . map (\monitor -> AE.object ["title" AE..= monitor.alertConfig.title, "query" AE..= monitor.logQuery, "service" AE..= monitor.service, "status" AE..= monitor.currentStatus, "value" AE..= monitor.currentValue, "alertThreshold" AE..= monitor.alertThreshold, "lastAlert" AE..= monitor.alertLastTriggered])
