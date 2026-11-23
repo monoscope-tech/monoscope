@@ -68,7 +68,7 @@ import Pages.LogExplorer.LogItem qualified as LogItem
 import Pkg.Components.Table (Column, Features (..), Table (..), ZeroState (..), col, countedFilter, facetActions, fillCol, inventoryTable, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (DB, UUIDId, unAesonTextMaybe)
+import Pkg.DeriveUtils (DB, UUIDId, rawSql, unAesonTextMaybe)
 import Pkg.Drain qualified as Drain
 import Pkg.GenAI qualified as GenAI
 import Pkg.Parser.Eval (jsonAsText)
@@ -311,21 +311,124 @@ unitCap :: Int64
 unitCap = 10000
 
 
+-- | A time on the hour, rounded by @r@ ('floor' or 'ceiling').
+toHour :: (Double -> Int64) -> UTCTime -> UTCTime
+toHour r t = posixSecondsToUTCTime $ fromIntegral (3600 * r (realToFrac (utcTimeToPOSIXSeconds t) / 3600))
+
+
 -- | Windows at least this long start on the hour (see 'windowUnits').
 wholeHourWindow :: NominalDiffTime
 wholeHourWindow = 6 * 3600
 
 
--- | The window's units, one per trace. Each settled hour (closed 10 minutes ago, so late spans have
--- landed) is aggregated once into @apis.llm_unit_hours@; only the window's unsettled edges are read
--- from the store per request, so a day costs about what its last hour does.
+-- | The window's units, one per trace. A window of six hours or more starts on its hour: its oldest
+-- partial hour would otherwise be read raw on every refresh, and a week back that is a 10-60s scan
+-- of cold storage (2026-11-22's burst).
 windowUnits :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Reader AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> TimePicker.TimeWindow -> Eff es [Unit]
-windowUnits pid window = do
+windowUnits pid window = useTfReads >>= bool (storedUnits pid window{TimePicker.fromTime = start}) (tierUnits pid start window.toTime)
+  where
+    start = if diffUTCTime window.toTime window.fromTime >= wholeHourWindow then toHour floor window.fromTime else window.fromTime
+
+
+-- | The window's units through TimeFusion's @llm_1h@ tier: one query that TF serves from whole
+-- tier hours, reading only the edges raw. It routes only while each filter is spelled as the tier
+-- declares it (timefusion @schemas/otel_logs_and_spans.yaml@, pinned there by
+-- @the_llm_list_routes_to_its_tier@), and only with literal bounds, so nothing here is a parameter.
+-- A trace-less record keys by its conversation, so two sessions' logs are not one unit.
+tierUnits :: (DB es, Labeled "timefusion" Hasql :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [Unit]
+tierUnits pid from to =
+  -- One unit per trace: a trace's spans that do not repeat its conversation id are its rows too.
+  M.elems . M.fromListWith (flip (<>)) . map ((\u -> (u.unit, u)) . unit) <$> Hasql.withHasqlTimefusion True (Hasql.interp (rawSql query))
+  where
+    micros t = show @Text (floor (utcTimeToPOSIXSeconds t * 1e6) :: Int64)
+    ops = T.intercalate ", " . map (\o -> "'" <> o <> "'")
+    op = "attributes___gen_ai___operation___name"
+    model = op <> " IN (" <> ops GenAI.inferenceOps <> ")"
+    tool = op <> " = 'execute_tool'"
+    finished a = "(" <> T.intercalate " OR " ["attributes___gen_ai___response___finish_reasons LIKE '%\"" <> r <> "\"%'" | r <- GenAI.abnormalReasons a] <> ")"
+    preview = "attributes___gen_ai___input___preview IS NOT NULL"
+    dims = "context___trace_id, attributes___gen_ai___conversation___id, attributes___gen_ai___agent___name, attributes___gen_ai___request___model, attributes___user___id, resource___service___name"
+    count f = "count(*) FILTER (WHERE " <> f <> ")"
+    filtered agg f = agg <> " FILTER (WHERE " <> f <> ")"
+    query =
+      "SELECT "
+        <> T.intercalate
+          ", "
+          [ dims
+          , count model
+          , count tool
+          , count (op <> " IN (" <> ops GenAI.agentRunOps <> ")")
+          , "CAST(" <> filtered "sum(attributes___gen_ai___usage___input_tokens)" model <> " AS DOUBLE PRECISION)"
+          , "CAST(" <> filtered "sum(attributes___gen_ai___usage___output_tokens)" model <> " AS DOUBLE PRECISION)"
+          , filtered "sum(attributes___gen_ai___usage___cost)" model
+          , filtered "count(attributes___gen_ai___usage___cost)" model
+          , count "status_code = 'ERROR'"
+          , count ("status_code = 'ERROR' AND " <> tool)
+          , count ("status_code = 'ERROR' AND " <> model)
+          , count (finished GenAI.Truncated)
+          , count (finished GenAI.Filtered)
+          , "min(timestamp)"
+          , "max(end_time)"
+          , "CAST(max(attributes___gen_ai___usage___input_tokens) AS DOUBLE PRECISION)"
+          , filtered "first_value(attributes___gen_ai___input___preview ORDER BY timestamp)" preview
+          , filtered "min(timestamp)" preview
+          , filtered "first_value(attributes___gen_ai___tool___name ORDER BY timestamp)" tool
+          , filtered "first_value(attributes___gen_ai___tool___call___arguments ORDER BY timestamp)" tool
+          , filtered "min(timestamp)" tool
+          , "CAST(distinct_count(" <> filtered "hll_agg(attributes___gen_ai___tool___call___arguments)" tool <> ") AS BIGINT)"
+          ]
+        <> " FROM otel_logs_and_spans WHERE project_id = '"
+        <> pid.toText
+        <> "' AND timestamp >= to_timestamp_micros("
+        <> micros from
+        <> ") AND timestamp < to_timestamp_micros("
+        <> micros to
+        <> ") AND "
+        <> op
+        <> " IS NOT NULL GROUP BY "
+        <> dims
+    stamped at x = (\t v -> show @Text (floor (utcTimeToPOSIXSeconds t) :: Int64) <> "|" <> v) <$> at <*> x
+    unit (TierRow trId conv agent model' user service llm tools runs inTok outTok cost costs errs toolErrs modelErrs trunc filt started ended maxIn prev prevAt firstTool firstArgs toolAt distinctArgs) =
+      Unit
+        { hour = started
+        , unit = if T.null trId then fromMaybe "" conv else trId
+        , conversation = conv
+        , agent
+        , model = model'
+        , user
+        , service
+        , started
+        , lastSeen = fromMaybe started ended
+        , endUs = floor (utcTimeToPOSIXSeconds (fromMaybe started ended) * 1e6)
+        , llmCalls = llm
+        , toolCalls = tools
+        , agentRuns = runs
+        , tokens = fromMaybe 0 inTok + fromMaybe 0 outTok
+        , cost = cost <* guard (costs > 0)
+        , errors = errs
+        , toolErrors = toolErrs
+        , modelErrors = modelErrs
+        , truncated = trunc
+        , filtered = filt
+        , repeats = tools - fromMaybe tools distinctArgs
+        , maxInput = maxIn
+        , firstPreview = stamped prevAt prev
+        , firstTool = stamped toolAt ((\t a -> t <> "\t" <> fromMaybe "" a) <$> firstTool <*> pure firstArgs)
+        }
+
+
+-- | A 'tierUnits' row, positionally as its query selects it.
+data TierRow = TierRow Text (Maybe Text) (Maybe Text) (Maybe Text) (Maybe Text) (Maybe Text) Int64 Int64 Int64 (Maybe Double) (Maybe Double) (Maybe Double) Int64 Int64 Int64 Int64 Int64 Int64 UTCTime (Maybe UTCTime) (Maybe Double) (Maybe Text) (Maybe UTCTime) (Maybe Text) (Maybe Text) (Maybe UTCTime) (Maybe Int64)
+  deriving stock (Generic)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | The Postgres read: settled hours aggregated once into @apis.llm_unit_hours@, the open edges live.
+-- TimeFusion reads go through its own tier instead ('tierUnits'); this goes with the Postgres store.
+storedUnits :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Reader AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> TimePicker.TimeWindow -> Eff es [Unit]
+storedUnits pid window = do
   now <- Time.currentTime
-  let toHour r t = posixSecondsToUTCTime $ fromIntegral (3600 * r (utcTimeToPOSIXSeconds t / 3600) :: Int64)
-      -- A window of six hours or more starts on its hour: its oldest partial hour would otherwise be
-      -- read live on every refresh, and a week back that is a 10-60s scan of cold storage.
-      start = if diffUTCTime window.toTime window.fromTime >= wholeHourWindow then toHour floor window.fromTime else window.fromTime
+  let start = window.fromTime
       settled = takeWhile (\h -> addUTCTime 3600 h <= window.toTime && addUTCTime 4200 h <= now) $ iterate (addUTCTime 3600) (toHour ceiling start)
   cached <- M.fromList . map (\(h, HI.AsJsonb us) -> (h, us)) <$> bool (Hasql.interp [HI.sql| SELECT hour, units FROM apis.llm_unit_hours WHERE project_id = #{pid} AND hour = ANY(#{V.fromList settled}) AND computed_at >= hour + interval '70 minutes' |]) (pure []) (null settled)
   -- A day per query, persisted as it lands, so a cold week makes progress even if the page gives up.
@@ -942,8 +1045,9 @@ parseVerdicts = bimap toText (Drain.answeredOnce (.key)) . AE.eitherDecodeStrict
 -- one window read and one span fetch for the project, then one model call per signal.
 evaluateSignals :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Reader AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> Eff es ()
 evaluateSignals pid = do
-  -- Run hourly, this also keeps a week of settled hours aggregated, so no window up to 7D opens cold.
-  void $ windowUnits pid =<< llmWindow Nothing Nothing (Just "7D")
+  -- Run hourly, this also keeps the Postgres store a week deep, so no window up to 7D opens cold
+  -- there; TimeFusion's tier keeps itself.
+  unlessM useTfReads $ void $ storedUnits pid =<< llmWindow Nothing Nothing (Just "7D")
   window <- llmWindow Nothing Nothing Nothing
   convs <- conversationsOf <$> windowUnits pid window
   signals <- selectSignals pid

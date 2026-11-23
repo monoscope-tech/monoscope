@@ -134,17 +134,21 @@ spec = around withTestResources do
       now <- getCurrentTime
       setTestTime tr.trTestClock now
       let chat n ago = ingestSpanLinked tr apiKey "8c4e" ("c" <> show n) Nothing "chat gpt-4o" [("gen_ai.operation.name", "chat"), ("gen_ai.request.model", "gpt-4o"), ("gen_ai.conversation.id", "conv-h"), ("gen_ai.usage.input_tokens", "10")] (addUTCTime (negate ago) now)
-          calls = do
-            LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.ConversationsBody t))) <- call (viaTf tr) $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "24H") (Just "1")
-            pure [(c.key, c.llmCalls, length c.units) | c <- toList t.rows]
+          listed t = do
+            LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.ConversationsBody tbl))) <- call t $ LLM.llmGetH pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "24H") (Just "1")
+            pure [(c.key, c.llmCalls, length c.units) | c <- toList tbl.rows]
+          -- The Postgres read keeps its own store; a TimeFusion read goes through TF's llm_1h tier.
+          calls = listed tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = False}}}
       chat (1 :: Int) 7200 >> chat 2 60
       calls `shouldReturn` [("conv-h", 2, 1)]
+      realTf <- isJust <$> lookupEnv "TIMEFUSION_PG_TEST_URL"
+      when realTf $ listed (viaTf tr) `shouldReturn` [("conv-h", 2, 1)]
       dbQuery @_ @(Only Int) tr [sql| SELECT count(*)::int FROM apis.llm_unit_hours WHERE project_id = ? AND jsonb_array_length(units) > 0 |] (Only pid) `shouldReturn` [Only 1]
       -- The settled hour is read from the store, not rescanned.
       chat 3 7200
       calls `shouldReturn` [("conv-h", 2, 1)]
-      -- The hourly job keeps a week settled, so a 7D window opens on stored hours only.
-      runTestBg now tr $ LLM.evaluateSignals pid
+      -- The hourly job keeps the Postgres store a week deep, so a 7D window opens on stored hours only.
+      runTestBg now tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = False}}} $ LLM.evaluateSignals pid
       [Only stored] <- dbQuery @_ @(Only Int) tr [sql| SELECT count(*)::int FROM apis.llm_unit_hours WHERE project_id = ? |] (Only pid)
       stored `shouldSatisfy` (>= 7 * 24 - 2) -- the unsettled last hour or two stay live
     it "prices Pi's durable sessions from pi-otel: one conversation per routine run, input counted with its cache" \tr -> do
@@ -189,10 +193,10 @@ spec = around withTestResources do
       -- The same run, read back through the pages a user would open.
       -- Through TimeFusion reads, which CI points at a real TimeFusion.
       (from, to) <- around' <$> getCurrentTime
-      LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call (viaTf tr) $ LLM.llmGetH testPid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
+      LLM.LLMPage _ (PageCtx _ (DeferredBody (LLM.ConversationsBody table))) <- call tr $ LLM.llmGetH testPid Nothing Nothing Nothing Nothing Nothing from to Nothing (Just "1")
       run <- maybe (fail "the assistant run is not listed as a conversation") pure $ viaNonEmpty head $ toList table.rows
       (run.agents, run.title, run.llmCalls >= 2, run.toolCalls >= 1) `shouldBe` (["monoscope"], Just "plot error trend over time", True, True)
-      detail <- call (viaTf tr) $ LLM.conversationGetH testPid run.key from to Nothing
+      detail <- call tr $ LLM.conversationGetH testPid run.key from to Nothing
       renderT detail `shouldContainAll` ["plot error trend over time", "System instructions", "Ask AI about this conversation", "Transcript", "Timeline", "Cost by model", "Tools", "Open trace", "showTrace="]
       [(chatId, chatTs)] <- dbQuery tr [sql| SELECT id::text, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND attributes->'gen_ai'->'operation'->>'name' = 'chat' ORDER BY start_time LIMIT 1 |] (Only testPid)
       chatUuid <- maybe (fail "span id is not a uuid") pure $ UUID.fromText chatId
