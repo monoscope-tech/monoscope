@@ -37,7 +37,7 @@ import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, fieldMenuActions, fmtInt, freeTierUsageBanner, freeTierUsageStatus, loadingIndicatorWith_, navTabAttrs, popoverPanel_, popoverTrigger_, scriptJson)
+import Utils (FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, fieldMenuActions, fmtInt, freeTierUsageBanner, freeTierUsageStatus, loadingIndicatorWith_, navTabAttrs, popoverPanel_, popoverTrigger_, scriptJson, uiToggle_)
 import Web.I18n qualified as I18n
 import Web.Links
 
@@ -532,7 +532,7 @@ bodyWrapper bcfg child = do
             div_ [id_ "ai-dock", hxGet_ $ urls.aiDockGet p.id Nothing Nothing, hxTrigger_ "load", hxSwap_ "outerMorph"] ""
           -- Mobile nav toggle (CSS-only sidebar control, only rendered when sidebar exists)
           when (isJust bcfg.currProject)
-            $ input_ [type_ "checkbox", class_ "hidden", id_ "mobile-nav-toggle", [__|on load if window.innerWidth < 768 then set #sidenav-toggle.checked to true|]]
+            $ uiToggle_ [class_ "hidden", id_ "mobile-nav-toggle", [__|on load if window.innerWidth < 768 then set #sidenav-toggle.checked to true|]]
           section_ [class_ "flex h-screen flex-col"] do
             forM_ bcfg.currProject \project -> do
               when (sess.user.isSudo && project.id /= Projects.demoProjectId && not (V.any ((== project.id) . (.id)) sess.persistentSession.projects.getProjects))
@@ -813,7 +813,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
     ]
     ""
   div_ [class_ "relative z-[1] px-1 group-has-[#sidenav-toggle:checked]/pg:px-2 flex flex-col grow min-h-0 overflow-hidden"] do
-    input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
+    uiToggle_ ([class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
     -- Project picker + Toggle (context + sidebar control)
     div_ [class_ "pt-2 flex flex-col group-has-[#sidenav-toggle:checked]/pg:flex-row items-center gap-1 group-has-[#sidenav-toggle:checked]/pg:gap-2 group/ctx"] do
       div_ [class_ "block group-has-[#sidenav-toggle:checked]/pg:flex-1 group-has-[#sidenav-toggle:checked]/pg:min-w-0"] do
@@ -1133,7 +1133,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
         userIdentifier = bool (CI.original currUser.email) (currUser.firstName <> " " <> currUser.lastName) (currUser.firstName /= "" || currUser.lastName /= "")
     label_ [class_ "flex group-has-[#sidenav-toggle:not(:checked)]/pg:hidden cursor-pointer gap-2 items-center px-2 py-2 rounded-lg hover:bg-fillWeak transition-colors duration-100", Aria.label_ "Toggle dark mode"] do
       faSprite_ "sun-bright" "regular" "h-4 w-4 shrink-0 text-textWeak"
-      input_ [type_ "checkbox", class_ "toggle toggle-sm theme-controller", id_ "dark-mode-toggle", Aria.label_ "Use dark appearance", onclick_ "toggleDarkMode()"]
+      uiToggle_ [class_ "toggle toggle-sm theme-controller", id_ "dark-mode-toggle", Aria.label_ "Use dark appearance", onclick_ "toggleDarkMode()"]
       faSprite_ "moon-stars" "regular" "h-4 w-4 shrink-0 text-textWeak"
     button_ ([type_ "button", class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex justify-center items-center py-2 rounded-lg hover:bg-fillWeak cursor-pointer transition-colors duration-100", Aria.label_ "Toggle dark mode", onclick_ "toggleDarkMode()"] <> tippyRight_ "Toggle dark mode") do
       span_ [class_ "dark:hidden"] $ faSprite_ "sun-bright" "regular" "h-4 w-4 text-textWeak"

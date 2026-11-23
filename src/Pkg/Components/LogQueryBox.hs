@@ -20,7 +20,7 @@ import Pages.Components (dialogField_, filterInputAttr_, floatingDialog_, keyboa
 import Pkg.Components.Widget (VizType (..), vizIsChart, vizWidget)
 import Pkg.SchemaLearning (FacetData (..), FacetValue (..))
 import Relude
-import Utils (copyToClipboardAttr_, displayTimestamp, faSprite_, formatUTC, onpointerdown_)
+import Utils (copyToClipboardAttr_, displayTimestamp, faSprite_, formatUTC, onpointerdown_, uiToggle_)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), urls)
 
 
@@ -85,9 +85,8 @@ logQueryBox_ config = do
         -- attribute instead of toggling classes on three elements across two
         -- files (which had drifted to two different border colours).
         div_ [class_ "group/qbox px-1 py-0.5 flex-1 flex flex-col gap-0.5 bg-bgRaised rounded-lg border border-strokeWeak focus-within:ring-2 focus-within:ring-strokeBrand-weak data-[query-state=error]:border-strokeError-strong has-[.ai-search:focus-visible]:ring-2 has-[.ai-search:focus-visible]:ring-strokeBrand-strong", id_ "queryBox", data_ "query-state" (bool "ok" "error" (isJust config.parseError))] do
-          input_
+          uiToggle_
             $ [ class_ "sr-only ai-search"
-              , type_ "checkbox"
               , id_ "ai-search-chkbox"
               , Aria.label_ "Ask in plain English with AI search"
               , -- Every path that opens or collapses AI search routes through `change`, so
@@ -286,12 +285,11 @@ logQueryBox_ config = do
         -- Explorer-only: the widget editor has no timeline, and its Monitors tab owns alerts.
         whenNothing_ config.targetWidgetPreview $ div_ [class_ "flex shrink-0 items-center justify-end gap-3 whitespace-nowrap max-md:w-full"] do
           label_ [class_ "flex min-h-8 cursor-pointer items-center gap-1.5 text-xs text-textWeak hover:text-textStrong"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart", [__|init if window.innerWidth < 768 set my.checked to true|]]
+            uiToggle_ [class_ "checkbox checkbox-sm rounded-sm toggle-chart", [__|init if window.innerWidth < 768 set my.checked to true|]]
             span_ "Hide timeline"
           label_ [class_ "flex min-h-8 cursor-pointer items-center gap-1.5 text-xs text-textWeak hover:text-textStrong group-has-[#viz-patterns:checked]/pg:hidden group-has-[#viz-sessions:checked]/pg:hidden"] do
-            input_
-              $ [ type_ "checkbox"
-                , id_ "create-alert-toggle"
+            uiToggle_
+              $ [ id_ "create-alert-toggle"
                 , class_ "checkbox checkbox-sm rounded-sm"
                 , -- The #create-alert-toggle hash deep-link replays this element's own change
                   -- handler rather than duplicating the force-switch body on an ancestor init.
@@ -476,7 +474,7 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
       searchInput_ "h-9 flex-1 border-0 bg-fillWeaker" ("Search " <> T.toLower label <> " queries") [filterInputAttr_ $ ".dataLibContent" <> label <> " .query-item"]
       when (label == "Saved")
         $ label_ [class_ "tabs tabs-sm tabs-box tabs-outline bg-fillWeak text-textWeak shrink items-center h-8 cursor-pointer has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2"] do
-          input_ [class_ "sr-only", type_ "checkbox", id_ "queryLibraryGroup", Aria.label_ "Show all team queries"]
+          uiToggle_ [class_ "sr-only", id_ "queryLibraryGroup", Aria.label_ "Show all team queries"]
           span_ [Aria.hidden_ "true", class_ "tab h-full bg-fillWeaker group-has-[#queryLibraryGroup:checked]/pg:bg-transparent px-2", data_ "tippy-content" "My queries"] $ faSprite_ "user" "regular" "w-3 h-3"
           span_ [Aria.hidden_ "true", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-fillWeaker px-2", data_ "tippy-content" "All team queries"] $ faSprite_ "users" "regular" "w-3 h-3"
 

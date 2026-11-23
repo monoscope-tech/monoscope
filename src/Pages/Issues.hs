@@ -160,7 +160,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, done, successToast, useTfReads)
-import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, faSprite_, fmtDate, fmtInt, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, kqlQuoted, loadingIndicator_, lookupValueText, navTabStrip_, nonEmptyT, popoverPanel_, popoverTrigger_, renderMarkdown, summaryWords)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, faSprite_, fmtDate, fmtInt, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, kqlQuoted, loadingIndicator_, lookupValueText, navTabStrip_, nonEmptyT, popoverPanel_, popoverTrigger_, renderMarkdown, summaryWords, uiToggle_)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseQueryParamMaybe)
 import Web.Links (CookieProtectedRoutes (..), IssuesRoutes' (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), explorerUrl, urls)
@@ -788,7 +788,7 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
       div_ ([class_ "w-full min-w-0 flex items-center gap-1.5"] <> [[__|on input from #issue-journey-search set #issue-journey-events.open to true|] | total > 5]) do
         input_ [id_ "issue-journey-search", type_ "search", placeholder_ "Search", Aria.label_ "Search the user journey", class_ "input input-xs w-full min-w-0 flex-1 text-base sm:text-xs", filterInputAttr_ "#issue-journey .crumb"]
         label_ [class_ "btn btn-xs btn-ghost shrink-0 gap-1 has-[:checked]:text-textBrand has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2", term "data-tippy-content" "Newest first"] do
-          input_ [type_ "checkbox", class_ "crumb-rev sr-only", Aria.label_ "Newest events first"]
+          uiToggle_ [class_ "crumb-rev sr-only", Aria.label_ "Newest events first"]
           faSprite_ "arrows-up-down" "regular" "w-3 h-3"
         copyButton_ "btn btn-xs btn-ghost" "w-3 h-3" "#issue-journey-text's textContent" []
         pre_ [id_ "issue-journey-text", class_ "hidden"] $ toHtml $ unlines [bc.kind <> foldMap (" " <>) bc.message | bc <- crumbList]

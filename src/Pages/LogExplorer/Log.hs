@@ -97,7 +97,7 @@ import System.Types
 import Text.Casing (fromAny, toKebab)
 import Text.Megaparsec (parseMaybe)
 import Text.Slugify (slugify)
-import Utils (FieldAction (..), FieldMenuCtx (..), encodeText, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, showFFloat', statusFillColorText, toUriStr)
+import Utils (FieldAction (..), FieldMenuCtx (..), encodeText, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, showFFloat', statusFillColorText, toUriStr, uiToggle_)
 import Web.HttpApiData (parseQueryParam, parseUrlPiece)
 
 import Web.ApiTypes (ApiProblem (ApiProblem), LogResult (..), ProblemCode (..), TraceTreeEntry (..), problem)
@@ -1541,9 +1541,8 @@ apiLogsPage page = do
     -- It overlays the widget's header row; a panel too narrow to clear the centred title stacks it instead.
     rowCountHeader = div_ [class_ "max-md:hidden flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 @max-[640px]:mb-0 group-has-[#viz-patterns:checked]/pg:mb-0"] do
       filtersLabel_ []
-        $ input_
-          [ type_ "checkbox"
-          , class_ "toggle-filters sr-only"
+        $ uiToggle_
+          [ class_ "toggle-filters sr-only"
           , id_ "toggle-filters"
           , [__|
               init

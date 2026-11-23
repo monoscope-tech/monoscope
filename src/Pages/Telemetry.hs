@@ -76,7 +76,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, faSprite_, faSymbolDefs_, faUse_, fmtInt, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, nonEmptyT, onpointerdown_, parseTime, popoverTrigger_, prettyPrintCount, scriptJson, toUriStr, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, faSprite_, faSymbolDefs_, faUse_, fmtInt, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, nonEmptyT, onpointerdown_, parseTime, popoverTrigger_, prettyPrintCount, scriptJson, toUriStr, uiToggle_, utcTimeToNanoseconds)
 import Web.Links hiding (explorerUrl)
 
 
@@ -1383,7 +1383,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden group-has-[#tab-map:checked]/tt:block", id_ "service_map"] do
             serviceMapPanel_ pid ("trace-service-map-" <> traceItem.traceId) traceGraph serviceColors Nothing
     -- Open state is this checkbox: rows check it before loading a span, close unchecks it.
-    input_ [type_ "checkbox", class_ "hidden peer/trace", id_ "trace-details-open"]
+    uiToggle_ [class_ "hidden peer/trace", id_ "trace-details-open"]
     div_ [class_ "hidden @min-[64rem]/trace:peer-checked/trace:block", id_ "trace-details-resizer-wrapper"]
       $ Components.resizerWith_ [data_ "min" "260", data_ "max" "70vw"] "trace_details_container" "trace_details_width" False
     label_
