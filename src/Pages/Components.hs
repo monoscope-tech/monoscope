@@ -1016,8 +1016,8 @@ floatingModal_ modalId =
 -- fused into one word and two hyperscript handlers ran "end" into "on". Classes join with a
 -- space, @_@ handlers with a newline, styles with @;@; any other repeat keeps the caller's value.
 --
--- >>> renderText $ div_ (mergedAttrs [class_ "a", term "_" "on click x end", id_ "own", class_ "b", term "_" "on load y end", id_ "caller"]) ""
--- "<div class=\"a b\" _=\"on click x end\non load y end\" id=\"caller\"></div>"
+-- >>> renderText $ div_ (mergedAttrs [class_ "a", term "_" "on click add .x", id_ "own", class_ "b", term "_" "on load add .y", id_ "caller"]) ""
+-- "<div class=\"a b\" _=\"on click add .x\non load add .y\" id=\"caller\"></div>"
 mergedAttrs :: [Attribute] -> [Attribute]
 mergedAttrs attrs = [Attribute k (joined k [v | Attribute k' v <- attrs, k' == k]) | k <- ordNub [k | Attribute k _ <- attrs]]
   where
