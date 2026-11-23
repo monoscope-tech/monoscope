@@ -85,7 +85,7 @@ homeGetH pid = do
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now
       inbox = Issues.inboxFilters{Issues.hideLowSeverity = True}
-  (newIssues, newIssueCount) <- Issues.selectIssues pid Issues.PIssueL inbox{Issues.timeRange = Just (dayAgo, now), Issues.period = "24h", Issues.limit = 6}
+  (newIssues, newIssueCount) <- Issues.selectIssues pid Issues.PIssueL inbox{Issues.timeRange = Just (dayAgo, now), Issues.period = "24h", Issues.limit = 5}
   (_, openIssueCount) <- Issues.selectIssues pid Issues.PIssue inbox{Issues.limit = 0}
   resolved <- Issues.resolvedIssuesSince pid dayAgo
   highlights <- Issues.liveHighlights pid
@@ -135,19 +135,17 @@ home_ d = div_ [class_ "w-full h-full overflow-y-auto c-scroll"] $ div_ [class_ 
   whenJust (mfilter (not . (.invited)) d.slack) slackConnectCard_
   alerts_ d
   let flagged kind = filter ((== kind) . (.kind)) d.highlights
+      issueCards = map (highlightCard_ d.pid d.now) (flagged Issues.HKIssue) <> map (issueCard_ d.pid d.now) d.newIssues
+      improvementCards = map (highlightCard_ d.pid d.now) (flagged Issues.HKImprovement) <> map (resolvedCard_ d.pid d.now) d.resolved
   div_ [class_ "grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-10"] do
-    column_ "Today's issues" (d.newIssueCount + length (flagged Issues.HKIssue)) (Just ("All issues", issuesListUrl d.pid)) do
-      if null d.newIssues && null (flagged Issues.HKIssue)
+    column_ "Today's issues" (d.newIssueCount + length (flagged Issues.HKIssue)) (Just ("All issues", issuesListUrl d.pid))
+      $ if null issueCards
         then quiet_ "circle-check" "Nothing new broke in the last 24 hours."
-        else do
-          forM_ (flagged Issues.HKIssue) $ highlightCard_ d.pid d.now
-          forM_ d.newIssues $ issueCard_ d.pid d.now
-    column_ "Today's improvements" (length d.resolved + length (flagged Issues.HKImprovement)) Nothing do
-      if null d.resolved && null (flagged Issues.HKImprovement)
+        else sequence_ (take 5 issueCards)
+    column_ "Today's improvements" (length d.resolved + length (flagged Issues.HKImprovement)) Nothing
+      $ if null improvementCards
         then quiet_ "arrow-trend-up" "Resolved issues and AI-confirmed wins from the last 24 hours land here."
-        else do
-          forM_ (flagged Issues.HKImprovement) $ highlightCard_ d.pid d.now
-          forM_ d.resolved $ resolvedCard_ d.pid d.now
+        else sequence_ (take 5 improvementCards)
   jumpBackIn_ d
   unless (null $ flagged Issues.HKInsight) $ section_ [class_ "flex flex-col gap-2", Aria.label_ "For you today"] do
     sectionHead_ "For you today" (Just $ length $ flagged Issues.HKInsight) $ Just ("AI routines", urls.aiRoutinesGet d.pid)
@@ -185,8 +183,9 @@ connectAgent_ d = div_ [class_ "relative"] do
       [ type_ "button"
       , Aria.label_ "Copy the agent setup prompt"
       , class_ "rounded-e-full ps-1.5 pe-3.5 py-2 text-iconNeutral hover:text-textStrong active:scale-[0.96] transition-[color,scale] duration-100 cursor-pointer"
-      , [__|on click call navigator.clipboard.writeText(#agent-prompt.textContent) then add .text-iconSuccess to me then put 'Copied the agent setup prompt' into #agent-copy-status then wait 1.5s then remove .text-iconSuccess from me|]
+      , [__|on click call navigator.clipboard.writeText(#agent-prompt.textContent) then add .copied to me then put 'Copied the agent setup prompt' into #agent-copy-status then wait 1.5s then remove .copied from me|]
       ]
+      $ span_ [class_ "copy-icon"]
       $ faSprite_ "copy" "regular" "w-4 h-4"
     span_ [id_ "agent-copy-status", role_ "status", class_ "sr-only"] ""
   div_ ([class_ "dropdown dropdown-end z-50 mt-2 w-[min(30rem,calc(100vw-2rem))] rounded-2xl border border-strokeWeak bg-bgRaised p-5 shadow-lg flex flex-col gap-4", role_ "dialog", Aria.label_ "Connect your agent"] <> popoverPanel_ "connect-agent-pop") do
@@ -329,7 +328,7 @@ sectionHead_ title countM linkM = div_ [class_ "flex items-center gap-2"] do
   whenJust countM $ span_ [class_ "rounded-md bg-fillWeak px-1.5 text-xs font-medium tabular-nums text-textWeak"] . toHtml . fmtInt
   whenJust linkM \(label, href) -> a_ ([href_ href, class_ "ml-auto inline-flex items-center gap-1 text-xs text-textWeak hover:text-textBrand"] <> navTabAttrs) do
     toHtml label
-    faSprite_ "arrow-right" "regular" "w-3 h-3"
+    faSprite_ "arrow-right" "regular" "w-3 h-3 rtl:-scale-x-100"
 
 
 column_ :: Html () -> Int -> Maybe (Text, Text) -> Html () -> Html ()
