@@ -377,6 +377,12 @@ tests:
     when:
       - condition: "!flag(devtest)"
         buildable: false
+      - condition: "flag(devtest)"
+        dependencies:
+          - monoscope-cli
+          - brick
+          - vty
+          - silently
     main: Main.hs
     source-dirs:
       - src

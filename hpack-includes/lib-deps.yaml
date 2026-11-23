@@ -1,9 +1,5 @@
 - base
 - monoscope-shared
-# test-dev compiles src/ + test/integration/ together and the CLI specs there drive
-# CLI.Main. The library itself never uses monoscope-cli (that would defeat the
-# split); it is declared unused there and silenced by -Wno-error=unused-packages.
-- monoscope-cli
 - relude >= 1.2.0.0
 - colourista
 - proto-lens
@@ -190,7 +186,4 @@
 - ansi-terminal
 - http-client-tls
 - unix
-- brick
-- vty
 - random
-- silently

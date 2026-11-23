@@ -5,13 +5,15 @@ ARG RUNTIME_IMAGE=debian:12-slim
 FROM ${DEPS_IMAGE} AS dependencies
 FROM dependencies AS builder
 
-# Install system dependencies if not using deps image (no-ops if already installed)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-  curl ca-certificates lsb-release gnupg \
-  libssl-dev librdkafka-dev libsnappy-dev libgrpc-dev \
-  libpq-dev libldap2-dev libsasl2-dev liblz4-dev libzstd-dev \
-  pkg-config git wget unzip \
-  || true
+# Install system dependencies if not using deps image (no-ops in <0.1s on monoscope-deps)
+RUN dpkg -s librdkafka-dev libgrpc-dev libpq-dev libsnappy-dev liblz4-dev libzstd-dev libldap2-dev libsasl2-dev libssl-dev >/dev/null 2>&1 || ( \
+  apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates lsb-release gnupg \
+    libssl-dev librdkafka-dev libsnappy-dev libgrpc-dev \
+    libpq-dev libldap2-dev libsasl2-dev liblz4-dev libzstd-dev \
+    pkg-config git wget unzip \
+  && rm -rf /var/lib/apt/lists/* \
+  )
 
 # Install protoc if not present
 RUN which protoc || ( \
@@ -54,12 +56,9 @@ COPY cli ./cli
 # The server links only profiled objects; the vanilla pass exists only to run Template Haskell
 # splices, so it builds at -O0 (package.yaml's ghc-prof-options restores -O1 for the profiled pass).
 # AutoInstrument rules out -fexternal-interpreter, which would drop the vanilla pass entirely.
-RUN printf 'package *\n  profiling: True\n  profiling-detail: none\npackage monoscope\n  profiling-detail: late\n  optimization: False\n' >> cabal.project.local
-
-# Build Haskell dependencies (fast - already cached in deps image; layer-cached until the
-# cabal files or shared/ change).
-RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/.cabal/store \
-    cabal update && cabal build --only-dependencies exe:monoscope-server -j --semaphore
+# -fno-write-ide-info skips .hie generation in production (weeder runs in native CI), cutting
+# compile time, disk I/O, and persistent dist cache size across both vanilla and prof passes.
+RUN printf 'package *\n  profiling: True\n  profiling-detail: none\npackage monoscope\n  profiling-detail: late\n  optimization: False\n  ghc-options: -fno-write-ide-info\n' >> cabal.project.local
 
 # The dependency image is a cache, not the authority for npm versions. Install
 # from this checkout's lockfiles in a separately cached layer so new frontend
@@ -68,7 +67,7 @@ COPY package.json package-lock.json ./
 COPY web-components/package.json web-components/package-lock.json ./web-components/
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --prefer-offline --no-audit && \
-    npm ci --prefix web-components --prefer-online --no-audit
+    npm ci --prefix web-components --prefer-offline --no-audit
 
 # Copy source code
 COPY package.yaml ./
@@ -117,9 +116,10 @@ RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/
     flock /cache/lock sh -c '[ ! -d /cache/dist ] || { rm -rf /build/dist-newstyle && cp -a /cache/dist /build/dist-newstyle; }' && \
     (command -v hpack >/dev/null && hpack || echo "hpack not installed, using committed monoscope.cabal") && \
     find /build/dist-newstyle -name 'BodyWrapper.*' -delete && \
-    cabal build exe:monoscope-server -j --semaphore --ghc-options="+RTS -A64m -n2m -RTS" && \
+    { cabal build exe:monoscope-server -f-devtest -j --semaphore --ghc-options="+RTS -A128m -n4m -V0 -RTS" || \
+      (cabal update && cabal build exe:monoscope-server -f-devtest -j --semaphore --ghc-options="+RTS -A128m -n4m -V0 -RTS"); } && \
     mkdir -p /build/dist && \
-    cp "$(cabal list-bin -v0 exe:monoscope-server | grep -a '/monoscope-server$' | tail -n1)" /build/dist/ && \
+    cp "$(cabal list-bin -v0 -f-devtest exe:monoscope-server | grep -a '/monoscope-server$' | tail -n1)" /build/dist/ && \
     entry="$(node -p "require('./static/public/assets/web-components/dist/manifest.json')['index.html'].file")" && \
     { test -f "static/public/assets/web-components/dist/$entry" || \
       { echo "manifest entry $entry does not exist in dist" >&2; exit 1; }; } && \
@@ -133,16 +133,19 @@ RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/
     rm -rf /build/dist-newstyle
 
 # Native CLI objects use their own cache, separate from the profiled server.
+# Strip the root package (`.`) from cabal.project so root monoscope.cabal edits
+# (e.g. new SQL migrations) never invalidate the CLI layer cache.
 FROM dependencies AS impact-cli
 WORKDIR /build
-COPY monoscope.cabal cabal.project cabal.project.freeze ./
+COPY cabal.project cabal.project.freeze ./
 COPY shared ./shared
 COPY cli ./cli
 COPY scripts/cli-bin.sh scripts/package-cli.sh scripts/check-cli-linkage.sh ./scripts/
 RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/.cabal/store \
     --mount=type=cache,id=monoscope-impact-cli-dist-v1,target=/build/dist-newstyle,sharing=locked \
-    cabal build monoscope-cli:exe:monoscope -j --ghc-options="-O2 -split-sections -optl-Wl,--gc-sections +RTS -A64m -n2m -RTS" && \
-    scripts/package-cli.sh "$(scripts/cli-bin.sh --ghc-options="-O2 -split-sections -optl-Wl,--gc-sections +RTS -A64m -n2m -RTS")" /build/monoscope
+    sed '/^packages:/s/ \./ /' cabal.project > cabal.project.cli && \
+    cabal build --project-file=cabal.project.cli monoscope-cli:exe:monoscope -j --semaphore --ghc-options="-O2 -split-sections -optl-Wl,--gc-sections +RTS -A128m -n4m -V0 -RTS" && \
+    scripts/package-cli.sh "$(scripts/cli-bin.sh --project-file=cabal.project.cli --ghc-options="-O2 -split-sections -optl-Wl,--gc-sections +RTS -A128m -n4m -V0 -RTS")" /build/monoscope
 
 FROM node:24-bookworm-slim AS impact-sdk
 WORKDIR /opt/monoscope/impact-review-worker
@@ -194,12 +197,6 @@ RUN useradd -m -U -s /bin/false monoscope
 
 WORKDIR /opt/monoscope
 
-# Declared after the apt layer: a per-commit value above it would rebuild that layer every time.
-ARG GIT_HASH=dev
-ARG GIT_COMMIT_DATE=dev
-ENV GIT_HASH=$GIT_HASH
-ENV GIT_COMMIT_DATE=$GIT_COMMIT_DATE
-
 # --chown on COPY, not a later `chown -R`, which would duplicate every file into another layer.
 RUN mkdir -p profiles && chown monoscope:monoscope . profiles
 
@@ -241,6 +238,11 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=3 \
 ENTRYPOINT ["bash","-c","ls -t profiles/monoscope-*.eventlog 2>/dev/null | tail -n +6 | xargs -r rm -f; exec ./monoscope-server +RTS -olprofiles/monoscope-$(date +%s).eventlog -RTS \"$@\"","--"]
 
 FROM runtime AS server
+# Declared in final stages (after impact-tools) so per-commit GIT_HASH never invalidates impact-tools' apt/SDK layers.
+ARG GIT_HASH=dev
+ARG GIT_COMMIT_DATE=dev
+ENV GIT_HASH=$GIT_HASH
+ENV GIT_COMMIT_DATE=$GIT_COMMIT_DATE
 COPY --from=builder --chown=monoscope:monoscope --chmod=755 /build/dist/monoscope-server /usr/local/bin/chart-cli ./
 COPY --from=builder --chown=monoscope:monoscope /build/static ./static
 
@@ -281,6 +283,10 @@ USER monoscope
 RUN monoscope --version && node --version && gh pr edit --help | grep -q -- --attach && bash -n /opt/monoscope/impact-review-worker/prepare.sh
 
 FROM impact-tools AS impact-worker
+ARG GIT_HASH=dev
+ARG GIT_COMMIT_DATE=dev
+ENV GIT_HASH=$GIT_HASH
+ENV GIT_COMMIT_DATE=$GIT_COMMIT_DATE
 COPY --from=server --chown=monoscope:monoscope /opt/monoscope /opt/monoscope
 
 FROM server AS production

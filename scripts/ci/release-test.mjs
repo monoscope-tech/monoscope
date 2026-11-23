@@ -314,7 +314,7 @@ process.stdout.write('200');
 test('cold Cabal cache preserves prebuilt dependencies and subsequent additions', () => {
   const dockerfile = readFileSync(new URL('../../Dockerfile', import.meta.url), 'utf8');
   const mounts = [...dockerfile.matchAll(/--mount=type=cache[^\s]*target=\/root\/\.cabal\/store[^\s]*/g)].map(([mount]) => `${mount},id=monoscope-seed-${root.split('/').at(-1)}`);
-  assert.equal(mounts.length, 3);
+  assert.equal(mounts.length, 2);
   copyFileSync(new URL('../../.dockerignore', import.meta.url), join(repo, '.dockerignore'));
   writeFileSync(join(repo, 'cabal.project'), 'packages: .');
   writeFileSync(join(repo, 'cabal.project.local'), 'unreviewed build flags');
@@ -325,7 +325,6 @@ COPY cabal.project* /inputs/
 RUN test ! -e /inputs/cabal.project.local
 RUN ${mounts[0]} test ! -e /root/.cabal/store/addition && test "$(cat /root/.cabal/store/dependency)" = prebuilt && printf 'incremental' > /root/.cabal/store/addition
 RUN ${mounts[1]} test "$(cat /root/.cabal/store/dependency)" = prebuilt && test "$(cat /root/.cabal/store/addition)" = incremental
-RUN ${mounts[2]} test "$(cat /root/.cabal/store/dependency)" = prebuilt && test "$(cat /root/.cabal/store/addition)" = incremental
 `;
   const builder = process.platform === 'darwin' ? ['--builder', 'monoscope-local-amd64'] : [];
   if (process.platform === 'darwin') {

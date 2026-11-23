@@ -335,17 +335,32 @@ CABAL_OPTS="--ghc-options=-O0 -j$CI_CORES +RTS -A64m -n2m -RTS"
 # 'fast'; adding the flag stops it.)
 CABAL_FLAGS='-f-devtest'
 
+npm_ci_if_stale() { # <dir> <npm-ci-args...>
+  local dir=$1; shift
+  if [ "${CI_ROOT:-}" = /build ] && [ -f "$dir/package-lock.json" ]; then
+    local sha stamp="$dir/node_modules/.monoscope-lock-sha"
+    sha=$(sha256 < "$dir/package-lock.json")
+    if [ -d "$dir/node_modules" ] && [ "$(cat "$stamp" 2>/dev/null || true)" = "$sha" ]; then
+      return 0
+    fi
+    (cd "$dir" && npm ci "$@") && printf '%s\n' "$sha" > "$stamp"
+  else
+    (cd "$dir" && npm ci "$@")
+  fi
+}
+
 prepare_browser() {
   [ "${CI_BROWSER_PREPARED:-}" != true ] || return 0
-  (cd e2e && npm ci --prefer-offline --no-audit && \
+  npm_ci_if_stale e2e --prefer-offline --no-audit
+  (cd e2e && \
     { [ -e /usr/local/share/monoscope-playwright-deps ] || npx playwright install-deps chromium; } && \
-    npx playwright install chromium)
+    { [ -d /root/.cache/ms-playwright ] && [ -n "$(find /root/.cache/ms-playwright -maxdepth 2 -name 'chromium-*' 2>/dev/null | head -1)" ] || npx playwright install chromium; })
   export CI_BROWSER_PREPARED=true
 }
 
 prepare_web_deps() {
   [ "${CI_WEB_DEPS_PREPARED:-}" != true ] || return 0
-  (cd web-components && npm ci --prefer-offline --no-audit)
+  npm_ci_if_stale web-components --prefer-offline --no-audit
   export CI_WEB_DEPS_PREPARED=true
 }
 
@@ -374,24 +389,44 @@ run_body() { # <check>
       # dist-newstyle is shared with other branches' checkouts, so it can hold .hie files for
       # modules this tree lacks (reported dead) and lack them for modules it has (GHC can
       # recompile a module without rewriting its .hie, hiding every reference it makes).
-      srcs=$(git ls-files '*.hs' | sed -E 'h; s#^(src|shared/src|cli/exe|cli/test|cli|test/[a-z]+|app)/##; s#\.hs$##; G; s#\n# #')
-      src_of() { printf '%s\n' "$srcs" | awk -v m="$1" '$1 == m { print $2; exit }'; }
       cabal build integration-tests unit-tests -j $CABAL_FLAGS "$CABAL_OPTS"
-      find dist-newstyle -name '*.o' | while read -r o; do
-        b=${o%%-tmp/*}-tmp; [ "$b" = "$o-tmp" ] && b=${o%/build/*}/build
-        m=${o#"$b"/}; m=${m%.o}
-        # cabal skips GHC while its sources hash the same, so drop its build stamp too.
-        if [ -d "$b/extra-compilation-artifacts/hie" ] && [ ! -e "$b/extra-compilation-artifacts/hie/$m.hie" ] && [ -n "$(src_of "$m")" ]; then
-          rm -f "${b%/build*}/cache/build" "$b/$m".{o,hi,dyn_o,dyn_hi}
-        fi
-      done
-      cabal build integration-tests unit-tests -j $CABAL_FLAGS "$CABAL_OPTS"
+      rebuilt=$(python3 -c '
+import os, re, subprocess
+srcs = {re.sub(r"\.hs$", "", re.sub(r"^(src|shared/src|cli/exe|cli/test|cli|test/[a-z]+|app)/", "", p))
+        for p in subprocess.check_output(["git", "ls-files", "*.hs"], text=True).splitlines()}
+missing = 0
+for root, _, files in os.walk("dist-newstyle"):
+    for fn in files:
+        if not fn.endswith(".o"): continue
+        o = os.path.join(root, fn)
+        idx = o.find("-tmp/")
+        b = o[:idx + 4] if idx != -1 else (o[:o.rfind("/build/")] + "/build" if "/build/" in o else None)
+        if not b: continue
+        m = o[len(b) + 1:-2]
+        hie_dir = os.path.join(b, "extra-compilation-artifacts", "hie")
+        if os.path.isdir(hie_dir) and not os.path.exists(os.path.join(hie_dir, m + ".hie")) and m in srcs:
+            cache_stamp = os.path.join(b.split("/build")[0], "cache", "build")
+            for p in [cache_stamp, *(os.path.join(b, m + ext) for ext in (".o", ".hi", ".dyn_o", ".dyn_hi"))]:
+                if os.path.exists(p): os.remove(p)
+            missing += 1
+print(missing)
+')
+      [ "$rebuilt" -eq 0 ] || cabal build integration-tests unit-tests -j $CABAL_FLAGS "$CABAL_OPTS"
       command -v weeder >/dev/null 2>&1 || cabal install weeder --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
-      find dist-newstyle -name '*.hie' | while read -r f; do
-        m=${f%.hie}; m=${m##*/build/}; m=${m##*/hie/}; m=${m##*-tmp/}
-        case $m in Proto/* | Paths_* | */autogen/*) continue ;; esac
-        [ -n "$(src_of "$m")" ] || rm -f "$f"
-      done
+      python3 -c '
+import os, re, subprocess
+srcs = {re.sub(r"\.hs$", "", re.sub(r"^(src|shared/src|cli/exe|cli/test|cli|test/[a-z]+|app)/", "", p))
+        for p in subprocess.check_output(["git", "ls-files", "*.hs"], text=True).splitlines()}
+for root, _, files in os.walk("dist-newstyle"):
+    for fn in files:
+        if not fn.endswith(".hie"): continue
+        f = os.path.join(root, fn)
+        m = f[:-4]
+        for sep in ("/build/", "/hie/", "-tmp/"):
+            if sep in m: m = m.split(sep)[-1]
+        if m.startswith(("Proto/", "Paths_")) or "/autogen/" in m: continue
+        if m not in srcs: os.remove(f)
+'
       weeder --config weeder.toml --hie-directory dist-newstyle
       ;;
     release-tests) node --test scripts/ci/release-test.mjs scripts/disk-guard/disk-guard.test.mjs ;;
@@ -437,7 +472,8 @@ run_integration() {
     timeout 600 sh -c 'apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update && apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends ffmpeg graphviz' \
       || die "could not install ffmpeg/graphviz (stalled package mirror?)"
   fi
-  (cd impact-review-worker && npm ci --ignore-scripts --no-audit && npm test)
+  npm_ci_if_stale impact-review-worker --ignore-scripts --no-audit
+  (cd impact-review-worker && npm test)
   prepare_web_deps
   prepare_browser
   # The checkout is bind-mounted from the host: building to ./chart-cli here would
@@ -767,8 +803,10 @@ with open(sys.argv[1], "w") as lock:
     compose rm -sf postgres minio timefusion >/dev/null 2>&1 || true
   fi
   if [ "$needs_integration" = true ]; then
-    # Pick up a native arm64 TimeFusion image when available.
-    if [ -z "${MONOSCOPE_CI_TF_IMAGE:-}" ] && [ "$(uname -m)" = arm64 ] \
+    # Pick up a native arm64 TimeFusion image when available (even under a Rosetta x86_64 shell).
+    local host_arm64=false
+    [ "$(uname -m)" = arm64 ] || [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = 1 ] && host_arm64=true
+    if [ -z "${MONOSCOPE_CI_TF_IMAGE:-}" ] && [ "$host_arm64" = true ] \
        && docker image inspect "$TF_LOCAL_IMAGE" >/dev/null 2>&1; then
       export MONOSCOPE_CI_TF_IMAGE="$TF_LOCAL_IMAGE" MONOSCOPE_CI_TF_PLATFORM=linux/arm64
       note "using locally built $TF_LOCAL_IMAGE (native arm64)"

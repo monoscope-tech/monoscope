@@ -27,7 +27,6 @@ module Pkg.DeriveUtils (
   hashedAssetPath,
   stripAssetHash,
   assetHash,
-  viteAssetFile,
   embedIconEntries,
   bulkActionSlug,
   showPGFloatArray,
@@ -86,7 +85,6 @@ import Language.Haskell.TH.Syntax qualified as TH
 import Numeric (showHex)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import OpenTelemetry.Instrumentation.PostgresqlSimple (pgsSpan)
-import Pkg.AssetManifestFingerprint (assetManifestFingerprint)
 import Pkg.Deriving
 import Refined (FromTo, Refined, unrefine)
 import Refined.Unsafe (reallyUnsafeRefine)
@@ -417,23 +415,6 @@ stripAssetHash p = do
   (prefix, h) <- T.breakOnEnd "." <$> T.stripSuffix "." stemDot
   guard $ T.length h == 8 && T.all isHexDigit h && not (T.null prefix)
   pure (prefix <> ext, h)
-
-
--- | URL of a Vite build output, looked up by manifest key (e.g. @"index.html"@ for the
--- entry). The emitted filename already carries a content hash, so this must NOT get a
--- @?v=@ query on top: chunks import the entry back as a bare @./index.<hash>.js@, and a
--- queried URL is a second module identity — the browser would evaluate the whole graph
--- twice and every @customElements.define@ in it would throw on the second pass.
-viteAssetFile :: FilePath -> TH.Q TH.Exp
-viteAssetFile key =
-  assetManifestFingerprint `seq` do
-    let dir = "/public/assets/web-components/dist/"
-        manifest = "static" <> dir <> "manifest.json"
-    TH.qAddDependentFile manifest
-    chunks <- TH.runIO $ AE.eitherDecodeFileStrict' @AE.Object manifest
-    either (fail . (("viteAssetFile " <> manifest <> ": ") <>)) (TH.lift . (dir <>) . toString @Text)
-      $ chunks
-      >>= AET.parseEither (\o -> o AE..: fromString key >>= (AE..: "file"))
 
 
 -- | Format a list of Floats as a PostgreSQL array literal, e.g. "{1.0,2.0,3.0}"
