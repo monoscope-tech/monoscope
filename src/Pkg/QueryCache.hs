@@ -29,6 +29,7 @@ module Pkg.QueryCache (
   nextBucketStart,
   chunkIntervalSupported,
   replaceTimeseriesRange,
+  SeriesSummary (..),
   summarizeSeries,
 
   -- * Trace session identity
@@ -527,56 +528,63 @@ mergeTimeseriesData cached new
 -- | Replace the dataset and recompute every figure derived from it.
 withRows :: MetricsData -> V.Vector (V.Vector (Maybe Double)) -> MetricsData
 withRows metrics rows =
-  let (rowsCount, rpm, stats) = summarizeSeries rows
-   in metrics{dataset = rows, rowsCount, rowsPerMin = Just rpm, stats = Just stats}
+  let s = summarizeSeries rows
+   in metrics{dataset = rows, rowsCount = s.rowsCount, rowsPerMin = Just s.rowsPerMin, stats = Just s.stats}
 
 
--- | Compute @(rowsCount, rowsPerMin, MetricsStats)@ over pivoted timeseries rows
--- (@[timestamp, series1, ...]@).
+data SeriesSummary = SeriesSummary
+  { rowsCount :: Double
+  , rowsPerMin :: Double
+  , stats :: MetricsStats
+  }
+  deriving stock (Show)
+
+
+-- | Compute 'SeriesSummary' over pivoted timeseries rows (@[timestamp, series1, ...]@).
+-- Gap-only rows are ignored for 'maxGroupSum' and leave a trailing 'last' as 'Nothing'.
 --
 -- Empty datasets and gap-only rows yield zero totals and 'def' stats ('last' is 'Nothing'):
 --
 -- >>> summarizeSeries V.empty
--- (0.0,0.0,MetricsStats {min = 0.0, max = 0.0, sum = 0.0, count = 0, mean = 0.0, mode = 0.0, maxGroupSum = 0.0, last = Nothing})
+-- SeriesSummary {rowsCount = 0.0, rowsPerMin = 0.0, stats = MetricsStats {min = 0.0, max = 0.0, sum = 0.0, count = 0, mean = 0.0, mode = 0.0, maxGroupSum = 0.0, last = Nothing}}
 -- >>> summarizeSeries (V.fromList [V.fromList [Just 60, Nothing]])
--- (0.0,0.0,MetricsStats {min = 0.0, max = 0.0, sum = 0.0, count = 0, mean = 0.0, mode = 0.0, maxGroupSum = 0.0, last = Nothing})
+-- SeriesSummary {rowsCount = 0.0, rowsPerMin = 0.0, stats = MetricsStats {min = 0.0, max = 0.0, sum = 0.0, count = 0, mean = 0.0, mode = 0.0, maxGroupSum = 0.0, last = Nothing}}
 --
 -- A trailing gap row leaves 'last' as 'Nothing' rather than fabricating @Just 0@:
 --
--- >>> let (_, _, st) = summarizeSeries (V.fromList [V.fromList [Just 0, Just 5], V.fromList [Just 60, Nothing]])
+-- >>> let st = (summarizeSeries (V.fromList [V.fromList [Just 0, Just 5], V.fromList [Just 60, Nothing]])).stats
 -- >>> (st.maxGroupSum, st.last)
 -- (5.0,Nothing)
 --
--- >>> let (tot, rpm, st) = summarizeSeries (V.fromList [V.fromList [Just 0, Just 2, Just 3], V.fromList [Just 60, Just 4, Nothing]])
--- >>> (tot, rpm, st.min, st.max, st.count, st.maxGroupSum, st.last)
+-- >>> let s = summarizeSeries (V.fromList [V.fromList [Just 0, Just 2, Just 3], V.fromList [Just 60, Just 4, Nothing]])
+-- >>> (s.rowsCount, s.rowsPerMin, s.stats.min, s.stats.max, s.stats.count, s.stats.maxGroupSum, s.stats.last)
 -- (9.0,3.0,2.0,4.0,3,5.0,Just 4.0)
-summarizeSeries :: V.Vector (V.Vector (Maybe Double)) -> (Double, Double, MetricsStats)
-summarizeSeries rows
-  | V.null allValues = (0, 0, def)
-  | otherwise = (sumV, rate, MetricsStats minV maxV sumV cnt (sumV / fromIntegral cnt) mode maxGroupSum lastRowSum)
+summarizeSeries :: V.Vector (V.Vector (Maybe Double)) -> SeriesSummary
+summarizeSeries rows = case V.uncons allValues of
+  Nothing -> SeriesSummary 0 0 def
+  Just (h, rest) ->
+    let (!minV, !maxV, !sumV, !cnt, !freq) =
+          V.foldl'
+            ( \(!mn, !mx, !s, !c, !f) x ->
+                let f' = if M.size f < maxFreqEntries || M.member x f then M.insertWith (+) x 1 f else f
+                 in (min mn x, max mx x, s + x, c + 1, f')
+            )
+            (h, h, h, 1, one (h, 1))
+            rest
+        maxGroupSum = V.foldl' max 0 (V.catMaybes rowSums)
+        lastRowSum = snd =<< V.unsnoc rowSums
+        -- first (smallest) value wins ties, hence the strict `>`
+        mode = fst $ M.foldlWithKey' (\acc@(_, cnt') k c -> if c > cnt' then (k, c) else acc) (h, 0) freq
+        rate = case V.uncons (V.mapMaybe rowTimestamp rows) of
+          Nothing -> 0
+          Just (t0, ts) ->
+            let (!lo, !hi) = V.foldl' (\(!a, !b) t -> (min a t, max b t)) (t0, t0) ts
+             in if hi <= lo then 0 else fromIntegral cnt * 60 / (hi - lo)
+     in SeriesSummary sumV rate $ MetricsStats minV maxV sumV cnt (sumV / fromIntegral cnt) mode maxGroupSum lastRowSum
   where
+    maxFreqEntries = 1000 -- cap frequency map to prevent memory issues with high-cardinality data
     allValues = V.concatMap (V.catMaybes . V.drop 1) rows
     rowSums = V.map (\r -> let vs = V.catMaybes (V.drop 1 r) in V.sum vs <$ guard (not $ V.null vs)) rows
-    nonEmptySums = V.catMaybes rowSums
-    h = V.head allValues
-    maxFreqEntries = 1000 -- cap frequency map to prevent memory issues with high-cardinality data
-    (!minV, !maxV, !sumV, !cnt, !freq) =
-      V.foldl'
-        ( \(!mn, !mx, !s, !c, !f) x ->
-            let f' = if M.size f < maxFreqEntries || M.member x f then M.insertWith (+) x 1 f else f
-             in (min mn x, max mx x, s + x, c + 1, f')
-        )
-        (h, h, h, 1, one (h, 1))
-        (V.tail allValues)
-    maxGroupSum = if V.null nonEmptySums then 0 else V.maximum nonEmptySums
-    lastRowSum = snd =<< V.unsnoc rowSums
-    -- first (smallest) value wins ties, hence the strict `>`
-    mode = fst $ M.foldlWithKey' (\acc@(_, cnt') k c -> if c > cnt' then (k, c) else acc) (h, 0) freq
-    timestamps = V.mapMaybe rowTimestamp rows
-    rate =
-      if V.null timestamps || V.maximum timestamps <= V.minimum timestamps
-        then 0
-        else fromIntegral cnt * 60 / (V.maximum timestamps - V.minimum timestamps)
 
 
 -- | Filter dataset rows by timestamp predicate and recalculate stats

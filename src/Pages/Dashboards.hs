@@ -1471,28 +1471,30 @@ dashboardBWConf bw pid dashId title tabM currentRange readOnly freeTierStatus =
           li_ $ a_ [href_ (urls.dashboardRepositoryGet pid dashId), class_ "p-2"] "Repository sync"
           li_ $ button_ [class_ "p-2 w-full text-left text-textError", hxDelete_ (urls.dashboardDelete pid dashId), hxSwap_ "none", hxConfirm_ "Are you sure you want to delete this dashboard? This action cannot be undone.", data_ "tippy-content" "Permanently deletes this dashboard"] "Delete dashboard"
       where
-        yamlEditorDrawer_ = div_ [class_ "drawer drawer-end inline-block w-auto"] do
+        yamlEditorDrawer_ =
           let drawerId = "yaml-editor-drawer"
-          uiToggle_ [id_ drawerId, class_ "drawer-toggle", [__|on keyup if the event's key is 'Escape' set my.checked to false end on closeYamlDrawer from window set my.checked to false|]]
-          div_ [class_ "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-hidden"] do
-            label_ [Lucid.for_ drawerId, class_ "drawer-overlay w-full grow flex-1"] ""
-            div_ [style_ "width: min(90vw, 1000px)", class_ "bg-bgRaised h-full overflow-hidden flex flex-col"] do
-              div_ [class_ "flex justify-between items-center p-4 border-b border-strokeWeak shrink-0"] do
-                h2_ [class_ "text-lg font-semibold"] "Edit Dashboard Schema"
-                div_ [class_ "flex items-center gap-2"] do
-                  label_ [class_ "btn btn-sm cursor-pointer", Lucid.for_ "yaml-import-input"] do
-                    faSprite_ "upload" "regular" "w-3 h-3 mr-1"
-                    "Import"
-                  input_ [id_ "yaml-import-input", type_ "file", accept_ ".yaml,.yml", class_ "hidden", term "hx-on:change" "yamlEditorImport(this.files[0]); this.value = ''"]
-                  button_ [class_ "btn btn-sm", term "hx-on:click" "yamlEditorExport()"] do
-                    faSprite_ "download" "regular" "w-3 h-3 mr-1"
-                    "Export"
-                  label_ [class_ "btn btn-ghost btn-sm", Aria.label_ "Close YAML editor", Lucid.for_ drawerId] $ faSprite_ "xmark" "regular" "w-3 h-3"
-              div_ [class_ "flex-1 overflow-hidden", id_ "yaml-editor-wrapper", hxGet_ (urls.dashboardYamlGet pid dashId), hxTrigger_ "intersect once", hxTarget_ "#yaml-editor-content"] do
-                div_ [id_ "yaml-editor-content", class_ "h-full flex items-center justify-center"] $ loadingIndicator_ LdMD LdDots
-              div_ [class_ "p-4 border-t border-strokeWeak flex justify-between items-center shrink-0"] do
-                div_ [id_ "yaml-status", class_ "text-sm"] ""
-                button_ [class_ "btn btn-primary", hxPut_ (urls.dashboardYamlPut pid dashId), hxTarget_ "#yaml-status", hxVals_ "js:{yaml: window.yamlEditor?.getValue() || ''}"] "Save Changes"
+           in Components.drawerShell_
+                drawerId
+                False
+                mempty
+                [style_ "width: min(90vw, 1000px)", class_ "pointer-events-auto bg-bgRaised h-full overflow-hidden flex flex-col", Aria.label_ "Edit Dashboard Schema"]
+                do
+                  div_ [class_ "flex justify-between items-center p-4 border-b border-strokeWeak shrink-0"] do
+                    h2_ [class_ "text-lg font-semibold"] "Edit Dashboard Schema"
+                    div_ [class_ "flex items-center gap-2"] do
+                      label_ [class_ "btn btn-sm cursor-pointer", Lucid.for_ "yaml-import-input"] do
+                        faSprite_ "upload" "regular" "w-3 h-3 mr-1"
+                        "Import"
+                      input_ [id_ "yaml-import-input", type_ "file", accept_ ".yaml,.yml", class_ "hidden", term "hx-on:change" "yamlEditorImport(this.files[0]); this.value = ''"]
+                      button_ [class_ "btn btn-sm", term "hx-on:click" "yamlEditorExport()"] do
+                        faSprite_ "download" "regular" "w-3 h-3 mr-1"
+                        "Export"
+                      label_ [class_ "btn btn-ghost btn-sm", Aria.label_ "Close YAML editor", Lucid.for_ drawerId] $ faSprite_ "xmark" "regular" "w-3 h-3"
+                  div_ [class_ "flex-1 overflow-hidden", id_ "yaml-editor-wrapper", hxGet_ (urls.dashboardYamlGet pid dashId), hxTrigger_ "intersect once", hxTarget_ "#yaml-editor-content"] do
+                    div_ [id_ "yaml-editor-content", class_ "h-full flex items-center justify-center"] $ loadingIndicator_ LdMD LdDots
+                  div_ [class_ "p-4 border-t border-strokeWeak flex justify-between items-center shrink-0"] do
+                    div_ [id_ "yaml-status", class_ "text-sm"] ""
+                    button_ [class_ "btn btn-primary", hxPut_ (urls.dashboardYamlPut pid dashId), hxTarget_ "#yaml-status", hxVals_ "js:{yaml: window.yamlEditor?.getValue() || ''}"] "Save Changes"
 
 
 dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
@@ -3286,7 +3288,7 @@ dashboardYamlPutH pid dashId form = do
       _ <- updateSchema ed dashboard (Just now)
       whenJust dashboard.title $ void . updateTitle ed
       syncDashboardAndQueuePush pid dashId
-      addTriggerEvent "closeYamlDrawer" ""
+      addTriggerEvent "closeModal" ""
       pure $ YamlSaved pid dashId dashboard
 
 

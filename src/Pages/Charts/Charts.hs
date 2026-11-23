@@ -73,8 +73,8 @@ pivot' rows
             V.groupBy (\a b -> fst3 a == fst3 b)
               $ V.modify (VA.sortBy (comparing fst3)) rows
           dataset = V.fromList $ map (transform headers) grouped
-          (totalSum, rate, stats) = QC.summarizeSeries dataset
-       in (headers, dataset, totalSum, rate, stats)
+          s = QC.summarizeSeries dataset
+       in (headers, dataset, s.rowsCount, s.rowsPerMin, s.stats)
 
 
 transform :: V.Vector Text -> V.Vector (Int, Text, Double) -> V.Vector (Maybe Double)

@@ -1,4 +1,4 @@
-module Pages.Components (codeContextUrl, drawer_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityDrawer_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, morphPostAttrs_, pollSelfAttrs_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, floatingModal_, formActionsModal_, dangerAction_, dangerZone_, floatingDialog_, floatingCard_, mergedAttrs, floatingScrim, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerHints_, pickerPopover_, durationMenu_, primaryButton_, submitBtn_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (codeContextUrl, drawer_, drawerShell_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityDrawer_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, morphPostAttrs_, pollSelfAttrs_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, floatingModal_, formActionsModal_, dangerAction_, dangerZone_, floatingDialog_, floatingCard_, mergedAttrs, floatingScrim, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerHints_, pickerPopover_, durationMenu_, primaryButton_, submitBtn_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -190,8 +190,10 @@ el_ n = with (makeElement n)
 -- False
 -- >>> "aria-modal=\"true\"" `T.isInfixOf` h
 -- True
-drawer_ :: Text -> Bool -> Maybe Text -> Maybe (Html ()) -> Html () -> Html ()
-drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-end inline-block w-auto"] do
+-- | Shared slide-over modal drawer shell: @uiToggle_@, body scroll lock, focus trap,
+-- Escape-to-close, @closeModal@ dismissal, overlay close label, and @role="dialog" aria-modal="true"@ panel.
+drawerShell_ :: Text -> Bool -> Html () -> [Attribute] -> Html () -> Html ()
+drawerShell_ drawerId startOpen trigger panelAttrs panelBody = div_ [class_ "drawer drawer-end inline-block w-auto"] do
   uiToggle_
     ( [ id_ drawerId
       , class_ "drawer-toggle"
@@ -219,40 +221,45 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
       |]
            ]
     )
-  label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block", Aria.label_ "Open drawer"] trigger
+  trigger
   -- The closed panel is translated beyond the viewport. Clip it here rather than letting
   -- its transformed width create a page-level horizontal scroll range.
   -- Standard drawers are modal. Explorer log details use their separate non-modal panel.
   div_ [class_ "drawer-side top-0 left-0 w-full h-full flex justify-end z-10000 overflow-y-scroll overflow-x-hidden"] do
     label_ [Lucid.for_ drawerId, Aria.label_ "Close drawer", class_ "w-full drawer-overlay grow flex-1"] ""
-    div_
-      [ id_ $ drawerId <> "-panel"
-      , class_ "pointer-events-auto fixed right-0 top-0 h-dvh w-[min(90vw,75rem)] max-sm:w-screen! overflow-y-auto overscroll-contain overflow-x-hidden bg-bgRaised border-s border-strokeWeak shadow-2xl relative [&:has(.widget-editor)>.drawer-floating-close]:hidden"
-      , role_ "dialog"
-      , term "aria-modal" "true"
-      , Aria.label_ "Details"
-      ]
-      do
-        div_ [class_ "drawer-floating-close sticky top-3 z-30 h-0 flex justify-end"]
-          $ label_
-            [ Lucid.for_ drawerId
-            , role_ "button"
-            , tabindex_ "0"
-            , keyboardActivateAttr_
-            , Aria.label_ "Close drawer"
-            , class_ "btn btn-sm btn-circle btn-ghost mr-3 text-iconNeutral hover:bg-fillWeak hover:text-iconBrand max-sm:size-11"
-            ]
-          $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
-        div_
-          [ id_ $ drawerId <> "-content"
-          , class_ "h-full flex flex-col gap-8 px-8 pb-4 max-lg:px-6 max-md:px-4"
-          , term "hx-on::after:swap" "window.labelDrawer(this.closest('[role=dialog]'))"
+    div_ ([id_ $ drawerId <> "-panel", role_ "dialog", term "aria-modal" "true"] <> panelAttrs) panelBody
+
+
+drawer_ :: Text -> Bool -> Maybe Text -> Maybe (Html ()) -> Html () -> Html ()
+drawer_ drawerId startOpen urlM content trigger =
+  drawerShell_
+    drawerId
+    startOpen
+    (label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block", Aria.label_ "Open drawer"] trigger)
+    [ class_ "pointer-events-auto fixed right-0 top-0 h-dvh w-[min(90vw,75rem)] max-sm:w-screen! overflow-y-auto overscroll-contain overflow-x-hidden bg-bgRaised border-s border-strokeWeak shadow-2xl relative [&:has(.widget-editor)>.drawer-floating-close]:hidden"
+    , Aria.label_ "Details"
+    ]
+    do
+      div_ [class_ "drawer-floating-close sticky top-3 z-30 h-0 flex justify-end"]
+        $ label_
+          [ Lucid.for_ drawerId
+          , role_ "button"
+          , tabindex_ "0"
+          , keyboardActivateAttr_
+          , Aria.label_ "Close drawer"
+          , class_ "btn btn-sm btn-circle btn-ghost mr-3 text-iconNeutral hover:bg-fillWeak hover:text-iconBrand max-sm:size-11"
           ]
-          -- hx-swap sits on the requester rather than being inherited from the wrapper:
-          -- htmx 4 resolves inheritance explicitly, so a parent's value no longer reaches here.
-          $ div_ (maybe [] (\url -> [hxGet_ url, hxTrigger_ "intersect once", hxSwap_ "innerHTML"]) urlM)
-          $ fromMaybe (loadingIndicator_ LdMD LdDots) content
-        div_ [id_ $ drawerId <> "-indicator", class_ "htmx-indicator absolute inset-0 z-10 w-full box-border bg-bgRaised px-8"] drawerLoadingSkeleton_
+        $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
+      div_
+        [ id_ $ drawerId <> "-content"
+        , class_ "h-full flex flex-col gap-8 px-8 pb-4 max-lg:px-6 max-md:px-4"
+        , term "hx-on::after:swap" "window.labelDrawer(this.closest('[role=dialog]'))"
+        ]
+        -- hx-swap sits on the requester rather than being inherited from the wrapper:
+        -- htmx 4 resolves inheritance explicitly, so a parent's value no longer reaches here.
+        $ div_ (maybe [] (\url -> [hxGet_ url, hxTrigger_ "intersect once", hxSwap_ "innerHTML"]) urlM)
+        $ fromMaybe (loadingIndicator_ LdMD LdDots) content
+      div_ [id_ $ drawerId <> "-indicator", class_ "htmx-indicator absolute inset-0 z-10 w-full box-border bg-bgRaised px-8"] drawerLoadingSkeleton_
 
 
 dateTime :: UTCTime -> Maybe UTCTime -> Html ()
