@@ -724,7 +724,7 @@ flagHelp = \case
     ModelError -> "A model call returned an error."
     Truncated -> "A reply stopped at the output token limit."
     Filtered -> "A reply was refused or cut by a content filter."
-    Looping -> "The same tool ran with the same arguments three or more times."
+    Looping -> "Three or more tool calls passed the same arguments."
     ContextPressure -> "A call used at least 80% of the model's context window."
   Judged _ reason -> reason
 
