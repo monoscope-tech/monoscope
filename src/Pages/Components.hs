@@ -17,7 +17,7 @@ import Pkg.ErrorFingerprint qualified as EF
 import PyF qualified
 import Relude
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), copyToClipboardAttr_, countNoun, deleteParam, faSprite_, fmtInt, formatUTC, loadingIndicator_, navTabAttrs, navTabStrip_, nonEmptyT, popoverPanel_, popoverTrigger_)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), copyToClipboardAttr_, countNoun, deleteParam, faSprite_, fmtInt, formatUTC, loadingIndicator_, navTabAttrs, navTabStrip_, nonEmptyT, popoverPanel_, popoverTrigger_, uiToggle_)
 import Web.Links
 
 
@@ -188,9 +188,8 @@ el_ n = with (makeElement n)
 -- True
 drawer_ :: Text -> Bool -> Maybe Text -> Maybe (Html ()) -> Html () -> Html ()
 drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-end inline-block w-auto"] do
-  input_
+  uiToggle_
     ( [ id_ drawerId
-      , type_ "checkbox"
       , class_ "drawer-toggle"
       , Aria.label_ "Toggle drawer"
       ]
@@ -918,10 +917,9 @@ data ModalCfg = ModalCfg
 modalWith_ :: Text -> ModalCfg -> Maybe (Html ()) -> Html () -> Html ()
 modalWith_ modalId cfg triggerM contentHtml = do
   whenJust triggerM $ label_ [Lucid.for_ modalId]
-  input_
+  uiToggle_
     $ [ class_ "modal-toggle"
       , id_ modalId
-      , type_ "checkbox"
       , Aria.label_ "Toggle modal"
       , -- Escape is heard on window: focus sits inside the modal, which is not this input's subtree.
         [__|on keyup[key is 'Escape'] from window or closeModal from body if my.checked set my.checked to false then send change to me end
@@ -1707,7 +1705,7 @@ stackFrames_ snippetUrl raw frames
       div_ [class_ "max-h-96 overflow-y-auto"] $ forM_ (zip [0 :: Int ..] frames) \(i, f) -> frame_ (Just i == firstInApp) f
       when (folded > 0)
         $ label_ [class_ "flex items-center gap-1.5 px-3 py-2 text-xs text-textBrand cursor-pointer border-t border-strokeWeak hover:bg-fillWeaker transition-colors"] do
-          input_ [type_ "checkbox", class_ "sys-frames sr-only"]
+          uiToggle_ [class_ "sys-frames sr-only"]
           faSprite_ "chevron-down" "regular" "w-3 h-3 shrink-0 group-has-[.sys-frames:checked]/frames:rotate-180 transition-transform"
           span_ [class_ "group-has-[.sys-frames:checked]/frames:hidden"] $ toHtml $ "Show " <> countNoun folded "runtime frame"
           span_ [class_ "hidden group-has-[.sys-frames:checked]/frames:inline"] "Hide runtime frames"

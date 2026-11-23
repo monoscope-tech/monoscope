@@ -47,7 +47,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Tracing (forkBackgroundFor)
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, done)
-import Utils (countNoun, encodeText, faSprite_, fmtInt, popoverPanel_, popoverTrigger_, renderMarkdownTocWithPrefix, toUriStr)
+import Utils (countNoun, encodeText, faSprite_, fmtInt, popoverPanel_, popoverTrigger_, renderMarkdownTocWithPrefix, toUriStr, uiToggle_)
 import Web.FormUrlEncoded (FromForm (..), parseAll, parseUnique)
 import Web.HttpApiData (FromHttpApiData (..))
 import Web.Links
@@ -1341,7 +1341,7 @@ copilotDock_ dock =
         <> [attribute | any ((== Issues.RunRunning) . (.status)) dock.sessions, attribute <- [hxGet_ $ urls.aiDockGet dock.projectId selectedId (Just seen), hxTrigger_ $ if isJust pending then "every 1s" else "every 2s", hxSwap_ "outerMorph"]]
     )
     do
-      input_ [type_ "checkbox", id_ "ai-dock-open", class_ "hidden", term "hx-morph-skip" "", Aria.hidden_ "true"]
+      uiToggle_ [id_ "ai-dock-open", class_ "hidden", term "hx-morph-skip" "", Aria.hidden_ "true"]
       for_ dock.selected panel_
       unless (null dock.sessions) $ div_ [class_ "pointer-events-auto flex max-w-full items-center gap-0.5 overflow-x-auto rounded-full border border-strokeWeak bg-bgRaised p-1 shadow-[0_8px_24px_-8px_oklch(0_0_0/0.3)]"] do
         button_ [type_ "button", class_ "flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs text-textWeak transition-[scale,background-color] hover:bg-fillHover active:scale-[0.97]", title_ "New request (⌘K)", [__|on click send paletteToggle to #cmd-palette-global|]] do

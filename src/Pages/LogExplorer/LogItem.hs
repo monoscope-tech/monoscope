@@ -181,8 +181,8 @@ data DetailsPanelLayout = ExplorerPanel | IssuesPanel | DrawerPanel
 
 detailsPanel_ :: Projects.ProjectId -> Maybe Text -> DetailsPanelLayout -> Html ()
 detailsPanel_ pid targetEventM layout = div_ [class_ $ "contents group/details " <> memptyIfFalse (layout /= DrawerPanel) "details-dockable", term "hx-ext" "hx-live"] do
-  input_
-    $ [type_ "checkbox", class_ "hidden peer/drawer", id_ "details-drawer-mode"]
+  uiToggle_
+    $ [class_ "hidden peer/drawer", id_ "details-drawer-mode"]
     <> if layout /= DrawerPanel
       then
         [ -- Seeded once, not bound: a standing `:checked` binding re-evaluates on the next
@@ -200,7 +200,7 @@ detailsPanel_ pid targetEventM layout = div_ [class_ $ "contents group/details "
             <> " document.getElementById('resizer-details_width-wrapper')?.classList.remove('hidden', 'opacity-0', 'pointer-events-none'); }"
         ]
       else [checked_]
-  input_ $ [type_ "checkbox", class_ "hidden peer/open", id_ "details-open"] <> memptyIfFalse (isJust targetEventM) [checked_]
+  uiToggle_ $ [class_ "hidden peer/open", id_ "details-open"] <> memptyIfFalse (isJust targetEventM) [checked_]
   -- Small screens keep modal, click-outside dismissal because the panel takes over
   -- the viewport. On desktop the backdrop is visual/structural only: it must not dim
   -- or intercept the log list, so another row can replace the open detail in one click.

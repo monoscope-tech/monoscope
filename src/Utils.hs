@@ -78,6 +78,7 @@ module Utils (
   DashboardSwap (..),
   navTabStrip_,
   TabStrip (..),
+  uiToggle_,
   popoverTrigger_,
   popoverPanel_,
   fieldMenuPanel_,
@@ -581,7 +582,7 @@ jsonValueToHtmlTree val pathM = do
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
     renderParentType opening closing key count child = div_ [class_ "log-item-with-children"] do
       label_ [class_ "inline-block items-center cursor-pointer"] do
-        input_ $ [type_ "checkbox", class_ "tree-toggle sr-only"] <> [checked_ | count == 0]
+        uiToggle_ $ [class_ "tree-toggle sr-only"] <> [checked_ | count == 0]
         faSprite_ "chevron-right" "regular" "log-item-tree-chevron"
         span_ [] $ toHtml $ if key == "" then opening else key <> ": " <> opening
       div_ [class_ "pl-5 children "] do
@@ -1542,6 +1543,18 @@ formatOffset base ts
   | otherwise = "+" <> T.show (s `div` 3600) <> "h " <> T.show ((s `mod` 3600) `div` 60) <> "m"
   where
     s = max 0 $ (ts - base) `div` 1000
+
+
+-- | Checkbox carrying transient CSS/UI state (drawer, modal, disclosure, peer toggle),
+-- never a submitted form field. Always emits @autocomplete="off"@ so browser
+-- back/forward form-state restoration cannot shift another checkbox's state onto it
+-- when async fragments (e.g. @#ai-dock-open@) change the document's checkbox count.
+--
+-- >>> let h = toStrict $ renderText $ uiToggle_ [id_ "d", class_ "hidden"]
+-- >>> ("type=\"checkbox\"" `T.isInfixOf` h, "autocomplete=\"off\"" `T.isInfixOf` h)
+-- (True,True)
+uiToggle_ :: [Attribute] -> Html ()
+uiToggle_ attrs = input_ (type_ "checkbox" : autocomplete_ "off" : attrs)
 
 
 -- Reusable htmx attrs for tab-style nav links (preload + morph swap)

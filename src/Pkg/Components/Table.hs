@@ -68,7 +68,7 @@ import Pages.BodyWrapper (PageCtx)
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_, filterInputAttr_, keyboardActivateAttr_, searchInput_, timeRefreshListener_)
 import Pkg.DeriveUtils (SortField (..), SortOrder (..))
 import Relude
-import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), deleteParam, faSprite_, fmtInt, loadingIndicator_, navTabAttrs, navTabStrip_, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), deleteParam, faSprite_, fmtInt, loadingIndicator_, navTabAttrs, navTabStrip_, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, uiToggle_)
 
 
 -- Core Types
@@ -444,7 +444,7 @@ swapTarget_ tid url = [hxGet_ url, hxTarget_ $ "#" <> tid, hxSelect_ $ "#" <> ti
 
 
 selectAllCheckbox_ :: Html ()
-selectAllCheckbox_ = input_ [term "aria-label" "Select All", type_ "checkbox", class_ "checkbox checkbox-sm checked:checkbox-primary", [__| on click set .bulkactionItemCheckbox.checked to my.checked |]]
+selectAllCheckbox_ = uiToggle_ [term "aria-label" "Select All", class_ "checkbox checkbox-sm checked:checkbox-primary", [__| on click set .bulkactionItemCheckbox.checked to my.checked |]]
 
 
 -- | One row of a sort dropdown; @linkAttrs@ carries either an href or the htmx swap attrs.

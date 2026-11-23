@@ -126,7 +126,7 @@ import Relude hiding (ask, asks)
 import Servant (FromHttpApiData (..), Header, Headers, addHeader, err400, err503, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, done, successToast)
-import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, fmtInt, formatBytes, formatFixedCommas, formatUTC, hostPath, htmxIndicator_)
+import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, fmtInt, formatBytes, formatFixedCommas, formatUTC, hostPath, htmxIndicator_, uiToggle_)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links
 import "cryptonite" Crypto.Hash (SHA256)
@@ -447,7 +447,7 @@ makeApiKeysTable pid canEdit apiKeys elemId =
               -- Keyed by key id, not row index — the active and archived tables both index from 0.
               let revealId = "reveal-key-" <> apiKey.id.toText
               div_ [class_ "group whitespace-nowrap w-full flex items-center gap-2 text-sm text-textWeak"] do
-                input_ [type_ "checkbox", id_ revealId, class_ "hidden"]
+                uiToggle_ [id_ revealId, class_ "hidden"]
                 span_ [class_ "min-w-0 font-mono group-has-[:checked]:hidden"] do
                   span_ [class_ "text-textStrong"] $ toHtml $ T.take 8 apiKey.keyPrefix
                   span_ [class_ "text-textDisabled", Aria.hidden_ "true"] "••••••••"

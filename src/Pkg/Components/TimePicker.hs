@@ -30,7 +30,7 @@ import System.Clock (TimeSpec (TimeSpec))
 import Text.Megaparsec (Parsec, parse, some)
 import Text.Megaparsec.Char (letterChar, space)
 import Text.Megaparsec.Char.Lexer (decimal)
-import Utils (faSprite_, nonEmptyT, parseTime, popoverPanel_, popoverTrigger_, scriptJson, sinceWindows, toUriStr)
+import Utils (faSprite_, nonEmptyT, parseTime, popoverPanel_, popoverTrigger_, scriptJson, sinceWindows, toUriStr, uiToggle_)
 
 
 -- $setup
@@ -216,7 +216,7 @@ liveDataControls_ submitForm currentRange targetIdM liveDataMode =
                     , term "hx-live:text" "closest('[data-live-data]').q('[data-row-stream-toggle]').disabled ? 'Unavailable in this view' : closest('[data-live-data]').q('[data-row-stream-toggle]').checked ? 'On' : 'Paused'"
                     ]
                     $ if supportsStreaming then "Paused" else "Unavailable in this view"
-                input_ $ [type_ "checkbox", id_ "streamLiveData", class_ "toggle toggle-sm", term "aria-label" "Stream new events", data_ "row-stream-toggle" ""] <> [disabled_ "" | not supportsStreaming]
+                uiToggle_ $ [id_ "streamLiveData", class_ "toggle toggle-sm", term "aria-label" "Stream new events", data_ "row-stream-toggle" ""] <> [disabled_ "" | not supportsStreaming]
               div_ [class_ "space-y-2 px-2 py-2"] do
                 label_ [class_ "block", Lucid.for_ $ targetPr <> "-live-refresh-interval"] do
                   div_ [class_ "font-medium text-textStrong"] "Refresh results"

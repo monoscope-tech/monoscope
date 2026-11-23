@@ -75,7 +75,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (FormWithOptional (..), faSprite_, fmtInt, formatWithCommas, popoverPanel_, popoverTrigger_)
+import Utils (FormWithOptional (..), faSprite_, fmtInt, formatWithCommas, popoverPanel_, popoverTrigger_, uiToggle_)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), ProjectsRoutes' (..), explorerUrl, urls)
 
@@ -783,7 +783,7 @@ alertSidebar_ display alert currTime = do
       mobileRow_ "Trigger" $ span_ [class_ "tabular-nums"] $ toHtml $ direction <> " " <> formatWithCommas alert.alertThreshold
       whenJust alert.warningThreshold \w -> mobileRow_ "Warning" $ span_ [class_ "tabular-nums text-textWarning"] $ toHtml $ direction <> " " <> formatWithCommas w
       label_ [class_ "px-3 py-1.5 flex flex-col gap-1 cursor-pointer"] do
-        input_ [type_ "checkbox", class_ "peer sr-only"]
+        uiToggle_ [class_ "peer sr-only"]
         span_ [class_ "text-xs text-textWeak"] "Query \x203a"
         pre_ [class_ "text-xs font-mono text-textStrong/70 whitespace-pre-wrap break-all line-clamp-1 peer-checked:line-clamp-none"] $ toHtml alert.logQuery
       mobileRow_ "Last eval" $ span_ [] $ toHtml $ ago alert.lastEvaluated

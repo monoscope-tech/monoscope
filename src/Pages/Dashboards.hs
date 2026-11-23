@@ -324,7 +324,7 @@ actionPickerField_ label name placeholder value = label_ [Lucid.for_ name, class
 
 dashboardVariables_ :: Projects.ProjectId -> Dashboards.DashboardId -> [Dashboards.Variable] -> [Attribute] -> Html ()
 dashboardVariables_ pid dashId variables extraAttrs = div_ ([id_ "dashboard-variables", class_ "contents"] <> extraAttrs) $ unless (null variables) do
-  input_ [type_ "checkbox", class_ "hidden peer/vars", id_ "dash-vars-toggle"]
+  uiToggle_ [class_ "hidden peer/vars", id_ "dash-vars-toggle"]
   label_ [Lucid.for_ "dash-vars-toggle", class_ "md:hidden cursor-pointer text-xs text-textWeak bg-fillWeaker border border-strokeWeak rounded-lg px-2 py-1 flex items-center gap-1 peer-checked/vars:hidden"] do
     faSprite_ "filter" "regular" "w-3 h-3"
     "Filters"
@@ -336,7 +336,7 @@ dashboardVariables_ pid dashId variables extraAttrs = div_ ([id_ "dashboard-vari
     let folds i var = length variables > 4 && i >= 3 && all T.null var.value
         hidden = length [() | (i, var) <- zip [0 :: Int ..] variables, folds i var]
     when (hidden > 0) do
-      input_ [type_ "checkbox", class_ "hidden peer/more", id_ "dash-vars-more"]
+      uiToggle_ [class_ "hidden peer/more", id_ "dash-vars-more"]
       label_ [Lucid.for_ "dash-vars-more", class_ "order-last self-end h-9 px-3 inline-flex items-center rounded-lg border border-strokeWeak bg-bgRaised text-sm text-textWeak cursor-pointer hover:border-strokeStrong hover:text-textStrong peer-checked/more:hidden", Aria.label_ $ "Show " <> show hidden <> " more filters"] $ toHtml $ "+" <> show @Text hidden
     forM_ (zip [0 :: Int ..] variables) \(i, var) -> fieldset_ ([class_ $ "dash-variable max-md:w-full pl-3 pr-2.5 border border-strokeWeak bg-bgRaised rounded-lg text-sm hover:border-strokeStrong focus-within:border-strokeFocus has-[[data-invalid]]:border-strokeError-strong" <> memptyIfFalse (folds i var) " hidden peer-checked/more:block"] <> foldMap (pure . title_) var.helpText) do
       legend_ [class_ "ml-1 px-1 text-xs leading-none text-textWeak whitespace-nowrap cursor-pointer", [__|on click call (next .tagify__input).focus()|]] do
@@ -1473,7 +1473,7 @@ dashboardBWConf bw pid dashId title tabM currentRange readOnly freeTierStatus =
       where
         yamlEditorDrawer_ = div_ [class_ "drawer drawer-end inline-block w-auto"] do
           let drawerId = "yaml-editor-drawer"
-          input_ [id_ drawerId, type_ "checkbox", class_ "drawer-toggle", [__|on keyup if the event's key is 'Escape' set my.checked to false end on closeYamlDrawer from window set my.checked to false|]]
+          uiToggle_ [id_ drawerId, class_ "drawer-toggle", [__|on keyup if the event's key is 'Escape' set my.checked to false end on closeYamlDrawer from window set my.checked to false|]]
           div_ [class_ "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-hidden"] do
             label_ [Lucid.for_ drawerId, class_ "drawer-overlay w-full grow flex-1"] ""
             div_ [style_ "width: min(90vw, 1000px)", class_ "bg-bgRaised h-full overflow-hidden flex flex-col"] do
@@ -1849,7 +1849,7 @@ instance ToHtml WidgetEditor where
               div_ [class_ "space-y-1"] do
                 strong_ [class_ "text-sm font-semibold text-textStrong"] "Create a monitor"
                 p_ [class_ "text-xs text-textWeak"] "Get alerts when this widget crosses a threshold."
-              input_ [type_ "checkbox", id_ monitorToggleId, class_ "toggle toggle-sm toggle-primary new-widget-monitor", Aria.label_ "Create a monitor", onchange_ $ "for (const [widget, monitor] of [['widgetAlertThreshold', 'alertThreshold'], ['widgetWarningThreshold', 'warningThreshold'], ['widgetUnit', 'unit']]) document.getElementById(this.checked ? monitor : widget).value = document.getElementById(this.checked ? widget : monitor).value; if (this.checked) requestAnimationFrame(() => document.getElementById('" <> monitorSectionId <> "').scrollIntoView({block: 'start'}))"]
+              uiToggle_ [id_ monitorToggleId, class_ "toggle toggle-sm toggle-primary new-widget-monitor", Aria.label_ "Create a monitor", onchange_ $ "for (const [widget, monitor] of [['widgetAlertThreshold', 'alertThreshold'], ['widgetWarningThreshold', 'warningThreshold'], ['widgetUnit', 'unit']]) document.getElementById(this.checked ? monitor : widget).value = document.getElementById(this.checked ? widget : monitor).value; if (this.checked) requestAnimationFrame(() => document.getElementById('" <> monitorSectionId <> "').scrollIntoView({block: 'start'}))"]
 
       script_ [text|widgetJSON.type = document.getElementById('${widgetPreviewId}')?.closest('[class~="group/wgtexp"]')?.querySelector('#visualizationTabs input:checked')?.value || widgetJSON.type|]
 

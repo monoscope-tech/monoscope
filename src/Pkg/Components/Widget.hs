@@ -818,7 +818,7 @@ widgetWith_ actions w' = case w.wType of
       -- Collapse chevron: only for full-width groups. A hidden checkbox drives both the
       -- nested grid's visibility and the chevron rotation purely in CSS.
       when isFullWidth $ label_ [class_ "p-2 rounded hover:bg-fillWeak transition-colors cursor-pointer tap-target has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong", Aria.label_ "Toggle group"] do
-        input_ [type_ "checkbox", class_ "sr-only peer wgt-collapse"]
+        uiToggle_ [class_ "sr-only peer wgt-collapse"]
         Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform peer-checked:rotate-180"
     -- Nested grid: flex-1 fills remaining space
     div_ (class_ "grid-stack grid-stack-preloaded nested-grid flex-1 group-has-[.wgt-collapse:checked]/wgt:hidden" : [data_ "stat-grid" (bool "" "plain" (all ((== WTStat) . (.wType)) normalizedChildren)) | not (null normalizedChildren) && all isStatWidget normalizedChildren] <> gridStackAttrs normalizedChildren) $ forM_ normalizedChildren (\wChild -> widget_ (wChild{_isNested = Just True}))

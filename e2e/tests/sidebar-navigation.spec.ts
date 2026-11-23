@@ -145,3 +145,17 @@ test('API docs reached from the sidebar renders Swagger UI', async ({ page }) =>
   await expect(page.locator('#swagger-ui .swagger-ui')).toBeAttached();
   expect(errors).toEqual([]);
 });
+
+// Regression: #ai-dock-open loads asynchronously via hx-trigger="load", shifting unnamed checkbox
+// indices between initial parse and unload; without autocomplete="off", browser back restored
+// #details-drawer-mode's checked state onto #details-open, opening an empty drawer over the page.
+test('browser back from RUM dashboard to Home never opens an empty details drawer', async ({ page }) => {
+  await page.goto(project + '/', { waitUntil: 'networkidle' });
+  await expect(page.locator('#ai-dock-open')).toBeAttached();
+  await page.locator(`a[href*="${project}/rum"]`).first().click();
+  await page.waitForLoadState('networkidle');
+  await page.goBack();
+  await page.waitForLoadState('networkidle');
+  await expect(page.locator('#details-open')).not.toBeChecked();
+  await expect(page.locator('#global-data-drawer')).not.toBeChecked();
+});
