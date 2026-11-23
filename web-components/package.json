@@ -53,11 +53,11 @@
     "vite": "^8.3.8"
   },
   "devDependencies": {
-    "@types/bun": "^1.4.4",
+    "@types/bun": "^1.4.5",
     "@types/js-yaml": "^4.0.9",
     "@types/jsonpath": "^0.2.4",
     "@types/node": "^26.6.6",
-    "@vitest/browser": "^5.1.0",
+    "@vitest/browser": "^5.1.1",
     "happy-dom": "^21.0.4",
     "jsdom": "^31.0.1",
     "mdast-util-to-markdown": "^2.2.3",
