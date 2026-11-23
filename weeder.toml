@@ -10,7 +10,7 @@ roots = [
   # Weeder cannot see doctest and Template Haskell references.
   "^Pkg\\.AssetManifestFingerprint\\.assetManifestFingerprint$",
   "^Pkg\\.Components\\.Table\\.defaultFeaturesAreInert$",
-  "^Pkg\\.DeriveUtils\\.viteAssetFile$",
+  "^Pkg\\.ViteAsset\\.viteAssetFile$",
   "^Pkg\\.Parser\\.defPid$",
   "^Pkg\\.QueryCache\\.(slidingWindowSeconds|cacheWindowStart)$",
   "^ProcessMessage\\.(ensureUrlParams|dynSegmentLabel|isUrlIdLike|tokenizeUrlPath)$",

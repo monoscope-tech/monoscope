@@ -427,13 +427,17 @@ test.describe("adding widgets to a dashboard", () => {
     await page.waitForSelector(`${ROOT_GRID}.grid-stack-initialized`, { timeout: 20000 });
     await openWidgetDrawer(page);
     const widgetTitle = "Copied Widget";
-    await page.locator('input[placeholder="Throughput"]').fill(widgetTitle);
+    const titleInput = page.locator('input[placeholder="Throughput"]');
+    await titleInput.fill(widgetTitle);
+    await expect(titleInput).toHaveValue(widgetTitle);
+    const submitButton = page.locator('button[type="submit"][form]').filter({ hasText: "Add widget" }).first();
+    await expect(submitButton).toBeVisible();
     await Promise.all([
       page.waitForResponse(
         (r) => r.request().method() === "PUT" && r.url().includes(source.id) && r.status() < 400,
         { timeout: 60000 },
       ),
-      page.getByRole("button", { name: "Add widget" }).first().click(),
+      submitButton.click(),
     ]);
 
     // The PUT returns a complete grid item. It must be adopted directly rather than

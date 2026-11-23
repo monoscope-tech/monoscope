@@ -19,9 +19,20 @@ import Pkg.Parser (
  )
 import Pkg.Parser.Expr (errorFlagSql)
 import Pkg.Parser.Stats (Sources (..))
-import Pkg.TestUtils (goldenText)
 import Relude
-import Test.Hspec (Spec, describe, it, shouldBe, shouldNotSatisfy, shouldSatisfy)
+import System.Directory (doesFileExist)
+import Test.Hspec (Expectation, Spec, describe, expectationFailure, it, shouldBe, shouldNotSatisfy, shouldSatisfy)
+
+
+goldenText :: FilePath -> Text -> Expectation
+goldenText name actual = do
+  let path = "./test/golden/" <> name
+  update <- (== Just "true") <$> lookupEnv "UPDATE_SNAPSHOTS"
+  exists <- doesFileExist path
+  if
+    | update -> writeFileText path actual
+    | exists -> readFileBS path >>= (actual `shouldBe`) . decodeUtf8
+    | otherwise -> expectationFailure $ "missing golden " <> path <> "; rerun with UPDATE_SNAPSHOTS=true"
 
 
 -- Normalize text by removing newlines, carriage returns, tabs, and extra spaces

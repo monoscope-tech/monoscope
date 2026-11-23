@@ -14,18 +14,8 @@ maintainer:     hello@monoscope.tech
 copyright:      2021-2026 Monoscope
 license:        AGPL-3.0-only
 license-file:   LICENSE
-build-type:     Custom
+build-type:     Simple
 extra-source-files:
-    proto/opentelemetry/proto/collector/logs/v1/logs_service.proto
-    proto/opentelemetry/proto/collector/metrics/v1/metrics_service.proto
-    proto/opentelemetry/proto/collector/profiles/v1development/profiles_service.proto
-    proto/opentelemetry/proto/collector/trace/v1/trace_service.proto
-    proto/opentelemetry/proto/common/v1/common.proto
-    proto/opentelemetry/proto/logs/v1/logs.proto
-    proto/opentelemetry/proto/metrics/v1/metrics.proto
-    proto/opentelemetry/proto/profiles/v1development/profiles.proto
-    proto/opentelemetry/proto/resource/v1/resource.proto
-    proto/opentelemetry/proto/trace/v1/trace.proto
     auto-instrument-config.toml
     static/migrations/0001_create_monoscope_tables.sql
     static/migrations/0002_logs_traces_metrics.sql
@@ -367,12 +357,6 @@ source-repository head
   type: git
   location: https://github.com/monoscope-tech/monoscope
 
-custom-setup
-  setup-depends:
-      Cabal
-    , base
-    , proto-lens-setup
-
 flag devtest
   description: Build the test-dev GHCi target. Off in CI (-f-devtest).
   manual: True
@@ -500,7 +484,6 @@ library
       Pkg.Queue
       Pkg.SchemaLearning
       Pkg.Slack
-      Pkg.TestUtils
       Pkg.UsageTelemetry
       Pkg.ViteAsset
       ProcessMessage
@@ -519,47 +502,6 @@ library
       Web.Links
       Web.MCP
       Web.Routes
-      Proto.Opentelemetry.Proto.Common.V1.Common
-      Proto.Opentelemetry.Proto.Common.V1.Common_Fields
-      Proto.Opentelemetry.Proto.Resource.V1.Resource
-      Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
-      Proto.Opentelemetry.Proto.Trace.V1.Trace
-      Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
-      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService
-      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields
-      Proto.Opentelemetry.Proto.Logs.V1.Logs
-      Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
-      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService
-      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields
-      Proto.Opentelemetry.Proto.Metrics.V1.Metrics
-      Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
-      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
-      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields
-      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles
-      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles_Fields
-      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService
-      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService_Fields
-  autogen-modules:
-      Proto.Opentelemetry.Proto.Common.V1.Common
-      Proto.Opentelemetry.Proto.Common.V1.Common_Fields
-      Proto.Opentelemetry.Proto.Resource.V1.Resource
-      Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
-      Proto.Opentelemetry.Proto.Trace.V1.Trace
-      Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
-      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService
-      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields
-      Proto.Opentelemetry.Proto.Logs.V1.Logs
-      Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
-      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService
-      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields
-      Proto.Opentelemetry.Proto.Metrics.V1.Metrics
-      Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
-      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
-      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields
-      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles
-      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles_Fields
-      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService
-      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService_Fields
   hs-source-dirs:
       src
   default-extensions:
@@ -586,8 +528,6 @@ library
       ViewPatterns
   ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -fplugin AutoInstrument
   ghc-prof-options: -O1
-  build-tool-depends:
-      proto-lens-protoc:proto-lens-protoc
   build-depends:
       Diff ==1.0.*
     , PyF
@@ -662,7 +602,6 @@ library
     , hs-opentelemetry-instrumentation-wai
     , hs-opentelemetry-propagator-w3c
     , hs-opentelemetry-sdk
-    , hspec
     , http-api-data
     , http-client
     , http-client-tls
@@ -694,6 +633,7 @@ library
     , modern-uri
     , monad-time-effectful
     , monoidal-containers
+    , monoscope-proto
     , monoscope-shared
     , mtl
     , neat-interpolation
@@ -707,7 +647,6 @@ library
     , parsec ==3.1.*
     , parser-combinators
     , pg-entity
-    , pg-transact
     , postgresql-binary
     , postgresql-libpq
     , postgresql-migration
@@ -748,7 +687,6 @@ library
     , these
     , time
     , time-manager
-    , tmp-postgres
     , transformers
     , typed-process
     , tz
@@ -802,8 +740,6 @@ executable monoscope-server
       UndecidableInstances
       ViewPatterns
   ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -fplugin AutoInstrument -rtsopts "-with-rtsopts=-N8 -M14G -A32m -I5 -Iw60 -Fd2"
-  build-tool-depends:
-      proto-lens-protoc:proto-lens-protoc
   build-depends:
       hs-opentelemetry-instrumentation-auto
     , monoscope
@@ -841,15 +777,18 @@ test-suite doctests
       UndecidableInstances
       ViewPatterns
   ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -fno-write-ide-info -threaded -rtsopts "-with-rtsopts=-N -A64m" -O0
-  build-tool-depends:
-      proto-lens-protoc:proto-lens-protoc
   build-depends:
-      base
+      async
+    , base
+    , directory
     , doctest >=0.20
+    , filepath
     , hs-opentelemetry-instrumentation-auto
     , monoscope
     , monoscope-cli
+    , monoscope-proto
     , monoscope-shared
+    , process
     , relude >=1.2.0.0
   default-language: GHC2024
 
@@ -882,6 +821,7 @@ test-suite integration-tests
       Pages.Projects.ProjectsSpec
       Pages.UptimeSpec
       Pkg.EmbeddingFairnessSpec
+      Pkg.TestUtils
       ReplaySpec
       Spec
       SpecHook
@@ -917,7 +857,6 @@ test-suite integration-tests
   ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -rtsopts "-with-rtsopts=-N -A64m -T" -O0
   build-tool-depends:
       hspec-discover:hspec-discover
-    , proto-lens-protoc:proto-lens-protoc
   build-depends:
       aeson
     , aeson-pretty
@@ -935,11 +874,15 @@ test-suite integration-tests
     , cryptonite
     , data-default
     , directory
+    , dotenv
     , effectful
     , effectful-core
     , effectful-postgresql
+    , envy
+    , extra
     , filepath
     , generic-lens
+    , geoip2
     , grapesy
     , hasql
     , hasql-interpolate
@@ -947,6 +890,7 @@ test-suite integration-tests
     , hasql-transaction
     , hs-opentelemetry-api
     , hs-opentelemetry-exporter-in-memory
+    , hs-opentelemetry-exporter-otlp
     , hs-opentelemetry-instrumentation-auto
     , hs-opentelemetry-instrumentation-hasql
     , hs-opentelemetry-propagator-w3c
@@ -964,12 +908,14 @@ test-suite integration-tests
     , lens
     , lens-aeson
     , log-base
+    , log-effectful
     , lucid
     , memory
     , minio-hs
     , monad-time-effectful
     , monoscope
     , monoscope-cli
+    , monoscope-proto
     , monoscope-shared
     , network
     , odd-jobs
@@ -982,6 +928,7 @@ test-suite integration-tests
     , postgresql-simple
     , process
     , proto-lens
+    , regex
     , relude >=1.2.0.0
     , resource-pool
     , safe-exceptions
@@ -997,6 +944,7 @@ test-suite integration-tests
     , text-display
     , these
     , time
+    , tmp-postgres
     , transformers
     , typed-process
     , unix
@@ -1137,7 +1085,6 @@ test-suite test-dev
       Pkg.Queue
       Pkg.SchemaLearning
       Pkg.Slack
-      Pkg.TestUtils
       Pkg.UsageTelemetry
       Pkg.ViteAsset
       ProcessMessage
@@ -1181,6 +1128,7 @@ test-suite test-dev
       Pages.Projects.ProjectsSpec
       Pages.UptimeSpec
       Pkg.EmbeddingFairnessSpec
+      Pkg.TestUtils
       ReplaySpec
       Spec
       SpecHook
@@ -1189,47 +1137,6 @@ test-suite test-dev
       System.TracingSpec
       Web.ApiV1Spec
       Web.AuthSpec
-      Proto.Opentelemetry.Proto.Common.V1.Common
-      Proto.Opentelemetry.Proto.Common.V1.Common_Fields
-      Proto.Opentelemetry.Proto.Resource.V1.Resource
-      Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
-      Proto.Opentelemetry.Proto.Trace.V1.Trace
-      Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
-      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService
-      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields
-      Proto.Opentelemetry.Proto.Logs.V1.Logs
-      Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
-      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService
-      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields
-      Proto.Opentelemetry.Proto.Metrics.V1.Metrics
-      Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
-      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
-      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields
-      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles
-      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles_Fields
-      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService
-      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService_Fields
-  autogen-modules:
-      Proto.Opentelemetry.Proto.Common.V1.Common
-      Proto.Opentelemetry.Proto.Common.V1.Common_Fields
-      Proto.Opentelemetry.Proto.Resource.V1.Resource
-      Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
-      Proto.Opentelemetry.Proto.Trace.V1.Trace
-      Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
-      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService
-      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields
-      Proto.Opentelemetry.Proto.Logs.V1.Logs
-      Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
-      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService
-      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields
-      Proto.Opentelemetry.Proto.Metrics.V1.Metrics
-      Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
-      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
-      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields
-      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles
-      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles_Fields
-      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService
-      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService_Fields
   hs-source-dirs:
       src
       test/integration
@@ -1258,7 +1165,6 @@ test-suite test-dev
   ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -fno-write-ide-info -rtsopts "-with-rtsopts=-N -A64m -T" -O0
   build-tool-depends:
       hspec-discover:hspec-discover
-    , proto-lens-protoc:proto-lens-protoc
   build-depends:
       Diff ==1.0.*
     , PyF
@@ -1333,7 +1239,6 @@ test-suite test-dev
     , hs-opentelemetry-instrumentation-wai
     , hs-opentelemetry-propagator-w3c
     , hs-opentelemetry-sdk
-    , hspec
     , http-api-data
     , http-client
     , http-client-tls
@@ -1365,6 +1270,7 @@ test-suite test-dev
     , modern-uri
     , monad-time-effectful
     , monoidal-containers
+    , monoscope-proto
     , monoscope-shared
     , mtl
     , neat-interpolation
@@ -1378,7 +1284,6 @@ test-suite test-dev
     , parsec ==3.1.*
     , parser-combinators
     , pg-entity
-    , pg-transact
     , postgresql-binary
     , postgresql-libpq
     , postgresql-migration
@@ -1419,7 +1324,6 @@ test-suite test-dev
     , these
     , time
     , time-manager
-    , tmp-postgres
     , transformers
     , typed-process
     , tz
@@ -1450,8 +1354,11 @@ test-suite test-dev
   if flag(devtest)
     build-depends:
         brick
+      , hspec
       , monoscope-cli
+      , pg-transact
       , silently
+      , tmp-postgres
       , vty
 
 test-suite unit-tests
@@ -1500,7 +1407,7 @@ test-suite unit-tests
       ViewPatterns
   ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -rtsopts "-with-rtsopts=-N -A64m" -O0
   build-tool-depends:
-      proto-lens-protoc:proto-lens-protoc
+      hspec-discover:hspec-discover
   build-depends:
       aeson
     , aeson-qq
@@ -1566,8 +1473,6 @@ benchmark utils-bench
       UndecidableInstances
       ViewPatterns
   ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
-  build-tool-depends:
-      proto-lens-protoc:proto-lens-protoc
   build-depends:
       base
     , bytestring

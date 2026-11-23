@@ -209,7 +209,7 @@ test-unit:
 
 # doctest loads the libraries from the inplace package db, so they must be built first (as CI does).
 test-doctests:
-	cabal build monoscope:lib:monoscope monoscope-shared:lib:monoscope-shared monoscope-cli:lib:monoscope-cli -f-devtest -j --ghc-options="-O0"
+	cabal build monoscope:lib:monoscope monoscope-shared:lib:monoscope-shared monoscope-cli:lib:monoscope-cli monoscope-proto:lib:monoscope-proto -f-devtest -j --ghc-options="-O0"
 	cabal test doctests -f-devtest -j --ghc-options="-O0" --test-show-details=direct
 
 # USE_EXTERNAL_DB=true is load-bearing on every target below that touches the DB: it selects

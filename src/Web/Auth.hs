@@ -501,7 +501,7 @@ instance ToHtml AuthPage where
           "Rated 4.5 out of 5 on Trustpilot"
       footer_ [class_ "flex flex-wrap items-center justify-between gap-3 text-xs text-textWeak"] do
         a_ [href_ "https://github.com/monoscope-tech/monoscope", class_ "hover:text-textStrong"] "Prefer to self-host? It's open source ↗"
-        div_ [class_ "flex gap-4"] $ forM_ [("Terms", "https://monoscopehq.com/terms-and-conditions/"), ("Privacy", "https://monoscopehq.com/privacy-policy/"), ("Status", "https://status.monoscope.tech/")] \(t, u) -> a_ [href_ u, class_ "hover:text-textStrong"] t
+        div_ [class_ "flex gap-4"] $ forM_ ([("Terms", "https://monoscopehq.com/terms-and-conditions/"), ("Privacy", "https://monoscopehq.com/privacy-policy/"), ("Status", "https://status.monoscope.tech/")] :: [(Html (), Text)]) \(t, u) -> a_ [href_ u, class_ "hover:text-textStrong"] t
     -- The website's hero art, so arriving from monoscopehq.com doesn't land on a blank page.
     aside_ [class_ "relative hidden min-h-[40rem] flex-[1.15] flex-col justify-between overflow-hidden rounded-box p-10 text-white lg:flex"] do
       img_ [src_ (assetUrl "/public/assets/auth/sky-morning.webp"), alt_ "", class_ "absolute inset-0 size-full object-cover object-[65%_40%] dark:hidden"]
@@ -516,7 +516,7 @@ instance ToHtml AuthPage where
             card $ forM_ perks \(t, d) -> div_ [class_ "flex gap-3"] do
               faSprite_ "circle-check" "solid" "mt-0.5 size-4 shrink-0 text-textBrand"
               div_ $ p_ [class_ "text-sm font-medium"] t >> p_ [class_ "text-xs text-textWeak"] d
-            div_ [class_ "grid grid-cols-2 gap-3"] $ forM_ [("20x", "faster MTTR at Blockradar"), ("780+", "OpenTelemetry integrations")] \(n, l) ->
+            div_ [class_ "grid grid-cols-2 gap-3"] $ forM_ ([("20x", "faster MTTR at Blockradar"), ("780+", "OpenTelemetry integrations")] :: [(Html (), Html ())]) \(n, l) ->
               div_ [class_ "rounded-xl bg-black/40 px-4 py-3"] $ p_ [class_ "text-2xl font-medium"] n >> p_ [class_ "text-xs text-white/85"] l
           else do
             card do
