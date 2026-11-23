@@ -27,6 +27,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
+import Numeric (showHex)
 import Pkg.EmailTemplates (EndpointAlertRow (..), NewLogPattern (..), ReportItem (..), groupedByContext, stripSummaryBadges, traceExplorerUrl)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (env))
@@ -112,15 +113,16 @@ sendDiscordAlert replyToMsgIdM alert pid pTitle channelIdM' = do
   case channelIdM of
     Nothing -> Nothing <$ Log.logAttention "Discord alert skipped: no channel configured" (AE.object ["project_id" AE..= pid])
     Just cid -> do
-      let mkPayload = \case
-            RoutineReportAlert{..} ->
+      let payloadM = case alertPayload appCtx.env.hostUrl pid pTitle alert of
+            Nothing -> Nothing
+            Just (Left (headline, period, highlights, reportUrl)) ->
               Just
                 $ discordEmbedMsg ("📊 **" <> headline <> "**")
                 $ AE.object
                 $ ["title" AE..= headline, "url" AE..= reportUrl, "color" AE..= snd (toneColor Calm), "description" AE..= T.intercalate "\n\n" (period : [("**" <> h.title <> "**\n" <> h.detail) <> foldMap (\l -> "\n[Explore](" <> l <> ")") h.link | h <- highlights])]
                 <> maybeToList (listToMaybe (mapMaybe (.chart) highlights) <&> \c -> "image" AE..= AE.object ["url" AE..= c])
-            other -> renderDiscordCard <$> alertCard appCtx.env.hostUrl pid pTitle other
-      join <$> forM (mkPayload alert) \payload -> Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid payload replyToMsgIdM
+            Just (Right c) -> Just $ renderDiscordCard c
+      join <$> forM payloadM \payload -> Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid payload replyToMsgIdM
 
 
 -- | Send a Slack alert, optionally threaded under @threadTsM@; returns the thread
@@ -139,8 +141,9 @@ sendSlackAlert threadTsM alert pid pTitle channelM = do
   slackData <- getProjectSlackData pid
   case (channelM, slackData) of
     (Just cid, Just sd) -> do
-      let mkPayload = \case
-            RoutineReportAlert{..} ->
+      let payloadM = case alertPayload appCtx.env.hostUrl pid pTitle alert of
+            Nothing -> Nothing
+            Just (Left (headline, period, highlights, reportUrl)) ->
               fmap AE.toJSON
                 $ Incidents.slackPayload
                 $ AE.object
@@ -151,9 +154,9 @@ sendSlackAlert threadTsM alert pid pTitle channelM = do
                                 <> [slackActions [AE.object ["type" AE..= ("button" :: Text), "text" AE..= plainTxt "Open the report", "url" AE..= reportUrl]]]
                             )
                   ]
-            other -> AE.toJSON . card <$> alertCard appCtx.env.hostUrl pid pTitle other
+            Just (Right c) -> Just $ AE.toJSON $ card c
           isDefaultChannel = cid == sd.channelId
-      join <$> forM (mkPayload alert) \payload -> do
+      join <$> forM payloadM \payload -> do
         -- Legacy installs (apis.slack row created between migrations 0077 and 0080)
         -- have no webhookUrl; they silently fall through to chat.postMessage and
         -- fail for private channels. Log a distinct attention so ops can prompt a re-OAuth.
@@ -186,7 +189,8 @@ sendWhatsAppAlert alert pid pTitle tos = do
     LogPatternAlert{} -> pass
     LogPatternRateChangeAlert{} -> pass
   where
-    issuePath h = let p = (urls.issues pid).detailHashGet h Nothing Nothing Nothing Nothing Nothing in fromMaybe p (T.stripPrefix "/p/" p)
+    -- Twilio template button URL suffix ({{2}}/{{4}}): must stay exact, never silently fall back to "/p/..."
+    issuePath h = pid.toText <> "/issues/by_hash/" <> h
     sendAlert template vars = for_ tos \to -> Notify.sendNotification $ Notify.whatsappNotification template to vars
     sendMonitor templateM status title url = case templateM of
       Nothing -> Log.logAttention "WhatsApp monitor alert skipped: WHATSAPP_MONITOR_TEMPLATE is not configured" $ AE.object ["project_id" AE..= pid, "status" AE..= status]
@@ -209,7 +213,7 @@ topStackFrame = fmap (T.take 160) . viaNonEmpty last . take 2 . filter (not . T.
 
 -- | "METHOD /path" for alert metadata; drops whichever half is missing, 'Nothing' when both are.
 errRoute :: ErrorPatterns.ATError -> Maybe Text
-errRoute err = guarded (not . T.null) $ unwords $ filter (not . T.null) $ catMaybes [err.requestMethod, err.requestPath]
+errRoute err = guarded (not . T.null) $ unwords $ mapMaybe (>>= guarded (not . T.null)) [err.requestMethod, err.requestPath]
 
 
 errFirstSeen :: ErrorPatterns.ATError -> Text
@@ -229,12 +233,14 @@ data Tone = Critical | Elevated | Calm | Healthy | Neutral
 -- >>> toneColor Healthy
 -- ("#30A46C",3187820)
 toneColor :: Tone -> (Text, Int)
-toneColor = \case
-  Critical -> ("#E5484D", 0xE5484D)
-  Elevated -> ("#F5A524", 0xF5A524)
-  Calm -> ("#3E63DD", 0x3E63DD)
-  Healthy -> ("#30A46C", 0x30A46C)
-  Neutral -> ("#8B8D98", 0x8B8D98)
+toneColor t = ("#" <> T.toUpper (toText (showHex hex "")), hex)
+  where
+    hex = case t of
+      Critical -> 0xE5484D
+      Elevated -> 0xF5A524
+      Calm -> 0x3E63DD
+      Healthy -> 0x30A46C
+      Neutral -> 0x8B8D98
 
 
 data StatusIcon
@@ -248,26 +254,20 @@ data StatusIcon
   deriving stock (Eq, Show)
 
 
-slackIcon :: StatusIcon -> Text
-slackIcon = \case
-  RedCircle -> ":red_circle:"
-  OrangeCircle -> ":large_orange_circle:"
-  YellowCircle -> ":large_yellow_circle:"
-  GreenCircle -> ":large_green_circle:"
-  BlueCircle -> ":large_blue_circle:"
-  CheckMark -> ":white_check_mark:"
-  WhiteCircle -> ":white_circle:"
+iconGlyphs :: StatusIcon -> (Text, Text)
+iconGlyphs = \case
+  RedCircle -> (":red_circle:", "🔴")
+  OrangeCircle -> (":large_orange_circle:", "🟠")
+  YellowCircle -> (":large_yellow_circle:", "🟡")
+  GreenCircle -> (":large_green_circle:", "🟢")
+  BlueCircle -> (":large_blue_circle:", "🔵")
+  CheckMark -> (":white_check_mark:", "✅")
+  WhiteCircle -> (":white_circle:", "⚪")
 
 
-discordIcon :: StatusIcon -> Text
-discordIcon = \case
-  RedCircle -> "🔴"
-  OrangeCircle -> "🟠"
-  YellowCircle -> "🟡"
-  GreenCircle -> "🟢"
-  BlueCircle -> "🔵"
-  CheckMark -> "✅"
-  WhiteCircle -> "⚪"
+slackIcon, discordIcon :: StatusIcon -> Text
+slackIcon = fst . iconGlyphs
+discordIcon = snd . iconGlyphs
 
 
 data Status = Status {icon :: StatusIcon, label :: Text, tone :: Tone}
@@ -275,35 +275,31 @@ data Status = Status {icon :: StatusIcon, label :: Text, tone :: Tone}
 
 
 -- | Transport-neutral inline formatting for card metadata (notes, facts, footer).
-data Inline = Plain Text | Bold Text | Code Text | Seq [Inline]
+data InlinePiece = PlainPiece Text | BoldPiece Text | CodePiece Text
   deriving stock (Eq, Show)
 
 
-instance Semigroup Inline where
-  Seq xs <> Seq ys = Seq (xs <> ys)
-  Seq xs <> y = Seq (xs <> [y])
-  x <> Seq ys = Seq (x : ys)
-  x <> y = Seq [x, y]
+newtype Inline = Inline [InlinePiece]
+  deriving stock (Eq, Show)
+  deriving newtype (Monoid, Semigroup)
 
 
-instance Monoid Inline where
-  mempty = Seq []
+pattern Plain, Bold, Code :: Text -> Inline
+pattern Plain t = Inline [PlainPiece t]
+pattern Bold t = Inline [BoldPiece t]
+pattern Code t = Inline [CodePiece t]
 
 
-renderSlackInline :: Inline -> Text
-renderSlackInline = \case
-  Plain t -> slackEscape t
-  Bold t -> bold t
-  Code t -> "`" <> slackEscape (inertCode t) <> "`"
-  Seq xs -> foldMap renderSlackInline xs
+renderInline :: (Text -> Text) -> (Text -> Text) -> (Text -> Text) -> Inline -> Text
+renderInline p b c (Inline xs) = flip foldMap xs \case
+  PlainPiece t -> p t
+  BoldPiece t -> b t
+  CodePiece t -> c t
 
 
-renderDiscordInline :: Inline -> Text
-renderDiscordInline = \case
-  Plain t -> t
-  Bold t -> "**" <> t <> "**"
-  Code t -> "`" <> inertCode t <> "`"
-  Seq xs -> foldMap renderDiscordInline xs
+renderSlackInline, renderDiscordInline :: Inline -> Text
+renderSlackInline = renderInline slackEscape bold (\t -> "`" <> slackEscape (inertCode t) <> "`")
+renderDiscordInline = renderInline id (\t -> "**" <> t <> "**") (\t -> "`" <> inertCode t <> "`")
 
 
 -- | Transport-neutral evidence block inside a 'Card'.
@@ -401,18 +397,19 @@ renderDiscordCard c =
           foldMap (\h -> "**" <> h <> "**" <> foldMap ((" · " <>) . (\x -> "_" <> x <> "_")) ctx <> "\n") (host <* guard (length groups > 1)) <> bulletList labels
 
 
--- | Build the transport-neutral alert 'Card' for alerts that share the card
--- anatomy. Returns 'Nothing' for multi-section digests ('RoutineReportAlert')
--- and deprecated 'ShapeAlert'.
-alertCard :: Text -> Projects.ProjectId -> Text -> NotificationAlerts -> Maybe Card
-alertCard hostUrl pid pTitle = \case
-  RuntimeErrorAlert{..} -> Just $ runtimeErrorCard runtimeAlertType errorData pTitle projectUrl (byHash errorData.hash) chartUrl occurrenceText firstSeenText ongoingFor
-  EndpointAlert{..} -> Just $ newEndpointsCard project endpoints (byHash endpointHash) projectUrl
-  MonitorsAlert{..} -> Just $ monitorCard sAlerting monitorTitle monitorUrl chartUrl
-  MonitorsRecoveryAlert{..} -> Just $ monitorCard sRecovered monitorTitle monitorUrl Nothing
-  LogPatternAlert lp -> Just $ logPatternCard lp pTitle
-  LogPatternRateChangeAlert rc -> Just $ rateChangeCard rc pTitle
-  RoutineReportAlert{} -> Nothing
+-- | Build the transport-neutral alert payload: 'Right' for alerts sharing the
+-- 'Card' anatomy, 'Left' for multi-section digests ('RoutineReportAlert'), and
+-- 'Nothing' for deprecated 'ShapeAlert'. Exhaustive so new constructors are a
+-- compile error in both Slack and Discord senders.
+alertPayload :: Text -> Projects.ProjectId -> Text -> NotificationAlerts -> Maybe (Either (Text, Text, [ReportItem], Text) Card)
+alertPayload hostUrl pid pTitle = \case
+  RuntimeErrorAlert{..} -> Just $ Right $ runtimeErrorCard runtimeAlertType errorData pTitle projectUrl (byHash errorData.hash) chartUrl occurrenceText firstSeenText ongoingFor
+  EndpointAlert{..} -> Just $ Right $ newEndpointsCard project endpoints (byHash endpointHash) projectUrl
+  MonitorsAlert{..} -> Just $ Right $ monitorCard sAlerting monitorTitle monitorUrl chartUrl
+  MonitorsRecoveryAlert{..} -> Just $ Right $ monitorCard sRecovered monitorTitle monitorUrl Nothing
+  LogPatternAlert lp -> Just $ Right $ logPatternCard lp pTitle
+  LogPatternRateChangeAlert rc -> Just $ Right $ rateChangeCard rc pTitle
+  RoutineReportAlert{..} -> Just $ Left (headline, period, highlights, reportUrl)
   ShapeAlert -> Nothing
   where
     projectUrl = hostPath hostUrl $ urls.homeGet pid
