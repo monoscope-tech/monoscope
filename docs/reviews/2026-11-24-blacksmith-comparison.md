@@ -162,6 +162,14 @@ Progress on each item is logged below as it lands.
   this. The binaries are now linked into `/usr/local/bin`, and `refresh_guest`'s remote path ran for
   real to build that guest on the worker.
 
+- **Proofs lost to busy verifier VMs (PR #1018 and worker config).** The worker admits 8 agents but
+  had 2 verifier slots, and a proof needs one per side. In a week, 134 checks (50 from reviews, 84
+  from fix runs) waited 45 s, got no VM and failed. Each review case cost one of its three proof
+  attempts. Verifier slots are now 4 (`IMPACT_REVIEW_VM_SLOTS=8,4,1` in
+  `/etc/monoscope/impact-worker.env`, backup `.bak-20261124`, effective at the next restart), and a
+  check waits up to five minutes for a slot. Each side takes its slot separately, so waiting cannot
+  deadlock.
+
 Open question, not changed: six reviews in a week ended with "exceeded its query budget" (20 host
 tool calls for a PR review). Three of them made no proof and ran no check before running out, so
 the calls went to telemetry and memory. A larger budget would only help if the agent proves first.

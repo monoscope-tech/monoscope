@@ -1764,8 +1764,10 @@ hostSlots = do
 
 -- | Holds one of this host's slots for the pool. Slots are lock files, so every process on the node
 -- shares them and each node of a cluster counts its own. Admission happens earlier, in the review
--- queue, so a busy agent or verifier slot fails fast rather than spending a review's budget; a build
--- has its own job budget and waits its turn.
+-- queue, so a busy agent slot fails fast rather than spending a review's budget. A check waits up to
+-- five minutes: the queue admits reviews by agent slot only, and a check that never ran still costs
+-- its review one of three proof attempts (134 did in a week at 45 s). A build has its own job budget
+-- and waits its turn.
 withSlot :: Pool -> IO a -> IO a
 withSlot pool action = do
   slots <- hostSlots
@@ -1783,7 +1785,7 @@ withSlot pool action = do
     NoVm -> action
     AgentPool Parent -> held "agent" slots.agents 45
     AgentPool Child -> held "child" slots.agents 45
-    VerifierPool -> held "verifier" slots.verifiers 45
+    VerifierPool -> held "verifier" slots.verifiers 300
     PreparePool -> held "prepare" slots.builds buildSeconds
 
 
