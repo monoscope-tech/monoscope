@@ -54,6 +54,7 @@ import Servant qualified
 import Servant.Server (ServerError (errBody), err400)
 import Servant.Types.SourceT (SourceT (..), StepT (..))
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.IO.Error (ioeGetLocation)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, withSpan_)
 import System.Types (Mime)
@@ -532,7 +533,7 @@ fetchMetricsDataWithProgress deadline progress respDataType sqlQuery now fromD t
       Just d -> execute conn "SET statement_timeout = ?" (Only d) *> act conn <* execute_ conn "RESET statement_timeout"
     runQ :: FromRow r => IO [r]
     runQ = withConn \conn -> let q = Query (encodeUtf8 sqlQuery) in pgSpan conn q (query_ conn q)
-    attempt = retryOnPoolExhaustion $ try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
+    attempt = retryOnPoolExhaustion $ try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ E.handleJust libpqConnectionLoss E.throwIO $ case respDataType of
       DTFloat -> do
         chartData <- runQ :: IO [Only (Maybe ChartNumber)]
         pure
@@ -634,6 +635,19 @@ convertTimestampsToMs md = md{dataset = V.map convertRow md.dataset, from = (* 1
     convertRow row = case V.uncons row of
       Just (Just ts, rest) -> V.cons (Just $ ts * 1000) rest
       _ -> row
+
+
+-- | libpq reports a connection lost mid-stream as a bare 'IOException' located at @libpq@, which
+-- slipped past 'try' as a 500 on every TimeFusion deploy (27/day). As an SQLSTATE-less 'SqlError'
+-- it takes the reconnect-and-retry path, and otherwise renders as a widget error.
+--
+-- >>> import System.IO.Error (ioeSetLocation, userError)
+-- >>> sqlState <$> libpqConnectionLoss (ioeSetLocation (userError "failed (server closed the connection unexpectedly)") "libpq")
+-- Just ""
+-- >>> sqlState <$> libpqConnectionLoss (userError "libpq: elsewhere")
+-- Nothing
+libpqConnectionLoss :: E.IOException -> Maybe SqlError
+libpqConnectionLoss e = SqlError "" PQ.FatalError (encodeUtf8 $ displayException e) "" "" <$ guard (ioeGetLocation e == "libpq")
 
 
 -- Only generated SELECTs use this retry classification. Empty SQLSTATE is
