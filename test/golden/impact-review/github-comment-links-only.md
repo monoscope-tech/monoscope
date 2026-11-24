@@ -43,4 +43,24 @@ Adds retries to payment capture. A second timeout can charge a customer twice, a
 > **[`src/payments/capture.ts:120`](https://github.com/acme/checkout/pull/42/files#diff-5badcd3e5097afa5539d90a33dfe2c3d239f41513fa07ece41696a1a74ab438bR120)**
 > The reasoning and production evidence are in the [full review](https://app.monoscope.tech/p/x/ai/runs/y).
 
+<!-- Proof results for coding agents (monoscope:proof-data)
+tested commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+c1 matches: Retries a timed-out capture once
+  observed: The capture command now retries after the first timeout and succeeds.
+  image "Receipt card" (merge base): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-base-1.png?sig=s
+  image "Receipt card" (this PR): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head-1.png?sig=s
+  image "Retry history" (this PR): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head-2.png?sig=s
+  recording "full video" (this PR): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s
+c2 differs: Reuses the idempotency key on every retry
+  observed: The second retry sent a new key, so the provider saw two charges.
+  image "Capture retried twice" (merge base): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base-1.png?sig=s
+  image "Capture retried twice" (this PR): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head-1.png?sig=s
+  recording "full video" (this PR): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s
+c3 unverified: Shows the retry count in the receipt
+  observed: The receipt page needs a browser, which this review cannot record.
+c4 differs: Gives up after three timeouts
+  observed: It retried a fourth time before giving up.
+merge risk: medium
+-->
+
 <sub>Reviewed [`aaaaaaa`](https://github.com/acme/checkout/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) with production telemetry from Jan 1 to Jan 8, 2025 · [Open the full review](https://app.monoscope.tech/p/x/ai/runs/y) · [Review settings](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings) · Comment `@monoscope prove it` to prove again</sub>

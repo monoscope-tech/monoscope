@@ -5,6 +5,7 @@ module Pages.ImpactReviewsSpec (spec) where
 import BackgroundJobs qualified
 import BackgroundJobs.Types qualified as Jobs
 import CLI.Harness qualified as CLI
+import Control.Lens ((.~))
 import Control.Monad.Trans.Except (throwE)
 import Data.Aeson qualified as AE
 import Data.Aeson.Encoding qualified as Encoding
@@ -20,9 +21,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Cache qualified as Cache
 import Data.Conduit.Combinators qualified as CC
 import Data.Effectful.AgentArtifacts qualified as Artifacts
-import Control.Lens ((.~))
 import Data.Effectful.AgentWorkspace qualified as Workspace
-import Data.Generics.Product.Fields (field')
 import Data.Effectful.AgentWorkspace.Guest qualified as Guest
 import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Artifacts qualified as Native
@@ -35,6 +34,7 @@ import Data.Effectful.GitPublication qualified as Publication
 import Data.Effectful.LLM qualified as LLM
 import Data.Effectful.ReviewEvaluation qualified as Evaluation
 import Data.Effectful.Wreq qualified as HTTP
+import Data.Generics.Product.Fields (field')
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
@@ -2876,6 +2876,33 @@ spec = around withTestResources $ describe "Production impact reviews" do
     released <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun otherRun.id)
     released.state `shouldBe` Reviews.Incomplete
 
+  -- Merged PRs kept "Proving this PR · 0 of 4 recorded … still running" forever (monoscope #975–#1014).
+  it "supersededReview_finalizesItsProgressCommentInsteadOfFailing" \tr -> do
+    setup tr
+    appConfig <- githubApp tr
+    void $ deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
+    [old] <- runQueryEffect tr $ Reviews.latestRuns testPid
+    let next = T.replicate 40 "b"
+        cfg = appConfig{impactReviewUsageDir = Just "fixture-usage", impactReviewCacheDir = Just "fixture-cache", impactReviewProvider = "fixture", openaiModel = "fixture"}
+        files = [Git.PullRequestFile "checkout.hs" "modified" (Just "@@ -1 +1 @@\n-old\n+new")]
+        runReview at run wrap = runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ pullRequestApi files [] pass (pullRequestAt (T.replicate 40 "d") at 1) $ wrap $ tryAny $ Impact.reviewPullRequest run.id
+        progressEdits = map (decodeUtf8 . snd) . filter (T.isSuffixOf "/issues/comments/99" . fst)
+    -- A push lands while the agent proves the old head: the review is replaced, not failed and retried.
+    (pushed, outcome) <- runReview revision old $ repositoryReview \_ _ _ _ -> do
+      runQueryEffect tr $ Reviews.setProgressComment old 99
+      void $ deliver tr $ payload "synchronize" next "2025-01-01T00:01:00Z"
+      pure $ Left "Review authorization is no longer available"
+    outcome `shouldSatisfy` isRight
+    progressEdits pushed `shouldSatisfy` any (T.isInfixOf "bbbbbbbb")
+    fmap (.state) <$> runQueryEffect tr (Reviews.getRun old.id) `shouldReturn` Just Reviews.Superseded
+    -- Once the newer run owns the comment, a late retry of the old one leaves it alone.
+    Just new <- find ((== next) . (.revision)) <$> runQueryEffect tr (Reviews.latestRuns testPid)
+    runQueryEffect tr $ Reviews.setProgressComment new 99
+    fst <$> runReview next old Test.id >>= (`shouldBe` []) . progressEdits
+    -- A merge before the proofs finish stops the comment too.
+    void $ deliver tr $ payload "closed" next "2025-01-01T00:02:00Z"
+    fst <$> runReview next new Test.id >>= (`shouldSatisfy` any (T.isInfixOf "closed")) . progressEdits
+
   it "reviewTriggers_draftsFollowTheModeAndMembersCanAskInEveryMode" \tr -> do
     setup tr
     let queued = dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'ReviewPullRequest' AND status = 'queued'" ()
@@ -2950,7 +2977,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     dbExec tr "UPDATE projects.projects SET deleted_at = now(), active = false WHERE id = ?" (Only testPid)
     downVote <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest{Wai.requestMethod = "POST"} $ encodeUtf8 $ rateUrl Reviews.Down) app
     traverse (fmap (H.statusCode . (.simpleStatus)) . fetch) [link.preview, rateUrl Reviews.Down] `shouldReturn` [404, 404]
-    (H.statusCode downVote.simpleStatus, ) <$> dbOne tr "SELECT rating FROM projects.pr_review_runs WHERE id = ?" (Only run.id) `shouldReturn` (404, "up" :: Text)
+    (H.statusCode downVote.simpleStatus,) <$> dbOne tr "SELECT rating FROM projects.pr_review_runs WHERE id = ?" (Only run.id) `shouldReturn` (404, "up" :: Text)
     dbExec tr "UPDATE projects.projects SET deleted_at = NULL, active = true WHERE id = ?" (Only testPid)
 
   it "sandbox_installsFromPackageRegistriesButReachesNothingElse" \_ -> withTemp "registry-egress" \directory -> do
@@ -3542,7 +3569,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     length (filter (T.isInfixOf "/issues/comments/99" . fst) requests) `shouldBe` 1
     let published = sentTo "/issues/comments/99" requests
     published `shouldContainAll` ["Merge risk: low", "Worth checking", "Related test toolchain unavailable", "production query reached its result limit", "test-service](", "<table>", "</table>", "\\\\*check", revision]
-    for_ @[] ["@impact-review-test", "https://untrusted.invalid", "long-review-log-body", "another-in-scope-event", "checkout-review-span", "Review temperature gauge"] \hidden -> published `shouldNotSatisfy` T.isInfixOf hidden
+    -- Standing caveats of how evidence works are the model's instructions, not this PR's gaps.
+    for_ @[] ["@impact-review-test", "https://untrusted.invalid", "long-review-log-body", "another-in-scope-event", "checkout-review-span", "Review temperature gauge", "describes the mapped service"] \hidden -> published `shouldNotSatisfy` T.isInfixOf hidden
     completed <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
     (completed.state, completed.commentId) `shouldBe` (Reviews.Completed, Just 99)
     checks <- runQueryEffect tr $ Reviews.latestChecks reviewPid
