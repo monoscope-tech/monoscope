@@ -156,6 +156,12 @@ Progress on each item is logged below as it lands.
 - **Master's build was broken (#1017).** `test/unit/Pkg/ParserSpec.hs` from #1014 failed
   `-Werror=name-shadowing`, so every PR's Build and Test was red.
 
+- **Integration-test proofs could not start Postgres (PR #1018, `a558c9534`).** VM commands get a
+  reset PATH, and the guest exposed Postgres only through Docker `ENV`, so `initdb` was missing and
+  every Haskell integration-test proof failed in setup. #1017's own review on the new guest found
+  this. The binaries are now linked into `/usr/local/bin`, and `refresh_guest`'s remote path ran for
+  real to build that guest on the worker.
+
 Still behind Blacksmith: no `@monoscope dismiss`, and claims carried over are re-recorded on both
 sides rather than reusing the merge-base recording.
 
