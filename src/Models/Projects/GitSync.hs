@@ -130,6 +130,7 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.ProjectApiKeys (decryptAPIKey, decryptSecret, encryptSecret)
 import Models.Projects.Projects (PersistentSessionId, ProjectId)
+import Network.Wreq qualified as Wreq
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), selectFrom)
 import Pkg.Git qualified as Git
 import Relude hiding (Reader)
@@ -914,16 +915,27 @@ consumeInstallationAttempt session nonce = do
   pure $ row <&> \(projectId, destination, iid) -> InstallationAttempt projectId destination (maybe InstallApp AuthorizeApp iid)
 
 
-data InstallationError = InstallationConfigurationMissing | InstallationAuthorizationFailed | InstallationVerificationFailed | InstallationOwnershipRequired | InstallationAccountMissing | InstallationProjectMissing
+data InstallationError
+  = InstallationConfigurationMissing
+  | InstallationAuthorizationFailed
+  | InstallationVerificationFailed
+  | InstallationNotVisible
+  | -- | The installed account's login: only it, or an owner of that organization, may bind it.
+    InstallationOwnershipRequired Text
+  | InstallationMembersPermissionMissing
+  | InstallationAccountMissing
+  | InstallationProjectMissing
   deriving stock (Eq, Show)
 
 
 installationErrorMessage :: InstallationError -> Text
 installationErrorMessage = \case
-  InstallationConfigurationMissing -> "An administrator must configure a valid GitHub App ID."
+  InstallationConfigurationMissing -> "GITHUB_APP_ID must be the GitHub App's numeric App ID, shown at the top of the App's settings page."
   InstallationAuthorizationFailed -> "GitHub did not authorize this account. Connect the account again."
   InstallationVerificationFailed -> "Could not verify your GitHub account. Connect the account again."
-  InstallationOwnershipRequired -> "Connect this account as its personal-account owner or an active GitHub organization owner."
+  InstallationNotVisible -> "Your GitHub account cannot see this installation. Sign in to GitHub as the account or organization owner that installed the App, then connect again."
+  InstallationOwnershipRequired account -> "Only @" <> account <> " or an owner of the @" <> account <> " organization can connect this installation. Sign in to GitHub as one of them, then connect again."
+  InstallationMembersPermissionMissing -> "GitHub refused to show your organization role. The GitHub App needs the Organization \"Members\" read permission, and the organization must accept that permission update under Settings → GitHub Apps."
   InstallationAccountMissing -> "GitHub returned an installation without an account."
   InstallationProjectMissing -> "This project is no longer available."
 
@@ -942,46 +954,29 @@ authorizeGitHubInstallation encKey pid appId clientId secret code callback iid =
             (AE.object ["client_id" AE..= clientId, "client_secret" AE..= secret, "code" AE..= code, "redirect_uri" AE..= callback])
         )
   token <- hoistEither $ maybeToRight InstallationAuthorizationFailed $ response ^? W.responseBody . key "access_token" . _String
-  installation <-
-    ExceptT
-      $ findPage
-        token
-        "user/installations"
-        (toListOf $ key "installations" . values)
-        (\value -> value ^? key "id" . _Integer == Just (fromIntegral iid) && value ^? key "app_id" . _Integer == Just expectedApp)
-        1
+  let github opts path = ExceptT $ first (const InstallationVerificationFailed) <$> Git.tryHttp (W.getWith (opts $ githubAppOpts token) (toString $ "https://api.github.com/" <> path))
+      findInstallation page = do
+        entries <- toListOf (W.responseBody . key "installations" . values) <$> github Relude.id ("user/installations?per_page=100&page=" <> show @Text page)
+        case find (\value -> value ^? key "id" . _Integer == Just (fromIntegral iid) && value ^? key "app_id" . _Integer == Just expectedApp) entries of
+          Just entry -> pure entry
+          Nothing | length entries == 100 -> findInstallation (page + 1)
+          Nothing -> hoistEither $ Left InstallationNotVisible
+  installation <- findInstallation (1 :: Int)
   account <- hoistEither $ maybeToRight InstallationAccountMissing $ installation ^? key "account" . key "login" . _String
-  case installation ^? key "account" . key "type" . _String of
-    Just "User" -> do
-      user <- ExceptT $ first (const InstallationVerificationFailed) <$> Git.tryHttp (W.getWith (githubAppOpts token) "https://api.github.com/user")
-      unless ((T.toLower <$> (user ^? W.responseBody . key "login" . _String)) == Just (T.toLower account)) $ hoistEither $ Left InstallationOwnershipRequired
-    Just "Organization" ->
-      void
-        $ ExceptT
-        $ findPage
-          token
-          "user/memberships/orgs"
-          (toListOf values)
-          ( \membership ->
-              (membership ^? key "state" . _String, membership ^? key "role" . _String, T.toLower <$> (membership ^? key "organization" . key "login" . _String))
-                == (Just "active", Just "admin", Just (T.toLower account))
-          )
-          1
-    _ -> hoistEither $ Left InstallationOwnershipRequired
+  let owns = \case
+        "User" -> (\user -> (T.toLower <$> user ^? W.responseBody . key "login" . _String) == Just (T.toLower account)) <$> github Relude.id "user"
+        "Organization" -> do
+          membership <- github (Wreq.checkResponse ?~ \_ _ -> pass) ("user/memberships/orgs/" <> account)
+          -- GitHub answers 403 when the App lacks the Members permission, 404 when the user is no member.
+          case membership ^. Wreq.responseStatus . Wreq.statusCode of
+            200 -> pure $ (membership ^? W.responseBody . key "state" . _String, membership ^? W.responseBody . key "role" . _String) == (Just "active", Just "admin")
+            403 -> hoistEither $ Left InstallationMembersPermissionMissing
+            404 -> pure False
+            _ -> hoistEither $ Left InstallationVerificationFailed
+        _ -> pure False
+  unlessM (maybe (pure False) owns $ installation ^? key "account" . key "type" . _String) $ hoistEither $ Left $ InstallationOwnershipRequired account
   credential <- lift $ upsertGitHubCredential encKey pid Git.GitHub Nothing account (Just iid) Nothing
   hoistEither $ maybeToRight InstallationProjectMissing $ void credential
-  where
-    findPage token path extract matches page = runExceptT do
-      response <-
-        ExceptT
-          $ first (const InstallationVerificationFailed)
-          <$> Git.tryHttp
-            (W.getWith (githubAppOpts token) (toString $ "https://api.github.com/" <> path <> "?per_page=100&page=" <> show @Text page))
-      let entries = extract (response ^. W.responseBody)
-      case find matches entries of
-        Just entry -> pure entry
-        Nothing | length entries == 100 -> ExceptT $ findPage token path extract matches (page + 1)
-        Nothing -> hoistEither $ Left InstallationOwnershipRequired
 
 
 -- | GitHub's own "Repository access" screen for an installation.
