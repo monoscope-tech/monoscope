@@ -2922,9 +2922,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr $ Reviews.releaseRun old
     void $ deliver tr $ payload "synchronize" next "2025-01-01T00:01:00Z"
     Just new <- find ((== next) . (.revision)) <$> runQueryEffect tr (Reviews.latestRuns testPid)
+    -- More dashboard queries than the evidence cap: the agent is told, and the PR comment is not.
+    dbExec tr "INSERT INTO projects.dashboards (project_id, created_by, title, schema) VALUES (?, (SELECT id FROM users.users LIMIT 1), 'Capped', ?)" (testPid, Aeson $ AE.object ["widgets" AE..= [AE.object ["query" AE..= ("| take " <> show @Text n)] | n <- [1 .. 21 :: Int]]])
     prompt <- newIORef ""
     void $ runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ pullRequestApi [Git.PullRequestFile "checkout.hs" "modified" (Just "@@ -1 +1 @@\n-old\n+new")] [] pass (pullRequestAt (T.replicate 40 "d") next 1) $ repositoryReview (\request _ _ _ -> writeIORef prompt request.prompt $> Left "stop") $ tryAny $ Impact.reviewPullRequest new.id
-    readIORef prompt >>= (`shouldContainAll` ["An earlier review of this pull request, at " <> revision, "node proof.mjs", "The receipt shows Retried once."])
+    readIORef prompt >>= (`shouldContainAll` ["An earlier review of this pull request, at " <> revision, "node proof.mjs", "The receipt shows Retried once.", "\"evidenceLimitReached\":[\"dashboard queries\"]"])
     -- Only scripts that passed on the head are offered, and the old run's proof keys are not citable.
     readIORef prompt >>= (`shouldNotSatisfy` \p -> any (`T.isInfixOf` p) ["broken-proof.mjs", "proof-1"])
 
