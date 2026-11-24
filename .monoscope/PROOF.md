@@ -103,7 +103,11 @@ node proof.mjs
 ```
 
 Locate controls by role and wait for them before asserting, and assert on what the user sees, so
-the base recording fails and the head passes:
+the base recording fails and the head passes. Set `page.setDefaultTimeout(5000)` so a wrong locator
+fails in seconds, and on failure print `await page.locator('body').ariaSnapshot()` before exiting:
+the next attempt then sees the controls the page has. Fields inside a collapsed section, tab or modal
+are hidden until you open it, and the sidebar repeats many links, so scope a locator to its region
+(`page.getByRole('main').getByRole('link', { name: 'Topics' })`).
 
 ```js
 const clear = page.getByRole('button', { name: 'Clear' }), pause = page.getByRole('button', { name: /Pause|Resume/ });
