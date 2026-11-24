@@ -369,6 +369,10 @@ prepare_web_deps() {
 }
 
 run_body() { # <check>
+  # Prune stale Proto.* generated files left in shared dist-newstyle from before the monoscope-proto
+  # split. Every cabal-using check needs it, not just build: an attested build is skipped, and
+  # weeder/e2e then failed on the restored cache with missing-home-modules.
+  [ ! -d dist-newstyle ] || find dist-newstyle -path '*/monoscope-0.1.0.0/*/Proto' -type d -exec rm -rf {} + 2>/dev/null || true
   case "$1" in
     frontend)
       mkdir -p static/public/assets/css static/public/assets/web-components/dist/js static/public/assets/web-components/dist/css
@@ -377,8 +381,6 @@ run_body() { # <check>
       (cd web-components && npm ci --prefer-offline --no-audit && NODE_ENV=production npx vite build --mode production --sourcemap false)
       ;;
     build)
-      # Prune stale Proto.* generated files left in shared dist-newstyle from before the monoscope-proto split.
-      find dist-newstyle -path '*/monoscope-0.1.0.0/*/Proto' -type d -exec rm -rf {} + 2>/dev/null || true
       cabal build all unit-tests monoscope-cli:cli-tests integration-tests doctests -j $CABAL_FLAGS "$CABAL_OPTS"
       ;;
     # doctest shells out to GHC with `-package` for each local library.  A fresh
