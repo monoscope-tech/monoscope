@@ -32,9 +32,10 @@ the bar.
 | #716 drop hris_enabled | Matches | 1 | 3 | — | — |
 | #711 unbundle modules | Matches | — (older layout) | video | — | — |
 
-Across all 32 commented Talstack PRs, 30 carry a Matches or Differs verdict, 1 was dismissed, and
-none is Unverified. PRs before #720 use an older layout without the hidden data block, so their
-claim and image counts do not parse. They are not empty.
+Across all 32 commented Talstack PRs: 25 Matches, 1 Differs (#720), 1 dismissed (#707), and 5 in an
+older layout whose verdict icon does not parse (#642, #645, #659, #687, #693). None is Unverified. PRs
+before #720 have no hidden data block, so their claim and image counts do not parse. They are not
+empty.
 
 What makes these comments strong:
 
@@ -58,10 +59,11 @@ What makes these comments strong:
 
 | Outcome | PRs |
 | :-- | --: |
-| Matches / Differs | 7 |
+| Matches / Differs | 6 (#976, #977, #978, #983, #992, #1010) |
 | Unverified | 11 |
-| Last visible comment stuck at "Proving this PR · 0 of N recorded" | 7 |
-| Review stopped / no proof needed | 5 |
+| Last visible comment stuck at "Proving this PR · 0 of N recorded" | 9 (#975, #980, #982, #985, #994, #997, #1000, #1001, #1014) |
+| Merge risk only, no proof | 3 |
+| Review stopped | 2 |
 
 Over 14 days, 73 of 207 head recordings (35%) and 26 of 208 base recordings exited 0.
 
@@ -71,7 +73,7 @@ production-telemetry merge risk (which Blacksmith does not have). The gap is out
 
 ### Why ours fail
 
-1. **Stale progress comments (7 PRs).** All 37 "Review authorization is no longer available"
+1. **Stale progress comments (9 PRs).** All 37 "Review authorization is no longer available"
    failures in the last 7 days were a push (20) or a merge (17) landing mid-review. The run was
    superseded without touching its progress comment, so a merged PR keeps "Proving this PR · 0 of
    4 recorded … still running" forever. Each one was also logged at attention level and retried.
@@ -98,6 +100,20 @@ production-telemetry merge risk (which Blacksmith does not have). The gap is out
 5. Add a hidden machine-readable results block for coding agents.
 6. Link Talstack (above) and compare claim for claim.
 
+## Profile: where proof time goes (7 days)
+
+| Check outcome | Base | Head | p50 | p90 | VM hours |
+| :-- | --: | --: | --: | --: | --: |
+| passed | 9 | 30 | 83–128 s | 323–567 s | 2.3 |
+| failed | 135 | 115 | 63–118 s | 255–475 s | 11.0 |
+| blocked (exit 126/127, compile failure) | 51 | 49 | 45 s | 52–67 s | 2.2 |
+| timed out (900 s cap) | 11 | 12 | 903 s | 904 s | 5.8 |
+
+About 21.5 VM-hours of checks ran for 104 reviews (4 checks each), and only 2.3 of those hours were
+checks that passed. Head recordings fail mostly on setup (missing tools or sources in the stale
+guest, a server that never starts), then on agent-written Playwright scripts (locator timeouts,
+strict-mode violations, syntax errors). Reviews take 12 minutes at p50 and 45 at p90.
+
 Progress on each item is logged below as it lands.
 
 ## Log
@@ -114,3 +130,23 @@ Progress on each item is logged below as it lands.
 - **Guest rebuild (fixed, `52f7282ba`, `bded5e197`).** Since #1013 the guest could not be rebuilt:
   its dependency stage lacked the new `proto` package and, with `Setup.hs` gone, tried to compile
   the `monoscope` library. It now builds `--only-dependencies all` like `Dockerfile.deps`.
+- **New guest deployed (`70d7ab18`, 2026-11-24 02:28 UTC).** Built on the worker from this branch
+  against the production server image. It contains the `hasql-pool` source, `cargo-nextest`,
+  Playwright and `monoscope-app`. The old guest is kept as `/srv/monoscope/guest.prev-5df490c7`. The
+  worker restarts onto it once no agent runs. Every workspace checkpoint is keyed by guest, so each
+  repository's next workspace build is cold.
+- **Guest rebuilds automatically (`df8fc1fb0`).** `make deploy-worker` fingerprints the files that
+  define the guest and rebuilds and swaps it on the worker when they change. See "Refreshing the
+  guest" in `docs/agent-operations.md`.
+- **Boilerplate caveats removed (`3c3637446`).** Three host caveats opened the could-not-verify list
+  of every review. The list now holds only the PR's own gaps, like Blacksmith's "not tested".
+
+## Left for a person
+
+- **Install the GitHub App on Talstack-LLC** (steps at the top) to run our proofs on those PRs.
+- **Stale comments already posted** on #975, #980, #982, #985, #994, #997, #1000, #1001 and #1014
+  do not heal: the fix acts when a superseded run's job runs again. Edit them by hand or ignore them.
+- **About 75 GB of old guests** on the worker (`guest.prev-20261111`, `guest.prev-ab85f39b`,
+  `guest.prev-5df490c7`, plus the 8 GB `guest.prev`), on a host that ran out of disk six times this
+  week. Automated rebuilds keep only one `guest.prev`. The others can go once the new guest has
+  run a few reviews.

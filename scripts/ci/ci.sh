@@ -1076,7 +1076,7 @@ echo "$INPUTS" > /srv/monoscope/guest.inputs
 for _ in $(seq 200); do docker top monoscope-impact-worker -o pid,args | grep -qE "pi-host|sandbox.mjs" || break; sleep 15; done
 systemctl restart monoscope-impact-worker
 SCRIPT
-systemd-run --quiet --collect --unit monoscope-guest-rebuild --setenv=SERVER_IMAGE="$1" --setenv=INPUTS="$2" bash /srv/monoscope/guest-rebuild.sh
+systemd-run --quiet --collect --unit monoscope-guest-rebuild --setenv=HOME=/root --setenv=SERVER_IMAGE="$1" --setenv=INPUTS="$2" bash /srv/monoscope/guest-rebuild.sh
 echo "guest rebuild started (journalctl -u monoscope-guest-rebuild)"
 REMOTE
 }
