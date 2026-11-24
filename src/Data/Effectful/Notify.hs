@@ -248,8 +248,8 @@ discordThreadedNotification channelId payload replyToMessageId =
 -- >>> let varsOf = \case WhatsAppNotification (WhatsAppData _ vars _) -> vars; _ -> AE.Null
 -- >>> varsOf $ whatsappNotification "t" "+1" (AE.object ["3" AE..= ("`boom\nCallStack:\n    at x`" :: Text), "4" AE..= ("" :: Text)])
 -- Object (fromList [("3",String "`boom CallStack: at x`"),("4",String "-")])
--- >>> T.length <$> (varsOf (whatsappNotification "t" "+1" (AE.object ["3" AE..= T.replicate 3000 "x"])) ^? key "3" . _String)
--- Just 200
+-- >>> case varsOf (whatsappNotification "t" "+1" (AE.object ["3" AE..= T.replicate 3000 "x"])) of AE.Object o -> (\case Just (AE.String t) -> T.length t; _ -> 0) (AEK.lookup "3" o); _ -> 0
+-- 200
 whatsappNotification :: Text -> Text -> AE.Value -> Notification
 whatsappNotification template to vars =
   WhatsAppNotification WhatsAppData{contentVariables = clean vars, ..}

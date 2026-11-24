@@ -67,10 +67,7 @@ on openTraceFullscreen(traceId, timestamp) from window
 <template id="trace-loading-skeleton"
 <div data-trace-url="/p/<uuid>/traces/<hex>/?timestamp=2026-07-15T18:59:16.952128Z" _="init send loadTrace(url: my @data-trace-url) to #trace_expanded_view"
 <span class="sr-only">Loading trace…</span>
-<button class="text-textBrand font-medium cursor-pointer hover:underline" aria-label="Retry loading trace" _="on click
-            add .hidden to #trace-load-error
-            call htmx.ajax(&#39;GET&#39;, #trace_expanded_view&#39;s @data-trace-url, {target: #trace_expanded_view, swap: &#39;innerHTML&#39;})
-          end">Retry</button>
+<button class="text-textBrand font-medium cursor-pointer hover:underline" aria-label="Retry loading trace" _="on click send loadTrace(url: #trace_expanded_view&#39;s @data-trace-url) to #trace_expanded_view">Retry</button>
 <input class="input input-sm w-full" value name="environment" id="environment" type="text" placeholder="e.g. production"
 <input class="input input-sm w-full" value name="service" id="service" type="text" placeholder="e.g. checkout"
 <h3 class="text-base font-semibold text-textStrong">Create monitor</h3>

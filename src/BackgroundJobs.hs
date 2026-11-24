@@ -2578,9 +2578,10 @@ dualExecPgTfWithSql ctx pgSql tfSql = Ki.scoped \scope -> do
     now <- Time.currentTime
     shouldAttempt <- liftIO $ ExtractionWorker.shouldAttemptCircuit ctx.tfCircuit now
     when shouldAttempt
-      -- A deploy drain refuses every write for ~15s and nothing replays this arm, so it
-      -- must outwait the handoff; every caller's UPDATE is guarded, so a re-run is a no-op.
-      $ tryAny (Hasql.retryTransientEff 60_000_000 "dual-exec:timefusion" $ withHasqlTimefusion True $ Hasql.interpExecute tfSql)
+      -- A deploy drain refuses every write until the replacement is ready (18–110s measured
+      -- on 2026-11-23) and nothing replays this arm, so it gets the ingest write's 180s budget;
+      -- every caller's UPDATE is guarded, so a re-run is a no-op.
+      $ tryAny (Hasql.retryTransientEff 180_000_000 "dual-exec:timefusion" $ withHasqlTimefusion True $ Hasql.interpExecute tfSql)
       >>= \case
         Right _ -> liftIO $ ExtractionWorker.recordCircuitSuccess ctx.tfCircuit
         Left e -> do
