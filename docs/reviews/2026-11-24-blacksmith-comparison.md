@@ -141,6 +141,24 @@ Progress on each item is logged below as it lands.
 - **Boilerplate caveats removed (`3c3637446`).** Three host caveats opened the could-not-verify list
   of every review. The list now holds only the PR's own gaps, like Blacksmith's "not tested".
 
+- **Carry-forward across pushes (PR #1018).** Each recording stores its claim, command and setup
+  (`pr_review_proofs.script`). A review of a later push gets the previous review's claims, the
+  scripts that passed on its head, and the files changed since, then re-proves those claims. That
+  is Blacksmith's "still holds on the new head".
+- **Evidence cap told to the agent (PR #1018).** #1017's own review pointed out that dropping the
+  cap caveat also dropped truncation detection. Capped kinds now go to the agent and the log.
+- **Proving without PROOF.md (PR #1018).** The prompt gives Blacksmith's recipe: start the app from
+  the repository, seed one user per role with sessions inserted directly, check status codes per
+  role, and name concretely what was not exercised.
+- **Browser proofs fail fast (PR #1018).** A 5-second default timeout, and an `ariaSnapshot()` on
+  failure so a retry can see the page's controls. PROOF.md covers hidden sections and the
+  sidebar's repeated links, the two locator mistakes behind most failed UI proofs this week.
+- **Master's build was broken (#1017).** `test/unit/Pkg/ParserSpec.hs` from #1014 failed
+  `-Werror=name-shadowing`, so every PR's Build and Test was red.
+
+Still behind Blacksmith: no `@monoscope dismiss`, and claims carried over are re-recorded on both
+sides rather than reusing the merge-base recording.
+
 ## Left for a person
 
 - **Install the GitHub App on Talstack-LLC** (steps at the top) to run our proofs on those PRs.
