@@ -74,16 +74,16 @@ spec = do
             [ ("rows", rows, "timestamp >= ago(7d)")
             , ("rows", rows, "timestamp == now()")
             , ("rows", rows, "name==\"GET\"")
-              -- Lowercase `desc`: this branch now builds its ORDER BY with buildOrderBy
+            , -- Lowercase `desc`: this branch now builds its ORDER BY with buildOrderBy
               -- like every other path, rather than hand-rolling an uppercase one.
-            , ("summary", summary, "name==\"GET\"")
+              ("summary", summary, "name==\"GET\"")
             , ("summary", summary, "name==\"GET\" | summarize count(*) by bin(timestamp, 1d)")
-              -- `bin(timestamp, 60)` is 60 SECONDS. These two previously asserted
+            , -- `bin(timestamp, 60)` is 60 SECONDS. These two previously asserted
               -- `5 minutes`, which was the silent fallback for any width the parser could
               -- not read — the bug, encoded as the expectation.
-            , ("rows", rows, "name==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60)")
-              -- ORDER BY uses GROUP BY column (kind) since timestamp is not in GROUP BY
-            , ("rows", rows, "timestamp >= ago(7d) | summarize TotalCount = count() by kind")
+              ("rows", rows, "name==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60)")
+            , -- ORDER BY uses GROUP BY column (kind) since timestamp is not in GROUP BY
+              ("rows", rows, "timestamp >= ago(7d) | summarize TotalCount = count() by kind")
             , ("rows", rows, "name==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60) | sort by parent_id asc | take 1000")
             , ("rows", rows, "| summarize count(*) by bin_auto(timestamp)")
             , ("rows", rows, "| summarize count() / 5.0 by bin_auto(timestamp)")
@@ -109,7 +109,6 @@ spec = do
       query `shouldSatisfy` T.isInfixOf "ORDER BY timestamp asc"
       query `shouldNotSatisfy` T.isInfixOf "ORDER BY timestamp desc"
 
-
     it "scalar summarize keeps its aggregate numeric (no ::text cast)" do
       -- Regression: the grouped shape casts aggregates to text for the DTText
       -- decoder, but a `by`-less summarize is read as a float. Casting it broke
@@ -133,8 +132,6 @@ spec = do
           sql = fromMaybe "" c.finalSummarizeQuery
       sql `shouldSatisfy` T.isInfixOf "COALESCE((name)::text, 'null')"
       sql `shouldSatisfy` T.isInfixOf "::text"
-
-
 
     it "keeps non-time groups in binned table results" do
       let (query, components) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize count() by bin_auto(timestamp), level"
@@ -187,7 +184,7 @@ spec = do
           alertSql q = T.toLower $ normT $ fromMaybe "" $ snd (fromRight' $ parseQueryToComponents cfg q) & (.finalAlertQuery)
           sql = alertSql "metrics | summarize hits = count(), total = sum(value) by bin_auto(timestamp) | extend hit_pct = 100.0 * hits / total"
       -- Must evaluate only hit_pct inside GREATEST(...), not GREATEST(hit_pct, hits, total)
-      sql `shouldSatisfy` T.isInfixOf "greatest(((100.0 * count(*)::float) / sum((value)::float))::float)::float8"
+      sql `shouldSatisfy` T.isInfixOf "greatest((((100.0 * count(*)::float) / nullif(sum((value)::float), 0)))::float)::float8"
 
     it "alert queries evaluate the extreme quantile for percentiles in the alert direction" do
       let aboveCfg = defSqlQueryCfg defPid fixedUTCTime Nothing Nothing
@@ -196,8 +193,6 @@ spec = do
           q = "| summarize percentiles(duration, 50, 75, 90, 95, 99) by bin_auto(timestamp)"
       alertSql aboveCfg q `shouldSatisfy` T.isInfixOf "approx_percentile(0.99"
       alertSql belowCfg q `shouldSatisfy` T.isInfixOf "approx_percentile(0.5"
-
-
 
     it "PostgreSQL metrics source uses native JSONB dimensions" do
       let cfg = defSqlQueryCfg defPid fixedUTCTime (Just SMetrics) Nothing
@@ -270,7 +265,6 @@ spec = do
 WITH bucket_digests AS (SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer AS timeB, percentile_agg(CAST(duration AS DOUBLE PRECISION)) AS digest FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY timeB HAVING COUNT(*) > 0) SELECT b.timeB, q.quantile, COALESCE(approx_percentile(q.percentile, b.digest), 0)::float AS value FROM bucket_digests b CROSS JOIN (VALUES (0.5, 'p50'), (0.9, 'p90')) AS q(percentile, quantile) ORDER BY b.timeB DESC, q.quantile
             |]
       normT sql `shouldBe` normT expected
-
 
   describe "countif parsing" do
     it "parses countif with simple condition" do
@@ -527,7 +521,6 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let result = parseQueryToAST "| extend cat = case(attributes.http.response.status_code >= 500, \"5xx\", \"ok\"), formatted = tostring(attributes.http.response.status_code)"
       isRight result `shouldBe` True
 
-
   describe "project operator" do
     it "parses project with single column" do
       let result = parseQueryToAST "| project service = resource.service.name"
@@ -580,8 +573,6 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
             |]
       normT sql `shouldBe` normT expected
 
-
-
     it "parses named nested aggregation in summarize" do
       let result = parseQueryToAST "| summarize error_pct = round(countif(attributes.http.response.status_code >= 500), 2) by bin(timestamp, 1h)"
       isRight result `shouldBe` True
@@ -594,7 +585,6 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', ROUND((COUNT(*) FILTER (WHERE attributes___http___response___status_code >= 500)::float)::numeric, 2)::float AS error_pct FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
-
 
   describe "round validation" do
     it "rejects decimals > 15" do
@@ -631,7 +621,6 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let result = parseQueryToAST "name != null and kind == \"server\" and (status_code == \"ERROR\" or coalesce(attributes.http.response.status_code, 0) >= 400)"
       isRight result `shouldBe` True
 
-
     -- The list projects `errors` as a computed boolean, so `errors == true` is what a reader
     -- writes next. It used to reach the raw payload column and fail the whole query with
     -- "Cannot infer common argument type for comparison operation Utf8View = Boolean" on
@@ -657,17 +646,13 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let result = parseQueryToAST "isnotnull(trace_id) and status_code == 200"
       isRight result `shouldBe` True
 
-
-
     it "parses toint in filter comparison" do
       let result = parseQueryToAST "toint(status_code) >= 400"
       isRight result `shouldBe` True
 
-
     it "parses nested scalar functions" do
       let result = parseQueryToAST "toint(coalesce(status_code, 0)) >= 400"
       isRight result `shouldBe` True
-
 
   describe "edge case handling" do
     it "handles large numbers (PostgreSQL handles overflow)" do
@@ -699,7 +684,6 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
     it "handles deeply nested functions" do
       let result = parseQueryToAST "| summarize round(tofloat(coalesce(duration, 0)), 2) by bin_auto(timestamp)"
       isRight result `shouldBe` True
-
 
     it "handles unicode in string literals" do
       let result = parseQueryToAST "| where name == \"café\""

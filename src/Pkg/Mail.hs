@@ -193,7 +193,7 @@ sendWhatsAppAlert alert pid pTitle numbers = do
   where
     -- Twilio template button URL suffix ({{2}}/{{4}}): must stay exact, never silently fall back to "/p/..."
     issuePath h = pid.toText <> "/issues/by_hash/" <> h
-    (invalid, tos) = partitionEithers [maybeToRight n (Notify.parsePhoneE164 n) | n <- V.toList numbers]
+    (invalid, tos) = Notify.partitionPhones numbers
     sendAlert template vars = for_ tos \to -> Notify.sendNotification $ Notify.whatsappNotification template to vars
     sendMonitor templateM status title url = case templateM of
       Nothing -> Log.logAttention "WhatsApp monitor alert skipped: WHATSAPP_MONITOR_TEMPLATE is not configured" $ AE.object ["project_id" AE..= pid, "status" AE..= status]

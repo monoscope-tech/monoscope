@@ -1314,7 +1314,7 @@ assertHandleAllowed h
 
 -- | Twilio only delivers to E.164 numbers; refuse the rest at the boundary instead of failing every alert.
 phonesE164 :: [Text] -> ATBaseCtx (V.Vector Text)
-phonesE164 ns = case partitionEithers [maybeToRight n (Notify.parsePhoneE164 n) | n <- ns] of
+phonesE164 ns = case Notify.partitionPhones ns of
   ([], ok) -> pure $ V.fromList ok
   (bad, _) -> refuse $ InvalidRequest $ "Phone numbers must be E.164, e.g. +2348012345678: " <> T.intercalate ", " bad
 

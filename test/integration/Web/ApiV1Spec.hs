@@ -362,6 +362,9 @@ spec = describe "API v1" do
       (.summary.id) <$> runB (ApiH.apiTeamGet testPid created.summary.id) `shouldReturn` created.summary.id
       (.summary.name) <$> runB (ApiH.apiTeamPatch testPid created.summary.id (ApiT.TeamPatch (Just "ops-v2") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing)) `shouldReturn` "ops-v2"
       (runB (ApiH.apiTeamCreate testPid (team "everyone" "everyone")) >>= evaluateWHNF_) `shouldThrow` anyException
+      -- Twilio only delivers to E.164: a local-format number is refused, a formatted one stored normalised.
+      (runB (ApiH.apiTeamCreate testPid (ApiT.TeamInput "wa" "wa" Nothing Nothing Nothing Nothing Nothing (Just ["01786322266"]) Nothing)) >>= evaluateWHNF_) `shouldThrow` anyException
+      (.phoneNumbers) <$> runB (ApiH.apiTeamPatch testPid created.summary.id (ApiT.TeamPatch Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just ["+234 816-111-5653"]) Nothing)) `shouldReturn` ["+2348161115653"]
       runB (ApiH.apiTeamsList testPid) >>= (`shouldSatisfy` any (.isEveryone))
       NoContent <- runB $ ApiH.apiTeamDelete testPid created.summary.id
       t1 <- runB $ ApiH.apiTeamCreate testPid (team "t-a" "t-a")

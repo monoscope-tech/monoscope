@@ -31,6 +31,7 @@ module Data.Effectful.Notify (
   withSlackContext,
   whatsappNotification,
   parsePhoneE164,
+  partitionPhones,
   discordNotification,
   discordThreadedNotification,
   discordNoMentions,
@@ -269,9 +270,14 @@ whatsappNotification template to vars =
 -- [Just "+2348161115653",Nothing,Nothing,Just "+15550001234",Nothing]
 parsePhoneE164 :: Text -> Maybe Text
 parsePhoneE164 raw = do
-  digits <- T.stripPrefix "+" $ T.filter (`notElem` (" -.()" :: String)) raw
+  digits <- T.stripPrefix "+" $ T.filter (not . (`T.elem` " -.()")) raw
   guard $ T.all isDigit digits && inRange (8, 15) (T.length digits) && not ("0" `T.isPrefixOf` digits)
   pure $ "+" <> digits
+
+
+-- | (rejected as written, accepted as E.164).
+partitionPhones :: Foldable f => f Text -> ([Text], [Text])
+partitionPhones ns = partitionEithers [maybeToRight n (parsePhoneE164 n) | n <- toList ns]
 
 
 -- | PagerDuty rejects the whole event when @summary@ passes 1024 chars or @dedup_key@ 255 (400

@@ -329,8 +329,8 @@ normalizeMessage msg =
 --
 -- >>> normalizeExceptionType "HttpExceptionRequest Request {\n  host = \"api.twilio.com\"\n  requestHeaders = [(\"traceparent\",\"00-4d40\")]"
 -- "HttpExceptionRequest"
--- >>> map normalizeExceptionType ["System.IO.IOException", "Uncaught TypeError", ""]
--- ["System.IO.IOException","Uncaught TypeError",""]
+-- >>> map normalizeExceptionType ["System.IO.IOException", "Uncaught TypeError", "", "(Foo\nbar)"]
+-- ["System.IO.IOException","Uncaught TypeError","","(Foo\nbar)"]
 --
 -- >>> let dump tp = "HttpExceptionRequest Request {\n  host = \"api.twilio.com\"\n  requestHeaders = [(\"traceparent\",\"" <> tp <> "\")]\n}"
 -- >>> let hashFor tp = (computeErrorHashes "p" (Just "svc") (Just "POST") RGeneric (normalizeExceptionType (dump tp)) (dump tp) "").narrow
@@ -338,7 +338,7 @@ normalizeMessage msg =
 -- True
 normalizeExceptionType :: Text -> Text
 normalizeExceptionType t
-  | T.any (== '\n') t || T.compareLength t 200 == GT = T.takeWhile (\c -> isAlphaNum c || c `elem` ("._:$" :: String)) $ T.stripStart t
+  | T.any (== '\n') t || T.compareLength t 200 == GT, ident@(T.uncons -> Just _) <- T.takeWhile (\c -> isAlphaNum c || T.elem c "._:$") $ T.stripStart t = ident
   | otherwise = t
 
 

@@ -703,7 +703,8 @@ avatarGetH userId _ send = do
       -- The picture URL is an IdP claim this anonymous route fetches: the probe manager refuses
       -- internal addresses (redirects included), times out and caps the body.
       -- A missing picture (Gravatar's d=404) is an answer, not a failure: read the status instead
-      -- of letting wreq throw, which marked every such fetch an error span and filed issues.
+      -- of letting wreq throw, which marked every such fetch an error span and filed issues. Any
+      -- non-2xx, an IdP's 5xx included, falls back the same way.
       fetchImage url ct cache fallback =
         handle (\(_ :: SomeException) -> fallback)
           $ Wreq.getWith (Wreq.defaults & W.manager .~ Right ctx.probeManager & W.checkResponse ?~ (\_ _ -> pass)) (toString url)
