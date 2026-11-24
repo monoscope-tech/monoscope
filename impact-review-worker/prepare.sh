@@ -30,7 +30,15 @@ if [ -f cabal.project ] && has cabal; then
     # `cabal build`/`cabal test` here (the agent's checks) reuses this build instead of reconfiguring.
     printf 'tests: True\noptimization: False\npackage monoscope\n  ghc-options: -j4\n' > cabal.project.local
     try cabal build exe:monoscope-server test:integration-tests --offline
-  else try cabal update && try cabal build all --enable-tests --ghc-options=-O0; fi
+  else
+    # Template Haskell often embeds built assets (Talstack hashes its Tailwind output), so build them first.
+    for target in css assets frontend; do [ -f Makefile ] && grep -q "^$target:" Makefile && try make "$target"; done
+    # As above, later plain cabal commands reuse this build only if its configuration is in a file;
+    # written only where the repository ignores it, so the tracked tree stays as reviewed.
+    flags=(--enable-tests --ghc-options=-O0)
+    if [ ! -f cabal.project.local ] && git -c safe.directory='*' check-ignore -q cabal.project.local; then printf 'tests: True\noptimization: False\n' > cabal.project.local && flags=(); fi
+    try cabal update && try cabal build all "${flags[@]}"
+  fi
 elif [ -f stack.yaml ] && has stack; then try stack build --test --no-run-tests --fast
 fi
 
