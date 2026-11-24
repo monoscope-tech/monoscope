@@ -526,7 +526,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
     retire run = whenJustM (Reviews.getRun run.id) \latest ->
       stopProgress run
         $ if latest.latestRevision /= run.revision
-          then "A newer commit, `" <> T.take 8 latest.latestRevision <> "`, replaced this review before its proofs finished."
+          then "A newer commit, " <> T.take 8 latest.latestRevision <> ", replaced this review before its proofs finished."
           else "The pull request was closed, merged or moved out of review before the proofs finished."
     -- A review that stops for good says so in its progress comment instead of leaving it running.
     stopProgress :: Reviews.ReviewRun -> Text -> ATBackgroundCtx ()
