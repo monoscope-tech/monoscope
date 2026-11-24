@@ -597,7 +597,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     editors <- forM [(w, tab) | (w, tabs) <- zip (mapMaybe (.id) stored) [[Nothing, Just "alerts"], [Nothing], [Nothing]], tab <- tabs] \(wid, tab) ->
       call tr $ Dashboards.dashboardWidgetExpandGetH testPid dashId wid tab
     -- Per editor: tab radios, actions, seeded widget type, step order, thresholds, monitor form.
-    goldenParts "dashboard-widget-editor" $ foldMap (elementsWith ["-drawer-tab\"", "type=\"submit\" form=\"", "Add widget and monitor", "var widgetJSON", "widget-preview-heading", "Configure query", "Name your widget", "Widget name", "class=\"group/thresholds", "name=\"alertThreshold\"", "empty-state"] . renderT) (newEditor : editors)
+    goldenParts "dashboard-widget-editor" $ foldMap (elementsWith ["-drawer-tab\"", "type=\"submit\" form=\"", "Add widget and monitor", "var widgetJSON", "widget-preview-heading", "Configure query", "Name your widget", "Widget name", "Chart thresholds", "id=\"widgetUnit\"", "id=\"widgetWarningThreshold\"", "id=\"widgetAlertThreshold\"", "id=\"widgetShowThresholdLines\"", "name=\"alertThreshold\"", "empty-state"] . renderT) (newEditor : editors)
 
   it "raw-SQL widgets decode any column type, stream what JSON returns, and route by store" \tr -> do
     -- One uncast column failed the whole widget with `Incompatible {errSQLType = "int4"}`.

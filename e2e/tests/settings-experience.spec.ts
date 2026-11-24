@@ -110,14 +110,14 @@ for (const theme of ['light', 'dark']) test(`storage preserves a saved connectio
     await expect(page.locator('#storage-connection-content')).toHaveCount(1);
     expect(sql(`SELECT s3_bucket->>'bucket' FROM projects.projects WHERE id = '${pid}'`).toString().trim()).toBe('fixture-bucket');
     await page.screenshot({ path: testInfo.outputPath('storage-rejected-replacement.png'), fullPage: true });
-    await page.locator('label[for="remove-modal"]').first().click();
+    await page.locator('#remove-modal-trigger').click();
     await page.getByRole('button', { name: 'Remove bucket', exact: true }).click();
     await expect(page.locator('#connectedInd')).toHaveText('Not connected');
     await expect(page.getByRole('alert')).toHaveCount(0);
     await expect(page.locator('#secretKey')).toHaveValue('');
     await expect(page.locator('#accessKey')).toHaveValue('');
     await expect(page.locator('#bucket')).toHaveValue('');
-    await expect(page.locator('label[for="remove-modal"]')).toHaveCount(0);
+    await expect(page.locator('#remove-modal-trigger')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Validate & Save', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Dismiss notification', exact: true }).click();
     await page.locator('#accessKey').fill('replacement-access');
@@ -137,7 +137,7 @@ for (const theme of ['light', 'dark']) test(`storage preserves a saved connectio
          UPDATE projects.project_members SET permission = 'view' WHERE project_id = '${pid}' AND user_id = '${uid}';`);
     await page.reload();
     await expect(page.getByText('fixture-bucket', { exact: true })).toBeVisible();
-    await expect(page.locator('#accessKey, #secretKey, label[for="remove-modal"]')).toHaveCount(0);
+    await expect(page.locator('#accessKey, #secretKey, #remove-modal-trigger')).toHaveCount(0);
     expect(await page.content()).not.toContain('fixture-secret');
     expect((await page.request.delete(`/p/${pid}/byob_s3`)).status()).toBe(403);
     expect((await page.request.post(`/p/${pid}/byob_s3`, { form: { accessKey: 'fixture', secretKey: 'fixture', region: 'us-east-1', bucket: 'INVALID_bucket', endpointUrl: '' } })).status()).toBe(403);

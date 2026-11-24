@@ -105,6 +105,7 @@ import Data.Aeson.KeyMap qualified as AEKM
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
+import Data.Effectful.Notify qualified as Notify
 import Data.Effectful.UUID qualified as UUID
 import Data.Generics.Labels ()
 import Data.Generics.Product.Subtype (upcast)
@@ -1283,6 +1284,7 @@ teamDetailsFromInput pid inp = do
   when (T.null inp.name) $ refuse $ Required "name"
   assertHandleAllowed inp.handle
   assertDiscordChannelsOwned pid (fold inp.discordChannels)
+  phoneNumbers <- phonesE164 (fold inp.phoneNumbers)
   pure
     PM.TeamDetails
       { name = inp.name
@@ -1292,7 +1294,7 @@ teamDetailsFromInput pid inp = do
       , notifyEmails = vml inp.notifyEmails
       , slackChannels = vml inp.slackChannels
       , discordChannels = vml inp.discordChannels
-      , phoneNumbers = vml inp.phoneNumbers
+      , phoneNumbers
       , pagerdutyServices = vml inp.pagerdutyServices
       , disabledChannels = V.empty
       }
@@ -1308,6 +1310,13 @@ assertHandleAllowed h
       refuse ReservedHandle
   | T.null h = refuse $ Required "handle"
   | otherwise = pass
+
+
+-- | Twilio only delivers to E.164 numbers; refuse the rest at the boundary instead of failing every alert.
+phonesE164 :: [Text] -> ATBaseCtx (V.Vector Text)
+phonesE164 ns = case Notify.partitionPhones ns of
+  ([], ok) -> pure $ V.fromList ok
+  (bad, _) -> refuse $ InvalidRequest $ "Phone numbers must be E.164, e.g. +2348012345678: " <> T.intercalate ", " bad
 
 
 assertDiscordChannelsOwned :: Projects.ProjectId -> [Text] -> ATBaseCtx ()
@@ -1332,6 +1341,7 @@ apiTeamPatch pid tid p = do
   t <- fetchEditableTeam pid tid
   whenJust p.handle assertHandleAllowed
   assertDiscordChannelsOwned pid (fold p.discordChannels)
+  phonesM <- traverse phonesE164 p.phoneNumbers
   let merged =
         (PM.teamToDetails t)
           { PM.name = fromMaybe t.name p.name
@@ -1341,7 +1351,7 @@ apiTeamPatch pid tid p = do
           , PM.notifyEmails = maybe t.notify_emails V.fromList p.notifyEmails
           , PM.slackChannels = maybe t.slack_channels V.fromList p.slackChannels
           , PM.discordChannels = maybe t.discord_channels V.fromList p.discordChannels
-          , PM.phoneNumbers = maybe t.phone_numbers V.fromList p.phoneNumbers
+          , PM.phoneNumbers = fromMaybe t.phone_numbers phonesM
           , PM.pagerdutyServices = maybe t.pagerduty_services V.fromList p.pagerdutyServices
           }
   _ <- PM.updateTeam pid tid merged

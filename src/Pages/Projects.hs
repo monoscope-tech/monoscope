@@ -67,6 +67,7 @@ import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isAlphaNum, isDigit, isLower)
 import Data.Default (Default (..))
+import Data.Effectful.Notify qualified as Notify
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq
 import Data.Effectful.Wreq qualified as W
@@ -354,7 +355,7 @@ integrationsSaved :: Projects.ProjectId -> IntegrationChange -> ATAuthCtx Integr
 integrationsSaved pid change = IntegrationsSaved change . (.content) <$> integrationsPage pid
 
 
-data ChannelsRejection = UnknownChannel | DiscordNotConnected | SlackNotConnected | PhoneNumberRequired
+data ChannelsRejection = UnknownChannel | DiscordNotConnected | SlackNotConnected | PhoneNumberRequired | InvalidPhoneNumbers [Text]
   deriving stock (Eq, Show)
 
 
@@ -364,6 +365,7 @@ instance Refusal ChannelsRejection where
     DiscordNotConnected -> "You need to connect Discord to this project first."
     SlackNotConnected -> "You need to connect Slack to this project first."
     PhoneNumberRequired -> "Provide at least one whatsapp number"
+    InvalidPhoneNumbers ns -> "Use the international format with a country code (e.g. +2348012345678): " <> T.intercalate ", " ns
 
 
 data PagerdutyKeyTooShort = PagerdutyKeyTooShort
@@ -379,7 +381,7 @@ data SlackNotInstalled = SlackNotInstalled
 updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (ActionResult ChannelsRejection IntegrationsSaved)
 updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, slackChannels, includeUserIdentityInAlerts} = act do
   void $ ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PEdit pid
-  validateNotificationChannels pid enabledChannels phones >>= traverse \() -> do
+  validateNotificationChannels pid enabledChannels phones >>= traverse \validPhones -> do
     projectM <- Projects.projectById pid
     slackInfoM <- getProjectSlackData pid
     everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
@@ -420,7 +422,7 @@ updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, sl
         $ (ProjectMembers.teamToDetails team)
           { ProjectMembers.slackChannels = V.fromList $ filter (`notElem` unreachable) requested
           , ProjectMembers.notifyEmails = V.fromList emails
-          , ProjectMembers.phoneNumbers = V.fromList phones
+          , ProjectMembers.phoneNumbers = V.fromList validPhones
           , ProjectMembers.disabledChannels = V.fromList $ filter (`notElem` enabledChannels) allChannels
           }
 
@@ -430,13 +432,17 @@ updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, sl
     integrationsSaved pid ChannelsUpdated
 
 
-validateNotificationChannels :: Projects.ProjectId -> [Text] -> [Text] -> ATAuthCtx (Either ChannelsRejection ())
+-- | Right carries the phone numbers normalised to E.164.
+validateNotificationChannels :: Projects.ProjectId -> [Text] -> [Text] -> ATAuthCtx (Either ChannelsRejection [Text])
 validateNotificationChannels _ enabledChannels _
   | any (`notElem` allChannels) enabledChannels = pure $ Left UnknownChannel
 validateNotificationChannels pid enabledChannels phones = do
   discord <- requireIntegration "discord" DiscordNotConnected enabledChannels (getDiscordDataByProjectId pid)
   slack <- requireIntegration "slack" SlackNotConnected enabledChannels (getProjectSlackData pid)
-  pure $ discord *> slack *> when ("phone" `elem` enabledChannels && null phones) (Left PhoneNumberRequired)
+  -- Numbers are checked only while WhatsApp is on: a stale one must not block saving other channels.
+  let phoneOn = "phone" `elem` enabledChannels
+      (invalid, valid) = Notify.partitionPhones phones
+  pure $ discord *> slack *> when (phoneOn && null phones) (Left PhoneNumberRequired) *> when (phoneOn && not (null invalid)) (Left $ InvalidPhoneNumbers invalid) $> bool phones valid phoneOn
 
 
 -- | Resolve the live Slack channel list for an (already-fetched) SlackData.

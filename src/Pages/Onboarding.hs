@@ -28,6 +28,7 @@ import Data.Aeson.Lens (key, _Array, _String)
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.Notify qualified as Notify
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W (get, responseBody)
 import Data.Text qualified as T
@@ -52,7 +53,7 @@ import Pages.Components
 import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, ActionResult, Done, HXRedirectDest, HXReswap, Outcome (..), Refusal (..), RespHeaders, Says (..), TriggerEvents, XWidgetJSON, act, addRespHeaders, addTriggerEvent, done)
+import System.Types (ATAuthCtx, ActionResult, Done, HXRedirectDest, HXReswap, Outcome (..), Refusal (..), RespHeaders, Says (..), TriggerEvents, XWidgetJSON, act, addErrorToast, addRespHeaders, addTriggerEvent, done)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, lookupValueText)
 import Web.FormUrlEncoded
 import Web.Links
@@ -269,7 +270,9 @@ phoneEmailPostH pid form = do
   memberEmails <- map (CI.original . (.email)) <$> Projects.usersByProjectId pid
   markStepCompleted pid $ show NotifChannel
   ProjectMembers.setEveryoneTeamEmails pid (V.fromList form.emails)
-  unless (T.null form.phoneNumber) $ ProjectMembers.setEveryoneTeamPhones pid (V.fromList [form.phoneNumber])
+  unless (T.null $ T.strip form.phoneNumber) $ case Notify.parsePhoneE164 form.phoneNumber of
+    Just phone -> ProjectMembers.setEveryoneTeamPhones pid (V.fromList [phone])
+    Nothing -> addErrorToast "Phone number not saved: use the international format with a country code, e.g. +2348012345678" Nothing
   addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ form.emails <> memberEmails) appCtx.config.enableFreetier
 
 

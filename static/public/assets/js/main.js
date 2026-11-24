@@ -126,6 +126,14 @@ window.labelDrawer = (drawer) => {
   drawer.removeAttribute('aria-label')
 }
 
+// htmx 4 fires htmx:after:swap on the requesting element, which for a drawer opened from the
+// page (a host tile, a table row) is outside the drawer, so only a document listener sees it.
+document.addEventListener('htmx:after:swap', () => {
+  document.querySelectorAll('.drawer-toggle:checked').forEach(toggle => {
+    window.labelDrawer(toggle.closest('.drawer')?.querySelector('[role="dialog"]'))
+  })
+})
+
 /**
  * Isolate focus and screen-reader navigation within a modal drawer.
  * @param {HTMLElement} container - The drawer's dialog panel

@@ -10,51 +10,15 @@
 <strong class="text-sm font-semibold text-textStrong">Name your widget</strong>
 <label class="label text-xs text-textStrong" for="idnewWidge-widget-title-input">Widget name<span class="text-textError">*</span>
 </label>
-<details class="group/thresholds rounded-lg border border-strokeWeak bg-fillWeaker">
-<summary class="flex min-h-11 cursor-pointer list-none items-center gap-3 rounded-lg px-3 hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong transition-colors motion-reduce:transition-none">
-<span class="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-fillWeak text-xs font-semibold tabular-nums text-textStrong">3</span>
-<strong class="text-sm font-semibold text-textStrong">Chart thresholds</strong>
-<span class="text-xs text-textWeak">Optional</span>
-<svg class="icon ml-auto size-3.5 shrink-0 text-iconNeutral transition-transform group-open/thresholds:rotate-180 motion-reduce:transition-none" width="1em" height="1em" viewBox="0 0 512 512">
-<g>
-<path d="M239 401c9.4 9.4 24.6 9.4 33.9 0L465 209c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-175 175L81 175c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9L239 401z" fill="currentColor" />
-</g>
-</svg>
-</summary>
-<div class="space-y-3 border-t border-strokeWeak p-3">
-<p class="text-xs text-textWeak">Limits shown on the chart, even without a monitor.</p>
-<div class="max-w-xs">
-<fieldset class="fieldset flex-1 min-w-0">
-<label class="label text-xs text-textStrong" for="widgetUnit">Measurement unit</label>
+<span class="text-sm font-medium text-textStrong">Chart thresholds</span>
 <input class="input input-sm w-full" value="ms" name="widgetUnit" id="widgetUnit" type="text" placeholder="e.g. ms, requests/s" hx-on:input="widgetJSON.unit = this.value || null" hx-on:change="htmx.trigger(document.getElementById(&#39;idnewWidge-widget-preview&#39;), &#39;update-widget&#39;)">
-</fieldset>
-</div>
-<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-<fieldset class="fieldset flex-1 min-w-0">
-<label class="label text-xs text-textStrong" for="widgetWarningThreshold">
-<div class="w-1.5 h-1.5 rounded-full shrink-0 bg-fillWarning-strong">
-</div>Warning threshold</label>
 <input class="input input-sm w-full" value name="widgetWarningThreshold" id="widgetWarningThreshold" type="number" placeholder step="any" hx-on:input="widgetJSON.warning_threshold = this.value || null" hx-on:change="widgetJSON.warning_threshold = this.value === &#39;&#39; ? null : Number(this.value); htmx.trigger(document.getElementById(&#39;idnewWidge-widget-preview&#39;), &#39;update-widget&#39;)">
-</fieldset>
-<fieldset class="fieldset flex-1 min-w-0">
-<label class="label text-xs text-textStrong" for="widgetAlertThreshold">
-<div class="w-1.5 h-1.5 rounded-full shrink-0 bg-fillError-strong">
-</div>Alert threshold</label>
 <input class="input input-sm w-full" value name="widgetAlertThreshold" id="widgetAlertThreshold" type="number" placeholder step="any" hx-on:input="widgetJSON.alert_threshold = this.value || null" hx-on:change="widgetJSON.alert_threshold = this.value === &#39;&#39; ? null : Number(this.value); htmx.trigger(document.getElementById(&#39;idnewWidge-widget-preview&#39;), &#39;update-widget&#39;)">
-</fieldset>
-</div>
-<div class="max-w-xs" hx-on:change="widgetJSON.show_threshold_lines = event.target.value; htmx.trigger(document.getElementById(&#39;idnewWidge-widget-preview&#39;), &#39;update-widget&#39;)">
-<fieldset class="fieldset flex-1 min-w-0">
-<label class="label text-xs text-textStrong" for="widgetShowThresholdLines">Show threshold lines</label>
 <select class="select select-sm w-full cursor-pointer" name="widgetShowThresholdLines" id="widgetShowThresholdLines">
 <option value="always" selected>Always</option>
 <option value="on_breach">Only when breached</option>
 <option value="never">Never</option>
 </select>
-</fieldset>
-</div>
-</div>
-</details>
 <input class="input input-sm w-full" value name="alertThreshold" id="alertThreshold" type="number" placeholder required="true" step="any" hx-on:input="widgetJSON.alert_threshold = this.value || null" hx-on:change="widgetJSON.alert_threshold = this.value === &#39;&#39; ? null : Number(this.value); htmx.trigger(document.getElementById(&#39;idnewWidge-widget-preview&#39;), &#39;update-widget&#39;)">
 <input type="radio" value="Edit" class="sr-only page-drawer-tab-edit" id="id00000000-tab-edit" name="<uuid>Expanded-drawer-tab" checked>
 <input type="radio" value="Monitors" class="sr-only page-drawer-tab-monitors" id="id00000000-tab-monitors" name="<uuid>Expanded-drawer-tab">
@@ -70,51 +34,15 @@
 <strong class="text-sm font-semibold text-textStrong">Name your widget</strong>
 <label class="label text-xs text-textStrong" for="id00000000-widget-title-input">Widget name<span class="text-textError">*</span>
 </label>
-<details class="group/thresholds rounded-lg border border-strokeWeak bg-fillWeaker" open>
-<summary class="flex min-h-11 cursor-pointer list-none items-center gap-3 rounded-lg px-3 hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong transition-colors motion-reduce:transition-none">
-<span class="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-fillWeak text-xs font-semibold tabular-nums text-textStrong">3</span>
-<strong class="text-sm font-semibold text-textStrong">Chart thresholds</strong>
-<span class="text-xs text-textWeak">Optional</span>
-<svg class="icon ml-auto size-3.5 shrink-0 text-iconNeutral transition-transform group-open/thresholds:rotate-180 motion-reduce:transition-none" width="1em" height="1em" viewBox="0 0 512 512">
-<g>
-<path d="M239 401c9.4 9.4 24.6 9.4 33.9 0L465 209c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-175 175L81 175c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9L239 401z" fill="currentColor" />
-</g>
-</svg>
-</summary>
-<div class="space-y-3 border-t border-strokeWeak p-3">
-<p class="text-xs text-textWeak">Limits shown on the chart, even without a monitor.</p>
-<div class="max-w-xs">
-<fieldset class="fieldset flex-1 min-w-0">
-<label class="label text-xs text-textStrong" for="widgetUnit">Measurement unit</label>
+<span class="text-sm font-medium text-textStrong">Chart thresholds</span>
 <input class="input input-sm w-full" value="requests/s" name="widgetUnit" id="widgetUnit" type="text" placeholder="e.g. ms, requests/s" hx-on:input="widgetJSON.unit = this.value || null" hx-on:change="htmx.trigger(document.getElementById(&#39;id00000000-widget-preview&#39;), &#39;update-widget&#39;)" hx-live:value="widgetJSON.unit ?? &#39;&#39;">
-</fieldset>
-</div>
-<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-<fieldset class="fieldset flex-1 min-w-0">
-<label class="label text-xs text-textStrong" for="widgetWarningThreshold">
-<div class="w-1.5 h-1.5 rounded-full shrink-0 bg-fillWarning-strong">
-</div>Warning threshold</label>
 <input class="input input-sm w-full" value="7.0" name="widgetWarningThreshold" id="widgetWarningThreshold" type="number" placeholder step="any" hx-on:input="widgetJSON.warning_threshold = this.value || null" hx-on:change="widgetJSON.warning_threshold = this.value === &#39;&#39; ? null : Number(this.value); htmx.trigger(document.getElementById(&#39;id00000000-widget-preview&#39;), &#39;update-widget&#39;)" hx-live:value="widgetJSON.warning_threshold ?? &#39;&#39;">
-</fieldset>
-<fieldset class="fieldset flex-1 min-w-0">
-<label class="label text-xs text-textStrong" for="widgetAlertThreshold">
-<div class="w-1.5 h-1.5 rounded-full shrink-0 bg-fillError-strong">
-</div>Alert threshold</label>
 <input class="input input-sm w-full" value="10.0" name="widgetAlertThreshold" id="widgetAlertThreshold" type="number" placeholder step="any" hx-on:input="widgetJSON.alert_threshold = this.value || null" hx-on:change="widgetJSON.alert_threshold = this.value === &#39;&#39; ? null : Number(this.value); htmx.trigger(document.getElementById(&#39;id00000000-widget-preview&#39;), &#39;update-widget&#39;)" hx-live:value="widgetJSON.alert_threshold ?? &#39;&#39;">
-</fieldset>
-</div>
-<div class="max-w-xs" hx-on:change="widgetJSON.show_threshold_lines = event.target.value; htmx.trigger(document.getElementById(&#39;id00000000-widget-preview&#39;), &#39;update-widget&#39;)">
-<fieldset class="fieldset flex-1 min-w-0">
-<label class="label text-xs text-textStrong" for="widgetShowThresholdLines">Show threshold lines</label>
 <select class="select select-sm w-full cursor-pointer" name="widgetShowThresholdLines" id="widgetShowThresholdLines">
 <option value="always" selected>Always</option>
 <option value="on_breach">Only when breached</option>
 <option value="never">Never</option>
 </select>
-</fieldset>
-</div>
-</div>
-</details>
 <input class="input input-sm w-full" value="10.0" name="alertThreshold" id="alertThreshold" type="number" placeholder required="true" step="any" hx-on:input="widgetJSON.alert_threshold = this.value || null" hx-on:change="widgetJSON.alert_threshold = this.value === &#39;&#39; ? null : Number(this.value); htmx.trigger(document.getElementById(&#39;id00000000-widget-preview&#39;), &#39;update-widget&#39;)" hx-live:value="widgetJSON.alert_threshold ?? &#39;&#39;">
 <input type="radio" value="Edit" class="sr-only page-drawer-tab-edit" id="id00000000-tab-edit" name="<uuid>Expanded-drawer-tab">
 <input type="radio" value="Monitors" class="sr-only page-drawer-tab-monitors" id="id00000000-tab-monitors" name="<uuid>Expanded-drawer-tab" checked>
@@ -130,51 +58,15 @@
 <strong class="text-sm font-semibold text-textStrong">Name your widget</strong>
 <label class="label text-xs text-textStrong" for="id00000000-widget-title-input">Widget name<span class="text-textError">*</span>
 </label>
-<details class="group/thresholds rounded-lg border border-strokeWeak bg-fillWeaker" open>
-<summary class="flex min-h-11 cursor-pointer list-none items-center gap-3 rounded-lg px-3 hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong transition-colors motion-reduce:transition-none">
-<span class="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-fillWeak text-xs font-semibold tabular-nums text-textStrong">3</span>
-<strong class="text-sm font-semibold text-textStrong">Chart thresholds</strong>
-<span class="text-xs text-textWeak">Optional</span>
-<svg class="icon ml-auto size-3.5 shrink-0 text-iconNeutral transition-transform group-open/thresholds:rotate-180 motion-reduce:transition-none" width="1em" height="1em" viewBox="0 0 512 512">
-<g>
-<path d="M239 401c9.4 9.4 24.6 9.4 33.9 0L465 209c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-175 175L81 175c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9L239 401z" fill="currentColor" />
-</g>
-</svg>
-</summary>
-<div class="space-y-3 border-t border-strokeWeak p-3">
-<p class="text-xs text-textWeak">Limits shown on the chart, even without a monitor.</p>
-<div class="max-w-xs">
-<fieldset class="fieldset flex-1 min-w-0">
-<label class="label text-xs text-textStrong" for="widgetUnit">Measurement unit</label>
+<span class="text-sm font-medium text-textStrong">Chart thresholds</span>
 <input class="input input-sm w-full" value="requests/s" name="widgetUnit" id="widgetUnit" type="text" placeholder="e.g. ms, requests/s" hx-on:input="widgetJSON.unit = this.value || null" hx-on:change="htmx.trigger(document.getElementById(&#39;id00000000-widget-preview&#39;), &#39;update-widget&#39;)" hx-live:value="widgetJSON.unit ?? &#39;&#39;">
-</fieldset>
-</div>
-<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-<fieldset class="fieldset flex-1 min-w-0">
-<label class="label text-xs text-textStrong" for="widgetWarningThreshold">
-<div class="w-1.5 h-1.5 rounded-full shrink-0 bg-fillWarning-strong">
-</div>Warning threshold</label>
 <input class="input input-sm w-full" value="7.0" name="widgetWarningThreshold" id="widgetWarningThreshold" type="number" placeholder step="any" hx-on:input="widgetJSON.warning_threshold = this.value || null" hx-on:change="widgetJSON.warning_threshold = this.value === &#39;&#39; ? null : Number(this.value); htmx.trigger(document.getElementById(&#39;id00000000-widget-preview&#39;), &#39;update-widget&#39;)" hx-live:value="widgetJSON.warning_threshold ?? &#39;&#39;">
-</fieldset>
-<fieldset class="fieldset flex-1 min-w-0">
-<label class="label text-xs text-textStrong" for="widgetAlertThreshold">
-<div class="w-1.5 h-1.5 rounded-full shrink-0 bg-fillError-strong">
-</div>Alert threshold</label>
 <input class="input input-sm w-full" value="10.0" name="widgetAlertThreshold" id="widgetAlertThreshold" type="number" placeholder step="any" hx-on:input="widgetJSON.alert_threshold = this.value || null" hx-on:change="widgetJSON.alert_threshold = this.value === &#39;&#39; ? null : Number(this.value); htmx.trigger(document.getElementById(&#39;id00000000-widget-preview&#39;), &#39;update-widget&#39;)" hx-live:value="widgetJSON.alert_threshold ?? &#39;&#39;">
-</fieldset>
-</div>
-<div class="max-w-xs" hx-on:change="widgetJSON.show_threshold_lines = event.target.value; htmx.trigger(document.getElementById(&#39;id00000000-widget-preview&#39;), &#39;update-widget&#39;)">
-<fieldset class="fieldset flex-1 min-w-0">
-<label class="label text-xs text-textStrong" for="widgetShowThresholdLines">Show threshold lines</label>
 <select class="select select-sm w-full cursor-pointer" name="widgetShowThresholdLines" id="widgetShowThresholdLines">
 <option value="always" selected>Always</option>
 <option value="on_breach">Only when breached</option>
 <option value="never">Never</option>
 </select>
-</fieldset>
-</div>
-</div>
-</details>
 <input class="input input-sm w-full" value="10.0" name="alertThreshold" id="alertThreshold" type="number" placeholder required="true" step="any" hx-on:input="widgetJSON.alert_threshold = this.value || null" hx-on:change="widgetJSON.alert_threshold = this.value === &#39;&#39; ? null : Number(this.value); htmx.trigger(document.getElementById(&#39;id00000000-widget-preview&#39;), &#39;update-widget&#39;)" hx-live:value="widgetJSON.alert_threshold ?? &#39;&#39;">
 <input type="radio" value="Edit" class="sr-only page-drawer-tab-edit" id="id00000000-tab-edit" name="<uuid>Expanded-drawer-tab" checked>
 <input type="radio" value="Monitors" class="sr-only page-drawer-tab-monitors" id="id00000000-tab-monitors" name="<uuid>Expanded-drawer-tab">
@@ -204,51 +96,15 @@
 <strong class="text-sm font-semibold text-textStrong">Name your widget</strong>
 <label class="label text-xs text-textStrong" for="id00000000-widget-title-input">Widget name<span class="text-textError">*</span>
 </label>
-<details class="group/thresholds rounded-lg border border-strokeWeak bg-fillWeaker">
-<summary class="flex min-h-11 cursor-pointer list-none items-center gap-3 rounded-lg px-3 hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong transition-colors motion-reduce:transition-none">
-<span class="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-fillWeak text-xs font-semibold tabular-nums text-textStrong">3</span>
-<strong class="text-sm font-semibold text-textStrong">Chart thresholds</strong>
-<span class="text-xs text-textWeak">Optional</span>
-<svg class="icon ml-auto size-3.5 shrink-0 text-iconNeutral transition-transform group-open/thresholds:rotate-180 motion-reduce:transition-none" width="1em" height="1em" viewBox="0 0 512 512">
-<g>
-<path d="M239 401c9.4 9.4 24.6 9.4 33.9 0L465 209c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-175 175L81 175c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9L239 401z" fill="currentColor" />
-</g>
-</svg>
-</summary>
-<div class="space-y-3 border-t border-strokeWeak p-3">
-<p class="text-xs text-textWeak">Limits shown on the chart, even without a monitor.</p>
-<div class="max-w-xs">
-<fieldset class="fieldset flex-1 min-w-0">
-<label class="label text-xs text-textStrong" for="widgetUnit">Measurement unit</label>
+<span class="text-sm font-medium text-textStrong">Chart thresholds</span>
 <input class="input input-sm w-full" value name="widgetUnit" id="widgetUnit" type="text" placeholder="e.g. ms, requests/s" hx-on:input="widgetJSON.unit = this.value || null" hx-on:change="htmx.trigger(document.getElementById(&#39;id00000000-widget-preview&#39;), &#39;update-widget&#39;)" hx-live:value="widgetJSON.unit ?? &#39;&#39;">
-</fieldset>
-</div>
-<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-<fieldset class="fieldset flex-1 min-w-0">
-<label class="label text-xs text-textStrong" for="widgetWarningThreshold">
-<div class="w-1.5 h-1.5 rounded-full shrink-0 bg-fillWarning-strong">
-</div>Warning threshold</label>
 <input class="input input-sm w-full" value name="widgetWarningThreshold" id="widgetWarningThreshold" type="number" placeholder step="any" hx-on:input="widgetJSON.warning_threshold = this.value || null" hx-on:change="widgetJSON.warning_threshold = this.value === &#39;&#39; ? null : Number(this.value); htmx.trigger(document.getElementById(&#39;id00000000-widget-preview&#39;), &#39;update-widget&#39;)" hx-live:value="widgetJSON.warning_threshold ?? &#39;&#39;">
-</fieldset>
-<fieldset class="fieldset flex-1 min-w-0">
-<label class="label text-xs text-textStrong" for="widgetAlertThreshold">
-<div class="w-1.5 h-1.5 rounded-full shrink-0 bg-fillError-strong">
-</div>Alert threshold</label>
 <input class="input input-sm w-full" value name="widgetAlertThreshold" id="widgetAlertThreshold" type="number" placeholder step="any" hx-on:input="widgetJSON.alert_threshold = this.value || null" hx-on:change="widgetJSON.alert_threshold = this.value === &#39;&#39; ? null : Number(this.value); htmx.trigger(document.getElementById(&#39;id00000000-widget-preview&#39;), &#39;update-widget&#39;)" hx-live:value="widgetJSON.alert_threshold ?? &#39;&#39;">
-</fieldset>
-</div>
-<div class="max-w-xs" hx-on:change="widgetJSON.show_threshold_lines = event.target.value; htmx.trigger(document.getElementById(&#39;id00000000-widget-preview&#39;), &#39;update-widget&#39;)">
-<fieldset class="fieldset flex-1 min-w-0">
-<label class="label text-xs text-textStrong" for="widgetShowThresholdLines">Show threshold lines</label>
 <select class="select select-sm w-full cursor-pointer" name="widgetShowThresholdLines" id="widgetShowThresholdLines">
 <option value="always" selected>Always</option>
 <option value="on_breach">Only when breached</option>
 <option value="never">Never</option>
 </select>
-</fieldset>
-</div>
-</div>
-</details>
 <section class="max-w-sm my-2 p-4 mx-auto text-center flex flex-col gap-3 empty-state">
 <div>
 <svg class="icon h-6 w-6 text-iconNeutral" width="1em" height="1em" viewBox="0 0 640 640">

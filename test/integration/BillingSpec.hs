@@ -542,7 +542,9 @@ spec = around withTestResources do
 
     ingestLog tr key "under the cap" frozenTime
     logCount tr pid `shouldReturn` 5
-    dbExec tr [sql|INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, window_start, window_end) VALUES (?, ?, 0, now() - interval '1 minute', now())|] (pid, IngestBudget.hardCap Projects.freeTierDailyMaxEvents)
+    -- The OTLP export below meters on the wall clock, while the test DB's now() follows the test clock.
+    wallNow <- getCurrentTime
+    dbExec tr [sql|INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, window_start, window_end) VALUES (?, ?, 0, ?, ?)|] (pid, IngestBudget.hardCap Projects.freeTierDailyMaxEvents, addUTCTime (-60) wallNow, wallNow)
     Cache.purge tr.trATCtx.projectCache
     ingestLog tr key "over the cap" frozenTime
     logCount tr pid `shouldReturn` 5

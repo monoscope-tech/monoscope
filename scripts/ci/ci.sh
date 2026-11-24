@@ -352,9 +352,13 @@ npm_ci_if_stale() { # <dir> <npm-ci-args...>
 prepare_browser() {
   [ "${CI_BROWSER_PREPARED:-}" != true ] || return 0
   npm_ci_if_stale e2e --prefer-offline --no-audit
+  # The deps image installs browsers under root's HOME, but GitHub's container runs with
+  # HOME=/github/home, where Playwright looked and found none. Pin the path; install then
+  # downloads only a version the image lacks.
+  if [ -z "${PLAYWRIGHT_BROWSERS_PATH:-}" ] && [ -d /root/.cache/ms-playwright ]; then export PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright; fi
   (cd e2e && \
     { [ -e /usr/local/share/monoscope-playwright-deps ] || npx playwright install-deps chromium; } && \
-    { [ -d /root/.cache/ms-playwright ] && [ -n "$(find /root/.cache/ms-playwright -maxdepth 2 -name 'chromium-*' 2>/dev/null | head -1)" ] || npx playwright install chromium; })
+    npx playwright install chromium)
   export CI_BROWSER_PREPARED=true
 }
 
@@ -365,6 +369,10 @@ prepare_web_deps() {
 }
 
 run_body() { # <check>
+  # Prune stale Proto.* generated files left in shared dist-newstyle from before the monoscope-proto
+  # split. Every cabal-using check needs it, not just build: an attested build is skipped, and
+  # weeder/e2e then failed on the restored cache with missing-home-modules.
+  [ ! -d dist-newstyle ] || find dist-newstyle -path '*/monoscope-0.1.0.0/*/Proto' -type d -exec rm -rf {} + 2>/dev/null || true
   case "$1" in
     frontend)
       mkdir -p static/public/assets/css static/public/assets/web-components/dist/js static/public/assets/web-components/dist/css
@@ -373,8 +381,6 @@ run_body() { # <check>
       (cd web-components && npm ci --prefer-offline --no-audit && NODE_ENV=production npx vite build --mode production --sourcemap false)
       ;;
     build)
-      # Prune stale Proto.* generated files left in shared dist-newstyle from before the monoscope-proto split.
-      find dist-newstyle -path '*/monoscope-0.1.0.0/*/Proto' -type d -exec rm -rf {} + 2>/dev/null || true
       cabal build all unit-tests monoscope-cli:cli-tests integration-tests doctests -j $CABAL_FLAGS "$CABAL_OPTS"
       ;;
     # doctest shells out to GHC with `-package` for each local library.  A fresh

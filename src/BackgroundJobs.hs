@@ -2578,9 +2578,10 @@ dualExecPgTfWithSql ctx pgSql tfSql = Ki.scoped \scope -> do
     now <- Time.currentTime
     shouldAttempt <- liftIO $ ExtractionWorker.shouldAttemptCircuit ctx.tfCircuit now
     when shouldAttempt
-      -- A deploy drain refuses every write for ~15s and nothing replays this arm, so it
-      -- must outwait the handoff; every caller's UPDATE is guarded, so a re-run is a no-op.
-      $ tryAny (Hasql.retryTransientEff 60_000_000 "dual-exec:timefusion" $ withHasqlTimefusion True $ Hasql.interpExecute tfSql)
+      -- A deploy drain refuses every write until the replacement is ready (18–110s measured
+      -- on 2026-11-23) and nothing replays this arm, so it gets the ingest write's 180s budget;
+      -- every caller's UPDATE is guarded, so a re-run is a no-op.
+      $ tryAny (Hasql.retryTransientEff 180_000_000 "dual-exec:timefusion" $ withHasqlTimefusion True $ Hasql.interpExecute tfSql)
       >>= \case
         Right _ -> liftIO $ ExtractionWorker.recordCircuitSuccess ctx.tfCircuit
         Left e -> do
@@ -5291,13 +5292,19 @@ runSlackIncidentDeliveries = do
   -- claiming until nothing is due: a burst of lifecycle replies drains in one run.
   -- Bounded, since a delivery retried for immediate resend is claimable again.
   unless ctx.config.pauseNotifications do
+    -- A 429 answers for the whole workspace: its other due deliveries wait out Retry-After
+    -- instead of each spending a call (a bulk archive drew 4,997 429s in one minute).
+    throttled <- newIORef (mempty :: Map.Map Text UTCTime)
     exhausted <- fmap isJust . runMaybeT . replicateM_ 10 $ guard <=< lift $ do
       now <- Time.currentTime
       deliveries <- Incidents.claimSlackDeliveries now
-      not (null deliveries) <$ forConcurrently deliveries \delivery -> do
+      -- Workspaces in parallel, each one's deliveries in turn, so its first 429 stops the rest.
+      not (null deliveries) <$ forConcurrently (NE.groupAllWith (.teamId) deliveries) \workspace -> for_ workspace \delivery -> do
         activeProject <- Projects.activeProjectById delivery.projectId
         installation <- if isJust activeProject then Integrations.getProjectSlackData delivery.projectId else pure Nothing
+        retryAtM <- installation & maybe (pure Nothing) \sd -> Map.lookup sd.teamId <$> readIORef throttled
         outcome <- case installation of
+          Just _ | Just retryAt <- retryAtM, retryAt > now -> pure $ Incidents.DeliveryRetry retryAt "ratelimited"
           Just sd | sd.teamId == delivery.teamId -> do
             let (operation, parent) = case delivery.operation of
                   Incidents.PostRoot -> (Notify.SlackPost, Nothing)
@@ -5336,14 +5343,16 @@ runSlackIncidentDeliveries = do
             if not allowed
               then pure $ Incidents.DeliveryRejected "incident_routine_authority_withdrawn"
               else
-                send <&> \case
-                  Notify.SlackSent ts -> maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
+                send >>= \case
+                  Notify.SlackSent ts -> pure $ maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
                   -- Without a bot token nothing can ever recover the timestamp.
                   Notify.SlackAccepted ->
-                    Incidents.WebhookAccepted $ if T.null sd.botToken then Incidents.Threadless else Incidents.ThreadCapable
-                  Notify.SlackRateLimited seconds -> Incidents.DeliveryRetry (addUTCTime (fromIntegral seconds) now) "ratelimited"
-                  Notify.SlackRejected reason -> Incidents.DeliveryRejected reason
-                  Notify.SlackAmbiguous -> Incidents.DeliveryUncertain "network_outcome_unknown"
+                    pure $ Incidents.WebhookAccepted $ if T.null sd.botToken then Incidents.Threadless else Incidents.ThreadCapable
+                  Notify.SlackRateLimited seconds ->
+                    let retryAt = addUTCTime (fromIntegral seconds) now
+                     in Incidents.DeliveryRetry retryAt "ratelimited" <$ atomicModifyIORef'_ throttled (Map.insertWith max sd.teamId retryAt)
+                  Notify.SlackRejected reason -> pure $ Incidents.DeliveryRejected reason
+                  Notify.SlackAmbiguous -> pure $ Incidents.DeliveryUncertain "network_outcome_unknown"
           _ -> pure $ Incidents.DeliveryRejected "installation_replaced_or_removed"
         finishedAt <- Time.currentTime
         saved <- Incidents.finishSlackDelivery finishedAt delivery outcome

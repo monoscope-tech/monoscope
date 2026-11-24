@@ -30,6 +30,8 @@ module Data.Effectful.Notify (
   slackWebhookNotification,
   withSlackContext,
   whatsappNotification,
+  parsePhoneE164,
+  partitionPhones,
   discordNotification,
   discordThreadedNotification,
   discordNoMentions,
@@ -44,7 +46,9 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.Lens (key, _String)
 import Data.Aeson.QQ (aesonQQ)
+import Data.Char (isDigit)
 import Data.Effectful.Wreq (HTTP, postWith)
+import Data.Ix (inRange)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
 import Data.Vector qualified as V
@@ -235,25 +239,55 @@ discordThreadedNotification channelId payload replyToMessageId =
   DiscordNotification DiscordData{..}
 
 
--- | Twilio rejects a content variable holding a newline, a tab or 4+ spaces, or an empty one
--- (error 21656): a multi-line exception message failed every WhatsApp error alert.
+-- | Twilio rejects a content variable holding a newline, a tab or 4+ spaces, or an empty one,
+-- and a message whose rendered body passes WhatsApp's 1024-char limit (both error 21656). A
+-- multi-line exception failed every error alert; then a 3KB HTTP-exception dump in {{3}} did,
+-- and each failure was itself an error that alerted again. 200 chars keeps four variables plus
+-- the template's own text under the limit.
 --
--- >>> case whatsappNotification "t" "+1" (AE.object ["3" AE..= ("`boom\nCallStack:\n    at x`" :: Text), "4" AE..= ("" :: Text)]) of WhatsAppNotification (WhatsAppData _ vars _) -> vars; _ -> AE.Null
+-- >>> let varsOf = \case WhatsAppNotification (WhatsAppData _ vars _) -> vars; _ -> AE.Null
+-- >>> varsOf $ whatsappNotification "t" "+1" (AE.object ["3" AE..= ("`boom\nCallStack:\n    at x`" :: Text), "4" AE..= ("" :: Text)])
 -- Object (fromList [("3",String "`boom CallStack: at x`"),("4",String "-")])
+-- >>> case varsOf (whatsappNotification "t" "+1" (AE.object ["3" AE..= T.replicate 3000 "x"])) of AE.Object o -> (\case Just (AE.String t) -> T.length t; _ -> 0) (AEK.lookup "3" o); _ -> 0
+-- 200
 whatsappNotification :: Text -> Text -> AE.Value -> Notification
 whatsappNotification template to vars =
   WhatsAppNotification WhatsAppData{contentVariables = clean vars, ..}
   where
     clean = \case
       AE.Object o -> AE.Object (clean <$> o)
-      AE.String t -> AE.String $ fromMaybe "-" $ nonEmptyText $ T.take 1000 $ unwords $ words t
+      AE.String t -> AE.String $ fromMaybe "-" $ nonEmptyText $ cap $ unwords $ words t
       v -> v
+    cap t = if T.compareLength t 200 == GT then T.take 199 t <> "…" else t
     nonEmptyText t = t <$ guard (not $ T.null t)
 
 
+-- | E.164 — @+@, then 8–15 digits not starting with 0 — ignoring spaces, dashes, dots and
+-- parens. Twilio refuses anything else (21211), so a number saved in local format
+-- (@01786322266@) failed every alert sent to it.
+--
+-- >>> map parsePhoneE164 ["+234 816-111-5653", "01786322266", "+12", "+1 (555) 000.1234", "+0123456789"]
+-- [Just "+2348161115653",Nothing,Nothing,Just "+15550001234",Nothing]
+parsePhoneE164 :: Text -> Maybe Text
+parsePhoneE164 raw = do
+  digits <- T.stripPrefix "+" $ T.filter (not . (`T.elem` " -.()")) raw
+  guard $ T.all isDigit digits && inRange (8, 15) (T.length digits) && not ("0" `T.isPrefixOf` digits)
+  pure $ "+" <> digits
+
+
+-- | (rejected as written, accepted as E.164).
+partitionPhones :: Foldable f => f Text -> ([Text], [Text])
+partitionPhones ns = partitionEithers [maybeToRight n (parsePhoneE164 n) | n <- toList ns]
+
+
+-- | PagerDuty rejects the whole event when @summary@ passes 1024 chars or @dedup_key@ 255 (400
+-- "Event object is invalid"); an HTTP-exception issue title did that to every error page.
+--
+-- >>> case pagerdutyNotification "k" PDTrigger (T.replicate 300 "d") (T.replicate 3000 "s") PDError AE.Null "u" of PagerdutyNotification d -> (T.length d.dedupKey, T.length d.summary); _ -> (0, 0)
+-- (255,1024)
 pagerdutyNotification :: Text -> PagerdutyAction -> Text -> Text -> PagerdutySeverity -> AE.Value -> Text -> Notification
-pagerdutyNotification integrationKey eventAction dedupKey summary severity customDetails monitorUrl =
-  PagerdutyNotification PagerdutyData{..}
+pagerdutyNotification integrationKey eventAction dedupKey' summary' severity customDetails monitorUrl =
+  PagerdutyNotification PagerdutyData{dedupKey = T.take 255 dedupKey', summary = T.take 1024 summary', ..}
 
 
 -- | Rewrite every Block Kit block list in a Slack message — the top-level
@@ -503,8 +537,10 @@ runNotifyTest ref = interpret \_ -> \case
           _ -> sd
     idx <- liftIO $ atomicModifyIORef' ref (\notifications -> (SlackNotification captured : notifications, length notifications + 1))
     let timestamp = "1788900000." <> T.justifyRight 6 '0' (show idx)
-    -- A channel whose id starts with "PRIVATE" stands for one the bot has not joined.
+    -- A channel whose id starts with "PRIVATE" stands for one the bot has not joined, and one
+    -- starting "RATELIMITED" for a workspace Slack is throttling.
     pure $ case operation of
+      _ | "RATELIMITED" `T.isPrefixOf` sd.channelId -> SlackRateLimited 30
       SlackUpdate ts -> SlackSent ts
       SlackPost
         | isNothing sd.webhookUrl && "PRIVATE" `T.isPrefixOf` sd.channelId -> SlackRejected "not_in_channel"
