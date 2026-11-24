@@ -446,9 +446,13 @@ for root, _, files in os.walk("dist-newstyle"):
     # Drives the real server in a real browser. scripts/e2e.sh starts that server itself on
     # 8081 against a throwaway database, so this only has to supply the binary and chromium.
     e2e)
-      [ -n "${E2E_SERVER_BIN:-}" ] || cabal build monoscope-server -j $CABAL_FLAGS "$CABAL_OPTS"
+      # cabal judges freshness by content, so the binary it just called up to date is current even
+      # though a fresh checkout leaves every source newer by mtime, which e2e.sh's guard (meant for
+      # local runs) refused, failing a deploy whose build was attested.
+      local bin=${E2E_SERVER_BIN:-}
+      [ -n "$bin" ] || { cabal build monoscope-server -j $CABAL_FLAGS "$CABAL_OPTS" && bin=$(cabal list-bin monoscope-server); }
       prepare_browser
-      scripts/e2e.sh
+      E2E_SERVER_BIN=$bin scripts/e2e.sh
       ;;
     # Provisioned SDK guests run through the Haskell suite; its inputs include the worker.
     integration-tests)
