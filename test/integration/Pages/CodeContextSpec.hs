@@ -409,11 +409,11 @@ spec = do
         denied `shouldBe` Left GitSync.InstallationNotVisible
         runQueryEffect tr (GitSync.getGitHubCredentials owned) >>= (`shouldSatisfy` null)
         (_, collaborator) <- authorize "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"foreign\",\"type\":\"User\"}}]}" "[]"
-        collaborator `shouldBe` Left (GitSync.InstallationOwnershipRequired "foreign")
+        collaborator `shouldBe` Left (GitSync.InstallationOwnershipRequired $ GitSync.PersonalOwner "foreign")
         let organization = "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"team\",\"type\":\"Organization\"}}]}"
         for_ ([("member", "active", False), ("admin", "pending", False), ("admin", "active", True)] :: [(Text, Text, Bool)]) \(role, membershipState, allowed) -> do
           (_, result) <- authorize organization $ AE.encode $ AE.object ["state" AE..= membershipState, "role" AE..= role]
-          result `shouldBe` if allowed then Right () else Left (GitSync.InstallationOwnershipRequired "team")
+          result `shouldBe` if allowed then Right () else Left (GitSync.InstallationOwnershipRequired $ GitSync.OrganizationOwner "team")
         (requests, personal) <- authorize "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"team\",\"type\":\"User\"}}]}" "[]"
         personal `shouldBe` Right ()
         map fst requests `shouldBe` ["https://github.com/login/oauth/access_token", "https://api.github.com/user/installations?per_page=100&page=1", "https://api.github.com/user"]

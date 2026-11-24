@@ -75,6 +75,7 @@ module Models.Projects.GitSync (
   createInstallationAttempt,
   consumeInstallationAttempt,
   InstallationError (..),
+  InstallationOwner (..),
   installationErrorMessage,
   authorizeGitHubInstallation,
   -- Re-exported from "Pkg.Git" so a caller needs one import, not two
@@ -920,11 +921,15 @@ data InstallationError
   | InstallationAuthorizationFailed
   | InstallationVerificationFailed
   | InstallationNotVisible
-  | -- | The installed account's login: only it, or an owner of that organization, may bind it.
-    InstallationOwnershipRequired Text
+  | InstallationOwnershipRequired InstallationOwner
   | InstallationMembersPermissionMissing
   | InstallationAccountMissing
   | InstallationProjectMissing
+  deriving stock (Eq, Show)
+
+
+-- | The account an installation belongs to: only it, or an owner of that organization, may bind it.
+data InstallationOwner = PersonalOwner Text | OrganizationOwner Text
   deriving stock (Eq, Show)
 
 
@@ -934,7 +939,8 @@ installationErrorMessage = \case
   InstallationAuthorizationFailed -> "GitHub did not authorize this account. Connect the account again."
   InstallationVerificationFailed -> "Could not verify your GitHub account. Connect the account again."
   InstallationNotVisible -> "Your GitHub account cannot see this installation. Sign in to GitHub as the account or organization owner that installed the App, then connect again."
-  InstallationOwnershipRequired account -> "Only @" <> account <> " or an owner of the @" <> account <> " organization can connect this installation. Sign in to GitHub as one of them, then connect again."
+  InstallationOwnershipRequired (PersonalOwner account) -> "Only @" <> account <> " can connect this installation. Sign in to GitHub as @" <> account <> ", then connect again."
+  InstallationOwnershipRequired (OrganizationOwner account) -> "Only an owner of the @" <> account <> " organization can connect this installation. Sign in to GitHub as an owner, then connect again."
   InstallationMembersPermissionMissing -> "GitHub refused to show your organization role. The GitHub App needs the Organization \"Members\" read permission, and the organization must accept that permission update under Settings → GitHub Apps."
   InstallationAccountMissing -> "GitHub returned an installation without an account."
   InstallationProjectMissing -> "This project is no longer available."
@@ -963,18 +969,18 @@ authorizeGitHubInstallation encKey pid appId clientId secret code callback iid =
           Nothing -> hoistEither $ Left InstallationNotVisible
   installation <- findInstallation (1 :: Int)
   account <- hoistEither $ maybeToRight InstallationAccountMissing $ installation ^? key "account" . key "login" . _String
-  let owns = \case
-        "User" -> (\user -> (T.toLower <$> user ^? W.responseBody . key "login" . _String) == Just (T.toLower account)) <$> github Relude.id "user"
-        "Organization" -> do
-          membership <- github (Wreq.checkResponse ?~ \_ _ -> pass) ("user/memberships/orgs/" <> account)
-          -- GitHub answers 403 when the App lacks the Members permission, 404 when the user is no member.
-          case membership ^. Wreq.responseStatus . Wreq.statusCode of
-            200 -> pure $ (membership ^? W.responseBody . key "state" . _String, membership ^? W.responseBody . key "role" . _String) == (Just "active", Just "admin")
-            403 -> hoistEither $ Left InstallationMembersPermissionMissing
-            404 -> pure False
-            _ -> hoistEither $ Left InstallationVerificationFailed
-        _ -> pure False
-  unlessM (maybe (pure False) owns $ installation ^? key "account" . key "type" . _String) $ hoistEither $ Left $ InstallationOwnershipRequired account
+  let owner = if installation ^? key "account" . key "type" . _String == Just "Organization" then OrganizationOwner account else PersonalOwner account
+  owns <- case owner of
+    PersonalOwner _ -> (\user -> (T.toLower <$> user ^? W.responseBody . key "login" . _String) == Just (T.toLower account)) <$> github Relude.id "user"
+    OrganizationOwner _ -> do
+      membership <- github (Wreq.checkResponse ?~ \_ _ -> pass) ("user/memberships/orgs/" <> account)
+      -- GitHub answers 403 when the App lacks the Members permission, 404 when the user is no member.
+      case membership ^. Wreq.responseStatus . Wreq.statusCode of
+        200 -> pure $ (membership ^? W.responseBody . key "state" . _String, membership ^? W.responseBody . key "role" . _String) == (Just "active", Just "admin")
+        403 -> hoistEither $ Left InstallationMembersPermissionMissing
+        404 -> pure False
+        _ -> hoistEither $ Left InstallationVerificationFailed
+  unless owns $ hoistEither $ Left $ InstallationOwnershipRequired owner
   credential <- lift $ upsertGitHubCredential encKey pid Git.GitHub Nothing account (Just iid) Nothing
   hoistEither $ maybeToRight InstallationProjectMissing $ void credential
 
