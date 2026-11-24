@@ -3083,8 +3083,10 @@ flushDrainTask shard task
                      , (pid, "summary" :: Text, patternHash, task.flushedAt, eventCount)
                      )
       let (ups, hss) = unzip prepared
-      unless (null ups) $ void $ LogPatterns.upsertLogPatternBatch ups
-      unless (null hss) $ void $ LogPatterns.upsertHourlyStatBatch hss
+      -- Concurrent flushers still deadlock on these rows against the pattern jobs (38/day,
+      -- 40P01); a deadlock rolls the statement back whole, so a retry cannot double-count.
+      unless (null ups) $ void $ retryOnDeadlock "log pattern upsert" $ LogPatterns.upsertLogPatternBatch ups
+      unless (null hss) $ void $ retryOnDeadlock "log pattern hourly stats" $ LogPatterns.upsertHourlyStatBatch hss
 
       -- UPDATE-2: additive per-row tag append. Dual-forked to Postgres + TimeFusion.
       -- TimeFusion now supports `UPDATE ... FROM (unnest)` natively (see the
@@ -5278,9 +5280,14 @@ checkTriggeredQueryMonitors = do
       -- not consume a notification whose outbox write failed.
       tryAny (evaluateQueryMonitor monitor startWall) >>= \case
         Right _ -> pass
-        Left err -> do
-          Log.logAttention "Query monitor evaluation failed" (monitor.id, monitor.alertConfig.title, show err)
-          tryStep "monitor-data-unavailable" $ recordMonitorDataGap monitor startWall Monitors.EvaluationFailed
+        -- A TimeFusion deploy drain or dropped connection clears within a tick (18–110s): the
+        -- monitor stays due and re-evaluates next run instead of telling its incident thread
+        -- the data is gone, which every TF deploy did to every monitor with an open incident.
+        Left err
+          | Hasql.isTransientException err -> Log.logWarn "Query monitor evaluation deferred: store unavailable" (monitor.id, show err)
+          | otherwise -> do
+              Log.logAttention "Query monitor evaluation failed" (monitor.id, monitor.alertConfig.title, show err)
+              tryStep "monitor-data-unavailable" $ recordMonitorDataGap monitor startWall Monitors.EvaluationFailed
   tryStep "slack-incident-delivery" runSlackIncidentDeliveries
 
 
