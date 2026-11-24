@@ -162,6 +162,11 @@ Progress on each item is logged below as it lands.
   this. The binaries are now linked into `/usr/local/bin`, and `refresh_guest`'s remote path ran for
   real to build that guest on the worker.
 
+Open question, not changed: six reviews in a week ended with "exceeded its query budget" (20 host
+tool calls for a PR review). Three of them made no proof and ran no check before running out, so
+the calls went to telemetry and memory. A larger budget would only help if the agent proves first.
+The session transcripts would show which calls those were.
+
 Still behind Blacksmith: no `@monoscope dismiss`, and claims carried over are re-recorded on both
 sides rather than reusing the merge-base recording.
 
