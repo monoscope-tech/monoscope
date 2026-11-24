@@ -5,7 +5,6 @@ import Data.Default (def)
 import Data.Text qualified as T
 import Lucid (renderText)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Utils qualified
 import Relude
 import System.Config (DeploymentEnv (..), EnvConfig (..))
 import Test.Hspec
@@ -44,26 +43,3 @@ spec = do
       for_ [shell "" True Prod, shell "test-key" False Prod, shell "test-key" True Dev] \html -> do
         html `shouldNotSatisfy` T.isInfixOf "new Monoscope("
         html `shouldNotSatisfy` T.isInfixOf "deps/monoscope/monoscope-"
-
-  describe "SidebarIcons" do
-    it "sidebarIcons_preserveTheirOriginalSizes" do
-      for_
-        ( [ ("dashboard", "0 0 14 14")
-          , ("explore", "0 0 512 512")
-          , ("bug", "0 0 512 512")
-          , ("web", "0 0 16 15")
-          , ("server", "0 0 512 512")
-          , ("swap", "0 0 640 512")
-          , ("list-check", "0 0 512 512")
-          , ("chart-simple", "0 0 448 512")
-          , ("gear", "0 0 512 512")
-          , ("circle-question", "0 0 16 16")
-          ]
-            :: [(Text, Text)]
-        )
-        \(name, viewBox) -> (Utils.lookupIcon "regular" name <&> (.viewBox)) `shouldBe` Just viewBox
-
-    it "sidebarIcons_preserveTheirStrokeWidths" do
-      for_ ([("circle-question", "1.5"), ("server", "48"), ("web", "1.33333")] :: [(Text, Text)]) \(name, width) ->
-        (Utils.lookupIcon "regular" name <&> (.body))
-          `shouldSatisfy` maybe False (T.isInfixOf $ "stroke-width=\"" <> width <> "\"")

@@ -116,7 +116,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), ResourceRow (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, dialogTrigger_, disclosure_, emptyState_, formActionsModal_, formField_, grantsTrial, headerRow_, iconBadge_, keyboardActivateAttr_, localTimeFmt_, modalWith_, nativeDialog_, options_, paymentPlanPicker, resourceList_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), ResourceRow (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, dialogTrigger_, disclosure_, emptyState_, formActionsModal_, formField_, formSelectFieldWith_, grantsTrial, headerRow_, iconBadge_, keyboardActivateAttr_, localTimeFmt_, modalWith_, nativeDialog_, options_, paymentPlanPicker, resourceList_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
@@ -813,15 +813,13 @@ promTargetModal_ pid mcfg = do
       do
         field_ "name" "Name" True def{placeholder = "api-gateway", value = maybe "" (.name) mcfg, extraAttrs = [autofocus_]}
         field_ "url" "Metrics URL" True def{inputType = "url", placeholder = "http://service:9090/metrics", value = maybe "" (.url) mcfg, hint = Just "Must be reachable from Monoscope and return the Prometheus text exposition format."}
-        label_ [class_ "flex flex-col gap-1 text-sm"] do
-          span_ [class_ "text-textWeak"] "Scrape interval"
-          -- No sub-minute options: the dispatcher ticks once per minute, so a shorter
-          -- interval can't be honoured. Always include the config's current value (even if
-          -- off-list) so editing an unrelated field never silently rewrites the interval.
-          let cur = maybe 60 (.scrapeIntervalSeconds) mcfg
-              presets = [(60, "1 minute"), (300, "5 minutes"), (900, "15 minutes"), (3600, "1 hour")] :: [(Int, Text)]
-              opts = if any ((== cur) . fst) presets then presets else sortWith fst ((cur, show cur <> "s") : presets)
-          select_ [class_ "select select-bordered w-full", name_ "scrapeInterval"] $ options_ (Just $ show cur) [(show v, l) | (v, l) <- opts]
+        -- No sub-minute options: the dispatcher ticks once per minute, so a shorter
+        -- interval can't be honoured. Always include the config's current value (even if
+        -- off-list) so editing an unrelated field never silently rewrites the interval.
+        let cur = maybe 60 (.scrapeIntervalSeconds) mcfg
+            presets = [(60, "1 minute"), (300, "5 minutes"), (900, "15 minutes"), (3600, "1 hour")] :: [(Int, Text)]
+            opts = if any ((== cur) . fst) presets then presets else sortWith fst ((cur, show cur <> "s") : presets)
+        formSelectFieldWith_ FieldMd def{inputId = Just (modalId <> "-scrapeInterval")} "Scrape interval" "scrapeInterval" False $ options_ (Just $ show cur) [(show v, l) | (v, l) <- opts]
         -- Optional fields stay collapsed until needed; auto-expanded when editing a target
         -- that already has them set, so existing values are never hidden behind the toggle.
         let hasAdvanced = maybe False (\c -> isJust c.authHeader || not (T.null (labelsToText c.extraLabels))) mcfg

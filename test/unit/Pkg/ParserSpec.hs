@@ -182,6 +182,21 @@ spec = do
       havingSql `shouldSatisfy` T.isInfixOf "> 80"
       havingSql `shouldNotSatisfy` T.isInfixOf "peak"
 
+    it "alert queries project post-summarize extend ratios without raw helper aggregates" do
+      let cfg = defSqlQueryCfg defPid fixedUTCTime (Just SMetrics) Nothing
+          alertSql q = T.toLower $ normT $ fromMaybe "" $ snd (fromRight' $ parseQueryToComponents cfg q) & (.finalAlertQuery)
+          sql = alertSql "metrics | summarize hits = count(), total = sum(value) by bin_auto(timestamp) | extend hit_pct = 100.0 * hits / total"
+      -- Must evaluate only hit_pct inside GREATEST(...), not GREATEST(hit_pct, hits, total)
+      sql `shouldSatisfy` T.isInfixOf "greatest(((100.0 * count(*)::float) / sum((value)::float))::float)::float8"
+
+    it "alert queries evaluate the extreme quantile for percentiles in the alert direction" do
+      let aboveCfg = defSqlQueryCfg defPid fixedUTCTime Nothing Nothing
+          belowCfg = aboveCfg{alertBelow = True}
+          alertSql c q = T.toLower $ normT $ fromMaybe "" $ snd (fromRight' $ parseQueryToComponents c q) & (.finalAlertQuery)
+          q = "| summarize percentiles(duration, 50, 75, 90, 95, 99) by bin_auto(timestamp)"
+      alertSql aboveCfg q `shouldSatisfy` T.isInfixOf "approx_percentile(0.99"
+      alertSql belowCfg q `shouldSatisfy` T.isInfixOf "approx_percentile(0.5"
+
 
 
     it "PostgreSQL metrics source uses native JSONB dimensions" do

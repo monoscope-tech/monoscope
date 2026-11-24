@@ -14,6 +14,7 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Ids qualified as Projects
 import Pkg.Deriving (WrappedEnumSC (..))
+import Pkg.Duration qualified as Duration
 import Pkg.GenAI qualified as GenAI
 import Pkg.Parser.Eval (evalExpr, filterExpr, resolveIn)
 import Pkg.Parser.Expr
@@ -34,6 +35,7 @@ data QueryComponents = QueryComponents
   , select :: [Text] -- project: replaces default columns
   , extendSelect :: [Text] -- extend: appends to default columns
   , aggregations :: [Text] -- Summarize aggregations (separate from extended columns in select)
+  , alertAggregations :: [Text] -- Primary alert expressions (no aliases), dropping post-summarize extend helpers
   , finalColumns :: [Text]
   , finalSqlQuery :: Text
   , hasCountOver :: Bool -- True if finalSqlQuery includes count(*) OVER() as last column
@@ -199,7 +201,16 @@ applySectionToComponent sqlCfg qc = \case
   HavingClause expr -> qc{havingClause = conj qc.havingClause expr}
   Source source -> qc{fromTable = Just $ display source}
   sec@(SummarizeCommand aggs byClauseM) ->
-    applySummarizeByClauseToQC sqlCfg byClauseM qc{aggregations = qc.aggregations <> map display aggs, percentilesInfo = extractPercentilesInfo [sec], seriesAggs = qc.seriesAggs <> concatMap seriesLeaves aggs, seriesBinned = all seriesBinnable aggs}
+    applySummarizeByClauseToQC
+      sqlCfg
+      byClauseM
+      qc
+        { aggregations = qc.aggregations <> map display aggs
+        , alertAggregations = qc.alertAggregations <> map (aggForAlert sqlCfg.alertBelow) (primaryAlertAggs aggs)
+        , percentilesInfo = extractPercentilesInfo [sec]
+        , seriesAggs = qc.seriesAggs <> concatMap seriesLeaves aggs
+        , seriesBinned = all seriesBinnable aggs
+        }
   -- extend adds computed columns (appends to defaults) AND tracks mappings for GROUP BY resolution
   ExtendCommand cols ->
     qc
@@ -594,7 +605,7 @@ sqlFromQueryComponents sqlCfg qc =
     -- output labels and cannot appear inside GREATEST. The monitor decoder
     -- expects float8 even when an aggregate produces float4.
     alertAggregate =
-      bool "GREATEST(" "LEAST(" sqlCfg.alertBelow <> T.intercalate ", " (if null qc.aggregations then ["count(*)"] else colsNoAsClause qc.aggregations) <> ")::float8"
+      bool "GREATEST(" "LEAST(" sqlCfg.alertBelow <> T.intercalate ", " (if null qc.alertAggregations then ["count(*)"] else qc.alertAggregations) <> ")::float8"
     alertWhere timeFilter = scopedWhere sqlCfg timeFilter whereCondition
     alertQuery =
       [fmt|
@@ -626,14 +637,7 @@ seriesLookback = 300
 -- >>> map (fmap (fromRational @Double) . intervalSeconds) ["10 seconds", "1 hours", "500 milliseconds", "2 days", "0 seconds", "nope"]
 -- [Just 10.0,Just 3600.0,Just 0.5,Just 172800.0,Nothing,Nothing]
 intervalSeconds :: Text -> Maybe Rational
-intervalSeconds t = case words t of
-  [n, unit] -> do
-    count <- readMaybe @Integer (toString n)
-    guard (count > 0)
-    (fromInteger count *) <$> Map.lookup (T.dropWhileEnd (== 's') unit) units
-  _ -> Nothing
-  where
-    units = Map.fromList @Text @Rational [("nanosecond", 1e-9), ("microsecond", 1e-6), ("millisecond", 1e-3), ("second", 1), ("minute", 60), ("hour", 3600), ("day", 86400), ("week", 604800)]
+intervalSeconds = fmap Duration.durationToSeconds . Duration.parsePostgresInterval
 
 
 -- | What a query returns, read off its @summarize@ ('parseQueryToAST' admits at most one):

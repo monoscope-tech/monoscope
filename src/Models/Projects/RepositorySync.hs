@@ -27,7 +27,6 @@ module Models.Projects.RepositorySync (
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types qualified as AET
-import Data.Char (isAsciiLower, isDigit)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -299,19 +298,23 @@ importDefinition resource observed definition = runExceptT do
           monitor <- hoistEither $ first ("The monitor query could not be compiled: " <>) $ monitorFromInput resource.projectId now (Monitors.QueryMonitorId resource.localId) existing input
           pure (Monitors.queryMonitorUpsertSql monitor, QueryDefinition $ monitorToInput monitor)
         UptimeDefinitionConfig input -> do
-          unless (PromCfg.safeScrapeUrl input.url && not (T.null $ T.strip input.name) && input.intervalSeconds >= 60 && input.expectedStatus >= 100 && input.expectedStatus <= 599) $ hoistEither $ Left "Uptime checks require a name, public HTTP URL, interval of at least 60 seconds, and HTTP status 100–599."
+          let name = T.strip input.name
+              url = T.strip input.url
+          unless (PromCfg.safeScrapeUrl url && not (T.null name) && input.intervalSeconds >= 60 && input.expectedStatus >= 100 && input.expectedStatus <= 599) $ hoistEither $ Left "Uptime checks require a name, public HTTP URL, interval of at least 60 seconds, and HTTP status 100–599."
           pure
             ( [HI.sql| INSERT INTO apis.prometheus_scrape_configs (id, project_id, kind, name, url, scrape_interval_seconds, extra_labels, expected_status, enabled)
-              VALUES (#{resource.localId}, #{resource.projectId}, 'uptime', #{input.name}, #{input.url}, #{input.intervalSeconds}, '{}', #{input.expectedStatus}, #{input.enabled})
+              VALUES (#{resource.localId}, #{resource.projectId}, 'uptime', #{name}, #{url}, #{input.intervalSeconds}, '{}', #{input.expectedStatus}, #{input.enabled})
               ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, url = EXCLUDED.url, scrape_interval_seconds = EXCLUDED.scrape_interval_seconds, expected_status = EXCLUDED.expected_status, enabled = EXCLUDED.enabled, updated_at = #{now}
               WHERE apis.prometheus_scrape_configs.project_id = EXCLUDED.project_id |]
             , incoming
             )
         CronDefinitionConfig input -> do
-          unless (not (T.null input.slug || T.null (T.strip input.name)) && T.all (\c -> isAsciiLower c || isDigit c || T.any (== c) "_.-") input.slug && input.intervalSeconds >= 60 && input.graceSeconds >= 60) $ hoistEither $ Left "Cron monitors require a name, a slug using a-z, 0-9, _, . or -, and intervals of at least 60 seconds."
+          let slug = T.toLower (T.strip input.slug)
+              name = T.strip input.name
+          unless (Monitors.isValidCronSlug slug && not (T.null name) && input.intervalSeconds >= 60 && input.graceSeconds >= 60) $ hoistEither $ Left "Cron monitors require a name, a slug using a-z, 0-9, _, . or -, and intervals of at least 60 seconds."
           pure
             ( [HI.sql| INSERT INTO apis.cron_monitors (id, project_id, slug, name, interval_secs, grace_secs, created_at)
-              VALUES (#{resource.localId}, #{resource.projectId}, #{input.slug}, #{input.name}, #{input.intervalSeconds}, #{input.graceSeconds}, #{now})
+              VALUES (#{resource.localId}, #{resource.projectId}, #{slug}, #{name}, #{input.intervalSeconds}, #{input.graceSeconds}, #{now})
               ON CONFLICT (id) DO UPDATE SET slug = EXCLUDED.slug, name = EXCLUDED.name, interval_secs = EXCLUDED.interval_secs, grace_secs = EXCLUDED.grace_secs
               WHERE apis.cron_monitors.project_id = EXCLUDED.project_id |]
             , incoming

@@ -1126,9 +1126,10 @@ instance ToHtml RepositoryGet where
           else when canEdit $ post (urls.repositoryDetachPost pid rid resource.id) [hxConfirm_ "Stop syncing this file? It stays in Monoscope and in the repository."] $ button_ [type_ "submit", class_ "btn btn-sm btn-ghost"] "Detach"
         when resource.conflicted do
           span_ [class_ "text-sm text-textWarning"] "Both versions changed"
-          details_ [class_ "w-full min-w-0 space-y-3"] do
-            summary_ [class_ "cursor-pointer text-sm text-textBrand"] "Compare versions"
-            div_ [class_ "grid min-w-0 gap-4 md:grid-cols-2"] $ for_ ([("Active in Monoscope", Yaml.encode . AE.toJSON <$> join (lookup resource.id page.conflictVersions)), ("Merged Git version", Yaml.encode <$> resource.remoteDefinition)] :: [(Text, Maybe ByteString)]) \(label, version) -> div_ [class_ "min-w-0 space-y-2"] do
+          toHtml
+            $ disclosure_ [class_ "w-full min-w-0 space-y-3"] "text-sm text-textBrand" "Compare versions"
+            $ div_ [class_ "grid min-w-0 gap-4 md:grid-cols-2"]
+            $ for_ ([("Active in Monoscope", Yaml.encode . AE.toJSON <$> join (lookup resource.id page.conflictVersions)), ("Merged Git version", Yaml.encode <$> resource.remoteDefinition)] :: [(Text, Maybe ByteString)]) \(label, version) -> div_ [class_ "min-w-0 space-y-2"] do
               h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml label
               pre_ [class_ "max-h-80 overflow-auto rounded-lg bg-fillWeak p-3 text-xs text-textWeak"] $ toHtml @Text $ maybe "Deleted" decodeUtf8 version
           when canEdit $ post (urls.repositoryConflictPost pid rid resource.id) [class_ "flex gap-2"] do

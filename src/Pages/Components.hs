@@ -1,4 +1,4 @@
-module Pages.Components (codeContextUrl, drawer_, drawerShell_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityDrawer_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, morphPostAttrs_, pollSelfAttrs_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, floatingModal_, formActionsModal_, dangerAction_, dangerZone_, floatingDialog_, floatingCard_, mergedAttrs, floatingScrim, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerHints_, pickerPopover_, durationMenu_, primaryButton_, submitBtn_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (codeContextUrl, drawer_, drawerShell_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityDrawer_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, swapTarget_, morphPostAttrs_, pollSelfAttrs_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formSelectFieldWith_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, floatingModal_, formActionsModal_, dangerAction_, dangerZone_, floatingDialog_, floatingCard_, mergedAttrs, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerNoMatches_, pickerHints_, pickerPopover_, actionMenu_, durationMenu_, primaryButton_, submitBtn_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -422,7 +422,7 @@ freePricing pid isCurrent =
         "Free tier"
         "Free forever"
         (priceDisplay_ [] "0" "/per month")
-        (div_ [[__|on click halt|]] $ pricingButton_ isCurrent "bg-fillStrong text-textInverse-strong" [term "hx-on:click" "htmx.trigger('#freePricing', 'click')", type_ "button"] "Start free")
+        (pricingButton_ isCurrent "bg-fillStrong text-textInverse-strong" [type_ "button"] "Start free")
         ["10K events per day", "1 user: project owner only", "Opentelemetry Logs, Traces and Metrics", "Last 30 days data retention"]
         "What's included:"
 
@@ -679,6 +679,11 @@ timeWindowVals_ :: Text -> Attribute
 timeWindowVals_ defaultSince = term "hx-vals" $ "js:{...(p=>({since:p.since ?? (p.from || p.to ? '' : '" <> defaultSince <> "'),from:p.from || '',to:p.to || ''}))(Object.fromEntries(new URLSearchParams(location.search)))}"
 
 
+-- | htmx attrs that fetch @url@ and replace @#tid@ from the response, pushing the URL.
+swapTarget_ :: Text -> Text -> [Attribute]
+swapTarget_ tid url = [hxGet_ url, hxTarget_ ("#" <> tid), hxSelect_ ("#" <> tid), hxSwap_ "outerHTML", hxPushUrl_ "true"]
+
+
 -- | htmx attrs for a POST form that morphs @#targetId@ in place with @#indicatorId@ spinning.
 morphPostAttrs_ :: Text -> Text -> Text -> [Attribute]
 morphPostAttrs_ url targetId indicatorId = [action_ url, method_ "post", hxPost_ url, hxTarget_ ("#" <> targetId), hxSelect_ ("#" <> targetId), hxSwap_ "outerMorph", hxIndicator_ ("#" <> indicatorId)]
@@ -783,10 +788,14 @@ options_ sel = mapM_ \(v, label) -> option_ (value_ v : [selected_ "" | sel == J
 
 
 formSelectField_ :: Monad m => FieldSize -> Text -> Text -> Bool -> HtmlT m () -> HtmlT m ()
-formSelectField_ size lbl name required options =
-  formField_ size def lbl name required
+formSelectField_ size = formSelectFieldWith_ size def
+
+
+formSelectFieldWith_ :: Monad m => FieldSize -> FieldCfg -> Text -> Text -> Bool -> HtmlT m () -> HtmlT m ()
+formSelectFieldWith_ size cfg lbl name required options =
+  formField_ size cfg lbl name required
     $ Just
-    $ select_ ([class_ $ case size of { FieldSm -> "select select-sm w-full cursor-pointer"; FieldMd -> "select w-full h-12 cursor-pointer" }, name_ name, id_ name] <> [required_ "true" | required]) options
+    $ select_ ([class_ $ case size of { FieldSm -> "select select-sm w-full cursor-pointer"; FieldMd -> "select w-full h-12 cursor-pointer" }, name_ name, id_ (fromMaybe name cfg.inputId)] <> [required_ "true" | required] <> cfg.extraAttrs) options
 
 
 -- | @Collapsible open@ is a details disclosure.
@@ -797,6 +806,7 @@ data PanelCfg = PanelCfg
   { icon :: Maybe Text
   , subtitle :: Maybe Text
   , sectionId :: Maybe Text -- id of a collapsible panel's details element
+  , leading :: Maybe (Html ()) -- optional leading badge/step element in collapsible header
   }
   deriving stock (Generic)
   deriving anyclass (Default)
@@ -814,6 +824,7 @@ panel_ style cfg title content = case style of
     details_ ([class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] <> [open_ "" | startOpen] <> maybe [] (pure . id_) cfg.sectionId) do
       summary_ [class_ "p-3 cursor-pointer list-none flex items-center justify-between gap-2 hover:bg-fillWeak transition-colors"] do
         div_ [class_ "flex items-center gap-2"] do
+          whenJust cfg.leading toHtml
           whenJust cfg.icon \ic -> faSprite_ ic "regular" "w-3.5 h-3.5 text-iconNeutral"
           span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml title
           whenJust cfg.subtitle $ span_ [class_ "text-xs text-textWeak"] . toHtml
@@ -998,20 +1009,18 @@ dialogTrigger_ :: Monad m => Text -> [Attribute] -> HtmlT m () -> HtmlT m ()
 dialogTrigger_ dialogId attrs = button_ $ [id_ (dialogId <> "-trigger"), type_ "button", onclick_ ("document.getElementById('" <> dialogId <> "').showModal()")] <> attrs
 
 
--- | Red ghost trigger plus the confirmation modal it opens, e.g. a Remove/Disconnect action.
+-- | Red ghost trigger plus the native @<dialog>@ confirmation modal it opens, e.g. a Remove/Disconnect action.
 dangerAction_ :: Text -> Text -> Text -> Text -> Text -> [Attribute] -> Text -> Html ()
-dangerAction_ modalId icon label title description confirmAttrs confirmText = do
-  label_ [class_ "btn btn-sm btn-ghost gap-1 text-textError hover:bg-fillError-weak", Lucid.for_ modalId] do
+dangerAction_ dialogId icon label title description confirmAttrs confirmText = do
+  dialogTrigger_ dialogId [class_ "btn btn-sm btn-ghost gap-1 text-textError hover:bg-fillError-weak"] do
     faSprite_ icon "regular" "w-3 h-3"
     span_ $ toHtml label
-  modalWith_ modalId def{boxClass = "p-6", hideClose = True} Nothing do
-    div_ [class_ "flex items-start gap-3 mb-4"] do
+  nativeDialog_ dialogId title "p-6 max-w-md" do
+    div_ [class_ "flex items-start gap-3 mt-2 mb-4"] do
       iconBadge_ IconSm ErrorBadge "triangle-alert"
-      div_ do
-        h3_ [class_ "text-lg font-semibold text-textStrong"] $ toHtml title
-        p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml description
+      p_ [class_ "text-sm text-textWeak"] $ toHtml description
     div_ [class_ "flex justify-end gap-2 mt-6"] do
-      label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ modalId] "Cancel"
+      button_ [type_ "button", class_ "btn btn-sm btn-ghost", onclick_ "this.closest('dialog').close()"] "Cancel"
       button_ ([type_ "button", class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText
 
 
@@ -1024,11 +1033,11 @@ dangerZone_ title desc action = section_ [class_ "flex flex-wrap items-center ju
   action
 
 
--- | Checkbox-toggled floating prompt shell ('modalWith_' at @pt-[15vh]@ over 'floatingScrim',
+-- | Checkbox-toggled floating prompt shell ('modalWith_' at @pt-[15vh]@ over dimmed scrim,
 -- with no outer box chrome so a 'floatingCard_' or 'pickerCard_' inside is the sole surface).
 floatingModal_ :: Text -> Html () -> Html ()
 floatingModal_ modalId =
-  modalWith_ modalId def{boxClass = "!w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none", wrapperClass = "!items-start pt-[15vh] px-4 " <> floatingScrim, hideClose = True} Nothing
+  modalWith_ modalId def{boxClass = "!w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none", wrapperClass = "!items-start pt-[15vh] px-4 bg-black/40 dark:bg-black/65 backdrop:backdrop-blur-[2px] [&_.modal-backdrop]:backdrop-blur-[2px]", hideClose = True} Nothing
 
 
 -- | A component's own attributes followed by its caller's, as one list Lucid renders correctly.
@@ -1052,15 +1061,10 @@ mergedAttrs attrs = [Attribute k (joined k [v | Attribute k' v <- attrs, k' == k
 -- the title id is @dialogId-title@. Children may style on @group-has-[…]/dialog@.
 floatingDialog_ :: Text -> Html () -> (Text, [Text]) -> [Attribute] -> Html () -> Html () -> Html ()
 floatingDialog_ dialogId title submitHint formAttrs body submit =
-  with (makeElement "dialog") [id_ dialogId, class_ $ "modal !items-start px-4 pt-[15vh] " <> floatingScrim, term "aria-labelledby" (dialogId <> "-title")] do
+  with (makeElement "dialog") [id_ dialogId, class_ "modal !items-start px-4 pt-[15vh] bg-black/40 dark:bg-black/65 backdrop:backdrop-blur-[2px] [&_.modal-backdrop]:backdrop-blur-[2px]", term "aria-labelledby" (dialogId <> "-title")] do
     form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close"] "close"
     form_ (mergedAttrs $ formAttrs <> [class_ "modal-box group/dialog !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none"])
       $ floatingCard_ [id_ $ dialogId <> "-title"] title (\attrs -> button_ (mergedAttrs $ [type_ "button", onclick_ "this.closest('dialog').close()"] <> attrs)) [submitHint, ("Close", ["esc"])] body submit
-
-
--- | The backdrop behind a floating prompt: dark enough in both themes that the card reads as the only surface.
-floatingScrim :: Text
-floatingScrim = "bg-black/40 dark:bg-black/65 backdrop:backdrop-blur-[2px] [&_.modal-backdrop]:backdrop-blur-[2px]"
 
 
 -- | A floating prompt's card: the title and close control, @body@, then keyboard hints beside
@@ -1506,6 +1510,26 @@ pickerEmpty_ msg =
     $ toHtml msg
 
 
+-- | Compact empty-result line inside an async picker popover.
+pickerNoMatches_ :: Text -> Html ()
+pickerNoMatches_ = p_ [class_ "px-3 py-5 text-center text-xs text-textWeak"] . toHtml
+
+
+-- | Popover action menu: trigger button + positioned @ul.dropdown.dropdown-end.menu@ panel.
+-- Callers supply width, padding, radius, and size classes inline via @menuAttrs@.
+actionMenu_ :: Text -> Bool -> [Attribute] -> Html () -> [Attribute] -> Html () -> Html ()
+actionMenu_ menuId closeOnClick triggerAttrs triggerBody menuAttrs items = do
+  button_ (mergedAttrs $ [type_ "button"] <> popoverTrigger_ menuId <> triggerAttrs) triggerBody
+  ul_
+    ( mergedAttrs
+        $ [class_ "dropdown dropdown-end menu bg-bgRaised border border-strokeWeak shadow-lg z-50"]
+        <> popoverPanel_ menuId
+        <> [[__|on click call me.hidePopover()|] | closeOnClick]
+        <> menuAttrs
+    )
+    items
+
+
 -- | Chromeless popover container hosting a 'pickerCard_' so the card itself is the sole surface,
 -- focusing the search input whenever opened.
 pickerPopover_ :: Text -> Text -> [Attribute] -> Html () -> Html ()
@@ -1638,16 +1662,13 @@ periodToggle_ baseUrl targetId currentPeriod =
     forM_ ["24h" :: Text, "7d" :: Text] \val ->
       let url = deleteParam "period" baseUrl <> "&period=" <> val
        in button_
-            [ class_ $ "cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors " <> bool "text-textWeak hover:bg-fillWeaker hover:text-textStrong" "bg-fillWeak text-textStrong" (val == currentPeriod)
-            , type_ "button"
-            , Aria.label_ $ "Show " <> val <> " activity"
-            , term "aria-pressed" $ bool "false" "true" (val == currentPeriod)
-            , hxGet_ url
-            , hxTarget_ $ "#" <> targetId
-            , hxSelect_ $ "#" <> targetId
-            , hxSwap_ "outerHTML"
-            , hxPushUrl_ "true"
-            ]
+            ( [ class_ $ "cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors " <> bool "text-textWeak hover:bg-fillWeaker hover:text-textStrong" "bg-fillWeak text-textStrong" (val == currentPeriod)
+              , type_ "button"
+              , Aria.label_ $ "Show " <> val <> " activity"
+              , term "aria-pressed" $ bool "false" "true" (val == currentPeriod)
+              ]
+                <> swapTarget_ targetId url
+            )
             $ toHtml val
 
 

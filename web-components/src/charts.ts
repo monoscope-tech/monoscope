@@ -177,6 +177,7 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
 
   const fData = buildHierarchy(data);
   const flameContainer = document.querySelector('#a' + renderAt) as HTMLElement;
+  const traceTabs = document.getElementById('trace-tabs');
   const resetBtn = document.getElementById('reset-zoom-btn');
 
   const renderItem = (item: ItemsWithStyle, container: HTMLElement, rootVal: number, containerWidth: number) => {
@@ -202,7 +203,7 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
         (e.currentTarget as HTMLElement).classList.add('ring-2', 'ring-strokeBrand-strong', 'timeline-selected');
         const data = filterJson(structuredClone(fData), item.name);
         flameGraph(data, renderAt, true);
-        resetBtn?.classList.remove('hidden');
+        if (traceTabs) traceTabs.dataset.flameZoomed = 'true';
         window.htmx.trigger('#trigger-span-' + item.spanId, 'click');
       },
       'data-tippy-content': `${item.serviceName ? item.serviceName + ' · ' : ''}${item.label} — ${t} ${u} (${pct.toFixed(1)}%)${item.hasErrors ? ' · error' : ''}`,
@@ -248,7 +249,7 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
   if (resetBtn) {
     resetBtn.addEventListener('click', () => {
       flameGraph(fData, renderAt);
-      resetBtn.classList.add('hidden');
+      delete traceTabs?.dataset.flameZoomed;
     }, { signal });
   }
 

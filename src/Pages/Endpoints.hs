@@ -400,7 +400,7 @@ renderEndpointMainCol pid currentTab (EnpReqStatsVM _ _ enp) = do
   div_ [class_ "flex items-center justify-between gap-3 min-w-0"] do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
       a_ ([class_ "inline-flex items-center gap-1.5 font-medium text-textBrand hover:underline underline-offset-2 decoration-from-font truncate min-w-0", href_ (urls.endpointDetailsRedirect pid [("var-endpointHash", Just enp.endpointHash), ("var-host", Just enp.host)])] <> navTabAttrs) $ do
-        span_ [class_ $ "endpoint endpoint-" <> T.toLower enp.method <> " shrink-0 !w-auto !p-0.5 !px-1.5 !m-0 !text-xs !rounded", data_ "enp-urlMethod" enp.method] $ toHtml enp.method
+        span_ [class_ $ methodClass enp.method <> " shrink-0 !w-auto !p-0.5 !px-1.5 !m-0 !text-xs !rounded", data_ "enp-urlMethod" enp.method] $ toHtml enp.method
         span_ [class_ "inconsolata text-sm truncate", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
       servicesBadges_
         sourceLabel
@@ -410,6 +410,17 @@ renderEndpointMainCol pid currentTab (EnpReqStatsVM _ _ enp) = do
       [ RowAction{icon = "explore", label = "Logs", href = logExplorerHref pid q, attrs = navTabAttrs}
       , RowAction{icon = "brackets-curly", label = "Schema", href = docsHref pid enp.host (tabParam currentTab) (Just enp.endpointHash), attrs = []}
       ]
+  where
+    methodClass :: Text -> Text
+    methodClass m = case T.toUpper m of
+      "GET" -> "endpoint endpoint-get"
+      "POST" -> "endpoint endpoint-post"
+      "PUT" -> "endpoint endpoint-put"
+      "PATCH" -> "endpoint endpoint-patch"
+      "DELETE" -> "endpoint endpoint-delete"
+      "HEAD" -> "endpoint endpoint-head"
+      "OPTIONS" -> "endpoint endpoint-options"
+      _ -> "endpoint"
 
 
 -- Learned API documentation ----------------------------------------------------

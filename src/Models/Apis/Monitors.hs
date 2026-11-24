@@ -1,6 +1,9 @@
 module Models.Apis.Monitors (
   CronMonitor (..),
   CheckinStatus (..),
+  cronExpectedBy,
+  isValidCronSlug,
+  activeThreshold,
   cronMonitorsByProject,
   cronMonitorById,
   updateCronMonitor,
@@ -39,9 +42,11 @@ module Models.Apis.Monitors (
 
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
+import Data.Char (isAsciiLower, isDigit)
 import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.OpenApi (ToSchema)
+import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time.Clock (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
@@ -431,3 +436,27 @@ claimDueCronMonitors limit =
 
 recordCronCheckin :: DB es => UUID.UUID -> UTCTime -> CheckinStatus -> Eff es Int64
 recordCronCheckin mid at status = Hasql.interpExecute [HI.sql| UPDATE apis.cron_monitors SET last_checkin_at = #{at}, last_status = #{status} WHERE id = #{mid} |]
+
+
+-- | Deadline by which a cron monitor must check in before it is considered missed.
+cronExpectedBy :: CronMonitor -> Maybe UTCTime -> UTCTime
+cronExpectedBy m lastSeen = addUTCTime (fromIntegral $ m.intervalSecs + m.graceSecs) (fromMaybe m.createdAt lastSeen)
+
+
+-- | Valid cron monitor slug: non-empty lowercase ASCII, digits, or @_.-@.
+--
+-- >>> map isValidCronSlug ["daily-backup_1.0", "", "UPPER", "bad slug"]
+-- [True,False,False,False]
+isValidCronSlug :: Text -> Bool
+isValidCronSlug s = not (T.null s) && T.all (\c -> isAsciiLower c || isDigit c || c `elem` ("_.-" :: String)) s
+
+
+-- | Effective threshold for a monitor transitioning from @m.currentStatus@ into @nextStatus@,
+-- honoring hysteresis recovery thresholds when returning to 'MSNormal'.
+activeThreshold :: QueryMonitor -> MonitorStatus -> Double
+activeThreshold m = \case
+  MSWarning -> fromMaybe m.alertThreshold m.warningThreshold
+  MSAlerting -> m.alertThreshold
+  MSNormal
+    | m.currentStatus == MSWarning -> fromMaybe m.alertThreshold (m.warningRecoveryThreshold <|> m.warningThreshold)
+    | otherwise -> fromMaybe m.alertThreshold m.alertRecoveryThreshold

@@ -81,6 +81,7 @@ library
     Data.Effectful.AgentWorkspace.Guest
     Pkg.CLIFormat
     Pkg.Deriving
+    Pkg.Duration
     Pkg.GitCommand
     Pkg.MonitorConfig
     Pkg.Parser.Eval

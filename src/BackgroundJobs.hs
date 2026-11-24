@@ -3317,9 +3317,9 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
 commitQueryMonitorEvaluation :: Monitors.QueryMonitor -> Double -> Monitors.MonitorStatus -> UTCTime -> Incidents.IncidentDelivery -> Tx.Transaction Bool -> ATBackgroundCtx Bool
 commitQueryMonitorEvaluation monitor value status observedAt delivery commitStatus = do
   let isRecovery = status == Monitors.MSNormal
-      threshold = case status of Monitors.MSWarning -> fromMaybe monitor.alertThreshold monitor.warningThreshold; Monitors.MSAlerting -> monitor.alertThreshold; Monitors.MSNormal -> monitor.alertThreshold
+      threshold = Monitors.activeThreshold monitor status
       source = Incidents.MonitorIncident monitor.id
-      thresholdDir = thresholdDirection monitor.triggerLessThan
+      thresholdDir = Issues.thresholdDirection monitor.triggerLessThan
   appCtx <- ask @Config.AuthContext
   project <- Projects.activeProjectById monitor.projectId
   case project of
@@ -5147,7 +5147,7 @@ evaluateCronMonitor now m = do
       completion c = case attr "monitor.status" c of Nothing -> Just Monitors.CSOk; Just "ok" -> Just Monitors.CSOk; Just "error" -> Just Monitors.CSError; Just _ -> Nothing
       latest = viaNonEmpty last $ sortWith fst [(c.timestamp, st) | c <- spans, attr "monitor.slug" c == Just m.slug, maybe True (c.timestamp >) m.lastCheckinAt, Just st <- [completion c]]
       lastSeen = (fst <$> latest) <|> m.lastCheckinAt
-      expectedBy = addUTCTime (fromIntegral $ m.intervalSecs + m.graceSecs) (fromMaybe m.createdAt lastSeen)
+      expectedBy = Monitors.cronExpectedBy m lastSeen
       open failure = do
         let d = Issues.CronData{monitorId = UUID.toText m.id, slug = m.slug, name = m.name, failure, expectedBy, lastCheckinAt = lastSeen}
             headline = Mail.cronName d <> bool " failed" " missed its run" (failure == Issues.CFMissed)
@@ -5603,10 +5603,6 @@ evaluateQueryMonitorValue monitor at value =
 -- MSAlerting
 -- >>> BJ.monitorStatus True Nothing 100 (Just 80) Nothing PM.MSAlerting 101
 -- MSNormal
-thresholdDirection :: Bool -> Issues.ThresholdDirection
-thresholdDirection = bool Issues.Above Issues.Below
-
-
 monitorStatus :: Bool -> Maybe Double -> Double -> Maybe Double -> Maybe Double -> Monitors.MonitorStatus -> Double -> Monitors.MonitorStatus
 monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery prev value
   | breached alertThreshold = Monitors.MSAlerting
@@ -5616,10 +5612,10 @@ monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRec
       Monitors.MSWarning -> holdUnless (recovered warnRecovery (fromMaybe alertThreshold warnThreshold))
       Monitors.MSNormal -> Monitors.MSNormal
   where
-    dir = thresholdDirection triggerLessThan
+    dir = Issues.thresholdDirection triggerLessThan
     holdUnless r = if r then Monitors.MSNormal else prev
     breached t = Issues.meetsThreshold dir t value
-    recovered r t = bool (<) (>) triggerLessThan value (fromMaybe t r)
+    recovered r t = Issues.recoveredFrom dir (fromMaybe t r) value
 
 
 -- ============================================================================

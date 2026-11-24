@@ -65,7 +65,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Pages.BodyWrapper (PageCtx)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), emptyState_, filterInputAttr_, keyboardActivateAttr_, mergedAttrs, pollSelfAttrs_, searchInput_, timeRefreshListener_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), emptyState_, filterInputAttr_, keyboardActivateAttr_, mergedAttrs, pollSelfAttrs_, searchInput_, swapTarget_, timeRefreshListener_)
 import Pkg.DeriveUtils (SortField (..), SortOrder (..))
 import Relude
 import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), deleteParam, faSprite_, fmtInt, loadingIndicator_, navTabAttrs, navTabStrip_, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, uiToggle_)
@@ -438,11 +438,6 @@ instance ToHtml TabFilter where
 -- "/x?a=1&filter=bar"
 withQuery :: Text -> Text -> Text
 withQuery url q = url <> bool "?" "&" ("?" `T.isInfixOf` url) <> q
-
-
--- | htmx attrs that fetch @url@ and swap the target container with the same container from the response.
-swapTarget_ :: Text -> Text -> [Attribute]
-swapTarget_ tid url = [hxGet_ url, hxTarget_ $ "#" <> tid, hxSelect_ $ "#" <> tid, hxPushUrl_ "true", hxSwap_ "outerHTML"]
 
 
 selectAllCheckbox_ :: Html ()

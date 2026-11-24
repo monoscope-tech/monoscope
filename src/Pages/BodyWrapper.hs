@@ -1040,31 +1040,31 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                     span_ [class_ $ "hidden group-has-[#sidenav-toggle:checked]/pg:block me-2 h-1 w-1 shrink-0 rounded-full " <> bool "bg-transparent" "bg-fillBrand-strong" isActive, Aria.hidden_ "true"] ""
                     span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block min-w-0 flex-1 truncate leading-5"] $ toHtml c.title
                   span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block shrink-0 pe-2 text-2xs tabular-nums text-textDisabled group-hover/thread:opacity-0 group-focus-within/thread:opacity-0 transition-opacity duration-100", title_ $ toText $ formatTime defaultTimeLocale "%e %b %Y, %H:%M UTC" c.updatedAt] $ toHtml $ relativeTime c.updatedAt
-                  button_
-                    ( [ type_ "button"
-                      , Aria.label_ $ "Actions for " <> c.title
-                      , class_ "absolute end-0.5 hidden h-6 w-6 items-center justify-center rounded text-textWeak opacity-0 hover:bg-fillHover hover:text-textStrong group-has-[#sidenav-toggle:checked]/pg:flex group-hover/thread:opacity-100 group-focus-within/thread:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-1 transition-[color,background-color,opacity] duration-100"
-                      ]
-                        <> popoverTrigger_ actionsId
-                    )
-                    $ faSprite_ "ellipsis" "regular" "h-3.5 w-3.5"
-                  ul_ ([class_ "dropdown dropdown-end menu menu-sm z-50 w-44 rounded-lg border border-strokeWeak bg-bgRaised p-1 shadow-lg", [__|on click call me.hidePopover()|]] <> popoverPanel_ actionsId) do
-                    li_ [] $ a_ [href_ href] "Open chat"
-                    li_ []
-                      $ button_
-                        [ type_ "button"
-                        , data_ "thread-title" c.title
-                        , data_ "title-url" $ urls.aiThreadTitlePost project.id c.conversationId
-                        , [__|on click
+                  Components.actionMenu_
+                    actionsId
+                    True
+                    [ Aria.label_ $ "Actions for " <> c.title
+                    , class_ "absolute end-0.5 hidden h-6 w-6 items-center justify-center rounded text-textWeak opacity-0 hover:bg-fillHover hover:text-textStrong group-has-[#sidenav-toggle:checked]/pg:flex group-hover/thread:opacity-100 group-focus-within/thread:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-1 transition-[color,background-color,opacity] duration-100"
+                    ]
+                    (faSprite_ "ellipsis" "regular" "h-3.5 w-3.5")
+                    [class_ "menu-sm w-44 rounded-lg p-1"]
+                    do
+                      li_ [] $ a_ [href_ href] "Open chat"
+                      li_ []
+                        $ button_
+                          [ type_ "button"
+                          , data_ "thread-title" c.title
+                          , data_ "title-url" $ urls.aiThreadTitlePost project.id c.conversationId
+                          , [__|on click
                             set #ai-thread-rename-input.value to my.dataset.threadTitle
                             set the @hx-post of #ai-thread-rename-form to my.dataset.titleUrl
                             call #ai-thread-rename-modal.showModal()|]
-                        ]
-                        "Rename"
-                    when (c.conversationType == Issues.CTWeb && isNothing c.routineKind) $ li_ [] $ form_ [class_ "w-full", hxPost_ $ urls.aiRoutinePost project.id c.conversationId, hxSwap_ "none", hxConfirm_ "Turn this chat into a daily routine?"] do
-                      input_ [type_ "hidden", name_ "intervalMinutes", value_ "1440"]
-                      button_ [type_ "submit", class_ "w-full text-start"] "Make daily routine"
-                    li_ [] $ button_ [type_ "button", class_ "text-textError", hxDelete_ $ urls.aiThreadDelete project.id c.conversationId, hxSwap_ "none", hxConfirm_ "Delete this chat and its message history? This cannot be undone."] "Delete chat"
+                          ]
+                          "Rename"
+                      when (c.conversationType == Issues.CTWeb && isNothing c.routineKind) $ li_ [] $ form_ [class_ "w-full", hxPost_ $ urls.aiRoutinePost project.id c.conversationId, hxSwap_ "none", hxConfirm_ "Turn this chat into a daily routine?"] do
+                        input_ [type_ "hidden", name_ "intervalMinutes", value_ "1440"]
+                        button_ [type_ "submit", class_ "w-full text-start"] "Make daily routine"
+                      li_ [] $ button_ [type_ "button", class_ "text-textError", hxDelete_ $ urls.aiThreadDelete project.id c.conversationId, hxSwap_ "none", hxConfirm_ "Delete this chat and its message history? This cannot be undone."] "Delete chat"
           activeType = (.conversationType) <$> find ((== bcfg.activeConversationId) . Just . (.conversationId)) bcfg.conversations
           routineCard c = do
             -- A PR thread is listed under its routine, so the routine marks where you are.
@@ -1442,7 +1442,7 @@ navFlyoutLimit = 20
 
 navDashboardRows_ :: Projects.ProjectId -> [Dashboards.NavDashboard] -> Html ()
 navDashboardRows_ pid ds
-  | null ds = p_ [class_ "px-3 py-5 text-center text-xs text-textWeak"] "No matching dashboards"
+  | null ds = Components.pickerNoMatches_ "No matching dashboards"
   | otherwise = do
       forM_ (take navFlyoutLimit ds) \d -> do
         let title = Dashboards.dashTitle d.title
@@ -1461,7 +1461,7 @@ navDashboardRows_ pid ds
 
 navIssueRows_ :: Projects.ProjectId -> [Issues.NavIssue] -> Html ()
 navIssueRows_ pid is
-  | null is = p_ [class_ "px-3 py-5 text-center text-xs text-textWeak"] "No matching issues"
+  | null is = Components.pickerNoMatches_ "No matching issues"
   | otherwise = do
       forM_ (take navFlyoutLimit is) \i ->
         Components.pickerItem_

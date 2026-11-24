@@ -65,7 +65,7 @@ import Models.Projects.DashboardTemplates qualified as DashboardTemplates
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), ResourceRow (..), agoText, callout_, copyField_, dangerAction_, dangerZone_, detailTab_, emptyState_, factGrid_, formCheckbox_, formField_, formSelectField_, options_, panel_, pollSelfAttrs_, resourceList_, sectionLabel_, statFigure_, tabPanel_, teamPicker_, toneDot_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), ResourceRow (..), agoText, callout_, copyField_, dangerAction_, dangerZone_, detailTab_, disclosure_, emptyState_, factGrid_, formCheckbox_, formField_, formSelectField_, options_, panel_, pollSelfAttrs_, resourceList_, sectionLabel_, statFigure_, tabPanel_, teamPicker_, toneDot_, tonePill_)
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
@@ -212,7 +212,7 @@ uptimeState c
 cronState :: Monitors.CronMonitor -> UTCTime -> CheckState
 cronState m now = case m.lastStatus of
   Just Monitors.CSError -> Failing
-  _ | now > addUTCTime (fromIntegral $ m.intervalSecs + m.graceSecs) (fromMaybe m.createdAt m.lastCheckinAt) -> Failing
+  _ | now > Monitors.cronExpectedBy m m.lastCheckinAt -> Failing
   Just Monitors.CSOk -> Operational
   Nothing -> Pending
 
@@ -773,7 +773,7 @@ cronMonitorPostH pid form = act do
       name = T.strip form.name
   if
     | T.null slug || T.null name -> pure $ Left MissingSlugOrName
-    | not (T.all (\c -> isAsciiLower c || isDigit c || c `elem` ("_.-" :: String)) slug) -> pure $ Left InvalidSlug
+    | not (Monitors.isValidCronSlug slug) -> pure $ Left InvalidSlug
     | otherwise ->
         (Monitors.insertCronMonitor pid slug name (max 60 form.interval) (max 60 form.grace) =<< Time.currentTime) >>= \case
           0 -> pure $ Left $ DuplicateSlug slug
@@ -802,7 +802,7 @@ newtype CronMonitorPage = CronMonitorPage (PageCtx CronDashboard)
 instance ToHtml CronMonitorPage where
   toHtml (CronMonitorPage (PageCtx bw d)) = shell bw $ div_ [class_ "group/cm mx-auto max-w-6xl space-y-4 p-4"] do
     let m = d.monitor
-        nextDue = addUTCTime (fromIntegral $ m.intervalSecs + m.graceSecs) (fromMaybe m.createdAt m.lastCheckinAt)
+        nextDue = Monitors.cronExpectedBy m m.lastCheckinAt
     checkHeader_ (urls.monitors d.pid).cronGet "Cron" (cronState m d.now) m.name do
       span_ [class_ "font-mono"] $ toHtml m.slug
       span_ $ "every " <> toHtml (intervalLabel m.intervalSecs) <> ", " <> toHtml (intervalLabel m.graceSecs) <> " grace"
@@ -927,11 +927,8 @@ statusBoard_ b = div_ ([id_ "status-board", class_ "mx-auto max-w-3xl space-y-6 
           whenJust c.avgMs \ms -> span_ [class_ "shrink-0 text-xs text-textWeak tabular-nums"] $ toHtml $ showMs (Just ms) <> " avg · 90 days"
         span_ [class_ "shrink-0 text-sm"] $ statePill_ c.state
       barsWithScale_ b.now c.days
-      details_ [class_ "group/cd text-sm"] do
-        summary_ [class_ "flex w-fit cursor-pointer list-none items-center gap-1 text-xs text-textWeak hover:text-textBrand"] do
-          faSprite_ "chevron-right" "regular" "size-3 transition-transform group-open/cd:rotate-90"
-          "History and locations"
-        div_ [class_ "mt-3 grid gap-4 md:grid-cols-2"] do
+      disclosure_ [class_ "text-sm"] "w-fit text-xs text-textWeak hover:text-textBrand" "History and locations"
+        $ div_ [class_ "mt-3 grid gap-4 md:grid-cols-2"] do
           div_ $ sectionLabel_ "Monthly uptime" >> monthsTable_ c.months
           unless (null c.byRegion) $ div_ do
             sectionLabel_ "Locations, last 24 hours"

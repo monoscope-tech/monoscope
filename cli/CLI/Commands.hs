@@ -99,6 +99,7 @@ import Options.Applicative (Parser, help, long, maybeReader, metavar, option)
 import Pages.Charts.Types (MetricsData (..))
 import Pkg.CLIFormat (cleanSummaryValue, escapeControls, evalCond, extractColIdxMap, extractInt, extractRawRows, extractRows, extractTextArray, renderSummaryCell, valToText)
 import Pkg.Deriving (decodeEnumSC)
+import Pkg.Duration qualified as Duration
 import Pkg.Parser.Expr (kqlQuoted)
 import System.IO (hPutStrLn)
 import System.Process (spawnProcess)
@@ -521,11 +522,7 @@ planChunks opts
 
 -- | @"<n><unit>"@ → seconds; units @s@/@m@/@h@/@d@, case-insensitive.
 parseDurationSecs :: Text -> Maybe Int
-parseDurationSecs (T.toLower . T.strip -> t) =
-  asum
-    [ (* mult) <$> (readMaybe . toString =<< T.stripSuffix sfx t)
-    | (sfx, mult) <- [("s", 1), ("m", 60), ("h", 3600), ("d", 86400)]
-    ]
+parseDurationSecs = fmap (round . Duration.durationToSeconds) . Duration.parseDuration Duration.CaseInsensitive Duration.sinceUnits
 
 
 parseDurationHours :: Text -> Maybe Int
@@ -1445,9 +1442,7 @@ checkAssertion MetricsData{dataFloat} cond = case dataFloat of
 -- if the suffix is missing or unparseable; bare numbers are NOT accepted
 -- as seconds (validateDurationFor would have rejected them at flag parse).
 parseDurationMs :: Text -> Int
-parseDurationMs (T.toLower . T.strip -> t)
-  | Just n <- T.stripSuffix "ms" t = fromMaybe 5000 (readMaybe $ toString n)
-  | otherwise = maybe 5000 (* 1000) (parseDurationSecs t)
+parseDurationMs = maybe 5000 Duration.durationToMs . Duration.parseDuration Duration.CaseInsensitive Duration.durationUnits
 
 
 -- Device auth helpers

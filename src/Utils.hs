@@ -2135,6 +2135,13 @@ data Icon = Icon
   deriving stock (Eq, Show)
 
 
+-- | Look up an embedded SVG icon by style (@"regular"@/@"solid"@) and name.
+--
+-- Sidebar icons preserve their original viewBoxes and stroke widths:
+-- >>> map (\(n, vb) -> (lookupIcon "regular" n <&> (.viewBox)) == Just vb) [("dashboard", "0 0 14 14"), ("explore", "0 0 512 512"), ("bug", "0 0 512 512"), ("web", "0 0 16 15"), ("server", "0 0 512 512"), ("swap", "0 0 640 512"), ("list-check", "0 0 512 512"), ("chart-simple", "0 0 448 512"), ("gear", "0 0 512 512"), ("circle-question", "0 0 16 16")]
+-- [True,True,True,True,True,True,True,True,True,True]
+-- >>> map (\(n, w) -> maybe False (T.isInfixOf ("stroke-width=\"" <> w <> "\"")) (lookupIcon "regular" n <&> (.body))) [("circle-question", "1.5"), ("server", "48"), ("web", "1.33333")]
+-- [True,True,True]
 lookupIcon :: Text -> Text -> Maybe Icon
 lookupIcon kind name = HM.lookup (kind, name) iconTable
 

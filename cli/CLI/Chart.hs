@@ -306,6 +306,11 @@ stripAnsi t = case T.breakOn "\ESC[" t of
 
 
 -- | Pad (or truncate) to an exact visible width, ANSI-safe.
+--
+-- >>> visibleWidth (padTo 10 (colorize True (seriesColor 0) "abc"))
+-- 10
+-- >>> visibleWidth (padTo 4 "abcdefgh")
+-- 4
 padTo :: Int -> Text -> Text
 padTo n t
   | w <= n = t <> T.replicate (n - w) " "
