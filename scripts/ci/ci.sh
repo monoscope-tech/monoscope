@@ -1052,7 +1052,8 @@ REMOTE
 # proofs on missing packages (hasql-pool, cargo-nextest in Nov 2026). When they change, the worker
 # rebuilds it from $sha in the background, swaps it in keeping one previous guest, and restarts once
 # idle. Checkpoints are keyed by guest build, so the next workspace build after a swap is cold.
-GUEST_INPUTS='package.json package-lock.json web-components/package.json web-components/package-lock.json monoscope.cabal cabal.project cabal.project.freeze shared/monoscope-shared.cabal cli/monoscope-cli.cabal proto/monoscope-proto.cabal impact-review-worker/Dockerfile.browser impact-review-worker/build-guest.mjs impact-review-worker/monoscope-app.sh impact-review-worker/monoscope-traffic.mjs impact-review-worker/guest-init.sh impact-review-worker/package-lock.json'
+# package.yaml, not monoscope.cabal: the generated file also changes with every new module and migration.
+GUEST_INPUTS='package.json package-lock.json web-components/package.json web-components/package-lock.json package.yaml hpack-includes cabal.project cabal.project.freeze shared/monoscope-shared.cabal cli/monoscope-cli.cabal proto/monoscope-proto.cabal impact-review-worker/Dockerfile.browser impact-review-worker/build-guest.mjs impact-review-worker/monoscope-app.sh impact-review-worker/monoscope-traffic.mjs impact-review-worker/guest-init.sh impact-review-worker/package-lock.json'
 refresh_guest() { # <sha>
   local inputs
   # shellcheck disable=SC2086
