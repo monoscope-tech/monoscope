@@ -439,8 +439,10 @@ validateNotificationChannels _ enabledChannels _
 validateNotificationChannels pid enabledChannels phones = do
   discord <- requireIntegration "discord" DiscordNotConnected enabledChannels (getDiscordDataByProjectId pid)
   slack <- requireIntegration "slack" SlackNotConnected enabledChannels (getProjectSlackData pid)
-  let (invalid, valid) = Notify.partitionPhones phones
-  pure $ discord *> slack *> when ("phone" `elem` enabledChannels && null phones) (Left PhoneNumberRequired) *> unless (null invalid) (Left $ InvalidPhoneNumbers invalid) $> valid
+  -- Numbers are checked only while WhatsApp is on: a stale one must not block saving other channels.
+  let phoneOn = "phone" `elem` enabledChannels
+      (invalid, valid) = Notify.partitionPhones phones
+  pure $ discord *> slack *> when (phoneOn && null phones) (Left PhoneNumberRequired) *> when (phoneOn && not (null invalid)) (Left $ InvalidPhoneNumbers invalid) $> bool phones valid phoneOn
 
 
 -- | Resolve the live Slack channel list for an (already-fetched) SlackData.
