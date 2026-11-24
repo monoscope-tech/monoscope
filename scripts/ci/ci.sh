@@ -1045,6 +1045,40 @@ systemctl is-active -q monoscope-impact-worker-restart || systemd-run --quiet --
   'for _ in $(seq 200); do docker top monoscope-impact-worker -o pid,args | grep -qE "pi-host|sandbox.mjs" || break; sleep 15; done; systemctl restart monoscope-impact-worker'
 REMOTE
   note "proof worker restarts on $sha once no review is running"
+  refresh_guest "$sha"
+}
+
+# The proof guest bakes the toolchains, dependencies and browsers these files define; a stale one fails
+# proofs on missing packages (hasql-pool, cargo-nextest in Nov 2026). When they change, the worker
+# rebuilds it from $sha in the background, swaps it in keeping one previous guest, and restarts once
+# idle. Checkpoints are keyed by guest build, so the next workspace build after a swap is cold.
+GUEST_INPUTS='package.json package-lock.json web-components/package.json web-components/package-lock.json monoscope.cabal cabal.project cabal.project.freeze shared/monoscope-shared.cabal cli/monoscope-cli.cabal proto/monoscope-proto.cabal impact-review-worker/Dockerfile.browser impact-review-worker/build-guest.mjs impact-review-worker/monoscope-app.sh impact-review-worker/monoscope-traffic.mjs impact-review-worker/guest-init.sh impact-review-worker/package-lock.json'
+refresh_guest() { # <sha>
+  local inputs
+  # shellcheck disable=SC2086
+  inputs=$(git ls-tree -r "$1" -- $GUEST_INPUTS | sha256 | cut -c1-16)
+  [ "$(ssh -o BatchMode=yes "$IMPACT_WORKER_HOST" cat /srv/monoscope/guest.inputs 2>/dev/null)" != "$inputs" ] || return 0
+  git archive --format=tar "$1" -- package.json package-lock.json web-components/package.json web-components/package-lock.json monoscope.cabal cabal.project cabal.project.freeze shared cli proto impact-review-worker \
+    | ssh -o BatchMode=yes "$IMPACT_WORKER_HOST" sudo bash -c "'systemctl is-active -q monoscope-guest-rebuild && { cat >/dev/null; exit 0; }; rm -rf /srv/monoscope/guest-src && mkdir -p /srv/monoscope/guest-src && tar -xf - -C /srv/monoscope/guest-src'"
+  ssh -o BatchMode=yes "$IMPACT_WORKER_HOST" sudo bash -s "${IMAGE}:$1" "$inputs" <<'REMOTE'
+set -e
+systemctl is-active -q monoscope-guest-rebuild && { echo "guest rebuild already running"; exit 0; }
+cat > /srv/monoscope/guest-rebuild.sh <<'SCRIPT'
+set -eu
+cd /srv/monoscope/guest-src/impact-review-worker && npm ci --ignore-scripts --no-audit --no-fund
+docker pull -q "$SERVER_IMAGE" && docker pull -q ghcr.io/monoscope-tech/monoscope-deps:latest
+rm -rf /srv/monoscope/guest.next
+IMPACT_REVIEW_CONTAINER_ENGINE=docker IMPACT_REVIEW_SERVER_IMAGE=$SERVER_IMAGE nice -n 10 npx -y node@22 build-guest.mjs browser /srv/monoscope/guest.next
+chown -R root:root /srv/monoscope/guest.next && chmod 755 /srv/monoscope/guest.next && chmod 644 /srv/monoscope/guest.next/*
+rm -rf /srv/monoscope/guest.prev && mv /srv/monoscope/guest /srv/monoscope/guest.prev && mv /srv/monoscope/guest.next /srv/monoscope/guest
+echo "$INPUTS" > /srv/monoscope/guest.inputs
+# The worker bind-mounts the old directory until it restarts.
+for _ in $(seq 200); do docker top monoscope-impact-worker -o pid,args | grep -qE "pi-host|sandbox.mjs" || break; sleep 15; done
+systemctl restart monoscope-impact-worker
+SCRIPT
+systemd-run --quiet --collect --unit monoscope-guest-rebuild --setenv=SERVER_IMAGE="$1" --setenv=INPUTS="$2" bash /srv/monoscope/guest-rebuild.sh
+echo "guest rebuild started (journalctl -u monoscope-guest-rebuild)"
+REMOTE
 }
 
 # ---------------------------------------------------------------- ship
