@@ -6,6 +6,7 @@ module Pkg.ErrorFingerprint (
   parseStackTrace,
   normalizeStackTrace,
   normalizeMessage,
+  normalizeExceptionType,
   computeErrorFingerprint,
   computeErrorHashes,
   ErrorMask (..),
@@ -20,7 +21,7 @@ module Pkg.ErrorFingerprint (
 )
 where
 
-import Data.Char (isDigit, isHexDigit)
+import Data.Char (isAlphaNum, isDigit, isHexDigit)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display)
@@ -318,6 +319,27 @@ normalizeMessage msg =
       (prose, json) = T.breakOn "{\"" combined
       collapsed = if T.compareLength json 512 == GT then prose <> "{json}" else combined
    in T.strip $ replaceAllFormats collapsed
+
+
+-- | A type that spans lines or runs long is a rendered value, not a type name:
+-- hs-opentelemetry's http-client instrumentation puts the whole @show@ of an
+-- 'HttpException' (traceparent, request ids, dates) in @error.type@, so every
+-- failed call minted its own issue (~1,400 Twilio/PagerDuty issues in two days).
+-- Its leading identifier is the type; real type names pass through unchanged.
+--
+-- >>> normalizeExceptionType "HttpExceptionRequest Request {\n  host = \"api.twilio.com\"\n  requestHeaders = [(\"traceparent\",\"00-4d40\")]"
+-- "HttpExceptionRequest"
+-- >>> map normalizeExceptionType ["System.IO.IOException", "Uncaught TypeError", ""]
+-- ["System.IO.IOException","Uncaught TypeError",""]
+--
+-- >>> let dump tp = "HttpExceptionRequest Request {\n  host = \"api.twilio.com\"\n  requestHeaders = [(\"traceparent\",\"" <> tp <> "\")]\n}"
+-- >>> let hashFor tp = (computeErrorHashes "p" (Just "svc") (Just "POST") RGeneric (normalizeExceptionType (dump tp)) (dump tp) "").narrow
+-- >>> hashFor "00-4d40f1-7cce89-03" == hashFor "00-6ab7ff-95cc61-03"
+-- True
+normalizeExceptionType :: Text -> Text
+normalizeExceptionType t
+  | T.any (== '\n') t || T.compareLength t 200 == GT = T.takeWhile (\c -> isAlphaNum c || c `elem` ("._:$" :: String)) $ T.stripStart t
+  | otherwise = t
 
 
 -- | Compute the error fingerprint hash using stack-trace-first prioritization

@@ -702,7 +702,12 @@ avatarGetH userId _ send = do
       initialsImg = pure ("image/svg+xml", "public, max-age=60", avatarInitialsSvg name)
       -- The picture URL is an IdP claim this anonymous route fetches: the probe manager refuses
       -- internal addresses (redirects included), times out and caps the body.
-      fetchImage url ct cache fallback = handle (\(_ :: SomeException) -> fallback) $ Wreq.getWith (Wreq.defaults & W.manager .~ Right ctx.probeManager) (toString url) <&> \r -> (ct, cache, r ^. Wreq.responseBody)
+      -- A missing picture (Gravatar's d=404) is an answer, not a failure: read the status instead
+      -- of letting wreq throw, which marked every such fetch an error span and filed issues.
+      fetchImage url ct cache fallback =
+        handle (\(_ :: SomeException) -> fallback)
+          $ Wreq.getWith (Wreq.defaults & W.manager .~ Right ctx.probeManager & W.checkResponse ?~ (\_ _ -> pass)) (toString url)
+          >>= \r -> if H.statusIsSuccessful (r ^. W.responseStatus) then pure (ct, cache, r ^. Wreq.responseBody) else fallback
       gravatar u = fetchImage (gravatarUrl (CI.original u.email)) "image/png" "public, max-age=604800" initialsImg
   (ct, cache, body) <- case userM of
     Nothing -> initialsImg

@@ -67,6 +67,7 @@ import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isAlphaNum, isDigit, isLower)
 import Data.Default (Default (..))
+import Data.Effectful.Notify qualified as Notify
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq
 import Data.Effectful.Wreq qualified as W
@@ -354,7 +355,7 @@ integrationsSaved :: Projects.ProjectId -> IntegrationChange -> ATAuthCtx Integr
 integrationsSaved pid change = IntegrationsSaved change . (.content) <$> integrationsPage pid
 
 
-data ChannelsRejection = UnknownChannel | DiscordNotConnected | SlackNotConnected | PhoneNumberRequired
+data ChannelsRejection = UnknownChannel | DiscordNotConnected | SlackNotConnected | PhoneNumberRequired | InvalidPhoneNumbers [Text]
   deriving stock (Eq, Show)
 
 
@@ -364,6 +365,7 @@ instance Refusal ChannelsRejection where
     DiscordNotConnected -> "You need to connect Discord to this project first."
     SlackNotConnected -> "You need to connect Slack to this project first."
     PhoneNumberRequired -> "Provide at least one whatsapp number"
+    InvalidPhoneNumbers ns -> "Use the international format with a country code (e.g. +2348012345678): " <> T.intercalate ", " ns
 
 
 data PagerdutyKeyTooShort = PagerdutyKeyTooShort
@@ -420,7 +422,7 @@ updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, sl
         $ (ProjectMembers.teamToDetails team)
           { ProjectMembers.slackChannels = V.fromList $ filter (`notElem` unreachable) requested
           , ProjectMembers.notifyEmails = V.fromList emails
-          , ProjectMembers.phoneNumbers = V.fromList phones
+          , ProjectMembers.phoneNumbers = V.fromList $ mapMaybe Notify.parsePhoneE164 phones
           , ProjectMembers.disabledChannels = V.fromList $ filter (`notElem` enabledChannels) allChannels
           }
 
@@ -436,7 +438,8 @@ validateNotificationChannels _ enabledChannels _
 validateNotificationChannels pid enabledChannels phones = do
   discord <- requireIntegration "discord" DiscordNotConnected enabledChannels (getDiscordDataByProjectId pid)
   slack <- requireIntegration "slack" SlackNotConnected enabledChannels (getProjectSlackData pid)
-  pure $ discord *> slack *> when ("phone" `elem` enabledChannels && null phones) (Left PhoneNumberRequired)
+  let invalid = filter (isNothing . Notify.parsePhoneE164) phones
+  pure $ discord *> slack *> when ("phone" `elem` enabledChannels && null phones) (Left PhoneNumberRequired) *> unless (null invalid) (Left $ InvalidPhoneNumbers invalid)
 
 
 -- | Resolve the live Slack channel list for an (already-fetched) SlackData.

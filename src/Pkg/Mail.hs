@@ -170,8 +170,10 @@ sendSlackAlert threadTsM alert pid pTitle channelM = do
 
 
 sendWhatsAppAlert :: (Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> V.Vector Text -> Eff es ()
-sendWhatsAppAlert alert pid pTitle tos = do
+sendWhatsAppAlert alert pid pTitle numbers = do
   appCtx <- ask @Config.AuthContext
+  unless (null invalid)
+    $ Log.logAttention "WhatsApp alert skipped numbers not in E.164 form (+<country code><number>); fix them in the project's notification settings" (AE.object ["project_id" AE..= pid, "invalid_count" AE..= length invalid])
   case alert of
     RuntimeErrorAlert{..} ->
       sendAlert appCtx.config.whatsappErrorTemplate
@@ -191,6 +193,7 @@ sendWhatsAppAlert alert pid pTitle tos = do
   where
     -- Twilio template button URL suffix ({{2}}/{{4}}): must stay exact, never silently fall back to "/p/..."
     issuePath h = pid.toText <> "/issues/by_hash/" <> h
+    (invalid, tos) = partitionEithers [maybeToRight n (Notify.parsePhoneE164 n) | n <- V.toList numbers]
     sendAlert template vars = for_ tos \to -> Notify.sendNotification $ Notify.whatsappNotification template to vars
     sendMonitor templateM status title url = case templateM of
       Nothing -> Log.logAttention "WhatsApp monitor alert skipped: WHATSAPP_MONITOR_TEMPLATE is not configured" $ AE.object ["project_id" AE..= pid, "status" AE..= status]

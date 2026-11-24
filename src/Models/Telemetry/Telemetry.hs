@@ -2553,8 +2553,9 @@ extractATErrorFromRecord spanObj =
 -- | Build an 'ErrorPatterns.ATError' from a span/log plus the extracted
 -- @(errorType, message, stackTrace)@ triple. Hash-driven dedup groups similar errors.
 atErrorFrom :: OtelLogsAndSpans -> ErrorPatterns.CaptureMechanism -> Maybe Bool -> Text -> Text -> Text -> ErrorPatterns.ATError
-atErrorFrom spanObj mechanism handled typ msg stack =
-  let attrs = unAesonTextMaybe spanObj.attributes
+atErrorFrom spanObj mechanism handled rawTyp msg stack =
+  let typ = EF.normalizeExceptionType rawTyp
+      attrs = unAesonTextMaybe spanObj.attributes
       resc = unAesonTextMaybe spanObj.resource
       -- Attributes arrive both flat ("client.address") and nested by ingest's dot-notation
       -- expansion ({client: {address}}), so each key is tried both ways.
