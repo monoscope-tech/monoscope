@@ -42,9 +42,12 @@ one focused test, a doctest or `monoscope-app --server` compiles only what chang
 was not prepared (`dist-newstyle` is missing), mark the claim unverified and say which test would
 prove it.
 
-Build with the prepared workspace's flags, `cabal build --offline --ghc-options="-O0 -j2" <target>`.
-Without `-O0`, cabal builds at `-O1`, every module recompiles ("Optimisation flags changed"), and the
-check runs out of time. Warning flags such as `-Werror=unused-imports` do not force a rebuild.
+Prove a server-side behaviour with the integration test the pull request adds, as the command (no
+setup): `monoscope-app --test 'supersededReview_'`. It builds the frontend the server's Template
+Haskell reads, copies in the git-pinned dependency sources, and runs the matching tests offline
+from the workspace's warm build. A match with no tests fails, so the base, which lacks the new test,
+fails. A bare `cabal build` or `cabal test` skips the first two steps and fails before any test runs
+(on #1021: a missing Vite manifest, then a missing `hasql-interpolate` source).
 
 ## UI changes
 

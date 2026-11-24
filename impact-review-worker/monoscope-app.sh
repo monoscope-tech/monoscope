@@ -1,17 +1,25 @@
 #!/bin/bash
 # Serves Monoscope offline with this checkout's frontend; see .monoscope/PROOF.md. With --server it also
 # builds this checkout's server from the workspace's warm build and runs that instead of the guest's.
+# With --test MATCH it runs the integration tests MATCH selects, from the same warm build.
 set -euo pipefail
 trap 'tail -qn 30 /tmp/{tailwind,vite,cabal,postgres,monoscope,traffic}.log >&2 2>/dev/null' ERR
 app=/opt/monoscope
 ln -sfn /opt/proof/node_modules node_modules
 ln -sfn /opt/proof/web-components/node_modules web-components/node_modules
-if [ "${1:-}" = --server ]; then
+# What a build of this checkout needs: the frontend Template Haskell reads, the git-pinned sources
+# the guest fetched, and the workspace build's configuration (or cabal rebuilds from scratch).
+haskell() {
   ./node_modules/.bin/tailwindcss -i static/public/assets/css/tailwind.css -o static/public/assets/css/tailwind.min.css >/tmp/tailwind.log 2>&1
   (cd web-components && ./node_modules/.bin/vite build >/tmp/vite.log 2>&1)
   mkdir -p dist-newstyle/src && cp -Rn /opt/haskell/dist-src/. dist-newstyle/src/
-  # The workspace build's configuration, or cabal reconfigures and rebuilds from scratch.
   [ -f cabal.project.local ] || printf 'tests: True\noptimization: False\npackage monoscope\n  ghc-options: -j4\n' > cabal.project.local
+}
+if [ "${1:-}" = --test ]; then
+  haskell
+  exec cabal test integration-tests --offline --test-show-details=direct --test-option=--match --test-option="${2:?usage: monoscope-app --test MATCH}" --test-option=--color --test-option=never --test-option=--fail-on=empty
+elif [ "${1:-}" = --server ]; then
+  haskell
   cabal build exe:monoscope-server --offline >/tmp/cabal.log 2>&1
   server=$(cabal list-bin exe:monoscope-server --offline | tail -n 1) root=$PWD migrate=True
 else
