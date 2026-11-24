@@ -178,7 +178,7 @@ schema role = \case
   RecordProof ->
     object
       [ ("claim", bounded 1 (Just 200) & O.description ?~ "The behaviour this recording proves, as the PR author would state it.")
-      , ("command", bounded 1 (Just 16384) & O.description ?~ "Bash run from /workspace on each revision and recorded. Exit nonzero when the claimed behaviour is absent.")
+      , ("command", bounded 1 (Just 16384) & O.description ?~ "Bash run from /workspace on each revision and recorded. Exit nonzero when the claimed behaviour is absent. In a browser script, set a 5-second default timeout and, when a step fails, print the page's ariaSnapshot() before exiting, so a retry targets the controls the page has.")
       , ("setup", bounded 1 (Just 16384) & O.description ?~ "Optional bash run first and not recorded: build and start the app in the background, migrate and seed its data, and wait until it answers. Reuse the repository's saved setup unchanged when it still applies. It runs in its own shell, so exports do not reach the command; use fixed ports or write values to a file.")
       , ("highlight", bounded 1 (Just 200) & O.description ?~ "Optional text the command prints at the moment the claimed behaviour shows, such as a step heading. For a terminal proof, the comment's preview is an eight-second clip from there, with a timeline of the whole recording; without it, the clip is the recording's end.")
       , ("covers", array 1 11 (bounded 1 $ Just 200) & O.description ?~ "Other planned claims this one recording also proves, as plan_proofs stated them. Script one case per claim, each behind its own chapter.")

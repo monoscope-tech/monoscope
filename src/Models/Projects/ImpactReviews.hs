@@ -54,6 +54,8 @@ module Models.Projects.ImpactReviews (
   ProofRecipe (..),
   SetupReuse (..),
   proofRecipe,
+  PriorReview (..),
+  priorReview,
   proofSides,
   proofFile,
   ClaimState (..),
@@ -635,8 +637,8 @@ data SetupReuse = NoSetup | Reused | Changed
 -- | Stores one proof's recordings, all sides or none, under the run's next unused key. Only the run
 -- holding the review lease can record, so a superseded attempt cannot add media. The setup behind a
 -- successful head recording becomes the repository's saved recipe.
-saveProofs :: DB es => ReviewRun -> UUIDId "agent_attempt" -> Maybe Text -> NonEmpty Agent.ProofMedia -> Eff es (Either Text (Text, SetupReuse))
-saveProofs run attempt setup sides = Hasql.transaction TxS.ReadCommitted TxS.Write do
+saveProofs :: DB es => ReviewRun -> UUIDId "agent_attempt" -> Agent.ProofScript -> NonEmpty Agent.ProofMedia -> Eff es (Either Text (Text, SetupReuse))
+saveProofs run attempt script sides = Hasql.transaction TxS.ReadCommitted TxS.Write do
   HI.OneColumn leased <-
     Hasql.oneTx
       [HI.sql|SELECT EXISTS (SELECT 1 FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
@@ -649,14 +651,15 @@ saveProofs run attempt setup sides = Hasql.transaction TxS.ReadCommitted TxS.Wri
       then pure []
       else forM (toList sides) \proof ->
         Hasql.queryTx @(Maybe (HI.OneColumn Bool))
-          [HI.sql|WITH saved AS (INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, revision, exit_code, cast_bytes, gif, mp4, browser, chapters)
-        VALUES (#{run.id}, #{attempt}, #{key}, #{proof.side}, #{proof.revision}, #{fromIntegral @Int @Int32 <$> proof.exitCode}, #{proof.cast}, #{proof.gif}, #{proof.mp4}, #{proof.browser}, #{Aeson proof.chapters})
+          [HI.sql|WITH saved AS (INSERT INTO projects.pr_review_proofs (run_id, attempt_id, key, side, revision, exit_code, cast_bytes, gif, mp4, browser, chapters, script)
+        VALUES (#{run.id}, #{attempt}, #{key}, #{proof.side}, #{proof.revision}, #{fromIntegral @Int @Int32 <$> proof.exitCode}, #{proof.cast}, #{proof.gif}, #{proof.mp4}, #{proof.browser}, #{Aeson proof.chapters}, #{Aeson script})
         ON CONFLICT (run_id, key, side) DO NOTHING RETURNING run_id, key, side
       ), shots AS (
         INSERT INTO projects.pr_review_proof_shots (run_id, key, side, n, label, png)
         SELECT saved.run_id, saved.key, saved.side, shot.n, shot.label, shot.png
         FROM saved, unnest(#{V.fromList (map fst proof.shots)}::text[], #{V.fromList (map snd proof.shots)}::bytea[]) WITH ORDINALITY AS shot(label, png, n)
       ) SELECT true FROM saved|]
+  let setup = script.setup
   if
     | not leased -> Left "Review authorization is no longer available" <$ Tx.condemn
     | full -> Left "Proof budget exhausted; cite the proofs already recorded" <$ Tx.condemn
@@ -679,6 +682,25 @@ saveProofs run attempt setup sides = Hasql.transaction TxS.ReadCommitted TxS.Wri
 data ProofRecipe = ProofRecipe {setup :: Text, revision :: Text}
   deriving stock (Generic)
   deriving anyclass (HI.DecodeRow)
+
+
+-- | The latest earlier review of this pull request: its claims (without their proof keys) and the
+-- scripts whose head recording passed, so a review of a new push re-proves them the same way.
+data PriorReview = PriorReview {revision :: Text, claims :: AE.Value, scripts :: AE.Value}
+  deriving stock (Generic)
+  deriving anyclass (HI.DecodeRow)
+
+
+priorReview :: DB es => ReviewRun -> Eff es (Maybe PriorReview)
+priorReview run =
+  Hasql.interpOne
+    [HI.sql|SELECT p.revision,
+      coalesce((SELECT jsonb_agg(c - 'proofKeys') FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p.result->'claims') = 'array' THEN p.result->'claims' ELSE '[]' END) c), '[]'),
+      coalesce((SELECT jsonb_agg(DISTINCT s.script) FROM projects.pr_review_proofs s WHERE s.run_id = p.id AND s.side = 'head' AND s.exit_code = 0 AND s.script IS NOT NULL), '[]')
+    FROM projects.pr_review_runs p JOIN projects.pr_review_runs r ON r.id = #{run.id}
+    WHERE p.thread_id = r.thread_id AND p.revision <> r.revision AND p.created_at < r.created_at
+      AND (jsonb_typeof(p.result->'claims') = 'array' OR EXISTS (SELECT 1 FROM projects.pr_review_proofs s WHERE s.run_id = p.id AND s.script IS NOT NULL))
+    ORDER BY p.created_at DESC LIMIT 1|]
 
 
 proofRecipe :: DB es => ReviewRun -> Eff es (Maybe ProofRecipe)

@@ -156,6 +156,25 @@ Progress on each item is logged below as it lands.
 - **Master's build was broken (#1017).** `test/unit/Pkg/ParserSpec.hs` from #1014 failed
   `-Werror=name-shadowing`, so every PR's Build and Test was red.
 
+- **Integration-test proofs could not start Postgres (PR #1018, `a558c9534`).** VM commands get a
+  reset PATH, and the guest exposed Postgres only through Docker `ENV`, so `initdb` was missing and
+  every Haskell integration-test proof failed in setup. #1017's own review on the new guest found
+  this. The binaries are now linked into `/usr/local/bin`, and `refresh_guest`'s remote path ran for
+  real to build that guest on the worker.
+
+- **Proofs lost to busy verifier VMs (PR #1018 and worker config).** The worker admits 8 agents but
+  had 2 verifier slots, and a proof needs one per side. In a week, 134 checks (50 from reviews, 84
+  from fix runs) waited 45 s, got no VM and failed. Each review case cost one of its three proof
+  attempts. Verifier slots are now 4 (`IMPACT_REVIEW_VM_SLOTS=8,4,1` in
+  `/etc/monoscope/impact-worker.env`, backup `.bak-20261124`, effective at the next restart), and a
+  check waits up to five minutes for a slot. Each side takes its slot separately, so waiting cannot
+  deadlock.
+
+Open question, not changed: six reviews in a week ended with "exceeded its query budget" (20 host
+tool calls for a PR review). Three of them made no proof and ran no check before running out, so
+the calls went to telemetry and memory. A larger budget would only help if the agent proves first.
+The session transcripts would show which calls those were.
+
 Still behind Blacksmith: no `@monoscope dismiss`, and claims carried over are re-recorded on both
 sides rather than reusing the merge-base recording.
 
@@ -164,7 +183,11 @@ sides rather than reusing the merge-base recording.
 - **Install the GitHub App on Talstack-LLC** (steps at the top) to run our proofs on those PRs.
 - **Stale comments already posted** on #975, #980, #982, #985, #994, #997, #1000, #1001 and #1014
   do not heal: the fix acts when a superseded run's job runs again. Edit them by hand or ignore them.
-- **About 75 GB of old guests** on the worker (`guest.prev-20261111`, `guest.prev-ab85f39b`,
-  `guest.prev-5df490c7`, plus the 8 GB `guest.prev`), on a host that ran out of disk six times this
+- **The guest was rebuilt twice tonight**: `70d7ab18` (02:28 UTC) and `0c44e530` (04:00 UTC, with
+  `initdb`), the second through `refresh_guest`'s real remote path. That swap deleted the old 8 GB
+  `guest.prev` by design and kept `70d7ab18` as `guest.prev`. A rebuild peaks near 40 GB of memory
+  on the worker host. Each forced restart cost the reviews and fix runs in flight (#1016 lost one).
+- **About 67 GB of older guests** on the worker (`guest.prev-20261111`, `guest.prev-ab85f39b`,
+  `guest.prev-5df490c7`), on a host that ran out of disk six times this
   week. Automated rebuilds keep only one `guest.prev`. The others can go once the new guest has
   run a few reviews.
