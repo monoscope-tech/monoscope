@@ -15,7 +15,12 @@ image=$(docker service inspect srv-captain--monoscope --format '{{.Spec.TaskTemp
 tree=$(label "$image" io.monoscope.source-tree || { docker pull -q "$image" >/dev/null && label "$image" io.monoscope.source-tree; } || true)
 [ -n "$tree" ] || { say "production image $image carries no source tree"; exit 0; }
 want=$W:tree-$tree
-docker pull -q "$want" >/dev/null 2>&1 || { say "no worker image for tree $tree yet (the Mac builds it with the server image)"; exit 0; }
+if ! docker pull -q "$want" >/dev/null 2>&1; then
+  # Said once per tree, not every tick: an image built before worker images existed never gets one.
+  [ "$(cat /run/monoscope-worker-follow.missing 2>/dev/null)" = "$tree" ] || say "no worker image for tree $tree yet (the Mac builds it with the server image)"
+  echo "$tree" > /run/monoscope-worker-follow.missing
+  exit 0
+fi
 new=$(label "$want" io.monoscope.worker-inputs || true)
 running=$(docker inspect --format '{{.Image}}' monoscope-impact-worker 2>/dev/null || true)
 [ -z "$running" ] || [ "$new" != "$(label "$running" io.monoscope.worker-inputs || true)" ] || exit 0
