@@ -973,8 +973,27 @@ renderReview host run audience result =
     -- Identical query results are shown once: a reviewer that re-ran a query cited it twice.
     <> (if github && shown then concatMap evidenceBlock $ take 3 $ ordNubOn (\e -> maybe (Left e.key) (Right . AE.encode) e.queryResult) $ filter (\e -> any (elem e.key . (.evidenceKeys)) result.findings) result.evidence else [])
     <> coverage
+    <> [agentData | github, not (null (fold result.claims) && null (fold result.issues))]
     <> [footer]
   where
+    -- Coding agents working on the pull request read outcomes here instead of parsing the comment.
+    agentData =
+      T.intercalate "\n"
+        $ ["<!-- Proof results for coding agents (monoscope:proof-data)", "tested commit " <> run.revision <> foldMap (", merge base " <>) run.base]
+        <> concat
+          [ (c <> " " <> T.toLower (show claim.status) <> ": " <> clean claim.title)
+              : ("  observed: " <> clean claim.summary)
+              : [ "  " <> kind <> " \"" <> clean name <> "\" (" <> sideName p.side <> "): " <> url
+                | p <- sidesOf claim
+                , (kind, name, url) <- [("image", shot.label, shot.url) | shot <- fold p.shots] <> [("recording", "full video", p.video) | p.side == Agent.Head]
+                ]
+          | (c, claim) <- zip (map (("c" <>) . show @Text @Int) [1 ..]) (fold result.claims)
+          ]
+        <> concat [["issue: " <> clean i.title, "  observed: " <> clean i.summary] | i <- fold result.issues]
+        <> ["not verified: " <> clean gap | shown, gap <- result.coverage]
+        <> ["merge risk: " <> T.takeWhileEnd (/= ' ') (riskHeading $ mergeRisk a) | Just a <- [result.assessments]]
+        <> ["-->"]
+    sideName = \case Agent.Base -> "merge base"; Agent.Head -> "this PR"
     evidenceBlock item = case item.queryResult of
       Just o -> ["![Review query results](" <> url <> ")" | binnedQuery o, Just url <- [item.chartUrl]] <> [evidenceTable item.service o | numericAggregate o]
       Nothing -> ["![Observed service events](" <> url <> ")" | Just url <- [item.chartUrl]]

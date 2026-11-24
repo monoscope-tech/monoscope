@@ -76,4 +76,24 @@ Adds retries to payment capture. A second timeout can charge a customer twice, a
 
 </details>
 
+<!-- Proof results for coding agents (monoscope:proof-data)
+tested commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+c1 matches: Shows the retry count in the receipt
+  observed: The receipt shows Retried once under the charge; before, it showed only the amount.
+  image "Receipt card" (merge base): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-base-1.png?sig=s
+  image "Receipt card" (this PR): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head-1.png?sig=s
+  image "Retry history" (this PR): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head-2.png?sig=s
+  recording "full video" (this PR): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s
+c2 matches: Retries a timed-out capture once
+  observed: The capture command retries after the first timeout and succeeds.
+  image "Capture retried twice" (merge base): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base-1.png?sig=s
+  image "Capture retried twice" (this PR): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head-1.png?sig=s
+  recording "full video" (this PR): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s
+issue: Receipt total overflows its card at 1280px
+  observed: The total runs 9px past the receipt card on the right; it fits at 1440px.
+not verified: No load test covers the retry backoff.
+not verified: Provider-side duplicates are not visible in this project's telemetry.
+merge risk: medium
+-->
+
 <sub>Reviewed [`aaaaaaa`](https://github.com/acme/checkout/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) with production telemetry from Jan 1 to Jan 8, 2025 · [Open the full review](https://app.monoscope.tech/p/x/ai/runs/y) · [Review settings](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings) · Did the proof get it right? [Yes](https://app.monoscope.tech/rate/up) · [No](https://app.monoscope.tech/rate/down) · Comment `@monoscope prove it` to prove again</sub>
