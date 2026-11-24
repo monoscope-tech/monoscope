@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Types (reviewSeconds, fixSeconds, AgentAwaitingReview (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), FixContext (..), Evidence (..), EvidenceKind (..), Observation (..), QueryKind (..), QueryObservation (..), KnowledgeSnapshot (..), ThinkingLevel (..), ReviewMode (..), DraftSubmission (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionResult (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), FixReviewRequest (..), FixReviewDecision (..), FixReviewResult (..), Explanation (..), validExplanation, PricingStatus (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), ProofMedia (..), ProofProgress (..), ProofHooks (..), hoistHooks, WorkspaceFingerprint, mkWorkspaceFingerprint, Revision, mkRevision, revisionText, Candidate (..), Step (..), Failure (..)) where
+module Data.Effectful.CodeReview.Types (reviewSeconds, fixSeconds, AgentAwaitingReview (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), FixContext (..), Evidence (..), EvidenceKind (..), Observation (..), QueryKind (..), QueryObservation (..), KnowledgeSnapshot (..), ThinkingLevel (..), ReviewMode (..), DraftSubmission (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionResult (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), FixReviewRequest (..), FixReviewDecision (..), FixReviewResult (..), Explanation (..), validExplanation, PricingStatus (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), ProofMedia (..), ProofProgress (..), ProofScript (..), ProofHooks (..), hoistHooks, WorkspaceFingerprint, mkWorkspaceFingerprint, Revision, mkRevision, revisionText, Candidate (..), Step (..), Failure (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Char (isHexDigit)
@@ -140,12 +140,18 @@ data ProofMedia = ProofMedia {side :: RevisionSide, revision :: Text, exitCode :
 data ProofProgress = Planned (NonEmpty Text) | Started (NonEmpty Text) | Recorded (NonEmpty Text) Text | Unproved (NonEmpty Text)
 
 
+-- | What one record_proof ran, so the next review of the pull request can replay it.
+data ProofScript = ProofScript {claim :: Text, command :: Text, setup :: Maybe Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
 -- | How a review stores each recorded proof (returning its key) and reports progress.
-data ProofHooks m = ProofHooks {save :: Maybe Text -> NonEmpty ProofMedia -> m (Either Text Text), progress :: ProofProgress -> m ()}
+data ProofHooks m = ProofHooks {save :: ProofScript -> NonEmpty ProofMedia -> m (Either Text Text), progress :: ProofProgress -> m ()}
 
 
 hoistHooks :: (forall a. m a -> n a) -> ProofHooks m -> ProofHooks n
-hoistHooks to hooks = ProofHooks{save = \setup -> to . hooks.save setup, progress = to . hooks.progress}
+hoistHooks to hooks = ProofHooks{save = \script -> to . hooks.save script, progress = to . hooks.progress}
 
 
 data CheckStatus = Passed | Failed | Blocked | Invalidated | TimedOut | OutputLimit | Cancelled | CleanupFailed

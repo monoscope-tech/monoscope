@@ -2903,6 +2903,31 @@ spec = around withTestResources $ describe "Production impact reviews" do
     void $ deliver tr $ payload "closed" next "2025-01-01T00:02:00Z"
     fst <$> runReview next new Test.id >>= (`shouldSatisfy` any (T.isInfixOf "closed")) . progressEdits
 
+  -- Blacksmith's "still holds on the new head": a push re-proves the last review's claims with its scripts.
+  it "pushedReview_reprovesThePriorClaimsWithTheirPassingScripts" \tr -> do
+    setup tr
+    appConfig <- githubApp tr
+    void $ deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
+    [old] <- runQueryEffect tr $ Reviews.latestRuns testPid
+    let next = T.replicate 40 "b"
+        media side code = Proof.ProofMedia{side, revision, exitCode = Just code, cast = "cast", gif = "gif", mp4 = "mp4", browser = False, shots = [], chapters = []}
+        script = Agent.ProofScript "Shows the retry count" "node proof.mjs" (Just "monoscope-app")
+        record command headExit = runQueryEffect tr (Reviews.saveProofs old (UUIDId UUID.nil) script{Agent.command} (media Agent.Base 1 :| [media Agent.Head headExit])) >>= (`shouldSatisfy` isRight)
+        cfg = appConfig{impactReviewUsageDir = Just "fixture-usage", impactReviewCacheDir = Just "fixture-cache", impactReviewProvider = "fixture", openaiModel = "fixture"}
+    runQueryEffect tr (Reviews.claimRun (slots 100) old) `shouldReturn` True
+    record "node proof.mjs" 0
+    record "node broken-proof.mjs" 1
+    let claim = AE.object ["title" AE..= ("Shows the retry count" :: Text), "status" AE..= ("matches" :: Text), "summary" AE..= ("The receipt shows Retried once." :: Text), "proofKeys" AE..= (["proof-1"] :: [Text])]
+    dbExec tr "UPDATE projects.pr_review_runs SET result = ? WHERE id = ?" (Aeson $ AE.object ["claims" AE..= ([claim] :: [AE.Value])], old.id)
+    runQueryEffect tr $ Reviews.releaseRun old
+    void $ deliver tr $ payload "synchronize" next "2025-01-01T00:01:00Z"
+    Just new <- find ((== next) . (.revision)) <$> runQueryEffect tr (Reviews.latestRuns testPid)
+    prompt <- newIORef ""
+    void $ runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ pullRequestApi [Git.PullRequestFile "checkout.hs" "modified" (Just "@@ -1 +1 @@\n-old\n+new")] [] pass (pullRequestAt (T.replicate 40 "d") next 1) $ repositoryReview (\request _ _ _ -> writeIORef prompt request.prompt $> Left "stop") $ tryAny $ Impact.reviewPullRequest new.id
+    readIORef prompt >>= (`shouldContainAll` ["An earlier review of this pull request, at " <> revision, "node proof.mjs", "The receipt shows Retried once."])
+    -- Only scripts that passed on the head are offered, and the old run's proof keys are not citable.
+    readIORef prompt >>= (`shouldNotSatisfy` \p -> any (`T.isInfixOf` p) ["broken-proof.mjs", "proof-1"])
+
   it "reviewTriggers_draftsFollowTheModeAndMembersCanAskInEveryMode" \tr -> do
     setup tr
     let queued = dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'ReviewPullRequest' AND status = 'queued'" ()
@@ -3063,7 +3088,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Reviews.claimRun (slots 1){Workspace.node = "second-node"} late) `shouldReturn` True
     -- A setup whose head recording succeeded becomes the repository's recipe; an attempt stores at most three proofs.
     let attempt = UUIDId UUID.nil
-        saveProof = runQueryEffect tr $ Reviews.saveProofs middle attempt (Just "make serve &") (sideProof Agent.Base 1 :| [sideProof Agent.Head 0])
+        saveProof = runQueryEffect tr $ Reviews.saveProofs middle attempt (Agent.ProofScript "Serves the receipt" "curl -s localhost:8080" (Just "make serve &")) (sideProof Agent.Base 1 :| [sideProof Agent.Head 0])
     -- The first replays no saved recipe; later ones replay the one it saved.
     traverse (const saveProof) [1 .. 4 :: Int] `shouldReturn` ([Right ("proof-1", Reviews.Changed), Right ("proof-2", Reviews.Reused), Right ("proof-3", Reviews.Reused), Left "Proof budget exhausted; cite the proofs already recorded"] :: [Either Text (Text, Reviews.SetupReuse)])
     fmap (.setup) <$> runQueryEffect tr (Reviews.proofRecipe middle) `shouldReturn` Just "make serve &"
