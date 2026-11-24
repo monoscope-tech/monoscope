@@ -63,9 +63,11 @@ RUN curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/
   && mkdir -p /etc/postgresql-common && echo 'create_main_cluster = false' > /etc/postgresql-common/createcluster.conf \
   && apt-get update && apt-get install -y --no-install-recommends postgresql-18 timescaledb-2-postgresql-18 timescaledb-toolkit-postgresql-18 \
     libgmp10 librdkafka1 libpq5 libsnappy1v5 liblz4-1 libzstd1 libsasl2-2 libldap-2.5-0 libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libjpeg62-turbo libgif7 fontconfig fonts-dejavu-core \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* \
+  && ln -s /usr/lib/postgresql/18/bin/* /usr/local/bin/ && command -v initdb pg_ctl
 COPY proto/opentelemetry /opt/traffic/proto/opentelemetry
 RUN cd /opt/traffic && npm install --no-save --no-audit --no-fund protobufjs@7.6.6 && rm -rf /root/.npm
+# Build steps see ENV; VM commands get the default PATH, so the binaries are also linked above.
 ENV PATH=/usr/lib/postgresql/18/bin:$PATH
 COPY --from=server --chown=review-agent:review-agent /opt/monoscope /opt/monoscope
 WORKDIR /opt/monoscope
