@@ -175,7 +175,11 @@ sides rather than reusing the merge-base recording.
 - **Install the GitHub App on Talstack-LLC** (steps at the top) to run our proofs on those PRs.
 - **Stale comments already posted** on #975, #980, #982, #985, #994, #997, #1000, #1001 and #1014
   do not heal: the fix acts when a superseded run's job runs again. Edit them by hand or ignore them.
-- **About 75 GB of old guests** on the worker (`guest.prev-20261111`, `guest.prev-ab85f39b`,
-  `guest.prev-5df490c7`, plus the 8 GB `guest.prev`), on a host that ran out of disk six times this
+- **The guest was rebuilt twice tonight**: `70d7ab18` (02:28 UTC) and `0c44e530` (04:00 UTC, with
+  `initdb`), the second through `refresh_guest`'s real remote path. That swap deleted the old 8 GB
+  `guest.prev` by design and kept `70d7ab18` as `guest.prev`. A rebuild peaks near 40 GB of memory
+  on the worker host. Each forced restart cost the reviews and fix runs in flight (#1016 lost one).
+- **About 67 GB of older guests** on the worker (`guest.prev-20261111`, `guest.prev-ab85f39b`,
+  `guest.prev-5df490c7`), on a host that ran out of disk six times this
   week. Automated rebuilds keep only one `guest.prev`. The others can go once the new guest has
   run a few reviews.
