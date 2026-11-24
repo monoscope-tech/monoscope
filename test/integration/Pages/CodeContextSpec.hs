@@ -1075,6 +1075,14 @@ spec = do
         void $ call tr $ AIThreads.routineDeleteH otherPid installed.conversationId
         analyzeOther
         isJust <$> triage otherPid `shouldReturn` False
+        -- repositoryConnect_enablesPullRequestReviews_evenWhenAnalysisFails: connecting any repository
+        -- leaves an active review routine, so reviews work without visiting the routine catalog.
+        reviewsPid <- createTestProject tr "reviews"
+        reviewsAccount <- grantOf tr reviewsPid Git.GitHub Nothing "team" Nothing (Just "fixture")
+        Just reviewsRepository <- runQueryEffect tr $ GitSync.connectRepository reviewsPid reviewsAccount.id (Git.GitRepo "team/checkout" "checkout" True "main")
+        void $ runJob tr withUnavailableRepositoryAPI (BackgroundJobs.AnalyzeRepository reviewsPid reviewsRepository.id)
+        isJust <$> runQueryEffect tr (Issues.getEventRoutine reviewsPid Issues.EventPullRequest) `shouldReturn` True
+        isJust <$> triage reviewsPid `shouldReturn` False
         -- An older installation still on its template's text follows the newer version; an edited one keeps its own.
         let older = Issues.issueTriageTemplate{Issues.version = 1, Issues.prompt = "Older triage instructions", Issues.reportWhen = Issues.ReportFindings}
             user = (getResponse tr.trSessAndHeader :: Projects.Session).user.id
@@ -1102,7 +1110,7 @@ spec = do
         void $ runTestBg frozenTime tr $ BackgroundJobs.processBackgroundJob tr.trATCtx{config = tr.trATCtx.config{enableDailyJobScheduling = True}} BackgroundJobs.DailyJob
         dbOne tr "SELECT count(*)::int FROM background_jobs WHERE payload = ?::jsonb" (Only $ decodeUtf8 @Text $ AE.encode $ BackgroundJobs.AnalyzeRepository testPid repository.id) `shouldReturn` (1 :: Int)
 
-      it "repositoryConnection_missingReviewRunnerIsNotReadyAndRetainsDetails" \tr -> do
+      it "repositoryConnection_reviewReadinessAndRetainedDetails" \tr -> do
         let configured = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = "fixture", githubAppId = "fixture", githubAppPrivateKey = "fixture", impactReviewAgent = Just "test/fixtures/impact-review-agent.mjs"}}}
             withConfig f r = r{trATCtx = r.trATCtx{config = f r.trATCtx.config}}
             withoutAgent = withConfig (\c -> c{impactReviewAgent = Nothing}) configured
@@ -1118,9 +1126,9 @@ spec = do
         readiness configured >>= (`shouldSatisfy` \case PageCodeContext.ReviewNeedsRoutine -> True; _ -> False)
         void $ call configured $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review")
         readiness configured >>= (`shouldSatisfy` \case PageCodeContext.ReviewReady _ -> True; _ -> False)
-        noRunner <- renderT . (.content) <$> call withoutAgent (PageCodeContext.repositoryGetH testPid repository.id)
-        noRunner `shouldNotSatisfy` T.isInfixOf "Ready for pull requests"
-        noRunner `shouldSatisfy` T.isInfixOf "Automatic reviews are unavailable. Ask your Monoscope administrator to finish review setup."
+        -- reviewReadiness_ignoresTheWebServersAgent: reviews run on the impact worker, so a web server
+        -- without IMPACT_REVIEW_AGENT (prod) must not report setup as missing (2026-11-24).
+        readiness withoutAgent >>= (`shouldSatisfy` \case PageCodeContext.ReviewReady _ -> True; _ -> False)
         readiness (withConfig (\c -> c{githubAppPrivateKey = ""}) configured) >>= (`shouldSatisfy` \case PageCodeContext.ReviewNeedsServer -> True; _ -> False)
         for_ details.content.mappings \mapping -> runQueryEffect tr $ CodeContext.deleteCodeMapping testPid mapping.id
         void $ runQueryEffect tr $ GitSync.deleteGitHubSync sync.id

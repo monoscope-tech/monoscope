@@ -468,9 +468,10 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
         lift $ Hasql.interpExecute_ [HI.sql| INSERT INTO projects.repository_analysis (repository_id, suggestions) VALUES (#{rid}, #{suggestions}) ON CONFLICT (repository_id) DO UPDATE SET suggestions = EXCLUDED.suggestions, analyzed_at = now(), error = NULL |]
       for_ (leftToMaybe result) \err -> Hasql.interpExecute_ [HI.sql| INSERT INTO projects.repository_analysis (repository_id, error) VALUES (#{rid}, #{err}) ON CONFLICT (repository_id) DO UPDATE SET error = EXCLUDED.error, analyzed_at = now() |]
       -- One analysis per project provisions at a time; a concurrent one skips, the holder installs.
-      when (isRight result) $ void $ withXactLease ctx ("routine-provision:" <> pid.toText) $ whenJustM (Projects.projectById pid) \project -> do
+      -- A connected repository always gets pull request reviews, even when analysis failed.
+      void $ withXactLease ctx ("routine-provision:" <> pid.toText) $ whenJustM (Projects.projectById pid) \project -> do
         mapped <- not . null <$> CodeContext.getCodeMappings pid
-        for_ (Issues.issueTriageTemplate : [Issues.issueAutofixTemplate | mapped]) $ Issues.provisionRoutineTemplate project >=> traverse_ \routine -> enqueueAIRoutine ctx routine.id routine.scheduledAt
+        for_ (Issues.productionImpactReviewTemplate : [t | isRight result, t <- Issues.issueTriageTemplate : [Issues.issueAutofixTemplate | mapped]]) $ Issues.provisionRoutineTemplate project >=> traverse_ \routine -> enqueueAIRoutine ctx routine.id routine.scheduledAt
     runConversation :: Projects.ProjectId -> UUIDId "ai_routine_run" -> ATBackgroundCtx ()
     runConversation project identifier = do
       let claim = Issues.runContextFor project $ Issues.ConversationClaim identifier
