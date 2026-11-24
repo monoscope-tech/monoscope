@@ -331,7 +331,7 @@ memoryPageH :: Projects.ProjectId -> WikiSelection -> Maybe Memory.PagePath -> M
 memoryPageH pid selection after search editRequested draft = do
   (session, _, bw) <- mkPageCtx pid
   when (session.persistentSession.id == demoGuestSessionId) $ throwError err404
-  canEdit <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid session.user.id
+  canEdit <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getSessionPermission pid session.user.id
   -- @newPath@ is the path a new page starts at; an editor following a link to a missing page gets one there.
   (selected, newPath) <- case selection of
     Landing -> pure (Nothing, Nothing)
@@ -555,7 +555,7 @@ data RepositoryView = OverviewPage (Maybe Text) (Maybe Text) | ReviewsPage | Fix
 repositoriesPageH :: Projects.ProjectId -> RepositoryView -> ATAuthCtx (RespHeaders (PageCtx RepositoriesGet))
 repositoriesPageH pid selection = do
   (session, _, bw) <- mkPageCtx pid
-  canEdit <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid session.user.id
+  canEdit <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getSessionPermission pid session.user.id
   let (tab, serviceM) = case selection of
         OverviewPage _ service -> (Overview, service)
         ReviewsPage -> (PullRequests, Nothing)
@@ -849,7 +849,6 @@ data ReviewReadiness
   | ReviewNeedsService
   | ReviewNeedsApp
   | ReviewNeedsServer
-  | ReviewNeedsAgent
   | ReviewUnsupportedHost
   deriving stock (Show)
 
@@ -879,7 +878,7 @@ repositoryGetH pid rid = do
   settings <- ImpactReviews.repositorySettings pid
   routine <- Issues.getEventRoutine pid Issues.EventPullRequest
   cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
-  permission <- ProjectMembers.getUserPermission pid session.user.id
+  permission <- ProjectMembers.getSessionPermission pid session.user.id
   let mappings = filter (mappingInRepository credentials repository) allMappings
       dashboardSync = find (\s -> (s.host, s.apiBase, s.owner, s.repo) == (repository.host, repository.apiBase, repository.owner, repository.repo)) syncs
       reviewSettings = find (\s -> s.owner == T.toLower repository.owner && s.repo == T.toLower repository.repo) settings
@@ -887,7 +886,7 @@ repositoryGetH pid rid = do
         | repository.host /= Git.GitHub || isJust repository.apiBase = ReviewUnsupportedHost
         | any T.null ([cfg.githubAppWebhookSecret, cfg.githubAppId, cfg.githubAppPrivateKey] :: [Text]) = ReviewNeedsServer
         | not (any (isJust . (.service)) mappings) = ReviewNeedsService
-        | Just s <- reviewSettings = if isNothing cfg.impactReviewAgent then ReviewNeedsAgent else maybe ReviewNeedsRoutine (const $ ReviewReady s) routine
+        | Just s <- reviewSettings = maybe ReviewNeedsRoutine (const $ ReviewReady s) routine
         | otherwise = ReviewNeedsApp
   resources <- maybe (pure []) (RepositorySync.resources pid . (.id)) dashboardSync
   conflictVersions <- forM (filter (.conflicted) resources) $ \resource -> (resource.id,) <$> RepositorySync.localDefinition resource
@@ -1079,7 +1078,6 @@ instance ToHtml RepositoryGet where
                 ReviewReady settings -> (,False) do
                   colorChip_ (triggerBadge settings.trigger) "circle-check" $ triggerLabel settings.trigger
                   p_ [class_ "text-sm text-textWeak"] $ toHtml askHint
-                ReviewNeedsAgent -> setupRequired "Automatic reviews are unavailable. Ask your Monoscope administrator to finish review setup."
                 ReviewNeedsRoutine -> setupRequired "Activate or resume the Production impact review routine. Repository settings choose which pull requests it reviews."
                 ReviewNeedsService -> setupRequired "Link a named service so reviews can find the production telemetry for this repository."
                 ReviewNeedsApp -> setupRequired "Link source context through the GitHub App to receive automatic pull request reviews. A token connection can still provide source context and configuration sync."
@@ -1257,7 +1255,7 @@ codeMappingsEditorGetH pid credentialM sampleM = do
 codeMappingsContent :: Projects.ProjectId -> Maybe Text -> Maybe GitSync.GitHubCredentialId -> Maybe GitSync.Repository -> ATAuthCtx (Html ())
 codeMappingsContent pid sampleM credentialM repositoryM = do
   session <- Projects.getSession
-  canEdit <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid session.user.id
+  canEdit <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getSessionPermission pid session.user.id
   allAccounts <- if canEdit then codeContextCredentials pid else GitSync.getGitHubCredentials pid
   let accounts = filter (\c -> maybe True (\r -> (r.host, r.apiBase) == (c.host, c.apiBase)) repositoryM) allAccounts
       requested = credentialM <|> (repositoryM >>= (.credentialId))
@@ -1528,11 +1526,12 @@ instance ToHtml RepositoryConnectGet where
                   span_ [class_ "min-w-0 flex-1 text-sm text-textStrong break-all"] $ toHtml repository.fullName
                   when repository.private $ span_ [class_ "text-xs text-textWeak shrink-0"] "Private"
               submitBtn_ "repository-connect-indicator" "Connect selected repositories"
-          whenJust account.installationId $ installationSettingsLink_ . GitSync.installationSettingsUrl
-      a_ [href_ (urls.githubAppInstall page.projectId (Just "code")), class_ "btn btn-sm btn-outline"] "Connect GitHub account"
-      p_ [class_ "border-t border-strokeWeak pt-4 text-xs text-textWeak"] do
-        "Using another Git host or a repository token? "
-        a_ [href_ (urls.repositoryTokenGet page.projectId), class_ "text-textBrand underline underline-offset-2"] "Connect with a token"
+          whenJust account.installationId $ p_ [class_ "text-sm"] . installationSettingsLink_ . GitSync.installationSettingsUrl
+      div_ [class_ "flex flex-wrap items-center gap-3 border-t border-strokeWeak pt-4"] do
+        a_ [href_ (urls.githubAppInstall page.projectId (Just "code")), class_ "btn btn-sm btn-outline gap-2"] do
+          faSprite_ "github" "regular" "h-4 w-4"
+          if any ((== Git.GitHub) . (.host)) page.accounts then "Connect another GitHub account" else "Connect GitHub"
+        a_ [href_ (urls.repositoryTokenGet page.projectId), class_ "btn btn-sm btn-outline"] "Connect GitLab, Bitbucket, Gitea or a token"
   toHtmlRaw = toHtml
 
 
