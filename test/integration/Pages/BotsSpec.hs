@@ -2978,11 +2978,12 @@ spec = around withTestResources do
       goldenHtml "ai-dock-running" started
       dashboards tr "Dock dashboard" `shouldReturn` 1
       readIORef prompts >>= \ps -> (any (T.isInfixOf ("viewing \"Dashboards\" at " <> page) . fst) ps, any (elem "open_page" . snd) ps) `shouldBe` (True, True)
-      let anchors html = [href | href <- [page, here], ("href=\"" <> href <> "\" class=\"hidden\"") `T.isInfixOf` html]
+      -- A visit is a hidden link the dock clicks; a reload is a hidden element htmx fetches on load.
+      let anchors html = [href | href <- [page, here], any (`T.isInfixOf` html) ["href=\"" <> href <> "\" class=\"hidden\"", "class=\"hidden\" data-hx-get=\"" <> href <> "\" data-hx-trigger=\"load\""]]
       traverse (fmap anchors . dockView tr run.conversationId (Just $ "http://localhost:8080" <> here)) ([Just 0, Just 1, Just 2, Nothing] :: [Maybe Int]) `shouldReturn` [[page], [here], [], []]
       -- Opening the page they are on swaps it whole: morphing a page onto itself kept stale widget state.
       dockView tr run.conversationId (Just $ "http://localhost:8080" <> page) (Just 0)
-        >>= (`shouldContainAll` ["href=\"" <> page <> "\" class=\"hidden\" data-hx-get=\"" <> page <> "\" data-hx-target=\"#main-content\" data-hx-select=\"#main-content\" data-hx-swap=\"outerHTML\""])
+        >>= (`shouldContainAll` ["class=\"hidden\" data-hx-get=\"" <> page <> "\" data-hx-trigger=\"load\" data-hx-target=\"#main-content\" data-hx-select=\"#main-content\" data-hx-swap=\"outerHTML\""])
       let followUp = UUIDId $ UUID.fromWords 0 0 94 2
           later = "/p/" <> testPid.toText <> "/issues"
       void $ dockAsk tr (\_ _ -> pass) followUp ("query=Now+the+issues&title=Issues&path=" <> later <> "&conversation=" <> run.conversationId.toText)

@@ -537,8 +537,10 @@ runNotifyTest ref = interpret \_ -> \case
           _ -> sd
     idx <- liftIO $ atomicModifyIORef' ref (\notifications -> (SlackNotification captured : notifications, length notifications + 1))
     let timestamp = "1788900000." <> T.justifyRight 6 '0' (show idx)
-    -- A channel whose id starts with "PRIVATE" stands for one the bot has not joined.
+    -- A channel whose id starts with "PRIVATE" stands for one the bot has not joined, and one
+    -- starting "RATELIMITED" for a workspace Slack is throttling.
     pure $ case operation of
+      _ | "RATELIMITED" `T.isPrefixOf` sd.channelId -> SlackRateLimited 30
       SlackUpdate ts -> SlackSent ts
       SlackPost
         | isNothing sd.webhookUrl && "PRIVATE" `T.isPrefixOf` sd.channelId -> SlackRejected "not_in_channel"

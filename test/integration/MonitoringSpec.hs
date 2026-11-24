@@ -53,9 +53,9 @@ import Pages.Dashboards qualified as Dashboards
 import Pages.Issues qualified as IssuesPage
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Monitors qualified as Alerts
-import Pages.Uptime qualified as Uptime
 import Pages.Projects qualified as ProjectPages
 import Pages.Settings qualified as Settings
+import Pages.Uptime qualified as Uptime
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
@@ -1089,6 +1089,13 @@ spec = describe "Monitoring" do
         recurring.id `shouldNotBe` episode.id
         run (I.recordIncidentEvent recovered) `shouldReturn` I.AlreadyRecorded episode.id recoveryEvent
         fmap (.phase) <$> run (I.getEpisode testPid recurring.id) `shouldReturn` Just I.EpisodeActive
+
+      it "a 429 holds the workspace's other due deliveries until Retry-After without another call" \tr -> do
+        update <- setupWithIssue tr
+        setupSlackData tr testPid "T1"
+        void $ runTestBgNoReset tr $ I.recordIncidentEvent update{I.destinations = [I.SlackDestination "T1" ("RATELIMITED" <> c) | c <- ["1", "2", "3"]]}
+        length . slack . fst <$> captureNotifs tr runSlackIncidentDeliveries `shouldReturn` 1
+        dbOne @_ @Int tr [sql|SELECT count(*)::int FROM apis.slack_incident_deliveries d JOIN apis.slack_incident_roots r ON r.id = d.root_id WHERE r.channel_id LIKE 'RATELIMITED%' AND d.state = 'pending' AND d.last_error = 'ratelimited'|] () `shouldReturn` 3
 
       it "keeps ambiguous roots pending reconciliation and rejects an old worker after a scheduled retry" \tr -> do
         update <- setupWithIssue tr
