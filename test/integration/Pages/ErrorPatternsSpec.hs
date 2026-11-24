@@ -76,6 +76,11 @@ spec = around withTestResources $ describe "Error patterns" do
     dbRefusal [] "Schema error: No field named ts."
     -- A connection dropped mid-statement reports an empty code and message (15efe6c1): nothing to file.
     ingestSessionEvent tr apiKey "INSERT postgres" [("db.response.status_code", ""), ("error.type", "")] (Just ": ") (at 300)
+    -- http-client instrumentation puts the whole HttpException show in error.type and the status;
+    -- its traceparent differs per call, which minted one issue per failed Twilio send.
+    let httpDump tp = "HttpExceptionRequest Request {\n  host                 = \"api.twilio.com\"\n  requestHeaders       = [(\"traceparent\",\"" <> tp <> "\")]\n}\n (StatusCodeException (Response {responseStatus = Status {statusCode = 400}}))"
+    forM_ ["00-4d40f192069929ac6eb5a75ca945e5ba-7cce89400a5a0c18-03", "00-6ab7ff49a5b550c9685ad83f792c7e6f-95cc61f6415ac40c-03"] \tp ->
+      ingestSessionEvent tr apiKey "POST" [("error.type", httpDump tp)] (Just $ httpDump tp) (at 300)
     -- Log records carry no exception event: OTel's exception.* and the browser SDK's error.*.
     ingestErrorLog tr apiKey "user is not defined" [("exception.type", "ReferenceError"), ("exception.message", "user is not defined"), ("exception.stacktrace", "ReferenceError: user is not defined\n    at (/app.js:123:5)")] (at (-5))
     ingestErrorLog tr apiKey "" [("error.name", "TypeError"), ("error.type", "uncaught_exception"), ("error.message", "Cannot read properties of null"), ("error.stack", "TypeError: Cannot read properties of null\n    at handleClick (app.bundle.js:42:11)"), ("exception.escaped", "false")] (at (-4))
@@ -85,7 +90,7 @@ spec = around withTestResources $ describe "Error patterns" do
 
     -- IPs normalise into one fingerprint, one message across span names is pre-merged, and nothing leaks across projects.
     pats <- patterns tr testPid
-    sort (map (.errorType) pats) `shouldBe` ["ConnectionError", "ConnectionRefusedError", "ContextError", "IOException", "ReferenceError", "TimeoutError", "TypeError", "TypeError", "XX000"]
+    sort (map (.errorType) pats) `shouldBe` ["ConnectionError", "ConnectionRefusedError", "ContextError", "HttpExceptionRequest", "IOException", "ReferenceError", "TimeoutError", "TypeError", "TypeError", "XX000"]
     map (.errorType) <$> patterns tr otherPid `shouldReturn` ["IsolationError"]
     sort [(p.message, "handleClick" `T.isInfixOf` p.stacktrace) | p <- pats, p.errorType `elem` ["ReferenceError", "TypeError"]]
       `shouldBe` [("Cannot read properties of null", True), (undefinedMsg, False), ("user is not defined", False)]
