@@ -48,11 +48,13 @@ RUN cd /opt/proof && npm ci --no-audit --no-fund && cd web-components && npm ci 
 # its own copy-on-write disk, so a shared writable cache directory leaks nothing between runs.
 
 # Proof commands run with a reset environment, so Playwright finds its browsers at its default path.
+# The agent owns the package index: `cabal update` rewrites it, and other repositories' dependencies
+# come from Hackage (a root-owned index failed the update, and downloads fell back to a dead mirror).
 RUN useradd --create-home --uid 1000 --user-group --shell /bin/bash review-agent \
   && install -d -o review-agent -g review-agent /home/review-agent/.cache && ln -s /opt/proof/browsers /home/review-agent/.cache/ms-playwright \
   && chmod o+x /root && find /root/.cabal -type d -exec chown review-agent:review-agent {} + \
   && find /root/.cabal/store -path '*/package.db/*' -type f -exec chown review-agent:review-agent {} + && ln -s /root/.cabal /home/review-agent/.cabal \
-  && mkdir -p /root/.cabal/logs && chown -R review-agent:review-agent /root/.cabal/logs
+  && mkdir -p /root/.cabal/logs && chown -R review-agent:review-agent /root/.cabal/logs /root/.cabal/packages
 
 # The production server for app proofs (monoscope-app.sh): its runtime libraries, Postgres with
 # TimescaleDB migrated here once so a proof boots in seconds, and an OTLP traffic generator.
