@@ -522,7 +522,7 @@ planChunks opts
 
 -- | @"<n><unit>"@ → seconds; units @s@/@m@/@h@/@d@, case-insensitive.
 parseDurationSecs :: Text -> Maybe Int
-parseDurationSecs = fmap (round . Duration.durationToSeconds) . Duration.parseDuration True Duration.sinceUnits
+parseDurationSecs = fmap (round . Duration.durationToSeconds) . Duration.parseDuration Duration.CaseInsensitive Duration.sinceUnits
 
 
 parseDurationHours :: Text -> Maybe Int
@@ -1442,7 +1442,7 @@ checkAssertion MetricsData{dataFloat} cond = case dataFloat of
 -- if the suffix is missing or unparseable; bare numbers are NOT accepted
 -- as seconds (validateDurationFor would have rejected them at flag parse).
 parseDurationMs :: Text -> Int
-parseDurationMs = maybe 5000 Duration.durationToMs . Duration.parseDuration True Duration.durationUnits
+parseDurationMs = maybe 5000 Duration.durationToMs . Duration.parseDuration Duration.CaseInsensitive Duration.durationUnits
 
 
 -- Device auth helpers

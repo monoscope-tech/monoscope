@@ -1238,7 +1238,7 @@ parseTimespan t
 -- SECURITY: never passes user input through — always reconstructs the string.
 kqlTimespanToTimeBucket :: Text -> Maybe T.Text
 kqlTimespanToTimeBucket timespan =
-  Duration.durationToPostgresInterval <$> (parseBareSeconds ts <|> Duration.parsePostgresInterval ts <|> Duration.parseDuration False Duration.kqlUnits ts)
+  Duration.durationToPostgresInterval <$> (parseBareSeconds ts <|> Duration.parsePostgresInterval ts <|> Duration.parseDuration Duration.CaseSensitive Duration.kqlUnits ts)
   where
     ts = T.strip timespan
     parseBareSeconds t = (,Duration.Sec) <$> (readMaybe @Int (toString t) >>= \n -> guard (n > 0) $> n)

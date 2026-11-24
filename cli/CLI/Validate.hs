@@ -16,7 +16,6 @@ module CLI.Validate (
 import Relude
 
 import CLI.Core (dieWith)
-import Data.Set qualified as S
 import Data.Text qualified as T
 import Effectful
 import Pkg.Duration qualified as Duration
@@ -30,7 +29,7 @@ import Pkg.Parser.Stats (parseQueryToAST)
 validateUnitsFor :: [Duration.DurationUnit] -> Text -> Text -> Either Text Text
 validateUnitsFor allowed flag t
   | T.null t = Left $ flag <> " must not be empty"
-  | Just _ <- Duration.parseDuration True (S.fromList allowed) t = Right (T.strip t)
+  | Just _ <- Duration.parseDuration Duration.CaseInsensitive allowed t = Right (T.strip t)
   | otherwise = Left $ flag <> " must match " <> T.intercalate "|" (map (("N" <>) . Duration.unitSuffix) allowed) <> " (e.g. 30m, 2h, 7d); got '" <> t <> "'"
 
 
@@ -46,7 +45,7 @@ validateUnitsFor allowed flag t
 -- >>> validateDurationFor "--window" ""
 -- Left "--window must not be empty"
 validateDurationFor :: Text -> Text -> Either Text Text
-validateDurationFor = validateUnitsFor [Duration.Sec, Duration.Min, Duration.Hour, Duration.Day, Duration.Ms]
+validateDurationFor = validateUnitsFor Duration.durationUnits
 
 
 -- | Validate a server-side @--since@ duration (@s|m|h|d@).
@@ -60,7 +59,7 @@ validateDurationFor = validateUnitsFor [Duration.Sec, Duration.Min, Duration.Hou
 -- >>> validateSinceFor "--since" ""
 -- Left "--since must not be empty"
 validateSinceFor :: Text -> Text -> Either Text Text
-validateSinceFor = validateUnitsFor [Duration.Sec, Duration.Min, Duration.Hour, Duration.Day]
+validateSinceFor = validateUnitsFor Duration.sinceUnits
 
 
 -- | Validated @--kind@ flag: @log@ → 'EKLog', @span@/@trace@ → 'EKSpan'.

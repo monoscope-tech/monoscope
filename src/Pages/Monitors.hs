@@ -176,7 +176,7 @@ scheduleOf form =
 -- >>> map parseIntervalToMins ["5m", "1h", "12h", "1d", "soon"]
 -- [Just 5,Just 60,Just 720,Just 1440,Nothing]
 parseIntervalToMins :: Text -> Maybe Int
-parseIntervalToMins = fmap (round . (/ 60) . Duration.durationToSeconds) . Duration.parseDuration False Duration.kqlUnits
+parseIntervalToMins = fmap (round . (/ 60) . Duration.durationToSeconds) . Duration.parseDuration Duration.CaseSensitive Duration.kqlUnits
 
 
 minsToInterval :: Int -> Text

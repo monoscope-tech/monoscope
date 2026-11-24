@@ -76,25 +76,14 @@ rangeQuery :: TimePicker -> Text
 rangeQuery = foldMap (\(k, v) -> "&" <> k <> "=" <> toUriStr v) . rangePairs
 
 
--- | Test parseSince with different time units
--- >>> parseSince (Unsafe.read "2024-10-31 12:00:00 UTC") "2H"
--- (Just 2024-10-31 10:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("2H",""))
---
--- >>> parseSince (Unsafe.read "2024-10-31 12:00:00 UTC") "30M"
--- (Just 2024-10-31 11:30:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("30M",""))
---
--- >>> parseSince (Unsafe.read "2024-10-31 12:00:00 UTC") "7D"
--- (Just 2024-10-24 12:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("7D",""))
---
--- >>> parseSince (Unsafe.read "2024-10-31 12:00:00 UTC") "1h"
--- (Just 2024-10-31 11:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("1H",""))
-parseSince :: UTCTime -> Text -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
-parseSince now since = case Duration.parseDuration True Duration.sinceUnits since of
-  Nothing -> (Nothing, Nothing, Nothing)
-  Just dur ->
-    ( Just $ addUTCTime (negate $ realToFrac (Duration.durationToSeconds dur)) now
-    , Just now
-    , Just (T.toUpper $ T.strip since, "")
+-- | Parse a relative @since@ duration into @(from, to, label)@, or 'Nothing' on invalid input.
+parseSince :: UTCTime -> Text -> Maybe (UTCTime, UTCTime, (Text, Text))
+parseSince now since = do
+  dur <- Duration.parseDuration Duration.CaseInsensitive Duration.sinceUnits since
+  pure
+    ( addUTCTime (negate $ realToFrac (Duration.durationToSeconds dur)) now
+    , now
+    , (T.toUpper $ T.strip since, "")
     )
 
 
@@ -121,14 +110,13 @@ defaultSince = "1H"
 -- True
 parseTimeRangeWith :: UTCTime -> Text -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
 parseTimeRangeWith now fallbackSince tp = case nonEmptyT tp.since of
-  Just s -> case parseSince now s of
-    (Nothing, Nothing, Nothing) -> parseSince now fallbackSince
-    res -> res
+  Just s -> toRange (parseSince now s <|> parseSince now fallbackSince)
   Nothing -> case (parseT tp.from, parseT tp.to) of
-    (Nothing, Nothing) -> parseSince now fallbackSince
+    (Nothing, Nothing) -> toRange (parseSince now fallbackSince)
     (f, t) -> (f, t, liftA2 (,) (formatUTC <$> f) (formatUTC <$> t))
   where
     parseT = (>>= iso8601ParseM @Maybe @UTCTime . toString)
+    toRange = maybe (Nothing, Nothing, Nothing) \(f, t, lbl) -> (Just f, Just t, Just lbl)
 
 
 -- | 'parseTimeRangeWith' using 'defaultSince'.
@@ -455,9 +443,9 @@ mkTimeWindow :: UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> TimeWindow
 mkTimeWindow now fromQuery toQuery sinceParam =
   let sinceQuery = nonEmptyT sinceParam <|> (defaultWindow <$ guard (all (isNothing . nonEmptyT) [fromQuery, toQuery]))
       (fromM, toM, currentRange) = parseTimeRangeWith now defaultWindow $ TimePicker sinceQuery fromQuery toQuery
-      (defaultFrom, _, _) = parseSince now defaultWindow
+      defaultFrom = maybe now (\(f, _, _) -> f) (parseSince now defaultWindow)
    in TimeWindow
-        { fromTime = fromMaybe (fromMaybe now defaultFrom) fromM
+        { fromTime = fromMaybe defaultFrom fromM
         , toTime = fromMaybe now toM
         , currentRange
         , fromQuery

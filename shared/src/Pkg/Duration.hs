@@ -2,6 +2,7 @@
 -- TimePicker @since@, CLI flags, and monitor schedules.
 module Pkg.Duration (
   DurationUnit (..),
+  CaseSensitivity (..),
   unitSuffix,
   sinceUnits,
   durationUnits,
@@ -15,7 +16,6 @@ module Pkg.Duration (
 
 import Data.Char (isDigit)
 import Data.List (lookup)
-import Data.Set qualified as S
 import Data.Text qualified as T
 import Relude
 
@@ -24,81 +24,65 @@ data DurationUnit = Ns | Us | Ms | Sec | Min | Hour | Day | Week
   deriving stock (Bounded, Enum, Eq, Ord, Show)
 
 
--- | Allowed units for server-side @since@ parameters (@s|m|h|d@).
-sinceUnits :: Set DurationUnit
-sinceUnits = S.fromList [Sec, Min, Hour, Day]
+data CaseSensitivity = CaseSensitive | CaseInsensitive
+  deriving stock (Eq, Show)
 
 
--- | Allowed units for CLI duration flags (@ms|s|m|h|d@).
-durationUnits :: Set DurationUnit
-durationUnits = S.fromList [Ms, Sec, Min, Hour, Day]
-
-
--- | Allowed units for KQL @bin()@ intervals (@ns|us|µs|ms|s|m|h|d|w@).
-kqlUnits :: Set DurationUnit
-kqlUnits = S.fromList [minBound .. maxBound]
+-- | Canonical (compact suffix, PostgreSQL plural unit, seconds) for each unit.
+unitInfo :: DurationUnit -> (Text, Text, Rational)
+unitInfo = \case
+  Ns -> ("ns", "nanoseconds", 1e-9)
+  Us -> ("us", "microseconds", 1e-6)
+  Ms -> ("ms", "milliseconds", 1e-3)
+  Sec -> ("s", "seconds", 1)
+  Min -> ("m", "minutes", 60)
+  Hour -> ("h", "hours", 3600)
+  Day -> ("d", "days", 86400)
+  Week -> ("w", "weeks", 604800)
 
 
 unitSuffix :: DurationUnit -> Text
-unitSuffix = \case
-  Ns -> "ns"
-  Us -> "us"
-  Ms -> "ms"
-  Sec -> "s"
-  Min -> "m"
-  Hour -> "h"
-  Day -> "d"
-  Week -> "w"
+unitSuffix u = let (s, _, _) = unitInfo u in s
 
 
-unitPostgresName :: DurationUnit -> Text
-unitPostgresName = \case
-  Ns -> "nanoseconds"
-  Us -> "microseconds"
-  Ms -> "milliseconds"
-  Sec -> "seconds"
-  Min -> "minutes"
-  Hour -> "hours"
-  Day -> "days"
-  Week -> "weeks"
+-- | Allowed units for server-side @since@ parameters (@s|m|h|d@).
+sinceUnits :: [DurationUnit]
+sinceUnits = [Sec, Min, Hour, Day]
 
 
-unitSeconds :: DurationUnit -> Rational
-unitSeconds = \case
-  Ns -> 1e-9
-  Us -> 1e-6
-  Ms -> 1e-3
-  Sec -> 1
-  Min -> 60
-  Hour -> 3600
-  Day -> 86400
-  Week -> 604800
+-- | Allowed units for CLI duration flags (@s|m|h|d|ms@).
+durationUnits :: [DurationUnit]
+durationUnits = [Sec, Min, Hour, Day, Ms]
 
 
--- | Parse a positive integer duration with a suffix in the allowed unit set.
--- When @caseInsensitive@ is 'True', suffix matching ignores case (e.g. @"1H"@).
+-- | Allowed units for KQL @bin()@ intervals (@ns|us|µs|ms|s|m|h|d|w@).
+kqlUnits :: [DurationUnit]
+kqlUnits = [minBound .. maxBound]
+
+
+-- | Parse a positive integer duration with a suffix in the allowed unit list.
 --
--- >>> parseDuration True sinceUnits "24H"
+-- >>> parseDuration CaseInsensitive sinceUnits "24H"
 -- Just (24,Hour)
--- >>> parseDuration True durationUnits "500ms"
+-- >>> parseDuration CaseInsensitive durationUnits "500ms"
 -- Just (500,Ms)
--- >>> parseDuration False kqlUnits "1M"
+-- >>> parseDuration CaseSensitive kqlUnits "1M"
 -- Nothing
--- >>> parseDuration True sinceUnits "0s"
+-- >>> parseDuration CaseInsensitive sinceUnits "0s"
 -- Nothing
--- >>> parseDuration True sinceUnits "500ms"
+-- >>> parseDuration CaseInsensitive sinceUnits "500ms"
 -- Nothing
--- >>> parseDuration False kqlUnits "10µs"
+-- >>> parseDuration CaseSensitive kqlUnits "10µs"
 -- Just (10,Us)
-parseDuration :: Bool -> Set DurationUnit -> Text -> Maybe (Int, DurationUnit)
-parseDuration caseInsensitive allowed raw = do
+parseDuration :: CaseSensitivity -> [DurationUnit] -> Text -> Maybe (Int, DurationUnit)
+parseDuration caseSens allowed raw = do
   let trimmed = T.strip raw
       (digits, rest) = T.span isDigit trimmed
-      sfx = (if caseInsensitive then T.toLower else id) $ T.strip rest
+      sfx = (case caseSens of CaseInsensitive -> T.toLower; CaseSensitive -> id) $ T.strip rest
   n <- readMaybe @Int (toString digits)
   guard (n > 0)
   u <- lookup sfx suffixTable
-  guard (u `S.member` allowed)
+  guard (u `elem` allowed)
   pure (n, u)
   where
     suffixTable :: [(Text, DurationUnit)]
@@ -107,19 +91,20 @@ parseDuration caseInsensitive allowed raw = do
 
 -- | Parse a positive PostgreSQL interval string (e.g. @"5 minutes"@, @"1 hour"@).
 --
--- >>> map parsePostgresInterval ["10 seconds", "1 hours", "500 milliseconds", "2 days", "0 seconds", "nope"]
--- [Just (10,Sec),Just (1,Hour),Just (500,Ms),Just (2,Day),Nothing,Nothing]
+-- >>> map parsePostgresInterval ["10 seconds", "1 hour", "500 milliseconds", "2 days", "0 seconds", "10 secondss", "nope"]
+-- [Just (10,Sec),Just (1,Hour),Just (500,Ms),Just (2,Day),Nothing,Nothing,Nothing]
 parsePostgresInterval :: Text -> Maybe (Int, DurationUnit)
 parsePostgresInterval t = case words t of
   [num, unit] -> do
     n <- readMaybe @Int (toString num)
     guard (n > 0)
-    u <- lookup (T.dropWhileEnd (== 's') unit) pgUnits
+    let singular = fromMaybe unit (T.stripSuffix "s" unit)
+    u <- lookup singular pgUnits
     pure (n, u)
   _ -> Nothing
   where
     pgUnits :: [(Text, DurationUnit)]
-    pgUnits = [(T.dropWhileEnd (== 's') (unitPostgresName u), u) | u <- [minBound .. maxBound]]
+    pgUnits = [(fromMaybe nm (T.stripSuffix "s" nm), u) | u <- [minBound .. maxBound], let (_, nm, _) = unitInfo u]
 
 
 -- | Exact duration in seconds.
@@ -127,7 +112,7 @@ parsePostgresInterval t = case words t of
 -- >>> map (fromRational @Double . durationToSeconds) [(500, Ms), (2, Hour), (1, Week)]
 -- [0.5,7200.0,604800.0]
 durationToSeconds :: (Int, DurationUnit) -> Rational
-durationToSeconds (n, u) = fromIntegral n * unitSeconds u
+durationToSeconds (n, u) = let (_, _, secs) = unitInfo u in fromIntegral n * secs
 
 
 -- | Duration in milliseconds (rounded).
@@ -140,4 +125,4 @@ durationToMs d = round (durationToSeconds d * 1000)
 -- >>> parsePostgresInterval (durationToPostgresInterval (15, Min)) == Just (15, Min)
 -- True
 durationToPostgresInterval :: (Int, DurationUnit) -> Text
-durationToPostgresInterval (n, u) = show n <> " " <> unitPostgresName u
+durationToPostgresInterval (n, u) = let (_, nm, _) = unitInfo u in show n <> " " <> nm

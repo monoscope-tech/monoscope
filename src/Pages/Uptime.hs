@@ -212,7 +212,7 @@ uptimeState c
 cronState :: Monitors.CronMonitor -> UTCTime -> CheckState
 cronState m now = case m.lastStatus of
   Just Monitors.CSError -> Failing
-  _ | now > Monitors.cronExpectedBy m -> Failing
+  _ | now > Monitors.cronExpectedBy m m.lastCheckinAt -> Failing
   Just Monitors.CSOk -> Operational
   Nothing -> Pending
 
@@ -802,7 +802,7 @@ newtype CronMonitorPage = CronMonitorPage (PageCtx CronDashboard)
 instance ToHtml CronMonitorPage where
   toHtml (CronMonitorPage (PageCtx bw d)) = shell bw $ div_ [class_ "group/cm mx-auto max-w-6xl space-y-4 p-4"] do
     let m = d.monitor
-        nextDue = Monitors.cronExpectedBy m
+        nextDue = Monitors.cronExpectedBy m m.lastCheckinAt
     checkHeader_ (urls.monitors d.pid).cronGet "Cron" (cronState m d.now) m.name do
       span_ [class_ "font-mono"] $ toHtml m.slug
       span_ $ "every " <> toHtml (intervalLabel m.intervalSecs) <> ", " <> toHtml (intervalLabel m.graceSecs) <> " grace"

@@ -240,15 +240,16 @@ aggForAlert alertBelow = \case
 -- >>> let Right secs = parseQueryToAST "metrics | summarize hits = count(), total = sum(value) | extend hit_pct = 100.0 * hits / total"
 -- >>> [map aggName (primaryAlertAggs aggs) | SummarizeCommand aggs _ <- secs]
 -- [["hit_pct"]]
+-- >>> let Right secs2 = parseQueryToAST "metrics | summarize hits = count(), total = sum(value) | extend hit_pct = round(100.0 * hits / total, 2)"
+-- >>> [map aggName (primaryAlertAggs aggs) | SummarizeCommand aggs _ <- secs2]
+-- [["hit_pct"]]
 primaryAlertAggs :: [AggFunction] -> [AggFunction]
 primaryAlertAggs aggs = case filter (\a -> aggToSqlNoAlias a `S.notMember` helpers) aggs of
   [] -> aggs
   ps -> ps
   where
     helpers = S.fromList [aggToSqlNoAlias h | a <- aggs, h <- inlinedSubAggs a]
-    inlinedSubAggs = \case
-      ArithExpr e _ -> go e
-      _ -> []
+    inlinedSubAggs = foldMapOf aggScalars go
     go = \case
       SAgg a -> a : inlinedSubAggs a
       SArith l _ r -> go l <> go r

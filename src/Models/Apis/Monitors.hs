@@ -2,7 +2,6 @@ module Models.Apis.Monitors (
   CronMonitor (..),
   CheckinStatus (..),
   cronExpectedBy,
-  cronExpectedByWith,
   isValidCronSlug,
   activeThreshold,
   cronMonitorsByProject,
@@ -440,12 +439,8 @@ recordCronCheckin mid at status = Hasql.interpExecute [HI.sql| UPDATE apis.cron_
 
 
 -- | Deadline by which a cron monitor must check in before it is considered missed.
-cronExpectedByWith :: CronMonitor -> Maybe UTCTime -> UTCTime
-cronExpectedByWith m lastSeen = addUTCTime (fromIntegral $ m.intervalSecs + m.graceSecs) (fromMaybe m.createdAt lastSeen)
-
-
-cronExpectedBy :: CronMonitor -> UTCTime
-cronExpectedBy m = cronExpectedByWith m m.lastCheckinAt
+cronExpectedBy :: CronMonitor -> Maybe UTCTime -> UTCTime
+cronExpectedBy m lastSeen = addUTCTime (fromIntegral $ m.intervalSecs + m.graceSecs) (fromMaybe m.createdAt lastSeen)
 
 
 -- | Valid cron monitor slug: non-empty lowercase ASCII, digits, or @_.-@.
@@ -453,10 +448,10 @@ cronExpectedBy m = cronExpectedByWith m m.lastCheckinAt
 -- >>> map isValidCronSlug ["daily-backup_1.0", "", "UPPER", "bad slug"]
 -- [True,False,False,False]
 isValidCronSlug :: Text -> Bool
-isValidCronSlug s = not (T.null s) && T.all (\c -> isAsciiLower c || isDigit c || T.any (== c) "_.-") s
+isValidCronSlug s = not (T.null s) && T.all (\c -> isAsciiLower c || isDigit c || c `elem` ("_.-" :: String)) s
 
 
--- | Effective threshold for a monitor transitioning into @nextStatus@,
+-- | Effective threshold for a monitor transitioning from @m.currentStatus@ into @nextStatus@,
 -- honoring hysteresis recovery thresholds when returning to 'MSNormal'.
 activeThreshold :: QueryMonitor -> MonitorStatus -> Double
 activeThreshold m = \case

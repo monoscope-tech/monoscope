@@ -5147,7 +5147,7 @@ evaluateCronMonitor now m = do
       completion c = case attr "monitor.status" c of Nothing -> Just Monitors.CSOk; Just "ok" -> Just Monitors.CSOk; Just "error" -> Just Monitors.CSError; Just _ -> Nothing
       latest = viaNonEmpty last $ sortWith fst [(c.timestamp, st) | c <- spans, attr "monitor.slug" c == Just m.slug, maybe True (c.timestamp >) m.lastCheckinAt, Just st <- [completion c]]
       lastSeen = (fst <$> latest) <|> m.lastCheckinAt
-      expectedBy = Monitors.cronExpectedByWith m lastSeen
+      expectedBy = Monitors.cronExpectedBy m lastSeen
       open failure = do
         let d = Issues.CronData{monitorId = UUID.toText m.id, slug = m.slug, name = m.name, failure, expectedBy, lastCheckinAt = lastSeen}
             headline = Mail.cronName d <> bool " failed" " missed its run" (failure == Issues.CFMissed)
