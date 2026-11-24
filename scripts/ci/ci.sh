@@ -352,9 +352,13 @@ npm_ci_if_stale() { # <dir> <npm-ci-args...>
 prepare_browser() {
   [ "${CI_BROWSER_PREPARED:-}" != true ] || return 0
   npm_ci_if_stale e2e --prefer-offline --no-audit
+  # The deps image installs browsers under root's HOME, but GitHub's container runs with
+  # HOME=/github/home, where Playwright looked and found none. Pin the path; install then
+  # downloads only a version the image lacks.
+  if [ -z "${PLAYWRIGHT_BROWSERS_PATH:-}" ] && [ -d /root/.cache/ms-playwright ]; then export PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright; fi
   (cd e2e && \
     { [ -e /usr/local/share/monoscope-playwright-deps ] || npx playwright install-deps chromium; } && \
-    { [ -d /root/.cache/ms-playwright ] && [ -n "$(find /root/.cache/ms-playwright -maxdepth 2 -name 'chromium-*' 2>/dev/null | head -1)" ] || npx playwright install chromium; })
+    npx playwright install chromium)
   export CI_BROWSER_PREPARED=true
 }
 
