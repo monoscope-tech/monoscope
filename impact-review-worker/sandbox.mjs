@@ -11,7 +11,7 @@ import { DEFAULT_GUEST_TMPFS, RealFSProvider, ReadonlyProvider, VM, VmCheckpoint
 // accepted risk (2026-11-19): a repository's traffic insights list the paths its visitors fetched, so
 // that code could exfiltrate source through crafted URLs; without it no git-pinned dependency builds.
 const { httpHooks } = createHttpHooks({
-  allowedHosts: ['deb.debian.org', 'security.debian.org', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org', 'index.crates.io', 'static.crates.io', 'static.rust-lang.org', 'proxy.golang.org', 'sum.golang.org', 'hackage.haskell.org', 'downloads.haskell.org', 'get-ghcup.haskell.org', 'nodejs.org', 'repo.maven.apache.org', 'repo1.maven.org', 'rubygems.org', 'index.rubygems.org', 'raw.githubusercontent.com', 'github.com', 'codeload.github.com', 'objects.githubusercontent.com'],
+  allowedHosts: ['deb.debian.org', 'security.debian.org', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org', 'index.crates.io', 'static.crates.io', 'static.rust-lang.org', 'proxy.golang.org', 'sum.golang.org', 'hackage.haskell.org', 'www.stackage.org', 'downloads.haskell.org', 'get-ghcup.haskell.org', 'nodejs.org', 'repo.maven.apache.org', 'repo1.maven.org', 'rubygems.org', 'index.rubygems.org', 'raw.githubusercontent.com', 'github.com', 'codeload.github.com', 'objects.githubusercontent.com'],
   // ghcup's release metadata is the only GitHub content a guest may read.
   isRequestAllowed: (request) => {
     const { host, pathname } = new URL(request.url);
