@@ -805,7 +805,6 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
       ctx <- ask @AuthContext
       let maxQueryChars = 2000
           maxEvidence = 20 :: Int
-          evidenceLimit = maxEvidence + 1
           services = nubOrd $ mapMaybe (.service) mappings
           link = hostPath ctx.config.hostUrl
       stats <-
@@ -819,18 +818,18 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           FROM otel_logs_and_spans WHERE project_id = #{run.projectId.toText} AND timestamp >= #{from} AND timestamp <= #{until}
             AND resource___service___name = ANY(#{V.fromList services})
           GROUP BY resource___service___name, resource___deployment___environment___name
-          ORDER BY count(*) DESC LIMIT #{evidenceLimit}|]
+          ORDER BY count(*) DESC LIMIT #{maxEvidence}|]
       monitors <-
         Hasql.interp
           [HI.sql|SELECT id::text, log_query FROM monitors.query_monitors
           WHERE project_id = #{run.projectId} AND deleted_at IS NULL AND deactivated_at IS NULL
-          ORDER BY id LIMIT #{evidenceLimit}|]
+          ORDER BY id LIMIT #{maxEvidence}|]
       dashboards <-
         Hasql.interp
           [HI.sql|SELECT id, q #>> '{}' FROM projects.dashboards,
           LATERAL jsonb_path_query(schema, '$.**.query') q
-          WHERE project_id = #{run.projectId} AND jsonb_typeof(q) = 'string' ORDER BY id LIMIT #{evidenceLimit}|]
-      telemetry <- forM (zip [1 :: Int ..] (take maxEvidence stats)) \(n, (service, environment, count, errors)) -> do
+          WHERE project_id = #{run.projectId} AND jsonb_typeof(q) = 'string' ORDER BY id LIMIT #{maxEvidence}|]
+      telemetry <- forM (zip [1 :: Int ..] stats) \(n, (service, environment, count, errors)) -> do
         let item = Evidence ("telemetry-" <> show n) Telemetry (Just service) (guarded (not . T.null) environment) "" Nothing (Just $ Observation count errors) Nothing Nothing
         chart <- evidencePng run.projectId from until item
         pure item{url = link $ (urls.logExplorer run.projectId).logExplorerGet (Just $ serviceSelector item) Nothing Nothing (Just $ toText $ iso8601Show from) (Just $ toText $ iso8601Show until) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing, chartUrl = chart}
@@ -849,13 +848,10 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                     Nothing
               )
               [1 :: Int ..]
-              (take maxEvidence rows)
+              rows
           gaps =
             ["No service mapping: repository access alone cannot link changed code to production." | null services]
               <> ["No log/span events observed for the mapped services in the last seven days." | not (null services) && null stats]
-              <> ["Evidence is capped at " <> show maxEvidence <> " service/environment groups, monitors and dashboard queries." | length stats > maxEvidence || length monitors > maxEvidence || length dashboards > maxEvidence]
-              <> ["Telemetry describes the mapped service, not a proven changed-path or deployed-revision match."]
-              <> ["Monitor and dashboard references are project-wide; their relationship to the mapped service is unverified." | not (null monitors && null dashboards)]
       pure (telemetry <> references Monitor [(link $ (urls.monitors run.projectId).overviewGet i, q) | (i, q) <- monitors] <> references Dashboard [(link $ urls.dashboardsGet run.projectId d Nothing Nothing Nothing Nothing [], q) | (d, q) <- dashboards], gaps)
 
 

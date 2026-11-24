@@ -3569,7 +3569,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     length (filter (T.isInfixOf "/issues/comments/99" . fst) requests) `shouldBe` 1
     let published = sentTo "/issues/comments/99" requests
     published `shouldContainAll` ["Merge risk: low", "Worth checking", "Related test toolchain unavailable", "production query reached its result limit", "test-service](", "<table>", "</table>", "\\\\*check", revision]
-    for_ @[] ["@impact-review-test", "https://untrusted.invalid", "long-review-log-body", "another-in-scope-event", "checkout-review-span", "Review temperature gauge"] \hidden -> published `shouldNotSatisfy` T.isInfixOf hidden
+    -- Standing caveats of how evidence works are the model's instructions, not this PR's gaps.
+    for_ @[] ["@impact-review-test", "https://untrusted.invalid", "long-review-log-body", "another-in-scope-event", "checkout-review-span", "Review temperature gauge", "describes the mapped service"] \hidden -> published `shouldNotSatisfy` T.isInfixOf hidden
     completed <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
     (completed.state, completed.commentId) `shouldBe` (Reviews.Completed, Just 99)
     checks <- runQueryEffect tr $ Reviews.latestChecks reviewPid
