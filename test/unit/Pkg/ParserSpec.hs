@@ -192,7 +192,7 @@ spec = do
     it "alert queries evaluate the extreme quantile for percentiles in the alert direction" do
       let aboveCfg = defSqlQueryCfg defPid fixedUTCTime Nothing Nothing
           belowCfg = aboveCfg{alertBelow = True}
-          alertSql c q = T.toLower $ normT $ fromMaybe "" $ snd (fromRight' $ parseQueryToComponents c q) & (.finalAlertQuery)
+          alertSql c kql = T.toLower $ normT $ fromMaybe "" $ snd (fromRight' $ parseQueryToComponents c kql) & (.finalAlertQuery)
           q = "| summarize percentiles(duration, 50, 75, 90, 95, 99) by bin_auto(timestamp)"
       alertSql aboveCfg q `shouldSatisfy` T.isInfixOf "approx_percentile(0.99"
       alertSql belowCfg q `shouldSatisfy` T.isInfixOf "approx_percentile(0.5"
