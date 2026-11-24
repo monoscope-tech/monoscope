@@ -170,6 +170,34 @@ Progress on each item is logged below as it lands.
   check waits up to five minutes for a slot. Each side takes its slot separately, so waiting cannot
   deadlock.
 
+- **Guest inputs follow `package.yaml` (#1020).** `monoscope.cabal` changes with every module and
+  migration, so #1018's one migration rebuilt the whole guest.
+- **One command for Haskell proofs (#1022).** #1021's own review, the first on the fixed worker,
+  spent its three attempts on setup it improvised: `cabal build --offline` lacked the git-pinned
+  `hasql-interpolate` source, plain `cabal build` failed on the Vite manifest Template Haskell
+  reads, and the third sent a malformed patch. `monoscope-app --test MATCH` does the build steps
+  `--server` does and runs the matching integration tests; an empty match fails, so the base fails.
+  PROOF.md points Haskell proofs at it.
+
+## Status at the end of the night (2026-11-24 ~09:00 UTC)
+
+Merged and deployed: #1017, #1018, #1020, #1021, #1022 (app via the Deploy workflow; worker via
+`make deploy-worker` at `3789fe8b`). The worker runs 4 verifier slots. Its guest rebuilds with the
+`--test` command, and the worker restarts once idle.
+
+Verified in production:
+
+- **Superseded runs.** #1019 was merged while its review was proving. The comment became "Review
+  stopped: a newer commit replaced this review…", and the worker logged "Production impact review
+  superseded" at info, with no retry. (#1021 then removed the stray quotes around the commit.)
+- **Guest contents.** The rebuilt guest has the `hasql-pool` and `hasql-interpolate` sources,
+  `cargo-nextest`, Playwright, `initdb` and `pg_ctl` on the default PATH, and `monoscope-app`.
+- **Migration 0305** applied (`pr_review_proofs.script jsonb`).
+
+Not yet seen end to end: a Haskell integration-test proof passing through `monoscope-app --test`,
+and a push that carries a passing script forward. Both need a new PR after the guest swap. Check
+the next review's comment and `projects.pr_review_proofs.script`.
+
 Open question, not changed: six reviews in a week ended with "exceeded its query budget" (20 host
 tool calls for a PR review). Three of them made no proof and ran no check before running out, so
 the calls went to telemetry and memory. A larger budget would only help if the agent proves first.
