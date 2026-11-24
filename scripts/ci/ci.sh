@@ -903,6 +903,10 @@ cmd_image() { # [sha] — build and push the production image for a commit
   sha=$(git rev-parse "$sha^{commit}")
   MONOSCOPE_BUILDER=$BUILDER scripts/ci/release.sh build "$sha"
   publish_attestation image "$sha" docker linux-amd64
+  # Every server image gets its worker image, so the host's worker-follow can follow a deploy that
+  # went through CI. Usually a retag: it rebuilds only when the worker's inputs changed.
+  MONOSCOPE_BUILDER=$BUILDER scripts/ci/release.sh worker "$sha" \
+    || note "WARNING: no worker image for $sha — the proof worker stays on its build until \`make deploy-worker\`"
 }
 
 # Local AMD64 emulation through OrbStack/Rosetta; never allocate an SSH builder.
@@ -1027,24 +1031,15 @@ cmd_image_who() { # <sha> — immutable image labels preserve the original PR bu
 }
 
 # The proof worker is a plain container on the KVM host (Swarm cannot pass /dev/kvm), so CapRover never
-# rolls it. It runs every background job, so it must run the server build production just received.
+# rolls it. It runs every background job, so it must run the server build production runs: the host's
+# worker-follow timer pulls it after any deploy. This makes sure the image exists and follows now.
 cmd_deploy_worker() { # [sha]
-  local sha worker=$IMAGE-impact-worker
+  local sha
   sha=$(git rev-parse "${1:-HEAD}^{commit}")
   caprover_env
   [ -n "${IMPACT_WORKER_HOST:-}" ] || { note "IMPACT_WORKER_HOST unset — proof worker not redeployed"; return 0; }
-  scripts/ci/release.sh worker "$sha"
-  # A restart kills the reviews it interrupts, so the host restarts the worker once none is running,
-  # waiting at most a review's budget; ship does not wait for it.
-  ssh -o BatchMode=yes "$IMPACT_WORKER_HOST" sudo bash -s "$worker" "$sha" <<'REMOTE'
-set -e
-docker pull -q "$1:$2" >/dev/null
-docker tag "$1:$2" "$1:current"
-# A restart already waiting picks up the new :current, so a second ship needs no second waiter.
-systemctl is-active -q monoscope-impact-worker-restart || systemd-run --quiet --collect --unit monoscope-impact-worker-restart sh -c \
-  'for _ in $(seq 200); do docker top monoscope-impact-worker -o pid,args | grep -qE "pi-host|sandbox.mjs" || break; sleep 15; done; systemctl restart monoscope-impact-worker'
-REMOTE
-  note "proof worker restarts on $sha once no review is running"
+  MONOSCOPE_BUILDER=$BUILDER scripts/ci/release.sh worker "$sha"
+  ssh -o BatchMode=yes "$IMPACT_WORKER_HOST" sudo /usr/local/bin/monoscope-worker-follow
   refresh_guest "$sha"
 }
 
@@ -1081,6 +1076,22 @@ systemd-run --quiet --collect --unit monoscope-guest-rebuild --setenv=HOME=/root
 echo "guest rebuild started (journalctl -u monoscope-guest-rebuild)"
 REMOTE
 }
+
+# Install the host side of the proof worker's deploys: worker-follow.sh on a 2-minute timer.
+cmd_worker_follow_install() {
+  caprover_env
+  [ -n "${IMPACT_WORKER_HOST:-}" ] || die "IMPACT_WORKER_HOST is unset"
+  ssh -o BatchMode=yes "$IMPACT_WORKER_HOST" sudo bash -c "'cat > /usr/local/bin/monoscope-worker-follow && chmod 755 /usr/local/bin/monoscope-worker-follow'" < scripts/ci/worker-follow.sh
+  ssh -o BatchMode=yes "$IMPACT_WORKER_HOST" sudo bash -s <<'REMOTE'
+set -e
+printf '[Unit]\nDescription=Keep the proof worker on the build production runs\nAfter=docker.service\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/monoscope-worker-follow\n' > /etc/systemd/system/monoscope-worker-follow.service
+printf '[Unit]\nDescription=Follow production deploys onto the proof worker\n\n[Timer]\nOnBootSec=2min\nOnUnitActiveSec=2min\n\n[Install]\nWantedBy=timers.target\n' > /etc/systemd/system/monoscope-worker-follow.timer
+systemctl daemon-reload
+systemctl enable --now monoscope-worker-follow.timer
+REMOTE
+  note "worker-follow installed on $IMPACT_WORKER_HOST"
+}
+
 
 # ---------------------------------------------------------------- ship
 #
@@ -1366,6 +1377,7 @@ case "$cmd" in
   deploy-rollback) cmd_deploy "${1:?rollback needs a SHA}" rollback ;;
   deploy-status) cmd_deploy_status ;;
   deploy-worker) cmd_deploy_worker "$@" ;;
+  worker-follow-install) cmd_worker_follow_install ;;
   deployed)    cmd_deployed "$@" ;;
   ship)        cmd_ship "$@" ;;
   builder)     cmd_builder "$@" ;;

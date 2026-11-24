@@ -111,22 +111,43 @@ build() {
   printf '%s@%s\n' "$IMAGE" "$digest"
 }
 
-# The proof worker takes the server build from the production image by digest, so only its own layers build.
+# What the proof worker runs: the server's code and the worker's own layers. The frontend, static
+# assets, tests, docs and CI scripts are not in it, so a merge touching only those reuses the last
+# worker image, and the host (worker-follow.sh) sees the same inputs and does not restart it.
+WORKER=$IMAGE-impact-worker
+WORKER_PATHS=(src shared cli proto app package.yaml hpack-includes monoscope.cabal cabal.project cabal.project.freeze Dockerfile impact-review-worker scripts/cli-bin.sh scripts/package-cli.sh scripts/check-cli-linkage.sh)
+worker_inputs() { # sha deps runtime
+  { printf 'monoscope-worker-v1\n%s\n%s\n' "$2" "$3"
+    for p in "${WORKER_PATHS[@]}"; do printf '%s %s\n' "$p" "$(git rev-parse -q --verify "$1:$p" || echo absent)"; done; } | sha256
+}
+
+# The proof worker takes the server build from the production image by digest, so only its own layers
+# build, and only when its inputs changed; otherwise this tree is tagged onto the existing image.
 worker() {
-  local sha deps
+  local sha tree deps runtime fingerprint digest
   sha=$(git rev-parse "$1^{commit}")
-  require_local_builder
+  tree=$(git rev-parse "$sha^{tree}")
   deps=${MONOSCOPE_DEPS_IMAGE:-"ghcr.io/monoscope-tech/monoscope-deps@$(registry_digest ghcr.io/monoscope-tech/monoscope-deps:latest)"}
-  git archive "$sha" | docker buildx build --builder "$MONOSCOPE_BUILDER" --platform linux/amd64 -f Dockerfile --target impact-worker \
-    --build-context "server=docker-image://$IMAGE@$(registry_digest "$IMAGE:$sha")" \
-    --build-arg "DEPS_IMAGE=$deps" --build-arg "RUNTIME_IMAGE=debian@$(registry_digest debian:12-slim)" --build-arg "GIT_HASH=$sha" \
-    --label "org.opencontainers.image.revision=$sha" --cache-from "type=registry,ref=$IMAGE:buildcache" \
-    --provenance=false --push -t "$IMAGE-impact-worker:$sha" -
+  runtime="debian@$(registry_digest debian:12-slim)"
+  fingerprint=$(worker_inputs "$sha" "$deps" "$runtime")
+  if digest=$(registry_digest "$WORKER:inputs-$fingerprint" 2>/dev/null); then
+    echo "Reusing $WORKER@$digest: no worker inputs changed" >&2
+    docker buildx imagetools create --prefer-index=false -t "$WORKER:$sha" -t "$WORKER:tree-$tree" "$WORKER@$digest"
+  else
+    require_local_builder
+    git archive "$sha" | docker buildx build --builder "$MONOSCOPE_BUILDER" --platform linux/amd64 -f Dockerfile --target impact-worker \
+      --build-context "server=docker-image://$IMAGE@$(registry_digest "$IMAGE:$sha")" \
+      --build-arg "DEPS_IMAGE=$deps" --build-arg "RUNTIME_IMAGE=$runtime" --build-arg "GIT_HASH=$sha" \
+      --label "org.opencontainers.image.revision=$sha" --label "io.monoscope.source-tree=$tree" --label "io.monoscope.worker-inputs=$fingerprint" \
+      --cache-from "type=registry,ref=$IMAGE:buildcache" \
+      --provenance=false --push -t "$WORKER:inputs-$fingerprint" -t "$WORKER:$sha" -t "$WORKER:tree-$tree" -
+  fi
 }
 
 case "${1:-}" in
   build) shift; build "$@" ;;
   worker) worker "$2" ;;
+  worker-inputs) worker_inputs "$(git rev-parse "$2^{commit}")" "${3:-deps}" "${4:-runtime}" ;;
   local-context) require_local_context ;;
   local-builder) require_local_builder ;;
   current-master) current_master "$2" ;;

@@ -564,6 +564,11 @@ deploy-status:
 deploy-worker:
 	./scripts/ci/ci.sh deploy-worker
 
+# Install the worker host's timer that follows every production deploy (CI's included) onto the
+# proof worker, restarting it only when the worker's inputs changed. Once per host.
+worker-follow-install:
+	./scripts/ci/ci.sh worker-follow-install
+
 # Converge broker-side config (retention, segment roll) for topics monoscope owns.
 kafka-topics:
 	./scripts/kafka-topics.sh
@@ -606,6 +611,6 @@ tf-image:
 builder-rm:
 	./scripts/ci/ci.sh builder rm
 
-.PHONY: ci ci-signoff ci-status ci-shell land ci-down ci-clean ci-selftest deploy-image image-follow tmux-image-follow ship kafka-topics deploy-app rollback-app deploy-status deploy-worker builder-setup builder-status builder-rm tf-image
+.PHONY: ci ci-signoff ci-status ci-shell land ci-down ci-clean ci-selftest deploy-image image-follow tmux-image-follow ship kafka-topics deploy-app rollback-app deploy-status deploy-worker worker-follow-install builder-setup builder-status builder-rm tf-image
 
 .PHONY: all test fmt fmt-check hpack-check lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev tmux-live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin tmux-web-components-watch tmux-minio-local kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf
