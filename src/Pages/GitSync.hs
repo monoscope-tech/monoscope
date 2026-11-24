@@ -734,7 +734,7 @@ instance ToHtml GitHubConnect where
     ConnectFailed pidM failure -> div_ [class_ "mx-auto max-w-xl space-y-4 p-6"] do
       h1_ [class_ "text-xl font-semibold text-textStrong"] "Connect GitHub"
       p_ [role_ "alert", class_ "text-sm text-textError"] $ toHtml @Text case failure of
-        AppNotConfigured -> "An administrator must configure GitHub user authorization before connecting an account."
+        AppNotConfigured -> "GitHub user authorization is not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET from the GitHub App's settings page (Client secrets → Generate a new client secret), add <HOST_URL>/github/callback as the App's callback URL, then restart Monoscope."
         AttemptMissing -> "This connection request is missing, expired, or already used. Return to Repositories and connect the account again."
         AuthorizationFailed err -> GitSync.installationErrorMessage err
         ConnectionIncomplete -> "GitHub did not complete the connection. Return to Repositories and try again."

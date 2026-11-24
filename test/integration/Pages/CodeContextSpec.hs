@@ -399,31 +399,35 @@ spec = do
         runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
 
         -- installationAuthorization_requiresTheGitHubAccountOwner: only the account itself, or an
-        -- active org admin (found on any membership page), may bind an installation.
+        -- active admin of the installed organization, may bind an installation.
         owned <- createTestProject tr "Installation owner"
         let authorize installations memberships =
               runTestBgRecordingHTTP frozenTime tr
-                $ withHTTPResponses (\_ endpoint -> pure $ Just $ if endpoint == "https://github.com/login/oauth/access_token" then "{\"access_token\":\"fixture-user-token\"}" else if endpoint == "https://api.github.com/user" then "{\"login\":\"team\"}" else if "https://api.github.com/user/memberships/orgs?" `T.isPrefixOf` toText endpoint then memberships else installations)
+                $ withHTTPResponses (\_ endpoint -> pure $ Just $ if endpoint == "https://github.com/login/oauth/access_token" then "{\"access_token\":\"fixture-user-token\"}" else if endpoint == "https://api.github.com/user" then "{\"login\":\"team\"}" else if endpoint == "https://api.github.com/user/memberships/orgs/team" then memberships else installations)
                 $ GitSync.authorizeGitHubInstallation (encKeyOf tr) owned "123" "fixture-client" "fixture-secret" "fixture-code" "http://localhost:8081/github/callback" 42
         (_, denied) <- authorize "{\"installations\":[{\"id\":43,\"account\":{\"login\":\"foreign\"}}]}" "[]"
-        denied `shouldBe` Left GitSync.InstallationOwnershipRequired
+        denied `shouldBe` Left GitSync.InstallationNotVisible
         runQueryEffect tr (GitSync.getGitHubCredentials owned) >>= (`shouldSatisfy` null)
         (_, collaborator) <- authorize "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"foreign\",\"type\":\"User\"}}]}" "[]"
-        collaborator `shouldBe` Left GitSync.InstallationOwnershipRequired
+        collaborator `shouldBe` Left (GitSync.InstallationOwnershipRequired "foreign")
         let organization = "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"team\",\"type\":\"Organization\"}}]}"
         for_ ([("member", "active", False), ("admin", "pending", False), ("admin", "active", True)] :: [(Text, Text, Bool)]) \(role, membershipState, allowed) -> do
-          let memberships = AE.encode ([AE.object ["state" AE..= membershipState, "role" AE..= role, "organization" AE..= AE.object ["login" AE..= ("team" :: Text)]]] :: [AE.Value])
-          (_, result) <- authorize organization memberships
-          result `shouldBe` if allowed then Right () else Left GitSync.InstallationOwnershipRequired
+          (_, result) <- authorize organization $ AE.encode $ AE.object ["state" AE..= membershipState, "role" AE..= role]
+          result `shouldBe` if allowed then Right () else Left (GitSync.InstallationOwnershipRequired "team")
         (requests, personal) <- authorize "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"team\",\"type\":\"User\"}}]}" "[]"
         personal `shouldBe` Right ()
         map fst requests `shouldBe` ["https://github.com/login/oauth/access_token", "https://api.github.com/user/installations?per_page=100&page=1", "https://api.github.com/user"]
-        let firstPage = AE.encode $ replicate 100 $ AE.object ["state" AE..= ("active" :: Text), "role" AE..= ("member" :: Text)]
-            ownerPage = "[{\"state\":\"active\",\"role\":\"admin\",\"organization\":{\"login\":\"Team\"}}]"
-            paging _ endpoint = pure $ Just $ if endpoint == "https://github.com/login/oauth/access_token" then "{\"access_token\":\"fixture-user-token\"}" else if "user/installations?" `T.isInfixOf` toText endpoint then "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"Team\",\"type\":\"Organization\"}}]}" else if "page=2" `T.isSuffixOf` toText endpoint then ownerPage else firstPage
-        (paged, admin) <- runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses paging $ GitSync.authorizeGitHubInstallation (encKeyOf tr) owned "123" "fixture-client" "fixture-secret" "fixture-code" "https://monoscope.test/github/callback" 42
-        admin `shouldBe` Right ()
-        map fst paged `shouldSatisfy` elem "https://api.github.com/user/memberships/orgs?per_page=100&page=2"
+        -- installationAuthorization_membersPermissionMissing_namesTheFix: without the App's Members
+        -- permission GitHub answers the org membership lookup with 403; that is a setup problem,
+        -- not a claim that the user is no owner.
+        let forbidden = interpose @W.HTTP \_ -> \case
+              W.GetWith _ "https://api.github.com/user/memberships/orgs/team" -> pure (mockResponse "{\"message\":\"Resource not accessible by integration\"}"){responseStatus = H.mkStatus 403 ""}
+              W.GetWith _ _ -> pure $ mockResponse organization
+              W.PostWith {} -> pure $ mockResponse "{\"access_token\":\"fixture-user-token\"}"
+              _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Unexpected request"
+        (_, unpermitted) <- runTestBgRecordingHTTP frozenTime tr $ forbidden $ GitSync.authorizeGitHubInstallation (encKeyOf tr) owned "123" "fixture-client" "fixture-secret" "fixture-code" "https://monoscope.test/github/callback" 42
+        unpermitted `shouldBe` Left GitSync.InstallationMembersPermissionMissing
+        GitSync.installationErrorMessage GitSync.InstallationMembersPermissionMissing `shouldSatisfy` T.isInfixOf "\"Members\" read permission"
         [account] <- runQueryEffect tr $ GitSync.getGitHubCredentials owned
         (account.account, account.installationId, account.accessToken) `shouldBe` ("team", Just 42, Nothing)
         runQueryEffect tr (GitSync.getGitSyncs owned) >>= (`shouldSatisfy` null)
