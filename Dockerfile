@@ -239,15 +239,18 @@ COPY --from=builder --chown=monoscope:monoscope --chmod=755 /build/dist/monoscop
 COPY --from=builder --chown=monoscope:monoscope /build/static ./static
 
 # agg renders proof recordings (asciinema casts) into GIF previews; pinned by checksum. The gnu builds
-# need glibc 2.38 and the bookworm runtime has 2.36, so amd64 takes the static musl build.
-FROM scratch AS agg
-ADD --checksum=sha256:ddcbf6ca044c8ac3a434dcb9ee89fb9e3be87209982b7c2adb55f782e8f0f390 --chmod=755 https://github.com/asciinema/agg/releases/download/v1.9.0/agg-x86_64-unknown-linux-musl /agg-amd64
-ADD --checksum=sha256:2b4be407b97e00e1c313a41d154ced8fa3d02c560c8f47a0db4950a2576444c9 --chmod=755 https://github.com/asciinema/agg/releases/download/v1.9.0/agg-aarch64-unknown-linux-gnu /agg-arm64
+# need glibc 2.38 and the bookworm runtime has 2.36, so amd64 takes the static musl build. One stage
+# per arch, so a build fetches only its own: the unused arm64 download once failed an amd64 build.
+FROM scratch AS agg-amd64
+ADD --checksum=sha256:ddcbf6ca044c8ac3a434dcb9ee89fb9e3be87209982b7c2adb55f782e8f0f390 --chmod=755 https://github.com/asciinema/agg/releases/download/v1.9.0/agg-x86_64-unknown-linux-musl /agg
+FROM scratch AS agg-arm64
+ADD --checksum=sha256:2b4be407b97e00e1c313a41d154ced8fa3d02c560c8f47a0db4950a2576444c9 --chmod=755 https://github.com/asciinema/agg/releases/download/v1.9.0/agg-aarch64-unknown-linux-gnu /agg
+FROM agg-${TARGETARCH} AS agg
 
 FROM runtime AS impact-tools
 ARG TARGETARCH
 USER root
-COPY --from=agg /agg-${TARGETARCH} /usr/local/bin/agg
+COPY --from=agg /agg /usr/local/bin/agg
 RUN case "$(dpkg --print-architecture)" in \
       amd64) qemu=qemu-system-x86 ;; \
       arm64) qemu=qemu-system-arm ;; \
