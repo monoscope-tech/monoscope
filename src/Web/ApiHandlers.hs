@@ -1447,7 +1447,7 @@ apiMetricsCatalog pid service search limit offset active = do
 apiFacets :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx AE.Value
 apiFacets pid sinceM fromM toM fieldM = do
   now <- Time.currentTime
-  let (fromT, toT, _) = TP.parseTimeRange now (TP.TimePicker sinceM fromM toM)
+  let (fromT, toT, _) = TP.parseTimeRangeWith now "24H" (TP.TimePicker sinceM fromM toM)
       defaultFrom = fromMaybe (addUTCTime (negate nominalDay) now) fromT
       defaultTo = fromMaybe now toT
   summaryM <- SchemaCatalog.getFacetSummary Nothing pid "otel_logs_and_spans" defaultFrom defaultTo

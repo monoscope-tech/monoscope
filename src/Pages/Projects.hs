@@ -103,7 +103,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsConten
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), PanelCfg (..), PanelStyle (..), brandLogo_, callout_, connectionBadge_, dangerAction_, dirtyFormSaveAttr_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadge_, modalWith_, panel_, roleOptions_, searchInput_, sectionLabel_, settingsH2_, settingsSection_, tagInput_, toggleRow_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), PanelCfg (..), PanelStyle (..), brandLogo_, callout_, connectionBadge_, dangerAction_, dirtyFormSaveAttr_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadge_, modalWith_, panel_, roleOptions_, searchInput_, sectionLabel_, settingsH2_, settingsSection_, swapTarget_, tagInput_, toggleRow_, tonePill_)
 import Pages.Settings qualified as Settings
 import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
@@ -1083,7 +1083,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
       a_ [href_ (Links.urls.projects.teamsManageGet pid Nothing), class_ "text-iconNeutral hover:text-iconBrand"] $ faSprite_ "arrow-left" "regular" "h-4 w-4"
       h2_ [class_ "text-textStrong text-3xl font-semibold flex items-center gap-2"] do
         toHtml team.name
-        when isEveryone $ span_ [class_ "badge badge-primary"] "Default"
+        when isEveryone $ tonePill_ BrandBadge "Default"
     when isEveryone
       $ div_ [class_ "mb-6"]
       $ callout_ BrandBadge Nothing do
@@ -1153,14 +1153,11 @@ teamTabsHeader_ pid active membersCount teamsCount = do
   let tab label key count = do
         let url = if key == "members" then Links.urls.projects.membersManageGet pid else Links.urls.projects.teamsManageGet pid Nothing
         a_
-          [ class_ $ "flex items-center gap-2 a-tab border-b border-b-strokeWeak px-3 py-2 text-sm" <> (if active == key then " t-tab-active" else "")
-          , href_ url
-          , hxGet_ url
-          , hxTarget_ settingsContentTarget
-          , hxSelect_ settingsContentTarget
-          , hxSwap_ "outerHTML"
-          , hxPushUrl_ "true"
-          ]
+          ( [ class_ $ "flex items-center gap-2 a-tab border-b border-b-strokeWeak px-3 py-2 text-sm" <> (if active == key then " t-tab-active" else "")
+            , href_ url
+            ]
+              <> swapTarget_ (T.drop 1 settingsContentTarget) url
+          )
           do
             toHtml (label :: Text)
             span_ [class_ "text-textDisabled text-xs font-normal"] $ toHtml $ fmtInt count

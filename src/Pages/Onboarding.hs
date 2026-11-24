@@ -766,9 +766,8 @@ inviteTeamMemberModal pid emails enableFreetier =
         iconBadge_ IconSm SuccessBadge "circle-check"
         span_ [class_ "text-textStrong text-xl"] "Test notification sent"
       div_ [class_ "text-textWeak text-sm"] "No notification? Close this modal and verify your emails and channels."
-      details_ [class_ "w-full border-t border-strokeWeak pt-3"] $ do
-        summary_ [class_ "text-textBrand text-sm cursor-pointer"] "Invite team members"
-        div_ [class_ "flex-col gap-3 flex pt-3"] $ do
+      disclosure_ [class_ "w-full border-t border-strokeWeak pt-3"] "text-textBrand text-sm" "Invite team members"
+        $ div_ [class_ "flex-col gap-3 flex pt-3"] do
           when enableFreetier $ callout_ BrandBadge Nothing "Only the project owner can access a Free project. Invited members remain disabled until you upgrade."
           div_ [class_ "w-full gap-2 flex items-center"] $ do
             input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]

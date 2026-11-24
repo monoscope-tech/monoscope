@@ -22,6 +22,7 @@ import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Pkg.Deriving (escapeRegex)
+import Pkg.Duration qualified as Duration
 import Relude hiding (GT, LT, Sum, many, some)
 import System.IO.Unsafe (unsafePerformIO)
 import Text.Megaparsec
@@ -1229,35 +1230,18 @@ parseTimespan t
 --
 -- Everything else is REFUSED rather than guessed at — calendar units because
 -- @time_bucket@ has no fixed width for them, longhand aliases because they did
--- not survive the trip to SQL intact (see 'timespanSuffixes'):
+-- not survive the trip to SQL intact:
 --
 -- >>> map kqlTimespanToTimeBucket ["1mo", "1M", "1y", "1 month", "30sec", "10min"]
 -- [Nothing,Nothing,Nothing,Nothing,Nothing,Nothing]
 --
 -- SECURITY: never passes user input through — always reconstructs the string.
 kqlTimespanToTimeBucket :: Text -> Maybe T.Text
-kqlTimespanToTimeBucket timespan = parseBareSeconds ts <|> parsePostgresInterval ts <|> parseKqlFormat ts
+kqlTimespanToTimeBucket timespan =
+  Duration.durationToPostgresInterval <$> (parseBareSeconds ts <|> Duration.parsePostgresInterval ts <|> Duration.parseDuration False Duration.kqlUnits ts)
   where
     ts = T.strip timespan
-    -- A unitless number is SECONDS, which is what the shipped README means by
-    -- `bin(timestamp, 86400)` — one day. It used to fall through to the
-    -- five-minute default, so that documented example silently drew 5-minute
-    -- buckets. `bin(timestamp, 300)` is unaffected: 300 seconds IS five
-    -- minutes, which is why the old default hid this for so long.
-    parseBareSeconds t = (<> " seconds") . show @Text @Int <$> (readMaybe (toString t) >>= \n -> guard (n > 0) $> n)
-    validUnits = S.fromList ["second", "seconds", "minute", "minutes", "hour", "hours", "day", "days", "week", "weeks", "millisecond", "milliseconds", "microsecond", "microseconds", "nanosecond", "nanoseconds"]
-    -- Parse and reconstruct PostgreSQL interval format (returns validated string, not original input)
-    parsePostgresInterval t = case words t of
-      [num, unit] | Just n <- readMaybe @Int (toString num), unit `S.member` validUnits -> Just $ show n <> " " <> unit
-      _ -> Nothing
-    -- Longest suffix first: "30sec" must match "sec", not "s" with a "30se"
-    -- numeral that fails to read.
-    parseKqlFormat t =
-      listToMaybe
-        [ show n <> " " <> name
-        | (sfx, name) <- sortOn (negate . T.length . fst) timespanSuffixes
-        , Just n <- [T.stripSuffix sfx t >>= readMaybe @Int . toString]
-        ]
+    parseBareSeconds t = (,Duration.Sec) <$> (readMaybe @Int (toString t) >>= \n -> guard (n > 0) $> n)
 
 
 -- | The width a @bin()@ falls back to when a caller renders without validating.
@@ -1265,22 +1249,6 @@ kqlTimespanToTimeBucket timespan = parseBareSeconds ts <|> parsePostgresInterval
 -- which is exactly what made the wrong-bucket bug invisible.
 defaultBinWidth :: T.Text
 defaultBinWidth = "5 minutes"
-
-
--- | Every timespan suffix @bin()@ accepts, mapped to its PostgreSQL unit.
---
--- Deliberately ONLY the single-letter KQL forms plus @µs@/@w@. Multi-character
--- aliases (@sec@, @min@, @hr@, @wk@) were tried and REVERTED on 2026-08-31:
--- 'kqlTimespanToTimeBucket' rendered them correctly — the doctests above prove
--- @"30sec" -> Just "30 seconds"@ — but the query still bucketed at one minute
--- end to end, and @10min@ at roughly five. Something between this function and
--- the emitted SQL mangles them and was not identified. Accepting an alias that
--- silently buckets wrong is the exact bug this module is being fixed for, so
--- they stay rejected (with a message naming the spelling to use) until that
--- path is understood. Do not re-add them without an end-to-end row-count check
--- against a fixed window.
-timespanSuffixes :: [(T.Text, T.Text)]
-timespanSuffixes = ("µs", "microseconds") : ("w", "weeks") : [(u, nm) | (u, nm, _) <- timespanUnits]
 
 
 -- | The error for a @bin()@ width we cannot bucket by, or 'Nothing' when it is

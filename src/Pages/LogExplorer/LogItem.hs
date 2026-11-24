@@ -635,11 +635,11 @@ renderErrors pid svcM attr resAttr errs =
           $ button_
             [ class_ "shrink-0 cursor-pointer flex items-center gap-1 text-xs px-2 py-0.5 rounded text-textWeak hover:text-textStrong hover:bg-bgBase/60 transition-colors"
             , Aria.label_ "Copy exception message"
-            , copySourceAttr_ ("document.querySelector('." <> copyId <> "')")
+            , copySourceAttr_ ("document.getElementById('" <> copyId <> "')")
             ]
             (faSprite_ "copy" "regular" "w-3 h-3" >> "Copy")
       unless (T.null message)
-        $ pre_ [class_ $ copyId <> " text-xs font-mono whitespace-pre-wrap break-words text-textStrong px-3 py-2.5 leading-relaxed"] (toHtml message)
+        $ pre_ [id_ copyId, class_ "text-xs font-mono whitespace-pre-wrap break-words text-textStrong px-3 py-2.5 leading-relaxed"] (toHtml message)
       let frames = EF.framesFor attr stacktrace
       unless (null frames)
         $ div_ [class_ "border-t border-strokeError-strong/30"]
@@ -747,10 +747,7 @@ traceOverlay_ pidTxt layout showTrace = do
           button_
             [ class_ "text-textBrand font-medium cursor-pointer hover:underline"
             , Aria.label_ "Retry loading trace"
-            , [__|on click
-            add .hidden to #trace-load-error
-            call htmx.ajax('GET', #trace_expanded_view's @data-trace-url, {target: #trace_expanded_view, swap: 'innerHTML'})
-          end|]
+            , [__|on click send loadTrace(url: #trace_expanded_view's @data-trace-url) to #trace_expanded_view|]
             ]
             "Retry"
 

@@ -695,13 +695,9 @@ async function render(
     const title = menu.querySelector<HTMLElement>('[data-menu-title]');
     if (title) title.textContent = label;
     const endpointEntry = key.startsWith('endpoint:');
+    menu.dataset.inferred = String(inferred || endpointEntry);
     for (const a of menu.querySelectorAll<HTMLAnchorElement>('[data-menu-action]')) {
-      const action = a.dataset.menuAction!;
-      // A synthetic endpoint entry is a graph anchor, not a service whose resource.name can
-      // be searched. Keep only graph-local actions; real downstream nodes keep their normal
-      // trace/log/metric investigation links.
-      a.classList.toggle('hidden', (inferred || endpointEntry) && action !== 'inspect' && action !== 'focus');
-      a.href = menuHref(pid, action, key);
+      a.href = menuHref(pid, a.dataset.menuAction!, key);
     }
     menu.showPopover?.();
     menu.style.cssText = `position:fixed;inset:auto;left:${Math.max(0, Math.min(x, window.innerWidth - menu.offsetWidth))}px;top:${Math.max(0, Math.min(y, window.innerHeight - menu.offsetHeight))}px`;
@@ -713,8 +709,7 @@ async function render(
     isolated = null;
     if (chip) {
       const node = key ? byKey.get(key) : undefined;
-      chip.classList.toggle('hidden', !node);
-      chip.classList.toggle('flex', !!node);
+      chip.dataset.scoped = String(!!node);
       const label = chip.querySelector<HTMLElement>('[data-scope-label]');
       if (label && node) label.textContent = node.label || 'Entry point';
     }

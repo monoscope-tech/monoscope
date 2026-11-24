@@ -16,9 +16,10 @@ module CLI.Validate (
 import Relude
 
 import CLI.Core (dieWith)
-import Data.Char (isDigit)
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Effectful
+import Pkg.Duration qualified as Duration
 import Pkg.Parser.Stats (parseQueryToAST)
 
 
@@ -26,15 +27,11 @@ import Pkg.Parser.Stats (parseQueryToAST)
 -- Suffix matching is case-insensitive — the platform's TimePicker emits
 -- uppercase forms ("1H", "24H") and the server accepts either. Original casing
 -- is preserved on success.
-validateUnitsFor :: [Text] -> Text -> Text -> Either Text Text
-validateUnitsFor units flag t
+validateUnitsFor :: [Duration.DurationUnit] -> Text -> Text -> Either Text Text
+validateUnitsFor allowed flag t
   | T.null t = Left $ flag <> " must not be empty"
-  | otherwise =
-      let trimmed = T.strip t
-          (digits, suffix) = T.span isDigit trimmed
-       in if T.null digits || T.toLower suffix `notElem` units
-            then Left $ flag <> " must match " <> T.intercalate "|" (map ("N" <>) units) <> " (e.g. 30m, 2h, 7d); got '" <> t <> "'"
-            else Right trimmed
+  | Just _ <- Duration.parseDuration True (S.fromList allowed) t = Right (T.strip t)
+  | otherwise = Left $ flag <> " must match " <> T.intercalate "|" (map (("N" <>) . Duration.unitSuffix) allowed) <> " (e.g. 30m, 2h, 7d); got '" <> t <> "'"
 
 
 -- | Validate a client-side duration (@s|m|h|d|ms@) for flags parsed locally
@@ -49,12 +46,10 @@ validateUnitsFor units flag t
 -- >>> validateDurationFor "--window" ""
 -- Left "--window must not be empty"
 validateDurationFor :: Text -> Text -> Either Text Text
-validateDurationFor = validateUnitsFor ["s", "m", "h", "d", "ms"]
+validateDurationFor = validateUnitsFor [Duration.Sec, Duration.Min, Duration.Hour, Duration.Day, Duration.Ms]
 
 
--- | Validate a server-side @--since@ duration (@s|m|h|d@). The server's
--- @TimePicker.parseSince@ does not accept @ms@ and treats unknown units as a
--- zero-width window, so reject sub-second units client-side.
+-- | Validate a server-side @--since@ duration (@s|m|h|d@).
 --
 -- >>> validateSinceFor "--since" "10s"
 -- Right "10s"
@@ -65,7 +60,7 @@ validateDurationFor = validateUnitsFor ["s", "m", "h", "d", "ms"]
 -- >>> validateSinceFor "--since" ""
 -- Left "--since must not be empty"
 validateSinceFor :: Text -> Text -> Either Text Text
-validateSinceFor = validateUnitsFor ["s", "m", "h", "d"]
+validateSinceFor = validateUnitsFor [Duration.Sec, Duration.Min, Duration.Hour, Duration.Day]
 
 
 -- | Validated @--kind@ flag: @log@ → 'EKLog', @span@/@trace@ → 'EKSpan'.

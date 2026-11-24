@@ -755,7 +755,7 @@ serviceOptions_ current services =
         , data_ "service" service
         , [__|on click send htmx:abort to <#metric-service-picker [data-picker-input]/> then set the value of <#metric-service-picker [data-picker-input]/> to '' then set #metric-source-input.value to my.dataset.service then call #metric-service-picker.hidePopover() then call (closest <form/>).requestSubmit()|]
         ]
-    when (null services) $ p_ [class_ "px-3 py-4 text-center text-xs text-textWeak"] "No matching services."
+    when (null services) $ Components.pickerNoMatches_ "No matching services."
     when (length services >= serviceOptionsLimit) $ p_ [class_ "px-3 py-1.5 text-xs text-textWeak"] $ toHtml $ "Showing the first " <> show @Text serviceOptionsLimit <> " services \x2014 type to narrow."
 
 
@@ -1110,16 +1110,13 @@ metricsDetailsPage pid allDashboards allMonitors source labelM currentRange metr
                   span_ [class_ "mt-1 block text-xs text-textWeak"] "Choose a dimension to split the chart."
                   dimensionChips topDimensions
                   unless (null moreDimensions)
-                    $ details_ [class_ "mt-3"] do
-                      summary_ [class_ "inline-flex cursor-pointer items-center text-sm text-textWeak hover:text-textStrong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11 max-md:text-sm"] $ "Show " <> toHtml (prettyPrintCount $ length moreDimensions) <> " more dimensions"
-                      dimensionChips moreDimensions
+                    $ Components.disclosure_ [class_ "mt-3"] "text-sm text-textWeak hover:text-textStrong max-md:min-h-11 max-md:text-sm" ("Show " <> toHtml (prettyPrintCount $ length moreDimensions) <> " more dimensions")
+                    $ dimensionChips moreDimensions
               unless (V.null sources)
-                $ details_ [class_ "border-t border-strokeWeak pt-4"] do
-                  summary_ [class_ "inline-flex cursor-pointer items-center text-sm text-textWeak hover:text-textStrong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11 max-md:text-sm"] do
-                    "Reporting services"
-                    span_ [class_ "ml-1 text-textDisabled"] $ "(" <> toHtml (prettyPrintCount $ V.length sources) <> ")"
-                  div_ [class_ "mt-2 flex flex-wrap gap-1.5"] $ forM_ sources $ \service ->
-                    span_ [class_ "badge badge-ghost font-normal"] $ toHtml service
+                $ Components.disclosure_ [class_ "border-t border-strokeWeak pt-4"] "text-sm text-textWeak hover:text-textStrong max-md:min-h-11 max-md:text-sm" ("Reporting services" >> span_ [class_ "ml-1 text-textDisabled"] ("(" <> toHtml (prettyPrintCount $ V.length sources) <> ")"))
+                $ div_ [class_ "mt-2 flex flex-wrap gap-1.5"]
+                $ forM_ sources
+                $ \service -> span_ [class_ "badge badge-ghost font-normal"] $ toHtml service
               unless (null dashboards && null monitors)
                 $ div_ [class_ "border-t border-strokeWeak pt-4"] do
                   span_ [class_ "text-xs font-medium text-textWeak"] "Used by"
@@ -1314,7 +1311,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                       , onpointerdown_ $ "navigateSpans('" <> dir <> "')"
                       ]
                       $ faSprite_ icon "regular" "w-3 h-3"
-              button_ [class_ "btn border border-strokeWeak bg-fillWeaker h-9 hidden", id_ "reset-zoom-btn"] "Reset Zoom"
+              button_ [class_ "btn border border-strokeWeak bg-fillWeaker h-9 hidden group-data-[flame-zoomed=true]/tt:inline-flex", id_ "reset-zoom-btn"] "Reset Zoom"
           div_ [role_ "tabpanel", class_ "a-tab-content w-full hidden group-has-[#tab-timeline:checked]/tt:block", id_ "flame_graph"] do
             div_ [class_ "flex max-md:flex-col gap-2 w-full pt-2 relative", style_ "--tl-left:65%", id_ $ "timeline-layout-" <> traceItem.traceId] do
               div_
@@ -1515,7 +1512,7 @@ renderSpanListTable services colors records =
         $ table_ [class_ "table w-full"] do
           thead_ [class_ "border-b border-strokeWeak"]
             $ tr_ [class_ "p-2 border-b font-medium"]
-            $ forM_ (["Time", "Span name", "Event type", "Span kind", "Exec. time"] :: [Text]) (td_ [] . toHtml)
+            $ forM_ (["Time", "Span name", "Event type", "Span kind", "Exec. time"] :: [Text]) (th_ [scope_ "col"] . toHtml)
           tbody_ $ forM_ filterRecords \spanRecord -> do
             let reqType = foldMap (\(t, _, _, _) -> t) $ getRequestDetails spanRecord.attributes
             tr_ ([id_ $ "sp-list-" <> spanRecord.spanId, class_ "span-filterble font-medium"] <> spanDetailAttrs_ ShowSkeleton (UUIDId spanRecord.projectId) spanRecord.uSpanId spanRecord.timestamp) do

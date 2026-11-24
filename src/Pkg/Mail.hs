@@ -533,12 +533,7 @@ monitorIncidentMessages project monitor value status observedAt episode issueUrl
   )
   where
     st = case status of Monitors.MSNormal -> sRecovered; Monitors.MSWarning -> sWarning; Monitors.MSAlerting -> sAlerting
-    threshold = case status of
-      Monitors.MSWarning -> fromMaybe monitor.alertThreshold monitor.warningThreshold
-      Monitors.MSAlerting -> monitor.alertThreshold
-      Monitors.MSNormal
-        | monitor.currentStatus == Monitors.MSWarning -> fromMaybe monitor.alertThreshold (monitor.warningRecoveryThreshold <|> monitor.warningThreshold)
-        | otherwise -> fromMaybe monitor.alertThreshold monitor.alertRecoveryThreshold
+    threshold = Monitors.activeThreshold monitor status
     started = maybe observedAt (.startedAt) episode
     -- The side of the threshold the reading is on, in every state.
     comparison = if (status == Monitors.MSNormal) /= monitor.triggerLessThan then "below " else "above "

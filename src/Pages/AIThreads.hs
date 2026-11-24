@@ -35,7 +35,7 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkAIPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
 import Pages.CodeContext qualified as CodeContext
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), disclosure_, emptyState_, iconBadge_, localTimeFmt_, logExplorerUrl, toneDot_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), actionMenu_, disclosure_, emptyState_, iconBadge_, localTimeFmt_, logExplorerUrl, toneDot_, tonePill_)
 import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
@@ -323,8 +323,7 @@ routinesGetH pid = do
                                    let (toggle, toggleLabel) = bool (\p c -> urls.aiRoutineResumePost p c False, "Resume") (urls.aiRoutinePausePost, "Pause") r.routineActive
                                        menuId = "routine-menu-" <> r.conversationId.toText
                                    button_ [hxPost_ $ toggle pid r.conversationId, hxSwap_ "none", type_ "button", class_ "btn btn-xs btn-outline active:scale-[0.96] transition-transform"] $ toHtml @Text toggleLabel
-                                   button_ ([type_ "button", class_ "btn btn-xs btn-ghost btn-square", Aria.label_ $ "More actions for " <> r.title] <> popoverTrigger_ menuId) $ faSprite_ "ellipsis" "regular" "h-3.5 w-3.5"
-                                   ul_ ([class_ "dropdown dropdown-end menu menu-sm w-52 rounded-box border border-strokeWeak bg-bgRaised p-1 text-start shadow-lg"] <> popoverPanel_ menuId) do
+                                   actionMenu_ menuId False [class_ "btn btn-xs btn-ghost btn-square", Aria.label_ $ "More actions for " <> r.title] (faSprite_ "ellipsis" "regular" "h-3.5 w-3.5") [class_ "menu-sm w-52 rounded-box p-1 text-start"] do
                                      when (isJust r.routineRunningSince) $ li_ $ button_ [type_ "button", hxPost_ $ urls.aiRoutineCancelPost pid r.conversationId, hxSwap_ "none", class_ "text-textWarning"] "Stop active runs"
                                      when (isJust r.routineInterval) do
                                        li_ [class_ "menu-title"] "Deliver results"
@@ -489,15 +488,15 @@ threadPageGetH pid convId docM runM hxTarget = do
     runStatusId :: Issues.RoutineRun -> Text
     runStatusId run = "routine-run-status-" <> run.id.toText
     -- Like 'Pages.Components.pollSelfAttrs_' but with @outerMorph@ so open disclosures survive polling.
-    morphPollAttrs_ :: Text -> Text -> Text -> [Attribute]
-    morphPollAttrs_ cid url trigger = [hxGet_ url, hxTrigger_ trigger, hxTarget_ "this", hxSelect_ $ "#" <> cid, hxSwap_ "outerMorph", term "hx-preload" "false"]
+    morphPollSelfAttrs_ :: Text -> Text -> Text -> [Attribute]
+    morphPollSelfAttrs_ cid url trigger = [hxGet_ url, hxTrigger_ trigger, hxTarget_ "this", hxSelect_ $ "#" <> cid, hxSwap_ "outerMorph", term "hx-preload" "false"]
     cardDisclosure_ :: [Attribute] -> Text -> Html () -> Html () -> Html ()
     cardDisclosure_ attrs bodyCls summary = disclosure_ (class_ "rounded-xl border border-strokeWeak bg-bgRaised" : attrs) "gap-2 rounded-xl px-4 py-3 text-sm font-medium text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:-outline-offset-2" summary . div_ [class_ $ "border-t border-strokeWeak p-4" <> bodyCls]
 
     runView_ :: Bool -> Issues.RoutineRun -> Issues.RoutineRunEvidence -> Maybe Projects.User -> [Issues.AIArtifact] -> ProjectMembers.Permissions -> [Investigations.OperationEntry AI.OperationPolicy] -> Maybe (Html ()) -> Html ()
     runView_ retained run evidence requestedBy artifacts viewerPermission operations fixEvidence =
       section_
-        ([id_ "routine-run", class_ "space-y-5"] <> bool [] (morphPollAttrs_ "routine-run" (urls.aiRoutineRunGet pid run.id (Just convId)) "every 5s" <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) (run.status == Issues.RunRunning))
+        ([id_ "routine-run", class_ "space-y-5"] <> bool [] (morphPollSelfAttrs_ "routine-run" (urls.aiRoutineRunGet pid run.id (Just convId)) "every 5s" <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) (run.status == Issues.RunRunning))
         do
           header_ [class_ "space-y-2"] do
             div_ [class_ "flex items-baseline justify-between gap-3"] do
@@ -634,7 +633,7 @@ threadPageGetH pid convId docM runM hxTarget = do
             -- A chat lists its documents first; a routine leads with its result, then its history.
             unless (null docs || isRoutine) documentsNav_
             div_
-              ([id_ "ai-thread-results", class_ "space-y-8"] <> bool [] (morphPollAttrs_ "ai-thread-results" threadHref "every 2s" <> [term "hx-select-oob" "#pageTitleText:outerHTML"]) (any ((== Issues.RunRunning) . (.status)) runs))
+              ([id_ "ai-thread-results", class_ "space-y-8"] <> bool [] (morphPollSelfAttrs_ "ai-thread-results" threadHref "every 2s" <> [term "hx-select-oob" "#pageTitleText:outerHTML"]) (any ((== Issues.RunRunning) . (.status)) runs))
               do
                 -- A routine reads as its latest result (plus the question that prompted it); older ones live under Runs below.
                 let definingPrompt m = m.role == Issues.ChatUser && Just (T.strip m.content) == (T.strip <$> instructions)
@@ -800,7 +799,7 @@ threadPageGetH pid convId docM runM hxTarget = do
           article_
             ( [id_ "ai-document", Aria.label_ doc.title]
                 -- Routines keep appending to today's document; keep an open one current.
-                <> bool [] (morphPollAttrs_ "ai-document" (docHref doc) "every 60s") (any ((.routineActive) . fst) routineM)
+                <> bool [] (morphPollSelfAttrs_ "ai-document" (docHref doc) "every 60s") (any ((.routineActive) . fst) routineM)
             )
             do
               h2_ [class_ "text-base font-semibold text-textStrong text-balance break-words"] $ toHtml doc.title
@@ -1360,7 +1359,7 @@ copilotDock_ dock =
       whenJust dock.pageChange \case
         -- The child clicks it: navTabAttrs already owns the anchor's hyperscript attribute.
         Visit href -> a_ ([href_ href, class_ "hidden"] <> navTabAttrs) $ span_ [[__|init call my parentElement.click()|]] ""
-        Reload href -> a_ [href_ href, class_ "hidden", hxGet_ href, hxTarget_ "#main-content", hxSelect_ "#main-content", hxSwap_ "outerHTML", [__|init call me.click()|]] ""
+        Reload href -> div_ [class_ "hidden", hxGet_ href, hxTrigger_ "load", hxTarget_ "#main-content", hxSelect_ "#main-content", hxSwap_ "outerHTML"] ""
   where
     selectedId = (.session.conversationId) <$> dock.selected
     seen = maybe 0 (\open -> length open.calls + length open.answer) dock.selected

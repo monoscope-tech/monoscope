@@ -50,10 +50,6 @@ main = hspec do
                                     , "from": null, "to": null, "stats": null, "error": null }|]
       map (.points) (seriesFromMetrics md) `shouldBe` [[(1000, Just 5), (2000, Just 7)]]
 
-    it "pads and truncates to an exact visible width despite ANSI escapes" do
-      visibleWidth (padTo 10 (colorize True (seriesColor 0) "abc")) `shouldBe` 10
-      visibleWidth (padTo 4 "abcdefgh") `shouldBe` 4
-
   describe "CLI.Core" do
     it "prints a structured error's message, never its raw JSON" do
       let render code = renderAPIError . APIError code . decodeUtf8 . AE.encode

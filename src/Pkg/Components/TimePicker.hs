@@ -17,7 +17,7 @@ import Data.Aeson qualified as AE
 import Data.List (lookup)
 import Data.Map qualified as Map
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, diffUTCTime, secondsToNominalDiffTime)
+import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Deriving.Aeson.Stock qualified as DAE
 import Language.Haskell.TH.Syntax qualified as THS
@@ -27,11 +27,9 @@ import Lucid.Base (termRaw)
 import Lucid.Hyperscript (__)
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (assetUrl)
-import Relude hiding (some)
+import Pkg.Duration qualified as Duration
+import Relude
 import System.Clock (TimeSpec (TimeSpec))
-import Text.Megaparsec (Parsec, parse, some)
-import Text.Megaparsec.Char (letterChar, space)
-import Text.Megaparsec.Char.Lexer (decimal)
 import Utils (faSprite_, formatUTC, nonEmptyT, popoverPanel_, popoverTrigger_, scriptJson, sinceWindows, toUriStr, uiToggle_)
 
 
@@ -39,9 +37,6 @@ import Utils (faSprite_, formatUTC, nonEmptyT, popoverPanel_, popoverTrigger_, s
 -- >>> import Relude.Unsafe qualified as Unsafe
 -- >>> import Data.Time (UTCTime (UTCTime), fromGregorian)
 -- >>> let epoch = UTCTime (fromGregorian 2026 1 1) 0
-
-
-type Parser = Parsec Void Text
 
 
 data TimePicker = TimePicker
@@ -94,19 +89,13 @@ rangeQuery = foldMap (\(k, v) -> "&" <> k <> "=" <> toUriStr v) . rangePairs
 -- >>> parseSince (Unsafe.read "2024-10-31 12:00:00 UTC") "1h"
 -- (Just 2024-10-31 11:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("1H",""))
 parseSince :: UTCTime -> Text -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
-parseSince now since =
-  either (const (Nothing, Nothing, Nothing)) buildResult (parse timeParser "" since)
-  where
-    buildResult (num, secs) =
-      ( Just $ addUTCTime (negate . secondsToNominalDiffTime $ fromIntegral (num * secs)) now
-      , Just now
-      , Just (T.toUpper since, "")
-      )
-
-    -- unknown units resolve to 0 seconds, i.e. a zero-width range rather than an unbounded one
-    timeParser :: Parser (Int, Int)
-    timeParser = (,) <$> decimal <*> (space *> (unitSecs . toText <$> some letterChar))
-    unitSecs u = fromMaybe 0 $ lookup (T.toUpper u) [("S", 1), ("M", 60), ("H", 3600), ("D", 86400)]
+parseSince now since = case Duration.parseDuration True Duration.sinceUnits since of
+  Nothing -> (Nothing, Nothing, Nothing)
+  Just dur ->
+    ( Just $ addUTCTime (negate $ realToFrac (Duration.durationToSeconds dur)) now
+    , Just now
+    , Just (T.toUpper $ T.strip since, "")
+    )
 
 
 -- | The default range for query surfaces (Explorer, dashboards): every layer
@@ -132,7 +121,9 @@ defaultSince = "1H"
 -- True
 parseTimeRangeWith :: UTCTime -> Text -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
 parseTimeRangeWith now fallbackSince tp = case nonEmptyT tp.since of
-  Just s -> parseSince now s
+  Just s -> case parseSince now s of
+    (Nothing, Nothing, Nothing) -> parseSince now fallbackSince
+    res -> res
   Nothing -> case (parseT tp.from, parseT tp.to) of
     (Nothing, Nothing) -> parseSince now fallbackSince
     (f, t) -> (f, t, liftA2 (,) (formatUTC <$> f) (formatUTC <$> t))

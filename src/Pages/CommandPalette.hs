@@ -10,7 +10,7 @@ import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
-import Pages.Components (PickerCfg (..), PickerItem (..), PickerList (..), floatingScrim, logExplorerUrl, pickerBadge_, pickerCard_, pickerEmpty_, pickerIcon_, pickerItem_, pickerOption_)
+import Pages.Components (PickerCfg (..), PickerItem (..), PickerList (..), logExplorerUrl, pickerBadge_, pickerCard_, pickerEmpty_, pickerIcon_, pickerItem_, pickerOption_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Servant (NoContent (..))
@@ -92,7 +92,7 @@ paletteShell_ pid = do
   -- Backdrop (hidden by default, shown on Cmd+K / search click)
   div_
     [ id_ "cmd-palette-backdrop"
-    , class_ $ "cmd-palette-backdrop hidden fixed inset-0 flex flex-col items-center px-4 pt-[15vh] " <> floatingScrim
+    , class_ "cmd-palette-backdrop hidden fixed inset-0 flex flex-col items-center px-4 pt-[15vh] bg-black/40 dark:bg-black/65 backdrop:backdrop-blur-[2px] [&_.modal-backdrop]:backdrop-blur-[2px]"
     , style_ "z-index:99999"
     , [__|on click if event.target is me add .hidden to me end
           on htmx:before:request from <body/> if event.target.id is not 'cmd-palette-dynamic' add .hidden to me end|]

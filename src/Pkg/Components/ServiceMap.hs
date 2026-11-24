@@ -133,7 +133,7 @@ envFacet_ pid graph selected =
 -- renderer, which only writes text into it — the markup is Lucid's, as always.
 scopeChip_ :: Html ()
 scopeChip_ =
-  div_ [class_ "hidden items-center gap-2 px-1 text-xs", term "data-map-scope" ""] do
+  div_ [class_ "hidden data-[scoped=true]:flex items-center gap-2 px-1 text-xs", term "data-map-scope" ""] do
     span_ [class_ "inline-flex items-center gap-1.5 rounded-md border border-strokeWeak bg-fillWeak px-2 py-1"] do
       span_ [class_ "text-textWeak"] "Service:"
       span_ [class_ "font-medium text-textStrong truncate max-w-64", term "data-scope-label" ""] ""
@@ -206,7 +206,7 @@ nodeCardTemplate_ =
 nodeMenu_ :: Text -> Html ()
 nodeMenu_ elId =
   div_
-    [ class_ "m-0 min-w-56 rounded-lg border border-strokeWeak bg-bgRaised shadow-lg py-1 text-sm"
+    [ class_ "group/smenu m-0 min-w-56 rounded-lg border border-strokeWeak bg-bgRaised shadow-lg py-1 text-sm"
     , id_ $ elId <> "-menu"
     , term "popover" "auto"
     , term "data-service-menu" ""
@@ -215,7 +215,7 @@ nodeMenu_ elId =
       div_ [class_ "px-3 py-1.5 font-semibold text-textStrong truncate border-b border-strokeWeak mb-1", term "data-menu-title" ""] ""
       forM_ menuItems \(action, icon, label) ->
         a_
-          [ class_ "flex items-center gap-2 px-3 py-1.5 text-textStrong hover:bg-fillWeak cursor-pointer"
+          [ class_ $ "flex items-center gap-2 px-3 py-1.5 text-textStrong hover:bg-fillWeak cursor-pointer" <> bool " group-data-[inferred=true]/smenu:hidden" "" (action `elem` (["inspect", "focus"] :: [Text]))
           , term "data-menu-action" action
           , href_ "#"
           ]

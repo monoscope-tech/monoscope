@@ -726,7 +726,28 @@ summaryToken_ wrap token = case T.breakOn "⇒" token of
     textWrap = bool "" " whitespace-pre-wrap break-words" wrap
     tokenClass :: Text -> Text
     tokenClass = \case
-      s | "badge-" `T.isPrefixOf` s -> "cbadge-sm " <> s <> badgeWrap
+      "badge-neutral" -> "cbadge-sm badge-neutral" <> badgeWrap
+      "badge-primary" -> "cbadge-sm badge-primary" <> badgeWrap
+      "badge-secondary" -> "cbadge-sm badge-secondary" <> badgeWrap
+      "badge-accent" -> "cbadge-sm badge-accent" <> badgeWrap
+      "badge-info" -> "cbadge-sm badge-info" <> badgeWrap
+      "badge-success" -> "cbadge-sm badge-success" <> badgeWrap
+      "badge-warning" -> "cbadge-sm badge-warning" <> badgeWrap
+      "badge-error" -> "cbadge-sm badge-error" <> badgeWrap
+      "badge-ghost" -> "cbadge-sm badge-ghost" <> badgeWrap
+      "badge-2xx" -> "cbadge-sm badge-2xx" <> badgeWrap
+      "badge-3xx" -> "cbadge-sm badge-3xx" <> badgeWrap
+      "badge-4xx" -> "cbadge-sm badge-4xx" <> badgeWrap
+      "badge-5xx" -> "cbadge-sm badge-5xx" <> badgeWrap
+      "badge-GET" -> "cbadge-sm badge-GET" <> badgeWrap
+      "badge-POST" -> "cbadge-sm badge-POST" <> badgeWrap
+      "badge-PUT" -> "cbadge-sm badge-PUT" <> badgeWrap
+      "badge-PATCH" -> "cbadge-sm badge-PATCH" <> badgeWrap
+      "badge-DELETE" -> "cbadge-sm badge-DELETE" <> badgeWrap
+      "badge-HEAD" -> "cbadge-sm badge-HEAD" <> badgeWrap
+      "badge-OPTIONS" -> "cbadge-sm badge-OPTIONS" <> badgeWrap
+      "badge-error-strong" -> "cbadge-sm badge-error-strong" <> badgeWrap
+      "badge-warning-strong" -> "cbadge-sm badge-warning-strong" <> badgeWrap
       s | s `elem` ["text-textWeak", "text-weak"] -> "text-textWeak text-xs" <> textWrap
       "text-textStrong" -> "text-textStrong text-xs font-medium" <> textWrap
       _ -> "cbadge-sm badge-neutral" <> badgeWrap

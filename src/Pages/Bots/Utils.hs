@@ -343,7 +343,7 @@ buildIssuePrompt pid issue now = do
               ,
                 ( "### Trigger Conditions"
                 , \m ->
-                    ("- **Trigger Direction**: " <> bool "Alert when value EXCEEDS threshold (>)" "Alert when value DROPS BELOW threshold (<)" m.triggerLessThan)
+                    ("- **Trigger Direction**: " <> bool "Alert when value EXCEEDS threshold (≥)" "Alert when value DROPS BELOW threshold (≤)" m.triggerLessThan)
                       : catMaybes
                         [ m.warningThreshold <&> \wt -> "- **Warning Threshold**: " <> show wt <> " (warning level)"
                         , m.alertRecoveryThreshold <&> \art -> "- **Alert Recovery**: Alert clears when value returns to " <> show art

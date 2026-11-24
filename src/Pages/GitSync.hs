@@ -430,9 +430,11 @@ gitSyncSettingsView GitSyncSettings{hostUrl, projectId = pid, sync = syncM, fail
           when sync.syncEnabled $ button_ [type_ "button", hxPost_ (urls.gitSyncRepositoryPause pid sync.id), hxTarget_ ("#" <> targetId), hxSwap_ "outerMorph", hxIndicator_ ("#" <> targetId <> "-pause-indicator"), class_ "btn btn-sm btn-ghost gap-1"] do
             "Pause sync"
             htmxIndicator_ (targetId <> "-pause-indicator") LdXS
-      unless isViaApp $ details_ [class_ "pt-6 border-t border-strokeWeak"] do
-        summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Webhook and dashboard file setup"
-        div_ [class_ "prose prose-sm max-w-none pt-4"] $ renderMarkdown $ setupInstructions sync.host webhookUrl
+      unless isViaApp
+        $ disclosure_ [class_ "pt-6 border-t border-strokeWeak"] "text-sm font-medium text-textStrong" "Webhook and dashboard file setup"
+        $ div_ [class_ "prose prose-sm max-w-none pt-4"]
+        $ renderMarkdown
+        $ setupInstructions sync.host webhookUrl
 
     -- Setup notes for a token connection, in the host's own vocabulary — the GitHub-only
     -- walkthrough this replaced sent GitLab, Gitea and Bitbucket users looking for settings that

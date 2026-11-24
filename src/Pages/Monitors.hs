@@ -61,21 +61,22 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPa
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils (Channel (channelId, channelName))
-import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), agoText, detailTab_, durationMenu_, emptyState_, formCheckbox_, formField_, formSelectField_, inlineIconBtn_, metadataChip_, options_, panel_, silenceBadge_, teamPicker_, untilLabel)
+import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), actionMenu_, agoText, detailTab_, disclosure_, durationMenu_, emptyState_, formCheckbox_, formField_, formSelectFieldWith_, formSelectField_, inlineIconBtn_, metadataChip_, options_, panel_, silenceBadge_, tabPanel_, teamPicker_, untilLabel)
 import Pages.Projects (TBulkActionForm (..))
 import Pages.Uptime qualified as Uptime
 import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
-import Pkg.Parser (intervalSeconds, parseQueryToAST)
-import Pkg.Parser.Expr (ToQueryText (..), kqlTimespanToTimeBucket)
+import Pkg.Duration qualified as Duration
+import Pkg.Parser (parseQueryToAST)
+import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.QueryCache (rewriteBinAutoToFixed)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (FormWithOptional (..), faSprite_, fmtInt, formatWithCommas, popoverPanel_, popoverTrigger_, uiToggle_)
+import Utils (FormWithOptional (..), faSprite_, fmtInt, formatWithCommas, popoverTrigger_, uiToggle_)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), ProjectsRoutes' (..), explorerUrl, urls)
 
@@ -175,7 +176,7 @@ scheduleOf form =
 -- >>> map parseIntervalToMins ["5m", "1h", "12h", "1d", "soon"]
 -- [Just 5,Just 60,Just 720,Just 1440,Nothing]
 parseIntervalToMins :: Text -> Maybe Int
-parseIntervalToMins = fmap (round . (/ 60)) . (intervalSeconds <=< kqlTimespanToTimeBucket)
+parseIntervalToMins = fmap (round . (/ 60) . Duration.durationToSeconds) . Duration.parseDuration False Duration.kqlUnits
 
 
 minsToInterval :: Int -> Text
@@ -290,19 +291,16 @@ monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow condition
     when isFree $ p_ [class_ "text-xs text-textWeak mt-1"] "Free plan: hourly minimum frequency. Upgrade for faster checks."
     div_ [class_ "flex flex-col gap-3 py-2 sm:flex-row"] do
       formSelectField_ FieldSm "Execute the query" "frequency" False $ forM_ timeOpts mkFreqOpt
-      formField_ FieldSm def "Include rows from" "timeWindow" False
-        $ Just (select_ [class_ "select select-bordered select-sm w-full", name_ "timeWindow", id_ "timeWindow", chartUpdateAttr] $ forM_ timeOpts mkTimeOpt)
+      formSelectFieldWith_ FieldSm def{extraAttrs = [chartUpdateAttr]} "Include rows from" "timeWindow" False $ forM_ timeOpts mkTimeOpt
       case conditionType of
         FixedThreshold -> div_ [class_ "fieldset flex-1 min-w-0"] do
           span_ [class_ "label text-xs text-textStrong"] "Alert when"
           p_ [class_ "text-sm text-textStrong py-2"] "A chart threshold is crossed"
         SelectCondition choice ->
           let isThresholdType = maybe True (== "threshold_exceeded") choice
-           in formField_ FieldSm def "Alert when" "conditionType" False
-                $ Just
-                $ select_ [name_ "conditionType", class_ "select select-bordered select-sm w-full", id_ "condType", term "hx-on:change" "document.getElementById('thresholds').open = this.value == 'threshold_exceeded'"] do
-                  option_ ([value_ "threshold_exceeded"] <> [selected_ "" | isThresholdType]) "chart threshold is crossed"
-                  option_ ([value_ "has_matches"] <> [selected_ "" | not isThresholdType]) "the query has any results"
+           in formSelectFieldWith_ FieldSm def{extraAttrs = [term "hx-on:change" "document.getElementById('thresholds').open = this.value == 'threshold_exceeded'"]} "Alert when" "conditionType" False do
+                option_ ([value_ "threshold_exceeded"] <> [selected_ "" | isThresholdType]) "chart threshold is crossed"
+                option_ ([value_ "has_matches"] <> [selected_ "" | not isThresholdType]) "the query has any results"
 
 
 thresholdsSection_ :: Maybe Text -> Maybe Text -> Maybe Double -> Maybe Double -> Bool -> Maybe Double -> Maybe Double -> Html ()
@@ -337,9 +335,8 @@ notificationSettingsSection_ allTeams selectedTeamIds monitorM = do
       stopVal = maybe "5" show $ monitorM >>= (.stopAfterCount)
   panel_ (Collapsible False) def{icon = Just "envelope"} "Notification Settings" do
     teamPicker_ (V.toList allTeams) (V.toList selectedTeamIds)
-    details_ [class_ "mt-4 border-t border-strokeWeak pt-3"] do
-      summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Advanced notification settings"
-      div_ [class_ "space-y-3 pt-3"] do
+    disclosure_ [class_ "mt-4 border-t border-strokeWeak pt-3"] "text-sm font-medium text-textStrong" "Advanced notification settings"
+      $ div_ [class_ "space-y-3 pt-3"] do
         div_ [class_ "flex flex-col sm:flex-row sm:items-center w-full gap-2"] do
           formSelectField_ FieldSm "Severity" "severity" False $ forM_ ["Info", "Error", "Warning", "Critical"] \s -> option_ [selected_ "" | defaultSeverity == s] $ toHtml s
           div_ [class_ "flex-1"] $ formField_ FieldSm def{value = defaultSubject, placeholder = "e.g. Alert triggered for high error rate"} "Subject" "subject" False Nothing
@@ -696,13 +693,11 @@ unifiedMonitorOverviewH pid monitorId = do
                         button_ [type_ "button", class_ "px-3 py-2 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full flex items-center gap-2", hxPost_ url, hxSwap_ "none"] do
                           faSprite_ icon "regular" "h-3.5 w-3.5"
                           toHtml label
-                  div_ [class_ "md:hidden inline-block"] do
-                    button_ ([type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak", Aria.label_ "Actions"] <> popoverTrigger_ mobilePopId) do
-                      faSprite_ "ellipsis-vertical" "regular" "h-4 w-4"
-                    div_ (popoverPanel_ mobilePopId <> [class_ "dropdown dropdown-end menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 min-w-44 rounded-md shadow-lg mt-1"]) do
-                      maybe (mobItem_ "bell-slash" (mr.alertMutePost alert.id Nothing) "Mute") (const $ mobItem_ "bell" (mr.alertUnmutePost alert.id) "Unmute") alert.mutedUntil
-                      when needsResolve $ mobItem_ "check" (mr.alertResolvePost alert.id) "Resolve"
-                      mobItem_ deactIcon (mr.alertSingleToggleActive alert.id) deactLabel
+                  div_ [class_ "md:hidden inline-block"]
+                    $ actionMenu_ mobilePopId False [class_ "btn btn-sm btn-ghost border border-strokeWeak", Aria.label_ "Actions"] (faSprite_ "ellipsis-vertical" "regular" "h-4 w-4") [class_ "p-1 text-sm min-w-44 rounded-md mt-1"] do
+                      li_ $ maybe (mobItem_ "bell-slash" (mr.alertMutePost alert.id Nothing) "Mute") (const $ mobItem_ "bell" (mr.alertUnmutePost alert.id) "Unmute") alert.mutedUntil
+                      when needsResolve $ li_ $ mobItem_ "check" (mr.alertResolvePost alert.id) "Resolve"
+                      li_ $ mobItem_ deactIcon (mr.alertSingleToggleActive alert.id) deactLabel
                   a_ [href_ $ (urls.logExplorer pid).logExplorerGet (Just alert.logQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just alert.id.toText) Nothing Nothing, class_ "btn btn-sm max-md:btn-ghost max-md:border max-md:border-strokeWeak btn-primary", Aria.label_ "Edit monitor", term "data-tippy-content" "Edit query, thresholds, and notification settings"] do
                     faSprite_ "pen-to-square" "regular" "h-4 w-4"
                     span_ [class_ "max-md:hidden"] "Edit monitor"
@@ -761,10 +756,10 @@ unifiedOverviewPage pid alert currTime teams = do
         legend_ [class_ "sr-only"] "Monitor detail view"
         detailTab_ "monitor-tabs" "tab-exec-history" "shrink-0 font-medium text-textWeak" True "Execution History"
         detailTab_ "monitor-tabs" "tab-notif-channels" "shrink-0 font-medium text-textWeak" False "Notification Channels"
-      div_ [class_ "overflow-y-auto hidden group-has-[.tab-exec-history:checked]/mt:block"]
+      tabPanel_ "overflow-y-auto group-has-[.tab-exec-history:checked]/mt:block" "monitor-exec-history-panel"
         $ div_ [class_ "mt-2 p-2 border border-strokeWeak rounded-lg overflow-x-auto flex flex-col max-h-[400px] max-md:max-h-[300px]"]
         $ termRaw "log-list" [id_ "resultTable", class_ "w-full divide-y shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block", term "windowTarget" "logList", term "projectId" pid.toText, term "initialFetchUrl" historyUrl] ("" :: Text)
-      div_ [class_ "overflow-y-auto hidden group-has-[.tab-notif-channels:checked]/mt:block"] $ alertNotificationsTab_ alert teams
+      tabPanel_ "overflow-y-auto group-has-[.tab-notif-channels:checked]/mt:block" "monitor-notif-channels-panel" $ alertNotificationsTab_ alert teams
   where
     display = maybe (MDStatus alert.currentStatus) (const MDDeactivated) alert.deactivatedAt
     historyUrl = explorerUrl pid LogQueries.Data LogQueries.ExplorerUrl{query = Just $ "kind==\"alert\" and parent_id==\"" <> alert.id.toText <> "\"", cols = Nothing, cursor = Nothing, since = Nothing, from = Nothing, to = Nothing, layout = Nothing, source = Nothing, environment = Nothing, serviceScope = Nothing, recent = False}
@@ -806,7 +801,7 @@ alertSidebar_ display alert currTime = do
         whenJust alert.stopAfterCount \count -> span_ [class_ "text-textWeak"] $ toHtml $ "Stop after: " <> fmtInt count
   where
     ago = maybe "Never" (toText . prettyTimeAuto currTime)
-    direction = bool ">" "<" alert.triggerLessThan
+    direction = Issues.directionSymbol (Issues.thresholdDirection alert.triggerLessThan)
     mobileRow_ :: Html () -> Html () -> Html ()
     mobileRow_ label val = div_ [class_ "px-3 py-1.5 flex items-center justify-between gap-2"] do
       span_ [class_ "text-xs text-textWeak shrink-0"] label

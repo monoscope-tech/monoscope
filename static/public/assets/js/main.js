@@ -126,12 +126,6 @@ window.labelDrawer = (drawer) => {
   drawer.removeAttribute('aria-label')
 }
 
-document.addEventListener('htmx:after:swap', () => {
-  document.querySelectorAll('.drawer-toggle:checked').forEach(toggle => {
-    window.labelDrawer(toggle.closest('.drawer')?.querySelector('[role="dialog"]'))
-  })
-})
-
 /**
  * Isolate focus and screen-reader navigation within a modal drawer.
  * @param {HTMLElement} container - The drawer's dialog panel

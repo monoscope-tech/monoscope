@@ -1461,9 +1461,14 @@ dashboardBWConf bw pid dashId title tabM currentRange readOnly freeTierStatus =
         span_ [class_ "hidden max-md:inline text-sm"] "Add widget"
       div_ [class_ "max-md:hidden"] yamlEditorDrawer_
       let dashActionsPop = "dash-actions-" <> dashId.toText
-      div_ [class_ "inline-block"] do
-        button_ ([type_ "button", class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Open context menu", data_ "tippy-content" "Context Menu"] <> popoverTrigger_ dashActionsPop) $ faSprite_ "ellipsis" "regular" "w-4 h-4"
-        ul_ ([class_ "dropdown dropdown-end menu menu-md bg-bgRaised rounded-box border border-strokeWeak p-2 w-52 shadow-lg leading-none"] <> popoverPanel_ dashActionsPop) do
+      div_ [class_ "inline-block"]
+        $ Components.actionMenu_
+          dashActionsPop
+          False
+          [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Open context menu", data_ "tippy-content" "Context Menu"]
+          (faSprite_ "ellipsis" "regular" "w-4 h-4")
+          [class_ "menu-md rounded-box p-2 w-52 leading-none"]
+        $ do
           li_ $ label_ [Lucid.for_ "pageTitleModalId", class_ "p-2"] "Rename dashboard"
           when (isJust tabSlugM) $ li_ $ label_ [Lucid.for_ "tabRenameModalId", class_ "p-2"] "Rename tab"
           li_ $ duplicate_ "p-2 w-full text-left" "Duplicate dashboard"
@@ -1674,19 +1679,19 @@ instance ToHtml WidgetEditor where
             then h2_ [class_ "text-base font-semibold text-textStrong max-md:order-1 max-md:w-full"] "Add a widget"
             else div_ [class_ "min-w-0 max-md:order-1 max-md:w-full"] do
               div_ [class_ "tabs tabs-box tabs-outline"] do
-                let mkTab tabName label isActive = label_ [role_ "tab", class_ "tab has-[:checked]:tab-active focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-strokeFocus"] do
+                let mkTab tabName hookCls label isActive = label_ [role_ "tab", class_ "tab has-[:checked]:tab-active focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-strokeFocus"] do
                       input_
                         $ [ type_ "radio"
                           , value_ tabName
-                          , class_ $ "sr-only page-drawer-tab-" <> T.toLower tabName
+                          , class_ hookCls
                           , id_ $ widPrefix <> "-tab-" <> T.toLower tabName
                           , name_ $ wid <> "-drawer-tab"
                           ]
                         <> [checked_ | isActive]
                       toHtml @Text label
                 -- A built-in dashboard's widget can be read, not changed or monitored in place.
-                mkTab "Edit" (bool "Edit" "Query" readOnly) (readOnly || effectiveActiveTab == EditTab)
-                unless readOnly $ mkTab "Monitors" "Monitors" (effectiveActiveTab == AlertsTab)
+                mkTab "Edit" "sr-only page-drawer-tab-edit" (bool "Edit" "Query" readOnly) (readOnly || effectiveActiveTab == EditTab)
+                unless readOnly $ mkTab "Monitors" "sr-only page-drawer-tab-monitors" "Monitors" (effectiveActiveTab == AlertsTab)
 
           div_ [class_ "ml-auto flex shrink-0 items-center gap-3 max-md:contents"] do
             div_ [class_ "flex shrink-0 items-center gap-3 max-md:order-3 max-md:w-full max-md:overflow-x-auto"] do
@@ -1799,16 +1804,15 @@ instance ToHtml WidgetEditor where
                   , mobileExtra = Nothing
                   , parseError = Nothing
                   }
-              details_ [class_ "text-xs text-textWeak"] do
-                summary_ [class_ "cursor-pointer select-none transition-colors hover:text-textStrong"] "Show generated SQL"
-                div_
+              Components.disclosure_ [class_ "text-xs text-textWeak"] "transition-colors hover:text-textStrong" "Show generated SQL"
+                $ div_
                   [ id_ $ widPrefix <> "-sql-preview"
                   , hxGet_ $ urls.widgetSqlPreview pid Nothing (Just dashId.toText) Nothing Nothing Nothing
                   , hxVals_ "js:{query: widgetJSON.raw_query || widgetJSON.query}"
                   , hxTrigger_ "toggle from:closest details"
                   , hxSwap_ "innerHTML"
                   ]
-                  $ loadingIndicator_ LdXS LdSpinner
+                  (loadingIndicator_ LdXS LdSpinner)
 
             numberedStep_ 2 "Name your widget"
               $ div_ [class_ "max-w-xl"]
@@ -1831,23 +1835,21 @@ instance ToHtml WidgetEditor where
 
             when isThresholdChart
               $ section_ [class_ $ "max-w-3xl" <> if isNewWidget then " group-has-[.new-widget-monitor:checked]/wgtexp:hidden" else ""]
-              $ details_ ([class_ "group/thresholds rounded-lg border border-strokeWeak bg-fillWeaker"] <> [open_ "" | isJust widgetToUse.warningThreshold || isJust widgetToUse.alertThreshold || isJust monitorM]) do
-                summary_ [class_ "flex min-h-11 cursor-pointer list-none items-center gap-3 rounded-lg px-3 hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong transition-colors motion-reduce:transition-none"] do
-                  span_ [class_ "inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-fillWeak text-xs font-semibold tabular-nums text-textStrong"] "3"
-                  strong_ [class_ "text-sm font-semibold text-textStrong"] "Chart thresholds"
-                  span_ [class_ "text-xs text-textWeak"] "Optional"
-                  faSprite_ "chevron-down" "regular" "ml-auto size-3.5 shrink-0 text-iconNeutral transition-transform group-open/thresholds:rotate-180 motion-reduce:transition-none"
-                div_ [class_ "space-y-3 border-t border-strokeWeak p-3"] do
-                  p_ [class_ "text-xs text-textWeak"] "Limits shown on the chart, even without a monitor."
-                  when (isJust monitorM) $ p_ [class_ "text-xs text-textWarning"] "This monitor uses these thresholds. Saving changes will also change when it alerts."
-                  div_ [class_ "max-w-xs"]
-                    $ Components.formField_ Components.FieldSm def{Components.value = fromMaybe "" widgetToUse.unit, Components.placeholder = "e.g. ms, requests/s", Components.extraAttrs = [term "hx-on:input" "widgetJSON.unit = this.value || null", term "hx-on:change" [text|htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]] <> [term "hx-live:value" "widgetJSON.unit ?? ''" | not isNewWidget]} "Measurement unit" "widgetUnit" False Nothing
-                  div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
-                    thresholdField_ "warning_threshold" "Warning threshold" "widgetWarningThreshold" widgetToUse.warningThreshold "bg-fillWarning-strong" False
-                    thresholdField_ "alert_threshold" "Alert threshold" "widgetAlertThreshold" widgetToUse.alertThreshold "bg-fillError-strong" False
-                  div_ [class_ "max-w-xs", term "hx-on:change" [text|widgetJSON.show_threshold_lines = event.target.value; htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]]
-                    $ Components.formSelectField_ Components.FieldSm "Show threshold lines" "widgetShowThresholdLines" False
-                    $ Components.options_ (Just $ maybe "always" display widgetToUse.showThresholdLines) [("always", "Always"), ("on_breach", "Only when breached"), ("never", "Never")]
+              $ Components.panel_
+                (Components.Collapsible $ isJust widgetToUse.warningThreshold || isJust widgetToUse.alertThreshold || isJust monitorM)
+                def{Components.subtitle = Just "Optional", Components.leading = Just $ span_ [class_ "inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-fillWeak text-xs font-semibold tabular-nums text-textStrong"] "3"}
+                "Chart thresholds"
+              $ div_ [class_ "space-y-3 border-t border-strokeWeak pt-3"] do
+                p_ [class_ "text-xs text-textWeak"] "Limits shown on the chart, even without a monitor."
+                when (isJust monitorM) $ p_ [class_ "text-xs text-textWarning"] "This monitor uses these thresholds. Saving changes will also change when it alerts."
+                div_ [class_ "max-w-xs"]
+                  $ Components.formField_ Components.FieldSm def{Components.value = fromMaybe "" widgetToUse.unit, Components.placeholder = "e.g. ms, requests/s", Components.extraAttrs = [term "hx-on:input" "widgetJSON.unit = this.value || null", term "hx-on:change" [text|htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]] <> [term "hx-live:value" "widgetJSON.unit ?? ''" | not isNewWidget]} "Measurement unit" "widgetUnit" False Nothing
+                div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
+                  thresholdField_ "warning_threshold" "Warning threshold" "widgetWarningThreshold" widgetToUse.warningThreshold "bg-fillWarning-strong" False
+                  thresholdField_ "alert_threshold" "Alert threshold" "widgetAlertThreshold" widgetToUse.alertThreshold "bg-fillError-strong" False
+                div_ [class_ "max-w-xs", term "hx-on:change" [text|widgetJSON.show_threshold_lines = event.target.value; htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]]
+                  $ Components.formSelectField_ Components.FieldSm "Show threshold lines" "widgetShowThresholdLines" False
+                  $ Components.options_ (Just $ maybe "always" display widgetToUse.showThresholdLines) [("always", "Always"), ("on_breach", "Only when breached"), ("never", "Never")]
 
             when isNewWidget $ label_ [Lucid.for_ monitorToggleId, class_ "flex cursor-pointer items-center justify-between gap-4 rounded-xl border border-strokeWeak bg-fillWeaker p-4 hover:bg-fillWeak has-[:checked]:border-strokeBrand-strong has-[:checked]:bg-fillBrand-weak"] do
               div_ [class_ "space-y-1"] do
@@ -2313,7 +2315,7 @@ dashboardsGet_ dg
             renderModifiedCol dash = span_ [class_ "text-xs text-textWeak tabular-nums", data_ "tippy-content" "Last modified date"] $ Components.localTimeFmt_ "MMM d, h:mm aaa" dash.updatedAt
             renderTeamsCol dash = forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml $ "@" <> team.handle
             renderTagsCol dash = forM_ (V.toList dash.tags) \tag ->
-              a_ [class_ "badge badge-sm badge-neutral mr-1 cursor-pointer hover:badge-primary", hxGet_ $ dashboardsListUrl dg.projectId <> "?tag=" <> toUriStr tag, hxTarget_ "#dashboardsTableContainer", hxSelect_ "#dashboardsTableContainer", hxPushUrl_ "true", hxSwap_ "outerHTML"] $ toHtml tag
+              a_ ([class_ "badge badge-sm badge-neutral mr-1 cursor-pointer hover:badge-primary"] <> Components.swapTarget_ "dashboardsTableContainer" (dashboardsListUrl dg.projectId <> "?tag=" <> toUriStr tag)) $ toHtml tag
 
             renderWidgetsCol dash = do
               let count = getWidgetCount dash

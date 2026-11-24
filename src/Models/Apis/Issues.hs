@@ -43,7 +43,10 @@ module Models.Apis.Issues (
   RuntimeExceptionData (..),
   QueryAlertData (..),
   ThresholdDirection (..),
+  thresholdDirection,
   meetsThreshold,
+  recoveredFrom,
+  directionSymbol,
   ChatMessageKind (..),
   IssueSeverity (..),
   LogPatternRateChangeData (..),
@@ -646,6 +649,10 @@ data ThresholdDirection = Above | Below
   deriving (AE.FromJSON, AE.ToJSON, Display, FromHttpApiData) via WrappedEnumSC 'Nothing "" ThresholdDirection
 
 
+thresholdDirection :: Bool -> ThresholdDirection
+thresholdDirection = bool Above Below
+
+
 -- | Whether a recorded value crossed its threshold in the alert's direction.
 --
 -- >>> (meetsThreshold Below 5 5, meetsThreshold Below 5 10, meetsThreshold Above 5 5, meetsThreshold Above 5 3)
@@ -653,6 +660,21 @@ data ThresholdDirection = Above | Below
 meetsThreshold :: ThresholdDirection -> Double -> Double -> Bool
 meetsThreshold Below threshold v = v <= threshold
 meetsThreshold Above threshold v = v >= threshold
+
+
+-- | Whether a value strictly cleared its recovery threshold. Without a
+-- hysteresis band, @recoveredFrom d t v == not (meetsThreshold d t v)@.
+--
+-- >>> [(meetsThreshold d 5 v == not (recoveredFrom d 5 v)) | d <- [Above, Below], v <- [4, 5, 6]]
+-- [True,True,True,True,True,True]
+recoveredFrom :: ThresholdDirection -> Double -> Double -> Bool
+recoveredFrom Below threshold v = v > threshold
+recoveredFrom Above threshold v = v < threshold
+
+
+directionSymbol :: ThresholdDirection -> Text
+directionSymbol Above = "≥"
+directionSymbol Below = "≤"
 
 
 -- | Query Alert issue data

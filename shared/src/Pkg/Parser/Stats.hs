@@ -61,6 +61,8 @@ module Pkg.Parser.Stats (
   seriesSourceSQL,
   seriesBinsSQL,
   seriesBinnable,
+  primaryAlertAggs,
+  aggForAlert,
 ) where
 
 import Control.Lens (Traversal', allOf, foldMapOf, notNullOf, over, set, view)
@@ -213,6 +215,44 @@ aggToSqlNoAlias (ToInt val _) = "(" <> display val <> ")::integer"
 aggToSqlNoAlias (ToString val _) = "(" <> display val <> ")::text"
 aggToSqlNoAlias (Plain sub _) = display sub
 aggToSqlNoAlias (ArithExpr expr _) = "(" <> display expr <> ")::float"
+
+
+-- | SQL expression for an aggregate inside a monitor alert query (no alias).
+-- Multi-quantile @percentiles(x, p1, ..., pk)@ evaluates the extreme quantile
+-- in the alert's trigger direction (max for above-threshold, min for below)
+-- instead of silently collapsing to the first quantile.
+--
+-- >>> let p = Percentiles (SubjectExpr (Subject "duration" "duration" []) Nothing) [50, 95, 99] Nothing
+-- >>> (aggForAlert False p == percentileSQL 0.99 "duration", aggForAlert True p == percentileSQL 0.5 "duration")
+-- (True,True)
+aggForAlert :: Bool -> AggFunction -> Text
+aggForAlert alertBelow = \case
+  Percentiles subExpr (p : ps) _ ->
+    percentileSQL (foldl' (bool max min alertBelow) p ps / 100.0) (subjectExprToSQL subExpr)
+  agg -> aggToSqlNoAlias agg
+
+
+-- | Primary measures for a monitor alert query: drops raw helper aggregates
+-- that were inlined into a post-summarize @extend@ (e.g. @hits@ and @total@
+-- when @extend hit_pct = 100.0 * hits / total@ is present), so @GREATEST(...)@
+-- evaluates @hit_pct@ rather than raw counts against a percentage threshold.
+--
+-- >>> let Right secs = parseQueryToAST "metrics | summarize hits = count(), total = sum(value) | extend hit_pct = 100.0 * hits / total"
+-- >>> [map aggName (primaryAlertAggs aggs) | SummarizeCommand aggs _ <- secs]
+-- [["hit_pct"]]
+primaryAlertAggs :: [AggFunction] -> [AggFunction]
+primaryAlertAggs aggs = case filter (\a -> aggToSqlNoAlias a `S.notMember` helpers) aggs of
+  [] -> aggs
+  ps -> ps
+  where
+    helpers = S.fromList [aggToSqlNoAlias h | a <- aggs, h <- inlinedSubAggs a]
+    inlinedSubAggs = \case
+      ArithExpr e _ -> go e
+      _ -> []
+    go = \case
+      SAgg a -> a : inlinedSubAggs a
+      SArith l _ r -> go l <> go r
+      SVal _ -> []
 
 
 data AggFunction
