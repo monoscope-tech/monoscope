@@ -833,7 +833,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
         let item = Evidence ("telemetry-" <> show n) Telemetry (Just service) (guarded (not . T.null) environment) "" Nothing (Just $ Observation count errors) Nothing Nothing
         chart <- evidencePng run.projectId from until item
         pure item{url = link $ (urls.logExplorer run.projectId).logExplorerGet (Just $ serviceSelector item) Nothing Nothing (Just $ toText $ iso8601Show from) (Just $ toText $ iso8601Show until) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing, chartUrl = chart}
-      let references kind rows =
+      let references kind =
             zipWith
               ( \n (url, query) ->
                   Evidence
@@ -848,7 +848,6 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                     Nothing
               )
               [1 :: Int ..]
-              rows
           gaps =
             ["No service mapping: repository access alone cannot link changed code to production." | null services]
               <> ["No log/span events observed for the mapped services in the last seven days." | not (null services) && null stats]
