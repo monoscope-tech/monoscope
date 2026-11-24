@@ -2893,7 +2893,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       void $ deliver tr $ payload "synchronize" next "2025-01-01T00:01:00Z"
       pure $ Left "Review authorization is no longer available"
     outcome `shouldSatisfy` isRight
-    progressEdits pushed `shouldSatisfy` any (T.isInfixOf "bbbbbbbb")
+    progressEdits pushed `shouldSatisfy` any (T.isInfixOf "A newer commit, bbbbbbbb, replaced this review")
     fmap (.state) <$> runQueryEffect tr (Reviews.getRun old.id) `shouldReturn` Just Reviews.Superseded
     -- Once the newer run owns the comment, a late retry of the old one leaves it alone.
     Just new <- find ((== next) . (.revision)) <$> runQueryEffect tr (Reviews.latestRuns testPid)
