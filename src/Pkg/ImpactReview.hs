@@ -467,11 +467,11 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
   case run.state of
     Reviews.Completed -> whenJustM (Issues.getEventRun run.projectId $ Issues.PullRequestReview run.id) \execution ->
       when (execution.status == Issues.RunRunning) $ completeReview run execution.id execution.startedAt
-    Reviews.Superseded -> pass
+    Reviews.Superseded -> retire run
     (Reviews.Queued; Reviews.Reviewing; Reviews.Incomplete) -> review run
   where
     review run
-      | run.revision /= run.latestRevision = Reviews.supersedeRun run
+      | run.revision /= run.latestRevision = Reviews.supersedeRun run >> retire run
       | otherwise = bracket (liftIO Workspace.hostSlots >>= (`Reviews.claimRun` run)) (\claimed -> when claimed $ Reviews.releaseRun run) $ \claimed ->
           when claimed
             $ Issues.getEventRoutine run.projectId Issues.EventPullRequest
@@ -489,14 +489,21 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                     outcome <- tryAny $ Timeout.timeout (reviewSeconds * 1000000) $ runErrorNoCallStack $ execute run execution context
                     let retryMessage = "Review failed; retry to collect current evidence"
                         finish = void . Issues.completeRun context
-                        failReview retries failureResult message detail = do
-                          Log.logAttention "Production impact review failed" (run.id, detail)
-                          active <- Issues.routineRunActive run.projectId execution.id
-                          finish $ if active then failureResult (Issues.RunFailure message Issues.RunOnly) else Issues.CancelledResult Nothing
-                          Reviews.recordFailure run message
-                          -- Deferring nodes requeue with fresh odd-jobs attempts, so agent retries are bounded per chain here.
-                          -- Publication recovery reuses the stored result, calls no model, and retries until it reconciles.
-                          if retries && (isJust run.result || execution.chainAttempt < 3) then throwIO $ ReviewFailure message else stopProgress run message
+                        failReview retries failureResult message detail =
+                          -- A push or merge mid-review revokes its authorization: that replaces the review, it is no failure.
+                          Reviews.getRun run.id >>= \case
+                            Just latest | latest.state == Reviews.Superseded || latest.revision /= latest.latestRevision -> do
+                              Log.logInfo "Production impact review superseded" (run.id, detail)
+                              finish $ Issues.CancelledResult $ Just "A newer commit or the pull request closing replaced this review."
+                              Reviews.supersedeRun run >> retire run
+                            _ -> do
+                              Log.logAttention "Production impact review failed" (run.id, detail)
+                              active <- Issues.routineRunActive run.projectId execution.id
+                              finish $ if active then failureResult (Issues.RunFailure message Issues.RunOnly) else Issues.CancelledResult Nothing
+                              Reviews.recordFailure run message
+                              -- Deferring nodes requeue with fresh odd-jobs attempts, so agent retries are bounded per chain here.
+                              -- Publication recovery reuses the stored result, calls no model, and retries until it reconciles.
+                              if retries && (isJust run.result || execution.chainAttempt < 3) then throwIO $ ReviewFailure message else stopProgress run message
                     case outcome of
                       Left err
                         | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> Jobs.deferOperationReview run.projectId identifier deadline
@@ -515,6 +522,12 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                           _ -> do
                             finish $ Issues.CancelledResult $ Just "The PR changed or review authorization was withdrawn before publication."
                             stopProgress run "The pull request changed or review authorization was withdrawn before publication."
+    retire :: Reviews.ReviewRun -> ATBackgroundCtx ()
+    retire run = whenJustM (Reviews.getRun run.id) \latest ->
+      stopProgress run
+        $ if latest.latestRevision /= run.revision
+          then "A newer commit, `" <> T.take 8 latest.latestRevision <> "`, replaced this review before its proofs finished."
+          else "The pull request was closed, merged or moved out of review before the proofs finished."
     -- A review that stops for good says so in its progress comment instead of leaving it running.
     stopProgress :: Reviews.ReviewRun -> Text -> ATBackgroundCtx ()
     stopProgress run reason = whenJustM (Reviews.progressComment run) \cid -> whenRightM_ (reviewConnection run) \(_, _, _, conn) -> do

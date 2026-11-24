@@ -14,10 +14,11 @@ FROM ${DEPS_IMAGE} AS haskell
 WORKDIR /build
 RUN rm -f cabal.project.local
 COPY monoscope.cabal cabal.project cabal.project.freeze ./
-# The server's library depends on the local shared and CLI packages, which cabal builds from source here.
+# The server's library depends on the local shared, CLI and proto packages, which cabal builds from source here.
 # Test suites too: a fix proves itself with a regression test, and Hackage mirrors are outside the sandbox.
 COPY shared shared
 COPY cli cli
+COPY proto proto
 RUN cabal update && cabal build --only-dependencies --enable-tests exe:monoscope-server test:integration-tests -j && mkdir -p /opt/haskell && cp -R dist-newstyle/src /opt/haskell/dist-src
 
 FROM haskell:9.12.2

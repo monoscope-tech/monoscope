@@ -733,8 +733,14 @@ recordProgress run event = do
   next <$ Hasql.interpExecute_ [HI.sql|UPDATE projects.pr_review_runs SET proof_progress = #{Aeson next} WHERE id = #{run.id}|]
 
 
+-- | The comment a run still owns: a newer run of the pull request takes it over by updating it or finishing.
 progressComment :: DB es => ReviewRun -> Eff es (Maybe Int64)
-progressComment run = (>>= HI.getOneColumn) <$> Hasql.interpOne [HI.sql|SELECT progress_comment_id FROM projects.pr_review_runs WHERE id = #{run.id}|]
+progressComment run =
+  (>>= HI.getOneColumn)
+    <$> Hasql.interpOne
+      [HI.sql|SELECT r.progress_comment_id FROM projects.pr_review_runs r WHERE r.id = #{run.id}
+    AND NOT EXISTS (SELECT 1 FROM projects.pr_review_runs n WHERE n.thread_id = r.thread_id AND n.created_at > r.created_at
+      AND (n.progress_comment_id = r.progress_comment_id OR n.state = #{Completed}))|]
 
 
 setProgressComment :: DB es => ReviewRun -> Int64 -> Eff es ()
