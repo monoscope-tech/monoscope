@@ -2844,7 +2844,9 @@ export class LogList extends LitElement {
 
         /* Column width styles - dynamically generated for all known columns */
         ${unsafeHTML(
+          // Column names reach here from the URL (`cols`, KQL aliases) and are parsed as markup.
           [...new Set([...this.logsColumns, ...Object.keys(this.columnMaxWidthMap)])]
+            .filter((col) => /^[\w.-]+$/.test(col))
             .map((col) => {
               if (col === 'summary')
                 return `.col-summary.break-all { width: var(--col-summary-width); min-width: var(--col-summary-width); }

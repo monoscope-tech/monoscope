@@ -180,6 +180,9 @@ spec = describe "API v1" do
           cases =
             [ ("no auth", H.methodGet, "/api/v1/schema", [], "", 401)
             , ("demo project", H.methodGet, "/api/v1/schema", [demo], "", 200)
+            , -- GHSA-m455-776j-f464: the credential-less demo principal minted keys and renamed the demo project.
+              ("demo, create key", H.methodPost, "/api/v1/api_keys", [demo, json], AE.encode (AE.object ["title" AE..= ("anon" :: Text)]), 401)
+            , ("demo, patch project", H.methodPatch, "/api/v1/project", [demo, json], AE.encode (AE.object ["title" AE..= ("pwned" :: Text)]), 401)
             , ("ingestion key, no key", H.methodGet, "/api/v1/ingestion-key", [demo], "", 401)
             , ("ingestion key, invalid key", H.methodGet, "/api/v1/ingestion-key", [demo, bearer "invalid-key"], "", 401)
             , ("mcp, no key", H.methodPost, "/api/v1/mcp", [json], AE.encode (rpc "tools/list" []), 401)
