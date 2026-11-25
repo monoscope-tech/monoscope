@@ -821,6 +821,12 @@ spec = do
         _ <- testServant tr $ PageCodeContext.repositoryReviewsPostH testPid repository.id (ImpactReviews.ReviewSettings "foreign" "private" ImpactReviews.WhenAsked False)
         settings <- runQueryEffect tr $ ImpactReviews.repositorySettings testPid
         map (\s -> (s.owner, s.repo, s.trigger)) settings `shouldMatchList` [("team", "checkout", ImpactReviews.WhenAsked), ("team", "catalog", ImpactReviews.ReadyPullRequests)]
+        -- Unsaved evidence follows visibility (connect records it); a saved choice wins either way.
+        repository.private `shouldBe` Just True
+        let evidence = map (\s -> (s.repo, s.includeEvidence)) <$> runQueryEffect tr (ImpactReviews.repositorySettings testPid)
+        evidence `shouldReturn` [("catalog", False), ("checkout", False)]
+        dbExec tr "UPDATE projects.repositories SET private = true WHERE project_id = ? AND repo = 'catalog'" (Only testPid)
+        evidence `shouldReturn` [("catalog", True), ("checkout", False)]
         for_ (filter ((== "checkout") . (.repo)) mappings) \mapping -> void $ testServant tr $ PageCodeContext.repositorySourceDeleteH testPid repository.id mapping.id
         map (.repo) <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) `shouldReturn` ["catalog"]
 

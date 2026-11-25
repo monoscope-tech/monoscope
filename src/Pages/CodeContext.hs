@@ -58,7 +58,7 @@ import Network.HTTP.Types.Header qualified as Header
 import Network.Wai qualified as Wai
 import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx)
-import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), callout_, colorChip_, dialogTrigger_, disclosure_, emptyState_, filterInputAttr_, formCheckbox_, formField_, formSelectField_, installationSettingsLink_, localTimeFmt_, morphPostAttrs_, nativeDialog_, options_, panel_, searchInput_, settingsH2_, submitBtn_)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), callout_, colorChip_, dialogTrigger_, disclosure_, emptyState_, filterInputAttr_, formCheckbox_, formField_, formSelectFieldWith_, formSelectField_, installationSettingsLink_, localTimeFmt_, morphPostAttrs_, nativeDialog_, options_, panel_, searchInput_, settingsH2_, submitBtn_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
@@ -832,7 +832,7 @@ reviewSettingsFields_ owner repo settings = do
   let trigger = maybe ImpactReviews.ReadyPullRequests (.trigger) settings
       evidence = bool "false" "true" $ any (.includeEvidence) settings
   formSelectField_ FieldSm "Review pull requests" "trigger" False $ options_ (Just $ toUrlPiece trigger) [(toUrlPiece t, triggerLabel t) | t <- universe]
-  formSelectField_ FieldSm "Production evidence in GitHub" "includeEvidence" False $ options_ (Just evidence) [("false", "Links only"), ("true", "Aggregates and links")]
+  formSelectFieldWith_ FieldSm def{hint = Just "Until you choose, private repositories get aggregates and links, public ones links only."} "Production evidence in GitHub" "includeEvidence" False $ options_ (Just evidence) [("false", "Links only"), ("true", "Aggregates and links")]
 
 
 -- | Asks-only reviews are quiet until someone comments, so they read as neutral, not active.
