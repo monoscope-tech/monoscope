@@ -473,9 +473,12 @@ releaseRun run =
 repositorySettings :: DB es => ProjectId -> Eff es [ReviewSettings]
 repositorySettings pid =
   Hasql.interp
-    [HI.sql|SELECT DISTINCT lower(m.owner), lower(m.repo), CASE WHEN s.enabled IS FALSE THEN #{WhenAsked} ELSE coalesce(s.trigger, #{ReadyPullRequests}) END, coalesce(s.include_evidence, false)
+    -- Unsaved evidence follows visibility: a private repository's readers already have access,
+    -- so its comments carry production aggregates; a public one gets links only.
+    [HI.sql|SELECT DISTINCT lower(m.owner), lower(m.repo), CASE WHEN s.enabled IS FALSE THEN #{WhenAsked} ELSE coalesce(s.trigger, #{ReadyPullRequests}) END, coalesce(s.include_evidence, bool_or(r.private) OVER (PARTITION BY lower(m.owner), lower(m.repo)), false)
     FROM projects.code_mappings m JOIN projects.git_credentials c ON c.id = m.credential_id AND c.project_id = m.project_id
     LEFT JOIN projects.pr_review_settings s ON s.project_id = m.project_id AND s.owner = lower(m.owner) AND s.repo = lower(m.repo)
+    LEFT JOIN projects.repositories r ON r.project_id = m.project_id AND r.host = c.host AND r.api_base IS NOT DISTINCT FROM c.api_base AND lower(r.owner) = lower(m.owner) AND lower(r.repo) = lower(m.repo)
     WHERE m.project_id = #{pid} AND c.host = 'github' AND c.api_base IS NULL AND c.installation_id IS NOT NULL
     ORDER BY lower(m.owner), lower(m.repo)|]
 

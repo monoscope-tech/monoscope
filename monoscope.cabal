@@ -312,6 +312,7 @@ extra-source-files:
     static/migrations/0303_promote_gen_ai_text_columns.sql
     static/migrations/0304_drop_llm_unit_hours.sql
     static/migrations/0305_pr_review_proof_scripts.sql
+    static/migrations/0306_repository_visibility.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb
     test/fixtures/github-app-test.pem

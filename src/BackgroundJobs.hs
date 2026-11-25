@@ -447,6 +447,8 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
         token <- ExceptT $ GitSync.githubToken ctx.config.githubAppId ctx.config.githubAppPrivateKey credentials
         conn <- hoistEither $ first Git.gitConnErrorMessage $ GitSync.credentialConn account token
         metadata <- ExceptT $ Git.fetchRepository conn (Git.RepoRef repository.owner repository.repo "HEAD")
+        -- Visibility can change on the host; review evidence defaults follow it.
+        lift $ Hasql.interpExecute_ [HI.sql| UPDATE projects.repositories SET private = #{metadata.private} WHERE id = #{rid} AND private IS DISTINCT FROM #{metadata.private} |]
         (_, tree) <- ExceptT $ Git.fetchTree conn (Git.RepoRef repository.owner repository.repo metadata.defaultBranch) ""
         now <- lift Time.currentTime
         summary <- lift $ SchemaCatalog.getSummary Nothing pid

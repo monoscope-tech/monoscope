@@ -166,6 +166,7 @@ data Repository = Repository
   , createdAt :: UTCTime
   , credentialId :: Maybe GitHubCredentialId
   , sourceEnabled :: Bool
+  , private :: Maybe Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
@@ -212,10 +213,10 @@ connectRepository :: DB es => ProjectId -> GitHubCredentialId -> Git.GitRepo -> 
 connectRepository pid cid repository =
   let (owner, repo) = Git.splitFullName repository.fullName
    in Hasql.interp
-        [HI.sql| INSERT INTO projects.repositories (project_id, host, api_base, owner, repo, credential_id)
-                 SELECT project_id, host, api_base, projects.git_identity_name(host, #{owner}), projects.git_identity_name(host, #{repo}), id FROM projects.git_credentials
+        [HI.sql| INSERT INTO projects.repositories (project_id, host, api_base, owner, repo, credential_id, private)
+                 SELECT project_id, host, api_base, projects.git_identity_name(host, #{owner}), projects.git_identity_name(host, #{repo}), id, #{repository.private} FROM projects.git_credentials
                  WHERE project_id = #{pid} AND id = #{cid}
-                 ON CONFLICT (project_id, host, api_base, owner, repo) DO UPDATE SET credential_id = EXCLUDED.credential_id
+                 ON CONFLICT (project_id, host, api_base, owner, repo) DO UPDATE SET credential_id = EXCLUDED.credential_id, private = EXCLUDED.private
                  RETURNING * |]
 
 
