@@ -1,0 +1,27 @@
+# GC policy for the Mac's monoscope-local-amd64 builder (`make builder-setup`).
+# BuildKit's default rule #0 caps cache mounts at ~488MiB for 48h. The server's dist-newstyle
+# cache mount is several GB, so GC evicted it right after each build and every image was a
+# cold ~40-minute compile. Cache mounts get their own generous rule instead.
+[worker.oci]
+  gc = true
+
+  [[worker.oci.gcpolicy]]
+    filters = ["type==source.local", "type==source.git.checkout"]
+    keepDuration = "48h"
+    maxUsedSpace = "1GB"
+
+  [[worker.oci.gcpolicy]]
+    filters = ["type==exec.cachemount"]
+    keepDuration = "720h"
+    maxUsedSpace = "40GB"
+
+  [[worker.oci.gcpolicy]]
+    keepDuration = "720h"
+    reservedSpace = "10GB"
+    maxUsedSpace = "120GB"
+    minFreeSpace = "100GB"
+
+  [[worker.oci.gcpolicy]]
+    all = true
+    reservedSpace = "10GB"
+    maxUsedSpace = "120GB"

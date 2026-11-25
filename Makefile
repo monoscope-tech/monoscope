@@ -539,6 +539,13 @@ deploy-image:
 image-follow:
 	DOCKER_CONTEXT=$${DOCKER_CONTEXT:-orbstack} MONOSCOPE_BUILDER=$${MONOSCOPE_BUILDER:-monoscope-local-amd64} scripts/ci/image-follow.sh
 
+# Keep image-follow running permanently under launchd (survives reboots and closed panes).
+image-follow-install:
+	./scripts/ci/ci.sh image-follow-install
+
+image-follow-uninstall:
+	./scripts/ci/ci.sh image-follow-uninstall
+
 tmux-image-follow:
 	$(call tmux_pane,image-follow,make image-follow)
 
@@ -611,6 +618,6 @@ tf-image:
 builder-rm:
 	./scripts/ci/ci.sh builder rm
 
-.PHONY: ci ci-signoff ci-status ci-shell land ci-down ci-clean ci-selftest deploy-image image-follow tmux-image-follow ship kafka-topics deploy-app rollback-app deploy-status deploy-worker worker-follow-install builder-setup builder-status builder-rm tf-image
+.PHONY: ci ci-signoff ci-status ci-shell land ci-down ci-clean ci-selftest deploy-image image-follow image-follow-install image-follow-uninstall tmux-image-follow ship kafka-topics deploy-app rollback-app deploy-status deploy-worker worker-follow-install builder-setup builder-status builder-rm tf-image
 
 .PHONY: all test fmt fmt-check hpack-check lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev tmux-live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin tmux-web-components-watch tmux-minio-local kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf
