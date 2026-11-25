@@ -278,7 +278,7 @@ gitSyncRepositoryPauseH pid sid = do
 
 
 requireGitWrite :: Projects.ProjectId -> ATAuthCtx ()
-requireGitWrite = void . ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit
+requireGitWrite = void . ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PEdit
 
 
 -- | Why an action left a connection as it was; shown inside its panel.

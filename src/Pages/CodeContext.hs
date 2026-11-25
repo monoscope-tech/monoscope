@@ -17,6 +17,7 @@ import Data.Aeson.Types qualified as AET
 import Data.Algorithm.Diff qualified as Diff
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache qualified as Cache
+import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.CodeReview qualified as Agent
@@ -1255,7 +1256,8 @@ codeMappingsEditorGetH pid credentialM sampleM = do
 codeMappingsContent :: Projects.ProjectId -> Maybe Text -> Maybe GitSync.GitHubCredentialId -> Maybe GitSync.Repository -> ATAuthCtx (Html ())
 codeMappingsContent pid sampleM credentialM repositoryM = do
   session <- Projects.getSession
-  canEdit <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getSessionPermission pid session.user.id
+  -- The demo guest edits the demo, but its GitHub credential reaches operator repositories.
+  canEdit <- (CI.original session.user.email /= Projects.demoGuestEmail &&) . maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getSessionPermission pid session.user.id
   allAccounts <- if canEdit then codeContextCredentials pid else GitSync.getGitHubCredentials pid
   let accounts = filter (\c -> maybe True (\r -> (r.host, r.apiBase) == (c.host, c.apiBase)) repositoryM) allAccounts
       requested = credentialM <|> (repositoryM >>= (.credentialId))
@@ -1766,4 +1768,4 @@ impactReviewRetryH pid rid = do
 
 
 requireReviewWrite :: Projects.ProjectId -> ATAuthCtx ()
-requireReviewWrite = void . ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit
+requireReviewWrite = void . ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PEdit

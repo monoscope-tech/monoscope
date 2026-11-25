@@ -19,6 +19,8 @@ import Network.Wai.Test qualified as WT
 import Models.Apis.Issues qualified as Issues
 import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper qualified as BodyWrapper
+import Pages.CodeContext qualified as CodeContext
+import Pages.GitSync qualified as GitSyncP
 import Pages.Home qualified as Home
 import Pages.Onboarding qualified as Onboarding
 import Pages.Projects qualified as ProjectsP
@@ -145,6 +147,8 @@ spec = around withTestResources do
     runQueryEffect tr (PM.getSessionPermission demoPid (getResponse guest).user.id) `shouldReturn` Just PM.PEdit
     traverse (httpStatus asGuest) [void $ Settings.apiPostH demoPid (Settings.GenerateAPIKeyForm "guest" Nothing), void $ ProjectsP.manageMembersPostH demoPid Nothing (ProjectsP.ManageMembersForm ["x@example.test"] [PM.PAdmin]), void $ ProjectsP.pricingUpdateH demoPid (ProjectsP.PricingUpdateForm Nothing Nothing Nothing), void $ Onboarding.phoneEmailPostH demoPid (Onboarding.NotifChannelForm "+15550100" ["x@example.test"])] `shouldReturn` [403, 403, 403, 403]
     httpStatus asGuest (void $ Home.homeGetH demoPid) `shouldReturn` 200
+    -- The demo's GitHub credential is the operator's installation: the guest neither lists, connects nor unlinks through it.
+    traverse (httpStatus asGuest) [void $ CodeContext.repositoryConnectGetH demoPid Nothing, void $ GitSyncP.gitSyncSettingsDeleteH demoPid] `shouldReturn` [403, 403]
     -- Chat stays open to the guest: its turn is admitted and runs, read-only.
     call asGuest (AIThreads.startThreadPostHWithTools Nothing demoPid $ fromRightShow $ urlDecodeAsForm "query=What+failed%3F&mode=chat") >>= (`shouldSatisfy` isRight)
     runId <- dbOne tr [sql| SELECT id FROM apis.ai_routine_runs WHERE project_id = ? AND requested_by = ? |] (demoPid, (getResponse guest).user.id)
