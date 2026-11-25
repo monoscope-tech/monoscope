@@ -503,7 +503,11 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                               Reviews.recordFailure run message
                               -- Deferring nodes requeue with fresh odd-jobs attempts, so agent retries are bounded per chain here.
                               -- Publication recovery reuses the stored result, calls no model, and retries until it reconciles.
-                              if retries && (isJust run.result || execution.chainAttempt < 3) then throwIO $ ReviewFailure message else stopProgress run message
+                              -- A retry continues the chain, which needs a checkpoint once models were called (unless only
+                              -- publication is left); without one it could only end "Saved progress was lost" and hide this failure.
+                              published <- isJust . (>>= (.result)) <$> Reviews.getRun run.id
+                              resumable <- (published ||) . isRight <$> runErrorNoCallStack @ReviewFailure (requireRetainedSession run.projectId (Usage.Review run.id) . join . rightToMaybe =<< Agent.readSessionContext (Agent.ReviewSubject run.id) context.rootId)
+                              if retries && (isJust run.result || execution.chainAttempt < 3 && resumable) then throwIO $ ReviewFailure message else stopProgress run message
                     case outcome of
                       Left err
                         | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> Jobs.deferOperationReview run.projectId identifier deadline
@@ -668,7 +672,10 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                   ( \value -> do
                       queried <- State.gets @ReviewMemory (Map.elems . (.evidence))
                       recorded <- recordedProofs
-                      pure $ void $ validateDraft (concatMap changedLines initial.files) (map (\item -> (item.key, item.kind)) $ evidence <> queried) recorded value
+                      let checked = void $ validateDraft (concatMap changedLines initial.files) (map (\item -> (item.key, item.kind)) $ evidence <> queried) recorded value
+                      -- Rejections go back to the agent only; a review that runs out of submissions is undiagnosable without them.
+                      whenLeft_ checked $ Log.logInfo "Review draft rejected" . (run.id,)
+                      pure checked
                   )
             output <- require answer
             parsed <- require $ first (const "Review agent returned invalid review JSON") $ AE.eitherDecodeStrict @ReviewDraft $ encodeUtf8 output
