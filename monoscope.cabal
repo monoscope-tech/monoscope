@@ -532,6 +532,7 @@ library
   ghc-prof-options: -O1
   build-depends:
       Diff ==1.0.*
+    , JuicyPixels
     , PyF
     , Unique
     , aeson
@@ -1170,6 +1171,7 @@ test-suite test-dev
       hspec-discover:hspec-discover
   build-depends:
       Diff ==1.0.*
+    , JuicyPixels
     , PyF
     , Unique
     , aeson

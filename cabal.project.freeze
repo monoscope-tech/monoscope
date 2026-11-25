@@ -2,6 +2,7 @@ active-repositories: hackage.haskell.org:merge
 constraints: any.Cabal ==3.14.1.0,
              any.Cabal-syntax ==3.14.1.0,
              any.HUnit ==1.6.2.0,
+             any.JuicyPixels ==3.3.9,
              any.OneTuple ==0.4.2,
              any.Only ==0.1,
              any.PyF ==0.11.4.0,

@@ -706,10 +706,11 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             let shots = if null browser.shots then [(T.take 80 proof.claim, png) | Just png <- [card]] else browser.shots
                             let summary = AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "clip" AE..= (window <$ guard @Maybe (isNothing browser.video)), "output" AE..= T.takeEnd 3000 output, "screenshots" AE..= map fst shots, "video" AE..= isJust browser.video, "advice" AE..= Media.proofAdvice browser.shots card output]
                             pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4, browser = isJust browser.video, shots, chapters = browser.chapters}, summary)
-                        sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty $ map fst recorded
+                        let (contrasted, contrast) = Media.contrastSides $ map fst recorded
+                        sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty contrasted
                         key <- ExceptT $ hooks.save ProofScript{claim = proof.claim, command = proof.shellCommand, setup = proof.setup} sides
                         lift $ hooks.progress $ Recorded (proof.claim :| fold proof.covers) key
-                        pure $ AE.object ["key" AE..= key, "claim" AE..= proof.claim, "sides" AE..= map snd recorded, "note" AE..= ("Cite this key in a claim. The PR author sees both recordings." :: Text)]
+                        pure $ AE.object ["key" AE..= key, "claim" AE..= proof.claim, "sides" AE..= map snd recorded, "advice" AE..= contrast, "note" AE..= ("Cite this key in a claim. The PR author sees both recordings." :: Text)]
 
                     receive :: Maybe Checkout.Prepared -> Maybe GuestSession -> Int -> Int -> Maybe (Accepted result) -> IO (Either Text result)
                     receive supplied guestSession remaining submissions accepted = do
