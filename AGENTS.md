@@ -249,6 +249,11 @@ each burning ~85 minutes of wall clock before reporting an e2e expectation that 
 local run would have shown in minutes. Never treat "push it and see what CI says"
 as a way to test a change.
 
+**Even when told to skip sign-off, run `make ci-signoff CHECKS="e2e"` for any change to visible text**
+(button/link labels, headings, messages): Playwright selects by accessible name, so a renamed label
+passes every Haskell check and still breaks master (#1031 renamed two repository-connect links).
+`grep -rn "<old text>" e2e/tests` first shows which specs to update.
+
 **Sign-off must stay fast, every time — treat a slower sign-off as a regression.**
 The cabal store, `dist-newstyle`, npm and Playwright caches are docker volumes shared
 by every checkout (`ci/compose.yml`), so a new worktree or sign-off clone builds

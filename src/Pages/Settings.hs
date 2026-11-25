@@ -176,7 +176,7 @@ data StorageGet = StorageGet
 storagePage :: Projects.ProjectId -> ATAuthCtx (PageCtx StorageGet)
 storagePage pid = do
   (session, project, bw) <- mkPageCtx pid
-  permission <- ProjectMembers.getUserPermission pid session.user.id
+  permission <- ProjectMembers.getSessionPermission pid session.user.id
   pure $ PageCtx bw{pageTitle = "Storage", isSettingsPage = True} $ StorageGet pid project.s3Bucket Nothing permission
 
 
@@ -364,7 +364,7 @@ apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ApiGet)
 apiGetH pid = do
   (session, _, bw) <- mkPageCtx pid
   apiKeys <- apiKeysForProject pid
-  permission <- ProjectMembers.getUserPermission pid session.user.id
+  permission <- ProjectMembers.getSessionPermission pid session.user.id
   addRespHeaders $ ApiGet $ PageCtx bw{pageTitle = "API Keys", isSettingsPage = True} (ApiKeySettings pid apiKeys permission)
 
 
@@ -551,7 +551,7 @@ prometheusGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders PrometheusGet)
 prometheusGetH pid = do
   (session, _, bw) <- mkPageCtx pid
   cfgs <- PromCfg.configsByProjectId pid PromCfg.CKPrometheus
-  permission <- ProjectMembers.getUserPermission pid session.user.id
+  permission <- ProjectMembers.getSessionPermission pid session.user.id
   addRespHeaders $ PrometheusGet $ PageCtx bw{pageTitle = "Prometheus", isSettingsPage = True} (PrometheusSettings pid cfgs permission)
 
 
@@ -760,7 +760,7 @@ prometheusToggleH pid cid = do
 prometheusMut :: Projects.ProjectId -> ATAuthCtx (RespHeaders PrometheusMut)
 prometheusMut pid = do
   (session, _) <- Projects.sessionAndProject pid
-  permission <- ProjectMembers.getUserPermission pid session.user.id
+  permission <- ProjectMembers.getSessionPermission pid session.user.id
   cfgs <- PromCfg.configsByProjectId pid PromCfg.CKPrometheus
   addRespHeaders $ PrometheusMut (PrometheusSettings pid cfgs permission)
 

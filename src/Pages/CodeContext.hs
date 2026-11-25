@@ -38,6 +38,7 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Reader.Static qualified
+import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Lucid hiding (for_)
 import Lucid.Aria qualified as Aria
@@ -847,6 +848,7 @@ askHint = "Comment @monoscope review on any pull request to ask for a review, or
 data ReviewReadiness
   = ReviewReady ImpactReviews.ReviewSettings
   | ReviewNeedsRoutine
+  | ReviewNeedsWorker
   | ReviewNeedsService
   | ReviewNeedsApp
   | ReviewNeedsServer
@@ -878,6 +880,7 @@ repositoryGetH pid rid = do
   syncs <- GitSync.getGitSyncs pid
   settings <- ImpactReviews.repositorySettings pid
   routine <- Issues.getEventRoutine pid Issues.EventPullRequest
+  workerRunning <- ImpactReviews.reviewWorkerRunning =<< Time.currentTime
   cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
   permission <- ProjectMembers.getSessionPermission pid session.user.id
   let mappings = filter (mappingInRepository credentials repository) allMappings
@@ -887,7 +890,7 @@ repositoryGetH pid rid = do
         | repository.host /= Git.GitHub || isJust repository.apiBase = ReviewUnsupportedHost
         | any T.null ([cfg.githubAppWebhookSecret, cfg.githubAppId, cfg.githubAppPrivateKey] :: [Text]) = ReviewNeedsServer
         | not (any (isJust . (.service)) mappings) = ReviewNeedsService
-        | Just s <- reviewSettings = maybe ReviewNeedsRoutine (const $ ReviewReady s) routine
+        | Just s <- reviewSettings = if not workerRunning then ReviewNeedsWorker else maybe ReviewNeedsRoutine (const $ ReviewReady s) routine
         | otherwise = ReviewNeedsApp
   resources <- maybe (pure []) (RepositorySync.resources pid . (.id)) dashboardSync
   conflictVersions <- forM (filter (.conflicted) resources) $ \resource -> (resource.id,) <$> RepositorySync.localDefinition resource
@@ -1079,6 +1082,7 @@ instance ToHtml RepositoryGet where
                 ReviewReady settings -> (,False) do
                   colorChip_ (triggerBadge settings.trigger) "circle-check" $ triggerLabel settings.trigger
                   p_ [class_ "text-sm text-textWeak"] $ toHtml askHint
+                ReviewNeedsWorker -> setupRequired "No review worker has checked in for three minutes, so pull requests wait in the queue. Ask your Monoscope administrator to start one (docs/agent-operations.md)."
                 ReviewNeedsRoutine -> setupRequired "Activate or resume the Production impact review routine. Repository settings choose which pull requests it reviews."
                 ReviewNeedsService -> setupRequired "Link a named service so reviews can find the production telemetry for this repository."
                 ReviewNeedsApp -> setupRequired "Link source context through the GitHub App to receive automatic pull request reviews. A token connection can still provide source context and configuration sync."

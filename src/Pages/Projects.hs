@@ -1136,7 +1136,7 @@ teamPageNF pid handle = do
 manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)
 manageMembersGetH pid = do
   (sess, project, bw) <- mkPageCtx pid
-  permission <- ProjectMembers.getUserPermission pid sess.user.id
+  permission <- ProjectMembers.getSessionPermission pid sess.user.id
   projMembers <- V.fromList <$> ProjectMembers.selectAllProjectMembers pid
   teamsCount <- length <$> ProjectMembers.getTeamsVM pid
   let bwconf = bw{pageTitle = "Team", isSettingsPage = True}

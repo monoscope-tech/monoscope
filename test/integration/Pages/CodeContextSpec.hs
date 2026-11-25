@@ -35,6 +35,7 @@ import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
+import Data.Effectful.AgentWorkspace qualified as Workspace
 import Models.Projects.ProjectApiKeys qualified as Keys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
@@ -1086,8 +1087,13 @@ spec = do
         reviewsPid <- createTestProject tr "reviews"
         reviewsAccount <- grantOf tr reviewsPid Git.GitHub Nothing "team" Nothing (Just "fixture")
         Just reviewsRepository <- runQueryEffect tr $ GitSync.connectRepository reviewsPid reviewsAccount.id (Git.GitRepo "team/checkout" "checkout" True "main")
+        -- A pull request opened before the routine existed stopped at the routine gate; it runs now.
+        let head' = T.replicate 40 "a"
+        dbExec tr "INSERT INTO projects.pr_review_threads (project_id, owner, repo, number, latest_revision, event_at) VALUES (?, 'team', 'checkout', 7, ?, now())" (reviewsPid, head')
+        dbExec tr "INSERT INTO projects.pr_review_runs (thread_id, revision, state, error) SELECT id, ?, 'incomplete', ? FROM projects.pr_review_threads WHERE project_id = ?" (head', ImpactReviews.routineMissingError, reviewsPid)
         void $ runJob tr withUnavailableRepositoryAPI (BackgroundJobs.AnalyzeRepository reviewsPid reviewsRepository.id)
         isJust <$> runQueryEffect tr (Issues.getEventRoutine reviewsPid Issues.EventPullRequest) `shouldReturn` True
+        dbOne tr "SELECT r.state FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id WHERE t.project_id = ?" (Only reviewsPid) `shouldReturn` ("queued" :: Text)
         isJust <$> triage reviewsPid `shouldReturn` False
         -- An older installation still on its template's text follows the newer version; an edited one keeps its own.
         let older = Issues.issueTriageTemplate{Issues.version = 1, Issues.prompt = "Older triage instructions", Issues.reportWhen = Issues.ReportFindings}
@@ -1129,6 +1135,15 @@ spec = do
         renderT details.content `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories/" <> repository.id.toText <> "/source\"")
         map (.service) details.content.mappings `shouldBe` [Just "checkout"]
         fmap (.id) details.content.dashboardSync `shouldBe` Just sync.id
+        -- reviewReadiness_needsAWorkerThatCheckedInRecently: with no live worker a review would only
+        -- queue, so a self-hosted install without one must not read "Ready".
+        now <- Hasql.getTestTime tr.trTestClock
+        let announce at node = runQueryEffect tr $ ImpactReviews.announceReviewWorker at (Workspace.Slots node 1 2 1 False)
+        announce (addUTCTime (-240) now) "stale-node"
+        noWorker <- call configured $ PageCodeContext.repositoryGetH testPid repository.id
+        noWorker.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewNeedsWorker -> True; _ -> False
+        renderT noWorker.content `shouldSatisfy` T.isInfixOf "No review worker has checked in"
+        announce now "live-node"
         readiness configured >>= (`shouldSatisfy` \case PageCodeContext.ReviewNeedsRoutine -> True; _ -> False)
         void $ call configured $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review")
         readiness configured >>= (`shouldSatisfy` \case PageCodeContext.ReviewReady _ -> True; _ -> False)
