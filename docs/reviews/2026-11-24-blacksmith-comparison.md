@@ -47,8 +47,11 @@ workspace; base checks take 1–2 min and head checks 5–7 min (head rebuilds t
 | :-- | :-- | :-- |
 | #726 People tab | Matches (7), 1 issue found | 2 match with UI stills and video: a member opens Company People on head, base rejects it; a manager links only to reports. 2 unverified (field masking, sidebar labels) |
 | #722 profile catalogue | 10 match, 2 differ, issue found | 1 match (pay fields seeded, date of birth private by default) with base/head stills; 5 unverified |
-| #721 review templates | Matches | 0/2: template chooser not recorded |
-| #730 anonymous survey | Matches | 0/1: ran before the workspace fix; every check timed out |
+| #721 review templates | Matches | 0/2: all three attempts retried a locator inside a closed `<dialog>` (#1035 now says to open it first) |
+| #730 anonymous survey | Matches | re-run after the fix: 1 match (anonymous responses masked) |
+| #724 HRIS leaks | Matches (4) | re-run: 1 match (admin export omits sensitive columns), 2 unverified |
+| #716 drop hris_enabled | Matches | re-run: 1 match (schema comparison before and after the migration) |
+| #711 unbundle modules | Matches | re-run: 1 match (admin flow enforces the Goals gate) |
 
 The #726 head still is a real screenshot of the People table with the seeded roles, which is the
 format Blacksmith uses; ours adds the merge-risk table and the not-verified list. Still behind:
