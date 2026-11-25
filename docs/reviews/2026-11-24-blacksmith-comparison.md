@@ -34,6 +34,26 @@ didn't claim; we found none. Some of our "matches" are weak ("code is buildable"
 which #1029 now forbids as claims. Next lever: a Talstack proof recipe (Postgres, migrations,
 seeded sessions, server) in a `.monoscope/PROOF.md`, so UI claims get screenshots.
 
+### With the app recipe (2026-11-25)
+
+A saved recipe now starts Talstack in the verifier: Postgres, `.env.dist`, the server, and three
+seeded sessions (Ada admin, Max manager, Mia member reporting to Max). Two worker bugs kept it from
+working until #1034: a short terminal setup overwrote the recipe, and leases left by killed workers
+pinned about 70 GB of stale workspaces, so maintenance evicted Talstack's fresh base build within
+minutes and every check rebuilt cold past the 900 s limit. After the fix every check attached the
+workspace; base checks take 1–2 min and head checks 5–7 min (head rebuilds the changed modules).
+
+| Talstack PR | Blacksmith | Ours with the recipe |
+| :-- | :-- | :-- |
+| #726 People tab | Matches (7), 1 issue found | 2 match with UI stills and video: a member opens Company People on head, base rejects it; a manager links only to reports. 2 unverified (field masking, sidebar labels) |
+| #722 profile catalogue | 10 match, 2 differ, issue found | 1 match (pay fields seeded, date of birth private by default) with base/head stills; 5 unverified |
+| #721 review templates | Matches | 0/2: template chooser not recorded |
+| #730 anonymous survey | Matches | 0/1: ran before the workspace fix; every check timed out |
+
+The #726 head still is a real screenshot of the People table with the seeded roles, which is the
+format Blacksmith uses; ours adds the merge-risk table and the not-verified list. Still behind:
+Blacksmith covers more claims per PR and found issues the PRs didn't claim; we found none.
+
 ## What Blacksmith produces
 
 | PR | Verdict | Claims | Screenshots | Found | Not tested |
