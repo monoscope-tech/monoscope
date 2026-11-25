@@ -3801,9 +3801,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Usage.recordCall reviewPid (Usage.Review run.id) $ Agent.ModelCall (UUIDId $ UUID.fromWords 72 0 0 1) finishedAttempt "fixture" "fixture") `shouldReturn` True
     void $ review fakeAgent
     reviewState `shouldReturn` Just Reviews.Completed
+    -- reviewFailure_withoutCheckpoint_keepsItsReason (Talstack #721, 2026-11-25): a failure after model calls leaves
+    -- no checkpoint, so a retry could only end "Saved progress was lost" and overwrite the cause; the chain stops instead.
     retry
-    lost <- replicateM 2 $ snd <$> within (transport True . fakeAgentWith ["--fail-after-usage"]) (tryAny $ Impact.reviewPullRequest run.id)
-    map isLeft lost `shouldBe` [True, False]
+    stopped <- snd <$> within (transport True . fakeAgentWith ["--record-call", "--fail-after-usage"]) (tryAny $ Impact.reviewPullRequest run.id)
+    stopped `shouldSatisfy` isRight
+    fmap (.error) <$> runQueryEffect tr (Reviews.getRun run.id) `shouldReturn` Just (Just "Review failed; retry to collect current evidence")
     void $ review fakeAgent
     -- askedProof_postsANewComment (#826): an ask's answer lands below it, not in the review comment far above.
     dbExec tr "UPDATE projects.pr_review_runs SET request = ? WHERE id = ?" (Aeson $ AE.toJSON Reviews.Ask{login = "ada", commentId = 77, command = Reviews.Prove, focus = Nothing}, run.id)
@@ -3867,7 +3870,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
       priorRevisions <- revisions
       (revokedWrites, revoked) <- attempt (observedComment 123 lostBody . revokeDuringLookup . fakeAgent)
       changeAccess False
-      revoked `shouldSatisfy` isLeft
+      -- The run already called models and left no checkpoint, so it stops instead of retrying into a lost session.
+      revoked `shouldSatisfy` isRight
       revokedWrites `shouldNotSatisfy` reaches "/issues/comments/99"
       revisions >>= (\stored -> (revokeMapping, stored) `shouldBe` (revokeMapping, priorRevisions))
     (freshRequests, freshResult) <- attempt (observedComment 123 lostBody . fakeAgent)
