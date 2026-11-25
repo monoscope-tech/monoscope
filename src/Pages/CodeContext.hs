@@ -1049,7 +1049,7 @@ instance ToHtml RepositoryGet where
       when canEdit $ post (urls.repositoryAnalyzePost pid rid) [] $ button_ [type_ "submit", class_ "btn btn-sm btn-outline gap-2"] do
         faSprite_ "arrows-rotate" "regular" "h-3.5 w-3.5"
         "Analyze repository"
-      when canEdit $ p_ [class_ "w-full max-w-[65ch] text-xs text-textWeak"] "Analysis matches this repository to services in your telemetry. The first run can link those services and turn on dashboard sync; existing settings are kept."
+      when canEdit $ p_ [class_ "w-full max-w-[65ch] text-xs text-textWeak"] "Analysis runs when the repository is connected and daily after that: it links the services in your telemetry that match this repository and turns on dashboard sync. Run it now after new services start reporting; existing settings are kept."
     whenJust (page.analysis >>= (.error)) $ \err -> p_ [role_ "status", class_ "text-sm text-textError"] $ toHtml $ "Setup needs attention: " <> err
     whenJust (page.analysis >>= (.suggestions)) $ \suggestions -> when (null page.mappings) $ div_ [class_ "rounded-xl border border-strokeWeak p-4 space-y-2"] do
       p_ [class_ "text-sm font-medium text-textStrong"] "Service mapping needs input"

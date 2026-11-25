@@ -451,7 +451,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
         now <- lift Time.currentTime
         summary <- lift $ SchemaCatalog.getSummary Nothing pid
         let names = maybe [] (V.toList . (.services)) summary
-            matches = filter ((== T.toLower repository.repo) . T.toLower) names
+            matches = GitSync.repositoryServices repository.repo names
         previous <- lift $ GitSync.getRepositoryAnalysis pid rid
         unless (isJust $ previous >>= (.suggestions)) do
           mappings <- lift $ CodeContext.getCodeMappings pid

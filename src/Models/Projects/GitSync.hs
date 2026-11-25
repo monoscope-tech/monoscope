@@ -13,6 +13,7 @@ module Models.Projects.GitSync (
   AnalysisSuggestions (..),
   RepositoryAnalysis (..),
   getRepositoryAnalysis,
+  repositoryServices,
   getRepositories,
   getRepository,
   connectRepository,
@@ -128,7 +129,6 @@ import Jose.Jwt (Jwt (..))
 import Models.Projects.DashboardTemplates (Editable, askTemplates, editableIn)
 import Models.Projects.Dashboards (Dashboard, DashboardId)
 import Models.Projects.Dashboards qualified as Dashboards
-import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.ProjectApiKeys (decryptAPIKey, decryptSecret, encryptSecret)
 import Models.Projects.Projects (PersistentSessionId, ProjectId)
 import Network.Wreq qualified as Wreq
@@ -183,6 +183,16 @@ data RepositoryAnalysis = RepositoryAnalysis {suggestions :: Maybe AnalysisSugge
   deriving anyclass (HI.DecodeRow)
 
 
+-- | The observed services a repository builds: its own name, or its name plus a component
+-- (`talstack-web`, `talstack_api`). Exact-name matching alone left a repository's other
+-- services unlinked, so their errors and pull requests got no source context.
+--
+-- >>> repositoryServices "talstack" ["talstack", "talstack-web", "Talstack_API", "talstack.worker", "talstacker", "web-talstack", "other"]
+-- ["talstack","talstack-web","Talstack_API","talstack.worker"]
+repositoryServices :: Text -> [Text] -> [Text]
+repositoryServices repo = filter $ maybe False ((`elem` ["", "-", "_", "."]) . T.take 1) . T.stripPrefix (T.toLower repo) . T.toLower
+
+
 getRepositoryAnalysis :: DB es => ProjectId -> RepositoryId -> Eff es (Maybe RepositoryAnalysis)
 getRepositoryAnalysis pid rid =
   Hasql.interpOne
@@ -222,11 +232,11 @@ removeRepository pid rid = do
     sync <- lift $ Hasql.queryTx @(Maybe (HI.OneColumn GitHubSyncId)) [HI.sql| SELECT id FROM projects.git_sync WHERE project_id = #{pid} AND host = #{repository.host} AND api_base IS NOT DISTINCT FROM #{repository.apiBase} AND owner = #{repository.owner} AND repo = #{repository.repo} FOR UPDATE |]
     for_ sync \(HI.OneColumn sid) -> ExceptT $ deleteSync sid now
     lift do
+      -- Reviews stop with the code mappings deleted below. The settings go too, so reconnecting
+      -- starts on the defaults: a "when asked" row left here kept a reconnected repository's
+      -- automatic reviews off with nothing on the page saying why.
       when (repository.host == Git.GitHub && isNothing repository.apiBase)
-        $ Hasql.executeTx
-          [HI.sql| INSERT INTO projects.pr_review_settings (project_id, owner, repo, trigger, enabled, include_evidence)
-            VALUES (#{pid}, lower(#{repository.owner}), lower(#{repository.repo}), #{ImpactReviews.WhenAsked}, false, false)
-            ON CONFLICT (project_id, owner, repo) DO UPDATE SET trigger = EXCLUDED.trigger, enabled = false |]
+        $ Hasql.executeTx [HI.sql| DELETE FROM projects.pr_review_settings WHERE project_id = #{pid} AND owner = lower(#{repository.owner}) AND repo = lower(#{repository.repo}) |]
       Hasql.executeTx
         [HI.sql| DELETE FROM projects.code_mappings m USING projects.git_credentials c
           WHERE m.project_id = #{pid} AND m.credential_id = c.id AND c.project_id = m.project_id

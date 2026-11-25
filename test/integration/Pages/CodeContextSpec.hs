@@ -423,7 +423,7 @@ spec = do
         let forbidden = interpose @W.HTTP \_ -> \case
               W.GetWith _ "https://api.github.com/user/memberships/orgs/team" -> pure (mockResponse "{\"message\":\"Resource not accessible by integration\"}"){responseStatus = H.mkStatus 403 ""}
               W.GetWith _ _ -> pure $ mockResponse organization
-              W.PostWith {} -> pure $ mockResponse "{\"access_token\":\"fixture-user-token\"}"
+              W.PostWith{} -> pure $ mockResponse "{\"access_token\":\"fixture-user-token\"}"
               _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Unexpected request"
         (_, unpermitted) <- runTestBgRecordingHTTP frozenTime tr $ forbidden $ GitSync.authorizeGitHubInstallation (encKeyOf tr) owned "123" "fixture-client" "fixture-secret" "fixture-code" "https://monoscope.test/github/callback" 42
         unpermitted `shouldBe` Left GitSync.InstallationMembersPermissionMissing
@@ -1168,7 +1168,8 @@ spec = do
         [(d.title, d.filePath, d.fileSha) | d <- dashboards, isNothing d.gitSyncId] `shouldBe` [("Local overview", Nothing, Nothing)]
         length (filter (isJust . (.gitSyncId)) dashboards) `shouldBe` 1
         runIds `shouldReturn` history
-        dbQuery tr "SELECT trigger, include_evidence FROM projects.pr_review_settings WHERE project_id = ? AND owner = 'team' AND repo = 'checkout'" (Only testPid) `shouldReturn` [("when_asked" :: Text, False)]
+        -- Removal drops the repository's review settings, so a reconnect starts on automatic reviews.
+        dbQuery @_ @(Text, Bool) tr "SELECT trigger, include_evidence FROM projects.pr_review_settings WHERE project_id = ? AND owner = 'team' AND repo = 'checkout'" (Only testPid) `shouldReturn` []
         runQueryEffect tr (GitSync.removeRepository testPid repository.id) `shouldReturn` Left GitSync.ConnectionMissing
         review 2 "b"
         runIds `shouldReturn` history
