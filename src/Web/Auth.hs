@@ -543,7 +543,7 @@ instance ToHtml AuthPage where
 
 -- | The browser that starts a login carries its @state@ back to 'authCallbackH'. Unchecked, any
 -- valid code was accepted from any browser: a link to the callback with the attacker's own
--- code silently signed the victim into the attacker's account (login CSRF).
+-- code silently signed the victim into the attacker's account (login CSRF). Expired once redeemed.
 oauthStateCookie :: Text -> SetCookie
 oauthStateCookie st = defaultSetCookie{setCookieName = "monoscope_oauth_state", setCookieValue = encodeUtf8 st, setCookiePath = Just "/", setCookieHttpOnly = True, setCookieSecure = True, setCookieSameSite = Just sameSiteLax, setCookieMaxAge = Just 600}
 
@@ -558,7 +558,7 @@ authCallbackH
   -> Maybe ByteString -- Cookie
   -> Maybe ByteString -- User-Agent
   -> Maybe ByteString -- CF-IPCountry
-  -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] (Html ()))
+  -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] (Html ()))
 authCallbackH codeM stateM redirectToM cookieM userAgentM countryM = do
   envCfg <- ask @AuthContext
   pool <- asks pool
@@ -596,7 +596,7 @@ authCallbackH codeM stateM redirectToM cookieM userAgentM countryM = do
         Created uid -> AdConversions.recordSignup uid $ catMaybes [(hCookie,) <$> cookieM, (hUserAgent,) <$> userAgentM, ("CF-IPCountry",) <$> countryM]
   case resp of
     Left err -> Logging.logAttention "unable to process auth callback page" err >> throwError err302{errHeaders = [("Location", "/login?auth0_callback_failure")]}
-    Right (persistentSessId, signupCookieM) -> pure $ addHeader (safeRedirect redirectToM) $ addHeader (craftSessionCookie persistentSessId True) $ maybe noHeader addHeader signupCookieM do
+    Right (persistentSessId, signupCookieM) -> pure $ addHeader (safeRedirect redirectToM) $ addHeader (oauthStateCookie ""){setCookieMaxAge = Just 0} $ addHeader (craftSessionCookie persistentSessId True) $ maybe noHeader addHeader signupCookieM do
       html_ do
         head_ $ meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
         body_ $ a_ [href_ $ safeRedirect redirectToM] "Continue to Monoscope"

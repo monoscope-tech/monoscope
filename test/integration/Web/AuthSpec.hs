@@ -34,7 +34,7 @@ import System.Config qualified as Config
 import System.Server qualified as Server
 import System.Types (ApiPrincipal (..))
 import Web.Auth qualified as Auth
-import Web.Cookie (SetCookie, parseSetCookie, setCookieName, setCookieValue)
+import Web.Cookie (SetCookie, parseSetCookie, setCookieMaxAge, setCookieName, setCookieValue)
 import Web.FormUrlEncoded (urlDecodeAsForm)
 import Web.I18n qualified as I18n
 
@@ -192,7 +192,8 @@ spec = around withTestResources do
     let unverified _ url = pure $ "{\"email\":\"unverified@example.com\",\"email_verified\":false}" <$ guard ("/userinfo" `T.isSuffixOf` toText url)
     toBaseServantResponse tr{trATCtx = adCtx} (withHTTPResponses unverified $ Auth.authCallbackH (Just "code") (Just "st-1") Nothing (Just "monoscope_oauth_state=st-1") Nothing Nothing) `shouldThrow` anyException
     runQueryEffect tr (Projects.userByEmail "unverified@example.com") >>= (`shouldSatisfy` isNothing)
-    [_, signup] <- callback cookie
+    [clearedState, _, signup] <- callback cookie
+    (setCookieName clearedState, setCookieMaxAge clearedState) `shouldBe` ("monoscope_oauth_state", Just 0)
     Just (uid :: Projects.UserId) <- runQueryEffect tr $ Hasql.interpOne [HI.sql| SELECT id FROM users.users WHERE email = 'callback@example.com' |]
     (setCookieName signup, setCookieValue signup) `shouldBe` ("monoscope_signup", encodeUtf8 uid.toText)
     runQueryEffect tr (Hasql.interpOne [HI.sql| SELECT attribution->>'gclid' FROM users.users WHERE id = #{uid} |]) >>= (`shouldBe` Just (Just "G1" :: Maybe Text))
@@ -205,7 +206,7 @@ spec = around withTestResources do
     reddit `shouldContainAll` ["\"SIGN_UP\"", "\"click_id\":\"R1\"", "\"signup-" <> uid.toText <> "\"", emailSha]
     (meta <> reddit) `shouldNotSatisfy` T.isInfixOf "callback@example.com"
     -- A returning sign-in, or a new one without consent, records and queues nothing.
-    callback cookie >>= (`shouldBe` 1) . length
+    callback cookie >>= (`shouldBe` 2) . length
     runQueryEffect tr (AdConversions.recordSignup uid [("CF-IPCountry", "DE")]) >>= (`shouldSatisfy` isNothing)
     sendQueued >>= (`shouldBe` ([], []))
 
