@@ -32,10 +32,12 @@ import Data.Effectful.Notify qualified as Notify
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W (get, responseBody)
 import Data.Text qualified as T
+import Data.Time (addUTCTime)
 import Data.Vector qualified as V (Vector, fromList, (!?))
 import Effectful (Eff, (:>))
 import Effectful.Reader.Static (ask)
 import Effectful.State.Static.Local qualified as State
+import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -280,10 +282,15 @@ checkIntegrationGet :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (ActionResu
 checkIntegrationGet pid languageM = act do
   void $ Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
-  v :: Maybe Text <- Hasql.withHasqlTimefusion appCtx.env.enableTimefusionReads $ Hasql.interpOne [HI.sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = #{pid.toText} LIMIT 1|]
-  case v of
-    Nothing -> pure $ maybeToRight NoEventsYet $ AwaitingEvents pid <$> languageM
-    Just _ -> do
+  now <- Time.currentTime
+  -- A project that ingested once needs no scan. Otherwise only recent rows answer: an unbounded
+  -- LIMIT 1 planned every file the project ever wrote, ~78 GB per poll on prod (2026-11-25).
+  seen <-
+    Activation.reachedMilestone pid Activation.IngestVerified
+      ||^ (isJust @Text <$> Hasql.withHasqlTimefusion appCtx.env.enableTimefusionReads (Hasql.interpOne [HI.sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = #{pid.toText} AND timestamp >= #{addUTCTime (-86400) now} LIMIT 1|]))
+  if not seen
+    then pure $ maybeToRight NoEventsYet $ AwaitingEvents pid <$> languageM
+    else do
       markStepCompleted pid $ show Integration
       Activation.recordActivationMilestones Activation.IngestVerified Nothing [pid] >>= traverse_ \p -> do
         insertJob $ AdConversion $ Activated p
