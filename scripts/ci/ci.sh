@@ -954,8 +954,10 @@ cmd_image_follow_uninstall() {
 }
 
 # True when the builder runs scripts/ci/buildkitd.toml's GC: a rule for cache mounts alone.
+# Captured, not piped into `grep -q`: under pipefail its early exit SIGPIPEs buildx and reads as false.
 builder_keeps_cache_mounts() {
-  docker buildx inspect "$BUILDER" 2>/dev/null | grep -qE '^ *Filters: +type==exec\.cachemount$'
+  local policy
+  policy=$(docker buildx inspect "$BUILDER" 2>/dev/null) && grep -qE '^ *Filters: +type==exec\.cachemount$' <<<"$policy"
 }
 
 # Local AMD64 emulation through OrbStack/Rosetta; never allocate an SSH builder.
