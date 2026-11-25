@@ -675,6 +675,8 @@ saveProofs run attempt script sides = Hasql.transaction TxS.ReadCommitted TxS.Wr
           SELECT #{run.projectId}, #{run.owner}, #{run.repo}, #{setup}, #{run.revision}, #{run.id}
           WHERE #{setup}::text IS NOT NULL AND #{any (\p -> p.side == Agent.Head && p.exitCode == Just 0) sides}
           ON CONFLICT (project_id, owner, repo) DO UPDATE SET setup = EXCLUDED.setup, revision = EXCLUDED.revision, run_id = EXCLUDED.run_id, updated_at = now()
+          -- A trivial terminal setup must not displace a full app recipe; a browser proof's setup carries the app.
+          WHERE #{any (.browser) sides} OR length(EXCLUDED.setup) >= length(projects.pr_review_proof_recipes.setup)
         ) SELECT CASE WHEN #{setup}::text IS NULL THEN #{NoSetup} WHEN (SELECT setup FROM prior) = #{setup} THEN #{Reused} ELSE #{Changed} END|]
     | otherwise -> Left ("Proof " <> key <> " was already recorded; record the proof again") <$ Tx.condemn
 

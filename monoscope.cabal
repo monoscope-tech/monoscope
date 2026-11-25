@@ -881,6 +881,7 @@ test-suite integration-tests
     , effectful-postgresql
     , envy
     , extra
+    , filelock
     , filepath
     , generic-lens
     , geoip2

@@ -231,6 +231,8 @@ tests:
       # MigrationRunnerSpec drives the real runner over a temp migrations dir.
       - postgresql-migration
       - temporary
+      # ImpactReviewsSpec holds a workspace lease's lock the way a live worker does.
+      - filelock
       - tmp-postgres
       - hasql
       - hasql-interpolate
