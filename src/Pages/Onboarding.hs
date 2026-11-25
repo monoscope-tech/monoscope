@@ -1,3 +1,8 @@
+-- | Onboarding: QuickStart (project name + data region) routes to one of
+-- AutoInstrument (GitHub + Setup agent PR), MonitorUrl (zero-code uptime) or
+-- Instrument (AI-agent prompt / SDK / CLI), then Alerts. Info/Survey/NotifChannel/
+-- Integration/Pricing are the legacy steps, still served for old @?step=@ links.
+-- User-facing copy says "Setup agent", never the internal @pi-durable@ name.
 module Pages.Onboarding (
   onboardingGetH,
   OnboardingStep (..),

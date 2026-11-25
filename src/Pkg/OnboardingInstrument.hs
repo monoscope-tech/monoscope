@@ -3,6 +3,9 @@
 -- Kubernetes/Docker/infra, or database config), discovers candidate uptime URLs,
 -- generates secret-free OpenTelemetry instrumentation, verifies live ingestion
 -- against Monoscope using an ephemeral project API key, and opens a GitHub PR.
+-- The key is only ever a runtime env var: never written to generated files or
+-- the PR, which lists MONOSCOPE_API_KEY only as a placeholder.
+-- The PR opens only after the test span is confirmed in otel_logs_and_spans.
 module Pkg.OnboardingInstrument (
   runOnboardingInstrument,
   detectStackFromPaths,
