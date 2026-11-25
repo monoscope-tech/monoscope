@@ -85,6 +85,7 @@ import Pkg.TestUtils qualified as Test
 import Servant (ServerError (..), getResponse)
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.FileLock qualified as FileLock
 import System.Directory (canonicalizePath, copyFile, createDirectoryIfMissing, createFileLink, doesDirectoryExist, doesFileExist, findExecutable, listDirectory, removeFile, removePathForcibly, renameDirectory)
 import System.Environment (getEnvironment)
 import System.Environment qualified as Environment
@@ -1881,6 +1882,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
       Workspace.maintenanceBudgetMet report `shouldBe` (budget == maxBound)
       status `shouldBe` if budget == maxBound then ExitSuccess else ExitFailure 1
       readFileBS unknown `shouldReturn` "Retain this unknown file."
+    -- staleLease_stopsPinningTheCache: a lease its worker never released (killed by a deploy mid-review) is reclaimed;
+    -- a held one stays.
+    let leases = cache </> toString testPid.toText </> "leases"
+    for_ ["workspaces", "leases/.lease-orphan", "leases/.lease-live"] $ createDirectoryIfMissing True . ((cache </> toString testPid.toText) </>)
+    writeFileBS (leases </> ".lease-orphan" </> "baseline.qcow2") "pinned"
+    FileLock.withFileLock (leases </> ".lease-live" </> "held.lock") FileLock.Exclusive \_ -> do
+      void $ CLI.runCLILifecycleLive ["workspace", "maintain", "--config", config]
+      listDirectory leases `shouldReturn` [".lease-live"]
 
   it "nativeGuest_resumePreservesCompletedEdits" \_ -> do
     profile <- nativeTestImage
@@ -3094,6 +3103,15 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- The first replays no saved recipe; later ones replay the one it saved.
     traverse (const saveProof) [1 .. 4 :: Int] `shouldReturn` ([Right ("proof-1", Reviews.Changed), Right ("proof-2", Reviews.Reused), Right ("proof-3", Reviews.Reused), Left "Proof budget exhausted; cite the proofs already recorded"] :: [Either Text (Text, Reviews.SetupReuse)])
     fmap (.setup) <$> runQueryEffect tr (Reviews.proofRecipe middle) `shouldReturn` Just "make serve &"
+    -- A shorter terminal setup does not replace the saved recipe (Talstack's app recipe was lost to a
+    -- 120-character one); a browser proof's setup, which carries the app's environment, does.
+    let other = UUIDId (UUID.fromWords 0 0 0 1)
+        script = Agent.ProofScript "Checks a page" "node proof.mjs" . Just
+        browserSide side code = (sideProof side code){Proof.browser = True}
+    void $ runQueryEffect tr $ Reviews.saveProofs middle other (script "true") (sideProof Agent.Base 1 :| [sideProof Agent.Head 0])
+    fmap (.setup) <$> runQueryEffect tr (Reviews.proofRecipe middle) `shouldReturn` Just "make serve &"
+    void $ runQueryEffect tr $ Reviews.saveProofs middle other (script "app") (browserSide Agent.Base 1 :| [browserSide Agent.Head 0])
+    fmap (.setup) <$> runQueryEffect tr (Reviews.proofRecipe middle) `shouldReturn` Just "app"
     void $ runQueryEffect tr $ Reviews.receiveEvent Nothing $ eventAt (T.replicate 40 "c") 4
     builds `shouldReturn` 1 -- the first base's build finished above; this base queues its own
     -- askOnReviewedHead_answersInANewComment: an ask on a head that already has a progress comment answers below itself.
