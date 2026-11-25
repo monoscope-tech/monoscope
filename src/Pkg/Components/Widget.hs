@@ -42,7 +42,7 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Ids qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), actionMenu_, copyButton_, emDash_, emptyState_, localTimeFmt_, searchInput_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), copyButton_, emDash_, emptyState_, localTimeFmt_, searchInput_)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.DeriveUtils (JsonValueSchema (..), UUIDId (..), WrappedEnumSC (..))
 import Pkg.Parser (ResultShape (..), ToQueryText (..), parseQueryToAST, replacePlaceholders, resultShape, templateBindings)
@@ -1269,14 +1269,10 @@ renderWidgetHeader actions widget valueM subValueM expandBtnFn ctaM = div_ [clas
         $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
     actions
     let widgetMenuPop = wId <> "-widget-menu"
-    div_ [class_ "inline-block"]
-      $ actionMenu_
-        widgetMenuPop
-        False
-        [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Widget menu", data_ "tippy-content" "Widget Menu"]
-        (Utils.faSprite_ "ellipsis" "regular" "w-4 h-4")
-        [class_ "text-textStrong menu-md rounded-box p-2 w-52 leading-none"]
-      $ do
+    div_ [class_ "inline-block"] do
+      button_ ([type_ "button", class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Widget menu", data_ "tippy-content" "Widget Menu"] <> Utils.popoverTrigger_ widgetMenuPop)
+        $ Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
+      ul_ ([class_ "dropdown text-textStrong dropdown-end menu menu-md bg-bgRaised rounded-box p-2 w-52 shadow-lg leading-none border border-strokeWeak"] <> Utils.popoverPanel_ widgetMenuPop) do
         -- A widget on a dashboard is copied from it by id. One that is not — the log
         -- explorer's chart — has no server-side row to copy, so its own JSON goes with
         -- it and the picker PUTs that as a new widget.
