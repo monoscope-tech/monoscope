@@ -3,21 +3,36 @@
 Blacksmith ("codesmith proof") comments on 32 Talstack pull requests; Monoscope's bot reviews
 monoscope and timefusion. This compares what each produced and records what we changed.
 
-## Can we run our proofs on the Talstack PRs?
+## Running our proofs on the Talstack PRs
 
-Not yet. The Monoscope GitHub App is not installed on `Talstack-LLC` (only `claude` and
-`blacksmith-sh` are), and reviews only run for repositories linked through an app installation
-(`projects.git_credentials.installation_id`). Installing it needs the browser flow:
+The Monoscope app isn't installed on Talstack-LLC, so the exact PR commits were pushed from a local
+checkout to a private mirror, `monoscope-tech/talstack-proof-mirror` (mirror #1–#8 = Talstack #730,
+#726, #724, #722, #721, #720, #716, #711). Our reviews post there, never on Talstack. The mirror is
+mapped in the monoscope project, so the merge-risk section has no Talstack telemetry (Talstack Prod
+has no repository mapping).
 
-1. Install the Monoscope GitHub App on `Talstack-LLC`, selecting `talstack` only.
-2. In a Monoscope project, add the code mapping for `Talstack-LLC/talstack` and set its review
-   trigger to **Only when asked**, with the routine on the **Observe** policy, so nothing posts to
-   Talstack pull requests while we compare.
-3. Ask for `@monoscope prove it` on #730, #726, #724, #722, #721, #720, #716, #711 (or retry the
-   runs from the run page).
+| Talstack PR | Blacksmith | Ours, first run (09:50 UTC) | Ours after #1024 and #1027 |
+| :-- | :-- | :-- | :-- |
+| #730 anonymous survey | Matches (1 claim, 4 stills) | 0/2 verified | 1 match (survey tests), main claim unverified |
+| #726 People tab | Matches (7), 1 issue found | 0/3 | 2 match (non-admin view, links), 1 unverified |
+| #724 HRIS leaks | Matches (4) | 0/3 | 2 match (category audiences, export fields), 2 unverified |
+| #722 profile catalogue | 10 match, 2 differ, issue found | 0/3 | 1 match (celebrations) |
+| #721 review templates | Matches | 0/2 | 1 match (create-cycle page), 1 unverified |
+| #720 payroll | Differs (6), issue found | 0/2 | 1 match (builds), 1 unverified |
+| #716 drop hris_enabled | Matches | 2 match | 1 match |
+| #711 unbundle modules | Matches | not run | 2 match (gate specs), 4 unverified |
 
-Talstack has no `.monoscope/PROOF.md`. Blacksmith proved it with no repository guidance. That is
-the bar.
+What changed between the runs: Talstack could not build in our VMs at all. The guest's cabal index
+was root-owned, stackage.org was blocked, and Tailwind assets weren't built before Template Haskell
+read them (#1024). It now builds cold in 22 minutes into a 3.6 GB warm workspace. Agents also
+stopped loading the project into GHCi in their own 1 GB VM, which had stalled two reviews to their
+45-minute budget (#1027).
+
+Where Blacksmith is still ahead on Talstack: it starts the app with seeded roles and shows base and
+head screenshots per claim; ours proves through tests and scripts. It found three issues the PRs
+didn't claim; we found none. Some of our "matches" are weak ("code is buildable", "tests execute"),
+which #1029 now forbids as claims. Next lever: a Talstack proof recipe (Postgres, migrations,
+seeded sessions, server) in a `.monoscope/PROOF.md`, so UI claims get screenshots.
 
 ## What Blacksmith produces
 
