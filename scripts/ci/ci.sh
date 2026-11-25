@@ -905,6 +905,7 @@ cmd_image() { # [sha] — build and push the production image for a commit
   local sha
   sha=${1:-HEAD}
   sha=$(git rev-parse "$sha^{commit}")
+  builder_keeps_cache_mounts || note "WARNING: builder '$BUILDER' evicts the compile cache, so this is a cold ~40-minute build; run \`make builder-setup\`"
   MONOSCOPE_BUILDER=$BUILDER scripts/ci/release.sh build "$sha"
   publish_attestation image "$sha" docker linux-amd64
   # Every server image gets its worker image, so the host's worker-follow can follow a deploy that
@@ -913,14 +914,66 @@ cmd_image() { # [sha] — build and push the production image for a commit
     || note "WARNING: no worker image for $sha — the proof worker stays on its build until \`make deploy-worker\`"
 }
 
+# Keep image-follow running under launchd, so every master head gets its image whether or not
+# anyone has a pane open: CI deploys wait for that image, and nobody running image-follow is how
+# master's deploys timed out. It runs master's copy of the script from its own clone.
+FOLLOW_AGENT=tech.monoscope.image-follow
+cmd_image_follow_install() {
+  local dir=${IMAGE_FOLLOW_DIR:-$HOME/.cache/monoscope-image-follow} plist=$HOME/Library/LaunchAgents/$FOLLOW_AGENT.plist
+  [ "$(uname -s)" = Darwin ] || die "image-follow runs on the Mac that builds images"
+  [ -d "$dir/.git" ] || { git clone -q --no-hardlinks --local "$(git rev-parse --show-toplevel)" "$dir" && git -C "$dir" remote set-url origin "$(git remote get-url origin)"; }
+  mkdir -p "$(dirname "$plist")" "$HOME/Library/Logs"
+  cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$FOLLOW_AGENT</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>-c</string>
+    <string>cd "$dir" &amp;&amp; git fetch -q origin master &amp;&amp; exec bash &lt;(git show origin/master:scripts/ci/image-follow.sh)</string></array>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>$PATH</string>
+    <key>DOCKER_CONTEXT</key><string>orbstack</string>
+    <key>MONOSCOPE_BUILDER</key><string>$BUILDER</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>60</integer>
+  <key>StandardOutPath</key><string>$HOME/Library/Logs/monoscope-image-follow.log</string>
+  <key>StandardErrorPath</key><string>$HOME/Library/Logs/monoscope-image-follow.log</string>
+</dict></plist>
+PLIST
+  launchctl bootout "gui/$(id -u)/$FOLLOW_AGENT" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$plist"
+  note "image-follow runs under launchd ($FOLLOW_AGENT); log: ~/Library/Logs/monoscope-image-follow.log"
+}
+
+cmd_image_follow_uninstall() {
+  launchctl bootout "gui/$(id -u)/$FOLLOW_AGENT" 2>/dev/null || true
+  rm -f "$HOME/Library/LaunchAgents/$FOLLOW_AGENT.plist"
+  note "image-follow agent removed"
+}
+
+# True when the builder runs scripts/ci/buildkitd.toml's GC: a rule for cache mounts alone.
+# Captured, not piped into `grep -q`: under pipefail its early exit SIGPIPEs buildx and reads as false.
+builder_keeps_cache_mounts() {
+  local policy
+  policy=$(docker buildx inspect "$BUILDER" 2>/dev/null) && grep -qE '^ *Filters: +type==exec\.cachemount$' <<<"$policy"
+}
+
 # Local AMD64 emulation through OrbStack/Rosetta; never allocate an SSH builder.
 cmd_builder() { # setup | rm | status
   case "${1:-status}" in
     setup)
       [ -z "${BUILD_HOST:-}" ] || die "BUILD_HOST is prohibited; image builders must stay on this Mac"
       MONOSCOPE_BUILDER=$BUILDER scripts/ci/release.sh local-context
+      # A builder made before scripts/ci/buildkitd.toml keeps BuildKit's default GC, which evicts
+      # the multi-GB compile cache mount after every build; the policy is fixed at creation.
+      if docker buildx inspect "$BUILDER" >/dev/null 2>&1 && ! builder_keeps_cache_mounts; then
+        note "recreating '$BUILDER': its GC policy evicts the compile cache"
+        docker buildx rm "$BUILDER" >/dev/null
+      fi
       if ! docker buildx inspect "$BUILDER" >/dev/null 2>&1; then
-        docker buildx create --name "$BUILDER" --driver docker-container \
+        docker buildx create --name "$BUILDER" --driver docker-container --buildkitd-config scripts/ci/buildkitd.toml \
           --platform linux/amd64 --driver-opt env.BUILDKIT_STEP_LOG_MAX_SIZE=-1 orbstack >/dev/null
       fi
       MONOSCOPE_BUILDER=$BUILDER scripts/ci/release.sh local-builder
@@ -1382,6 +1435,8 @@ case "$cmd" in
   deploy-status) cmd_deploy_status ;;
   deploy-worker) cmd_deploy_worker "$@" ;;
   worker-follow-install) cmd_worker_follow_install ;;
+  image-follow-install) cmd_image_follow_install ;;
+  image-follow-uninstall) cmd_image_follow_uninstall ;;
   deployed)    cmd_deployed "$@" ;;
   ship)        cmd_ship "$@" ;;
   builder)     cmd_builder "$@" ;;
