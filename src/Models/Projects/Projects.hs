@@ -357,9 +357,9 @@ data Project = Project
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Project
 
 
--- | Project-list projection: every 'Project' column PLUS two columns computed by the join
--- in 'selectProjectsForUser' (@has_integrated@, @users_display_images@). It is NOT a
--- duplicate of 'Project' to merge away — those columns are only available via that aggregate
+-- | Project-list projection: every 'Project' column PLUS a column computed by the join
+-- in 'selectProjectsForUser' (@users_display_images@). It is NOT a
+-- duplicate of 'Project' to merge away — that column is only available via that aggregate
 -- query, so folding them into 'Project' would force every plain project lookup to carry the
 -- joins. Kept as a dedicated projection for the project-list page.
 data ProjectListItem = ProjectListItem
@@ -389,7 +389,6 @@ data ProjectListItem = ProjectListItem
     -- settings, before the joined columns below.
     billingProvider :: BillingProvider
   , includeUserIdentityInAlerts :: Bool
-  , hasIntegrated :: Bool
   , usersDisplayImages :: V.Vector Text
   }
   deriving stock (Generic, Show)
@@ -729,18 +728,11 @@ accessibleMembership =
     <> ")"
 
 
-selectProjectsForUser :: (DB es, Time :> es) => UserId -> Eff es [ProjectListItem]
-selectProjectsForUser uid = do
-  now <- currentTime
+selectProjectsForUser :: DB es => UserId -> Eff es [ProjectListItem]
+selectProjectsForUser uid =
   EHasql.interp
     $ [HI.sql|
         SELECT p.*,
-               EXISTS (
-                    SELECT 1 FROM otel_logs_and_spans ols
-                    WHERE ols.project_id = p.id::text
-                    AND ols.timestamp >= #{now}::timestamptz - INTERVAL '30 days'
-                    LIMIT 1
-                ) as has_integrated,
                ARRAY_AGG('/api/avatar/' || us.id::text) OVER (PARTITION BY p.id)
         FROM projects.projects AS p
         JOIN projects.project_members AS pm ON (p.id = pm.project_id)

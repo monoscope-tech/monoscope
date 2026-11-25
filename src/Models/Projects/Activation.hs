@@ -2,6 +2,7 @@ module Models.Projects.Activation (
   ActivationMilestone (..),
   recordActivationMilestone,
   recordActivationMilestones,
+  reachedMilestone,
 ) where
 
 import Data.Effectful.Hasql qualified as Hasql
@@ -45,3 +46,8 @@ recordActivationMilestones milestone createdAfter projectIds =
       ON CONFLICT (project_id, milestone) DO NOTHING
       RETURNING project_id
     |]
+
+
+reachedMilestone :: DB es => Projects.ProjectId -> ActivationMilestone -> Eff es Bool
+reachedMilestone projectId milestone =
+  Hasql.interpOne [HI.sql| SELECT EXISTS (SELECT 1 FROM projects.activation_milestones WHERE project_id = #{projectId} AND milestone = #{milestone}) |] <&> fromMaybe False

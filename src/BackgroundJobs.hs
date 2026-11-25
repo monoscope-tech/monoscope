@@ -624,7 +624,7 @@ runMonoscopeAdminDaily authCtx = do
       lookupTitle pid = maybe pid.toText (.title) $ Map.lookup pid projectMap
 
   allRows <- forM allProjects \(project :: Projects.Project) -> do
-    events <- Telemetry.countRowsSince [HI.sql|otel_logs_and_spans|] False project.id since
+    events <- Telemetry.countRowsSince [HI.sql|otel_logs_and_spans|] authCtx.env.enableTimefusionReads project.id since
     metrics <- Telemetry.countRowsSince [HI.sql|otel_metrics|] authCtx.env.enableTimefusionReads project.id since
     pure (project, events, metrics, events + metrics)
   let (activeRows, inactiveRows) = partition (\(_, _, _, t) -> t > 0) allRows

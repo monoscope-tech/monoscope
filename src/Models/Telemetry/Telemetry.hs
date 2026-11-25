@@ -1001,15 +1001,16 @@ adjacentHashEvent pid hashKey step from = case step of
 -- | First/recent trace_id for a (project, method, url_path). Window kept tight (7d) since
 -- endpoint-anomaly issues are minutes-to-hours old; tie-broken by id for stable nav between
 -- "First" and "Recent" page loads. We UNION ALL two index-friendly subqueries (one per
--- url-path source) instead of OR'ing them in a single WHERE, so each side can hit its own
--- expression index and avoid a 7d seq scan on otel_logs_and_spans.
-getEndpointTraceId :: DB es => Projects.ProjectId -> Text -> Text -> Bool -> UTCTime -> Eff es (Maybe (Text, UTCTime))
-getEndpointTraceId pid method urlPath isFirst now =
-  Hasql.interpOne
+-- url-path source) instead of OR'ing them in a single WHERE, so each side filters on its own
+-- column and avoid a 7d seq scan on otel_logs_and_spans.
+getEndpointTraceId :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> Text -> Text -> Bool -> UTCTime -> Eff es (Maybe (Text, UTCTime))
+getEndpointTraceId useTf pid method urlPath isFirst now =
+  Hasql.withHasqlTimefusion useTf
+    $ Hasql.interpOne
     $ [HI.sql| SELECT context___trace_id, start_time FROM ( |]
     <> branch [HI.sql| attributes___url___path = #{urlPath} |]
     <> [HI.sql| UNION ALL |]
-    <> branch [HI.sql| attributes->'http'->>'route' = #{urlPath} |]
+    <> branch [HI.sql| attributes___http___route = #{urlPath} |]
     <> [HI.sql| ) c |]
     <> orderSql
     <> [HI.sql| LIMIT 1 |]

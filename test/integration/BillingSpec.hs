@@ -109,7 +109,7 @@ spec = around withTestResources do
     -- TF-only deployments write no Postgres telemetry: an event behind the "timefusion" pool
     -- (a schema search_path routes otel_logs_and_spans to) still verifies a project with none.
     tfOnly <- createTestProject tr "tf-only"
-    db <- dbOne @_ @Text tr [sql|CREATE SCHEMA tf_only; CREATE TABLE tf_only.otel_logs_and_spans (project_id text, context___span_id text); INSERT INTO tf_only.otel_logs_and_spans VALUES (?, 'span-1'); SELECT current_database()|] (Only tfOnly.toText)
+    db <- dbOne @_ @Text tr [sql|CREATE SCHEMA tf_only; CREATE TABLE tf_only.otel_logs_and_spans (project_id text, context___span_id text, timestamp timestamptz); INSERT INTO tf_only.otel_logs_and_spans VALUES (?, 'span-1', ?); SELECT current_database()|] (tfOnly.toText, eventTime)
     host <- fromMaybe "localhost" <$> lookupEnv "DB_HOST"
     bracket (mkHasqlPool 1 $ encodeUtf8 $ "host=" <> toText host <> " user=postgres password=postgres dbname=" <> db <> " options='-c search_path=tf_only'") OHasql.release \tfPool -> do
       let ctx = tr.trATCtx
