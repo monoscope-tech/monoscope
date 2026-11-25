@@ -14,6 +14,9 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   LANG: C.UTF-8
   # Applied to our packages only: turning optimisation flags on globally would
