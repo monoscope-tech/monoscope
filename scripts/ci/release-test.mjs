@@ -54,12 +54,16 @@ const is = (...prefix) => prefix.every((arg, i) => args[i] === arg);
 if (is('context', 'inspect', 'orbstack')) console.log(process.env.TEST_DOCKER_ENDPOINT ?? 'unix:///Users/test/.orbstack/run/docker.sock');
 else if (is('buildx', 'inspect')) {
   const name = args[2] === '--bootstrap' ? args[3] : args[2];
-  if (name !== 'monoscope-local-amd64' || process.env.TEST_BUILDER_MISSING && !fs.existsSync(process.env.CALLS + '-builder')) process.exit(1);
+  const created = fs.existsSync(process.env.CALLS + '-builder');
+  if (name !== 'monoscope-local-amd64' || (process.env.TEST_BUILDER_MISSING || fs.existsSync(process.env.CALLS + '-removed')) && !created) process.exit(1);
   console.log('Name: monoscope-local-amd64');
   console.log('Driver: docker-container');
   for (const endpoint of (process.env.TEST_BUILDER_ENDPOINT ?? 'orbstack').split(',')) console.log('Endpoint: ' + endpoint);
+  // scripts/ci/buildkitd.toml's cache-mount rule, as buildx prints it.
+  if (created ? fs.readFileSync(process.env.CALLS + '-builder', 'utf8').includes('--buildkitd-config') : !process.env.TEST_BUILDER_DEFAULT_GC) console.log(' Filters:        type==exec.cachemount');
 }
-else if (is('buildx', 'create')) fs.writeFileSync(process.env.CALLS + '-builder', args.at(-1));
+else if (is('buildx', 'create')) fs.writeFileSync(process.env.CALLS + '-builder', args.join(' '));
+else if (is('buildx', 'rm')) fs.writeFileSync(process.env.CALLS + '-removed', '');
 else if (is('manifest', 'inspect')) process.exit(args[2] in state ? 0 : 1);
 else if (is('buildx', 'imagetools', 'inspect')) {
   const ref = args[3];
@@ -220,6 +224,16 @@ test('builder setup creates only the local OrbStack node and reuses it', () => {
   assert.equal(created.length, 1);
   assert.equal(created[0].at(-1), 'orbstack');
   assert.equal(existsSync(`${env.CALLS}-ssh`), false);
+});
+
+test('builder setup recreates a builder whose GC policy evicts the compile cache', () => {
+  env.TEST_BUILDER_DEFAULT_GC = 'true';
+  const result = spawnSync('bash', [join(dirname(script), 'ci.sh'), 'builder', 'setup'], { cwd: repo, env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(calls().some(args => args[0] === 'buildx' && args[1] === 'rm'));
+  const created = calls().filter(args => args[0] === 'buildx' && args[1] === 'create');
+  assert.equal(created.length, 1);
+  assert.ok(created[0].includes('--buildkitd-config'));
 });
 
 test('legacy BUILD_HOST is rejected before any SSH or Docker operation', () => {
