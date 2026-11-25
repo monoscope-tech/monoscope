@@ -131,6 +131,7 @@ import Pkg.ImpactReview qualified as ImpactReview
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), addConvertKitUserOrganization, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Mail qualified as Mail
 import Pkg.Metrics qualified as Metrics
+import Pkg.OnboardingInstrument qualified as OnboardingInstrument
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.Queue (getOrInitKafkaProducer, kafkaSaslExtraProps)
 import Pkg.SchemaLearning (SummaryDoc (..))
@@ -391,6 +392,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
     MonoscopeAdminDaily -> runMonoscopeAdminDaily authCtx
     UsageAuditReport -> runUsageAuditReport authCtx
     AdConversion conv -> AdConversions.sendConversion authCtx conv
+    OnboardingInstrument pid rid -> OnboardingInstrument.runOnboardingInstrument pid rid
   where
     investigateIncident pid eventId rootId = do
       acquired <- withXactLease authCtx ("incident-investigation:" <> rootId.toText)

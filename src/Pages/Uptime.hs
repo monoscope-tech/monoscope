@@ -33,6 +33,9 @@ module Pages.Uptime (
   statusPagePostH,
   statusPageEditH,
   statusPageDeleteH,
+  StatusPageVisibilityHtml (..),
+  statusPageToggleVisibilityH,
+  statusPageVisibilityCard_,
   StatusPageView,
   statusPageGetH,
   statusAllGetH,
@@ -421,11 +424,14 @@ instance ToHtml UptimeList where
 
 uptimeCheckPostH :: Projects.ProjectId -> UptimeForm -> ATAuthCtx (ActionResult UptimeRejection UptimeList)
 uptimeCheckPostH pid form = act do
-  _ <- requireEdit pid
+  (_, project) <- requireEdit pid
   case validUptime form of
     Left r -> pure $ Left r
     Right v -> do
       void $ PromCfg.insertUptime pid v
+      configs <- PromCfg.configsByProjectId pid PromCfg.CKUptime
+      let newIds = maybeToList $ (.id.unUUIDId) <$> find ((== v.url) . (.url)) configs
+      void $ Uptime.ensureDefaultStatusPage pid project.title newIds
       addSuccessToast "Uptime check added" Nothing
       addTriggerEvent "monitorSaved" AE.Null
       Right . UptimeList <$> uptimeOverview pid
@@ -1082,6 +1088,50 @@ validPage form
 
 statusPageDeleteH :: Projects.ProjectId -> Uptime.StatusPageId -> ATAuthCtx (RespHeaders (Done Redirected))
 statusPageDeleteH pid sid = requireEdit pid >> Uptime.deleteStatusPage pid sid >> done (Redirected (urls.monitors pid).statusPagesGet "Status page deleted")
+
+
+data StatusPageVisibilityHtml = StatusPageVisibilityHtml
+  { spvPid :: Projects.ProjectId
+  , spvHost :: Text
+  , spvPage :: Uptime.StatusPage
+  }
+
+
+instance ToHtml StatusPageVisibilityHtml where
+  toHtml StatusPageVisibilityHtml{..} = toHtml $ statusPageVisibilityCard_ spvPid spvHost spvPage
+  toHtmlRaw = toHtml
+
+
+statusPageToggleVisibilityH :: Projects.ProjectId -> Uptime.StatusPageId -> ATAuthCtx (RespHeaders StatusPageVisibilityHtml)
+statusPageToggleVisibilityH pid sid = do
+  _ <- requireEdit pid
+  host <- (.config.hostUrl) <$> ask @AuthContext
+  page <- Uptime.toggleStatusPageVisibility pid sid >>= maybe (throwError Servant.err404) pure
+  addRespHeaders $ StatusPageVisibilityHtml pid host page
+
+
+-- | Reusable status page summary row with 1-click Internal <-> Public visibility toggle.
+statusPageVisibilityCard_ :: Projects.ProjectId -> Text -> Uptime.StatusPage -> Html ()
+statusPageVisibilityCard_ pid host page =
+  div_ [class_ "rounded-lg border border-strokeWeak bg-bgBase px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2.5"] do
+    div_ [class_ "min-w-0 flex-1 space-y-0.5"] do
+      div_ [class_ "flex flex-wrap items-center gap-2"] do
+        faSprite_ (bool "lock" "globe" (page.visibility == Uptime.VPublic)) "regular" "size-3.5 text-iconNeutral shrink-0"
+        a_ [href_ ((urls.monitors pid).statusPageGet page.id), target_ "_blank", class_ "text-xs font-medium text-textStrong hover:text-textBrand truncate"]
+          $ toHtml page.title
+        tonePill_ (bool NeutralBadge SuccessBadge (page.visibility == Uptime.VPublic)) (bool "Internal only" "Public" (page.visibility == Uptime.VPublic))
+      when (page.visibility == Uptime.VPublic)
+        $ a_ [href_ (hostPath host ("/status/" <> page.slug)), target_ "_blank", rel_ "noopener noreferrer", class_ "block truncate font-mono text-[11px] text-textBrand hover:underline"]
+        $ toHtml
+        $ hostPath host ("/status/" <> page.slug)
+    button_
+      [ type_ "button"
+      , hxPost_ ((urls.monitors pid).statusPageToggleVisibility page.id)
+      , hxSwap_ "outerHTML"
+      , term "hx-target" "closest div"
+      , class_ "btn btn-xs rounded-md border border-strokeWeak bg-bgRaised text-textStrong hover:bg-fillWeak shrink-0 cursor-pointer active:scale-[0.96] transition-transform"
+      ]
+      $ bool "Make public" "Make internal" (page.visibility == Uptime.VPublic)
 
 
 -- | What a status page URL shows: nothing, the board to anyone, or the board with a member's edit form.

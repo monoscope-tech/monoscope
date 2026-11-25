@@ -71,7 +71,7 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     -- The built-in board shows every check and cron monitor, whatever the pages pick.
     renderT <$> call tr (Uptime.statusAllGetH pid) >>= (`shouldContainAll` ["Project status", "Checkout API", "Nightly billing"])
     pages <- runQueryEffect tr $ UptimeM.statusPagesByProject pid
-    map (.slug) pages `shouldBe` ["acme", "acme-ops"]
+    map (.slug) pages `shouldBe` ["status", "acme", "acme-ops"]
     -- Editing keeps the page's URL unique, and changes what it shows.
     let acme = find ((== "acme") . (.slug)) pages
     acmeId <- maybe (fail "no acme page") (pure . (.id)) acme

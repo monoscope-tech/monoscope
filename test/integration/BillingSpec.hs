@@ -155,6 +155,36 @@ spec = around withTestResources do
     (.paymentPlan) <$> projectOf tr pid `shouldReturn` "Free"
     lookupResponseHeader @"Location" landing `shouldSatisfy` \case Header l -> ("/p/" <> pid.toText <> "/dashboards/") `T.isPrefixOf` l; _ -> False
 
+  it "redesigned quick-start onboarding saves name/region, creates verified uptime checks, and queues durable repo instrumentation" \tr0 -> do
+    (tr, pid) <- onboarded tr0
+    let step m = call tr (Onboarding.onboardingGetH pid m) <&> \(Onboarding.OnboardingGet (PageCtx _ d)) -> d
+    -- Default landing is QuickStart
+    step Nothing >>= \case
+      Onboarding.QuickStartStep{} -> pass
+      other -> expectationFailure $ "expected QuickStartStep, got " <> show other
+    -- Submitting QuickStart saves project name + region and routes to MonitorUrl
+    (qsHeaders, _) <- testServant tr $ Onboarding.onboardingQuickStartPostH pid Onboarding.QuickStartForm{projectName = "Acme Cloud", location = "eu", next = "url"}
+    lookupResponseHeader @"HX-Redirect" qsHeaders `shouldBe` Header ("/p/" <> pid.toText <> "/onboarding?step=MonitorUrl")
+    -- Creating uptime checks records an initial probe result and auto-creates an Internal default status page
+    created <- call tr $ Onboarding.onboardingCreateUptimesPostH pid Onboarding.CreateUptimesForm{selected = ["https://api.acme.com/health||Acme Health"]}
+    length created.createdChecks `shouldBe` 1
+    created.createdStatusPage `shouldSatisfy` isJust
+    project <- projectOf tr pid
+    project.title `shouldBe` "Acme Cloud"
+    project.paymentPlan `shouldBe` "ONBOARDING"
+    -- Finishing Alerts routes an ONBOARDING project to the plan picker (never auto-Free)
+    (finishHeaders, _) <- testServant tr $ Onboarding.onboardingFinishPostH pid
+    lookupResponseHeader @"HX-Redirect" finishHeaders `shouldBe` Header ("/p/" <> pid.toText <> "/onboarding?step=Pricing")
+    -- Starting durable auto-instrumentation creates a persisted run visible via status endpoint
+    started <- call tr $ Onboarding.onboardingStartInstrumentPostH pid Onboarding.StartInstrumentForm{repoFullName = "acme/api", branch = Just "main", targetKind = Just "backend"}
+    started.statusRun `shouldSatisfy` isJust
+    fetched <- call tr $ Onboarding.onboardingInstrumentStatusGetH pid Nothing
+    fetched.statusRun `shouldSatisfy` isJust
+    -- Instrument hub exposes active API key for editors
+    step (Just Onboarding.Instrument) >>= \case
+      Onboarding.InstrumentHubStep{apiKey = k} -> k `shouldNotBe` "<API_KEY>"
+      other -> expectationFailure $ "expected InstrumentHubStep, got " <> show other
+
   it "project settings: defaults, alert toggles, members, storage, super-admin notice and an unbilled deletion" \tr0 -> do
     (tr, pid) <- onboarded tr0
     let settings = do
