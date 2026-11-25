@@ -459,7 +459,9 @@ threadPageGetH pid convId docM runM hxTarget = do
     fixEvidence <- case run.source of
       Issues.FixRun identifier | run.status == Issues.RunSucceeded && viewerPermission >= ProjectMembers.PAdmin -> Just <$> CodeContext.issueFixEvidenceH pid identifier
       (Issues.ScheduledRun; Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}; Issues.FixRun{}) -> pure Nothing
-    pure $ runView_ (isNothing conversationM) run evidence requestedBy runArtifacts viewerPermission operations fixEvidence
+    -- Only a member's decision counts ('Investigations.decideOperationReview'), so a super admin sees no Approve/Deny.
+    reviewer <- ProjectMembers.getUserPermission pid sess.user.id
+    pure $ runView_ (isNothing conversationM) run evidence requestedBy runArtifacts viewerPermission reviewer operations fixEvidence
   let activeId = (.conversationId) <$> conversationM
       messages = bool [] selectedMessages (isJust conversationM)
       -- 'latest-result' mirrors the newest run, already shown as the latest result and under Runs.
@@ -493,8 +495,8 @@ threadPageGetH pid convId docM runM hxTarget = do
     cardDisclosure_ :: [Attribute] -> Text -> Html () -> Html () -> Html ()
     cardDisclosure_ attrs bodyCls summary = disclosure_ (class_ "rounded-xl border border-strokeWeak bg-bgRaised" : attrs) "gap-2 rounded-xl px-4 py-3 text-sm font-medium text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:-outline-offset-2" summary . div_ [class_ $ "border-t border-strokeWeak p-4" <> bodyCls]
 
-    runView_ :: Bool -> Issues.RoutineRun -> Issues.RoutineRunEvidence -> Maybe Projects.User -> [Issues.AIArtifact] -> ProjectMembers.Permissions -> [Investigations.OperationEntry AI.OperationPolicy] -> Maybe (Html ()) -> Html ()
-    runView_ retained run evidence requestedBy artifacts viewerPermission operations fixEvidence =
+    runView_ :: Bool -> Issues.RoutineRun -> Issues.RoutineRunEvidence -> Maybe Projects.User -> [Issues.AIArtifact] -> ProjectMembers.Permissions -> Maybe ProjectMembers.Permissions -> [Investigations.OperationEntry AI.OperationPolicy] -> Maybe (Html ()) -> Html ()
+    runView_ retained run evidence requestedBy artifacts viewerPermission reviewer operations fixEvidence =
       section_
         ([id_ "routine-run", class_ "space-y-5"] <> bool [] (morphPollSelfAttrs_ "routine-run" (urls.aiRoutineRunGet pid run.id (Just convId)) "every 5s" <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) (run.status == Issues.RunRunning))
         do
@@ -570,7 +572,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                     p_ [class_ "text-xs text-textWeak"] do
                       "Review deadline: "
                       localTimeFmt_ "MMM d, HH:mm" request.expiresAt
-                    when (viewerPermission >= max required (Catalog.approverPermission request.approver))
+                    when (any (>= max required (Catalog.approverPermission request.approver)) reviewer)
                       $ form_
                         [ hxPost_ $ urls.aiOperationReviewPost pid operation.id
                         , hxTarget_ "closest #routine-run"
