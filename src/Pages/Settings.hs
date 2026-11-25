@@ -116,7 +116,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), ResourceRow (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, dialogTrigger_, disclosure_, emptyState_, formActionsModal_, formField_, formSelectFieldWith_, grantsTrial, headerRow_, iconBadge_, keyboardActivateAttr_, localTimeFmt_, modalWith_, nativeDialog_, options_, paymentPlanPicker, resourceList_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), ResourceRow (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, dialogTrigger_, disclosure_, emptyState_, formField_, formSelectFieldWith_, grantsTrial, headerRow_, keyboardActivateAttr_, localTimeFmt_, modalWith_, nativeDialog_, options_, paymentPlanPicker, resourceList_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
@@ -392,15 +392,15 @@ apiKeysPage settings = do
   settingsSection_ do
     headerRow_ [] do
       settingsH2_ "API Keys"
-      when canEdit $ modalWith_ "apikey-modal" def{boxClass = "w-full max-w-md p-6"} (Just $ span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "New Key") do
-        div_ [class_ "flex flex-col gap-3"] do
-          iconBadge_ IconLg BrandBadge "key"
-          div_ [class_ "flex flex-col gap-1"] do
-            h3_ [class_ "text-xl font-semibold text-textStrong"] "Generate an API key"
-            p_ [class_ "text-sm text-textWeak text-pretty"] "Keys authenticate the telemetry your services send to this project."
-        form_ [hxPost_ $ urls.apiPost pid, class_ "flex flex-col gap-6 pt-4", hxTarget_ settingsContentTarget] do
-          formField_ FieldMd def{placeholder = "Production collector", hint = Just "Name it after the service or environment that uses it.", inputId = Just "api-key-title", extraAttrs = [maxlength_ "100", autocomplete_ "off"]} "Key title" "title" True Nothing
-          formActionsModal_ "apikey-modal" $ button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Create key"
+      when canEdit do
+        dialogTrigger_ "apikey-modal" [class_ "btn btn-sm btn-primary gap-1.5"] $ faSprite_ "plus" "regular" "w-3 h-3" >> "New Key"
+        nativeDialog_ "apikey-modal" "Generate an API key" "w-full max-w-md p-6" do
+          p_ [class_ "mt-1 text-sm text-textWeak text-pretty"] "Keys authenticate the telemetry your services send to this project."
+          form_ [hxPost_ $ urls.apiPost pid, class_ "flex flex-col gap-6 pt-4", hxTarget_ settingsContentTarget] do
+            formField_ FieldMd def{placeholder = "Production collector", hint = Just "Name it after the service or environment that uses it.", inputId = Just "api-key-title", extraAttrs = [maxlength_ "100", autocomplete_ "off"]} "Key title" "title" True Nothing
+            div_ [class_ "mt-3 flex justify-end gap-2"] do
+              button_ [type_ "button", class_ "btn", onclick_ "this.closest('dialog').close()"] "Cancel"
+              button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Create key"
     unless canEdit $ p_ [class_ "text-sm text-textWeak mb-4"] "A project editor can create, reveal, and manage API keys."
     apiMainContent pid canEdit settings.keys Nothing
   where

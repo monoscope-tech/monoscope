@@ -24,7 +24,7 @@ import Hasql.Interpolate qualified as HI
 import Lucid
 import Models.Ids qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Pages.Components (BadgeColor (..), metaChip_, tonePill_)
+import Pages.Components (BadgeColor (..), disclosure_, metaChip_, tonePill_)
 import Pkg.DeriveUtils (AesonText)
 import Pkg.GenAI qualified as GenAI
 import Pkg.Parser.Eval (jsonAsText)
@@ -93,9 +93,7 @@ prettyJson v = maybe (jsonAsText v) (decodeUtf8 . AEP.encodePretty) $ case v of
 
 message_ :: Projects.ProjectId -> Map Text Call -> Maybe Call -> AE.Value -> Html ()
 message_ pid tools stepM m = case role of
-  "system" -> details_ [class_ "rounded-xl border border-strokeWeak bg-fillWeaker px-3 py-2 text-sm"] do
-    summary_ [class_ "flex cursor-pointer items-center gap-2 text-xs font-medium text-textWeak"] $ roleAvatar_ role >> "System instructions"
-    div_ [class_ "mt-2 max-h-96 overflow-auto"] parts_
+  "system" -> disclosure_ [class_ "rounded-xl border border-strokeWeak bg-fillWeaker px-3 py-2 text-sm"] "text-xs font-medium text-textWeak" (roleAvatar_ role >> "System instructions") $ div_ [class_ "mt-2 max-h-96 overflow-auto"] parts_
   _ -> article_ [class_ $ "flex gap-3 rounded-xl border px-3 py-2.5 " <> case role of { "user" -> "border-strokeBrand-weak bg-fillBrand-weak"; "tool" -> "border-strokeWeak bg-fillWeaker"; _ -> "border-strokeWeak bg-bgRaised" }] do
     roleAvatar_ role
     div_ [class_ "flex min-w-0 flex-1 flex-col gap-1.5"] do
@@ -123,7 +121,7 @@ roleAvatar_ = \case
 part_ :: Map Text Call -> AE.Value -> Html ()
 part_ tools p = case (field "type", p) of
   (Just "text", _) -> textBlock_ $ maybe "" jsonAsText $ fieldV "content"
-  (Just "reasoning", _) -> details_ [class_ "text-sm"] $ summary_ [class_ "cursor-pointer text-xs text-textWeak"] "Reasoning" >> textBlock_ (maybe "" jsonAsText $ fieldV "content")
+  (Just "reasoning", _) -> disclosure_ [class_ "text-sm"] "text-xs text-textWeak" "Reasoning" $ textBlock_ (maybe "" jsonAsText $ fieldV "content")
   (Just "tool_call", _) -> div_ [class_ "flex flex-col gap-1.5 rounded-lg border border-strokeWeak bg-fillWeaker px-2.5 py-2 font-mono text-xs"] do
     div_ [class_ "flex flex-wrap items-center gap-2"] do
       span_ [class_ "grid h-5 w-5 place-items-center rounded bg-teal-400/15 text-teal-700 dark:text-teal-300"] $ faSprite_ "function" "regular" "h-3 w-3"
@@ -132,9 +130,12 @@ part_ tools p = case (field "type", p) of
         span_ [class_ "tabular-nums text-textWeak"] $ toHtml $ getDurationNSMS $ fromIntegral t.duration
         when t.failed $ tonePill_ ErrorBadge "Failed"
     whenJust (fieldV "arguments") $ pre_ [class_ "max-h-48 overflow-auto whitespace-pre-wrap break-all text-textWeak"] . toHtml . prettyJson
-  (Just "tool_call_response", _) -> details_ [class_ "rounded-lg border border-strokeWeak px-2.5 py-1.5 text-xs"] do
-    summary_ [class_ "cursor-pointer font-mono text-textWeak"] $ toHtml $ "Result" <> maybe "" ((" · " <>) . (\t -> fromMaybe t.name t.tool)) (field "id" >>= (`M.lookup` tools)) <> " · " <> countNoun (T.length response) "char"
-    pre_ [class_ "mt-1 max-h-96 overflow-auto whitespace-pre-wrap break-all font-mono text-textWeak"] $ toHtml $ maybe "" prettyJson $ fieldV "response"
+  (Just "tool_call_response", _) ->
+    disclosure_ [class_ "rounded-lg border border-strokeWeak px-2.5 py-1.5 text-xs"] "font-mono text-textWeak" (toHtml $ "Result" <> maybe "" ((" · " <>) . (\t -> fromMaybe t.name t.tool)) (field "id" >>= (`M.lookup` tools)) <> " · " <> countNoun (T.length response) "char")
+      $ pre_ [class_ "mt-1 max-h-96 overflow-auto whitespace-pre-wrap break-all font-mono text-textWeak"]
+      $ toHtml
+      $ maybe "" prettyJson
+      $ fieldV "response"
   (_, AE.String t) -> textBlock_ t
   _ -> pre_ [class_ "overflow-auto whitespace-pre-wrap break-all font-mono text-xs text-textWeak"] $ toHtml $ jsonAsText p
   where

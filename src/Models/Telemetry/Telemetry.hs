@@ -2479,6 +2479,10 @@ traceIdOf r = nonEmptyT (r.context >>= (.trace_id))
 -- | 'Pkg.Parser.Expr.isErrorSql' over a decoded row. Any record the UI flags as an error
 -- also feeds the Issues pipeline — frontend @console.error@ logs and server spans marked
 -- ERROR without a recorded exception event.
+--
+-- >>> let base = def :: OtelLogsAndSpans
+-- >>> map isErrorRecord [base, base{level = Just "ERROR"}, base{level = Just "fatal"}, base{status_code = Just "ERROR"}, base{severity = Just def{severity_number = 17}}]
+-- [False,True,True,True,True]
 isErrorRecord :: OtelLogsAndSpans -> Bool
 isErrorRecord s =
   any ((`elem` ["error", "fatal"]) . T.toLower) s.level

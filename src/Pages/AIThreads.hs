@@ -560,8 +560,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                 $ p_ [class_ "text-sm text-textWeak"] "No result was retained. This action was not repeated. It may still complete."
               let required = MCP.minimumPermission operation.proposal.policy.capability
               if viewerPermission >= required
-                then details_ [class_ "text-sm text-textWeak"] do
-                  summary_ [class_ "cursor-pointer font-medium text-textStrong"] "Proposal and outcome"
+                then disclosure_ [class_ "text-sm text-textWeak"] "font-medium text-textStrong" "Proposal and outcome" do
                   pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.proposal
                   pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.outcome
                   when (operation.review /= Investigations.NoReview) $ pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.review
@@ -806,9 +805,10 @@ threadPageGetH pid convId docM runM hxTarget = do
             do
               h2_ [class_ "text-base font-semibold text-textStrong text-balance break-words"] $ toHtml doc.title
               p_ [class_ "mt-1 text-xs text-textWeak"] $ "Updated " >> localTimeFmt_ "MMM d, HH:mm" doc.updatedAt
-              when (length openToc > 1) $ details_ [class_ "mt-4 text-sm text-textWeak"] do
-                summary_ [class_ "cursor-pointer"] "On this page"
-                ul_ [class_ "mt-2 space-y-1"] $ for_ openToc \(anchor, heading) ->
+              when (length openToc > 1)
+                $ disclosure_ [class_ "mt-4 text-sm text-textWeak"] "" "On this page"
+                $ ul_ [class_ "mt-2 space-y-1"]
+                $ for_ openToc \(anchor, heading) ->
                   li_ $ a_ [href_ $ "#" <> anchor, class_ "block truncate text-textBrand hover:underline"] $ toHtml heading
               div_ [class_ "prose prose-sm mt-6 max-w-none break-words overflow-x-auto [&_h2]:scroll-mt-4"] openBody
 

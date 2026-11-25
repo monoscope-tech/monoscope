@@ -367,7 +367,6 @@ export class LogList extends LitElement {
   private updateBatchTimer: NodeJS.Timeout | null = null;
   private pendingUpdates: Set<string> = new Set();
   private handleMouseUp: (() => void) | null = null;
-  private sessionPlayerWrapper: HTMLElement | null = null;
   private containerRef = createRef<HTMLDivElement>();
   private nextFetchUrl = '';
   private fetchGeneration = 0;
@@ -4024,12 +4023,6 @@ export class LogList extends LitElement {
         e.stopPropagation();
         e.preventDefault();
         window.dispatchEvent(new CustomEvent('loadSessionReplay', { detail: { sessionId }, bubbles: true, cancelable: false }));
-        let wrapper = this.sessionPlayerWrapper;
-        if (!wrapper) {
-          wrapper = document.querySelector('#sessionPlayerWrapper');
-          this.sessionPlayerWrapper = wrapper;
-        }
-        if (wrapper) wrapper.classList.remove('hidden');
       }}
     >
       ${faSprite('play', 'solid', 'w-3 h-3')}
