@@ -11,6 +11,8 @@ import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Lucid
+import Lucid.Aria qualified as Aria
+import Lucid.Hyperscript (__)
 import Models.Apis.ShareEvents qualified as ShareEvents
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -24,7 +26,7 @@ import Relude
 import Servant (err404)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, useTfReads)
-import Utils (copyToClipboardAttr_)
+import Utils (copyToClipboardAttr_, faSprite_)
 
 
 -- | Result of resolving a share id: missing entirely, expired, or live with hours-remaining + body.
