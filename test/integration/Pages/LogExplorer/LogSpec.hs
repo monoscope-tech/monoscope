@@ -556,7 +556,7 @@ spec = do
       apiKey <- createTestAPIKey tr pid "aggregates-key"
       ingestTrace tr apiKey "GET /api/pattern-expand" frozenTime
       pv <- call tr $ Log.logPatternsH pid Nothing (stamp (-60)) Nothing (stamp 60) (Just "spans") Nothing Nothing
-      case pv of { Log.PatternsView total _ _ _ -> total `shouldSatisfy` (>= 0) }
+      case pv of Log.PatternsView total _ _ _ -> total `shouldSatisfy` (>= 0)
       (case AE.toJSON pv of AE.Object o -> filter (`AEKM.member` o) ["totalPatterns", "colIdxMap"]; _ -> []) `shouldBe` ["totalPatterns", "colIdxMap"]
       -- A live poll (cursor set) merges into a list that already has its summary header.
       sessions <- forM [Nothing, stamp (-60)] \cur -> call tr (Log.logSessionsH pid Nothing (stamp (-60)) Nothing (stamp 60) Nothing Nothing cur) <&> \(Log.SessionsView total _ summ) -> (total >= 0, isJust summ)
@@ -577,9 +577,10 @@ spec = do
         $ runQueryEffect tr
         $ Hasql.withHasqlTimefusion True
         $ Hasql.interpExecute_ [HI.sql| UPDATE otel_logs_and_spans SET hashes = #{patTags} WHERE project_id = #{pid.toText} AND name = #{spanName} |]
-      let expand key = call tr (Log.apiLogExpandH pid (Just "pattern") (Just key) Nothing Nothing (stamp (-60)) Nothing (stamp 60)) <&> \case
-            AE.Object o | Just (AE.Number n) <- AEKM.lookup "queryResultCount" o -> round n
-            _ -> -1 :: Int
+      let expand key =
+            call tr (Log.apiLogExpandH pid (Just "pattern") (Just key) Nothing Nothing (stamp (-60)) Nothing (stamp 60)) <&> \case
+              AE.Object o | Just (AE.Number n) <- AEKM.lookup "queryResultCount" o -> round n
+              _ -> -1 :: Int
       eventually (expand "abcd1234") (== 1) `shouldReturn` 1
       mapM expand ["00000000", spanName] `shouldReturn` [0, 0]
 
@@ -626,7 +627,7 @@ spec = do
       updated `shouldBe` [5, 2]
       (all isJust <$> mapM (\p -> runHasqlEffect tr (SC.getSummary Nothing p)) (projs <> staleP)) `shouldReturn` True
 
-    it "chart cache: hits and partial merges equal fresh reads; streams populate it and replay it without telemetry" \tr -> do
+    it "chart cache: hits and partial merges equal fresh reads; streams populate it and replay it without telemetry" \(withPgReads -> tr) -> do
       key <- createTestAPIKey tr testPid "chart-cache-key"
       let countQ = "summarize count(*) by bin_auto(timestamp)"
           fresh q from to = clearCache tr >> queryMetrics tr q from to
@@ -688,7 +689,7 @@ spec = do
     -- Chart SQL failures were swallowed into empty datasets, the same "no data" overlay as an
     -- empty range; and a failed partial-hit delta still advanced `cached_to`, leaving a permanent
     -- hole between the old and new watermark.
-    it "chart cache failures: errors surface, the watermark holds, nothing is cached; empty successes are cached and advance" \tr -> do
+    it "chart cache failures: errors surface, the watermark holds, nothing is cached; empty successes are cached and advance" \(withPgReads -> tr) -> do
       let countQ = "summarize count(*) by bin_auto(timestamp)"
           times@(_, t1, t2) = (addUTCTime (-1800) baseTime, baseTime, addUTCTime 1800 baseTime)
           unscoped = runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just countQ) Nothing Nothing (Just (timeAt (-1800))) (Just (timeAt 1800)) Nothing Nothing []
@@ -711,7 +712,7 @@ spec = do
       dbExec tr [sql|UPDATE query_cache SET cached_data = jsonb_set(cached_data, '{error}', '"old failure"') WHERE project_id = ?|] (Only testPid)
       (outcome <$> hourly) `shouldReturn` (Nothing, V.empty)
 
-    it "chart cache scope and streaming: compiler changes and service scope change keys, shared cache expires, streams survive closed connections and slow queries" \tr -> do
+    it "chart cache scope and streaming: compiler changes and service scope change keys, shared cache expires, streams survive closed connections and slow queries" \(withPgReads -> tr) -> do
       -- Results cached under the old jsonpath predicate must not answer the new compiler's query.
       forM_ ["attributes.url.full matches regex \"^/cache-invalidated$\"", "spans | where attributes.url.full matches regex \"^/cache-invalidated$\"", "attributes.events[*].timestamp > ago(1h)"] \predicate -> do
         clearAllTestData tr
@@ -929,7 +930,8 @@ otelRow pid name attrs res =
 -- the log-level columns the top-level walk reads.
 richObs :: Projects.ProjectId -> Text -> Bool -> SchemaLearning.ObservationInput
 richObs p method logCols =
-  ProcessMessage.extractObservation ProcessMessage.emptyPathClassifier
+  ProcessMessage.extractObservation
+    ProcessMessage.emptyPathClassifier
     (otelRow p (method <> " /orders") (Map.fromList attrs) (Map.singleton "service.name" (AE.String "checkout-svc")) :: Telemetry.OtelLogsAndSpans)
       { Telemetry.kind = Just "server"
       , Telemetry.status_code = Just "200"

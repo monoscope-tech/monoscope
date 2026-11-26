@@ -161,7 +161,8 @@ spec = around withTestResources $ describe "Error patterns" do
     sampleEmail "anon-hash" `shouldReturn` Just "a@b.c"
 
     -- The hourly job schedules baselines and spike detection for projects with fresh telemetry.
-    bg tr $ BackgroundJobs.runHourlyJob frozenTime 0
+    -- Postgres: TimeFusion's cross-project scan does not see rows still in its write buffer.
+    bg (withPgReads tr) $ BackgroundJobs.runHourlyJob frozenTime 0
     let errorJob = \case BackgroundJobs.ErrorBaselineCalculation p -> [("baseline" :: Text, p)]; BackgroundJobs.ErrorSpikeDetection p -> [("spike", p)]; _ -> []
     sort . filter ((== testPid) . snd) . concatMap (errorJob . snd) . V.toList <$> getPendingBackgroundJobs tr.trATCtx `shouldReturn` [("baseline", testPid), ("spike", testPid)]
     void $ runBackgroundJobsWhere frozenTime tr.trATCtx (not . null . errorJob)

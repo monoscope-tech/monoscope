@@ -18,8 +18,7 @@ module Pkg.TestUtils (
   eventually,
   withSetup,
   withTestResources,
-  withTfChartResources,
-  withTfChartPool,
+  withPgReads,
   fromRightShow,
   TestResources (..),
   testSessionHeader,
@@ -904,21 +903,6 @@ withSharedLogger :: (Log.Logger -> m a) -> m a
 withSharedLogger act = act sharedTestLogger
 
 
--- | 'withTestResources' with the postgres-simple TimeFusion pool (what charts read) on
--- the real TimeFusion when TIMEFUSION_PG_TEST_URL is set; 'withTestResources' wires TF
--- only through Hasql.
-withTfChartResources :: (TestResources -> IO ()) -> IO ()
-withTfChartResources k = withTestResources (`withTfChartPool` k)
-
-
--- | The chart TimeFusion pool of 'withTfChartResources', for an example that already holds resources.
-withTfChartPool :: TestResources -> (TestResources -> IO a) -> IO a
-withTfChartPool tr k =
-  lookupEnv "TIMEFUSION_PG_TEST_URL" >>= \case
-    Nothing -> k tr
-    Just url -> bracket (newPool $ setNumStripes (Just 1) $ defaultPoolConfig (connectPostgreSQL $ encodeUtf8 $ toText url) close 60 2) destroyAllResources \pool -> k tr{trATCtx = tr.trATCtx{timefusionPgPool = pool}}
-
-
 -- Compose withSetup with additional IO actions
 withTestResources :: (TestResources -> IO ()) -> IO ()
 withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
@@ -941,6 +925,13 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   hasqlMain <- mkHasqlPool 2 cstr
   hasqlJobs <- mkHasqlPool 2 cstr
   hasqlTf <- mkHasqlPool 2 tfCstr
+  -- What charts and user SQL read through postgres-simple: the same TimeFusion as 'hasqlTf'.
+  tfChartPool <- maybe (pure pool) (\url -> newPool $ setNumStripes (Just 1) $ defaultPoolConfig (connectPostgreSQL $ encodeUtf8 $ toText url) close 60 2) tfPgUrl
+  -- Each example gets a fresh Postgres, but TimeFusion is shared: clear what the fixed project ids
+  -- hold from earlier examples and runs. One id per statement; TF deletes nothing for an IN list.
+  when (isJust tfPgUrl) $ withResource tfChartPool \conn ->
+    for_ (liftA2 (,) ["otel_logs_and_spans" :: Text, "otel_metrics"] fixedProjectIds) \(tbl, pid) ->
+      PGS.execute_ conn (fromString $ toString $ "DELETE FROM " <> tbl <> " WHERE project_id = '" <> pid <> "'")
   sessAndHeader <- testSessionHeader pool hasqlMain
 
   -- Load .env file for tests (to get OPENAI_API_KEY and other non-database configs)
@@ -1003,7 +994,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
           probeManager
           pool
           pool
-          pool
+          tfChartPool
           hasqlMain
           hasqlJobs
           hasqlTf
@@ -1082,7 +1073,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
       , trTestClock = testClock
       }
     -- finally over mapM_ releases every pool even if an earlier release throws
-    `finally` mapM_ OHasql.release ([hasqlMain, hasqlJobs, hasqlTf] :: [OHasql.TracedPool])
+    `finally` (mapM_ OHasql.release ([hasqlMain, hasqlJobs, hasqlTf] :: [OHasql.TracedPool]) `finally` when (isJust tfPgUrl) (destroyAllResources tfChartPool))
 
 
 toServantResponse :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
@@ -1868,6 +1859,18 @@ mockResponse body =
 
 testPid :: Projects.ProjectId
 testPid = UUIDId UUID.nil
+
+
+-- | Reads (charts included) from Postgres, for a spec that seeds or mutates its telemetry with raw SQL.
+withPgReads :: TestResources -> TestResources
+withPgReads tr = tr{trATCtx = tr.trATCtx{env = pg, config = pg, timefusionPgPool = tr.trATCtx.pool}}
+  where
+    pg = tr.trATCtx.env{enableTimefusionReads = False}
+
+
+-- | Project ids specs use verbatim rather than minting one; TimeFusion is cleared of them per example.
+fixedProjectIds :: [Text]
+fixedProjectIds = ["00000000-0000-0000-0000-0000000000" <> n | n <- ["00", "01", "02", "2a", "d1"]]
 
 
 -- | Test HTTP interpreter that routes CLI requests to server handlers.

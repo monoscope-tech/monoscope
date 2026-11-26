@@ -156,8 +156,8 @@ tabs:
               ROUND((approx_percentile(0.75, percentile_agg(duration)) / 1000000.0)::numeric, 1)::text AS p75_ms,
               replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(page, '"', ''), '\', ''),
                 '.', '[.]'), '+', '[+]'), '*', '[*]'), '(', '[(]'), ')', '[)]'), '$', '[$]'), '|', '[|]'), '{', '[{]'), ':id', '[^/]+') AS rx
-            FROM pages GROUP BY page ORDER BY COUNT(*) DESC LIMIT 20
-          ) AS top ORDER BY n DESC
+            FROM pages GROUP BY page ORDER BY COUNT(*) DESC, page LIMIT 20
+          ) AS top ORDER BY n DESC, page
 
       - type: heatmap
         title: Page load distribution
@@ -287,13 +287,13 @@ tabs:
             LEFT JOIN p75 AS p ON p.vital = t.vital
           )
           SELECT upper(vital) AS vital,
-            CASE WHEN total IS NULL OR (verdict IS NULL AND NOT estimable AND le IS NOT NULL) THEN '—' WHEN value IS NULL THEN '> ' || lo::text
+            CASE WHEN total IS NULL OR (verdict IS NULL AND NOT estimable AND le IS NOT NULL) THEN '—' WHEN value IS NULL THEN '> ' || regexp_replace(lo::text, '\.0$', '')
               ELSE CASE WHEN verdict IS NULL THEN '≈ ' ELSE '' END || CASE WHEN vital = 'cls' THEN ROUND(value::numeric, 3)::text ELSE ROUND(value::numeric)::text || ' ms' END END AS p75,
             CASE WHEN total IS NULL THEN 'rating;info-weak⇒No observations in this window' WHEN verdict = 'Good' THEN 'rating;success-strong⇒Good'
               WHEN verdict = 'Poor' THEN 'rating;error-strong⇒Poor' WHEN verdict = 'Needs improvement' THEN 'rating;warning-strong⇒Needs improvement'
               WHEN NOT estimable THEN 'rating;info-weak⇒Buckets too coarse to rate' WHEN value <= good THEN 'rating;success-weak⇒Likely good'
               WHEN value > poor THEN 'rating;error-weak⇒Likely poor' ELSE 'rating;warning-weak⇒Likely needs improvement' END AS rating,
-            CASE WHEN total IS NULL THEN '' ELSE COALESCE(lo, 0)::text || ' – ' || COALESCE(le::text, '∞') END AS bucket,
+            CASE WHEN total IS NULL THEN '' ELSE regexp_replace(COALESCE(lo, 0)::text, '\.0$', '') || ' – ' || COALESCE(regexp_replace(le::text, '\.0$', ''), '∞') END AS bucket,
             COALESCE(total, 0)::text AS samples,
             about
           FROM rated ORDER BY ord
@@ -378,7 +378,7 @@ tabs:
             FROM cdf WHERE total > 0 AND cum >= 0.75 * total AND cum - n < 0.75 * total
           ), shown AS (
             -- Too coarse to place against the thresholds: wider than twice the needs-improvement band, as in Core Web Vitals.
-            SELECT p.page, p.vital, p.total, CASE WHEN p.le - COALESCE(p.lo, 0) > 2 * (t.poor - t.good) THEN '—' WHEN p.le IS NULL THEN '> ' || p.lo::text
+            SELECT p.page, p.vital, p.total, CASE WHEN p.le - COALESCE(p.lo, 0) > 2 * (t.poor - t.good) THEN '—' WHEN p.le IS NULL THEN '> ' || regexp_replace(p.lo::text, '\.0$', '')
                 WHEN p.vital = 'cls' THEN ROUND(p.value::numeric, 3)::text ELSE ROUND(p.value::numeric)::text || ' ms' END AS value
             FROM p75 AS p JOIN (VALUES ('lcp', 1, 2500.0, 4000.0, 'Largest Contentful Paint: when the main content becomes visible. Good ≤ 2.5 s, poor > 4 s.'),
               ('inp', 2, 200.0, 500.0, 'Interaction to Next Paint: how quickly the page responds to clicks, taps and keys. Good ≤ 200 ms, poor > 500 ms.'),
@@ -389,7 +389,7 @@ tabs:
           )
           SELECT page, MAX(CASE WHEN vital = 'lcp' THEN value END) AS lcp, MAX(CASE WHEN vital = 'inp' THEN value END) AS inp,
             MAX(CASE WHEN vital = 'cls' THEN value END) AS cls, SUM(total)::text AS samples
-          FROM shown GROUP BY page ORDER BY SUM(total) DESC LIMIT 50
+          FROM shown GROUP BY page ORDER BY SUM(total) DESC, page LIMIT 50
 
   # Fetch and XHR calls the browser made, timed from the user's side ({{client_request_filter}}).
   - name: Network
