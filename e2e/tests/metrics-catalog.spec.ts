@@ -142,11 +142,11 @@ test.describe('metrics catalog', () => {
 
   test('a new search cancels an older scroll request', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 720 });
-    await page.goto(url + '?q=uxcatalog');
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     await page.route('**/metrics?**append=true', async route => { await gate; await route.continue().catch(() => {}); });
     const pending = page.waitForRequest(r => r.url().includes('append=true'));
+    await page.goto(url + '?q=uxcatalog');
     await page.locator('#main-content').evaluate(el => { el.scrollTop = 420; });
     await pending;
     await page.locator('#search-input').fill('uxcatalogruntime.metric.01');
