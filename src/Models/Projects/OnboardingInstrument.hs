@@ -92,6 +92,7 @@ data InstrumentRun = InstrumentRun
   , repoFullName :: Text
   , branch :: Text
   , targetKind :: Text
+  , rootPath :: Text
   , status :: RunStatus
   , detectedStack :: Text
   , phases :: Aeson [PhaseItem]
@@ -144,8 +145,8 @@ startRefusal paid (active, prs, today)
 
 -- | Starts a run unless 'startRefusal' says otherwise. A run idle for 30 minutes counts as
 -- dead so a crashed worker can't block the project; the guarded insert closes double-submits.
-createRun :: DB es => Bool -> Projects.ProjectId -> Maybe RepositoryId -> Text -> Text -> Text -> Eff es (Either StartRefusal InstrumentRun)
-createRun paid pid repoId repoFullName branch targetKind = do
+createRun :: DB es => Bool -> Projects.ProjectId -> Maybe RepositoryId -> Text -> Text -> Text -> Text -> Eff es (Either StartRefusal InstrumentRun)
+createRun paid pid repoId repoFullName branch targetKind rootPath = do
   counts <-
     HI.getOneRow
       <$> Hasql.interp
@@ -159,11 +160,11 @@ createRun paid pid repoId repoFullName branch targetKind = do
       maybeToRight RunInProgress
         <$> Hasql.interp
           [HI.sql| INSERT INTO projects.onboarding_instrument_runs
-                     (project_id, repository_id, repo_full_name, branch, target_kind, status, phases)
-                   SELECT #{pid}, #{repoId}, #{repoFullName}, #{branch}, #{targetKind}, #{RunQueued}, #{HI.AsJsonb (initialPhases repoFullName)}
+                     (project_id, repository_id, repo_full_name, branch, target_kind, root_path, status, phases)
+                   SELECT #{pid}, #{repoId}, #{repoFullName}, #{branch}, #{targetKind}, #{rootPath}, #{RunQueued}, #{HI.AsJsonb (initialPhases repoFullName)}
                    WHERE NOT EXISTS (SELECT 1 FROM projects.onboarding_instrument_runs
                                      WHERE project_id = #{pid} AND status NOT IN (#{RunCompleted}, #{RunFailed}) AND updated_at > NOW() - INTERVAL '30 minutes')
-                   RETURNING id, project_id, repository_id, repo_full_name, branch, target_kind, status,
+                   RETURNING id, project_id, repository_id, repo_full_name, branch, target_kind, root_path, status,
                              detected_stack, phases, diff_preview, suggested_urls, pr_url, pr_number,
                              verified_event_at, error_summary, error_log, created_at, updated_at |]
 
@@ -171,7 +172,7 @@ createRun paid pid repoId repoFullName branch targetKind = do
 getRun :: DB es => Projects.ProjectId -> RunId -> Eff es (Maybe InstrumentRun)
 getRun pid rid =
   Hasql.interp
-    [HI.sql| SELECT id, project_id, repository_id, repo_full_name, branch, target_kind, status,
+    [HI.sql| SELECT id, project_id, repository_id, repo_full_name, branch, target_kind, root_path, status,
                     detected_stack, phases, diff_preview, suggested_urls, pr_url, pr_number,
                     verified_event_at, error_summary, error_log, created_at, updated_at
              FROM projects.onboarding_instrument_runs
@@ -181,7 +182,7 @@ getRun pid rid =
 latestRunForProject :: DB es => Projects.ProjectId -> Eff es (Maybe InstrumentRun)
 latestRunForProject pid =
   Hasql.interp
-    [HI.sql| SELECT id, project_id, repository_id, repo_full_name, branch, target_kind, status,
+    [HI.sql| SELECT id, project_id, repository_id, repo_full_name, branch, target_kind, root_path, status,
                     detected_stack, phases, diff_preview, suggested_urls, pr_url, pr_number,
                     verified_event_at, error_summary, error_log, created_at, updated_at
              FROM projects.onboarding_instrument_runs
