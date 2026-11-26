@@ -2060,7 +2060,11 @@ renderTableWithDataAndParams widget headers dataRows params = do
       cellText col v = fromMaybe (formatColumnValue col v) (guard (not $ isNumericCol col) *> shortId v)
       texts = sortOn (Down . widestOf) $ filter (not . alignsRight) visible
       flexFields = map (.field) $ case filter ((> 40) . widestOf) texts of [] -> take 1 texts; long -> long
-      colWidth col = col.width <|> (("calc(" <> show (widestOf col) <> "ch + " <> bool "2rem" "7rem" (Just col.field == barField) <> ")") <$ guard (col.field `notElem` flexFields))
+      chPad n v = "calc(" <> show n <> "ch + var(" <> v <> "))"
+      colWidths = [(c, c.width <|> (chPad (widestOf c) (bool "--col-pad" "--bar-pad" (Just c.field == barField)) <$ guard (c.field `notElem` flexFields))) | c <- visible]
+      -- Narrower than every fixed column plus ~12ch per text column, the table scrolls rather
+      -- than crush its labels to a letter per line.
+      minWidth = "--table-min: calc(" <> T.intercalate " + " [fromMaybe (chPad (min 12 $ widestOf c) "--col-pad") w | (c, w) <- colWidths] <> ")"
       colIdx col = fromMaybe 0 $ findIndex ((== col.field) . (.field)) columns
       -- The next standard window wider than the one the table read, offered as one click.
       widen = maybe ESNone (\(k, (_, label)) -> ESCustom $ button_ [type_ "button", class_ "btn btn-sm btn-ghost w-max mx-auto text-textBrand", term "_" [text|on click call updateTimePicker({since: '${k}'}) then call dispatchQueryUpdate()|]] $ toHtml ("Show " <> T.toLower label)) case TimePicker.parseTimeRange (posixSecondsToUTCTime 0) (TimePicker.TimePicker (param "since") (param "from") (param "to")) of
@@ -2068,8 +2072,8 @@ renderTableWithDataAndParams widget headers dataRows params = do
         _ -> Nothing
       sections = bool [(Nothing, toList dataRows)] [(Just (getRowValue 0 (head g)), toList g) | g <- NE.groupBy ((==) `on` getRowValue 0) (toList dataRows)] grouped
 
-  table_ [class_ "dashboard-table table table-sm w-full relative [&_:is(th,td):first-child]:pl-4 [&_:is(th,td):last-child]:pr-4 [&_td]:border-b [&_td]:border-strokeWeak/50 [&_tr:last-child_td]:border-b-0", id_ tableId] do
-    colgroup_ $ forM_ visible $ col_ . foldMap (\w -> [style_ $ "width: " <> w]) . colWidth
+  table_ [class_ "dashboard-table table table-sm w-full relative [&_:is(th,td):first-child]:pl-4 [&_:is(th,td):last-child]:pr-4 [&_td]:border-b [&_td]:border-strokeWeak/50 [&_tr:last-child_td]:border-b-0", id_ tableId, style_ minWidth] do
+    colgroup_ $ forM_ colWidths $ col_ . foldMap (\w -> [style_ $ "width: " <> w]) . snd
     unless (widget.wType == WTTopList) $ sortableTableHead_ widget columns (param "table-sort")
     tbody_ [] $ forM_ sections \(section, rows) -> do
       whenJust section $ tr_ [] . th_ [colspan_ (show $ length visible), scope_ "colgroup", class_ "pt-3 pb-1 text-left text-xs font-medium text-textWeak"] . toHtml
