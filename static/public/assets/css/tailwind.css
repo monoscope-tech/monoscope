@@ -1089,6 +1089,10 @@ body, :host {
   [popover]:not(:popover-open) {
     display: none;
   }
+  /* Same for DaisyUI's .modal on a closed <dialog>: laid out, it fires lazy hx-trigger="intersect" content on page load. */
+  dialog.modal:not([open]) {
+    display: none;
+  }
   .modal-box {
     background-color: var(--color-bgOverlay);
   }
@@ -2597,6 +2601,9 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
 
 .dashboard-table {
   table-layout: fixed;
+  min-width: var(--table-min);
+  --col-pad: 2rem;
+  --bar-pad: 7rem;
 }
 .dashboard-table :is(th, td) {
   overflow-wrap: anywhere;
@@ -2611,10 +2618,22 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
 .dashboard-table-wrap {
   container: dtable / inline-size;
 }
+/* Before scrolling or stacking, give the label column the numeric columns' slack.
+   --col-pad budgets each column's inline padding plus a little air, so they shrink together. */
+@container dtable (max-width: 42rem) {
+  .dashboard-table {
+    --col-pad: 1.25rem;
+    --bar-pad: 3rem;
+  }
+  .dashboard-table :is(th, td):not(:first-child, :last-child) {
+    padding-inline: 0.5rem;
+  }
+}
 @container dtable (max-width: 30rem) {
   .dashboard-table,
   .dashboard-table tbody {
     display: block;
+    min-width: 0;
   }
   .dashboard-table colgroup {
     display: none;
