@@ -7,6 +7,7 @@ import Data.Text qualified as T
 import Data.UUID (UUID)
 import Hasql.Interpolate qualified as HI
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
