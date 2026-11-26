@@ -739,10 +739,12 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
               changed <- Git.filesBetween conn (Git.RepoRef run.owner run.repo run.revision) earlier.revision pr.head.revision
               pure (earlier, rightToMaybe changed)
           -- Reviewers' asks are claims to test: most of what a review finds the PR missed starts there.
-          threads <- traverse (\thread -> Git.listPullRequestComments conn (Git.RepoRef run.owner run.repo run.revision) thread run.number) [Git.Conversation, Git.Inline]
+          threads <- traverse (\thread -> Git.listPullRequestComments conn (Git.RepoRef run.owner run.repo run.revision) thread run.number) [Git.Inline, Git.Conversation]
           for_ (lefts threads) $ Log.logAttention "Pull request discussion could not be read" . (run.id,)
-          let ours = maybe False ((== readMaybe @Int64 (toString cfg.githubAppId)) . Just . (.id)) . (.performedViaGithubApp)
-              discussion = take 20 [AE.object ["author" AE..= fmap (.login) c.user, "path" AE..= c.path, "comment" AE..= T.take 800 c.body] | c <- concat (rights threads), not (ours c)]
+          -- Another proof bot's reports are its findings, not asks; feeding them in would copy its verdicts.
+          let skipped c = maybe False ((== readMaybe @Int64 (toString cfg.githubAppId)) . Just . (.id)) c.performedViaGithubApp || maybe False (("blacksmith" `T.isInfixOf`) . T.toLower . (.login)) c.user
+              -- Asks arrive late, so the newest of each thread are kept.
+              discussion = take 20 [AE.object ["author" AE..= fmap (.login) c.user, "path" AE..= c.path, "comment" AE..= T.take 800 c.body] | c <- concatMap (reverse . filter (not . skipped)) (rights threads)]
           until <- Time.currentTime
           let from = addUTCTime (negate $ nominalDay * 7) until
           collected <- tryAny $ collectEvidence run mappings from until
