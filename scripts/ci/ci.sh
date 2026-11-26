@@ -1075,9 +1075,13 @@ cmd_deploy_status() { # what the app is running right now
   local token
   caprover_env
   [ -n "${CAPROVER_PASSWORD:-}" ] || { note "CAPROVER_PASSWORD unset — deploy works without it, status needs it"; return 0; }
+  # Without a Cloudflare Access service token the login gets Access's HTML sign-in page, not JSON.
   token=$(curl -sS -X POST "$CAPROVER_URL/api/v2/login" ${access_headers[@]+"${access_headers[@]}"} -H 'Content-Type: application/json' \
     -H 'x-namespace: captain' -d "{\"password\":\"$CAPROVER_PASSWORD\"}" \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("token",""))')
+    | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("data",{}).get("token",""))
+except ValueError: pass')
+  [ -n "$token" ] || [ -n "${CF_ACCESS_CLIENT_ID:-}" ] || { note "could not log in to $CAPROVER_URL for status: Cloudflare Access needs CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET (a service token) in .env"; return 0; }
   [ -n "$token" ] || { note "could not log in to $CAPROVER_URL for status"; return 0; }
   curl -sS "$CAPROVER_URL/api/v2/user/apps/appDefinitions" ${access_headers[@]+"${access_headers[@]}"} \
     -H 'x-namespace: captain' -H "x-captain-auth: $token" \
