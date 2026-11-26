@@ -1724,7 +1724,7 @@ teamModal pid team projMembers slackChans discordChans isInTeamView = do
         -- Details
         div_ [class_ "space-y-3 pb-4"] do
           div_ [class_ "grid grid-cols-2 gap-3"] do
-            field_ "Team Name" "teamName" "e.g. Backend Team" name []
+            field_ "Team Name" "teamName" "e.g. Backend Team" name [autofocus_]
             field_ "Handle" "teamHandle" "e.g. backend-team" handle [pattern_ "^[a-z][a-z0-9\\-]*$"]
           formField_ FieldSm def{inputType = "textarea", placeholder = "What does this team do?", value = description, inputId = Just (mkId "teamDescription"), extraAttrs = [class_ "min-h-12 resize-none"]} "Description" "teamDescription" False Nothing
 
