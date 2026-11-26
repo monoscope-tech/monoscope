@@ -1,12 +1,12 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithTools, processAIQueryWithMode, buildIssuePrompt, verifyWidgetSignature, freshWebhookTimestamp, BotErrorType (..), formatBotError, botEmoji, runBotQueryWithTools, slackResponse, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
+module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithTools, processAIQueryWithMode, buildIssuePrompt, verifyWidgetSignature, BotErrorType (..), formatBotError, botEmoji, runBotQueryWithTools, slackResponse, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
-import Data.Char (isDigit, isSpace)
+import Data.Char (isSpace)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq (Options, header)
@@ -452,13 +452,6 @@ buildIssuePrompt pid issue now = do
         , "- The chat panel is ~400px wide, so brevity matters."
         , "- For chart requests, prioritize a correct KQL query and a data-driven explanation."
         ]
-
-
--- | A webhook's signed Unix-seconds timestamp is within five minutes of @now@, past or
--- future, so a captured request cannot be replayed later.
-freshWebhookTimestamp :: UTCTime -> Text -> Bool
-freshWebhookTimestamp now ts =
-  not (T.null ts) && T.all isDigit ts && any (\seconds -> abs (POSIX.utcTimeToPOSIXSeconds now - fromInteger seconds) <= 300) (readMaybe @Integer $ toString ts)
 
 
 verifyWidgetSignature :: Text -> Projects.ProjectId -> Text -> Maybe Text -> Either LBS.ByteString ()

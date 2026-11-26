@@ -188,7 +188,6 @@ data Features a = Features
 data Config = Config
   { tableClasses :: Text
   , thClasses :: Text
-  , tdClasses :: Text
   , containerClasses :: Text
   , showHeader :: Bool
   , elemID :: Text
@@ -356,7 +355,6 @@ instance Default Config where
       { tableClasses = "table table-sm w-full relative"
       , -- Headers never wrap: a wide table scrolls (the grid is overflow-x-auto) instead of squeezing labels.
         thClasses = "text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap"
-      , tdClasses = "px-4 py-4"
       , containerClasses = "w-full mx-auto space-y-2"
       , showHeader = True
       , elemID = "tableContainer"

@@ -8,9 +8,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types qualified as AET
 import Data.Base64.Types (extractBase64)
-import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
-import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache qualified as Cache
@@ -67,9 +65,8 @@ import System.Timeout (timeout)
 import System.Types (ATBackgroundCtx, Done (..))
 import UnliftIO.Async (cancel, concurrently, wait, waitCatch, withAsync)
 import UnliftIO.Exception (bracket, throwIO, try)
+import Utils qualified
 import Web.Routes qualified as Routes
-import "cryptonite" Crypto.Hash.Algorithms (SHA256)
-import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
 encKeyOf :: TestResources -> ByteString
@@ -224,11 +221,6 @@ setupSyncOn tr host owner repo secret = do
         , webhookSecret = secret
         , pathPrefix = Nothing
         }
-
-
--- | HMAC-SHA256 hex of a body, the digest three of the four hosts send.
-hmacHexOf :: Text -> ByteString -> Text
-hmacHexOf secret body = decodeUtf8 $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) body :: HMAC.HMAC SHA256)
 
 
 -- | The whole routed app, so wiki requests go through auth, routing and forms like a browser's.
@@ -1411,7 +1403,7 @@ spec = do
       -- the route's host matches the row's, and the push is to the tracked branch.
       it "webhooks_queueImportsOnlyForVerifiedPushesToTheTrackedRow" \tr -> do
         let pushBody owner repo = toStrict $ AE.encode $ AE.object ["push" AE..= AE.object ["changes" AE..= ([AE.object ["new" AE..= AE.object ["name" AE..= ("main" :: Text)]]] :: [AE.Value])], "ref" AE..= ("refs/heads/main" :: Text), "repository" AE..= AE.object ["full_name" AE..= (owner <> "/" <> repo :: Text)]]
-            signed secret body = Just $ "sha256=" <> hmacHexOf secret body
+            signed secret body = Just $ "sha256=" <> Utils.hmacSha256Hex secret body
             deliver host ev sig body = do
               dbExec tr "DELETE FROM background_jobs WHERE payload->>'tag' LIKE 'GitSync%'" ()
               void $ toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH host Git.WebhookReq{event = Just ev, signature = sig, gitlabToken = Nothing, gitlabWebhookId = Nothing, gitlabTimestamp = Nothing, body}
@@ -1446,7 +1438,7 @@ spec = do
         forM_ [(Git.Gitea, "push" :: Text), (Git.Bitbucket, "repo:push")] \(host, ev) -> do
           setupSyncOn tr host "acme" "config" (Just "s3cret")
           let hosted = pushBody "acme" "config"
-          deliver host ev (Just $ (if host == Git.Bitbucket then "sha256=" else "") <> hmacHexOf "s3cret" hosted) hosted >>= (`shouldSatisfy` (>= 1))
+          deliver host ev (Just $ (if host == Git.Bitbucket then "sha256=" else "") <> Utils.hmacSha256Hex "s3cret" hosted) hosted >>= (`shouldSatisfy` (>= 1))
         -- importsOnlyTheTargetBranchAndIgnoresTheAutomatedPRBranch
         setupSyncOn tr Git.GitHub "branch-filter-owner" "config" (Just "s3cret")
         for_ (["monoscope-dashboards", "feature/user-pr"] :: [Text]) \branch -> do
@@ -1458,7 +1450,7 @@ spec = do
         -- delivery on the Gitea route matches no GitLab row.
         setupSyncOn tr Git.GitLab "acme" "config" (Just "gl-secret")
         let collision = pushBody "acme" "config"
-        deliver Git.Gitea "push" (Just $ hmacHexOf "gl-secret" collision) collision `shouldReturn` 0
+        deliver Git.Gitea "push" (Just $ Utils.hmacSha256Hex "gl-secret" collision) collision `shouldReturn` 0
 
       it "repositoryExport_retriesFailuresAndUpdatesOneConfigurationPRWithoutWritingToTheTargetBranch" \tr -> do
         sync <- teamDashboards tr

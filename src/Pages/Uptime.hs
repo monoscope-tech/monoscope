@@ -502,7 +502,7 @@ instance ToHtml UptimeCheckPage where
       div_ [class_ "flex items-center gap-2"] do
         TimePicker.liveDataControls_ Nothing (Just (d.since, "")) Nothing TimePicker.RefreshOnly
         openDashboard_ d.pid [("var-check", Just d.check.id.toText), ("since", Just d.since)]
-    div_ [class_ "flex overflow-x-auto whitespace-nowrap border-b border-strokeWeak", [__|on click halt the event's bubbling|]] do
+    div_ [class_ "flex overflow-x-auto whitespace-nowrap border-b border-strokeWeak"] do
       detailTab_ "uc" "t-overview" "" True "Overview"
       detailTab_ "uc" "t-performance" "" False "Performance"
       detailTab_ "uc" "t-errors" "" False "Errors"
@@ -817,7 +817,7 @@ instance ToHtml CronMonitorPage where
       span_ [class_ "font-mono"] $ toHtml m.slug
       span_ $ "every " <> toHtml (intervalLabel m.intervalSecs) <> ", " <> toHtml (intervalLabel m.graceSecs) <> " grace"
       span_ $ toHtml $ maybe "no check-in yet" (("last run " <>) . agoText d.now) m.lastCheckinAt
-    div_ [class_ "flex overflow-x-auto whitespace-nowrap border-b border-strokeWeak", [__|on click halt the event's bubbling|]] do
+    div_ [class_ "flex overflow-x-auto whitespace-nowrap border-b border-strokeWeak"] do
       detailTab_ "cm" "t-overview" "" True "Overview"
       detailTab_ "cm" "t-runs" "" False "Check-ins"
       detailTab_ "cm" "t-incidents" "" False $ "Incidents" >> countBadge_ d.incidents

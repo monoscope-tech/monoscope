@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, Dep (..), loadDeps, frontendBuild, BWConfig (..), llmCallsUrl, apiCatalogUrl, stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus, externalHeadScripts_, navSearchGetH) where
+module Pages.BodyWrapper (bodyWrapper, Dep (..), loadDeps, frontendBuild, BWConfig (..), llmCallsUrl, apiCatalogUrl, stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus, externalHeadScripts_, navSearchGetH, AiComposerMode (..), openAiComposerAttr_) where
 
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
@@ -572,7 +572,8 @@ bodyWrapper bcfg child = do
                 div_ [class_ "h-0 shrink"] do
                   Components.drawer_ "global-data-drawer" (isJust bcfg.globalDrawerContent) Nothing bcfg.globalDrawerContent ""
                   -- Picks the dashboard a widget is added (from the explorer) or copied (from a dashboard) to.
-                  Components.floatingModal_ "dashboards-modal"
+                  Components.floatingDialogShell_ "dashboards-modal"
+                    $ div_ [class_ "modal-box !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none"]
                     $ Components.pickerCard_
                       def
                         { Components.cardClass = "w-full max-w-lg"
@@ -582,7 +583,7 @@ bodyWrapper bcfg child = do
                             span_ [class_ "badge badge-ghost badge-xs max-w-48 shrink-0 gap-1 truncate text-2xs text-textWeak"] do
                               span_ [id_ "dashboards-modal-title"] "Add to dashboard"
                               span_ [id_ "dashboards-modal-widget-title", class_ "truncate before:me-1 before:content-['\xb7'] empty:hidden"] ""
-                            label_ [Lucid.for_ "dashboards-modal", Aria.label_ "Close", class_ "inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-iconNeutral transition-colors hover:bg-fillHover hover:text-textStrong"]
+                            button_ [type_ "button", [__|on click call (closest <dialog/>).close()|], Aria.label_ "Close", class_ "inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-iconNeutral transition-colors hover:bg-fillHover hover:text-textStrong"]
                               $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
                         , Components.afterList =
                             forM_ bcfg.currProject \p -> details_ [class_ "group/new border-t border-strokeWeak", [__|on toggle if my.open call #dashboards-modal-new-title.focus() end|]] do
@@ -997,8 +998,8 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
               faSprite_ icon "regular" $ bool "w-3 h-3 shrink-0" "w-3.5 h-3.5 shrink-0" active
               span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] $ toHtml label
       div_ [class_ "flex flex-col gap-px group-has-[#sidenav-toggle:checked]/pg:px-1"] do
-        newAIAction True "plus" "New chat" [__|on click set #ai-composer-input.value to '' then set #ai-composer-chat.checked to true then call #ai-composer-modal.showModal()|]
-        newAIAction False "clock-rotate-left" "New routine" [__|on click set #ai-composer-input.value to '' then set #ai-composer-routine.checked to true then call #ai-composer-modal.showModal()|]
+        newAIAction True "plus" "New chat" (openAiComposerAttr_ ComposerChat)
+        newAIAction False "clock-rotate-left" "New routine" (openAiComposerAttr_ ComposerRoutine)
       div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block border-t border-strokeWeak/40 my-1 mx-2"] ""
       when (length bcfg.conversations > 15) $ div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block px-1 pb-1"] do
         div_ [class_ "relative"] do
@@ -1500,6 +1501,16 @@ navFlyoutItems pid = \case
   "Monitors" -> [("Uptime checks", (urls.monitors pid).uptimeGet), ("Cron monitors", (urls.monitors pid).cronGet), ("Status pages", (urls.monitors pid).statusPagesGet), ("Alerts", (urls.monitors pid).listGet Nothing Nothing), ("New alert", Components.logExplorerUrl pid <> "#create-alert-toggle")]
   "Settings" -> [(t, l) | (t, l, _) <- navBottomList pid]
   _ -> []
+
+
+data AiComposerMode = ComposerChat | ComposerRoutine
+
+
+-- | Opens @#ai-composer-modal@ with the chosen mode radio selected.
+openAiComposerAttr_ :: AiComposerMode -> Attribute
+openAiComposerAttr_ = \case
+  ComposerChat -> [__|on click set #ai-composer-input.value to '' then set #ai-composer-chat.checked to true then call #ai-composer-modal.showModal()|]
+  ComposerRoutine -> [__|on click set #ai-composer-input.value to '' then set #ai-composer-routine.checked to true then call #ai-composer-modal.showModal()|]
 
 
 settingsContentTarget :: Text
