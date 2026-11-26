@@ -50,6 +50,22 @@ test('native bash timeouts reject invalid bounds before the guest and keep the n
   assert.deepEqual(requests.map(operation => operation.contents.timeout), [null, 0.01, 1, 2 ** 32 - 1]);
 });
 
+// A fix's one cold build with no timeout ran 49 minutes and used its whole budget before it could submit.
+test('native bash calls end by the agent deadline, whatever timeout they ask for', async () => {
+  const requests = [];
+  const tools = hostTools({ policy: { builtins: [] } }, '/unused', async operation => {
+    requests.push(operation);
+    return { Right: { exitCode: 0, timedOut: false, truncated: false, log: '/run/command.log', output: Buffer.from('ok').toString('base64') } };
+  }, Date.now() + 90_000);
+  for (const timeout of [undefined, 2 ** 32 - 1, 30]) {
+    const call = { type: 'toolCall', id: 'deadline', name: 'bash', arguments: { command: 'cabal build', ...(timeout === undefined ? {} : { timeout }) } };
+    await runToolCall(call, { tools, assistantMessage: { role: 'assistant', content: [call] }, context: { systemPrompt: '', messages: [], tools } });
+  }
+  const [unset, huge, small] = requests.map(operation => operation.contents.timeout);
+  assert.ok(unset <= 90 && unset >= 85 && huge === unset, `${unset} ${huge}`);
+  assert.equal(small, 30);
+});
+
 test('oversized JSONL records are rejected regardless of newline or chunk boundaries', async () => {
   for (const chunks of [['12345'], ['12345\n'], ['123', '45'], ['123', '45\n'], ['ok\n12345\n'], ['1234', '5\n']]) {
     await assert.rejects(records(chunks, 4), /Protocol record exceeds its size limit/);

@@ -216,15 +216,18 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
 }
 
 // Pi's file and shell calls become host Guest operations, run as the review account in the host-owned VM.
-export function hostTools(preparedCheckout, root, guestOperation) {
+// A shell call ends by `deadline` (ms): one cold build with no timeout used a fix's whole budget, so the
+// agent never got the turn to submit what it had.
+export function hostTools(preparedCheckout, root, guestOperation, deadline = Infinity) {
   const guest = async (tag, contents) => {
     const reply = await guestOperation({ tag, contents });
     if (Object.hasOwn(reply, 'Left')) throw Object.assign(new Error(reply.Left), tag === 'Access' ? { code: 'ENOENT' } : {});
     return reply.Right;
   };
   let guestLog;
-  const tools = [bashTool(async (command, cwd, { onData, timeout }) => {
-    const ran = await guest('Run', { command, cwd, timeout: timeout ?? null });
+  const tools = [bashTool(async (command, cwd, { onData, timeout: requested }) => {
+    const timeout = Math.min(requested ?? Infinity, Math.max(1, Math.floor((deadline - Date.now()) / 1000)));
+    const ran = await guest('Run', { command, cwd, timeout: Number.isFinite(timeout) ? timeout : null });
     guestLog = ran.log;
     onData(Buffer.from(ran.output, 'base64'));
     if (ran.truncated) onData(Buffer.from('\n[Output beyond 64 MiB was discarded]\n'));
@@ -328,7 +331,7 @@ async function main() {
     } else result = await runPi({
       preparedCheckout, request: { ...request, head: preparedCheckout.head }, modelRuntime, attemptId, signal, root, skillsDir: preparedCheckout.guest,
       sessionManager,
-      tools: hostTools(preparedCheckout, root, (operation) => exchange('Guest', operation)), warnAt,
+      tools: hostTools(preparedCheckout, root, (operation) => exchange('Guest', operation), warnAt), warnAt,
       optionsTool: (invocation) => exchange('Tool', invocation),
       workflow: {
         name: preparedCheckout.policy.tools.find((tool) => tool.name.startsWith('submit_'))?.name,

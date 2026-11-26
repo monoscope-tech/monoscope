@@ -1459,11 +1459,19 @@ runFix pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob) \
     Right (Just (Right Agent.Unfixed{})) -> pass
     _ -> do
       let lost = case outcome of Right (Just (Left NativeSessionLost)) -> True; _ -> False
-          message = bool "Issue fix failed; retry to collect current evidence" nativeSessionLostMessage lost
+      -- A retry resumes from the reviewed-fix checkpoint or a retained session. After model calls without
+      -- either it could only end "Saved progress was lost" and hide why this attempt failed, so the job
+      -- stops here with that reason.
+      checkpointed <- isJust <$> Fixes.getCheckpoint lease
+      saved <- maybe (pure Nothing) (fmap (join . rightToMaybe) . Agent.readSessionContext (Agent.FixSubject fid) . (.rootId)) =<< Fixes.agentRunContext lease
+      resumable <- (checkpointed ||) . isRight <$> runErrorNoCallStack @ReviewFailure (requireRetainedSession pid (Usage.Fix fid) saved)
+      let message
+            | lost = nativeSessionLostMessage
+            | resumable = "Issue fix failed; retry to collect current evidence"
+            | otherwise = case outcome of Right (Just (Left (ReviewFailure reason))) -> reason; Right Nothing -> "Issue fix timed out"; _ -> "Issue fix failed"
       Fixes.failJob lease message
       Log.logAttention "Issue-fix job failed" (pid, fid, either (toText . displayException) (maybe "Timed out" (either (show @Text) (const ""))) outcome)
-      -- A lost session cannot resume, so a retry only repeats this failure (ten times, in prod).
-      unless lost $ throwIO $ ReviewFailure message
+      when (resumable && not lost) $ throwIO $ ReviewFailure message
   where
     require :: Error ReviewFailure :> es => Either Text a -> Eff es a
     require = either (throwError . ReviewFailure) pure
