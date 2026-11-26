@@ -427,6 +427,11 @@ withExternalDBSetup f = do
 
   -- Create test database from template (retry on contention)
   masterConn <- connect $ connInfo "postgres"
+  -- Jobs and sweeps compare this process's clock with the DB's (odd-jobs polls with
+  -- getCurrentTime), so a skewed DB (e.g. under faketime) fails them as if broken.
+  hostNow <- getCurrentTime
+  [Only skew] <- PGS.query masterConn "SELECT abs(extract(epoch FROM clock_timestamp() - ?::timestamptz))::float8" (Only hostNow)
+  when (skew > (300 :: Double)) $ fail $ "test postgres is " <> show (round skew :: Int) <> "s off this machine's clock; restart it with `make timescaledb-docker-tmp`"
   let createFromTemplate attempt = do
         result <- try @SomeException $ execute masterConn (Query $ encodeUtf8 $ "CREATE DATABASE " <> testDbName <> " TEMPLATE " <> templateDbName) ()
         case result of

@@ -338,8 +338,8 @@ timescaledb-docker-tmp:
 		--user root \
 		--entrypoint /bin/bash \
 		docker.io/timescale/timescaledb-ha:pg16-all \
-		-c "apt-get update -qq && apt-get install -y -qq faketime > /dev/null 2>&1 && \
-		    exec gosu postgres faketime '2025-01-01 01:00:00' docker-entrypoint.sh postgres \
+		-c "chown -R postgres:postgres /home/postgres/pgdata && \
+		    exec gosu postgres docker-entrypoint.sh postgres \
 		    -c shared_preload_libraries='pg_stat_statements,timescaledb' \
 		    -c max_connections=200"
 
