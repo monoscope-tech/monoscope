@@ -52,25 +52,25 @@ describe('chartDataUrl', () => {
 
 describe('chart empty state', () => {
   test('reveals and hides the stable server-rendered guidance', () => {
-    document.body.innerHTML = '<div id="latency_empty" class="chart-no-data hidden"></div>';
+    document.body.innerHTML = '<div id="latency_bordered"></div>';
+    const state = () => document.getElementById('latency_bordered')!.dataset.widgetState;
 
     showNoDataOverlay('latency');
-    expect(document.querySelector('#latency_empty')?.classList.contains('hidden')).toBe(false);
+    expect(state()).toBe('empty');
 
     hideNoDataOverlay('latency');
-    expect(document.querySelector('#latency_empty')?.classList.contains('hidden')).toBe(true);
+    expect(state()).toBeUndefined();
   });
 
   test('replaces stale empty guidance with the fetch error', () => {
     document.body.innerHTML = `
-      <div id="latency_empty" class="chart-no-data hidden"></div>
-      <div id="latency_error" class="hidden"><span id="latency_errorMsg"></span></div>`;
+      <div id="latency_bordered"></div>
+      <div id="latency_error"><span id="latency_errorMsg"></span></div>`;
 
     showNoDataOverlay('latency');
     showChartError('latency', 'Unable to load this chart.');
 
-    expect(document.querySelector('#latency_empty')?.classList.contains('hidden')).toBe(true);
-    expect(document.querySelector('#latency_error')?.classList.contains('hidden')).toBe(false);
+    expect(document.getElementById('latency_bordered')!.dataset.widgetState).toBe('error');
     expect(document.querySelector('#latency_errorMsg')?.textContent).toBe('Unable to load this chart.');
   });
 });
