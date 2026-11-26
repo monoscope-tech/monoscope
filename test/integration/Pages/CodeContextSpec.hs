@@ -1414,7 +1414,7 @@ spec = do
             signed secret body = Just $ "sha256=" <> hmacHexOf secret body
             deliver host ev sig body = do
               dbExec tr "DELETE FROM background_jobs WHERE payload->>'tag' LIKE 'GitSync%'" ()
-              void $ toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH host Git.WebhookReq{event = Just ev, signature = sig, gitlabToken = Nothing, gitlabWebhookId = Nothing, gitlabTimestamp = Nothing, body}
+              void $ toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH host Nothing Git.WebhookReq{event = Just ev, signature = sig, gitlabToken = Nothing, gitlabWebhookId = Nothing, gitlabTimestamp = Nothing, body}
               length . filter isImport <$> pendingJobs tr
             announced = (>>= (.announcedRevision)) <$> onlySync tr
         setupSyncOn tr Git.GitHub "webhook-owner" "webhook-repo" (Just "s3cret")

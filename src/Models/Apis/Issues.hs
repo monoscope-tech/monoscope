@@ -2504,16 +2504,33 @@ upsertRoutine requestedBy pid convId interval = do
     Hasql.queryTx $ upsertRoutineSql requestedBy pid convId interval now
 
 
+-- | Who a routine write leaves as owner. The scheduler runs only member-owned routines, so a super
+-- admin (no membership) editing a customer's routine keeps its current owner, and a routine they create
+-- goes to the project's earliest admin; a member who saves it takes it over, as before.
+routineOwnerSql :: Projects.ProjectId -> Projects.UserId -> HI.Sql -> HI.Sql
+routineOwnerSql pid requester current =
+  [HI.sql|COALESCE((SELECT #{requester} WHERE EXISTS (|]
+    <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id = #{pid} AND member.user_id = #{requester}|]
+    <> [HI.sql|)), |]
+    <> current
+    <> [HI.sql|, (SELECT eligible.user_id FROM (|]
+    <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id = #{pid}|]
+    <> [HI.sql|) eligible JOIN projects.project_members pm ON pm.project_id = eligible.project_id AND pm.user_id = eligible.user_id
+      WHERE eligible.permission = 'admin' ORDER BY pm.created_at, pm.id LIMIT 1))|]
+
+
 upsertRoutineSql :: Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> RoutineInterval -> UTCTime -> HI.Sql
 upsertRoutineSql requestedBy pid convId interval now =
   let intervalMinutes = routineIntervalMinutes interval
+      owner = routineOwnerSql pid requestedBy [HI.sql|routine.requested_by|]
+      newOwner = routineOwnerSql pid requestedBy [HI.sql|NULL|]
    in [HI.sql|WITH saved AS (
         INSERT INTO apis.ai_routines AS routine (requested_by, project_id, conversation_id, interval_minutes, next_run_at, policy)
-        SELECT #{requestedBy}, #{pid}, #{convId}, #{intervalMinutes}, #{addUTCTime (fromIntegral $ intervalMinutes * 60) now}, #{Autonomous}
+        SELECT ^{newOwner}, #{pid}, #{convId}, #{intervalMinutes}, #{addUTCTime (fromIntegral $ intervalMinutes * 60) now}, #{Autonomous}
         FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{convId}
         ON CONFLICT (project_id, conversation_id) DO UPDATE SET
-          authority_version = routine.authority_version + CASE WHEN routine.requested_by IS DISTINCT FROM EXCLUDED.requested_by THEN 1 ELSE 0 END,
-          requested_by = EXCLUDED.requested_by, interval_minutes = EXCLUDED.interval_minutes, active = TRUE,
+          authority_version = routine.authority_version + CASE WHEN routine.requested_by IS DISTINCT FROM ^{owner} THEN 1 ELSE 0 END,
+          requested_by = ^{owner}, interval_minutes = EXCLUDED.interval_minutes, active = TRUE,
           next_run_at = CASE WHEN routine.running_since IS NULL THEN EXCLUDED.next_run_at ELSE routine.next_run_at END,
           schedule_kind = #{ScheduleInterval}, schedule_hour = NULL, schedule_minute = NULL, schedule_weekday = NULL,
           cancelled_at = NULL
@@ -2627,19 +2644,21 @@ installRoutine requestedBy pid convId timezone installation = do
       (kind, intervalMinutes, hour, minute, weekday) = scheduleColumns template.schedule
       zone = if isJust (TZ.tzByName $ encodeUtf8 timezone) then timezone else "UTC"
       nextRunAt = nextRoutineAt template.schedule zone now now
+      owner = routineOwnerSql pid requestedBy [HI.sql|routine.requested_by|]
+      newOwner = routineOwnerSql pid requestedBy [HI.sql|NULL|]
   Hasql.transaction TxS.ReadCommitted TxS.Write do
     void $ prepareRoutineGrantTx pid convId
     Hasql.queryTx
       [HI.sql|WITH installed AS (INSERT INTO apis.ai_routines AS routine
       (requested_by, project_id, conversation_id, interval_minutes, timezone, next_run_at, template_key, template_version,
        schedule_kind, schedule_hour, schedule_minute, schedule_weekday, report_when, destination, policy, instructions, incident_team_id, incident_channel_id, incident_enabled_at)
-      SELECT #{requestedBy}, #{pid}, #{convId}, #{intervalMinutes}, #{zone}, #{nextRunAt}, #{templateKey}, #{template.version},
+      SELECT ^{newOwner}, #{pid}, #{convId}, #{intervalMinutes}, #{zone}, #{nextRunAt}, #{templateKey}, #{template.version},
              #{kind}, #{hour}, #{minute}, #{weekday}, #{template.reportWhen}, #{destination}, #{policy}, #{template.prompt}, #{teamId}, #{channelId}, #{enabledAt}
       FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{convId}
       ON CONFLICT (project_id, conversation_id) DO UPDATE SET
-        authority_version = routine.authority_version + CASE WHEN routine.requested_by IS DISTINCT FROM EXCLUDED.requested_by THEN 1 ELSE 0 END,
-        policy = CASE WHEN EXCLUDED.schedule_kind = 'incident' AND routine.requested_by IS DISTINCT FROM EXCLUDED.requested_by THEN EXCLUDED.policy ELSE routine.policy END,
-        requested_by = EXCLUDED.requested_by, interval_minutes = EXCLUDED.interval_minutes, timezone = EXCLUDED.timezone, active = TRUE,
+        authority_version = routine.authority_version + CASE WHEN routine.requested_by IS DISTINCT FROM ^{owner} THEN 1 ELSE 0 END,
+        policy = CASE WHEN EXCLUDED.schedule_kind = 'incident' AND routine.requested_by IS DISTINCT FROM ^{owner} THEN EXCLUDED.policy ELSE routine.policy END,
+        requested_by = ^{owner}, interval_minutes = EXCLUDED.interval_minutes, timezone = EXCLUDED.timezone, active = TRUE,
         next_run_at = EXCLUDED.next_run_at, template_key = EXCLUDED.template_key,
         template_version = EXCLUDED.template_version, schedule_kind = EXCLUDED.schedule_kind,
         schedule_hour = EXCLUDED.schedule_hour, schedule_minute = EXCLUDED.schedule_minute,
@@ -3482,12 +3501,20 @@ finishRunRowsTx finalization =
             AND (retired.requested_by IS NULL OR run.requested_by IS NULL)
           RETURNING run.id, run.project_id, run.conversation_id, run.root_run_id, TRUE AS request_ended
         )|]
+    -- A review run whose review ended half an hour ago: its worker died, or the job that would close it
+    -- found the review already superseded (three such runs sat "running" from 2026-11-24).
+    reviewEnded =
+      [HI.sql|(run.source #>> '{contents,tag}' = 'PullRequestReview' AND EXISTS (SELECT 1 FROM projects.pr_review_runs review
+        WHERE review.id::text = run.source #>> '{contents,contents}' AND review.state IN ('completed', 'incomplete', 'superseded')
+          AND COALESCE(review.finished_at, review.created_at) < clock_timestamp() - interval '30 minutes'))|]
     retire scope =
       [HI.sql|WITH finished AS (
         UPDATE apis.ai_routine_runs run SET status = #{RunCancelled}, finished_at = clock_timestamp(),
-          error = 'Run authorizing member or installation is no longer available.'
+          error = CASE WHEN ^{reviewEnded} THEN 'A newer commit or the pull request closing replaced this review.'
+            ELSE 'Run authorizing member or installation is no longer available.' END
         WHERE ((run.status = #{RunRunning} AND (run.requested_by IS NULL OR
           (run.routine_id IS NULL AND run.source->>'tag' IN ('ScheduledRun', 'TriggeredRun'))))
+          OR (run.status = #{RunRunning} AND ^{reviewEnded})
           OR (run.status IN ('running', 'failed', 'timed_out') AND run.source->>'tag' = 'FixRun' AND NOT (|]
         <> nativeFixAccessSql mempty
         <> [HI.sql|)))|]
@@ -3575,11 +3602,12 @@ resumeRoutine start requestedBy pid convId = do
       Just (schedule, timezone) -> do
         let nextRunAt = if start == RunNow then Just now else nextRoutineAt schedule timezone now now
             resume = start == ResumeSchedule
+            owner = routineOwnerSql pid requestedBy [HI.sql|routine.requested_by|]
         Hasql.queryTx
           [HI.sql|WITH resumed AS (
-            UPDATE apis.ai_routines SET
-              authority_version = authority_version + CASE WHEN requested_by IS DISTINCT FROM #{requestedBy} THEN 1 ELSE 0 END,
-              requested_by = #{requestedBy}, active = TRUE, cancelled_at = NULL,
+            UPDATE apis.ai_routines routine SET
+              authority_version = authority_version + CASE WHEN requested_by IS DISTINCT FROM ^{owner} THEN 1 ELSE 0 END,
+              requested_by = ^{owner}, active = TRUE, cancelled_at = NULL,
               next_run_at = CASE WHEN running_since IS NULL THEN #{nextRunAt} ELSE next_run_at END
             WHERE project_id = #{pid} AND conversation_id = #{convId} AND (active OR #{resume})
             RETURNING id, next_run_at, running_since
@@ -3605,10 +3633,11 @@ setRoutineDestination pid convId destination =
 
 setRoutinePolicy :: DB es => Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> ExecutionPolicy -> Eff es ()
 setRoutinePolicy user pid conversation policy =
-  Hasql.interpExecute_
-    [HI.sql|UPDATE apis.ai_routines SET
-      authority_version = authority_version + CASE WHEN (policy <> #{Observe} AND #{policy} = #{Observe}) OR requested_by IS DISTINCT FROM #{user} THEN 1 ELSE 0 END,
-      requested_by = #{user}, policy = #{policy}
+  let owner = routineOwnerSql pid user [HI.sql|routine.requested_by|]
+   in Hasql.interpExecute_
+        [HI.sql|UPDATE apis.ai_routines routine SET
+      authority_version = authority_version + CASE WHEN (policy <> #{Observe} AND #{policy} = #{Observe}) OR requested_by IS DISTINCT FROM ^{owner} THEN 1 ELSE 0 END,
+      requested_by = ^{owner}, policy = #{policy}
       WHERE project_id = #{pid} AND conversation_id = #{conversation}|]
 
 

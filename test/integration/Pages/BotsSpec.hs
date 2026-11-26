@@ -1959,8 +1959,29 @@ spec = around withTestResources do
       dbExec tr [sql|UPDATE users.users SET is_sudo = TRUE WHERE id = ?|] (Only $ uid tr)
       readProject sudoProject >>= (`shouldSatisfy` isRight)
       memberAccess sudoProject `shouldThrow` denied
+      -- routineOwnership_superAdminWritesKeepAMemberOwner: the scheduler runs only member-owned routines,
+      -- so a routine a super admin creates goes to the earliest admin, and their saves keep that owner.
+      let routineConv = conversation 41
+          ownerOf = dbOne tr [sql|SELECT requested_by FROM apis.ai_routines WHERE project_id = ? AND conversation_id = ?|] (sudoProject, routineConv)
+          admin = UUIDId (UUID.fromWords 0 0 41 1) :: Projects.UserId
+      admin `shouldNotBe` uid tr
+      runTestBg frozenTime tr do
+        Hasql.interpExecute_ [HI.sql|INSERT INTO users.users (id, email) VALUES (#{admin}, 'routine-owner@example.com')|]
+        Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{sudoProject}, #{admin}, #{PM.PAdmin})|]
+        Hasql.interpExecute_ [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{sudoProject}, #{routineConv}, #{Issues.CTWeb})|]
+        void $ Issues.upsertRoutine (uid tr) sudoProject routineConv $ fromRightShow $ Issues.mkRoutineInterval 15
+      ownerOf `shouldReturn` admin
+      runTestBg frozenTime tr do
+        Issues.setRoutinePolicy (uid tr) sudoProject routineConv Issues.Observe
+        void $ Issues.resumeRoutine Issues.ResumeSchedule (uid tr) sudoProject routineConv
+        void $ Issues.upsertRoutine (uid tr) sudoProject routineConv $ fromRightShow $ Issues.mkRoutineInterval 30
+      ownerOf `shouldReturn` admin
+      -- superAdminChat_reachesTheComposer: a super admin may chat in a project they are not a member of.
+      let emptyChat = AIThreads.startThreadPostHWithTools (Just Routes.mcpProjectTools) sudoProject $ formOf @AIThreads.AIChatForm "query=+&mode=chat"
+      call tr emptyChat `shouldReturn` Left (AIThreads.NewThreadPrompt AIThreads.EmptyPrompt)
       dbExec tr [sql|UPDATE users.users SET is_sudo = FALSE WHERE id = ?|] (Only $ uid tr)
       readProject sudoProject `shouldThrow` denied
+      runAuthHandler tr (statusOf emptyChat) `shouldReturn` 403
       -- Deactivation is seen by the next in-app call and by the next scheduled routine.
       checked <- newIORef Nothing
       Just slot <- runTestBg frozenTime tr do
@@ -3175,8 +3196,11 @@ spec = around withTestResources do
           runQueryEffect tr $ Issues.deleteConversation testPid conv
           replay form `shouldReturn` 409
         pure (origin, replay form)
+      -- The test session is a super admin, who may still chat without membership; revocation is about members.
+      dbExec tr [sql|UPDATE users.users SET is_sudo = FALSE WHERE id = ?|] (Only $ uid tr)
       dbExec tr [sql|DELETE FROM projects.project_members WHERE project_id = ? AND user_id = ?|] (testPid, uid tr)
       for_ replays \(origin, replay) -> (origin,) <$> replay `shouldReturn` (origin, 403)
+      dbExec tr [sql|UPDATE users.users SET is_sudo = TRUE WHERE id = ?|] (Only $ uid tr)
       readIORef calls `shouldReturn` ["get_project", "get_schema", "get_schema"]
 
     it "a durable run resumes completed reads from its checkpoint with its original model, input and authority" \tr -> do
@@ -3611,9 +3635,12 @@ spec = around withTestResources do
       let readsInitial = forM ["D123INITIAL", "G123INITIAL"] \channel -> runTestBg frozenTime tr $ Investigations.canReadEvidence testPid PM.PAdmin (Investigations.MemberViewer $ uid tr) $ Issues.slackScopedConversationId testPid "T_TRANSCRIPT" channel "1735689600.000001"
           activate active = dbExec tr [sql|UPDATE projects.project_members SET active = ? WHERE project_id = ? AND user_id = ?|] (active, testPid, uid tr)
       readsInitial `shouldReturn` [True, True]
+      -- Super admins (the test session is one) keep their own chats; a deactivated member does not.
+      dbExec tr [sql|UPDATE users.users SET is_sudo = FALSE WHERE id = ?|] (Only $ uid tr)
       activate False
       readsInitial `shouldReturn` [False, False]
       activate True
+      dbExec tr [sql|UPDATE users.users SET is_sudo = TRUE WHERE id = ?|] (Only $ uid tr)
       -- A private source's audience is retained before the model runs; the heartbeat never re-polls Slack membership.
       for_ ([("D123PRIVATE", True), ("G123PRIVATE", False)] :: [(Text, Bool)]) \(channel, direct) -> do
         proofs <- newIORef (0 :: Int)

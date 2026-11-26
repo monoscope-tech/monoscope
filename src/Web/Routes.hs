@@ -190,7 +190,7 @@ data Routes mode = Routes
   , stripeWebhook :: mode :- "webhook" :> "stripe" :> Header "Stripe-Signature" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[HTML] (Html ())
   , usageReport :: mode :- "telemetry" :> "v1" :> "report" :> Header "X-Real-IP" Text :> RemoteHost :> ReqBody '[JSON] UsageTelemetry.Report :> PostAccepted '[JSON] NoContent
   , -- Kept at its original path so hooks configured before multi-host support keep delivering.
-    githubWebhook :: mode :- "webhook" :> "github" :> Header "X-Hub-Signature-256" Text :> Header "X-GitHub-Event" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[JSON] AE.Value
+    githubWebhook :: mode :- "webhook" :> "github" :> Header "X-Hub-Signature-256" Text :> Header "X-GitHub-Event" Text :> Header "X-GitHub-Delivery" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[JSON] AE.Value
   , -- One route per host. The host is in the path rather than sniffed from the headers because
     -- it decides which signature scheme to verify with, and that must not be attacker-chosen.
     -- Every host's signature and event headers are captured; each arm reads only its own.
@@ -262,10 +262,11 @@ server otlpTraces otlpLogs collectUsage runNow =
         , lemonWebhook = Settings.webhookPostH
         , stripeWebhook = Settings.stripeWebhookPostH
         , usageReport = \realIp -> collectUsage . sender realIp
-        , githubWebhook = \sigM eventM body -> GitSync.gitWebhookPostH Git.GitHub (Git.WebhookReq eventM sigM Nothing Nothing Nothing body)
+        , githubWebhook = \sigM eventM deliveryM body -> GitSync.gitWebhookPostH Git.GitHub deliveryM (Git.WebhookReq eventM sigM Nothing Nothing Nothing body)
         , gitWebhook = \host bbSig giteaSig glSig glToken glId glTs giteaEvent glEvent bbEvent body ->
             GitSync.gitWebhookPostH
               host
+              Nothing
               Git.WebhookReq
                 { event = asum [giteaEvent, glEvent, bbEvent]
                 , signature = asum [giteaSig, glSig, bbSig]

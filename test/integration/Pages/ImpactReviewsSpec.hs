@@ -80,6 +80,7 @@ import Pkg.GitCommand qualified as HostGit
 import Pkg.ImpactReview qualified as Impact
 import Pkg.Minio qualified as Storage
 import Pkg.Parser.Stats qualified as KQL
+import OpenTelemetry.Trace.Core (SpanHot (hotName))
 import Pkg.TestUtils hiding (call)
 import Pkg.TestUtils qualified as Test
 import Servant (ServerError (..), getResponse)
@@ -174,7 +175,7 @@ deliverEvent tr event respond value = do
   let body = toStrict $ AE.encode value
       signature = "sha256=" <> decodeUtf8 (B16.encode $ BA.convert (HMAC.hmac ("impact-secret" :: ByteString) body :: HMAC.HMAC SHA256))
       configured = tr{trATCtx = tr.trATCtx{config = app{githubAppWebhookSecret = "impact-secret"}}}
-  runAsBaseRecordingHTTP configured $ githubResponses respond $ GitSyncPage.gitWebhookPostH Git.GitHub $ Git.WebhookReq (Just event) (Just signature) Nothing Nothing Nothing body
+  runAsBaseRecordingHTTP configured $ githubResponses respond $ GitSyncPage.gitWebhookPostH Git.GitHub (Just "fixture-delivery") $ Git.WebhookReq (Just event) (Just signature) Nothing Nothing Nothing body
 
 
 commentPayload :: Text -> Text -> AE.Value
@@ -2860,7 +2861,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     reopened <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun new.id)
     reopened.state `shouldBe` Reviews.Queued
     runQueryEffect tr $ Reviews.releaseRun new
-    let status secret signature = fmap snd $ runAsBaseRecordingHTTP tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = secret}}} $ catchError @ServerError (GitSyncPage.gitWebhookPostH Git.GitHub (Git.WebhookReq (Just "pull_request") signature Nothing Nothing Nothing (toStrict $ AE.encode $ payload "synchronize" (T.replicate 40 "c") "2025-01-01T00:04:00Z")) $> 200) (\_ err -> pure err.errHTTPCode)
+    let status secret signature = fmap snd $ runAsBaseRecordingHTTP tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = secret}}} $ catchError @ServerError (GitSyncPage.gitWebhookPostH Git.GitHub Nothing (Git.WebhookReq (Just "pull_request") signature Nothing Nothing Nothing (toStrict $ AE.encode $ payload "synchronize" (T.replicate 40 "c") "2025-01-01T00:04:00Z")) $> 200) (\_ err -> pure err.errHTTPCode)
         forged = Just $ "sha256=" <> T.replicate 64 "0"
     traverse (uncurry status) [(tr.trATCtx.config.githubAppWebhookSecret, Nothing), ("", forged), ("impact-secret", forged)] `shouldReturn` [503, 503, 401]
     final <- runQueryEffect tr $ Reviews.latestRuns testPid
@@ -2911,6 +2912,31 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- A merge before the proofs finish stops the comment too.
     void $ deliver tr $ payload "closed" next "2025-01-01T00:02:00Z"
     fst <$> runReview next new Test.id >>= (`shouldSatisfy` any (T.isInfixOf "closed")) . progressEdits
+
+  -- Three review routine runs sat "running" from 2026-11-24: their worker died mid-review, a push superseded the
+  -- review, and the retried job only retired the review, never the routine run.
+  it "supersededReview_cancelsItsDanglingRoutineRun" \tr -> do
+    setup tr
+    appConfig <- githubApp tr
+    void $ deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
+    [old] <- runQueryEffect tr $ Reviews.latestRuns testPid
+    Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventPullRequest
+    let convId = UUIDId old.threadId.unUUIDId
+        routineRun = fmap (.status) <$> runQueryEffect tr (Issues.getEventRun testPid $ Issues.PullRequestReview old.id)
+    runTestBg frozenTime tr do
+      void $ Issues.getOrCreateConversation testPid convId Issues.CTPullRequest (AE.object [])
+      void $ Issues.startEventRun routine (Issues.PullRequestReviewRequest old.id) Issues.RestartRun convId "Review"
+    routineRun `shouldReturn` Just Issues.RunRunning
+    void $ deliver tr $ payload "synchronize" (T.replicate 40 "b") "2025-01-01T00:01:00Z"
+    void $ runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = appConfig}) $ tryAny $ Impact.reviewPullRequest old.id
+    routineRun `shouldReturn` Just Issues.RunCancelled
+
+  -- GitHub deliveries could be counted in our own telemetry but not attributed (2026-11-26): each is now one span.
+  it "githubWebhook_recordsEachDeliveryAsASpan" \tr -> do
+    setup tr
+    (_, spans) <- withCapturedSpans \_ -> deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
+    [textAttr hook k | (_, hook) <- spans, hotName hook == "github.webhook", k <- ["github.delivery_id", "github.event", "github.action", "vcs.repository.name", "monoscope.webhook.outcome"]]
+      `shouldBe` map Just ["fixture-delivery", "pull_request", "opened", "impact-org/checkout", "RunQueued"]
 
   -- Blacksmith's "still holds on the new head": a push re-proves the last review's claims with its scripts.
   it "pushedReview_reprovesThePriorClaimsWithTheirPassingScripts" \tr -> do
@@ -3807,6 +3833,13 @@ spec = around withTestResources $ describe "Production impact reviews" do
     stopped <- snd <$> within (transport True . fakeAgentWith ["--record-call", "--fail-after-usage"]) (tryAny $ Impact.reviewPullRequest run.id)
     stopped `shouldSatisfy` isRight
     fmap (.error) <$> runQueryEffect tr (Reviews.getRun run.id) `shouldReturn` Just (Just "Review failed; retry to collect current evidence")
+    void $ review fakeAgent
+    -- reviewStopped_permanentFailure_doesNotRetry: a misconfigured GITHUB_APP_ID cannot heal, so the first failure
+    -- ends the run with its reason instead of spending the chain's three attempts.
+    retry
+    misconfigured <- snd <$> within (transport True . fakeAgent . Reader.local (\ctx -> ctx{config = ctx.config{githubAppId = "not-a-number"}})) (tryAny $ Impact.reviewPullRequest run.id)
+    misconfigured `shouldSatisfy` isRight
+    fmap (.error) <$> runQueryEffect tr (Reviews.getRun run.id) `shouldReturn` Just (Just "GITHUB_APP_ID must be numeric")
     void $ review fakeAgent
     -- askedProof_postsANewComment (#826): an ask's answer lands below it, not in the review comment far above.
     dbExec tr "UPDATE projects.pr_review_runs SET request = ? WHERE id = ?" (Aeson $ AE.toJSON Reviews.Ask{login = "ada", commentId = 77, command = Reviews.Prove, focus = Nothing}, run.id)

@@ -16,7 +16,7 @@
 <span>Conversations</span>
 <span class="text-2xs tabular-nums text-textDisabled">2</span>
 </a>
-<dialog id="ai-composer-modal" class="modal !items-start px-4 pt-[15vh] bg-black/40 dark:bg-black/65 backdrop:backdrop-blur-[2px] [&amp;_.modal-backdrop]:backdrop-blur-[2px]" aria-labelledby="ai-composer-modal-title"
+<dialog id="ai-composer-modal" class="modal !items-start px-4 pt-[15vh] bg-black/40 dark:bg-black/65 backdrop:backdrop-blur-[2px] [&amp;_.modal-backdrop]:backdrop-blur-[2px]" aria-labelledby="ai-composer-modal-title" _="on closeModal from body if my.open call me.close() end"
 <div class="flex items-center" data-header-actions
 <div class="flex items-center" data-header-actions
 <input type="radio" name="nav-view" id="nav-view-ai" class="sr-only" checked hx-live="if (!this.dataset.seeded) { this.dataset.seeded = &#39;1&#39;; this.checked = this.value === (sessionStorage.getItem(&#39;sidebar-view&#39;) || &#39;ai&#39;) }" _="on input call sessionStorage.setItem(&#39;sidebar-view&#39;, my.value)" value="ai"
