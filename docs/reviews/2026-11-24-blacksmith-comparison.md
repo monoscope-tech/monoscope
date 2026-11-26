@@ -72,6 +72,16 @@ Comparing our stills with Blacksmith's on the same PRs:
   without a screenshot, goes back to the agent as advice; a changed pair gets the changed pixels boxed on
   both sides. Blacksmith shows no highlight.
 
+### After #1043 (2026-11-26, #726 re-proved)
+
+- 3 claims match, up from 2 (member People access, admin table, manager navigation), with three base/head
+  page pairs at 2560x1600; 3 stay unverified (active-only rows, public-field masking, admin-only tabs).
+- Fonts render with natural spacing on every still.
+- One bounding box around all changes covered the whole page: full-page stills of a relaid page differ in
+  many places (sidebar items, toolbar, a 6 px table shift). #1067 boxes each cluster instead and marks only
+  local changes (at most three clusters, under a quarter of the still); relaid pages stay unmarked.
+- Head checks still take 285 s against 53 s for base, so the prepared head workspace below is the next lever.
+
 ### Next: a prepared head workspace (proposed)
 
 Reviews average 3.0 proofs, always the budget, and each head check rebuilds the PR from the base
