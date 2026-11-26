@@ -1,14 +1,14 @@
+# srv-captain--internal-otelcol's config, loaded at start from https://app.monoscope.tech/public/internal-otelcol.yml
+# (it used to load a pinned gist, which drifted from this file). Edit here; the service reads it on restart.
 receivers:
   otlp:
     protocols:
       http:
         endpoint: 0.0.0.0:4318
-        cors:
-          allowed_origins:
-            - '*'
       grpc:
         endpoint: 0.0.0.0:4317
-  hostmetrics:
+
+  host_metrics:
     root_path: /hostfs
     collection_interval: 30s
     scrapers:
@@ -29,6 +29,7 @@ receivers:
       memory:
       network:
       processes:
+
   prometheus:
     config:
       scrape_configs:
@@ -36,7 +37,8 @@ receivers:
           scrape_interval: 10s
           static_configs:
             - targets: ['0.0.0.0:8888']
-  filelog:
+
+  file_log:
     include_file_path: true
     poll_interval: 500ms
     include:
@@ -125,23 +127,23 @@ processors:
       - context: log
         statements:
           # Try multiple sources for service.name in order of preference
-          # 1. First try attributes["service.name"] if already set by attributes processor
+          # 1. First try log.attributes["service.name"] if already set by attributes processor
           - set(resource.attributes["service.name"], log.attributes["service.name"]) where log.attributes["service.name"] != nil
           # 2. Try nested attrs structure first (most common in your logs)
           - set(resource.attributes["service.name"], log.attributes["attrs"]["com.docker.swarm.service.name"]) where resource.attributes["service.name"] == nil and log.attributes["attrs"]["com.docker.swarm.service.name"] != nil
           # 3. Try direct swarm service name attribute
           - set(resource.attributes["service.name"], log.attributes["com.docker.swarm.service.name"]) where resource.attributes["service.name"] == nil and log.attributes["com.docker.swarm.service.name"] != nil
-          # 3. Try container labels with swarm service name
+          # 4. Try container labels with swarm service name
           - set(resource.attributes["service.name"], resource.attributes["container.labels.com.docker.swarm.service.name"]) where resource.attributes["service.name"] == nil and resource.attributes["container.labels.com.docker.swarm.service.name"] != nil
-          # 4. Try app-name label
+          # 5. Try app-name label
           - set(resource.attributes["service.name"], resource.attributes["container.labels.app-name"]) where resource.attributes["service.name"] == nil and resource.attributes["container.labels.app-name"] != nil
-          # 5. Try container.labels.app
+          # 6. Try container.labels.app
           - set(resource.attributes["service.name"], resource.attributes["container.labels.app"]) where resource.attributes["service.name"] == nil and resource.attributes["container.labels.app"] != nil
-          # 6. Try container.labels.service
+          # 7. Try container.labels.service
           - set(resource.attributes["service.name"], resource.attributes["container.labels.service"]) where resource.attributes["service.name"] == nil and resource.attributes["container.labels.service"] != nil
-          # 7. Fall back to container name
+          # 8. Fall back to container name
           - set(resource.attributes["service.name"], resource.attributes["container.name"]) where resource.attributes["service.name"] == nil and resource.attributes["container.name"] != nil
-          # 8. Copy deployment.environment to resource if it exists
+          # 9. Copy deployment.environment to resource if it exists
           - set(resource.attributes["deployment.environment"], log.attributes["deployment.environment"]) where log.attributes["deployment.environment"] != nil
 
   # Optional: Add more Docker Swarm specific attributes
@@ -177,7 +179,7 @@ processors:
         action: upsert
 
 exporters:
-  otlp:
+  otlp_grpc:
     endpoint: ${env:OTLP_ENDPOINT}
     tls:
       insecure: ${env:OTLP_INSECURE:-false}
@@ -187,14 +189,14 @@ exporters:
 service:
   pipelines:
     metrics:
-      receivers: [hostmetrics, prometheus, otlp, docker_stats]
+      receivers: [host_metrics, prometheus, otlp, docker_stats]
       processors: [batch, resourcedetection/system, attributes, resource]
-      exporters: [otlp]
+      exporters: [otlp_grpc]
     traces:
       receivers: [otlp]
       processors: [batch, resource]
-      exporters: [otlp]
+      exporters: [otlp_grpc]
     logs:
-      receivers: [otlp, filelog]
+      receivers: [otlp, file_log]
       processors: [batch, resourcedetection/docker, resourcedetection/system, attributes, attributes/swarm, resource, transform]
-      exporters: [otlp]
+      exporters: [otlp_grpc]
