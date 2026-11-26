@@ -1540,10 +1540,9 @@ instance ToHtml WidgetEditor where
                     thresholdField_ "warning_threshold" "Warning threshold" "warningThreshold" widgetToUse.warningThreshold "bg-fillWarning-strong" False
                   div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
                     Components.formField_ Components.FieldSm def{Components.value = fromMaybe "" widgetToUse.unit, Components.placeholder = "e.g. requests/s", Components.extraAttrs = [term "hx-on:input" "widgetJSON.unit = this.value || null", term "hx-on:change" [text|htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]] <> [term "hx-live:value" "widgetJSON.unit ?? ''" | not isNewWidget]} "Measurement unit" "unit" False Nothing
-                    Components.formSelectField_ Components.FieldSm "Trigger direction" "direction" False $ Components.options_ (Just $ bool "above" "below" (maybe False (.triggerLessThan) monitorM)) [("above", "Above threshold"), ("below", "Below threshold")]
-                  div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
-                    Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show (monitorM >>= (.alertRecoveryThreshold)), Components.placeholder = "Same as alert threshold", Components.extraAttrs = [step_ "any"]} "Alert recovery (optional)" "alertRecoveryThreshold" False Nothing
-                    Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show (monitorM >>= (.warningRecoveryThreshold)), Components.placeholder = "Same as warning threshold", Components.extraAttrs = [step_ "any"]} "Warning recovery (optional)" "warningRecoveryThreshold" False Nothing
+                    Alerts.triggerDirectionField_ "Trigger direction" (maybe False (.triggerLessThan) monitorM)
+                  div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"]
+                    $ Alerts.recoveryThresholdFields_ Nothing (monitorM >>= (.alertRecoveryThreshold)) (monitorM >>= (.warningRecoveryThreshold))
 
                 Alerts.notificationSettingsSection_ teams (maybe V.empty (.teams) monitorM) monitorM
 

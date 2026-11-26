@@ -60,7 +60,6 @@ import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
-import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Apis.Uptime qualified as Uptime
@@ -302,6 +301,19 @@ monitorList_ listId (formTitle, formSub) addForm (emptyTitle, emptyDesc) now row
             sub
           dayBars_ now days
           right
+  where
+    stateDot_ :: CheckState -> Html ()
+    stateDot_ s =
+      span_
+        [ class_ case s of
+            Operational -> "size-2 shrink-0 rounded-full bg-fillSuccess-strong"
+            Failing -> "size-2 shrink-0 rounded-full bg-fillError-strong ring-4 ring-fillError-weak"
+            Paused -> "size-2 shrink-0 rounded-full bg-fillStrong"
+            Pending -> "size-2 shrink-0 rounded-full border border-strokeStrong"
+        , Aria.label_ (snd $ stateTone s)
+        , role_ "img"
+        ]
+        mempty
 
 
 uptimeChecksList_ :: UptimeOverview -> Html ()
@@ -336,20 +348,6 @@ uptimeChecksList_ o =
           )
     | c <- V.toList o.checks
     ]
-
-
-stateDot_ :: CheckState -> Html ()
-stateDot_ s =
-  span_
-    [ class_ case s of
-        Operational -> "size-2 shrink-0 rounded-full bg-fillSuccess-strong"
-        Failing -> "size-2 shrink-0 rounded-full bg-fillError-strong ring-4 ring-fillError-weak"
-        Paused -> "size-2 shrink-0 rounded-full bg-fillStrong"
-        Pending -> "size-2 shrink-0 rounded-full border border-strokeStrong"
-    , Aria.label_ (snd $ stateTone s)
-    , role_ "img"
-    ]
-    mempty
 
 
 intervalOptions :: [(Text, Text)]
@@ -515,7 +513,31 @@ instance ToHtml UptimeCheckPage where
     tabPanel_ "group-has-[.t-errors:checked]/uc:block" "uc-errors" $ view "Errors"
     tabPanel_ "group-has-[.t-incidents:checked]/uc:block space-y-4" "uc-incidents" $ incidentsTable_ d.now "No downtime in the last 90 days" d.incidents
     tabPanel_ "group-has-[.t-log:checked]/uc:block space-y-4" "uc-log" $ resultsTable_ d.now True d.recent
-    tabPanel_ "group-has-[.t-settings:checked]/uc:block space-y-4" "uc-settings" $ uptimeSettings_ d
+    tabPanel_ "group-has-[.t-settings:checked]/uc:block space-y-4" "uc-settings" do
+      form_ [class_ "surface-raised space-y-4 rounded-xl p-4", hxPost_ ((urls.monitors d.pid).uptimeCheckEdit d.check.id), hxSwap_ "none"] do
+        div_ [class_ "grid gap-3 md:grid-cols-[1fr_2fr]"] do
+          formField_ FieldSm def{value = d.check.name} "Name" "name" True Nothing
+          formField_ FieldSm def{inputType = "url", value = d.check.url} "URL" "url" True Nothing
+        div_ [class_ "grid gap-3 md:grid-cols-3"] do
+          formSelectField_ FieldSm "Every" "interval" False $ options_ (Just $ show d.check.scrapeIntervalSeconds) intervalOptions
+          expectedStatusField_ d.check.expectedStatus
+          formField_ FieldSm def{value = fold d.check.responseContains, placeholder = "e.g. \"status\":\"ok\""} "Response contains" "contains" False Nothing
+        requestFields_ d.teams (Just d.check)
+        fieldset_ [class_ "space-y-2"] do
+          legend_ [class_ "text-sm font-medium text-textStrong"] "Regions"
+          p_ [class_ "text-xs text-textWeak"] "None selected runs from this deployment's region. A region can be picked once a worker probes from it."
+          div_ [class_ "grid grid-cols-2 gap-2 md:grid-cols-4"] $ forM_ Uptime.regions \r -> do
+            let chosen = r.code `V.elem` d.check.regions
+                served = r.code `elem` d.served
+            formCheckbox_ FieldSm (r.city <> " · " <> r.code <> bool " · no worker" "" served) "regions" ([value_ r.code] <> [checked_ | chosen] <> [disabled_ "" | not (served || chosen)])
+        div_ [class_ "flex justify-end"] $ button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save changes"
+      section_ [class_ "surface-raised flex flex-wrap items-center justify-between gap-3 rounded-xl p-4"] do
+        div_ do
+          p_ [class_ "font-medium text-textStrong"] $ bool "Resume checking" "Pause checking" d.check.enabled
+          p_ [class_ "text-sm text-textWeak"] "A paused check keeps its history and opens no issues."
+        button_ [type_ "button", class_ "btn btn-sm", hxPost_ ((urls.monitors d.pid).uptimeToggle d.check.id), hxSwap_ "none"] $ bool "Resume" "Pause" d.check.enabled
+      dangerZone_ "Delete this check" "Its history stays for 400 days but is no longer shown."
+        $ dangerAction_ "uc-delete" "trash" "Delete" ("Delete " <> d.check.name <> "?") "The check stops and is removed from status pages." [hxPost_ ((urls.monitors d.pid).uptimeDelete d.check.id), hxSwap_ "none"] "Delete check"
   toHtmlRaw = toHtml
 
 
@@ -533,13 +555,6 @@ countBadge_ :: [Uptime.Incident] -> Html ()
 countBadge_ is = unless (null is) $ span_ [class_ $ if any (isNothing . (.recoveredAt)) is then "ml-1.5 rounded-full bg-fillError-weak px-1.5 text-2xs font-semibold text-textError tabular-nums" else "ml-1.5 rounded-full bg-fillWeak px-1.5 text-2xs font-semibold text-textWeak tabular-nums"] $ show (length is)
 
 
-windowsGrid_ :: Text -> Uptime.WindowUptime -> Html ()
-windowsGrid_ noun w = div_ [class_ "grid grid-cols-2 gap-3 md:grid-cols-4"] $ forM_ @[] [("Last 24 hours", w.day), ("Last 7 days", w.week), ("Last 30 days", w.month), ("Last 90 days", w.quarter)] \(label :: Text, (total, failed)) ->
-  div_ [class_ "surface-raised rounded-xl p-4"] do
-    statFigure_ "" [] label $ toHtml $ maybe "—" showPct $ Uptime.uptimePercent total failed
-    p_ [class_ "mt-2 text-xs text-textWeak tabular-nums"] $ toHtml $ if total == 0 then "None yet" else countNoun total noun <> " · " <> fmtInt failed <> " failed"
-
-
 show2 :: Double -> Text
 show2 = showFFloat' 2
 
@@ -552,22 +567,6 @@ uptimeTable_ elemID emptyTitle emptyDesc columns rows =
       , columns
       , rows = V.fromList rows
       , features = def{Table.rowAttrs = Just $ const [class_ "border-t border-strokeWeak"], Table.zeroState = Just Table.ZeroState{icon = "", title = emptyTitle, description = emptyDesc, action = Table.ESNone}}
-      }
-
-
-monthsTable_ :: [(Day, Int, Int)] -> Html ()
-monthsTable_ [] = p_ [class_ "text-sm text-textWeak"] "No history yet"
-monthsTable_ ms =
-  toHtml
-    Table.Table
-      { config = def{Table.elemID = "uptime-months", Table.renderAsTable = True, Table.showHeader = False, Table.noSurface = True, Table.tableClasses = "w-full text-sm", Table.containerClasses = "w-full"}
-      , rows = V.fromList ms
-      , features = def{Table.rowAttrs = Just $ const [class_ "border-b border-strokeWeak last:border-0"]}
-      , columns =
-          [ Table.col "Month" (\(m, _, _) -> toHtml $ formatTime defaultTimeLocale "%B %Y" m) & Table.withAttrs [class_ "py-1.5 text-textStrong"]
-          , Table.col "Uptime" (\(_, total, failed) -> toHtml $ maybe "—" showPct $ Uptime.uptimePercent total failed) & Table.withAttrs [class_ "py-1.5 text-right font-medium tabular-nums text-textStrong"]
-          , Table.col "Failed" (\(_, _, failed) -> show failed <> " failed") & Table.withAttrs [class_ "py-1.5 pl-4 text-right text-xs text-textWeak tabular-nums"]
-          ]
       }
 
 
@@ -630,34 +629,6 @@ requestFields_ teams checkM = div_ [class_ "group/req space-y-3"] do
     div_ [class_ "group-has-[option[value=get]:checked]/req:invisible group-has-[option[value=head]:checked]/req:invisible"]
       $ formField_ FieldSm def{inputType = "textarea", value = foldMap (fold . (.requestBody)) checkM, placeholder = "{\"ping\": true}", hint = Just "Sent with POST, PUT, PATCH and DELETE.", extraAttrs = [rows_ "3"]} "Body" "body" False Nothing
   teamPicker_ teams (foldMap (V.toList . (.teams)) checkM)
-
-
-uptimeSettings_ :: UptimeDashboard -> Html ()
-uptimeSettings_ d = do
-  form_ [class_ "surface-raised space-y-4 rounded-xl p-4", hxPost_ ((urls.monitors d.pid).uptimeCheckEdit d.check.id), hxSwap_ "none"] do
-    div_ [class_ "grid gap-3 md:grid-cols-[1fr_2fr]"] do
-      formField_ FieldSm def{value = d.check.name} "Name" "name" True Nothing
-      formField_ FieldSm def{inputType = "url", value = d.check.url} "URL" "url" True Nothing
-    div_ [class_ "grid gap-3 md:grid-cols-3"] do
-      formSelectField_ FieldSm "Every" "interval" False $ options_ (Just $ show d.check.scrapeIntervalSeconds) intervalOptions
-      expectedStatusField_ d.check.expectedStatus
-      formField_ FieldSm def{value = fold d.check.responseContains, placeholder = "e.g. \"status\":\"ok\""} "Response contains" "contains" False Nothing
-    requestFields_ d.teams (Just d.check)
-    fieldset_ [class_ "space-y-2"] do
-      legend_ [class_ "text-sm font-medium text-textStrong"] "Regions"
-      p_ [class_ "text-xs text-textWeak"] "None selected runs from this deployment's region. A region can be picked once a worker probes from it."
-      div_ [class_ "grid grid-cols-2 gap-2 md:grid-cols-4"] $ forM_ Uptime.regions \r -> do
-        let chosen = r.code `V.elem` d.check.regions
-            served = r.code `elem` d.served
-        formCheckbox_ FieldSm (r.city <> " · " <> r.code <> bool " · no worker" "" served) "regions" ([value_ r.code] <> [checked_ | chosen] <> [disabled_ "" | not (served || chosen)])
-    div_ [class_ "flex justify-end"] $ button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save changes"
-  section_ [class_ "surface-raised flex flex-wrap items-center justify-between gap-3 rounded-xl p-4"] do
-    div_ do
-      p_ [class_ "font-medium text-textStrong"] $ bool "Resume checking" "Pause checking" d.check.enabled
-      p_ [class_ "text-sm text-textWeak"] "A paused check keeps its history and opens no issues."
-    button_ [type_ "button", class_ "btn btn-sm", hxPost_ ((urls.monitors d.pid).uptimeToggle d.check.id), hxSwap_ "none"] $ bool "Resume" "Pause" d.check.enabled
-  dangerZone_ "Delete this check" "Its history stays for 400 days but is no longer shown."
-    $ dangerAction_ "uc-delete" "trash" "Delete" ("Delete " <> d.check.name <> "?") "The check stops and is removed from status pages." [hxPost_ ((urls.monitors d.pid).uptimeDelete d.check.id), hxSwap_ "none"] "Delete check"
 
 
 uptimeCheckGetH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> Maybe Text -> ATAuthCtx (RespHeaders UptimeCheckPage)
@@ -824,7 +795,10 @@ instance ToHtml CronMonitorPage where
       detailTab_ "cm" "t-setup" "" False "Setup"
       detailTab_ "cm" "t-settings" "" False "Settings"
     tabPanel_ "group-has-[.t-overview:checked]/cm:block space-y-4" "cm-overview" do
-      windowsGrid_ "run" d.windows
+      div_ [class_ "grid grid-cols-2 gap-3 md:grid-cols-4"] $ forM_ @[] [("Last 24 hours", d.windows.day), ("Last 7 days", d.windows.week), ("Last 30 days", d.windows.month), ("Last 90 days", d.windows.quarter)] \(label :: Text, (total, failed)) ->
+        div_ [class_ "surface-raised rounded-xl p-4"] do
+          statFigure_ "" [] label $ toHtml $ maybe "—" showPct $ Uptime.uptimePercent total failed
+          p_ [class_ "mt-2 text-xs text-textWeak tabular-nums"] $ toHtml $ if total == 0 then "None yet" else countNoun total "run" <> " · " <> fmtInt failed <> " failed"
       panel_ Raised def "Daily runs" $ barsWithScale_ d.now d.days
       panel_ Raised def "Schedule" $ factGrid_ "grid-cols-2 md:grid-cols-3" [("Last run", maybe "—" (agoText d.now) m.lastCheckinAt), ("Last result", maybe "—" (bool "Error" "OK" . (== Monitors.CSOk)) m.lastStatus), ("Next run due by", toText $ formatTime defaultTimeLocale "%b %e, %H:%M UTC" nextDue)]
     tabPanel_ "group-has-[.t-runs:checked]/cm:block" "cm-runs" $ resultsTable_ d.now False d.recent
@@ -896,12 +870,6 @@ checkState :: UTCTime -> Check -> CheckState
 checkState now = \case UptimeCheck c -> uptimeState c; CronCheck m -> cronState m now
 
 
--- | Uptime counts downtime from 'Uptime.downtimeAfter' failures in a row, matching when it opens an
--- issue; one missed or failed cron run is already an incident.
-minFailures :: Check -> Int
-minFailures = \case UptimeCheck _ -> Uptime.downtimeAfter; CronCheck _ -> 1
-
-
 projectChecks :: DB es => Projects.ProjectId -> Eff es [Check]
 projectChecks pid = do
   uptime <- PromCfg.configsByProjectId pid PromCfg.CKUptime
@@ -957,19 +925,29 @@ statusBoard_ b = div_ ([id_ "status-board", class_ "mx-auto max-w-3xl space-y-6 
   footer_ [class_ "border-t border-strokeWeak pt-4 text-center text-xs text-textWeak"] do
     "Updated " <> toHtml (formatTime defaultTimeLocale "%b %e, %H:%M UTC" b.now) <> " · Powered by "
     a_ [href_ "https://monoscope.tech", class_ "text-textBrand hover:underline"] "Monoscope"
+  where
+    monthsTable_ :: [(Day, Int, Int)] -> Html ()
+    monthsTable_ [] = p_ [class_ "text-sm text-textWeak"] "No history yet"
+    monthsTable_ ms =
+      toHtml
+        Table.Table
+          { config = def{Table.elemID = "uptime-months", Table.renderAsTable = True, Table.showHeader = False, Table.noSurface = True, Table.tableClasses = "w-full text-sm", Table.containerClasses = "w-full"}
+          , rows = V.fromList ms
+          , features = def{Table.rowAttrs = Just $ const [class_ "border-b border-strokeWeak last:border-0"]}
+          , columns =
+              [ Table.col "Month" (\(m, _, _) -> toHtml $ formatTime defaultTimeLocale "%B %Y" m) & Table.withAttrs [class_ "py-1.5 text-textStrong"]
+              , Table.col "Uptime" (\(_, total, failed) -> toHtml $ maybe "—" showPct $ Uptime.uptimePercent total failed) & Table.withAttrs [class_ "py-1.5 text-right font-medium tabular-nums text-textStrong"]
+              , Table.col "Failed" (\(_, _, failed) -> show failed <> " failed") & Table.withAttrs [class_ "py-1.5 pl-4 text-right text-xs text-textWeak tabular-nums"]
+              ]
+          }
 
 
--- | What a status page says went wrong: an uptime failure by its status code, never the client
--- error (it names the URL); a cron run by its own outcome.
-publicReason :: Check -> Uptime.Incident -> Text
-publicReason c i = case c of
-  UptimeCheck _ -> maybe "Request failed" (("HTTP " <>) . show) i.statusCode
-  CronCheck _ -> fromMaybe "Run failed" i.reason
-
-
--- | A check's failure runs long enough to count as incidents.
+-- | A check's failure runs long enough to count as incidents: uptime counts downtime from
+-- 'Uptime.downtimeAfter' failures in a row, while one missed or failed cron run is already an incident.
 incidentsOf :: Check -> [Uptime.Incident] -> [Uptime.Incident]
-incidentsOf c = filter \i -> i.checkId == checkId c && i.failures >= minFailures c
+incidentsOf c = filter \i -> i.checkId == checkId c && i.failures >= minFailures
+  where
+    minFailures = case c of UptimeCheck _ -> Uptime.downtimeAfter; CronCheck _ -> 1
 
 
 -- | A board of @checks@, in order, with their history: four queries whatever the page's size.
@@ -985,6 +963,11 @@ statusBoard refresh title description checks = do
   let component c = Component{name = checkName c, state = checkState now c, days = daysOf i buckets, avgMs = weightedAvg [b | b <- buckets, b.checkId == i], months = [(d, t, f) | (m, d, t, f) <- months, m == i], byRegion = filter ((== i) . (.checkId)) byRegion}
         where
           i = checkId c
+      -- What a status page says went wrong: an uptime failure by its status code, never the client
+      -- error (it names the URL); a cron run by its own outcome.
+      publicReason c i = case c of
+        UptimeCheck _ -> maybe "Request failed" (("HTTP " <>) . show) i.statusCode
+        CronCheck _ -> fromMaybe "Run failed" i.reason
   pure StatusBoard{title, description, now, refresh, components = map component checks, incidents = sortWith (\(_, _, i) -> Down i.startedAt) [(checkName c, publicReason c i, i) | c <- checks, i <- incidentsOf c runs]}
 
 
