@@ -9,6 +9,8 @@
 module Pkg.OnboardingInstrument (
   runOnboardingInstrument,
   detectStackFromPaths,
+  serviceRoots,
+  listServiceRoots,
   buildDiffPreview,
 ) where
 
@@ -19,6 +21,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as LLM
 import Data.Effectful.UUID qualified as UUIDEff
 import Data.Effectful.Wreq qualified as W
+import Data.List (lookup)
 import Data.ProtoLens (defMessage, encodeMessage)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -100,6 +103,28 @@ detectStackFromPaths paths
     lower = map T.toLower paths
 
 
+-- | Folders holding a service manifest, each with the stack detected from the files it owns
+-- (a file belongs to the deepest root above it). Dependency, example and test trees are ignored.
+--
+-- >>> serviceRoots ["package.json", "src/index.ts", "README.md"]
+-- ("","Node.js / TypeScript") :| []
+-- >>> serviceRoots ["package.json", "apps/web/package.json", "apps/web/next.config.ts", "services/api/go.mod", "node_modules/x/package.json", "examples/demo/go.mod"]
+-- ("","Node.js / TypeScript") :| [("apps/web","Next.js (TypeScript / Frontend + API)"),("services/api","Go")]
+-- >>> serviceRoots ["Chart.yaml", "templates/deployment.yaml"]
+-- ("","Kubernetes (Helm)") :| []
+serviceRoots :: [Text] -> NonEmpty (Text, Text)
+serviceRoots paths = fromMaybe (("", detectStackFromPaths paths) :| []) $ nonEmpty [(r, detectStackFromPaths [rel r p | p <- paths, owner p == Just r]) | r <- roots]
+  where
+    segs = T.splitOn "/"
+    dir = T.intercalate "/" . fromMaybe [] . viaNonEmpty init . segs
+    ignored = any (`elem` ["node_modules", "vendor", "examples", "example", "test", "tests", "testdata", "fixtures", "dist", ".git"]) . segs . T.toLower
+    manifest p = let b = T.toLower $ fromMaybe p $ viaNonEmpty last $ segs p in b `elem` ["package.json", "go.mod", "pyproject.toml", "requirements.txt", "cargo.toml", "pom.xml", "build.gradle", "build.gradle.kts", "mix.exs", "composer.json"] || ".csproj" `T.isSuffixOf` b
+    roots = sort $ ordNub [dir p | p <- paths, manifest p, not (ignored p)]
+    under r p = T.null r || (r <> "/") `T.isPrefixOf` p
+    owner p = viaNonEmpty last [r | r <- roots, under r p]
+    rel r p = if T.null r then p else T.drop (T.length r + 1) p
+
+
 -- | Format a compact unified-style diff preview from generated files.
 buildDiffPreview :: [PatchFile] -> Text
 buildDiffPreview =
@@ -117,24 +142,30 @@ runOnboardingInstrument pid rid = do
       let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
       let phases0 = OI.initialPhases run.repoFullName
       OI.updateRunProgress rid OI.RunCloning "" (setPhase "clone" OI.PhaseRunning Nothing phases0) "" []
-      connRes <- resolveGitConn encKey pid run
+      connRes <- resolveGitConn encKey pid run.repositoryId run.repoFullName run.branch
       case connRes of
         Left err ->
           OI.failRun rid (setPhase "clone" OI.PhaseFailed (Just err) phases0) "Could not access the selected GitHub repository. Check GitHub App permissions and try again." err
         Right (conn, repoRef) -> do
           -- Phase 1: Fetch tree & key files
-          treeRes <- Git.fetchTree conn repoRef ""
+          treeRes <- Git.fetchTree conn repoRef (bool (run.rootPath <> "/") "" (T.null run.rootPath))
           case treeRes of
             Left err ->
               OI.failRun rid (setPhase "clone" OI.PhaseFailed (Just err) phases0) "Could not read files from the repository. Verify the branch exists and retry." err
             Right (_, entries) -> do
-              let paths = [e.path | e <- entries, e.isBlob]
-                  detected = detectStackFromPaths paths
+              -- A monorepo run is scoped to one service root: the agent sees paths relative to it,
+              -- and its files, span and service name are placed back under it.
+              let root = run.rootPath
+                  rel p = if T.null root then p else T.drop (T.length root + 1) p
+                  repoPaths = [e.path | e <- entries, e.isBlob]
+                  paths = map rel repoPaths
+                  service = run.repoFullName <> bool ("/" <> root) "" (T.null root)
+                  detected = fromMaybe (detectStackFromPaths paths) $ lookup root $ toList $ serviceRoots repoPaths
                   phases1 = setPhase "detect" OI.PhaseRunning (Just detected) $ setPhase "clone" OI.PhaseDone (Just $ show (length paths) <> " files") phases0
               OI.updateRunProgress rid OI.RunDetecting detected phases1 "" []
               -- Fetch key manifest/readme/config files for stack context & URL discovery
-              let interesting = take 8 $ filter isContextFile paths
-              fetched <- forM interesting \p -> (p,) . rightToMaybe <$> Git.fetchFile conn repoRef p
+              let interesting = take 8 $ filter isContextFile repoPaths
+              fetched <- forM interesting \p -> (rel p,) . rightToMaybe <$> Git.fetchFile conn repoRef p
               let fileContents = [(p, T.take 2500 $ decodeUtf8 bs) | (p, Just bs) <- fetched]
                   candidateDocUrls = take 3 $ Discovery.extractUrlsFromText $ unlines (map snd fileContents)
               suggestedUrls <-
@@ -145,14 +176,14 @@ runOnboardingInstrument pid rid = do
               let phases2 = setPhase "patch" OI.PhaseRunning Nothing $ setPhase "detect" OI.PhaseDone (Just detected) phases1
               OI.updateRunProgress rid OI.RunPatching detected phases2 "" suggestedUrls
               -- Phase 3: Generate secret-free OpenTelemetry instrumentation
-              plan <- generateInstrumentationPlan detected run.repoFullName paths fileContents
+              plan <- (\pl -> pl{files = [f{path = bool (root <> "/") "" (T.null root) <> f.path} | f <- pl.files]}) <$> generateInstrumentationPlan detected service paths fileContents
               let diffTxt = buildDiffPreview plan.files
                   phases3 = setPhase "verify" OI.PhaseRunning Nothing $ setPhase "patch" OI.PhaseDone (Just $ show (length plan.files) <> " file(s)") phases2
               OI.updateRunProgress rid OI.RunVerifying plan.stack phases3 diffTxt suggestedUrls
               -- Phase 4: Generate/fetch API key & verify real live ingestion against Monoscope
               apiKey <- ensureActiveApiKey ctx.config.apiKeyEncryptionSecretKey pid
               now <- Time.currentTime
-              verifyRes <- sendAndVerifyTestSpan ctx pid apiKey run.repoFullName plan.stack now
+              verifyRes <- sendAndVerifyTestSpan ctx pid apiKey service plan.stack now
               case verifyRes of
                 Left err ->
                   OI.failRun
@@ -183,25 +214,36 @@ runOnboardingInstrument pid rid = do
                       OI.completeRun rid phases5 diffTxt suggestedUrls (Just prUrl) (Just $ fromIntegral prNum) (Just verifiedAt)
 
 
-resolveGitConn :: (DB es, IOE :> es, Log :> es, Reader AuthContext :> es, W.HTTP :> es) => ByteString -> Projects.ProjectId -> OI.InstrumentRun -> Eff es (Either Text (Git.GitConn, Git.RepoRef))
-resolveGitConn encKey pid run = do
+resolveGitConn :: (DB es, IOE :> es, Log :> es, Reader AuthContext :> es, W.HTTP :> es) => ByteString -> Projects.ProjectId -> Maybe GitSync.RepositoryId -> Text -> Text -> Eff es (Either Text (Git.GitConn, Git.RepoRef))
+resolveGitConn encKey pid repositoryId repoFullName branch = do
   ctx <- ask @AuthContext
   let toConn cred owner repo = runExceptT do
         credentials <- hoistEither $ maybeToRight "Reconnect the repository account." $ GitSync.credentialCreds cred
         token <- ExceptT $ GitSync.githubToken ctx.config.githubAppId ctx.config.githubAppPrivateKey credentials
         conn <- hoistEither $ first Git.gitConnErrorMessage $ GitSync.credentialConn cred token
-        pure (conn, Git.RepoRef owner repo run.branch)
+        pure (conn, Git.RepoRef owner repo branch)
   repos <- GitSync.getRepositories pid
-  let matchedRepo = (run.repositoryId >>= \rid -> find ((== rid) . (.id)) repos) <|> find (\r -> r.owner <> "/" <> r.repo == run.repoFullName) repos
+  let matchedRepo = (repositoryId >>= \rid -> find ((== rid) . (.id)) repos) <|> find (\r -> r.owner <> "/" <> r.repo == repoFullName) repos
   case matchedRepo of
     Just r -> do
       credM <- join <$> traverse (GitSync.getGitHubCredential encKey pid) r.credentialId
       maybe (pure $ Left "GitHub credential not found for this repository.") (\c -> toConn c r.owner r.repo) credM
     Nothing -> do
       creds <- GitSync.getGitHubCredentials pid
-      case (find ((== Git.GitHub) . (.host)) creds, Git.splitFullName run.repoFullName) of
+      case (find ((== Git.GitHub) . (.host)) creds, Git.splitFullName repoFullName) of
         (Just cred, (owner, repo)) | not (T.null owner || T.null repo) -> toConn cred owner repo
         _ -> pure $ Left "No connected GitHub account found for this project."
+
+
+-- | The repository's default branch and service roots, for the onboarding folder picker.
+listServiceRoots :: (DB es, IOE :> es, Log :> es, Reader AuthContext :> es, W.HTTP :> es) => Projects.ProjectId -> Maybe GitSync.RepositoryId -> Text -> Eff es (Either Text (Text, NonEmpty (Text, Text)))
+listServiceRoots pid repositoryId repoFullName = do
+  ctx <- ask @AuthContext
+  runExceptT do
+    (conn, r) <- ExceptT $ resolveGitConn (encodeUtf8 ctx.config.apiKeyEncryptionSecretKey) pid repositoryId repoFullName "HEAD"
+    branch <- lift $ Git.defaultBranchOf conn r
+    (_, entries) <- ExceptT $ Git.fetchTree conn (Git.RepoRef r.owner r.repo branch) ""
+    pure (branch, serviceRoots [e.path | e <- entries, e.isBlob])
 
 
 isContextFile :: Text -> Bool

@@ -177,12 +177,12 @@ spec = around withTestResources do
     (finishHeaders, _) <- testServant tr $ Onboarding.onboardingFinishPostH pid
     lookupResponseHeader @"HX-Redirect" finishHeaders `shouldBe` Header ("/p/" <> pid.toText <> "/onboarding?step=Pricing")
     -- Starting durable auto-instrumentation creates a persisted run visible via status endpoint
-    started <- call tr $ Onboarding.onboardingStartInstrumentPostH pid Onboarding.StartInstrumentForm{repoFullName = "acme/api", branch = Just "main", targetKind = Just "backend"}
+    started <- call tr $ Onboarding.onboardingStartInstrumentPostH pid Onboarding.StartInstrumentForm{repoFullName = "acme/api", branch = Just "main", targetKind = Just "backend", rootPath = Nothing}
     started.statusRun `shouldSatisfy` isJust
     fetched <- call tr $ Onboarding.onboardingInstrumentStatusGetH pid Nothing
     fetched.statusRun `shouldSatisfy` isJust
     -- One run at a time on every plan; unpaid projects get one PR and 3 attempts a day
-    let start = (.statusRefusal) <$> call tr (Onboarding.onboardingStartInstrumentPostH pid Onboarding.StartInstrumentForm{repoFullName = "acme/api", branch = Nothing, targetKind = Nothing})
+    let start = (.statusRefusal) <$> call tr (Onboarding.onboardingStartInstrumentPostH pid Onboarding.StartInstrumentForm{repoFullName = "acme/api", branch = Nothing, targetKind = Nothing, rootPath = Nothing})
         failRuns = dbExec tr [sql|UPDATE projects.onboarding_instrument_runs SET status = 'failed' WHERE project_id = ?|] (Only pid)
     start `shouldReturn` Just OI.RunInProgress
     (failRuns >> start) `shouldReturn` Nothing
@@ -190,11 +190,16 @@ spec = around withTestResources do
     (failRuns >> start) `shouldReturn` Just OI.UnpaidDailyLimit
     dbExec tr [sql|UPDATE projects.onboarding_instrument_runs SET pr_url = 'https://github.com/acme/api/pull/1', created_at = created_at - INTERVAL '2 days' WHERE project_id = ?|] (Only pid)
     start `shouldReturn` Just OI.UnpaidPrUsed
-    rendered <- renderT <$> call tr (Onboarding.onboardingStartInstrumentPostH pid Onboarding.StartInstrumentForm{repoFullName = "acme/api", branch = Nothing, targetKind = Nothing})
+    rendered <- renderT <$> call tr (Onboarding.onboardingStartInstrumentPostH pid Onboarding.StartInstrumentForm{repoFullName = "acme/api", branch = Nothing, targetKind = Nothing, rootPath = Nothing})
     rendered `shouldSatisfy` T.isInfixOf "Free projects include one setup PR"
     dbExec tr [sql|UPDATE projects.projects SET payment_plan = 'Startup' WHERE id = ?|] (Only pid)
     start `shouldReturn` Nothing
     start `shouldReturn` Just OI.RunInProgress
+    -- A monorepo run is scoped to the chosen service folder; without GitHub the picker falls back to the root
+    failRuns
+    scoped <- call tr $ Onboarding.onboardingStartInstrumentPostH pid Onboarding.StartInstrumentForm{repoFullName = "acme/api", branch = Nothing, targetKind = Nothing, rootPath = Just " /services/api/ "}
+    (.rootPath) <$> scoped.statusRun `shouldBe` Just "services/api"
+    renderT <$> call tr (Onboarding.onboardingServiceRootsGetH pid (Just "acme/api")) >>= (`shouldSatisfy` T.isInfixOf "will start from its root")
     -- Instrument hub exposes active API key for editors
     step (Just Onboarding.Instrument) >>= \case
       Onboarding.InstrumentHubStep{apiKey = k} -> k `shouldNotBe` "<API_KEY>"

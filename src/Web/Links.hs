@@ -631,6 +631,7 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , onboardingCreateUptimesPost :: mode :- "p" :> ProjectId :> "onboarding" :> "create-uptimes" :> ReqBody '[FormUrlEncoded] (Opaque "Onboarding.CreateUptimesForm") :> Post '[HTML] (RespHeaders (Opaque "Onboarding.CreatedUptimesHtml"))
   , onboardingStartInstrumentPost :: mode :- "p" :> ProjectId :> "onboarding" :> "auto-instrument" :> "start" :> ReqBody '[FormUrlEncoded] (Opaque "Onboarding.StartInstrumentForm") :> Post '[HTML] (RespHeaders (Opaque "Onboarding.InstrumentStatusHtml"))
   , onboardingInstrumentStatusGet :: mode :- "p" :> ProjectId :> "onboarding" :> "auto-instrument" :> "status" :> QueryParam "runId" (UUIDId "onboarding_instrument_run") :> Get '[HTML] (RespHeaders (Opaque "Onboarding.InstrumentStatusHtml"))
+  , onboardingServiceRootsGet :: mode :- "p" :> ProjectId :> "onboarding" :> "auto-instrument" :> "services" :> QueryParam "repoFullName" Text :> Get '[HTML] (RespHeaders (Opaque "Onboarding.ServiceRootsHtml"))
   , onboardingFinishPost :: mode :- "p" :> ProjectId :> "onboarding" :> "finish" :> Unrefusable 'POST (Opaque "Onboarding.OnboardingRedirect")
   , onboardingAlertsPost :: mode :- "p" :> ProjectId :> "onboarding" :> "alerts" :> ReqBody '[JSON] (Opaque "Onboarding.NotifChannelForm") :> Unrefusable 'POST (Opaque "Onboarding.OnboardingRedirect")
   , onboardingInfoPost :: mode :- "p" :> ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] (Opaque "Onboarding.OnboardingInfoForm") :> Unrefusable 'POST (Opaque "Onboarding.OnboardingStepPost")

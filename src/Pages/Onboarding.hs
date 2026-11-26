@@ -11,6 +11,7 @@ module Pages.Onboarding (
   onboardingCreateUptimesPostH,
   onboardingStartInstrumentPostH,
   onboardingInstrumentStatusGetH,
+  onboardingServiceRootsGetH,
   onboardingFinishPostH,
   onboardingAlertsPostH,
   onboardingInfoPostH,
@@ -28,6 +29,7 @@ module Pages.Onboarding (
   DiscoveredEndpointsHtml (..),
   CreatedUptimesHtml (..),
   InstrumentStatusHtml (..),
+  ServiceRootsHtml (..),
   NotifChannelForm (..),
   OnboardingInfoForm (..),
   OnboardingConfForm (..),
@@ -81,6 +83,7 @@ import Pages.Components
 import Pages.Uptime qualified as UptimePage
 import Pkg.DeriveUtils (UUIDId (..), assetUrl)
 import Pkg.OnboardingDiscovery qualified as Discovery
+import Pkg.OnboardingInstrument qualified as Instrument
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ActionResult, Done, HXRedirectDest, HXReswap, Outcome (..), Refusal (..), RespHeaders, Says (..), TriggerEvents, XWidgetJSON, act, addErrorToast, addRespHeaders, addTriggerEvent, done)
@@ -315,7 +318,8 @@ onboardingStartInstrumentPostH pid form = do
       branch = fromMaybe "main" $ mfilter (not . T.null . T.strip) form.branch
       targetKind = fromMaybe "auto" $ mfilter (not . T.null . T.strip) form.targetKind
       paid = Projects.isPaidPlan $ Projects.parsePlan project.paymentPlan
-  OI.createRun paid pid ((.id) <$> repoM) (T.strip form.repoFullName) branch targetKind >>= \case
+      rootPath = maybe "" (T.dropAround (== '/') . T.strip) form.rootPath
+  OI.createRun paid pid ((.id) <$> repoM) (T.strip form.repoFullName) branch targetKind rootPath >>= \case
     Right run -> insertJob (OnboardingInstrument pid run.id) >> addRespHeaders (InstrumentStatusHtml pid (Just run) Nothing)
     Left refusal -> OI.latestRunForProject pid >>= \runM -> addRespHeaders $ InstrumentStatusHtml pid runM (Just refusal)
 
@@ -325,6 +329,16 @@ onboardingInstrumentStatusGetH pid runIdM = do
   void $ Projects.sessionAndProject pid
   runM <- maybe (OI.latestRunForProject pid) (OI.getRun pid) runIdM
   addRespHeaders $ InstrumentStatusHtml pid runM Nothing
+
+
+-- | The repository's default branch and service folders; the picker shows only for monorepos.
+onboardingServiceRootsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders ServiceRootsHtml)
+onboardingServiceRootsGetH pid repoFullNameM = do
+  void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
+  let repoFullName = maybe "" T.strip repoFullNameM
+  repos <- GitSync.getRepositories pid
+  let repoM = find (\r -> r.owner <> "/" <> r.repo == repoFullName) repos
+  addRespHeaders . ServiceRootsHtml =<< Instrument.listServiceRoots pid ((.id) <$> repoM) repoFullName
 
 
 onboardingFinishPostH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Done OnboardingRedirect))
@@ -386,6 +400,7 @@ data StartInstrumentForm = StartInstrumentForm
   { repoFullName :: Text
   , branch :: Maybe Text
   , targetKind :: Maybe Text
+  , rootPath :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -446,6 +461,25 @@ instance ToHtml InstrumentStatusHtml where
     renderAgentProgress_ pid runM
     where
       upgrade msg = toHtml @Text msg >> " " >> a_ [href_ $ stepUrl pid Pricing, class_ "text-textBrand hover:underline"] "See plans"
+  toHtmlRaw = toHtml
+
+
+newtype ServiceRootsHtml = ServiceRootsHtml {serviceRoots :: Either Text (Text, NonEmpty (Text, Text))}
+  deriving stock (Show)
+
+
+instance ToHtml ServiceRootsHtml where
+  toHtml (ServiceRootsHtml res) = toHtml @(Html ()) case res of
+    Left _ -> p_ [class_ "text-xs text-textWeak"] "Couldn't list this repository's folders; the Setup agent will start from its root."
+    Right (branch, roots) -> do
+      input_ [type_ "hidden", name_ "branch", value_ branch]
+      when (length roots > 1) $ fieldset_ [class_ "space-y-1.5"] do
+        legend_ [class_ "text-xs font-medium text-textStrong mb-1.5"] "Service to instrument"
+        forM_ (zip [0 :: Int ..] $ toList roots) \(i, (dir, stack)) ->
+          label_ [class_ "flex cursor-pointer items-center gap-2 rounded-lg border border-strokeWeak bg-bgBase px-3 py-2 text-sm has-[:checked]:border-strokeBrand-strong has-[:checked]:bg-fillBrand-weak"] do
+            input_ $ [type_ "radio", name_ "rootPath", value_ dir, class_ "radio radio-xs"] <> [checked_ | i == 0]
+            span_ [class_ "min-w-0 truncate font-mono text-xs text-textStrong"] $ toHtml $ if T.null dir then "Repository root" else dir
+            span_ [class_ "ms-auto shrink-0 text-xs text-textWeak"] $ toHtml stack
   toHtmlRaw = toHtml
 
 
@@ -1086,6 +1120,8 @@ step2InstrumentPage pid _title apiKey host initialTab hasGitHub repos latestRunM
                     button_ [type_ "submit", class_ "btn btn-primary h-10 shrink-0 rounded-lg text-sm font-medium gap-2 cursor-pointer"] do
                       faSprite_ "sparkles" "regular" "size-3.5"
                       span_ "Start setup agent"
+                  unless (null repos)
+                    $ div_ [id_ "service-roots", hxGet_ (urls.projects.onboardingServiceRootsGet pid Nothing), hxTrigger_ "load, change from:#repoFullName", hxInclude_ "#repoFullName", hxSwap_ "innerHTML"] mempty
 
               div_ [id_ "setup-agent-panel"] $ renderAgentProgress_ pid latestRunM
 
