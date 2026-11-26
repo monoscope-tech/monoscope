@@ -1,5 +1,5 @@
 <button class="btn btn-primary btn-sm max-md:min-h-11 group-has-[.new-widget-monitor:checked]/wgtexp:hidden" type="submit" form="idnewWidge-widget-form">Add widget</button>
-<button id="idnewWidge-add-monitor-button" class="btn btn-primary btn-sm max-md:min-h-11 hidden group-has-[.new-widget-monitor:checked]/wgtexp:inline-flex" type="button" hx-on:click="window.submitWidgetWithMonitor(&#39;idnewWidge-alert-form&#39;, &#39;idnewWidge-widget-form&#39;, &#39;idnewWidge-monitor-query-hint&#39;)">Add widget and monitor</button>
+<button id="idnewWidge-add-monitor-button" class="btn btn-primary btn-sm max-md:min-h-11 hidden group-has-[.new-widget-monitor:checked]/wgtexp:inline-flex" type="submit" form="idnewWidge-alert-form" onclick="if (!document.querySelector(&#39;#filterElement&#39;).getValue().trim()) { document.getElementById(&#39;idnewWidge-monitor-query-hint&#39;).hidden = false; document.querySelector(&#39;#filterElement .cm-content&#39;).focus(); event.preventDefault(); }">Add widget and monitor</button>
 <div class="widget-preview-heading flex items-center justify-between gap-4">
 <h3 class="text-sm font-semibold text-textStrong">Preview</h3>
 </div>

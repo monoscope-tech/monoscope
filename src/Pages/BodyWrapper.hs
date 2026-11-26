@@ -1405,14 +1405,12 @@ settingsWrapper pid current pageHtml =
               ( [ class_ $ "settings-nav-link flex gap-2 md:gap-3 items-center px-2.5 md:px-3 py-2 rounded-lg whitespace-nowrap" <> bool "" " active" (current == linkText)
                 , href_ link
                 , hxGet_ link
-                , hxTarget_ settingsContentTarget
-                , hxSelect_ settingsContentTarget
                 , term "hx-select-oob" "#settings-nav:outerMorph"
-                , hxSwap_ "outerMorph"
                 , hxPushUrl_ "true"
                 , hxIndicator_ "#settings-loading"
                 , [__|on click set my.preloadState to 'DONE'|]
                 ]
+                  <> Components.morphTarget_ "settings-content"
                   <> tippyRight_ linkText
               )
               do

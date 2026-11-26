@@ -76,14 +76,8 @@ function hookDashboardDocumentOnce(): void {
   });
 }
 
-let domContentLoaded = document.readyState === 'complete';
-if (!domContentLoaded) {
-  document.addEventListener('DOMContentLoaded', () => { domContentLoaded = true; }, { once: true });
-}
-
-export function initDashboardPage(gridStackReady: Promise<unknown>): void {
+export function initDashboardPage(gridStackReady: Promise<unknown>, fullLoad: boolean): void {
   hookDashboardDocumentOnce();
-  const fullLoad = !domContentLoaded;
   gridStackReady.then(() => {
     const GridStack = w.GridStack;
     const request = fullLoad
@@ -323,11 +317,10 @@ export function initDashboardPage(gridStackReady: Promise<unknown>): void {
   });
 }
 
-export function initWidgetEditor(widgetPreviewId: string): void {
-  const editor = document.getElementById(widgetPreviewId)?.closest<HTMLElement>('.widget-editor');
-  const pane = editor?.closest<HTMLElement & { _widgetPreviewResize?: ResizeObserver; _widgetPreviewAbort?: AbortController }>('[role="dialog"]');
-  const header = editor?.querySelector<HTMLElement>('.widget-editor-header');
-  if (!editor || !pane || !header) return;
+export function initWidgetEditor(editor: HTMLElement): void {
+  const pane = editor.closest<HTMLElement & { _widgetPreviewResize?: ResizeObserver; _widgetPreviewAbort?: AbortController }>('[role="dialog"]');
+  const header = editor.querySelector<HTMLElement>('.widget-editor-header');
+  if (!pane || !header) return;
   const update = () => {
     const compact = editor.classList.contains('is-compact');
     const next = pane.scrollTop > 0;
@@ -358,30 +351,21 @@ export function initWidgetEditor(widgetPreviewId: string): void {
   update();
 }
 
-export function submitWidgetWithMonitor(alertFormId: string, widgetFormId: string, hintId: string): void {
-  const form = document.getElementById(alertFormId) as HTMLFormElement | null;
-  const filter = document.querySelector<HTMLElement & { getValue?: () => string }>('#filterElement');
-  if (!filter?.getValue?.().trim()) {
-    const hint = document.getElementById(hintId);
-    if (hint) hint.hidden = false;
-    document.querySelector<HTMLElement>('#filterElement .cm-content')?.focus();
-    return;
+function mountDashboardAndEditors(fullLoad: boolean): void {
+  const page = document.getElementById('dashboardPage');
+  if (page && !page.dataset.dashboardInit) {
+    page.dataset.dashboardInit = '1';
+    initDashboardPage(w.loadDeps('GridStack'), fullLoad);
   }
-  if (!form?.reportValidity()) return;
-  if (form.dataset.widgetSaved === 'true') {
-    form.requestSubmit();
-    return;
-  }
-  for (const [from, to] of [
-    ['alertThreshold', 'widgetAlertThreshold'],
-    ['warningThreshold', 'widgetWarningThreshold'],
-    ['unit', 'widgetUnit'],
-  ]) {
-    const dst = document.getElementById(to) as HTMLInputElement | null;
-    const src = form.querySelector<HTMLInputElement>(`[name="${from}"]`);
-    if (dst && src) dst.value = src.value;
-  }
-  (document.getElementById(widgetFormId) as HTMLFormElement | null)?.requestSubmit();
+  document.querySelectorAll<HTMLElement>('.widget-editor:not([data-widget-editor-init])').forEach(el => {
+    el.dataset.widgetEditorInit = '1';
+    initWidgetEditor(el);
+  });
 }
 
-Object.assign(window, { initDashboardPage, initWidgetEditor, submitWidgetWithMonitor });
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => mountDashboardAndEditors(true), { once: true });
+} else {
+  mountDashboardAndEditors(true);
+}
+document.addEventListener('htmx:after:settle', () => mountDashboardAndEditors(false));

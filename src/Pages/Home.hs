@@ -11,6 +11,7 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, zonedTimeToUTC)
+import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField (..))
@@ -36,6 +37,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (SortOrder (..), UUIDId (..))
 import Pkg.Slack qualified as Slack
 import Relude hiding (ask)
+import Servant (err302, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging (logAttention)
 import System.Types (ATAuthCtx, Outcome (..), RespHeaders, Toast (..), ToastLevel (..), addRespHeaders, done)
@@ -81,7 +83,8 @@ instance ToHtml HomeData where
 
 homeGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders HomeGet)
 homeGetH pid = do
-  (sess, _, bw) <- mkPageCtx pid
+  (sess, project, bw) <- mkPageCtx pid
+  when (Projects.isOnboarding project.paymentPlan) $ throwError err302{errHeaders = [("Location", encodeUtf8 $ urls.projects.onboading pid Nothing)]}
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now
       inbox = Issues.inboxFilters{Issues.hideLowSeverity = True}

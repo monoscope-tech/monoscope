@@ -520,7 +520,8 @@ renderTable tbl =
   where
     renderRows :: Html ()
     renderRows
-      | tbl.config.renderAsTable =
+      | tbl.config.renderAsTable = do
+          treeCollapseStyle
           table_ [class_ $ tbl.config.tableClasses <> if tbl.config.noDividers then " no-dividers" else ""] do
             when tbl.config.showHeader
               $ thead_ do
@@ -549,6 +550,14 @@ renderTable tbl =
                           whenJust tbl.features.tableHeaderActions $ span_ [class_ $ bool "group-has-[.bulkactionItemCheckbox:checked]/grid:md:hidden" "" (null tbl.features.bulkActions)] . renderHeaderTableActions
             renderBody [id_ $ tbl.config.elemID <> "_tbody"] tbl
       | otherwise = renderBody [] tbl
+      where
+        -- CSS owns descendant visibility so HTMX morphs never lose collapsed state.
+        treeCollapseStyle = forM_ tbl.features.treeConfig \tc ->
+          let esc = T.replace "<" "\\3c " . T.replace "\"" "\\\"" . T.replace "\\" "\\\\"
+              groups = [esc (tc.rowPath r) | r <- V.toList tbl.rows, tc.isGroupRow r]
+           in unless (null groups)
+                $ style_
+                $ foldMap (\p -> "#" <> tbl.config.elemID <> "_tbody:has(>[data-tree-path=\"" <> p <> "\"][data-tree-collapsed=\"true\"])>[data-tree-path^=\"" <> p <> ".\"]{display:none}") groups
 
     toggleSortUrl :: SortableConfig -> Text -> Text
     toggleSortUrl cfg field = withQuery (deleteParam "sort" cfg.baseUrl) $ "sort=" <> toUriStr (bool "+" "-" (cfg.currentSort == "+" <> field) <> field)
@@ -718,7 +727,7 @@ treeRowAttrs row tc =
         , role_ "button"
         , tabindex_ "0"
         , term "aria-label" $ "Toggle metric namespace " <> tc.rowPath row
-        , onclick_ "toggleTreeRow(this)"
+        , [__|on click if @data-tree-collapsed is 'true' set @data-tree-collapsed to 'false' then set @aria-expanded to 'true' else set @data-tree-collapsed to 'true' then set @aria-expanded to 'false' end|]
         , keyboardActivateAttr_
         ]
       else []
