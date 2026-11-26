@@ -150,6 +150,13 @@ spec = around withTestResources $ describe "Issues" do
     pages <- forM [java, go, noTrace, traced, alert, logPattern, spanSchema] (detail tr)
     goldenHtml "issue-detail-types" $ traverse_ toHtml pages
 
+    forM_ ([("status_code;badge-4xx", Nothing, "ERROR"), ("status_code;badge-5xx", Nothing, "ERROR"), ("status;badge-error⇒ERROR", Nothing, "ERROR"), ("status_code;badge-5xx", Just "warning", "WARN"), ("plain message", Nothing, "Unknown")] :: [(Text, Maybe Text, Text)]) \(patternText, level, chip) -> do
+      let hash = patternText <> fold level
+      issue <- seedIssue tr (issueSeed Issues.LogPattern hash){payload = AE.toJSON $ Issues.LogPatternData hash patternText Nothing level Nothing "summary" detectedAt 1}
+      html <- renderT <$> detail tr issue
+      html `shouldSatisfy` T.isInfixOf (">" <> chip <> "</span>")
+      BackgroundJobs.isIssueWorthy level patternText `shouldBe` (chip /= "Unknown")
+
   it "triage: ack, archive, priority, assign, resolve, spam, expiry, collaboration and saved views" \tr -> do
     [a, b] <- forM ([(0, "triage-a"), (60, "triage-b")] :: [(NominalDiffTime, Text)]) \(dt, h) -> seedIssue tr (issueSeed Issues.LogPattern h){title = "triage " <> h, at = addUTCTime dt frozenTime}
     member : _ <- runTestBg frozenTime tr (ProjectMembers.selectActiveProjectMembers testPid)

@@ -315,7 +315,7 @@ uptimeChecksList_ o =
           formField_ FieldSm def{inputType = "url", placeholder = "https://shop.example.com/health"} "URL" "url" True Nothing
           formField_ FieldSm def{placeholder = "e.g. \"status\":\"ok\""} "Response contains" "contains" False Nothing
           formSelectField_ FieldSm "Every" "interval" False $ options_ Nothing intervalOptions
-          formField_ FieldSm def{inputType = "number", value = "200", extraAttrs = [min_ "100", max_ "599"]} "Expected status" "expectedStatus" False Nothing
+          expectedStatusField_ Nothing
           button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add check"
         details_ do
           summary_ [class_ "inline-flex cursor-pointer items-center gap-1.5 text-xs text-textWeak hover:text-textBrand"] $ faSprite_ "code" "regular" "size-3" >> "Customize request and alerts"
@@ -617,6 +617,10 @@ resultsTable_ now probes =
     )
 
 
+expectedStatusField_ :: Maybe Int -> Html ()
+expectedStatusField_ expected = formField_ FieldSm def{inputType = "number", value = show (fromMaybe 200 expected), extraAttrs = [min_ "100", max_ "599"]} "Expected status" "expectedStatus" False Nothing
+
+
 -- | The request a check sends and who hears when it fails, shared by the add and settings forms.
 requestFields_ :: [ManageMembers.Team] -> Maybe PromCfg.PrometheusScrapeConfig -> Html ()
 requestFields_ teams checkM = div_ [class_ "group/req space-y-3"] do
@@ -636,7 +640,7 @@ uptimeSettings_ d = do
       formField_ FieldSm def{inputType = "url", value = d.check.url} "URL" "url" True Nothing
     div_ [class_ "grid gap-3 md:grid-cols-3"] do
       formSelectField_ FieldSm "Every" "interval" False $ options_ (Just $ show d.check.scrapeIntervalSeconds) intervalOptions
-      formField_ FieldSm def{inputType = "number", value = show (fromMaybe 200 d.check.expectedStatus), extraAttrs = [min_ "100", max_ "599"]} "Expected status" "expectedStatus" False Nothing
+      expectedStatusField_ d.check.expectedStatus
       formField_ FieldSm def{value = fold d.check.responseContains, placeholder = "e.g. \"status\":\"ok\""} "Response contains" "contains" False Nothing
     requestFields_ d.teams (Just d.check)
     fieldset_ [class_ "space-y-2"] do

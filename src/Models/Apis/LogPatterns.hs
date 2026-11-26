@@ -28,6 +28,7 @@ module Models.Apis.LogPatterns (
   getLogPatternsByIds,
   knownPatternFields,
   sourceFieldLabel,
+  patternHasErrorStatus,
   getTotalEventCount,
   pruneStalePatterns,
   pruneOldHourlyStats,
@@ -497,3 +498,13 @@ pruneOldHourlyStats pid now hoursBack = Hasql.interpExecute [HI.sql| DELETE FROM
 -- Prevents unbounded accumulation for low-volume projects that never trigger processNewLogPatterns.
 autoAcknowledgeStaleNewPatterns :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
 autoAcknowledgeStaleNewPatterns pid now staleDays = Hasql.interpExecute [HI.sql| UPDATE apis.log_patterns SET state = #{LPSAcknowledged}, acknowledged_at = #{now} WHERE project_id = #{pid} AND state = #{LPSNew} AND created_at < #{now}::timestamptz - INTERVAL '1 day' * #{staleDays} |]
+
+
+-- | Error-status evidence is independent of an explicitly reported log level.
+--
+-- >>> map patternHasErrorStatus ["status_code;badge-5xx", "status_code;badge-4xx", "status;badge-error⇒ERROR", "plain message", ""]
+-- [True,True,True,False,False]
+-- >>> patternHasErrorStatus "status_code;badge-4xx status_code;badge-5xx"
+-- True
+patternHasErrorStatus :: Text -> Bool
+patternHasErrorStatus pat = any (`T.isInfixOf` pat) ["status;badge-error⇒ERROR", "status_code;badge-4xx", "status_code;badge-5xx"]
