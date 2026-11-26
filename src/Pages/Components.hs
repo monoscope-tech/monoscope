@@ -668,7 +668,7 @@ timeRefreshTrigger = "update-query[event.detail?.source != 'auto-refresh' || !th
 
 
 timeRefreshAttrs :: Text -> Text -> Text -> [Attribute]
-timeRefreshAttrs cid url trigger = [hxGet_ url, hxTrigger_ trigger, term "hx-sync" "this:replace", term "hx-preload" "false", timeWindowVals_ ""] <> morphTarget_ cid
+timeRefreshAttrs cid url trigger = [hxGet_ url, hxTrigger_ trigger] <> morphTarget_ cid <> [term "hx-sync" "this:replace", term "hx-preload" "false", timeWindowVals_ ""]
 
 
 -- | Sends the address bar's current time window, so a live refresh follows the picker. With
