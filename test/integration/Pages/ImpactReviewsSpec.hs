@@ -4652,7 +4652,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
               ( \env -> \case
                   Agent.ReadSessionContext (Agent.FixSubject fixId) _ -> Right . Map.lookup fixId <$> liftIO (readIORef savedFixContexts)
                   Agent.FixRepository scope request queryTelemetry knowledge admit calls usage allocations checks phase validate -> localSeqUnliftIO env \unlift -> liftIO $ withSystemTempDirectory "job-fix-agent" \directory -> do
-                    for_ (case scope of Agent.Isolated -> Nothing; Agent.Retained _ capture -> Just capture) $ \capture -> unlift capture >>= \context -> modifyIORef' savedFixContexts (Map.insert request.request.runId context)
+                    -- A session is saved when the agent pauses; one that ran out of time never did.
+                    unless (mode == "--app-job-time-budget") $ for_ (case scope of Agent.Isolated -> Nothing; Agent.Retained _ capture -> Just capture) $ \capture -> unlift capture >>= \context -> modifyIORef' savedFixContexts (Map.insert request.request.runId context)
                     when (mode == "--app-job-lost-session") $ modifyIORef' lostSessionCalls (+ 1)
                     let diagnostic = directory </> "failure.txt"
                     if mode == "--app-job-time-budget"
