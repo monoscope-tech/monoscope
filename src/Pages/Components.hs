@@ -702,9 +702,9 @@ pollSelfAttrs_ = pollSelfAttrsWith_ "outerHTML"
 -- | Use @outerMorph@ when polling must preserve open disclosures.
 --
 -- >>> renderText (div_ (pollSelfAttrs_ "run" "/run" "every 5s") mempty :: Html ())
--- "<div hx-get=\"/run\" hx-trigger=\"every 5s\" hx-target=\"this\" hx-swap=\"outerHTML\" hx-select=\"#run\" hx-preload=\"false\"></div>"
+-- "<div data-hx-get=\"/run\" data-hx-trigger=\"every 5s\" data-hx-target=\"this\" data-hx-swap=\"outerHTML\" data-hx-select=\"#run\" hx-preload=\"false\"></div>"
 -- >>> renderText (div_ (pollSelfAttrsWith_ "outerMorph" "run" "/run" "every 5s") mempty :: Html ())
--- "<div hx-get=\"/run\" hx-trigger=\"every 5s\" hx-target=\"this\" hx-swap=\"outerMorph\" hx-select=\"#run\" hx-preload=\"false\"></div>"
+-- "<div data-hx-get=\"/run\" data-hx-trigger=\"every 5s\" data-hx-target=\"this\" data-hx-swap=\"outerMorph\" data-hx-select=\"#run\" hx-preload=\"false\"></div>"
 pollSelfAttrsWith_ :: Text -> Text -> Text -> Text -> [Attribute]
 pollSelfAttrsWith_ swapMode cid url trigger = [hxGet_ url, hxTrigger_ trigger, hxTarget_ "this", hxSwap_ swapMode, hxSelect_ $ "#" <> cid, makeAttribute "hx-preload" "false"]
 
