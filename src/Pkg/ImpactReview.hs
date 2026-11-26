@@ -65,7 +65,7 @@ import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), rawSql)
 import Pkg.Git qualified as Git
 import Pkg.LiveTail (capRowValue)
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser.Expr (CmpOp (..), Expr (..), FieldKey (..), Subject (..), ToQueryText (..), Values (..), isErrorSql)
+import Pkg.Parser.Expr (CmpOp (..), Expr (..), FieldKey (..), Subject (..), ToQueryText (..), Values (..), isErrorSql, sqlStringLit)
 import Pkg.Parser.Stats qualified as KQL
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -867,18 +867,28 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           evidenceLimit = maxEvidence + 1
           services = nubOrd $ mapMaybe (.service) mappings
           link = hostPath ctx.config.hostUrl
+          lit = sqlStringLit . toText . iso8601Show
+      -- Literals, not parameters, and isErrorSql verbatim: TimeFusion serves it from its
+      -- @impact_1h@ tier only so (timefusion @the_impact_review_routes_to_its_tier@).
       stats <-
         if null services
           then pure []
           else
             Hasql.withHasqlTimefusion ctx.env.enableTimefusionReads
               $ Hasql.interp
-                [HI.sql|SELECT resource___service___name, coalesce(resource___deployment___environment___name, ''),
-          count(*)::bigint, count(*) FILTER (WHERE ^{rawSql isErrorSql})::bigint
-          FROM otel_logs_and_spans WHERE project_id = #{run.projectId.toText} AND timestamp >= #{from} AND timestamp <= #{until}
-            AND resource___service___name = ANY(#{V.fromList services})
-          GROUP BY resource___service___name, resource___deployment___environment___name
-          ORDER BY count(*) DESC LIMIT #{evidenceLimit}|]
+              $ rawSql
+              $ "SELECT resource___service___name, coalesce(resource___deployment___environment___name, ''), count(*)::bigint, count(*) FILTER (WHERE "
+              <> isErrorSql
+              <> ")::bigint FROM otel_logs_and_spans WHERE project_id = "
+              <> sqlStringLit run.projectId.toText
+              <> " AND timestamp >= "
+              <> lit from
+              <> " AND timestamp <= "
+              <> lit until
+              <> " AND resource___service___name IN ("
+              <> T.intercalate ", " (map sqlStringLit services)
+              <> ") GROUP BY resource___service___name, resource___deployment___environment___name ORDER BY count(*) DESC LIMIT "
+              <> show evidenceLimit
       monitors <-
         Hasql.interp
           [HI.sql|SELECT id::text, log_query FROM monitors.query_monitors
