@@ -44,6 +44,10 @@ COPY web-components/package.json web-components/package-lock.json /opt/proof/web
 RUN cd /opt/proof && npm ci --no-audit --no-fund && cd web-components && npm ci --no-audit --no-fund && npm install --no-save --no-audit --no-fund playwright@1.58.2 \
   && npx playwright install --with-deps chromium && rm -rf /root/.npm /var/lib/apt/lists/* && chmod -R a+rX /opt/proof \
   && mkdir -p /opt/proof/web-components/node_modules/.vite && chmod 1777 /opt/proof/web-components/node_modules/.vite
+# Headless Chromium hints fonts in full by default, which spaces glyphs unevenly ("Surve ys") in every
+# screenshot; agents launch the browser themselves, so the flag lives in a wrapper around each binary.
+RUN for b in /opt/proof/browsers/chromium-*/chrome-linux64/chrome /opt/proof/browsers/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell; do \
+  mv "$b" "$b.real" && printf '#!/bin/sh\nexec "$0.real" --font-render-hinting=none "$@"\n' > "$b" && chmod 755 "$b"; done
 # Proofs run as the agent account and Vite writes its dependency cache under node_modules; each VM has
 # its own copy-on-write disk, so a shared writable cache directory leaks nothing between runs.
 
