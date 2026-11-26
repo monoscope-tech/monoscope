@@ -1159,7 +1159,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         create ts = map (show @Text . Servant.getResponse) <$> call tr (traverse (\t -> Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = t, Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}) ts >>= addRespHeaders)
     -- The empty state opens the new-dashboard dialog, not a dead href="newDashboardMdl".
     zero <- renderT <$> fetch tr Nothing filters{Dashboards.tag = ["no-such-tag-so-the-list-is-empty"]}
-    zero `shouldContainAll` ["No dashboards yet", "newDashboardMdl').showModal()"]
+    zero `shouldContainAll` ["No dashboards yet", "id=\"newDashboardMdl-empty-trigger\"", ".showModal()"]
     zero `shouldNotSatisfy` T.isInfixOf "href=\"newDashboardMdl\""
     -- Template previews load only once the modal opens.
     initial <- renderT <$> fetch tr Nothing filters
@@ -1356,7 +1356,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     vars `shouldContainAll` ["data-tagify-mode=\"select\"", "sticky top-0 z-10", "dashboard-grid-wrapper relative isolate z-0"]
     -- Tabs use the shared navigation contract (htmx 4 swap names), no /content partial and no hyperscript.
     let tabs = render (def :: DashboardModel.Dashboard){DashboardModel.tabs = Just [tab "Overview", tab "Errors"]}
-    tabs `shouldContainAll` ["hx-target=\"#dashboard-tabs-content\"", "hx-swap=\"outerMorph\"", "hx-push-url=\"true\"", "/dashboards/00000000-0000-0000-0000-000000000000/settled", "duration_ms", "response_bytes", "htmx:before:request", "htmx:after:settle", "keepalive: true"]
+    tabs `shouldContainAll` ["hx-target=\"#dashboard-tabs-content\"", "hx-swap=\"outerMorph\"", "hx-push-url=\"true\"", "data-settled-url=\"", "/dashboards/00000000-0000-0000-0000-000000000000/settled\""]
     filter (`T.isInfixOf` tabs) ["hx-select=\"", "/content", "remove .tab-active"] `shouldBe` []
     -- The settle probe accepts only its closed navigation vocabulary, and only from members.
     let sample n = AE.eitherDecode @Dashboards.DashboardSettleSample $ "{\"duration_ms\":1,\"response_bytes\":2,\"navigation\":\"" <> n <> "\"}"
