@@ -29,6 +29,7 @@ import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.TH
+import GHC.Clock (getMonotonicTime)
 import Models.Projects.ProjectMemory qualified as Memory
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types.Status qualified as HTTP
@@ -258,7 +259,9 @@ queryLimit :: Task format -> Int
 queryLimit = \case
   FixTask{} -> fixQueryLimit
   (PatchTask{}; SourcePatchTask{}) -> 20
-  (SourceTask{}; AdvisoryTask{}; AdmissionTask{}; PeerTask{}) -> 20
+  (SourceTask{}; AdmissionTask{}; PeerTask{}) -> 20
+  -- Successful reviews used up to 24 calls; overruns at 23-26 were one parallel telemetry batch.
+  AdvisoryTask{} -> 30
 
 
 data DraftValidator format result where
@@ -439,6 +442,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
       (Right host, Just command) -> do
         verifierSession <- UUID4.nextRandom
         proofCount <- newIORef (0 :: Int)
+        started <- getMonotonicTime
         -- A review's or fix's agent stops a minute before its job; both run on the long queue. At eight
         -- minutes a fix was killed before its first checkpoint, and its retry could only report the session lost.
         let budget = case task of AdvisoryTask{} -> reviewSeconds - 60; FixTask{} -> fixSeconds - 300; _ -> 480
@@ -542,7 +546,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                     protectWorkspace = for_ (["/usr/bin/git" :| ["config", "--system", "--add", "safe.directory", path] | path <- ["/workspace", "/workspace/.git"]] <> ["/bin/chown" :| ["-hR", "0:0", "/workspace"], "/bin/chmod" :| ["-R", "u+rwX,go+rX,go-w", "/workspace"], "/usr/bin/git" :| ["update-index", "--refresh"]] :: [NonEmpty Text]) $ void . ExceptT . execute Supervisor
                     regression :: Request run -> Workspace.Baseline -> UUID.UUID -> AE.Value -> [(Text, Text)] -> Outbox.Outbox -> IO (Either Text (RegressionWire, [(Workspace.Side, FilePath, Text)]))
                     regression pinned baseline sessionId artifact revisions outbox = active $ \session -> do
-                      let options = session.verifier (Outbox.checksPath outbox)
+                      elapsed <- getMonotonicTime
+                      let options = (session.verifier (Outbox.checksPath outbox)){Workspace.sideSeconds = max 60 $ min (15 * 60) $ (budget - ceiling (elapsed - started) - 120) `div` 2}
                       case Workspace.mkRegressionRequest pinned.projectId pinned.runId pinned.attemptId sessionId pinned.base session.imageBuildId baseline artifact revisions of
                         Left _ -> pure $ Left "Regression arguments do not match the host contract"
                         Right request -> do

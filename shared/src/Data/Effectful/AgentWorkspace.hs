@@ -475,7 +475,9 @@ newtype Identifier (kind :: Symbol) = Identifier UUID
   deriving newtype (AE.FromJSON, AE.ToJSON)
 
 
-data RegressionOptions = RegressionOptions {artifactDir :: FilePath, checkout :: FilePath, image :: Text, bridge :: FilePath}
+-- | @sideSeconds@ bounds each side of a check, so a review near its deadline gets a timed-out check back
+-- in time to submit instead of the job ending first.
+data RegressionOptions = RegressionOptions {artifactDir :: FilePath, checkout :: FilePath, image :: Text, bridge :: FilePath, sideSeconds :: Int}
 
 
 data Artifact = Artifact {script :: Text, testPatch :: Maybe Text, failureMessage :: Text}
@@ -1186,7 +1188,7 @@ verifyArtifactRegression options request = do
           privateWrite logPath ""
           -- A side's setup can build the head before it runs; a change to a widely imported Haskell module
           -- rebuilds much of the project even from a warm workspace.
-          outcome <- tryAny $ Timeout.timeout (15 * 60 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox VerifierPool options.bridge \rpc -> do
+          outcome <- tryAny $ Timeout.timeout (options.sideSeconds * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox VerifierPool options.bridge \rpc -> do
             image <- rpc @Image $ Resolve options.image
             ensure $ image.buildId == request.imageBuildId
             let sandbox = Sandbox image.assetDir checkResources.cpus checkResources.memoryMiB RegistryCow $ one ("/checkout", checkout)

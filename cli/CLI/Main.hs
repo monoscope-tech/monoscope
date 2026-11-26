@@ -181,7 +181,7 @@ commandParser =
           , cmd "load" (options (pure Workspace.Lookup)) (progDesc "Verify a prepared workspace")
           , cmd "archive" (options (pure Workspace.Archive)) (progDesc "Archive a verified checkpoint in self-hosted object storage")
           , cmd "restore" (options (pure Workspace.Restore)) (progDesc "Restore and verify an archived checkpoint")
-          , cmd "check" (RegressionCmd <$> strOption (long "request" <> metavar "FILE") <*> (Workspace.RegressionOptions <$> strOption (long "artifacts" <> metavar "DIRECTORY") <*> strOption (long "checkout" <> metavar "DIRECTORY") <*> strOption (long "image" <> metavar "IMAGE") <*> strOption (long "bridge" <> metavar "EXECUTABLE"))) (progDesc "Replay and retain a frozen regression in isolated workspaces")
+          , cmd "check" (RegressionCmd <$> strOption (long "request" <> metavar "FILE") <*> (Workspace.RegressionOptions <$> strOption (long "artifacts" <> metavar "DIRECTORY") <*> strOption (long "checkout" <> metavar "DIRECTORY") <*> strOption (long "image" <> metavar "IMAGE") <*> strOption (long "bridge" <> metavar "EXECUTABLE") <*> pure (15 * 60))) (progDesc "Replay and retain a frozen regression in isolated workspaces")
           , cmd "lease" leaseOptions (progDesc "Hold a private prepared workspace until stdin closes")
           , cmd "prepare" (options (Workspace.Prepare <$> strOption (long "checkout" <> metavar "DIRECTORY"))) (progDesc "Build and atomically publish a pinned workspace")
           ]
