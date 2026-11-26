@@ -1,5 +1,8 @@
 name: fourmolu
-on: push
+# master requires CI (repository ruleset), which rejects a bot push; PR branches are formatted before merge.
+on:
+  push:
+    branches-ignore: [master]
 
 # Serialise per-branch so two pushes can't race for the same fast-forward.
 concurrency:

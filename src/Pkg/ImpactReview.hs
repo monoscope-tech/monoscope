@@ -288,12 +288,12 @@ patchLines path = go Nothing . lines
 -- >>> fmap (.verdict) (validateResult [file] [measured] [] result)
 -- Right WorthChecking
 -- >>> validateResult [file] [measured] [] (emptyResult NoFinding [finding{evidenceKeys = ["invented"]}] now now) & either id (const "accepted")
--- "Finding cites unavailable evidence"
+-- "Finding cites unavailable evidence: invented"
 -- >>> validateResult [file] [measured] [] (emptyResult NoFinding [finding{location = ChangedLine "a.hs" 2 Head}] now now) & either id (const "accepted")
--- "Finding does not reference a changed line"
+-- "Finding does not reference a changed line: a.hs:2 (head) is unchanged; changed head lines there: 1"
 -- >>> let malformed = Git.PullRequestFile "a.hs" "modified" (Just "@@ -0 +0 @@\n-old\n+new")
 -- >>> validateResult [malformed] [measured] [] (emptyResult NoFinding [finding{location = ChangedLine "a.hs" 0 Head}] now now) & either id (const "accepted")
--- "Finding does not reference a changed line"
+-- "Finding does not reference a changed line: a.hs:0 (head) is unchanged; that file has no changes on that side"
 validateResult :: [Git.PullRequestFile] -> [Evidence] -> [Text] -> ReviewResult -> Either Text ReviewResult
 validateResult files evidence gaps result = do
   validateFindings (concatMap changedLines files) (map (\item -> (item.key, item.kind)) evidence) result.findings
@@ -370,14 +370,24 @@ validateAssessments draft = do
   when (T.null $ T.strip draft.summary) $ Left "Summarize the change and its risk"
 
 
+-- | A rejection names what to fix: agents resubmitted the same bad location until their budget ran out.
+--
+-- >>> let at l = ChangedLine "src/A.hs" l Head
+-- >>> let finding l keys = Finding (at l) "Retries double the load." "Check the retry rate." keys
+-- >>> let check = either id (const "accepted") . validateFindings [at 10, at 12, ChangedLine "src/A.hs" 3 Base] [("q1", Telemetry)] . pure
+-- >>> map check [finding 10 ["q1"], finding 11 ["q1"], finding 10 ["q1", "q9"], finding 10 []]
+-- ["accepted","Finding does not reference a changed line: src/A.hs:11 (head) is unchanged; changed head lines there: 10, 12","Finding cites unavailable evidence: q9","Finding cites unavailable evidence: none cited"]
 validateFindings :: [ChangedLine] -> [(Text, EvidenceKind)] -> [Finding] -> Either Text ()
 validateFindings changed evidence findings = do
   unless (length findings <= 5) $ Left "Review returned more than five findings"
   for_ findings \finding -> do
-    unless (finding.location `elem` changed && finding.location.line > 0) $ Left "Finding does not reference a changed line"
+    let at = finding.location
+        nearby = take 8 [show c.line | c <- changed, c.path == at.path, c.side == at.side, c.line > 0]
+    unless (at `elem` changed && at.line > 0) $ Left $ "Finding does not reference a changed line: " <> at.path <> ":" <> show at.line <> " (" <> T.toLower (show at.side) <> ") is unchanged; " <> bool ("changed " <> T.toLower (show at.side) <> " lines there: " <> T.intercalate ", " nearby) "that file has no changes on that side" (null nearby)
     unless (not (T.null finding.mechanism || T.null finding.nextStep) && T.length finding.mechanism <= 1200 && T.length finding.nextStep <= 600) $ Left "Finding is empty or exceeds its text budget"
+    let missing = filter (`notElem` map fst evidence) $ nubOrd finding.evidenceKeys
+    unless (not (null finding.evidenceKeys) && length finding.evidenceKeys <= 3 && null missing) $ Left $ "Finding cites unavailable evidence: " <> bool (T.intercalate ", " missing) (bool "none cited" "more than three keys" $ length finding.evidenceKeys > 3) (null missing)
     let cited = filter ((`elem` finding.evidenceKeys) . fst) evidence
-    unless (not (null finding.evidenceKeys) && length finding.evidenceKeys <= 3 && length cited == length (nubOrd finding.evidenceKeys)) $ Left "Finding cites unavailable evidence"
     unless (any ((== Telemetry) . snd) cited) $ Left "Finding has no measured production context"
 
 
