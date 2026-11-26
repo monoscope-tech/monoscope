@@ -4652,10 +4652,13 @@ spec = around withTestResources $ describe "Production impact reviews" do
               ( \env -> \case
                   Agent.ReadSessionContext (Agent.FixSubject fixId) _ -> Right . Map.lookup fixId <$> liftIO (readIORef savedFixContexts)
                   Agent.FixRepository scope request queryTelemetry knowledge admit calls usage allocations checks phase validate -> localSeqUnliftIO env \unlift -> liftIO $ withSystemTempDirectory "job-fix-agent" \directory -> do
-                    for_ (case scope of Agent.Isolated -> Nothing; Agent.Retained _ capture -> Just capture) $ \capture -> unlift capture >>= \context -> modifyIORef' savedFixContexts (Map.insert request.request.runId context)
+                    -- A session is saved when the agent pauses; one that ran out of time never did.
+                    unless (mode == "--app-job-time-budget") $ for_ (case scope of Agent.Isolated -> Nothing; Agent.Retained _ capture -> Just capture) $ \capture -> unlift capture >>= \context -> modifyIORef' savedFixContexts (Map.insert request.request.runId context)
                     when (mode == "--app-job-lost-session") $ modifyIORef' lostSessionCalls (+ 1)
                     let diagnostic = directory </> "failure.txt"
-                    if mode `elem` ["--app-job-revoke-account", "--app-job-revoke-role"]
+                    if mode == "--app-job-time-budget"
+                      then unlift (calls $ Agent.ModelCall (uid 995) request.request.attemptId "fixture" "fixture") $> Left "Review agent exceeded its time budget"
+                      else if mode `elem` ["--app-job-revoke-account", "--app-job-revoke-role"]
                       then do
                         heading <- either (fail . toString) pure $ Memory.mkMemoryText "Revocation context"
                         contents <- either (fail . toString) pure $ Memory.mkMemoryText "Keep the original authorized revision only."
@@ -4739,6 +4742,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
     map (.error) lostRuns `shouldBe` [Just "Saved progress was lost, so this run cannot resume. Start it again for a fresh run."]
     dbOne tr [sql|SELECT count(*)::int FROM projects.pr_review_attempts WHERE project_id = ? AND fix_run_id = ?|] (testPid, lostId) `shouldReturn` (1 :: Int)
     runQueryEffect tr (Fixes.completedResult testPid lostId) >>= (`shouldSatisfy` isNothing)
+    -- fixFailure_withoutCheckpoint_keepsItsReason: an attempt that spent model calls and saved nothing ends
+    -- with its own reason; its retry could only report "Saved progress was lost" (Talstack, 2026-11-26).
+    let spentId = uid 996
+    queue spentId
+    tryAny (run spentId "--app-job-time-budget") >>= (`shouldSatisfy` isRight)
+    dbOne tr [sql|SELECT failure FROM projects.issue_fix_jobs WHERE run_id = ?|] (Only spentId) `shouldReturn` (Just "Review agent exceeded its time budget" :: Maybe Text)
     (requests, ()) <- run fid "--app-job"
     requests `shouldNotSatisfy` any (\(url, _) -> "/pulls" `T.isInfixOf` url || "/comments" `T.isInfixOf` url)
     completed <- maybe (fail "Verified application result missing") pure =<< runQueryEffect tr (Fixes.completedResult testPid fid)
