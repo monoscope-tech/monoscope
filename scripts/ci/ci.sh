@@ -1021,6 +1021,9 @@ caprover_env() {
   [ -n "${CAPROVER_URL:-}" ]    || die "CAPROVER_URL is unset (see docs/local-ci.md)"
   [ -n "${CAPROVER_APP:-}" ]    || die "CAPROVER_APP is unset (see docs/local-ci.md)"
   [ -n "${CAPROVER_APP_TOKEN:-}" ] || die "CAPROVER_APP_TOKEN is unset (see docs/local-ci.md)"
+  # The dashboard API sits behind Cloudflare Access; only the app-token deploy path bypasses it.
+  access_headers=()
+  [ -z "${CF_ACCESS_CLIENT_ID:-}" ] || access_headers=(-H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET:-}")
 }
 
 cmd_deploy() { # [sha] [rollback] — rollback must be explicitly requested
@@ -1072,11 +1075,11 @@ cmd_deploy_status() { # what the app is running right now
   local token
   caprover_env
   [ -n "${CAPROVER_PASSWORD:-}" ] || { note "CAPROVER_PASSWORD unset — deploy works without it, status needs it"; return 0; }
-  token=$(curl -sS -X POST "$CAPROVER_URL/api/v2/login" -H 'Content-Type: application/json' \
+  token=$(curl -sS -X POST "$CAPROVER_URL/api/v2/login" ${access_headers[@]+"${access_headers[@]}"} -H 'Content-Type: application/json' \
     -H 'x-namespace: captain' -d "{\"password\":\"$CAPROVER_PASSWORD\"}" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("token",""))')
   [ -n "$token" ] || { note "could not log in to $CAPROVER_URL for status"; return 0; }
-  curl -sS "$CAPROVER_URL/api/v2/user/apps/appDefinitions" \
+  curl -sS "$CAPROVER_URL/api/v2/user/apps/appDefinitions" ${access_headers[@]+"${access_headers[@]}"} \
     -H 'x-namespace: captain' -H "x-captain-auth: $token" \
     | python3 -c "
 import json,sys
