@@ -1002,7 +1002,7 @@ normalizeQuery = (\prompt -> if T.null prompt then Left EmptyPrompt else if T.le
 authorizeProject :: Projects.ProjectId -> ATAuthCtx ()
 authorizeProject pid = do
   (sess, _) <- Projects.sessionAndProject pid
-  unlessM (isJust <$> ProjectMembers.getUserPermission pid sess.user.id) $ throwError Servant.err403
+  unlessM (isJust <$> ProjectMembers.getSessionPermission pid sess.user.id) $ throwError Servant.err403
 
 
 -- | Schedule the routine's next run, if the write produced one.

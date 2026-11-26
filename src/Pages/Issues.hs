@@ -2075,7 +2075,7 @@ data AIChatForm = AIChatForm {query :: Text, requestId :: Maybe (UUIDId "ai_rout
 aiChatPostHWithTools :: Maybe AI.ProjectTools -> Projects.ProjectId -> Issues.IssueId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
 aiChatPostHWithTools projectTools pid issueId form = do
   (sess, _) <- Projects.sessionAndProject pid
-  unlessM (isJust <$> ProjectMembers.getUserPermission pid sess.user.id) $ throwError err403
+  unlessM (isJust <$> ProjectMembers.getSessionPermission pid sess.user.id) $ throwError err403
   when (T.length form.query > 4000) $ throwError err400{errBody = "Query too long. Maximum 4000 characters allowed."}
   issue <- Issues.selectIssueById pid issueId >>= maybe (throwError err404) pure
   appCtx <- ask @AuthContext
@@ -2084,7 +2084,9 @@ aiChatPostHWithTools projectTools pid issueId form = do
   let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
   unlessM (AI.canReadEvidence (AI.MemberAccess AI.WebSession sess.user.id) pid convId) $ throwError err403
   retained <- Issues.getRoutineRun pid requestId
-  let browserOnly = case (.source) <$> retained of Just Issues.InteractiveRun{} -> True; _ -> False
+  -- A super admin is no member, so their turn runs in this request rather than as a queued member run.
+  member <- ProjectMembers.getUserPermission pid sess.user.id
+  let browserOnly = case (.source) <$> retained of Just Issues.InteractiveRun{} -> True; _ -> isNothing member
       admit = if browserOnly then Issues.startInteractiveRun else Jobs.startConversation Jobs.WakeNow
   admit Nothing pid convId sess.user.id requestId form.query Issues.Observe (Issues.WebIssue issueId) >>= \case
     Issues.ConflictingRequest -> throwError err409{errBody = "Request ID already belongs to another request"}

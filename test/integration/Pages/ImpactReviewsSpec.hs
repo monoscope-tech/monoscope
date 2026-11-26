@@ -3808,6 +3808,13 @@ spec = around withTestResources $ describe "Production impact reviews" do
     stopped `shouldSatisfy` isRight
     fmap (.error) <$> runQueryEffect tr (Reviews.getRun run.id) `shouldReturn` Just (Just "Review failed; retry to collect current evidence")
     void $ review fakeAgent
+    -- reviewStopped_permanentFailure_doesNotRetry: a misconfigured GITHUB_APP_ID cannot heal, so the first failure
+    -- ends the run with its reason instead of spending the chain's three attempts.
+    retry
+    misconfigured <- snd <$> within (transport True . fakeAgent . Reader.local (\ctx -> ctx{config = ctx.config{githubAppId = "not-a-number"}})) (tryAny $ Impact.reviewPullRequest run.id)
+    misconfigured `shouldSatisfy` isRight
+    fmap (.error) <$> runQueryEffect tr (Reviews.getRun run.id) `shouldReturn` Just (Just "GITHUB_APP_ID must be numeric")
+    void $ review fakeAgent
     -- askedProof_postsANewComment (#826): an ask's answer lands below it, not in the review comment far above.
     dbExec tr "UPDATE projects.pr_review_runs SET request = ? WHERE id = ?" (Aeson $ AE.toJSON Reviews.Ask{login = "ada", commentId = 77, command = Reviews.Prove, focus = Nothing}, run.id)
     askRequests <- review fakeAgent

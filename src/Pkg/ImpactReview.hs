@@ -228,7 +228,9 @@ emptyResult :: Verdict -> [Finding] -> UTCTime -> UTCTime -> ReviewResult
 emptyResult verdict findings windowStart windowEnd = ReviewResult{verdict, findings, coverage = [], evidence = [], windowStart, windowEnd, knowledge = Nothing, summary = Nothing, assessments = Nothing, claims = Nothing, proofs = Nothing, issues = Nothing, noProofNeeded = Nothing}
 
 
-data ReviewFailure = ReviewFailure Text | ReviewPublicationRefused Text | NativeSessionLost
+-- | 'ReviewStopped': a failure no retry can heal (configuration, a paused routine, a refused tool), so the
+-- run ends at once with its reason instead of spending its three attempts.
+data ReviewFailure = ReviewFailure Text | ReviewStopped Text | ReviewPublicationRefused Text | NativeSessionLost
   deriving stock (Generic, Show)
   deriving anyclass (Exception)
 
@@ -515,6 +517,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                       Right Nothing -> failReview True Issues.TimedOutResult ("Review exceeded its " <> show (reviewSeconds `div` 60) <> "-minute budget") "Review timed out"
                       Right (Just (Left (ReviewFailure err))) -> failReview True Issues.FailedResult retryMessage err
                       Right (Just (Left NativeSessionLost)) -> failReview False Issues.FailedResult nativeSessionLostMessage nativeSessionLostMessage
+                      Right (Just (Left (ReviewStopped reason))) -> failReview False Issues.FailedResult reason reason
                       Right (Just (Left (ReviewPublicationRefused reason))) -> do
                         finish $ Issues.CancelledResult $ Just reason
                         Reviews.recordFailure run reason
@@ -751,7 +754,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
     publish run execution context conn ref pr result =
       AI.authorizeRunOperation context Catalog.ExternalPublication >>= \case
         Left (AI.AuthorityDenied Issues.ActionGrantRequired) -> Reviews.finishRun run Nothing
-        Left denial -> throwError $ ReviewFailure $ AI.toolDenialMessage denial
+        Left denial -> throwError $ ReviewStopped $ AI.toolDenialMessage denial
         Right _ -> do
           cfg <- (.config) <$> ask @AuthContext
           whenM (Reviews.currentRun run) do
@@ -787,7 +790,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
     reviewComment run conn ref = do
       cfg <- (.config) <$> ask @AuthContext
       comments <- require =<< Git.listPullRequestComments conn ref run.number
-      appId <- maybe (throwError $ ReviewFailure "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
+      appId <- maybe (throwError $ ReviewStopped "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
       progress <- Reviews.progressComment run
       let ours = [c.id | c <- comments, fmap (.id) c.performedViaGithubApp == Just appId, reviewMarker run `T.isInfixOf` c.body]
       pure $ find (`elem` ours) progress <|> if isJust run.request then Nothing else viaNonEmpty last ours
@@ -809,17 +812,17 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
     reconcileComment run conn = \case
       Catalog.NativeCall (Catalog.PublishPullRequestComment retained) | retained.reviewId == run.id -> do
         cfg <- (.config) <$> ask @AuthContext
-        appId <- maybe (throwError $ ReviewFailure "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
+        appId <- maybe (throwError $ ReviewStopped "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
         observed <- either (throwError . ReviewFailure) pure =<< Git.listPullRequestComments conn (Git.RepoRef run.owner run.repo run.revision) run.number
         pure $ Right . AE.toJSON . (.id) <$> find (\comment -> fmap (.id) comment.performedViaGithubApp == Just appId && comment.body == retained.body) observed
       (Catalog.ModelCall{}; Catalog.NativeCall Catalog.WriteWiki{}; Catalog.NativeCall Catalog.EnrichIssue{}; Catalog.NativeCall Catalog.PublishPullRequestComment{}) -> pure Nothing
 
     requireActive :: (DB es, Error ReviewFailure :> es) => Reviews.ReviewRun -> Issues.EventRun -> Eff es ()
     requireActive run execution = do
-      unlessM (Issues.routineRunActive run.projectId execution.id) $ throwError $ ReviewFailure "Routine paused, stopped, or requester access revoked"
+      unlessM (Issues.routineRunActive run.projectId execution.id) $ throwError $ ReviewStopped "Routine paused, stopped, or requester access revoked"
       required <- Investigations.conversationEvidencePermission run.projectId (UUIDId run.threadId.unUUIDId)
       audience <- Investigations.conversationEvidenceAudience run.projectId (UUIDId run.threadId.unUUIDId)
-      unless (required <= ProjectMembers.PView && audience == Investigations.ProjectAudience) $ throwError $ ReviewFailure "Restricted conversation evidence cannot be published to this review's shared destinations"
+      unless (required <= ProjectMembers.PView && audience == Investigations.ProjectAudience) $ throwError $ ReviewStopped "Restricted conversation evidence cannot be published to this review's shared destinations"
 
     require :: Either Text a -> ReviewCtx a
     require = either (throwError . ReviewFailure) pure
