@@ -473,11 +473,9 @@ instance ToHtml WikiGet where
           unless (null backlinks) $ section_ [Aria.labelledby_ "wiki-backlinks", class_ "mt-12 space-y-2 border-t border-strokeWeak pt-4"] do
             h3_ [id_ "wiki-backlinks", class_ "flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-textWeak"] $ faSprite_ "link" "regular" "h-3 w-3" >> "Linked from"
             ul_ [class_ "flex flex-wrap gap-2"] $ for_ backlinks \page -> li_ $ a_ (class_ "inline-flex items-center gap-1.5 rounded-md bg-fillWeak px-2 py-1 text-sm text-textStrong hover:text-textBrand" : repositoryNavAttrs (pageLink page)) $ faSprite_ "file-lines" "regular" "h-3 w-3" >> title page
-          unless (null history) $ details_ [class_ "mt-6 border-t border-strokeWeak pt-4"] do
-            summary_ [class_ "flex cursor-pointer items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-textWeak hover:text-textStrong"] $ faSprite_ "clock-rotate-left" "regular" "h-3 w-3" >> "Revision history"
+          unless (null history) $ toHtml $ disclosure_ [class_ "mt-6 border-t border-strokeWeak pt-4"] "text-xs font-semibold uppercase tracking-wider text-textWeak hover:text-textStrong" (faSprite_ "clock-rotate-left" "regular" "h-3 w-3" >> "Revision history") do
             when (length history == Memory.pageLimit) $ p_ [class_ "mt-3 text-sm text-textWeak"] $ toHtml @Text $ "Showing the " <> show Memory.pageLimit <> " most recent revisions. Older revisions remain stored."
-            div_ [class_ "mt-3 divide-y divide-strokeWeak"] $ for_ (zip history $ map Just (drop 1 history) <> [Nothing]) \(page, previous) -> details_ [class_ "py-3"] do
-              summary_ [class_ "cursor-pointer text-sm text-textWeak"] $ edited page
+            div_ [class_ "mt-3 divide-y divide-strokeWeak"] $ for_ (zip history $ map Just (drop 1 history) <> [Nothing]) \(page, previous) -> disclosure_ [class_ "py-3"] "text-sm text-textWeak" (edited page) do
               for_ previous \old -> div_ [class_ "mt-3 space-y-1"] do
                 p_ [class_ "text-xs font-medium text-textWeak"] $ toHtml @Text $ "Changes from revision " <> show old.version
                 revisionDiff old page
@@ -739,8 +737,7 @@ repositoriesPageH pid selection = do
               AE.Error _ -> p_ [class_ "text-sm text-textWeak"] "The saved review could not be displayed. Rerun the review."
               AE.Success result -> do
                 div_ [class_ "prose prose-sm max-w-none break-words [&_pre]:overflow-x-auto"] $ renderMarkdown (ImpactReview.renderReview cfg.hostUrl run ImpactReview.MonoscopeView result)
-                for_ (nonEmpty =<< result.knowledge) \notes -> details_ [class_ "mt-3 text-sm text-textWeak"] do
-                  summary_ [class_ "cursor-pointer font-medium"] "Service knowledge from this review"
+                for_ (nonEmpty =<< result.knowledge) \notes -> disclosure_ [class_ "mt-3 text-sm text-textWeak"] "font-medium" "Service knowledge from this review" do
                   p_ [class_ "mt-2 text-xs"] "Agent conclusions from the recorded evidence window. Recheck against current code and telemetry."
                   ul_ [class_ "mt-2 space-y-2"] $ for_ notes \note -> li_ do
                     span_ [class_ "font-medium"] $ toHtml note.service
@@ -1111,8 +1108,7 @@ instance ToHtml RepositoryGet where
               p_ [class_ "text-sm text-textWeak"] "Monoscope edits are active immediately. Git changes apply after merge into the target branch. Dashboards and monitor definitions share this folder."
               syncLink
               when (canEdit && sync.exportPaused) $ post (urls.repositoryResumePost pid rid) [] $ button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Resume export"
-              when canEdit $ details_ [class_ "space-y-3"] do
-                summary_ [class_ "cursor-pointer text-sm text-textBrand"] "Move existing resources into this folder"
+              when canEdit $ toHtml $ disclosure_ [class_ "space-y-3"] "text-sm text-textBrand" "Move existing resources into this folder" do
                 for_ ([RepositorySync.Dashboard, RepositorySync.Query, RepositorySync.Uptime, RepositorySync.Cron] :: [RepositorySync.ResourceKind]) \kind -> do
                   let candidates = filter ((== kind) . (.kind)) page.folderCandidates
                   unless (null candidates) $ post (urls.repositoryFolderPost pid rid) [class_ "flex flex-wrap items-end gap-2"] do
