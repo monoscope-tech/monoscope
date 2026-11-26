@@ -175,6 +175,25 @@ export function initLogQueryBox(vizType: string, chartVizTypes: string[], popula
   }
 }
 
+function mountLogQueryBoxes(): void {
+  document.querySelectorAll<HTMLScriptElement>('script[data-log-query-box-init]:not([data-init])').forEach(el => {
+    el.dataset.init = '1';
+    try {
+      const cfg = JSON.parse(el.textContent || '{}');
+      initLogQueryBox(cfg.vizType || '', cfg.chartVizTypes || [], cfg.popularQueries || []);
+    } catch {
+      // Ignore malformed config payloads
+    }
+  });
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', mountLogQueryBoxes, { once: true });
+} else {
+  mountLogQueryBoxes();
+}
+document.addEventListener('htmx:after:settle', mountLogQueryBoxes);
+
 Object.assign(window, {
   updateVizTypeInUrl,
   handleVisualizationUpdate,
@@ -185,5 +204,4 @@ Object.assign(window, {
   swapSessionsRegionIfNeeded,
   showQueryParseError,
   clearQueryParseError,
-  initLogQueryBox,
 });

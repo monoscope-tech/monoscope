@@ -189,28 +189,4 @@ onReady(function(){
         window.location.href = url.toString();
     }
 
-    function toggleTreeRow(el: HTMLElement) {
-        const path = el.getAttribute('data-tree-path') ?? '';
-        const level = parseInt(el.getAttribute('data-tree-level') ?? '0', 10);
-        const collapsed = el.getAttribute('data-tree-collapsed') === 'true';
-        const rows = el.parentElement?.querySelectorAll<HTMLElement>('tr[data-tree-path], div[data-tree-path]') ?? [];
-        let found = false;
-        for (const r of rows) {
-            if (r === el) { found = true; continue; }
-            if (!found) continue;
-            const rp = r.getAttribute('data-tree-path') ?? '';
-            if (!rp.startsWith(path + '.') && rp !== path) break;
-            if (collapsed) {
-                if (parseInt(r.getAttribute('data-tree-level') ?? '0', 10) === level + 1) r.style.display = '';
-            } else {
-                r.style.display = 'none';
-                if (r.getAttribute('data-tree-group') === 'true') {
-                    r.setAttribute('data-tree-collapsed', 'true');
-                    r.setAttribute('aria-expanded', 'false');
-                }
-            }
-        }
-        el.setAttribute('data-tree-collapsed', collapsed ? 'false' : 'true');
-        el.setAttribute('aria-expanded', collapsed ? 'true' : 'false');
-    }
-Object.assign(window, { filterByField, viewFieldPatterns, toggleTreeRow });
+Object.assign(window, { filterByField, viewFieldPatterns });
