@@ -1222,12 +1222,18 @@ pExtendSection = pColumnCommand "extend" ExtendCommand
 
 
 -- | Parser for 'project' command - select specific columns
--- Microsoft KQL: project ColumnName = Expression [, ...]
+-- Microsoft KQL: project [ColumnName =] Expression [, ...]; a bare column keeps its own name.
 --
 -- >>> parse pProjectSection "" "project service = resource.service.name, count = count()"
 -- Right (ProjectCommand [("service",Plain (Subject "resource.service.name" "resource" [FieldKey "service",FieldKey "name"]) (Just "service")),("count",Count (Subject "*" "*" []) (Just "count"))])
+-- >>> parse pProjectSection "" "project timestamp, resource.service.name"
+-- Right (ProjectCommand [("timestamp",Plain (Subject "timestamp" "timestamp" []) (Just "timestamp")),("resource_service_name",Plain (Subject "resource.service.name" "resource" [FieldKey "service",FieldKey "name"]) (Just "resource_service_name"))])
 pProjectSection :: Parser Section
-pProjectSection = pColumnCommand "project" ProjectCommand
+pProjectSection = string "project" *> space *> (ProjectCommand <$> (pNamedExpr <|> bare) `sepBy1` comma)
+  where
+    bare = do
+      name <- sanitizeAlias . toText <$> lookAhead (some (alphaNumChar <|> oneOf ("_." :: String)))
+      (name,) . set (typed @(Maybe Text)) (Just name) <$> pAggArith
 
 
 -- | Parse a named aggregation like 'TotalCount = count()'
