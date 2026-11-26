@@ -11,6 +11,8 @@ module Pages.Monitors (
   monitorScheduleSection_,
   ScheduleCondition (..),
   thresholdsSection_,
+  triggerDirectionField_,
+  recoveryThresholdFields_,
   notificationSettingsSection_,
   -- Unified monitors (formerly Testing)
   UnifiedMonitorItem (..),
@@ -303,6 +305,19 @@ monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow condition
                 option_ ([value_ "has_matches"] <> [selected_ "" | not isThresholdType]) "the query has any results"
 
 
+triggerDirectionField_ :: Text -> Bool -> Html ()
+triggerDirectionField_ label triggerLessThan =
+  formSelectField_ FieldSm label "direction" False
+    $ options_ (Just $ bool "above" "below" triggerLessThan) [("above", "Above threshold"), ("below", "Below threshold")]
+
+
+recoveryThresholdFields_ :: Maybe Text -> Maybe Double -> Maybe Double -> Html ()
+recoveryThresholdFields_ unitM alertRecoveryM warningRecoveryM = do
+  let showVal = maybe "" show
+  formField_ FieldSm def{inputType = "number", dot = Just "bg-fillError-strong", suffix = unitM, placeholder = "Same as trigger", value = showVal alertRecoveryM, extraAttrs = [step_ "any"]} "Alert recovery" "alertRecoveryThreshold" False Nothing
+  formField_ FieldSm def{inputType = "number", dot = Just "bg-fillWarning-strong", suffix = unitM, placeholder = "Same as trigger", value = showVal warningRecoveryM, extraAttrs = [step_ "any"]} "Warning recovery" "warningRecoveryThreshold" False Nothing
+
+
 thresholdsSection_ :: Maybe Text -> Maybe Text -> Maybe Double -> Maybe Double -> Bool -> Maybe Double -> Maybe Double -> Html ()
 thresholdsSection_ unitM chartTargetIdM alertThresholdM warningThresholdM triggerLessThan alertRecoveryM warningRecoveryM = do
   let chartId = fromMaybe "visualization-widget" chartTargetIdM
@@ -313,15 +328,12 @@ thresholdsSection_ unitM chartTargetIdM alertThresholdM warningThresholdM trigge
     div_ [class_ "flex flex-row gap-2 py-2"] do
       formField_ FieldSm def{inputType = "number", dot = Just "bg-fillError-strong", suffix = unitM, value = showVal alertThresholdM, extraAttrs = [chartUpdateAttr]} "Alert threshold" "alertThreshold" True Nothing
       formField_ FieldSm def{inputType = "number", dot = Just "bg-fillWarning-strong", suffix = unitM, value = showVal warningThresholdM, extraAttrs = [chartUpdateAttr]} "Warning threshold" "warningThreshold" False Nothing
-      formSelectField_ FieldSm "Trigger condition" "direction" False
-        $ options_ (Just $ bool "above" "below" triggerLessThan) [("above", "Above threshold"), ("below", "Below threshold")]
+      triggerDirectionField_ "Trigger condition" triggerLessThan
     div_ [class_ "mt-3 pt-3 border-t border-strokeWeak space-y-2"] do
       div_ [class_ "space-y-1 text-xs text-textWeak"] do
         div_ (span_ [class_ "font-medium text-textStrong"] "Recovery thresholds " >> span_ "(optional)")
         p_ "Alert recovers only when value crosses these thresholds"
-      div_ [class_ "flex flex-row gap-2 py-2"] do
-        formField_ FieldSm def{inputType = "number", dot = Just "bg-fillError-strong", suffix = unitM, placeholder = "Same as trigger", value = showVal alertRecoveryM} "Alert recovery" "alertRecoveryThreshold" False Nothing
-        formField_ FieldSm def{inputType = "number", dot = Just "bg-fillWarning-strong", suffix = unitM, placeholder = "Same as trigger", value = showVal warningRecoveryM} "Warning recovery" "warningRecoveryThreshold" False Nothing
+      div_ [class_ "flex flex-row gap-2 py-2"] $ recoveryThresholdFields_ unitM alertRecoveryM warningRecoveryM
 
 
 notificationSettingsSection_ :: V.Vector ManageMembers.Team -> V.Vector ManageMembers.TeamId -> Maybe Monitors.QueryMonitor -> Html ()

@@ -699,6 +699,76 @@ resultShape ast = case listToMaybe [(aggs, by) | SummarizeCommand aggs by <- ast
 -- >>> c6.havingClause
 -- Nothing
 --
+-- Grammar acceptance for KQL summarize/extend/project/scalar/edge forms:
+-- >>> :{
+-- all (isRight . parseQueryToAST)
+--   [ "| summarize percentile(duration, 95) by bin(timestamp, 1h)"
+--   , "| summarize percentiles(duration, 50, 75, 90, 95) by bin(timestamp, 1h)"
+--   , "| summarize percentile(duration / 1e6, 95) by bin(timestamp, 1h)"
+--   , "| summarize percentile(duration, 0) by bin_auto(timestamp)"
+--   , "| summarize percentile(duration, 100) by bin_auto(timestamp)"
+--   , "| summarize countif(status_code == \"ERROR\") by bin(timestamp, 1h)"
+--   , "| summarize countif(duration > 1000) by bin_auto(timestamp)"
+--   , "| summarize dcount(attributes.user.id) by bin_auto(timestamp)"
+--   , "| summarize dcount(resource.service.name) by bin_auto(timestamp)"
+--   , "| summarize dcount(attributes.user.id, 0) by bin_auto(timestamp)"
+--   , "| summarize dcount(attributes.user.id, 2) by bin_auto(timestamp)"
+--   , "| summarize dcount(attributes.user.id, 4) by bin_auto(timestamp)"
+--   , "| summarize coalesce(name, \"unknown\") by bin_auto(timestamp)"
+--   , "| summarize coalesce(name, kind, level, \"default\") by bin_auto(timestamp)"
+--   , "| summarize strcat(name, \" \", url_path) by bin_auto(timestamp)"
+--   , "| summarize strcat(service, \":\", name, \"@\", kind, \"/\", level) by bin_auto(timestamp)"
+--   , "| summarize iff(status_code == \"ERROR\", \"error\", \"ok\") by bin_auto(timestamp)"
+--   , "| summarize iff(duration > 1000, start_time, end_time) by bin_auto(timestamp)"
+--   , "| summarize case(attributes.http.response.status_code >= 500, \"5xx\", attributes.http.response.status_code >= 400, \"4xx\", attributes.http.response.status_code >= 300, \"3xx\", \"ok\") by bin_auto(timestamp)"
+--   , "| summarize case(attributes.http.response.status_code >= 500, name, attributes.http.response.status_code >= 400, kind, level) by bin_auto(timestamp)"
+--   , "| summarize count(), countif(status_code == \"ERROR\"), dcount(attributes.user.id) by bin_auto(timestamp)"
+--   , "| summarize error_count = countif(status_code == \"ERROR\") by bin_auto(timestamp)"
+--   , "kind == \"server\" | summarize countif(status_code == \"ERROR\") by resource.service.name"
+--   , "| summarize round(duration, 0) by bin_auto(timestamp)"
+--   , "| summarize round(duration, 2) by bin_auto(timestamp)"
+--   , "| summarize round(duration, 15) by bin_auto(timestamp)"
+--   , "| summarize tofloat(duration) by bin_auto(timestamp)"
+--   , "| summarize todouble(duration) by bin_auto(timestamp)"
+--   , "| summarize toint(duration) by bin_auto(timestamp)"
+--   , "| summarize tolong(duration) by bin_auto(timestamp)"
+--   , "| summarize tostring(status_code) by bin_auto(timestamp)"
+--   , "| extend error_cat = case(attributes.http.response.status_code >= 500, \"5xx\", \"ok\")"
+--   , "| extend cat = case(attributes.http.response.status_code >= 500, \"5xx\", \"ok\"), formatted = tostring(attributes.http.response.status_code)"
+--   , "| extend error.count = count()"
+--   , "| project service = resource.service.name"
+--   , "| project service = resource.service.name, total = count()"
+--   , "| project total = count(), avg_duration = avg(duration)"
+--   , "| summarize total.count = count() by attributes.http.response.status_code"
+--   , "| summarize round(countif(attributes.http.response.status_code >= 400), 2) by bin_auto(timestamp)"
+--   , "| summarize tofloat(count()) by bin_auto(timestamp)"
+--   , "| summarize error_pct = round(countif(attributes.http.response.status_code >= 500), 2) by bin(timestamp, 1h)"
+--   , "coalesce(status_code, 0) >= 400"
+--   , "coalesce(attributes.http.response.status_code, 0) >= 400"
+--   , "name != null and kind == \"server\" and (status_code == \"ERROR\" or coalesce(attributes.http.response.status_code, 0) >= 400)"
+--   , "isnull(status_message)"
+--   , "isnotnull(trace_id) and status_code == 200"
+--   , "toint(status_code) >= 400"
+--   , "toint(coalesce(status_code, 0)) >= 400"
+--   , "| where duration == 2147483647"
+--   , "| summarize count() / 0"
+--   , "| summarize round(tofloat(coalesce(duration, 0)), 2) by bin_auto(timestamp)"
+--   , "| where name == \"café\""
+--   , "| summarize (count() + 10) * 2 / 5 by bin_auto(timestamp)"
+--   ]
+-- :}
+-- True
+--
+-- Out-of-range percentile arguments are rejected at parse time:
+-- >>> :{
+-- all (isLeft . parseQueryToAST)
+--   [ "| summarize percentile(duration, 150) by bin_auto(timestamp)"
+--   , "| summarize percentile(duration, -10) by bin_auto(timestamp)"
+--   , "| summarize percentiles(duration, 50, 150) by bin_auto(timestamp)"
+--   ]
+-- :}
+-- True
+--
 -- A binned rate by plain columns or attributes reads per-bin series rows, filtered
 -- inside; mixed with another aggregation, it reads every point:
 -- >>> let chart q = maybe "" (T.unwords . words) $ (.finalSummarizeQuery) . snd =<< hush (parseQueryToComponents cfg ("metrics | where metric_name == \"a\" | summarize " <> q))

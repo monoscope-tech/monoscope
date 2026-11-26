@@ -124,22 +124,6 @@ data TokenResponse = TokenResponse
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] TokenResponse
 
 
-exchangeCodeForToken :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Text -> Text -> Eff es (Maybe TokenResponse)
-exchangeCodeForToken clientId clientSecret redirectUri code = do
-  let formData :: [FormParam]
-      formData =
-        [ "client_id" Wreq.:= clientId
-        , "client_secret" Wreq.:= clientSecret
-        , "code" Wreq.:= code
-        , "redirect_uri" Wreq.:= redirectUri
-        ]
-
-  responseBdy <- (^. responseBody) <$> postWith (defaults & contentTypeHeader "application/x-www-form-urlencoded; charset=utf-8") "https://slack.com/api/oauth.v2.access" formData
-  let token = AE.decode responseBdy
-  -- Log only Slack's error field: the raw body may carry an access_token.
-  token <$ when (isNothing token) (Log.logAttention "Slack oauth.v2.access token exchange failed" (AE.object ["error" AE..= either Relude.id (const "unparseable_response") (parseSlackOkOrErr responseBdy)]))
-
-
 -- | Every Slack refusal that carries a body; 'refuse' fixes each one's status and wire text.
 data SlackRefusal
   = EvidenceNeedsLinkedAccount
@@ -311,6 +295,20 @@ linkProjectGetH slack_code stateM = do
             whenLeft_ result (logWelcomeMessageFailure token'.incomingWebhook.channelId)
           pure $ installedResponse "Slack" pid install.onboarding bwconf
         _ -> pure $ addHeader (urls.projects.integrationGet pid) $ NoTokenFound $ PageCtx bwconf ()
+      where
+        exchangeCodeForToken :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Text -> Text -> Eff es (Maybe TokenResponse)
+        exchangeCodeForToken clientId clientSecret redirectUri authCode = do
+          let formData :: [FormParam]
+              formData =
+                [ "client_id" Wreq.:= clientId
+                , "client_secret" Wreq.:= clientSecret
+                , "code" Wreq.:= authCode
+                , "redirect_uri" Wreq.:= redirectUri
+                ]
+          responseBdy <- (^. responseBody) <$> postWith (defaults & contentTypeHeader "application/x-www-form-urlencoded; charset=utf-8") "https://slack.com/api/oauth.v2.access" formData
+          let tok = AE.decode responseBdy
+          -- Log only Slack's error field: the raw body may carry an access_token.
+          tok <$ when (isNothing tok) (Log.logAttention "Slack oauth.v2.access token exchange failed" (AE.object ["error" AE..= either Relude.id (const "unparseable_response") (parseSlackOkOrErr responseBdy)]))
 
 
 slackInteractionsH :: SlackInteraction -> ATBaseCtx AE.Value
@@ -912,22 +910,20 @@ classifySlackEvent workspaceId wire = do
 
 -- | Verify Slack's raw request body before decoding it. Both past and future
 -- timestamps are bounded to five minutes; the digest comparison is constant-time.
-verifySlackSignature :: Text -> UTCTime -> Maybe Text -> Maybe Text -> ByteString -> Bool
-verifySlackSignature secret now timestamp signature body = fromMaybe False do
-  guard $ not $ T.null secret
-  ts <- timestamp
-  guard $ freshWebhookTimestamp now ts
-  digest <- signature >>= T.stripPrefix "v0=" >>= rightToMaybe . B16.decode . encodeUtf8
-  let signed = "v0:" <> encodeUtf8 ts <> ":" <> body
-  pure $ BA.constEq (hmacSha256 (encodeUtf8 secret) signed) digest
-
-
 requireSlackSignature :: ByteString -> Maybe Text -> Maybe Text -> ATBaseCtx ()
 requireSlackSignature body timestamp signature = do
   envCfg <- asks env
   when (T.null envCfg.slackSigningSecret) $ throwError err503
   now <- Time.currentTime
-  unless (verifySlackSignature envCfg.slackSigningSecret now timestamp signature body) $ throwError err401
+  unless (verify envCfg.slackSigningSecret now) $ throwError err401
+  where
+    verify secret now = fromMaybe False do
+      guard $ not $ T.null secret
+      ts <- timestamp
+      guard $ freshWebhookTimestamp now ts
+      digest <- signature >>= T.stripPrefix "v0=" >>= rightToMaybe . B16.decode . encodeUtf8
+      let signed = "v0:" <> encodeUtf8 ts <> ":" <> body
+      pure $ BA.constEq (hmacSha256 (encodeUtf8 secret) signed) digest
 
 
 slackFormPostH :: FromForm a => (a -> ATBaseCtx AE.Value) -> ByteString -> Maybe Text -> Maybe Text -> ATBaseCtx AE.Value
