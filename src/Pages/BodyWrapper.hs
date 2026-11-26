@@ -114,7 +114,8 @@ activationProgress pid ingestionVerified = do
         [HI.sql|
         SELECT
           EXISTS (SELECT 1 FROM projects.dashboards WHERE project_id = #{pid}),
-          EXISTS (SELECT 1 FROM monitors.query_monitors WHERE project_id = #{pid} AND deleted_at IS NULL),
+          EXISTS (SELECT 1 FROM monitors.query_monitors WHERE project_id = #{pid} AND deleted_at IS NULL)
+            OR EXISTS (SELECT 1 FROM apis.prometheus_scrape_configs WHERE project_id = #{pid} AND kind = 'uptime'),
           EXISTS (SELECT 1 FROM apis.notification_test_history WHERE project_id = #{pid} AND status = 'sent')
       |]
   pure ActivationProgress{..}
@@ -163,10 +164,10 @@ onboardingChecklist_ :: Projects.Project -> ActivationProgress -> Html ()
 onboardingChecklist_ project progressState = do
   let pid = project.id
       items =
-        [ (progressState.ingestionVerified, ("Verify ingestion", stepUrl pid Integration, "paper-plane"))
+        [ (progressState.ingestionVerified, ("Instrument your stack", stepUrl pid Instrument, "paper-plane"))
+        , (progressState.hasMonitor, ("Add uptime or alert monitor", stepUrl pid MonitorUrl, "heart-pulse"))
         , (progressState.hasDashboard, ("Create a dashboard", dashboardsUrl pid, "dashboard"))
-        , (progressState.hasMonitor, ("Create a monitor", (urls.monitors pid).listGet Nothing Nothing, "bell"))
-        , (progressState.hasTestNotification, ("Send a test notification", urls.projects.integrationGet pid, "envelope"))
+        , (progressState.hasTestNotification, ("Connect alert channel", urls.projects.integrationGet pid, "envelope"))
         ]
           :: [(Bool, (Text, Text, Text))]
       doneCount = length $ filter fst items

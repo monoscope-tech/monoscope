@@ -885,7 +885,7 @@ getInstallationToken appId privateKeyB64 installationId =
       <&> (>>= first (\err -> "Failed to parse token response: " <> toText err) . AE.eitherDecode . (^. W.responseBody))
 
 
-data InstallDest = InstallCode | InstallSync
+data InstallDest = InstallCode | InstallSync | InstallOnboarding
   deriving stock (Eq, Generic, Read, Show)
   deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Install" InstallDest
 

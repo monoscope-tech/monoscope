@@ -869,7 +869,7 @@ updateProjectPricing pid paymentPlan subId firstSubItemId orderId =
 
 
 -- | Constructor names are the @?step=@ URL values and the stored @onboarding_steps_completed@ entries.
-data OnboardingStep = Info | Survey | NotifChannel | Integration | Pricing | Complete
+data OnboardingStep = QuickStart | AutoInstrument | MonitorUrl | Instrument | Alerts | Info | Survey | NotifChannel | Integration | Pricing | Complete
   deriving stock (Eq, Read, Show)
   deriving (FromHttpApiData, ToHttpApiData) via WrappedEnumShow OnboardingStep
 

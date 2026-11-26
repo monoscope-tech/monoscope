@@ -754,7 +754,11 @@ githubAppInstallH pid toM = do
     =<< if any T.null [ctx.config.githubClientId, ctx.config.githubClientSecret]
       then pure $ ConnectFailed (Just pid) AppNotConfigured
       else do
-        nonce <- GitSync.createInstallationAttempt session.persistentSession.id (GitSync.InstallationAttempt pid (if toM == Just "code" then GitSync.InstallCode else GitSync.InstallSync) GitSync.InstallApp)
+        let dest = case toM of
+              Just "code" -> GitSync.InstallCode
+              Just "onboarding" -> GitSync.InstallOnboarding
+              _ -> GitSync.InstallSync
+        nonce <- GitSync.createInstallationAttempt session.persistentSession.id (GitSync.InstallationAttempt pid dest GitSync.InstallApp)
         pure $ Continue "Continue to GitHub to choose the account and repositories." $ "https://github.com/apps/" <> ctx.config.githubAppName <> "/installations/new?state=" <> UUID.toText nonce
 
 
@@ -774,7 +778,11 @@ githubAppCallbackH instIdM _setupAction stateM codeM = do
         (Just iid, Just code) ->
           GitSync.authorizeGitHubInstallation (encodeUtf8 ctx.config.apiKeyEncryptionSecretKey) attempt.projectId ctx.config.githubAppId ctx.config.githubClientId ctx.config.githubClientSecret code callback iid <&> \case
             Left err -> ConnectFailed (Just attempt.projectId) (AuthorizationFailed err)
-            Right () -> Continue "GitHub account verified. Choose the repositories to connect." $ urls.repositoryConnectGet attempt.projectId Nothing
+            Right () ->
+              let nextUrl = case attempt.destination of
+                    GitSync.InstallOnboarding -> urls.projects.onboading attempt.projectId (Just Projects.AutoInstrument)
+                    _ -> urls.repositoryConnectGet attempt.projectId Nothing
+               in Continue "GitHub account verified. Continuing setup." nextUrl
         (Just iid, Nothing) | GitSync.InstallApp <- attempt.step -> do
           nonce <- GitSync.createInstallationAttempt session.persistentSession.id attempt{GitSync.step = GitSync.AuthorizeApp iid}
           pure $ Continue "Authorize your GitHub account to verify this installation." $ "https://github.com/login/oauth/authorize?client_id=" <> escaped ctx.config.githubClientId <> "&redirect_uri=" <> escaped callback <> "&state=" <> UUID.toText nonce
