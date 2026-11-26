@@ -93,6 +93,30 @@ else if (is('buildx', 'imagetools', 'inspect')) {
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
+test('e2e prepares missing or stale frontend assets before starting the server', () => {
+  const ci = join(repo, 'scripts/ci/ci.sh');
+  copyFileSync(join(dirname(script), 'ci.sh'), ci);
+  mkdirSync(join(repo, 'web-components'));
+  writeFileSync(join(root, 'bin/npm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(join(root, 'bin/npx'), `#!/usr/bin/env node
+const fs = require('node:fs');
+if (process.argv[2] === 'tailwindcss') fs.writeFileSync(process.argv[process.argv.indexOf('-o') + 1], 'current CSS');
+if (process.argv[2] === 'vite') fs.writeFileSync('../static/public/assets/web-components/dist/manifest.json', '{}');
+`, { mode: 0o755 });
+  writeFileSync(join(repo, 'scripts/e2e.sh'), '#!/bin/sh\n[ "$(cat static/public/assets/css/tailwind.min.css 2>/dev/null)" = "current CSS" ] && [ "$(cat static/public/assets/web-components/dist/manifest.json 2>/dev/null)" = "{}" ] || { echo "e2e received missing or stale frontend assets" >&2; exit 73; }\n', { mode: 0o755 });
+  for (const stale of [false, true]) {
+    if (stale) {
+      writeFileSync(join(repo, 'static/public/assets/css/tailwind.min.css'), 'old CSS');
+      writeFileSync(join(repo, 'static/public/assets/web-components/dist/manifest.json'), 'old manifest');
+    }
+    const result = spawnSync('bash', [ci, 'body', 'e2e'], {
+      cwd: repo, env: { ...env, E2E_SERVER_BIN: 'true', CI_BROWSER_PREPARED: 'true', CI_FRONTEND_PREPARED: '' }, encoding: 'utf8',
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  }
+});
+
 test('installer recognizes an installed release without downloading it again', () => {
   const installed = join(root, 'installed');
   mkdirSync(installed);

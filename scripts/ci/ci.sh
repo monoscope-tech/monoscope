@@ -368,6 +368,12 @@ prepare_web_deps() {
   export CI_WEB_DEPS_PREPARED=true
 }
 
+prepare_frontend() {
+  [ "${CI_FRONTEND_PREPARED:-}" != true ] || return 0
+  run_body frontend
+  export CI_FRONTEND_PREPARED=true
+}
+
 run_body() { # <check>
   # Prune stale Proto.* generated files left in shared dist-newstyle from before the monoscope-proto
   # split. Every cabal-using check needs it, not just build: an attested build is skipped, and
@@ -376,9 +382,10 @@ run_body() { # <check>
   case "$1" in
     frontend)
       mkdir -p static/public/assets/css static/public/assets/web-components/dist/js static/public/assets/web-components/dist/css
-      npm ci --prefer-offline --no-audit
+      npm_ci_if_stale . --prefer-offline --no-audit
       npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
-      (cd web-components && npm ci --prefer-offline --no-audit && NODE_ENV=production npx vite build --mode production --sourcemap false)
+      prepare_web_deps
+      (cd web-components && NODE_ENV=production npx vite build --mode production --sourcemap false)
       ;;
     build)
       cabal build all unit-tests monoscope-cli:cli-tests integration-tests doctests -j $CABAL_FLAGS "$CABAL_OPTS"
@@ -446,6 +453,8 @@ for root, _, files in os.walk("dist-newstyle"):
     # Drives the real server in a real browser. scripts/e2e.sh starts that server itself on
     # 8081 against a throwaway database, so this only has to supply the binary and chromium.
     e2e)
+      # Also prepare assets for standalone `body e2e`, which bypasses cmd_run.
+      prepare_frontend
       # cabal judges freshness by content, so the binary it just called up to date is current even
       # though a fresh checkout leaves every source newer by mtime, which e2e.sh's guard (meant for
       # local runs) refused, failing a deploy whose build was attested.
@@ -632,6 +641,11 @@ cmd_run() {
       note "$c already proven ($ref) — skipping (CI_FORCE=true to override)"
       continue
     fi
+    # Attestations prove inputs, but do not materialize generated files in this checkout.
+    # Prepare once before builds and parallel lanes so their assets and embedded hashes agree.
+    case "$c" in
+      build|doctests|unit-tests|integration-tests|weeder|e2e) prepare_frontend ;;
+    esac
     # If build was skipped, still overlap the two suites when both need to run.
     if [ "$c" = integration-tests ] && [ -n "${CI_ATTEST_OUT:-}" ] \
        && case " $bg " in *" e2e "*) false ;; *) true ;; esac \
@@ -642,6 +656,7 @@ cmd_run() {
     local started=$SECONDS
     if CAPS="$CAPS" "$0" body "$c"; then
       note "passed $c in $((SECONDS - started))s"
+      [ "$c" != frontend ] || export CI_FRONTEND_PREPARED=true
       if [ "$c" = build ] && [ -n "${CI_ATTEST_OUT:-}" ]; then
         # The path is the last line: cabal's first sync of a source-repository-package prints
         # git's "HEAD is now at …" to stdout ahead of it.
