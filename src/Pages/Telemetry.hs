@@ -919,7 +919,7 @@ dataPointsPage pid metrics refCounts countsUrl page filters = do
                     div_ [class_ "w-10 shrink-0"]
                       $ when r.isGroup
                       $ div_ [class_ "w-full border border-strokeWeak flex justify-between gap-1 items-center rounded-sm px-1 py-0.5"] do
-                        faUse_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-textStrong tree-chevron rotate-90 transition-transform"
+                        faUse_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-textStrong transition-transform [[data-tree-collapsed=false]_&]:rotate-90"
                         span_ [class_ "text-xs"] $ toHtml $ fmtInt r.childCount
                     whenJust r.parentPath \p -> span_ [class_ "text-textDisabled"] $ toHtml $ p <> "."
                     case r.metric of
@@ -1480,13 +1480,14 @@ renderSpanListTable services colors records =
           avgDuration = if listLen == 0 then 0 else duration `div` toInteger listLen
           pctOfTotal = if totalDuration == 0 then 0 else duration * 100 `div` totalDuration
       tr_
-        [ class_ $ "w-full overflow-x-hidden p-2 cursor-pointer font-medium hover:bg-fillWeaker border-b-2 last:border-b-0" <> bool "" " bg-fillError-weak/30" hasErr
-        , [__|on click toggle .hidden on next <tr/> then toggle .rotate-90 on the first <svg/> in the first <td/> in me|]
+        [ class_ $ "w-full overflow-x-hidden p-2 cursor-pointer font-medium hover:bg-fillWeaker border-b-2 last:border-b-0 [&[aria-expanded=true]+tr]:table-row [&[aria-expanded=true]_svg.svc-chev]:rotate-90" <> bool "" " bg-fillError-weak/30" hasErr
+        , term "aria-expanded" "false"
+        , [__|on click if @aria-expanded is 'true' set @aria-expanded to 'false' else set @aria-expanded to 'true' end|]
         ]
         do
           td_ [class_ "ml-1 px-2 py-1 w-[600px] text-textStrong truncate flex items-center gap-1 font-medium"] do
             div_ [class_ $ "w-1 h-4 " <> if hasErr then "bg-fillError-strong" else "bg-fillBrand-weak"] pass
-            faSprite_ "chevron-right" "regular" "h-3 w-3 mr-2 text-iconNeutral"
+            faSprite_ "chevron-right" "regular" "svc-chev h-3 w-3 mr-2 text-iconNeutral transition-transform"
             div_ [class_ $ "w-3 h-3 rounded-sm " <> getServiceColor service colors] pass
             span_ [] $ toHtml service
           td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] $ toHtml $ fmtInt listLen
@@ -1599,7 +1600,7 @@ buildSpanTree_ pid sp level scol = do
       operationIndent = fromMaybe 0 $ viaNonEmpty minimum1 [T.length $ T.takeWhile isSpace line | line <- operationLines, not $ T.all isSpace line]
       errorMessage = fold $ guard sp.spanRecord.hasErrors *> (attr "exception.message" <|> attr "error.message")
       tip = "Service: " <> sp.spanRecord.serviceName <> "\nSpan: " <> sp.spanRecord.spanName <> (if label == sp.spanRecord.spanName then "" else "\nOperation: " <> label) <> "\nDepth: " <> show level
-  div_ [class_ "span-filterble"] do
+  div_ [class_ "span-filterble [&:has(>div>div>.waterfall-toggle[aria-expanded=false])>.waterfall-children]:hidden"] do
     div_
       ( [ class_ $ "flex items-center w-full h-7 hover:bg-fillWeaker waterfall-row" <> bool "" " bg-fillError-weak/40 hover:bg-fillError-weak" sp.spanRecord.hasErrors <> bool " cursor-pointer" " italic text-textWeak bg-fillWeaker/50" isSynthetic
         , id_ $ "trigger-span-" <> sp.spanRecord.spanId
@@ -1623,13 +1624,12 @@ buildSpanTree_ pid sp level scol = do
             then
               button_
                 [ type_ "button"
-                , class_ "waterfall-toggle w-6 h-7 flex items-center justify-center shrink-0"
+                , class_ "waterfall-toggle w-6 h-7 flex items-center justify-center shrink-0 [&[aria-expanded=true]>svg]:rotate-90"
                 , Aria.label_ "Child spans"
                 , term "aria-expanded" "true"
-                , [__|on click halt the event's bubbling then toggle .hidden on the first <.waterfall-children/> in the closest .span-filterble then toggle .rotate-90 on the first <svg/> in me
-                       then if @aria-expanded is 'true' set @aria-expanded to 'false' else set @aria-expanded to 'true' end|]
+                , [__|on click halt the event's bubbling then if @aria-expanded is 'true' set @aria-expanded to 'false' else set @aria-expanded to 'true' end|]
                 ]
-                $ faSprite_ "chevron-right" "regular" "h-3 w-3 text-textWeak rotate-90"
+                $ faSprite_ "chevron-right" "regular" "h-3 w-3 text-textWeak transition-transform"
             else div_ [class_ "w-6 shrink-0"] pass
           if isSynthetic
             then faSprite_ "circle-question" "regular" "h-3 w-3 text-textWeak shrink-0"

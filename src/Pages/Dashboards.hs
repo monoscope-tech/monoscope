@@ -308,18 +308,16 @@ dashboardSettledPostH pid dashId sample = do
   pure NoContent
 
 
--- | A rename prompt: a 'Components.floatingCard_' of fields over Cancel / Save changes.
+-- | A rename prompt: a 'Components.floatingDialog_' of fields over Cancel / Save changes.
 actionPickerModal_ :: Text -> Text -> [Attribute] -> Html () -> Html ()
 actionPickerModal_ modalId title formAttrs fields =
-  Components.floatingModal_ modalId
-    $ form_ ([hxTrigger_ "submit"] <> formAttrs)
-    $ Components.floatingCard_ [] (toHtml title) (\attrs -> label_ (Lucid.for_ modalId : attrs)) [("Save", ["↵"])] fields "Save changes"
+  Components.floatingDialog_ modalId (toHtml title) ("Save", ["↵"]) (hxTrigger_ "submit" : formAttrs) fields "Save changes"
 
 
-actionPickerField_ :: Text -> Text -> Text -> Text -> Html ()
-actionPickerField_ label name placeholder value = label_ [Lucid.for_ name, class_ "flex flex-col gap-1.5 text-xs font-medium text-textStrong"] do
+actionPickerField_ :: Text -> Text -> Text -> Text -> [Attribute] -> Html ()
+actionPickerField_ label name placeholder value extra = label_ [Lucid.for_ name, class_ "flex flex-col gap-1.5 text-xs font-medium text-textStrong"] do
   toHtml label
-  input_ [class_ "no-focus-ring h-10 w-full rounded-md border border-base-300 bg-transparent px-3 text-sm font-normal outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-textDisabled focus:border-strokeBrand-strong focus:ring-2 focus:ring-strokeBrand-weak", id_ name, name_ name, placeholder_ placeholder, value_ value]
+  input_ $ [class_ "no-focus-ring h-10 w-full rounded-md border border-base-300 bg-transparent px-3 text-sm font-normal outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-textDisabled focus:border-strokeBrand-strong focus:ring-2 focus:ring-strokeBrand-weak", id_ name, name_ name, placeholder_ placeholder, value_ value] <> extra
 
 
 dashboardVariables_ :: Projects.ProjectId -> Dashboards.DashboardId -> [Dashboards.Variable] -> [Attribute] -> Html ()
@@ -475,13 +473,13 @@ dashboardPage_ pid dashId dash dashVM allParams = do
   unless readOnly
     $ actionPickerModal_ "pageTitleModalId" "Rename dashboard" [hxPatch_ (urls.dashboardRenamePatch pid dashId), hxSwap_ "innerHTML", hxTarget_ "#pageTitleText"]
     $ div_ [class_ "flex flex-col gap-3 p-3"] do
-      actionPickerField_ "Dashboard title" "title" "Insert new title" (dashTitle dashVM.title)
-      actionPickerField_ "Folder" "fileDir" "reports/" (folderFromPath dashVM.filePath)
+      actionPickerField_ "Dashboard title" "title" "Insert new title" (dashTitle dashVM.title) [autofocus_]
+      actionPickerField_ "Folder" "fileDir" "reports/" (folderFromPath dashVM.filePath) []
 
   when (isJust dash.tabs && not readOnly)
     $ actionPickerModal_ "tabRenameModalId" "Rename tab" [hxPatch_ (urls.dashboardTabRenamePatch pid dashId (fromMaybe "" activeTabSlug)), hxSwap_ "none"]
     $ div_ [class_ "p-3"]
-    $ actionPickerField_ "Tab name" "newName" "Enter tab name" (maybe "" ((.name) . snd) activeTabInfo)
+    $ actionPickerField_ "Tab name" "newName" "Enter tab name" (maybe "" ((.name) . snd) activeTabInfo) [autofocus_]
 
   when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-bgRaised backdrop-blur-xs max-md:px-2 px-4 py-1 max-md:py-0.5 gap-4 max-md:gap-2 items-center flex-wrap md:flex-nowrap sticky top-0 z-10"] do
     -- Tabs section (on the left) - now using htmx for lazy loading
@@ -1469,8 +1467,8 @@ dashboardBWConf bw pid dashId title tabM currentRange readOnly freeTierStatus =
           (faSprite_ "ellipsis" "regular" "w-4 h-4")
           [class_ "menu-md rounded-box p-2 w-52 leading-none"]
         $ do
-          li_ $ label_ [Lucid.for_ "pageTitleModalId", class_ "p-2"] "Rename dashboard"
-          when (isJust tabSlugM) $ li_ $ label_ [Lucid.for_ "tabRenameModalId", class_ "p-2"] "Rename tab"
+          li_ $ Components.dialogTrigger_ "pageTitleModalId" [class_ "p-2 w-full text-left"] "Rename dashboard"
+          when (isJust tabSlugM) $ li_ $ Components.dialogTrigger_ "tabRenameModalId" [class_ "p-2 w-full text-left"] "Rename tab"
           li_ $ duplicate_ "p-2 w-full text-left" "Duplicate dashboard"
           li_ $ label_ [Lucid.for_ "yaml-editor-drawer", class_ "p-2", data_ "tippy-content" "View and edit the dashboard schema as YAML"] "Edit YAML"
           li_ $ a_ [href_ (urls.dashboardRepositoryGet pid dashId), class_ "p-2"] "Repository sync"

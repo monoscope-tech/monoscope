@@ -164,7 +164,7 @@ test('plan comparison stays usable on a narrow screen', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto(`${project}/manage_billing`);
   await page.getByText('Change plan', { exact: true }).click();
-  const box = page.locator('#pricing-modal + .modal .modal-box');
+  const box = page.locator('#pricing-modal .modal-box');
   await expect(box).toBeVisible();
   await expect(box.getByRole('slider', { name: 'Total events', exact: true })).toBeVisible();
   await expect.poll(() => box.evaluate(element => {
