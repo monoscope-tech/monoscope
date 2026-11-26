@@ -202,10 +202,11 @@ const deferredInitObserver = new IntersectionObserver((entries) => {
 }, { rootMargin: '150px' });
 
 const scrollSettled = debounce(() => document.documentElement.removeAttribute('data-scrolling'), 150);
-document.addEventListener('scroll', () => {
+// Wheel and touch, not scroll: a programmatic scroll (a drawer opening) must not swallow the next hover.
+for (const type of ['wheel', 'touchmove']) document.addEventListener(type, () => {
   if (!document.documentElement.hasAttribute('data-scrolling')) document.documentElement.setAttribute('data-scrolling', '');
   scrollSettled();
-}, { capture: true, passive: true });
+}, { passive: true });
 
 // Charts not yet seen on screen, each with the load or refresh waiting for it. Kept by an
 // observer so a refresh tick or a fetch dequeue over hundreds of charts reads no layout.
