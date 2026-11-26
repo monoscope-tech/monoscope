@@ -33,9 +33,8 @@ fi
 psql -h "$PGHOST" -p "$PGPORT" -U postgres -tAc 'SELECT 1' >/dev/null || {
   echo "No postgres on $PGHOST:$PGPORT. Start it with: make timescaledb-docker" >&2; exit 1; }
 
-# `make timescaledb-docker-tmp` runs postgres under faketime (frozen in 2025) for the integration
-# suite. The e2e server keeps the real clock, so every spec comparing a DB timestamp with it (a sync
-# lease's expires_at, say) fails as if the feature were broken.
+# The e2e server keeps the real clock, so a skewed postgres fails every spec comparing a DB timestamp
+# with it (a sync lease's expires_at, say) as if the feature were broken.
 skew=$(psql -h "$PGHOST" -p "$PGPORT" -U postgres -tAc "SELECT abs(extract(epoch FROM now()) - $(date +%s))::int")
 [ "$skew" -lt 300 ] || {
   echo "postgres on $PGHOST:$PGPORT is ${skew}s off this machine's clock (faketime?). Point E2E_PGPORT at a real-clock postgres." >&2; exit 1; }
