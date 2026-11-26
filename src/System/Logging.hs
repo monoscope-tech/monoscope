@@ -93,12 +93,20 @@ makeLogger dest action = withRunInIO \unlift -> do
 -- >>> let at d = AE.decode @(Map Text AE.Value) $ jsonLine (Log.LogMessage "c" d (UTCTime (fromGregorian 2026 1 1) 0) Log.LogAttention "m" AE.Null)
 -- >>> [(Map.lookup "level" =<< at d, Map.lookup "domain" =<< at d) | d <- [["warn"], ["jobs"]]]
 -- [(Just (String "warn"),Just (Array [])),(Just (String "attention"),Just (Array [String "jobs"]))]
+--
+-- The trace and span ids 'tolerantLogger' puts in @data@ are also written at the top level, where
+-- the collector reads them into the record's trace context:
+--
+-- >>> Map.lookup "trace_id" =<< AE.decode @(Map Text AE.Value) (jsonLine (Log.LogMessage "c" [] (UTCTime (fromGregorian 2026 1 1) 0) Log.LogInfo "m" (AE.object ["trace_id" AE..= ("ab" :: Text)])))
+-- Just (String "ab")
 jsonLine :: Log.LogMessage -> LByteString
-jsonLine m
-  | warnDomain `notElem` m.lmDomain = AE.encode m
-  | otherwise = AE.encode case AE.toJSON m{Log.lmDomain = filter (/= warnDomain) m.lmDomain} of
-      AE.Object o -> AE.Object (AEKM.insert "level" "warn" o)
-      v -> v
+jsonLine m = AE.encode case AE.toJSON m{Log.lmDomain = filter (/= warnDomain) m.lmDomain} of
+  AE.Object o -> AE.Object $ bool id (AEKM.insert "level" "warn") (warnDomain `elem` m.lmDomain) $ ids <> o
+  v -> v
+  where
+    ids = case m.lmData of
+      AE.Object d -> AEKM.filterWithKey (\k _ -> k `elem` ["trace_id", "span_id"]) d
+      _ -> mempty
 
 
 warnDomain :: Text

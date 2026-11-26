@@ -467,7 +467,7 @@ prepareWorkspace kind repository fetch = do
 -- | The bounded label 'Metrics.reviewFailures' counts a failure under, from its logged detail.
 --
 -- >>> map failureCause ["Review authorization is no longer available", "Review agent exceeded its query budget", "Review agent could not be executed: /tmp/x: createDirectory: resource exhausted", "Saved progress was lost, so this run cannot resume.", "Review timed out", "boom"]
--- ["authorization_lost","budget_query","sandbox","session_lost","timed_out","other"]
+-- ["authorization_lost","budget_query","host_disk_full","session_lost","timed_out","other"]
 failureCause :: Text -> Text
 failureCause detail = maybe "other" snd $ find ((`T.isInfixOf` detail) . fst) causes
   where
@@ -478,6 +478,8 @@ failureCause detail = maybe "other" snd $ find ((`T.isInfixOf` detail) . fst) ca
       , ("exceeded its time budget", "budget_time")
       , ("exceeded its query budget", "budget_query")
       , ("exceeded its submission budget", "budget_submission")
+      , ("resource exhausted", "host_disk_full")
+      , ("No space left on device", "host_disk_full")
       , ("could not be executed", "sandbox")
       , ("Saved progress was lost", "session_lost")
       , ("session data is missing", "session_lost")

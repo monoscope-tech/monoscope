@@ -1,0 +1,28 @@
+{
+  "attributes": [
+    {
+      "key": "log.original",
+      "value": {
+        "stringValue": "{\"level\":\"info\",\"msg\":\"x\",\"trace_id\":\"abc\",\"span_id\":\"00000000000000000000\"}"
+      }
+    },
+    {
+      "key": "span_id",
+      "value": {
+        "stringValue": "00000000000000000000"
+      }
+    },
+    {
+      "key": "trace_id",
+      "value": {
+        "stringValue": "abc"
+      }
+    }
+  ],
+  "body": {
+    "stringValue": "x"
+  },
+  "observedTimeUnixNano": "1700000000000000000",
+  "severityNumber": 9,
+  "severityText": "info"
+}
