@@ -11,13 +11,12 @@ import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Lucid
-import Lucid.Aria qualified as Aria
 import Lucid.Hyperscript (__)
 import Models.Apis.ShareEvents qualified as ShareEvents
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), emptyState_, fieldLabel_, sectionLabel_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), emptyState_, fieldLabel_, nativeDialogWith_, sectionLabel_, tonePill_)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Replay qualified as Replay
 import Pages.Telemetry qualified as PTelemetry
@@ -26,7 +25,7 @@ import Relude
 import Servant (err404)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, useTfReads)
-import Utils (copyToClipboardAttr_, faSprite_)
+import Utils (copyToClipboardAttr_)
 
 
 -- | Result of resolving a share id: missing entirely, expired, or live with hours-remaining + body.
@@ -60,28 +59,23 @@ newtype ShareLinkPost = ShareLinkPost Text
 
 instance ToHtml ShareLinkPost where
   toHtml (ShareLinkPost rid) = toHtml @(Html ()) $ div_ [id_ "invite-modal-container"] do
-    term "dialog" [id_ "shareModal", Aria.labelledby_ "shareModal-title", class_ "modal p-3 sm:p-8 overscroll-contain", [__|init call me.showModal()|]] do
-      div_ [class_ "modal-box relative max-w-md p-6 space-y-2"] do
-        h2_ [id_ "shareModal-title", class_ "pe-8 text-textStrong text-lg font-semibold"] "Share link"
-        p_ [class_ "text-textWeak text-sm"] "Anyone with this link can view the event. Expires in 48 hours."
-        div_ [class_ "flex items-center gap-2 pt-2"] do
-          input_
-            [ type_ "text"
-            , readonly_ "readonly"
-            , id_ "shareURL"
-            , value_ $ "https://app.monoscope.tech/share/r/" <> rid
-            , class_ "flex-1 min-w-0 bg-fillWeaker border border-strokeWeak rounded-md px-3 py-1.5 font-mono text-xs text-textWeak cursor-text transition-colors focus:outline-hidden focus:border-strokeBrand-strong"
-            , onfocus_ "this.select()"
-            ]
-          button_
-            [ type_ "button"
-            , class_ "shrink-0 bg-fillSuccess-weak text-textSuccess px-3 py-1.5 rounded-md text-sm font-medium hover:bg-fillSuccess-strong hover:text-white transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-strokeBrand-strong focus-visible:ring-offset-2"
-            , copyToClipboardAttr_ "document.getElementById('shareURL').value" "URL copied to clipboard"
-            ]
-            "Copy link"
-        button_ [type_ "button", Aria.label_ "Close Share link", onclick_ "this.closest('dialog').close()", class_ "btn btn-xs btn-circle btn-ghost absolute top-4 end-4 text-iconNeutral hover:bg-fillWeak hover:text-textStrong"]
-          $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
-      form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close Share link"] "Close"
+    nativeDialogWith_ [[__|init call me.showModal()|]] "shareModal" "Share link" "max-w-md p-6 space-y-2" do
+      p_ [class_ "text-textWeak text-sm"] "Anyone with this link can view the event. Expires in 48 hours."
+      div_ [class_ "flex items-center gap-2 pt-2"] do
+        input_
+          [ type_ "text"
+          , readonly_ "readonly"
+          , id_ "shareURL"
+          , value_ $ "https://app.monoscope.tech/share/r/" <> rid
+          , class_ "flex-1 min-w-0 bg-fillWeaker border border-strokeWeak rounded-md px-3 py-1.5 font-mono text-xs text-textWeak cursor-text transition-colors focus:outline-hidden focus:border-strokeBrand-strong"
+          , onfocus_ "this.select()"
+          ]
+        button_
+          [ type_ "button"
+          , class_ "shrink-0 bg-fillSuccess-weak text-textSuccess px-3 py-1.5 rounded-md text-sm font-medium hover:bg-fillSuccess-strong hover:text-white transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-strokeBrand-strong focus-visible:ring-offset-2"
+          , copyToClipboardAttr_ "document.getElementById('shareURL').value" "URL copied to clipboard"
+          ]
+          "Copy link"
   toHtmlRaw = toHtml
 
 

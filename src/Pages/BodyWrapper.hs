@@ -1233,13 +1233,13 @@ navbar bcfg menuL =
             Nothing -> case targetPageM of
               Just targetPage -> a_ ([class_ $ "max-w-[40ch] truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong hover:bg-fillWeak max-md:text-sm" <> cap, href_ targetPage, id_ "pageTitleText", title_ bcfg.pageTitle] <> navTabAttrs) $ toHtml bcfg.pageTitle
               Nothing -> case bcfg.pageTitleModalId of
-                Just modalId -> button_ [type_ "button", class_ $ "max-w-[40ch] truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 max-md:text-sm" <> cap, onclick_ ("document.getElementById('" <> modalId <> "').showModal()"), id_ "pageTitleText", title_ bcfg.pageTitle, Aria.label_ $ "Rename " <> bcfg.pageTitle] $ toHtml bcfg.pageTitle
+                Just modalId -> Components.dialogTrigger_ modalId [class_ $ "max-w-[40ch] truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 max-md:text-sm" <> cap, id_ "pageTitleText", title_ bcfg.pageTitle, Aria.label_ $ "Rename " <> bcfg.pageTitle] $ toHtml bcfg.pageTitle
                 Nothing -> span_ [class_ $ "max-w-[40ch] truncate p-1 py-2 text-xl font-semibold leading-none text-textStrong max-md:text-sm" <> cap, id_ "pageTitleText", title_ bcfg.pageTitle] $ toHtml bcfg.pageTitle
           -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
           span_ [id_ "pageTitleSuffix", class_ "max-md:hidden flex items-center gap-1"] $ whenJust bcfg.pageTitleSuffix \suffix -> do
             faSprite_ "chevron-right" "regular" "w-3 h-3"
             case bcfg.pageTitleSuffixModalId of
-              Just modalId -> button_ [type_ "button", class_ "font-medium text-xl p-1 leading-none text-textWeak cursor-pointer hover:bg-fillWeak rounded-md focus-visible:outline-2 focus-visible:outline-offset-2", onclick_ ("document.getElementById('" <> modalId <> "').showModal()"), id_ "pageTitleSuffixText", Aria.label_ $ "Rename " <> suffix] $ toHtml suffix
+              Just modalId -> Components.dialogTrigger_ modalId [class_ "font-medium text-xl p-1 leading-none text-textWeak cursor-pointer hover:bg-fillWeak rounded-md focus-visible:outline-2 focus-visible:outline-offset-2", id_ "pageTitleSuffixText", Aria.label_ $ "Rename " <> suffix] $ toHtml suffix
               Nothing -> span_ [class_ "font-medium text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
         whenJust bcfg.docsLink \link -> a_ ([class_ "-ms-0.5 max-md:hidden inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-iconBrand hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2", href_ link, term "hx-preload" "false", target_ "_blank", rel_ "noopener", Aria.label_ "Open documentation for this page"] <> tippyRight_ "Open documentation for this page") $ faSprite_ "circle-question" "regular" "w-4 h-4"
       when (isJust bcfg.navTabs) headerDivider_

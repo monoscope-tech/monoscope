@@ -171,6 +171,8 @@ test('plan comparison stays usable on a narrow screen', async ({ page }) => {
     const bounds = element.getBoundingClientRect();
     return bounds.left >= 0 && bounds.right <= innerWidth && element.scrollWidth <= element.clientWidth;
   })).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(box).toBeHidden();
 });
 
 test('Prometheus target form fits a narrow screen with advanced fields open', async ({ page }) => {

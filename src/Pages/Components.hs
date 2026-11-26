@@ -1,4 +1,4 @@
-module Pages.Components (codeContextUrl, drawer_, drawerShell_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityDrawer_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, swapTarget_, morphTarget_, morphPostAttrs_, pollSelfAttrs_, pollSelfAttrsWith_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formSelectFieldWith_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, floatingModal_, dangerAction_, dangerZone_, floatingDialog_, floatingCard_, mergedAttrs, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerNoMatches_, pickerHints_, pickerPopover_, actionMenu_, durationMenu_, primaryButton_, submitBtn_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (codeContextUrl, drawer_, drawerShell_, nativeDialog_, nativeDialogWith_, dialogTrigger_, dialogBackdrop_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityDrawer_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, swapTarget_, morphTarget_, morphPostAttrs_, pollSelfAttrs_, pollSelfAttrsWith_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formSelectFieldWith_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, floatingModal_, dangerAction_, dangerZone_, floatingDialog_, floatingCard_, mergedAttrs, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerNoMatches_, pickerHints_, pickerPopover_, actionMenu_, durationMenu_, primaryButton_, submitBtn_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -991,32 +991,43 @@ modalWith_ modalId cfg triggerM contentHtml = do
 -- Escape, which the checkbox 'modalWith_' cannot. A backdrop click, a successful form submit
 -- or a server @closeModal@ event closes it, and focus returns to its 'dialogTrigger_'. The title heads and names it.
 nativeDialog_ :: Monad m => Text -> Text -> Text -> HtmlT m () -> HtmlT m ()
-nativeDialog_ dialogId title boxClass body =
+nativeDialog_ = nativeDialogWith_ []
+
+
+nativeDialogWith_ :: Monad m => [Attribute] -> Text -> Text -> Text -> HtmlT m () -> HtmlT m ()
+nativeDialogWith_ dialogAttrs dialogId title boxClass body =
   term
     "dialog"
-    [ id_ dialogId
-    , Aria.labelledby_ (dialogId <> "-title")
-    , class_ "modal p-3 sm:p-8 overscroll-contain"
-    , -- A form the save re-renders is detached before closeModal bubbles, so a successful submit closes too.
-      [__|on closeModal from body or htmx:after:request
-    if my.open and (event.type is 'closeModal' or (event.target.tagName is 'FORM' and event.detail.ctx.response.status < 300 and event.detail.ctx.response.headers.get('HX-Reswap') is not 'none'))
-      call me.close()
-      wait 0ms
-      set opener to document.getElementById(my.id + '-trigger')
-      if opener call opener.focus() end
-    end|]
-    ]
+    ( mergedAttrs
+        $ [ id_ dialogId
+          , Aria.labelledby_ (dialogId <> "-title")
+          , class_ "modal p-3 sm:p-8 overscroll-contain"
+          , -- A form the save re-renders is detached before closeModal bubbles, so a successful submit closes too.
+            [__|on closeModal from body or htmx:after:request
+          if my.open and (event.type is 'closeModal' or (event.target.tagName is 'FORM' and event.detail.ctx.response.status < 300 and event.detail.ctx.response.headers.get('HX-Reswap') is not 'none'))
+            call me.close()
+            wait 0ms
+            set opener to document.getElementById(my.id + '-trigger')
+            if opener call opener.focus() end
+          end|]
+          ]
+        <> dialogAttrs
+    )
     do
       div_ [class_ $ "modal-box relative " <> boxClass] do
         h2_ [id_ (dialogId <> "-title"), class_ "pe-8 text-lg font-semibold text-textStrong break-words"] $ toHtml title
         body
-        button_ [type_ "button", Aria.label_ ("Close " <> title), onclick_ "this.closest('dialog').close()", class_ "btn btn-xs btn-circle btn-ghost absolute top-4 end-4 text-iconNeutral hover:bg-fillWeak hover:text-textStrong"]
+        button_ [type_ "button", Aria.label_ ("Close " <> title), [__|on click call (closest <dialog/>).close()|], class_ "btn btn-xs btn-circle btn-ghost absolute top-4 end-4 text-iconNeutral hover:bg-fillWeak hover:text-textStrong"]
           $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
-      form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ ("Close " <> title)] "Close"
+      dialogBackdrop_ ("Close " <> title)
+
+
+dialogBackdrop_ :: Monad m => Text -> HtmlT m ()
+dialogBackdrop_ lbl = form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ lbl] "Close"
 
 
 dialogTrigger_ :: Monad m => Text -> [Attribute] -> HtmlT m () -> HtmlT m ()
-dialogTrigger_ dialogId attrs = button_ $ [id_ (dialogId <> "-trigger"), type_ "button", onclick_ ("document.getElementById('" <> dialogId <> "').showModal()")] <> attrs
+dialogTrigger_ dialogId attrs = button_ $ mergedAttrs $ [id_ (dialogId <> "-trigger"), type_ "button", onclick_ ("document.getElementById('" <> dialogId <> "').showModal()")] <> attrs
 
 
 -- | Red ghost trigger plus the native @<dialog>@ confirmation modal it opens, e.g. a Remove/Disconnect action.
@@ -1030,7 +1041,7 @@ dangerAction_ dialogId icon label title description confirmAttrs confirmText = d
       iconBadge_ IconSm ErrorBadge "triangle-alert"
       p_ [class_ "text-sm text-textWeak"] $ toHtml description
     div_ [class_ "flex justify-end gap-2 mt-6"] do
-      button_ [type_ "button", class_ "btn btn-sm btn-ghost", onclick_ "this.closest('dialog').close()"] "Cancel"
+      button_ [type_ "button", class_ "btn btn-sm btn-ghost", [__|on click call (closest <dialog/>).close()|]] "Cancel"
       button_ ([type_ "button", class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText
 
 
@@ -1073,8 +1084,8 @@ floatingDialog_ :: Text -> Html () -> (Text, [Text]) -> [Attribute] -> Html () -
 floatingDialog_ dialogId title submitHint formAttrs body submit =
   with (makeElement "dialog") [id_ dialogId, class_ "modal !items-start px-4 pt-[15vh] bg-black/40 dark:bg-black/65 backdrop:backdrop-blur-[2px] [&_.modal-backdrop]:backdrop-blur-[2px]", term "aria-labelledby" (dialogId <> "-title"), [__|on closeModal from body if my.open call me.close() end|]] do
     form_ (mergedAttrs $ formAttrs <> [class_ "modal-box group/dialog !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none"])
-      $ floatingCard_ [id_ $ dialogId <> "-title"] title (\attrs -> button_ (mergedAttrs $ [type_ "button", onclick_ "this.closest('dialog').close()"] <> attrs)) [submitHint, ("Close", ["esc"])] body submit
-    form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close"] "close"
+      $ floatingCard_ [id_ $ dialogId <> "-title"] title (\attrs -> button_ (mergedAttrs $ [type_ "button", [__|on click call (closest <dialog/>).close()|]] <> attrs)) [submitHint, ("Close", ["esc"])] body submit
+    dialogBackdrop_ "Close"
 
 
 -- | A floating prompt's card: the title and close control, @body@, then keyboard hints beside

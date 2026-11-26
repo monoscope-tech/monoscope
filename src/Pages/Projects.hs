@@ -1714,7 +1714,7 @@ teamModal pid team projMembers slackChans discordChans isInTeamView = do
       slackChannels = encodeField (.slack_channels)
       discordChannels = encodeField (.discord_channels)
       pagerdutyServicesTags = encodeField (.pagerduty_services)
-      field_ lbl fid ph val extra = formField_ FieldSm def{placeholder = ph, value = val, inputId = Just (mkId fid), extraAttrs = required_ "true" : extra <> [disabled_ "" | isEveryoneTeam]} lbl fid False Nothing
+      field_ lbl fid cfg = formField_ FieldSm cfg{inputId = Just (mkId fid), extraAttrs = required_ "true" : cfg.extraAttrs <> [disabled_ "" | isEveryoneTeam]} lbl fid False Nothing
 
   nativeDialog_ modalId (if isJust team then "Edit Team" else "Create Team") "p-6 max-w-lg w-full" do
     form_ [hxPost_ $ Links.urls.projects.teamsManagePost pid (guard isInTeamView $> "true"), hxExt_ "json-enc", hxVals_ [text|js:{teamMembers: window.getTagValues('#$prefix-team-members-input'), notifEmails: window.getTagValues('#$prefix-notif-emails-input'), slackChannels: window.getTagValues('#$prefix-slack-channels-input'), discordChannels: window.getTagValues('#$prefix-discord-channels-input'), pagerdutyServices: window.getTagValues('#$prefix-pagerduty-services-input'), phoneNumbers: []}|], hxSwap_ "none", class_ "flex flex-col gap-0 w-full"] do
@@ -1724,8 +1724,8 @@ teamModal pid team projMembers slackChans discordChans isInTeamView = do
         -- Details
         div_ [class_ "space-y-3 pb-4"] do
           div_ [class_ "grid grid-cols-2 gap-3"] do
-            field_ "Team Name" "teamName" "e.g. Backend Team" name [autofocus_]
-            field_ "Handle" "teamHandle" "e.g. backend-team" handle [pattern_ "^[a-z][a-z0-9\\-]*$"]
+            field_ "Team Name" "teamName" def{placeholder = "e.g. Backend Team", value = name, extraAttrs = [autofocus_]}
+            field_ "Handle" "teamHandle" def{placeholder = "e.g. backend-team", value = handle, extraAttrs = [pattern_ "^[a-z][a-z0-9\\-]*$"]}
           formField_ FieldSm def{inputType = "textarea", placeholder = "What does this team do?", value = description, inputId = Just (mkId "teamDescription"), extraAttrs = [class_ "min-h-12 resize-none"]} "Description" "teamDescription" False Nothing
 
         -- Members
@@ -1769,6 +1769,6 @@ teamModal pid team projMembers slackChans discordChans isInTeamView = do
                   li_ "Copy the Integration Key"
 
       div_ [class_ "mt-3 flex justify-end gap-2"] do
-        button_ [type_ "button", class_ "btn btn-sm btn-ghost", onclick_ "this.closest('dialog').close()"] "Cancel"
+        button_ [type_ "button", class_ "btn btn-sm btn-ghost", [__|on click call (closest <dialog/>).close()|]] "Cancel"
         button_ [class_ "btn btn-sm btn-primary", type_ "submit"]
           $ toHtml (if isJust team then "Save Changes" else "Create Team" :: Text)

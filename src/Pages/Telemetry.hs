@@ -1600,7 +1600,7 @@ buildSpanTree_ pid sp level scol = do
       operationIndent = fromMaybe 0 $ viaNonEmpty minimum1 [T.length $ T.takeWhile isSpace line | line <- operationLines, not $ T.all isSpace line]
       errorMessage = fold $ guard sp.spanRecord.hasErrors *> (attr "exception.message" <|> attr "error.message")
       tip = "Service: " <> sp.spanRecord.serviceName <> "\nSpan: " <> sp.spanRecord.spanName <> (if label == sp.spanRecord.spanName then "" else "\nOperation: " <> label) <> "\nDepth: " <> show level
-  div_ [class_ "span-filterble [&:has(>div>div>.waterfall-toggle[aria-expanded=false])>.waterfall-children]:hidden"] do
+  div_ [class_ "span-filterble [&[data-collapsed=true]>.waterfall-children]:hidden"] do
     div_
       ( [ class_ $ "flex items-center w-full h-7 hover:bg-fillWeaker waterfall-row" <> bool "" " bg-fillError-weak/40 hover:bg-fillError-weak" sp.spanRecord.hasErrors <> bool " cursor-pointer" " italic text-textWeak bg-fillWeaker/50" isSynthetic
         , id_ $ "trigger-span-" <> sp.spanRecord.spanId
@@ -1627,7 +1627,7 @@ buildSpanTree_ pid sp level scol = do
                 , class_ "waterfall-toggle w-6 h-7 flex items-center justify-center shrink-0 [&[aria-expanded=true]>svg]:rotate-90"
                 , Aria.label_ "Child spans"
                 , term "aria-expanded" "true"
-                , [__|on click halt the event's bubbling then if @aria-expanded is 'true' set @aria-expanded to 'false' else set @aria-expanded to 'true' end|]
+                , [__|on click halt the event's bubbling then set p to closest .span-filterble then if @aria-expanded is 'true' set @aria-expanded to 'false' then set p.dataset.collapsed to 'true' else set @aria-expanded to 'true' then set p.dataset.collapsed to 'false' end|]
                 ]
                 $ faSprite_ "chevron-right" "regular" "h-3 w-3 text-textWeak transition-transform"
             else div_ [class_ "w-6 shrink-0"] pass

@@ -11,7 +11,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
-import Pages.Components (PickerCfg (..), PickerItem (..), PickerList (..), logExplorerUrl, pickerBadge_, pickerCard_, pickerEmpty_, pickerIcon_, pickerItem_, pickerOption_)
+import Pages.Components (PickerCfg (..), PickerItem (..), PickerList (..), dialogBackdrop_, logExplorerUrl, pickerBadge_, pickerCard_, pickerEmpty_, pickerIcon_, pickerItem_, pickerOption_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Servant (NoContent (..))
@@ -90,7 +90,6 @@ paletteShell_ :: Projects.ProjectId -> Html ()
 paletteShell_ pid = do
   -- Global palette functions + Cmd+K listener (must be on a visible element)
   span_ [id_ "cmd-palette-global", paletteGlobalScript] ""
-  -- Native modal <dialog> (top-layer, built-in Escape and backdrop dismissal)
   term
     "dialog"
     [ id_ "cmd-palette-backdrop"
@@ -159,7 +158,7 @@ paletteShell_ pid = do
             "Copy current URL"
             "Action"
           pickerEmpty_ "No matching results"
-      form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close"] "close"
+      dialogBackdrop_ "Close"
   where
     -- Global Cmd+K listener — on a visible element so it is processed. A letter typed where
     -- no field or player takes it opens the palette with that letter.
