@@ -43,7 +43,6 @@ import System.IO (hClose)
 import System.IO.Error (isDoesNotExistError, isEOFError, tryIOError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
-import System.Tracing qualified as Tracing
 import Text.HTML.TagSoup qualified as TagSoup
 import UnliftIO.Async (forConcurrently)
 import UnliftIO.Exception (catch, finally, throwIO, tryAny)

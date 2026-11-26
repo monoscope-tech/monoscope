@@ -461,7 +461,6 @@ dashboardPage_ pid dashId dash dashVM allParams = do
   forM_ ["/public/assets/deps/echarts/echarts.min.js", "/public/assets/roma-echarts.js"] \path ->
     link_ [rel_ "preload", term "as" "script", href_ $ assetUrl path]
   let dashIdText = dashId.toText
-      gridStack = loadDeps [GridStack]
       allTabs = fold dash.tabs
       activeTabSlug = join (lookup activeTabSlugKey allParams)
       activeTabInfo = activeTabSlug >>= findTabBySlug allTabs
@@ -527,8 +526,6 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     -- and htmx processes the swapped content itself.
     whenJust (join $ lookup "expand" allParams) \wid ->
       div_ (hxTrigger_ "load" : drawerLoadAttrs_ (urls.dashboardWidgetExpandGet pid dashId wid Nothing)) pass
-
-    script_ [type_ "module"] [text|window.initDashboardPage(${gridStack});|]
 
 
 -- | The hidden form that persists a drag/resize. Every layout edit the reader makes goes
@@ -1420,8 +1417,6 @@ instance ToHtml WidgetEditor where
             [text| var widgetJSON = ${widgetJSON};
                    { const p = new URLSearchParams(location.search), since = p.get('since'), from = p.get('from'), to = p.get('to');
                      if (since || (from && to)) window.updateTimePicker({since, from, to}, {targetPr: 'widget', skipSetParams: true}); } |]
-
-      script_ [type_ "module"] [text|window.initWidgetEditor('${widgetPreviewId}');|]
 
       div_
         [ class_

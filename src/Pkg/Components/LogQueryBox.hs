@@ -15,12 +15,11 @@ import Models.Apis.LogPatterns (knownPatternFields)
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
-import NeatInterpolation (text)
 import Pages.Components (dialogField_, filterInputAttr_, floatingDialog_, keyboardActivateAttr_, options_, searchInput_)
 import Pkg.Components.Widget (VizType (..), vizIsChart, vizWidget)
 import Pkg.SchemaLearning (FacetData (..), FacetValue (..))
 import Relude
-import Utils (copyToClipboardAttr_, displayTimestamp, faSprite_, formatUTC, onpointerdown_, uiToggle_)
+import Utils (copyToClipboardAttr_, displayTimestamp, faSprite_, formatUTC, onpointerdown_, scriptJson, uiToggle_)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), urls)
 
 
@@ -577,11 +576,13 @@ enrichSchemaWithFacets schema (FacetData facetMap) =
        in Map.insertWith (\_ fi -> fi{Schema.examples = vals}) dotKey (Schema.FieldInfo "string" "" vals) acc
 
 
--- | Initialization code for the query editor that sets up schema data, query library, and popular searches
+-- | Initialization data for the query editor (consumed automatically by web-components/src/log-query-box.ts).
 queryEditorInitializationCode :: Maybe VizType -> Html ()
-queryEditorInitializationCode vizTypeM = do
-  let
-    popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
-    vizType = foldMap display vizTypeM
-    chartVizTypes = decodeUtf8 $ AE.encode $ filter vizIsChart [minBound :: VizType ..]
-  script_ [type_ "module"] [text|window.initLogQueryBox("$vizType", $chartVizTypes, $popularQueriesJson);|]
+queryEditorInitializationCode vizTypeM =
+  script_ [type_ "application/json", data_ "log-query-box-init" ""]
+    $ scriptJson
+    $ AE.object
+      [ "vizType" AE..= foldMap display vizTypeM
+      , "chartVizTypes" AE..= filter vizIsChart [minBound :: VizType ..]
+      , "popularQueries" AE..= Schema.popularOtelQueriesJson
+      ]

@@ -76,14 +76,8 @@ function hookDashboardDocumentOnce(): void {
   });
 }
 
-let domContentLoaded = document.readyState === 'complete';
-if (!domContentLoaded) {
-  document.addEventListener('DOMContentLoaded', () => { domContentLoaded = true; }, { once: true });
-}
-
-export function initDashboardPage(gridStackReady: Promise<unknown>): void {
+export function initDashboardPage(gridStackReady: Promise<unknown>, fullLoad: boolean): void {
   hookDashboardDocumentOnce();
-  const fullLoad = !domContentLoaded;
   gridStackReady.then(() => {
     const GridStack = w.GridStack;
     const request = fullLoad
@@ -323,11 +317,10 @@ export function initDashboardPage(gridStackReady: Promise<unknown>): void {
   });
 }
 
-export function initWidgetEditor(widgetPreviewId: string): void {
-  const editor = document.getElementById(widgetPreviewId)?.closest<HTMLElement>('.widget-editor');
-  const pane = editor?.closest<HTMLElement & { _widgetPreviewResize?: ResizeObserver; _widgetPreviewAbort?: AbortController }>('[role="dialog"]');
-  const header = editor?.querySelector<HTMLElement>('.widget-editor-header');
-  if (!editor || !pane || !header) return;
+export function initWidgetEditor(editor: HTMLElement): void {
+  const pane = editor.closest<HTMLElement & { _widgetPreviewResize?: ResizeObserver; _widgetPreviewAbort?: AbortController }>('[role="dialog"]');
+  const header = editor.querySelector<HTMLElement>('.widget-editor-header');
+  if (!pane || !header) return;
   const update = () => {
     const compact = editor.classList.contains('is-compact');
     const next = pane.scrollTop > 0;
@@ -384,4 +377,23 @@ export function submitWidgetWithMonitor(alertFormId: string, widgetFormId: strin
   (document.getElementById(widgetFormId) as HTMLFormElement | null)?.requestSubmit();
 }
 
-Object.assign(window, { initDashboardPage, initWidgetEditor, submitWidgetWithMonitor });
+function mountDashboardAndEditors(fullLoad: boolean): void {
+  const page = document.getElementById('dashboardPage');
+  if (page && !page.dataset.dashboardInit) {
+    page.dataset.dashboardInit = '1';
+    initDashboardPage(w.loadDeps('GridStack'), fullLoad);
+  }
+  document.querySelectorAll<HTMLElement>('.widget-editor:not([data-widget-editor-init])').forEach(el => {
+    el.dataset.widgetEditorInit = '1';
+    initWidgetEditor(el);
+  });
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => mountDashboardAndEditors(true), { once: true });
+} else {
+  mountDashboardAndEditors(true);
+}
+document.addEventListener('htmx:after:settle', () => mountDashboardAndEditors(false));
+
+Object.assign(window, { submitWidgetWithMonitor });
