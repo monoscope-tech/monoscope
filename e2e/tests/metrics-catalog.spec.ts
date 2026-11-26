@@ -28,7 +28,6 @@ test.describe('metrics catalog', () => {
     await page.locator('#metric-filters').getByRole('button', { name: 'Search', exact: true }).click();
     await expect(page).toHaveURL(/q=uxcatalogruntime/);
     await expect(page.locator('#metrics-toolbar')).toContainText('24 matching metrics');
-    await expect(page.locator('.metric_filterble')).toHaveCount(12);
     await page.locator('#metric-pagination').scrollIntoViewIfNeeded();
     await expect(page.locator('.metric_filterble')).toHaveCount(24);
     expect(await page.locator('.metric_filterble').evaluateAll(cards => cards.every(c => c.id.includes('uxcatalogruntime')))).toBe(true);
@@ -51,12 +50,13 @@ test.describe('metrics catalog', () => {
 
   test('scroll loads ahead, preserves position, and keeps filters visible', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 720 });
-    await page.goto(url + '?q=uxcatalog');
-    await expect(page.locator('.metric_filterble')).toHaveCount(12);
-    // Hold the actual server response to verify the loading and fallback controls.
+    // Hold the actual server response to verify the loading and fallback controls. The next page
+    // loads a screen ahead of the end, which on a short page is straight after the first.
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     await page.route('**/metrics?**append=true', async route => { await gate; await route.continue(); });
+    await page.goto(url + '?q=uxcatalog');
+    await expect(page.locator('.metric_filterble')).toHaveCount(12);
     await page.locator('#main-content').evaluate(el => { el.scrollTop = 420; });
     await expect(page.locator('#metric-pagination')).toHaveClass(/htmx-request/);
     const before = await page.locator('#main-content').evaluate(el => el.scrollTop);
@@ -97,7 +97,7 @@ test.describe('metrics catalog', () => {
       return (window as any).echarts?.getInstanceByDom(el)?.getOption()?.dataset?.[0]?.source?.length ?? 0;
     }), { timeout: 20000 }).toBeGreaterThan(1);
     const firstCard = page.locator('.metric_filterble').first();
-    await firstCard.locator('details summary').click();
+    await firstCard.getByRole('button', { name: /^Group by/ }).click();
     await firstCard.getByRole('button', { name: 'attributes.region', exact: true }).click();
     await expect(firstCard).toContainText('attributes.region');
     await expect.poll(() => page.evaluate(() => {
@@ -118,9 +118,9 @@ test.describe('metrics catalog', () => {
   });
 
   test('failed automatic pagination has a working manual retry', async ({ page }) => {
-    await page.goto(url + '?q=uxcatalog');
     await page.route('**/metrics?**append=true', route => route.fulfill({ status: 503, body: 'Temporarily unavailable' }), { times: 1 });
     const failed = page.waitForResponse(r => r.url().includes('append=true') && r.status() === 503);
+    await page.goto(url + '?q=uxcatalog');
     await page.locator('#metric-pagination').scrollIntoViewIfNeeded();
     await failed;
     const more = page.getByRole('link', { name: 'Load more metrics' });
