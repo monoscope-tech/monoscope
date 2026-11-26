@@ -20,12 +20,12 @@ cd "$(dirname "$0")/../.."
 yaml_keys=$(grep -oE 'set\(log\.body, log\.attributes\["[^"]+"\]\)' static/public/otelcol.yaml \
             | sed -E 's/.*"([^"]+)".*/\1/')
 
-# Keys from src/Utils.hs — the messageKeys list, in source order.
+# Keys from src/Utils.hs — the words of the messageKeys multiline string, in source order.
 hs_keys=$(awk '
-  /^messageKeys *=/                   { in_list = 1; next }
-  in_list && /^[[:space:]]*\]/        { exit }
-  in_list                             { print }
-' src/Utils.hs | grep -oE '"[^"]+"' | tr -d '"')
+  /^messageKeys *=/            { in_def = 1; next }
+  in_def && /"""/              { if (in_str) exit; in_str = 1; next }
+  in_str                       { print }
+' src/Utils.hs | tr -s '[:space:]' '\n' | grep .)
 
 yaml_count=$(echo "$yaml_keys" | grep -c .)
 hs_prefix=$(echo "$hs_keys" | head -n "$yaml_count")

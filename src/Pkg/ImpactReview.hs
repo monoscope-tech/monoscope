@@ -464,6 +464,31 @@ prepareWorkspace kind repository fetch = do
     Right prepared -> Log.logInfo (kind <> " workspace ready") (repository, prepared)
 
 
+-- | The bounded label 'Metrics.reviewFailures' counts a failure under, from its logged detail.
+--
+-- >>> map failureCause ["Review authorization is no longer available", "Review agent exceeded its query budget", "Review agent could not be executed: /tmp/x: createDirectory: resource exhausted", "Saved progress was lost, so this run cannot resume.", "Review timed out", "boom"]
+-- ["authorization_lost","budget_query","host_disk_full","session_lost","timed_out","other"]
+failureCause :: Text -> Text
+failureCause detail = maybe "other" snd $ find ((`T.isInfixOf` detail) . fst) causes
+  where
+    causes :: [(Text, Text)]
+    causes =
+      [ ("no longer authorized", "authorization_lost")
+      , ("authorization is no longer available", "authorization_lost")
+      , ("exceeded its time budget", "budget_time")
+      , ("exceeded its query budget", "budget_query")
+      , ("exceeded its submission budget", "budget_submission")
+      , ("resource exhausted", "host_disk_full")
+      , ("No space left on device", "host_disk_full")
+      , ("could not be executed", "sandbox")
+      , ("Saved progress was lost", "session_lost")
+      , ("session data is missing", "session_lost")
+      , ("changed before publication", "pr_changed")
+      , ("timed out", "timed_out")
+      , ("GITHUB_APP_ID", "configuration")
+      ]
+
+
 reviewPullRequest :: Reviews.ReviewId -> ATBackgroundCtx ()
 reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
   case run.state of
@@ -500,6 +525,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                               Reviews.supersedeRun run >> retire run
                             _ -> do
                               Log.logAttention "Production impact review failed" (run.id, detail)
+                              Metrics.count Metrics.reviewFailures 1 [("cause", OA.toAttribute $ failureCause detail)]
                               active <- Issues.routineRunActive run.projectId execution.id
                               finish $ if active then failureResult (Issues.RunFailure message Issues.RunOnly) else Issues.CancelledResult Nothing
                               Reviews.recordFailure run message

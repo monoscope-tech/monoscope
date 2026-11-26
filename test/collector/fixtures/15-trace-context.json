@@ -1,0 +1,35 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "tier1-test"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "15-trace-context"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "0",
+              "observedTimeUnixNano": "1700000000000000000",
+              "severityNumber": 0,
+              "severityText": "",
+              "body": {
+                "stringValue": "{\"level\":\"attention\",\"message\":\"review failed\",\"trace_id\":\"579f2a46d08b013c9097434f00a561d7\",\"span_id\":\"1c867e817aa5c286\"}"
+              },
+              "attributes": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

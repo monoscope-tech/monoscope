@@ -1802,7 +1802,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let runWith session artifact expectedPatch = do
           headRevision <- revisionAt
           let request = AE.object ["projectId" AE..= testPid, "runId" AE..= uid 1, "attemptId" AE..= uid 2, "sessionId" AE..= uid session, "base" AE..= base, "imageBuildId" AE..= imageId, "workspace" AE..= AE.object ["tag" AE..= ("Pristine" :: Text)], "artifact" AE..= artifact, "revisions" AE..= ([["base", base], ["head", headRevision]] :: [[Text]])]
-              options = Workspace.RegressionOptions artifacts repository (toText image) bridge
+              options = Workspace.RegressionOptions artifacts repository (toText image) bridge (15 * 60)
               requestPath = directory </> "request.json"
           writeFileLBS requestPath $ AE.encode request
           outcome <- runEff $ Workspace.runWorkspaceReal $ Workspace.runRegression options requestPath
@@ -1854,7 +1854,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     statuses invalid `shouldReturn` ["blocked", "blocked"]
     traverse (parse $ field "reason") invalid >>= (`shouldSatisfy` all (T.isInfixOf "Git diff"))
     map (.exitCode) invalidReceipts `shouldBe` [Nothing, Nothing]
-    exhausted <- runEff $ Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions artifacts repository (toText image) bridge) (directory </> "request.json")
+    exhausted <- runEff $ Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions artifacts repository (toText image) bridge (15 * 60)) (directory </> "request.json")
     leftToMaybe (first Workspace.regressionErrorText exhausted) `shouldBe` Just "Local check comparison budget is exhausted"
     void $ git ["rm", "--quiet", "regression.sh"]
     void $ git ["commit", "--quiet", "-m", "fix without retained test"]
@@ -1977,7 +1977,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       writeFileBS script "exec make prepared-app"
       let regression snapshotPath snapshotHash = AE.object ["projectId" AE..= testPid, "runId" AE..= testPid, "attemptId" AE..= testPid, "sessionId" AE..= testPid, "base" AE..= base, "imageBuildId" AE..= imageId, "workspace" AE..= AE.object ["tag" AE..= ("PreparedCheckpoint" :: Text), "contents" AE..= AE.object ["path" AE..= (snapshotPath :: FilePath), "sha256" AE..= (snapshotHash :: Text)]], "artifact" AE..= AE.object ["script" AE..= ("exec make check" :: Text), "failureMessage" AE..= ("cached dependency decoding failed" :: Text)], "revisions" AE..= ([["base", base], ["head", headRevision]] :: [[Text]])]
       writeFileLBS request $ AE.encode $ regression checkpoint fingerprint
-      result <- runEff (Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions checks repository (toText profile) bridge) request) >>= either (fail . show) (pure . AE.toJSON)
+      result <- runEff (Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions checks repository (toText profile) bridge (15 * 60)) request) >>= either (fail . show) (pure . AE.toJSON)
       rows <- parse (field "report" >=> field "results") result :: IO [AE.Value]
       traverse (parse $ field "status") rows `shouldReturn` (["passed", "failed"] :: [Text])
       outputTails <- traverse (parse $ field "tail") rows :: IO [Text]
@@ -1990,7 +1990,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           relocatedManifest = withKey "bytes" (AE.toJSON $ BS.length relocatedBytes) $ withKey "sha256" (AE.String relocatedHash) manifest
       writeFileLBS manifestPath $ AE.encode relocatedManifest
       writeFileLBS request $ AE.encode $ regression checkpoint relocatedHash
-      relocated <- runEff (Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions checks repository (toText profile) bridge) request) >>= either (fail . show) (pure . AE.toJSON)
+      relocated <- runEff (Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions checks repository (toText profile) bridge (15 * 60)) request) >>= either (fail . show) (pure . AE.toJSON)
       sha256 <$> readFileBS checkpoint `shouldReturn` relocatedHash
       isRight <$> lookupPrepared original options `shouldReturn` True
       relocatedRows <- parse (field "report" >=> field "results") relocated :: IO [AE.Value]
@@ -2007,7 +2007,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             sha256 <$> readFileBS immutable `shouldReturn` relocatedHash
             removeFile checkpoint
             writeFileLBS request $ AE.encode $ regression immutable relocatedHash
-          replay <- Workspace.runRegression (Workspace.RegressionOptions checks repository (toText profile) bridge) request
+          replay <- Workspace.runRegression (Workspace.RegressionOptions checks repository (toText profile) bridge (15 * 60)) request
           liftIO do
             replayed <- either (fail . show) (pure . AE.toJSON) replay
             statuses <- parse (field "report" >=> field "results") replayed >>= traverse (parse $ field "status")
@@ -2080,7 +2080,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             originalAssetDir <- parse (field "assetDir") manifest :: IO FilePath
             parse (field "manifest" >=> field "assetDir") normalized `shouldReturn` originalAssetDir
             writeFileLBS request $ AE.encode $ replace "sessionId" (AE.toJSON $ UUID.fromWords 0 0 0 97) $ regression checkpoint relocatedHash
-            replay <- runEff (Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions checks repository (toText profile) bridge) request) >>= either (fail . show) (pure . AE.toJSON)
+            replay <- runEff (Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions checks repository (toText profile) bridge (15 * 60)) request) >>= either (fail . show) (pure . AE.toJSON)
             statuses <- parse (field "report" >=> field "results") replay >>= traverse (parse $ field "status")
             statuses `shouldBe` (["passed", "failed"] :: [Text])
             sha256 <$> readFileBS checkpoint `shouldReturn` relocatedHash

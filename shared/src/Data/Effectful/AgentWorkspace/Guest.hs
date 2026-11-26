@@ -241,7 +241,7 @@ withGuest seat host expected checkout revision start lease attempt allocate reta
       let suspend path = do
             void $ run "/" $ "/bin/sh" :| ["-c", "set -eu; umask 077; mkdir -p /var/lib/monoscope-agent; cd /run; tar --exclude=monoscope-skills -cf /var/lib/monoscope-agent/run.tar -- monoscope-*"]
             Suspended revision imageBuildId (AgentWorkspace.checkpointSummary <$> leased) <$> AgentWorkspace.captureSnapshot rpc imageBuildId path
-      Right <$> action (Session suspend cache leased skills imageBuildId (AgentWorkspace.leasedBaseline leased) operate copyIn (\artifacts -> RegressionOptions artifacts checkout host.image host.bridge) output (void . workspace . toList) upload)
+      Right <$> action (Session suspend cache leased skills imageBuildId (AgentWorkspace.leasedBaseline leased) operate copyIn (\artifacts -> RegressionOptions artifacts checkout host.image host.bridge (15 * 60)) output (void . workspace . toList) upload)
   receipt <- measured
   case outcome of
     Left failed -> void (tryAny $ traverse_ allocate receipt) >> throwIO failed
