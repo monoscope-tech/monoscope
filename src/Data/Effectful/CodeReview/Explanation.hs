@@ -298,12 +298,18 @@ clipCast highlight cast = case BS8.lines cast of
 -- ["The locator matched a hidden element, which sits in a closed dialog, menu, tab or drawer: click the control that opens it first, then wait for it; retrying the same locator fails the same way."]
 -- >>> length $ proofAdvice [] Nothing "locator.click: Error: strict mode violation: getByText('Annual review') resolved to 2 elements"
 -- 1
+-- >>> length $ proofAdvice [] Nothing "Error: [Cabal-7132]\r\nAmbiguous target 'talstack:tests'. It could be:"
+-- 1
+-- >>> length $ proofAdvice [] Nothing "Test suite tests: RUNNING...\r\ntests: unexpected argument `a'"
+-- 1
 proofAdvice :: [(Text, ByteString)] -> Maybe ByteString -> Text -> [Text]
 proofAdvice shots card output =
   ["Screenshot \"" <> label <> "\" is too tight to place the change; retake it framing the row, card or panel around it, with the same locator on both sides." | (label, png) <- shots, BS.length png >= 24, foldl' (\n b -> n * 256 + fromIntegral b) (0 :: Int) (BS.unpack $ BS.take 4 $ BS.drop 16 png) < 480]
     <> ["The terminal card shows no command; show each step with run 'cmd' (curl, psql, the script) so the card prints the command beside its output." | null shots, isJust card, not (any (T.isPrefixOf "$ " . stripSgr) (lines output))]
     <> ["The locator matched a hidden element, which sits in a closed dialog, menu, tab or drawer: click the control that opens it first, then wait for it; retrying the same locator fails the same way." | "resolved to hidden" `T.isInfixOf` output]
     <> ["The locator matched several elements (a hidden modal often repeats the text): use the scoped locator Playwright printed for the one you mean, such as locator('#form').getByText(...)." | "strict mode violation" `T.isInfixOf` output]
+    <> ["Cabal found several targets by that name; name the component, such as cabal test pkg:test:tests." | "Ambiguous target" `T.isInfixOf` output]
+    <> ["The test runner got the match text as separate words; pass it as one argument with --test-option=--match --test-option='the full text'." | "unexpected argument" `T.isInfixOf` output, "Test suite" `T.isInfixOf` output]
 
 
 -- | Base and head stills paired by name. An identical pair shows no change, so the agent is told to reframe
