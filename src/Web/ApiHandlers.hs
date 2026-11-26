@@ -936,6 +936,9 @@ apiIngestionKey :: ApiPrincipal -> ATBaseCtx (Headers '[Header "Cache-Control" T
 apiIngestionKey = \case
   DemoReader _ -> refuse AuthenticationRequired
   Viewer _ -> refuse InsufficientRole
+  -- A key already holds the project credential; what it must not hold is the admin authority
+  -- that 'principalRefusal' now refuses a key.
+  APIKey pid -> ingestionKey pid
   Authenticated pid -> ingestionKey pid
   -- Settings already shows editors the project's keys.
   Editor pid -> ingestionKey pid

@@ -336,10 +336,15 @@ apiKeyAuthHandler logger env = mkAuthHandler \req -> do
           & runEff
   authed <- join <$> traverse (runEffs . (`resolveApiKeyProject` mbHeaderPid)) mbAuth
   let member pid =
-        maybe (pure Nothing) (runEffs . (`sessionBearerRole` pid)) mbAuth <&> \case
-          Just r | r < ProjectMembers.PEdit -> Viewer pid
-          Just r | r < ProjectMembers.PAdmin -> Editor pid
-          _ -> Authenticated pid
+        runEffs do
+          role <- sessionBearerRole (fromMaybe "" mbAuth) pid
+          pure $ case role of
+            Just r | r < ProjectMembers.PEdit -> Viewer pid
+            Just r | r < ProjectMembers.PAdmin -> Editor pid
+            Just _ -> Authenticated pid
+            -- No session row behind this bearer, so it is an API key: a project credential,
+            -- not an administrator.
+            Nothing -> APIKey pid
   principal <- case (mbHeaderPid, authed) of
     -- Demo project: world-readable, mirrors the web UI bypass in `sessionByID`.
     (Just pid, _) | pid == Projects.demoProjectId, authed /= Just pid -> pure $ DemoReader pid
@@ -361,7 +366,9 @@ sessionBearerRole bearer pid = runMaybeT do
 -- every handler sees only the project id (an anonymous demo caller could mint keys). So the
 -- demo reader and a viewer only read, search and speak MCP, whose tool calls come back through
 -- here one by one ('Web.Routes.apiV1App'), and only an admin writes members, API keys, teams or
--- the project. Neither reads API keys: a key is a fixed-IV encryption of its listed id.
+-- the project. An API key is a project credential, not an administrator: it may not administer
+-- those either, and no non-admin reads API keys, since a key is a fixed-IV encryption of its
+-- listed id.
 -- Matched by path segment, since MCP calls arrive without the @/api/v1@ prefix, and on
 -- 'rawPathInfo': at Servant's auth check routing has already consumed 'pathInfo'.
 --
@@ -371,9 +378,12 @@ sessionBearerRole bearer pid = runMaybeT do
 -- [Just InsufficientRole,Just InsufficientRole,Nothing,Nothing]
 -- >>> map (principalRefusal (Viewer Projects.demoProjectId)) [req "GET" "/api/v1/api_keys", req "GET" "/api_keys/x", req "GET" "/api/v1/events", req "GET" "/api_keys/", req "GET" "/api/v1/api%5Fkeys"]
 -- [Just InsufficientRole,Just InsufficientRole,Nothing,Just InsufficientRole,Just InsufficientRole]
+-- >>> map (principalRefusal (APIKey Projects.demoProjectId)) [req "GET" "/api/v1/events", req "POST" "/api/v1/events/query", req "POST" "/api/v1/monitors", req "PATCH" "/api/v1/members/self", req "POST" "/api/v1/api_keys", req "GET" "/api/v1/api_keys"]
+-- [Nothing,Nothing,Nothing,Just InsufficientRole,Just InsufficientRole,Just InsufficientRole]
 principalRefusal :: ApiPrincipal -> Request -> Maybe ApiError
 principalRefusal principal req = case principal of
   Authenticated _ -> Nothing
+  APIKey _ -> InsufficientRole <$ guard (target == Just "api_keys" || (write && any (`elem` ["members", "teams", "project"]) target))
   Editor _ -> InsufficientRole <$ guard (write && any (`elem` ["members", "api_keys", "teams", "project"]) target)
   Viewer _ -> InsufficientRole <$ guard (not readOnly || target == Just "api_keys")
   DemoReader _ -> DemoReadOnly <$ guard (not readOnly || target == Just "api_keys")

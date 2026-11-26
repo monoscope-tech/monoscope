@@ -307,11 +307,16 @@ type instance
     (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
 
 
--- | How an @/api/v1@ request reached its project: with a key or session, or through
--- the world-readable demo bypass, which must never be handed credentials.
--- | 'Editor' is a member session below admin: it may not change members, keys, teams or the project.
--- 'Viewer' is a member session that only reads; 'DemoReader' is a credential-less demo caller.
-data ApiPrincipal = Authenticated {projectId :: Sessions.ProjectId} | Editor {projectId :: Sessions.ProjectId} | Viewer {projectId :: Sessions.ProjectId} | DemoReader {projectId :: Sessions.ProjectId}
+-- | Who is calling an @/api/v1@ route. 'Authenticated' is an admin-tier member session; 'Editor'
+-- a member session below admin, which may not change members, keys, teams or the project; 'Viewer'
+-- a session that only reads; 'DemoReader' a credential-less demo caller; and 'APIKey' a project
+-- credential, which is not an administrator (see 'principalRefusal').
+data ApiPrincipal
+  = Authenticated {projectId :: Sessions.ProjectId}
+  | APIKey {projectId :: Sessions.ProjectId}
+  | Editor {projectId :: Sessions.ProjectId}
+  | Viewer {projectId :: Sessions.ProjectId}
+  | DemoReader {projectId :: Sessions.ProjectId}
   deriving stock (Eq, Show)
 
 

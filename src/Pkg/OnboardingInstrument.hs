@@ -172,7 +172,7 @@ runOnboardingInstrument pid rid = do
                 concat <$> forM candidateDocUrls \u ->
                   case Discovery.normalizeTargetUrl u of
                     Nothing -> pure []
-                    Just norm -> snd <$> Discovery.discoverEndpoints norm
+                    Just norm -> snd <$> Discovery.discoverEndpoints ctx.scrapeManager norm
               let phases2 = setPhase "patch" OI.PhaseRunning Nothing $ setPhase "detect" OI.PhaseDone (Just detected) phases1
               OI.updateRunProgress rid OI.RunPatching detected phases2 "" suggestedUrls
               -- Phase 3: Generate secret-free OpenTelemetry instrumentation
