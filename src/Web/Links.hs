@@ -302,7 +302,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardSettledPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> "settled" :> ReqBody '[JSON] (Opaque "Dashboards.DashboardSettleSample") :> Post '[JSON] NoContent
   , dashboardRepositoryGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> "repository" :> Get '[HTML] (RespHeaders (Opaque1 "PageCtx" (Opaque "GitSync.DashboardRepositoryGet")))
   , dashboardRepositoryPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> "repository" :> ReqBody '[FormUrlEncoded] (Opaque "GitSync.DashboardRepositoryForm") :> Post '[HTML] (RespHeaders (Opaque1 "PageCtx" (Opaque "GitSync.DashboardRepositoryGet")))
-  , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> QPT "widget_id" :> QPT "tab" :> QPT "configure_monitor" :> ReqBody '[JSON] (Opaque "Widget.Widget") :> Action 'PUT (Opaque "Dashboards.WidgetMonitorRejection") (Opaque "Dashboards.WidgetSaved")
+  , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> QPT "widget_id" :> QPT "tab" :> ReqBody '[JSON] (Opaque "Widget.Widget") :> Action 'PUT (Opaque "Dashboards.WidgetMonitorRejection") (Opaque "Dashboards.WidgetSaved")
   , dashboardWidgetReorderPatchH :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> "widgets_order" :> QPT "tab" :> ReqBody '[JSON] (Map Text (Opaque "Dashboards.WidgetReorderItem")) :> Action 'PATCH (Opaque "Dashboards.EditRefusal") (Opaque "Dashboards.LayoutSaved")
   , dashboardDelete :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> Delete '[HTML] (RespHeaders (Opaque "Dashboards.DashboardRes"))
   , dashboardRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> "rename" :> ReqBody '[FormUrlEncoded] (Opaque "Dashboards.DashboardRenameForm") :> Action 'PATCH (Opaque "Dashboards.EditRefusal") (Opaque "Dashboards.DashboardRenamed")
@@ -588,6 +588,7 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   , statusAllGet :: mode :- "status-pages" :> "all" :> Get '[HTML] (RespHeaders (Opaque "Uptime.StatusPageView"))
   , statusPageGet :: mode :- "status-pages" :> Capture "page_id" Uptime.StatusPageId :> Get '[HTML] (RespHeaders (Opaque "Uptime.StatusPageView"))
   , statusPageEdit :: mode :- "status-pages" :> Capture "page_id" Uptime.StatusPageId :> ReqBody '[FormUrlEncoded] (Opaque "Uptime.StatusPageForm") :> Action 'POST (Opaque "Uptime.StatusPageRejection") (Opaque "Uptime.Redirected")
+  , statusPageToggleVisibility :: mode :- "status-pages" :> Capture "page_id" Uptime.StatusPageId :> "visibility" :> Post '[HTML] (RespHeaders (Opaque "Uptime.StatusPageVisibilityHtml"))
   , statusPageDelete :: mode :- "status-pages" :> Capture "page_id" Uptime.StatusPageId :> "delete" :> Unrefusable 'POST (Opaque "Uptime.Redirected")
   , alertBulkAction :: mode :- "alerts" :> "bulk_action" :> Capture "action" Monitors.MonitorBulkAction :> ReqBody '[FormUrlEncoded] (Opaque "ManageMembers.TBulkActionForm") :> Post '[HTML] (RespHeaders (Opaque1 "PageCtx" ((Opaque1 "Table.Table") (Opaque "Testing.UnifiedMonitorItem"))))
   }
@@ -625,6 +626,14 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , notificationsTestHistoryGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "history" :> Get '[HTML] (RespHeaders (Opaque "Settings.NotificationTestHistoryGet"))
   , -- Onboarding routes
     onboading :: mode :- "p" :> ProjectId :> "onboarding" :> LenientQP "step" Projects.OnboardingStep :> Get '[HTML] (RespHeaders (Opaque "Onboarding.OnboardingGet"))
+  , onboardingQuickStartPost :: mode :- "p" :> ProjectId :> "onboarding" :> "quick-start" :> ReqBody '[FormUrlEncoded] (Opaque "Onboarding.QuickStartForm") :> Unrefusable 'POST (Opaque "Onboarding.OnboardingRedirect")
+  , onboardingDiscoverUrlsPost :: mode :- "p" :> ProjectId :> "onboarding" :> "discover-urls" :> ReqBody '[FormUrlEncoded] (Opaque "Onboarding.DiscoverUrlForm") :> Post '[HTML] (RespHeaders (Opaque "Onboarding.DiscoveredEndpointsHtml"))
+  , onboardingCreateUptimesPost :: mode :- "p" :> ProjectId :> "onboarding" :> "create-uptimes" :> ReqBody '[FormUrlEncoded] (Opaque "Onboarding.CreateUptimesForm") :> Post '[HTML] (RespHeaders (Opaque "Onboarding.CreatedUptimesHtml"))
+  , onboardingStartInstrumentPost :: mode :- "p" :> ProjectId :> "onboarding" :> "auto-instrument" :> "start" :> ReqBody '[FormUrlEncoded] (Opaque "Onboarding.StartInstrumentForm") :> Post '[HTML] (RespHeaders (Opaque "Onboarding.InstrumentStatusHtml"))
+  , onboardingInstrumentStatusGet :: mode :- "p" :> ProjectId :> "onboarding" :> "auto-instrument" :> "status" :> QueryParam "runId" (UUIDId "onboarding_instrument_run") :> Get '[HTML] (RespHeaders (Opaque "Onboarding.InstrumentStatusHtml"))
+  , onboardingServiceRootsGet :: mode :- "p" :> ProjectId :> "onboarding" :> "auto-instrument" :> "services" :> QueryParam "repoFullName" Text :> Get '[HTML] (RespHeaders (Opaque "Onboarding.ServiceRootsHtml"))
+  , onboardingFinishPost :: mode :- "p" :> ProjectId :> "onboarding" :> "finish" :> Unrefusable 'POST (Opaque "Onboarding.OnboardingRedirect")
+  , onboardingAlertsPost :: mode :- "p" :> ProjectId :> "onboarding" :> "alerts" :> ReqBody '[JSON] (Opaque "Onboarding.NotifChannelForm") :> Unrefusable 'POST (Opaque "Onboarding.OnboardingRedirect")
   , onboardingInfoPost :: mode :- "p" :> ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] (Opaque "Onboarding.OnboardingInfoForm") :> Unrefusable 'POST (Opaque "Onboarding.OnboardingStepPost")
   , onboardingConfPost :: mode :- "p" :> ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] (Opaque "Onboarding.OnboardingConfForm") :> Unrefusable 'POST (Opaque "Onboarding.OnboardingStepPost")
   , onboardingPhoneEmailsPost :: mode :- "p" :> ProjectId :> "onboarding" :> "phone-emails" :> ReqBody '[JSON] (Opaque "Onboarding.NotifChannelForm") :> Post '[HTML] (RespHeaders (Opaque "Onboarding.OnboardingPhoneEmailsPost"))

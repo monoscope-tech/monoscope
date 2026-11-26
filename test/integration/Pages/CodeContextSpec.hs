@@ -8,12 +8,11 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types qualified as AET
 import Data.Base64.Types (extractBase64)
-import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
-import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache qualified as Cache
+import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as W
 import Data.Map.Strict qualified as M
@@ -66,9 +65,8 @@ import System.Timeout (timeout)
 import System.Types (ATBackgroundCtx, Done (..))
 import UnliftIO.Async (cancel, concurrently, wait, waitCatch, withAsync)
 import UnliftIO.Exception (bracket, throwIO, try)
+import Utils qualified
 import Web.Routes qualified as Routes
-import "cryptonite" Crypto.Hash.Algorithms (SHA256)
-import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
 encKeyOf :: TestResources -> ByteString
@@ -223,11 +221,6 @@ setupSyncOn tr host owner repo secret = do
         , webhookSecret = secret
         , pathPrefix = Nothing
         }
-
-
--- | HMAC-SHA256 hex of a body, the digest three of the four hosts send.
-hmacHexOf :: Text -> ByteString -> Text
-hmacHexOf secret body = decodeUtf8 $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) body :: HMAC.HMAC SHA256)
 
 
 -- | The whole routed app, so wiki requests go through auth, routing and forms like a browser's.
@@ -423,7 +416,7 @@ spec = do
         let forbidden = interpose @W.HTTP \_ -> \case
               W.GetWith _ "https://api.github.com/user/memberships/orgs/team" -> pure (mockResponse "{\"message\":\"Resource not accessible by integration\"}"){responseStatus = H.mkStatus 403 ""}
               W.GetWith _ _ -> pure $ mockResponse organization
-              W.PostWith {} -> pure $ mockResponse "{\"access_token\":\"fixture-user-token\"}"
+              W.PostWith{} -> pure $ mockResponse "{\"access_token\":\"fixture-user-token\"}"
               _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Unexpected request"
         (_, unpermitted) <- runTestBgRecordingHTTP frozenTime tr $ forbidden $ GitSync.authorizeGitHubInstallation (encKeyOf tr) owned "123" "fixture-client" "fixture-secret" "fixture-code" "https://monoscope.test/github/callback" 42
         unpermitted `shouldBe` Left GitSync.InstallationMembersPermissionMissing
@@ -821,6 +814,16 @@ spec = do
         _ <- testServant tr $ PageCodeContext.repositoryReviewsPostH testPid repository.id (ImpactReviews.ReviewSettings "foreign" "private" ImpactReviews.WhenAsked False)
         settings <- runQueryEffect tr $ ImpactReviews.repositorySettings testPid
         map (\s -> (s.owner, s.repo, s.trigger)) settings `shouldMatchList` [("team", "checkout", ImpactReviews.WhenAsked), ("team", "catalog", ImpactReviews.ReadyPullRequests)]
+        -- Unsaved evidence follows visibility (connect records it); a saved choice wins either way.
+        repository.private `shouldBe` Just True
+        let evidence = map (\s -> (s.repo, s.includeEvidence)) <$> runQueryEffect tr (ImpactReviews.repositorySettings testPid)
+        evidence `shouldReturn` [("catalog", False), ("checkout", False)]
+        dbExec tr "UPDATE projects.repositories SET private = true WHERE project_id = ? AND repo = 'catalog'" (Only testPid)
+        evidence `shouldReturn` [("catalog", True), ("checkout", False)]
+        -- A public repository's comments are readable by anyone: links only, even when aggregates were saved.
+        runQueryEffect tr $ ImpactReviews.updateSettings testPid (ImpactReviews.ReviewSettings "team" "catalog" ImpactReviews.ReadyPullRequests True)
+        dbExec tr "UPDATE projects.repositories SET private = false WHERE project_id = ? AND repo = 'catalog'" (Only testPid)
+        evidence `shouldReturn` [("catalog", False), ("checkout", False)]
         for_ (filter ((== "checkout") . (.repo)) mappings) \mapping -> void $ testServant tr $ PageCodeContext.repositorySourceDeleteH testPid repository.id mapping.id
         map (.repo) <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) `shouldReturn` ["catalog"]
 
@@ -1080,8 +1083,13 @@ spec = do
         reviewsPid <- createTestProject tr "reviews"
         reviewsAccount <- grantOf tr reviewsPid Git.GitHub Nothing "team" Nothing (Just "fixture")
         Just reviewsRepository <- runQueryEffect tr $ GitSync.connectRepository reviewsPid reviewsAccount.id (Git.GitRepo "team/checkout" "checkout" True "main")
+        -- A pull request opened before the routine existed stopped at the routine gate; it runs now.
+        let head' = T.replicate 40 "a"
+        dbExec tr "INSERT INTO projects.pr_review_threads (project_id, owner, repo, number, latest_revision, event_at) VALUES (?, 'team', 'checkout', 7, ?, now())" (reviewsPid, head')
+        dbExec tr "INSERT INTO projects.pr_review_runs (thread_id, revision, state, error) SELECT id, ?, 'incomplete', ? FROM projects.pr_review_threads WHERE project_id = ?" (head', ImpactReviews.routineMissingError, reviewsPid)
         void $ runJob tr withUnavailableRepositoryAPI (BackgroundJobs.AnalyzeRepository reviewsPid reviewsRepository.id)
         isJust <$> runQueryEffect tr (Issues.getEventRoutine reviewsPid Issues.EventPullRequest) `shouldReturn` True
+        dbOne tr "SELECT r.state FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id WHERE t.project_id = ?" (Only reviewsPid) `shouldReturn` ("queued" :: Text)
         isJust <$> triage reviewsPid `shouldReturn` False
         -- An older installation still on its template's text follows the newer version; an edited one keeps its own.
         let older = Issues.issueTriageTemplate{Issues.version = 1, Issues.prompt = "Older triage instructions", Issues.reportWhen = Issues.ReportFindings}
@@ -1123,6 +1131,15 @@ spec = do
         renderT details.content `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories/" <> repository.id.toText <> "/source\"")
         map (.service) details.content.mappings `shouldBe` [Just "checkout"]
         fmap (.id) details.content.dashboardSync `shouldBe` Just sync.id
+        -- reviewReadiness_needsAWorkerThatCheckedInRecently: with no live worker a review would only
+        -- queue, so a self-hosted install without one must not read "Ready".
+        now <- Hasql.getTestTime tr.trTestClock
+        let announce at node = runQueryEffect tr $ ImpactReviews.announceReviewWorker at (Workspace.Slots node 1 2 1 False)
+        announce (addUTCTime (-240) now) "stale-node"
+        noWorker <- call configured $ PageCodeContext.repositoryGetH testPid repository.id
+        noWorker.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewNeedsWorker -> True; _ -> False
+        renderT noWorker.content `shouldSatisfy` T.isInfixOf "No review worker has checked in"
+        announce now "live-node"
         readiness configured >>= (`shouldSatisfy` \case PageCodeContext.ReviewNeedsRoutine -> True; _ -> False)
         void $ call configured $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review")
         readiness configured >>= (`shouldSatisfy` \case PageCodeContext.ReviewReady _ -> True; _ -> False)
@@ -1168,7 +1185,8 @@ spec = do
         [(d.title, d.filePath, d.fileSha) | d <- dashboards, isNothing d.gitSyncId] `shouldBe` [("Local overview", Nothing, Nothing)]
         length (filter (isJust . (.gitSyncId)) dashboards) `shouldBe` 1
         runIds `shouldReturn` history
-        dbQuery tr "SELECT trigger, include_evidence FROM projects.pr_review_settings WHERE project_id = ? AND owner = 'team' AND repo = 'checkout'" (Only testPid) `shouldReturn` [("when_asked" :: Text, False)]
+        -- Removal drops the repository's review settings, so a reconnect starts on automatic reviews.
+        dbQuery @_ @(Text, Bool) tr "SELECT trigger, include_evidence FROM projects.pr_review_settings WHERE project_id = ? AND owner = 'team' AND repo = 'checkout'" (Only testPid) `shouldReturn` []
         runQueryEffect tr (GitSync.removeRepository testPid repository.id) `shouldReturn` Left GitSync.ConnectionMissing
         review 2 "b"
         runIds `shouldReturn` history
@@ -1385,10 +1403,10 @@ spec = do
       -- the route's host matches the row's, and the push is to the tracked branch.
       it "webhooks_queueImportsOnlyForVerifiedPushesToTheTrackedRow" \tr -> do
         let pushBody owner repo = toStrict $ AE.encode $ AE.object ["push" AE..= AE.object ["changes" AE..= ([AE.object ["new" AE..= AE.object ["name" AE..= ("main" :: Text)]]] :: [AE.Value])], "ref" AE..= ("refs/heads/main" :: Text), "repository" AE..= AE.object ["full_name" AE..= (owner <> "/" <> repo :: Text)]]
-            signed secret body = Just $ "sha256=" <> hmacHexOf secret body
+            signed secret body = Just $ "sha256=" <> Utils.hmacSha256Hex secret body
             deliver host ev sig body = do
               dbExec tr "DELETE FROM background_jobs WHERE payload->>'tag' LIKE 'GitSync%'" ()
-              void $ toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH host Git.WebhookReq{event = Just ev, signature = sig, gitlabToken = Nothing, gitlabWebhookId = Nothing, gitlabTimestamp = Nothing, body}
+              void $ toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH host Nothing Git.WebhookReq{event = Just ev, signature = sig, gitlabToken = Nothing, gitlabWebhookId = Nothing, gitlabTimestamp = Nothing, body}
               length . filter isImport <$> pendingJobs tr
             announced = (>>= (.announcedRevision)) <$> onlySync tr
         setupSyncOn tr Git.GitHub "webhook-owner" "webhook-repo" (Just "s3cret")
@@ -1420,7 +1438,7 @@ spec = do
         forM_ [(Git.Gitea, "push" :: Text), (Git.Bitbucket, "repo:push")] \(host, ev) -> do
           setupSyncOn tr host "acme" "config" (Just "s3cret")
           let hosted = pushBody "acme" "config"
-          deliver host ev (Just $ (if host == Git.Bitbucket then "sha256=" else "") <> hmacHexOf "s3cret" hosted) hosted >>= (`shouldSatisfy` (>= 1))
+          deliver host ev (Just $ (if host == Git.Bitbucket then "sha256=" else "") <> Utils.hmacSha256Hex "s3cret" hosted) hosted >>= (`shouldSatisfy` (>= 1))
         -- importsOnlyTheTargetBranchAndIgnoresTheAutomatedPRBranch
         setupSyncOn tr Git.GitHub "branch-filter-owner" "config" (Just "s3cret")
         for_ (["monoscope-dashboards", "feature/user-pr"] :: [Text]) \branch -> do
@@ -1432,7 +1450,7 @@ spec = do
         -- delivery on the Gitea route matches no GitLab row.
         setupSyncOn tr Git.GitLab "acme" "config" (Just "gl-secret")
         let collision = pushBody "acme" "config"
-        deliver Git.Gitea "push" (Just $ hmacHexOf "gl-secret" collision) collision `shouldReturn` 0
+        deliver Git.Gitea "push" (Just $ Utils.hmacSha256Hex "gl-secret" collision) collision `shouldReturn` 0
 
       it "repositoryExport_retriesFailuresAndUpdatesOneConfigurationPRWithoutWritingToTheTargetBranch" \tr -> do
         sync <- teamDashboards tr

@@ -228,7 +228,9 @@ emptyResult :: Verdict -> [Finding] -> UTCTime -> UTCTime -> ReviewResult
 emptyResult verdict findings windowStart windowEnd = ReviewResult{verdict, findings, coverage = [], evidence = [], windowStart, windowEnd, knowledge = Nothing, summary = Nothing, assessments = Nothing, claims = Nothing, proofs = Nothing, issues = Nothing, noProofNeeded = Nothing}
 
 
-data ReviewFailure = ReviewFailure Text | ReviewPublicationRefused Text | NativeSessionLost
+-- | 'ReviewStopped': a failure no retry can heal (configuration, a paused routine, a refused tool), so the
+-- run ends at once with its reason instead of spending its three attempts.
+data ReviewFailure = ReviewFailure Text | ReviewStopped Text | ReviewPublicationRefused Text | NativeSessionLost
   deriving stock (Generic, Show)
   deriving anyclass (Exception)
 
@@ -462,6 +464,31 @@ prepareWorkspace kind repository fetch = do
     Right prepared -> Log.logInfo (kind <> " workspace ready") (repository, prepared)
 
 
+-- | The bounded label 'Metrics.reviewFailures' counts a failure under, from its logged detail.
+--
+-- >>> map failureCause ["Review authorization is no longer available", "Review agent exceeded its query budget", "Review agent could not be executed: /tmp/x: createDirectory: resource exhausted", "Saved progress was lost, so this run cannot resume.", "Review timed out", "boom"]
+-- ["authorization_lost","budget_query","host_disk_full","session_lost","timed_out","other"]
+failureCause :: Text -> Text
+failureCause detail = maybe "other" snd $ find ((`T.isInfixOf` detail) . fst) causes
+  where
+    causes :: [(Text, Text)]
+    causes =
+      [ ("no longer authorized", "authorization_lost")
+      , ("authorization is no longer available", "authorization_lost")
+      , ("exceeded its time budget", "budget_time")
+      , ("exceeded its query budget", "budget_query")
+      , ("exceeded its submission budget", "budget_submission")
+      , ("resource exhausted", "host_disk_full")
+      , ("No space left on device", "host_disk_full")
+      , ("could not be executed", "sandbox")
+      , ("Saved progress was lost", "session_lost")
+      , ("session data is missing", "session_lost")
+      , ("changed before publication", "pr_changed")
+      , ("timed out", "timed_out")
+      , ("GITHUB_APP_ID", "configuration")
+      ]
+
+
 reviewPullRequest :: Reviews.ReviewId -> ATBackgroundCtx ()
 reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
   case run.state of
@@ -476,7 +503,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           when claimed
             $ Issues.getEventRoutine run.projectId Issues.EventPullRequest
             >>= \case
-              Nothing -> Reviews.recordFailure run "Activate or resume Production impact review in AI routines."
+              Nothing -> Reviews.recordFailure run Reviews.routineMissingError
               Just routine -> do
                 let convId = UUIDId run.threadId.unUUIDId
                     input = "Review " <> run.owner <> "/" <> run.repo <> " #" <> show run.number <> " at " <> run.revision
@@ -498,12 +525,17 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                               Reviews.supersedeRun run >> retire run
                             _ -> do
                               Log.logAttention "Production impact review failed" (run.id, detail)
+                              Metrics.count Metrics.reviewFailures 1 [("cause", OA.toAttribute $ failureCause detail)]
                               active <- Issues.routineRunActive run.projectId execution.id
                               finish $ if active then failureResult (Issues.RunFailure message Issues.RunOnly) else Issues.CancelledResult Nothing
                               Reviews.recordFailure run message
                               -- Deferring nodes requeue with fresh odd-jobs attempts, so agent retries are bounded per chain here.
                               -- Publication recovery reuses the stored result, calls no model, and retries until it reconciles.
-                              if retries && (isJust run.result || execution.chainAttempt < 3) then throwIO $ ReviewFailure message else stopProgress run message
+                              -- A retry continues the chain, which needs a checkpoint once models were called (unless only
+                              -- publication is left); without one it could only end "Saved progress was lost" and hide this failure.
+                              published <- isJust . (>>= (.result)) <$> Reviews.getRun run.id
+                              resumable <- (published ||) . isRight <$> runErrorNoCallStack @ReviewFailure (requireRetainedSession run.projectId (Usage.Review run.id) . join . rightToMaybe =<< Agent.readSessionContext (Agent.ReviewSubject run.id) context.rootId)
+                              if retries && (isJust run.result || execution.chainAttempt < 3 && resumable) then throwIO $ ReviewFailure message else stopProgress run message
                     case outcome of
                       Left err
                         | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> Jobs.deferOperationReview run.projectId identifier deadline
@@ -511,6 +543,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                       Right Nothing -> failReview True Issues.TimedOutResult ("Review exceeded its " <> show (reviewSeconds `div` 60) <> "-minute budget") "Review timed out"
                       Right (Just (Left (ReviewFailure err))) -> failReview True Issues.FailedResult retryMessage err
                       Right (Just (Left NativeSessionLost)) -> failReview False Issues.FailedResult nativeSessionLostMessage nativeSessionLostMessage
+                      Right (Just (Left (ReviewStopped reason))) -> failReview False Issues.FailedResult reason reason
                       Right (Just (Left (ReviewPublicationRefused reason))) -> do
                         finish $ Issues.CancelledResult $ Just reason
                         Reviews.recordFailure run reason
@@ -522,12 +555,17 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                           _ -> do
                             finish $ Issues.CancelledResult $ Just "The PR changed or review authorization was withdrawn before publication."
                             stopProgress run "The pull request changed or review authorization was withdrawn before publication."
+    -- Also ends a routine run still marked running: its worker died, and only this job would close it.
     retire :: Reviews.ReviewRun -> ATBackgroundCtx ()
-    retire run = whenJustM (Reviews.getRun run.id) \latest ->
-      stopProgress run
-        $ if latest.latestRevision /= run.revision
-          then "A newer commit, " <> T.take 8 latest.latestRevision <> ", replaced this review before its proofs finished."
-          else "The pull request was closed, merged or moved out of review before the proofs finished."
+    retire run = do
+      whenJustM (Issues.getEventRun run.projectId $ Issues.PullRequestReview run.id) \execution -> when (execution.status == Issues.RunRunning) do
+        context <- AI.requireRunContext run.projectId $ Issues.EventClaim (Issues.PullRequestReview run.id) execution.id execution.startedAt
+        void $ Issues.completeRun context $ Issues.CancelledResult $ Just "A newer commit or the pull request closing replaced this review."
+      whenJustM (Reviews.getRun run.id) \latest ->
+        stopProgress run
+          $ if latest.latestRevision /= run.revision
+            then "A newer commit, " <> T.take 8 latest.latestRevision <> ", replaced this review before its proofs finished."
+            else "The pull request was closed, merged or moved out of review before the proofs finished."
     -- A review that stops for good says so in its progress comment instead of leaving it running.
     stopProgress :: Reviews.ReviewRun -> Text -> ATBackgroundCtx ()
     stopProgress run reason = whenJustM (Reviews.progressComment run) \cid -> whenRightM_ (reviewConnection run) \(_, _, _, conn) -> do
@@ -668,7 +706,10 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                   ( \value -> do
                       queried <- State.gets @ReviewMemory (Map.elems . (.evidence))
                       recorded <- recordedProofs
-                      pure $ void $ validateDraft (concatMap changedLines initial.files) (map (\item -> (item.key, item.kind)) $ evidence <> queried) recorded value
+                      let checked = void $ validateDraft (concatMap changedLines initial.files) (map (\item -> (item.key, item.kind)) $ evidence <> queried) recorded value
+                      -- Rejections go back to the agent only; a review that runs out of submissions is undiagnosable without them.
+                      whenLeft_ checked $ Log.logInfo "Review draft rejected" . (run.id,)
+                      pure checked
                   )
             output <- require answer
             parsed <- require $ first (const "Review agent returned invalid review JSON") $ AE.eitherDecodeStrict @ReviewDraft $ encodeUtf8 output
@@ -744,7 +785,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
     publish run execution context conn ref pr result =
       AI.authorizeRunOperation context Catalog.ExternalPublication >>= \case
         Left (AI.AuthorityDenied Issues.ActionGrantRequired) -> Reviews.finishRun run Nothing
-        Left denial -> throwError $ ReviewFailure $ AI.toolDenialMessage denial
+        Left denial -> throwError $ ReviewStopped $ AI.toolDenialMessage denial
         Right _ -> do
           cfg <- (.config) <$> ask @AuthContext
           whenM (Reviews.currentRun run) do
@@ -780,7 +821,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
     reviewComment run conn ref = do
       cfg <- (.config) <$> ask @AuthContext
       comments <- require =<< Git.listPullRequestComments conn ref run.number
-      appId <- maybe (throwError $ ReviewFailure "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
+      appId <- maybe (throwError $ ReviewStopped "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
       progress <- Reviews.progressComment run
       let ours = [c.id | c <- comments, fmap (.id) c.performedViaGithubApp == Just appId, reviewMarker run `T.isInfixOf` c.body]
       pure $ find (`elem` ours) progress <|> if isJust run.request then Nothing else viaNonEmpty last ours
@@ -802,17 +843,17 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
     reconcileComment run conn = \case
       Catalog.NativeCall (Catalog.PublishPullRequestComment retained) | retained.reviewId == run.id -> do
         cfg <- (.config) <$> ask @AuthContext
-        appId <- maybe (throwError $ ReviewFailure "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
+        appId <- maybe (throwError $ ReviewStopped "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
         observed <- either (throwError . ReviewFailure) pure =<< Git.listPullRequestComments conn (Git.RepoRef run.owner run.repo run.revision) run.number
         pure $ Right . AE.toJSON . (.id) <$> find (\comment -> fmap (.id) comment.performedViaGithubApp == Just appId && comment.body == retained.body) observed
       (Catalog.ModelCall{}; Catalog.NativeCall Catalog.WriteWiki{}; Catalog.NativeCall Catalog.EnrichIssue{}; Catalog.NativeCall Catalog.PublishPullRequestComment{}) -> pure Nothing
 
     requireActive :: (DB es, Error ReviewFailure :> es) => Reviews.ReviewRun -> Issues.EventRun -> Eff es ()
     requireActive run execution = do
-      unlessM (Issues.routineRunActive run.projectId execution.id) $ throwError $ ReviewFailure "Routine paused, stopped, or requester access revoked"
+      unlessM (Issues.routineRunActive run.projectId execution.id) $ throwError $ ReviewStopped "Routine paused, stopped, or requester access revoked"
       required <- Investigations.conversationEvidencePermission run.projectId (UUIDId run.threadId.unUUIDId)
       audience <- Investigations.conversationEvidenceAudience run.projectId (UUIDId run.threadId.unUUIDId)
-      unless (required <= ProjectMembers.PView && audience == Investigations.ProjectAudience) $ throwError $ ReviewFailure "Restricted conversation evidence cannot be published to this review's shared destinations"
+      unless (required <= ProjectMembers.PView && audience == Investigations.ProjectAudience) $ throwError $ ReviewStopped "Restricted conversation evidence cannot be published to this review's shared destinations"
 
     require :: Either Text a -> ReviewCtx a
     require = either (throwError . ReviewFailure) pure

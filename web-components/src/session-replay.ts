@@ -137,6 +137,7 @@ export class SessionReplay extends LitElement {
 
     window.addEventListener('loadSessionReplay', (e) => {
       const { sessionId } = (e as CustomEvent<{ sessionId: string }>).detail;
+      document.getElementById(this.containerId)?.classList.remove('hidden');
       this.fetchNewSessionData(sessionId);
       updateUrlState('session_replay', sessionId);
     }, { signal });
@@ -764,7 +765,7 @@ export class SessionReplay extends LitElement {
     if (this.initialSession) {
       this.fetchNewSessionData(this.initialSession);
     } else if (urlSession) {
-      document.querySelector(`#${this.containerId}`)?.classList.remove('hidden');
+      document.getElementById(this.containerId)?.classList.remove('hidden');
       this.fetchNewSessionData(urlSession);
     }
   }

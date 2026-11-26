@@ -315,12 +315,18 @@ export const showChartError = (chartId: string, message: string, retry?: () => P
       try { await retry(); } finally { button.disabled = false; }
     } : null;
   }
-  banner?.classList.remove('hidden');
+  $(`${chartId}_bordered`)?.setAttribute('data-widget-state', 'error');
 };
 
-const hideChartError = (chartId: string) => $(`${chartId}_error`)?.classList.add('hidden');
-export const showNoDataOverlay = (chartId: string) => $(`${chartId}_empty`)?.classList.remove('hidden');
-export const hideNoDataOverlay = (chartId: string) => $(`${chartId}_empty`)?.classList.add('hidden');
+const hideChartError = (chartId: string) => {
+  const b = $(`${chartId}_bordered`);
+  if (b?.dataset.widgetState === 'error') delete b.dataset.widgetState;
+};
+export const showNoDataOverlay = (chartId: string) => $(`${chartId}_bordered`)?.setAttribute('data-widget-state', 'empty');
+export const hideNoDataOverlay = (chartId: string) => {
+  const b = $(`${chartId}_bordered`);
+  if (b?.dataset.widgetState === 'empty') delete b.dataset.widgetState;
+};
 
 // Loader + spotlight border move together, and both writes are deferred to a frame so a
 // fetch never forces layout in the middle of a scroll.

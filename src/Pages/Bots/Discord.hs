@@ -26,7 +26,7 @@ import Network.HTTP.Types (renderSimpleQuery, statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Bots.Utils (BotEmoji (..), BotErrorType (..), BotResponse (..), BotType (..), authHeader, botEmoji, botReplyPayload, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, freshWebhookTimestamp, installedResponse, parseInstallState, runBotQueryWithTools, withBotThread, withDashboardTemplate)
+import Pages.Bots.Utils (BotEmoji (..), BotErrorType (..), BotResponse (..), BotType (..), authHeader, botEmoji, botReplyPayload, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, installedResponse, parseInstallState, runBotQueryWithTools, withBotThread, withDashboardTemplate)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (idFromText)
@@ -39,7 +39,7 @@ import Servant.Server (ServerError (errBody), err400, err401, err403, err404)
 import System.Config (AuthContext (env), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBaseCtx)
-import Utils (constEqText, hostPath)
+import Utils (constEqText, freshWebhookTimestamp, hostPath)
 import Web.Cookie (SetCookie (..), defaultSetCookie, parseCookies, sameSiteLax)
 import Web.Links (CookieProtectedRoutes (..), urls)
 import "base16-bytestring" Data.ByteString.Base16 qualified as Base16
@@ -101,6 +101,18 @@ linkDiscordGetH pidM' codeM guildIdM cookieM = do
           registerDiscordCommands envCfg.discordClientId envCfg.discordBotToken guildId
           pure $ installedResponse "Discord" pid isOnboarding bwconf
     _ -> pure discordErr
+  where
+    registerDiscordCommands :: HTTP :> es => Text -> Text -> Text -> Eff es ()
+    registerDiscordCommands appId botToken guildId =
+      for_
+        [ cmd "monoscope" "Ask about your project or get reports" ["options" AE..= arr [AE.object ["name" AE..= ("question" :: Text), "description" AE..= ("Your question in natural language" :: Text), "type" AE..= (3 :: Int), "required" AE..= True]]]
+        , cmd "here" "Channel for monoscope to send notifications" ["default_member_permissions" AE..= ("32" :: Text)]
+        , cmd "dashboard" "Select and share dashboard widget" []
+        ]
+        $ discordJsonPost botToken ("https://discord.com/api/v10/applications/" <> appId <> "/guilds/" <> guildId <> "/commands")
+      where
+        cmd :: Text -> Text -> [(AE.Key, AE.Value)] -> AE.Value
+        cmd name description extra = AE.object $ ["name" AE..= name, "description" AE..= description, "type" AE..= (1 :: Int)] <> extra
 
 
 -- | Discord interaction type. Discord sends 1 for PING; every other numeric type
@@ -291,6 +303,33 @@ discordInteractionsH projectTools rawBody signatureM timestampM = do
     discordSelectContent choices sId placeholder =
       AE.object ["flags" AE..= (64 :: Int), "components" AE..= arr [AE.object ["type" AE..= (1 :: Int), "components" AE..= arr [AE.object ["type" AE..= (3 :: Int), "custom_id" AE..= sId, "placeholder" AE..= placeholder, "options" AE..= map (\(t, v) -> AE.object ["label" AE..= t, "value" AE..= v]) choices]]]]]
 
+    verifyDiscordSignature :: Log.Log :> es => ByteString -> ByteString -> ByteString -> ByteString -> Eff es Bool
+    verifyDiscordSignature publicKey signatureHex timestamp rawBody' =
+      either (\err -> False <$ Log.logTrace ("Discord signature verification failed: " <> toText err) ()) pure result
+      where
+        result = do
+          sig <- first show . Crypto.eitherCryptoError . Ed25519.signature =<< first show (Base16.decode signatureHex)
+          pk <- first show . Crypto.eitherCryptoError . Ed25519.publicKey =<< first show (Base16.decode publicKey)
+          pure $ Ed25519.verify pk (timestamp <> rawBody') sig
+
+    getThreadStarterMessage :: (HTTP :> es, Ki.StructuredConcurrency :> es, Log.Log :> es) => DiscordInteraction -> Text -> Eff es (Maybe [DiscordMessage])
+    getThreadStarterMessage interaction botToken = case (interaction.channel_id, interaction.channel) of
+      (Just channelId, Just DiscordThreadChannel{type_ = 11, parent_id = Just pId}) -> do
+        let baseUrl = "https://discord.com/api/v10/channels/"
+            opts = defaults & authHeader "Bot" botToken & contentTypeHeader "application/json"
+        -- Plain Ki.fork (not forkWithCtx): Data.Effectful.Wreq.getWith is not
+        -- OTel-instrumented, so the child fibers emit no spans — there is
+        -- nothing to parent and propagation would only add IOE constraint
+        -- noise to this signature.
+        (response, response') <- Ki.scoped \scope -> do
+          t1 <- Ki.fork scope $ getWith opts (toString $ baseUrl <> channelId <> "/messages?limit=50")
+          t2 <- Ki.fork scope $ getWith opts (toString $ baseUrl <> pId <> "/messages/" <> channelId)
+          liftA2 (,) (Ki.atomically $ Ki.await t1) (Ki.atomically $ Ki.await t2)
+        case AE.eitherDecode (response ^. responseBody) of
+          Left err -> Nothing <$ Log.logAttention ("Error decoding Discord thread messages: " <> toText err) ()
+          Right messages -> pure $ Just $ messages <> maybeToList (rightToMaybe (AE.eitherDecode (response' ^. responseBody)) :: Maybe DiscordMessage)
+      _ -> pure Nothing
+
 
 discordJsonPost :: HTTP :> es => Text -> Text -> AE.Value -> Eff es ()
 discordJsonPost botToken url payload = void $ postWith (defaults & authHeader "Bot" botToken & contentTypeHeader "application/json") (toString url) payload
@@ -307,16 +346,6 @@ followup envCfg i content = do
   discordJsonPost envCfg.discordBotToken ("https://discord.com/api/v10/webhooks/" <> envCfg.discordClientId <> "/" <> i.token) (Notify.discordNoMentions content)
 
 
-verifyDiscordSignature :: Log.Log :> es => ByteString -> ByteString -> ByteString -> ByteString -> Eff es Bool
-verifyDiscordSignature publicKey signatureHex timestamp rawBody =
-  either (\err -> False <$ Log.logTrace ("Discord signature verification failed: " <> toText err) ()) pure result
-  where
-    result = do
-      sig <- first show . Crypto.eitherCryptoError . Ed25519.signature =<< first show (Base16.decode signatureHex)
-      pk <- first show . Crypto.eitherCryptoError . Ed25519.publicKey =<< first show (Base16.decode publicKey)
-      pure $ Ed25519.verify pk (timestamp <> rawBody) sig
-
-
 newtype DiscordUser = DiscordUser
   { username :: Text
   }
@@ -330,35 +359,3 @@ data DiscordMessage = DiscordMessage
   }
   deriving (Generic, Show)
   deriving anyclass (AE.FromJSON)
-
-
-getThreadStarterMessage :: (HTTP :> es, Ki.StructuredConcurrency :> es, Log.Log :> es) => DiscordInteraction -> Text -> Eff es (Maybe [DiscordMessage])
-getThreadStarterMessage interaction botToken = case (interaction.channel_id, interaction.channel) of
-  (Just channelId, Just DiscordThreadChannel{type_ = 11, parent_id = Just pId}) -> do
-    let baseUrl = "https://discord.com/api/v10/channels/"
-        opts = defaults & authHeader "Bot" botToken & contentTypeHeader "application/json"
-    -- Plain Ki.fork (not forkWithCtx): Data.Effectful.Wreq.getWith is not
-    -- OTel-instrumented, so the child fibers emit no spans — there is
-    -- nothing to parent and propagation would only add IOE constraint
-    -- noise to this signature.
-    (response, response') <- Ki.scoped \scope -> do
-      t1 <- Ki.fork scope $ getWith opts (toString $ baseUrl <> channelId <> "/messages?limit=50")
-      t2 <- Ki.fork scope $ getWith opts (toString $ baseUrl <> pId <> "/messages/" <> channelId)
-      liftA2 (,) (Ki.atomically $ Ki.await t1) (Ki.atomically $ Ki.await t2)
-    case AE.eitherDecode (response ^. responseBody) of
-      Left err -> Nothing <$ Log.logAttention ("Error decoding Discord thread messages: " <> toText err) ()
-      Right messages -> pure $ Just $ messages <> maybeToList (rightToMaybe (AE.eitherDecode (response' ^. responseBody)) :: Maybe DiscordMessage)
-  _ -> pure Nothing
-
-
-registerDiscordCommands :: HTTP :> es => Text -> Text -> Text -> Eff es ()
-registerDiscordCommands appId botToken guildId =
-  for_
-    [ cmd "monoscope" "Ask about your project or get reports" ["options" AE..= arr [AE.object ["name" AE..= ("question" :: Text), "description" AE..= ("Your question in natural language" :: Text), "type" AE..= (3 :: Int), "required" AE..= True]]]
-    , cmd "here" "Channel for monoscope to send notifications" ["default_member_permissions" AE..= ("32" :: Text)]
-    , cmd "dashboard" "Select and share dashboard widget" []
-    ]
-    $ discordJsonPost botToken ("https://discord.com/api/v10/applications/" <> appId <> "/guilds/" <> guildId <> "/commands")
-  where
-    cmd :: Text -> Text -> [(AE.Key, AE.Value)] -> AE.Value
-    cmd name description extra = AE.object $ ["name" AE..= name, "description" AE..= description, "type" AE..= (1 :: Int)] <> extra

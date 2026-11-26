@@ -32,10 +32,10 @@ import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkAIPageCtx, navTabAttrs)
+import Pages.BodyWrapper (AiComposerMode (..), BWConfig (..), PageCtx (..), mkAIPageCtx, navTabAttrs, openAiComposerAttr_)
 import Pages.Bots.Utils qualified as Bots
 import Pages.CodeContext qualified as CodeContext
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), actionMenu_, disclosure_, emptyState_, iconBadge_, localTimeFmt_, logExplorerUrl, toneDot_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), actionMenu_, disclosure_, emptyState_, iconBadge_, localTimeFmt_, logExplorerUrl, morphTarget_, pollSelfAttrsWith_, toneDot_, tonePill_)
 import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
@@ -238,7 +238,7 @@ threadsGetH pid = do
           { pageTitle = "Conversations"
           , menuItem = Just "AI"
           , conversations = allConversations
-          , pageActions = Just $ button_ [type_ "button", Aria.label_ "New chat", class_ "btn btn-sm btn-primary gap-2 active:scale-[0.96] transition-transform", [__|on click set #ai-composer-input.value to '' then set #ai-composer-chat.checked to true then call #ai-composer-modal.showModal()|]] do
+          , pageActions = Just $ button_ [type_ "button", Aria.label_ "New chat", class_ "btn btn-sm btn-primary gap-2 active:scale-[0.96] transition-transform", openAiComposerAttr_ ComposerChat] do
               faSprite_ "plus" "regular" "h-3.5 w-3.5"
               span_ [class_ "max-md:hidden"] "New chat"
           }
@@ -273,7 +273,7 @@ routinesGetH pid = do
           { pageTitle = "Routines"
           , menuItem = Just "AI"
           , conversations
-          , pageActions = Just $ button_ [type_ "button", Aria.label_ "New custom routine", class_ "btn btn-sm btn-primary gap-2 active:scale-[0.96] transition-transform", [__|on click set #ai-composer-input.value to '' then set #ai-composer-routine.checked to true then call #ai-composer-modal.showModal()|]] do
+          , pageActions = Just $ button_ [type_ "button", Aria.label_ "New custom routine", class_ "btn btn-sm btn-primary gap-2 active:scale-[0.96] transition-transform", openAiComposerAttr_ ComposerRoutine] do
               faSprite_ "plus" "regular" "h-3.5 w-3.5"
               span_ [class_ "max-md:hidden"] "New custom routine"
           }
@@ -292,7 +292,7 @@ routinesGetH pid = do
             else
               toHtml
                 Table
-                  { config = def{elemID = "ai-routines-installed", renderAsTable = True, tdClasses = "px-4 py-2.5"}
+                  { config = def{elemID = "ai-routines-installed", renderAsTable = True}
                   , columns =
                       [ col
                           "Routine"
@@ -350,7 +350,7 @@ routinesGetH pid = do
             runsTable_ tableId sectionRuns =
               toHtml
                 Table
-                  { config = def{elemID = tableId, renderAsTable = True, tdClasses = "px-4 py-2.5"}
+                  { config = def{elemID = tableId, renderAsTable = True}
                   , columns =
                       [ col
                           "Run"
@@ -459,7 +459,9 @@ threadPageGetH pid convId docM runM hxTarget = do
     fixEvidence <- case run.source of
       Issues.FixRun identifier | run.status == Issues.RunSucceeded && viewerPermission >= ProjectMembers.PAdmin -> Just <$> CodeContext.issueFixEvidenceH pid identifier
       (Issues.ScheduledRun; Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}; Issues.FixRun{}) -> pure Nothing
-    pure $ runView_ (isNothing conversationM) run evidence requestedBy runArtifacts viewerPermission operations fixEvidence
+    -- Only a member's decision counts ('Investigations.decideOperationReview'), so a super admin sees no Approve/Deny.
+    reviewer <- ProjectMembers.getUserPermission pid sess.user.id
+    pure $ runView_ (isNothing conversationM) run evidence requestedBy runArtifacts viewerPermission reviewer operations fixEvidence
   let activeId = (.conversationId) <$> conversationM
       messages = bool [] selectedMessages (isJust conversationM)
       -- 'latest-result' mirrors the newest run, already shown as the latest result and under Runs.
@@ -487,16 +489,13 @@ threadPageGetH pid convId docM runM hxTarget = do
       (Issues.RunRunning; Issues.RunSucceeded; Issues.RunNoFindings; Issues.RunCancelled) -> "text-textWeak"
     runStatusId :: Issues.RoutineRun -> Text
     runStatusId run = "routine-run-status-" <> run.id.toText
-    -- Like 'Pages.Components.pollSelfAttrs_' but with @outerMorph@ so open disclosures survive polling.
-    morphPollSelfAttrs_ :: Text -> Text -> Text -> [Attribute]
-    morphPollSelfAttrs_ cid url trigger = [hxGet_ url, hxTrigger_ trigger, hxTarget_ "this", hxSelect_ $ "#" <> cid, hxSwap_ "outerMorph", term "hx-preload" "false"]
     cardDisclosure_ :: [Attribute] -> Text -> Html () -> Html () -> Html ()
     cardDisclosure_ attrs bodyCls summary = disclosure_ (class_ "rounded-xl border border-strokeWeak bg-bgRaised" : attrs) "gap-2 rounded-xl px-4 py-3 text-sm font-medium text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:-outline-offset-2" summary . div_ [class_ $ "border-t border-strokeWeak p-4" <> bodyCls]
 
-    runView_ :: Bool -> Issues.RoutineRun -> Issues.RoutineRunEvidence -> Maybe Projects.User -> [Issues.AIArtifact] -> ProjectMembers.Permissions -> [Investigations.OperationEntry AI.OperationPolicy] -> Maybe (Html ()) -> Html ()
-    runView_ retained run evidence requestedBy artifacts viewerPermission operations fixEvidence =
+    runView_ :: Bool -> Issues.RoutineRun -> Issues.RoutineRunEvidence -> Maybe Projects.User -> [Issues.AIArtifact] -> ProjectMembers.Permissions -> Maybe ProjectMembers.Permissions -> [Investigations.OperationEntry AI.OperationPolicy] -> Maybe (Html ()) -> Html ()
+    runView_ retained run evidence requestedBy artifacts viewerPermission reviewer operations fixEvidence =
       section_
-        ([id_ "routine-run", class_ "space-y-5"] <> bool [] (morphPollSelfAttrs_ "routine-run" (urls.aiRoutineRunGet pid run.id (Just convId)) "every 5s" <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) (run.status == Issues.RunRunning))
+        ([id_ "routine-run", class_ "space-y-5"] <> bool [] (pollSelfAttrsWith_ "outerMorph" "routine-run" (urls.aiRoutineRunGet pid run.id (Just convId)) "every 5s" <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) (run.status == Issues.RunRunning))
         do
           header_ [class_ "space-y-2"] do
             div_ [class_ "flex items-baseline justify-between gap-3"] do
@@ -532,7 +531,7 @@ threadPageGetH pid convId docM runM hxTarget = do
             div_ [class_ "flex items-center justify-between gap-3"] do
               h2_ [class_ "text-sm font-semibold text-textStrong"] "Action history"
               let refresh = urls.aiRoutineRunGet pid run.id (Just convId)
-              a_ [href_ refresh, hxGet_ refresh, hxSelect_ "#routine-run", hxTarget_ "#routine-run", hxSwap_ "outerMorph", term "hx-preload" "false", class_ "btn btn-xs btn-ghost"] "Refresh actions"
+              a_ ([href_ refresh, hxGet_ refresh, term "hx-preload" "false", class_ "btn btn-xs btn-ghost"] <> morphTarget_ "routine-run") "Refresh actions"
             p_ [class_ "text-xs text-textWeak"] "Most recent 200 actions for this request, including unresolved earlier actions. A saved response can contain a tool error."
             for_ operations \operation -> article_ [id_ $ "operation-" <> operation.id.toText, class_ "space-y-2 rounded-lg border border-strokeWeak p-3"] do
               div_ [class_ "flex flex-wrap items-center justify-between gap-2"] do
@@ -558,8 +557,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                 $ p_ [class_ "text-sm text-textWeak"] "No result was retained. This action was not repeated. It may still complete."
               let required = MCP.minimumPermission operation.proposal.policy.capability
               if viewerPermission >= required
-                then details_ [class_ "text-sm text-textWeak"] do
-                  summary_ [class_ "cursor-pointer font-medium text-textStrong"] "Proposal and outcome"
+                then disclosure_ [class_ "text-sm text-textWeak"] "font-medium text-textStrong" "Proposal and outcome" do
                   pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.proposal
                   pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.outcome
                   when (operation.review /= Investigations.NoReview) $ pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.review
@@ -570,7 +568,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                     p_ [class_ "text-xs text-textWeak"] do
                       "Review deadline: "
                       localTimeFmt_ "MMM d, HH:mm" request.expiresAt
-                    when (viewerPermission >= max required (Catalog.approverPermission request.approver))
+                    when (any (>= max required (Catalog.approverPermission request.approver)) reviewer)
                       $ form_
                         [ hxPost_ $ urls.aiOperationReviewPost pid operation.id
                         , hxTarget_ "closest #routine-run"
@@ -633,7 +631,7 @@ threadPageGetH pid convId docM runM hxTarget = do
             -- A chat lists its documents first; a routine leads with its result, then its history.
             unless (null docs || isRoutine) documentsNav_
             div_
-              ([id_ "ai-thread-results", class_ "space-y-8"] <> bool [] (morphPollSelfAttrs_ "ai-thread-results" threadHref "every 2s" <> [term "hx-select-oob" "#pageTitleText:outerHTML"]) (any ((== Issues.RunRunning) . (.status)) runs))
+              ([id_ "ai-thread-results", class_ "space-y-8"] <> bool [] (pollSelfAttrsWith_ "outerMorph" "ai-thread-results" threadHref "every 2s" <> [term "hx-select-oob" "#pageTitleText:outerHTML"]) (any ((== Issues.RunRunning) . (.status)) runs))
               do
                 -- A routine reads as its latest result (plus the question that prompted it); older ones live under Runs below.
                 let definingPrompt m = m.role == Issues.ChatUser && Just (T.strip m.content) == (T.strip <$> instructions)
@@ -799,14 +797,15 @@ threadPageGetH pid convId docM runM hxTarget = do
           article_
             ( [id_ "ai-document", Aria.label_ doc.title]
                 -- Routines keep appending to today's document; keep an open one current.
-                <> bool [] (morphPollSelfAttrs_ "ai-document" (docHref doc) "every 60s") (any ((.routineActive) . fst) routineM)
+                <> bool [] (pollSelfAttrsWith_ "outerMorph" "ai-document" (docHref doc) "every 60s") (any ((.routineActive) . fst) routineM)
             )
             do
               h2_ [class_ "text-base font-semibold text-textStrong text-balance break-words"] $ toHtml doc.title
               p_ [class_ "mt-1 text-xs text-textWeak"] $ "Updated " >> localTimeFmt_ "MMM d, HH:mm" doc.updatedAt
-              when (length openToc > 1) $ details_ [class_ "mt-4 text-sm text-textWeak"] do
-                summary_ [class_ "cursor-pointer"] "On this page"
-                ul_ [class_ "mt-2 space-y-1"] $ for_ openToc \(anchor, heading) ->
+              when (length openToc > 1)
+                $ disclosure_ [class_ "mt-4 text-sm text-textWeak"] "" "On this page"
+                $ ul_ [class_ "mt-2 space-y-1"]
+                $ for_ openToc \(anchor, heading) ->
                   li_ $ a_ [href_ $ "#" <> anchor, class_ "block truncate text-textBrand hover:underline"] $ toHtml heading
               div_ [class_ "prose prose-sm mt-6 max-w-none break-words overflow-x-auto [&_h2]:scroll-mt-4"] openBody
 
@@ -1003,7 +1002,7 @@ normalizeQuery = (\prompt -> if T.null prompt then Left EmptyPrompt else if T.le
 authorizeProject :: Projects.ProjectId -> ATAuthCtx ()
 authorizeProject pid = do
   (sess, _) <- Projects.sessionAndProject pid
-  unlessM (isJust <$> ProjectMembers.getUserPermission pid sess.user.id) $ throwError Servant.err403
+  unlessM (isJust <$> ProjectMembers.getSessionPermission pid sess.user.id) $ throwError Servant.err403
 
 
 -- | Schedule the routine's next run, if the write produced one.

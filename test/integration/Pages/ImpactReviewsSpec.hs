@@ -80,11 +80,13 @@ import Pkg.GitCommand qualified as HostGit
 import Pkg.ImpactReview qualified as Impact
 import Pkg.Minio qualified as Storage
 import Pkg.Parser.Stats qualified as KQL
+import OpenTelemetry.Trace.Core (SpanHot (hotName))
 import Pkg.TestUtils hiding (call)
 import Pkg.TestUtils qualified as Test
 import Servant (ServerError (..), getResponse)
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.FileLock qualified as FileLock
 import System.Directory (canonicalizePath, copyFile, createDirectoryIfMissing, createFileLink, doesDirectoryExist, doesFileExist, findExecutable, listDirectory, removeFile, removePathForcibly, renameDirectory)
 import System.Environment (getEnvironment)
 import System.Environment qualified as Environment
@@ -173,7 +175,7 @@ deliverEvent tr event respond value = do
   let body = toStrict $ AE.encode value
       signature = "sha256=" <> decodeUtf8 (B16.encode $ BA.convert (HMAC.hmac ("impact-secret" :: ByteString) body :: HMAC.HMAC SHA256))
       configured = tr{trATCtx = tr.trATCtx{config = app{githubAppWebhookSecret = "impact-secret"}}}
-  runAsBaseRecordingHTTP configured $ githubResponses respond $ GitSyncPage.gitWebhookPostH Git.GitHub $ Git.WebhookReq (Just event) (Just signature) Nothing Nothing Nothing body
+  runAsBaseRecordingHTTP configured $ githubResponses respond $ GitSyncPage.gitWebhookPostH Git.GitHub (Just "fixture-delivery") $ Git.WebhookReq (Just event) (Just signature) Nothing Nothing Nothing body
 
 
 commentPayload :: Text -> Text -> AE.Value
@@ -1800,7 +1802,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let runWith session artifact expectedPatch = do
           headRevision <- revisionAt
           let request = AE.object ["projectId" AE..= testPid, "runId" AE..= uid 1, "attemptId" AE..= uid 2, "sessionId" AE..= uid session, "base" AE..= base, "imageBuildId" AE..= imageId, "workspace" AE..= AE.object ["tag" AE..= ("Pristine" :: Text)], "artifact" AE..= artifact, "revisions" AE..= ([["base", base], ["head", headRevision]] :: [[Text]])]
-              options = Workspace.RegressionOptions artifacts repository (toText image) bridge
+              options = Workspace.RegressionOptions artifacts repository (toText image) bridge (15 * 60)
               requestPath = directory </> "request.json"
           writeFileLBS requestPath $ AE.encode request
           outcome <- runEff $ Workspace.runWorkspaceReal $ Workspace.runRegression options requestPath
@@ -1852,7 +1854,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     statuses invalid `shouldReturn` ["blocked", "blocked"]
     traverse (parse $ field "reason") invalid >>= (`shouldSatisfy` all (T.isInfixOf "Git diff"))
     map (.exitCode) invalidReceipts `shouldBe` [Nothing, Nothing]
-    exhausted <- runEff $ Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions artifacts repository (toText image) bridge) (directory </> "request.json")
+    exhausted <- runEff $ Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions artifacts repository (toText image) bridge (15 * 60)) (directory </> "request.json")
     leftToMaybe (first Workspace.regressionErrorText exhausted) `shouldBe` Just "Local check comparison budget is exhausted"
     void $ git ["rm", "--quiet", "regression.sh"]
     void $ git ["commit", "--quiet", "-m", "fix without retained test"]
@@ -1881,6 +1883,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
       Workspace.maintenanceBudgetMet report `shouldBe` (budget == maxBound)
       status `shouldBe` if budget == maxBound then ExitSuccess else ExitFailure 1
       readFileBS unknown `shouldReturn` "Retain this unknown file."
+    -- staleLease_stopsPinningTheCache: a lease its worker never released (killed by a deploy mid-review) is reclaimed;
+    -- a held one stays.
+    let leases = cache </> toString testPid.toText </> "leases"
+    for_ ["workspaces", "leases/.lease-orphan", "leases/.lease-live"] $ createDirectoryIfMissing True . ((cache </> toString testPid.toText) </>)
+    writeFileBS (leases </> ".lease-orphan" </> "baseline.qcow2") "pinned"
+    FileLock.withFileLock (leases </> ".lease-live" </> "held.lock") FileLock.Exclusive \_ -> do
+      void $ CLI.runCLILifecycleLive ["workspace", "maintain", "--config", config]
+      listDirectory leases `shouldReturn` [".lease-live"]
 
   it "nativeGuest_resumePreservesCompletedEdits" \_ -> do
     profile <- nativeTestImage
@@ -1967,7 +1977,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       writeFileBS script "exec make prepared-app"
       let regression snapshotPath snapshotHash = AE.object ["projectId" AE..= testPid, "runId" AE..= testPid, "attemptId" AE..= testPid, "sessionId" AE..= testPid, "base" AE..= base, "imageBuildId" AE..= imageId, "workspace" AE..= AE.object ["tag" AE..= ("PreparedCheckpoint" :: Text), "contents" AE..= AE.object ["path" AE..= (snapshotPath :: FilePath), "sha256" AE..= (snapshotHash :: Text)]], "artifact" AE..= AE.object ["script" AE..= ("exec make check" :: Text), "failureMessage" AE..= ("cached dependency decoding failed" :: Text)], "revisions" AE..= ([["base", base], ["head", headRevision]] :: [[Text]])]
       writeFileLBS request $ AE.encode $ regression checkpoint fingerprint
-      result <- runEff (Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions checks repository (toText profile) bridge) request) >>= either (fail . show) (pure . AE.toJSON)
+      result <- runEff (Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions checks repository (toText profile) bridge (15 * 60)) request) >>= either (fail . show) (pure . AE.toJSON)
       rows <- parse (field "report" >=> field "results") result :: IO [AE.Value]
       traverse (parse $ field "status") rows `shouldReturn` (["passed", "failed"] :: [Text])
       outputTails <- traverse (parse $ field "tail") rows :: IO [Text]
@@ -1980,7 +1990,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           relocatedManifest = withKey "bytes" (AE.toJSON $ BS.length relocatedBytes) $ withKey "sha256" (AE.String relocatedHash) manifest
       writeFileLBS manifestPath $ AE.encode relocatedManifest
       writeFileLBS request $ AE.encode $ regression checkpoint relocatedHash
-      relocated <- runEff (Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions checks repository (toText profile) bridge) request) >>= either (fail . show) (pure . AE.toJSON)
+      relocated <- runEff (Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions checks repository (toText profile) bridge (15 * 60)) request) >>= either (fail . show) (pure . AE.toJSON)
       sha256 <$> readFileBS checkpoint `shouldReturn` relocatedHash
       isRight <$> lookupPrepared original options `shouldReturn` True
       relocatedRows <- parse (field "report" >=> field "results") relocated :: IO [AE.Value]
@@ -1997,7 +2007,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             sha256 <$> readFileBS immutable `shouldReturn` relocatedHash
             removeFile checkpoint
             writeFileLBS request $ AE.encode $ regression immutable relocatedHash
-          replay <- Workspace.runRegression (Workspace.RegressionOptions checks repository (toText profile) bridge) request
+          replay <- Workspace.runRegression (Workspace.RegressionOptions checks repository (toText profile) bridge (15 * 60)) request
           liftIO do
             replayed <- either (fail . show) (pure . AE.toJSON) replay
             statuses <- parse (field "report" >=> field "results") replayed >>= traverse (parse $ field "status")
@@ -2070,7 +2080,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             originalAssetDir <- parse (field "assetDir") manifest :: IO FilePath
             parse (field "manifest" >=> field "assetDir") normalized `shouldReturn` originalAssetDir
             writeFileLBS request $ AE.encode $ replace "sessionId" (AE.toJSON $ UUID.fromWords 0 0 0 97) $ regression checkpoint relocatedHash
-            replay <- runEff (Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions checks repository (toText profile) bridge) request) >>= either (fail . show) (pure . AE.toJSON)
+            replay <- runEff (Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions checks repository (toText profile) bridge (15 * 60)) request) >>= either (fail . show) (pure . AE.toJSON)
             statuses <- parse (field "report" >=> field "results") replay >>= traverse (parse $ field "status")
             statuses `shouldBe` (["passed", "failed"] :: [Text])
             sha256 <$> readFileBS checkpoint `shouldReturn` relocatedHash
@@ -2851,7 +2861,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     reopened <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun new.id)
     reopened.state `shouldBe` Reviews.Queued
     runQueryEffect tr $ Reviews.releaseRun new
-    let status secret signature = fmap snd $ runAsBaseRecordingHTTP tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = secret}}} $ catchError @ServerError (GitSyncPage.gitWebhookPostH Git.GitHub (Git.WebhookReq (Just "pull_request") signature Nothing Nothing Nothing (toStrict $ AE.encode $ payload "synchronize" (T.replicate 40 "c") "2025-01-01T00:04:00Z")) $> 200) (\_ err -> pure err.errHTTPCode)
+    let status secret signature = fmap snd $ runAsBaseRecordingHTTP tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = secret}}} $ catchError @ServerError (GitSyncPage.gitWebhookPostH Git.GitHub Nothing (Git.WebhookReq (Just "pull_request") signature Nothing Nothing Nothing (toStrict $ AE.encode $ payload "synchronize" (T.replicate 40 "c") "2025-01-01T00:04:00Z")) $> 200) (\_ err -> pure err.errHTTPCode)
         forged = Just $ "sha256=" <> T.replicate 64 "0"
     traverse (uncurry status) [(tr.trATCtx.config.githubAppWebhookSecret, Nothing), ("", forged), ("impact-secret", forged)] `shouldReturn` [503, 503, 401]
     final <- runQueryEffect tr $ Reviews.latestRuns testPid
@@ -2902,6 +2912,31 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- A merge before the proofs finish stops the comment too.
     void $ deliver tr $ payload "closed" next "2025-01-01T00:02:00Z"
     fst <$> runReview next new Test.id >>= (`shouldSatisfy` any (T.isInfixOf "closed")) . progressEdits
+
+  -- Three review routine runs sat "running" from 2026-11-24: their worker died mid-review, a push superseded the
+  -- review, and the retried job only retired the review, never the routine run.
+  it "supersededReview_cancelsItsDanglingRoutineRun" \tr -> do
+    setup tr
+    appConfig <- githubApp tr
+    void $ deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
+    [old] <- runQueryEffect tr $ Reviews.latestRuns testPid
+    Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventPullRequest
+    let convId = UUIDId old.threadId.unUUIDId
+        routineRun = fmap (.status) <$> runQueryEffect tr (Issues.getEventRun testPid $ Issues.PullRequestReview old.id)
+    runTestBg frozenTime tr do
+      void $ Issues.getOrCreateConversation testPid convId Issues.CTPullRequest (AE.object [])
+      void $ Issues.startEventRun routine (Issues.PullRequestReviewRequest old.id) Issues.RestartRun convId "Review"
+    routineRun `shouldReturn` Just Issues.RunRunning
+    void $ deliver tr $ payload "synchronize" (T.replicate 40 "b") "2025-01-01T00:01:00Z"
+    void $ runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = appConfig}) $ tryAny $ Impact.reviewPullRequest old.id
+    routineRun `shouldReturn` Just Issues.RunCancelled
+
+  -- GitHub deliveries could be counted in our own telemetry but not attributed (2026-11-26): each is now one span.
+  it "githubWebhook_recordsEachDeliveryAsASpan" \tr -> do
+    setup tr
+    (_, spans) <- withCapturedSpans \_ -> deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
+    [textAttr hook k | (_, hook) <- spans, hotName hook == "github.webhook", k <- ["github.delivery_id", "github.event", "github.action", "vcs.repository.name", "monoscope.webhook.outcome"]]
+      `shouldBe` map Just ["fixture-delivery", "pull_request", "opened", "impact-org/checkout", "RunQueued"]
 
   -- Blacksmith's "still holds on the new head": a push re-proves the last review's claims with its scripts.
   it "pushedReview_reprovesThePriorClaimsWithTheirPassingScripts" \tr -> do
@@ -3094,6 +3129,15 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- The first replays no saved recipe; later ones replay the one it saved.
     traverse (const saveProof) [1 .. 4 :: Int] `shouldReturn` ([Right ("proof-1", Reviews.Changed), Right ("proof-2", Reviews.Reused), Right ("proof-3", Reviews.Reused), Left "Proof budget exhausted; cite the proofs already recorded"] :: [Either Text (Text, Reviews.SetupReuse)])
     fmap (.setup) <$> runQueryEffect tr (Reviews.proofRecipe middle) `shouldReturn` Just "make serve &"
+    -- A shorter terminal setup does not replace the saved recipe (Talstack's app recipe was lost to a
+    -- 120-character one); a browser proof's setup, which carries the app's environment, does.
+    let other = UUIDId (UUID.fromWords 0 0 0 1)
+        script = Agent.ProofScript "Checks a page" "node proof.mjs" . Just
+        browserSide side code = (sideProof side code){Proof.browser = True}
+    void $ runQueryEffect tr $ Reviews.saveProofs middle other (script "true") (sideProof Agent.Base 1 :| [sideProof Agent.Head 0])
+    fmap (.setup) <$> runQueryEffect tr (Reviews.proofRecipe middle) `shouldReturn` Just "make serve &"
+    void $ runQueryEffect tr $ Reviews.saveProofs middle other (script "app") (browserSide Agent.Base 1 :| [browserSide Agent.Head 0])
+    fmap (.setup) <$> runQueryEffect tr (Reviews.proofRecipe middle) `shouldReturn` Just "app"
     void $ runQueryEffect tr $ Reviews.receiveEvent Nothing $ eventAt (T.replicate 40 "c") 4
     builds `shouldReturn` 1 -- the first base's build finished above; this base queues its own
     -- askOnReviewedHead_answersInANewComment: an ask on a head that already has a progress comment answers below itself.
@@ -3783,9 +3827,19 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Usage.recordCall reviewPid (Usage.Review run.id) $ Agent.ModelCall (UUIDId $ UUID.fromWords 72 0 0 1) finishedAttempt "fixture" "fixture") `shouldReturn` True
     void $ review fakeAgent
     reviewState `shouldReturn` Just Reviews.Completed
+    -- reviewFailure_withoutCheckpoint_keepsItsReason (Talstack #721, 2026-11-25): a failure after model calls leaves
+    -- no checkpoint, so a retry could only end "Saved progress was lost" and overwrite the cause; the chain stops instead.
     retry
-    lost <- replicateM 2 $ snd <$> within (transport True . fakeAgentWith ["--fail-after-usage"]) (tryAny $ Impact.reviewPullRequest run.id)
-    map isLeft lost `shouldBe` [True, False]
+    stopped <- snd <$> within (transport True . fakeAgentWith ["--record-call", "--fail-after-usage"]) (tryAny $ Impact.reviewPullRequest run.id)
+    stopped `shouldSatisfy` isRight
+    fmap (.error) <$> runQueryEffect tr (Reviews.getRun run.id) `shouldReturn` Just (Just "Review failed; retry to collect current evidence")
+    void $ review fakeAgent
+    -- reviewStopped_permanentFailure_doesNotRetry: a misconfigured GITHUB_APP_ID cannot heal, so the first failure
+    -- ends the run with its reason instead of spending the chain's three attempts.
+    retry
+    misconfigured <- snd <$> within (transport True . fakeAgent . Reader.local (\ctx -> ctx{config = ctx.config{githubAppId = "not-a-number"}})) (tryAny $ Impact.reviewPullRequest run.id)
+    misconfigured `shouldSatisfy` isRight
+    fmap (.error) <$> runQueryEffect tr (Reviews.getRun run.id) `shouldReturn` Just (Just "GITHUB_APP_ID must be numeric")
     void $ review fakeAgent
     -- askedProof_postsANewComment (#826): an ask's answer lands below it, not in the review comment far above.
     dbExec tr "UPDATE projects.pr_review_runs SET request = ? WHERE id = ?" (Aeson $ AE.toJSON Reviews.Ask{login = "ada", commentId = 77, command = Reviews.Prove, focus = Nothing}, run.id)
@@ -3849,7 +3903,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
       priorRevisions <- revisions
       (revokedWrites, revoked) <- attempt (observedComment 123 lostBody . revokeDuringLookup . fakeAgent)
       changeAccess False
-      revoked `shouldSatisfy` isLeft
+      -- The run already called models and left no checkpoint, so it stops instead of retrying into a lost session.
+      revoked `shouldSatisfy` isRight
       revokedWrites `shouldNotSatisfy` reaches "/issues/comments/99"
       revisions >>= (\stored -> (revokeMapping, stored) `shouldBe` (revokeMapping, priorRevisions))
     (freshRequests, freshResult) <- attempt (observedComment 123 lostBody . fakeAgent)

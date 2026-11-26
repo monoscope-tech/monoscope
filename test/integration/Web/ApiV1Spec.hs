@@ -235,9 +235,9 @@ spec = describe "API v1" do
       let formBody = decodeUtf8 @Text (WT.simpleBody newForm)
       formBody `shouldContainAll` ["id=\"newDashboardForm\"", "data-template=\"nginx.yaml\""]
       filter (`T.isInfixOf` formBody) ["<!DOCTYPE", "id=\"main-sidenav\"", "id=\"dashboardsTableContainer\""] `shouldBe` []
-      -- Old onboarding links carry free-text steps: unknown ones fall back to Info.
+      -- Old onboarding links carry free-text steps: unknown ones fall back to QuickStart.
       onboarding <- getPath tr "/p/00000000-0000-0000-0000-000000000000/onboarding?step=bogus" [demo]
-      (status onboarding, "firstName" `T.isInfixOf` decodeUtf8 (WT.simpleBody onboarding)) `shouldBe` (200, True)
+      (status onboarding, "projectName" `T.isInfixOf` decodeUtf8 (WT.simpleBody onboarding)) `shouldBe` (200, True)
       -- No display image: one Gravatar probe with d=404, then local initials, cached a week.
       let uid = (Servant.getResponse tr.trSessAndHeader).persistentSession.user.getUser.id
       runHasqlEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE users.users SET display_image_url = '' WHERE id = #{uid} |]

@@ -154,6 +154,7 @@ data BgJobs
     -- auto-scheduled because parking is a forensic archive by design.
     ReplayParkedMessages Int
   | AdConversion Conversion
+  | OnboardingInstrument Projects.ProjectId (UUIDId "onboarding_instrument_run")
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 

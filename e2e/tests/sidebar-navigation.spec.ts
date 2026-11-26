@@ -81,6 +81,25 @@ test('command palette asks the assistant by default and keeps logs one step down
   expect([form.get('query'), form.get('allowActions'), form.get('path')]).toEqual(['make a dashboard', 'true', new URL(page.url()).pathname + new URL(page.url()).search]);
 });
 
+test('command palette opens on Cmd+K, drills back on Escape, and closes on Escape or backdrop click', async ({ page }) => {
+  await page.goto(project + '/dashboards');
+  const dialog = page.locator('#cmd-palette-backdrop');
+  const input = page.locator('#cmd-palette-input');
+  await page.keyboard.press('ControlOrMeta+k');
+  await expect(dialog).toBeVisible();
+  await expect(input).toBeFocused();
+  // Typing while already open goes into the input rather than re-triggering type-to-open.
+  await input.pressSequentially('dash');
+  await expect(input).toHaveValue('dash');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  // Backdrop click closes the native <dialog>.
+  await page.keyboard.press('ControlOrMeta+k');
+  await expect(dialog).toBeVisible();
+  await dialog.locator('form.modal-backdrop button').click({ force: true });
+  await expect(dialog).toBeHidden();
+});
+
 // Regression: morphing a dashboard's deeper-nested navbar into Explorer's showed the closed time-range list inline.
 test('morphing from a dashboard never lays out the closed time picker inline', async ({ page }) => {
   const dash = await makeDashboard(page, `E2E Navbar Morph ${Date.now()}`);

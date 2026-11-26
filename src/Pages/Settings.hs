@@ -81,7 +81,7 @@ import Data.Effectful.Notify qualified as Notify
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (Day, UTCTime (..), addDays, addUTCTime, diffUTCTime, utc, utcToZonedTime)
-import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
@@ -116,7 +116,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), ResourceRow (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, dialogTrigger_, disclosure_, emptyState_, formActionsModal_, formField_, formSelectFieldWith_, grantsTrial, headerRow_, iconBadge_, keyboardActivateAttr_, localTimeFmt_, modalWith_, nativeDialog_, options_, paymentPlanPicker, resourceList_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ResourceRow (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, dialogTrigger_, disclosure_, emptyState_, formField_, formSelectFieldWith_, grantsTrial, headerRow_, keyboardActivateAttr_, localTimeFmt_, nativeDialog_, options_, paymentPlanPicker, resourceList_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
@@ -126,11 +126,9 @@ import Relude hiding (ask, asks)
 import Servant (FromHttpApiData (..), Header, Headers, addHeader, err400, err503, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, done, successToast)
-import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, fmtInt, formatBytes, formatFixedCommas, formatUTC, hostPath, htmxIndicator_, uiToggle_)
+import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, fmtInt, formatBytes, formatFixedCommas, formatUTC, freshWebhookTimestamp, hmacSha256, hostPath, htmxIndicator_, uiToggle_)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links
-import "cryptonite" Crypto.Hash (SHA256)
-import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
 ----------------------------------------------------------------------
@@ -176,7 +174,7 @@ data StorageGet = StorageGet
 storagePage :: Projects.ProjectId -> ATAuthCtx (PageCtx StorageGet)
 storagePage pid = do
   (session, project, bw) <- mkPageCtx pid
-  permission <- ProjectMembers.getUserPermission pid session.user.id
+  permission <- ProjectMembers.getSessionPermission pid session.user.id
   pure $ PageCtx bw{pageTitle = "Storage", isSettingsPage = True} $ StorageGet pid project.s3Bucket Nothing permission
 
 
@@ -364,7 +362,7 @@ apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ApiGet)
 apiGetH pid = do
   (session, _, bw) <- mkPageCtx pid
   apiKeys <- apiKeysForProject pid
-  permission <- ProjectMembers.getUserPermission pid session.user.id
+  permission <- ProjectMembers.getSessionPermission pid session.user.id
   addRespHeaders $ ApiGet $ PageCtx bw{pageTitle = "API Keys", isSettingsPage = True} (ApiKeySettings pid apiKeys permission)
 
 
@@ -392,15 +390,15 @@ apiKeysPage settings = do
   settingsSection_ do
     headerRow_ [] do
       settingsH2_ "API Keys"
-      when canEdit $ modalWith_ "apikey-modal" def{boxClass = "w-full max-w-md p-6"} (Just $ span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "New Key") do
-        div_ [class_ "flex flex-col gap-3"] do
-          iconBadge_ IconLg BrandBadge "key"
-          div_ [class_ "flex flex-col gap-1"] do
-            h3_ [class_ "text-xl font-semibold text-textStrong"] "Generate an API key"
-            p_ [class_ "text-sm text-textWeak text-pretty"] "Keys authenticate the telemetry your services send to this project."
-        form_ [hxPost_ $ urls.apiPost pid, class_ "flex flex-col gap-6 pt-4", hxTarget_ settingsContentTarget] do
-          formField_ FieldMd def{placeholder = "Production collector", hint = Just "Name it after the service or environment that uses it.", inputId = Just "api-key-title", extraAttrs = [maxlength_ "100", autocomplete_ "off"]} "Key title" "title" True Nothing
-          formActionsModal_ "apikey-modal" $ button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Create key"
+      when canEdit do
+        dialogTrigger_ "apikey-modal" [class_ "btn btn-sm btn-primary gap-1.5"] $ faSprite_ "plus" "regular" "w-3 h-3" >> "New Key"
+        nativeDialog_ "apikey-modal" "Generate an API key" "w-full max-w-md p-6" do
+          p_ [class_ "mt-1 text-sm text-textWeak text-pretty"] "Keys authenticate the telemetry your services send to this project."
+          form_ [hxPost_ $ urls.apiPost pid, class_ "flex flex-col gap-6 pt-4", hxTarget_ settingsContentTarget] do
+            formField_ FieldMd def{placeholder = "Production collector", hint = Just "Name it after the service or environment that uses it.", inputId = Just "api-key-title", extraAttrs = [maxlength_ "100", autocomplete_ "off"]} "Key title" "title" True Nothing
+            div_ [class_ "mt-3 flex justify-end gap-2"] do
+              button_ [type_ "button", class_ "btn", onclick_ "this.closest('dialog').close()"] "Cancel"
+              button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Create key"
     unless canEdit $ p_ [class_ "text-sm text-textWeak mb-4"] "A project editor can create, reveal, and manage API keys."
     apiMainContent pid canEdit settings.keys Nothing
   where
@@ -551,7 +549,7 @@ prometheusGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders PrometheusGet)
 prometheusGetH pid = do
   (session, _, bw) <- mkPageCtx pid
   cfgs <- PromCfg.configsByProjectId pid PromCfg.CKPrometheus
-  permission <- ProjectMembers.getUserPermission pid session.user.id
+  permission <- ProjectMembers.getSessionPermission pid session.user.id
   addRespHeaders $ PrometheusGet $ PageCtx bw{pageTitle = "Prometheus", isSettingsPage = True} (PrometheusSettings pid cfgs permission)
 
 
@@ -760,7 +758,7 @@ prometheusToggleH pid cid = do
 prometheusMut :: Projects.ProjectId -> ATAuthCtx (RespHeaders PrometheusMut)
 prometheusMut pid = do
   (session, _) <- Projects.sessionAndProject pid
-  permission <- ProjectMembers.getUserPermission pid session.user.id
+  permission <- ProjectMembers.getSessionPermission pid session.user.id
   cfgs <- PromCfg.configsByProjectId pid PromCfg.CKPrometheus
   addRespHeaders $ PrometheusMut (PrometheusSettings pid cfgs permission)
 
@@ -1160,13 +1158,10 @@ data WebhookData = WebhookData
 -- | LS signs a hex-encoded HMAC-SHA256 of the raw body in the X-Signature header.
 --
 -- >>> import "monoscope" Pages.Settings qualified as PS
--- >>> import "base16-bytestring" Data.ByteString.Base16 qualified as B16
--- >>> import Data.ByteArray qualified as BA
--- >>> import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
--- >>> import "cryptonite" Crypto.Hash (SHA256)
+-- >>> import "monoscope" Utils qualified as U
 -- >>> let body = "{\"event\":\"x\"}" :: ByteString
 -- >>> let secret = "s3cret" :: ByteString
--- >>> let sig = decodeUtf8 (B16.encode (BA.convert (HMAC.hmac secret body :: HMAC.HMAC SHA256) :: ByteString)) :: Text
+-- >>> let sig = U.hmacSha256Hex "s3cret" body
 -- >>> PS.verifyLemonSqueezySignature sig body secret
 -- True
 -- >>> PS.verifyLemonSqueezySignature sig body "wrong"
@@ -1179,9 +1174,7 @@ data WebhookData = WebhookData
 -- False
 verifyLemonSqueezySignature :: Text -> ByteString -> ByteString -> Bool
 verifyLemonSqueezySignature sigHeader payload secret =
-  maybe False (BA.constEq expected) $ rightToMaybe $ B16.decode $ encodeUtf8 sigHeader
-  where
-    expected = BA.convert (HMAC.hmac secret payload :: HMAC.HMAC SHA256) :: ByteString
+  maybe False (BA.constEq (hmacSha256 secret payload)) $ rightToMaybe $ B16.decode $ encodeUtf8 sigHeader
 
 
 -- | Email every member about a billing change; @mk@ renders from the project title and billing URL
@@ -1478,7 +1471,7 @@ billingPage d = div_ [] do
 
     -- Actions (kept above the breakdown so they remain near the headline numbers)
     div_ [class_ "border-t border-strokeWeak pt-6 flex items-center gap-3"] do
-      label_ [Lucid.for_ "pricing-modal", class_ "btn btn-sm btn-primary cursor-pointer"] "Change plan"
+      dialogTrigger_ "pricing-modal" [class_ "btn btn-sm btn-primary cursor-pointer"] "Change plan"
       when (d.provider /= Projects.NoBillingProvider)
         $ a_ [class_ "btn btn-sm btn-ghost text-textBrand", term "hx-preload" "false", hxGet_ $ urls.projects.manageSubscriptionGet d.pid] "Manage subscription"
 
@@ -1488,10 +1481,8 @@ billingPage d = div_ [] do
     -- Past cycles
     pastCyclesSection_ isFree basePriceNum d.pastCycles
 
-  modalWith_ "pricing-modal" def{boxClass = "w-full max-w-6xl p-4 sm:p-8 lg:px-16 lg:py-12", wrapperClass = "p-3 sm:p-8"} Nothing do
-    div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
-      span_ [class_ "text-textStrong text-2xl font-semibold"] "Compare Plans"
-      p_ [class_ "mt-2 mb-4"] "Drag the slider to estimate costs at different usage levels."
+  nativeDialog_ "pricing-modal" "Compare Plans" "w-full max-w-6xl p-4 sm:p-8 lg:px-16 lg:py-12" do
+    p_ [class_ "mt-1 mb-4 text-sm text-textWeak"] "Drag the slider to estimate costs at different usage levels."
     -- Free upgrades use Stripe; billing recovery keeps the existing provider.
     paymentPlanPicker d.pid d.lemonUrl d.critical d.paymentPlan d.enableFreetier d.basicAuthEnabled d.trialEligible False (bool d.provider Projects.NoBillingProvider isFree)
 
@@ -1780,9 +1771,8 @@ stripeWebhookPostH sigHeaderM rawBody = do
     verifyStripeSignature now sigHeader secret = fromMaybe False do
       let parts = T.splitOn "," sigHeader
       ts <- listToMaybe $ mapMaybe (T.stripPrefix "t=") parts
-      epoch <- readMaybe @Integer (toString ts)
-      guard $ abs (round (utcTimeToPOSIXSeconds now) - epoch) <= 300
-      let expected = BA.convert (HMAC.hmac secret (encodeUtf8 ts <> "." <> rawBody) :: HMAC.HMAC SHA256) :: ByteString
+      guard $ freshWebhookTimestamp now ts
+      let expected = hmacSha256 secret (encodeUtf8 ts <> "." <> rawBody)
       pure $ any (BA.constEq expected) (rights $ B16.decode . encodeUtf8 <$> mapMaybe (T.stripPrefix "v1=") parts)
 
 

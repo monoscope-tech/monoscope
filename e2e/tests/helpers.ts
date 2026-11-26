@@ -53,7 +53,7 @@ export type Dash = { id: string; title: string };
  */
 export async function makeDashboard(page: Page, title: string, template = "Blank dashboard"): Promise<Dash> {
   await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
-  await page.locator('label[for="newDashboardMdl"]').first().click();
+  await page.locator('#newDashboardMdl-trigger').first().click();
   await page.locator("#dashListItemParent").getByText(template, { exact: true }).click();
   await page.getByRole("textbox", { name: "Dashboard name *", exact: true }).fill(title);
   await page.getByRole("button", { name: "Create" }).first().click();

@@ -35,9 +35,36 @@ test.describe("Onboarding flow", () => {
     await expect(article.getByRole("heading", { level: 1 })).toContainText(/Fastify/i);
   });
 
-  test("moves from profile setup to an instrumentable project", async ({ page, baseURL }) => {
+  test("4-step onboarding sequence flows smoothly from project & uptime through instrumentation and alerts to plan picker", async ({ page, baseURL }) => {
     await asDemoAdmin(page, baseURL!);
     await page.goto(ONBOARDING_URL);
+    await expect(page.getByText("Step 1 of 4")).toBeVisible();
+    await expect(page.getByText("Set up your project")).toBeVisible();
+    await page.locator("#projectName").fill("TestCorp");
+    await page.locator('input[name="location"][value="eu"]').check({ force: true });
+    await page.getByRole("button", { name: /Proceed/i }).click();
+
+    await expect(page.getByText("Step 2 of 4")).toBeVisible();
+    await expect(page.getByText("Instrument your apps or servers")).toBeVisible();
+    await page.locator('.ai-target-pill[data-target="kubernetes"]').click();
+    await expect(page.locator("#ai-target-kubernetes")).toBeVisible();
+    await expect(page.locator("#quick-cmd-kubernetes")).toContainText("helm upgrade --install monoscope-otel");
+
+    await page.locator("label", { hasText: "GitHub PR" }).click();
+    await expect(page.locator("#panel-github")).toBeVisible();
+
+    await page.getByRole("link", { name: /Proceed/i }).first().click();
+    await expect(page.getByText("Step 3 of 4")).toBeVisible();
+    await expect(page.getByText("How should we notify you about issues?")).toBeVisible();
+
+    await page.getByRole("button", { name: /Proceed/i }).click();
+    await expect(page.getByText("Step 4 of 4")).toBeVisible();
+    await expect(page.locator("#freePricing")).toBeVisible();
+  });
+
+  test("moves from legacy profile setup to an instrumentable project", async ({ page, baseURL }) => {
+    await asDemoAdmin(page, baseURL!);
+    await page.goto(`${ONBOARDING_URL}?step=Info`);
     await expect(page.getByText("Step 1 of 5")).toBeVisible();
     await page.locator('input[name="firstName"]').fill("E2E");
     await page.locator('input[name="lastName"]').fill("Test");
@@ -57,7 +84,7 @@ test.describe("Onboarding flow", () => {
     await expect(page.getByText("Discord")).toBeVisible();
     await page.getByRole("button", { name: "Proceed" }).click();
     await expect(page.getByText("Test notification sent")).toBeVisible();
-    await page.getByLabel("Modal dialog").getByRole("button", { name: "Proceed" }).click();
+    await page.getByRole("dialog", { name: "Test notification sent" }).getByRole("button", { name: "Proceed" }).click();
 
     await expect(page.getByText("Step 4 of 5")).toBeVisible();
     await expect(page.getByText("Your API Key", { exact: true })).toBeVisible();
@@ -67,7 +94,7 @@ test.describe("Onboarding flow", () => {
 
   test("shows every plan and starts paid checkout", async ({ page }) => {
     await page.goto(`${ONBOARDING_URL}?step=Pricing`);
-    await expect(page.getByText("Step 5 of 5")).toBeVisible();
+    await expect(page.getByText("Step 4 of 4")).toBeVisible();
     await expect(page.locator("#freePricing")).toBeVisible();
     await expect(page.locator("#GraduatedPricing")).toBeVisible();
     await expect(page.locator("#SystemsPricing")).toBeVisible();

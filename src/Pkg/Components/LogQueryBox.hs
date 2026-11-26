@@ -15,12 +15,11 @@ import Models.Apis.LogPatterns (knownPatternFields)
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
-import NeatInterpolation (text)
 import Pages.Components (dialogField_, filterInputAttr_, floatingDialog_, keyboardActivateAttr_, options_, searchInput_)
 import Pkg.Components.Widget (VizType (..), vizIsChart, vizWidget)
 import Pkg.SchemaLearning (FacetData (..), FacetValue (..))
 import Relude
-import Utils (copyToClipboardAttr_, displayTimestamp, faSprite_, formatUTC, onpointerdown_, uiToggle_)
+import Utils (copyToClipboardAttr_, displayTimestamp, faSprite_, formatUTC, onpointerdown_, scriptJson, uiToggle_)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), urls)
 
 
@@ -143,13 +142,13 @@ logQueryBox_ config = do
               [ type_ "button"
               , id_ "ai-search-submit"
               , Aria.label_ "Generate query"
-              , Aria.disabled_ "true"
+              , disabled_ ""
               , data_ "tippy-content" "Generate query"
               , -- Disabled follows the prompt box reactively (hx-live re-runs on every
                 -- input event), replacing hand-rolled attribute flipping in hyperscript.
-                term "hx-live:aria-disabled" "!q('#ai-search-input').value.trim()"
-              , class_ "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-iconNeutral aria-disabled:cursor-not-allowed aria-disabled:text-textDisabled aria-[disabled=false]:cursor-pointer aria-[disabled=false]:text-iconBrand aria-[disabled=false]:hover:bg-fillBrand-weak aria-[disabled=false]:active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-1 transition-transform"
-              , onclick_ "if(this.getAttribute('aria-disabled')!=='true') htmx.trigger('#ai-search-input', 'htmx:trigger')"
+                term "hx-live:disabled" "!q('#ai-search-input').value.trim()"
+              , class_ "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-iconNeutral disabled:cursor-not-allowed disabled:text-textDisabled enabled:cursor-pointer enabled:text-iconBrand enabled:hover:bg-fillBrand-weak enabled:active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-1 transition-transform"
+              , onclick_ "htmx.trigger('#ai-search-input', 'htmx:trigger')"
               ]
               $ faSprite_ "arrow-right" "regular" "h-4 w-4"
             label_
@@ -577,190 +576,13 @@ enrichSchemaWithFacets schema (FacetData facetMap) =
        in Map.insertWith (\_ fi -> fi{Schema.examples = vals}) dotKey (Schema.FieldInfo "string" "" vals) acc
 
 
--- | Initialization code for the query editor that sets up schema data, query library, and popular searches
+-- | Initialization data for the query editor (consumed automatically by web-components/src/log-query-box.ts).
 queryEditorInitializationCode :: Maybe VizType -> Html ()
-queryEditorInitializationCode vizTypeM = do
-  let
-    popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
-    vizType = foldMap display vizTypeM
-    chartVizTypes = decodeUtf8 $ AE.encode $ filter vizIsChart [minBound :: VizType ..]
-  script_
-    [text|
-    window.currentVisualizationType = "$vizType";
-    // Views the widget draws instead of the log list; the list skips fetching while one is active.
-    window.chartVizTypes = $chartVizTypes;
-    
-    // Function to update viz type in URL without reloading the page
-    // Resolves once the query is rewritten, so a caller's refetch sees the new query.
-    window.updateVizTypeInUrl = function(vizType, shouldUpdateUrl = true, editor = document.getElementById('filterElement')) {
-      window.currentVisualizationType = vizType;
-      return new Promise(resolve => requestAnimationFrame(() => {
-        // Only update URL if we're not in widget mode and shouldUpdateUrl is true
-        const isWidgetMode = editor && editor.hasAttribute('target-widget-preview');
-        
-        if (shouldUpdateUrl && !isWidgetMode) {
-          const url = new URL(window.location);
-          url.searchParams.set('viz_type', vizType);
-          history.replaceState({}, '', url.toString());
-        }
-        
-        Promise.resolve(window.queryEditorCallFor?.(editor, 'handleVisualizationChange', vizType)).finally(resolve);
-      }));
-    };
-
-    // Called by the AI-search response handler and query-builder.ts to switch viz type.
-    // Click the owning editor's radio so its change handler remains the single owner of
-    // query, widget and preview state; document-global lookup can target a hidden drawer.
-    window.handleVisualizationUpdate = function(vizType, widgetId) {
-      window.requestAnimationFrame(() => {
-        const preview = document.getElementById(widgetId || 'visualization-widget-container');
-        const root = preview?.closest('[class~="group/wgtexp"]') || document;
-        const radio = root.querySelector(`#visualizationTabs input[value='$${vizType}']`);
-        if (radio && !radio.checked) radio.click();
-      });
-    };
-
-    // Single owner for "apply this query to the editor". The query library closes AI search
-    // on the way out (picking a saved query ends the AI interaction), but an AI response
-    // keeps the panel and its prompt on screen so the phrasing can be refined and re-run —
-    // collapsing it there reads as the app having thrown the question away.
-    window.applyQuery = function(q, replace = true, closeAiSearch = true, editor = document.getElementById('filterElement')) {
-      const chk = editor?.closest('form')?.querySelector('.ai-search');
-      if (chk && closeAiSearch) chk.checked = false;
-      window.queryEditorCallFor(editor, 'handleAddQuery', q, replace);
-    };
-
-    // Routes one /ai_search response into the subsystems it can touch. Lives here, not
-    // inline on the input, because every arm is a call into a JS global defined above —
-    // the element keeps a one-expression hook and this stays readable and testable.
-    window.applyAiSearchResult = function(evt, el) {
-      const ctx = evt.detail && evt.detail.ctx;
-      const text = (ctx && ctx.text) || '';
-      if (!ctx || !(ctx.response && ctx.response.status < 400)) {
-        if (text.includes('INVALID_QUERY_ERROR')) {
-          document.body.dispatchEvent(new CustomEvent('errorToast', { bubbles: true,
-            detail: { value: ['Could not generate a query. Try being more specific, e.g. "show errors from payment-service in the last 2 hours"'] } }));
-        }
-        return;
-      }
-      let result;
-      try { result = JSON.parse(text); } catch (e) { return; }
-      if (result.time_range) window.updateTimePicker(result.time_range);
-      const editor = el.closest('form')?.querySelector('query-editor');
-      if (result.query) window.applyQuery(result.query, true, false, editor);
-      // Native dispatch, not htmx.trigger: both listeners (log-list.ts, widgets.ts) are
-      // plain addEventListener('submit'), so this needs no htmx API surface.
-      else if (result.time_range) el.closest('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-      // A widget editor has an explicit visualization control beside the query. AI search
-      // edits its query only; otherwise a filter-only prompt can silently replace that choice.
-      if (result.visualization_type && !el.closest('form')?.querySelector('query-editor[target-widget-preview]')) {
-        window.handleVisualizationUpdate(result.visualization_type, el.dataset.containerId || 'visualization-widget-container');
-      }
-    };
-
-    // Initialise after the interaction-triggered query-editor chunk upgrades the element.
-    customElements.whenDefined('query-editor').then(function initEditor() {
-      const editor = document.getElementById('filterElement');
-      if (!editor || !window.schemaManager?.setSchemaData) return;
-      editor.setQueryLibrary?.(window.queryLibraryData || []);
-      if (editor.setPopularSearches) editor.setPopularSearches($popularQueriesJson);
-    });
-
-    // Bucket-bar click handler for the sessions header. Defined here (not in the
-    // header markup) so the header stays script-free and can be injected via
-    // innerHTML from the sessions data response. Dispatches the same update-query
-    // event the log-list uses for chart-zoom so the table refetches.
-    window.__sessionsBucketFilter = function(fromEpoch, toEpoch) {
-      if (!Number.isFinite(fromEpoch) || !Number.isFinite(toEpoch) || fromEpoch <= 0) return;
-      const from = new Date(fromEpoch * 1000).toISOString();
-      const to = new Date(toEpoch * 1000).toISOString();
-      if (window.updateTimePicker) {
-        window.updateTimePicker({ from, to }, { skipSetParams: true });
-      } else {
-        console.warn('[sessions-header] updateTimePicker missing; picker UI will not reflect filter');
-      }
-      const p = new URLSearchParams(window.location.search);
-      p.set('from', from); p.set('to', to); p.delete('since');
-      const url = window.location.pathname + '?' + p.toString() + window.location.hash;
-      window.history.replaceState({}, '', url);
-      document.dispatchEvent(new CustomEvent('update-query', { bubbles: true, detail: { source: 'sessions-header-bar', timeRange: from + ' \u2192 ' + to } }));
-    };
-
-    // Fill the over-time chart's per-bar tooltips (sessions + patterns) in the
-    // browser's local timezone, so they match the table and time picker. Runs
-    // after the header HTML is injected into #page-summary-region. Reads
-    // data-bucket-start/width off the container and data-bi/data-count off each
-    // bar. Axis labels are server-rendered <local-time> elements — only the
-    // tippy tooltip strings need JS (attributes can't host an element).
-    window.formatSummaryChart = function(root) {
-      const chart = root && root.querySelector('[data-summary-chart]');
-      if (!chart) return;
-      const start = +chart.dataset.bucketStart, width = +chart.dataset.bucketWidth;
-      if (!Number.isFinite(start) || !Number.isFinite(width) || width <= 0) return;
-      const bars = Array.prototype.slice.call(chart.querySelectorAll('[data-bi]'));
-      if (!bars.length) return;
-      const firstEpoch = start + (+bars[0].dataset.bi) * width;
-      const endEpoch = start + ((+bars[bars.length - 1].dataset.bi) + 1) * width;
-      const spanDays = (endEpoch - firstEpoch) / 86400;
-      const opts = spanDays >= 1
-        ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
-        : { hour: '2-digit', minute: '2-digit' };
-      const fmt = e => new Date(e * 1000).toLocaleString([], opts);
-      // A single bar means the range fits one bucket (e.g. patterns' hourly
-      // rollup at <1h); append the container note so a hover explains why.
-      const note = bars.length === 1 ? (chart.dataset.note || '') : '';
-      bars.forEach(bar => {
-        const from = start + (+bar.dataset.bi) * width;
-        const base = bar.getAttribute('data-count') || '';
-        const label = fmt(from) + ' \u2013 ' + fmt(from + width) + (base ? ' \u00b7 ' + base : '') + (note ? ' \u00b7 ' + note : '');
-        bar.setAttribute('data-tippy-content', label);
-        bar.setAttribute('aria-label', label);
-      });
-    };
-
-    // Swap the #page-summary-region when the viz tab change crosses the summary
-    // boundary. Sessions and patterns both render a data-injected summary header
-    // (skeleton now, real HTML delivered with the data refetch — no extra scan);
-    // every other viz type renders the chart+latency region via HTMX.
-    window.swapSessionsRegionIfNeeded = function(newViz, prevViz) {
-      const isSummary = v => v === 'sessions' || v === 'patterns';
-      if (!isSummary(newViz) && !isSummary(prevViz)) return;
-      const region = document.getElementById('page-summary-region');
-      if (!region) return;
-      const tpl = document.getElementById(isSummary(newViz) ? 'sessions-summary-skeleton' : 'chart-summary-skeleton');
-      if (tpl) { region.setAttribute('aria-busy', 'true'); region.innerHTML = tpl.innerHTML; }
-      if (isSummary(newViz)) return; // summary arrives with the data refetch; don't scan again
-      if (!window.htmx) return;
-      const url = new URL(window.location);
-      url.searchParams.set('viz_type', newViz);
-      window.htmx.ajax('GET', url.pathname + url.search, {
-        target: '#page-summary-region',
-        select: '#page-summary-region',
-        swap: 'outerHTML'
-      });
-    };
-
-    // Inline parse error: the markup (icon + message span) is rendered by Lucid;
-    // JS only fills the text and toggles visibility.
-    // Sets one attribute; the border and the message row follow from it in CSS.
-    // A repeated set of the same message is a no-op so a refetch can't twitch the page.
-    window.showQueryParseError = function(msg) {
-      msg = msg || '';
-      const el = document.getElementById('query-parse-error');
-      if (!el || el.dataset.msg === msg) return;
-      el.dataset.msg = msg;
-      const m = document.getElementById('query-parse-error-msg');
-      if (m) m.textContent = msg;
-      document.getElementById('queryBox')?.setAttribute('data-query-state', msg ? 'error' : 'ok');
-    };
-    window.clearQueryParseError = () => window.showQueryParseError('');
-    // The editor re-validates right after this event and re-asserts a still-valid
-    // error, so clearing here would only flash the strip off and on.
-    window.addEventListener('update-query', () => window.clearQueryParseError());
-    // Listen for server-sent parse error events (via HX-Trigger header)
-    document.body.addEventListener('showParseError', (e) => {
-      const detail = e.detail;
-      const msg = Array.isArray(detail) ? detail[0] : (detail?.value || detail || 'Invalid query syntax');
-      window.showQueryParseError(msg);
-    });
-    |]
+queryEditorInitializationCode vizTypeM =
+  script_ [type_ "application/json", data_ "log-query-box-init" ""]
+    $ scriptJson
+    $ AE.object
+      [ "vizType" AE..= foldMap display vizTypeM
+      , "chartVizTypes" AE..= filter vizIsChart [minBound :: VizType ..]
+      , "popularQueries" AE..= Schema.popularOtelQueriesJson
+      ]

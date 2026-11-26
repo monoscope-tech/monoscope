@@ -1,4 +1,4 @@
-module Pages.Components (codeContextUrl, drawer_, drawerShell_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityDrawer_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, swapTarget_, morphPostAttrs_, pollSelfAttrs_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formSelectFieldWith_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, floatingModal_, formActionsModal_, dangerAction_, dangerZone_, floatingDialog_, floatingCard_, mergedAttrs, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerNoMatches_, pickerHints_, pickerPopover_, actionMenu_, durationMenu_, primaryButton_, submitBtn_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (codeContextUrl, drawer_, drawerShell_, nativeDialog_, nativeDialogWith_, dialogTrigger_, dialogBackdrop_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityDrawer_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, swapTarget_, morphTarget_, morphPostAttrs_, pollSelfAttrs_, pollSelfAttrsWith_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formSelectFieldWith_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, dangerAction_, dangerZone_, floatingDialogShell_, floatingDialog_, floatingCard_, mergedAttrs, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerNoMatches_, pickerHints_, pickerPopover_, actionMenu_, durationMenu_, primaryButton_, submitBtn_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -502,16 +502,6 @@ brandLogo_ h = do
   img_ [class_ $ h <> " hidden dark:block", src_ "/public/assets/svgs/logo_white.svg", alt_ "Monoscope"]
 
 
-modalCloseButton_ :: Monad m => Text -> HtmlT m ()
-modalCloseButton_ modalId =
-  label_
-    [ Lucid.for_ modalId
-    , Aria.label_ "Close modal"
-    , class_ "tap-target !absolute right-3 top-3 z-10 inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-iconNeutral hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-2 active:scale-[0.96] transition-[color,background-color,scale]"
-    ]
-    $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
-
-
 primaryButton_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
 primaryButton_ attrs = button_ (class_ " btn btn-primary btn-sm " : attrs)
 
@@ -668,7 +658,7 @@ timeRefreshTrigger = "update-query[event.detail?.source != 'auto-refresh' || !th
 
 
 timeRefreshAttrs :: Text -> Text -> Text -> [Attribute]
-timeRefreshAttrs cid url trigger = [hxGet_ url, hxTrigger_ trigger, hxTarget_ $ "#" <> cid, hxSelect_ $ "#" <> cid, hxSwap_ "outerMorph", term "hx-sync" "this:replace", term "hx-preload" "false", timeWindowVals_ ""]
+timeRefreshAttrs cid url trigger = [hxGet_ url, hxTrigger_ trigger] <> morphTarget_ cid <> [term "hx-sync" "this:replace", term "hx-preload" "false", timeWindowVals_ ""]
 
 
 -- | Sends the address bar's current time window, so a live refresh follows the picker. With
@@ -683,15 +673,30 @@ swapTarget_ :: Text -> Text -> [Attribute]
 swapTarget_ tid url = [hxGet_ url, hxTarget_ ("#" <> tid), hxSelect_ ("#" <> tid), hxSwap_ "outerHTML", hxPushUrl_ "true"]
 
 
+-- | htmx attrs that morph @#tid@ in place from the matching fragment in the response.
+morphTarget_ :: Text -> [Attribute]
+morphTarget_ tid = [hxTarget_ ("#" <> tid), hxSelect_ ("#" <> tid), hxSwap_ "outerMorph"]
+
+
 -- | htmx attrs for a POST form that morphs @#targetId@ in place with @#indicatorId@ spinning.
 morphPostAttrs_ :: Text -> Text -> Text -> [Attribute]
-morphPostAttrs_ url targetId indicatorId = [action_ url, method_ "post", hxPost_ url, hxTarget_ ("#" <> targetId), hxSelect_ ("#" <> targetId), hxSwap_ "outerMorph", hxIndicator_ ("#" <> indicatorId)]
+morphPostAttrs_ url targetId indicatorId = [action_ url, method_ "post", hxPost_ url, hxIndicator_ ("#" <> indicatorId)] <> morphTarget_ targetId
 
 
 -- | htmx attrs that fetch @url@ on @trigger@ and replace this element with @#cid@ from the response.
 -- @hx-preload@ is off because the body preloads on hover, which would refetch the container.
 pollSelfAttrs_ :: Text -> Text -> Text -> [Attribute]
-pollSelfAttrs_ cid url trigger = [hxGet_ url, hxTrigger_ trigger, hxTarget_ "this", hxSwap_ "outerHTML", hxSelect_ $ "#" <> cid, makeAttribute "hx-preload" "false"]
+pollSelfAttrs_ = pollSelfAttrsWith_ "outerHTML"
+
+
+-- | Use @outerMorph@ when polling must preserve open disclosures.
+--
+-- >>> renderText (div_ (pollSelfAttrs_ "run" "/run" "every 5s") mempty :: Html ())
+-- "<div data-hx-get=\"/run\" data-hx-trigger=\"every 5s\" data-hx-target=\"this\" data-hx-swap=\"outerHTML\" data-hx-select=\"#run\" hx-preload=\"false\"></div>"
+-- >>> renderText (div_ (pollSelfAttrsWith_ "outerMorph" "run" "/run" "every 5s") mempty :: Html ())
+-- "<div data-hx-get=\"/run\" data-hx-trigger=\"every 5s\" data-hx-target=\"this\" data-hx-swap=\"outerMorph\" data-hx-select=\"#run\" hx-preload=\"false\"></div>"
+pollSelfAttrsWith_ :: Text -> Text -> Text -> Text -> [Attribute]
+pollSelfAttrsWith_ swapMode cid url trigger = [hxGet_ url, hxTrigger_ trigger, hxTarget_ "this", hxSwap_ swapMode, hxSelect_ $ "#" <> cid, makeAttribute "hx-preload" "false"]
 
 
 -- | The skeleton half of 'Deferred', also usable on its own for a panel whose body is one
@@ -767,11 +772,11 @@ formField_ size cfg lbl name required customM =
       when required $ span_ [class_ $ case size of { FieldSm -> "text-textError"; FieldMd -> "text-textWeak" }] "*"
     fromMaybe
       ( case (cfg.inputType, cfg.suffix) of
-          ("textarea", _) -> textarea_ ([class_ $ case size of { FieldSm -> "textarea textarea-sm w-full leading-relaxed"; FieldMd -> "textarea w-full" }, name_ name, id_ fid, placeholder_ cfg.placeholder] <> commonAttrs) $ toHtml cfg.value
+          ("textarea", _) -> textarea_ (mergedAttrs $ [class_ $ case size of { FieldSm -> "textarea textarea-sm w-full leading-relaxed"; FieldMd -> "textarea w-full" }, name_ name, id_ fid, placeholder_ cfg.placeholder] <> commonAttrs) $ toHtml cfg.value
           (_, Just sfx) -> div_ [class_ "relative"] do
-            input_ $ [class_ $ case size of { FieldSm -> "input input-sm w-full pr-14"; FieldMd -> "input w-full h-12 pr-14" }] <> inputAttrs
+            input_ $ mergedAttrs $ [class_ $ case size of { FieldSm -> "input input-sm w-full pr-14"; FieldMd -> "input w-full h-12 pr-14" }] <> inputAttrs
             span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] $ toHtml sfx
-          _ -> input_ $ [class_ $ case size of { FieldSm -> "input input-sm w-full"; FieldMd -> "input w-full h-12" }] <> inputAttrs
+          _ -> input_ $ mergedAttrs $ [class_ $ case size of { FieldSm -> "input input-sm w-full"; FieldMd -> "input w-full h-12" }] <> inputAttrs
       )
       customM
     whenJust cfg.hint $ p_ [id_ $ fid <> "-hint", class_ "text-xs text-textWeak"] . toHtml
@@ -794,7 +799,7 @@ formSelectFieldWith_ :: Monad m => FieldSize -> FieldCfg -> Text -> Text -> Bool
 formSelectFieldWith_ size cfg lbl name required options =
   formField_ size cfg lbl name required
     $ Just
-    $ select_ ([class_ $ case size of { FieldSm -> "select select-sm w-full cursor-pointer"; FieldMd -> "select w-full h-12 cursor-pointer" }, name_ name, id_ (fromMaybe name cfg.inputId)] <> [required_ "true" | required] <> cfg.extraAttrs) options
+    $ select_ (mergedAttrs $ [class_ $ case size of { FieldSm -> "select select-sm w-full cursor-pointer"; FieldMd -> "select w-full h-12 cursor-pointer" }, name_ name, id_ (fromMaybe name cfg.inputId)] <> [required_ "true" | required] <> cfg.extraAttrs) options
 
 
 -- | @Collapsible open@ is a details disclosure.
@@ -849,12 +854,6 @@ formCheckbox_ size lbl name extraAttrs =
 
 tagInput_ :: Monad m => Text -> Text -> [Attribute] -> HtmlT m ()
 tagInput_ inputId ph attrs = textarea_ (mergedAttrs $ [class_ "textarea w-full min-h-12 resize-none", id_ inputId, placeholder_ ph, data_ "tagify" ""] <> attrs) ""
-
-
-formActionsModal_ :: Monad m => Text -> HtmlT m () -> HtmlT m ()
-formActionsModal_ modalId submitBtn = div_ [class_ "mt-3 flex justify-end gap-2"] do
-  label_ [Lucid.for_ modalId, class_ "btn cursor-pointer"] "Cancel"
-  submitBtn
 
 
 connectionBadge_ :: Monad m => Bool -> HtmlT m ()
@@ -925,87 +924,47 @@ kvList_ cls rows = dl_ [class_ $ "grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 ga
   dd_ [class_ "min-w-0 truncate text-textStrong"] v
 
 
-data ModalCfg = ModalCfg
-  { autoOpen :: Bool
-  , boxClass :: Text
-  , boxStyle :: Text
-  , wrapperClass :: Text
-  , hideClose :: Bool
-  }
-  deriving stock (Generic)
-  deriving anyclass (Default)
-
-
-modalWith_ :: Text -> ModalCfg -> Maybe (Html ()) -> Html () -> Html ()
-modalWith_ modalId cfg triggerM contentHtml = do
-  whenJust triggerM $ label_ [Lucid.for_ modalId]
-  uiToggle_
-    $ [ class_ "modal-toggle"
-      , id_ modalId
-      , Aria.label_ "Toggle modal"
-      , -- Escape is heard on window: focus sits inside the modal, which is not this input's subtree.
-        [__|on keyup[key is 'Escape'] from window or closeModal from body if my.checked set my.checked to false then send change to me end
-          on change if my.checked then
-            add .overflow-hidden to <body/>
-            wait 50ms then
-            set :modal to the next <.modal/> then
-            set :focusable to :modal.querySelector('[autofocus]') or :modal.querySelector('input:not([type=hidden]):not([type=checkbox]), textarea, select, [tabindex]:not([tabindex="-1"])') then
-            if :focusable then call :focusable.focus() end
-          else
-            remove .overflow-hidden from <body/>
-          end
-      |]
-      ]
-    <> [checked_ | cfg.autoOpen]
-  div_
-    [ class_ $ "modal w-screen " <> cfg.wrapperClass
-    , role_ "dialog"
-    , Aria.label_ "Modal dialog"
-    , style_ "--color-base-100: var(--color-fillWeaker)"
-    , [__|on keydown[key=='Enter' and target.tagName=='INPUT' and target.type!='textarea']
-        set :form to target.closest('form') then
-        if :form then halt the event then call :form.requestSubmit() end
-      |]
-    ]
-    do
-      label_ [class_ "modal-backdrop", Lucid.for_ modalId, Aria.label_ "Close modal"] ""
-      div_
-        ( [class_ $ "modal-box relative w-auto flex flex-col gap-5 " <> bool "max-w-5xl" cfg.boxClass (not $ T.null cfg.boxClass)]
-            <> [style_ cfg.boxStyle | not $ T.null cfg.boxStyle]
-        )
-        do
-          unless cfg.hideClose $ modalCloseButton_ modalId
-          div_ [class_ "space-y-2"] contentHtml
-
-
 -- | A native modal @<dialog>@: the browser traps focus, makes the page inert and handles
--- Escape, which the checkbox 'modalWith_' cannot. A backdrop click, a successful form submit
--- or a server @closeModal@ event closes it, and focus returns to its 'dialogTrigger_'. The title heads and names it.
+-- Escape. A backdrop click, a successful form submit or a server @closeModal@ event closes it,
+-- and focus returns to its 'dialogTrigger_'. The title heads and names it.
 nativeDialog_ :: Monad m => Text -> Text -> Text -> HtmlT m () -> HtmlT m ()
-nativeDialog_ dialogId title boxClass body =
+nativeDialog_ = nativeDialogWith_ []
+
+
+nativeDialogWith_ :: Monad m => [Attribute] -> Text -> Text -> Text -> HtmlT m () -> HtmlT m ()
+nativeDialogWith_ dialogAttrs dialogId title boxClass body =
   term
     "dialog"
-    [ id_ dialogId
-    , Aria.labelledby_ (dialogId <> "-title")
-    , class_ "modal p-3 sm:p-8 overscroll-contain"
-    , -- A form the save re-renders is detached before closeModal bubbles, so a successful submit closes too.
-      [__|on closeModal from body or htmx:after:request
-    if my.open and (event.type is 'closeModal' or (event.target.tagName is 'FORM' and event.detail.ctx.response.status < 300 and event.detail.ctx.response.headers.get('HX-Reswap') is not 'none'))
-      call me.close()
-      wait 0ms
-      set opener to document.getElementById(my.id + '-trigger')
-      if opener call opener.focus() end
-    end|]
-    ]
+    ( mergedAttrs
+        $ [ id_ dialogId
+          , Aria.labelledby_ (dialogId <> "-title")
+          , class_ "modal p-3 sm:p-8 overscroll-contain"
+          , -- A form the save re-renders is detached before closeModal bubbles, so a successful submit closes too.
+            [__|on closeModal from body or htmx:after:request
+          if my.open and (event.type is 'closeModal' or (event.target.tagName is 'FORM' and event.detail.ctx.response.status < 300 and event.detail.ctx.response.headers.get('HX-Reswap') is not 'none'))
+            call me.close()
+            wait 0ms
+            set opener to document.getElementById(my.id + '-trigger')
+            if opener call opener.focus() end
+          end|]
+          ]
+        <> dialogAttrs
+    )
     do
-      div_ [class_ $ "modal-box " <> boxClass] do
-        h2_ [id_ (dialogId <> "-title"), class_ "text-lg font-semibold text-textStrong break-words"] $ toHtml title
+      div_ [class_ $ "modal-box relative " <> boxClass] do
+        h2_ [id_ (dialogId <> "-title"), class_ "pe-8 text-lg font-semibold text-textStrong break-words"] $ toHtml title
         body
-      form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ ("Close " <> title)] "Close"
+        button_ [type_ "button", Aria.label_ ("Close " <> title), [__|on click call (closest <dialog/>).close()|], class_ "btn btn-xs btn-circle btn-ghost absolute top-4 end-4 text-iconNeutral hover:bg-fillWeak hover:text-textStrong"]
+          $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
+      dialogBackdrop_ ("Close " <> title)
+
+
+dialogBackdrop_ :: Monad m => Text -> HtmlT m ()
+dialogBackdrop_ lbl = form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ lbl] "Close"
 
 
 dialogTrigger_ :: Monad m => Text -> [Attribute] -> HtmlT m () -> HtmlT m ()
-dialogTrigger_ dialogId attrs = button_ $ [id_ (dialogId <> "-trigger"), type_ "button", onclick_ ("document.getElementById('" <> dialogId <> "').showModal()")] <> attrs
+dialogTrigger_ dialogId attrs = button_ $ mergedAttrs $ [id_ (dialogId <> "-trigger"), type_ "button", onclick_ ("document.getElementById('" <> dialogId <> "').showModal()")] <> attrs
 
 
 -- | Red ghost trigger plus the native @<dialog>@ confirmation modal it opens, e.g. a Remove/Disconnect action.
@@ -1019,7 +978,7 @@ dangerAction_ dialogId icon label title description confirmAttrs confirmText = d
       iconBadge_ IconSm ErrorBadge "triangle-alert"
       p_ [class_ "text-sm text-textWeak"] $ toHtml description
     div_ [class_ "flex justify-end gap-2 mt-6"] do
-      button_ [type_ "button", class_ "btn btn-sm btn-ghost", onclick_ "this.closest('dialog').close()"] "Cancel"
+      button_ [type_ "button", class_ "btn btn-sm btn-ghost", [__|on click call (closest <dialog/>).close()|]] "Cancel"
       button_ ([type_ "button", class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText
 
 
@@ -1030,13 +989,6 @@ dangerZone_ title desc action = section_ [class_ "flex flex-wrap items-center ju
     p_ [class_ "font-medium text-textStrong"] $ toHtml title
     p_ [class_ "text-sm text-textWeak"] $ toHtml desc
   action
-
-
--- | Checkbox-toggled floating prompt shell ('modalWith_' at @pt-[15vh]@ over dimmed scrim,
--- with no outer box chrome so a 'floatingCard_' or 'pickerCard_' inside is the sole surface).
-floatingModal_ :: Text -> Html () -> Html ()
-floatingModal_ modalId =
-  modalWith_ modalId def{boxClass = "!w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none", wrapperClass = "!items-start pt-[15vh] px-4 bg-black/40 dark:bg-black/65 backdrop:backdrop-blur-[2px] [&_.modal-backdrop]:backdrop-blur-[2px]", hideClose = True} Nothing
 
 
 -- | A component's own attributes followed by its caller's, as one list Lucid renders correctly.
@@ -1056,14 +1008,22 @@ mergedAttrs attrs = [Attribute k (joined k [v | Attribute k' v <- attrs, k' == k
       _ -> fromMaybe "" . viaNonEmpty last
 
 
+-- | Chromeless native @<dialog>@ shell positioned at @pt-[15vh]@ over a dimmed backdrop.
+-- The title id is @dialogId-title@; @body@ renders inside the dialog before the backdrop.
+floatingDialogShell_ :: Text -> Html () -> Html ()
+floatingDialogShell_ dialogId body =
+  with (makeElement "dialog") [id_ dialogId, class_ "modal !items-start px-4 pt-[15vh] bg-black/40 dark:bg-black/65 backdrop:backdrop-blur-[2px] [&_.modal-backdrop]:backdrop-blur-[2px]", term "aria-labelledby" (dialogId <> "-title"), [__|on closeModal from body if my.open call me.close() end|]] do
+    body
+    dialogBackdrop_ "Close"
+
+
 -- | Native @<dialog>@ prompt over a dimmed backdrop, as a 'floatingCard_'. Open with @showModal()@;
 -- the title id is @dialogId-title@. Children may style on @group-has-[…]/dialog@.
 floatingDialog_ :: Text -> Html () -> (Text, [Text]) -> [Attribute] -> Html () -> Html () -> Html ()
 floatingDialog_ dialogId title submitHint formAttrs body submit =
-  with (makeElement "dialog") [id_ dialogId, class_ "modal !items-start px-4 pt-[15vh] bg-black/40 dark:bg-black/65 backdrop:backdrop-blur-[2px] [&_.modal-backdrop]:backdrop-blur-[2px]", term "aria-labelledby" (dialogId <> "-title")] do
-    form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close"] "close"
-    form_ (mergedAttrs $ formAttrs <> [class_ "modal-box group/dialog !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none"])
-      $ floatingCard_ [id_ $ dialogId <> "-title"] title (\attrs -> button_ (mergedAttrs $ [type_ "button", onclick_ "this.closest('dialog').close()"] <> attrs)) [submitHint, ("Close", ["esc"])] body submit
+  floatingDialogShell_ dialogId
+    $ form_ (mergedAttrs $ formAttrs <> [class_ "modal-box group/dialog !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none"])
+    $ floatingCard_ [id_ $ dialogId <> "-title"] title (\attrs -> button_ (mergedAttrs $ [type_ "button", [__|on click call (closest <dialog/>).close()|]] <> attrs)) [submitHint, ("Close", ["esc"])] body submit
 
 
 -- | A floating prompt's card: the title and close control, @body@, then keyboard hints beside

@@ -29,6 +29,7 @@ import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.TH
+import GHC.Clock (getMonotonicTime)
 import Models.Projects.ProjectMemory qualified as Memory
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types.Status qualified as HTTP
@@ -42,7 +43,6 @@ import System.IO (hClose)
 import System.IO.Error (isDoesNotExistError, isEOFError, tryIOError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
-import System.Tracing qualified as Tracing
 import Text.HTML.TagSoup qualified as TagSoup
 import UnliftIO.Async (forConcurrently)
 import UnliftIO.Exception (catch, finally, throwIO, tryAny)
@@ -258,7 +258,9 @@ queryLimit :: Task format -> Int
 queryLimit = \case
   FixTask{} -> fixQueryLimit
   (PatchTask{}; SourcePatchTask{}) -> 20
-  (SourceTask{}; AdvisoryTask{}; AdmissionTask{}; PeerTask{}) -> 20
+  (SourceTask{}; AdmissionTask{}; PeerTask{}) -> 20
+  -- Successful reviews used up to 24 calls; overruns at 23-26 were one parallel telemetry batch.
+  AdvisoryTask{} -> 30
 
 
 data DraftValidator format result where
@@ -439,6 +441,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
       (Right host, Just command) -> do
         verifierSession <- UUID4.nextRandom
         proofCount <- newIORef (0 :: Int)
+        started <- getMonotonicTime
         -- A review's or fix's agent stops a minute before its job; both run on the long queue. At eight
         -- minutes a fix was killed before its first checkpoint, and its retry could only report the session lost.
         let budget = case task of AdvisoryTask{} -> reviewSeconds - 60; FixTask{} -> fixSeconds - 300; _ -> 480
@@ -542,7 +545,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                     protectWorkspace = for_ (["/usr/bin/git" :| ["config", "--system", "--add", "safe.directory", path] | path <- ["/workspace", "/workspace/.git"]] <> ["/bin/chown" :| ["-hR", "0:0", "/workspace"], "/bin/chmod" :| ["-R", "u+rwX,go+rX,go-w", "/workspace"], "/usr/bin/git" :| ["update-index", "--refresh"]] :: [NonEmpty Text]) $ void . ExceptT . execute Supervisor
                     regression :: Request run -> Workspace.Baseline -> UUID.UUID -> AE.Value -> [(Text, Text)] -> Outbox.Outbox -> IO (Either Text (RegressionWire, [(Workspace.Side, FilePath, Text)]))
                     regression pinned baseline sessionId artifact revisions outbox = active $ \session -> do
-                      let options = session.verifier (Outbox.checksPath outbox)
+                      elapsed <- getMonotonicTime
+                      let options = (session.verifier (Outbox.checksPath outbox)){Workspace.sideSeconds = max 60 $ min (15 * 60) $ (budget - ceiling (elapsed - started) - 120) `div` 2}
                       case Workspace.mkRegressionRequest pinned.projectId pinned.runId pinned.attemptId sessionId pinned.base session.imageBuildId baseline artifact revisions of
                         Left _ -> pure $ Left "Regression arguments do not match the host contract"
                         Right request -> do
@@ -706,10 +710,11 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             let shots = if null browser.shots then [(T.take 80 proof.claim, png) | Just png <- [card]] else browser.shots
                             let summary = AE.object ["side" AE..= receipt.side, "revision" AE..= receipt.revision, "status" AE..= receipt.status, "exitCode" AE..= receipt.exitCode, "clip" AE..= (window <$ guard @Maybe (isNothing browser.video)), "output" AE..= T.takeEnd 3000 output, "screenshots" AE..= map fst shots, "video" AE..= isJust browser.video, "advice" AE..= Media.proofAdvice browser.shots card output]
                             pure (ProofMedia{side = receipt.side, revision = receipt.revision, exitCode = receipt.exitCode, cast, gif, mp4, browser = isJust browser.video, shots, chapters = browser.chapters}, summary)
-                        sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty $ map fst recorded
+                        let (contrasted, contrast) = Media.contrastSides $ map fst recorded
+                        sides <- maybe (throwE "The proof recorded no revision") pure $ nonEmpty contrasted
                         key <- ExceptT $ hooks.save ProofScript{claim = proof.claim, command = proof.shellCommand, setup = proof.setup} sides
                         lift $ hooks.progress $ Recorded (proof.claim :| fold proof.covers) key
-                        pure $ AE.object ["key" AE..= key, "claim" AE..= proof.claim, "sides" AE..= map snd recorded, "note" AE..= ("Cite this key in a claim. The PR author sees both recordings." :: Text)]
+                        pure $ AE.object ["key" AE..= key, "claim" AE..= proof.claim, "sides" AE..= map snd recorded, "advice" AE..= contrast, "note" AE..= ("Cite this key in a claim. The PR author sees both recordings." :: Text)]
 
                     receive :: Maybe Checkout.Prepared -> Maybe GuestSession -> Int -> Int -> Maybe (Accepted result) -> IO (Either Text result)
                     receive supplied guestSession remaining submissions accepted = do

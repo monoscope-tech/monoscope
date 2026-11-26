@@ -141,10 +141,11 @@ onReady(function(){
           }
 
 
-          // Cmd+Enter / Ctrl+Enter form submission for textareas
+          // Cmd+Enter / Ctrl+Enter form submission for opt-in textareas
           document.addEventListener('keydown', function(e: KeyboardEvent) {
-            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && (e.target as HTMLElement).tagName === 'TEXTAREA') {
-              const form = (e.target as HTMLElement).closest('form');
+            const target = e.target as HTMLElement;
+            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && target.matches?.('textarea[data-submit-on-mod-enter]')) {
+              const form = target.closest('form');
               if (form) {
                 e.preventDefault();
                 form.requestSubmit();
@@ -187,4 +188,5 @@ onReady(function(){
         url.searchParams.delete('aggregate_skip');
         window.location.href = url.toString();
     }
+
 Object.assign(window, { filterByField, viewFieldPatterns });

@@ -32,8 +32,10 @@ module Pages.GitSync (
 ) where
 
 import BackgroundJobs qualified
+import Control.Lens ((^?))
 import Control.Monad.Trans.Except (withExceptT)
 import Data.Aeson qualified as AE
+import Data.Aeson.Lens (key, _Integer, _String)
 import Data.Cache qualified as Cache
 import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
@@ -62,6 +64,7 @@ import Relude hiding (ask)
 import Servant (ServerError (..), err401, err403, err404, err503)
 import System.Config qualified as Config
 import System.Logging qualified as Log
+import System.Tracing qualified as Tracing
 import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, act, addErrorToast, addRespHeaders, addSuccessToast, done, redirectCS)
 import Utils (LoadingSize (..), faSprite_, hostPath, htmxIndicator_, renderMarkdown)
 import Web.ApiTypes (readOnlyMessage)
@@ -90,26 +93,42 @@ data GitSyncForm = GitSyncForm
 -- | An inbound push from any host. The order is security-relevant: parse /only/ the repository
 -- name, find its row, verify the signature, and only then queue a job. Queueing before
 -- 'Git.verifyWebhook' returns is how a forged body gets to enqueue work.
-gitWebhookPostH :: Git.GitHost -> Git.WebhookReq -> ATBaseCtx AE.Value
-gitWebhookPostH Git.GitHub req | req.event `elem` map Just ["pull_request", "issue_comment" :: Text] = do
+-- Each GitHub delivery is one @github.webhook@ span naming what arrived and what became of it, so
+-- "did GitHub reach us for this PR" is a query over our own telemetry.
+gitWebhookPostH :: Git.GitHost -> Maybe Text -> Git.WebhookReq -> ATBaseCtx AE.Value
+gitWebhookPostH Git.GitHub delivery req | req.event `elem` map Just ["pull_request", "issue_comment" :: Text] = Tracing.withSpan "github.webhook" deliveryAttrs \sp -> do
   ctx <- ask @Config.AuthContext
   let secret = ctx.config.githubAppWebhookSecret
+      outcome o = Tracing.addAttribute sp "monoscope.webhook.outcome" (Otel.toAttribute (o :: Text))
       status s = AE.object ["status" AE..= (s :: Text)]
   if T.null secret
-    then throwError err503{errBody = "GitHub App webhook secret is not configured"}
+    then outcome "secret_missing" >> throwError err503{errBody = "GitHub App webhook secret is not configured"}
     else case Git.verifyWebhook Git.GitHub (Just secret) req of
-      Left _ -> throwError err401{errBody = "Invalid GitHub signature"}
+      Left _ -> outcome "signature_invalid" >> throwError err401{errBody = "Invalid GitHub signature"}
       Right ()
         | req.event == Just "issue_comment" -> case ImpactReviews.decodeComment req.body of
-            Left err -> status "ignored" <$ Log.logTrace "Ignoring GitHub comment" err
+            Left err -> status "ignored" <$ (outcome "ignored" >> Log.logTrace "Ignoring GitHub comment" err)
             Right request ->
               ImpactReview.requestReview request >>= \case
-                Left err -> status "error" <$ Log.logAttention "PR review request was not queued" (request.owner, request.repo, request.number, err)
-                Right () -> pure $ status "ok"
+                Left err -> status "error" <$ (outcome "request_failed" >> Log.logAttention "PR review request was not queued" (request.owner, request.repo, request.number, err))
+                Right () -> status "ok" <$ outcome "review_requested"
         | otherwise -> case ImpactReviews.decodeEvent req.body of
-            Left err -> status "ignored" <$ Log.logInfo "Ignoring GitHub PR event" err
-            Right event -> ImpactReviews.receiveEvent Nothing event $> status "ok"
-gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
+            Left err -> status "ignored" <$ (outcome "ignored" >> Log.logInfo "Ignoring GitHub PR event" err)
+            Right event -> ImpactReviews.receiveEvent Nothing event >>= \reception -> status "ok" <$ outcome (show reception)
+  where
+    attr :: Otel.ToAttribute a => Text -> Maybe a -> Maybe (Text, Otel.Attribute)
+    attr k = fmap ((k,) . Otel.toAttribute)
+    number path = fromInteger @Int64 <$> req.body ^? path . _Integer
+    deliveryAttrs =
+      catMaybes
+        [ attr "github.delivery_id" delivery
+        , attr "github.event" req.event
+        , attr "github.action" $ req.body ^? key "action" . _String
+        , attr "vcs.repository.name" $ T.toLower <$> req.body ^? key "repository" . key "full_name" . _String
+        , attr "github.installation.id" $ number (key "installation" . key "id")
+        , attr "vcs.change.id" $ number (key "pull_request" . key "number") <|> number (key "issue" . key "number")
+        ]
+gitWebhookPostH host _ req = case Git.parseWebhookRepo host req.body of
   Nothing -> errResp "missing repository" <$ Log.logAttention "Git webhook without a repository name" (Git.hostSlug host)
   Just fullName -> do
     let (ownerName, repoName) = Git.splitFullName fullName
@@ -324,7 +343,7 @@ gitSyncSettingsView GitSyncSettings{hostUrl, projectId = pid, sync = syncM, fail
       -- GitHub for anyone who cannot install an App.
       div_ [class_ "pt-6 border-t border-strokeWeak"] do
         disclosure_ [] "text-xs font-medium text-textWeak hover:text-textStrong" (toHtml $ "Or connect " <> T.intercalate ", " (map Git.hostLabel universe) <> " with a token")
-          $ form_ [class_ "pt-4 space-y-3", hxPost_ actionUrl, hxSwap_ "outerMorph", hxTarget_ ("#" <> targetId), hxIndicator_ ("#" <> targetId <> "-indicator")] do
+          $ form_ (class_ "pt-4 space-y-3" : morphPostAttrs_ actionUrl targetId (targetId <> "-indicator")) do
             div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
               -- Picking a host rewrites the token label and shows the server-URL field only for
               -- the hosts that can have one, so nobody is asked for a Bitbucket server address.
@@ -401,7 +420,7 @@ gitSyncSettingsView GitSyncSettings{hostUrl, projectId = pid, sync = syncM, fail
           toHtml @Text $ case err.operation of GitSync.ImportDashboards -> "Retry import"; GitSync.ExportDashboard _ -> "Retry export"; GitSync.ExportDashboards -> "Retry export"
           htmxIndicator_ (targetId <> "-retry-indicator") LdXS
 
-      form_ [class_ "space-y-4", hxPost_ actionUrl, hxSwap_ "outerMorph", hxTarget_ ("#" <> targetId), hxIndicator_ ("#" <> targetId <> "-indicator")] do
+      form_ (class_ "space-y-4" : morphPostAttrs_ actionUrl targetId (targetId <> "-indicator")) do
         -- An App installation knows which repositories it reaches, so changing one is picking from
         -- that list; a PAT's scope cannot be enumerated, so those keep the text boxes.
         if isViaApp
@@ -523,7 +542,7 @@ repositoryDashboardPage pid rid = do
   ctx <- ask @Config.AuthContext
   repos <- maybe (pure Nothing) (liftIO . Cache.lookup ctx.repoListCache) repository.credentialId
   let branch = maybe "" (.defaultBranch) $ find ((== repository.owner <> "/" <> repository.repo) . (.fullName)) (fold repos)
-  permission <- ProjectMembers.getUserPermission pid session.user.id
+  permission <- ProjectMembers.getSessionPermission pid session.user.id
   pure $ PageCtx bw{prePageTitle = Just "Repositories", pageTitle = repository.owner <> "/" <> repository.repo, pageTitleUrl = Just $ urls.repositoryGet pid rid, pageTitleSuffix = Just "Configuration sync", menuItem = Just "Repositories"} RepositoryDashboardGet{repository, sync, accounts, form = RepositoryDashboardForm repository.credentialId branch Nothing, hostUrl = ctx.config.hostUrl, permission, setupError = Nothing}
 
 
@@ -685,7 +704,7 @@ dashboardRepositoryPageH pid did assignmentError = do
   (session, _, bw) <- mkPageCtx pid
   dashboard <- Dashboards.getDashboardByProjectId pid did >>= maybe (throwError err404) pure
   repositories <- GitSync.getGitSyncs pid
-  permission <- ProjectMembers.getUserPermission pid session.user.id
+  permission <- ProjectMembers.getSessionPermission pid session.user.id
   addRespHeaders $ PageCtx bw{pageTitle = "Dashboard repository"} DashboardRepositoryGet{dashboard, repositories, assignmentError, permission}
 
 
@@ -754,7 +773,11 @@ githubAppInstallH pid toM = do
     =<< if any T.null [ctx.config.githubClientId, ctx.config.githubClientSecret]
       then pure $ ConnectFailed (Just pid) AppNotConfigured
       else do
-        nonce <- GitSync.createInstallationAttempt session.persistentSession.id (GitSync.InstallationAttempt pid (if toM == Just "code" then GitSync.InstallCode else GitSync.InstallSync) GitSync.InstallApp)
+        let dest = case toM of
+              Just "code" -> GitSync.InstallCode
+              Just "onboarding" -> GitSync.InstallOnboarding
+              _ -> GitSync.InstallSync
+        nonce <- GitSync.createInstallationAttempt session.persistentSession.id (GitSync.InstallationAttempt pid dest GitSync.InstallApp)
         pure $ Continue "Continue to GitHub to choose the account and repositories." $ "https://github.com/apps/" <> ctx.config.githubAppName <> "/installations/new?state=" <> UUID.toText nonce
 
 
@@ -774,7 +797,11 @@ githubAppCallbackH instIdM _setupAction stateM codeM = do
         (Just iid, Just code) ->
           GitSync.authorizeGitHubInstallation (encodeUtf8 ctx.config.apiKeyEncryptionSecretKey) attempt.projectId ctx.config.githubAppId ctx.config.githubClientId ctx.config.githubClientSecret code callback iid <&> \case
             Left err -> ConnectFailed (Just attempt.projectId) (AuthorizationFailed err)
-            Right () -> Continue "GitHub account verified. Choose the repositories to connect." $ urls.repositoryConnectGet attempt.projectId Nothing
+            Right () ->
+              let nextUrl = case attempt.destination of
+                    GitSync.InstallOnboarding -> urls.projects.onboading attempt.projectId (Just Projects.AutoInstrument)
+                    _ -> urls.repositoryConnectGet attempt.projectId Nothing
+               in Continue "GitHub account verified. Continuing setup." nextUrl
         (Just iid, Nothing) | GitSync.InstallApp <- attempt.step -> do
           nonce <- GitSync.createInstallationAttempt session.persistentSession.id attempt{GitSync.step = GitSync.AuthorizeApp iid}
           pure $ Continue "Authorize your GitHub account to verify this installation." $ "https://github.com/login/oauth/authorize?client_id=" <> escaped ctx.config.githubClientId <> "&redirect_uri=" <> escaped callback <> "&state=" <> UUID.toText nonce

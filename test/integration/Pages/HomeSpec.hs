@@ -6,6 +6,7 @@ import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.Wreq (runHTTPRecordWith)
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
+import Effectful.Error.Static (catchError)
 import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Issues qualified as Issues
@@ -17,6 +18,8 @@ import Pages.Home qualified as Home
 import Pages.Settings qualified as Settings
 import Pkg.Components.Widget qualified as Widget
 import Pkg.TestUtils
+import Servant (ServerError (..))
+import Web.Links (CookieProtectedRoutes (..), ProjectsRoutes' (..), urls)
 import Web.Routes qualified as Routes
 
 
@@ -48,6 +51,13 @@ spec = around withTestResources $ describe "Home screen" do
     void $ call tr $ Home.highlightDismissPostH pid (fromOnly hid)
     dismissed <- renderT <$> call tr (Home.homeGetH pid)
     T.isInfixOf "Checkout 5xx up 4.8x" dismissed `shouldBe` False
+
+  it "home_unfinishedOnboarding_redirectsToOnboarding" \tr -> do
+    -- The projects list links to Home, which skipped the onboarding redirect the old dashboard entrypoint had.
+    pid <- createTestProject tr "Acme Shop"
+    dbExec tr [sql|UPDATE projects.projects SET payment_plan = 'ONBOARDING' WHERE id = ?|] (Only pid)
+    runAuthHandler tr (catchError @ServerError ([] <$ Home.homeGetH pid) (\_ e -> pure e.errHeaders))
+      `shouldReturn` [("Location", encodeUtf8 @Text $ urls.projects.onboading pid Nothing)]
 
   it "home_rawSqlWidgets_loadForAViewer" \tr -> do
     -- Home skipped the dashboard's SQL signing, so /widget 403'd a viewer's "Near memory limit" and it stayed a skeleton.

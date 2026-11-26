@@ -57,8 +57,8 @@ serviceMapPanelWith_ panel pid elId graph colors = div_ [class_ "w-full flex fle
                 $ "Showing the "
                 <> show (V.length (drawnNodes graph))
                 <> " busiest dependencies. Quieter ones are folded away — search to find a specific one."
-          serviceMapLegend_ graph colors
-          envFacet_ pid graph (case panel of GlobalPanel selectedEnv -> selectedEnv; EndpointPanel -> Nothing)
+          serviceMapLegend_
+          envFacet_ (case panel of GlobalPanel selectedEnv -> selectedEnv; EndpointPanel -> Nothing)
           scopeChip_
           -- A React-Flow-shaped canvas, without React: a clipping viewport, one pane that the
           -- renderer translates and scales, an SVG layer for the edges, and the nodes as real
@@ -99,208 +99,171 @@ serviceMapPanelWith_ panel pid elId graph colors = div_ [class_ "w-full flex fle
               nodeCardTemplate_
           -- Outside the scrolling viewport: an absolutely positioned menu inside a scroll
           -- container is clipped by it the moment the node is near an edge.
-          nodeMenu_ elId
+          nodeMenu_
           script_ [type_ "application/json", id_ $ elId <> "-data"] $ scriptJson graph
           script_ [type_ "application/json", id_ $ elId <> "-colors"]
             $ scriptJson
             $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList colors]
-          dependencyTable_ graph
+          dependencyTable_
+  where
+    -- The Env facet, in the shape Datadog puts beside its flow map. Server-side, because the
+    -- environment is a rollup dimension rather than something the payload can be filtered down
+    -- to: picking one is a new query, so it is a link and it survives a reload and a share.
+    -- Hidden entirely when nothing in range reports an environment.
+    envFacet_ :: Maybe Text -> Html ()
+    envFacet_ selected =
+      unless (V.null graph.environments) $ div_ [class_ "flex flex-wrap items-center gap-1.5 px-1 text-xs"] do
+        span_ [class_ "text-textWeak font-medium mr-0.5"] "Env"
+        forM_ (Nothing : (Just <$> V.toList graph.environments)) \opt ->
+          a_
+            [ class_
+                $ "rounded-md border px-2 py-0.5 "
+                <> bool "border-strokeWeak text-textWeak hover:bg-fillWeak" "border-strokeBrand-strong bg-fillBrand-weak text-textStrong font-medium" (opt == selected)
+            , href_ $ (urls.traces pid).serviceMapGetH Nothing Nothing Nothing opt Nothing
+            ]
+            $ toHtml
+            $ fromMaybe "All" opt
 
+    -- The active scope: a dismissable chip saying which service the map is currently answering for.
+    scopeChip_ :: Html ()
+    scopeChip_ =
+      div_ [class_ "hidden data-[scoped=true]:flex items-center gap-2 px-1 text-xs", term "data-map-scope" ""] do
+        span_ [class_ "inline-flex items-center gap-1.5 rounded-md border border-strokeWeak bg-fillWeak px-2 py-1"] do
+          span_ [class_ "text-textWeak"] "Service:"
+          span_ [class_ "font-medium text-textStrong truncate max-w-64", term "data-scope-label" ""] ""
+          button_
+            [ class_ "text-textWeak hover:text-textStrong cursor-pointer"
+            , term "data-scope-clear" ""
+            , type_ "button"
+            , term "aria-label" "Clear service scope"
+            ]
+            "×"
+        span_ [class_ "text-textWeak", term "data-scope-count" ""] ""
 
--- | The Env facet, in the shape Datadog puts beside its flow map. Server-side, because the
--- environment is a rollup dimension rather than something the payload can be filtered down
--- to: picking one is a new query, so it is a link and it survives a reload and a share.
---
--- Hidden entirely when nothing in range reports an environment — a facet with no choices in
--- it is furniture, not a control.
-envFacet_ :: Projects.ProjectId -> ServiceGraph -> Maybe Text -> Html ()
-envFacet_ pid graph selected =
-  unless (V.null graph.environments) $ div_ [class_ "flex flex-wrap items-center gap-1.5 px-1 text-xs"] do
-    span_ [class_ "text-textWeak font-medium mr-0.5"] "Env"
-    forM_ (Nothing : (Just <$> V.toList graph.environments)) \opt ->
-      a_
-        [ class_
-            $ "rounded-md border px-2 py-0.5 "
-            <> bool "border-strokeWeak text-textWeak hover:bg-fillWeak" "border-strokeBrand-strong bg-fillBrand-weak text-textStrong font-medium" (opt == selected)
-        , href_ $ (urls.traces pid).serviceMapGetH Nothing Nothing Nothing opt Nothing
-        ]
-        $ toHtml
-        $ fromMaybe "All" opt
+    -- Zoom affordances. Real buttons also give the gesture a keyboard equivalent.
+    zoomControls_ :: Html ()
+    zoomControls_ =
+      div_ [class_ "absolute bottom-3 right-3 z-20 flex flex-col rounded-lg border border-strokeWeak bg-bgRaised shadow-sm overflow-hidden"]
+        $ forM_ ([("zoom-in", "plus", "Zoom in"), ("zoom-out", "minus", "Zoom out"), ("fit", "expand", "Fit to view")] :: [(Text, Text, Text)])
+        $ \(action, icon, label) ->
+          button_
+            [ class_ "p-1.5 hover:bg-fillWeak cursor-pointer border-b border-strokeWeak last:border-0"
+            , type_ "button"
+            , term "data-map-zoom" action
+            , term "aria-label" label
+            , title_ label
+            ]
+            $ faSprite_ icon "regular" "w-3.5 h-3.5 text-iconNeutral"
 
+    -- A compact orientation view for a large map.
+    mapOverview_ :: Html ()
+    mapOverview_ =
+      div_ [class_ "absolute bottom-3 left-3 z-20 hidden lg:block rounded-lg border border-strokeWeak bg-bgRaised p-1.5 shadow-sm", term "data-map-overview-shell" "", term "aria-hidden" "true"]
+        $ svg_ [class_ "block h-20 w-40", term "data-map-overview" "", term "viewBox" "0 0 160 80", term "preserveAspectRatio" "none"] pass
 
--- | The active scope, in the shape Datadog puts above its flow map: a dismissable chip
--- saying which service the map is currently answering for. Rendered once and toggled by the
--- renderer, which only writes text into it — the markup is Lucid's, as always.
-scopeChip_ :: Html ()
-scopeChip_ =
-  div_ [class_ "hidden data-[scoped=true]:flex items-center gap-2 px-1 text-xs", term "data-map-scope" ""] do
-    span_ [class_ "inline-flex items-center gap-1.5 rounded-md border border-strokeWeak bg-fillWeak px-2 py-1"] do
-      span_ [class_ "text-textWeak"] "Service:"
-      span_ [class_ "font-medium text-textStrong truncate max-w-64", term "data-scope-label" ""] ""
-      button_
-        [ class_ "text-textWeak hover:text-textStrong cursor-pointer"
-        , term "data-scope-clear" ""
-        , type_ "button"
-        , term "aria-label" "Clear service scope"
-        ]
-        "×"
-    span_ [class_ "text-textWeak", term "data-scope-count" ""] ""
-
-
--- | Zoom affordances. `roam` used to be on with nothing to say so — the canvas panned and
--- zoomed and no one could tell. Real buttons also give the gesture a keyboard equivalent.
-zoomControls_ :: Html ()
-zoomControls_ =
-  div_ [class_ "absolute bottom-3 right-3 z-20 flex flex-col rounded-lg border border-strokeWeak bg-bgRaised shadow-sm overflow-hidden"]
-    $ forM_ ([("zoom-in", "plus", "Zoom in"), ("zoom-out", "minus", "Zoom out"), ("fit", "expand", "Fit to view")] :: [(Text, Text, Text)])
-    $ \(action, icon, label) ->
-      button_
-        [ class_ "p-1.5 hover:bg-fillWeak cursor-pointer border-b border-strokeWeak last:border-0"
-        , type_ "button"
-        , term "data-map-zoom" action
-        , term "aria-label" label
-        , title_ label
-        ]
-        $ faSprite_ icon "regular" "w-3.5 h-3.5 text-iconNeutral"
-
-
--- | A compact orientation view for a large map. The renderer uses the exact laid-out nodes
--- and viewport transform, so the overview cannot drift into a second, approximate map.
-mapOverview_ :: Html ()
-mapOverview_ =
-  div_ [class_ "absolute bottom-3 left-3 z-20 hidden lg:block rounded-lg border border-strokeWeak bg-bgRaised p-1.5 shadow-sm", term "data-map-overview-shell" "", term "aria-hidden" "true"]
-    $ svg_ [class_ "block h-20 w-40", term "data-map-overview" "", term "viewBox" "0 0 160 80", term "preserveAspectRatio" "none"] pass
-
-
--- | The node card, authored once here and cloned per drawn node by the renderer. A template
--- rather than a card per node in the payload: a project at the cap carries 150 drawn nodes and
--- up to 1200 collapsed members, and rendering all of them to hide most would be ten thousand
--- elements the reader never sees. Cloning Lucid-authored markup is not building HTML in JS.
-nodeCardTemplate_ :: Html ()
-nodeCardTemplate_ =
-  template_ [term "data-node-card" ""] $ do
-    button_
-      [ type_ "button"
-      , class_ "absolute flex h-[62px] w-[150px] overflow-hidden rounded-[3px] border bg-bgRaised text-left text-2xs leading-3 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong transition-[opacity,border-color,background-color] duration-150 hover:bg-fillWeak"
-      , term "data-node" ""
-      ]
-      do
-        div_ [class_ "min-w-0 flex-1 px-1.5 py-1"] do
-          div_ [class_ "flex items-center gap-1"] do
-            span_ [class_ "shrink-0 text-iconNeutral", term "data-node-icon" ""] pass
-            span_ [class_ "truncate font-medium text-textStrong", term "data-node-name" ""] pass
-            span_ [class_ "shrink-0 tabular-nums text-textWeak hidden", term "data-node-count" ""] pass
-          div_ [class_ "text-textWeak", term "data-node-errors" ""] pass
-          div_ [class_ "text-textWeak", term "data-node-latency" ""] pass
-          span_ [class_ "relative mt-0.5 flex h-3.5 overflow-hidden rounded-[2px] bg-fillWeak tabular-nums"] do
-            span_ [class_ "absolute inset-y-0 left-0 bg-fillBrand-strong/30", term "data-node-rps-bar" ""] pass
-            span_ [class_ "relative px-1 text-textStrong", term "data-node-rps" ""] pass
-        -- The health bar runs the full height of the card at its right edge, which is where
-        -- Datadog puts it and why it reads without being looked at.
-        span_ [class_ "w-[4px] shrink-0", term "data-node-health" ""] pass
-
-
--- | Click menu for a node, in the shape Datadog uses: the actions you actually want next
--- from a service on a map. Rendered once by Lucid and reused for every node — the renderer
--- only positions it and rewrites the hrefs, so no markup is ever built in JavaScript.
-nodeMenu_ :: Text -> Html ()
-nodeMenu_ elId =
-  div_
-    [ class_ "group/smenu m-0 min-w-56 rounded-lg border border-strokeWeak bg-bgRaised shadow-lg py-1 text-sm"
-    , id_ $ elId <> "-menu"
-    , term "popover" "auto"
-    , term "data-service-menu" ""
-    ]
-    do
-      div_ [class_ "px-3 py-1.5 font-semibold text-textStrong truncate border-b border-strokeWeak mb-1", term "data-menu-title" ""] ""
-      forM_ menuItems \(action, icon, label) ->
-        a_
-          [ class_ $ "flex items-center gap-2 px-3 py-1.5 text-textStrong hover:bg-fillWeak cursor-pointer" <> bool " group-data-[inferred=true]/smenu:hidden" "" (action `elem` (["inspect", "focus"] :: [Text]))
-          , term "data-menu-action" action
-          , href_ "#"
+    -- The node card, authored once here and cloned per drawn node by the renderer.
+    nodeCardTemplate_ :: Html ()
+    nodeCardTemplate_ =
+      template_ [term "data-node-card" ""] $ do
+        button_
+          [ type_ "button"
+          , class_ "absolute flex h-[62px] w-[150px] overflow-hidden rounded-[3px] border bg-bgRaised text-left text-2xs leading-3 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong transition-[opacity,border-color,background-color] duration-150 hover:bg-fillWeak"
+          , term "data-node" ""
           ]
           do
-            faSprite_ icon "regular" "w-3.5 h-3.5 text-iconNeutral shrink-0"
-            toHtml label
+            div_ [class_ "min-w-0 flex-1 px-1.5 py-1"] do
+              div_ [class_ "flex items-center gap-1"] do
+                span_ [class_ "shrink-0 text-iconNeutral", term "data-node-icon" ""] pass
+                span_ [class_ "truncate font-medium text-textStrong", term "data-node-name" ""] pass
+                span_ [class_ "shrink-0 tabular-nums text-textWeak hidden", term "data-node-count" ""] pass
+              div_ [class_ "text-textWeak", term "data-node-errors" ""] pass
+              div_ [class_ "text-textWeak", term "data-node-latency" ""] pass
+              span_ [class_ "relative mt-0.5 flex h-3.5 overflow-hidden rounded-[2px] bg-fillWeak tabular-nums"] do
+                span_ [class_ "absolute inset-y-0 left-0 bg-fillBrand-strong/30", term "data-node-rps-bar" ""] pass
+                span_ [class_ "relative px-1 text-textStrong", term "data-node-rps" ""] pass
+            -- The health bar runs the full height of the card at its right edge.
+            span_ [class_ "w-[4px] shrink-0", term "data-node-health" ""] pass
 
+    -- Click menu for a node, rendered once by Lucid and reused for every node.
+    nodeMenu_ :: Html ()
+    nodeMenu_ =
+      div_
+        [ class_ "group/smenu m-0 min-w-56 rounded-lg border border-strokeWeak bg-bgRaised shadow-lg py-1 text-sm"
+        , id_ $ elId <> "-menu"
+        , term "popover" "auto"
+        , term "data-service-menu" ""
+        ]
+        do
+          div_ [class_ "px-3 py-1.5 font-semibold text-textStrong truncate border-b border-strokeWeak mb-1", term "data-menu-title" ""] ""
+          forM_ menuItems \(action, icon, label) ->
+            a_
+              [ class_ $ "flex items-center gap-2 px-3 py-1.5 text-textStrong hover:bg-fillWeak cursor-pointer" <> bool " group-data-[inferred=true]/smenu:hidden" "" (action `elem` (["inspect", "focus"] :: [Text]))
+              , term "data-menu-action" action
+              , href_ "#"
+              ]
+              do
+                faSprite_ icon "regular" "w-3.5 h-3.5 text-iconNeutral shrink-0"
+                toHtml label
+      where
+        -- @data-menu-action@ is the contract with the renderer, which fills in the href per node.
+        menuItems :: [(Text, Text, Text)]
+        menuItems =
+          [ ("focus", "diagram-project", "Focus on this service")
+          , ("inspect", "arrow-right", "Inspect")
+          , ("events", "list-tree", "View events (spans & logs)")
+          , ("logs", "file-lines", "View logs only")
+          , ("metrics", "chart-line", "View metrics")
+          , ("monitors", "bell", "View monitors")
+          , ("repositories", "code-branch", "View repositories")
+          ]
 
--- | @data-menu-action@ is the contract with the renderer, which fills in the href per node.
--- \"inspect\" and \"focus\" have no href: the first isolates the node's upstream and
--- downstream in place, the second scopes the whole map to it and re-lays it out.
---
--- \"events\" and \"logs\" land on the same explorer. Events includes a service's spans and
--- logs; the logs action adds the kind filter.
-menuItems :: [(Text, Text, Text)]
-menuItems =
-  [ ("focus", "diagram-project", "Focus on this service")
-  , ("inspect", "arrow-right", "Inspect")
-  , ("events", "list-tree", "View events (spans & logs)")
-  , ("logs", "file-lines", "View logs only")
-  , ("metrics", "chart-line", "View metrics")
-  , ("monitors", "bell", "View monitors")
-  , ("repositories", "code-branch", "View repositories")
-  ]
+    serviceMapLegend_ :: Html ()
+    serviceMapLegend_ = div_ [class_ "flex flex-col gap-2"] do
+      div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-xs text-textWeak"] do
+        div_ [class_ "flex items-center gap-1.5"] do
+          div_ [class_ "w-4 h-2.5 rounded-sm shrink-0 border border-strokeStrong"] pass
+          span_ [] "Instrumented service"
+        div_ [class_ "flex items-center gap-1.5"] do
+          faSprite_ "cloud" "regular" "w-3.5 h-3.5 text-iconNeutral"
+          span_ [] "Uninstrumented dependency"
+        div_ [class_ "flex items-center gap-1.5"] do
+          div_ [class_ "w-2.5 h-2.5 rounded-full shrink-0 bg-fillWarning-strong"] pass
+          span_ [] "Elevated errors (1%+)"
+        div_ [class_ "flex items-center gap-1.5"] do
+          div_ [class_ "w-2.5 h-2.5 rounded-full shrink-0 bg-fillError-strong"] pass
+          span_ [] "Failing (5%+)"
+      -- One swatch is not a colour key, it is a lone label pretending to be one.
+      when (length services > 1) $ div_ [class_ "flex items-start gap-3 px-1 text-xs text-textWeak"] do
+        span_ [class_ "shrink-0 font-medium"] "Service colors"
+        ul_ [class_ "flex flex-wrap max-md:flex-nowrap gap-x-3 gap-y-1 max-md:overflow-x-auto c-scroll", term "aria-label" "Service colors"]
+          $ forM_ services
+          $ \service -> li_ [class_ "flex items-center gap-1.5 shrink-0", term "data-service-color" service] do
+            div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> HM.findWithDefault "bg-fillStrong" service colors] pass
+            span_ [class_ "truncate max-w-40"] $ toHtml service
+      where
+        services = ordNub [n.label | n <- V.toList graph.nodes, n.kind == NKService, not n.inferred, not (T.null n.label)]
 
-
--- | The card's icon says what a node /is/ (service, DB, queue or external dependency), and
--- its right-edge bar says how it is doing. The legend makes those two encodings explicit and
--- states the health thresholds, because a reader is entitled to know where red begins.
-serviceMapLegend_ :: ServiceGraph -> HM.HashMap Text Text -> Html ()
-serviceMapLegend_ graph colors = div_ [class_ "flex flex-col gap-2"] do
-  -- Written out rather than folded over a list of class strings: Tailwind's scanner has to
-  -- see each set of classes as a literal at the element that wears them, and a reader should
-  -- not have to jump to a `where` clause to learn what a swatch looks like.
-  div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-xs text-textWeak"] do
-    div_ [class_ "flex items-center gap-1.5"] do
-      div_ [class_ "w-4 h-2.5 rounded-sm shrink-0 border border-strokeStrong"] pass
-      span_ [] "Instrumented service"
-    div_ [class_ "flex items-center gap-1.5"] do
-      faSprite_ "cloud" "regular" "w-3.5 h-3.5 text-iconNeutral"
-      span_ [] "Uninstrumented dependency"
-    div_ [class_ "flex items-center gap-1.5"] do
-      div_ [class_ "w-2.5 h-2.5 rounded-full shrink-0 bg-fillWarning-strong"] pass
-      span_ [] "Elevated errors (1%+)"
-    div_ [class_ "flex items-center gap-1.5"] do
-      div_ [class_ "w-2.5 h-2.5 rounded-full shrink-0 bg-fillError-strong"] pass
-      span_ [] "Failing (5%+)"
-  -- One swatch is not a colour key, it is a lone label pretending to be one.
-  when (length services > 1) $ div_ [class_ "flex items-start gap-3 px-1 text-xs text-textWeak"] do
-    span_ [class_ "shrink-0 font-medium"] "Service colors"
-    ul_ [class_ "flex flex-wrap max-md:flex-nowrap gap-x-3 gap-y-1 max-md:overflow-x-auto c-scroll", term "aria-label" "Service colors"]
-      $ forM_ services
-      $ \service -> li_ [class_ "flex items-center gap-1.5 shrink-0", term "data-service-color" service] do
-        div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> HM.findWithDefault "bg-fillStrong" service colors] pass
-        span_ [class_ "truncate max-w-40"] $ toHtml service
-  where
-    services = ordNub [n.label | n <- V.toList graph.nodes, n.kind == NKService, not n.inferred, not (T.null n.label)]
-
-
--- | The no-JS, screen-reader and small-screen representation of the same graph.
-dependencyTable_ :: ServiceGraph -> Html ()
-dependencyTable_ graph =
-  disclosure_ [class_ "border border-strokeStrong rounded-2xl overflow-hidden"] "px-3 py-2 text-sm text-textStrong" (toHtml $ "Dependencies (" <> fmtInt (V.length (drawnEdges graph)) <> ")")
-    $ toHtml
-      Table.Table
-        { config = def{Table.elemID = "service-map-deps", Table.renderAsTable = True, Table.noSurface = True, Table.tableClasses = "w-full text-xs", Table.thClasses = "text-left font-medium px-3 py-1.5 whitespace-nowrap text-textWeak border-b border-strokeWeak", Table.containerClasses = "w-full"}
-        , rows = V.fromList $ sortOn (\e -> Down e.stats.requests) $ V.toList (drawnEdges graph)
-        , features = def{Table.rowAttrs = Just $ const [class_ "border-b border-strokeWeak last:border-0"]}
-        , columns =
-            [ Table.col "Caller" (toHtml . nodeDisplay . (.source)) & Table.withAttrs [class_ "px-3 py-1.5 whitespace-nowrap"]
-            , Table.col "Callee" (toHtml . nodeDisplay . (.target)) & Table.withAttrs [class_ "px-3 py-1.5 whitespace-nowrap"]
-            , Table.col "Requests" (toHtml . prettyPrintCount . fromIntegral . (.stats.requests)) & Table.withAttrs [class_ "px-3 py-1.5 tabular-nums"]
-            , Table.col "Errors" (\e -> span_ [class_ $ bool "" "text-textError" (e.stats.errors > 0)] $ toHtml $ if e.stats.errors == 0 then "0" else show e.stats.errors <> " (" <> pct e.stats.errorRate <> ")") & Table.withAttrs [class_ "px-3 py-1.5 tabular-nums"]
-            , Table.col "p95 latency" (\e -> toHtml $ bool (getDurationNSMS (fromIntegral e.stats.p95Ns)) "—" (e.stats.p95Ns <= 0)) & Table.withAttrs [class_ "px-3 py-1.5 tabular-nums"]
-            ]
-        }
-  where
-    -- Edges reference node keys; show the human label the node carries. Built once rather
-    -- than searched per row: a capped map is 150 nodes and the table is one row per edge.
-    labels = HM.fromList [(n.key, n.label <> maybe "" (\c -> " (" <> countNoun c "endpoint" <> ")") n.memberCount) | n <- V.toList graph.nodes]
-    nodeDisplay k = if T.null k then "Entry point" else HM.lookupDefault k k labels
-
-
-pct :: Double -> Text
-pct r = showFFloat' 1 (r * 100) <> "%"
+    -- The no-JS, screen-reader and small-screen representation of the same graph.
+    dependencyTable_ :: Html ()
+    dependencyTable_ =
+      disclosure_ [class_ "border border-strokeStrong rounded-2xl overflow-hidden"] "px-3 py-2 text-sm text-textStrong" (toHtml $ "Dependencies (" <> fmtInt (V.length (drawnEdges graph)) <> ")")
+        $ toHtml
+          Table.Table
+            { config = def{Table.elemID = "service-map-deps", Table.renderAsTable = True, Table.noSurface = True, Table.tableClasses = "w-full text-xs", Table.thClasses = "text-left font-medium px-3 py-1.5 whitespace-nowrap text-textWeak border-b border-strokeWeak", Table.containerClasses = "w-full"}
+            , rows = V.fromList $ sortOn (\e -> Down e.stats.requests) $ V.toList (drawnEdges graph)
+            , features = def{Table.rowAttrs = Just $ const [class_ "border-b border-strokeWeak last:border-0"]}
+            , columns =
+                [ Table.col "Caller" (toHtml . nodeDisplay . (.source)) & Table.withAttrs [class_ "px-3 py-1.5 whitespace-nowrap"]
+                , Table.col "Callee" (toHtml . nodeDisplay . (.target)) & Table.withAttrs [class_ "px-3 py-1.5 whitespace-nowrap"]
+                , Table.col "Requests" (toHtml . prettyPrintCount . fromIntegral . (.stats.requests)) & Table.withAttrs [class_ "px-3 py-1.5 tabular-nums"]
+                , Table.col "Errors" (\e -> span_ [class_ $ bool "" "text-textError" (e.stats.errors > 0)] $ toHtml $ if e.stats.errors == 0 then "0" else show e.stats.errors <> " (" <> pct e.stats.errorRate <> ")") & Table.withAttrs [class_ "px-3 py-1.5 tabular-nums"]
+                , Table.col "p95 latency" (\e -> toHtml $ bool (getDurationNSMS (fromIntegral e.stats.p95Ns)) "—" (e.stats.p95Ns <= 0)) & Table.withAttrs [class_ "px-3 py-1.5 tabular-nums"]
+                ]
+            }
+      where
+        labels = HM.fromList [(n.key, n.label <> maybe "" (\c -> " (" <> countNoun c "endpoint" <> ")") n.memberCount) | n <- V.toList graph.nodes]
+        nodeDisplay k = if T.null k then "Entry point" else HM.lookupDefault k k labels
+        pct r = showFFloat' 1 (r * 100) <> "%"
 
 
 -- | The map's empty/error slot: the shared compact empty state inside the fixed-height

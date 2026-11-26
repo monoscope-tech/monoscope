@@ -190,7 +190,7 @@ data Routes mode = Routes
   , stripeWebhook :: mode :- "webhook" :> "stripe" :> Header "Stripe-Signature" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[HTML] (Html ())
   , usageReport :: mode :- "telemetry" :> "v1" :> "report" :> Header "X-Real-IP" Text :> RemoteHost :> ReqBody '[JSON] UsageTelemetry.Report :> PostAccepted '[JSON] NoContent
   , -- Kept at its original path so hooks configured before multi-host support keep delivering.
-    githubWebhook :: mode :- "webhook" :> "github" :> Header "X-Hub-Signature-256" Text :> Header "X-GitHub-Event" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[JSON] AE.Value
+    githubWebhook :: mode :- "webhook" :> "github" :> Header "X-Hub-Signature-256" Text :> Header "X-GitHub-Event" Text :> Header "X-GitHub-Delivery" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[JSON] AE.Value
   , -- One route per host. The host is in the path rather than sniffed from the headers because
     -- it decides which signature scheme to verify with, and that must not be attacker-chosen.
     -- Every host's signature and event headers are captured; each arm reads only its own.
@@ -262,10 +262,11 @@ server otlpTraces otlpLogs collectUsage runNow =
         , lemonWebhook = Settings.webhookPostH
         , stripeWebhook = Settings.stripeWebhookPostH
         , usageReport = \realIp -> collectUsage . sender realIp
-        , githubWebhook = \sigM eventM body -> GitSync.gitWebhookPostH Git.GitHub (Git.WebhookReq eventM sigM Nothing Nothing Nothing body)
+        , githubWebhook = \sigM eventM deliveryM body -> GitSync.gitWebhookPostH Git.GitHub deliveryM (Git.WebhookReq eventM sigM Nothing Nothing Nothing body)
         , gitWebhook = \host bbSig giteaSig glSig glToken glId glTs giteaEvent glEvent bbEvent body ->
             GitSync.gitWebhookPostH
               host
+              Nothing
               Git.WebhookReq
                 { event = asum [giteaEvent, glEvent, bbEvent]
                 , signature = asum [giteaSig, glSig, bbSig]
@@ -378,7 +379,7 @@ cookieProtectedServer projectTools runNow =
     , dashboardSettledPost = Dashboards.dashboardSettledPostH
     , dashboardRepositoryGet = GitSync.dashboardRepositoryGetH
     , dashboardRepositoryPost = GitSync.dashboardRepositoryPostH
-    , dashboardWidgetPut = Dashboards.dashboardWidgetPutWithMonitorH
+    , dashboardWidgetPut = Dashboards.dashboardWidgetPutH
     , dashboardWidgetReorderPatchH = Dashboards.dashboardWidgetReorderPatchH
     , dashboardDelete = Dashboards.dashboardDeleteH
     , dashboardRenamePatch = Dashboards.dashboardRenamePatchH
@@ -627,6 +628,7 @@ monitorsServer pid =
     , statusAllGet = Uptime.statusAllGetH pid
     , statusPageGet = Uptime.statusPageGetH pid
     , statusPageDelete = Uptime.statusPageDeleteH pid
+    , statusPageToggleVisibility = Uptime.statusPageToggleVisibilityH pid
     , statusPageEdit = Uptime.statusPageEditH pid
     , alertUpsertPost = Testing.alertUpsertPostH pid
     , alertSingleGet = Testing.alertSingleGetH pid
@@ -666,6 +668,14 @@ projectsServer =
     , manageSubscriptionGet = ManageMembers.manageSubGetH
     , stripeCheckout = ManageMembers.stripeCheckoutInitH
     , onboading = \pid -> Onboarding.onboardingGetH pid . (rightToMaybe =<<)
+    , onboardingQuickStartPost = Onboarding.onboardingQuickStartPostH
+    , onboardingDiscoverUrlsPost = Onboarding.onboardingDiscoverUrlsPostH
+    , onboardingCreateUptimesPost = Onboarding.onboardingCreateUptimesPostH
+    , onboardingStartInstrumentPost = Onboarding.onboardingStartInstrumentPostH
+    , onboardingInstrumentStatusGet = Onboarding.onboardingInstrumentStatusGetH
+    , onboardingServiceRootsGet = Onboarding.onboardingServiceRootsGetH
+    , onboardingFinishPost = Onboarding.onboardingFinishPostH
+    , onboardingAlertsPost = Onboarding.onboardingAlertsPostH
     , onboardingInfoPost = Onboarding.onboardingInfoPostH
     , onboardingConfPost = Onboarding.onboardingConfPostH
     , onboardingPhoneEmailsPost = Onboarding.phoneEmailPostH
@@ -1248,6 +1258,15 @@ type instance Opaque "Onboarding.NoEventsYet" = Onboarding.NoEventsYet
 type instance Opaque "Onboarding.NotifChannelForm" = Onboarding.NotifChannelForm
 type instance Opaque "Onboarding.OnboardingConfForm" = Onboarding.OnboardingConfForm
 type instance Opaque "Onboarding.OnboardingGet" = Onboarding.OnboardingGet
+type instance Opaque "Onboarding.QuickStartForm" = Onboarding.QuickStartForm
+type instance Opaque "Onboarding.DiscoverUrlForm" = Onboarding.DiscoverUrlForm
+type instance Opaque "Onboarding.CreateUptimesForm" = Onboarding.CreateUptimesForm
+type instance Opaque "Onboarding.StartInstrumentForm" = Onboarding.StartInstrumentForm
+type instance Opaque "Onboarding.OnboardingRedirect" = Onboarding.OnboardingRedirect
+type instance Opaque "Onboarding.DiscoveredEndpointsHtml" = Onboarding.DiscoveredEndpointsHtml
+type instance Opaque "Onboarding.CreatedUptimesHtml" = Onboarding.CreatedUptimesHtml
+type instance Opaque "Onboarding.InstrumentStatusHtml" = Onboarding.InstrumentStatusHtml
+type instance Opaque "Onboarding.ServiceRootsHtml" = Onboarding.ServiceRootsHtml
 type instance Opaque "Onboarding.OnboardingInfoForm" = Onboarding.OnboardingInfoForm
 type instance Opaque "Onboarding.OnboardingPhoneEmailsPost" = Onboarding.OnboardingPhoneEmailsPost
 type instance Opaque "Onboarding.OnboardingStepPost" = Onboarding.OnboardingStepPost
@@ -1306,6 +1325,7 @@ type instance Opaque "Uptime.StatusPageForm" = Uptime.StatusPageForm
 type instance Opaque "Uptime.StatusPageRejection" = Uptime.StatusPageRejection
 type instance Opaque "Uptime.StatusPageView" = Uptime.StatusPageView
 type instance Opaque "Uptime.StatusPages" = Uptime.StatusPages
+type instance Opaque "Uptime.StatusPageVisibilityHtml" = Uptime.StatusPageVisibilityHtml
 type instance Opaque "Uptime.UptimeCheckPage" = Uptime.UptimeCheckPage
 type instance Opaque "Uptime.UptimeChecks" = Uptime.UptimeChecks
 type instance Opaque "Uptime.UptimeForm" = Uptime.UptimeForm

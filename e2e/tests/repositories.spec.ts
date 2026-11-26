@@ -124,7 +124,7 @@ test('repository token setup keeps errors local without enabling dashboard sync'
     await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }]);
     await page.setViewportSize({ width: 320, height: 800 });
     await page.goto(`/p/${pid}/repositories/connect`);
-    await page.getByRole('link', { name: 'Connect with a token', exact: true }).click();
+    await page.getByRole('link', { name: 'Connect GitLab, Bitbucket, Gitea or a token', exact: true }).click();
     await expect(page).toHaveURL(`/p/${pid}/repositories/connect/token`);
     const panel = page.locator('#repository-token-content');
     await panel.getByRole('combobox', { name: /Git host/ }).selectOption('gitea');
@@ -406,7 +406,7 @@ test('shared repository connection keeps account choice and provider recovery vi
     await expect(account).toHaveValue(accounts[1]);
     await expect(retry).toBeFocused();
     await expect(page.locator('#repository-connect-content')).toHaveCount(1);
-    await expect(panel.getByRole('link', { name: 'Connect GitHub account', exact: true })).toBeVisible();
+    await expect(panel.getByRole('link', { name: 'Connect another GitHub account', exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
     await page.screenshot({ path: testInfo.outputPath('repository-connection-error.png'), fullPage: true });
     const emptySelection = await page.request.post(`/p/${pid}/repositories/connect?credentialId=${accounts[1]}`, { form: {} });

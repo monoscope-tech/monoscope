@@ -19,9 +19,9 @@
 # Parallel integration, UI, and e2e lanes share dependency installs prepared by
 # the runner before launch; each check still declares its own source inputs.
 frontend	node	@fe @uisrc
-build	ghc	@hs @fe
-doctests	ghc	@hs @fe
-unit-tests	ghc	@hs @fe
+build	ghc node	@hs @fe
+doctests	ghc node	@hs @fe
+unit-tests	ghc node	@hs @fe
 cli-tests	ghc	@cli
 # Integration installs SDK/media tools and runs the VM-free SDK protocol tests.
 # Container VM cases remain pending without
@@ -29,7 +29,7 @@ cli-tests	ghc	@cli
 # Shards require clean summaries and successful process exits; diagnostic text
 # and test names do not determine their result.
 integration-tests	ghc node bun python3 pg pg-cli minio tf-real	@hs @fe impact-review-worker e2e/package.json e2e/package-lock.json scripts/cli-bin.sh scripts/package-cli.sh scripts/check-cli-linkage.sh scripts/baseline-agent-migrations*.py docs/slack/agent-manifest.json
-weeder	ghc	@hs @fe
+weeder	ghc node	@hs @fe
 hlint	hlint	src shared/src cli .hlint.yaml
 # CI regenerates monoscope.cabal and never parses the workflows, so nothing else checks either.
 repo-lint	actionlint hpack	.github @hs monoscope.cabal auto-instrument-config.toml scripts/disk-guard

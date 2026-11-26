@@ -1,7 +1,7 @@
 {-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsWorkerInitWithTools, jobsWorkerConfig, jobsRunner, runWorkspaceMaintenanceTimer, ensureDailyJobScheduled, processBackgroundJob, processBackgroundJobWithTools, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, dualExecPgTfWithSql, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl, sendAlertToChannels) where
+module BackgroundJobs (jobsWorkerInit, jobsWorkerInitWithTools, jobsWorkerConfig, jobsRunner, runWorkspaceMaintenanceTimer, runReviewWorkerHeartbeat, ensureDailyJobScheduled, processBackgroundJob, processBackgroundJobWithTools, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, dualExecPgTfWithSql, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl, sendAlertToChannels) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -97,6 +97,7 @@ import Models.Projects.Activation qualified as Activation
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
+import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.RepositorySync qualified as RepositorySync
@@ -130,6 +131,7 @@ import Pkg.ImpactReview qualified as ImpactReview
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), addConvertKitUserOrganization, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Mail qualified as Mail
 import Pkg.Metrics qualified as Metrics
+import Pkg.OnboardingInstrument qualified as OnboardingInstrument
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.Queue (getOrInitKafkaProducer, kafkaSaslExtraProps)
 import Pkg.SchemaLearning (SummaryDoc (..))
@@ -390,6 +392,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
     MonoscopeAdminDaily -> runMonoscopeAdminDaily authCtx
     UsageAuditReport -> runUsageAuditReport authCtx
     AdConversion conv -> AdConversions.sendConversion authCtx conv
+    OnboardingInstrument pid rid -> OnboardingInstrument.runOnboardingInstrument pid rid
   where
     investigateIncident pid eventId rootId = do
       acquired <- withXactLease authCtx ("incident-investigation:" <> rootId.toText)
@@ -447,11 +450,13 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
         token <- ExceptT $ GitSync.githubToken ctx.config.githubAppId ctx.config.githubAppPrivateKey credentials
         conn <- hoistEither $ first Git.gitConnErrorMessage $ GitSync.credentialConn account token
         metadata <- ExceptT $ Git.fetchRepository conn (Git.RepoRef repository.owner repository.repo "HEAD")
+        -- Visibility can change on the host; review evidence defaults follow it.
+        lift $ Hasql.interpExecute_ [HI.sql| UPDATE projects.repositories SET private = #{metadata.private} WHERE id = #{rid} AND private IS DISTINCT FROM #{metadata.private} |]
         (_, tree) <- ExceptT $ Git.fetchTree conn (Git.RepoRef repository.owner repository.repo metadata.defaultBranch) ""
         now <- lift Time.currentTime
         summary <- lift $ SchemaCatalog.getSummary Nothing pid
         let names = maybe [] (V.toList . (.services)) summary
-            matches = filter ((== T.toLower repository.repo) . T.toLower) names
+            matches = GitSync.repositoryServices repository.repo names
         previous <- lift $ GitSync.getRepositoryAnalysis pid rid
         unless (isJust $ previous >>= (.suggestions)) do
           mappings <- lift $ CodeContext.getCodeMappings pid
@@ -472,6 +477,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
       void $ withXactLease ctx ("routine-provision:" <> pid.toText) $ whenJustM (Projects.projectById pid) \project -> do
         mapped <- not . null <$> CodeContext.getCodeMappings pid
         for_ (Issues.productionImpactReviewTemplate : [t | isRight result, t <- Issues.issueTriageTemplate : [Issues.issueAutofixTemplate | mapped]]) $ Issues.provisionRoutineTemplate project >=> traverse_ \routine -> enqueueAIRoutine ctx routine.id routine.scheduledAt
+        whenJustM (Issues.getEventRoutine pid Issues.EventPullRequest) $ const $ ImpactReviews.retryRoutineBlockedRuns pid
     runConversation :: Projects.ProjectId -> UUIDId "ai_routine_run" -> ATBackgroundCtx ()
     runConversation project identifier = do
       let claim = Issues.runContextFor project $ Issues.ConversationClaim identifier
@@ -624,7 +630,7 @@ runMonoscopeAdminDaily authCtx = do
       lookupTitle pid = maybe pid.toText (.title) $ Map.lookup pid projectMap
 
   allRows <- forM allProjects \(project :: Projects.Project) -> do
-    events <- Telemetry.countRowsSince [HI.sql|otel_logs_and_spans|] False project.id since
+    events <- Telemetry.countRowsSince [HI.sql|otel_logs_and_spans|] authCtx.env.enableTimefusionReads project.id since
     metrics <- Telemetry.countRowsSince [HI.sql|otel_metrics|] authCtx.env.enableTimefusionReads project.id since
     pure (project, events, metrics, events + metrics)
   let (activeRows, inactiveRows) = partition (\(_, _, _, t) -> t > 0) allRows
@@ -2934,6 +2940,14 @@ runWorkspaceMaintenanceTimer logger ctx tp = for_ ctx.config.impactReviewWorkspa
           then Log.logInfo "Workspace maintenance complete" (AE.toJSON report)
           else Log.logAttention "Workspace maintenance could not meet its budget" (AE.toJSON report)
   threadDelay 300_000_000
+
+
+-- | A node that can run reviews (it has agent slots) checks in every minute; one that cannot stays silent.
+runReviewWorkerHeartbeat :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
+runReviewWorkerHeartbeat logger ctx tp =
+  Workspace.hostSlots >>= \slots -> when (slots.agents > 0) $ forever do
+    runBackground logger ctx tp $ tryStep "review-worker-heartbeat" $ Time.currentTime >>= (`ImpactReviews.announceReviewWorker` slots)
+    threadDelay 60_000_000
 
 
 -- | 1-minute error-count decay tick. Propagates merged counts and decays
@@ -5872,7 +5886,7 @@ processNewLogPatterns pid authCtx = do
 isIssueWorthy :: Maybe Text -> Text -> Bool
 isIssueWorthy logLevel logPattern =
   isAlertableLogLevel logLevel
-    || any (`T.isInfixOf` logPattern) ["status;badge-error⇒ERROR", "status_code;badge-4xx", "status_code;badge-5xx"]
+    || LogPatterns.patternHasErrorStatus logPattern
 
 
 -- | Prune acknowledged patterns not seen in 30 days, auto-acknowledge stale 'new' patterns,

@@ -1453,7 +1453,8 @@ audienceVisible project viewer = \case
   ProjectAudience -> pure True
   NoAudience -> pure False
   PersonalAudience owner -> case viewer of
-    MemberViewer member | owner == member -> isJust <$> ProjectMembers.getUserPermission project member
+    -- A super admin's own chat stays theirs; a removed member is no super admin, so loses it.
+    MemberViewer member | owner == member -> isJust <$> ProjectMembers.getSessionPermission project member
     DirectMessageViewer member team user channel | owner == member -> Integrations.slackDirectMessageOwner project member team user channel
     (ProjectViewer; MemberViewer{}; ChannelViewer{}; DirectMessageViewer{}) -> pure False
   SlackChannelAudience channel -> case viewer of

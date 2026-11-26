@@ -1511,7 +1511,7 @@ apiLogsPage page = do
       logsListPanel
       div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block max-md:hidden ml-3.5"] $ resizer_ "alert_container" "alert_width" False
       alertPanel
-      div_ [class_ $ "transition-opacity duration-200 hidden max-md:hidden ml-3.5 " <> if isJust page.targetEvent then "group-has-[#viz-logs:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block" else "", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
+      div_ [class_ "transition-opacity duration-200 hidden ml-3.5 md:group-has-[#details-open:checked]/pg:block group-has-[#details-drawer-mode:checked]/pg:hidden!", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
       detailsPanel
 
     -- No `contain:layout` here: it makes this a containing block for fixed/anchored

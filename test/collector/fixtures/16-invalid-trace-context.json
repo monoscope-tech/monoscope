@@ -1,0 +1,35 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "tier1-test"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "16-invalid-trace-context"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "0",
+              "observedTimeUnixNano": "1700000000000000000",
+              "severityNumber": 0,
+              "severityText": "",
+              "body": {
+                "stringValue": "{\"level\":\"info\",\"msg\":\"x\",\"trace_id\":\"abc\",\"span_id\":\"00000000000000000000\"}"
+              },
+              "attributes": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

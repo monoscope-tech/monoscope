@@ -312,6 +312,10 @@ extra-source-files:
     static/migrations/0303_promote_gen_ai_text_columns.sql
     static/migrations/0304_drop_llm_unit_hours.sql
     static/migrations/0305_pr_review_proof_scripts.sql
+    static/migrations/0306_onboarding_redesign.sql
+    static/migrations/0306_repository_visibility.sql
+    static/migrations/0307_review_workers.sql
+    static/migrations/0308_onboarding_run_root_path.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb
     test/fixtures/github-app-test.pem
@@ -412,6 +416,7 @@ library
       Models.Projects.GitSync
       Models.Projects.ImpactReviews
       Models.Projects.IssueFixes
+      Models.Projects.OnboardingInstrument
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.ProjectMemory
@@ -478,6 +483,8 @@ library
       Pkg.Mail
       Pkg.Metrics
       Pkg.Minio
+      Pkg.OnboardingDiscovery
+      Pkg.OnboardingInstrument
       Pkg.OpenApi
       Pkg.Parser
       Pkg.Prometheus
@@ -531,6 +538,7 @@ library
   ghc-prof-options: -O1
   build-depends:
       Diff ==1.0.*
+    , JuicyPixels
     , PyF
     , Unique
     , aeson
@@ -538,11 +546,9 @@ library
     , aeson-pretty
     , aeson-qq
     , annotated-exception
-    , ansi-terminal
     , async
     , attoparsec
     , attoparsec-aeson
-    , barbies
     , base
     , base16-bytestring
     , base64
@@ -559,7 +565,6 @@ library
     , containers
     , cookie
     , cryptohash-md5
-    , crypton
     , crypton-x509
     , crypton-x509-store
     , cryptonite
@@ -569,7 +574,6 @@ library
     , dotenv
     , effectful
     , effectful-core
-    , effectful-postgresql
     , effectful-th
     , envy
     , errors
@@ -593,20 +597,16 @@ library
     , hasql-th
     , hasql-transaction
     , hs-opentelemetry-api
-    , hs-opentelemetry-exporter-in-memory
-    , hs-opentelemetry-exporter-otlp
     , hs-opentelemetry-instrumentation-auto
     , hs-opentelemetry-instrumentation-hasql
     , hs-opentelemetry-instrumentation-http-client
     , hs-opentelemetry-instrumentation-hw-kafka-client
     , hs-opentelemetry-instrumentation-postgresql-simple
     , hs-opentelemetry-instrumentation-wai
-    , hs-opentelemetry-propagator-w3c
     , hs-opentelemetry-sdk
     , http-api-data
     , http-client
     , http-client-tls
-    , http-media
     , http-types
     , hw-kafka-client
     , indexed-traversable
@@ -643,19 +643,14 @@ library
     , odd-jobs
     , openai
     , openapi3
-    , optparse-applicative
-    , parallel
     , parsec ==3.1.*
-    , parser-combinators
     , pg-entity
     , postgresql-binary
     , postgresql-libpq
     , postgresql-migration
     , postgresql-simple
     , pretty-relative-time
-    , process
     , proto-lens
-    , proto-lens-runtime
     , random
     , refined
     , regex
@@ -664,10 +659,8 @@ library
     , resource-pool
     , resourcet
     , retry
-    , safe
     , safe-exceptions
     , scientific
-    , scotty
     , servant
     , servant-client
     , servant-htmx
@@ -683,7 +676,6 @@ library
     , template-haskell
     , temporary
     , text
-    , text-builder-linear
     , text-display
     , these
     , time
@@ -693,19 +685,16 @@ library
     , tz
     , unix
     , unliftio
-    , unliftio-pool
     , unordered-containers
     , uuid
     , uuid-quasi
     , valor >=1.0.0.0
     , vector
     , vector-algorithms
-    , vector-split
     , wai
     , wai-cors
     , wai-extra
     , wai-log
-    , wai-middleware-static
     , warp
     , wreq
     , xss-sanitize >=0.3.7.2 && <0.4
@@ -881,6 +870,7 @@ test-suite integration-tests
     , effectful-postgresql
     , envy
     , extra
+    , filelock
     , filepath
     , generic-lens
     , geoip2
@@ -1013,6 +1003,7 @@ test-suite test-dev
       Models.Projects.GitSync
       Models.Projects.ImpactReviews
       Models.Projects.IssueFixes
+      Models.Projects.OnboardingInstrument
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.ProjectMemory
@@ -1079,6 +1070,8 @@ test-suite test-dev
       Pkg.Mail
       Pkg.Metrics
       Pkg.Minio
+      Pkg.OnboardingDiscovery
+      Pkg.OnboardingInstrument
       Pkg.OpenApi
       Pkg.Parser
       Pkg.Prometheus
@@ -1168,6 +1161,7 @@ test-suite test-dev
       hspec-discover:hspec-discover
   build-depends:
       Diff ==1.0.*
+    , JuicyPixels
     , PyF
     , Unique
     , aeson
@@ -1175,11 +1169,9 @@ test-suite test-dev
     , aeson-pretty
     , aeson-qq
     , annotated-exception
-    , ansi-terminal
     , async
     , attoparsec
     , attoparsec-aeson
-    , barbies
     , base
     , base16-bytestring
     , base64
@@ -1196,7 +1188,6 @@ test-suite test-dev
     , containers
     , cookie
     , cryptohash-md5
-    , crypton
     , crypton-x509
     , crypton-x509-store
     , cryptonite
@@ -1206,7 +1197,6 @@ test-suite test-dev
     , dotenv
     , effectful
     , effectful-core
-    , effectful-postgresql
     , effectful-th
     , envy
     , errors
@@ -1230,20 +1220,16 @@ test-suite test-dev
     , hasql-th
     , hasql-transaction
     , hs-opentelemetry-api
-    , hs-opentelemetry-exporter-in-memory
-    , hs-opentelemetry-exporter-otlp
     , hs-opentelemetry-instrumentation-auto
     , hs-opentelemetry-instrumentation-hasql
     , hs-opentelemetry-instrumentation-http-client
     , hs-opentelemetry-instrumentation-hw-kafka-client
     , hs-opentelemetry-instrumentation-postgresql-simple
     , hs-opentelemetry-instrumentation-wai
-    , hs-opentelemetry-propagator-w3c
     , hs-opentelemetry-sdk
     , http-api-data
     , http-client
     , http-client-tls
-    , http-media
     , http-types
     , hw-kafka-client
     , indexed-traversable
@@ -1280,19 +1266,14 @@ test-suite test-dev
     , odd-jobs
     , openai
     , openapi3
-    , optparse-applicative
-    , parallel
     , parsec ==3.1.*
-    , parser-combinators
     , pg-entity
     , postgresql-binary
     , postgresql-libpq
     , postgresql-migration
     , postgresql-simple
     , pretty-relative-time
-    , process
     , proto-lens
-    , proto-lens-runtime
     , random
     , refined
     , regex
@@ -1301,10 +1282,8 @@ test-suite test-dev
     , resource-pool
     , resourcet
     , retry
-    , safe
     , safe-exceptions
     , scientific
-    , scotty
     , servant
     , servant-client
     , servant-htmx
@@ -1320,7 +1299,6 @@ test-suite test-dev
     , template-haskell
     , temporary
     , text
-    , text-builder-linear
     , text-display
     , these
     , time
@@ -1330,19 +1308,16 @@ test-suite test-dev
     , tz
     , unix
     , unliftio
-    , unliftio-pool
     , unordered-containers
     , uuid
     , uuid-quasi
     , valor >=1.0.0.0
     , vector
     , vector-algorithms
-    , vector-split
     , wai
     , wai-cors
     , wai-extra
     , wai-log
-    , wai-middleware-static
     , warp
     , wreq
     , xss-sanitize >=0.3.7.2 && <0.4
@@ -1355,9 +1330,14 @@ test-suite test-dev
   if flag(devtest)
     build-depends:
         brick
+      , hs-opentelemetry-exporter-in-memory
+      , hs-opentelemetry-exporter-otlp
+      , hs-opentelemetry-propagator-w3c
       , hspec
       , monoscope-cli
+      , optparse-applicative
       , pg-transact
+      , process
       , silently
       , tmp-postgres
       , vty

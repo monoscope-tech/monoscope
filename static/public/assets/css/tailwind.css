@@ -314,21 +314,13 @@
     transform: translateX(0);
   }
 
-  /* Modal fade-scale animation with exit */
+  /* Modal fade-scale animation */
   .modal-box {
     animation: modalIn 150ms var(--ease-out-expo);
   }
-  .modal-toggle:not(:checked) + .modal:not(.modal-open) .modal-box {
-    animation: modalOut 120ms ease-in forwards;
-  }
-  /* Prevent modal flash when idiomorph adds new modal elements during htmx morph */
-  .modal-toggle:not(:checked) + .modal {
-    transition: none;
-  }
-  @keyframes modalOut {
-    from { opacity: 1; transform: scale(1); }
-    to { opacity: 0; transform: scale(0.96); }
-  }
+  /* Widget error/empty overlays driven by a single data-widget-state on *_bordered */
+  [data-widget-state="error"] > [id$="_error"] { display: block; }
+  [data-widget-state="empty"] [id$="_empty"] { display: flex; }
 
   /* Respect reduced motion preferences */
   @media (prefers-reduced-motion: reduce) {

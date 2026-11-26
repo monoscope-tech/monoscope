@@ -37,6 +37,10 @@ for (const contents of [execution, execution, { ...execution, id: randomUUID(), 
   process.stdout.write(JSON.stringify({ tag: 'Check', contents }) + '\n');
   assert.deepEqual(JSON.parse((await input.next()).value), { Right: [] });
 }
+if (process.argv.includes('--record-call')) {
+  process.stdout.write(JSON.stringify({ tag: 'Call', contents: { id: randomUUID(), attemptId, provider: 'fixture', model: request.model } }) + '\n');
+  assert.deepEqual(JSON.parse((await input.next()).value), { Right: [] });
+}
 const usage = { id: randomUUID(), attemptId, provider: 'fixture', model: request.model, responseId: 'fixture-response', inputTokens: 12, outputTokens: 5, cacheReadTokens: 13, cacheWriteTokens: 17, costNanousd: 1234000, pricing: { input: 1, output: 2 }, succeeded: true };
 for (const contents of [usage, usage, process.argv.includes('--conflicting-usage') ? { ...usage, costNanousd: 9999999 } : { ...usage, id: randomUUID(), responseId: null, costNanousd: null, succeeded: false }]) {
   process.stdout.write(JSON.stringify({ tag: 'Usage', contents }) + '\n');

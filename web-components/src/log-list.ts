@@ -317,7 +317,6 @@ export class LogList extends LitElement {
   @query('#logs_list_container_inner') private logsContainer?: HTMLElement;
   @query('#loader') private loaderElement?: HTMLElement;
   @query('#log_details_container') private logDetailsContainer?: HTMLElement;
-  @query('#resizer-details_width-wrapper') private resizerWrapper?: HTMLElement;
   // Monotonic id for detail-panel loads, so a superseded request can tell it lost the race.
   private detailRequestSeq = 0;
   private readonly serviceTimePopoverId = `service-time-breakdown-${generateId()}`;
@@ -367,7 +366,6 @@ export class LogList extends LitElement {
   private updateBatchTimer: NodeJS.Timeout | null = null;
   private pendingUpdates: Set<string> = new Set();
   private handleMouseUp: (() => void) | null = null;
-  private sessionPlayerWrapper: HTMLElement | null = null;
   private containerRef = createRef<HTMLDivElement>();
   private nextFetchUrl = '';
   private fetchGeneration = 0;
@@ -2123,7 +2121,6 @@ export class LogList extends LitElement {
     // Embedded lists (a dashboard's logs widget) only get details if the page rendered
     // the panel; without one there is nothing to open, and a row click is a no-op.
     if (!sideView) return;
-    const resizerWrapper = this.resizerWrapper || document.querySelector('#resizer-details_width-wrapper');
     const listWasDeepScrolled = (this.logsContainer?.scrollTop ?? 0) > 0;
     // Open state and inline/drawer mode are both checkboxes the page owns; CSS derives
     // the geometry from them (Pages.LogExplorer.LogItem.detailsPanel_). The drawer
@@ -2148,11 +2145,6 @@ export class LogList extends LitElement {
         const inlineWidth = sideView.dataset.inlineWidth || '550px';
         sideView.style.width = inlineWidth;
         updateUrlState('details_width', inlineWidth);
-      }
-
-      // Always show the resizer when a log row is clicked
-      if (resizerWrapper) {
-        resizerWrapper.classList.remove('hidden', 'opacity-0', 'pointer-events-none');
       }
 
       // Opening the details pane changes the list's width. At a deep virtual scroll offset,
@@ -4024,12 +4016,6 @@ export class LogList extends LitElement {
         e.stopPropagation();
         e.preventDefault();
         window.dispatchEvent(new CustomEvent('loadSessionReplay', { detail: { sessionId }, bubbles: true, cancelable: false }));
-        let wrapper = this.sessionPlayerWrapper;
-        if (!wrapper) {
-          wrapper = document.querySelector('#sessionPlayerWrapper');
-          this.sessionPlayerWrapper = wrapper;
-        }
-        if (wrapper) wrapper.classList.remove('hidden');
       }}
     >
       ${faSprite('play', 'solid', 'w-3 h-3')}

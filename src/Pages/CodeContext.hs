@@ -38,6 +38,7 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Reader.Static qualified
+import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Lucid hiding (for_)
 import Lucid.Aria qualified as Aria
@@ -58,7 +59,7 @@ import Network.HTTP.Types.Header qualified as Header
 import Network.Wai qualified as Wai
 import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx)
-import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), callout_, colorChip_, dialogTrigger_, disclosure_, emptyState_, filterInputAttr_, formCheckbox_, formField_, formSelectField_, installationSettingsLink_, localTimeFmt_, morphPostAttrs_, nativeDialog_, options_, panel_, searchInput_, settingsH2_, submitBtn_)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), callout_, colorChip_, dialogTrigger_, disclosure_, emptyState_, filterInputAttr_, formCheckbox_, formField_, formSelectFieldWith_, formSelectField_, installationSettingsLink_, localTimeFmt_, morphPostAttrs_, morphTarget_, nativeDialog_, options_, panel_, searchInput_, settingsH2_, submitBtn_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
@@ -399,7 +400,7 @@ instance ToHtml WikiGet where
           span_ [class_ "text-xs font-semibold uppercase tracking-wider text-textWeak"] "Pages"
           when canEdit $ a_ ([Aria.label_ "New page", title_ "New page", class_ "btn btn-ghost btn-sm btn-square"] <> repositoryNavAttrs (newPageUrl "")) $ faSprite_ "plus" "regular" "h-3.5 w-3.5"
         form_ [method_ "get", action_ base, role_ "search"]
-          $ searchInput_ "w-full" "Search pages" [id_ "wiki-search", name_ "q", value_ $ fromMaybe "" search, hxGet_ base, hxTrigger_ "input changed delay:300ms, search", hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph", hxPushUrl_ "true"]
+          $ searchInput_ "w-full" "Search pages" ([id_ "wiki-search", name_ "q", value_ $ fromMaybe "" search, hxGet_ base, hxTrigger_ "input changed delay:300ms, search", hxPushUrl_ "true"] <> morphTarget_ "repository-content")
         when (null pages) $ p_ [class_ "px-2 text-sm text-textWeak"] $ maybe "No pages yet." (\q -> toHtml $ "No pages match \x201C" <> q <> "\x201D.") search
         let insert page [] (WikiTree _ children) = WikiTree (Just page) children
             insert page (segment : rest) (WikiTree item children) = WikiTree item $ Map.alter (Just . insert page rest . fromMaybe (WikiTree Nothing mempty)) segment children
@@ -472,11 +473,9 @@ instance ToHtml WikiGet where
           unless (null backlinks) $ section_ [Aria.labelledby_ "wiki-backlinks", class_ "mt-12 space-y-2 border-t border-strokeWeak pt-4"] do
             h3_ [id_ "wiki-backlinks", class_ "flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-textWeak"] $ faSprite_ "link" "regular" "h-3 w-3" >> "Linked from"
             ul_ [class_ "flex flex-wrap gap-2"] $ for_ backlinks \page -> li_ $ a_ (class_ "inline-flex items-center gap-1.5 rounded-md bg-fillWeak px-2 py-1 text-sm text-textStrong hover:text-textBrand" : repositoryNavAttrs (pageLink page)) $ faSprite_ "file-lines" "regular" "h-3 w-3" >> title page
-          unless (null history) $ details_ [class_ "mt-6 border-t border-strokeWeak pt-4"] do
-            summary_ [class_ "flex cursor-pointer items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-textWeak hover:text-textStrong"] $ faSprite_ "clock-rotate-left" "regular" "h-3 w-3" >> "Revision history"
+          unless (null history) $ toHtml $ disclosure_ [class_ "mt-6 border-t border-strokeWeak pt-4"] "text-xs font-semibold uppercase tracking-wider text-textWeak hover:text-textStrong" (faSprite_ "clock-rotate-left" "regular" "h-3 w-3" >> "Revision history") do
             when (length history == Memory.pageLimit) $ p_ [class_ "mt-3 text-sm text-textWeak"] $ toHtml @Text $ "Showing the " <> show Memory.pageLimit <> " most recent revisions. Older revisions remain stored."
-            div_ [class_ "mt-3 divide-y divide-strokeWeak"] $ for_ (zip history $ map Just (drop 1 history) <> [Nothing]) \(page, previous) -> details_ [class_ "py-3"] do
-              summary_ [class_ "cursor-pointer text-sm text-textWeak"] $ edited page
+            div_ [class_ "mt-3 divide-y divide-strokeWeak"] $ for_ (zip history $ map Just (drop 1 history) <> [Nothing]) \(page, previous) -> disclosure_ [class_ "py-3"] "text-sm text-textWeak" (edited page) do
               for_ previous \old -> div_ [class_ "mt-3 space-y-1"] do
                 p_ [class_ "text-xs font-medium text-textWeak"] $ toHtml @Text $ "Changes from revision " <> show old.version
                 revisionDiff old page
@@ -517,13 +516,11 @@ repositoryNavAttrs :: Text -> [Attribute]
 repositoryNavAttrs url =
   [ href_ url
   , hxGet_ url
-  , hxTarget_ "#repository-content"
-  , hxSelect_ "#repository-content"
   , term "hx-select-oob" "#main-navbar:outerMorph"
-  , hxSwap_ "outerMorph"
   , hxPushUrl_ "true"
   , [__|on click set my.preloadState to 'DONE'|]
   ]
+    <> morphTarget_ "repository-content"
 
 
 repositoriesGetH :: Projects.ProjectId -> Maybe RepositoryTab -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx RepositoriesGet))
@@ -738,15 +735,14 @@ repositoriesPageH pid selection = do
               AE.Error _ -> p_ [class_ "text-sm text-textWeak"] "The saved review could not be displayed. Rerun the review."
               AE.Success result -> do
                 div_ [class_ "prose prose-sm max-w-none break-words [&_pre]:overflow-x-auto"] $ renderMarkdown (ImpactReview.renderReview cfg.hostUrl run ImpactReview.MonoscopeView result)
-                for_ (nonEmpty =<< result.knowledge) \notes -> details_ [class_ "mt-3 text-sm text-textWeak"] do
-                  summary_ [class_ "cursor-pointer font-medium"] "Service knowledge from this review"
+                for_ (nonEmpty =<< result.knowledge) \notes -> disclosure_ [class_ "mt-3 text-sm text-textWeak"] "font-medium" "Service knowledge from this review" do
                   p_ [class_ "mt-2 text-xs"] "Agent conclusions from the recorded evidence window. Recheck against current code and telemetry."
                   ul_ [class_ "mt-2 space-y-2"] $ for_ notes \note -> li_ do
                     span_ [class_ "font-medium"] $ toHtml note.service
                     toHtml @Text $ ": " <> note.summary
           div_ [class_ "flex flex-wrap justify-end gap-2 border-t border-strokeWeak pt-4"] do
             form_ [method_ "dialog"] $ button_ [class_ "btn btn-sm btn-ghost", autofocus_] "Close"
-            when (canEdit && run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [type_ "button", class_ "btn btn-sm btn-primary", hxPost_ (urls.impactReviewRetry pid run.id), hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph", [__|on click call (closest <dialog/>).close()|]] "Rerun review"
+            when (canEdit && run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ ([type_ "button", class_ "btn btn-sm btn-primary", hxPost_ (urls.impactReviewRetry pid run.id), [__|on click call (closest <dialog/>).close()|]] <> morphTarget_ "repository-content") "Rerun review"
     FixesPage -> do
       runs <- if session.persistentSession.id == demoGuestSessionId then pure [] else IssueFixes.latestMediaForUser pid session.user.id
       pure $ section_ [class_ "space-y-4"] do
@@ -832,7 +828,7 @@ reviewSettingsFields_ owner repo settings = do
   let trigger = maybe ImpactReviews.ReadyPullRequests (.trigger) settings
       evidence = bool "false" "true" $ any (.includeEvidence) settings
   formSelectField_ FieldSm "Review pull requests" "trigger" False $ options_ (Just $ toUrlPiece trigger) [(toUrlPiece t, triggerLabel t) | t <- universe]
-  formSelectField_ FieldSm "Production evidence in GitHub" "includeEvidence" False $ options_ (Just evidence) [("false", "Links only"), ("true", "Aggregates and links")]
+  formSelectFieldWith_ FieldSm def{hint = Just "Private repositories get aggregates and links until you choose; public ones always get links only."} "Production evidence in GitHub" "includeEvidence" False $ options_ (Just evidence) [("false", "Links only"), ("true", "Aggregates and links")]
 
 
 -- | Asks-only reviews are quiet until someone comments, so they read as neutral, not active.
@@ -847,6 +843,7 @@ askHint = "Comment @monoscope review on any pull request to ask for a review, or
 data ReviewReadiness
   = ReviewReady ImpactReviews.ReviewSettings
   | ReviewNeedsRoutine
+  | ReviewNeedsWorker
   | ReviewNeedsService
   | ReviewNeedsApp
   | ReviewNeedsServer
@@ -878,6 +875,7 @@ repositoryGetH pid rid = do
   syncs <- GitSync.getGitSyncs pid
   settings <- ImpactReviews.repositorySettings pid
   routine <- Issues.getEventRoutine pid Issues.EventPullRequest
+  workerRunning <- ImpactReviews.reviewWorkerRunning =<< Time.currentTime
   cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
   permission <- ProjectMembers.getSessionPermission pid session.user.id
   let mappings = filter (mappingInRepository credentials repository) allMappings
@@ -887,7 +885,7 @@ repositoryGetH pid rid = do
         | repository.host /= Git.GitHub || isJust repository.apiBase = ReviewUnsupportedHost
         | any T.null ([cfg.githubAppWebhookSecret, cfg.githubAppId, cfg.githubAppPrivateKey] :: [Text]) = ReviewNeedsServer
         | not (any (isJust . (.service)) mappings) = ReviewNeedsService
-        | Just s <- reviewSettings = maybe ReviewNeedsRoutine (const $ ReviewReady s) routine
+        | Just s <- reviewSettings = if not workerRunning then ReviewNeedsWorker else maybe ReviewNeedsRoutine (const $ ReviewReady s) routine
         | otherwise = ReviewNeedsApp
   resources <- maybe (pure []) (RepositorySync.resources pid . (.id)) dashboardSync
   conflictVersions <- forM (filter (.conflicted) resources) $ \resource -> (resource.id,) <$> RepositorySync.localDefinition resource
@@ -1040,7 +1038,7 @@ instance ToHtml RepositoryGet where
         pid = repository.projectId
         rid = repository.id
         canEdit = maybe False (>= ProjectMembers.PEdit) page.permission
-        post url attrs = form_ ([method_ "post", action_ url, hxPost_ url, hxTarget_ "#repository-detail", hxSelect_ "#repository-detail", hxSwap_ "outerMorph"] <> attrs)
+        post url attrs = form_ ([method_ "post", action_ url, hxPost_ url] <> morphTarget_ "repository-detail" <> attrs)
         syncLink = a_ [href_ (urls.repositoryDashboardGet pid rid), class_ "btn btn-sm btn-outline"] $ if canEdit then "Configure sync" else "View sync"
     header_ [class_ "flex flex-wrap items-center gap-x-6 gap-y-3"] do
       div_ [class_ "min-w-0 space-y-2 break-words"] do
@@ -1049,7 +1047,7 @@ instance ToHtml RepositoryGet where
       when canEdit $ post (urls.repositoryAnalyzePost pid rid) [] $ button_ [type_ "submit", class_ "btn btn-sm btn-outline gap-2"] do
         faSprite_ "arrows-rotate" "regular" "h-3.5 w-3.5"
         "Analyze repository"
-      when canEdit $ p_ [class_ "w-full max-w-[65ch] text-xs text-textWeak"] "Analysis matches this repository to services in your telemetry. The first run can link those services and turn on dashboard sync; existing settings are kept."
+      when canEdit $ p_ [class_ "w-full max-w-[65ch] text-xs text-textWeak"] "Analysis runs when the repository is connected and daily after that: it links the services in your telemetry that match this repository and turns on dashboard sync. Run it now after new services start reporting; existing settings are kept."
     whenJust (page.analysis >>= (.error)) $ \err -> p_ [role_ "status", class_ "text-sm text-textError"] $ toHtml $ "Setup needs attention: " <> err
     whenJust (page.analysis >>= (.suggestions)) $ \suggestions -> when (null page.mappings) $ div_ [class_ "rounded-xl border border-strokeWeak p-4 space-y-2"] do
       p_ [class_ "text-sm font-medium text-textStrong"] "Service mapping needs input"
@@ -1079,6 +1077,7 @@ instance ToHtml RepositoryGet where
                 ReviewReady settings -> (,False) do
                   colorChip_ (triggerBadge settings.trigger) "circle-check" $ triggerLabel settings.trigger
                   p_ [class_ "text-sm text-textWeak"] $ toHtml askHint
+                ReviewNeedsWorker -> setupRequired "No review worker has checked in for three minutes, so pull requests wait in the queue. Ask your Monoscope administrator to start one (docs/agent-operations.md)."
                 ReviewNeedsRoutine -> setupRequired "Activate or resume the Production impact review routine. Repository settings choose which pull requests it reviews."
                 ReviewNeedsService -> setupRequired "Link a named service so reviews can find the production telemetry for this repository."
                 ReviewNeedsApp -> setupRequired "Link source context through the GitHub App to receive automatic pull request reviews. A token connection can still provide source context and configuration sync."
@@ -1107,8 +1106,7 @@ instance ToHtml RepositoryGet where
               p_ [class_ "text-sm text-textWeak"] "Monoscope edits are active immediately. Git changes apply after merge into the target branch. Dashboards and monitor definitions share this folder."
               syncLink
               when (canEdit && sync.exportPaused) $ post (urls.repositoryResumePost pid rid) [] $ button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Resume export"
-              when canEdit $ details_ [class_ "space-y-3"] do
-                summary_ [class_ "cursor-pointer text-sm text-textBrand"] "Move existing resources into this folder"
+              when canEdit $ toHtml $ disclosure_ [class_ "space-y-3"] "text-sm text-textBrand" "Move existing resources into this folder" do
                 for_ ([RepositorySync.Dashboard, RepositorySync.Query, RepositorySync.Uptime, RepositorySync.Cron] :: [RepositorySync.ResourceKind]) \kind -> do
                   let candidates = filter ((== kind) . (.kind)) page.folderCandidates
                   unless (null candidates) $ post (urls.repositoryFolderPost pid rid) [class_ "flex flex-wrap items-end gap-2"] do
@@ -1505,7 +1503,7 @@ instance ToHtml RepositoryConnectGet where
     let connectionUrl = urls.repositoryConnectGet page.projectId ((.id) <$> page.credential)
     div_ [id_ "repository-connect-content", class_ "space-y-5 rounded-xl border border-strokeWeak bg-bgBase p-4 sm:p-5"] do
       unless (null page.accounts) $ form_
-        [action_ (urls.repositoryConnectGet page.projectId Nothing), method_ "get", hxGet_ (urls.repositoryConnectGet page.projectId Nothing), hxTrigger_ "change", hxPushUrl_ "true", hxTarget_ "#repository-connect-content", hxSelect_ "#repository-connect-content", hxSwap_ "outerMorph", hxIndicator_ "#repository-account-indicator", class_ "space-y-2"]
+        ([action_ (urls.repositoryConnectGet page.projectId Nothing), method_ "get", hxGet_ (urls.repositoryConnectGet page.projectId Nothing), hxTrigger_ "change", hxPushUrl_ "true", hxIndicator_ "#repository-account-indicator", class_ "space-y-2"] <> morphTarget_ "repository-connect-content")
         do
           formSelectField_ FieldSm "Repository account" "credentialId" True do
             option_ ([value_ "", disabled_ "disabled"] <> [selected_ "selected" | isNothing page.credential]) "Choose an account"
@@ -1518,7 +1516,7 @@ instance ToHtml RepositoryConnectGet where
           case page.repositories of
             Left _ -> callout_ ErrorBadge Nothing $ div_ [role_ "alert", class_ "space-y-2"] do
               p_ [class_ "text-sm text-textError"] "Could not load repositories. Retry, or ask an administrator to check this connection."
-              a_ [id_ "repository-connect-retry", href_ connectionUrl, hxGet_ connectionUrl, hxTarget_ "#repository-connect-content", hxSelect_ "#repository-connect-content", hxSwap_ "outerMorph", class_ "btn btn-sm btn-ghost"] "Retry"
+              a_ ([id_ "repository-connect-retry", href_ connectionUrl, hxGet_ connectionUrl, class_ "btn btn-sm btn-ghost"] <> morphTarget_ "repository-connect-content") "Retry"
             Right [] -> p_ [role_ "status", class_ "text-sm text-textWeak"] "No repositories are available to this account. Grant repository access or connect another account."
             Right repositories -> morphPostForm_ connectionUrl "repository-connect-content" "repository-connect-indicator" do
               when (length repositories > 8) $ searchInput_ "w-full" "Filter repositories" [filterInputAttr_ ".repository-choice"]

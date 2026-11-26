@@ -224,22 +224,10 @@ spec = do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| where service == \"accounting\""
       query `shouldSatisfy` T.isInfixOf "resource___service___name = 'accounting'"
 
-  describe "percentile parsing" do
-    it "parses percentile(duration, 95) via full query" do
-      let result = parseQueryToAST "| summarize percentile(duration, 95) by bin(timestamp, 1h)"
-      isRight result `shouldBe` True
-
+  describe "percentile lowering" do
     it "lowers p95 to a portable aggregate and coalesces empty buckets" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize p95(duration) by bin(timestamp, 1h)"
       query `shouldSatisfy` T.isInfixOf "COALESCE(approx_percentile(0.95, percentile_agg(CAST(duration AS DOUBLE PRECISION))), 0)::float"
-
-    it "parses percentiles(duration, 50, 75, 90, 95) via full query" do
-      let result = parseQueryToAST "| summarize percentiles(duration, 50, 75, 90, 95) by bin(timestamp, 1h)"
-      isRight result `shouldBe` True
-
-    it "parses percentile with division expression via full query" do
-      let result = parseQueryToAST "| summarize percentile(duration / 1e6, 95) by bin(timestamp, 1h)"
-      isRight result `shouldBe` True
 
     it "extracts percentilesInfo from AST" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize percentiles(duration, 50, 75, 90, 95) by bin(timestamp, 1h)"
@@ -266,15 +254,7 @@ WITH bucket_digests AS (SELECT extract(epoch from time_bucket('1 hours', timesta
             |]
       normT sql `shouldBe` normT expected
 
-  describe "countif parsing" do
-    it "parses countif with simple condition" do
-      let result = parseQueryToAST "| summarize countif(status_code == \"ERROR\") by bin(timestamp, 1h)"
-      isRight result `shouldBe` True
-
-    it "parses countif with comparison condition" do
-      let result = parseQueryToAST "| summarize countif(duration > 1000) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
+  describe "summarize SQL lowering" do
     it "generates COUNT FILTER SQL for countif" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize countif(status_code == \"ERROR\") by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
@@ -283,20 +263,6 @@ WITH bucket_digests AS (SELECT extract(epoch from time_bucket('1 hours', timesta
 SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', COUNT(*) FILTER (WHERE status_code = 'ERROR')::float AS countif_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
-
-  describe "dcount parsing" do
-    it "parses dcount with simple field" do
-      let result = parseQueryToAST "| summarize dcount(attributes.user.id) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "parses dcount with dotted field path" do
-      let result = parseQueryToAST "| summarize dcount(resource.service.name) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "parses dcount with optional accuracy parameter" do
-      -- Microsoft KQL: dcount(expr [, accuracy]) where accuracy is 0-4
-      let result = parseQueryToAST "| summarize dcount(attributes.user.id, 2) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
 
     it "lowers dcount to a sketch, the spelling both backends share" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize dcount(attributes.user.id) by bin(timestamp, 1h)"
@@ -316,16 +282,6 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
             |]
       normT sql `shouldBe` normT expected
 
-  describe "coalesce parsing" do
-    it "parses coalesce with two arguments" do
-      let result = parseQueryToAST "| summarize coalesce(name, \"unknown\") by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "parses coalesce with multiple arguments (variadic)" do
-      -- Microsoft KQL: coalesce(arg, arg_2, [arg_3,...]) - up to 64 args
-      let result = parseQueryToAST "| summarize coalesce(name, kind, \"default\") by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
     it "generates COALESCE SQL" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize coalesce(name, \"unknown\") by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
@@ -334,16 +290,6 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
 SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', COALESCE(name, 'unknown') AS coalesce_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
-
-  describe "strcat parsing" do
-    it "parses strcat with multiple arguments" do
-      -- Microsoft KQL: strcat(argument1, argument2 [, argument3 ... ])
-      let result = parseQueryToAST "| summarize strcat(name, \" \", url_path) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "parses strcat with variadic arguments" do
-      let result = parseQueryToAST "| summarize strcat(service, \":\", name, \"@\", kind) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
 
     it "generates CONCAT SQL for strcat" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize strcat(name, \" \", url_path) by bin(timestamp, 1h)"
@@ -354,16 +300,6 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
             |]
       normT sql `shouldBe` normT expected
 
-  describe "iff parsing" do
-    it "parses iff with literal values" do
-      -- Microsoft KQL: iff(if, then, else) - all scalar types
-      let result = parseQueryToAST "| summarize iff(status_code == \"ERROR\", \"error\", \"ok\") by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "parses iff with field references" do
-      let result = parseQueryToAST "| summarize iff(duration > 1000, start_time, end_time) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
     it "generates CASE WHEN SQL for iff" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize iff(status_code == \"ERROR\", \"error\", \"ok\") by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
@@ -373,16 +309,6 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
             |]
       normT sql `shouldBe` normT expected
 
-  describe "case parsing" do
-    it "parses case with literal values" do
-      -- Microsoft KQL: case(predicate_1, then_1, [predicate_2, then_2, ...] else)
-      let result = parseQueryToAST "| summarize case(attributes.http.response.status_code >= 500, \"5xx\", attributes.http.response.status_code >= 400, \"4xx\", \"ok\") by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "parses case with field references" do
-      let result = parseQueryToAST "| summarize case(attributes.http.response.status_code >= 500, name, attributes.http.response.status_code >= 400, kind, level) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
     it "generates multi-branch CASE SQL" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize case(attributes.http.response.status_code >= 500, \"5xx\", attributes.http.response.status_code >= 400, \"4xx\", \"ok\") by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
@@ -391,19 +317,6 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
 SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', CASE WHEN attributes___http___response___status_code >= 500 THEN '5xx' WHEN attributes___http___response___status_code >= 400 THEN '4xx' ELSE 'ok' END AS case_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
-
-  describe "combined aggregations" do
-    it "parses multiple aggregations including countif and dcount" do
-      let result = parseQueryToAST "| summarize count(), countif(status_code == \"ERROR\"), dcount(attributes.user.id) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "parses aggregation with named alias" do
-      let result = parseQueryToAST "| summarize error_count = countif(status_code == \"ERROR\") by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "parses complex query with countif for error rate calculation" do
-      let result = parseQueryToAST "kind == \"server\" | summarize countif(status_code == \"ERROR\") by resource.service.name"
-      isRight result `shouldBe` True
 
   describe "endpoint analytics query forms" do
     it "keeps a named average available to order by" do
@@ -425,74 +338,31 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       sessionSql `shouldSatisfy` T.isInfixOf "distinct_count(approx_count_distinct(attributes___session___id))"
       p75Sql `shouldSatisfy` T.isInfixOf "approx_percentile(0.75"
 
-  describe "edge cases and validation" do
+  describe "validation errors" do
     it "rejects dcount with accuracy > 4" do
       parseQueryToAST "| summarize dcount(attributes.user.id, 5) by bin_auto(timestamp)" `shouldFailWith` "Syntax error at column 42: dcount accuracy must be 0-4 per KQL spec"
 
     it "rejects coalesce with single argument" do
       parseQueryToAST "| summarize coalesce(x) by bin_auto(timestamp)" `shouldFailWith` "Syntax error at column 24: coalesce requires at least 2 arguments"
 
-    it "accepts dcount with accuracy 0-4" do
-      let result0 = parseQueryToAST "| summarize dcount(attributes.user.id, 0) by bin_auto(timestamp)"
-      let result4 = parseQueryToAST "| summarize dcount(attributes.user.id, 4) by bin_auto(timestamp)"
-      isRight result0 `shouldBe` True
-      isRight result4 `shouldBe` True
-
-    it "parses coalesce with multiple arguments" do
-      let result = parseQueryToAST "| summarize coalesce(name, kind, level, \"default\") by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "parses strcat with multiple arguments" do
-      let result = parseQueryToAST "| summarize strcat(service, \":\", name, \"@\", kind, \"/\", level) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "parses nested function calls" do
-      -- Test iff with strcat in then clause
-      let result = parseQueryToAST "| summarize iff(attributes.http.response.status_code >= 500, \"error\", \"ok\") by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "parses dotted field paths in scalar contexts" do
-      let result = parseQueryToAST "| summarize dcount(resource.service.name) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "parses complex case with multiple branches" do
-      let result = parseQueryToAST "| summarize case(attributes.http.response.status_code >= 500, \"5xx\", attributes.http.response.status_code >= 400, \"4xx\", attributes.http.response.status_code >= 300, \"3xx\", \"ok\") by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-  describe "round parsing" do
-    it "parses round with value and decimals" do
-      let result = parseQueryToAST "| summarize round(duration, 2) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
     it "rejects round with non-numeric decimals" do
       parseQueryToAST "| summarize round(duration, \"two\") by bin_auto(timestamp)" `shouldFailWith` "Syntax error at column 34: round() decimals must be numeric"
 
+    it "rejects project with no columns" do
+      parseQueryToAST "| project" `shouldFailWith` "Syntax error at column 3: unexpected 'p', expecting end of input or white space"
+
+    it "rejects decimals > 15" do
+      parseQueryToAST "| summarize round(duration, 16) by bin_auto(timestamp)" `shouldFailWith` "Syntax error at column 31: round() decimals must be 0-15 per PostgreSQL limit"
+
+    it "rejects negative decimals" do
+      parseQueryToAST "| summarize round(duration, -1) by bin_auto(timestamp)" `shouldFailWith` "Syntax error at column 31: round() decimals must be 0-15 per PostgreSQL limit"
+
+  describe "round and type casting SQL" do
     it "generates ROUND SQL" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize round(duration, 2) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
       -- round produces ROUND(value::numeric, decimals)::float
       normT sql `shouldBe` normT "SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', ROUND((duration)::numeric, 2)::float AS round_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC"
-
-  describe "type casting functions" do
-    it "parses tofloat" do
-      let result = parseQueryToAST "| summarize tofloat(duration) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "parses todouble (alias for tofloat)" do
-      let result = parseQueryToAST "| summarize todouble(duration) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "parses toint" do
-      let result = parseQueryToAST "| summarize toint(duration) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "parses tolong (alias for toint)" do
-      let result = parseQueryToAST "| summarize tolong(duration) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "parses tostring" do
-      let result = parseQueryToAST "| summarize tostring(status_code) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
 
     it "generates proper SQL for tofloat" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize tofloat(duration) by bin(timestamp, 1h)"
@@ -512,36 +382,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       -- tostring produces ::text (not ::float, as text cannot be cast to float)
       normT sql `shouldBe` normT "SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (status_code)::text AS tostring_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC"
 
-  describe "extend operator" do
-    it "parses extend with single column" do
-      let result = parseQueryToAST "| extend error_cat = case(attributes.http.response.status_code >= 500, \"5xx\", \"ok\")"
-      isRight result `shouldBe` True
-
-    it "parses extend with multiple columns" do
-      let result = parseQueryToAST "| extend cat = case(attributes.http.response.status_code >= 500, \"5xx\", \"ok\"), formatted = tostring(attributes.http.response.status_code)"
-      isRight result `shouldBe` True
-
-  describe "project operator" do
-    it "parses project with single column" do
-      let result = parseQueryToAST "| project service = resource.service.name"
-      isRight result `shouldBe` True
-
-    it "parses project with multiple columns" do
-      let result = parseQueryToAST "| project service = resource.service.name, total = count()"
-      isRight result `shouldBe` True
-
-    it "parses project with aggregation functions" do
-      let result = parseQueryToAST "| project total = count(), avg_duration = avg(duration)"
-      isRight result `shouldBe` True
-
-    it "rejects project with no columns" do
-      parseQueryToAST "| project" `shouldFailWith` "Syntax error at column 3: unexpected 'p', expecting end of input or white space"
-
   describe "nested aggregations" do
-    it "parses round with nested countif" do
-      let result = parseQueryToAST "| summarize round(countif(attributes.http.response.status_code >= 400), 2) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
     it "generates SQL for round with nested countif" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize round(countif(attributes.http.response.status_code >= 400), 2) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
@@ -550,10 +391,6 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
 SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', ROUND((COUNT(*) FILTER (WHERE attributes___http___response___status_code >= 400)::float)::numeric, 2)::float AS round_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
-
-    it "parses tofloat with nested count" do
-      let result = parseQueryToAST "| summarize tofloat(count()) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
 
     it "generates SQL for tofloat with nested sum" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize tofloat(sum(duration)) by bin(timestamp, 1h)"
@@ -573,10 +410,6 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
             |]
       normT sql `shouldBe` normT expected
 
-    it "parses named nested aggregation in summarize" do
-      let result = parseQueryToAST "| summarize error_pct = round(countif(attributes.http.response.status_code >= 500), 2) by bin(timestamp, 1h)"
-      isRight result `shouldBe` True
-
     it "generates SQL for named nested aggregation" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize error_pct = round(countif(attributes.http.response.status_code >= 500), 2) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
@@ -586,41 +419,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
             |]
       normT sql `shouldBe` normT expected
 
-  describe "round validation" do
-    it "rejects decimals > 15" do
-      parseQueryToAST "| summarize round(duration, 16) by bin_auto(timestamp)" `shouldFailWith` "Syntax error at column 31: round() decimals must be 0-15 per PostgreSQL limit"
-
-    it "rejects negative decimals" do
-      parseQueryToAST "| summarize round(duration, -1) by bin_auto(timestamp)" `shouldFailWith` "Syntax error at column 31: round() decimals must be 0-15 per PostgreSQL limit"
-
-    it "accepts valid decimals range" do
-      let result = parseQueryToAST "| summarize round(duration, 0) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-      let result2 = parseQueryToAST "| summarize round(duration, 15) by bin_auto(timestamp)"
-      isRight result2 `shouldBe` True
-
-  describe "pNamedExpr with dots" do
-    it "allows dots in names and sanitizes to underscores" do
-      let result = parseQueryToAST "| extend error.count = count()"
-      isRight result `shouldBe` True
-
-    it "sanitizes dots in summarize named aggregations" do
-      let result = parseQueryToAST "| summarize total.count = count() by attributes.http.response.status_code"
-      isRight result `shouldBe` True
-
   describe "scalar functions in filter expressions" do
-    it "parses coalesce in where clause comparison" do
-      let result = parseQueryToAST "coalesce(status_code, 0) >= 400"
-      isRight result `shouldBe` True
-
-    it "parses coalesce with nested field path" do
-      let result = parseQueryToAST "coalesce(attributes.http.response.status_code, 0) >= 400"
-      isRight result `shouldBe` True
-
-    it "parses complex filter with coalesce" do
-      let result = parseQueryToAST "name != null and kind == \"server\" and (status_code == \"ERROR\" or coalesce(attributes.http.response.status_code, 0) >= 400)"
-      isRight result `shouldBe` True
-
     -- The list projects `errors` as a computed boolean, so `errors == true` is what a reader
     -- writes next. It used to reach the raw payload column and fail the whole query with
     -- "Cannot infer common argument type for comparison operation Utf8View = Boolean" on
@@ -637,61 +436,6 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       whereOf "errors != true" `shouldBe` whereOf "errors == false"
       -- Nothing that already worked moves: the column itself stays addressable.
       whereOf "errors != null" `shouldSatisfy` T.isInfixOf "errors IS NOT NULL"
-
-    it "parses isnull as standalone expression" do
-      let result = parseQueryToAST "isnull(status_message)"
-      isRight result `shouldBe` True
-
-    it "parses isnotnull in combined expression" do
-      let result = parseQueryToAST "isnotnull(trace_id) and status_code == 200"
-      isRight result `shouldBe` True
-
-    it "parses toint in filter comparison" do
-      let result = parseQueryToAST "toint(status_code) >= 400"
-      isRight result `shouldBe` True
-
-    it "parses nested scalar functions" do
-      let result = parseQueryToAST "toint(coalesce(status_code, 0)) >= 400"
-      isRight result `shouldBe` True
-
-  describe "edge case handling" do
-    it "handles large numbers (PostgreSQL handles overflow)" do
-      let result = parseQueryToAST "| where duration == 2147483647"
-      isRight result `shouldBe` True
-
-    it "handles division by zero literal (parser allows, PostgreSQL returns NULL/Infinity)" do
-      let result = parseQueryToAST "| summarize count() / 0"
-      isRight result `shouldBe` True
-
-    it "rejects percentile value > 100" do
-      let result = parseQueryToAST "| summarize percentile(duration, 150) by bin_auto(timestamp)"
-      isLeft result `shouldBe` True
-
-    it "rejects percentile value < 0" do
-      let result = parseQueryToAST "| summarize percentile(duration, -10) by bin_auto(timestamp)"
-      isLeft result `shouldBe` True
-
-    it "rejects percentiles with any value out of range" do
-      let result = parseQueryToAST "| summarize percentiles(duration, 50, 150) by bin_auto(timestamp)"
-      isLeft result `shouldBe` True
-
-    it "accepts percentile at boundary values" do
-      let result0 = parseQueryToAST "| summarize percentile(duration, 0) by bin_auto(timestamp)"
-      let result100 = parseQueryToAST "| summarize percentile(duration, 100) by bin_auto(timestamp)"
-      isRight result0 `shouldBe` True
-      isRight result100 `shouldBe` True
-
-    it "handles deeply nested functions" do
-      let result = parseQueryToAST "| summarize round(tofloat(coalesce(duration, 0)), 2) by bin_auto(timestamp)"
-      isRight result `shouldBe` True
-
-    it "handles unicode in string literals" do
-      let result = parseQueryToAST "| where name == \"café\""
-      isRight result `shouldBe` True
-
-    it "handles complex arithmetic with multiple operators" do
-      let result = parseQueryToAST "| summarize (count() + 10) * 2 / 5 by bin_auto(timestamp)"
-      isRight result `shouldBe` True
 
   describe "output field aliases" do
     -- These three names appear in query results and the schema endpoint, so

@@ -25,7 +25,6 @@ module Pages.Dashboards (
   dashboardsPostH,
   DashboardForm (..),
   dashboardWidgetPutH,
-  dashboardWidgetPutWithMonitorH,
   dashboardWidgetReorderPatchH,
   WidgetReorderItem (..),
   dashboardDeleteH,
@@ -111,7 +110,7 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxPushUrl_, hxPut_, hxSelect_, hxSwapOob_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxPut_, hxSwapOob_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
@@ -129,7 +128,7 @@ import NeatInterpolation
 import OpenTelemetry.Attributes qualified as OA
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), emptyState_, filterInputAttr_, formField_, primaryButton_, tagInput_)
+import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), emptyState_, filterInputAttr_, formField_, primaryButton_, tagInput_)
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.Issues qualified as IssuesPage
@@ -308,18 +307,16 @@ dashboardSettledPostH pid dashId sample = do
   pure NoContent
 
 
--- | A rename prompt: a 'Components.floatingCard_' of fields over Cancel / Save changes.
+-- | A rename prompt: a 'Components.floatingDialog_' of fields over Cancel / Save changes.
 actionPickerModal_ :: Text -> Text -> [Attribute] -> Html () -> Html ()
 actionPickerModal_ modalId title formAttrs fields =
-  Components.floatingModal_ modalId
-    $ form_ ([hxTrigger_ "submit"] <> formAttrs)
-    $ Components.floatingCard_ [] (toHtml title) (\attrs -> label_ (Lucid.for_ modalId : attrs)) [("Save", ["↵"])] fields "Save changes"
+  Components.floatingDialog_ modalId (toHtml title) ("Save", ["↵"]) (hxTrigger_ "submit" : formAttrs) fields "Save changes"
 
 
-actionPickerField_ :: Text -> Text -> Text -> Text -> Html ()
-actionPickerField_ label name placeholder value = label_ [Lucid.for_ name, class_ "flex flex-col gap-1.5 text-xs font-medium text-textStrong"] do
+actionPickerField_ :: Text -> Text -> Text -> Text -> [Attribute] -> Html ()
+actionPickerField_ label name placeholder value extra = label_ [Lucid.for_ name, class_ "flex flex-col gap-1.5 text-xs font-medium text-textStrong"] do
   toHtml label
-  input_ [class_ "no-focus-ring h-10 w-full rounded-md border border-base-300 bg-transparent px-3 text-sm font-normal outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-textDisabled focus:border-strokeBrand-strong focus:ring-2 focus:ring-strokeBrand-weak", id_ name, name_ name, placeholder_ placeholder, value_ value]
+  input_ $ [class_ "no-focus-ring h-10 w-full rounded-md border border-base-300 bg-transparent px-3 text-sm font-normal outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-textDisabled focus:border-strokeBrand-strong focus:ring-2 focus:ring-strokeBrand-weak", id_ name, name_ name, placeholder_ placeholder, value_ value] <> extra
 
 
 dashboardVariables_ :: Projects.ProjectId -> Dashboards.DashboardId -> [Dashboards.Variable] -> [Attribute] -> Html ()
@@ -463,7 +460,6 @@ dashboardPage_ pid dashId dash dashVM allParams = do
   forM_ ["/public/assets/deps/echarts/echarts.min.js", "/public/assets/roma-echarts.js"] \path ->
     link_ [rel_ "preload", term "as" "script", href_ $ assetUrl path]
   let dashIdText = dashId.toText
-      gridStack = loadDeps [GridStack]
       allTabs = fold dash.tabs
       activeTabSlug = join (lookup activeTabSlugKey allParams)
       activeTabInfo = activeTabSlug >>= findTabBySlug allTabs
@@ -475,13 +471,13 @@ dashboardPage_ pid dashId dash dashVM allParams = do
   unless readOnly
     $ actionPickerModal_ "pageTitleModalId" "Rename dashboard" [hxPatch_ (urls.dashboardRenamePatch pid dashId), hxSwap_ "innerHTML", hxTarget_ "#pageTitleText"]
     $ div_ [class_ "flex flex-col gap-3 p-3"] do
-      actionPickerField_ "Dashboard title" "title" "Insert new title" (dashTitle dashVM.title)
-      actionPickerField_ "Folder" "fileDir" "reports/" (folderFromPath dashVM.filePath)
+      actionPickerField_ "Dashboard title" "title" "Insert new title" (dashTitle dashVM.title) [autofocus_]
+      actionPickerField_ "Folder" "fileDir" "reports/" (folderFromPath dashVM.filePath) []
 
   when (isJust dash.tabs && not readOnly)
     $ actionPickerModal_ "tabRenameModalId" "Rename tab" [hxPatch_ (urls.dashboardTabRenamePatch pid dashId (fromMaybe "" activeTabSlug)), hxSwap_ "none"]
     $ div_ [class_ "p-3"]
-    $ actionPickerField_ "Tab name" "newName" "Enter tab name" (maybe "" ((.name) . snd) activeTabInfo)
+    $ actionPickerField_ "Tab name" "newName" "Enter tab name" (maybe "" ((.name) . snd) activeTabInfo) [autofocus_]
 
   when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-bgRaised backdrop-blur-xs max-md:px-2 px-4 py-1 max-md:py-0.5 gap-4 max-md:gap-2 items-center flex-wrap md:flex-nowrap sticky top-0 z-10"] do
     -- Tabs section (on the left) - now using htmx for lazy loading
@@ -529,335 +525,6 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     -- and htmx processes the swapped content itself.
     whenJust (join $ lookup "expand" allParams) \wid ->
       div_ (hxTrigger_ "load" : drawerLoadAttrs_ (urls.dashboardWidgetExpandGet pid dashId wid Nothing)) pass
-
-    script_
-      [text|
-      // Runs on a full load and again on every link into a dashboard (a swap of #main-content).
-      // A block, not top-level consts: a second run would redeclare them and throw.
-      {
-      const fullLoad = document.readyState === 'loading';
-      ${gridStack}.then(() => {
-        // Measure the experience that matters: the shell, its swap (if any), and grid
-        // hydration have all completed. This is deliberately a same-origin, bounded
-        // aggregate; dashboard/project ids are validated server-side but never become
-        // metric dimensions. A link is timed from its request, a full load from this parse.
-        const request = fullLoad ? null : performance.getEntriesByType('resource').filter(e => e.initiatorType === 'fetch' && e.name.includes('/dashboards/') && !e.name.includes('/settled')).at(-1);
-        let dashboardStartedAt = request?.startTime ?? performance.now();
-        let dashboardSettledSent = false;
-        function reportDashboardSettled(navigation, responseBytes) {
-          if (dashboardSettledSent) return;
-          const page = document.getElementById('dashboardPage');
-          const url = page?.dataset.settledUrl;
-          // Past the server's 10-minute bound (a backgrounded tab) the sample measures
-          // idleness, not settling, and only earns a 400.
-          const durationMs = Math.round(performance.now() - dashboardStartedAt);
-          if (!url || durationMs > 600000) return;
-          dashboardSettledSent = true;
-          const body = JSON.stringify({
-            navigation,
-            duration_ms: durationMs,
-            response_bytes: Math.max(0, Math.round(responseBytes || 0))
-          });
-          fetch(url, { method: 'POST', credentials: 'same-origin', keepalive: true, headers: {'Content-Type': 'application/json'}, body }).catch(() => {});
-        }
-        window.interpolateVarTemplates = window.interpolateVarTemplates || function() {};
-        // Local, not window.debounce: that global is published by the lazily-imported
-        // widgets chunk, so initializeGrids raced it and threw "debounce is not defined"
-        // mid-setup — skipping grid-stack-initialized, setAnimation and gridStackInstance.
-        const debounce = (fn, wait) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), wait); }; };
-        GridStack.renderCB = function(el, w) {
-          el.innerHTML = w.content;
-          const scripts = Array.from(el.querySelectorAll('script'));
-          scripts.forEach(oldScript => {
-            const newScript = document.createElement('script');
-            Array.from(oldScript.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value));
-            if (oldScript.textContent) {newScript.textContent = oldScript.textContent}
-            oldScript.parentNode.replaceChild(newScript, oldScript);
-          });
-        };
-
-        // Widget PUTs return the same complete .grid-stack-item markup used by a full
-        // dashboard render. Passing that markup to addWidget({content}) creates a second
-        // grid item around it; the nested item's auto-height content then appears as a
-        // collapsed card until the next page load. Adopt the returned item itself and
-        // let GridStack read its gs-* attributes, exactly as it does on initial load.
-        window.adoptDashboardWidget = function(html, existingEl) {
-          const template = document.createElement('template');
-          template.innerHTML = html.trim();
-          const widgetEl = template.content.querySelector('.grid-stack-item');
-          const grid = window.gridStackInstance;
-          if (!(widgetEl instanceof HTMLElement) || !grid) return null;
-
-          // An edit is the same server-rendered replacement, but it must retain the
-          // position GridStack currently owns in case the saved YAML had not caught up
-          // with a drag. Suppress grid events: the PUT already persisted this change.
-          const position = existingEl?.gridstackNode
-            ? (({x, y, w, h}) => ({x, y, w, h}))(existingEl.gridstackNode)
-            : null;
-          if (existingEl) grid.removeWidget(existingEl, true, false);
-          grid.el.appendChild(widgetEl);
-          grid.makeWidget(widgetEl);
-          if (position) grid.update(widgetEl, position);
-          htmx.process(widgetEl);
-          window.evalScriptsFromContent(widgetEl);
-          return widgetEl;
-        };
-
-        function initializeGrids() {
-          document.querySelectorAll('.grid-stack:not(.nested-grid)').forEach(gridEl => {
-            if (!gridEl.classList.contains('grid-stack-initialized')) {
-              try {
-                const grid = GridStack.init({
-                  column: 12,
-                  cellHeight: '5rem',
-                  margin: '1rem 0.5rem',
-                  handleClass: 'grid-stack-handle',
-                  styleInHead: true,
-                  float: false,
-                  animate: false,
-                  columnOpts: {
-                    breakpointForWindow: false,
-                    breakpoints: gridEl.dataset.minWidth ? [{w: Number(gridEl.dataset.minWidth), c: 1}] : [{w: 800, c: 6}, {w: 400, c: 1}],
-                    layout: 'list'
-                  },
-                }, gridEl);
-                let lastCol = grid.getColumn();
-                if (lastCol === 6) grid.compact();
-                const readOnly = !!gridEl.closest('[data-read-only]');
-                if (lastCol !== 12 || readOnly) grid.setStatic(true);
-                new ResizeObserver(() => {
-                  const col = grid.getColumn();
-                  if (col !== lastCol) {
-                    lastCol = col;
-                    if (col === 6) grid.compact();
-                    grid.setStatic(col !== 12 || readOnly);
-                  }
-                }).observe(gridEl);
-
-                // Track real user interactions only — programmatic .update() calls
-                // (e.g. autoFitGroupToChildren on initial mount) emit 'change' but not
-                // dragstart/resizestart. Without this gate, every page load saves a
-                // template snapshot into the schema column, defeating YAML live-reload.
-                grid.on('dragstart resizestart', () => { gridEl._userInteracted = true; });
-                grid.on('removed change', debounce(() => {
-                  if (grid.getColumn() !== 12) return;
-                  if (gridEl.offsetParent === null) return;
-                  const collapsingWidget = gridEl.querySelector('[data-collapse-action]');
-                  if (collapsingWidget) { delete collapsingWidget.dataset.collapseAction; return; }
-                  if (!gridEl._userInteracted) return;
-                  htmx.trigger(document.body, 'widget-order-changed');
-                }, 500));
-                // 'removed' fires when a widget is deleted via DOM removal — that's a real edit.
-                grid.on('removed', () => { gridEl._userInteracted = true; });
-                gridEl.classList.add('grid-stack-initialized');
-                requestAnimationFrame(() => requestAnimationFrame(() => grid.setAnimation(true)));
-                window.gridStackInstance = grid;
-              } finally {
-                window.interpolateVarTemplates();
-              }
-            }
-          });
-
-          // Initialize nested grids
-          document.querySelectorAll('.nested-grid').forEach(nestedEl => {
-            if (!nestedEl.classList.contains('grid-stack-initialized')) {
-              const parentWidget = nestedEl.closest('.grid-stack-item');
-              const collapseInput = parentWidget?.querySelector('.wgt-collapse');
-              // Store original YAML height for partial-width groups
-              if (parentWidget) {
-                parentWidget.dataset.originalH = parentWidget.getAttribute('gs-h') || '0';
-              }
-
-              const nestedInstance = GridStack.init({
-                column: 12,
-                acceptWidgets: true,
-                cellHeight: '5rem',
-                margin: '1rem 0.5rem',
-                handleClass: 'nested-grid-stack-handle',
-                styleInHead: true,
-                animate: false,
-                columnOpts: {
-                  breakpointForWindow: false,
-                  breakpoints: nestedEl.dataset.minWidth ? [{w: Number(nestedEl.dataset.minWidth), c: 1}] : [{w: 600, c: 6}, {w: 400, c: 1}],
-                  layout: 'list'
-                },
-              }, nestedEl);
-              let lastNestedCol = nestedInstance.getColumn();
-              if (lastNestedCol === 6) nestedInstance.compact();
-              const nestedReadOnly = !!nestedEl.closest('[data-read-only]');
-              if (lastNestedCol !== 12 || nestedReadOnly) nestedInstance.setStatic(true);
-
-              // Auto-fit group to children
-              function autoFitGroupToChildren() {
-                const items = nestedInstance.getGridItems();
-                const node = parentWidget?.gridstackNode;
-                if (!node) return;
-
-                // Don't resize if group is collapsed (the header checkbox is the collapse state)
-                if (collapseInput?.checked) return;
-
-                const isFullWidth = node.w === 12;
-                const maxRow = Math.max(1, ...items.map(item => (item.gridstackNode?.y || 0) + (item.gridstackNode?.h || 1)));
-
-                const requiredHeight = 1 + maxRow;  // 1 for header + content
-                const yamlHeight = parseInt(parentWidget.dataset.originalH) || requiredHeight;
-
-                // Full-width: always auto-fit. Partial-width: max of YAML and required
-                const targetHeight = isFullWidth ? requiredHeight : Math.max(yamlHeight, requiredHeight);
-
-                if (node.h !== targetHeight && window.gridStackInstance) {
-                  window.gridStackInstance.update(parentWidget, { h: targetHeight });
-                }
-              }
-
-              nestedInstance.on('change added removed', autoFitGroupToChildren);
-              requestAnimationFrame(autoFitGroupToChildren);
-              new ResizeObserver(() => {
-                const col = nestedInstance.getColumn();
-                if (col !== lastNestedCol) {
-                  lastNestedCol = col;
-                  if (col === 6) nestedInstance.compact();
-                  nestedInstance.setStatic(col !== 12 || nestedReadOnly);
-                  autoFitGroupToChildren();
-                }
-              }).observe(nestedEl);
-              nestedInstance.on('dragstart resizestart removed', () => { nestedEl._userInteracted = true; });
-              nestedInstance.on('removed change', debounce(() => {
-                if (nestedInstance.getColumn() !== 12) return;
-                if (nestedEl.offsetParent === null) return;
-                const collapsingWidget = nestedEl.closest('[data-collapse-action]');
-                if (collapsingWidget) { delete collapsingWidget.dataset.collapseAction; return; }
-                if (!nestedEl._userInteracted) return;
-                htmx.trigger(document.body, 'widget-order-changed');
-              }, 500));
-
-              nestedEl.classList.add('grid-stack-initialized');
-              requestAnimationFrame(() => requestAnimationFrame(() => nestedInstance.setAnimation(true)));
-            }
-          });
-        }
-
-        initializeGrids();
-        const loaded = request ?? performance.getEntriesByType('navigation')[0];
-        requestAnimationFrame(() => requestAnimationFrame(() => reportDashboardSettled(fullLoad ? 'initial' : 'link', loaded?.transferSize || loaded?.encodedBodySize || 0)));
-
-        // Keep attributed dashboard CLS samples available to browser telemetry
-        // and tests. User-initiated shifts are excluded by the web-vitals spec.
-        if (!window.__dashboardLayoutShifts && typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('layout-shift')) {
-          window.__dashboardLayoutShifts = [];
-          new PerformanceObserver(list => {
-            for (const entry of list.getEntries()) {
-              if (entry.hadRecentInput) continue;
-              const page = document.getElementById('dashboardPage');
-              const sample = {
-                value: entry.value,
-                dashboardId: page?.dataset.dashboardId || "unknown",
-                widgetCount: Number(page?.dataset.widgetCount || 0),
-                gridRelated: entry.sources?.some(source => source.node?.closest?.('.grid-stack')) || false,
-                chartRelated: entry.sources?.some(source => source.node?.closest?.('[data-chart-widget]')) || false
-              };
-              window.__dashboardLayoutShifts.push(sample);
-              window.dispatchEvent(new CustomEvent('dashboard-layout-shift', { detail: sample }));
-            }
-          }).observe({ type: 'layout-shift', buffered: true });
-        }
-
-        // Reachable from #dashboard-tabs-content's element-local hx-on::after-swap,
-        // which evaluates in global scope and can't see this closure.
-        window.initializeGrids = initializeGrids;
-
-        // Document level because swap events bubble up (a handler inside the tab container
-        // misses swaps aimed at #main-content) and an outerMorph emits settle, not swap.
-        // initializeGrids skips anything already .grid-stack-initialized, so re-running is cheap.
-        if (!window.__dashboardSwapHooked) {
-          window.__dashboardSwapHooked = true;
-          ['htmx:after:swap', 'htmx:after:settle'].forEach(function(name) {
-            document.addEventListener(name, function(event) {
-              const el = event.target;
-              if (!(el instanceof Element) || !(el.matches('.grid-stack') || el.querySelector('.grid-stack'))) return;
-              window.initializeGrids();
-              window.interpolateVarTemplates();
-            });
-          });
-          document.addEventListener('htmx:before:request', function(event) {
-            const trigger = event.detail?.elt;
-            if (!(trigger instanceof Element) || !trigger.closest('#dashboard-tabs-container')) return;
-            dashboardStartedAt = performance.now();
-            dashboardSettledSent = false;
-          });
-          document.addEventListener('htmx:after:settle', function(event) {
-            const target = event.detail?.target;
-            if (!(target instanceof Element) || target.id !== 'dashboard-tabs-content') return;
-            const resource = performance.getEntriesByType('resource').filter(entry => entry.name.includes('/dashboards/') && entry.name.includes('/tab/')).at(-1);
-            const bytes = resource?.transferSize || resource?.encodedBodySize || 0;
-            window.initializeGrids();
-            requestAnimationFrame(() => requestAnimationFrame(() => reportDashboardSettled('tab', bytes)));
-          });
-        }
-      });
-      }
-
-      // Once per document, unlike the block above: each run would add another copy.
-      if (!window.__dashboardDocHooked) {
-      window.__dashboardDocHooked = true;
-      // Listen for widget-remove-requested custom events
-      document.addEventListener('widget-remove-requested', function(e) {
-        const widgetEl = document.getElementById(e.detail.widgetId + '_widgetEl');
-        if (widgetEl) {
-          const gridEl = widgetEl.closest('.grid-stack');
-          if (gridEl && gridEl.gridstack) {
-            gridEl.gridstack.removeWidget(widgetEl, true);
-          }
-        }
-      });
-
-      function compactGrid(grid, el) {
-        if (!el) return;
-        const items = Array.from(el.querySelectorAll(':scope > .grid-stack-item')).sort((a, b) => (a.gridstackNode?.y || 0) - (b.gridstackNode?.y || 0));
-        const rows = {};
-        items.forEach(item => { const y = item.gridstackNode?.y || 0; (rows[y] = rows[y] || []).push(item); });
-        let nextY = 0, needsUpdate = false;
-        const updates = [];
-        Object.keys(rows).map(Number).sort((a, b) => a - b).forEach(y => {
-          rows[y].forEach(item => {
-            if (item.gridstackNode?.y !== nextY) { updates.push({ item, y: nextY }); needsUpdate = true; }
-          });
-          nextY += Math.max(...rows[y].map(item => item.gridstackNode?.h || 1));
-        });
-        if (needsUpdate) {
-          grid.batchUpdate();
-          updates.forEach(({ item, y }) => grid.update(item, { y }));
-          grid.batchUpdate(false);
-        }
-      }
-
-      // Delegated handler for the group-collapse checkbox: the checkbox + CSS in
-      // Widget.hs own the hide/rotate; this handler only resizes the grid item.
-      document.addEventListener('change', function(e) {
-        if (!e.target.classList?.contains('wgt-collapse')) return;
-        const parentWidget = e.target.closest('.grid-stack-item');
-        const grid = window.gridStackInstance;
-        if (!parentWidget || !grid) return;
-
-        requestAnimationFrame(() => {
-          const isCollapsed = e.target.checked;
-          const mainGridEl = document.querySelector('.grid-stack:not(.nested-grid)');
-
-          parentWidget.dataset.collapseAction = 'true';
-
-          if (isCollapsed) {
-            grid.update(parentWidget, { h: 1 });
-          } else {
-            const nestedInstance = parentWidget.querySelector('.nested-grid')?.gridstack;
-            const items = nestedInstance?.getGridItems() || [];
-            const maxRow = Math.max(1, ...items.map(item => (item.gridstackNode?.y || 0) + (item.gridstackNode?.h || 1)));
-            grid.update(parentWidget, { h: 1 + maxRow });
-          }
-          compactGrid(grid, mainGridEl);
-        });
-      });
-      }
-      |]
 
 
 -- | The hidden form that persists a drag/resize. Every layout edit the reader makes goes
@@ -1221,10 +888,6 @@ processEagerWidget pid now pageRange allParams widget = case widget.wType of
       pure $ widget & #html ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.headers tableData.dataText allParams)
 
 
-dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (ActionResult WidgetMonitorRejection WidgetSaved)
-dashboardWidgetPutH pid dashId widgetIdM tabSlugM = dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM Nothing
-
-
 -- | 'WidgetAdded' carries the dashboard it landed on (title, url), so the toast can name and open it.
 data WidgetChange = WidgetAdded Text Text | WidgetUpdated | WidgetAndMonitorUpdated
   deriving stock (Eq, Show)
@@ -1243,8 +906,8 @@ instance Outcome WidgetSaved where
     WidgetAndMonitorUpdated -> "Widget and monitor updated successfully"
 
 
-dashboardWidgetPutWithMonitorH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (ActionResult WidgetMonitorRejection WidgetSaved)
-dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM widget = act do
+dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (ActionResult WidgetMonitorRejection WidgetSaved)
+dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = act do
   _ <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   (access, dashVM, dash) <- getDashWithAccess pid dashId Nothing
   uid <- UUID.genUUID <&> UUID.toText
@@ -1285,7 +948,7 @@ dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM w
       _ <- updateSchema ed (updateDashboardWidgets dash tabSlugM' normalizedWidgetIdM widgetUpdated{Widget._tabSlug = Nothing}) Nothing
       syncDashboardAndQueuePush pid dashId
       traverse_ Monitors.queryMonitorUpsert monitorUpdateM
-      unless (configureMonitorM == Just "true") $ addTriggerEvent "closeModal" ""
+      addTriggerEvent "closeModal" ""
       pure $ flip WidgetSaved widgetUpdated case (monitorUpdateM, normalizedWidgetIdM) of
         (Just _, _) -> WidgetAndMonitorUpdated
         (Nothing, Just _) -> WidgetUpdated
@@ -1469,8 +1132,8 @@ dashboardBWConf bw pid dashId title tabM currentRange readOnly freeTierStatus =
           (faSprite_ "ellipsis" "regular" "w-4 h-4")
           [class_ "menu-md rounded-box p-2 w-52 leading-none"]
         $ do
-          li_ $ label_ [Lucid.for_ "pageTitleModalId", class_ "p-2"] "Rename dashboard"
-          when (isJust tabSlugM) $ li_ $ label_ [Lucid.for_ "tabRenameModalId", class_ "p-2"] "Rename tab"
+          li_ $ Components.dialogTrigger_ "pageTitleModalId" [class_ "p-2 w-full text-left"] "Rename dashboard"
+          when (isJust tabSlugM) $ li_ $ Components.dialogTrigger_ "tabRenameModalId" [class_ "p-2 w-full text-left"] "Rename tab"
           li_ $ duplicate_ "p-2 w-full text-left" "Duplicate dashboard"
           li_ $ label_ [Lucid.for_ "yaml-editor-drawer", class_ "p-2", data_ "tippy-content" "View and edit the dashboard schema as YAML"] "Edit YAML"
           li_ $ a_ [href_ (urls.dashboardRepositoryGet pid dashId), class_ "p-2"] "Repository sync"
@@ -1629,7 +1292,7 @@ instance ToHtml WidgetEditor where
     form_
       [ class_ "hidden"
       , id_ widgetFormId
-      , hxPut_ $ urls.dashboardWidgetPut pid dashId (fold . (.id) <$> existingWidgetM) tabSlugM ("true" <$ guard isNewWidget)
+      , hxPut_ $ urls.dashboardWidgetPut pid dashId (fold . (.id) <$> existingWidgetM) tabSlugM
       , hxVals_ $ "js:{...widgetJSON, title: " <> widgetTitleValue <> ", query: document.querySelector('#filterElement').getValue()" <> if isThresholdChart then ", unit: document.getElementById('widgetUnit').value || null, warning_threshold: document.getElementById('widgetWarningThreshold').value === '' ? null : Number(document.getElementById('widgetWarningThreshold').value), alert_threshold: document.getElementById('widgetAlertThreshold').value === '' ? null : Number(document.getElementById('widgetAlertThreshold').value), show_threshold_lines: document.getElementById('widgetShowThresholdLines').value}" else "}"
       , hxExt_ "json-enc"
       , data_ "form-mode" $ if isNewWidget then "new" else "edit"
@@ -1648,17 +1311,7 @@ instance ToHtml WidgetEditor where
           [text|
           if (event.detail.ctx.response.status >= 400) return;
           event.preventDefault();
-          const isNew = this.dataset.formMode === 'new';
-          const configureMonitor = isNew && this.closest('.widget-editor').querySelector('.new-widget-monitor:checked');
-          const saved = window.adoptDashboardWidget(event.detail.ctx.text, isNew ? null : document.getElementById('${sourceWid}_widgetEl'));
-          if (configureMonitor && saved) {
-            const id = JSON.parse(saved.dataset.widget).id;
-            const form = document.getElementById('${alertFormId}');
-            form.querySelector('[name="widgetId"]').value = id;
-            form.querySelector('[name="query"]').value = document.querySelector('#filterElement').getValue();
-            form.dataset.widgetSaved = 'true';
-            setTimeout(() => form.requestSubmit(), 0);
-          }
+          window.adoptDashboardWidget(event.detail.ctx.text, this.dataset.formMode === 'new' ? null : document.getElementById('${sourceWid}_widgetEl'));
         |]
       ]
       ""
@@ -1679,19 +1332,19 @@ instance ToHtml WidgetEditor where
             then h2_ [class_ "text-base font-semibold text-textStrong max-md:order-1 max-md:w-full"] "Add a widget"
             else div_ [class_ "min-w-0 max-md:order-1 max-md:w-full"] do
               div_ [class_ "tabs tabs-box tabs-outline"] do
-                let mkTab tabName hookCls label isActive = label_ [role_ "tab", class_ "tab has-[:checked]:tab-active focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-strokeFocus"] do
+                let mkTab tabName clsAttr label isActive = label_ [role_ "tab", class_ "tab has-[:checked]:tab-active focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-strokeFocus"] do
                       input_
                         $ [ type_ "radio"
                           , value_ tabName
-                          , class_ hookCls
+                          , clsAttr
                           , id_ $ widPrefix <> "-tab-" <> T.toLower tabName
                           , name_ $ wid <> "-drawer-tab"
                           ]
                         <> [checked_ | isActive]
                       toHtml @Text label
                 -- A built-in dashboard's widget can be read, not changed or monitored in place.
-                mkTab "Edit" "sr-only page-drawer-tab-edit" (bool "Edit" "Query" readOnly) (readOnly || effectiveActiveTab == EditTab)
-                unless readOnly $ mkTab "Monitors" "sr-only page-drawer-tab-monitors" "Monitors" (effectiveActiveTab == AlertsTab)
+                mkTab "Edit" (class_ "sr-only page-drawer-tab-edit") (bool "Edit" "Query" readOnly) (readOnly || effectiveActiveTab == EditTab)
+                unless readOnly $ mkTab "Monitors" (class_ "sr-only page-drawer-tab-monitors") "Monitors" (effectiveActiveTab == AlertsTab)
 
           div_ [class_ "ml-auto flex shrink-0 items-center gap-3 max-md:contents"] do
             div_ [class_ "flex shrink-0 items-center gap-3 max-md:order-3 max-md:w-full max-md:overflow-x-auto"] do
@@ -1701,7 +1354,14 @@ instance ToHtml WidgetEditor where
               if isNewWidget
                 then do
                   button_ [class_ "btn btn-primary btn-sm max-md:min-h-11 group-has-[.new-widget-monitor:checked]/wgtexp:hidden", type_ "submit", form_ widgetFormId] "Add widget"
-                  button_ [id_ $ widPrefix <> "-add-monitor-button", class_ "btn btn-primary btn-sm max-md:min-h-11 hidden group-has-[.new-widget-monitor:checked]/wgtexp:inline-flex", type_ "button", term "hx-on:click" $ "const form = document.getElementById('" <> alertFormId <> "'); if (!document.querySelector('#filterElement').getValue().trim()) { document.getElementById('" <> widPrefix <> "-monitor-query-hint').hidden = false; document.querySelector('#filterElement .cm-content').focus(); return; } if (form.reportValidity()) { if (form.dataset.widgetSaved === 'true') { form.requestSubmit(); return; } for (const [from, to] of [[\"alertThreshold\", \"widgetAlertThreshold\"], [\"warningThreshold\", \"widgetWarningThreshold\"], [\"unit\", \"widgetUnit\"]]) document.getElementById(to).value = form.querySelector(\"[name=\" + from + \"]\").value; document.getElementById('" <> widgetFormId <> "').requestSubmit(); }"] "Add widget and monitor"
+                  button_
+                    [ id_ $ widPrefix <> "-add-monitor-button"
+                    , class_ "btn btn-primary btn-sm max-md:min-h-11 hidden group-has-[.new-widget-monitor:checked]/wgtexp:inline-flex"
+                    , type_ "submit"
+                    , form_ alertFormId
+                    , onclick_ [text|if (!document.querySelector('#filterElement').getValue().trim()) { document.getElementById('${widPrefix}-monitor-query-hint').hidden = false; document.querySelector('#filterElement .cm-content').focus(); event.preventDefault(); }|]
+                    ]
+                    "Add widget and monitor"
                 else
                   if readOnly
                     then span_ [class_ "hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:inline-flex items-center gap-1.5 text-sm text-textWeak", data_ "tippy-content" "Built-in dashboards always show the latest version we ship; duplicate the dashboard to change it"] do
@@ -1749,32 +1409,6 @@ instance ToHtml WidgetEditor where
             [text| var widgetJSON = ${widgetJSON};
                    { const p = new URLSearchParams(location.search), since = p.get('since'), from = p.get('from'), to = p.get('to');
                      if (since || (from && to)) window.updateTimePicker({since, from, to}, {targetPr: 'widget', skipSetParams: true}); } |]
-
-      script_
-        [text|{ const editor = document.getElementById('${widgetPreviewId}').closest('.widget-editor');
-                      const pane = editor.closest('[role="dialog"]');
-                      const header = editor.querySelector('.widget-editor-header');
-                      const update = () => {
-                        const compact = editor.classList.contains('is-compact');
-                        const next = pane.scrollTop > 0;
-                        if (next === compact) return;
-                        editor.classList.toggle('is-compact', next);
-                      };
-                      const resize = () => editor.style.setProperty('--widget-header-height', header.offsetHeight + 'px');
-                      pane.onscroll = update;
-                      pane._widgetPreviewResize?.disconnect();
-                      pane._widgetPreviewResize = new ResizeObserver(resize);
-                      pane._widgetPreviewResize.observe(header);
-                      pane._widgetPreviewAbort?.abort();
-                      pane._widgetPreviewAbort = new AbortController();
-                      const initialHeight = window.visualViewport?.height;
-                      window.visualViewport?.addEventListener('resize', () => {
-                        const keyboardOpen = initialHeight - window.visualViewport.height > 140;
-                        editor.classList.toggle('keyboard-open', keyboardOpen);
-                        pane.style.height = keyboardOpen ? window.visualViewport.height + 'px' : '';
-                      }, {signal: pane._widgetPreviewAbort.signal});
-                      editor.addEventListener('change', e => { if (e.target.matches('.page-drawer-tab-edit, .page-drawer-tab-monitors')) requestAnimationFrame(update); });
-                      resize(); update(); }|]
 
       div_
         [ class_
@@ -1876,12 +1510,26 @@ instance ToHtml WidgetEditor where
                 , hxTrigger_ "submit"
                 , class_ "flex max-w-4xl flex-col gap-4 pb-6 [&>details]:bg-fillWeaker"
                 ]
-                  <> [term "_" [text|on htmx:after:request[detail.ctx.response.status >= 400] put 'Retry monitor' into #${widPrefix}-add-monitor-button|] | isNewWidget]
+                  <> if isNewWidget
+                    then
+                      [ onsubmit_
+                          [text|const q = document.querySelector('#filterElement').getValue();
+                          if (!q.trim()) { document.getElementById('${widPrefix}-monitor-query-hint').hidden = false; document.querySelector('#filterElement .cm-content').focus(); event.preventDefault(); event.stopImmediatePropagation(); return false; }
+                          this.querySelector('[name="query"]').value = q;
+                          this.querySelector('[name="widgetJson"]').value = JSON.stringify({...widgetJSON, title: ${widgetTitleValue}, query: q, ...(document.getElementById('widgetShowThresholdLines') ? {show_threshold_lines: document.getElementById('widgetShowThresholdLines').value} : {})});|]
+                      , term
+                          "hx-on:htmx:before:swap"
+                          "if (event.detail.ctx.response.status >= 400) return; event.preventDefault(); window.gridStackInstance?.removeWidget('#add_a_widget_label', true, false); window.adoptDashboardWidget(event.detail.ctx.text, null);"
+                      ]
+                    else []
               )
               do
                 input_ [type_ "hidden", name_ "widgetId", value_ sourceWid]
                 input_ [type_ "hidden", name_ "query", value_ $ fromMaybe "" widgetToUse.query]
                 input_ [type_ "hidden", name_ "vizType", value_ $ case widgetToUse.wType of Widget.WTTimeseriesLine -> "timeseries_line"; _ -> "timeseries"]
+                when isNewWidget do
+                  input_ [type_ "hidden", name_ "widgetJson", value_ ""]
+                  whenJust tabSlugM \slug -> input_ [type_ "hidden", name_ "tabSlug", value_ slug]
 
                 -- Monitor Schedule section (shared component)
                 Alerts.monitorScheduleSection_ paymentPlan (maybe 5 (.checkIntervalMins) monitorM) (maybe 5 (.timeWindowMins) monitorM) Alerts.FixedThreshold
@@ -1893,10 +1541,9 @@ instance ToHtml WidgetEditor where
                     thresholdField_ "warning_threshold" "Warning threshold" "warningThreshold" widgetToUse.warningThreshold "bg-fillWarning-strong" False
                   div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
                     Components.formField_ Components.FieldSm def{Components.value = fromMaybe "" widgetToUse.unit, Components.placeholder = "e.g. requests/s", Components.extraAttrs = [term "hx-on:input" "widgetJSON.unit = this.value || null", term "hx-on:change" [text|htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]] <> [term "hx-live:value" "widgetJSON.unit ?? ''" | not isNewWidget]} "Measurement unit" "unit" False Nothing
-                    Components.formSelectField_ Components.FieldSm "Trigger direction" "direction" False $ Components.options_ (Just $ bool "above" "below" (maybe False (.triggerLessThan) monitorM)) [("above", "Above threshold"), ("below", "Below threshold")]
-                  div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
-                    Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show (monitorM >>= (.alertRecoveryThreshold)), Components.placeholder = "Same as alert threshold", Components.extraAttrs = [step_ "any"]} "Alert recovery (optional)" "alertRecoveryThreshold" False Nothing
-                    Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show (monitorM >>= (.warningRecoveryThreshold)), Components.placeholder = "Same as warning threshold", Components.extraAttrs = [step_ "any"]} "Warning recovery (optional)" "warningRecoveryThreshold" False Nothing
+                    Alerts.triggerDirectionField_ "Trigger direction" (maybe False (.triggerLessThan) monitorM)
+                  div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"]
+                    $ Alerts.recoveryThresholdFields_ Nothing (monitorM >>= (.alertRecoveryThreshold)) (monitorM >>= (.warningRecoveryThreshold))
 
                 Alerts.notificationSettingsSection_ teams (maybe V.empty (.teams) monitorM) monitorM
 
@@ -1929,6 +1576,8 @@ data WidgetAlertForm = WidgetAlertForm
   , stopAfterCheck :: Maybe Bool
   , stopAfter :: Maybe Int
   , teams :: [ManageMembers.TeamId]
+  , widgetJson :: Maybe Text
+  , tabSlug :: Maybe Text
   }
   deriving stock (Generic, Show)
   -- 'teamPicker_' checkboxes post @teams@ once per chosen team, and none when unchecked.
@@ -1959,25 +1608,37 @@ instance Refusal WidgetMonitorRejection where
     ReadOnlyDashboard -> Nothing
 
 
-data WidgetMonitorSaved = WidgetMonitorSaved
-  deriving stock (Eq, Generic, Show)
-  deriving (Outcome) via Says "Widget monitor configured successfully" WidgetMonitorSaved
+newtype WidgetMonitorSaved = WidgetMonitorSaved (Maybe Widget.Widget)
+  deriving stock (Generic, Show)
+
+
+instance Outcome WidgetMonitorSaved where
+  outcomeBody (WidgetMonitorSaved wM) = foldMap toHtml wM
+  outcomeToast _ = Just "Widget monitor configured successfully"
 
 
 widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> WidgetAlertForm -> ATAuthCtx (ActionResult WidgetMonitorRejection WidgetMonitorSaved)
 widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = act do
   (session, _) <- ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
   now <- Time.currentTime
-  -- Reuse the widget's existing monitor id when there is one
-  existingMonitor <- Monitors.queryMonitorByWidgetId pid dashboardIdM form.widgetId
+  let creatingWidget = isJust form.widgetJson
+  newWid <- UUID.genUUID <&> UUID.toText
+  let targetWid = if creatingWidget then newWid else form.widgetId
+  -- Reuse the widget's existing monitor id when editing an existing widget's monitor
+  existingMonitor <- if creatingWidget then pure Nothing else Monitors.queryMonitorByWidgetId pid dashboardIdM form.widgetId
   everyoneM <- ManageMembers.getEveryoneTeam pid
   queryMonitorId <- maybe (Monitors.QueryMonitorId <$> UUID.genUUID) (pure . (.id)) existingMonitor
   chartWidgetE <- forM dashboardIdM \dashId ->
     getDashWithAccess pid dashId Nothing <&> \(access, dashVM, dash) -> do
       ed <- first (const ReadOnlyDashboard) access
-      maybeToRight WidgetNotFound $ (\(slug, widget) -> ((dashId, ed), dashVM.title, dash, slug, widget)) <$> findWidgetInDashboard form.widgetId dash
+      case form.widgetJson of
+        Just rawWidget -> do
+          parsed <- first (const WidgetNotFound) $ AE.eitherDecodeStrict @Widget.Widget (encodeUtf8 rawWidget)
+          pure ((dashId, ed), dashVM.title, dash, form.tabSlug, parsed{Widget.id = Just newWid, Widget.standalone = Nothing, Widget.naked = Nothing, Widget._centerTitle = Nothing, Widget._tabSlug = Nothing})
+        Nothing ->
+          maybeToRight WidgetNotFound $ (\(slug, widget) -> ((dashId, ed), dashVM.title, dash, slug, widget)) <$> findWidgetInDashboard form.widgetId dash
   let unitM = mfilter (not . T.null) $ T.strip <$> form.unit
-      -- Everything is checked before anything is written, so a refusal leaves the widget as it was.
+      -- Everything is checked before anything is written, so a refusal leaves the dashboard as it was.
       planE = do
         -- An empty query compiles to a count over all traffic, not the widget's series.
         when (T.null (T.strip form.query)) $ Left RawSqlWidget
@@ -1987,7 +1648,7 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = act do
         let monitorTitle = maybe (maybe "Widget monitor" (.alertConfig.title) existingMonitor) (\(_, dashboardTitle, _, _, widget) -> widgetMonitorTitle dashboardTitle widget.title) chartWidgetM
         monitor <-
           first MonitorQueryInvalid
-            $ fmap (\m -> m{Monitors.widgetId = Just form.widgetId, Monitors.dashboardId = dashboardIdM})
+            $ fmap (\m -> m{Monitors.widgetId = Just targetWid, Monitors.dashboardId = dashboardIdM})
             $ monitorFromInput pid now queryMonitorId existingMonitor
             $ let (checkIntervalMins, timeWindowMins, notifyAfterMins, stopAfterCount) = Alerts.scheduleOf form
                in MonitorInput
@@ -2018,12 +1679,16 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = act do
                       service = session.service <* guard (isNothing dashboardIdM)
                     }
         pure do
-          whenJust chartWidgetM \((dashId, ed), _, dash, tabSlugM, widget) ->
-            when ((widget.alertThreshold, widget.warningThreshold, widget.unit) /= (Just chartThreshold, warningThreshold, unitM)) do
-              _ <- updateSchema ed (updateDashboardWidgets dash tabSlugM (Just form.widgetId) widget{Widget.alertThreshold = Just chartThreshold, Widget.warningThreshold = warningThreshold, Widget.unit = unitM}) Nothing
-              syncDashboardAndQueuePush pid dashId
+          savedWidgetM <- case chartWidgetM of
+            Just ((dashId, ed), _, dash, tabSlugM, widget) -> do
+              let widgetWithThresholds = widget{Widget.query = Just form.query, Widget.alertThreshold = Just chartThreshold, Widget.warningThreshold = warningThreshold, Widget.unit = unitM}
+              when (creatingWidget || (widget.alertThreshold, widget.warningThreshold, widget.unit) /= (Just chartThreshold, warningThreshold, unitM)) do
+                _ <- updateSchema ed (updateDashboardWidgets dash tabSlugM (guard (not creatingWidget) $> form.widgetId) widgetWithThresholds) Nothing
+                syncDashboardAndQueuePush pid dashId
+              pure (widgetWithThresholds <$ guard creatingWidget)
+            Nothing -> pure Nothing
           _ <- Monitors.queryMonitorUpsert monitor
-          WidgetMonitorSaved <$ addTriggerEvent "closeModal" ""
+          WidgetMonitorSaved savedWidgetM <$ addTriggerEvent "closeModal" ""
   sequence planE
 
 
@@ -2271,7 +1936,7 @@ dashboardsGet_ dg
                       -- makes the upsert append under a fresh id rather than overwrite the
                       -- explorer's "visualization-widget" added last time.
                       Nothing ->
-                        [ term "hx-put" $ urls.dashboardWidgetPut dg.projectId dash.id Nothing Nothing Nothing
+                        [ term "hx-put" $ urls.dashboardWidgetPut dg.projectId dash.id Nothing Nothing
                         , hxExt_ "json-enc"
                         , hxVals_ "js:{...JSON.parse(document.getElementById('dashboards-modal-widget-json').value || '{}')}"
                         ]
@@ -2284,13 +1949,19 @@ dashboardsGet_ dg
             $ if V.null dg.dashboards then emptyState_ def{size = ESCompact} "No dashboards yet" "Create one below with this widget." else emptyState_ def{size = ESCompact} "No dashboards match" "Try another name, or create a dashboard below."
   | otherwise = do
       unless dg.embedded
-        $ Components.modalWith_ "newDashboardMdl" def{autoOpen = dg.showNew, boxClass = "max-w-none", boxStyle = "width:min(92vw,76rem);max-width:none;overflow:clip"} Nothing
+        $ Components.nativeDialogWith_
+          ( [[__|on htmx:after:swap set f to (the first <[autofocus]/> in me) or (the first <input:not([type=hidden]):not([type=checkbox]):not([type=radio])/> in me) then if f call f.focus() end|]]
+              <> [[__|init call me.showModal()|] | dg.showNew]
+          )
+          "newDashboardMdl"
+          "New Dashboard"
+          "max-w-none w-[min(92vw,76rem)] overflow-clip"
         $ if not dg.showNew
           then
             div_
               [ id_ "newDashboardForm"
               , hxGet_ $ urls.dashboardNewGet dg.projectId
-              , hxTrigger_ "change[target.checked] from:#newDashboardMdl"
+              , hxTrigger_ "intersect once"
               , hxSwap_ "outerHTML"
               ]
               $ p_ [class_ "py-8 text-center text-sm text-textWeak", role_ "status"] "Loading dashboard templates…"
@@ -2387,7 +2058,7 @@ dashboardsGet_ dg
                       , Table.search = if noBulkActions then Nothing else Just Table.ClientSide
                       , Table.tableHeaderActions = dg.tableActions
                       , Table.header = if dg.embedded || null dg.filters.tag then Nothing else Just $ activeFilters_ dg.projectId ((.currentSort) <$> dg.tableActions) dg.filters
-                      , Table.zeroState = if dg.embedded then Nothing else Just Table.ZeroState{icon = "chart-area", title = "No dashboards yet", description = "Create your first dashboard to visualize your data", action = Table.ESCustom $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn text-sm w-max mx-auto btn-primary"] "Create Dashboard"}
+                      , Table.zeroState = if dg.embedded then Nothing else Just Table.ZeroState{icon = "chart-area", title = "No dashboards yet", description = "Create your first dashboard to visualize your data", action = Table.ESCustom $ Components.dialogTrigger_ "newDashboardMdl" [id_ "newDashboardMdl-empty-trigger", class_ "btn text-sm w-max mx-auto btn-primary"] "Create Dashboard"}
                       }
                 }
 
@@ -2407,23 +2078,10 @@ activeFilters_ pid sortM filters = div_ [class_ "flex items-center gap-2 mb-4"] 
     span_ [class_ "badge badge-sm badge-primary gap-1"] do
       toHtml tag
       a_
-        [ class_ "cursor-pointer"
-        , Aria.label_ $ "Remove filter: " <> tag
-        , hxGet_ $ removeTag tag
-        , hxTarget_ "#dashboardsTableContainer"
-        , hxSelect_ "#dashboardsTableContainer"
-        , hxPushUrl_ "true"
-        , hxSwap_ "outerHTML"
-        ]
+        ([class_ "cursor-pointer", Aria.label_ $ "Remove filter: " <> tag] <> Components.swapTarget_ "dashboardsTableContainer" (removeTag tag))
         $ faSprite_ "xmark" "regular" "w-3 h-3"
   a_
-    [ class_ "text-xs text-textBrand hover:underline cursor-pointer"
-    , hxGet_ basePath
-    , hxTarget_ "#dashboardsTableContainer"
-    , hxSelect_ "#dashboardsTableContainer"
-    , hxPushUrl_ "true"
-    , hxSwap_ "outerHTML"
-    ]
+    ([class_ "text-xs text-textBrand hover:underline cursor-pointer"] <> Components.swapTarget_ "dashboardsTableContainer" basePath)
     "Clear all"
 
 
@@ -2473,7 +2131,7 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filt
             bw
               { pageTitle = "Dashboards"
               , freeTierStatus = freeTierStatus
-              , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn btn-sm btn-primary gap-2"] do
+              , pageActions = Just $ Components.dialogTrigger_ "newDashboardMdl" [class_ "btn btn-sm btn-primary gap-2"] do
                   faSprite_ "plus" "regular" "h-4 w-4"
                   "New Dashboard"
               }

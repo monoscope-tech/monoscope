@@ -18,7 +18,10 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: /(container-identity|endpoint-analytics|host-map|infrastructure-time-window|metric-exemplars|metrics-catalog|tabs|rum-audience)\.spec\.ts$/ },
-    { name: "chromium-fixtures", use: { ...devices["Desktop Chrome"] }, testMatch: /(container-identity|endpoint-analytics|host-map|infrastructure-time-window|metric-exemplars|metrics-catalog|tabs|rum-audience)\.spec\.ts$/, dependencies: ["chromium"], workers: 1 },
+    // Keep specs that mutate or count shared DEMO_PROJECT rows serial;
+    // the 3 scoped metrics specs (host-map, metric-exemplars, metrics-catalog)
+    // isolate their fixture keys and run in parallel.
+    { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: /(container-identity|endpoint-analytics|infrastructure-time-window|rum-audience|tabs)\.spec\.ts$/ },
+    { name: "chromium-fixtures", use: { ...devices["Desktop Chrome"] }, testMatch: /(container-identity|endpoint-analytics|infrastructure-time-window|rum-audience|tabs)\.spec\.ts$/, dependencies: ["chromium"], workers: 1 },
   ],
 });

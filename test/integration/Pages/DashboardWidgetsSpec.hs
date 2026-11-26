@@ -1157,14 +1157,14 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         titled t = listed >>= maybe (fail $ "no dashboard titled " <> toString t) pure . find ((== t) . (.title))
         -- In one request, as the page does; the test UUID supply would otherwise repeat ids.
         create ts = map (show @Text . Servant.getResponse) <$> call tr (traverse (\t -> Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = t, Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}) ts >>= addRespHeaders)
-    -- The empty state opens the new-dashboard modal (a <label for>), not a dead href="newDashboardMdl".
+    -- The empty state opens the new-dashboard dialog, not a dead href="newDashboardMdl".
     zero <- renderT <$> fetch tr Nothing filters{Dashboards.tag = ["no-such-tag-so-the-list-is-empty"]}
-    zero `shouldContainAll` ["No dashboards yet", "for=\"newDashboardMdl\""]
+    zero `shouldContainAll` ["No dashboards yet", "newDashboardMdl').showModal()"]
     zero `shouldNotSatisfy` T.isInfixOf "href=\"newDashboardMdl\""
     -- Template previews load only once the modal opens.
     initial <- renderT <$> fetch tr Nothing filters
     initial `shouldNotSatisfy` T.isInfixOf "dashboardTemplatePreviews"
-    initial `shouldContainAll` ["hx-get=\"/p/" <> testPid.toText <> "/dashboards/new\"", "hx-trigger=\"change[target.checked] from:#newDashboardMdl\""]
+    initial `shouldContainAll` ["hx-get=\"/p/" <> testPid.toText <> "/dashboards/new\"", "hx-trigger=\"intersect once\""]
     picker <- renderT <$> fetch tr (Just "true") filters
     PageCtx _ pd <- page tr (Just "true") filters
     picker `shouldContainAll` (["value=\"Blank dashboard\"", "data-title=\"Nginx\"", "Requests"] <> [("data-template=\"" <> fromMaybe "" t.file <> "\"") | t <- pd.dashTemplates])

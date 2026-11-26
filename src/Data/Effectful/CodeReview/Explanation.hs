@@ -1,5 +1,6 @@
-module Data.Effectful.CodeReview.Explanation (renderExplanation, readExplanationMedia, proofScript, proofCast, proofFailure, Window (..), clipCast, proofAdvice, renderProof, BrowserMedia (..), browserMedia, renderVideo) where
+module Data.Effectful.CodeReview.Explanation (renderExplanation, readExplanationMedia, proofScript, proofCast, proofFailure, Window (..), clipCast, proofAdvice, contrastSides, contrastPair, renderProof, BrowserMedia (..), browserMedia, renderVideo) where
 
+import Codec.Picture (Image (..), PixelRGBA8 (..), convertRGBA8, decodePng, encodePng, generateImage, pixelAt)
 import Conduit (runConduit, (.|))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
@@ -293,10 +294,68 @@ clipCast highlight cast = case BS8.lines cast of
 -- 1
 -- >>> proofAdvice [] (Just "card") "\ESC[36m$ curl -si /ping\ESC[0m\r\npong ok\r\n"
 -- []
+-- >>> proofAdvice [] Nothing "TimeoutError: locator.waitFor: Timeout 5000ms exceeded.\r\n    15 × locator resolved to hidden <h1>Choose a template</h1>"
+-- ["The locator matched a hidden element, which sits in a closed dialog, menu, tab or drawer: click the control that opens it first, then wait for it; retrying the same locator fails the same way."]
+-- >>> length $ proofAdvice [] Nothing "locator.click: Error: strict mode violation: getByText('Annual review') resolved to 2 elements"
+-- 1
+-- >>> length $ proofAdvice [] Nothing "Error: [Cabal-7132]\r\nAmbiguous target 'talstack:tests'. It could be:"
+-- 1
+-- >>> length $ proofAdvice [] Nothing "Test suite tests: RUNNING...\r\ntests: unexpected argument `a'"
+-- 1
 proofAdvice :: [(Text, ByteString)] -> Maybe ByteString -> Text -> [Text]
 proofAdvice shots card output =
   ["Screenshot \"" <> label <> "\" is too tight to place the change; retake it framing the row, card or panel around it, with the same locator on both sides." | (label, png) <- shots, BS.length png >= 24, foldl' (\n b -> n * 256 + fromIntegral b) (0 :: Int) (BS.unpack $ BS.take 4 $ BS.drop 16 png) < 480]
     <> ["The terminal card shows no command; show each step with run 'cmd' (curl, psql, the script) so the card prints the command beside its output." | null shots, isJust card, not (any (T.isPrefixOf "$ " . stripSgr) (lines output))]
+    <> ["The locator matched a hidden element, which sits in a closed dialog, menu, tab or drawer: click the control that opens it first, then wait for it; retrying the same locator fails the same way." | "resolved to hidden" `T.isInfixOf` output]
+    <> ["The locator matched several elements (a hidden modal often repeats the text): use the scoped locator Playwright printed for the one you mean, such as locator('#form').getByText(...)." | "strict mode violation" `T.isInfixOf` output]
+    <> ["Cabal found several targets by that name; name the component, such as cabal test pkg:test:tests." | "Ambiguous target" `T.isInfixOf` output]
+    <> ["The test runner got the match text as separate words; pass it as one argument with --test-option=--match --test-option='the full text'." | "unexpected argument" `T.isInfixOf` output, "Test suite" `T.isInfixOf` output]
+
+
+-- | Base and head stills paired by name. An identical pair shows no change, so the agent is told to reframe
+-- it; a changed pair of one size gets the changed region boxed on both sides, so the eye lands on it.
+contrastSides :: [ProofMedia] -> ([ProofMedia], [Text])
+contrastSides sides =
+  let shotsOf wanted = fold [media.shots | media <- sides, media.side == wanted]
+      pairs = [(name, contrastPair before after) | (name, before) <- shotsOf Base, Just after <- [lookup name (shotsOf Head)]]
+      restyle ProofMedia{..} = ProofMedia{shots = [(name, maybe png (if side == Base then fst else snd) (join $ lookup name pairs)) | (name, png) <- shots], ..}
+      missing = [side | side <- [Base, Head], null (shotsOf side), not (null (shotsOf $ bool Base Head (side == Base)))]
+   in ( map restyle sides
+      , ["Screenshot \"" <> name <> "\" is identical on base and head, so it shows no change; frame the part of the page the change affects, or leave it out." | (name, Nothing) <- pairs]
+          <> ["The " <> T.toLower (show side) <> " side took no screenshot, so the author sees no page to compare; take each screenshot before asserting." | side <- missing]
+      )
+
+
+-- | Nothing when two stills are pixel-identical; otherwise both, boxed around what differs when their sizes match.
+--
+-- >>> let png c = toStrict $ encodePng $ generateImage (\x y -> if (x, y) == (30, 30) then c else PixelRGBA8 255 255 255 255) 60 60
+-- >>> contrastPair (png $ PixelRGBA8 255 255 255 255) (png $ PixelRGBA8 255 255 255 255)
+-- Nothing
+-- >>> fmap (\(a, b) -> (a /= png (PixelRGBA8 255 255 255 255), b /= png (PixelRGBA8 0 0 0 255))) $ contrastPair (png $ PixelRGBA8 255 255 255 255) (png $ PixelRGBA8 0 0 0 255)
+-- Just (True,True)
+contrastPair :: ByteString -> ByteString -> Maybe (ByteString, ByteString)
+contrastPair before after = case (convertRGBA8 <$> decodePng before, convertRGBA8 <$> decodePng after) of
+  (Right a, Right b)
+    | (imageWidth a, imageHeight a) /= (imageWidth b, imageHeight b) -> Just (before, after)
+    | otherwise -> (\box -> (framed box a, framed box b)) <$> changedBox a b
+  _ -> guard (before /= after) $> (before, after)
+  where
+    framed (x0, y0, x1, y1) image =
+      let (l, t, r, bottom) = (max 0 (x0 - 12), max 0 (y0 - 12), min (imageWidth image - 1) (x1 + 12), min (imageHeight image - 1) (y1 + 12))
+          edge x y = x >= l && x <= r && y >= t && y <= bottom && (x < l + 4 || x > r - 4 || y < t + 4 || y > bottom - 4)
+       in toStrict $ encodePng $ generateImage (\x y -> if edge x y then PixelRGBA8 245 158 11 255 else pixelAt image x y) (imageWidth image) (imageHeight image)
+
+
+-- | The bounding box of pixels that differ beyond antialiasing noise.
+--
+-- >>> let dot (at :: [(Int, Int)]) = generateImage (\x y -> if (x, y) `elem` at then PixelRGBA8 0 0 0 255 else PixelRGBA8 255 255 255 255) 9 9
+-- >>> changedBox (dot []) (dot [(2, 3), (6, 1)])
+-- Just (2,1,6,3)
+changedBox :: Image PixelRGBA8 -> Image PixelRGBA8 -> Maybe (Int, Int, Int, Int)
+changedBox a b = foldl' grow Nothing [(x, y) | y <- [0 .. imageHeight a - 1], x <- [0 .. imageWidth a - 1], differs (pixelAt a x y) (pixelAt b x y)]
+  where
+    differs (PixelRGBA8 r g bl al) (PixelRGBA8 r' g' bl' al') = any (> 24) $ zipWith (\u v -> abs (fromIntegral @Word8 @Int u - fromIntegral v)) [r, g, bl, al] [r', g', bl', al']
+    grow acc (x, y) = Just $! maybe (x, y, x, y) (\(!x0, !y0, !x1, !y1) -> (min x0 x, min y0 y, max x1 x, max y1 y)) acc
 
 
 -- | Terminal text without its colour codes.

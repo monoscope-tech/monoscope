@@ -1,24 +1,24 @@
 module Pages.UptimeSpec (spec) where
 
 import BackgroundJobs qualified as Jobs
+import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.Notify (EmailData (..), Notification (..))
+import Data.Text qualified as T
+import Data.Time (addUTCTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Apis.Uptime qualified as UptimeM
-import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.DashboardTemplates qualified as DashboardTemplates
-import Pages.Charts.Charts qualified as Charts
-import Pkg.Components.Widget qualified as Widget
-import Pages.Uptime qualified as Uptime
-import Data.Text qualified as T
-import Data.Time (addUTCTime)
-import Data.Time.Format.ISO8601 (iso8601Show)
-import Data.ByteString.Lazy qualified as LBS
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Network.HTTP.Client qualified as HC
 import Network.HTTP.Types (status200)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
+import Pages.Charts.Charts qualified as Charts
+import Pages.Uptime qualified as Uptime
+import Pkg.Components.Widget qualified as Widget
 import Pkg.TestUtils
 import System.Config qualified as Config
 import Utils (internalAddress)
@@ -26,6 +26,19 @@ import Utils (internalAddress)
 
 spec :: Spec
 spec = around withTestResources $ describe "Uptime and status pages" do
+  it "keeps expected-status defaults, bounds and saved edits in the uptime forms" \tr -> do
+    pid <- createTestProject tr "Status fields"
+    let form expected = Uptime.UptimeForm "Health" "https://shop.example.com/health" (Just 60) expected [] Nothing Nothing Nothing Nothing []
+        statusInput html = T.takeWhile (/= '>') $ fold $ find (T.isInfixOf "name=\"expectedStatus\"") $ T.splitOn "<input" html
+    Right _ <- call tr $ Uptime.uptimeCheckPostH pid (form Nothing)
+    [check] <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId pid PromCfg.CKUptime)
+    overview <- renderT <$> call tr (Uptime.uptimeChecksGetH pid)
+    dashboard <- renderT <$> call tr (Uptime.uptimeCheckGetH pid check.id (Just "7D"))
+    forM_ [overview, dashboard] \html -> statusInput html `shouldContainAll` ["type=\"number\"", "value=\"200\"", "min=\"100\"", "max=\"599\""]
+    Right _ <- call tr $ Uptime.uptimeCheckEditH pid check.id (form $ Just 204)
+    editedPage <- renderT <$> call tr (Uptime.uptimeCheckGetH pid check.id (Just "7D"))
+    statusInput editedPage `shouldContainAll` ["value=\"204\"", "min=\"100\"", "max=\"599\""]
+
   it "draws 90 days of each check, publishes a status page, gates probes by region, and keeps history across edits" \tr -> do
     pid <- createTestProject tr "Status"
     void $ call tr $ Uptime.uptimeCheckPostH pid (Uptime.UptimeForm "Checkout API" "https://shop.example.com/health" (Just 60) (Just 200) [] Nothing Nothing Nothing Nothing [])
@@ -71,7 +84,7 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     -- The built-in board shows every check and cron monitor, whatever the pages pick.
     renderT <$> call tr (Uptime.statusAllGetH pid) >>= (`shouldContainAll` ["Project status", "Checkout API", "Nightly billing"])
     pages <- runQueryEffect tr $ UptimeM.statusPagesByProject pid
-    map (.slug) pages `shouldBe` ["acme", "acme-ops"]
+    map (.slug) pages `shouldBe` ["status", "acme", "acme-ops"]
     -- Editing keeps the page's URL unique, and changes what it shows.
     let acme = find ((== "acme") . (.slug)) pages
     acmeId <- maybe (fail "no acme page") (pure . (.id)) acme
@@ -164,7 +177,8 @@ spec = around withTestResources $ describe "Uptime and status pages" do
     tableSql <- maybe (fail "no Checks table") pure $ listToMaybe [q | w <- concatMap flat (DashboardTemplates.templateTab "uptime.yaml" "Overview" []), w.title == Just "Checks", Just q <- [w.sql]]
     let filled = T.replace "{{query_ast_filters}}" ("project_id = '" <> pid.toText <> "' AND name = 'uptime.probe'") tableSql
     dbQuery @_ @(Text, Int, Int, Double, Maybe Double, Maybe Double, Maybe Text) tr (fromString $ toString filled) ()
-      >>= (`shouldBe` [(shop.url, 6, 2, 66.667, True)]) . map (\(u, n, f, up, avg, p, lst) -> (u, n, f, fromIntegral (round (up * 1000) :: Int) / 1000 :: Double, isJust (avg *> p *> lst)))
+      >>= (`shouldBe` [(shop.url, 6, 2, 66.667, True)])
+      . map (\(u, n, f, up, avg, p, lst) -> (u, n, f, fromIntegral (round (up * 1000) :: Int) / 1000 :: Double, isJust (avg *> p *> lst)))
     page <- renderT <$> call tr (Uptime.uptimeCheckGetH pid shop.id (Just "7D"))
     page `shouldContainAll` ["Open as dashboard", "Daily uptime", "Probes by location", "Failure reasons", "/uptime/dashboard?var-check=" <> shop.id.toText]
     ("{{var-check}}" `T.isInfixOf` page) `shouldBe` False

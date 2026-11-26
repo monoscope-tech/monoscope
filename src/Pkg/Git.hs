@@ -82,6 +82,7 @@ module Pkg.Git (
   ConfigurationPullRequest (..),
   getConfigurationPullRequest,
   publishConfiguration,
+  publishPullRequest,
   closeConfigurationPullRequest,
   reopenConfigurationPullRequest,
 
@@ -857,6 +858,37 @@ publishConfiguration conn repo branch ownership expectedRevision number files
           hoistEither $ maybeToRight "GitHub did not return the pull request number." $ fromInteger <$> (response ^? key "number" . _Integer)
   where
     marker = "<!-- monoscope-sync:" <> ownership <> " -->"
+    pickSha :: AE.Value -> Either Text Text
+    pickSha value = maybeToRight "GitHub did not return an object revision." $ value ^? key "sha" . _String
+    post :: W.HTTP :> es => Text -> AE.Value -> ExceptT Text (Eff es) AE.Value
+    post path body = ExceptT $ (>>= first toText . AE.eitherDecode . (^. W.responseBody)) <$> tryHttp (W.postWith (gitOpts conn) (toString $ repoUrl conn repo path) body)
+
+
+-- | Create a branch from the target branch HEAD, commit files atomically, and open a GitHub PR.
+publishPullRequest :: W.HTTP :> es => GitConn -> RepoRef -> Text -> Text -> Text -> Text -> [(Text, ByteString)] -> Eff es (Either Text (Int, Text))
+publishPullRequest conn repo branch commitMsg prTitle prBody files
+  | conn.host /= GitHub = pure $ Left "Automated pull requests currently require GitHub."
+  | branch == repo.ref = pure $ Left "The branch name must differ from the target branch."
+  | null files = pure $ Left "No instrumentation files to commit."
+  | otherwise = runExceptT do
+      target <- ExceptT $ githubJson @AE.Value conn repo ("/commits/" <> enc repo.ref)
+      targetSha <- hoistEither $ pickSha target
+      targetTree <- hoistEither $ maybeToRight "GitHub did not return the target tree." $ target ^? key "commit" . key "tree" . key "sha" . _String
+      tree <-
+        post "/git/trees"
+          $ AE.object
+            [ "base_tree" AE..= targetTree
+            , "tree" AE..= [AE.object ["path" AE..= path, "mode" AE..= ("100644" :: Text), "type" AE..= ("blob" :: Text), "content" AE..= (decodeUtf8 body :: Text)] | (path, body) <- files]
+            ]
+      treeSha <- hoistEither $ pickSha tree
+      commit <- post "/git/commits" $ AE.object ["message" AE..= commitMsg, "tree" AE..= treeSha, "parents" AE..= ([targetSha] :: [Text])]
+      commitSha <- hoistEither $ pickSha commit
+      void $ post "/git/refs" $ AE.object ["ref" AE..= ("refs/heads/" <> branch), "sha" AE..= commitSha]
+      response <- post "/pulls" $ AE.object ["title" AE..= prTitle, "head" AE..= branch, "base" AE..= repo.ref, "body" AE..= prBody]
+      num <- hoistEither $ maybeToRight "GitHub did not return the pull request number." $ fromInteger <$> (response ^? key "number" . _Integer)
+      let prUrl = fromMaybe ("https://github.com/" <> repo.owner <> "/" <> repo.repo <> "/pull/" <> show num) $ response ^? key "html_url" . _String
+      pure (num, prUrl)
+  where
     pickSha :: AE.Value -> Either Text Text
     pickSha value = maybeToRight "GitHub did not return an object revision." $ value ^? key "sha" . _String
     post :: W.HTTP :> es => Text -> AE.Value -> ExceptT Text (Eff es) AE.Value

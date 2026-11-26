@@ -154,6 +154,7 @@ test('notification settings remain clean until the user changes a value', async 
   await page.locator('#include-user-identity-in-alerts').click();
   await expect(page.locator('#integrations-save-status')).toHaveText('Unsaved changes');
   await page.reload();
+  await expect.poll(() => page.locator('#emails_input').evaluate(element => Boolean((element as any)._tagifyInstance))).toBe(true);
   await page.waitForLoadState('networkidle');
   await page.locator('#notifsForm .tagify__tag__removeBtn').first().click();
   await expect(page.locator('#integrations-save-status')).toHaveText('Unsaved changes');
@@ -163,13 +164,15 @@ test('plan comparison stays usable on a narrow screen', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto(`${project}/manage_billing`);
   await page.getByText('Change plan', { exact: true }).click();
-  const box = page.locator('#pricing-modal + .modal .modal-box');
+  const box = page.locator('#pricing-modal .modal-box');
   await expect(box).toBeVisible();
   await expect(box.getByRole('slider', { name: 'Total events', exact: true })).toBeVisible();
   await expect.poll(() => box.evaluate(element => {
     const bounds = element.getBoundingClientRect();
     return bounds.left >= 0 && bounds.right <= innerWidth && element.scrollWidth <= element.clientWidth;
   })).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(box).toBeHidden();
 });
 
 test('Prometheus target form fits a narrow screen with advanced fields open', async ({ page }) => {

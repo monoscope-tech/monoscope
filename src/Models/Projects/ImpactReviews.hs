@@ -19,6 +19,10 @@ module Models.Projects.ImpactReviews (
   recordFailure,
   getRun,
   claimRun,
+  routineMissingError,
+  retryRoutineBlockedRuns,
+  announceReviewWorker,
+  reviewWorkerRunning,
   currentRun,
   saveResult,
   finishRun,
@@ -371,6 +375,19 @@ selectRuns pid rid =
     ORDER BY r.created_at DESC LIMIT 20|]
 
 
+-- | Called every minute by a node with agent slots, so readiness can tell a queued review will run.
+announceReviewWorker :: DB es => UTCTime -> Workspace.Slots -> Eff es ()
+announceReviewWorker now slots =
+  Hasql.interpExecute_
+    [HI.sql| INSERT INTO projects.review_workers (node, agents, seen_at) VALUES (#{slots.node}, #{fromIntegral @Int @Int32 slots.agents}, #{now})
+      ON CONFLICT (node) DO UPDATE SET agents = EXCLUDED.agents, seen_at = EXCLUDED.seen_at |]
+
+
+-- | A worker with agent slots checked in within three minutes.
+reviewWorkerRunning :: DB es => UTCTime -> Eff es Bool
+reviewWorkerRunning now = Hasql.interpScalar [HI.sql| SELECT EXISTS (SELECT 1 FROM projects.review_workers WHERE agents > 0 AND seen_at > #{now} - interval '3 minutes') |]
+
+
 -- | Admission happens here, before a review's time budget starts: past this node's agent slots, or two
 -- reviews of this project across nodes (so one busy tenant cannot take every slot), the run waits in
 -- the job queue instead of for a VM.
@@ -473,10 +490,16 @@ releaseRun run =
 repositorySettings :: DB es => ProjectId -> Eff es [ReviewSettings]
 repositorySettings pid =
   Hasql.interp
-    [HI.sql|SELECT DISTINCT lower(m.owner), lower(m.repo), CASE WHEN s.enabled IS FALSE THEN #{WhenAsked} ELSE coalesce(s.trigger, #{ReadyPullRequests}) END, coalesce(s.include_evidence, false)
+    -- Unsaved evidence follows visibility: a private repository's readers already have access,
+    -- so its comments carry production aggregates. A public one gets links only, whatever was
+    -- saved while it was private: its comments are readable by anyone.
+    [HI.sql|SELECT DISTINCT lower(m.owner), lower(m.repo), CASE WHEN s.enabled IS FALSE THEN #{WhenAsked} ELSE coalesce(s.trigger, #{ReadyPullRequests}) END,
+      coalesce(s.include_evidence, bool_or(r.private) OVER w, false) AND bool_or(r.private) OVER w IS NOT FALSE
     FROM projects.code_mappings m JOIN projects.git_credentials c ON c.id = m.credential_id AND c.project_id = m.project_id
     LEFT JOIN projects.pr_review_settings s ON s.project_id = m.project_id AND s.owner = lower(m.owner) AND s.repo = lower(m.repo)
+    LEFT JOIN projects.repositories r ON r.project_id = m.project_id AND r.host = c.host AND r.api_base IS NOT DISTINCT FROM c.api_base AND lower(r.owner) = lower(m.owner) AND lower(r.repo) = lower(m.repo)
     WHERE m.project_id = #{pid} AND c.host = 'github' AND c.api_base IS NULL AND c.installation_id IS NOT NULL
+    WINDOW w AS (PARTITION BY lower(m.owner), lower(m.repo))
     ORDER BY lower(m.owner), lower(m.repo)|]
 
 
@@ -502,6 +525,21 @@ retryRun pid rid = do
         AND r.revision = t.latest_revision AND (t.lease_until IS NULL OR t.lease_until < now())
       RETURNING r.id)
       INSERT INTO background_jobs_long (run_at, status, payload) SELECT now(), 'queued', #{payload} FROM retried|]
+
+
+-- | Why a review stopped before starting: its project had no active review routine.
+routineMissingError :: Text
+routineMissingError = "Activate or resume Production impact review in AI routines."
+
+
+-- | Reviews that stopped only for want of the routine, on their pull request's latest commit, run
+-- once it exists, so a pull request opened before the routine was installed still gets reviewed.
+retryRoutineBlockedRuns :: DB es => ProjectId -> Eff es ()
+retryRoutineBlockedRuns pid =
+  Hasql.interp @[HI.OneColumn ReviewId]
+    [HI.sql| SELECT r.id FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
+      WHERE t.project_id = #{pid} AND r.revision = t.latest_revision AND r.state = #{Incomplete} AND r.error = #{routineMissingError} |]
+    >>= traverse_ (retryRun pid . HI.getOneColumn)
 
 
 supersedeRun :: DB es => ReviewRun -> Eff es ()
@@ -675,6 +713,8 @@ saveProofs run attempt script sides = Hasql.transaction TxS.ReadCommitted TxS.Wr
           SELECT #{run.projectId}, #{run.owner}, #{run.repo}, #{setup}, #{run.revision}, #{run.id}
           WHERE #{setup}::text IS NOT NULL AND #{any (\p -> p.side == Agent.Head && p.exitCode == Just 0) sides}
           ON CONFLICT (project_id, owner, repo) DO UPDATE SET setup = EXCLUDED.setup, revision = EXCLUDED.revision, run_id = EXCLUDED.run_id, updated_at = now()
+          -- A trivial terminal setup must not displace a full app recipe; a browser proof's setup carries the app.
+          WHERE #{any (.browser) sides} OR length(EXCLUDED.setup) >= length(projects.pr_review_proof_recipes.setup)
         ) SELECT CASE WHEN #{setup}::text IS NULL THEN #{NoSetup} WHEN (SELECT setup FROM prior) = #{setup} THEN #{Reused} ELSE #{Changed} END|]
     | otherwise -> Left ("Proof " <> key <> " was already recorded; record the proof again") <$ Tx.condemn
 

@@ -1,0 +1,18 @@
+{
+  "attributes": [
+    {
+      "key": "log.original",
+      "value": {
+        "stringValue": "{\"level\":\"attention\",\"message\":\"review failed\",\"trace_id\":\"579f2a46d08b013c9097434f00a561d7\",\"span_id\":\"1c867e817aa5c286\"}"
+      }
+    }
+  ],
+  "body": {
+    "stringValue": "review failed"
+  },
+  "observedTimeUnixNano": "1700000000000000000",
+  "severityNumber": 17,
+  "severityText": "attention",
+  "spanId": "1c867e817aa5c286",
+  "traceId": "579f2a46d08b013c9097434f00a561d7"
+}

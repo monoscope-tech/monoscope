@@ -188,7 +188,6 @@ data Features a = Features
 data Config = Config
   { tableClasses :: Text
   , thClasses :: Text
-  , tdClasses :: Text
   , containerClasses :: Text
   , showHeader :: Bool
   , elemID :: Text
@@ -356,7 +355,6 @@ instance Default Config where
       { tableClasses = "table table-sm w-full relative"
       , -- Headers never wrap: a wide table scrolls (the grid is overflow-x-auto) instead of squeezing labels.
         thClasses = "text-left bg-bgAlternate sticky top-0 overflow-hidden whitespace-nowrap"
-      , tdClasses = "px-4 py-4"
       , containerClasses = "w-full mx-auto space-y-2"
       , showHeader = True
       , elemID = "tableContainer"
@@ -444,16 +442,6 @@ selectAllCheckbox_ :: Html ()
 selectAllCheckbox_ = uiToggle_ [term "aria-label" "Select All", class_ "checkbox checkbox-sm checked:checkbox-primary", [__| on click set .bulkactionItemCheckbox.checked to my.checked |]]
 
 
--- | One row of a sort dropdown; @linkAttrs@ carries either an href or the htmx swap attrs.
-sortOption_ :: Bool -> [Attribute] -> Text -> Text -> Html ()
-sortOption_ isActive linkAttrs title desc =
-  a_ ([class_ $ "flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer " <> bool "" " text-textBrand " isActive] <> linkAttrs) do
-    div_ [class_ "flex flex-col items-center justify-center px-1"] $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-4" else div_ [class_ "w-4 h-4"] ""
-    div_ [class_ "grow"] do
-      span_ [class_ "block text-sm font-medium"] $ toHtml title
-      span_ [class_ "block text-xs text-textWeak"] $ toHtml desc
-
-
 sortLoader_ :: Html ()
 sortLoader_ = div_ [class_ "p-12 fixed rounded-lg shadow-sm bg-bgOverlay top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md", id_ "sortLoader"] ""
 
@@ -474,6 +462,15 @@ sortDropdown_ popId panelAttrs opts current fallbackLabel optAttrs = do
   dropdownTriggerBtn_ "sort" (maybe fallbackLabel (\(t, _, _) -> t) $ find (\(_, _, k) -> k == current) opts) popId
   div_ (panelAttrs <> popoverPanel_ popId) $ forM_ opts \(title, desc, k) ->
     sortOption_ (current == k || (current == "" && k == defaultKey)) (optAttrs k <> [hxIndicator_ "#sortLoader"]) title desc
+  where
+    -- One row of a sort dropdown; @linkAttrs@ carries either an href or the htmx swap attrs.
+    sortOption_ :: Bool -> [Attribute] -> Text -> Text -> Html ()
+    sortOption_ isActive linkAttrs title desc =
+      a_ ([class_ $ "flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer " <> bool "" " text-textBrand " isActive] <> linkAttrs) do
+        div_ [class_ "flex flex-col items-center justify-center px-1"] $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-4" else div_ [class_ "w-4 h-4"] ""
+        div_ [class_ "grow"] do
+          span_ [class_ "block text-sm font-medium"] $ toHtml title
+          span_ [class_ "block text-xs text-textWeak"] $ toHtml desc
 
 
 -- Core Rendering Functions
@@ -484,7 +481,7 @@ renderTable tbl =
       tableMain = do
         sequence_ tbl.features.header
         forM_ tbl.features.tabs $ \tabs -> navTabStrip_ ViewTabs tabs.label "tabs-sm mx-3 w-fit" [(toHtml label, url, active) | (label, url, active) <- tabs.options]
-        when (isJust tbl.features.resultSummary || isJust tbl.features.exportName || tbl.features.customizeColumns || isJust tbl.features.grouping || isJust tbl.features.facets) $ renderResultToolbar tbl
+        when (isJust tbl.features.resultSummary || isJust tbl.features.exportName || tbl.features.customizeColumns || isJust tbl.features.grouping || isJust tbl.features.facets) renderResultToolbar
         -- Scrolls horizontally rather than clipping. `overflow-hidden` silently cut off whatever
         -- did not fit: Containers, Kubernetes and Images each need 1460-1820px and get ~1250
         -- with the facet rail open, so 200-570px of columns were unreachable — no scrollbar, no
@@ -495,17 +492,16 @@ renderTable tbl =
         -- resolves against exactly what it did before (verified in-browser).
         div_ [class_ $ "grid overflow-x-auto " <> tbl.config.gridClasses <> " my-0 group/grid" <> if tbl.config.noSurface then "" else " surface-table", id_ $ tbl.config.elemID <> "_grid"] do
           form_ [class_ $ "flex flex-col w-full" <> bool " divide-y" "" tbl.config.noDividers, id_ tbl.config.elemID, onkeydown_ "return event.key != 'Enter' || event.target.tagName != 'INPUT';"] do
-            when ((isJust tbl.features.rowId || isJust tbl.features.sort) && isNothing tbl.config.bulkActionsInHeader) $ renderToolbar tbl
+            when ((isJust tbl.features.rowId || isJust tbl.features.sort) && isNothing tbl.config.bulkActionsInHeader) renderToolbar
             when isEmpty $ whenJust tbl.features.zeroState \zs ->
               emptyState_ def{icon = mfilter (not . T.null) (Just zs.icon), size = tbl.config.zeroStateSize, action = zs.action} zs.title zs.description
             unless isEmpty
               $ div_ [class_ "w-full flex-col"] do
                 whenJust tbl.features.search \_ -> span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
-                div_ [id_ "rowsContainer", class_ $ bool " divide-y" "" tbl.config.noDividers] do
-                  renderRows tbl
+                div_ [id_ "rowsContainer", class_ $ bool " divide-y" "" tbl.config.noDividers] renderRows
       -- Room for the floating bulk-action bar; only selectable tables raise it.
       tableContent = div_ ([class_ $ tbl.config.containerClasses <> bool "" " pb-24" (not isEmpty && isJust tbl.features.rowId), id_ $ tbl.config.elemID <> "_page"] <> [data_ "table-columns" tbl.config.elemID | tbl.features.customizeColumns]) do
-        unless isEmpty $ whenJust tbl.features.search $ renderSearch tbl.config.elemID (fromMaybe "Search" tbl.features.searchPlaceholder)
+        unless isEmpty $ whenJust tbl.features.search $ renderSearch (fromMaybe "Search" tbl.features.searchPlaceholder)
         case tbl.features.facets of
           Just facets -> div_ [class_ "flex items-start gap-4 max-lg:flex-col"] do
             sidebar_ $ facetsConfig facets
@@ -513,7 +509,6 @@ renderTable tbl =
           Nothing -> tableMain
         -- Pagination footer outside the raised surface
         whenJust tbl.features.pagination renderPaginationFooter
-        when (isJust tbl.features.treeConfig) treeScript
       paddedContent = if tbl.config.addPadding then div_ [class_ "max-md:px-2 px-4 pt-2 pb-2"] tableContent else tableContent
       -- A deferred fill-in wins over the event refresh: the response it swaps in carries
       -- its own refreshOnEvent, so the listener is re-established rather than lost.
@@ -522,39 +517,169 @@ renderTable tbl =
         (Nothing, Just (evt, url)) -> pollSelfAttrs_ cid url $ evt <> " from:body"
         (Nothing, Nothing) -> []
    in maybe paddedContent (\cid -> div_ ([class_ "w-full table-refresh", id_ cid] <> refreshAttrs cid) paddedContent) tbl.config.containerId
+  where
+    renderRows :: Html ()
+    renderRows
+      | tbl.config.renderAsTable = do
+          treeCollapseStyle
+          table_ [class_ $ tbl.config.tableClasses <> if tbl.config.noDividers then " no-dividers" else ""] do
+            when tbl.config.showHeader
+              $ thead_ do
+                tr_ do
+                  when (isJust tbl.features.rowId)
+                    $ th_ [class_ $ tbl.config.thClasses <> " w-8 max-md:hidden"] selectAllCheckbox_
+                  forM_ (zip [0 ..] tbl.columns) \(idx, c) -> do
+                    let sortable = (,) <$> c.sortField <*> tbl.features.sortableColumns
+                        thAttrs = [class_ $ unwords $ filter (not . T.null) [tbl.config.thClasses, fromMaybe "" c.align, bool "" "cursor-pointer hover:bg-fillWeak" (isJust sortable)]]
+                        sortAttrs = foldMap (\(field, cfg) -> swapTarget_ cfg.targetId (toggleSortUrl cfg field)) sortable
+                        sortOrder = sortable >>= \(field, cfg) -> lookup cfg.currentSort [("-" <> field, Desc), ("+" <> field, Asc)]
+                    th_ (mergedAttrs $ c.attrs <> thAttrs <> sortAttrs <> [data_ "column-key" c.name]) do
+                      span_ [class_ $ "flex items-center gap-2 min-w-0" <> bool "" " flex-wrap" (tbl.config.bulkActionsInHeader == Just idx)] do
+                        span_ [class_ $ bool "max-md:hidden" "" (idx > 0 || isNothing tbl.features.rowId)] $ toHtml c.name
+                        sequence_ c.headerExtra
+                        whenJust sortOrder \case
+                          Asc -> faSprite_ "arrow-up" "regular" "w-3 h-3"
+                          Desc -> faSprite_ "arrow-down" "regular" "w-3 h-3"
+                        when (isJust sortable && isNothing sortOrder) $ faSprite_ "arrows-up-down" "regular" "w-3 h-3 opacity-30"
+                        when (tbl.config.bulkActionsInHeader == Just idx) do
+                          -- Selection actions replace nothing and appear only once a row is checked.
+                          span_ [class_ "hidden group-has-[.bulkactionItemCheckbox:checked]/grid:md:inline-flex gap-2 ml-2 items-center"] do
+                            forM_ tbl.features.bulkActions $ bulkActionBtn_ "btn-xs" "h-3 w-3"
+                            unless (null tbl.features.bulkActions || isNothing tbl.features.tableHeaderActions) $ span_ [class_ "w-px h-5 bg-strokeWeak mx-1"] ""
+                          -- Sort/filter give way to the selection actions so the header stays one line.
+                          whenJust tbl.features.tableHeaderActions $ span_ [class_ $ bool "group-has-[.bulkactionItemCheckbox:checked]/grid:md:hidden" "" (null tbl.features.bulkActions)] . renderHeaderTableActions
+            renderBody [id_ $ tbl.config.elemID <> "_tbody"] tbl
+      | otherwise = renderBody [] tbl
+      where
+        -- CSS owns descendant visibility so HTMX morphs never lose collapsed state.
+        treeCollapseStyle = forM_ tbl.features.treeConfig \tc ->
+          let esc = T.replace "<" "\\3c " . T.replace "\"" "\\\"" . T.replace "\\" "\\\\"
+              groups = [esc (tc.rowPath r) | r <- V.toList tbl.rows, tc.isGroupRow r]
+           in unless (null groups)
+                $ style_
+                $ foldMap (\p -> "#" <> tbl.config.elemID <> "_tbody:has(>[data-tree-path=\"" <> p <> "\"][data-tree-collapsed=\"true\"])>[data-tree-path^=\"" <> p <> ".\"]{display:none}") groups
 
+    toggleSortUrl :: SortableConfig -> Text -> Text
+    toggleSortUrl cfg field = withQuery (deleteParam "sort" cfg.baseUrl) $ "sort=" <> toUriStr (bool "+" "-" (cfg.currentSort == "+" <> field) <> field)
 
-renderRows :: Table a -> Html ()
-renderRows tbl
-  | tbl.config.renderAsTable =
-      table_ [class_ $ tbl.config.tableClasses <> if tbl.config.noDividers then " no-dividers" else ""] do
-        when tbl.config.showHeader
-          $ thead_ do
-            tr_ do
-              when (isJust tbl.features.rowId)
-                $ th_ [class_ $ tbl.config.thClasses <> " w-8 max-md:hidden"] selectAllCheckbox_
-              forM_ (zip [0 ..] tbl.columns) \(idx, c) -> do
-                let sortable = (,) <$> c.sortField <*> tbl.features.sortableColumns
-                    thAttrs = [class_ $ unwords $ filter (not . T.null) [tbl.config.thClasses, fromMaybe "" c.align, bool "" "cursor-pointer hover:bg-fillWeak" (isJust sortable)]]
-                    sortAttrs = foldMap (\(field, cfg) -> swapTarget_ cfg.targetId (toggleSortUrl cfg field)) sortable
-                    sortOrder = sortable >>= \(field, cfg) -> lookup cfg.currentSort [("-" <> field, Desc), ("+" <> field, Asc)]
-                th_ (mergedAttrs $ c.attrs <> thAttrs <> sortAttrs <> [data_ "column-key" c.name]) do
-                  span_ [class_ $ "flex items-center gap-2 min-w-0" <> bool "" " flex-wrap" (tbl.config.bulkActionsInHeader == Just idx)] do
-                    span_ [class_ $ bool "max-md:hidden" "" (idx > 0 || isNothing tbl.features.rowId)] $ toHtml c.name
-                    sequence_ c.headerExtra
-                    whenJust sortOrder \case
-                      Asc -> faSprite_ "arrow-up" "regular" "w-3 h-3"
-                      Desc -> faSprite_ "arrow-down" "regular" "w-3 h-3"
-                    when (isJust sortable && isNothing sortOrder) $ faSprite_ "arrows-up-down" "regular" "w-3 h-3 opacity-30"
-                    when (tbl.config.bulkActionsInHeader == Just idx) do
-                      -- Selection actions replace nothing and appear only once a row is checked.
-                      span_ [class_ "hidden group-has-[.bulkactionItemCheckbox:checked]/grid:md:inline-flex gap-2 ml-2 items-center"] do
-                        forM_ tbl.features.bulkActions $ bulkActionBtn_ "btn-xs" "h-3 w-3"
-                        unless (null tbl.features.bulkActions || isNothing tbl.features.tableHeaderActions) $ span_ [class_ "w-px h-5 bg-strokeWeak mx-1"] ""
-                      -- Sort/filter give way to the selection actions so the header stays one line.
-                      whenJust tbl.features.tableHeaderActions $ span_ [class_ $ bool "group-has-[.bulkactionItemCheckbox:checked]/grid:md:hidden" "" (null tbl.features.bulkActions)] . renderHeaderTableActions
-        renderBody [id_ $ tbl.config.elemID <> "_tbody"] tbl
-  | otherwise = renderBody [] tbl
+    renderHeaderTableActions :: TableHeaderActions -> Html ()
+    renderHeaderTableActions actions = span_ [class_ "inline-flex flex-wrap items-center gap-2 ml-2"] do
+      unless (null actions.sortOptions) $ renderSortDropdown actions
+      unless (null actions.filterMenus) $ renderFilterDropdown actions
+      renderFilterChips actions
+      where
+        renderSortDropdown :: TableHeaderActions -> Html ()
+        renderSortDropdown a = do
+          div_ [class_ "inline-block", data_ "tippy-content" "Sort by"]
+            $ sortDropdown_ "sortDropdown" [class_ "dropdown dropdown-start bg-bgRaised p-1 text-sm normal-case border border-strokeWeak z-50 w-72 rounded-md shadow-lg mt-1"] a.sortOptions a.currentSort "Sort"
+            $ \k -> swapTarget_ a.targetId (withQuery (deleteParam "sort" a.baseUrl) $ "sort=" <> toUriStr k)
+          sortLoader_
+        renderFilterDropdown :: TableHeaderActions -> Html ()
+        renderFilterDropdown a = do
+          let popId = "filterDropdown"
+          div_ [class_ "inline-block", data_ "tippy-content" "Filter by"] do
+            dropdownTriggerBtn_ "filter" ("Filter" <> if null a.activeFilters then "" else " (" <> show (sum $ map (length . snd) a.activeFilters) <> ")") popId
+            div_
+              ([class_ "dropdown dropdown-start bg-bgRaised p-1 text-sm normal-case border border-strokeWeak z-50 w-60 rounded-md shadow-lg mt-1"] <> popoverPanel_ popId)
+              do
+                div_ [class_ "flex items-center justify-between px-3 py-2 text-sm font-semibold text-textStrong border-b border-strokeWeak"] do
+                  span_ "Select Filter"
+                  button_
+                    ([type_ "button", class_ "text-xs text-textBrand cursor-pointer flex items-center gap-1"] <> swapTarget_ a.targetId (clearFiltersUrl a))
+                    ("Clear all" >> faSprite_ "xmark" "regular" "w-3 h-3")
+                div_ [class_ "p-1"] $ forM_ a.filterMenus (renderFilterMenuItem a)
+        renderFilterMenuItem :: TableHeaderActions -> FilterMenu -> Html ()
+        renderFilterMenuItem a menu = div_ [class_ "relative"] do
+          let subPopId = "filterSub_" <> menu.paramName
+          button_
+            ([class_ "flex items-center justify-between w-full px-3 py-2 text-sm rounded hover:bg-fillWeak cursor-pointer", type_ "button"] <> popoverTrigger_ subPopId)
+            do
+              span_ $ toHtml $ "By " <> menu.label
+              faSprite_ "chevron-right" "regular" "w-3 h-3"
+          div_
+            [ class_ "dropdown dropdown-right bg-bgRaised rounded-lg shadow-lg w-48 normal-case border border-strokeWeak max-h-60 overflow-y-auto"
+            , term "popover" "auto"
+            , id_ subPopId
+            , style_ $ "position-try: flip-inline; position-anchor: --anchor-" <> subPopId
+            ]
+            do
+              div_ [class_ "px-3 py-2 text-sm font-semibold text-textStrong border-b border-strokeWeak"] $ toHtml menu.label
+              div_ [class_ "p-1"] $ forM_ menu.options (facetChoice_ . filterChoice a menu)
+
+    renderToolbar :: Html ()
+    renderToolbar =
+      div_ [class_ $ "flex py-3 gap-8 items-center " <> if tbl.config.renderAsTable then "" else "bg-fillWeaker"] do
+        when (isJust tbl.features.rowId && not tbl.config.renderAsTable)
+          $ div_ [class_ "h-4 flex space-x-3 w-8 items-center"] do
+            span_ [class_ "w-2 h-full"] ""
+            selectAllCheckbox_
+        div_ [class_ "grow flex flex-row gap-2"] do
+          forM_ tbl.features.bulkActions $ bulkActionBtn_ "btn-sm" "h-4 w-4"
+          whenJust tbl.features.sort \sortCfg -> do
+            div_ [class_ "inline-block"]
+              $ sortDropdown_ "sortMenuDiv" [hxBoost_ "true", class_ "dropdown dropdown-end bg-bgRaised p-1 text-sm border border-strokeWeak mt-2 w-72 origin-top-right rounded-md shadow-lg"] sortCfg.options sortCfg.current sortCfg.current
+              $ \k -> [href_ $ withQuery (deleteParam "sort" sortCfg.currentURL) ("sort=" <> toUriStr k)]
+            sortLoader_
+
+    renderSearch :: Text -> SearchMode -> Html ()
+    renderSearch searchPlaceholder searchMode =
+      searchInput_ "w-full h-9 bg-transparent border-strokeWeak shadow-none" searchPlaceholder case searchMode of
+        ServerSide url -> [name_ "search", id_ "search_box", hxTrigger_ "keyup changed delay:500ms", hxGet_ url, hxTarget_ "#rowsContainer", hxSwap_ "innerHTML", hxIndicator_ "#searchIndicator"]
+        ClientSide -> [filterInputAttr_ $ "#" <> tbl.config.elemID <> "_page .itemsListItem"]
+
+    renderResultToolbar :: Html ()
+    renderResultToolbar = div_ [class_ "flex min-h-9 flex-wrap items-center justify-between gap-2"] do
+      whenJust tbl.features.resultSummary $ \summary -> span_ [class_ "text-sm text-textWeak", role_ "status", Aria.live_ "polite"] $ toHtml summary
+      forM_ tbl.features.facets $ \facets -> div_ [class_ "flex flex-wrap gap-2"] $ renderFilterChips facets
+      div_ [class_ "ml-auto flex flex-wrap items-center gap-2"] do
+        forM_ tbl.features.grouping selectControl_
+        forM_ tbl.features.exportName $ \name ->
+          button_
+            [ type_ "button"
+            , class_ "btn btn-xs border border-strokeWeak bg-transparent font-normal text-textWeak shadow-none"
+            , onclick_ $ "window.exportTableCsv('#" <> tbl.config.elemID <> "_grid table','" <> name <> ".csv')"
+            ]
+            $ faSprite_ "download" "solid" "h-3 w-3"
+            >> "Export"
+        when tbl.features.customizeColumns do
+          button_ ([type_ "button", class_ "btn btn-xs border border-strokeWeak bg-transparent font-normal text-textWeak shadow-none"] <> popoverTrigger_ (tbl.config.elemID <> "-columns")) do
+            faSprite_ "table-columns" "regular" "h-3 w-3"
+            "Customize"
+          -- CSS owns visibility; the checkbox only restores a stored choice. @data-forced@ marks a
+          -- user choice, so ticking a column that a breakpoint hides shows it.
+          style_ $ flip foldMap tbl.columns \c ->
+            let rule toggle display = "#" <> tbl.config.elemID <> "_page:has([data-column-toggle=\"" <> c.name <> "\"]" <> toggle <> ") [data-column-key=\"" <> c.name <> "\"]{display:" <> display <> "}"
+             in rule "[data-forced]:not(:checked)" "none" <> rule "[data-forced]:checked" "table-cell"
+          div_
+            ( popoverPanel_ (tbl.config.elemID <> "-columns")
+                <> [ class_ "dropdown dropdown-end z-50 mt-1 w-56 rounded-md border border-strokeWeak bg-bgRaised p-2 text-sm shadow-lg"
+                   , [__|on beforetoggle if event.newState is 'open' send syncColumn to <[data-column-toggle]/> in me end
+              on resize from window if me.matches(':popover-open') send syncColumn to <[data-column-toggle]/> in me end|]
+                   ]
+            )
+            do
+              span_ [class_ "block px-2 pb-1 text-xs font-semibold text-textStrong"] "Visible columns"
+              forM_ tbl.columns $ \column -> label_ [class_ "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-fillWeak"] do
+                input_
+                  [ type_ "checkbox"
+                  , checked_
+                  , class_ "checkbox checkbox-xs"
+                  , data_ "column-toggle" column.name
+                  , data_ "column-storage" $ "table-columns:" <> tbl.config.elemID <> ":" <> column.name
+                  , [__|init set saved to localStorage.getItem(@data-column-storage) if saved is not null set @data-forced to 'true' then set my.checked to saved is 'true' end
+                    on syncColumn if not @data-forced
+                      set cell to (closest <[data-table-columns]/>).querySelector('[data-column-key="' + @data-column-toggle + '"]')
+                      if cell set my.checked to getComputedStyle(cell).display is not 'none' end
+                    end
+                    on change set @data-forced to 'true' then call localStorage.setItem(@data-column-storage, my.checked)|]
+                  ]
+                toHtml column.name
+              button_
+                [ type_ "button"
+                , class_ "btn btn-xs btn-ghost mt-1 w-full font-normal"
+                , [__|on click repeat for t in <[data-column-toggle]/> in closest <[data-table-columns]/> call localStorage.removeItem(t.getAttribute('data-column-storage')) then remove @data-forced from t then send syncColumn to t end|]
+                ]
+                "Reset columns"
 
 
 -- | Row container: @tbody@ in table mode, plain div in list mode. Shared with 'renderTableRows'
@@ -602,7 +727,7 @@ treeRowAttrs row tc =
         , role_ "button"
         , tabindex_ "0"
         , term "aria-label" $ "Toggle metric namespace " <> tc.rowPath row
-        , onclick_ "toggleTreeRow(this)"
+        , [__|on click if @data-tree-collapsed is 'true' set @data-tree-collapsed to 'false' then set @aria-expanded to 'true' else set @data-tree-collapsed to 'true' then set @aria-expanded to 'false' end|]
         , keyboardActivateAttr_
         ]
       else []
@@ -661,13 +786,6 @@ bulkActionBtn_ btnSize iconSize blkA
       span_ [class_ "ml-1"] $ toHtml blkA.title
 
 
-renderHeaderTableActions :: TableHeaderActions -> Html ()
-renderHeaderTableActions actions = span_ [class_ "inline-flex flex-wrap items-center gap-2 ml-2"] do
-  unless (null actions.sortOptions) $ renderSortDropdown actions
-  unless (null actions.filterMenus) $ renderFilterDropdown actions
-  renderFilterChips actions
-
-
 renderFilterChips :: TableHeaderActions -> Html ()
 renderFilterChips actions = forM_ actions.filterMenus \menu -> forM_ (filter (.isActive) menu.options) \opt ->
   button_ ([type_ "button", class_ "inline-flex items-center gap-1 rounded-md border border-strokeWeak bg-fillWeak px-2 py-0.5 text-xs text-textStrong hover:bg-fillWeaker max-md:whitespace-normal", Aria.label_ $ "Remove filter " <> menu.label <> ": " <> opt.label] <> swapTarget_ actions.targetId (deleteParamValue menu.paramName opt.value actions.baseUrl)) do
@@ -697,49 +815,6 @@ facetsConfig actions = FacetsConfig (actions.targetId <> "-facets") "" (Just $ s
               }
           | (index, menu) <- zip [0 :: Int ..] actions.filterMenus
           ]
-
-
-renderSortDropdown :: TableHeaderActions -> Html ()
-renderSortDropdown actions = do
-  div_ [class_ "inline-block", data_ "tippy-content" "Sort by"]
-    $ sortDropdown_ "sortDropdown" [class_ "dropdown dropdown-start bg-bgRaised p-1 text-sm normal-case border border-strokeWeak z-50 w-72 rounded-md shadow-lg mt-1"] actions.sortOptions actions.currentSort "Sort"
-    $ \k -> swapTarget_ actions.targetId (withQuery (deleteParam "sort" actions.baseUrl) $ "sort=" <> toUriStr k)
-  sortLoader_
-
-
-renderFilterDropdown :: TableHeaderActions -> Html ()
-renderFilterDropdown actions = do
-  let popId = "filterDropdown"
-  div_ [class_ "inline-block", data_ "tippy-content" "Filter by"] do
-    dropdownTriggerBtn_ "filter" ("Filter" <> if null actions.activeFilters then "" else " (" <> show (sum $ map (length . snd) actions.activeFilters) <> ")") popId
-    div_
-      ([class_ "dropdown dropdown-start bg-bgRaised p-1 text-sm normal-case border border-strokeWeak z-50 w-60 rounded-md shadow-lg mt-1"] <> popoverPanel_ popId)
-      do
-        div_ [class_ "flex items-center justify-between px-3 py-2 text-sm font-semibold text-textStrong border-b border-strokeWeak"] do
-          span_ "Select Filter"
-          button_
-            ([type_ "button", class_ "text-xs text-textBrand cursor-pointer flex items-center gap-1"] <> swapTarget_ actions.targetId (clearFiltersUrl actions))
-            ("Clear all" >> faSprite_ "xmark" "regular" "w-3 h-3")
-        div_ [class_ "p-1"] $ forM_ actions.filterMenus (renderFilterMenuItem actions)
-
-
-renderFilterMenuItem :: TableHeaderActions -> FilterMenu -> Html ()
-renderFilterMenuItem actions menu = div_ [class_ "relative"] do
-  let subPopId = "filterSub_" <> menu.paramName
-  button_
-    ([class_ "flex items-center justify-between w-full px-3 py-2 text-sm rounded hover:bg-fillWeak cursor-pointer", type_ "button"] <> popoverTrigger_ subPopId)
-    do
-      span_ $ toHtml $ "By " <> menu.label
-      faSprite_ "chevron-right" "regular" "w-3 h-3"
-  div_
-    [ class_ "dropdown dropdown-right bg-bgRaised rounded-lg shadow-lg w-48 normal-case border border-strokeWeak max-h-60 overflow-y-auto"
-    , term "popover" "auto"
-    , id_ subPopId
-    , style_ $ "position-try: flip-inline; position-anchor: --anchor-" <> subPopId
-    ]
-    do
-      div_ [class_ "px-3 py-2 text-sm font-semibold text-textStrong border-b border-strokeWeak"] $ toHtml menu.label
-      div_ [class_ "p-1"] $ forM_ menu.options (facetChoice_ . filterChoice actions menu)
 
 
 filterChoice :: TableHeaderActions -> FilterMenu -> FilterOption -> FacetChoice
@@ -772,89 +847,6 @@ deleteParamValue key val url = fixQueryStart $ foldl' strip url [key <> "=", key
       _ -> t
 
 
-renderToolbar :: Table a -> Html ()
-renderToolbar tbl =
-  div_ [class_ $ "flex py-3 gap-8 items-center " <> if tbl.config.renderAsTable then "" else "bg-fillWeaker"] do
-    when (isJust tbl.features.rowId && not tbl.config.renderAsTable)
-      $ div_ [class_ "h-4 flex space-x-3 w-8 items-center"] do
-        span_ [class_ "w-2 h-full"] ""
-        selectAllCheckbox_
-
-    div_ [class_ "grow flex flex-row gap-2"] do
-      forM_ tbl.features.bulkActions $ bulkActionBtn_ "btn-sm" "h-4 w-4"
-      whenJust tbl.features.sort renderSortMenu
-
-
-renderSearch :: Text -> Text -> SearchMode -> Html ()
-renderSearch elemID searchPlaceholder searchMode =
-  searchInput_ "w-full h-9 bg-transparent border-strokeWeak shadow-none" searchPlaceholder case searchMode of
-    ServerSide url -> [name_ "search", id_ "search_box", hxTrigger_ "keyup changed delay:500ms", hxGet_ url, hxTarget_ "#rowsContainer", hxSwap_ "innerHTML", hxIndicator_ "#searchIndicator"]
-    ClientSide -> [filterInputAttr_ $ "#" <> elemID <> "_page .itemsListItem"]
-
-
-renderSortMenu :: SortConfig -> Html ()
-renderSortMenu sortCfg = do
-  div_ [class_ "inline-block"]
-    $ sortDropdown_ "sortMenuDiv" [hxBoost_ "true", class_ "dropdown dropdown-end bg-bgRaised p-1 text-sm border border-strokeWeak mt-2 w-72 origin-top-right rounded-md shadow-lg"] sortCfg.options sortCfg.current sortCfg.current
-    $ \k -> [href_ $ withQuery (deleteParam "sort" sortCfg.currentURL) ("sort=" <> toUriStr k)]
-  sortLoader_
-
-
-renderResultToolbar :: Table a -> Html ()
-renderResultToolbar tbl = div_ [class_ "flex min-h-9 flex-wrap items-center justify-between gap-2"] do
-  whenJust tbl.features.resultSummary $ \summary -> span_ [class_ "text-sm text-textWeak", role_ "status", Aria.live_ "polite"] $ toHtml summary
-  forM_ tbl.features.facets $ \facets -> div_ [class_ "flex flex-wrap gap-2"] $ renderFilterChips facets
-  div_ [class_ "ml-auto flex flex-wrap items-center gap-2"] do
-    forM_ tbl.features.grouping selectControl_
-    forM_ tbl.features.exportName $ \name ->
-      button_
-        [ type_ "button"
-        , class_ "btn btn-xs border border-strokeWeak bg-transparent font-normal text-textWeak shadow-none"
-        , onclick_ $ "window.exportTableCsv('#" <> tbl.config.elemID <> "_grid table','" <> name <> ".csv')"
-        ]
-        $ faSprite_ "download" "solid" "h-3 w-3"
-        >> "Export"
-    when tbl.features.customizeColumns do
-      button_ ([type_ "button", class_ "btn btn-xs border border-strokeWeak bg-transparent font-normal text-textWeak shadow-none"] <> popoverTrigger_ (tbl.config.elemID <> "-columns")) do
-        faSprite_ "table-columns" "regular" "h-3 w-3"
-        "Customize"
-      -- CSS owns visibility; the checkbox only restores a stored choice. @data-forced@ marks a
-      -- user choice, so ticking a column that a breakpoint hides shows it.
-      style_ $ flip foldMap tbl.columns \c ->
-        let rule toggle display = "#" <> tbl.config.elemID <> "_page:has([data-column-toggle=\"" <> c.name <> "\"]" <> toggle <> ") [data-column-key=\"" <> c.name <> "\"]{display:" <> display <> "}"
-         in rule "[data-forced]:not(:checked)" "none" <> rule "[data-forced]:checked" "table-cell"
-      div_
-        ( popoverPanel_ (tbl.config.elemID <> "-columns")
-            <> [ class_ "dropdown dropdown-end z-50 mt-1 w-56 rounded-md border border-strokeWeak bg-bgRaised p-2 text-sm shadow-lg"
-               , [__|on beforetoggle if event.newState is 'open' send syncColumn to <[data-column-toggle]/> in me end
-          on resize from window if me.matches(':popover-open') send syncColumn to <[data-column-toggle]/> in me end|]
-               ]
-        )
-        do
-          span_ [class_ "block px-2 pb-1 text-xs font-semibold text-textStrong"] "Visible columns"
-          forM_ tbl.columns $ \column -> label_ [class_ "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-fillWeak"] do
-            input_
-              [ type_ "checkbox"
-              , checked_
-              , class_ "checkbox checkbox-xs"
-              , data_ "column-toggle" column.name
-              , data_ "column-storage" $ "table-columns:" <> tbl.config.elemID <> ":" <> column.name
-              , [__|init set saved to localStorage.getItem(@data-column-storage) if saved is not null set @data-forced to 'true' then set my.checked to saved is 'true' end
-                on syncColumn if not @data-forced
-                  set cell to (closest <[data-table-columns]/>).querySelector('[data-column-key="' + @data-column-toggle + '"]')
-                  if cell set my.checked to getComputedStyle(cell).display is not 'none' end
-                end
-                on change set @data-forced to 'true' then call localStorage.setItem(@data-column-storage, my.checked)|]
-              ]
-            toHtml column.name
-          button_
-            [ type_ "button"
-            , class_ "btn btn-xs btn-ghost mt-1 w-full font-normal"
-            , [__|on click repeat for t in <[data-column-toggle]/> in closest <[data-table-columns]/> call localStorage.removeItem(t.getAttribute('data-column-storage')) then remove @data-forced from t then send syncColumn to t end|]
-            ]
-            "Reset columns"
-
-
 selectControl_ :: SelectControl -> Html ()
 selectControl_ cfg = label_ [class_ "flex items-center gap-2 whitespace-nowrap text-xs text-textWeak"] do
   toHtml cfg.label
@@ -880,38 +872,6 @@ renderPaginationFooter pg = div_ [class_ "flex items-center justify-between max-
     mkUrl page perPage = withQuery pg.baseUrl $ "page=" <> show page <> "&per_page=" <> show perPage
     pgAttrs = swapTarget_ pg.targetId
     navBtn icon enabled url = button_ ([class_ $ "p-1.5 rounded border border-strokeWeak " <> if enabled then "hover:bg-fillWeak cursor-pointer" else "opacity-40 cursor-not-allowed", type_ "button"] <> if enabled then pgAttrs url else []) $ faSprite_ icon "regular" "w-4 h-4"
-
-
-treeScript :: Html ()
-treeScript =
-  script_
-    """
-    function toggleTreeRow(el) {
-      var path = el.getAttribute('data-tree-path');
-      var level = parseInt(el.getAttribute('data-tree-level'));
-      var collapsed = el.getAttribute('data-tree-collapsed') === 'true';
-      var rows = el.parentElement.querySelectorAll('tr[data-tree-path], div[data-tree-path]');
-      var found = false;
-      for (var i = 0; i < rows.length; i++) {
-        var r = rows[i];
-        if (r === el) { found = true; continue; }
-        if (!found) continue;
-        var rp = r.getAttribute('data-tree-path');
-        if (!rp.startsWith(path + '.') && rp !== path) break;
-        if (collapsed) {
-          var rl = parseInt(r.getAttribute('data-tree-level'));
-          if (rl === level + 1) { r.style.display = ''; }
-        } else {
-          r.style.display = 'none';
-          if (r.getAttribute('data-tree-group') === 'true') r.setAttribute('data-tree-collapsed', 'true');
-        }
-      }
-      el.setAttribute('data-tree-collapsed', collapsed ? 'false' : 'true');
-      el.setAttribute('aria-expanded', collapsed ? 'true' : 'false');
-      var chev = el.querySelector('.tree-chevron');
-      if (chev) chev.classList.toggle('rotate-90');
-    }
-    """
 
 
 -- Column Builders
@@ -964,11 +924,6 @@ parseSortParam sortP overridesM = concatMap parseField (T.splitOn "," sortP)
       Just ('-', f) -> fields f Desc
       _ -> []
     fields f order = map (`SortField` order) $ fromMaybe [f] (lookup (T.toLower f) =<< overridesM)
-
-
--- Generate URL toggling the sort direction of a column
-toggleSortUrl :: SortableConfig -> Text -> Text
-toggleSortUrl cfg field = withQuery (deleteParam "sort" cfg.baseUrl) $ "sort=" <> toUriStr (bool "+" "-" (cfg.currentSort == "+" <> field) <> field)
 
 
 data FacetLayout = Plain | Collapsible

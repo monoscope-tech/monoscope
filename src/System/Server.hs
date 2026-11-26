@@ -510,6 +510,7 @@ runServer appLogger env tp = do
           ]
             & listToMaybe
         , guard (isJust env.config.impactReviewWorkspaceMaintenance) $> fiber "workspace-maintenance" (BackgroundJobs.runWorkspaceMaintenanceTimer appLogger env tp)
+        , guard (isJust env.config.impactReviewAgent && not consumerOnly) $> fiber "review-worker-heartbeat" (BackgroundJobs.runReviewWorkerHeartbeat appLogger env tp)
         ]
       <> fmap Just schemaFibers
       <> (if consumerOnly then [] else fmap Just jobFibers)

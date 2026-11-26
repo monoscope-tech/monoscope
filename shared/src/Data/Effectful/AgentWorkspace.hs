@@ -36,7 +36,7 @@ import Pkg.GitCommand qualified as HostGit
 import Relude hiding (Identity, identity, withFile)
 import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, findExecutable, listDirectory, removePathForcibly, renameDirectory, renameFile)
 import System.Environment (getEnvironment)
-import System.FileLock (SharedExclusive (..), tryLockFile, unlockFile, withFileLock, withTryFileLock)
+import System.FileLock (SharedExclusive (..), lockFile, tryLockFile, unlockFile, withFileLock, withTryFileLock)
 import System.FilePath (isAbsolute, takeDirectory, takeFileName, (</>))
 import System.IO (hClose, withBinaryFile)
 import System.IO.Error (catchIOError, isDoesNotExistError, tryIOError, userError)
@@ -475,7 +475,9 @@ newtype Identifier (kind :: Symbol) = Identifier UUID
   deriving newtype (AE.FromJSON, AE.ToJSON)
 
 
-data RegressionOptions = RegressionOptions {artifactDir :: FilePath, checkout :: FilePath, image :: Text, bridge :: FilePath}
+-- | @sideSeconds@ bounds each side of a check, so a review near its deadline gets a timed-out check back
+-- in time to submit instead of the job ending first.
+data RegressionOptions = RegressionOptions {artifactDir :: FilePath, checkout :: FilePath, image :: Text, bridge :: FilePath, sideSeconds :: Int}
 
 
 data Artifact = Artifact {script :: Text, testPatch :: Maybe Text, failureMessage :: Text}
@@ -806,7 +808,7 @@ maintain options = do
     recognized <- filterM (doesDirectoryExist . (</> "workspaces") . (root </>) . projectText) $ mapMaybe project names
     before <- allocated root
     recovery <- forM recognized \pid -> do
-      outcome <- tryAny $ recoverStages root options.remote pid
+      outcome <- tryAny $ reclaimLeases root pid >> recoverStages root options.remote pid
       pure (pid, outcome)
     usedAfterRecovery <- allocated root
     initial <- if usedAfterRecovery <= options.maxBytes then pure [] else forM recognized \pid -> (pid,) <$> allocated (root </> projectText pid)
@@ -1186,7 +1188,7 @@ verifyArtifactRegression options request = do
           privateWrite logPath ""
           -- A side's setup can build the head before it runs; a change to a widely imported Haskell module
           -- rebuilds much of the project even from a warm workspace.
-          outcome <- tryAny $ Timeout.timeout (15 * 60 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox VerifierPool options.bridge \rpc -> do
+          outcome <- tryAny $ Timeout.timeout (options.sideSeconds * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox VerifierPool options.bridge \rpc -> do
             image <- rpc @Image $ Resolve options.image
             ensure $ image.buildId == request.imageBuildId
             let sandbox = Sandbox image.assetDir checkResources.cpus checkResources.memoryMiB RegistryCow $ one ("/checkout", checkout)
@@ -1553,15 +1555,26 @@ leaseWorkspace options request action = do
           createDirectoryIfMissing True parent
           canonical parent
           Posix.setFileMode parent 0o700
-          bracketOnError (createTempDirectory parent ".lease-") removePathForcibly \directory -> do
+          bracketOnError (createTempDirectory parent ".lease-") removePathForcibly \directory -> bracketOnError (lockFile (directory </> "held.lock") Exclusive) unlockFile \held -> do
             let immutable = directory </> "baseline.qcow2"
                 mutable = directory </> "resume.qcow2"
             Posix.createLink value.path immutable
             copySnapshot (Snapshot immutable value.manifest.sha256) mutable
-            pure $ Leased value{path = immutable} mutable
+            pure (Leased value{path = immutable} mutable, held)
     )
-    (\prepared -> withProjectLock root request.projectId $ for_ prepared $ removePathForcibly . takeDirectory . (.resumePath))
-    action
+    (\prepared -> withProjectLock root request.projectId $ for_ prepared \(leased, held) -> removePathForcibly (takeDirectory leased.resumePath) >> unlockFile held)
+    (action . fmap fst)
+
+
+-- | A lease holds its lock while in use; one whose worker died (a deploy mid-review) would otherwise pin its
+-- workspace against eviction forever, so maintenance evicts fresh builds while stale ones stay.
+reclaimLeases :: FilePath -> ProjectId -> IO ()
+reclaimLeases root pid = void $ withTryFileLock (root </> projectText pid </> "workspaces" </> ".native.lock") Exclusive \_ -> do
+  let leases = root </> projectText pid </> "leases"
+  present <- doesDirectoryExist leases
+  when present $ listDirectory leases >>= traverse_ \name -> when (".lease-" `isPrefixOf` name) do
+    free <- withTryFileLock (leases </> name </> "held.lock") Exclusive $ const pass
+    when (isJust free) $ removePathForcibly $ leases </> name
 
 
 projectText :: ProjectId -> FilePath

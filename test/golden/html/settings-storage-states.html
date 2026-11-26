@@ -77,14 +77,14 @@
 <span>Remove</span>
 </button>
 <dialog id="remove-modal" aria-labelledby="remove-modal-title" class="modal p-3 sm:p-8 overscroll-contain" _="on closeModal from body or htmx:after:request
-    if my.open and (event.type is &#39;closeModal&#39; or (event.target.tagName is &#39;FORM&#39; and event.detail.ctx.response.status &lt; 300 and event.detail.ctx.response.headers.get(&#39;HX-Reswap&#39;) is not &#39;none&#39;))
-      call me.close()
-      wait 0ms
-      set opener to document.getElementById(my.id + &#39;-trigger&#39;)
-      if opener call opener.focus() end
-    end">
-<div class="modal-box p-6 max-w-md">
-<h2 id="remove-modal-title" class="text-lg font-semibold text-textStrong break-words">Remove bucket?</h2>
+          if my.open and (event.type is &#39;closeModal&#39; or (event.target.tagName is &#39;FORM&#39; and event.detail.ctx.response.status &lt; 300 and event.detail.ctx.response.headers.get(&#39;HX-Reswap&#39;) is not &#39;none&#39;))
+            call me.close()
+            wait 0ms
+            set opener to document.getElementById(my.id + &#39;-trigger&#39;)
+            if opener call opener.focus() end
+          end">
+<div class="modal-box relative p-6 max-w-md">
+<h2 id="remove-modal-title" class="pe-8 text-lg font-semibold text-textStrong break-words">Remove bucket?</h2>
 <div class="flex items-start gap-3 mt-2 mb-4">
 <div class="w-fit shrink-0 p-2 rounded-full bg-fillError-weak">
 <svg class="icon h-4 w-4 text-iconError" width="1em" height="1em" viewBox="0 0 512 512">
@@ -96,9 +96,16 @@
 <p class="text-sm text-textWeak">This will disconnect your S3 bucket. Data already stored will remain in your bucket.</p>
 </div>
 <div class="flex justify-end gap-2 mt-6">
-<button type="button" class="btn btn-sm btn-ghost" onclick="this.closest(&#39;dialog&#39;).close()">Cancel</button>
+<button type="button" class="btn btn-sm btn-ghost" _="on click call (closest &lt;dialog/&gt;).close()">Cancel</button>
 <button type="button" class="btn btn-sm bg-fillError-strong text-white hover:opacity-90" data-hx-delete="/p/<uuid>/byob_s3" data-hx-swap="outerHTML" data-hx-target="#storage-connection-content">Remove bucket</button>
 </div>
+<button type="button" aria-label="Close Remove bucket?" _="on click call (closest &lt;dialog/&gt;).close()" class="btn btn-xs btn-circle btn-ghost absolute top-4 end-4 text-iconNeutral hover:bg-fillWeak hover:text-textStrong">
+<svg class="icon h-3.5 w-3.5" width="1em" height="1em" viewBox="0 0 8 8">
+<g>
+<path d="M7 1L1 7M1 1L7 7" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round" />
+</g>
+</svg>
+</button>
 </div>
 <form method="dialog" class="modal-backdrop">
 <button aria-label="Close Remove bucket?">Close</button>

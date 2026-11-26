@@ -10,6 +10,7 @@ module Pkg.Metrics (
   ingestWriteHist,
   gitApiErrors,
   gitWebhookRejections,
+  reviewFailures,
   gitSyncHist,
   workspacePrepareHist,
   bump,
@@ -151,6 +152,16 @@ gitWebhookRejections =
   unsafePerformIO
     $ meterCreateCounterInt64 monoscopeMeter "monoscope.git.webhook.rejected" Nothing (Just "Webhook deliveries that failed verification") defaultAdvisoryParameters
 {-# NOINLINE gitWebhookRejections #-}
+
+
+-- | Production impact reviews that failed, by @cause@ ('Pkg.ImpactReview.failureCause', a fixed
+-- vocabulary). The cause text stays on the "Production impact review failed" log line; this answers
+-- "why do reviews fail" without scanning days of logs.
+reviewFailures :: Counter Int64
+reviewFailures =
+  unsafePerformIO
+    $ meterCreateCounterInt64 monoscopeMeter "monoscope.review.failures" Nothing (Just "Production impact reviews that failed, by cause") defaultAdvisoryParameters
+{-# NOINLINE reviewFailures #-}
 
 
 -- | Wall-time of one dashboard sync pull, by @host@.

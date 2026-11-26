@@ -36,8 +36,11 @@ module Models.Apis.Uptime (
   insertStatusPage,
   updateStatusPage,
   deleteStatusPage,
+  ensureDefaultStatusPage,
+  toggleStatusPageVisibility,
 ) where
 
+import Data.Char (isAsciiLower, isDigit)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
 import Data.Time (Day, UTCTime)
@@ -206,7 +209,7 @@ windowUptime cid now =
 
 
 data RegionStats = RegionStats {checkId :: UUID.UUID, region :: Text, total :: Int, failed :: Int, avgMs :: Maybe Double, avgDnsMs :: Maybe Double, lastAt :: UTCTime, lastOk :: Bool}
-  deriving stock (Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
 
 
@@ -221,7 +224,7 @@ regionStats ids since =
 -- | A run of consecutive failures, and the first success after it (none while ongoing). The
 -- last failure's status code says what went wrong without its message's client detail.
 data Incident = Incident {checkId :: UUID.UUID, startedAt :: UTCTime, lastFailedAt :: UTCTime, failures :: Int, recoveredAt :: Maybe UTCTime, reason :: Maybe Text, statusCode :: Maybe Int}
-  deriving stock (Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
 
 
@@ -272,7 +275,7 @@ data StatusPage = StatusPage
   , visibility :: Visibility
   , checkIds :: V.Vector UUID.UUID
   }
-  deriving stock (Generic)
+  deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
 
 
@@ -310,3 +313,43 @@ updateStatusPage pid sid slug title description visibility checks =
 
 deleteStatusPage :: DB es => Projects.ProjectId -> StatusPageId -> Eff es Int64
 deleteStatusPage pid sid = Hasql.interpExecute [HI.sql| DELETE FROM apis.status_pages WHERE project_id = #{pid} AND id = #{sid} |]
+
+
+-- | Ensure the project has a default status page (created as Internal by default) and
+-- attach any newly created check IDs to it so users never start with an empty status page.
+ensureDefaultStatusPage :: DB es => Projects.ProjectId -> Text -> [UUID.UUID] -> Eff es (Maybe StatusPage)
+ensureDefaultStatusPage pid projectTitle newIds = do
+  existing <- statusPagesByProject pid
+  case existing of
+    p : _ -> do
+      let merged = ordNub (V.toList p.checkIds <> newIds)
+      when (length merged > V.length p.checkIds)
+        $ void
+        $ updateStatusPage pid p.id p.slug p.title p.description p.visibility merged
+      pure $ Just p{checkIds = V.fromList merged}
+    [] -> do
+      let cleanTitle = let t = T.strip projectTitle in if T.null t then "Project" else t
+          pageTitle = cleanTitle <> " Status"
+          desc = "Live availability and response times for monitored services."
+          baseSlug = slugifyStatusTitle cleanTitle
+          fallbackSlug = baseSlug <> "-" <> T.take 8 pid.toText
+      inserted <- insertStatusPage pid baseSlug pageTitle desc VInternal newIds
+      when (inserted == 0) $ void $ insertStatusPage pid fallbackSlug pageTitle desc VInternal newIds
+      listToMaybe <$> statusPagesByProject pid
+
+
+-- | Flip a status page between Internal and Public visibility and return the updated row.
+toggleStatusPageVisibility :: DB es => Projects.ProjectId -> StatusPageId -> Eff es (Maybe StatusPage)
+toggleStatusPageVisibility pid sid = do
+  statusPageById pid sid >>= \case
+    Nothing -> pure Nothing
+    Just p -> do
+      let nextVis = case p.visibility of VPublic -> VInternal; VInternal -> VPublic
+      void $ Hasql.interpExecute [HI.sql| UPDATE apis.status_pages SET visibility = #{nextVis} WHERE project_id = #{pid} AND id = #{sid} |]
+      pure $ Just p{visibility = nextVis}
+
+
+slugifyStatusTitle :: Text -> Text
+slugifyStatusTitle raw =
+  let cleaned = T.intercalate "-" $ filter (not . T.null) $ T.split (not . (\c -> isAsciiLower c || isDigit c)) (T.toLower raw)
+   in if T.null cleaned then "status" else T.take 40 cleaned

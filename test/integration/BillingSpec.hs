@@ -29,6 +29,7 @@ import Database.PostgreSQL.Simple qualified as PGS
 import Effectful.Dispatch.Dynamic (interpose)
 import Effectful.Error.Static (catchError)
 import Models.Apis.Issues qualified as Issues
+import Models.Projects.OnboardingInstrument qualified as OI
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), defaultRequest)
 import Network.HTTP.Client.Internal (Response (..))
@@ -109,7 +110,7 @@ spec = around withTestResources do
     -- TF-only deployments write no Postgres telemetry: an event behind the "timefusion" pool
     -- (a schema search_path routes otel_logs_and_spans to) still verifies a project with none.
     tfOnly <- createTestProject tr "tf-only"
-    db <- dbOne @_ @Text tr [sql|CREATE SCHEMA tf_only; CREATE TABLE tf_only.otel_logs_and_spans (project_id text, context___span_id text); INSERT INTO tf_only.otel_logs_and_spans VALUES (?, 'span-1'); SELECT current_database()|] (Only tfOnly.toText)
+    db <- dbOne @_ @Text tr [sql|CREATE SCHEMA tf_only; CREATE TABLE tf_only.otel_logs_and_spans (project_id text, context___span_id text, timestamp timestamptz); INSERT INTO tf_only.otel_logs_and_spans VALUES (?, 'span-1', ?); SELECT current_database()|] (tfOnly.toText, eventTime)
     host <- fromMaybe "localhost" <$> lookupEnv "DB_HOST"
     bracket (mkHasqlPool 1 $ encodeUtf8 $ "host=" <> toText host <> " user=postgres password=postgres dbname=" <> db <> " options='-c search_path=tf_only'") OHasql.release \tfPool -> do
       let ctx = tr.trATCtx
@@ -154,6 +155,55 @@ spec = around withTestResources do
     pricing "42" `shouldReturn` Left CreateProject.SubscriptionBilledElsewhere
     (.paymentPlan) <$> projectOf tr pid `shouldReturn` "Free"
     lookupResponseHeader @"Location" landing `shouldSatisfy` \case Header l -> ("/p/" <> pid.toText <> "/dashboards/") `T.isPrefixOf` l; _ -> False
+
+  it "redesigned quick-start onboarding saves name/region, creates verified uptime checks, and queues durable repo instrumentation" \tr0 -> do
+    (tr, pid) <- onboarded tr0
+    let step m = call tr (Onboarding.onboardingGetH pid m) <&> \(Onboarding.OnboardingGet (PageCtx _ d)) -> d
+    -- Default landing is QuickStart
+    step Nothing >>= \case
+      Onboarding.QuickStartStep{} -> pass
+      other -> expectationFailure $ "expected QuickStartStep, got " <> show other
+    -- Submitting QuickStart saves project name + region and routes to MonitorUrl
+    (qsHeaders, _) <- testServant tr $ Onboarding.onboardingQuickStartPostH pid Onboarding.QuickStartForm{projectName = "Acme Cloud", location = "eu", next = "url"}
+    lookupResponseHeader @"HX-Redirect" qsHeaders `shouldBe` Header ("/p/" <> pid.toText <> "/onboarding?step=MonitorUrl")
+    -- Creating uptime checks records an initial probe result and auto-creates an Internal default status page
+    created <- call tr $ Onboarding.onboardingCreateUptimesPostH pid Onboarding.CreateUptimesForm{selected = ["https://api.acme.com/health||Acme Health"]}
+    length created.createdChecks `shouldBe` 1
+    created.createdStatusPage `shouldSatisfy` isJust
+    project <- projectOf tr pid
+    project.title `shouldBe` "Acme Cloud"
+    project.paymentPlan `shouldBe` "ONBOARDING"
+    -- Finishing Alerts routes an ONBOARDING project to the plan picker (never auto-Free)
+    (finishHeaders, _) <- testServant tr $ Onboarding.onboardingFinishPostH pid
+    lookupResponseHeader @"HX-Redirect" finishHeaders `shouldBe` Header ("/p/" <> pid.toText <> "/onboarding?step=Pricing")
+    -- Starting durable auto-instrumentation creates a persisted run visible via status endpoint
+    started <- call tr $ Onboarding.onboardingStartInstrumentPostH pid Onboarding.StartInstrumentForm{repoFullName = "acme/api", branch = Just "main", targetKind = Just "backend", rootPath = Nothing}
+    started.statusRun `shouldSatisfy` isJust
+    fetched <- call tr $ Onboarding.onboardingInstrumentStatusGetH pid Nothing
+    fetched.statusRun `shouldSatisfy` isJust
+    -- One run at a time on every plan; unpaid projects get one PR and 3 attempts a day
+    let start = (.statusRefusal) <$> call tr (Onboarding.onboardingStartInstrumentPostH pid Onboarding.StartInstrumentForm{repoFullName = "acme/api", branch = Nothing, targetKind = Nothing, rootPath = Nothing})
+        failRuns = dbExec tr [sql|UPDATE projects.onboarding_instrument_runs SET status = 'failed' WHERE project_id = ?|] (Only pid)
+    start `shouldReturn` Just OI.RunInProgress
+    (failRuns >> start) `shouldReturn` Nothing
+    (failRuns >> start) `shouldReturn` Nothing
+    (failRuns >> start) `shouldReturn` Just OI.UnpaidDailyLimit
+    dbExec tr [sql|UPDATE projects.onboarding_instrument_runs SET pr_url = 'https://github.com/acme/api/pull/1', created_at = created_at - INTERVAL '2 days' WHERE project_id = ?|] (Only pid)
+    start `shouldReturn` Just OI.UnpaidPrUsed
+    rendered <- renderT <$> call tr (Onboarding.onboardingStartInstrumentPostH pid Onboarding.StartInstrumentForm{repoFullName = "acme/api", branch = Nothing, targetKind = Nothing, rootPath = Nothing})
+    rendered `shouldSatisfy` T.isInfixOf "Free projects include one setup PR"
+    dbExec tr [sql|UPDATE projects.projects SET payment_plan = 'Startup' WHERE id = ?|] (Only pid)
+    start `shouldReturn` Nothing
+    start `shouldReturn` Just OI.RunInProgress
+    -- A monorepo run is scoped to the chosen service folder; without GitHub the picker falls back to the root
+    failRuns
+    scoped <- call tr $ Onboarding.onboardingStartInstrumentPostH pid Onboarding.StartInstrumentForm{repoFullName = "acme/api", branch = Nothing, targetKind = Nothing, rootPath = Just " /services/api/ "}
+    (.rootPath) <$> scoped.statusRun `shouldBe` Just "services/api"
+    renderT <$> call tr (Onboarding.onboardingServiceRootsGetH pid (Just "acme/api")) >>= (`shouldSatisfy` T.isInfixOf "will start from its root")
+    -- Instrument hub exposes active API key for editors
+    step (Just Onboarding.Instrument) >>= \case
+      Onboarding.InstrumentHubStep{apiKey = k} -> k `shouldNotBe` "<API_KEY>"
+      other -> expectationFailure $ "expected InstrumentHubStep, got " <> show other
 
   it "project settings: defaults, alert toggles, members, storage, super-admin notice and an unbilled deletion" \tr0 -> do
     (tr, pid) <- onboarded tr0

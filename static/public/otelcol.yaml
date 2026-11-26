@@ -116,6 +116,14 @@ processors:
           - set(log.cache["parsed"], ParseKeyValue(log.body, "=", " ")) where log.cache["parsed"] == nil and IsString(log.body) and IsMatch(log.body, "^[A-Za-z0-9_.-]+=\\S") and not IsMatch(log.body, "^\\s*[\\{\\[]")
           - merge_maps(log.attributes, log.cache["parsed"], "insert") where log.cache["parsed"] != nil
 
+          # Trace context written into the line (`trace_id`/`span_id`), so a
+          # scraped log opens its trace. Only valid lowercase hex, only when
+          # the SDK left the record's ids empty.
+          - set(log.trace_id.string, log.attributes["trace_id"]) where IsMatch(log.trace_id.string, "^0*$") and IsString(log.attributes["trace_id"]) and IsMatch(log.attributes["trace_id"], "^[0-9a-f]{32}$")
+          - set(log.span_id.string, log.attributes["span_id"]) where IsMatch(log.span_id.string, "^0*$") and IsString(log.attributes["span_id"]) and IsMatch(log.attributes["span_id"], "^[0-9a-f]{16}$")
+          - delete_key(log.attributes, "trace_id") where log.attributes["trace_id"] == log.trace_id.string
+          - delete_key(log.attributes, "span_id") where log.attributes["span_id"] == log.span_id.string
+
           # Severity text — pull from the usual aliases when the SDK didn't
           # set the dedicated severity_text field.
           - set(log.severity_text, String(log.attributes["level"]))     where log.severity_text == "" and log.attributes["level"] != nil
@@ -128,7 +136,7 @@ processors:
           - set(log.severity_number, SEVERITY_NUMBER_DEBUG) where log.severity_number == 0 and IsMatch(log.severity_text, "(?i)^(debug|dbg)")
           - set(log.severity_number, SEVERITY_NUMBER_INFO)  where log.severity_number == 0 and IsMatch(log.severity_text, "(?i)^(info|inf|notice)")
           - set(log.severity_number, SEVERITY_NUMBER_WARN)  where log.severity_number == 0 and IsMatch(log.severity_text, "(?i)^(warn|warning)")
-          - set(log.severity_number, SEVERITY_NUMBER_ERROR) where log.severity_number == 0 and IsMatch(log.severity_text, "(?i)^(err|error|severe)")
+          - set(log.severity_number, SEVERITY_NUMBER_ERROR) where log.severity_number == 0 and IsMatch(log.severity_text, "(?i)^(err|error|severe|attention)")
           - set(log.severity_number, SEVERITY_NUMBER_FATAL) where log.severity_number == 0 and IsMatch(log.severity_text, "(?i)^(fatal|crit|critical|emerg|panic|alert)")
 
           # Timestamp extraction — only when SDK didn't set `time`. We probe
