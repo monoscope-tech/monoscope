@@ -3751,7 +3751,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         fmap (.source) widget.dataset `shouldBe` Just (AE.toJSON ([[AE.String "events", AE.String "percent"], [AE.Number 3, AE.Number 100]] :: [[AE.Value]]))
         widgetQuery <- maybe (fail "widget query missing") pure item.query
         ast <- either (fail . toString) pure $ KQL.parseQueryToAST widgetQuery
-        replayed <- runQueryEffect tr $ selectLogTable False reviewPid ast widgetQuery Nothing (Just $ addUTCTime (-(30 * 86400)) frozenTime, Just $ addUTCTime 86400 frozenTime) [] Nothing Nothing Nothing Nothing
+        replayed <- runQueryEffect tr $ selectLogTable reviewPid ast widgetQuery Nothing (Just $ addUTCTime (-(30 * 86400)) frozenTime, Just $ addUTCTime 86400 frozenTime) [] Nothing Nothing Nothing Nothing
         (rows, _, _) <- either (fail . toString) pure replayed
         map V.toList (V.toList rows) `shouldBe` [[AE.Number 3, AE.Number 100]]
     expectedChart <-

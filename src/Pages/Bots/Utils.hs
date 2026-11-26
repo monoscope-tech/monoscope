@@ -205,16 +205,16 @@ installedSuccess botPlatform pidM = do
           p_ [class_ "text-textStrong text-sm"] $ toHtml desc
 
 
-processAIQuery :: ProjectToolCtx es => Maybe EnvConfig -> Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
-processAIQuery sourceConfig useTf = processAIQueryWithTools sourceConfig useTf Nothing
+processAIQuery :: ProjectToolCtx es => Maybe EnvConfig -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQuery sourceConfig = processAIQueryWithTools sourceConfig Nothing
 
 
-processAIQueryWithTools :: ProjectToolCtx es => Maybe EnvConfig -> Bool -> Maybe AI.ProjectTools -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
-processAIQueryWithTools sourceConfig useTf projectTools = processAIQueryWithMode sourceConfig useTf projectTools AI.InteractiveReadOnly
+processAIQueryWithTools :: ProjectToolCtx es => Maybe EnvConfig -> Maybe AI.ProjectTools -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQueryWithTools sourceConfig projectTools = processAIQueryWithMode sourceConfig projectTools AI.InteractiveReadOnly
 
 
-processAIQueryWithMode :: ProjectToolCtx es => Maybe EnvConfig -> Bool -> Maybe AI.ProjectTools -> AI.InvocationMode -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
-processAIQueryWithMode sourceConfig useTf projectTools invocationMode access pid userQuery conversationId model apiKey = do
+processAIQueryWithMode :: ProjectToolCtx es => Maybe EnvConfig -> Maybe AI.ProjectTools -> AI.InvocationMode -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQueryWithMode sourceConfig projectTools invocationMode access pid userQuery conversationId model apiKey = do
   AI.requireAgentAccess access pid
   for_ conversationId $ AI.requireEvidenceAccess access pid
   now <- Time.currentTime
@@ -232,7 +232,6 @@ processAIQueryWithMode sourceConfig useTf projectTools invocationMode access pid
           , AI.systemPromptOverride = issuePrompt
           , AI.conversationType = (.conversationType) <$> conversation
           , AI.conversationId = conversationId
-          , AI.useTimefusion = useTf
           , AI.access = access
           , AI.sourceConfig = sourceConfig
           , AI.invocationMode = invocationMode
@@ -489,7 +488,7 @@ runBotQueryWithTools
 runBotQueryWithTools projectTools invocationMode target deliver envCfg access pid userQuery resolveThread =
   AI.requireAgentAccess access pid >> do
     threadM <- resolveThread
-    processAIQueryWithMode (Just envCfg) envCfg.enableTimefusionReads projectTools invocationMode access pid userQuery threadM envCfg.openaiModel envCfg.openaiApiKey
+    processAIQueryWithMode (Just envCfg) projectTools invocationMode access pid userQuery threadM envCfg.openaiModel envCfg.openaiApiKey
       >>= either (\err -> send (ReplyText $ formatBotError target ServiceError) $> Left err) (\response -> dispatchAIResponse threadM response $> Right ())
   where
     send reply = AI.requireAgentAccess access pid >> deliver reply
@@ -525,7 +524,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
                 case parseQueryToAST query of
                   Left _ -> send $ ReplyText $ formatBotError target (QueryParseError query)
                   Right query' ->
-                    LogQueries.selectLogTable envCfg.enableTimefusionReads pid query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing Nothing Nothing
+                    LogQueries.selectLogTable pid query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing Nothing Nothing
                       >>= send
                       . ReplyText
                       . tableReply query

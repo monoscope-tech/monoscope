@@ -973,7 +973,7 @@ spec = around withTestResources do
                 | suffix == "/contents/checkout.py?ref=" <> oldRevision -> Just $ ghContent "poolSize = 50\n"
                 | suffix == "/contents/checkout.py?ref=" <> newRevision -> Just $ ghContent "poolSize = 5\n"
                 | otherwise -> Nothing
-      (requests, result) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ Bot.processAIQuery (Just tr.trATCtx.config) False (investigation tr "T_DEPLOYMENT" "CDEPLOYMENT") testPid "Could a pool setting change explain this? Compare production and staging." Nothing "model" "key"
+      (requests, result) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ Bot.processAIQuery (Just tr.trATCtx.config) (investigation tr "T_DEPLOYMENT" "CDEPLOYMENT") testPid "Could a pool setting change explain this? Compare production and staging." Nothing "model" "key"
       result `shouldSatisfy` isRight
       length requests `shouldBe` 8
       readIORef observed >>= \case
@@ -1037,7 +1037,7 @@ spec = around withTestResources do
                 steps = [fn "get_linked_repositories" [("service", "checkout")], fn "list_runbooks" (repoArgs revision), fn "read_runbook" (readArgs runbookPath Nothing), fn "read_runbook" (readArgs runbookPath (Just 101)), fn "read_runbook" (readArgs "../secrets.md" Nothing), fn "read_runbook" (readArgs runbookPath (Just 400)), fn "list_runbooks" (repoArgs "main")]
             writeIORef observed results
             pure $ nextStep results steps "The runbook lists a check to run; it is not evidence that anyone ran it."
-      (requests, result) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ Bot.processAIQuery (Just cfg) False (investigation tr "T_RUNBOOK" "CRUNBOOK") testPid "Is there a runbook for checkout latency?" Nothing "model" "key"
+      (requests, result) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ Bot.processAIQuery (Just cfg) (investigation tr "T_RUNBOOK" "CRUNBOOK") testPid "Is there a runbook for checkout latency?" Nothing "model" "key"
       result `shouldSatisfy` isRight
       map fst requests `shouldBe` map ("https://api.github.com/repos/acme/checkout-service" <>) (["/commits/" <> revision, "/git/trees/" <> revision <> "?recursive=1"] <> replicate 3 ("/contents/" <> runbookPath <> "?ref=" <> revision))
       readIORef observed >>= \case
@@ -1789,7 +1789,7 @@ spec = around withTestResources do
       dbOne @_ @Bool tr [sql|SELECT count(*) = count(DISTINCT md5(kept.content)) AND count(*) < 3 FROM apis.ai_routine_run_artifacts kept JOIN apis.ai_routine_runs run ON run.id = kept.run_id WHERE run.conversation_id = ? AND kept.key LIKE 'weekly-report-%'|] (Only reportConv) `shouldReturn` True
 
     it "answers recorded agent queries" \tr -> do
-      let askAgent query apiKey = runTestBg frozenTime tr $ Bot.processAIQuery Nothing False AI.ServiceAccess testPid query Nothing tr.trATCtx.env.openaiModel apiKey
+      let askAgent query apiKey = runTestBg frozenTime tr $ Bot.processAIQuery Nothing AI.ServiceAccess testPid query Nothing tr.trATCtx.env.openaiModel apiKey
       for_ ([("plot error trend over time", "agentic/error_trend_response.json"), ("show warning and error counts grouped by service", "agentic/service_breakdown_response.json"), ("what services have the most errors?", "agentic/explanation_only_response.json")] :: [(Text, FilePath)]) \(query, golden) ->
         askAgent query tr.trATCtx.env.openaiApiKey >>= either (fail . toString) (goldenJson golden . AE.toJSON . \r -> (r :: AI.LLMResponse){AI.toolCalls = Nothing})
       askAgent "show errors" "" >>= either (`shouldSatisfy` \err -> T.isInfixOf "unavailable" err || T.isInfixOf "error" (T.toLower err)) (const pass)

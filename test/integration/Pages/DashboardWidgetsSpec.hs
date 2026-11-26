@@ -731,7 +731,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     ingestTrace tr apiKey "GET /tenant-scope" frozenTime
     ingestTrace tr theirs "GET /tenant-scope" frozenTime
     let own = "project_id='" <> testPid.toText <> "'"
-        run source q = fmap (\rs -> ordNub [v | row <- V.toList rs, AE.String v <- V.toList row]) <$> runQueryEffect tr (LogQueries.executeSecuredQuery True testPid (LogQueries.SecuredSql source q) 100)
+        run source q = fmap (\rs -> ordNub [v | row <- V.toList rs, AE.String v <- V.toList row]) <$> runQueryEffect tr (LogQueries.executeSecuredQuery testPid (LogQueries.SecuredSql source q) 100)
     for_ [LogQueries.SqlPostgres, LogQueries.SqlTimefusion] \source -> do
       for_
         [ "SELECT project_id::text FROM otel_logs_and_spans WHERE " <> own <> " OR TRUE"
@@ -945,14 +945,17 @@ spec = around withTestResources $ describe "Dashboard widgets" do
   it "endpoint analytics: client spans count, selectors build route filters, pickers gate the widget phase, swaps ship skeletons" \tr -> do
     -- Every widget once pinned kind=="server", blanking the dashboard for outgoing (client-span)
     -- endpoints, ~56% of a project's. Reported for dellyman.com/api/v3.0/GetQuotes.
-    dbExec tr [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, date, name, kind, status_code, duration, hashes, summary) VALUES (gen_random_uuid(), ?, ?, ?, ?, 'POST', 'client', '200', 5000000, ARRAY['ba3431d5'], ARRAY['POST']) |] (testPid.toText, frozenTime, frozenTime, frozenTime)
-    let buckets q = (\md -> (md.error, V.length md.dataset)) <$> runQueryEffect tr (Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) (Just $ q <> "hashes[*]==\"ba3431d5\" | summarize count() by bin_auto(timestamp)") Nothing (Just "24H") Nothing Nothing Nothing Nothing [])
+    -- A chosen hash, so the span is written as a row into both stores.
+    tfUrl <- lookupEnv "TIMEFUSION_PG_TEST_URL"
+    for_ (tr.trATCtx.pool : [tr.trATCtx.timefusionPgPool | isJust tfUrl]) \store -> withResource store \conn ->
+      PG.execute conn [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, date, name, kind, status_code, duration, hashes, summary) VALUES ('5e1d7a5a-0000-4000-8000-000000000001', ?, ?, ?, ?, 'POST', 'client', '200', 5000000, ARRAY['ba3431d5'], ARRAY['POST']) |] (testPid.toText, frozenTime, frozenTime, frozenTime)
+    let buckets q = (\md -> (md.error, V.length md.dataset)) <$> runQueryEffect tr (Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just $ q <> "hashes[*]==\"ba3431d5\" | summarize count() by bin_auto(timestamp)") Nothing (Just "24H") Nothing Nothing Nothing Nothing [])
     buckets "" >>= (`shouldSatisfy` \(err, n) -> isNothing err && n > 0)
     snd <$> buckets "kind==\"server\" AND " `shouldReturn` 0
     -- Several aggregates with no `by` are one row of named columns; a single-float decoder failed
     -- them ("column count does not match its decoder"). A metrics query on an attribute with no
     -- otel_metrics column reads the JSON, not the spans-only attributes___db___namespace.
-    let chart src dt q = runQueryEffect tr (Charts.queryMetrics (Just Hasql.SqlPostgres) (Just dt) (Just testPid) (Just q) Nothing (Just "24H") Nothing Nothing src Nothing [])
+    let chart src dt q = runQueryEffect tr (Charts.queryMetrics Nothing (Just dt) (Just testPid) (Just q) Nothing (Just "24H") Nothing Nothing src Nothing [])
     multi <- chart Nothing Charts.DTMetric "summarize count(), min(duration), max(duration)"
     (multi.error, V.length multi.headers) `shouldBe` (Nothing, 3)
     (.error) <$> chart (Just "metrics") Charts.DTMetric "attributes.db.namespace == \"orders\" | summarize avg(value) by bin_auto(timestamp), attributes.db.namespace" `shouldReturn` Nothing
@@ -1388,7 +1391,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     endpoint <- DashboardModel.readDashboardFile "static/public/dashboards" "endpoint-stats.yaml"
     map (fmap (.source) . (.sql)) (fold $ endpoint >>= (.variables)) `shouldBe` [Just LogQueries.SqlPostgres, Just LogQueries.SqlPostgres]
     noApisPool <- mkHasqlPool 1 (tr.trConnStr <> " dbname=postgres")
-    runQueryEffect tr{trATCtx = tr.trATCtx{Config.hasqlTimefusionPool = noApisPool}} (LogQueries.executeSecuredQuery True testPid (LogQueries.SecuredSql LogQueries.SqlPostgres $ "SELECT COUNT(*)::bigint FROM apis.endpoints WHERE project_id='" <> testPid.toText <> "' AND 'otel_logs_and_spans' = 'otel_logs_and_spans'") 1)
+    runQueryEffect tr{trATCtx = tr.trATCtx{Config.hasqlTimefusionPool = noApisPool}} (LogQueries.executeSecuredQuery testPid (LogQueries.SecuredSql LogQueries.SqlPostgres $ "SELECT COUNT(*)::bigint FROM apis.endpoints WHERE project_id='" <> testPid.toText <> "' AND 'otel_logs_and_spans' = 'otel_logs_and_spans'") 1)
       >>= (`shouldSatisfy` isRight)
     -- The dashboard SQL-source migrations have already run in production.
     forM ["0119_endpoint_dashboard_sql_source", "0120_repair_dashboard_sql_source"] (\m -> show @Text . Crypto.hash @_ @Crypto.MD5 <$> readFileBS ("static/migrations/" <> m <> ".sql"))

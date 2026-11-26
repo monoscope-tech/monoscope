@@ -75,7 +75,7 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Deriving (WrappedEnumSC (..))
-import Pkg.Parser.Expr (CmpOp (..), Expr (..), FieldKey (..), Parser, Subject (..), ToQueryText (..), Values (..), arrayColumns, defaultBinWidth, flattenedMetricsAttributes, flattenedOtelAttributes, knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, searchExpr, suggestFieldRoot, unsupportedTimespan)
+import Pkg.Parser.Expr (CmpOp (..), Expr (..), FieldKey (..), Parser, Subject (..), ToQueryText (..), Values (..), arrayColumns, defaultBinWidth, flattenedMetricsAttributes, knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, searchExpr, suggestFieldRoot, unsupportedTimespan)
 import Relude hiding (GT, LT, Last, Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, hspace, space, string)
@@ -428,15 +428,14 @@ seriesSourceSQL bucketM binSecondsM table innerWhere inRange (ordNub -> leaves) 
 -- @last@, which a max cannot answer.
 --
 -- >>> let Right a = parse aggFunctionParser "" "rate(value)"
--- >>> seriesBinsSQL True "time_bucket('5 minutes', timestamp)" "time_bucket('30 minutes', timestamp)" 1800 ["metric_name"] "otel_metrics" "w" "aw" (seriesLeaves a)
+-- >>> seriesBinsSQL "time_bucket('5 minutes', timestamp)" "time_bucket('30 minutes', timestamp)" 1800 ["metric_name"] "otel_metrics" "w" "aw" (seriesLeaves a)
 -- Just "(SELECT *, (CASE WHEN aggregation_temporality = 'DELTA' THEN __sum_value WHEN __prev_value IS NULL THEN NULL WHEN __first_value < __prev_value THEN __max_value ELSE __max_value - __prev_value END) / GREATEST(1800.0, SUM(CAST(extract(epoch from timestamp) AS DOUBLE PRECISION) - CAST(extract(epoch from __prev_ts) AS DOUBLE PRECISION)) OVER (PARTITION BY series_id, time_bucket('30 minutes', timestamp))) AS __rate_value FROM (SELECT *, __last_ts AS timestamp, LAG(__last_ts) OVER (PARTITION BY series_id ORDER BY __last_ts) AS __prev_ts, LAG(__max_value) OVER (PARTITION BY series_id ORDER BY __last_ts) AS __prev_value FROM (SELECT series_id, aggregation_temporality, metric_name, max(timestamp) AS __last_ts, max(value) AS __max_value, first_value(value ORDER BY timestamp) AS __first_value, sum(value) AS __sum_value FROM otel_metrics WHERE w GROUP BY time_bucket('5 minutes', timestamp), series_id, aggregation_temporality, metric_name) AS __series_cells) AS __series_points) AS otel_metrics"
--- >>> let attrs pg = snd . T.breakOn "AS __series_cells" <$> seriesBinsSQL pg "c" "b" 60 ["attributes->'k8s'->>'pod'", "metric_name"] "otel_metrics" "w" "aw" (seriesLeaves a)
--- >>> attrs False
--- Just "AS __series_cells JOIN (SELECT series_id, (array_agg(attributes))[1] AS attributes FROM (SELECT series_id, attributes FROM otel_metrics WHERE aw GROUP BY series_id, attributes) AS __attrs GROUP BY series_id) AS __series_attrs USING (series_id)) AS __series_points) AS otel_metrics"
--- >>> [isJust $ seriesBinsSQL True "c" "b" 60 [col] "otel_metrics" "w" "aw" (seriesLeaves a) | col <- ["variant_to_json(attributes)->>'t'", "resource->>'t'", "COALESCE(attributes->>'t', 'x')"]]
+-- >>> snd . T.breakOn "AS __series_cells" <$> seriesBinsSQL "c" "b" 60 ["attributes->'k8s'->>'pod'", "metric_name"] "otel_metrics" "w" "aw" (seriesLeaves a)
+-- Just "AS __series_cells JOIN (SELECT series_id, first_value(attributes) AS attributes FROM (SELECT series_id, attributes FROM otel_metrics WHERE aw GROUP BY series_id, attributes) AS __attrs GROUP BY series_id) AS __series_attrs USING (series_id)) AS __series_points) AS otel_metrics"
+-- >>> [isJust $ seriesBinsSQL "c" "b" 60 [col] "otel_metrics" "w" "aw" (seriesLeaves a) | col <- ["variant_to_json(attributes)->>'t'", "resource->>'t'", "COALESCE(attributes->>'t', 'x')"]]
 -- [True,False,False]
-seriesBinsSQL :: Bool -> Text -> Text -> Double -> [Text] -> Text -> Text -> Text -> [(SeriesFn, Subject)] -> Maybe Text
-seriesBinsSQL timefusion cell bucket binSeconds groupCols table innerWhere attrsWhere (ordNub -> leaves) = do
+seriesBinsSQL :: Text -> Text -> Double -> [Text] -> Text -> Text -> Text -> [(SeriesFn, Subject)] -> Maybe Text
+seriesBinsSQL cell bucket binSeconds groupCols table innerWhere attrsWhere (ordNub -> leaves) = do
   guard $ not (null leaves) && all (T.all (\c -> isAlphaNum c || c == '_')) plainCols
   contributions <- traverse contribution leaves
   pure $ "(SELECT *, " <> T.intercalate ", " contributions <> " FROM (SELECT *, __last_ts AS timestamp, " <> T.intercalate ", " lags <> " FROM (SELECT " <> T.intercalate ", " (keys <> ["max(timestamp) AS __last_ts"] <> concatMap states subjects) <> " FROM " <> table <> " WHERE " <> innerWhere <> " GROUP BY " <> T.intercalate ", " (cell : keys) <> ") AS __series_cells" <> memptyIfTrue (null attrCols) attrsJoin <> ") AS __series_points) AS " <> table
@@ -445,9 +444,9 @@ seriesBinsSQL timefusion cell bucket binSeconds groupCols table innerWhere attrs
     (attrCols, plainCols) = partition attributePath groupCols
     keys = ordNub $ ["series_id", "aggregation_temporality"] <> plainCols
     -- Grouped by attributes first: TimeFusion's tier holds them as a dimension.
-    attrsJoin = " JOIN (SELECT series_id, " <> (if timefusion then "first_value(attributes)" else "(array_agg(attributes))[1]") <> " AS attributes FROM (SELECT series_id, attributes FROM " <> table <> " WHERE " <> attrsWhere <> " GROUP BY series_id, attributes) AS __attrs GROUP BY series_id) AS __series_attrs USING (series_id)"
+    attrsJoin = " JOIN (SELECT series_id, " <> "first_value(attributes)" <> " AS attributes FROM (SELECT series_id, attributes FROM " <> table <> " WHERE " <> attrsWhere <> " GROUP BY series_id, attributes) AS __attrs GROUP BY series_id) AS __series_attrs USING (series_id)"
     col = seriesStateCol
-    firstOf v = if timefusion then "first_value(" <> v <> " ORDER BY timestamp)" else "(array_agg(" <> v <> " ORDER BY timestamp))[1]"
+    firstOf v = "first_value(" <> v <> " ORDER BY timestamp)"
     states s = let v = display s in ["max(" <> v <> ") AS " <> col "max" s, firstOf v <> " AS " <> col "first" s, "sum(" <> v <> ") AS " <> col "sum" s]
     lagOf c = "LAG(" <> c <> ") OVER (PARTITION BY series_id ORDER BY __last_ts)"
     lags = (lagOf "__last_ts" <> " AS __prev_ts") : [lagOf (col "max" s) <> " AS " <> col "prev" s | s <- subjects]
@@ -517,13 +516,12 @@ data Sources = SSpans | SMetrics
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
--- | TimeFusion-only lowerings, keyed on the same flag; with it off the AST is untouched, so
--- Postgres SQL is byte-identical. Metrics: JSON columns are variants, so wrap them in
+-- | TimeFusion lowerings. Metrics: JSON columns are variants, so wrap them in
 -- @variant_to_json@ before the JSON-path operators. Any source: a bare-wildcard equality on
 -- a native array column ('arrayColumns') becomes @array_has@, ~2.3x faster than the jsonpath
 -- form. Equality only — @!=@ / @in@ / regex quantify differently over the elements.
 --
--- >>> let tf = fmap (rewriteSectionsForSource True Nothing) . parseQueryToAST
+-- >>> let tf = fmap (rewriteSectionsForSource Nothing) . parseQueryToAST
 -- >>> tf "hashes[*] == \"x\""
 -- Right [Search (ArrayHas "hashes" "x")]
 --
@@ -531,22 +529,16 @@ data Sources = SSpans | SMetrics
 --
 -- >>> all (\q -> isRight (parseQueryToAST q) && tf q == parseQueryToAST q) ["hashes[*] != \"x\"", "hashes[*] in (\"x\")", "hashes[*].k == \"x\"", "events[*] == \"x\"", "hashes[*] == 1"]
 -- True
--- >>> fmap (rewriteSectionsForSource False Nothing) (parseQueryToAST "hashes[*]==\"x\"")
--- Right [Search (Cmp Eq (Subject "hashes[*]" "hashes" [ArrayWildcard ""]) (Str "x"))]
 --
 -- A metrics subject with no flattened column of its own on @otel_metrics@ reads the JSON
--- column, on either store: it used to borrow the spans column name (@attributes___db___namespace@),
--- which @otel_metrics@ does not have.
+-- column: it used to borrow the spans column name (@attributes___db___namespace@), which
+-- @otel_metrics@ does not have.
 --
--- >>> let metrics tfOn = fmap (rewriteSectionsForSource tfOn (Just SMetrics)) . parseQueryToAST
--- >>> map (fmap (fmap display . (\case [Search (Cmp _ s _)] -> Just s; _ -> Nothing)) . metrics False) ["attributes.db.namespace == \"x\"", "attributes.db.system.name == \"x\"", "resource.host.name == \"x\""]
--- [Right (Just "(attributes)->'db'->>'namespace'"),Right (Just "attributes___db___system___name"),Right (Just "resource___host___name")]
--- >>> fmap (fmap display . (\case [Search (Cmp _ s _)] -> Just s; _ -> Nothing)) (metrics True "attributes.db.namespace == \"x\"")
--- Right (Just "variant_to_json(attributes)->'db'->>'namespace'")
-rewriteSectionsForSource :: Bool -> Maybe Sources -> [Section] -> [Section]
-rewriteSectionsForSource tfOn src
-  | not tfOn, src /= Just SMetrics = id
-  | otherwise = runIdentity . traverseAst (Identity . subject) (if tfOn then arrays else id)
+-- >>> let metrics = fmap (rewriteSectionsForSource (Just SMetrics)) . parseQueryToAST
+-- >>> map (fmap (fmap display . (\case [Search (Cmp _ s _)] -> Just s; _ -> Nothing)) . metrics) ["attributes.db.namespace == \"x\"", "attributes.db.system.name == \"x\"", "resource.host.name == \"x\""]
+-- [Right (Just "variant_to_json(attributes)->'db'->>'namespace'"),Right (Just "attributes___db___system___name"),Right (Just "resource___host___name")]
+rewriteSectionsForSource :: Maybe Sources -> [Section] -> [Section]
+rewriteSectionsForSource src = runIdentity . traverseAst (Identity . subject) arrays
   where
     arrays = \case
       Cmp Eq (Subject _ col [ArrayWildcard ""]) (Str v) | S.member col arrayColumns -> ArrayHas col v
@@ -555,9 +547,7 @@ rewriteSectionsForSource tfOn src
       Just SMetrics -> \case
         s@(Subject entire root keys)
           | entire `S.member` flattenedMetricsAttributes -> Subject entire (T.replace "." "___" entire) []
-          | root `elem` ["attributes", "resource"], tfOn -> Subject entire ("variant_to_json(" <> root <> ")") keys
-          -- A spans-only flattened name: the wrapped root opts out of that column ('Display Subject').
-          | root `elem` ["attributes", "resource"], entire `S.member` flattenedOtelAttributes -> Subject entire ("(" <> root <> ")") keys
+          | root `elem` ["attributes", "resource"] -> Subject entire ("variant_to_json(" <> root <> ")") keys
           | otherwise -> s
       Just SSpans -> id
       Nothing -> id

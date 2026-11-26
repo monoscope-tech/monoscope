@@ -145,10 +145,10 @@ defaultVisualizationType = "timeseries"
 -- | The SQL alert evaluation runs for a monitor's KQL: its window, direction and scope.
 -- Evaluation recompiles on every check (so parser fixes reach existing monitors), with
 -- @tf@ set; writes store the PG form for display. A query that doesn't compile is a 'Left'.
-compileAlertSql :: Bool -> Projects.ProjectId -> MonitorInput -> Either Text Text
-compileAlertSql tf pid inp =
+compileAlertSql :: Projects.ProjectId -> MonitorInput -> Either Text Text
+compileAlertSql pid inp =
   let scope = Parser.mkScopedQuery pid (Nothing, Nothing) inp.environment inp.service
-      cfg = (Parser.applyScopedQuery scope $ Parser.defSqlQueryCfg pid Parser.fixedUTCTime Nothing Nothing){Parser.alertLookbackMins = inp.timeWindowMins, Parser.alertBelow = inp.triggerLessThan, Parser.targetsTimefusion = tf}
+      cfg = (Parser.applyScopedQuery scope $ Parser.defSqlQueryCfg pid Parser.fixedUTCTime Nothing Nothing){Parser.alertLookbackMins = inp.timeWindowMins, Parser.alertBelow = inp.triggerLessThan}
       -- A widget's query keeps its dashboard placeholders; a monitor reads every variable as unset ("all").
       query = Parser.fillQueryTemplate Parser.KqlTemplate (Parser.variablePresetsKQL def pid.toText Nothing Nothing [] Parser.fixedUTCTime) inp.query
    in Parser.parseQueryToComponents cfg query >>= maybeToRight "The query produced no alert SQL" . (.finalAlertQuery) . snd
@@ -159,7 +159,7 @@ compileAlertSql tf pid inp =
 -- the API, monitors-as-code, the alert form and widget monitors.
 monitorFromInput :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorId -> Maybe Monitors.QueryMonitor -> MonitorInput -> Either Text Monitors.QueryMonitor
 monitorFromInput pid now mid existingM inp =
-  compileAlertSql False pid inp <&> \sql ->
+  compileAlertSql pid inp <&> \sql ->
     Monitors.QueryMonitor
       { id = mid
       , projectId = pid

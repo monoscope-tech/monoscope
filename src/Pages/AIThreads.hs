@@ -966,7 +966,7 @@ submitTurn projectTools origin requestId allowActions runner pid convId prompt =
     (QueuedTurn; DockTurn{}) -> pass
   when browserOnly do
     mode <- fmap AI.DurableRun $ AI.requireRunContext pid $ Issues.InteractiveClaim sess.user.id convId requestId
-    result <- Bots.processAIQueryWithMode (Just appCtx.config) appCtx.env.enableTimefusionReads projectTools mode (AI.MemberAccess AI.WebSession sess.user.id) pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
+    result <- Bots.processAIQueryWithMode (Just appCtx.config) projectTools mode (AI.MemberAccess AI.WebSession sess.user.id) pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
     case result of
       Left err -> throwError Servant.err502{Servant.errBody = encodeUtf8 err}
       Right _ -> pass

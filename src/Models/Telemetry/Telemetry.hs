@@ -2320,7 +2320,7 @@ otelColumns =
       , attrBigInt "attributes___gen_ai___usage___input_tokens" "gen_ai.usage.input_tokens"
       , attrBigInt "attributes___gen_ai___usage___output_tokens" "gen_ai.usage.output_tokens"
       , column "attributes___gen_ai___usage___cost" (\r -> r.attrs >>= getNestedValue ["gen_ai", "usage", "cost"] >>= GenAI.num)
-      , -- The LLM pages' text fields, as Pages.LLM.selectUnits reads them: arguments as written (an object as
+      , -- The LLM pages' text fields, as the LLM pages read them: arguments as written (an object as
         -- JSON, capped), finish reasons as JSON text. TF storage widened 2026-11-22; 0303 is the Postgres half.
         attrText "attributes___gen_ai___input___preview" "gen_ai.input.preview"
       , attrJson "attributes___gen_ai___tool___call___arguments" ["gen_ai", "tool", "call", "arguments"] (T.take 300 . \case AE.String t -> t; v -> jsonText v)

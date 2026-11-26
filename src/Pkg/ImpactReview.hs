@@ -1247,7 +1247,7 @@ requestEvidence pid currentServices windowStart windowEnd request = do
               query = toQText queryAST
           ctx <- ask @AuthContext
           let source = listToMaybe [s | KQL.Source s <- sections]
-          response <- fromMaybe (Left "Query timed out") <$> Timeout.timeout (30 * 1000000) (selectLogTable ctx.env.enableTimefusionReads pid queryAST query Nothing (Just windowStart, Just windowEnd) [] source Nothing Nothing (Just request.service))
+          response <- fromMaybe (Left "Query timed out") <$> Timeout.timeout (30 * 1000000) (selectLogTable pid queryAST query Nothing (Just windowStart, Just windowEnd) [] source Nothing Nothing (Just request.service))
           case response of
             -- The agent can only correct a query it can see the failure of.
             Left err -> pure $ Left $ "Production query failed: " <> queryFailure err

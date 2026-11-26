@@ -632,7 +632,7 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttr
   enableTfReads <- useTfReads
   -- Default to exact-match (no trace expansion); UI passes True via apiLogH.
   either (refuse . translateQueryError) (buildLogResult enableTfReads (fromMaybe False withChildrenM) (resultShape queryAST) pid now sinceM [] [])
-    =<< LogQueries.selectLogTable enableTfReads pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing environmentM serviceM
+    =<< LogQueries.selectLogTable pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing environmentM serviceM
 
 
 -- | Every refusal the explorer's JSON endpoints answer with, as a 400 'ApiProblem' (which the CLI's
@@ -888,7 +888,7 @@ logExplorerDataH pid q = withSpan_ "log-explorer.data" [] do
         unless (V.elem "explored_logs" project.onboardingStepsCompleted) $ void (Projects.completeOnboardingStep pid "explored_logs")
         Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId (toQText ast) ast Nothing
       resultE <-
-        LogQueries.selectLogTable authCtx.env.enableTimefusionReads pid queryAST (toQText queryAST) cursor (fromD, toD) addCols (parseMaybe pSource =<< q.source) q.targetSpans envM serviceM
+        LogQueries.selectLogTable pid queryAST (toQText queryAST) cursor (fromD, toD) addCols (parseMaybe pSource =<< q.source) q.targetSpans envM serviceM
       case resultE of
         Left err -> Log.logAttention "log-explorer.data query failed" (AE.object ["project_id" AE..= pid.toText, "source" AE..= fromMaybe "spans" q.source, "error" AE..= err]) $> (Just (sanitizeBackendError err), emptyTable)
         Right t -> pure (Nothing, t)

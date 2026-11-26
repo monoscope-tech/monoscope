@@ -2098,7 +2098,7 @@ aiChatPostHWithTools projectTools pid issueId form = do
   when browserOnly do
     mode <- fmap AI.DurableRun $ AI.requireRunContext pid $ Issues.InteractiveClaim sess.user.id convId requestId
     let access = AI.MemberAccess AI.WebSession sess.user.id
-        config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Nothing, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just fullSystemPrompt, AI.sourceConfig = Just appCtx.config, AI.useTimefusion = appCtx.env.enableTimefusionReads, AI.access = access, AI.projectTools = projectTools, AI.invocationMode = mode}
+        config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Nothing, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just fullSystemPrompt, AI.sourceConfig = Just appCtx.config, AI.access = access, AI.projectTools = projectTools, AI.invocationMode = mode}
     answer <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey >>= either (\err -> throwError err502{errBody = encodeUtf8 err}) pure
     void $ AI.completeAgenticResponse config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey answer
   messages <- Issues.selectChatHistory pid convId

@@ -242,21 +242,18 @@ data ExplorerUrl = ExplorerUrl
 -- SECURITY: validates the query for dangerous patterns and verifies a
 -- project_id filter is present (the caller substitutes {{project_id}}).
 -- The source is parsed at the dashboard/tool boundary instead of inferred from SQL
--- text; @useTimefusion@ is only the deployment-level telemetry-read switch.
-executeSecuredQuery :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> SecuredSql -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
-executeSecuredQuery useTimefusion pid (SecuredSql source userQuery) limit
+-- text: telemetry reads TimeFusion, and only 'SqlPostgres' reads Postgres.
+executeSecuredQuery :: (DB es, Labeled "timefusion" Hasql :> es) => Projects.ProjectId -> SecuredSql -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
+executeSecuredQuery pid (SecuredSql source userQuery) limit
   | not (validateSqlQuery userQuery) = pure $ Left "Query contains disallowed operations"
   | not (hasProjectIdFilter userQuery pid) = pure $ Left "Query must filter by project_id"
-  | otherwise = case scopeUserSql (source == SqlPostgres || not useTimefusion) pid userQuery of
+  | otherwise = case scopeUserSql (source == SqlPostgres) pid userQuery of
       Left err -> pure $ Left err
       Right scoped -> do
         let wrapped = rawSql ("SELECT jsonb_build_array(sub.*) FROM (" <> scoped <> ") sub") <> [HI.sql| LIMIT #{limit}|]
-            routeToTimefusion = case source of
-              SqlPostgres -> False
-              SqlTimefusion -> useTimefusion
             -- On the shared Postgres pool the statement gets the same 30s deadline as chart SQL.
             run
-              | routeToTimefusion = Hasql.withHasqlTimefusion True (Hasql.interpUser wrapped)
+              | source == SqlTimefusion = Hasql.withHasqlTimefusion True (Hasql.interpUser wrapped)
               | otherwise = Hasql.labeledSession "user_sql" (one (OA.toAttribute <$> Hasql.userQueryOrigin)) (TxS.transaction TxS.ReadCommitted TxS.Read (Tx.sql "SET LOCAL statement_timeout = '30s'" *> Hasql.queryTx wrapped))
         resultE <- try @Hasql.HasqlException $ jsonArrayRows <$> run
         pure $ first (\e -> "Query execution failed: " <> toText (displayException e)) resultE
@@ -422,14 +419,11 @@ validateSqlQuery query = "select" `T.isInfixOf` q && not (any (`T.isInfixOf` q) 
     forbidden = ["insert ", "update ", "delete ", "drop ", "truncate ", "alter ", "create ", "grant ", "revoke ", "copy ", "execute ", "explain ", "set ", "; ", "--", "/*", "*/", "information_schema", "pg_catalog", "pg_"] :: [Text]
 
 
--- | @useTimefusion@ (from @env.enableTimefusionReads@) routes the read to the TimeFusion
--- pool, as in 'executeSecuredQuery'. It is a parameter, not a wrapper the callers apply,
--- because callers that forgot it silently read the empty Postgres side.
-selectLogTable :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> Projects.ProjectId -> [Section] -> Text -> Maybe PageCursor -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
-selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM environment service = do
+selectLogTable :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe PageCursor -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
+selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM environment service = do
   now <- Time.currentTime
   let scope = mkScopedQuery pid dateRange environment service
-      cfg = (applyScopedQuery scope $ defSqlQueryCfg pid now source targetSpansM){cursorM, projectedColsByUser, targetsTimefusion = useTimefusion}
+      cfg = (applyScopedQuery scope $ defSqlQueryCfg pid now source targetSpansM){cursorM, projectedColsByUser}
       (q, queryComponents) = queryASTToComponents cfg queryAST
       canonicalOrder = case cursorM of Just (PageCursor PageNewer _) -> V.reverse; _ -> identity
 
@@ -464,7 +458,7 @@ selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedC
       $ try @SomeException
       $ Hasql.retryTransientEff 500_000 "log-explorer.data"
       $ checkpoint (toAnnotation ("selectLogTable", q))
-      $ Hasql.withHasqlTimefusion useTimefusion (jsonArrayRows <$> Hasql.interpUser (rawSql q))
+      $ Hasql.withHasqlTimefusion True (jsonArrayRows <$> Hasql.interpUser (rawSql q))
   let paged :: Either Text (V.Vector (V.Vector AE.Value), [Text], Int)
       paged = case result of
         Left e -> Left $ show e

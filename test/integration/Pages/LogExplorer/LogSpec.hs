@@ -883,7 +883,7 @@ str k m = HM.lookup k m >>= \case AE.String t -> Just t; _ -> Nothing
 -- | Spans of the last minute straight from the log table, as column → value maps.
 logTable :: TestResources -> Projects.ProjectId -> Maybe Text -> Maybe Text -> IO [HM.HashMap Text AE.Value]
 logTable tr pid envM svcM = do
-  res <- runQueryEffect tr $ LogQueries.selectLogTable tr.trATCtx.env.enableTimefusionReads pid [] "" Nothing (Just (addUTCTime (-60) frozenTime), Just (addUTCTime 60 frozenTime)) [] (Just SSpans) Nothing envM svcM
+  res <- runQueryEffect tr $ LogQueries.selectLogTable pid [] "" Nothing (Just (addUTCTime (-60) frozenTime), Just (addUTCTime 60 frozenTime)) [] (Just SSpans) Nothing envM svcM
   (rs, cols, _) <- either (fail . toString) pure res
   pure [HM.fromList (zip cols (V.toList r)) | r <- V.toList rs]
 
