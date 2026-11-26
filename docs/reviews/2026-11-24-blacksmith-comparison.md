@@ -72,6 +72,20 @@ Comparing our stills with Blacksmith's on the same PRs:
   without a screenshot, goes back to the agent as advice; a changed pair gets the changed pixels boxed on
   both sides. Blacksmith shows no highlight.
 
+### Next: a prepared head workspace (proposed)
+
+Reviews average 3.0 proofs, always the budget, and each head check rebuilds the PR from the base
+workspace: on the mirror a head check takes 403 s median against 97 s for base (monoscope: 107 s, p90
+535 s). Preparing the head once per review, while the agent reads the code, would cut every head check
+to base speed and leave room for more claims. Scope for that PR:
+
+- Prepare a workspace at the head revision, warm-started from the base build (the existing ancestor path).
+- Checks lease it for the head side, the base workspace for the base side.
+- Head entries must not become the lineage's `latest-*` pointer, must not be archived on build (3.6 GB
+  per PR head), and need their own eviction, since prune archives before it evicts.
+
+Not raising the proof budget: at 7 minutes per head check a fourth proof breaks the 45-minute review budget.
+
 ### Review failures (2026-11-25)
 
 - #721's re-proof failed "exceeded its submission budget"; its automatic retry then ended "Saved progress
