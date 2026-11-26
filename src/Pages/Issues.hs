@@ -2928,7 +2928,7 @@ instance ToHtml IssueActivityFeed where
       feed :: Html ()
       feed = do
         form_ [class_ "mx-4 mb-3 p-2 rounded-lg border border-strokeWeak bg-fillWeaker/40 flex flex-col gap-2 focus-within:border-strokeBrand-strong", hxPost_ $ (urls.issues f.projectId).commentPost f.issueId, hxSwap_ "none"] do
-          textarea_ [name_ "body", required_ "", rows_ "2", placeholder_ "Add a comment\x2026", Aria.label_ "Comment", class_ "textarea textarea-ghost textarea-sm w-full min-h-16 border-0 bg-transparent shadow-none focus:outline-none text-base sm:text-sm"] ""
+          textarea_ [name_ "body", required_ "", rows_ "2", placeholder_ "Add a comment\x2026", Aria.label_ "Comment", data_ "submit-on-mod-enter" "", class_ "textarea textarea-ghost textarea-sm w-full min-h-16 border-0 bg-transparent shadow-none focus:outline-none text-base sm:text-sm"] ""
           button_ [type_ "submit", class_ "btn btn-xs btn-ghost bg-fillWeak border-0 shadow-none self-end"] "Comment"
         unless (null links) $ div_ [class_ "px-4 pb-3 space-y-1"] do
           h4_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "External links"

@@ -6,6 +6,8 @@ import './main';
 // the trace HTML is swapped in, so a lazy import would lose the race and the
 // waterfall would render its rows with no bars.
 import './charts';
+import './dashboard-page';
+import './log-query-box';
 // Page chrome (tabs, cookies, tooltips, toasts, HTMX progress). Needed on every page, and
 // publishes globals that inline Lucid attributes call, so it must be eager too.
 import './page-chrome';
