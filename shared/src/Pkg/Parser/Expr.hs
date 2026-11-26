@@ -1383,8 +1383,15 @@ scalarFuncToSQL name args
 -- A bare JSONB column holds its value's JSON encoding, so a string is compared in that form;
 -- @body == "x"@ matched nothing and scanned the whole window until the statement timed out:
 --
+-- Equality also matches its longest word (3+ chars) as a literal, a superset TimeFusion serves
+-- from its text index; without it an hour of `body == "x"` decoded every row (1.4 GB on prod):
+--
 -- >>> display (Cmp Eq (Subject "" "body" []) (Str "it's done"))
--- "body = '\"it''s done\"'"
+-- "(body::text ~* 'done' AND body = '\"it''s done\"')"
+-- >>> display (Cmp Eq (Subject "" "body" []) (Str "ok"))
+-- "body = '\"ok\"'"
+-- >>> display (Cmp NotEq (Subject "" "body" []) (Str "it's done"))
+-- "body != '\"it''s done\"'"
 -- >>> display (Match NotIn (Subject "" "body" []) (List [Str "a", Str "b"]))
 -- "body NOT IN ('\"a\"','\"b\"')"
 -- >>> display (Cmp Eq (Subject "" "name" []) (Str "x"))
@@ -1569,8 +1576,16 @@ displayExprHelper op prec sub given =
         -- is regex-escaped and rendered as `~*`, mirroring the wildcard jsonpath path
         -- (like_regex + escapeRegex). ^/$ anchor startswith/endswith; negation is `!~*`.
         (Right m, _) | (neg, base) <- matchPolarity m, Just (pre, post) <- literalAnchors base -> subAsText <> (if neg then " !~* " else " ~* ") <> reTerm pre post val
-        _ -> displayPrec prec sub <> " " <> displayPrec @T.Text prec sqlOp <> " " <> displayPrec prec val
+        (Left Eq, Str _)
+          | Subject _ col [] <- sub
+          , isJsonbColumn col
+          , Str s <- given
+          , Just w <- viaNonEmpty (F1.maximumBy (comparing T.length)) (T.split (not . isAlphaNum) s)
+          , T.length w >= 3 ->
+              "(" <> subAsText <> " ~* " <> displayPrec prec (Str w) <> " AND " <> plain <> ")"
+        _ -> plain
   where
+    plain = displayPrec prec sub <> " " <> displayPrec @T.Text prec sqlOp <> " " <> displayPrec prec val
     val = case sub of
       Subject _ col [] | isJsonbColumn col, op `elem` [Left Eq, Left NotEq, Right In, Right NotIn] -> asJson given
       _ -> given
