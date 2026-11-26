@@ -131,6 +131,7 @@ data ReviewRun = ReviewRun
   , createdAt :: UTCTime
   , request :: Maybe Ask
   , base :: Maybe Text
+  , rating :: Maybe Rating
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, HI.DecodeRow)
@@ -369,7 +370,7 @@ selectRuns :: DB es => Maybe ProjectId -> Maybe ReviewId -> Eff es [ReviewRun]
 selectRuns pid rid =
   Hasql.interp
     [HI.sql|SELECT r.id, t.id, t.project_id, t.owner, t.repo, t.number::bigint, r.revision,
-    r.state, r.result, r.error, t.comment_id, t.latest_revision, r.created_at, r.request, r.base
+    r.state, r.result, r.error, t.comment_id, t.latest_revision, r.created_at, r.request, r.base, r.rating
     FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
     WHERE (#{pid}::uuid IS NULL OR t.project_id = #{pid}) AND (#{rid}::uuid IS NULL OR r.id = #{rid})
     ORDER BY r.created_at DESC LIMIT 20|]
@@ -812,7 +813,7 @@ setProgressComment run cid = Hasql.interpExecute_ [HI.sql|UPDATE projects.pr_rev
 -- | The PR author's answer to "Did the proof get it right?".
 data Rating = Up | Down
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
-  deriving (FromHttpApiData, HI.EncodeValue, ToHttpApiData) via WrappedEnumSC 'Nothing "" Rating
+  deriving (AE.FromJSON, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToHttpApiData) via WrappedEnumSC 'Nothing "" Rating
 
 
 ratingSignedPath :: ReviewId -> Rating -> Text

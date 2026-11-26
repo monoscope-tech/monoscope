@@ -453,6 +453,7 @@ cookieProtectedServer projectTools runNow =
     , codeMappingsPost = PageCodeContext.codeMappingsPostH
     , impactReviewSettingsPost = PageCodeContext.impactReviewSettingsPostH
     , impactReviewRetry = PageCodeContext.impactReviewRetryH
+    , impactReviewRating = PageCodeContext.impactReviewRatingH
     , issueFixGet = PageCodeContext.issueFixGetH
     , issueFixMedia = PageCodeContext.issueFixMediaH
     , issueFixPackage = PageCodeContext.issueFixPackageH
