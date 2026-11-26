@@ -32,8 +32,10 @@ module Pages.GitSync (
 ) where
 
 import BackgroundJobs qualified
+import Control.Lens ((^?))
 import Control.Monad.Trans.Except (withExceptT)
 import Data.Aeson qualified as AE
+import Data.Aeson.Lens (key, _Integer, _String)
 import Data.Cache qualified as Cache
 import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
@@ -62,6 +64,7 @@ import Relude hiding (ask)
 import Servant (ServerError (..), err401, err403, err404, err503)
 import System.Config qualified as Config
 import System.Logging qualified as Log
+import System.Tracing qualified as Tracing
 import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, act, addErrorToast, addRespHeaders, addSuccessToast, done, redirectCS)
 import Utils (LoadingSize (..), faSprite_, hostPath, htmxIndicator_, renderMarkdown)
 import Web.ApiTypes (readOnlyMessage)
@@ -90,26 +93,42 @@ data GitSyncForm = GitSyncForm
 -- | An inbound push from any host. The order is security-relevant: parse /only/ the repository
 -- name, find its row, verify the signature, and only then queue a job. Queueing before
 -- 'Git.verifyWebhook' returns is how a forged body gets to enqueue work.
-gitWebhookPostH :: Git.GitHost -> Git.WebhookReq -> ATBaseCtx AE.Value
-gitWebhookPostH Git.GitHub req | req.event `elem` map Just ["pull_request", "issue_comment" :: Text] = do
+-- Each GitHub delivery is one @github.webhook@ span naming what arrived and what became of it, so
+-- "did GitHub reach us for this PR" is a query over our own telemetry.
+gitWebhookPostH :: Git.GitHost -> Maybe Text -> Git.WebhookReq -> ATBaseCtx AE.Value
+gitWebhookPostH Git.GitHub delivery req | req.event `elem` map Just ["pull_request", "issue_comment" :: Text] = Tracing.withSpan "github.webhook" deliveryAttrs \sp -> do
   ctx <- ask @Config.AuthContext
   let secret = ctx.config.githubAppWebhookSecret
+      outcome o = Tracing.addAttribute sp "monoscope.webhook.outcome" (Otel.toAttribute (o :: Text))
       status s = AE.object ["status" AE..= (s :: Text)]
   if T.null secret
-    then throwError err503{errBody = "GitHub App webhook secret is not configured"}
+    then outcome "secret_missing" >> throwError err503{errBody = "GitHub App webhook secret is not configured"}
     else case Git.verifyWebhook Git.GitHub (Just secret) req of
-      Left _ -> throwError err401{errBody = "Invalid GitHub signature"}
+      Left _ -> outcome "signature_invalid" >> throwError err401{errBody = "Invalid GitHub signature"}
       Right ()
         | req.event == Just "issue_comment" -> case ImpactReviews.decodeComment req.body of
-            Left err -> status "ignored" <$ Log.logTrace "Ignoring GitHub comment" err
+            Left err -> status "ignored" <$ (outcome "ignored" >> Log.logTrace "Ignoring GitHub comment" err)
             Right request ->
               ImpactReview.requestReview request >>= \case
-                Left err -> status "error" <$ Log.logAttention "PR review request was not queued" (request.owner, request.repo, request.number, err)
-                Right () -> pure $ status "ok"
+                Left err -> status "error" <$ (outcome "request_failed" >> Log.logAttention "PR review request was not queued" (request.owner, request.repo, request.number, err))
+                Right () -> status "ok" <$ outcome "review_requested"
         | otherwise -> case ImpactReviews.decodeEvent req.body of
-            Left err -> status "ignored" <$ Log.logInfo "Ignoring GitHub PR event" err
-            Right event -> ImpactReviews.receiveEvent Nothing event $> status "ok"
-gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
+            Left err -> status "ignored" <$ (outcome "ignored" >> Log.logInfo "Ignoring GitHub PR event" err)
+            Right event -> ImpactReviews.receiveEvent Nothing event >>= \reception -> status "ok" <$ outcome (show reception)
+  where
+    attr :: Otel.ToAttribute a => Text -> Maybe a -> Maybe (Text, Otel.Attribute)
+    attr k = fmap ((k,) . Otel.toAttribute)
+    number path = fromInteger @Int64 <$> req.body ^? path . _Integer
+    deliveryAttrs =
+      catMaybes
+        [ attr "github.delivery_id" delivery
+        , attr "github.event" req.event
+        , attr "github.action" $ req.body ^? key "action" . _String
+        , attr "vcs.repository.name" $ T.toLower <$> req.body ^? key "repository" . key "full_name" . _String
+        , attr "github.installation.id" $ number (key "installation" . key "id")
+        , attr "vcs.change.id" $ number (key "pull_request" . key "number") <|> number (key "issue" . key "number")
+        ]
+gitWebhookPostH host _ req = case Git.parseWebhookRepo host req.body of
   Nothing -> errResp "missing repository" <$ Log.logAttention "Git webhook without a repository name" (Git.hostSlug host)
   Just fullName -> do
     let (ownerName, repoName) = Git.splitFullName fullName

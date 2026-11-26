@@ -3501,12 +3501,20 @@ finishRunRowsTx finalization =
             AND (retired.requested_by IS NULL OR run.requested_by IS NULL)
           RETURNING run.id, run.project_id, run.conversation_id, run.root_run_id, TRUE AS request_ended
         )|]
+    -- A review run whose review ended half an hour ago: its worker died, or the job that would close it
+    -- found the review already superseded (three such runs sat "running" from 2026-11-24).
+    reviewEnded =
+      [HI.sql|(run.source #>> '{contents,tag}' = 'PullRequestReview' AND EXISTS (SELECT 1 FROM projects.pr_review_runs review
+        WHERE review.id::text = run.source #>> '{contents,contents}' AND review.state IN ('completed', 'incomplete', 'superseded')
+          AND COALESCE(review.finished_at, review.created_at) < clock_timestamp() - interval '30 minutes'))|]
     retire scope =
       [HI.sql|WITH finished AS (
         UPDATE apis.ai_routine_runs run SET status = #{RunCancelled}, finished_at = clock_timestamp(),
-          error = 'Run authorizing member or installation is no longer available.'
+          error = CASE WHEN ^{reviewEnded} THEN 'A newer commit or the pull request closing replaced this review.'
+            ELSE 'Run authorizing member or installation is no longer available.' END
         WHERE ((run.status = #{RunRunning} AND (run.requested_by IS NULL OR
           (run.routine_id IS NULL AND run.source->>'tag' IN ('ScheduledRun', 'TriggeredRun'))))
+          OR (run.status = #{RunRunning} AND ^{reviewEnded})
           OR (run.status IN ('running', 'failed', 'timed_out') AND run.source->>'tag' = 'FixRun' AND NOT (|]
         <> nativeFixAccessSql mempty
         <> [HI.sql|)))|]

@@ -529,12 +529,17 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                           _ -> do
                             finish $ Issues.CancelledResult $ Just "The PR changed or review authorization was withdrawn before publication."
                             stopProgress run "The pull request changed or review authorization was withdrawn before publication."
+    -- Also ends a routine run still marked running: its worker died, and only this job would close it.
     retire :: Reviews.ReviewRun -> ATBackgroundCtx ()
-    retire run = whenJustM (Reviews.getRun run.id) \latest ->
-      stopProgress run
-        $ if latest.latestRevision /= run.revision
-          then "A newer commit, " <> T.take 8 latest.latestRevision <> ", replaced this review before its proofs finished."
-          else "The pull request was closed, merged or moved out of review before the proofs finished."
+    retire run = do
+      whenJustM (Issues.getEventRun run.projectId $ Issues.PullRequestReview run.id) \execution -> when (execution.status == Issues.RunRunning) do
+        context <- AI.requireRunContext run.projectId $ Issues.EventClaim (Issues.PullRequestReview run.id) execution.id execution.startedAt
+        void $ Issues.completeRun context $ Issues.CancelledResult $ Just "A newer commit or the pull request closing replaced this review."
+      whenJustM (Reviews.getRun run.id) \latest ->
+        stopProgress run
+          $ if latest.latestRevision /= run.revision
+            then "A newer commit, " <> T.take 8 latest.latestRevision <> ", replaced this review before its proofs finished."
+            else "The pull request was closed, merged or moved out of review before the proofs finished."
     -- A review that stops for good says so in its progress comment instead of leaving it running.
     stopProgress :: Reviews.ReviewRun -> Text -> ATBackgroundCtx ()
     stopProgress run reason = whenJustM (Reviews.progressComment run) \cid -> whenRightM_ (reviewConnection run) \(_, _, _, conn) -> do
