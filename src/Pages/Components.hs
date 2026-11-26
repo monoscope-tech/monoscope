@@ -1,4 +1,4 @@
-module Pages.Components (codeContextUrl, drawer_, drawerShell_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityDrawer_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, swapTarget_, morphTarget_, morphPostAttrs_, pollSelfAttrs_, pollSelfAttrsWith_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formSelectFieldWith_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, floatingModal_, formActionsModal_, dangerAction_, dangerZone_, floatingDialog_, floatingCard_, mergedAttrs, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerNoMatches_, pickerHints_, pickerPopover_, actionMenu_, durationMenu_, primaryButton_, submitBtn_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (codeContextUrl, drawer_, drawerShell_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityDrawer_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, swapTarget_, morphTarget_, morphPostAttrs_, pollSelfAttrs_, pollSelfAttrsWith_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formSelectFieldWith_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, floatingModal_, dangerAction_, dangerZone_, floatingDialog_, floatingCard_, mergedAttrs, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerNoMatches_, pickerHints_, pickerPopover_, actionMenu_, durationMenu_, primaryButton_, submitBtn_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -866,12 +866,6 @@ tagInput_ :: Monad m => Text -> Text -> [Attribute] -> HtmlT m ()
 tagInput_ inputId ph attrs = textarea_ (mergedAttrs $ [class_ "textarea w-full min-h-12 resize-none", id_ inputId, placeholder_ ph, data_ "tagify" ""] <> attrs) ""
 
 
-formActionsModal_ :: Monad m => Text -> HtmlT m () -> HtmlT m ()
-formActionsModal_ modalId submitBtn = div_ [class_ "mt-3 flex justify-end gap-2"] do
-  label_ [Lucid.for_ modalId, class_ "btn cursor-pointer"] "Cancel"
-  submitBtn
-
-
 connectionBadge_ :: Monad m => Bool -> HtmlT m ()
 connectionBadge_ connected = span_ [class_ $ "badge badge-sm badge-soft gap-1 " <> bool "badge-secondary" "badge-success" connected] do
   faSprite_ (bool "circle-info" "circle-check" connected) "regular" "h-3 w-3"
@@ -1013,9 +1007,11 @@ nativeDialog_ dialogId title boxClass body =
     end|]
     ]
     do
-      div_ [class_ $ "modal-box " <> boxClass] do
-        h2_ [id_ (dialogId <> "-title"), class_ "text-lg font-semibold text-textStrong break-words"] $ toHtml title
+      div_ [class_ $ "modal-box relative " <> boxClass] do
+        h2_ [id_ (dialogId <> "-title"), class_ "pe-8 text-lg font-semibold text-textStrong break-words"] $ toHtml title
         body
+        button_ [type_ "button", Aria.label_ ("Close " <> title), onclick_ "this.closest('dialog').close()", class_ "btn btn-xs btn-circle btn-ghost absolute top-4 end-4 text-iconNeutral hover:bg-fillWeak hover:text-textStrong"]
+          $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
       form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ ("Close " <> title)] "Close"
 
 
@@ -1075,10 +1071,10 @@ mergedAttrs attrs = [Attribute k (joined k [v | Attribute k' v <- attrs, k' == k
 -- the title id is @dialogId-title@. Children may style on @group-has-[…]/dialog@.
 floatingDialog_ :: Text -> Html () -> (Text, [Text]) -> [Attribute] -> Html () -> Html () -> Html ()
 floatingDialog_ dialogId title submitHint formAttrs body submit =
-  with (makeElement "dialog") [id_ dialogId, class_ "modal !items-start px-4 pt-[15vh] bg-black/40 dark:bg-black/65 backdrop:backdrop-blur-[2px] [&_.modal-backdrop]:backdrop-blur-[2px]", term "aria-labelledby" (dialogId <> "-title")] do
-    form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close"] "close"
+  with (makeElement "dialog") [id_ dialogId, class_ "modal !items-start px-4 pt-[15vh] bg-black/40 dark:bg-black/65 backdrop:backdrop-blur-[2px] [&_.modal-backdrop]:backdrop-blur-[2px]", term "aria-labelledby" (dialogId <> "-title"), [__|on closeModal from body if my.open call me.close() end|]] do
     form_ (mergedAttrs $ formAttrs <> [class_ "modal-box group/dialog !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none"])
       $ floatingCard_ [id_ $ dialogId <> "-title"] title (\attrs -> button_ (mergedAttrs $ [type_ "button", onclick_ "this.closest('dialog').close()"] <> attrs)) [submitHint, ("Close", ["esc"])] body submit
+    form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close"] "close"
 
 
 -- | A floating prompt's card: the title and close control, @body@, then keyboard hints beside

@@ -116,7 +116,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), ResourceRow (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, dialogTrigger_, disclosure_, emptyState_, formField_, formSelectFieldWith_, grantsTrial, headerRow_, keyboardActivateAttr_, localTimeFmt_, modalWith_, nativeDialog_, options_, paymentPlanPicker, resourceList_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ResourceRow (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, dialogTrigger_, disclosure_, emptyState_, formField_, formSelectFieldWith_, grantsTrial, headerRow_, keyboardActivateAttr_, localTimeFmt_, nativeDialog_, options_, paymentPlanPicker, resourceList_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
@@ -1478,7 +1478,7 @@ billingPage d = div_ [] do
 
     -- Actions (kept above the breakdown so they remain near the headline numbers)
     div_ [class_ "border-t border-strokeWeak pt-6 flex items-center gap-3"] do
-      label_ [Lucid.for_ "pricing-modal", class_ "btn btn-sm btn-primary cursor-pointer"] "Change plan"
+      dialogTrigger_ "pricing-modal" [class_ "btn btn-sm btn-primary cursor-pointer"] "Change plan"
       when (d.provider /= Projects.NoBillingProvider)
         $ a_ [class_ "btn btn-sm btn-ghost text-textBrand", term "hx-preload" "false", hxGet_ $ urls.projects.manageSubscriptionGet d.pid] "Manage subscription"
 
@@ -1488,10 +1488,8 @@ billingPage d = div_ [] do
     -- Past cycles
     pastCyclesSection_ isFree basePriceNum d.pastCycles
 
-  modalWith_ "pricing-modal" def{boxClass = "w-full max-w-6xl p-4 sm:p-8 lg:px-16 lg:py-12", wrapperClass = "p-3 sm:p-8"} Nothing do
-    div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
-      span_ [class_ "text-textStrong text-2xl font-semibold"] "Compare Plans"
-      p_ [class_ "mt-2 mb-4"] "Drag the slider to estimate costs at different usage levels."
+  nativeDialog_ "pricing-modal" "Compare Plans" "w-full max-w-6xl p-4 sm:p-8 lg:px-16 lg:py-12" do
+    p_ [class_ "mt-1 mb-4 text-sm text-textWeak"] "Drag the slider to estimate costs at different usage levels."
     -- Free upgrades use Stripe; billing recovery keeps the existing provider.
     paymentPlanPicker d.pid d.lemonUrl d.critical d.paymentPlan d.enableFreetier d.basicAuthEnabled d.trialEligible False (bool d.provider Projects.NoBillingProvider isFree)
 
