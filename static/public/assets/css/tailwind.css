@@ -1089,6 +1089,10 @@ body, :host {
   [popover]:not(:popover-open) {
     display: none;
   }
+  /* Same for DaisyUI's .modal on a closed <dialog>: laid out, it fires lazy hx-trigger="intersect" content on page load. */
+  dialog.modal:not([open]) {
+    display: none;
+  }
   .modal-box {
     background-color: var(--color-bgOverlay);
   }
