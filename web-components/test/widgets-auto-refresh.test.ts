@@ -316,7 +316,7 @@ describe('Log Explorer chart auto-refresh', () => {
   test.each(['network', 'query'])('%s failures keep data quiet until the third consecutive background failure', async (failure) => {
     const instance = chart();
     (window as any).echarts = { getInstanceByDom: () => null, init: () => instance };
-    document.body.innerHTML = '<div id="volume" data-chart-widget></div><div id="volumeValue"></div>' +
+    document.body.innerHTML = '<div id="volume" data-chart-widget></div><div id="volumeValue"></div><div id="volume_bordered"></div>' +
       '<div id="volume_error" class="hidden"><span id="volume_errorMsg"></span><button id="volume_retry">Retry</button></div>';
     vi.spyOn(console, 'error').mockImplementation(() => {});
     let fail = false;
@@ -329,6 +329,7 @@ describe('Log Explorer chart auto-refresh', () => {
     await vi.waitFor(() => expect(instance.hideLoading).toHaveBeenCalledTimes(1));
     const value = document.getElementById('volumeValue')!.textContent;
     const banner = document.getElementById('volume_error')!;
+    const failed = () => document.getElementById('volume_bordered')!.dataset.widgetState === 'error';
     let completed = 1;
     const refresh = async (background = true) => {
       vi.setSystemTime(Date.now() + 600_000);
@@ -339,26 +340,26 @@ describe('Log Explorer chart auto-refresh', () => {
     fail = true;
     await refresh();
     await refresh();
-    expect(banner.classList.contains('hidden')).toBe(true);
+    expect(failed()).toBe(false);
     expect(document.getElementById('volumeValue')!.textContent).toBe(value);
     fail = false;
     await refresh(); // recovery resets the count
     fail = true;
     await refresh();
     await refresh();
-    expect(banner.classList.contains('hidden')).toBe(true);
+    expect(failed()).toBe(false);
     await refresh();
-    expect(banner.classList.contains('hidden')).toBe(false);
+    expect(failed()).toBe(true);
     expect(document.getElementById('volume_errorMsg')!.textContent).toContain('last successful data');
     // Data is still on screen: a warning (a corner chip on stat tiles), not the failure banner.
     expect(banner.hasAttribute('data-stale')).toBe(true);
     expect(document.getElementById('volumeValue')!.textContent).toBe(value);
     fail = false;
     await refresh();
-    expect(banner.classList.contains('hidden')).toBe(true);
+    expect(failed()).toBe(false);
     fail = true;
     await refresh(false); // an explicit request reports failure immediately
-    expect(banner.classList.contains('hidden')).toBe(false);
+    expect(failed()).toBe(true);
   });
 
   // An issue chart whose query hits TimeFusion's 90s timeout was re-issued on every 15s tick.
@@ -524,7 +525,7 @@ describe('Log Explorer chart auto-refresh', () => {
 
     const retry = document.getElementById('volume_retry') as HTMLButtonElement;
     expect(retry.hidden).toBe(false);
-    expect(document.getElementById('volume_error')?.classList.contains('hidden')).toBe(false);
+    expect(document.getElementById('volume_bordered')?.dataset.widgetState).toBe('error');
     const refetchList = vi.fn();
     (window as any).logListTable = { refetchLogs: refetchList };
     const response = Promise.withResolvers<typeof chartData>();

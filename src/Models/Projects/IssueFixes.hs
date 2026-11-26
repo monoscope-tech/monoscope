@@ -181,18 +181,21 @@ createRun pid fid issue mapping base image =
 -- | Up to @n@ open issues from the last week that triage has had an hour with, each with a mapping
 -- 'createRun' accepts and no fix run in the last 23 hours (so the hourly sweep retries a failed one
 -- a day later, not 25 hours later); newest first.
+-- | An issue's next fix attempt waits 23 h after its first, then 46 h, then 92 h, and issues never tried
+-- go first: a fix that keeps failing the same way must not take the slots of fresh candidates.
 autofixCandidates :: (DB es, Time :> es) => ProjectId -> Int -> Eff es [(IssueId, CodeMappingId)]
 autofixCandidates pid n =
   Time.currentTime >>= \now ->
     Hasql.interp
-      [HI.sql|SELECT DISTINCT ON (i.created_at, i.id) i.id, m.id FROM apis.issues i
+      [HI.sql|SELECT DISTINCT ON (tried.n, i.created_at, i.id) i.id, m.id FROM apis.issues i
     JOIN projects.code_mappings m ON m.project_id = i.project_id AND m.service = i.service
     JOIN projects.git_credentials c ON c.id = m.credential_id AND c.project_id = i.project_id
+    CROSS JOIN LATERAL (SELECT count(*) AS n, max(f.created_at) AS last FROM projects.issue_fix_runs f WHERE f.issue_id = i.id) tried
     WHERE i.project_id = #{pid} AND i.archived_at IS NULL AND i.spam_at IS NULL AND i.issue_type <> 'api_change'
       AND i.created_at BETWEEN #{addUTCTime (-7 * nominalDay) now} AND #{addUTCTime (-3600) now}
       AND ^{appCredential}
-      AND NOT EXISTS (SELECT 1 FROM projects.issue_fix_runs f WHERE f.issue_id = i.id AND f.created_at > #{addUTCTime (-82800) now})
-    ORDER BY i.created_at DESC, i.id, length(m.path_prefix) DESC LIMIT #{n}|]
+      AND (tried.n = 0 OR tried.last < #{now}::timestamptz - make_interval(hours => (23 * 2 ^ (least(tried.n, 3) - 1))::int))
+    ORDER BY tried.n, i.created_at DESC, i.id, length(m.path_prefix) DESC LIMIT #{n}|]
 
 
 getRun :: DB es => ProjectId -> FixId -> Eff es (Either Failure (Maybe (Run Progress)))

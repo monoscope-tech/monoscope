@@ -3,21 +3,107 @@
 Blacksmith ("codesmith proof") comments on 32 Talstack pull requests; Monoscope's bot reviews
 monoscope and timefusion. This compares what each produced and records what we changed.
 
-## Can we run our proofs on the Talstack PRs?
+## Running our proofs on the Talstack PRs
 
-Not yet. The Monoscope GitHub App is not installed on `Talstack-LLC` (only `claude` and
-`blacksmith-sh` are), and reviews only run for repositories linked through an app installation
-(`projects.git_credentials.installation_id`). Installing it needs the browser flow:
+The Monoscope app isn't installed on Talstack-LLC, so the exact PR commits were pushed from a local
+checkout to a private mirror, `monoscope-tech/talstack-proof-mirror` (mirror #1–#8 = Talstack #730,
+#726, #724, #722, #721, #720, #716, #711). Our reviews post there, never on Talstack. The mirror is
+mapped in the monoscope project, so the merge-risk section has no Talstack telemetry (Talstack Prod
+has no repository mapping).
 
-1. Install the Monoscope GitHub App on `Talstack-LLC`, selecting `talstack` only.
-2. In a Monoscope project, add the code mapping for `Talstack-LLC/talstack` and set its review
-   trigger to **Only when asked**, with the routine on the **Observe** policy, so nothing posts to
-   Talstack pull requests while we compare.
-3. Ask for `@monoscope prove it` on #730, #726, #724, #722, #721, #720, #716, #711 (or retry the
-   runs from the run page).
+| Talstack PR | Blacksmith | Ours, first run (09:50 UTC) | Ours after #1024 and #1027 |
+| :-- | :-- | :-- | :-- |
+| #730 anonymous survey | Matches (1 claim, 4 stills) | 0/2 verified | 1 match (survey tests), main claim unverified |
+| #726 People tab | Matches (7), 1 issue found | 0/3 | 2 match (non-admin view, links), 1 unverified |
+| #724 HRIS leaks | Matches (4) | 0/3 | 2 match (category audiences, export fields), 2 unverified |
+| #722 profile catalogue | 10 match, 2 differ, issue found | 0/3 | 1 match (celebrations) |
+| #721 review templates | Matches | 0/2 | 1 match (create-cycle page), 1 unverified |
+| #720 payroll | Differs (6), issue found | 0/2 | 1 match (builds), 1 unverified |
+| #716 drop hris_enabled | Matches | 2 match | 1 match |
+| #711 unbundle modules | Matches | not run | 2 match (gate specs), 4 unverified |
 
-Talstack has no `.monoscope/PROOF.md`. Blacksmith proved it with no repository guidance. That is
-the bar.
+What changed between the runs: Talstack could not build in our VMs at all. The guest's cabal index
+was root-owned, stackage.org was blocked, and Tailwind assets weren't built before Template Haskell
+read them (#1024). It now builds cold in 22 minutes into a 3.6 GB warm workspace. Agents also
+stopped loading the project into GHCi in their own 1 GB VM, which had stalled two reviews to their
+45-minute budget (#1027).
+
+Where Blacksmith is still ahead on Talstack: it starts the app with seeded roles and shows base and
+head screenshots per claim; ours proves through tests and scripts. It found three issues the PRs
+didn't claim; we found none. Some of our "matches" are weak ("code is buildable", "tests execute"),
+which #1029 now forbids as claims. Next lever: a Talstack proof recipe (Postgres, migrations,
+seeded sessions, server) in a `.monoscope/PROOF.md`, so UI claims get screenshots.
+
+### With the app recipe (2026-11-25)
+
+A saved recipe now starts Talstack in the verifier: Postgres, `.env.dist`, the server, and three
+seeded sessions (Ada admin, Max manager, Mia member reporting to Max). Two worker bugs kept it from
+working until #1034: a short terminal setup overwrote the recipe, and leases left by killed workers
+pinned about 70 GB of stale workspaces, so maintenance evicted Talstack's fresh base build within
+minutes and every check rebuilt cold past the 900 s limit. After the fix every check attached the
+workspace; base checks take 1–2 min and head checks 5–7 min (head rebuilds the changed modules).
+
+| Talstack PR | Blacksmith | Ours with the recipe |
+| :-- | :-- | :-- |
+| #726 People tab | Matches (7), 1 issue found | 2 match with UI stills and video: a member opens Company People on head, base rejects it; a manager links only to reports. 2 unverified (field masking, sidebar labels) |
+| #722 profile catalogue | 10 match, 2 differ, issue found | 1 match (pay fields seeded, date of birth private by default) with base/head stills; 5 unverified |
+| #721 review templates | Matches | 0/2: all three attempts retried a locator inside a closed `<dialog>` (#1035 now says to open it first) |
+| #730 anonymous survey | Matches | re-run after the fix: 1 match (anonymous responses masked) |
+| #724 HRIS leaks | Matches (4) | re-run: 1 match (admin export omits sensitive columns), 2 unverified |
+| #716 drop hris_enabled | Matches | re-run: 1 match (schema comparison before and after the migration) |
+| #711 unbundle modules | Matches | re-run: 1 match (admin flow enforces the Goals gate) |
+
+The #726 head still is a real screenshot of the People table with the seeded roles, which is the
+format Blacksmith uses; ours adds the merge-risk table and the not-verified list. Still behind:
+Blacksmith covers more claims per PR and found issues the PRs didn't claim; we found none.
+
+### Screenshots side by side (2026-11-26)
+
+Comparing our stills with Blacksmith's on the same PRs:
+
+- **Fonts.** Both render Messina Sans with uneven glyph spacing ("Surve ys", "Engage ment"): headless
+  Chromium hints fonts in full by default. With `--font-render-hinting=none` the same page renders with
+  natural kerning (verified on the worker; the line is 3% narrower). #1043 wraps the guest's Chromium so
+  every agent script gets it; Blacksmith's stills still have the defect.
+- **Base without a page.** On #730 our base still was a terminal error dump: the script asserted before
+  its screenshot, so only head showed the UI. Blacksmith's scripts print both states and exit 0 on each
+  side ("contains Jordan Rivera: true" then "false"). #1043 tells agents to screenshot before asserting.
+- **Pairs that show nothing.** #1043 pairs base and head stills by name: an identical pair, or a side
+  without a screenshot, goes back to the agent as advice; a changed pair gets the changed pixels boxed on
+  both sides. Blacksmith shows no highlight.
+
+### After #1043 (2026-11-26, #726 re-proved)
+
+- 3 claims match, up from 2 (member People access, admin table, manager navigation), with three base/head
+  page pairs at 2560x1600; 3 stay unverified (active-only rows, public-field masking, admin-only tabs).
+- Fonts render with natural spacing on every still.
+- One bounding box around all changes covered the whole page: full-page stills of a relaid page differ in
+  many places (sidebar items, toolbar, a 6 px table shift). #1067 boxes each cluster instead and marks only
+  local changes (at most three clusters, under a quarter of the still); relaid pages stay unmarked.
+- Head checks still take 285 s against 53 s for base, so the prepared head workspace below is the next lever.
+
+### Next: a prepared head workspace (proposed)
+
+Reviews average 3.0 proofs, always the budget, and each head check rebuilds the PR from the base
+workspace: on the mirror a head check takes 403 s median against 97 s for base (monoscope: 107 s, p90
+535 s). Preparing the head once per review, while the agent reads the code, would cut every head check
+to base speed and leave room for more claims. Scope for that PR:
+
+- Prepare a workspace at the head revision, warm-started from the base build (the existing ancestor path).
+- Checks lease it for the head side, the base workspace for the base side.
+- Head entries must not become the lineage's `latest-*` pointer, must not be archived on build (3.6 GB
+  per PR head), and need their own eviction, since prune archives before it evicts.
+
+Not raising the proof budget: at 7 minutes per head check a fourth proof breaks the 45-minute review budget.
+
+### Review failures (2026-11-25)
+
+- #721's re-proof failed "exceeded its submission budget"; its automatic retry then ended "Saved progress
+  was lost", which replaced the cause in the comment. #1038 stops such a chain with the real reason and
+  logs each rejected draft. The next #721 run completed: the one rejection was a "matches" claim without a
+  passing head recording, which the agent corrected.
+- #721's agent now opens the template dialog (#1035) but then hit a Playwright strict-mode violation (the
+  title also sits in a hidden preview modal); #1043 adds advice for that case.
 
 ## What Blacksmith produces
 
