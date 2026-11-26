@@ -318,6 +318,9 @@
   .modal-box {
     animation: modalIn 150ms var(--ease-out-expo);
   }
+  /* Widget error/empty overlays driven by a single data-widget-state on *_bordered */
+  [data-widget-state="error"] > [id$="_error"] { display: block; }
+  [data-widget-state="empty"] [id$="_empty"] { display: flex; }
 
   /* Respect reduced motion preferences */
   @media (prefers-reduced-motion: reduce) {

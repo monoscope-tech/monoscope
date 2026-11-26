@@ -196,8 +196,7 @@ detailsPanel_ pid targetEventM layout = div_ [class_ $ "contents group/details "
           term "hx-on:change"
             $ "localStorage.setItem('log_details_mode', this.checked ? 'drawer' : 'inline');"
             <> "if (!this.checked) { const panel = document.getElementById('log_details_container'); const w = panel.dataset.inlineWidth || localStorage.getItem('resizer-details_width') || '550';"
-            <> " document.getElementById('log_details_container').style.width = /[%a-z]/i.test(w) ? w : w + 'px';"
-            <> " document.getElementById('resizer-details_width-wrapper')?.classList.remove('hidden', 'opacity-0', 'pointer-events-none'); }"
+            <> " document.getElementById('log_details_container').style.width = /[%a-z]/i.test(w) ? w : w + 'px'; }"
         ]
       else [checked_]
   uiToggle_ $ [class_ "hidden peer/open", id_ "details-open"] <> memptyIfFalse (isJust targetEventM) [checked_]
@@ -268,7 +267,6 @@ detailsPanel_ pid targetEventM layout = div_ [class_ $ "contents group/details "
           set my *width to '0px'
           if the first <#logs_list_container/> exists set the *width of #logs_list_container to '100%' end
           remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
-          if the first <#resizer-details_width-wrapper/> exists add .hidden .opacity-0 .pointer-events-none to #resizer-details_width-wrapper end
           call updateUrlState(['details_width', 'target_event', 'showTrace'], '', 'delete')
         end|]
     ]

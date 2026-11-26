@@ -58,7 +58,6 @@ on openTraceFullscreen(traceId, timestamp) from window
           set my *width to &#39;0px&#39;
           if the first &lt;#logs_list_container/&gt; exists set the *width of #logs_list_container to &#39;100%&#39; end
           remove .bg-fillBrand-strong from &lt;.item-row.bg-fillBrand-strong/&gt;
-          if the first &lt;#resizer-details_width-wrapper/&gt; exists add .hidden .opacity-0 .pointer-events-none to #resizer-details_width-wrapper end
           call updateUrlState([&#39;details_width&#39;, &#39;target_event&#39;, &#39;showTrace&#39;], &#39;&#39;, &#39;delete&#39;)
         end"
 <textarea class="w-full min-w-0 text-sm font-mono leading-5 bg-transparent resize-none py-1 outline-none no-focus-ring placeholder:opacity-60" data-query-input aria-label="Query" rows="1" placeholder="level == &quot;ERROR&quot;">

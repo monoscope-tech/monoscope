@@ -741,6 +741,7 @@ bodyWrapper bcfg child = do
               , maxlength_ "4000"
               , required_ "required"
               , autofocus_
+              , data_ "submit-on-mod-enter" ""
               , placeholder_ "Describe what you want Monoscope to investigate…"
               , Aria.label_ "Instructions"
               , class_ "no-focus-ring min-h-24 w-full resize-none bg-transparent py-3 text-base leading-6 text-textStrong outline-none placeholder:text-textWeak sm:text-sm sm:leading-5"
