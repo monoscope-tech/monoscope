@@ -3046,7 +3046,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- reviewRating_inApp: the GitHub links were never used, so the review dialog asks too, and shows the answer.
     (_, Done (CodeContextPage.Rated block)) <- testServant tr $ CodeContextPage.impactReviewRatingH testPid run.id Reviews.Down
     dbOne tr "SELECT rating FROM projects.pr_review_runs WHERE id = ?" (Only run.id) `shouldReturn` ("down" :: Text)
-    toStrict (renderText $ toHtml block) `shouldSatisfy` \html -> all (`T.isInfixOf` html) ["Did this review get it right?", "aria-pressed=\"true\">No<", "aria-pressed=\"false\">Yes<"]
+    let html = toStrict $ renderText $ toHtml block
+        button label = find (T.isInfixOf (">" <> label)) $ T.splitOn "</button>" html
+    html `shouldSatisfy` T.isInfixOf "Did this review get it right?"
+    map (fmap (T.isInfixOf "aria-pressed=\"true\"") . button) ["No", "Yes"] `shouldBe` [Just True, Just False]
     fmap (.rating) . find ((== run.id) . (.id)) <$> runQueryEffect tr (Reviews.latestRuns testPid) `shouldReturn` Just (Just Reviews.Down)
 
   it "sandbox_installsFromPackageRegistriesButReachesNothingElse" \_ -> withTemp "registry-egress" \directory -> do

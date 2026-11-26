@@ -1776,8 +1776,8 @@ instance ToHtml ReviewRating where
   toHtmlRaw = toHtml
   toHtml (ReviewRating pid rid current) = div_ [id_ ("review-rating-" <> rid.toText), class_ "flex flex-wrap items-center gap-2 text-sm"] do
     span_ [class_ "text-textWeak"] "Did this review get it right?"
-    for_ [(ImpactReviews.Up, "Yes"), (ImpactReviews.Down, "No")] \(rating, label) ->
-      button_ [type_ "button", class_ "btn btn-xs btn-outline aria-pressed:btn-active", term "aria-pressed" (if current == Just rating then "true" else "false"), hxPost_ (urls.impactReviewRating pid rid rating), hxTarget_ ("#review-rating-" <> rid.toText), hxSwap_ "outerHTML"] label
+    for_ @[] [(ImpactReviews.Up, "Yes" :: Text), (ImpactReviews.Down, "No")] \(rating, label) ->
+      button_ [type_ "button", class_ "btn btn-xs btn-outline aria-pressed:btn-active", term "aria-pressed" (if current == Just rating then "true" else "false"), hxPost_ (urls.impactReviewRating pid rid rating), hxTarget_ ("#review-rating-" <> rid.toText), hxSwap_ "outerHTML"] $ toHtml label
 
 
 impactReviewRatingH :: Projects.ProjectId -> ImpactReviews.ReviewId -> ImpactReviews.Rating -> ATAuthCtx (RespHeaders (Done (ReviewChange ReviewRating)))
