@@ -224,11 +224,17 @@ test-integration: $(IMPACT_WORKER_DEPS)
 # TimeFusion bring-up for integration tests. Delegates to the timefusion repo.
 # Override TIMEFUSION_DIR if your checkout lives elsewhere.
 TIMEFUSION_DIR ?= ../timefusion
-TIMEFUSION_PG_TEST_URL ?= postgresql://postgres:postgres@localhost:12345/postgres
+TIMEFUSION_PG_TEST_URL ?= postgresql://postgres:postgres@127.0.0.1:12345/postgres
 
-# A no-op once one answers: tf-start refuses a PGWire port already in use.
+# TimeFusion configured as CI's: each write flushed and readable at once (.env.minio's batch queue
+# delays it, and tf-start lets nothing override that file). A no-op once one answers on :12345.
 timefusion-start:
-	@nc -z 127.0.0.1 12345 2>/dev/null && echo "TimeFusion already up on :12345" || $(MAKE) -C $(TIMEFUSION_DIR) tf-start
+	@nc -z 127.0.0.1 12345 2>/dev/null && echo "TimeFusion already up on :12345" || { \
+	  $(MAKE) -C $(TIMEFUSION_DIR) minio-start && cd $(TIMEFUSION_DIR) && cargo build --release > /tmp/timefusion.log 2>&1 && \
+	  { set -a; . ./.env.minio; set +a; ENABLE_BATCH_QUEUE=false TIMEFUSION_BUFFER_FLUSH_IMMEDIATELY=true TIMEFUSION_FOYER_DISABLED=true \
+	    nohup ./target/release/timefusion >> /tmp/timefusion.log 2>&1 & echo $$! > /tmp/timefusion.pid; } && \
+	  for i in $$(seq 1 900); do nc -z 127.0.0.1 12345 2>/dev/null && { echo "TimeFusion up on :12345"; exit 0; }; sleep 1; done; \
+	  tail -50 /tmp/timefusion.log; exit 1; }
 
 timefusion-stop:
 	$(MAKE) -C $(TIMEFUSION_DIR) tf-stop
