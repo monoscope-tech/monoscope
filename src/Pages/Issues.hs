@@ -724,30 +724,34 @@ summaryToken_ wrap token = case T.breakOn "⇒" token of
     -- In chip mode the classes gain whitespace-pre-wrap/break-* suffixes.
     badgeWrap = bool "" " whitespace-pre-wrap break-all" wrap
     textWrap = bool "" " whitespace-pre-wrap break-words" wrap
+    knownBadges :: [Text]
+    knownBadges =
+      [ "badge-neutral"
+      , "badge-primary"
+      , "badge-secondary"
+      , "badge-accent"
+      , "badge-info"
+      , "badge-success"
+      , "badge-warning"
+      , "badge-error"
+      , "badge-ghost"
+      , "badge-2xx"
+      , "badge-3xx"
+      , "badge-4xx"
+      , "badge-5xx"
+      , "badge-GET"
+      , "badge-POST"
+      , "badge-PUT"
+      , "badge-PATCH"
+      , "badge-DELETE"
+      , "badge-HEAD"
+      , "badge-OPTIONS"
+      , "badge-error-strong"
+      , "badge-warning-strong"
+      ]
     tokenClass :: Text -> Text
     tokenClass = \case
-      "badge-neutral" -> "cbadge-sm badge-neutral" <> badgeWrap
-      "badge-primary" -> "cbadge-sm badge-primary" <> badgeWrap
-      "badge-secondary" -> "cbadge-sm badge-secondary" <> badgeWrap
-      "badge-accent" -> "cbadge-sm badge-accent" <> badgeWrap
-      "badge-info" -> "cbadge-sm badge-info" <> badgeWrap
-      "badge-success" -> "cbadge-sm badge-success" <> badgeWrap
-      "badge-warning" -> "cbadge-sm badge-warning" <> badgeWrap
-      "badge-error" -> "cbadge-sm badge-error" <> badgeWrap
-      "badge-ghost" -> "cbadge-sm badge-ghost" <> badgeWrap
-      "badge-2xx" -> "cbadge-sm badge-2xx" <> badgeWrap
-      "badge-3xx" -> "cbadge-sm badge-3xx" <> badgeWrap
-      "badge-4xx" -> "cbadge-sm badge-4xx" <> badgeWrap
-      "badge-5xx" -> "cbadge-sm badge-5xx" <> badgeWrap
-      "badge-GET" -> "cbadge-sm badge-GET" <> badgeWrap
-      "badge-POST" -> "cbadge-sm badge-POST" <> badgeWrap
-      "badge-PUT" -> "cbadge-sm badge-PUT" <> badgeWrap
-      "badge-PATCH" -> "cbadge-sm badge-PATCH" <> badgeWrap
-      "badge-DELETE" -> "cbadge-sm badge-DELETE" <> badgeWrap
-      "badge-HEAD" -> "cbadge-sm badge-HEAD" <> badgeWrap
-      "badge-OPTIONS" -> "cbadge-sm badge-OPTIONS" <> badgeWrap
-      "badge-error-strong" -> "cbadge-sm badge-error-strong" <> badgeWrap
-      "badge-warning-strong" -> "cbadge-sm badge-warning-strong" <> badgeWrap
+      s | s `elem` knownBadges -> "cbadge-sm " <> s <> badgeWrap
       s | s `elem` ["text-textWeak", "text-weak"] -> "text-textWeak text-xs" <> textWrap
       "text-textStrong" -> "text-textStrong text-xs font-medium" <> textWrap
       _ -> "cbadge-sm badge-neutral" <> badgeWrap
@@ -2803,59 +2807,52 @@ issuePreview_ nowM Issues.IssueL{base} = div_ [class_ "flex items-center gap-2 m
       | otherwise = previewSnippet pat
 
 
+-- | Split toggle/duration button shared by Acknowledge and Archive in the issue detail header.
+issueSplitActionBtn_
+  :: Text
+  -> Maybe (Text, Text, Text, Text, Text, Text)
+  -- ^ Active state: (btnClass, tip, ariaLabel, url, icon, label)
+  -> (Text, Text, Text, Text, Text, Text)
+  -- ^ Inactive primary button: (btnTone, tip, ariaLabel, url, icon, label)
+  -> (Text, [(Text, Text)], Text -> Text, Text)
+  -- ^ Duration menu: (heading, extraOptions, optionUrl, caretAriaLabel)
+  -> Html ()
+issueSplitActionBtn_ ctlId activeM (tone, tip, ariaLbl, url, icon, lbl) (menuHeading, extraOpts, optUrl, caretAria) =
+  div_ [id_ ctlId, class_ "inline-flex"] case activeM of
+    Just (actCls, actTip, actAria, actUrl, actIcon, actLbl) ->
+      button_ ([type_ "button", class_ $ "btn btn-sm gap-1.5 tooltip tooltip-bottom " <> actCls, data_ "tip" actTip, Aria.label_ actAria] <> req actUrl)
+        $ faSprite_ actIcon "regular" "w-4 h-4"
+        >> toHtml actLbl
+    Nothing -> div_ [class_ "join"] do
+      button_ ([type_ "button", class_ $ "btn btn-sm " <> tone <> " join-item gap-1.5 tooltip tooltip-bottom", data_ "tip" tip, Aria.label_ ariaLbl] <> req url)
+        $ faSprite_ icon "regular" "w-4 h-4"
+        >> toHtml lbl
+      durationMenu_ (ctlId <> "-menu") menuHeading extraOpts (req . optUrl) \popId ->
+        button_ ([type_ "button", class_ $ "btn btn-sm " <> tone <> " join-item px-2", Aria.label_ caretAria] <> popoverTrigger_ popId)
+          $ faSprite_ "chevron-down" "regular" "w-3 h-3"
+  where
+    req u = [hxPost_ u, hxTarget_ ("#" <> ctlId), hxSwap_ "outerHTML"]
+
+
 -- | Acknowledge control for the issue detail header. Unacknowledged: a primary
 -- button (silence until it regresses) joined to a caret opening the duration
 -- menu. Acknowledged: the remaining time, which un-acknowledges on click.
 issueAcknowledgeButton :: Projects.ProjectId -> Issues.IssueId -> UTCTime -> Maybe UTCTime -> Html ()
-issueAcknowledgeButton pid aid now untilM = div_ [id_ ctlId, class_ "inline-flex"] case untilM of
-  Just until' ->
-    button_
-      ( [ type_ "button"
-        , class_ "btn btn-sm gap-1.5 bg-fillSuccess-weak text-textSuccess border-strokeSuccess-weak tooltip tooltip-bottom"
-        , data_ "tip" "Notifications are paused. Unacknowledge to resume them."
-        , Aria.label_ "Unacknowledge issue"
-        ]
-          <> req ((urls.issues pid).unAcknowledgeGet aid)
-      )
-      do
-        faSprite_ "bell-slash" "regular" "w-4 h-4"
-        toHtml $ untilLabel "Acknowledged" now until'
-  Nothing -> div_ [class_ "join"] do
-    button_
-      ( [ type_ "button"
-        , class_ "btn btn-sm btn-primary join-item gap-1.5 tooltip tooltip-bottom"
-        , data_ "tip" "Pause notifications until this regresses"
-        , Aria.label_ "Acknowledge issue"
-        ]
-          <> req ((urls.issues pid).acknowledgeGet aid Nothing)
-      )
-      do
-        faSprite_ "check" "regular" "w-4 h-4"
-        "Acknowledge"
-    durationMenu_ (ctlId <> "-menu") "Acknowledge for\x2026" [] (req . (urls.issues pid).acknowledgeGet aid . readMaybe . toString) \popId ->
-      button_ ([type_ "button", class_ "btn btn-sm btn-primary join-item px-2", Aria.label_ "Acknowledge for a set time"] <> popoverTrigger_ popId)
-        $ faSprite_ "chevron-down" "regular" "w-3 h-3"
-  where
-    ctlId = "ack-ctl-" <> aid.toText
-    req url = [hxPost_ url, hxTarget_ ("#" <> ctlId), hxSwap_ "outerHTML"]
+issueAcknowledgeButton pid aid now untilM =
+  issueSplitActionBtn_
+    ("ack-ctl-" <> aid.toText)
+    (untilM <&> \u -> ("bg-fillSuccess-weak text-textSuccess border-strokeSuccess-weak", "Notifications are paused. Unacknowledge to resume them.", "Unacknowledge issue", (urls.issues pid).unAcknowledgeGet aid, "bell-slash", untilLabel "Acknowledged" now u))
+    ("btn-primary", "Pause notifications until this regresses", "Acknowledge issue", (urls.issues pid).acknowledgeGet aid Nothing, "check", "Acknowledge")
+    ("Acknowledge for\x2026", [], (urls.issues pid).acknowledgeGet aid . readMaybe . toString, "Acknowledge for a set time")
 
 
 issueArchiveButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Html ()
-issueArchiveButton pid aid archived = div_ [id_ ctlId, class_ "inline-flex"] do
-  if archived
-    then button_ ([type_ "button", class_ "btn btn-sm gap-1.5 tooltip tooltip-bottom btn-ghost bg-fillWarning-weak text-textWarning border-strokeWarning-weak", data_ "tip" "Move back to the Inbox", Aria.label_ "Unarchive issue"] <> req ((urls.issues pid).unarchiveGet aid)) do
-      faSprite_ "archive" "regular" "w-4 h-4"
-      "Unarchive"
-    else div_ [class_ "join"] do
-      button_ ([type_ "button", class_ "btn btn-sm btn-ghost join-item gap-1.5 tooltip tooltip-bottom", data_ "tip" "Not actionable \x2014 hide it and stop notifying", Aria.label_ "Archive issue"] <> req ((urls.issues pid).archiveGet aid Nothing)) do
-        faSprite_ "archive" "regular" "w-4 h-4"
-        "Archive"
-      durationMenu_ (ctlId <> "-menu") "Archive for\x2026" [("Until it escalates", "escalating")] (req . (urls.issues pid).archiveGet aid . parseQueryParamMaybe) \popId ->
-        button_ ([type_ "button", class_ "btn btn-sm btn-ghost join-item px-2", Aria.label_ "Archive for a set time"] <> popoverTrigger_ popId)
-          $ faSprite_ "chevron-down" "regular" "w-3 h-3"
-  where
-    ctlId = "archive-ctl-" <> aid.toText
-    req url = [hxPost_ url, hxTarget_ ("#" <> ctlId), hxSwap_ "outerHTML"]
+issueArchiveButton pid aid archived =
+  issueSplitActionBtn_
+    ("archive-ctl-" <> aid.toText)
+    (("btn-ghost bg-fillWarning-weak text-textWarning border-strokeWarning-weak", "Move back to the Inbox", "Unarchive issue", (urls.issues pid).unarchiveGet aid, "archive", "Unarchive") <$ guard archived)
+    ("btn-ghost", "Not actionable \x2014 hide it and stop notifying", "Archive issue", (urls.issues pid).archiveGet aid Nothing, "archive", "Archive")
+    ("Archive for\x2026", [("Until it escalates", "escalating")], (urls.issues pid).archiveGet aid . parseQueryParamMaybe, "Archive for a set time")
 
 
 -- | The issue's type as icon + label. @compact@ is the list\'s chip: tighter,

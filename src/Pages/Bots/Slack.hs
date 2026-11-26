@@ -322,11 +322,7 @@ slackInteractionsHWithTools projectTools interaction = do
   principalM <- Integrations.resolveSlackPrincipal interaction.team_id interaction.user_id Nothing
   case principalM of
     Nothing ->
-      traceResp
-        $ AE.object
-          [ "response_type" AE..= ("ephemeral" :: Text)
-          , "text" AE..= ("Link your Monoscope account by mentioning Monoscope or sending it a direct message, then retry this command. If already linked, check your project access and Slack installation." :: Text)
-          ]
+      traceResp $ ephemeralResp "Link your Monoscope account by mentioning Monoscope or sending it a direct message, then retry this command. If already linked, check your project access and Slack installation."
     Just principal -> do
       slackData <- getProjectSlackData principal.projectId >>= maybe (throwError err403) pure
       unless (slackData.teamId == interaction.team_id) $ throwError err403
@@ -343,11 +339,12 @@ slackInteractionsHWithTools projectTools interaction = do
           AI.requireAgentAccess access principal.projectId
           triggerSlackModal slackData.botToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView (SlackDashboardContext principal.projectId interaction.user_id interaction.channel_id Nothing) (V.fromList [dashboardSelectBlock "dashboard-select" "*Select dashboard*" dashboards])]
           traceResp $ textResp "modal opened"
-        _ | T.strip interaction.text == "search connect" -> do
-          traceResp $ AE.object ["response_type" AE..= ("ephemeral" :: Text), "text" AE..= ("<" <> hostPath authCtx.env.hostUrl (urls.slackEvidenceGet principal.projectId interaction.user_id) <> "|Connect your own Slack search access>. Use `" <> interaction.command <> " search disconnect` to remove it. This connection belongs to your account.")]
+        _
+          | T.strip interaction.text == "search connect" ->
+              traceResp $ ephemeralResp $ "<" <> hostPath authCtx.env.hostUrl (urls.slackEvidenceGet principal.projectId interaction.user_id) <> "|Connect your own Slack search access>. Use `" <> interaction.command <> " search disconnect` to remove it. This connection belongs to your account."
         _ | T.strip interaction.text == "search disconnect" -> do
           Integrations.revokeSlackEvidence principal.projectId principal.userId
-          traceResp $ AE.object ["response_type" AE..= ("ephemeral" :: Text), "text" AE..= ("Your Slack search access is disconnected. The project's Slack app remains connected." :: Text)]
+          traceResp $ ephemeralResp "Your Slack search access is disconnected. The project's Slack app remains connected."
         _ | T.strip interaction.text `elem` ["incidents on", "incidents off"] -> do
           permission <- ProjectMembers.getUserPermission principal.projectId principal.userId
           unless (permission >= Just ProjectMembers.PEdit) $ throwError err403
@@ -363,16 +360,13 @@ slackInteractionsHWithTools projectTools interaction = do
               Issues.installIncidentRoutine principal.userId principal.projectId channel
             else Issues.pauseRoutine principal.projectId conversation
           traceResp
-            $ AE.object
-              [ "response_type" AE..= ("ephemeral" :: Text)
-              , "text"
-                  AE..= if enabled
-                    then "Incident investigations are enabled for this channel. New installations start in Observe. Review the policy and run history: " <> hostPath authCtx.env.hostUrl (urls.aiThreadGet principal.projectId conversation Nothing)
-                    else "Incident investigations are paused for this channel."
-              ]
+            $ ephemeralResp
+            $ if enabled
+              then "Incident investigations are enabled for this channel. New installations start in Observe. Review the policy and run history: " <> hostPath authCtx.env.hostUrl (urls.aiThreadGet principal.projectId conversation Nothing)
+              else "Incident investigations are paused for this channel."
         _ ->
           Issues.getEventRoutine principal.projectId Issues.EventSlackMessage >>= \case
-            Nothing -> traceResp $ AE.object ["response_type" AE..= ("ephemeral" :: Text), "text" AE..= ("Ask a project editor to activate or resume Slack investigation in AI routines: " <> hostPath authCtx.env.hostUrl (urls.aiRoutinesGet principal.projectId))]
+            Nothing -> traceResp $ ephemeralResp $ "Ask a project editor to activate or resume Slack investigation in AI routines: " <> hostPath authCtx.env.hostUrl (urls.aiRoutinesGet principal.projectId)
             Just routine -> do
               AI.requireAgentAccess access principal.projectId
               let convId = Issues.slackCommandConversationId principal.projectId interaction.team_id interaction.channel_id interaction.trigger_id
@@ -381,6 +375,8 @@ slackInteractionsHWithTools projectTools interaction = do
               let status = if execution.status == Issues.RunRunning then botEmoji EmojiSearch <> " Analyzing your query..." else "This request has ended. Its result and history are retained."
               traceResp $ textResp $ status <> "\n<" <> hostPath authCtx.env.hostUrl (urls.aiRoutineRunGet principal.projectId execution.id Nothing) <> "|View run and review actions>"
   where
+    ephemeralResp :: Text -> AE.Value
+    ephemeralResp msg = AE.object ["response_type" AE..= ("ephemeral" :: Text), "text" AE..= msg]
     traceResp resp = resp <$ Log.logTrace ("Slack interaction response" :: Text) resp
 
     runMonoscopeHere :: SlackInteraction -> SlackData -> ATBaseCtx AE.Value
@@ -1826,26 +1822,16 @@ sendProgressStream connection target publicationId request footer = case request
         (Just session.timestamp)
     execute method body reject accepted expected = do
       AI.requireAgentAccess (AI.SlackAccess target.teamId target.slackUserId target.userId) target.projectId
-      response <- tryAny $ requestSlackApi connection.botToken method body
-      case response of
-        Left err -> maybe uncertain (\limited -> reject >> throwIO limited) $ fromException @Slack.SlackRateLimited err
-        Right received -> case AE.decode @SlackMessageAck (received ^. responseBody) of
-          Just ack
-            | statusIsSuccessful (received ^. Wreq.responseStatus)
-            , ack.ok
-            , Just timestamp <- ack.ts >>= Incidents.slackTimestamp -> do
-                unless (maybe True (== timestamp) expected) $ void uncertain
-                let next = accepted timestamp
-                confirmed <- Investigations.commitStream publicationId pending next
-                unless confirmed $ void uncertain
-                pure next
-            | statusIsSuccessful (received ^. Wreq.responseStatus)
-            , not ack.ok
-            , Just reason <- ack.error
-            , definiteSlackRejection reason -> do
-                reject
-                throwIO $ ErrorCall $ "Slack stream rejected: " <> toString reason
-          _ -> uncertain
+      callSlackAck connection.botToken method body >>= \case
+        AckRateLimited limited -> reject >> throwIO limited
+        AckRejected reason -> reject >> throwIO (ErrorCall $ "Slack stream rejected: " <> toString reason)
+        AckOk timestamp -> do
+          unless (maybe True (== timestamp) expected) $ void uncertain
+          let next = accepted timestamp
+          confirmed <- Investigations.commitStream publicationId pending next
+          unless confirmed $ void uncertain
+          pure next
+        AckAmbiguous _ -> uncertain
 
 
 -- | Late observations can arrive after the answer receipt is complete. Refresh
@@ -1869,6 +1855,27 @@ data SlackMessageAck = SlackMessageAck {ok :: Bool, ts :: Maybe Text, error :: M
   deriving anyclass (AE.FromJSON)
 
 
+data SlackAck = AckOk Incidents.SlackTimestamp | AckRejected Text | AckRateLimited Slack.SlackRateLimited | AckAmbiguous Text
+
+
+callSlackAck :: (HTTP :> es, IOE :> es) => Text -> Text -> AE.Value -> Eff es SlackAck
+callSlackAck token method body =
+  tryAny (requestSlackApi token method body) <&> \case
+    Left err -> maybe (AckAmbiguous "Transport failed") AckRateLimited $ fromException @Slack.SlackRateLimited err
+    Right received -> case AE.decode @SlackMessageAck (received ^. responseBody) of
+      Just ack
+        | statusIsSuccessful (received ^. Wreq.responseStatus)
+        , ack.ok
+        , Just timestamp <- ack.ts >>= Incidents.slackTimestamp ->
+            AckOk timestamp
+        | statusIsSuccessful (received ^. Wreq.responseStatus)
+        , not ack.ok
+        , Just reason <- ack.error
+        , definiteSlackRejection reason ->
+            AckRejected reason
+      _ -> AckAmbiguous "Acknowledgement was ambiguous"
+
+
 -- | Post a message whose delivery is tracked by a reservation row, then settle
 -- that reservation from Slack's acknowledgement. Only a definite accept confirms
 -- and only a definite rejection releases; every other outcome — transport
@@ -1887,29 +1894,18 @@ publishReservedMessage eventType token publicationId content release confirm = d
   -- Name the publication after the event type it is stamped with, so the log
   -- line and the metadata a reconciler searches for can never disagree.
   let label = T.takeWhileEnd (/= '_') eventType
-      pending reason = do
-        Log.logAttention ("Slack " <> label <> " publication awaits reconciliation") $ AE.object ["publication_id" AE..= publicationId, "reason" AE..= (reason :: Text)]
-        throwIO SlackPublicationPending
       body =
         mergeSlackContent content
           $ AE.object ["metadata" AE..= AE.object ["event_type" AE..= eventType, "event_payload" AE..= AE.object ["publication_id" AE..= publicationId]]]
-  response <- tryAny $ requestSlackApi token "chat.postMessage" body
-  case response of
-    Left err -> maybe (pending "Transport failed") (\limited -> release >> throwIO limited) (fromException @Slack.SlackRateLimited err)
-    Right received -> case AE.decode @SlackMessageAck (received ^. responseBody) of
-      Just ack
-        | statusIsSuccessful (received ^. Wreq.responseStatus)
-        , ack.ok
-        , Just timestamp <- ack.ts >>= Incidents.slackTimestamp -> do
-            confirmed <- confirm $ Incidents.slackTimestampText timestamp
-            unless confirmed $ throwIO $ ErrorCall $ "Conflicting Slack " <> toString label <> " acknowledgement"
-        | statusIsSuccessful (received ^. Wreq.responseStatus)
-        , not ack.ok
-        , Just reason <- ack.error
-        , definiteSlackRejection reason -> do
-            release
-            throwIO $ ErrorCall $ "Slack " <> toString label <> " rejected: " <> toString reason
-      _ -> pending "Acknowledgement was ambiguous"
+  callSlackAck token "chat.postMessage" body >>= \case
+    AckRateLimited limited -> release >> throwIO limited
+    AckRejected reason -> release >> throwIO (ErrorCall $ "Slack " <> toString label <> " rejected: " <> toString reason)
+    AckOk timestamp -> do
+      confirmed <- confirm $ Incidents.slackTimestampText timestamp
+      unless confirmed $ throwIO $ ErrorCall $ "Conflicting Slack " <> toString label <> " acknowledgement"
+    AckAmbiguous reason -> do
+      Log.logAttention ("Slack " <> label <> " publication awaits reconciliation") $ AE.object ["publication_id" AE..= publicationId, "reason" AE..= reason]
+      throwIO SlackPublicationPending
 
 
 data SlackPublicationPending = SlackPublicationPending
