@@ -57,6 +57,30 @@ The #726 head still is a real screenshot of the People table with the seeded rol
 format Blacksmith uses; ours adds the merge-risk table and the not-verified list. Still behind:
 Blacksmith covers more claims per PR and found issues the PRs didn't claim; we found none.
 
+### Screenshots side by side (2026-11-26)
+
+Comparing our stills with Blacksmith's on the same PRs:
+
+- **Fonts.** Both render Messina Sans with uneven glyph spacing ("Surve ys", "Engage ment"): headless
+  Chromium hints fonts in full by default. With `--font-render-hinting=none` the same page renders with
+  natural kerning (verified on the worker; the line is 3% narrower). #1043 wraps the guest's Chromium so
+  every agent script gets it; Blacksmith's stills still have the defect.
+- **Base without a page.** On #730 our base still was a terminal error dump: the script asserted before
+  its screenshot, so only head showed the UI. Blacksmith's scripts print both states and exit 0 on each
+  side ("contains Jordan Rivera: true" then "false"). #1043 tells agents to screenshot before asserting.
+- **Pairs that show nothing.** #1043 pairs base and head stills by name: an identical pair, or a side
+  without a screenshot, goes back to the agent as advice; a changed pair gets the changed pixels boxed on
+  both sides. Blacksmith shows no highlight.
+
+### Review failures (2026-11-25)
+
+- #721's re-proof failed "exceeded its submission budget"; its automatic retry then ended "Saved progress
+  was lost", which replaced the cause in the comment. #1038 stops such a chain with the real reason and
+  logs each rejected draft. The next #721 run completed: the one rejection was a "matches" claim without a
+  passing head recording, which the agent corrected.
+- #721's agent now opens the template dialog (#1035) but then hit a Playwright strict-mode violation (the
+  title also sits in a hidden preview modal); #1043 adds advice for that case.
+
 ## What Blacksmith produces
 
 | PR | Verdict | Claims | Screenshots | Found | Not tested |
