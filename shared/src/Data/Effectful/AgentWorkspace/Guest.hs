@@ -235,7 +235,8 @@ withGuest seat host expected checkout revision start lease attempt allocate reta
               lock
               for_ (Map.toList files) \(destination, bytes) -> upload destination bytes >> workspace ["/bin/chmod", "0444", destination]
       pure image.buildId
-    whenRight (Left "Agent sandbox could not be prepared") prepared \imageBuildId -> do
+    -- The cause travels with the message: a bare "could not be prepared" hid every failure behind one string.
+    flip (either (pure . Left . ("Agent sandbox could not be prepared: " <>) . T.take 300 . toText . displayException)) prepared \imageBuildId -> do
       ready <- getMonotonicTimeNSec
       let cache = CacheReport (maybe (if isJust host.workspace then Miss else Disabled) (Hit . AgentWorkspace.checkpointSummary) leased) ((ready - started) `div` 1000000)
       let suspend path = do
