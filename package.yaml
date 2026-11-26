@@ -364,6 +364,11 @@ tests:
           - hspec
           - tmp-postgres
           - pg-transact
+          - hs-opentelemetry-exporter-in-memory
+          - hs-opentelemetry-exporter-otlp
+          - hs-opentelemetry-propagator-w3c
+          - optparse-applicative
+          - process
     main: Main.hs
     source-dirs:
       - src

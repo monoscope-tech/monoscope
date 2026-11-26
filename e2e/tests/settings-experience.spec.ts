@@ -154,6 +154,7 @@ test('notification settings remain clean until the user changes a value', async 
   await page.locator('#include-user-identity-in-alerts').click();
   await expect(page.locator('#integrations-save-status')).toHaveText('Unsaved changes');
   await page.reload();
+  await expect.poll(() => page.locator('#emails_input').evaluate(element => Boolean((element as any)._tagifyInstance))).toBe(true);
   await page.waitForLoadState('networkidle');
   await page.locator('#notifsForm .tagify__tag__removeBtn').first().click();
   await expect(page.locator('#integrations-save-status')).toHaveText('Unsaved changes');

@@ -50,7 +50,12 @@ COPY proto ./proto
 # AutoInstrument rules out -fexternal-interpreter, which would drop the vanilla pass entirely.
 # -fno-write-ide-info skips .hie generation in production (weeder runs in native CI), cutting
 # compile time, disk I/O, and persistent dist cache size across both vanilla and prof passes.
-RUN printf 'package *\n  profiling: True\n  profiling-detail: none\npackage monoscope\n  profiling-detail: late\n  optimization: False\n  ghc-options: -fno-write-ide-info\n' >> cabal.project.local
+ARG ENABLE_PROF=true
+RUN if [ "$ENABLE_PROF" = "true" ]; then \
+      printf 'package *\n  profiling: True\n  profiling-detail: none\npackage monoscope\n  profiling-detail: late\n  optimization: False\n  ghc-options: -fno-write-ide-info\npackage monoscope-shared\n  ghc-options: -fno-write-ide-info\npackage monoscope-proto\n  ghc-options: -fno-write-ide-info\n' >> cabal.project.local; \
+    else \
+      printf 'package monoscope\n  ghc-options: -fno-write-ide-info\npackage monoscope-shared\n  ghc-options: -fno-write-ide-info\npackage monoscope-proto\n  ghc-options: -fno-write-ide-info\n' >> cabal.project.local; \
+    fi
 
 # The dependency image is a cache, not the authority for npm versions. Install
 # from this checkout's lockfiles in a separately cached layer so new frontend
