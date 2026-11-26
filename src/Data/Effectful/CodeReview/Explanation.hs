@@ -360,19 +360,21 @@ contrastPair before after = case (convertRGBA8 <$> decodePng before, convertRGBA
 -- >>> changedRegions (dot []) (dot [(5, 5), (30, 10), (190, 190)])
 -- [(0,0,47,23),(168,168,191,191)]
 changedRegions :: Image PixelRGBA8 -> Image PixelRGBA8 -> [(Int, Int, Int, Int)]
-changedRegions a b = map box $ clusters $ S.fromList [(cx, cy) | cy <- [0 .. (h - 1) `div` 24], cx <- [0 .. (w - 1) `div` 24], changed cx cy]
+changedRegions a b = clusters $ S.fromList [(cx, cy) | cy <- [0 .. (h - 1) `div` 24], cx <- [0 .. (w - 1) `div` 24], changed cx cy]
   where
     (w, h) = (imageWidth a, imageHeight a)
     changed cx cy = or [differs (pixelAt a x y) (pixelAt b x y) | y <- [cy * 24 .. min (h - 1) (cy * 24 + 23)], x <- [cx * 24 .. min (w - 1) (cx * 24 + 23)]]
     differs (PixelRGBA8 r g bl al) (PixelRGBA8 r' g' bl' al') = any (> 24) $ zipWith (\u v -> abs (fromIntegral @Word8 @Int u - fromIntegral v)) [r, g, bl, al] [r', g', bl', al']
     clusters cells = case S.minView cells of
       Nothing -> []
-      Just (seed, rest) -> let (cluster, remaining) = spread [seed] rest [seed] in cluster : clusters remaining
+      Just (seed, rest) -> let (cluster, remaining) = spread [seed] rest [] in box seed cluster : clusters remaining
     spread [] rest found = (found, rest)
     spread ((cx, cy) : queue) rest found =
       let near = [cell | dx <- [-2 .. 2], dy <- [-2 .. 2], let cell = (cx + dx, cy + dy), cell `S.member` rest]
        in spread (near <> queue) (foldr S.delete rest near) (near <> found)
-    box cells = (24 * minimum (map fst cells), 24 * minimum (map snd cells), min (w - 1) (24 * maximum (map fst cells) + 23), min (h - 1) (24 * maximum (map snd cells) + 23))
+    box (sx, sy) cells =
+      let (x0, y0, x1, y1) = foldl' (\(l, t, r, b') (x, y) -> (min l x, min t y, max r x, max b' y)) (sx, sy, sx, sy) cells
+       in (24 * x0, 24 * y0, min (w - 1) (24 * x1 + 23), min (h - 1) (24 * y1 + 23))
 
 
 -- | Terminal text without its colour codes.
