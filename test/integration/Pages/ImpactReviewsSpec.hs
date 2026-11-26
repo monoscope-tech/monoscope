@@ -31,6 +31,7 @@ import Data.Effectful.CodeReview.Outbox qualified as Outbox
 import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types qualified as Proof (ProofMedia (..))
 import Data.Effectful.GitPublication qualified as Publication
+import Data.Effectful.Hasql (setTestTime)
 import Data.Effectful.LLM qualified as LLM
 import Data.Effectful.ReviewEvaluation qualified as Evaluation
 import Data.Effectful.Wreq qualified as HTTP
@@ -4543,6 +4544,21 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr $ Issues.pauseRoutine testPid routine
     sweep
     fixed `shouldReturn` [Only issue]
+
+  -- 2026-11-26: ~80 issues each got a fresh hour-long fix attempt every 23 h, all failing the same way.
+  it "autofix_backsOffRepeatedFixesAndTriesUntriedIssuesFirst" \tr -> do
+    (mapping, issue, base) <- fixFixture tr "autofix-backoff"
+    let now = addUTCTime 7200 frozenTime
+    untried <- seedIssue tr (issueSeed Issues.RuntimeException "autofix-untried"){service = Just "test-service", at = frozenTime}
+    other <- fixRevision $ T.replicate 40 "b"
+    for_ (zip [1 ..] [base, other]) \(n, revision') -> runQueryEffect tr (Fixes.createRun testPid (UUIDId $ UUID.fromWords 97 0 0 n) issue mapping.id revision' (UUIDId UUID.nil)) `shouldReturn` Just (UUIDId $ UUID.fromWords 97 0 0 n)
+    let ranHoursAgo h = dbExec tr "UPDATE projects.issue_fix_runs SET created_at = ? WHERE issue_id = ?" (addUTCTime (-h * 3600) now, issue)
+        candidates = setTestTime tr.trTestClock now >> map fst <$> runQueryEffect tr (Fixes.autofixCandidates testPid 5)
+    -- Two failed attempts wait 46 h; the untried issue is offered either way, first.
+    ranHoursAgo 30
+    candidates `shouldReturn` [untried]
+    ranHoursAgo 47
+    candidates `shouldReturn` [untried, issue]
 
   it "nativeFix_applicationJobSharesRunAuthorityReceiptsAndCompletion" \tr -> do
     (mapping, issue, base) <- fixFixture tr "application-fix"
