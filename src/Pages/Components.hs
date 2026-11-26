@@ -1,4 +1,4 @@
-module Pages.Components (codeContextUrl, drawer_, drawerShell_, nativeDialog_, nativeDialogWith_, dialogTrigger_, dialogBackdrop_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityDrawer_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, swapTarget_, morphTarget_, morphPostAttrs_, pollSelfAttrs_, pollSelfAttrsWith_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formSelectFieldWith_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, dangerAction_, dangerZone_, floatingDialogShell_, floatingDialog_, floatingCard_, mergedAttrs, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerNoMatches_, pickerHints_, pickerPopover_, actionMenu_, durationMenu_, primaryButton_, submitBtn_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (codeContextUrl, drawer_, drawerShell_, nativeDialog_, nativeDialogWith_, dialogTrigger_, dialogBackdrop_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityDrawer_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, swapTarget_, morphTarget_, morphPostAttrs_, pollSelfAttrs_, pollSelfAttrsWith_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formSelectFieldWith_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, dangerAction_, dangerZone_, floatingDialogShell_, floatingDialog_, floatingCard_, mergedAttrs, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerNoMatches_, pickerHints_, pickerPopover_, actionMenu_, durationMenu_, primaryButton_, submitBtn_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -502,16 +502,6 @@ brandLogo_ h = do
   img_ [class_ $ h <> " hidden dark:block", src_ "/public/assets/svgs/logo_white.svg", alt_ "Monoscope"]
 
 
-modalCloseButton_ :: Monad m => Text -> HtmlT m ()
-modalCloseButton_ modalId =
-  label_
-    [ Lucid.for_ modalId
-    , Aria.label_ "Close modal"
-    , class_ "tap-target !absolute right-3 top-3 z-10 inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-iconNeutral hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-2 active:scale-[0.96] transition-[color,background-color,scale]"
-    ]
-    $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
-
-
 primaryButton_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
 primaryButton_ attrs = button_ (class_ " btn btn-primary btn-sm " : attrs)
 
@@ -934,62 +924,9 @@ kvList_ cls rows = dl_ [class_ $ "grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 ga
   dd_ [class_ "min-w-0 truncate text-textStrong"] v
 
 
-data ModalCfg = ModalCfg
-  { autoOpen :: Bool
-  , boxClass :: Text
-  , boxStyle :: Text
-  , wrapperClass :: Text
-  , hideClose :: Bool
-  }
-  deriving stock (Generic)
-  deriving anyclass (Default)
-
-
-modalWith_ :: Text -> ModalCfg -> Maybe (Html ()) -> Html () -> Html ()
-modalWith_ modalId cfg triggerM contentHtml = do
-  whenJust triggerM $ label_ [Lucid.for_ modalId]
-  uiToggle_
-    $ [ class_ "modal-toggle"
-      , id_ modalId
-      , Aria.label_ "Toggle modal"
-      , -- Escape is heard on window: focus sits inside the modal, which is not this input's subtree.
-        [__|on keyup[key is 'Escape'] from window or closeModal from body if my.checked set my.checked to false then send change to me end
-          on change if my.checked then
-            add .overflow-hidden to <body/>
-            wait 50ms then
-            set :modal to the next <.modal/> then
-            set :focusable to :modal.querySelector('[autofocus]') or :modal.querySelector('input:not([type=hidden]):not([type=checkbox]), textarea, select, [tabindex]:not([tabindex="-1"])') then
-            if :focusable then call :focusable.focus() end
-          else
-            remove .overflow-hidden from <body/>
-          end
-      |]
-      ]
-    <> [checked_ | cfg.autoOpen]
-  div_
-    [ class_ $ "modal w-screen " <> cfg.wrapperClass
-    , role_ "dialog"
-    , Aria.label_ "Modal dialog"
-    , style_ "--color-base-100: var(--color-fillWeaker)"
-    , [__|on keydown[key=='Enter' and target.tagName=='INPUT' and target.type!='textarea']
-        set :form to target.closest('form') then
-        if :form then halt the event then call :form.requestSubmit() end
-      |]
-    ]
-    do
-      label_ [class_ "modal-backdrop", Lucid.for_ modalId, Aria.label_ "Close modal"] ""
-      div_
-        ( [class_ $ "modal-box relative w-auto flex flex-col gap-5 " <> bool "max-w-5xl" cfg.boxClass (not $ T.null cfg.boxClass)]
-            <> [style_ cfg.boxStyle | not $ T.null cfg.boxStyle]
-        )
-        do
-          unless cfg.hideClose $ modalCloseButton_ modalId
-          div_ [class_ "space-y-2"] contentHtml
-
-
 -- | A native modal @<dialog>@: the browser traps focus, makes the page inert and handles
--- Escape, which the checkbox 'modalWith_' cannot. A backdrop click, a successful form submit
--- or a server @closeModal@ event closes it, and focus returns to its 'dialogTrigger_'. The title heads and names it.
+-- Escape. A backdrop click, a successful form submit or a server @closeModal@ event closes it,
+-- and focus returns to its 'dialogTrigger_'. The title heads and names it.
 nativeDialog_ :: Monad m => Text -> Text -> Text -> HtmlT m () -> HtmlT m ()
 nativeDialog_ = nativeDialogWith_ []
 

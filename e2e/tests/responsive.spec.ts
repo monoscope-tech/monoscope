@@ -6,7 +6,7 @@ test("essential dashboard and explorer actions survive a 320px viewport", async 
   const fitsViewport = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
   await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
-  await expect(page.locator('label[for="newDashboardMdl"]').first()).toBeVisible();
+  await expect(page.locator('#newDashboardMdl-trigger').first()).toBeVisible();
   await expect.poll(fitsViewport).toBe(true);
 
   await page.goto(`/p/${DEMO_PROJECT}/log_explorer`, { waitUntil: "domcontentloaded" });

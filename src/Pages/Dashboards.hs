@@ -129,7 +129,7 @@ import NeatInterpolation
 import OpenTelemetry.Attributes qualified as OA
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), emptyState_, filterInputAttr_, formField_, primaryButton_, tagInput_)
+import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), emptyState_, filterInputAttr_, formField_, primaryButton_, tagInput_)
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.Issues qualified as IssuesPage
@@ -2282,13 +2282,19 @@ dashboardsGet_ dg
             $ if V.null dg.dashboards then emptyState_ def{size = ESCompact} "No dashboards yet" "Create one below with this widget." else emptyState_ def{size = ESCompact} "No dashboards match" "Try another name, or create a dashboard below."
   | otherwise = do
       unless dg.embedded
-        $ Components.modalWith_ "newDashboardMdl" def{autoOpen = dg.showNew, boxClass = "max-w-none", boxStyle = "width:min(92vw,76rem);max-width:none;overflow:clip"} Nothing
+        $ Components.nativeDialogWith_
+          ( [[__|on htmx:after:swap set f to (the first <[autofocus]/> in me) or (the first <input:not([type=hidden]):not([type=checkbox]):not([type=radio])/> in me) then if f call f.focus() end|]]
+              <> [[__|init call me.showModal()|] | dg.showNew]
+          )
+          "newDashboardMdl"
+          "New Dashboard"
+          "max-w-none w-[min(92vw,76rem)] overflow-clip"
         $ if not dg.showNew
           then
             div_
               [ id_ "newDashboardForm"
               , hxGet_ $ urls.dashboardNewGet dg.projectId
-              , hxTrigger_ "change[target.checked] from:#newDashboardMdl"
+              , hxTrigger_ "intersect once"
               , hxSwap_ "outerHTML"
               ]
               $ p_ [class_ "py-8 text-center text-sm text-textWeak", role_ "status"] "Loading dashboard templates…"
@@ -2385,7 +2391,7 @@ dashboardsGet_ dg
                       , Table.search = if noBulkActions then Nothing else Just Table.ClientSide
                       , Table.tableHeaderActions = dg.tableActions
                       , Table.header = if dg.embedded || null dg.filters.tag then Nothing else Just $ activeFilters_ dg.projectId ((.currentSort) <$> dg.tableActions) dg.filters
-                      , Table.zeroState = if dg.embedded then Nothing else Just Table.ZeroState{icon = "chart-area", title = "No dashboards yet", description = "Create your first dashboard to visualize your data", action = Table.ESCustom $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn text-sm w-max mx-auto btn-primary"] "Create Dashboard"}
+                      , Table.zeroState = if dg.embedded then Nothing else Just Table.ZeroState{icon = "chart-area", title = "No dashboards yet", description = "Create your first dashboard to visualize your data", action = Table.ESCustom $ Components.dialogTrigger_ "newDashboardMdl" [id_ "newDashboardMdl-empty-trigger", class_ "btn text-sm w-max mx-auto btn-primary"] "Create Dashboard"}
                       }
                 }
 
@@ -2471,7 +2477,7 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filt
             bw
               { pageTitle = "Dashboards"
               , freeTierStatus = freeTierStatus
-              , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn btn-sm btn-primary gap-2"] do
+              , pageActions = Just $ Components.dialogTrigger_ "newDashboardMdl" [class_ "btn btn-sm btn-primary gap-2"] do
                   faSprite_ "plus" "regular" "h-4 w-4"
                   "New Dashboard"
               }

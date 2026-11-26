@@ -78,7 +78,7 @@ test("a dashboard can be created without assigning a team", async ({ page }) => 
   page.on("response", r => { if (r.request().method() === "POST") responses.push(r.status()); });
 
   await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
-  await page.locator('label[for="newDashboardMdl"]').first().click();
+  await page.locator('#newDashboardMdl-trigger').first().click();
   await page.getByText("Blank dashboard").click();
   await page.locator('input[name="title"]').first().fill("No Team Dashboard");
   await page.getByRole("button", { name: "Create" }).first().click();
@@ -104,7 +104,7 @@ async function openFirstDashboard(page: Page) {
 
   const links = page.locator(`#main-content a[href^="/p/${DEMO_PROJECT}/dashboards/"]`, { hasText: FIXTURE });
   if ((await links.count()) === 0) {
-    await page.locator('label[for="newDashboardMdl"]').first().click();
+    await page.locator('#newDashboardMdl-trigger').first().click();
     // A template, not "Blank dashboard": this spec is about the grid adopting widgets, and
     // the nested-group case needs a canvas that actually contains a group widget. Apache
     // ships one and — unlike Endpoint Analytics — declares no variables, so opening it
