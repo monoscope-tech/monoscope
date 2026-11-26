@@ -213,10 +213,9 @@ test.describe("adding widgets to a dashboard", () => {
       const alertRequest = (url: URL) => url.pathname.endsWith("/alert") && url.pathname.includes("/widgets/");
       await page.route(alertRequest, route => route.fulfill({ status: 503, body: "Temporary failure" }));
       await drawer.getByRole("button", { name: "Add widget and monitor" }).click();
-      await expect(drawer.getByRole("button", { name: "Retry monitor" })).toBeVisible();
-      await expect(page.locator(ROOT_ITEMS).filter({ hasText: "New widget errors" })).toHaveCount(1);
+      await expect(page.locator(ROOT_ITEMS).filter({ hasText: "New widget errors" })).toHaveCount(0);
       await page.unroute(alertRequest);
-      await drawer.getByRole("button", { name: "Retry monitor" }).click();
+      await drawer.getByRole("button", { name: "Add widget and monitor" }).click();
       await expect(page.getByText("Widget monitor configured successfully")).toBeVisible();
       await expect(page.locator("#page-data-drawer")).not.toBeChecked();
       await page.goto(`/p/${DEMO_PROJECT}/monitors`);

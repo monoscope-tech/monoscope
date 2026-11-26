@@ -351,32 +351,6 @@ export function initWidgetEditor(editor: HTMLElement): void {
   update();
 }
 
-export function submitWidgetWithMonitor(alertFormId: string, widgetFormId: string, hintId: string): void {
-  const form = document.getElementById(alertFormId) as HTMLFormElement | null;
-  const filter = document.querySelector<HTMLElement & { getValue?: () => string }>('#filterElement');
-  if (!filter?.getValue?.().trim()) {
-    const hint = document.getElementById(hintId);
-    if (hint) hint.hidden = false;
-    document.querySelector<HTMLElement>('#filterElement .cm-content')?.focus();
-    return;
-  }
-  if (!form?.reportValidity()) return;
-  if (form.dataset.widgetSaved === 'true') {
-    form.requestSubmit();
-    return;
-  }
-  for (const [from, to] of [
-    ['alertThreshold', 'widgetAlertThreshold'],
-    ['warningThreshold', 'widgetWarningThreshold'],
-    ['unit', 'widgetUnit'],
-  ]) {
-    const dst = document.getElementById(to) as HTMLInputElement | null;
-    const src = form.querySelector<HTMLInputElement>(`[name="${from}"]`);
-    if (dst && src) dst.value = src.value;
-  }
-  (document.getElementById(widgetFormId) as HTMLFormElement | null)?.requestSubmit();
-}
-
 function mountDashboardAndEditors(fullLoad: boolean): void {
   const page = document.getElementById('dashboardPage');
   if (page && !page.dataset.dashboardInit) {
@@ -395,5 +369,3 @@ if (document.readyState === 'loading') {
   mountDashboardAndEditors(true);
 }
 document.addEventListener('htmx:after:settle', () => mountDashboardAndEditors(false));
-
-Object.assign(window, { submitWidgetWithMonitor });

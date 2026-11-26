@@ -246,7 +246,7 @@ spec = describe "Monitoring" do
       saved <- (.widget) . fromRightShow <$> call tr (Dashboards.dashboardWidgetPutH testPid did Nothing Nothing def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "W", Widget.query = Just "name == \"x\""})
       wid <- maybe (fail "the saved widget has no id") pure saved.id
       void $ runTestBgNoReset tr $ Monitors.queryMonitorUpsert def{Monitors.id = mid, Monitors.projectId = testPid, Monitors.logQuery = "status_code == 200", Monitors.alertThreshold = 1, Monitors.checkIntervalMins = 5, Monitors.timeWindowMins = 5}
-      let widgetAlert = Dashboards.WidgetAlertForm{widgetId = wid, query = "name == \"x\"", vizType = Just "timeseries", unit = Nothing, alertThreshold = Just "1", warningThreshold = Nothing, direction = Issues.Above, alertRecoveryThreshold = Nothing, warningRecoveryThreshold = Nothing, frequency = Just "5m", timeWindow = Just "1h", severity = Nothing, subject = Nothing, message = Nothing, notifyAfterCheck = Nothing, notifyAfter = Nothing, stopAfterCheck = Nothing, stopAfter = Nothing, teams = []}
+      let widgetAlert = Dashboards.WidgetAlertForm{widgetId = wid, query = "name == \"x\"", vizType = Just "timeseries", unit = Nothing, alertThreshold = Just "1", warningThreshold = Nothing, direction = Issues.Above, alertRecoveryThreshold = Nothing, warningRecoveryThreshold = Nothing, frequency = Just "5m", timeWindow = Just "1h", severity = Nothing, subject = Nothing, message = Nothing, notifyAfterCheck = Nothing, notifyAfter = Nothing, stopAfterCheck = Nothing, stopAfter = Nothing, teams = [], widgetJson = Nothing, tabSlug = Nothing}
           rename = Dashboards.dashboardRenamePatchH testPid did Dashboards.DashboardRenameForm{Dashboards.title = "Renamed", Dashboards.fileDir = Nothing}
           writes =
             [ void $ Dashboards.dashboardsPostH testPid (dashForm "Viewer's own")
@@ -288,7 +288,7 @@ spec = describe "Monitoring" do
             SlackNotification sd | isJust sd.threadTs -> pass
             notification -> unless (url `T.isInfixOf` jsonText notification) $ expectationFailure $ "Missing widget link in " <> show (deliverySummary [notification])
           putWidget w = (void <$> call tr (Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing w)) `shouldReturn` Right ()
-          upsertAlert = call tr . Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId)
+          upsertAlert = fmap void . call tr . Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId)
           check = advanceMinutes tr 1 >> deliverySummary . fst <$> captureNotifs tr checkTriggeredQueryMonitors
           invalidQuery :: Either Dashboards.WidgetMonitorRejection a -> Bool
           invalidQuery = \case Left (Dashboards.MonitorQueryInvalid _) -> True; _ -> False
@@ -313,6 +313,8 @@ spec = describe "Monitoring" do
               , stopAfterCheck = Just True
               , stopAfter = Just 1
               , teams = []
+              , widgetJson = Nothing
+              , tabSlug = Nothing
               }
       dbExec
         tr
@@ -328,7 +330,7 @@ spec = describe "Monitoring" do
       upsertAlert alertForm'{Dashboards.query = "name ==", Dashboards.alertThreshold = Just "7"} >>= (`shouldSatisfy` invalidQuery)
       storedThreshold `shouldReturn` thresholdBefore
       isNothing <$> widgetMonitor testPid `shouldReturn` True
-      upsertAlert alertForm' `shouldReturn` Right Dashboards.WidgetMonitorSaved
+      upsertAlert alertForm' `shouldReturn` Right ()
       createdMonitor <- widgetMonitor testPid
       ((\m -> (m.alertConfig.title, m.alertConfig.emailAll)) <$> createdMonitor) `shouldBe` Just ("Checkout errors · Widget Monitor Lifecycle", True)
       overview <- call tr $ Alerts.unifiedMonitorOverviewH testPid (maybe "" (.id.toText) createdMonitor)
@@ -348,7 +350,7 @@ spec = describe "Monitoring" do
       -- Re-saving the alert form keeps a paused monitor paused.
       void $ testServant tr $ Dashboards.widgetAlertToggleH testPid widgetId (Just dashboardId)
       isJust . (>>= (.deactivatedAt)) <$> widgetMonitor testPid `shouldReturn` True
-      upsertAlert alertForm' `shouldReturn` Right Dashboards.WidgetMonitorSaved
+      upsertAlert alertForm' `shouldReturn` Right ()
       isJust . (>>= (.deactivatedAt)) <$> widgetMonitor testPid `shouldReturn` True
       void $ testServant tr $ Dashboards.widgetAlertToggleH testPid widgetId (Just dashboardId)
 
