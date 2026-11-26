@@ -1713,7 +1713,7 @@ teamModal pid team projMembers slackChans discordChans isInTeamView trigger = do
       slackChannels = encodeField (.slack_channels)
       discordChannels = encodeField (.discord_channels)
       pagerdutyServicesTags = encodeField (.pagerduty_services)
-      field_ lbl fid attrs = formField_ FieldSm def lbl (mkId fid) False $ Just $ input_ $ [class_ "input w-full", type_ "text", id_ $ mkId fid, name_ fid] <> attrs
+      field_ lbl fid ph val extra = formField_ FieldSm def{placeholder = ph, value = val, inputId = Just (mkId fid), extraAttrs = required_ "true" : extra <> [disabled_ "" | isEveryoneTeam]} lbl fid False Nothing
 
   modalWith_ modalId def{boxClass = "p-6 max-w-lg w-full"} (Just trigger) do
     form_ [hxPost_ $ Links.urls.projects.teamsManagePost pid (guard isInTeamView $> "true"), hxExt_ "json-enc", hxVals_ [text|js:{teamMembers: window.getTagValues('#$prefix-team-members-input'), notifEmails: window.getTagValues('#$prefix-notif-emails-input'), slackChannels: window.getTagValues('#$prefix-slack-channels-input'), discordChannels: window.getTagValues('#$prefix-discord-channels-input'), pagerdutyServices: window.getTagValues('#$prefix-pagerduty-services-input'), phoneNumbers: []}|], hxSwap_ "none", class_ "flex flex-col gap-0 w-full"] do
@@ -1724,9 +1724,9 @@ teamModal pid team projMembers slackChans discordChans isInTeamView trigger = do
         -- Details
         div_ [class_ "space-y-3 pb-4"] do
           div_ [class_ "grid grid-cols-2 gap-3"] do
-            field_ "Team Name" "teamName" $ [placeholder_ "e.g. Backend Team", value_ name, required_ "true"] <> [disabled_ "" | isEveryoneTeam]
-            field_ "Handle" "teamHandle" $ [placeholder_ "e.g. backend-team", value_ handle, required_ "true", pattern_ "^[a-z][a-z0-9\\-]*$"] <> [disabled_ "" | isEveryoneTeam]
-          formField_ FieldSm def "Description" (mkId "teamDescription") False $ Just $ textarea_ [class_ "textarea w-full min-h-12 resize-none text-sm leading-relaxed", id_ $ mkId "teamDescription", name_ "teamDescription", placeholder_ "What does this team do?"] $ toHtml description
+            field_ "Team Name" "teamName" "e.g. Backend Team" name []
+            field_ "Handle" "teamHandle" "e.g. backend-team" handle [pattern_ "^[a-z][a-z0-9\\-]*$"]
+          formField_ FieldSm def{inputType = "textarea", placeholder = "What does this team do?", value = description, inputId = Just (mkId "teamDescription"), extraAttrs = [class_ "min-h-12 resize-none"]} "Description" "teamDescription" False Nothing
 
         -- Members
         unless isEveryoneTeam

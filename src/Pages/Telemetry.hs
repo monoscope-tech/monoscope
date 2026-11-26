@@ -778,7 +778,17 @@ chartsPage pid metricList inactive filters activeCount nextUrl =
               $ Components.emptyState_ def{icon = Just "chart-line", action = ESLink "https://monoscopehq.com/docs/sdks/" "View SDK setup guides"} "No metrics found" "Metrics will appear here once your application starts sending telemetry data."
       else do
         when (V.null metricList) $ div_ [class_ "text-textWeak text-sm py-4"] "No metrics received in the last 7 days."
-        unless (V.null inactive) $ inactiveMetricsList pid filters.source inactive
+        unless (V.null inactive)
+          $ Components.panel_ (Components.Collapsible False) def (countNoun (V.length inactive) "inactive metric" <> " (no data in 7 days)")
+          $ linkList_ Nothing
+          $ V.toList inactive
+          <&> \metric ->
+            ( [href_ $ metricExpandUrl pid metric.metricName filters.source Nothing] <> drawerLoadAttrs_ (metricDetailUrl pid metric.metricName filters.source Nothing)
+            , div_ [class_ "flex items-center gap-2"] do
+                faSprite_ "chart-line" "regular" "w-3.5 h-3.5 text-textWeak"
+                span_ [class_ "truncate font-mono"] $ toHtml metric.metricName
+            , span_ [class_ "text-xs"] $ toHtml $ "Last seen " <> formatTime defaultTimeLocale "%b %d, %Y" metric.lastSeen
+            )
         unless (V.null metricList)
           $ div_ [class_ "w-full grid grid-cols-1 gap-x-4 gap-y-5 pb-4 md:grid-cols-2 lg:grid-cols-3", id_ "metric_list_container"]
           $ chartList pid filters.source metricList nextUrl
@@ -874,25 +884,6 @@ metricCard pid source metricName metricType metricUnit labels selectedM = do
       , Widget.groupByUrl = Just $ (urls.traces pid).metricCardGetH metricName Nothing (Just source)
       , Widget.groupByTarget = Just $ "#" <> cardId
       }
-
-
-inactiveMetricsList :: Projects.ProjectId -> Text -> V.Vector Telemetry.MetricChartListData -> Html ()
-inactiveMetricsList pid source metrics = do
-  details_ [class_ "collapse collapse-arrow bg-bgRaised border border-strokeWeak rounded-lg"] do
-    summary_ [class_ "collapse-title min-h-0 py-2 pl-3 font-medium text-sm text-textWeak"]
-      $ toHtml
-      $ countNoun (V.length metrics) "inactive metric"
-      <> " (no data in 7 days)"
-    div_ [class_ "collapse-content px-0 pb-0"]
-      $ linkList_ Nothing
-      $ V.toList metrics
-      <&> \metric ->
-        ( [href_ $ metricExpandUrl pid metric.metricName source Nothing] <> drawerLoadAttrs_ (metricDetailUrl pid metric.metricName source Nothing)
-        , div_ [class_ "flex items-center gap-2"] do
-            faSprite_ "chart-line" "regular" "w-3.5 h-3.5 text-textWeak"
-            span_ [class_ "truncate font-mono"] $ toHtml metric.metricName
-        , span_ [class_ "text-xs"] $ toHtml $ "Last seen " <> formatTime defaultTimeLocale "%b %d, %Y" metric.lastSeen
-        )
 
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Map Text (Int, Int, Int) -> Text -> Int -> MetricFilters -> Html ()

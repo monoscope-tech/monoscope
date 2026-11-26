@@ -2934,8 +2934,7 @@ instance ToHtml IssueActivityFeed where
             faSprite_ "link" "regular" "w-3 h-3 shrink-0"
             span_ [class_ "text-xs text-textWeak shrink-0"] $ toHtml $ linkProvider url
             span_ [class_ "truncate"] $ toHtml title
-        details_ [class_ "px-4 pb-3"] do
-          summary_ [class_ "text-xs text-textBrand cursor-pointer list-none [&::-webkit-details-marker]:hidden"] "+ Link issue"
+        disclosure_ [class_ "px-4 pb-3"] "text-xs text-textBrand" "+ Link issue" do
           form_ [class_ "mt-2 flex flex-col gap-2", hxPost_ $ (urls.issues f.projectId).linkPost f.issueId, hxSwap_ "none"] do
             input_ [type_ "url", name_ "url", required_ "", placeholder_ "https://github.com/org/repo/issues/42", Aria.label_ "Issue URL", class_ "input input-sm w-full"]
             input_ [type_ "text", name_ "title", placeholder_ "Title (optional)", Aria.label_ "Link title", class_ "input input-sm w-full"]

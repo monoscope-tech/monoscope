@@ -930,6 +930,33 @@ commonFormatPatterns =
 
 
 -- | The generic mask for a value's format (@{uuid}@, @{YYYY-MM-DD}@, …), if any.
+--
+-- >>> map valueToFormatStr ["22/02/2022", "20-02-2022", "22.02.2022", "2023-10-14", "2023/10/14", "20231014"]
+-- [Just "{dd/mm/yyyy}",Just "{dd-mm-yyyy}",Just "{dd.mm.yyyy}",Just "{YYYY-MM-DD}",Just "{YYYY/MM/DD}",Just "{YYYYMMDD}"]
+-- >>> map valueToFormatStr ["Oct 14, 2023", "14-Oct-2023", "2023-10-14T10:29:38.64522Z", "2023-10-14 10:29:38"]
+-- [Just "{Mon DD, YYYY}",Just "{DD-Mon-YYYY}",Just "{YYYY-MM-DDThh:mm:ss.sTZD}",Just "{YYYY-MM-DD HH:MM:SS}"]
+-- >>> map valueToFormatStr ["15:30:45", "15:30:45.123", "3:30 PM", "Mon, 14 Oct 2023 10:30:00 +0000"]
+-- [Just "{HH:MM:SS}",Just "{HH:MM:SS.mmm}",Just "{H:MM AM/PM}",Just "{rfc2822}"]
+-- >>> map valueToFormatStr ["c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd", "507f1f77bcf86cd799439011", "00000000-0000-0000-0000-000000000000", "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF", "g073bcdcc-2669-4bf6-81d3-e4ae73fb11fd"]
+-- [Just "{uuid}",Just "{uuid}",Just "{uuid}",Just "{uuid}",Nothing]
+-- >>> map valueToFormatStr ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "356a192b7913b04c54574d18c28d46e6395428ab", "5d41402abc4b2a76b9719d911017c592"]
+-- [Just "{sha256}",Just "{sha1}",Just "{md5}"]
+-- >>> map valueToFormatStr ["123", "200", "404", "500", "999", "0", "-42", "+123", "123.456", "-3.14159", "+1.23", "0xDEADBEEF"]
+-- [Just "{http_status}",Just "{http_status}",Just "{http_status}",Just "{http_status}",Just "{integer}",Just "{integer}",Nothing,Nothing,Just "{float}",Just "{float}",Just "{float}",Just "{hex}"]
+-- >>> map valueToFormatStr ["1634567890", "1634567890123", "2234567890", "1e10", "NaN", "Infinity"]
+-- [Just "{epoch_s}",Just "{epoch_ms}",Just "{integer}",Nothing,Nothing,Nothing]
+-- >>> map valueToFormatStr ["192.168.1.1", "0.0.0.0", "255.255.255.255", "256.1.1.1", "1.1.1.1.1", "192.168.1.0/24", "192.168.0.1/33", "2001:0db8:85a3:0000:0000:8a2e:0370:7334", "::1", "00:1B:44:11:3A:B7"]
+-- [Just "{ipv4}",Just "{ipv4}",Just "{ipv4}",Nothing,Nothing,Just "{cidr}",Nothing,Just "{ipv6}",Nothing,Just "{mac}"]
+-- >>> map valueToFormatStr [":8080", "user+tag@example.com", "@example.com", "https://example.com", "http://localhost:3000", "api.example.com"]
+-- [Just "{port}",Just "{email}",Nothing,Just "{url}",Nothing,Just "{hostname}"]
+-- >>> map valueToFormatStr ["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c", "dGVzdCBiYXNlNjQgZW5jb2Rpbmc="]
+-- [Just "{jwt}",Just "{base64}"]
+-- >>> map valueToFormatStr ["/usr/local/bin/script.sh", "C:\\Program Files\\test.exe", "/path with spaces/", "pid:12345", "tid:67890", "Thread-42", "session_abc123def456"]
+-- [Just "{file_path}",Just "{file_path}",Nothing,Just "{pid}",Just "{tid}",Just "{thread}",Just "{session_id}"]
+-- >>> map valueToFormatStr ["4111111111111111", "1111111111111111", "GB82WEST12345698765432", "123-45-6789", "+1 (555) 123-4567", "plain text", ""]
+-- [Just "{credit_card}",Just "{hex_id}",Just "{iban}",Just "{ssn}",Just "{phone}",Nothing,Nothing]
+-- >>> map valueToFormatStr ["00/00/0000", "32/13/2023", "29/02/2020", "12345678"]
+-- [Nothing,Nothing,Just "{dd/mm/yyyy}",Just "{YYYYMMDD}"]
 valueToFormatStr :: Text -> Maybe Text
 valueToFormatStr val = snd <$> find (\(regex, _) -> TDFA.matchTest (reRegex regex) chars) commonFormatPatterns
   where

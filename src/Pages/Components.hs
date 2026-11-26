@@ -1,4 +1,4 @@
-module Pages.Components (codeContextUrl, drawer_, drawerShell_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityDrawer_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, swapTarget_, morphPostAttrs_, pollSelfAttrs_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formSelectFieldWith_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, floatingModal_, formActionsModal_, dangerAction_, dangerZone_, floatingDialog_, floatingCard_, mergedAttrs, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerNoMatches_, pickerHints_, pickerPopover_, actionMenu_, durationMenu_, primaryButton_, submitBtn_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (codeContextUrl, drawer_, drawerShell_, nativeDialog_, dialogTrigger_, ResourceRow (..), resourceList_, PanelStyle (..), PanelCfg (..), panel_, entityDrawer_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, swapTarget_, morphTarget_, morphPostAttrs_, pollSelfAttrs_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, toneDot_, toneCls, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formSelectFieldWith_, formCheckbox_, teamPicker_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, emDash_, ModalCfg (..), modalWith_, floatingModal_, formActionsModal_, dangerAction_, dangerZone_, floatingDialog_, floatingCard_, mergedAttrs, dialogField_, kbdHints_, PickerCfg (..), PickerList (..), PickerItem (..), pickerCard_, pickerOption_, pickerItem_, pickerIcon_, pickerBadge_, pickerSeparator_, pickerFilterAttr_, pickerEmpty_, pickerNoMatches_, pickerHints_, pickerPopover_, actionMenu_, durationMenu_, primaryButton_, submitBtn_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -668,7 +668,7 @@ timeRefreshTrigger = "update-query[event.detail?.source != 'auto-refresh' || !th
 
 
 timeRefreshAttrs :: Text -> Text -> Text -> [Attribute]
-timeRefreshAttrs cid url trigger = [hxGet_ url, hxTrigger_ trigger, hxTarget_ $ "#" <> cid, hxSelect_ $ "#" <> cid, hxSwap_ "outerMorph", term "hx-sync" "this:replace", term "hx-preload" "false", timeWindowVals_ ""]
+timeRefreshAttrs cid url trigger = [hxGet_ url, hxTrigger_ trigger, term "hx-sync" "this:replace", term "hx-preload" "false", timeWindowVals_ ""] <> morphTarget_ cid
 
 
 -- | Sends the address bar's current time window, so a live refresh follows the picker. With
@@ -683,9 +683,14 @@ swapTarget_ :: Text -> Text -> [Attribute]
 swapTarget_ tid url = [hxGet_ url, hxTarget_ ("#" <> tid), hxSelect_ ("#" <> tid), hxSwap_ "outerHTML", hxPushUrl_ "true"]
 
 
+-- | htmx attrs that morph @#tid@ in place from the matching fragment in the response.
+morphTarget_ :: Text -> [Attribute]
+morphTarget_ tid = [hxTarget_ ("#" <> tid), hxSelect_ ("#" <> tid), hxSwap_ "outerMorph"]
+
+
 -- | htmx attrs for a POST form that morphs @#targetId@ in place with @#indicatorId@ spinning.
 morphPostAttrs_ :: Text -> Text -> Text -> [Attribute]
-morphPostAttrs_ url targetId indicatorId = [action_ url, method_ "post", hxPost_ url, hxTarget_ ("#" <> targetId), hxSelect_ ("#" <> targetId), hxSwap_ "outerMorph", hxIndicator_ ("#" <> indicatorId)]
+morphPostAttrs_ url targetId indicatorId = [action_ url, method_ "post", hxPost_ url, hxIndicator_ ("#" <> indicatorId)] <> morphTarget_ targetId
 
 
 -- | htmx attrs that fetch @url@ on @trigger@ and replace this element with @#cid@ from the response.
@@ -767,11 +772,11 @@ formField_ size cfg lbl name required customM =
       when required $ span_ [class_ $ case size of { FieldSm -> "text-textError"; FieldMd -> "text-textWeak" }] "*"
     fromMaybe
       ( case (cfg.inputType, cfg.suffix) of
-          ("textarea", _) -> textarea_ ([class_ $ case size of { FieldSm -> "textarea textarea-sm w-full leading-relaxed"; FieldMd -> "textarea w-full" }, name_ name, id_ fid, placeholder_ cfg.placeholder] <> commonAttrs) $ toHtml cfg.value
+          ("textarea", _) -> textarea_ (mergedAttrs $ [class_ $ case size of { FieldSm -> "textarea textarea-sm w-full leading-relaxed"; FieldMd -> "textarea w-full" }, name_ name, id_ fid, placeholder_ cfg.placeholder] <> commonAttrs) $ toHtml cfg.value
           (_, Just sfx) -> div_ [class_ "relative"] do
-            input_ $ [class_ $ case size of { FieldSm -> "input input-sm w-full pr-14"; FieldMd -> "input w-full h-12 pr-14" }] <> inputAttrs
+            input_ $ mergedAttrs $ [class_ $ case size of { FieldSm -> "input input-sm w-full pr-14"; FieldMd -> "input w-full h-12 pr-14" }] <> inputAttrs
             span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] $ toHtml sfx
-          _ -> input_ $ [class_ $ case size of { FieldSm -> "input input-sm w-full"; FieldMd -> "input w-full h-12" }] <> inputAttrs
+          _ -> input_ $ mergedAttrs $ [class_ $ case size of { FieldSm -> "input input-sm w-full"; FieldMd -> "input w-full h-12" }] <> inputAttrs
       )
       customM
     whenJust cfg.hint $ p_ [id_ $ fid <> "-hint", class_ "text-xs text-textWeak"] . toHtml
@@ -794,7 +799,7 @@ formSelectFieldWith_ :: Monad m => FieldSize -> FieldCfg -> Text -> Text -> Bool
 formSelectFieldWith_ size cfg lbl name required options =
   formField_ size cfg lbl name required
     $ Just
-    $ select_ ([class_ $ case size of { FieldSm -> "select select-sm w-full cursor-pointer"; FieldMd -> "select w-full h-12 cursor-pointer" }, name_ name, id_ (fromMaybe name cfg.inputId)] <> [required_ "true" | required] <> cfg.extraAttrs) options
+    $ select_ (mergedAttrs $ [class_ $ case size of { FieldSm -> "select select-sm w-full cursor-pointer"; FieldMd -> "select w-full h-12 cursor-pointer" }, name_ name, id_ (fromMaybe name cfg.inputId)] <> [required_ "true" | required] <> cfg.extraAttrs) options
 
 
 -- | @Collapsible open@ is a details disclosure.
