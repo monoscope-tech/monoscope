@@ -34,5 +34,7 @@
   "body": {
     "stringValue": "Connection refused"
   },
-  "observedTimeUnixNano": "1700000000000000000"
+  "observedTimeUnixNano": "1700000000000000000",
+  "severityNumber": 17,
+  "severityText": "err"
 }
