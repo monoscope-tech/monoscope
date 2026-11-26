@@ -318,6 +318,32 @@ for (const decision of ['approve', 'reject', 'removed', 'changed-schema']) test(
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+// 2026-11-26: 85 fix runs in two days were killed by the job timeout mid-work and lost their findings.
+test('a run near its deadline is told to submit before it is killed', { timeout: 10000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'impact-pi-deadline-'));
+  const runtime = await ModelRuntime.create({ authPath: join(root, 'auth.json'), modelsPath: null, refreshOnCreate: false });
+  const prompts = [];
+  runtime.registerProvider('anthropic', {
+    api: 'openai-completions', apiKey: 'fixture-key', baseUrl: 'http://127.0.0.1',
+    models: [{ id: 'fixture', name: 'Fixture', reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 16384, maxTokens: 1024 }],
+    streamSimple(model, context) {
+      prompts.push(context.messages.filter((message) => message.role === 'user').map((message) => typeof message.content === 'string' ? message.content : message.content.map((part) => part.text).join('')).join('\n'));
+      const step = prompts.length;
+      const content = step === 1 ? [{ type: 'toolCall', id: 'work', name: 'work', arguments: {} }] : step === 2 ? [{ type: 'toolCall', id: 'submit', name: 'submit_fix', arguments: { tag: 'Unfixed' } }] : [{ type: 'text', text: 'Done.' }];
+      const message = { role: 'assistant', content, api: 'openai-completions', provider: model.provider, model: model.id, timestamp: Date.now(), stopReason: content[0].type === 'text' ? 'stop' : 'toolUse', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+      const stream = new AssistantMessageEventStream();
+      queueMicrotask(() => { stream.push({ type: 'start', partial: message }); stream.push({ type: 'done', reason: message.stopReason, message }); });
+      return stream;
+    },
+  });
+  await mkdir(join(root, 'skills'));
+  const work = { name: 'work', label: 'work', description: 'Slow work', parameters: { type: 'object', properties: {} }, execute: async () => { await new Promise((done) => setTimeout(done, 300)); return { content: [{ type: 'text', text: 'worked' }], details: {} }; } };
+  const policy = { instructions: 'Fix it.', builtins: [], tools: [{ name: 'submit_fix', description: 'Submit', parameters: { type: 'object', properties: { tag: { type: 'string' } }, required: ['tag'], additionalProperties: false } }] };
+  await runPi({ preparedCheckout: { policy, repositorySkills: root }, request: { provider: 'anthropic', model: 'fixture', prompt: 'Fix the issue.', thinkingLevel: 'off' }, modelRuntime: runtime, attemptId: '00000000-0000-0000-0000-000000000001', workflow: { name: 'submit_fix', prepare: async (draft) => ({ Right: draft }) }, skillsDir: join(root, 'skills'), root, onEvent: () => {}, tools: [work], warnAt: Date.now() + 100 });
+  assert.ok(!prompts[0].includes('Time is almost up'), 'no warning before the deadline');
+  assert.ok(prompts[1].includes('Time is almost up') && prompts[1].includes('submit_fix'), 'the next model call carries the warning');
+});
+
 for (const capture of [undefined, 'SPAN_ONLY']) test(`Pi traces follow the OTel GenAI conventions, priced by Pi and grouped by the session file; content capture ${capture ?? 'unset'}`, { timeout: 10000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'impact-pi-otel-'));
   const spans = [];

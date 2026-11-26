@@ -97,7 +97,7 @@ function branchBeforeFailure(manager) {
  * Runs one Pi session over `tools` and returns the accepted submission. `workflow` names the submit tool and
  * prepares each candidate; tool contracts come from the host policy.
  */
-export async function runPi({ preparedCheckout, request, modelRuntime, attemptId, tools, workflow, skillsDir, root, optionsTool, signal, onEvent, sessionManager = SessionManager.inMemory(cwd) }) {
+export async function runPi({ preparedCheckout, request, modelRuntime, attemptId, tools, workflow, skillsDir, root, optionsTool, signal, onEvent, warnAt, sessionManager = SessionManager.inMemory(cwd) }) {
   const modelCalls = new Set();
   const meteredRuntime = new Proxy(modelRuntime, {
     get(target, property) {
@@ -115,7 +115,7 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
-  let session, submitted;
+  let session, submitted, warning;
   const abort = () => void session?.abort();
   signal?.addEventListener('abort', abort, { once: true });
   try {
@@ -178,6 +178,8 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
       onEvent(event);
     };
     session.subscribe(emit);
+    // Steering lands between tool calls, so a run near its deadline submits what it has instead of being killed.
+    if (warnAt !== undefined) warning = setTimeout(() => session.agent.steer({ role: 'user', content: `Time is almost up: call ${workflow.name} now with what you have established.${workflow.name === 'submit_fix' ? ' Without a verified candidate, submit Unfixed with the root cause you traced and what blocked verification.' : ''}`, timestamp: Date.now() }), Math.max(0, warnAt - Date.now()));
     await session.bindExtensions({});
     signal?.throwIfAborted();
     if (session.messages.length === 0) await session.prompt(request.prompt);
@@ -201,6 +203,7 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
     if (!submitted) throw new Error('Review agent did not submit a validated draft');
     return submitted;
   } finally {
+    clearTimeout(warning);
     signal?.removeEventListener('abort', abort);
     // pi-otel flushes on session_shutdown, which dispose never emits and which fails once disposed;
     // in-flight calls settle first so a failing call's span is still exported.
@@ -271,7 +274,9 @@ async function main() {
   const controller = new AbortController();
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => controller.abort());
   // The host's budget; stopping 20 s early leaves the host a clean error instead of a kill.
-  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout((Number(process.env.IMPACT_REVIEW_AGENT_SECONDS ?? 440) - 20) * 1000)]);
+  const budgetMs = (Number(process.env.IMPACT_REVIEW_AGENT_SECONDS ?? 440) - 20) * 1000;
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(budgetMs)]);
+  const warnAt = Date.now() + Math.max(budgetMs / 2, budgetMs - 5 * 60_000);
   let root, sessionManager, exchange;
   let pending = Promise.resolve();
   try {
@@ -323,7 +328,7 @@ async function main() {
     } else result = await runPi({
       preparedCheckout, request: { ...request, head: preparedCheckout.head }, modelRuntime, attemptId, signal, root, skillsDir: preparedCheckout.guest,
       sessionManager,
-      tools: hostTools(preparedCheckout, root, (operation) => exchange('Guest', operation)),
+      tools: hostTools(preparedCheckout, root, (operation) => exchange('Guest', operation)), warnAt,
       optionsTool: (invocation) => exchange('Tool', invocation),
       workflow: {
         name: preparedCheckout.policy.tools.find((tool) => tool.name.startsWith('submit_'))?.name,
