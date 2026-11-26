@@ -2897,7 +2897,7 @@ logLevelChip_ logLevel pat =
           | sl >= Telemetry.SLError -> Just "ERROR"
           | sl == Telemetry.SLWarn -> Just "WARN"
         other
-          | any (`T.isInfixOf` pat) ["status;badge-error⇒ERROR", "status_code;badge-4xx", "status_code;badge-5xx"] -> Just "ERROR"
+          | LogPatterns.patternHasErrorStatus pat -> Just "ERROR"
           | otherwise -> T.toUpper <$> other
       (tone, icon, label) = case effective of
         Just "ERROR" -> (ErrorBadge, "triangle-alert", "ERROR")

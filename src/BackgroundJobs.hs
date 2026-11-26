@@ -5886,7 +5886,7 @@ processNewLogPatterns pid authCtx = do
 isIssueWorthy :: Maybe Text -> Text -> Bool
 isIssueWorthy logLevel logPattern =
   isAlertableLogLevel logLevel
-    || any (`T.isInfixOf` logPattern) ["status;badge-error⇒ERROR", "status_code;badge-4xx", "status_code;badge-5xx"]
+    || LogPatterns.patternHasErrorStatus logPattern
 
 
 -- | Prune acknowledged patterns not seen in 30 days, auto-acknowledge stale 'new' patterns,

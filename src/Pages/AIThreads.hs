@@ -35,7 +35,7 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkAIPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
 import Pages.CodeContext qualified as CodeContext
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), actionMenu_, disclosure_, emptyState_, iconBadge_, localTimeFmt_, logExplorerUrl, toneDot_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), actionMenu_, disclosure_, emptyState_, iconBadge_, localTimeFmt_, logExplorerUrl, pollSelfAttrsWith_, toneDot_, tonePill_)
 import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
@@ -489,16 +489,13 @@ threadPageGetH pid convId docM runM hxTarget = do
       (Issues.RunRunning; Issues.RunSucceeded; Issues.RunNoFindings; Issues.RunCancelled) -> "text-textWeak"
     runStatusId :: Issues.RoutineRun -> Text
     runStatusId run = "routine-run-status-" <> run.id.toText
-    -- Like 'Pages.Components.pollSelfAttrs_' but with @outerMorph@ so open disclosures survive polling.
-    morphPollSelfAttrs_ :: Text -> Text -> Text -> [Attribute]
-    morphPollSelfAttrs_ cid url trigger = [hxGet_ url, hxTrigger_ trigger, hxTarget_ "this", hxSelect_ $ "#" <> cid, hxSwap_ "outerMorph", term "hx-preload" "false"]
     cardDisclosure_ :: [Attribute] -> Text -> Html () -> Html () -> Html ()
     cardDisclosure_ attrs bodyCls summary = disclosure_ (class_ "rounded-xl border border-strokeWeak bg-bgRaised" : attrs) "gap-2 rounded-xl px-4 py-3 text-sm font-medium text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:-outline-offset-2" summary . div_ [class_ $ "border-t border-strokeWeak p-4" <> bodyCls]
 
     runView_ :: Bool -> Issues.RoutineRun -> Issues.RoutineRunEvidence -> Maybe Projects.User -> [Issues.AIArtifact] -> ProjectMembers.Permissions -> Maybe ProjectMembers.Permissions -> [Investigations.OperationEntry AI.OperationPolicy] -> Maybe (Html ()) -> Html ()
     runView_ retained run evidence requestedBy artifacts viewerPermission reviewer operations fixEvidence =
       section_
-        ([id_ "routine-run", class_ "space-y-5"] <> bool [] (morphPollSelfAttrs_ "routine-run" (urls.aiRoutineRunGet pid run.id (Just convId)) "every 5s" <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) (run.status == Issues.RunRunning))
+        ([id_ "routine-run", class_ "space-y-5"] <> bool [] (pollSelfAttrsWith_ "outerMorph" "routine-run" (urls.aiRoutineRunGet pid run.id (Just convId)) "every 5s" <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) (run.status == Issues.RunRunning))
         do
           header_ [class_ "space-y-2"] do
             div_ [class_ "flex items-baseline justify-between gap-3"] do
@@ -634,7 +631,7 @@ threadPageGetH pid convId docM runM hxTarget = do
             -- A chat lists its documents first; a routine leads with its result, then its history.
             unless (null docs || isRoutine) documentsNav_
             div_
-              ([id_ "ai-thread-results", class_ "space-y-8"] <> bool [] (morphPollSelfAttrs_ "ai-thread-results" threadHref "every 2s" <> [term "hx-select-oob" "#pageTitleText:outerHTML"]) (any ((== Issues.RunRunning) . (.status)) runs))
+              ([id_ "ai-thread-results", class_ "space-y-8"] <> bool [] (pollSelfAttrsWith_ "outerMorph" "ai-thread-results" threadHref "every 2s" <> [term "hx-select-oob" "#pageTitleText:outerHTML"]) (any ((== Issues.RunRunning) . (.status)) runs))
               do
                 -- A routine reads as its latest result (plus the question that prompted it); older ones live under Runs below.
                 let definingPrompt m = m.role == Issues.ChatUser && Just (T.strip m.content) == (T.strip <$> instructions)
@@ -800,7 +797,7 @@ threadPageGetH pid convId docM runM hxTarget = do
           article_
             ( [id_ "ai-document", Aria.label_ doc.title]
                 -- Routines keep appending to today's document; keep an open one current.
-                <> bool [] (morphPollSelfAttrs_ "ai-document" (docHref doc) "every 60s") (any ((.routineActive) . fst) routineM)
+                <> bool [] (pollSelfAttrsWith_ "outerMorph" "ai-document" (docHref doc) "every 60s") (any ((.routineActive) . fst) routineM)
             )
             do
               h2_ [class_ "text-base font-semibold text-textStrong text-balance break-words"] $ toHtml doc.title
