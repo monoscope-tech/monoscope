@@ -126,13 +126,13 @@ test('a loader fetch keeps the rendered stat value until the response replaces i
 test('a 401 fails the chart unless a second 401 confirms it, and then reloads at most once per cooldown', async () => {
   fakeECharts();
   sessionStorage.removeItem('monoscope:session-reload');
-  document.body.innerHTML = '<div id="s" data-chart-widget></div><div id="s_error" class="hidden"><span id="s_errorMsg"></span><button id="s_retry" hidden></button></div>';
+  document.body.innerHTML = '<div id="s" data-chart-widget></div><div id="s_bordered"></div><div id="s_error" class="hidden"><span id="s_errorMsg"></span><button id="s_retry" hidden></button></div>';
   const statuses = [401, 200, 401, 401];
   vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: statuses.shift() ?? 200, headers: { 'Content-Type': 'application/json' } })));
   const widget = { ...config('s', []), opt: { tooltip: {}, dataset: {}, series: [], legend: {}, yAxis: {} }, pid: 'p', query: 'a' };
   chartWidget(widget);
   (globalThis as any).triggerIntersection();
-  await vi.waitFor(() => expect(document.getElementById('s_error')!.classList.contains('hidden')).toBe(false), { timeout: 5000 });
+  await vi.waitFor(() => expect(document.getElementById('s_bordered')!.dataset.widgetState).toBe('error'), { timeout: 5000 });
   expect(fetch).toHaveBeenCalledTimes(2); // the transient 401 was re-checked, not reloaded
   expect(sessionStorage.getItem('monoscope:session-reload')).toBeNull();
   expect(document.getElementById('s_errorMsg')!.textContent).toBe('Session expired. Retry reloads the page.');
