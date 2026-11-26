@@ -296,11 +296,14 @@ clipCast highlight cast = case BS8.lines cast of
 -- []
 -- >>> proofAdvice [] Nothing "TimeoutError: locator.waitFor: Timeout 5000ms exceeded.\r\n    15 × locator resolved to hidden <h1>Choose a template</h1>"
 -- ["The locator matched a hidden element, which sits in a closed dialog, menu, tab or drawer: click the control that opens it first, then wait for it; retrying the same locator fails the same way."]
+-- >>> length $ proofAdvice [] Nothing "locator.click: Error: strict mode violation: getByText('Annual review') resolved to 2 elements"
+-- 1
 proofAdvice :: [(Text, ByteString)] -> Maybe ByteString -> Text -> [Text]
 proofAdvice shots card output =
   ["Screenshot \"" <> label <> "\" is too tight to place the change; retake it framing the row, card or panel around it, with the same locator on both sides." | (label, png) <- shots, BS.length png >= 24, foldl' (\n b -> n * 256 + fromIntegral b) (0 :: Int) (BS.unpack $ BS.take 4 $ BS.drop 16 png) < 480]
     <> ["The terminal card shows no command; show each step with run 'cmd' (curl, psql, the script) so the card prints the command beside its output." | null shots, isJust card, not (any (T.isPrefixOf "$ " . stripSgr) (lines output))]
     <> ["The locator matched a hidden element, which sits in a closed dialog, menu, tab or drawer: click the control that opens it first, then wait for it; retrying the same locator fails the same way." | "resolved to hidden" `T.isInfixOf` output]
+    <> ["The locator matched several elements (a hidden modal often repeats the text): use the scoped locator Playwright printed for the one you mean, such as locator('#form').getByText(...)." | "strict mode violation" `T.isInfixOf` output]
 
 
 -- | Base and head stills paired by name. An identical pair shows no change, so the agent is told to reframe
@@ -339,7 +342,7 @@ contrastPair before after = case (convertRGBA8 <$> decodePng before, convertRGBA
 
 -- | The bounding box of pixels that differ beyond antialiasing noise.
 --
--- >>> let dot at = generateImage (\x y -> if (x, y) `elem` at then PixelRGBA8 0 0 0 255 else PixelRGBA8 255 255 255 255) 9 9
+-- >>> let dot (at :: [(Int, Int)]) = generateImage (\x y -> if (x, y) `elem` at then PixelRGBA8 0 0 0 255 else PixelRGBA8 255 255 255 255) 9 9
 -- >>> changedBox (dot []) (dot [(2, 3), (6, 1)])
 -- Just (2,1,6,3)
 changedBox :: Image PixelRGBA8 -> Image PixelRGBA8 -> Maybe (Int, Int, Int, Int)
