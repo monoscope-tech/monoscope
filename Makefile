@@ -146,13 +146,15 @@ IMPACT_WORKER_DEPS := impact-review-worker/node_modules/.package-lock.json
 $(IMPACT_WORKER_DEPS): impact-review-worker/package-lock.json
 	cd impact-review-worker && npm ci --ignore-scripts --no-audit
 
-live-test-dev: build-chart-cli $(IMPACT_WORKER_DEPS)
+# Reads and writes go through a real TimeFusion, as in CI; PG_ONLY=1 runs the Postgres leg alone,
+# where TF-dependent specs fail rather than skip.
+live-test-dev: build-chart-cli $(IMPACT_WORKER_DEPS) $(if $(PG_ONLY),,timefusion-start)
 	@GHCI_MAX=$${GHCI_MAX:-6} $(REAP_GHCI)
 	@$(if $(TEST_MATCH),echo '--match "$(TEST_MATCH)"' > .test-args,touch .test-args)
 	@echo "live-test-dev: hspec args from .test-args: [$$(cat .test-args)] (empty = whole suite)" | tee build-test-dev.log
 	@trap 'exit 130' INT TERM; while :; do \
 	  $(REAP_GHCI); \
-	  USE_EXTERNAL_DB=true LOG_LEVEL=attention \
+	  USE_EXTERNAL_DB=true LOG_LEVEL=attention $(if $(PG_ONLY),,TIMEFUSION_PG_TEST_URL=$(TIMEFUSION_PG_TEST_URL)) \
 	  ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -O0" --repl-options="-fobject-code -osuf dyn_o -hisuf dyn_hi +RTS -T $(GHCI_RTS) -RTS" --with-compiler=$(GHC)' \
 		--test ':! $(REAP_GHCI)' --test ':cmd Prelude.fmap (":main " Prelude.++) (Prelude.readFile ".test-args")' --reload=.test-args $(RELOAD_ENV) --warnings 2>&1; \
 	  $(GHCID_RESTART); \
@@ -224,8 +226,9 @@ test-integration: $(IMPACT_WORKER_DEPS)
 TIMEFUSION_DIR ?= ../timefusion
 TIMEFUSION_PG_TEST_URL ?= postgresql://postgres:postgres@localhost:12345/postgres
 
+# A no-op once one answers: tf-start refuses a PGWire port already in use.
 timefusion-start:
-	$(MAKE) -C $(TIMEFUSION_DIR) tf-start
+	@nc -z 127.0.0.1 12345 2>/dev/null && echo "TimeFusion already up on :12345" || $(MAKE) -C $(TIMEFUSION_DIR) tf-start
 
 timefusion-stop:
 	$(MAKE) -C $(TIMEFUSION_DIR) tf-stop
@@ -233,10 +236,6 @@ timefusion-stop:
 # Whether a local TimeFusion answers on the PGWire port the TF watcher and tests use.
 timefusion-status:
 	@nc -z 127.0.0.1 12345 && echo "TimeFusion up on :12345" || (echo "TimeFusion is not running — make timefusion-start"; exit 1)
-
-# The usual live-test-dev watcher, reading through a real TimeFusion (make timefusion-start first).
-live-test-dev-tf: timefusion-status
-	@TIMEFUSION_PG_TEST_URL=$(TIMEFUSION_PG_TEST_URL) $(MAKE) live-test-dev
 
 # Run integration tests against a real TimeFusion (started + stopped automatically).
 test-integration-tf: timefusion-start

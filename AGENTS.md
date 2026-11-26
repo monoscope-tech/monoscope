@@ -361,6 +361,8 @@ If you catch yourself about to run `cabal test integration-tests` or `cabal test
 
 The one acceptable exception is a CI-style reproduction with a fixed seed (e.g. chasing a flake) — and even then, prefer rerunning under live-test-dev, focused through `.test-args`, first.
 
+**`live-test-dev` runs against a real TimeFusion, as CI does.** It runs `make timefusion-start` first (a release build of `../timefusion` plus MinIO the first time; a no-op once up, `TIMEFUSION_DIR=` overrides the path) and sets `TIMEFUSION_PG_TEST_URL`, which turns on `tfEnabled` in `TestUtils`. `PG_ONLY=1 make live-test-dev` runs the Postgres leg alone; there, specs using `withTfReads True` or the dual-write TF leg fail rather than skip, so a failure in one is environmental. TF logs go to `/tmp/timefusion.log`; `make timefusion-status` / `make timefusion-stop`.
+
 ### Other test commands (rarely needed)
 
 ```bash
