@@ -7,7 +7,7 @@
 -- which reaches @Pkg.Components.Widget@, which imports @LogItem@ — a cycle. The renderer in
 -- "Pages.Components" only ever builds the URL, so nothing on the rendering side has to know
 -- this module exists.
-module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, repositoryDetachPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, FrameSource (..), repositoriesGetH, RepositoriesGet (..), serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, RepositoryRemoval (..), repositorySourceGetH, RepositorySourceGet, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, ReviewChange (..), repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), MappingsPanel, MappingRejection (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixEvidenceH, issueFixMediaH, issueFixPackageH, rangedMedia) where
+module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, repositoryDetachPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, FrameSource (..), repositoriesGetH, RepositoriesGet (..), serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, RepositoryRemoval (..), repositorySourceGetH, RepositorySourceGet, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, ReviewChange (..), repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), MappingsPanel, MappingRejection (..), impactReviewSettingsPostH, impactReviewRetryH, impactReviewRatingH, ReviewRating (..), issueFixGetH, issueFixEvidenceH, issueFixMediaH, issueFixPackageH, rangedMedia) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Commonmark qualified as Markdown
@@ -735,6 +735,7 @@ repositoriesPageH pid selection = do
               AE.Error _ -> p_ [class_ "text-sm text-textWeak"] "The saved review could not be displayed. Rerun the review."
               AE.Success result -> do
                 div_ [class_ "prose prose-sm max-w-none break-words [&_pre]:overflow-x-auto"] $ renderMarkdown (ImpactReview.renderReview cfg.hostUrl run ImpactReview.MonoscopeView result)
+                toHtml $ ReviewRating pid run.id run.rating
                 for_ (nonEmpty =<< result.knowledge) \notes -> disclosure_ [class_ "mt-3 text-sm text-textWeak"] "font-medium" "Service knowledge from this review" do
                   p_ [class_ "mt-2 text-xs"] "Agent conclusions from the recorded evidence window. Recheck against current code and telemetry."
                   ul_ [class_ "mt-2 space-y-2"] $ for_ notes \note -> li_ do
@@ -1218,7 +1219,7 @@ repositoryReviewsPostH pid rid settings = do
 
 
 -- | The view re-rendered after a review change.
-data ReviewChange a = SettingsSaved a | RerunQueued a
+data ReviewChange a = SettingsSaved a | RerunQueued a | Rated a
   deriving stock (Foldable, Show)
 
 
@@ -1227,6 +1228,7 @@ instance ToHtml a => Outcome (ReviewChange a) where
   outcomeToast = \case
     SettingsSaved _ -> Just "Review settings saved"
     RerunQueued _ -> Nothing
+    Rated _ -> Just "Thanks, your answer is recorded"
 
 
 repositorySourceDeleteH :: Projects.ProjectId -> GitSync.RepositoryId -> CodeContext.CodeMappingId -> ATAuthCtx (RespHeaders (Done MappingsPanel))
@@ -1763,6 +1765,26 @@ impactReviewRetryH pid rid = do
   requireReviewWrite pid
   ImpactReviews.retryRun pid rid
   done . RerunQueued . getResponse =<< repositoriesPageH pid ReviewsPage
+
+
+-- | The GitHub comment's Yes and No links went unused, so review quality had no signal; the review asks here too.
+data ReviewRating = ReviewRating Projects.ProjectId ImpactReviews.ReviewId (Maybe ImpactReviews.Rating)
+  deriving stock (Show)
+
+
+instance ToHtml ReviewRating where
+  toHtmlRaw = toHtml
+  toHtml (ReviewRating pid rid current) = div_ [id_ ("review-rating-" <> rid.toText), class_ "flex flex-wrap items-center gap-2 text-sm"] do
+    span_ [class_ "text-textWeak"] "Did this review get it right?"
+    for_ @[] [(ImpactReviews.Up, "Yes" :: Text), (ImpactReviews.Down, "No")] \(rating, label) ->
+      button_ [type_ "button", class_ "btn btn-xs btn-outline aria-pressed:btn-active", term "aria-pressed" (if current == Just rating then "true" else "false"), hxPost_ (urls.impactReviewRating pid rid rating), hxTarget_ ("#review-rating-" <> rid.toText), hxSwap_ "outerHTML"] $ toHtml label
+
+
+impactReviewRatingH :: Projects.ProjectId -> ImpactReviews.ReviewId -> ImpactReviews.Rating -> ATAuthCtx (RespHeaders (Done (ReviewChange ReviewRating)))
+impactReviewRatingH pid rid rating = do
+  void $ ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PView pid
+  unlessM (ImpactReviews.rateRun pid rid rating) $ throwError err404
+  done $ Rated $ ReviewRating pid rid (Just rating)
 
 
 requireReviewWrite :: Projects.ProjectId -> ATAuthCtx ()

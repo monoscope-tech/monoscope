@@ -62,6 +62,7 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Client qualified as HC
+import Lucid (renderText, toHtml)
 import Network.HTTP.Types qualified as H
 import Network.Minio qualified as Minio
 import Network.Wai qualified as Wai
@@ -99,7 +100,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import System.Posix.Files qualified as Posix
 import System.Posix.Signals qualified as Signal
 import System.Process.Typed (createPipe, getPid, getStdin, getStdout, nullStream, proc, readProcessStdout_, setEnv, setStderr, setStdin, setStdout, setWorkingDir, stopProcess, waitExitCode, withProcessTerm)
-import System.Types (ATBackgroundCtx, ATBaseCtx)
+import System.Types (ATBackgroundCtx, ATBaseCtx, Done (..))
 import UnliftIO.Async (cancel, concurrently, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (bracket_, finally, throwIO, tryAny)
@@ -3042,6 +3043,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
     traverse (fmap (H.statusCode . (.simpleStatus)) . fetch) [link.preview, rateUrl Reviews.Down] `shouldReturn` [404, 404]
     (H.statusCode downVote.simpleStatus,) <$> dbOne tr "SELECT rating FROM projects.pr_review_runs WHERE id = ?" (Only run.id) `shouldReturn` (404, "up" :: Text)
     dbExec tr "UPDATE projects.projects SET deleted_at = NULL, active = true WHERE id = ?" (Only testPid)
+    -- reviewRating_inApp: the GitHub links were never used, so the review dialog asks too, and shows the answer.
+    (_, Done (CodeContextPage.Rated block)) <- testServant tr $ CodeContextPage.impactReviewRatingH testPid run.id Reviews.Down
+    dbOne tr "SELECT rating FROM projects.pr_review_runs WHERE id = ?" (Only run.id) `shouldReturn` ("down" :: Text)
+    let html = toStrict $ renderText $ toHtml block
+        button label = find (T.isInfixOf (">" <> label)) $ T.splitOn "</button>" html
+    html `shouldSatisfy` T.isInfixOf "Did this review get it right?"
+    map (fmap (T.isInfixOf "aria-pressed=\"true\"") . button) ["No", "Yes"] `shouldBe` [Just True, Just False]
+    fmap (.rating) . find ((== run.id) . (.id)) <$> runQueryEffect tr (Reviews.latestRuns testPid) `shouldReturn` Just (Just Reviews.Down)
 
   it "sandbox_installsFromPackageRegistriesButReachesNothingElse" \_ -> withTemp "registry-egress" \directory -> do
     image <- guestImage
@@ -3170,7 +3179,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
 
   it "reviewComment_leadsWithMergeRiskAndShowsProductionDetailOnlyWhereAllowed" \_ -> do
     let pid = UUIDId UUID.nil
-        run = Reviews.ReviewRun{id = UUIDId UUID.nil, threadId = UUIDId UUID.nil, projectId = pid, owner = "acme", repo = "checkout", number = 42, revision = T.replicate 40 "a", state = Reviews.Completed, result = Nothing, error = Nothing, commentId = Nothing, latestRevision = T.replicate 40 "a", createdAt = frozenTime, request = Nothing, base = Nothing}
+        run = Reviews.ReviewRun{id = UUIDId UUID.nil, threadId = UUIDId UUID.nil, projectId = pid, owner = "acme", repo = "checkout", number = 42, revision = T.replicate 40 "a", state = Reviews.Completed, result = Nothing, error = Nothing, commentId = Nothing, latestRevision = T.replicate 40 "a", createdAt = frozenTime, request = Nothing, base = Nothing, rating = Nothing}
         telemetry = Impact.Evidence "telemetry-1" Impact.Telemetry (Just "checkout-api") (Just "production") "https://app.monoscope.tech/p/x/log_explorer" Nothing (Just $ Impact.Observation 120340 312) (Just "https://app.monoscope.tech/p/x/widget.png?widgetZ=fixture") Nothing
         -- The agent queried twice and got the same daily counts: they show once, as a table, not a picture.
         observation = Impact.QueryObservation Impact.Aggregated (V.fromList ["timestamp", "retried_twice", "captures"]) (V.fromList [V.fromList [AE.Number t, AE.Number r, AE.Number c] | (t, r, c) <- [(1794873600, 3, 1164948), (1794787200, 0, 1556994), (1794700800, 1, 1538283)]]) False False

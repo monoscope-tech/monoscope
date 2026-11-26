@@ -394,6 +394,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , issueFixPackage :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" (UUIDId "issue_fix") :> "publication.tar" :> RawM
   , issueFixMedia :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" (UUIDId "issue_fix") :> "media" :> Capture "asset" Artifacts.Asset :> RawM
   , impactReviewRetry :: mode :- "p" :> ProjectId :> "settings" :> "pr-reviews" :> Capture "id" ImpactReviews.ReviewId :> "rerun" :> Unrefusable 'POST ((Opaque1 "PageCodeContext.ReviewChange") (Opaque1 "PageCtx" (Opaque "PageCodeContext.RepositoriesGet")))
+  , impactReviewRating :: mode :- "p" :> ProjectId :> "settings" :> "pr-reviews" :> Capture "id" ImpactReviews.ReviewId :> "rating" :> Capture "rating" ImpactReviews.Rating :> Unrefusable 'POST ((Opaque1 "PageCodeContext.ReviewChange") (Opaque "PageCodeContext.ReviewRating"))
   , codeMappingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> Capture "id" (UUIDId "CodeMapping") :> Unrefusable 'DELETE (Opaque "PageCodeContext.MappingsPanel")
   , prometheusSettingsGet :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Get '[HTML] (RespHeaders (Opaque "Settings.PrometheusGet"))
   , prometheusSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> ReqBody '[FormUrlEncoded] (Opaque "Settings.PrometheusForm") :> Post '[HTML] (RespHeaders (Opaque "Settings.PrometheusMut"))
