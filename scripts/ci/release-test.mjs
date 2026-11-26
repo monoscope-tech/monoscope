@@ -166,14 +166,60 @@ test('only a build containing master writes back the shared compile cache', () =
   assert.deepEqual(builds().map(args => args.includes('CACHE_WRITE_BACK=true')), [true, false]);
 });
 
-test('stale commit cannot publish latest', () => {
-  release(['build']);
-  git('commit', '--allow-empty', '-qm', 'new master');
+// A newer master commit whose image is promoted to latest; the old sha is then stale.
+const newerLatest = () => {
+  writeFileSync(join(repo, 'source'), 'newer');
+  git('commit', '-qam', 'new master');
   git('push', '-q', 'origin', 'HEAD:master');
-  release(['latest', sha, digest], false);
-  assert.ok(!calls().some(args => args.includes(`${image}:latest`)));
-  release(['latest', git('rev-parse', 'HEAD'), digest]);
-  assert.ok(calls().some(args => args.includes(`${image}:latest`)));
+  const newer = `sha256:${'d'.repeat(64)}`;
+  writeFileSync(env.REGISTRY, JSON.stringify({ ...registry(), [`${image}:tree-${git('rev-parse', 'HEAD^{tree}')}`]: newer, [`${image}:latest`]: newer }));
+};
+
+test('latest moves to an older master commit while newer ones wait, never backwards', () => {
+  release(['build']);
+  writeFileSync(env.REGISTRY, JSON.stringify({ ...registry(), [`${image}:latest`]: `sha256:${'0'.repeat(64)}` }));
+  git('commit', '--allow-empty', '-qm', 'same tree');
+  writeFileSync(join(repo, 'source'), 'imageless');
+  git('commit', '-qam', 'newer, no image yet');
+  git('push', '-q', 'origin', 'HEAD:master');
+  release(['latest', sha, digest]);
+  release(['current-master', sha]);
+  assert.equal(registry()[`${image}:latest`], digest);
+  newerLatest();
+  assert.match(release(['latest', sha, digest], false).stderr, /stale/);
+  assert.equal(registry()[`${image}:latest`], `sha256:${'d'.repeat(64)}`);
+});
+
+// Regression: 2026-11-26 prod sat ~7h on 7ae8ef9df because every run handed off to a newer push
+// before the Mac finished its image, and the Mac never built those newer pushes' images in time.
+test('CI waits for its own image unless a newer master commit already has one', () => {
+  release(['build']);
+  const tree = git('rev-parse', 'HEAD^{tree}'), own = { [`${image}:tree-${tree}`]: digest };
+  const state = registry();
+  delete state[`${image}:${sha}`];
+  delete state[`${image}:tree-${tree}`];
+  writeFileSync(env.REGISTRY, JSON.stringify(state));
+  writeFileSync(join(repo, 'source'), 'newer');
+  git('commit', '-qam', 'newer master, image not built');
+  git('push', '-q', 'origin', 'HEAD:master');
+  const newerTree = git('rev-parse', 'HEAD^{tree}');
+  git('checkout', '-q', '--detach', sha);
+  // The Mac finishes this commit's image during the first wait.
+  writeFileSync(join(root, 'bin/sleep'), `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.writeFileSync(process.env.REGISTRY, JSON.stringify({ ...JSON.parse(fs.readFileSync(process.env.REGISTRY, 'utf8')), ...JSON.parse(process.env.TEST_SLEEP_IMAGE) }));
+`, { mode: 0o755 });
+  Object.assign(env, { GITHUB_ACTIONS: 'true', GITHUB_REF: 'refs/heads/master', IMAGE_WAIT_MINUTES: '5', TEST_SLEEP_IMAGE: JSON.stringify(own) });
+  const waited = release(['build']);
+  assert.match(waited.stderr, /waiting for/);
+  assert.doesNotMatch(waited.stderr, /superseded/);
+  assert.equal(registry()[`${image}:${sha}`], digest);
+  delete env.TEST_SLEEP_IMAGE;
+  const state2 = registry();
+  delete state2[`${image}:${sha}`];
+  delete state2[`${image}:tree-${tree}`];
+  writeFileSync(env.REGISTRY, JSON.stringify({ ...state2, [`${image}:tree-${newerTree}`]: `sha256:${'d'.repeat(64)}` }));
+  assert.match(release(['build'], false).stderr, /superseded/);
 });
 
 test('unreachable master and dirty tree fail closed', () => {
@@ -186,8 +232,7 @@ test('unreachable master and dirty tree fail closed', () => {
 
 test('stale local deploy never calls CapRover', () => {
   release(['build']);
-  git('commit', '--allow-empty', '-qm', 'new master');
-  git('push', '-q', 'origin', 'HEAD:master');
+  newerLatest();
   writeFileSync(join(root, 'bin/curl'), '#!/bin/sh\necho called > "$CALLS-caprover"\nexit 1\n', { mode: 0o755 });
   const result = spawnSync('bash', [join(dirname(script), 'ci.sh'), 'deploy', sha], {
     cwd: repo, env: { ...env, CAPROVER_URL: 'https://example.invalid', CAPROVER_APP: 'test', CAPROVER_APP_TOKEN: 'test' }, encoding: 'utf8',
@@ -322,6 +367,7 @@ test('requested revision must match checkout', () => {
 
 test('current master deploys by digest and explicit rollback preserves latest', () => {
   release(['build']);
+  writeFileSync(env.REGISTRY, JSON.stringify({ ...registry(), [`${image}:latest`]: `sha256:${'0'.repeat(64)}` }));
   writeFileSync(join(root, 'bin/curl'), `#!/usr/bin/env node
 const fs = require('node:fs');
 const args = process.argv.slice(2);
