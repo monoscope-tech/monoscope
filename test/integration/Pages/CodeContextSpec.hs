@@ -14,6 +14,7 @@ import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache qualified as Cache
+import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as W
 import Data.Map.Strict qualified as M
@@ -35,7 +36,6 @@ import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
-import Data.Effectful.AgentWorkspace qualified as Workspace
 import Models.Projects.ProjectApiKeys qualified as Keys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
@@ -828,6 +828,10 @@ spec = do
         evidence `shouldReturn` [("catalog", False), ("checkout", False)]
         dbExec tr "UPDATE projects.repositories SET private = true WHERE project_id = ? AND repo = 'catalog'" (Only testPid)
         evidence `shouldReturn` [("catalog", True), ("checkout", False)]
+        -- A public repository's comments are readable by anyone: links only, even when aggregates were saved.
+        runQueryEffect tr $ ImpactReviews.updateSettings testPid (ImpactReviews.ReviewSettings "team" "catalog" ImpactReviews.ReadyPullRequests True)
+        dbExec tr "UPDATE projects.repositories SET private = false WHERE project_id = ? AND repo = 'catalog'" (Only testPid)
+        evidence `shouldReturn` [("catalog", False), ("checkout", False)]
         for_ (filter ((== "checkout") . (.repo)) mappings) \mapping -> void $ testServant tr $ PageCodeContext.repositorySourceDeleteH testPid repository.id mapping.id
         map (.repo) <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) `shouldReturn` ["catalog"]
 

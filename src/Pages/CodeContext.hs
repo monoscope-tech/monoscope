@@ -830,7 +830,7 @@ reviewSettingsFields_ owner repo settings = do
   let trigger = maybe ImpactReviews.ReadyPullRequests (.trigger) settings
       evidence = bool "false" "true" $ any (.includeEvidence) settings
   formSelectField_ FieldSm "Review pull requests" "trigger" False $ options_ (Just $ toUrlPiece trigger) [(toUrlPiece t, triggerLabel t) | t <- universe]
-  formSelectFieldWith_ FieldSm def{hint = Just "Until you choose, private repositories get aggregates and links, public ones links only."} "Production evidence in GitHub" "includeEvidence" False $ options_ (Just evidence) [("false", "Links only"), ("true", "Aggregates and links")]
+  formSelectFieldWith_ FieldSm def{hint = Just "Private repositories get aggregates and links until you choose; public ones always get links only."} "Production evidence in GitHub" "includeEvidence" False $ options_ (Just evidence) [("false", "Links only"), ("true", "Aggregates and links")]
 
 
 -- | Asks-only reviews are quiet until someone comments, so they read as neutral, not active.
