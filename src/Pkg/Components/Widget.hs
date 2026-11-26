@@ -1668,19 +1668,19 @@ renderChart actions widget = do
                     span_ [class_ "min-w-0 truncate text-left text-textStrong"] $ toHtml selectedLabel
                     Utils.faSprite_ "chevron-down" "regular" "w-3 shrink-0"
                   ul_ ([class_ "dropdown dropdown-end mt-1 flex max-h-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-lg border border-strokeWeak bg-bgRaised p-1 shadow-lg"] <> Utils.popoverPanel_ groupByPop) do
-                      let item value label =
-                            li_
-                              $ button_
-                                [ class_ $ "w-full cursor-pointer whitespace-nowrap rounded px-2 py-1.5 text-left text-xs hover:bg-fillWeak " <> bool "" "bg-fillWeak text-textStrong" (widget.groupBySelected == Just value)
-                                , hxGet_ url
-                                , name_ "label"
-                                , value_ value
-                                , hxTarget_ $ fromMaybe "" widget.groupByTarget
-                                , hxSwap_ "outerHTML settle:0"
-                                ]
-                              $ toHtml label
-                      item "all" "All values"
-                      forM_ options \label -> item label label
+                    let item value label =
+                          li_
+                            $ button_
+                              [ class_ $ "w-full cursor-pointer whitespace-nowrap rounded px-2 py-1.5 text-left text-xs hover:bg-fillWeak " <> bool "" "bg-fillWeak text-textStrong" (widget.groupBySelected == Just value)
+                              , hxGet_ url
+                              , name_ "label"
+                              , value_ value
+                              , hxTarget_ $ fromMaybe "" widget.groupByTarget
+                              , hxSwap_ "outerHTML settle:0"
+                              ]
+                            $ toHtml label
+                    item "all" "All values"
+                    forM_ options \label -> item label label
           when isStat $ renderStatContent widget valueM
           unless (widget.wType == WTStat) $ div_ [data_ "chart-config" $ encodeText chartConfig, class_ $ "relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> if isStat then "" else " p-3"] do
             -- Scrolling under a still cursor hovered each chart in turn, and every tooltip move
