@@ -120,14 +120,19 @@ const withECharts = (fn: () => void) => void ensureECharts().then(fn, (e) => log
 // --- Concurrency limiter for response bodies (max 4 in flight) ---
 const MAX_CONCURRENT_FETCHES = 4;
 let activeFetches = 0;
-const fetchQueue: Array<() => void> = [];
+const fetchQueue: Array<{ run: () => void; el: Element | null }> = [];
 
-const limitedFetch = <T>(url: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T> => {
+// The first job whose chart is on screen, else the oldest: a long scroll must not leave the
+// charts in view waiting behind loads queued for the ones already scrolled past.
+export const nextQueued = <T extends { el: Element | null }>(queue: T[], viewportHeight = window.innerHeight): T | undefined =>
+  queue.splice(Math.max(0, queue.findIndex(({ el }) => !el || isNearChartViewport(el.getBoundingClientRect(), viewportHeight))), 1)[0];
+
+const limitedFetch = <T>(url: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal, el: Element | null = null): Promise<T> => {
   return new Promise((resolve, reject) => {
     const run = () => {
       if (signal?.aborted) {
         reject(signal.reason);
-        fetchQueue.shift()?.();
+        nextQueued(fetchQueue)?.run();
         return;
       }
       activeFetches++;
@@ -136,11 +141,11 @@ const limitedFetch = <T>(url: string, consume: (response: Response) => Promise<T
       // handing us 200 HTML that res.json() then chokes on. See Web.Auth.challengeFor.
       fetch(url, { signal, headers: { Accept: 'application/x-ndjson, application/json' } }).then(consume).then(resolve, reject).finally(() => {
         activeFetches--;
-        if (fetchQueue.length > 0) fetchQueue.shift()!();
+        nextQueued(fetchQueue)?.run();
       });
     };
     if (activeFetches < MAX_CONCURRENT_FETCHES) run();
-    else fetchQueue.push(run);
+    else fetchQueue.push({ run, el });
   });
 };
 
@@ -195,6 +200,25 @@ const deferredInitObserver = new IntersectionObserver((entries) => {
   }
 }, { rootMargin: '150px' });
 
+let scrollSettle: ReturnType<typeof setTimeout> | undefined;
+document.addEventListener('scroll', () => {
+  document.documentElement.setAttribute('data-scrolling', '');
+  clearTimeout(scrollSettle);
+  scrollSettle = setTimeout(() => document.documentElement.removeAttribute('data-scrolling'), 150);
+}, { capture: true, passive: true });
+
+// Charts the observer last saw off screen, each with the refresh a background tick deferred.
+// Kept by an observer so a tick over hundreds of charts reads no layout.
+const offscreen = new WeakMap<Element, (() => void) | null>();
+const offscreenObserver = new IntersectionObserver((entries) => {
+  for (const { target, isIntersecting } of entries) {
+    if (!isIntersecting) { offscreen.set(target, offscreen.get(target) ?? null); continue; }
+    const refresh = offscreen.get(target);
+    offscreen.delete(target);
+    refresh?.();
+  }
+}, { rootMargin: `${CHART_PREFETCH_PX}px` });
+
 const queueChartInit = (fn: () => void, chartId?: string) => {
   const el = chartId ? document.getElementById(chartId) : null;
   if (!el) {
@@ -217,9 +241,14 @@ const queueChartInit = (fn: () => void, chartId?: string) => {
 };
 
 // --- Shared ResizeObserver for all charts ---
+// Sizes as the ResizeObserver last reported them. Reading clientWidth while other charts write
+// the DOM forced a layout of the whole page per draw: seconds of main thread on a page of charts.
+const chartSizes = new WeakMap<Element, { width: number; height: number }>();
+const sizeOf = (el: HTMLElement | null) => (el && chartSizes.get(el)) ?? { width: el?.clientWidth ?? 0, height: el?.clientHeight ?? 0 };
 const sharedResizeObserver = new ResizeObserver((entries) => {
   for (const entry of entries) {
     const el = entry.target as HTMLElement;
+    chartSizes.set(el, { width: Math.round(entry.contentRect.width), height: Math.round(entry.contentRect.height) });
     if (el.id) queueChartResize(el.id);
   }
 });
@@ -788,7 +817,7 @@ export const prefetchChartData = (widgetData: WidGetData) => {
   entry.response = limitedFetch(streamUrl(url), res => checkChartResponse(res).then(res => readChartResponse<ChartDataResponse>(res, data => {
     entry.latest = data;
     entry.partial?.(data);
-  })), entry.controller.signal).catch(() => null);
+  })), entry.controller.signal, el).catch(() => null);
   chartDataPrefetch.set(chartId, entry);
 };
 
@@ -831,7 +860,8 @@ const legendSelections = new WeakMap<object, Record<string, boolean>>();
 export const drawSized = (chart: any, el: HTMLElement | null, options: any, unit = '', notMerge = false, onlyIfChanged = false) => {
   // A null source is the server's "fetch me": there is nothing to draw until the data lands.
   if (options.dataset && options.dataset.source == null) return;
-  const layout = chartLayoutForSize(options, el?.clientWidth ?? 0, el?.clientHeight ?? 0, (v) => formatStatValue(v, unit));
+  const { width, height } = sizeOf(el);
+  const layout = chartLayoutForSize(options, width, height, (v) => formatStatValue(v, unit));
   const key = JSON.stringify([layout.grid, layout.legend, layout.xAxis?.axisLabel]);
   if (onlyIfChanged && drawnLayouts.get(chart) === key) return;
   drawnLayouts.set(chart, key);
@@ -840,7 +870,7 @@ export const drawSized = (chart: any, el: HTMLElement | null, options: any, unit
 };
 const applyChartResponse = (chart: any, opt: any, widgetData: WidGetData, data: ChartDataResponse) => {
   const el = $(widgetData.chartId);
-  const width = el?.clientWidth ?? 0, height = el?.clientHeight ?? 0;
+  const { width, height } = sizeOf(el);
   const rows = chartRows(data);
   const key = JSON.stringify([width, height, data.from, data.to, data.headers, data.stats, rows]);
   if (drawnResponse.get(chart) === key) return;
@@ -929,7 +959,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     };
     const data: ChartDataResponse =
       (await takePrefetched(chartId, url, partial, signal)) ??
-      (await limitedFetch(showLoader ? streamUrl(url) : url, res => checkChartResponse(res).then(res => readChartResponse<ChartDataResponse>(res, partial)), signal));
+      (await limitedFetch(showLoader ? streamUrl(url) : url, res => checkChartResponse(res).then(res => readChartResponse<ChartDataResponse>(res, partial)), signal, $(chartId)));
     clearTimeout(partialTimer);
     const { from, to, rows_per_min, stats, error } = data;
     const dataset = chartRows(data);
@@ -1186,7 +1216,7 @@ for (const event of ['htmx:after:swap', 'htmx:after:settle']) document.addEventL
   [...new Set([...chartDisposers.keys(), ...chartDataPrefetch.keys()])].forEach((chartId) => {
     if (!document.getElementById(chartId)?.matches(DISPOSABLE_CHARTS)) disposeChart(chartId);
   });
-  initializeChartWidgets();
+  scheduleChartWidgets();
 });
 
 // Global resize queue to batch chart resize operations
@@ -1381,10 +1411,14 @@ export const chartWidget = (widgetData: WidGetData) => {
     }, { signal: controller.signal });
   });
 
+  if (chartEl) offscreenObserver.observe(chartEl);
   window.addEventListener('update-query', (e: Event) => {
     const detail = (e as CustomEvent<{ ast?: string; source?: string }>).detail;
     if (detail?.ast) widgetData.queryAST = detail.ast;
-    updateChartData(chart, opt, true, widgetData, controller.signal, detail?.source !== 'auto-refresh');
+    const background = detail?.source === 'auto-refresh';
+    if (background && chartEl && offscreen.has(chartEl)) return void offscreen.set(chartEl, () => updateChartData(chart, opt, true, widgetData, controller.signal, false));
+    if (chartEl && offscreen.has(chartEl)) offscreen.set(chartEl, null);
+    updateChartData(chart, opt, true, widgetData, controller.signal, !background);
   }, { signal: controller.signal });
 
   // Register with shared theme observer instead of per-widget MutationObserver
@@ -1407,6 +1441,7 @@ export const chartWidget = (widgetData: WidGetData) => {
   chartDisposers.set(chartId, () => {
     if (intervalId) clearInterval(intervalId);
     dataObserver?.disconnect();
+    if (chartEl) { offscreenObserver.unobserve(chartEl); offscreen.delete(chartEl); }
     controller.abort();
     if (chartEl) sharedResizeObserver.unobserve(chartEl);
     themeCallbacks.delete(onThemeChange);
@@ -1562,13 +1597,17 @@ const applyThresholds = (chart: any, thresholds: Record<string, number>, unit = 
 
 const chartConfigurations = new WeakMap<HTMLElement, string>();
 function initializeChartWidgets() {
-  [...document.querySelectorAll<HTMLElement>('[data-chart-config]')].sort((a, b) => b.clientHeight - a.clientHeight).forEach(host => {
+  const pageParams = new URLSearchParams(location.search);
+  // Opening, resizing or closing log details leaves the widgets' data unchanged.
+  for (const key of ['target_event', 'details_width', 'showTrace']) pageParams.delete(key);
+  const params = pageParams.toString();
+  // Unchanged hosts are dropped before anything reads layout: a page of hundreds of charts
+  // otherwise re-measured every one of them on each of the dozens of events a swap fires.
+  [...document.querySelectorAll<HTMLElement>('[data-chart-config]')].flatMap(host => {
+    const signature = host.dataset.chartConfig! + params + JSON.stringify(getDashboardConstants(host));
+    return chartConfigurations.get(host) === signature ? [] : [{ host, signature }];
+  }).sort((a, b) => b.host.clientHeight - a.host.clientHeight).forEach(({ host, signature }) => {
     const configJSON = host.dataset.chartConfig!;
-    const pageParams = new URLSearchParams(location.search);
-    // Opening, resizing or closing log details leaves the widgets' data unchanged.
-    for (const key of ['target_event', 'details_width', 'showTrace']) pageParams.delete(key);
-    const signature = configJSON + pageParams.toString() + JSON.stringify(getDashboardConstants(host));
-    if (chartConfigurations.get(host) === signature) return;
     chartConfigurations.set(host, signature);
     const config = JSON.parse(configJSON);
     const opt = reviveFunctions(JSON.parse(config.echartOpt));
@@ -1582,5 +1621,12 @@ function initializeChartWidgets() {
     }, config.chartId);
   });
 }
+// One scan per burst: a single swap fires htmx:after:process once per processed element.
+let scanPending = false;
+function scheduleChartWidgets() {
+  if (scanPending) return;
+  scanPending = true;
+  queueMicrotask(() => { scanPending = false; initializeChartWidgets(); });
+}
 initializeChartWidgets();
-document.addEventListener('htmx:after:process', initializeChartWidgets);
+document.addEventListener('htmx:after:process', scheduleChartWidgets);

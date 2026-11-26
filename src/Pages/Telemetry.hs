@@ -859,7 +859,8 @@ chartList pid source metricList nextUrl = do
     Just url -> do
       let loadNext = [hxGet_ $ url <> "&append=true", hxTarget_ "#metric-pagination", hxSwap_ "outerHTML", hxIndicator_ "#metric-pagination", term "hx-sync" "#metric-filters:drop"]
       div_ [id_ "metric-pagination", class_ "col-span-full relative min-h-20 flex items-center justify-center"] do
-        span_ ([class_ "absolute -top-96 h-96 w-px pointer-events-none", Aria.hidden_ "true", hxTrigger_ "intersect once"] <> loadNext) pass
+        -- A screen of lookahead: a page takes ~0.5s to arrive, longer than a scroll takes to cover 384px.
+        span_ ([class_ "absolute bottom-0 h-screen w-px pointer-events-none", Aria.hidden_ "true", hxTrigger_ "intersect once"] <> loadNext) pass
         a_ ([href_ url, class_ "btn btn-sm [.htmx-request_&]:hidden"] <> loadNext) "Load more metrics"
         span_ [class_ "hidden [.htmx-request_&]:inline-flex text-sm text-textWeak", role_ "status"] "Loading more metrics…"
 
@@ -874,7 +875,8 @@ metricCard pid source metricName metricType metricUnit labels selectedM = do
       selected = if selectedM == Just "all" then Nothing else selectedM <|> listToMaybe orderedLabels
       cardId = "metric_" <> T.replace "." "_" metricName
       detailUrl = metricDetailUrl pid metricName source selected
-  div_ [class_ "w-full flex flex-col gap-2 metric_filterble", id_ cardId]
+  -- Off-screen cards skip layout and paint: hundreds of charts made every draw relayout them all.
+  div_ [class_ "w-full flex flex-col gap-2 metric_filterble [content-visibility:auto] [contain-intrinsic-size:auto_15rem]", id_ cardId]
     $ div_ [class_ "h-60"]
     $ toHtml
     $ (metricWidget pid metricName metricType metricUnit source selected (Just metricName) Nothing (Just detailUrl))

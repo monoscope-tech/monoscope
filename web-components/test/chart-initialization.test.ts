@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import * as echarts from 'echarts';
-import { chartLayoutForSize, drawSized, isNearChartViewport, registerChartDisposer } from '../src/widgets';
+import { chartLayoutForSize, drawSized, isNearChartViewport, nextQueued, registerChartDisposer } from '../src/widgets';
 
 test('disposes a chart removed by an HTMX morph navigation', () => {
   const chart = document.createElement('div');
@@ -23,6 +23,16 @@ describe('isNearChartViewport', () => {
 
   test('keeps charts just below the viewport ready for scrolling', () => {
     expect(isNearChartViewport({ top: 1_149, bottom: 1_349 }, 1_000)).toBe(true);
+  });
+
+  // Scrolling past a page queued its charts' loads ahead of the ones now on screen.
+  test('nextQueued_servesOnscreenChartsBeforeOlderOffscreenOnes', () => {
+    const at = (top: number) => ({ el: { getBoundingClientRect: () => ({ top, bottom: top + 200 }) } as Element });
+    const [above, below, onscreen] = [at(-5_000), at(4_000), at(300)];
+    const queue = [above, below, onscreen, { el: null }];
+    expect(nextQueued(queue, 1_000)).toBe(onscreen);
+    expect(nextQueued([above, below], 1_000)).toBe(above); // nothing near: oldest first
+    expect(nextQueued([], 1_000)).toBeUndefined();
   });
 });
 

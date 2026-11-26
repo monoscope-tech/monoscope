@@ -1660,13 +1660,14 @@ renderChart actions widget = do
               button_ [type_ "button", id_ $ chartId <> "_retry", hidden_ "", class_ "shrink-0 underline px-2 disabled:opacity-50"] "Retry"
           whenJust ((,) <$> widget.groupByOptions <*> widget.groupByUrl) \(options, url) ->
             let selectedLabel = fromMaybe "All values" $ guarded (/= "all") =<< widget.groupBySelected
-             in div_ [class_ "flex shrink-0 justify-end px-3 pt-3"]
-                  $ details_ [class_ "dropdown dropdown-end relative max-w-[calc(100%-1.5rem)]"] do
-                    summary_ [class_ "btn btn-xs min-w-0 cursor-pointer justify-between gap-1 border-strokeWeak bg-bgRaised px-2 text-left text-textWeak opacity-100 hover:bg-fillWeak", data_ "tippy-content" "Group by"] do
-                      span_ [class_ "shrink-0 text-textDisabled"] "Group by"
-                      span_ [class_ "min-w-0 truncate text-left text-textStrong"] $ toHtml selectedLabel
-                      Utils.faSprite_ "chevron-down" "regular" "w-3 shrink-0"
-                    ul_ [class_ "dropdown-content absolute right-0 top-full z-50 mt-1 flex max-h-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-lg border border-strokeWeak bg-bgRaised p-1 opacity-100 shadow-lg"] do
+                groupByPop = chartId <> "-group-by"
+             in -- A popover, not a <details>: the top layer escapes the card's paint containment.
+                div_ [class_ "flex shrink-0 justify-end px-3 pt-3"] do
+                  button_ ([type_ "button", class_ "btn btn-xs min-w-0 max-w-[calc(100%-1.5rem)] cursor-pointer justify-between gap-1 border-strokeWeak bg-bgRaised px-2 text-left text-textWeak opacity-100 hover:bg-fillWeak", data_ "tippy-content" "Group by"] <> Utils.popoverTrigger_ groupByPop) do
+                    span_ [class_ "shrink-0 text-textDisabled"] "Group by"
+                    span_ [class_ "min-w-0 truncate text-left text-textStrong"] $ toHtml selectedLabel
+                    Utils.faSprite_ "chevron-down" "regular" "w-3 shrink-0"
+                  ul_ ([class_ "dropdown dropdown-end mt-1 flex max-h-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-lg border border-strokeWeak bg-bgRaised p-1 shadow-lg"] <> Utils.popoverPanel_ groupByPop) do
                       let item value label =
                             li_
                               $ button_
