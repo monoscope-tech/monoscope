@@ -523,7 +523,7 @@ repositoryDashboardPage pid rid = do
   ctx <- ask @Config.AuthContext
   repos <- maybe (pure Nothing) (liftIO . Cache.lookup ctx.repoListCache) repository.credentialId
   let branch = maybe "" (.defaultBranch) $ find ((== repository.owner <> "/" <> repository.repo) . (.fullName)) (fold repos)
-  permission <- ProjectMembers.getUserPermission pid session.user.id
+  permission <- ProjectMembers.getSessionPermission pid session.user.id
   pure $ PageCtx bw{prePageTitle = Just "Repositories", pageTitle = repository.owner <> "/" <> repository.repo, pageTitleUrl = Just $ urls.repositoryGet pid rid, pageTitleSuffix = Just "Configuration sync", menuItem = Just "Repositories"} RepositoryDashboardGet{repository, sync, accounts, form = RepositoryDashboardForm repository.credentialId branch Nothing, hostUrl = ctx.config.hostUrl, permission, setupError = Nothing}
 
 
@@ -685,7 +685,7 @@ dashboardRepositoryPageH pid did assignmentError = do
   (session, _, bw) <- mkPageCtx pid
   dashboard <- Dashboards.getDashboardByProjectId pid did >>= maybe (throwError err404) pure
   repositories <- GitSync.getGitSyncs pid
-  permission <- ProjectMembers.getUserPermission pid session.user.id
+  permission <- ProjectMembers.getSessionPermission pid session.user.id
   addRespHeaders $ PageCtx bw{pageTitle = "Dashboard repository"} DashboardRepositoryGet{dashboard, repositories, assignmentError, permission}
 
 

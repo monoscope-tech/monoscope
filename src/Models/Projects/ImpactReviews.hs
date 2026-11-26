@@ -19,6 +19,10 @@ module Models.Projects.ImpactReviews (
   recordFailure,
   getRun,
   claimRun,
+  routineMissingError,
+  retryRoutineBlockedRuns,
+  announceReviewWorker,
+  reviewWorkerRunning,
   currentRun,
   saveResult,
   finishRun,
@@ -371,6 +375,19 @@ selectRuns pid rid =
     ORDER BY r.created_at DESC LIMIT 20|]
 
 
+-- | Called every minute by a node with agent slots, so readiness can tell a queued review will run.
+announceReviewWorker :: DB es => UTCTime -> Workspace.Slots -> Eff es ()
+announceReviewWorker now slots =
+  Hasql.interpExecute_
+    [HI.sql| INSERT INTO projects.review_workers (node, agents, seen_at) VALUES (#{slots.node}, #{fromIntegral @Int @Int32 slots.agents}, #{now})
+      ON CONFLICT (node) DO UPDATE SET agents = EXCLUDED.agents, seen_at = EXCLUDED.seen_at |]
+
+
+-- | A worker with agent slots checked in within three minutes.
+reviewWorkerRunning :: DB es => UTCTime -> Eff es Bool
+reviewWorkerRunning now = Hasql.interpScalar [HI.sql| SELECT EXISTS (SELECT 1 FROM projects.review_workers WHERE agents > 0 AND seen_at > #{now} - interval '3 minutes') |]
+
+
 -- | Admission happens here, before a review's time budget starts: past this node's agent slots, or two
 -- reviews of this project across nodes (so one busy tenant cannot take every slot), the run waits in
 -- the job queue instead of for a VM.
@@ -505,6 +522,21 @@ retryRun pid rid = do
         AND r.revision = t.latest_revision AND (t.lease_until IS NULL OR t.lease_until < now())
       RETURNING r.id)
       INSERT INTO background_jobs_long (run_at, status, payload) SELECT now(), 'queued', #{payload} FROM retried|]
+
+
+-- | Why a review stopped before starting: its project had no active review routine.
+routineMissingError :: Text
+routineMissingError = "Activate or resume Production impact review in AI routines."
+
+
+-- | Reviews that stopped only for want of the routine, on their pull request's latest commit, run
+-- once it exists, so a pull request opened before the routine was installed still gets reviewed.
+retryRoutineBlockedRuns :: DB es => ProjectId -> Eff es ()
+retryRoutineBlockedRuns pid =
+  Hasql.interp @[HI.OneColumn ReviewId]
+    [HI.sql| SELECT r.id FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
+      WHERE t.project_id = #{pid} AND r.revision = t.latest_revision AND r.state = #{Incomplete} AND r.error = #{routineMissingError} |]
+    >>= traverse_ (retryRun pid . HI.getOneColumn)
 
 
 supersedeRun :: DB es => ReviewRun -> Eff es ()

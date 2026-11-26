@@ -476,7 +476,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           when claimed
             $ Issues.getEventRoutine run.projectId Issues.EventPullRequest
             >>= \case
-              Nothing -> Reviews.recordFailure run "Activate or resume Production impact review in AI routines."
+              Nothing -> Reviews.recordFailure run Reviews.routineMissingError
               Just routine -> do
                 let convId = UUIDId run.threadId.unUUIDId
                     input = "Review " <> run.owner <> "/" <> run.repo <> " #" <> show run.number <> " at " <> run.revision
