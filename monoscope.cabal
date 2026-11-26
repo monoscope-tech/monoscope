@@ -808,6 +808,7 @@ test-suite integration-tests
       Pages.IssuesSpec
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
+      Pages.OnboardingSpec
       Pages.Projects.ProjectsSpec
       Pages.UptimeSpec
       Pkg.EmbeddingFairnessSpec
@@ -1119,6 +1120,7 @@ test-suite test-dev
       Pages.IssuesSpec
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
+      Pages.OnboardingSpec
       Pages.Projects.ProjectsSpec
       Pages.UptimeSpec
       Pkg.EmbeddingFairnessSpec

@@ -2,6 +2,7 @@ module Web.AuthSpec (spec) where
 
 import BackgroundJobs qualified
 import BackgroundJobs.Types (BgJobs (AdConversion), Conversion (..))
+import Data.ByteString qualified as BS
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List qualified as L
 import Data.Text qualified as T
@@ -10,13 +11,13 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Hasql.Interpolate qualified as HI
 import Lucid qualified
+import Models.Apis.Issues qualified as Issues
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (Query, RequestHeaders, hAuthorization, hCacheControl, hCookie, statusCode, status200)
+import Network.HTTP.Types (Method, Query, RequestHeaders, hAuthorization, hCacheControl, hCookie, status200, statusCode)
 import Network.HTTP.Types.Header (hVary)
 import Network.Wai qualified as Wai
 import Network.Wai.Test qualified as WT
-import Models.Apis.Issues qualified as Issues
 import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper qualified as BodyWrapper
 import Pages.CodeContext qualified as CodeContext
@@ -114,7 +115,7 @@ spec = around withTestResources do
     let sid = UUID.toASCIIBytes (getResponse tr.trSessAndHeader).sessionId.getPersistentSessionId
         -- Servant runs the auth check at the routed leaf, where pathInfo is already consumed.
         api hs m p = Servant.runHandler $ unAuthHandler (Auth.apiKeyAuthHandler tr.trLogger tr.trATCtx) (WT.setPath Wai.defaultRequest p){Wai.requestMethod = m, Wai.requestHeaders = hs, Wai.pathInfo = []}
-        outcome = fmap (bimap errHTTPCode \case Authenticated _ -> rw; Editor _ -> ed; Viewer _ -> vw; DemoReader _ -> ro)
+        outcome = fmap (bimap errHTTPCode \case Authenticated _ -> rw; APIKey _ -> rw; Editor _ -> ed; Viewer _ -> vw; DemoReader _ -> ro)
         rw, ed, vw, ro :: Text
         (rw, ed, vw, ro) = ("rw", "ed", "vw", "ro")
         asMember = api [(hAuthorization, "Bearer " <> sid), ("X-Project-Id", encodeUtf8 testPid.toText)]
@@ -137,6 +138,29 @@ spec = around withTestResources do
     alive `shouldReturn` True
     void $ toBaseServantResponse tr $ Auth.logoutH (Just $ "monoscope_session=" <> sid)
     alive `shouldReturn` False
+
+  -- 2026-11 audit: a key bearer authenticated as the unrestricted `Authenticated` principal, so an
+  -- editor who read the ingestion key could add members, mint keys and patch the project.
+  it "apiKey_principalIsNotAnAdminSession" \tr -> do
+    key <- createTestAPIKey tr testPid "ingest"
+    let apiKey m p =
+          Servant.runHandler
+            $ unAuthHandler (Auth.apiKeyAuthHandler tr.trLogger tr.trATCtx) (WT.setPath Wai.defaultRequest p){Wai.requestMethod = m, Wai.requestHeaders = [(hAuthorization, "Bearer " <> encodeUtf8 key)], Wai.pathInfo = []}
+        refused = leftToMaybe . first errHTTPCode
+    traverse
+      (\x -> uncurry apiKey x <&> refused)
+      ( [ ("GET", "/api/v1/events")
+        , ("POST", "/api/v1/events/query")
+        , ("GET", "/api/v1/monitors")
+        , ("POST", "/api/v1/monitors")
+        , ("GET", "/api/v1/api_keys")
+        , ("POST", "/api/v1/api_keys")
+        , ("PATCH", "/api/v1/members/self")
+        , ("PATCH", "/api/v1/project")
+        ]
+          :: [(Method, BS.ByteString)]
+      )
+      `shouldReturn` [Nothing, Nothing, Nothing, Nothing, Nothing, Just 403, Just 403, Just 403]
 
   -- demoGuestSeededAdmin: migration 0001 seeds the guest identity as the demo project's admin, so
   -- every anonymous visitor (and its public session id as a bearer) passed PEdit/PAdmin gates.

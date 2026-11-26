@@ -193,7 +193,7 @@ suggestProjectName currentTitle email
 
 onboardingQuickStartPostH :: Projects.ProjectId -> QuickStartForm -> ATAuthCtx (RespHeaders (Done OnboardingRedirect))
 onboardingQuickStartPostH pid form = do
-  (_, project) <- Projects.sessionAndProject pid
+  (_, project) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   let cleanTitle = let t = T.strip form.projectName in if T.null t then project.title else t
       cleanLoc = let l = T.strip form.location in if l `elem` ["usa", "eu", "asia"] then l else "usa"
       answers = HI.AsJsonb $ AE.object ["location" AE..= cleanLoc, "companyName" AE..= cleanTitle]
@@ -226,7 +226,10 @@ onboardingQuickStartPostH pid form = do
 
 onboardingDiscoverUrlsPostH :: Projects.ProjectId -> DiscoverUrlForm -> ATAuthCtx (RespHeaders DiscoveredEndpointsHtml)
 onboardingDiscoverUrlsPostH pid form = do
-  void $ Projects.sessionAndProject pid
+  -- The probe is an outbound request the caller chooses: it sends through the operator's
+  -- network, so it needs at least an editor and never the shared demo guest.
+  void $ ProjectMembers.sessionAndProjectAtLeastMember ProjectMembers.PEdit pid
+  appCtx <- ask @AuthContext
   let raw = T.strip form.url
       isAuto = form.auto == Just "1"
   case Discovery.normalizeTargetUrl raw of
@@ -239,7 +242,7 @@ onboardingDiscoverUrlsPostH pid form = do
           []
           isAuto
     Just normalized -> do
-      (probes, suggestions) <- Discovery.discoverEndpoints normalized
+      (probes, suggestions) <- Discovery.discoverEndpoints appCtx.scrapeManager normalized
       if null suggestions
         then
           let reason = fromMaybe "Could not reach this host." $ viaNonEmpty head $ mapMaybe (.err) probes
@@ -343,7 +346,7 @@ onboardingServiceRootsGetH pid repoFullNameM = do
 
 onboardingFinishPostH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Done OnboardingRedirect))
 onboardingFinishPostH pid = do
-  void $ Projects.sessionAndProject pid
+  void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   markStepCompleted pid (show Alerts)
   done $ OnboardingRedirect (stepUrl pid Pricing)
 

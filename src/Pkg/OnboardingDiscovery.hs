@@ -153,16 +153,19 @@ candidateUrls baseUrl = case parseURI (toString baseUrl) of
 
 
 -- | Probe candidate URLs concurrently with a tight 4s timeout per request.
-probeCandidateUrls :: IOE :> es => Text -> Eff es [ProbeResult]
-probeCandidateUrls normalizedUrl = liftIO do
+-- Takes the caller's manager so the resolved-address guard applies: 'Utils.safeScrapeUrl'
+-- vets only the literal host, while 'System.Config.newProbeManagers' wraps the connections
+-- of the manager handed in here.
+probeCandidateUrls :: IOE :> es => HC.Manager -> Text -> Eff es [ProbeResult]
+probeCandidateUrls manager normalizedUrl = liftIO do
   let urls = candidateUrls normalizedUrl
-  forConcurrently urls probeOne
+  forConcurrently urls (probeOne manager)
 
 
-probeOne :: Text -> IO ProbeResult
-probeOne targetUrl = do
+probeOne :: HC.Manager -> Text -> IO ProbeResult
+probeOne manager targetUrl = do
   let path = maybe "/" (toText . (\p -> if null p then "/" else p) . uriPath) $ parseURI (toString targetUrl)
-      opts = Wreq.defaults & Wreq.checkResponse ?~ (\_ _ -> pass) & Wreq.redirects .~ 3
+      opts = Wreq.defaults & Wreq.manager .~ Right manager & Wreq.checkResponse ?~ (\_ _ -> pass) & Wreq.redirects .~ 3
   t0 <- getMonotonicTime
   res <- timeout 4_000_000 $ tryAny $ Wreq.getWith opts (toString targetUrl)
   t1 <- getMonotonicTime
@@ -189,9 +192,9 @@ friendlyHttpError ex = case fromException ex of
 
 
 -- | Probe candidate endpoints and rank them via LLM (with deterministic fallback).
-discoverEndpoints :: (IOE :> es, LLM.LLM :> es) => Text -> Eff es ([ProbeResult], [SuggestedUrl])
-discoverEndpoints normalizedUrl = do
-  probes <- probeCandidateUrls normalizedUrl
+discoverEndpoints :: (IOE :> es, LLM.LLM :> es) => HC.Manager -> Text -> Eff es ([ProbeResult], [SuggestedUrl])
+discoverEndpoints manager normalizedUrl = do
+  probes <- probeCandidateUrls manager normalizedUrl
   let reachable = filter (isJust . (.status)) probes
   suggestions <-
     if null reachable
