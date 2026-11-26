@@ -3592,7 +3592,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   request.prompt `shouldNotSatisfy` T.isInfixOf "private-log-body-must-not-leave-monoscope"
                   dbOne tr "SELECT count(*)::int FROM projects.pr_review_attempts WHERE id = ? AND run_id = ? AND project_id = ? AND provider = ?" (request.attemptId, request.runId, request.projectId, request.provider) `shouldReturn` (1 :: Int)
                   for_ [("--expect-recipe", True), ("--expect-no-recipe", False)] \(flag, expected) -> when (flag `elem` arguments) $ ("saved proof setup" `T.isInfixOf` request.prompt) `shouldBe` expected
-                  when ("--expect-discussion" `elem` arguments) $ (map (`T.isInfixOf` request.prompt) ["Keep payroll admin-only", "src/Routes.hs", "Reports count shows when private", "our own review body"] `shouldBe` [True, True, True, False])
+                  when ("--expect-discussion" `elem` arguments) $ (map (`T.isInfixOf` request.prompt) ["Keep payroll admin-only", "src/Routes.hs", "Reports count shows when private", "our own review body", "blacksmith proof report"] `shouldBe` [True, True, True, False, False])
                   when ("--prove-live" `elem` arguments) $ traverse_ (unlift . hooks.progress) [Agent.Planned ("Shows the retry count" :| ["Retries once"]), Agent.Started ("Shows the retry count" :| []), Agent.Recorded ("Shows the retry count" :| []) "proof-1"]
                   when ("--billing-change-before-usage" `elem` arguments) $ dbExec tr "UPDATE projects.projects SET customer_id = 'cus_after_attempt', billing_provider = ? WHERE id = ?" (Projects.LemonSqueezyProvider, reviewPid)
                   when (null arguments) do
@@ -3869,7 +3869,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- reviewerAsks_reachTheAgent: Blacksmith's "differs" findings test what reviewers asked for, so the agent
     -- sees the conversation and inline review comments, but not our own app's.
     let discussion = withHTTPResponses \_ endpoint -> pure case () of
-          _ | "/issues/7/comments?" `T.isInfixOf` toText endpoint -> Just $ AE.encode @[AE.Value] [AE.object ["id" AE..= (5 :: Int), "body" AE..= ("Keep payroll admin-only" :: Text), "user" AE..= AE.object ["login" AE..= ("ada" :: Text)]], appComment 99 123 "our own review body"]
+          _ | "/issues/7/comments?" `T.isInfixOf` toText endpoint -> Just $ AE.encode @[AE.Value] [AE.object ["id" AE..= (5 :: Int), "body" AE..= ("Keep payroll admin-only" :: Text), "user" AE..= AE.object ["login" AE..= ("ada" :: Text)]], appComment 99 123 "our own review body", AE.object ["id" AE..= (7 :: Int), "body" AE..= ("blacksmith proof report" :: Text), "user" AE..= AE.object ["login" AE..= ("blacksmith-sh[bot]" :: Text)]]]
             | "/pulls/7/comments?" `T.isInfixOf` toText endpoint -> Just $ AE.encode @[AE.Value] [AE.object ["id" AE..= (6 :: Int), "body" AE..= ("Reports count shows when private" :: Text), "path" AE..= ("src/Routes.hs" :: Text), "user" AE..= AE.object ["login" AE..= ("claude[bot]" :: Text)]]]
             | otherwise -> Nothing
     void $ review $ discussion . fakeAgentWith ["--expect-discussion"]
