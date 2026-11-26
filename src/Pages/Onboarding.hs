@@ -309,21 +309,22 @@ parseSelectedEndpoints = mapMaybe \entry -> case T.breakOn "||" entry of
 
 onboardingStartInstrumentPostH :: Projects.ProjectId -> StartInstrumentForm -> ATAuthCtx (RespHeaders InstrumentStatusHtml)
 onboardingStartInstrumentPostH pid form = do
-  void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
+  (_, project) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   repos <- GitSync.getRepositories pid
   let repoM = find (\r -> r.owner <> "/" <> r.repo == T.strip form.repoFullName) repos
       branch = fromMaybe "main" $ mfilter (not . T.null . T.strip) form.branch
       targetKind = fromMaybe "auto" $ mfilter (not . T.null . T.strip) form.targetKind
-  run <- OI.createRun pid ((.id) <$> repoM) (T.strip form.repoFullName) branch targetKind
-  insertJob $ OnboardingInstrument pid run.id
-  addRespHeaders $ InstrumentStatusHtml pid (Just run)
+      paid = Projects.isPaidPlan $ Projects.parsePlan project.paymentPlan
+  OI.createRun paid pid ((.id) <$> repoM) (T.strip form.repoFullName) branch targetKind >>= \case
+    Right run -> insertJob (OnboardingInstrument pid run.id) >> addRespHeaders (InstrumentStatusHtml pid (Just run) Nothing)
+    Left refusal -> OI.latestRunForProject pid >>= \runM -> addRespHeaders $ InstrumentStatusHtml pid runM (Just refusal)
 
 
 onboardingInstrumentStatusGetH :: Projects.ProjectId -> Maybe OI.RunId -> ATAuthCtx (RespHeaders InstrumentStatusHtml)
 onboardingInstrumentStatusGetH pid runIdM = do
   void $ Projects.sessionAndProject pid
   runM <- maybe (OI.latestRunForProject pid) (OI.getRun pid) runIdM
-  addRespHeaders $ InstrumentStatusHtml pid runM
+  addRespHeaders $ InstrumentStatusHtml pid runM Nothing
 
 
 onboardingFinishPostH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Done OnboardingRedirect))
@@ -431,12 +432,20 @@ instance ToHtml CreatedUptimesHtml where
 data InstrumentStatusHtml = InstrumentStatusHtml
   { statusPid :: Projects.ProjectId
   , statusRun :: Maybe OI.InstrumentRun
+  , statusRefusal :: Maybe OI.StartRefusal
   }
   deriving stock (Show)
 
 
 instance ToHtml InstrumentStatusHtml where
-  toHtml (InstrumentStatusHtml pid runM) = toHtml $ renderAgentProgress_ pid runM
+  toHtml (InstrumentStatusHtml pid runM refusalM) = toHtml do
+    forM_ refusalM \refusal -> div_ [class_ "mb-3", role_ "alert"] case refusal of
+      OI.RunInProgress -> callout_ WarningBadge (Just "A setup run is already in progress") "Wait for it to finish before starting another."
+      OI.UnpaidPrUsed -> callout_ BrandBadge (Just "Free projects include one setup PR") $ upgrade "Upgrade to run the Setup agent on more repositories."
+      OI.UnpaidDailyLimit -> callout_ BrandBadge (Just "Daily setup limit reached") $ upgrade "Free projects can start 3 setup runs a day. Try again tomorrow, or upgrade."
+    renderAgentProgress_ pid runM
+    where
+      upgrade msg = toHtml @Text msg >> " " >> a_ [href_ $ stepUrl pid Pricing, class_ "text-textBrand hover:underline"] "See plans"
   toHtmlRaw = toHtml
 
 
