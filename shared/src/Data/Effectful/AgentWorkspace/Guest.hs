@@ -145,7 +145,9 @@ withGuest seat host expected checkout revision start lease attempt allocate reta
           let staged = temporary </> takeFileName (toString destination)
           writeFileBS staged bytes
           rpc $ CopyFile $ Copy staged destination
-        lock = traverse_ workspace [["/usr/bin/git", "config", "--system", "--add", "safe.directory", "/workspace"], ["/bin/chown", "-hR", "0:0", "/workspace"], ["/bin/chmod", "-R", "u+rwX,go+rX,go-w", "/workspace"], ["/usr/bin/git", "config", "--system", "--add", "safe.directory", "/workspace/.git"], ["/usr/bin/git", "update-index", "--refresh"]]
+        -- Sources become root's; build output stays the agent's, so it can compile a test before
+        -- reproduction and the lock does not walk gigabytes of dist-newstyle/target/node_modules.
+        lock = traverse_ workspace [["/usr/bin/git", "config", "--system", "--add", "safe.directory", "/workspace"], ["/bin/sh", "-c", lockSources], ["/usr/bin/git", "config", "--system", "--add", "safe.directory", "/workspace/.git"], ["/usr/bin/git", "update-index", "--refresh"]]
         logged argv cwd limit = do
           path <- (logs </>) . (<> ".log") . UUID.toString <$> UUID4.nextRandom
           writeFileBS path ""
@@ -312,3 +314,12 @@ runSession path = do
                     )
           runConduit $ CC.sourceHandle stdin .| receive
         for_ (leftToMaybe result) $ send . Left @Text @AE.Value
+
+
+-- | Makes /workspace's sources root-owned and read-only to the agent, leaving its ignored build output
+-- (cabal, stack, cargo, npm, Python, Gradle) writable: the source fingerprint covers tracked files only.
+--
+-- >>> T.isInfixOf "-name dist-newstyle" lockSources && T.isInfixOf "-prune" lockSources
+-- True
+lockSources :: Text
+lockSources = "set -e; prune='( -name dist-newstyle -o -name .stack-work -o -name target -o -name node_modules -o -name .venv -o -name .gradle ) -prune'; find /workspace $prune -o -exec chown -h 0:0 {} +; find /workspace $prune -o ! -type l -exec chmod u+rwX,go+rX,go-w {} +"
