@@ -143,13 +143,13 @@ logQueryBox_ config = do
               [ type_ "button"
               , id_ "ai-search-submit"
               , Aria.label_ "Generate query"
-              , Aria.disabled_ "true"
+              , disabled_ ""
               , data_ "tippy-content" "Generate query"
               , -- Disabled follows the prompt box reactively (hx-live re-runs on every
                 -- input event), replacing hand-rolled attribute flipping in hyperscript.
-                term "hx-live:aria-disabled" "!q('#ai-search-input').value.trim()"
-              , class_ "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-iconNeutral aria-disabled:cursor-not-allowed aria-disabled:text-textDisabled aria-[disabled=false]:cursor-pointer aria-[disabled=false]:text-iconBrand aria-[disabled=false]:hover:bg-fillBrand-weak aria-[disabled=false]:active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-1 transition-transform"
-              , onclick_ "if(this.getAttribute('aria-disabled')!=='true') htmx.trigger('#ai-search-input', 'htmx:trigger')"
+                term "hx-live:disabled" "!q('#ai-search-input').value.trim()"
+              , class_ "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-iconNeutral disabled:cursor-not-allowed disabled:text-textDisabled enabled:cursor-pointer enabled:text-iconBrand enabled:hover:bg-fillBrand-weak enabled:active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-1 transition-transform"
+              , onclick_ "htmx.trigger('#ai-search-input', 'htmx:trigger')"
               ]
               $ faSprite_ "arrow-right" "regular" "h-4 w-4"
             label_

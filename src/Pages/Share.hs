@@ -11,11 +11,12 @@ import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Lucid
+import Lucid.Hyperscript (__)
 import Models.Apis.ShareEvents qualified as ShareEvents
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), ModalCfg (..), emptyState_, fieldLabel_, modalWith_, sectionLabel_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), emptyState_, fieldLabel_, nativeDialogWith_, sectionLabel_, tonePill_)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Replay qualified as Replay
 import Pages.Telemetry qualified as PTelemetry
@@ -58,8 +59,7 @@ newtype ShareLinkPost = ShareLinkPost Text
 
 instance ToHtml ShareLinkPost where
   toHtml (ShareLinkPost rid) = toHtml @(Html ()) $ div_ [id_ "invite-modal-container"] do
-    modalWith_ "shareModal" def{autoOpen = True, boxClass = "max-w-md p-6"} Nothing do
-      h3_ [class_ "text-textStrong text-lg font-semibold"] "Share link"
+    nativeDialogWith_ [[__|init call me.showModal()|]] "shareModal" "Share link" "max-w-md p-6 space-y-2" do
       p_ [class_ "text-textWeak text-sm"] "Anyone with this link can view the event. Expires in 48 hours."
       div_ [class_ "flex items-center gap-2 pt-2"] do
         input_

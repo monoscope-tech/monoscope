@@ -104,7 +104,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsConten
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), PanelCfg (..), PanelStyle (..), brandLogo_, callout_, connectionBadge_, dangerAction_, dirtyFormSaveAttr_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadge_, modalWith_, panel_, roleOptions_, searchInput_, sectionLabel_, settingsH2_, settingsSection_, swapTarget_, tagInput_, toggleRow_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), PanelCfg (..), PanelStyle (..), brandLogo_, callout_, connectionBadge_, dangerAction_, dialogTrigger_, dirtyFormSaveAttr_, disclosure_, emptyState_, filterInputAttr_, formField_, formSelectField_, headerRow_, iconBadge_, nativeDialog_, panel_, roleOptions_, searchInput_, sectionLabel_, settingsH2_, settingsSection_, swapTarget_, tagInput_, toggleRow_, tonePill_)
 import Pages.Settings qualified as Settings
 import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
@@ -987,7 +987,8 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
   settingsSection_ do
     headerRow_ [class_ "max-w-2xl"] do
       settingsH2_ "Team"
-      teamModal pid Nothing projMembers channels discordChannels False $ span_ [class_ "btn btn-sm btn-primary gap-1.5 whitespace-nowrap"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "New Team"
+      dialogTrigger_ "n-new-team-modal" [class_ "btn btn-sm btn-primary gap-1.5 whitespace-nowrap"] $ faSprite_ "plus" "regular" "w-3 h-3" >> "New Team"
+      teamModal pid Nothing projMembers channels discordChannels False
     div_ [class_ "max-w-2xl"] $ teamTabsHeader_ pid "teams" (V.length projMembers) (V.length teams)
 
     if V.null teams
@@ -1055,7 +1056,7 @@ teamGetH pid handle layoutM = do
               , pageActions =
                   if team.is_everyone
                     then Nothing
-                    else Just $ label_ [class_ "btn btn-sm gap-2", Lucid.for_ $ team.handle <> "-new-team-modal"] do
+                    else Just $ dialogTrigger_ (team.handle <> "-new-team-modal") [class_ "btn btn-sm gap-2"] do
                       faSprite_ "pen-to-square" "regular" "h-4 w-4"
                       "Edit"
               }
@@ -1124,7 +1125,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
         lazySection_ "monitors-section" "bell" "Monitors" "Search monitors..." ((Links.urls.monitors pid).teamAlertsGetH team.id)
         lazySection_ "dashboards-section" "chart-area" "Dashboards" "Search dashboards..." (Links.urls.dashboardsGetList pid Nothing Nothing (Just team.id) Nothing Nothing Nothing def)
         lazySection_ "services-section" "server" "Services" "Search services..." ""
-    unless isEveryone $ teamModal pid (Just team) projMembers slackChannels discordChannels True mempty
+    unless isEveryone $ teamModal pid (Just team) projMembers slackChannels discordChannels True
 
 
 teamPageNF :: Projects.ProjectId -> Text -> Html ()
@@ -1694,8 +1695,8 @@ alertConfiguration pid cp =
 
 
 -- Main Modal Component
-teamModal :: Projects.ProjectId -> Maybe ProjectMembers.TeamVM -> V.Vector ProjectMembers.ProjectMemberVM -> [BotUtils.Channel] -> [BotUtils.Channel] -> Bool -> Html () -> Html ()
-teamModal pid team projMembers slackChans discordChans isInTeamView trigger = do
+teamModal :: Projects.ProjectId -> Maybe ProjectMembers.TeamVM -> V.Vector ProjectMembers.ProjectMemberVM -> [BotUtils.Channel] -> [BotUtils.Channel] -> Bool -> Html ()
+teamModal pid team projMembers slackChans discordChans isInTeamView = do
   let encodeField f = encodeText $ maybe [] f team
       -- Tagify whitelists: members by user id and by email, channels by id.
       whiteList = encodeText $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
@@ -1713,20 +1714,19 @@ teamModal pid team projMembers slackChans discordChans isInTeamView trigger = do
       slackChannels = encodeField (.slack_channels)
       discordChannels = encodeField (.discord_channels)
       pagerdutyServicesTags = encodeField (.pagerduty_services)
-      field_ lbl fid attrs = formField_ FieldSm def lbl (mkId fid) False $ Just $ input_ $ [class_ "input w-full", type_ "text", id_ $ mkId fid, name_ fid] <> attrs
+      field_ lbl fid cfg = formField_ FieldSm cfg{inputId = Just (mkId fid), extraAttrs = required_ "true" : cfg.extraAttrs <> [disabled_ "" | isEveryoneTeam]} lbl fid False Nothing
 
-  modalWith_ modalId def{boxClass = "p-6 max-w-lg w-full"} (Just trigger) do
+  nativeDialog_ modalId (if isJust team then "Edit Team" else "Create Team") "p-6 max-w-lg w-full" do
     form_ [hxPost_ $ Links.urls.projects.teamsManagePost pid (guard isInTeamView $> "true"), hxExt_ "json-enc", hxVals_ [text|js:{teamMembers: window.getTagValues('#$prefix-team-members-input'), notifEmails: window.getTagValues('#$prefix-notif-emails-input'), slackChannels: window.getTagValues('#$prefix-slack-channels-input'), discordChannels: window.getTagValues('#$prefix-discord-channels-input'), pagerdutyServices: window.getTagValues('#$prefix-pagerduty-services-input'), phoneNumbers: []}|], hxSwap_ "none", class_ "flex flex-col gap-0 w-full"] do
       whenJust ((.id) <$> team) \tid -> input_ [type_ "hidden", name_ "teamId", value_ tid.toText]
-      h2_ [class_ "text-lg font-semibold text-textStrong"] $ toHtml (if isJust team then "Edit Team" else "Create Team" :: Text)
 
       div_ [class_ "flex-1 overflow-y-auto max-h-[60vh] mt-4 divide-y divide-strokeWeak"] do
         -- Details
         div_ [class_ "space-y-3 pb-4"] do
           div_ [class_ "grid grid-cols-2 gap-3"] do
-            field_ "Team Name" "teamName" $ [placeholder_ "e.g. Backend Team", value_ name, required_ "true"] <> [disabled_ "" | isEveryoneTeam]
-            field_ "Handle" "teamHandle" $ [placeholder_ "e.g. backend-team", value_ handle, required_ "true", pattern_ "^[a-z][a-z0-9\\-]*$"] <> [disabled_ "" | isEveryoneTeam]
-          formField_ FieldSm def "Description" (mkId "teamDescription") False $ Just $ textarea_ [class_ "textarea w-full min-h-12 resize-none text-sm leading-relaxed", id_ $ mkId "teamDescription", name_ "teamDescription", placeholder_ "What does this team do?"] $ toHtml description
+            field_ "Team Name" "teamName" def{placeholder = "e.g. Backend Team", value = name, extraAttrs = [autofocus_]}
+            field_ "Handle" "teamHandle" def{placeholder = "e.g. backend-team", value = handle, extraAttrs = [pattern_ "^[a-z][a-z0-9\\-]*$"]}
+          formField_ FieldSm def{inputType = "textarea", placeholder = "What does this team do?", value = description, inputId = Just (mkId "teamDescription"), extraAttrs = [class_ "min-h-12 resize-none"]} "Description" "teamDescription" False Nothing
 
         -- Members
         unless isEveryoneTeam
@@ -1768,6 +1768,7 @@ teamModal pid team projMembers slackChans discordChans isInTeamView trigger = do
                   li_ "Add 'Events API v2' integration"
                   li_ "Copy the Integration Key"
 
-      formActionsModal_ modalId
-        $ button_ [class_ "btn btn-sm btn-primary", type_ "submit"]
-        $ toHtml (if isJust team then "Save Changes" else "Create Team" :: Text)
+      div_ [class_ "mt-3 flex justify-end gap-2"] do
+        button_ [type_ "button", class_ "btn btn-sm btn-ghost", [__|on click call (closest <dialog/>).close()|]] "Cancel"
+        button_ [class_ "btn btn-sm btn-primary", type_ "submit"]
+          $ toHtml (if isJust team then "Save Changes" else "Create Team" :: Text)

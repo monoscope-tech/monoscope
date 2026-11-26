@@ -513,7 +513,6 @@ renderTable tbl =
           Nothing -> tableMain
         -- Pagination footer outside the raised surface
         whenJust tbl.features.pagination renderPaginationFooter
-        when (isJust tbl.features.treeConfig) treeScript
       paddedContent = if tbl.config.addPadding then div_ [class_ "max-md:px-2 px-4 pt-2 pb-2"] tableContent else tableContent
       -- A deferred fill-in wins over the event refresh: the response it swaps in carries
       -- its own refreshOnEvent, so the listener is re-established rather than lost.
@@ -880,38 +879,6 @@ renderPaginationFooter pg = div_ [class_ "flex items-center justify-between max-
     mkUrl page perPage = withQuery pg.baseUrl $ "page=" <> show page <> "&per_page=" <> show perPage
     pgAttrs = swapTarget_ pg.targetId
     navBtn icon enabled url = button_ ([class_ $ "p-1.5 rounded border border-strokeWeak " <> if enabled then "hover:bg-fillWeak cursor-pointer" else "opacity-40 cursor-not-allowed", type_ "button"] <> if enabled then pgAttrs url else []) $ faSprite_ icon "regular" "w-4 h-4"
-
-
-treeScript :: Html ()
-treeScript =
-  script_
-    """
-    function toggleTreeRow(el) {
-      var path = el.getAttribute('data-tree-path');
-      var level = parseInt(el.getAttribute('data-tree-level'));
-      var collapsed = el.getAttribute('data-tree-collapsed') === 'true';
-      var rows = el.parentElement.querySelectorAll('tr[data-tree-path], div[data-tree-path]');
-      var found = false;
-      for (var i = 0; i < rows.length; i++) {
-        var r = rows[i];
-        if (r === el) { found = true; continue; }
-        if (!found) continue;
-        var rp = r.getAttribute('data-tree-path');
-        if (!rp.startsWith(path + '.') && rp !== path) break;
-        if (collapsed) {
-          var rl = parseInt(r.getAttribute('data-tree-level'));
-          if (rl === level + 1) { r.style.display = ''; }
-        } else {
-          r.style.display = 'none';
-          if (r.getAttribute('data-tree-group') === 'true') r.setAttribute('data-tree-collapsed', 'true');
-        }
-      }
-      el.setAttribute('data-tree-collapsed', collapsed ? 'false' : 'true');
-      el.setAttribute('aria-expanded', collapsed ? 'true' : 'false');
-      var chev = el.querySelector('.tree-chevron');
-      if (chev) chev.classList.toggle('rotate-90');
-    }
-    """
 
 
 -- Column Builders

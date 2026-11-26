@@ -59,7 +59,7 @@ import Network.HTTP.Types.Header qualified as Header
 import Network.Wai qualified as Wai
 import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx)
-import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), callout_, colorChip_, dialogTrigger_, disclosure_, emptyState_, filterInputAttr_, formCheckbox_, formField_, formSelectFieldWith_, formSelectField_, installationSettingsLink_, localTimeFmt_, morphPostAttrs_, nativeDialog_, options_, panel_, searchInput_, settingsH2_, submitBtn_)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), callout_, colorChip_, dialogTrigger_, disclosure_, emptyState_, filterInputAttr_, formCheckbox_, formField_, formSelectFieldWith_, formSelectField_, installationSettingsLink_, localTimeFmt_, morphPostAttrs_, morphTarget_, nativeDialog_, options_, panel_, searchInput_, settingsH2_, submitBtn_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
@@ -400,7 +400,7 @@ instance ToHtml WikiGet where
           span_ [class_ "text-xs font-semibold uppercase tracking-wider text-textWeak"] "Pages"
           when canEdit $ a_ ([Aria.label_ "New page", title_ "New page", class_ "btn btn-ghost btn-sm btn-square"] <> repositoryNavAttrs (newPageUrl "")) $ faSprite_ "plus" "regular" "h-3.5 w-3.5"
         form_ [method_ "get", action_ base, role_ "search"]
-          $ searchInput_ "w-full" "Search pages" [id_ "wiki-search", name_ "q", value_ $ fromMaybe "" search, hxGet_ base, hxTrigger_ "input changed delay:300ms, search", hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph", hxPushUrl_ "true"]
+          $ searchInput_ "w-full" "Search pages" ([id_ "wiki-search", name_ "q", value_ $ fromMaybe "" search, hxGet_ base, hxTrigger_ "input changed delay:300ms, search", hxPushUrl_ "true"] <> morphTarget_ "repository-content")
         when (null pages) $ p_ [class_ "px-2 text-sm text-textWeak"] $ maybe "No pages yet." (\q -> toHtml $ "No pages match \x201C" <> q <> "\x201D.") search
         let insert page [] (WikiTree _ children) = WikiTree (Just page) children
             insert page (segment : rest) (WikiTree item children) = WikiTree item $ Map.alter (Just . insert page rest . fromMaybe (WikiTree Nothing mempty)) segment children
@@ -516,13 +516,11 @@ repositoryNavAttrs :: Text -> [Attribute]
 repositoryNavAttrs url =
   [ href_ url
   , hxGet_ url
-  , hxTarget_ "#repository-content"
-  , hxSelect_ "#repository-content"
   , term "hx-select-oob" "#main-navbar:outerMorph"
-  , hxSwap_ "outerMorph"
   , hxPushUrl_ "true"
   , [__|on click set my.preloadState to 'DONE'|]
   ]
+    <> morphTarget_ "repository-content"
 
 
 repositoriesGetH :: Projects.ProjectId -> Maybe RepositoryTab -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx RepositoriesGet))
@@ -744,7 +742,7 @@ repositoriesPageH pid selection = do
                     toHtml @Text $ ": " <> note.summary
           div_ [class_ "flex flex-wrap justify-end gap-2 border-t border-strokeWeak pt-4"] do
             form_ [method_ "dialog"] $ button_ [class_ "btn btn-sm btn-ghost", autofocus_] "Close"
-            when (canEdit && run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [type_ "button", class_ "btn btn-sm btn-primary", hxPost_ (urls.impactReviewRetry pid run.id), hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph", [__|on click call (closest <dialog/>).close()|]] "Rerun review"
+            when (canEdit && run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ ([type_ "button", class_ "btn btn-sm btn-primary", hxPost_ (urls.impactReviewRetry pid run.id), [__|on click call (closest <dialog/>).close()|]] <> morphTarget_ "repository-content") "Rerun review"
     FixesPage -> do
       runs <- if session.persistentSession.id == demoGuestSessionId then pure [] else IssueFixes.latestMediaForUser pid session.user.id
       pure $ section_ [class_ "space-y-4"] do
@@ -1040,7 +1038,7 @@ instance ToHtml RepositoryGet where
         pid = repository.projectId
         rid = repository.id
         canEdit = maybe False (>= ProjectMembers.PEdit) page.permission
-        post url attrs = form_ ([method_ "post", action_ url, hxPost_ url, hxTarget_ "#repository-detail", hxSelect_ "#repository-detail", hxSwap_ "outerMorph"] <> attrs)
+        post url attrs = form_ ([method_ "post", action_ url, hxPost_ url] <> morphTarget_ "repository-detail" <> attrs)
         syncLink = a_ [href_ (urls.repositoryDashboardGet pid rid), class_ "btn btn-sm btn-outline"] $ if canEdit then "Configure sync" else "View sync"
     header_ [class_ "flex flex-wrap items-center gap-x-6 gap-y-3"] do
       div_ [class_ "min-w-0 space-y-2 break-words"] do
@@ -1505,7 +1503,7 @@ instance ToHtml RepositoryConnectGet where
     let connectionUrl = urls.repositoryConnectGet page.projectId ((.id) <$> page.credential)
     div_ [id_ "repository-connect-content", class_ "space-y-5 rounded-xl border border-strokeWeak bg-bgBase p-4 sm:p-5"] do
       unless (null page.accounts) $ form_
-        [action_ (urls.repositoryConnectGet page.projectId Nothing), method_ "get", hxGet_ (urls.repositoryConnectGet page.projectId Nothing), hxTrigger_ "change", hxPushUrl_ "true", hxTarget_ "#repository-connect-content", hxSelect_ "#repository-connect-content", hxSwap_ "outerMorph", hxIndicator_ "#repository-account-indicator", class_ "space-y-2"]
+        ([action_ (urls.repositoryConnectGet page.projectId Nothing), method_ "get", hxGet_ (urls.repositoryConnectGet page.projectId Nothing), hxTrigger_ "change", hxPushUrl_ "true", hxIndicator_ "#repository-account-indicator", class_ "space-y-2"] <> morphTarget_ "repository-connect-content")
         do
           formSelectField_ FieldSm "Repository account" "credentialId" True do
             option_ ([value_ "", disabled_ "disabled"] <> [selected_ "selected" | isNothing page.credential]) "Choose an account"
@@ -1518,7 +1516,7 @@ instance ToHtml RepositoryConnectGet where
           case page.repositories of
             Left _ -> callout_ ErrorBadge Nothing $ div_ [role_ "alert", class_ "space-y-2"] do
               p_ [class_ "text-sm text-textError"] "Could not load repositories. Retry, or ask an administrator to check this connection."
-              a_ [id_ "repository-connect-retry", href_ connectionUrl, hxGet_ connectionUrl, hxTarget_ "#repository-connect-content", hxSelect_ "#repository-connect-content", hxSwap_ "outerMorph", class_ "btn btn-sm btn-ghost"] "Retry"
+              a_ ([id_ "repository-connect-retry", href_ connectionUrl, hxGet_ connectionUrl, class_ "btn btn-sm btn-ghost"] <> morphTarget_ "repository-connect-content") "Retry"
             Right [] -> p_ [role_ "status", class_ "text-sm text-textWeak"] "No repositories are available to this account. Grant repository access or connect another account."
             Right repositories -> morphPostForm_ connectionUrl "repository-connect-content" "repository-connect-indicator" do
               when (length repositories > 8) $ searchInput_ "w-full" "Filter repositories" [filterInputAttr_ ".repository-choice"]

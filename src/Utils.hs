@@ -1174,6 +1174,10 @@ levelFillColor level = case T.toLower level of
 -- True
 -- >>> replaceAllFormats (T.replicate 1000 "9") == replaceAllFormats (T.replicate 1001 "9")
 -- True
+-- >>> map replaceAllFormats ["", "::::::", "0x0x0x0x", "123.456.789.012", "Module failed at /app/src/main.js:42:15"]
+-- ["","::::::","{hex}x{hex}x","{float}.{float}","Module failed at /app/src/main.js{port}{port}"]
+-- >>> map replaceAllFormats ["postgres://user:pass@localhost:5432/mydb", "redis://192.168.1.10:6379/0", "pod-abc123def-xyz789", "i-0a1b2c3d4e5f67890", "CPU usage: 85.5%"]
+-- ["postgres://user:pass@localhost{port}/mydb","redis://{ipv4}{port}/{integer}","pod-abc{integer}def-xyz{integer}","i-{hex}","CPU usage: {float}%"]
 replaceAllFormats :: Text -> Text
 replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass input)
   where

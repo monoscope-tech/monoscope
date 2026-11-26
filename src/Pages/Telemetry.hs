@@ -778,7 +778,17 @@ chartsPage pid metricList inactive filters activeCount nextUrl =
               $ Components.emptyState_ def{icon = Just "chart-line", action = ESLink "https://monoscopehq.com/docs/sdks/" "View SDK setup guides"} "No metrics found" "Metrics will appear here once your application starts sending telemetry data."
       else do
         when (V.null metricList) $ div_ [class_ "text-textWeak text-sm py-4"] "No metrics received in the last 7 days."
-        unless (V.null inactive) $ inactiveMetricsList pid filters.source inactive
+        unless (V.null inactive)
+          $ Components.panel_ (Components.Collapsible False) def (countNoun (V.length inactive) "inactive metric" <> " (no data in 7 days)")
+          $ linkList_ Nothing
+          $ V.toList inactive
+          <&> \metric ->
+            ( [href_ $ metricExpandUrl pid metric.metricName filters.source Nothing] <> drawerLoadAttrs_ (metricDetailUrl pid metric.metricName filters.source Nothing)
+            , div_ [class_ "flex items-center gap-2"] do
+                faSprite_ "chart-line" "regular" "w-3.5 h-3.5 text-textWeak"
+                span_ [class_ "truncate font-mono"] $ toHtml metric.metricName
+            , span_ [class_ "text-xs"] $ toHtml $ "Last seen " <> formatTime defaultTimeLocale "%b %d, %Y" metric.lastSeen
+            )
         unless (V.null metricList)
           $ div_ [class_ "w-full grid grid-cols-1 gap-x-4 gap-y-5 pb-4 md:grid-cols-2 lg:grid-cols-3", id_ "metric_list_container"]
           $ chartList pid filters.source metricList nextUrl
@@ -876,25 +886,6 @@ metricCard pid source metricName metricType metricUnit labels selectedM = do
       }
 
 
-inactiveMetricsList :: Projects.ProjectId -> Text -> V.Vector Telemetry.MetricChartListData -> Html ()
-inactiveMetricsList pid source metrics = do
-  details_ [class_ "collapse collapse-arrow bg-bgRaised border border-strokeWeak rounded-lg"] do
-    summary_ [class_ "collapse-title min-h-0 py-2 pl-3 font-medium text-sm text-textWeak"]
-      $ toHtml
-      $ countNoun (V.length metrics) "inactive metric"
-      <> " (no data in 7 days)"
-    div_ [class_ "collapse-content px-0 pb-0"]
-      $ linkList_ Nothing
-      $ V.toList metrics
-      <&> \metric ->
-        ( [href_ $ metricExpandUrl pid metric.metricName source Nothing] <> drawerLoadAttrs_ (metricDetailUrl pid metric.metricName source Nothing)
-        , div_ [class_ "flex items-center gap-2"] do
-            faSprite_ "chart-line" "regular" "w-3.5 h-3.5 text-textWeak"
-            span_ [class_ "truncate font-mono"] $ toHtml metric.metricName
-        , span_ [class_ "text-xs"] $ toHtml $ "Last seen " <> formatTime defaultTimeLocale "%b %d, %Y" metric.lastSeen
-        )
-
-
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Map Text (Int, Int, Int) -> Text -> Int -> MetricFilters -> Html ()
 dataPointsPage pid metrics refCounts countsUrl page filters = do
   -- take/drop, not V.slice: slice is partial and errors unless the whole
@@ -928,7 +919,7 @@ dataPointsPage pid metrics refCounts countsUrl page filters = do
                     div_ [class_ "w-10 shrink-0"]
                       $ when r.isGroup
                       $ div_ [class_ "w-full border border-strokeWeak flex justify-between gap-1 items-center rounded-sm px-1 py-0.5"] do
-                        faUse_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-textStrong tree-chevron rotate-90 transition-transform"
+                        faUse_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-textStrong transition-transform [[data-tree-collapsed=false]_&]:rotate-90"
                         span_ [class_ "text-xs"] $ toHtml $ fmtInt r.childCount
                     whenJust r.parentPath \p -> span_ [class_ "text-textDisabled"] $ toHtml $ p <> "."
                     case r.metric of
@@ -1489,13 +1480,14 @@ renderSpanListTable services colors records =
           avgDuration = if listLen == 0 then 0 else duration `div` toInteger listLen
           pctOfTotal = if totalDuration == 0 then 0 else duration * 100 `div` totalDuration
       tr_
-        [ class_ $ "w-full overflow-x-hidden p-2 cursor-pointer font-medium hover:bg-fillWeaker border-b-2 last:border-b-0" <> bool "" " bg-fillError-weak/30" hasErr
-        , [__|on click toggle .hidden on next <tr/> then toggle .rotate-90 on the first <svg/> in the first <td/> in me|]
+        [ class_ $ "w-full overflow-x-hidden p-2 cursor-pointer font-medium hover:bg-fillWeaker border-b-2 last:border-b-0 [&[aria-expanded=true]+tr]:table-row [&[aria-expanded=true]_svg.svc-chev]:rotate-90" <> bool "" " bg-fillError-weak/30" hasErr
+        , term "aria-expanded" "false"
+        , [__|on click if @aria-expanded is 'true' set @aria-expanded to 'false' else set @aria-expanded to 'true' end|]
         ]
         do
           td_ [class_ "ml-1 px-2 py-1 w-[600px] text-textStrong truncate flex items-center gap-1 font-medium"] do
             div_ [class_ $ "w-1 h-4 " <> if hasErr then "bg-fillError-strong" else "bg-fillBrand-weak"] pass
-            faSprite_ "chevron-right" "regular" "h-3 w-3 mr-2 text-iconNeutral"
+            faSprite_ "chevron-right" "regular" "svc-chev h-3 w-3 mr-2 text-iconNeutral transition-transform"
             div_ [class_ $ "w-3 h-3 rounded-sm " <> getServiceColor service colors] pass
             span_ [] $ toHtml service
           td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] $ toHtml $ fmtInt listLen
@@ -1608,7 +1600,7 @@ buildSpanTree_ pid sp level scol = do
       operationIndent = fromMaybe 0 $ viaNonEmpty minimum1 [T.length $ T.takeWhile isSpace line | line <- operationLines, not $ T.all isSpace line]
       errorMessage = fold $ guard sp.spanRecord.hasErrors *> (attr "exception.message" <|> attr "error.message")
       tip = "Service: " <> sp.spanRecord.serviceName <> "\nSpan: " <> sp.spanRecord.spanName <> (if label == sp.spanRecord.spanName then "" else "\nOperation: " <> label) <> "\nDepth: " <> show level
-  div_ [class_ "span-filterble"] do
+  div_ [class_ "span-filterble [&[data-collapsed=true]>.waterfall-children]:hidden"] do
     div_
       ( [ class_ $ "flex items-center w-full h-7 hover:bg-fillWeaker waterfall-row" <> bool "" " bg-fillError-weak/40 hover:bg-fillError-weak" sp.spanRecord.hasErrors <> bool " cursor-pointer" " italic text-textWeak bg-fillWeaker/50" isSynthetic
         , id_ $ "trigger-span-" <> sp.spanRecord.spanId
@@ -1632,13 +1624,12 @@ buildSpanTree_ pid sp level scol = do
             then
               button_
                 [ type_ "button"
-                , class_ "waterfall-toggle w-6 h-7 flex items-center justify-center shrink-0"
+                , class_ "waterfall-toggle w-6 h-7 flex items-center justify-center shrink-0 [&[aria-expanded=true]>svg]:rotate-90"
                 , Aria.label_ "Child spans"
                 , term "aria-expanded" "true"
-                , [__|on click halt the event's bubbling then toggle .hidden on the first <.waterfall-children/> in the closest .span-filterble then toggle .rotate-90 on the first <svg/> in me
-                       then if @aria-expanded is 'true' set @aria-expanded to 'false' else set @aria-expanded to 'true' end|]
+                , [__|on click halt the event's bubbling then set p to closest .span-filterble then if @aria-expanded is 'true' set @aria-expanded to 'false' then set p.dataset.collapsed to 'true' else set @aria-expanded to 'true' then set p.dataset.collapsed to 'false' end|]
                 ]
-                $ faSprite_ "chevron-right" "regular" "h-3 w-3 text-textWeak rotate-90"
+                $ faSprite_ "chevron-right" "regular" "h-3 w-3 text-textWeak transition-transform"
             else div_ [class_ "w-6 shrink-0"] pass
           if isSynthetic
             then faSprite_ "circle-question" "regular" "h-3 w-3 text-textWeak shrink-0"
