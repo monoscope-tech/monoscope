@@ -76,6 +76,8 @@ module Pkg.Git (
   getPullRequestFiles,
   filesBetween,
   listPullRequestComments,
+  CommentThread (..),
+  CommentAuthor (..),
   publishPullRequestComment,
   reactToComment,
   canWrite,
@@ -683,9 +685,20 @@ data PullRequestComment = PullRequestComment
   { id :: Int64
   , body :: Text
   , performedViaGithubApp :: Maybe GitHubObjectId
+  , user :: Maybe CommentAuthor
+  , path :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON) via DAE.Snake PullRequestComment
+
+
+newtype CommentAuthor = CommentAuthor {login :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON)
+
+
+-- | A pull request's conversation, or the review comments attached to diff lines.
+data CommentThread = Conversation | Inline
 
 
 data Visibility = Public | Private | Internal
@@ -750,8 +763,8 @@ newtype CommitComparison = CommitComparison {files :: [PullRequestFile]}
   deriving anyclass (AE.FromJSON)
 
 
-listPullRequestComments :: W.HTTP :> es => GitConn -> RepoRef -> Int -> Eff es (Either Text [PullRequestComment])
-listPullRequestComments conn repo number = paginate 100 \page -> githubJson conn repo ("/issues/" <> show number <> "/comments?per_page=100&page=" <> show page)
+listPullRequestComments :: W.HTTP :> es => GitConn -> RepoRef -> CommentThread -> Int -> Eff es (Either Text [PullRequestComment])
+listPullRequestComments conn repo thread number = paginate 100 \page -> githubJson conn repo ((case thread of Conversation -> "/issues/"; Inline -> "/pulls/") <> show number <> "/comments?per_page=100&page=" <> show page)
 
 
 githubJson :: (AE.FromJSON a, W.HTTP :> es) => GitConn -> RepoRef -> Text -> Eff es (Either Text a)
