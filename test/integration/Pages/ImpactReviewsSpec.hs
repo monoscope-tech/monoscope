@@ -3583,6 +3583,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   request.prompt `shouldNotSatisfy` T.isInfixOf "private-log-body-must-not-leave-monoscope"
                   dbOne tr "SELECT count(*)::int FROM projects.pr_review_attempts WHERE id = ? AND run_id = ? AND project_id = ? AND provider = ?" (request.attemptId, request.runId, request.projectId, request.provider) `shouldReturn` (1 :: Int)
                   for_ [("--expect-recipe", True), ("--expect-no-recipe", False)] \(flag, expected) -> when (flag `elem` arguments) $ ("saved proof setup" `T.isInfixOf` request.prompt) `shouldBe` expected
+                  when ("--expect-discussion" `elem` arguments) $ (map (`T.isInfixOf` request.prompt) ["Keep payroll admin-only", "src/Routes.hs", "Reports count shows when private", "our own review body"] `shouldBe` [True, True, True, False])
                   when ("--prove-live" `elem` arguments) $ traverse_ (unlift . hooks.progress) [Agent.Planned ("Shows the retry count" :| ["Retries once"]), Agent.Started ("Shows the retry count" :| []), Agent.Recorded ("Shows the retry count" :| []) "proof-1"]
                   when ("--billing-change-before-usage" `elem` arguments) $ dbExec tr "UPDATE projects.projects SET customer_id = 'cus_after_attempt', billing_provider = ? WHERE id = ?" (Projects.LemonSqueezyProvider, reviewPid)
                   when (null arguments) do
@@ -3616,13 +3617,18 @@ spec = around withTestResources $ describe "Production impact reviews" do
         within :: (ATBackgroundCtx a -> ATBackgroundCtx a) -> ATBackgroundCtx a -> IO ([(Text, LByteString)], a)
         within wrap = runTestBgRecordingHTTP frozenTime tr . Reader.local (\ctx -> ctx{config = cfg}) . wrap
         -- A retried review through the PR transport; @wrap@ installs the agent and any extra responses.
-        review :: (ATBackgroundCtx () -> ATBackgroundCtx ()) -> IO [(Text, LByteString)]
-        review wrap = retry >> fst <$> within (transport True . wrap) (Impact.reviewPullRequest run.id)
+        review :: HasCallStack => (ATBackgroundCtx () -> ATBackgroundCtx ()) -> IO [(Text, LByteString)]
+        settle :: (ATBackgroundCtx () -> ATBackgroundCtx ()) -> IO [(Text, LByteString)]
+        -- A failed review stops rather than throwing, so a fake agent's assertion would fail silently.
+        review wrap = settle wrap <* (reviewState `shouldReturn` Just Reviews.Completed)
+        settle wrap = retry >> fst <$> within (transport True . wrap) (Impact.reviewPullRequest run.id)
         attempt :: (ATBackgroundCtx (Either SomeException ()) -> ATBackgroundCtx (Either SomeException ())) -> IO ([(Text, LByteString)], Either SomeException ())
         attempt wrap = retry >> within (transport True . wrap) (tryAny $ Impact.reviewPullRequest run.id)
         retry = runQueryEffect tr $ Reviews.retryRun reviewPid run.id
         sentTo path = T.intercalate " " . map (decodeUtf8 . snd) . filter (T.isInfixOf path . fst)
         reaches path = any (T.isInfixOf path . fst)
+        -- A request with a body writes; reviews also read the pull request's comments.
+        posts path = any (\(url, body) -> path `T.isInfixOf` url && not (LBS.null body))
         reviewState = fmap (.state) <$> runQueryEffect tr (Reviews.getRun run.id)
         queryResult = result{Impact.evidence = [Impact.Evidence "telemetry-1" Impact.Monitor Nothing Nothing "/monitor" (Just "private-customer-query") Nothing Nothing Nothing]}
     for_ @[] [Impact.GitHubComment False "/run" Nothing, Impact.GitHubComment True "/run" Nothing, Impact.MonoscopeView] \audience -> Impact.renderReview cfg.hostUrl run audience queryResult `shouldNotSatisfy` T.isInfixOf "private-customer-query"
@@ -3793,7 +3799,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       runQueryEffect tr $ Reviews.releaseRun failedRun
     (failedRequests, failedAgent) <- attempt $ repositoryReview \_ _ _ _ -> pure $ Left "private-agent-failure"
     failedAgent `shouldSatisfy` isLeft
-    failedRequests `shouldNotSatisfy` reaches "/issues/"
+    failedRequests `shouldNotSatisfy` posts "/issues/"
     void incomplete
     for_ [CodeContextPage.PullRequests, CodeContextPage.Usage] \tab -> do
       (_, interrupted) <- testServant tr $ CodeContextPage.repositoriesGetH reviewPid (Just tab) Nothing
@@ -3810,7 +3816,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       (cost, checked, known) <- ledger
       (failureRequests, processFailure) <- attempt $ fakeAgentWith [failure]
       processFailure `shouldSatisfy` isLeft
-      failureRequests `shouldNotSatisfy` reaches "/issues/"
+      failureRequests `shouldNotSatisfy` posts "/issues/"
       ledger `shouldReturn` if failure == "--wrong-check-revision" then (cost, checked, known) else (cost + 1234000, checked + 2, known)
 
     void $ review fakeAgent
@@ -3851,6 +3857,13 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let comparedFiles paths = withHTTPResponses \_ endpoint -> pure if "/compare/" `T.isInfixOf` toText endpoint then Just $ AE.encode $ AE.object ["files" AE..= [AE.object ["filename" AE..= path, "status" AE..= ("modified" :: Text)] | path <- paths :: [Text]]] else Nothing
     void $ review $ comparedFiles ["src/app.hs"] . fakeAgentWith ["--expect-recipe"]
     void $ review $ comparedFiles ["src/app.hs", ".monoscope/PROOF.md"] . fakeAgentWith ["--expect-no-recipe"]
+    -- reviewerAsks_reachTheAgent: Blacksmith's "differs" findings test what reviewers asked for, so the agent
+    -- sees the conversation and inline review comments, but not our own app's.
+    let discussion = withHTTPResponses \_ endpoint -> pure case () of
+          _ | "/issues/7/comments?" `T.isInfixOf` toText endpoint -> Just $ AE.encode @[AE.Value] [AE.object ["id" AE..= (5 :: Int), "body" AE..= ("Keep payroll admin-only" :: Text), "user" AE..= AE.object ["login" AE..= ("ada" :: Text)]], appComment 99 123 "our own review body"]
+            | "/pulls/7/comments?" `T.isInfixOf` toText endpoint -> Just $ AE.encode @[AE.Value] [AE.object ["id" AE..= (6 :: Int), "body" AE..= ("Reports count shows when private" :: Text), "path" AE..= ("src/Routes.hs" :: Text), "user" AE..= AE.object ["login" AE..= ("claude[bot]" :: Text)]]]
+            | otherwise -> Nothing
+    void $ review $ discussion . fakeAgentWith ["--expect-discussion"]
     dbExec tr "DELETE FROM projects.pr_review_proof_recipes WHERE project_id = ?" (Only reviewPid)
     -- askedProof_updatesOneCommentLive: each proof step edits the comment the ask created, and the
     -- finished review replaces it there rather than posting a second one.
@@ -3933,7 +3946,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
 
     -- Unlinking the repository while the agent runs revokes its tools and publication;
     -- switching to asks only does not cancel a review already running.
-    revokedRequests <- review $ repositoryReview \_ respond knowledge unlift -> do
+    revokedRequests <- settle $ repositoryReview \_ respond knowledge unlift -> do
       let request = Agent.TelemetryQuery "test-service" "| summarize count()"
       unlift (respond request) >>= (`shouldSatisfy` isRight)
       runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.WhenAsked False)
@@ -3942,11 +3955,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
       unlift (respond request) >>= (`shouldSatisfy` isLeft)
       unlift (knowledge $ Agent.Recall "test-service") >>= (`shouldSatisfy` isLeft)
       resultText result
-    revokedRequests `shouldNotSatisfy` reaches "/issues/"
+    revokedRequests `shouldNotSatisfy` posts "/issues/"
     dbExec tr "UPDATE projects.code_mappings SET repo = 'checkout' WHERE project_id = ?" (Only reviewPid)
     -- whenAsked_supersedesAQueuedAutomaticReview: switching to asks only stops an automatic run that has not started.
     runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.WhenAsked False)
-    quiet <- review (interpose @Agent.CodeReview \_ _ -> liftIO $ fail "An automatic review ran after the repository switched to asks only")
+    quiet <- settle (interpose @Agent.CodeReview \_ _ -> liftIO $ fail "An automatic review ran after the repository switched to asks only")
     quiet `shouldNotSatisfy` reaches "/issues/comments/99"
     reviewState `shouldReturn` Just Reviews.Superseded
     runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.ReadyPullRequests False)
@@ -4040,11 +4053,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
           searched `shouldBe` Right (AE.toJSON ([] :: [AE.Value]))
           wikiSaved `shouldSatisfy` isLeft
         Nothing -> fail "Expected the review worker to try wiki reads and writes"
-      wikiRequests `shouldNotSatisfy` reaches "/issues/"
+      wikiRequests `shouldNotSatisfy` posts "/issues/"
       runQueryEffect tr (Memory.latestPages reviewPid) >>= (\pages -> length pages `shouldBe` length beforePages)
     runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy reviewPid routine.conversationId Issues.Observe
     dbExec tr "DELETE FROM projects.code_mappings WHERE project_id = ? AND service IS NOT NULL" (Only reviewPid)
-    review (interpose @Agent.CodeReview \_ _ -> liftIO $ fail "Observe coverage-gap review must not call the model") >>= (`shouldNotSatisfy` reaches "/issues/")
+    review (interpose @Agent.CodeReview \_ _ -> liftIO $ fail "Observe coverage-gap review must not call the model") >>= (`shouldNotSatisfy` posts "/issues/")
     Just observedRun <- runQueryEffect tr $ Issues.getEventRun reviewPid $ Issues.PullRequestReview run.id
     observedRun.status `shouldBe` Issues.RunSucceeded
     runQueryEffect tr (Issues.listRunArtifacts reviewPid observedRun.id) >>= (\artifacts -> T.intercalate " " (mapMaybe (.content) artifacts) `shouldSatisfy` T.isInfixOf "Observe policy: the GitHub comment was not updated.")
@@ -4052,8 +4065,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
     for_ (["policy", "revision", "evidence"] :: [Text]) $ \restriction -> do
       runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy reviewPid routine.conversationId Issues.Autonomous
       revisionChanged <- newIORef False
+      lookups <- newIORef (0 :: Int)
+      -- The review reads the conversation first; the second lookup is publication's.
       let restrictBeforePublication = withHTTPResponses \_ endpoint -> do
-            when ("/issues/7/comments?" `T.isInfixOf` toText endpoint) $ case restriction of
+            publishing <- if "/issues/7/comments?" `T.isInfixOf` toText endpoint then atomicModifyIORef' lookups (\n -> (n + 1, n >= 1)) else pure False
+            when publishing $ case restriction of
               "policy" -> runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy reviewPid routine.conversationId Issues.Observe
               "revision" -> writeIORef revisionChanged True
               _ -> runQueryEffect tr $ Investigations.retainEvidencePermission reviewPid [observedRun.conversationId] ProjectMembers.PAdmin
