@@ -10,27 +10,44 @@ sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -
 registry_digest() {
   docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}'
 }
-# CI never compiles the image; the Mac does (~70 min cold). Poll the registry for up to
-# IMAGE_WAIT_MINUTES instead of failing the deploy, and stop once a newer master commit
-# supersedes this one: its own run deploys, and this one would be refused as stale anyway.
+# Trees of master's commits after $1, newest first; fails unless $1 is on master. A plain fetch
+# stops at $1 even in CI's depth-1 checkout; --depth here would make a developer's clone shallow.
+newer_trees() {
+  git fetch -q "$REMOTE" master 2>/dev/null && git merge-base --is-ancestor "$1" FETCH_HEAD || return 1
+  git log --format=%T "$1..FETCH_HEAD"
+}
+# CI never compiles the image; the Mac does (~70 min cold), one build at a time, skipping the heads
+# that land meanwhile. Poll the registry for up to IMAGE_WAIT_MINUTES, and hand off only once a newer
+# master commit has an image, since its run then deploys. Handing off to any newer push starved
+# production: the commit being built was superseded before its image landed, every time.
 await_image() { # sha tree
-  local deadline=$((SECONDS + ${IMAGE_WAIT_MINUTES:-0} * 60)) digest
+  local deadline=$((SECONDS + ${IMAGE_WAIT_MINUTES:-0} * 60)) digest trees t
   while :; do
     digest=$(registry_digest "$IMAGE:$1" 2>/dev/null || registry_digest "$IMAGE:tree-$2" 2>/dev/null) && { echo "$digest"; return; }
     [ "$SECONDS" -lt "$deadline" ] || return 1
-    if [ "${GITHUB_REF:-}" = refs/heads/master ] && [ "$(git ls-remote "$REMOTE" refs/heads/master | cut -f1)" != "$1" ]; then
-      echo "release: $1 is superseded on master; the newer commit's run deploys" >&2
-      return 1
+    if [ "${GITHUB_REF:-}" = refs/heads/master ] && trees=$(newer_trees "$1"); then
+      for t in $trees; do
+        registry_digest "$IMAGE:tree-$t" >/dev/null 2>&1 || continue
+        echo "release: $1 is superseded by a newer master commit with an image; its run deploys" >&2
+        return 1
+      done
     fi
     echo "release: waiting for $IMAGE:$1 to be built on the Mac" >&2
     sleep 60
   done
 }
 
+# Production only moves forward along master: $1 must be on it, and :latest (promoted by every
+# deploy but a rollback) must not already be a newer commit. An older commit may still deploy
+# while newer ones wait for their image; commits sharing $1's tree are the same image.
 current_master() {
-  local current
-  current=$(git ls-remote --exit-code "$REMOTE" refs/heads/master) || die "cannot verify current master"
-  [ "${current%%[[:space:]]*}" = "$1" ] || die "$1 is stale; master is ${current%%[[:space:]]*}"
+  local trees latest own t
+  trees=$(newer_trees "$1") || die "cannot verify $1 is on master"
+  latest=$(registry_digest "$IMAGE:latest") || die "cannot read $IMAGE:latest"
+  own=$(git rev-parse "$1^{tree}")
+  for t in $trees; do
+    [ "$t" = "$own" ] || [ "$(registry_digest "$IMAGE:tree-$t" 2>/dev/null)" != "$latest" ] || die "$1 is stale; latest is already newer tree $t"
+  done
 }
 
 require_local_context() {
