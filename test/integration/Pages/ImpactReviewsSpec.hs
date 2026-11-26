@@ -4555,8 +4555,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let ranHoursAgo h = dbExec tr "UPDATE projects.issue_fix_runs SET created_at = ? WHERE issue_id = ?" (addUTCTime (-h * 3600) now, issue)
         candidates = setTestTime tr.trTestClock now >> map fst <$> runQueryEffect tr (Fixes.autofixCandidates testPid 5)
     -- Two failed attempts wait 46 h; the untried issue is offered either way, first.
-    ranHoursAgo 30 >> candidates `shouldReturn` [untried]
-    ranHoursAgo 47 >> candidates `shouldReturn` [untried, issue]
+    ranHoursAgo 30
+    candidates `shouldReturn` [untried]
+    ranHoursAgo 47
+    candidates `shouldReturn` [untried, issue]
 
   it "nativeFix_applicationJobSharesRunAuthorityReceiptsAndCompletion" \tr -> do
     (mapping, issue, base) <- fixFixture tr "application-fix"
