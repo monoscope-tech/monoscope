@@ -16,6 +16,7 @@ import Data.List (lookup)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Scientific (toRealFloat)
+import Data.Set qualified as S
 import Data.Text qualified as T
 import GHC.Clock (getMonotonicTimeNSec)
 import Numeric (showFFloat)
@@ -326,7 +327,9 @@ contrastSides sides =
       )
 
 
--- | Nothing when two stills are pixel-identical; otherwise both, boxed around what differs when their sizes match.
+-- | Nothing when two stills are pixel-identical; otherwise both, with each cluster of changes boxed when the
+-- change is local: a relaid page (more than three clusters, or a quarter of the still) is left unmarked, since
+-- boxing everything points at nothing.
 --
 -- >>> let png c = toStrict $ encodePng $ generateImage (\x y -> if (x, y) == (30, 30) then c else PixelRGBA8 255 255 255 255) 60 60
 -- >>> contrastPair (png $ PixelRGBA8 255 255 255 255) (png $ PixelRGBA8 255 255 255 255)
@@ -337,25 +340,41 @@ contrastPair :: ByteString -> ByteString -> Maybe (ByteString, ByteString)
 contrastPair before after = case (convertRGBA8 <$> decodePng before, convertRGBA8 <$> decodePng after) of
   (Right a, Right b)
     | (imageWidth a, imageHeight a) /= (imageWidth b, imageHeight b) -> Just (before, after)
-    | otherwise -> (\box -> (framed box a, framed box b)) <$> changedBox a b
+    | otherwise -> case changedRegions a b of
+        [] -> Nothing
+        boxes | length boxes > 3 || sum [(x1 - x0) * (y1 - y0) | (x0, y0, x1, y1) <- boxes] * 4 > imageWidth a * imageHeight a -> Just (before, after)
+        boxes -> Just (framed boxes a, framed boxes b)
   _ -> guard (before /= after) $> (before, after)
   where
-    framed (x0, y0, x1, y1) image =
-      let (l, t, r, bottom) = (max 0 (x0 - 12), max 0 (y0 - 12), min (imageWidth image - 1) (x1 + 12), min (imageHeight image - 1) (y1 + 12))
-          edge x y = x >= l && x <= r && y >= t && y <= bottom && (x < l + 4 || x > r - 4 || y < t + 4 || y > bottom - 4)
+    framed boxes image =
+      let edge x y = flip any boxes \(x0, y0, x1, y1) ->
+            let (l, t, r, bottom) = (max 0 (x0 - 8), max 0 (y0 - 8), min (imageWidth image - 1) (x1 + 8), min (imageHeight image - 1) (y1 + 8))
+             in x >= l && x <= r && y >= t && y <= bottom && (x < l + 4 || x > r - 4 || y < t + 4 || y > bottom - 4)
        in toStrict $ encodePng $ generateImage (\x y -> if edge x y then PixelRGBA8 245 158 11 255 else pixelAt image x y) (imageWidth image) (imageHeight image)
 
 
--- | The bounding box of pixels that differ beyond antialiasing noise.
+-- | Where two stills differ beyond antialiasing noise, as one box per cluster of changed 24-pixel cells
+-- (cells up to two apart join, so a changed line of text is one box).
 --
--- >>> let dot (at :: [(Int, Int)]) = generateImage (\x y -> if (x, y) `elem` at then PixelRGBA8 0 0 0 255 else PixelRGBA8 255 255 255 255) 9 9
--- >>> changedBox (dot []) (dot [(2, 3), (6, 1)])
--- Just (2,1,6,3)
-changedBox :: Image PixelRGBA8 -> Image PixelRGBA8 -> Maybe (Int, Int, Int, Int)
-changedBox a b = foldl' grow Nothing [(x, y) | y <- [0 .. imageHeight a - 1], x <- [0 .. imageWidth a - 1], differs (pixelAt a x y) (pixelAt b x y)]
+-- >>> let dot (at :: [(Int, Int)]) = generateImage (\x y -> if (x, y) `elem` at then PixelRGBA8 0 0 0 255 else PixelRGBA8 255 255 255 255) 200 200
+-- >>> changedRegions (dot []) (dot [(5, 5), (30, 10), (190, 190)])
+-- [(0,0,47,23),(168,168,191,191)]
+changedRegions :: Image PixelRGBA8 -> Image PixelRGBA8 -> [(Int, Int, Int, Int)]
+changedRegions a b = clusters $ S.fromList [(cx, cy) | cy <- [0 .. (h - 1) `div` 24], cx <- [0 .. (w - 1) `div` 24], changed cx cy]
   where
+    (w, h) = (imageWidth a, imageHeight a)
+    changed cx cy = or [differs (pixelAt a x y) (pixelAt b x y) | y <- [cy * 24 .. min (h - 1) (cy * 24 + 23)], x <- [cx * 24 .. min (w - 1) (cx * 24 + 23)]]
     differs (PixelRGBA8 r g bl al) (PixelRGBA8 r' g' bl' al') = any (> 24) $ zipWith (\u v -> abs (fromIntegral @Word8 @Int u - fromIntegral v)) [r, g, bl, al] [r', g', bl', al']
-    grow acc (x, y) = Just $! maybe (x, y, x, y) (\(!x0, !y0, !x1, !y1) -> (min x0 x, min y0 y, max x1 x, max y1 y)) acc
+    clusters cells = case S.minView cells of
+      Nothing -> []
+      Just (seed, rest) -> let (cluster, remaining) = spread [seed] rest [] in box seed cluster : clusters remaining
+    spread [] rest found = (found, rest)
+    spread ((cx, cy) : queue) rest found =
+      let near = [cell | dx <- [-2 .. 2], dy <- [-2 .. 2], let cell = (cx + dx, cy + dy), cell `S.member` rest]
+       in spread (near <> queue) (foldr S.delete rest near) (near <> found)
+    box (sx, sy) cells =
+      let (x0, y0, x1, y1) = foldl' (\(l, t, r, b') (x, y) -> (min l x, min t y, max r x, max b' y)) (sx, sy, sx, sy) cells
+       in (24 * x0, 24 * y0, min (w - 1) (24 * x1 + 23), min (h - 1) (24 * y1 + 23))
 
 
 -- | Terminal text without its colour codes.
