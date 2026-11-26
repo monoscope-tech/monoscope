@@ -343,7 +343,7 @@ gitSyncSettingsView GitSyncSettings{hostUrl, projectId = pid, sync = syncM, fail
       -- GitHub for anyone who cannot install an App.
       div_ [class_ "pt-6 border-t border-strokeWeak"] do
         disclosure_ [] "text-xs font-medium text-textWeak hover:text-textStrong" (toHtml $ "Or connect " <> T.intercalate ", " (map Git.hostLabel universe) <> " with a token")
-          $ form_ [class_ "pt-4 space-y-3", hxPost_ actionUrl, hxSwap_ "outerMorph", hxTarget_ ("#" <> targetId), hxIndicator_ ("#" <> targetId <> "-indicator")] do
+          $ form_ (class_ "pt-4 space-y-3" : morphPostAttrs_ actionUrl targetId (targetId <> "-indicator")) do
             div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
               -- Picking a host rewrites the token label and shows the server-URL field only for
               -- the hosts that can have one, so nobody is asked for a Bitbucket server address.
@@ -420,7 +420,7 @@ gitSyncSettingsView GitSyncSettings{hostUrl, projectId = pid, sync = syncM, fail
           toHtml @Text $ case err.operation of GitSync.ImportDashboards -> "Retry import"; GitSync.ExportDashboard _ -> "Retry export"; GitSync.ExportDashboards -> "Retry export"
           htmxIndicator_ (targetId <> "-retry-indicator") LdXS
 
-      form_ [class_ "space-y-4", hxPost_ actionUrl, hxSwap_ "outerMorph", hxTarget_ ("#" <> targetId), hxIndicator_ ("#" <> targetId <> "-indicator")] do
+      form_ (class_ "space-y-4" : morphPostAttrs_ actionUrl targetId (targetId <> "-indicator")) do
         -- An App installation knows which repositories it reaches, so changing one is picking from
         -- that list; a PAT's scope cannot be enumerated, so those keep the text boxes.
         if isViaApp

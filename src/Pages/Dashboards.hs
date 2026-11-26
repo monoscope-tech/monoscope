@@ -1677,19 +1677,19 @@ instance ToHtml WidgetEditor where
             then h2_ [class_ "text-base font-semibold text-textStrong max-md:order-1 max-md:w-full"] "Add a widget"
             else div_ [class_ "min-w-0 max-md:order-1 max-md:w-full"] do
               div_ [class_ "tabs tabs-box tabs-outline"] do
-                let mkTab tabName hookCls label isActive = label_ [role_ "tab", class_ "tab has-[:checked]:tab-active focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-strokeFocus"] do
+                let mkTab tabName clsAttr label isActive = label_ [role_ "tab", class_ "tab has-[:checked]:tab-active focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-strokeFocus"] do
                       input_
                         $ [ type_ "radio"
                           , value_ tabName
-                          , class_ hookCls
+                          , clsAttr
                           , id_ $ widPrefix <> "-tab-" <> T.toLower tabName
                           , name_ $ wid <> "-drawer-tab"
                           ]
                         <> [checked_ | isActive]
                       toHtml @Text label
                 -- A built-in dashboard's widget can be read, not changed or monitored in place.
-                mkTab "Edit" "sr-only page-drawer-tab-edit" (bool "Edit" "Query" readOnly) (readOnly || effectiveActiveTab == EditTab)
-                unless readOnly $ mkTab "Monitors" "sr-only page-drawer-tab-monitors" "Monitors" (effectiveActiveTab == AlertsTab)
+                mkTab "Edit" (class_ "sr-only page-drawer-tab-edit") (bool "Edit" "Query" readOnly) (readOnly || effectiveActiveTab == EditTab)
+                unless readOnly $ mkTab "Monitors" (class_ "sr-only page-drawer-tab-monitors") "Monitors" (effectiveActiveTab == AlertsTab)
 
           div_ [class_ "ml-auto flex shrink-0 items-center gap-3 max-md:contents"] do
             div_ [class_ "flex shrink-0 items-center gap-3 max-md:order-3 max-md:w-full max-md:overflow-x-auto"] do

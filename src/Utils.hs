@@ -3,6 +3,9 @@ module Utils (
   internalAddress,
   scriptJson,
   constEqText,
+  hmacSha256,
+  hmacSha256Hex,
+  freshWebhookTimestamp,
   Icon (..),
   lookupIcon,
   queryStringFrom,
@@ -163,7 +166,10 @@ import Text.Regex.TDFA ((=~))
 import Text.URI qualified as URI
 import Web.FormUrlEncoded (Form (..), FromForm (..), defaultFormOptions, genericFromForm)
 import Web.Internal.FormUrlEncoded (GFromForm)
+import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 import "base64" Data.ByteString.Base64 qualified as B64
+import "cryptonite" Crypto.Hash (SHA256)
+import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
 escapedQueryPartial :: Text -> Text
@@ -690,6 +696,31 @@ hostPath host path = T.dropWhileEnd (== '/') host <> "/" <> T.dropWhile (== '/')
 -- | Equality whose time does not depend on where the inputs differ: for secrets and signatures.
 constEqText :: Text -> Text -> Bool
 constEqText a b = BA.constEq (encodeUtf8 @Text @ByteString a) (encodeUtf8 @Text @ByteString b)
+
+
+-- | Raw HMAC-SHA256 digest bytes for webhook signature verification.
+hmacSha256 :: ByteString -> ByteString -> ByteString
+hmacSha256 secret payload = BA.convert (HMAC.hmac secret payload :: HMAC.HMAC SHA256)
+
+
+-- | Lowercase hex-encoded HMAC-SHA256 digest of @payload@ under UTF-8 @secret@.
+--
+-- >>> hmacSha256Hex "key" "The quick brown fox jumps over the lazy dog"
+-- "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+hmacSha256Hex :: Text -> ByteString -> Text
+hmacSha256Hex secret = decodeUtf8 . B16.encode . hmacSha256 (encodeUtf8 secret)
+
+
+-- | A webhook's signed Unix-seconds timestamp is within five minutes of @now@, past or
+-- future, so a captured request cannot be replayed later.
+--
+-- >>> import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+-- >>> let t0 = posixSecondsToUTCTime 1700000000
+-- >>> map (freshWebhookTimestamp t0) ["1700000000", "1700000300", "1700000301", "1699999699", "", "abc"]
+-- [True,True,False,False,False,False]
+freshWebhookTimestamp :: UTCTime -> Text -> Bool
+freshWebhookTimestamp now ts =
+  not (T.null ts) && T.all isDigit ts && any (\seconds -> abs (utcTimeToPOSIXSeconds now - fromInteger seconds) <= 300) (readMaybe @Integer $ toString ts)
 
 
 -- | Encode a value as JSON Text (data attributes, widget JSON, etc.)

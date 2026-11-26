@@ -26,7 +26,7 @@ import Network.HTTP.Types (renderSimpleQuery, statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Bots.Utils (BotEmoji (..), BotErrorType (..), BotResponse (..), BotType (..), authHeader, botEmoji, botReplyPayload, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, freshWebhookTimestamp, installedResponse, parseInstallState, runBotQueryWithTools, withBotThread, withDashboardTemplate)
+import Pages.Bots.Utils (BotEmoji (..), BotErrorType (..), BotResponse (..), BotType (..), authHeader, botEmoji, botReplyPayload, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, installedResponse, parseInstallState, runBotQueryWithTools, withBotThread, withDashboardTemplate)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (idFromText)
@@ -39,7 +39,7 @@ import Servant.Server (ServerError (errBody), err400, err401, err403, err404)
 import System.Config (AuthContext (env), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBaseCtx)
-import Utils (constEqText, hostPath)
+import Utils (constEqText, freshWebhookTimestamp, hostPath)
 import Web.Cookie (SetCookie (..), defaultSetCookie, parseCookies, sameSiteLax)
 import Web.Links (CookieProtectedRoutes (..), urls)
 import "base16-bytestring" Data.ByteString.Base16 qualified as Base16

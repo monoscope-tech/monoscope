@@ -507,7 +507,7 @@ instance ToHtml ApiDocsVM where
   toHtmlRaw = toHtml
   toHtml vm = toHtml @(Html ()) $ div_ [class_ "group/apidocs flex flex-col h-full min-h-0 w-full"] do
     div_ [class_ "flex items-center gap-3 border-b border-strokeWeak px-4 shrink-0"] do
-      nav_ [class_ "flex", term "_" "on click halt the event's bubbling"] do
+      nav_ [class_ "flex"] do
         detailTab_ "apidocsTab" "apidocs-ref" "" True "Reference"
         detailTab_ "apidocsTab" "apidocs-yaml" "" False "OpenAPI 3.1"
       div_ [class_ "ml-auto flex items-center gap-2 py-1.5"] do

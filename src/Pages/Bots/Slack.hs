@@ -34,7 +34,6 @@ import Hasql.Transaction.Sessions qualified as TxS
 import Lucid qualified as H
 import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 import "cryptonite" Crypto.Hash (Digest, SHA256, hashlazy)
-import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 import Control.Exception (ErrorCall (..))
 import Control.Monad.Extra (whileM)
@@ -62,7 +61,7 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, pageTitle, sessM)
 import Pages.Bots.SlackProgress qualified as Progress
-import Pages.Bots.Utils (BotEmoji (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, freshWebhookTimestamp, installedResponse, runBotQueryWithTools, slackResponse, withBotThread)
+import Pages.Bots.Utils (BotEmoji (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, installedResponse, runBotQueryWithTools, slackResponse, withBotThread)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (UUIDId (..), idFromText, pgSpan)
@@ -79,7 +78,7 @@ import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, ProjectToolCtx, RespHeaders, addRespHeaders)
 import UnliftIO (timeout, withRunInIO)
 import UnliftIO.Exception (Handler (..), bracket, catch, catches, finally, throwIO, tryAny)
-import Utils (encodeText, hostPath)
+import Utils (encodeText, freshWebhookTimestamp, hmacSha256, hostPath)
 import Web.FormUrlEncoded (FromForm, urlDecodeAsForm)
 import Web.Links (CookieProtectedRoutes (..), ProjectsRoutes' (..), urls)
 
@@ -920,8 +919,7 @@ verifySlackSignature secret now timestamp signature body = fromMaybe False do
   guard $ freshWebhookTimestamp now ts
   digest <- signature >>= T.stripPrefix "v0=" >>= rightToMaybe . B16.decode . encodeUtf8
   let signed = "v0:" <> encodeUtf8 ts <> ":" <> body
-      expected = BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) signed :: HMAC.HMAC SHA256) :: ByteString
-  pure $ BA.constEq expected digest
+  pure $ BA.constEq (hmacSha256 (encodeUtf8 secret) signed) digest
 
 
 requireSlackSignature :: ByteString -> Maybe Text -> Maybe Text -> ATBaseCtx ()

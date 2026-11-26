@@ -81,7 +81,7 @@ import Data.Effectful.Notify qualified as Notify
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (Day, UTCTime (..), addDays, addUTCTime, diffUTCTime, utc, utcToZonedTime)
-import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
@@ -126,11 +126,9 @@ import Relude hiding (ask, asks)
 import Servant (FromHttpApiData (..), Header, Headers, addHeader, err400, err503, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, done, successToast)
-import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, fmtInt, formatBytes, formatFixedCommas, formatUTC, hostPath, htmxIndicator_, uiToggle_)
+import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, fmtInt, formatBytes, formatFixedCommas, formatUTC, freshWebhookTimestamp, hmacSha256, hostPath, htmxIndicator_, uiToggle_)
 import Web.FormUrlEncoded (FromForm)
 import Web.Links
-import "cryptonite" Crypto.Hash (SHA256)
-import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
 ----------------------------------------------------------------------
@@ -1160,13 +1158,10 @@ data WebhookData = WebhookData
 -- | LS signs a hex-encoded HMAC-SHA256 of the raw body in the X-Signature header.
 --
 -- >>> import "monoscope" Pages.Settings qualified as PS
--- >>> import "base16-bytestring" Data.ByteString.Base16 qualified as B16
--- >>> import Data.ByteArray qualified as BA
--- >>> import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
--- >>> import "cryptonite" Crypto.Hash (SHA256)
+-- >>> import "monoscope" Utils qualified as U
 -- >>> let body = "{\"event\":\"x\"}" :: ByteString
 -- >>> let secret = "s3cret" :: ByteString
--- >>> let sig = decodeUtf8 (B16.encode (BA.convert (HMAC.hmac secret body :: HMAC.HMAC SHA256) :: ByteString)) :: Text
+-- >>> let sig = U.hmacSha256Hex "s3cret" body
 -- >>> PS.verifyLemonSqueezySignature sig body secret
 -- True
 -- >>> PS.verifyLemonSqueezySignature sig body "wrong"
@@ -1179,9 +1174,7 @@ data WebhookData = WebhookData
 -- False
 verifyLemonSqueezySignature :: Text -> ByteString -> ByteString -> Bool
 verifyLemonSqueezySignature sigHeader payload secret =
-  maybe False (BA.constEq expected) $ rightToMaybe $ B16.decode $ encodeUtf8 sigHeader
-  where
-    expected = BA.convert (HMAC.hmac secret payload :: HMAC.HMAC SHA256) :: ByteString
+  maybe False (BA.constEq (hmacSha256 secret payload)) $ rightToMaybe $ B16.decode $ encodeUtf8 sigHeader
 
 
 -- | Email every member about a billing change; @mk@ renders from the project title and billing URL
@@ -1778,9 +1771,8 @@ stripeWebhookPostH sigHeaderM rawBody = do
     verifyStripeSignature now sigHeader secret = fromMaybe False do
       let parts = T.splitOn "," sigHeader
       ts <- listToMaybe $ mapMaybe (T.stripPrefix "t=") parts
-      epoch <- readMaybe @Integer (toString ts)
-      guard $ abs (round (utcTimeToPOSIXSeconds now) - epoch) <= 300
-      let expected = BA.convert (HMAC.hmac secret (encodeUtf8 ts <> "." <> rawBody) :: HMAC.HMAC SHA256) :: ByteString
+      guard $ freshWebhookTimestamp now ts
+      let expected = hmacSha256 secret (encodeUtf8 ts <> "." <> rawBody)
       pure $ any (BA.constEq expected) (rights $ B16.decode . encodeUtf8 <$> mapMaybe (T.stripPrefix "v1=") parts)
 
 

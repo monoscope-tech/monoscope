@@ -32,7 +32,7 @@ import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkAIPageCtx, navTabAttrs)
+import Pages.BodyWrapper (AiComposerMode (..), BWConfig (..), PageCtx (..), mkAIPageCtx, navTabAttrs, openAiComposerAttr_)
 import Pages.Bots.Utils qualified as Bots
 import Pages.CodeContext qualified as CodeContext
 import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), actionMenu_, disclosure_, emptyState_, iconBadge_, localTimeFmt_, logExplorerUrl, morphTarget_, pollSelfAttrsWith_, toneDot_, tonePill_)
@@ -238,7 +238,7 @@ threadsGetH pid = do
           { pageTitle = "Conversations"
           , menuItem = Just "AI"
           , conversations = allConversations
-          , pageActions = Just $ button_ [type_ "button", Aria.label_ "New chat", class_ "btn btn-sm btn-primary gap-2 active:scale-[0.96] transition-transform", [__|on click set #ai-composer-input.value to '' then set #ai-composer-chat.checked to true then call #ai-composer-modal.showModal()|]] do
+          , pageActions = Just $ button_ [type_ "button", Aria.label_ "New chat", class_ "btn btn-sm btn-primary gap-2 active:scale-[0.96] transition-transform", openAiComposerAttr_ ComposerChat] do
               faSprite_ "plus" "regular" "h-3.5 w-3.5"
               span_ [class_ "max-md:hidden"] "New chat"
           }
@@ -273,7 +273,7 @@ routinesGetH pid = do
           { pageTitle = "Routines"
           , menuItem = Just "AI"
           , conversations
-          , pageActions = Just $ button_ [type_ "button", Aria.label_ "New custom routine", class_ "btn btn-sm btn-primary gap-2 active:scale-[0.96] transition-transform", [__|on click set #ai-composer-input.value to '' then set #ai-composer-routine.checked to true then call #ai-composer-modal.showModal()|]] do
+          , pageActions = Just $ button_ [type_ "button", Aria.label_ "New custom routine", class_ "btn btn-sm btn-primary gap-2 active:scale-[0.96] transition-transform", openAiComposerAttr_ ComposerRoutine] do
               faSprite_ "plus" "regular" "h-3.5 w-3.5"
               span_ [class_ "max-md:hidden"] "New custom routine"
           }
@@ -292,7 +292,7 @@ routinesGetH pid = do
             else
               toHtml
                 Table
-                  { config = def{elemID = "ai-routines-installed", renderAsTable = True, tdClasses = "px-4 py-2.5"}
+                  { config = def{elemID = "ai-routines-installed", renderAsTable = True}
                   , columns =
                       [ col
                           "Routine"
@@ -350,7 +350,7 @@ routinesGetH pid = do
             runsTable_ tableId sectionRuns =
               toHtml
                 Table
-                  { config = def{elemID = tableId, renderAsTable = True, tdClasses = "px-4 py-2.5"}
+                  { config = def{elemID = tableId, renderAsTable = True}
                   , columns =
                       [ col
                           "Run"

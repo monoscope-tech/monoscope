@@ -7,7 +7,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as AE.KeyMap
 import Data.Base64.Types qualified as B64
-import Data.ByteArray qualified as BA
 import Data.ByteString.Lazy qualified as BL
 import Data.Char (isAlpha, isDigit, isHexDigit)
 import Data.Default
@@ -58,10 +57,7 @@ import Utils
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..))
 import Web.Links
-import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 import "base64" Data.ByteString.Base64.URL qualified as B64URL
-import "cryptonite" Crypto.Hash (SHA256)
-import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
 -- | 'Charts.MetricsStats' lives in @shared/@, which cannot see 'JSONHttpApiData',
@@ -707,9 +703,7 @@ stampPngUrl secret hostUrl pid since fromM toM w = widgetPngUrl secret hostUrl p
 
 
 signWidgetUrl :: Text -> Projects.ProjectId -> Text -> Text
-signWidgetUrl secret pid widgetJson =
-  let payload = pid.toText <> ":" <> widgetJson
-   in decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
+signWidgetUrl secret pid widgetJson = hmacSha256Hex secret $ encodeUtf8 (pid.toText <> ":" <> widgetJson)
 
 
 -- | Proof that the server rendered this SQL for @pid@, with the values @params@ give the
@@ -1299,7 +1293,7 @@ renderWidgetHeader actions widget valueM subValueM expandBtnFn ctaM = div_ [clas
               then set #dashboards-modal-widget-id.value to my.dataset.widgetId
               then set #dashboards-modal-source-dashboard-id.value to my.dataset.sourceDashboardId
               then set #dashboards-modal-widget-json.value to (widgetEl.dataset.widget or '')
-              then set #dashboards-modal.checked to true then send change to #dashboards-modal
+              then call #dashboards-modal.showModal()
               then trigger loadDashboards on #dashboards-modal-content
               then call (the closest <[popover]/>).hidePopover()
             |]
