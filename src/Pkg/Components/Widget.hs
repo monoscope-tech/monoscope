@@ -1683,7 +1683,9 @@ renderChart actions widget = do
                       forM_ options \label -> item label label
           when isStat $ renderStatContent widget valueM
           unless (widget.wType == WTStat) $ div_ [data_ "chart-config" $ encodeText chartConfig, class_ $ "relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> if isStat then "" else " p-3"] do
-            div_ [class_ "chart-render-slot h-full min-h-full w-full", id_ chartId, data_ "chart-widget" "", term "hx-morph-skip" ""] ""
+            -- Scrolling under a still cursor hovered each chart in turn, and every tooltip move
+            -- measures the page; widgets.ts marks the document while it scrolls.
+            div_ [class_ "chart-render-slot h-full min-h-full w-full in-[[data-scrolling]]:pointer-events-none", id_ chartId, data_ "chart-widget" "", term "hx-morph-skip" ""] ""
             -- A heatmap cell holding errors asks which of its events to open; widgets.ts places it at
             -- the click and fills the counts. Plain cells open their events directly.
             when (widget.wType == WTHeatmap) $ div_ [id_ $ chartId <> "_cell_menu", term "popover" "auto", role_ "menu", Aria.label_ "Open events", class_ "m-0 w-48 origin-top-left rounded-lg border border-strokeWeak bg-bgRaised p-1 text-xs text-textStrong shadow-lg transition-[opacity,scale,display,overlay] transition-discrete duration-150 ease-(--ease-out-quint) starting:open:scale-95 starting:open:opacity-0"] do

@@ -9,6 +9,7 @@ import { legendLayout } from './chart-legend';
 import { dayBarsOptions } from './day-bars';
 import { reviveFunctions } from './chart-functions';
 import { geomapOptions, registerWorld } from './geomap';
+import debounce from 'lodash/debounce';
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
 
@@ -124,8 +125,8 @@ const fetchQueue: Array<{ run: () => void; el: Element | null }> = [];
 
 // The first job whose chart is on screen, else the oldest: a long scroll must not leave the
 // charts in view waiting behind loads queued for the ones already scrolled past.
-export const nextQueued = <T extends { el: Element | null }>(queue: T[], viewportHeight = window.innerHeight): T | undefined =>
-  queue.splice(Math.max(0, queue.findIndex(({ el }) => !el || isNearChartViewport(el.getBoundingClientRect(), viewportHeight))), 1)[0];
+export const nextQueued = <T extends { el: Element | null }>(queue: T[], isOffscreen = (el: Element) => offscreen.has(el)): T | undefined =>
+  queue.splice(Math.max(0, queue.findIndex(({ el }) => !el || !isOffscreen(el))), 1)[0];
 
 const limitedFetch = <T>(url: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal, el: Element | null = null): Promise<T> => {
   return new Promise((resolve, reject) => {
@@ -200,19 +201,18 @@ const deferredInitObserver = new IntersectionObserver((entries) => {
   }
 }, { rootMargin: '150px' });
 
-let scrollSettle: ReturnType<typeof setTimeout> | undefined;
+const scrollSettled = debounce(() => document.documentElement.removeAttribute('data-scrolling'), 150);
 document.addEventListener('scroll', () => {
-  document.documentElement.setAttribute('data-scrolling', '');
-  clearTimeout(scrollSettle);
-  scrollSettle = setTimeout(() => document.documentElement.removeAttribute('data-scrolling'), 150);
+  if (!document.documentElement.hasAttribute('data-scrolling')) document.documentElement.setAttribute('data-scrolling', '');
+  scrollSettled();
 }, { capture: true, passive: true });
 
-// Charts the observer last saw off screen, each with the refresh a background tick deferred.
-// Kept by an observer so a tick over hundreds of charts reads no layout.
+// Charts not yet seen on screen, each with the load or refresh waiting for it. Kept by an
+// observer so a refresh tick or a fetch dequeue over hundreds of charts reads no layout.
 const offscreen = new WeakMap<Element, (() => void) | null>();
 const offscreenObserver = new IntersectionObserver((entries) => {
   for (const { target, isIntersecting } of entries) {
-    if (!isIntersecting) { offscreen.set(target, offscreen.get(target) ?? null); continue; }
+    if (!isIntersecting) { if (!offscreen.has(target)) offscreen.set(target, null); continue; }
     const refresh = offscreen.get(target);
     offscreen.delete(target);
     refresh?.();
@@ -1389,15 +1389,6 @@ export const chartWidget = (widgetData: WidGetData) => {
     }
   }, { signal: controller.signal });
 
-  let dataObserver: IntersectionObserver | undefined;
-  if (!opt.dataset.source && chartEl) {
-    dataObserver = new IntersectionObserver(
-      (entries, observer) =>
-        entries[0]?.isIntersecting && (updateChartData(chart, opt, true, widgetData, controller.signal), observer.disconnect())
-    );
-    dataObserver.observe(chartEl);
-  }
-
   // A chart refreshes its own data and nothing else. It used to also call
   // `logListTable.refetchLogs()`, which made every chart on the page order a full replacement of
   // the log list: two charts, two replacements per event, each one throwing away the reader's
@@ -1411,13 +1402,19 @@ export const chartWidget = (widgetData: WidGetData) => {
     }, { signal: controller.signal });
   });
 
-  if (chartEl) offscreenObserver.observe(chartEl);
+  if (chartEl) {
+    // A chart without data loads once it is first on screen.
+    if (!opt.dataset.source) offscreen.set(chartEl, () => updateChartData(chart, opt, true, widgetData, controller.signal));
+    offscreenObserver.observe(chartEl);
+  }
   window.addEventListener('update-query', (e: Event) => {
     const detail = (e as CustomEvent<{ ast?: string; source?: string }>).detail;
     if (detail?.ast) widgetData.queryAST = detail.ast;
     const background = detail?.source === 'auto-refresh';
-    if (background && chartEl && offscreen.has(chartEl)) return void offscreen.set(chartEl, () => updateChartData(chart, opt, true, widgetData, controller.signal, false));
-    if (chartEl && offscreen.has(chartEl)) offscreen.set(chartEl, null);
+    if (chartEl && offscreen.has(chartEl)) {
+      if (background) return void offscreen.set(chartEl, offscreen.get(chartEl) ?? (() => updateChartData(chart, opt, true, widgetData, controller.signal, false)));
+      offscreen.set(chartEl, null); // a user's change loads it now
+    }
     updateChartData(chart, opt, true, widgetData, controller.signal, !background);
   }, { signal: controller.signal });
 
@@ -1440,10 +1437,8 @@ export const chartWidget = (widgetData: WidGetData) => {
 
   chartDisposers.set(chartId, () => {
     if (intervalId) clearInterval(intervalId);
-    dataObserver?.disconnect();
-    if (chartEl) { offscreenObserver.unobserve(chartEl); offscreen.delete(chartEl); }
     controller.abort();
-    if (chartEl) sharedResizeObserver.unobserve(chartEl);
+    if (chartEl) { offscreenObserver.unobserve(chartEl); offscreen.delete(chartEl); sharedResizeObserver.unobserve(chartEl); }
     themeCallbacks.delete(onThemeChange);
     if (!chart.isDisposed()) chart.dispose();
     if ((window as any)[`${chartType}Chart`] === chart) delete (window as any)[`${chartType}Chart`];
@@ -1607,9 +1602,8 @@ function initializeChartWidgets() {
     const signature = host.dataset.chartConfig! + params + JSON.stringify(getDashboardConstants(host));
     return chartConfigurations.get(host) === signature ? [] : [{ host, signature }];
   }).sort((a, b) => b.host.clientHeight - a.host.clientHeight).forEach(({ host, signature }) => {
-    const configJSON = host.dataset.chartConfig!;
     chartConfigurations.set(host, signature);
-    const config = JSON.parse(configJSON);
+    const config = JSON.parse(host.dataset.chartConfig!);
     const opt = reviveFunctions(JSON.parse(config.echartOpt));
     const widgetData = { ...config, opt };
     if (!opt.dataset.source) prefetchChartData(widgetData);
@@ -1622,11 +1616,7 @@ function initializeChartWidgets() {
   });
 }
 // One scan per burst: a single swap fires htmx:after:process once per processed element.
-let scanPending = false;
-function scheduleChartWidgets() {
-  if (scanPending) return;
-  scanPending = true;
-  queueMicrotask(() => { scanPending = false; initializeChartWidgets(); });
-}
+let scan: Promise<void> | undefined;
+const scheduleChartWidgets = () => void (scan ??= Promise.resolve().then(() => { scan = undefined; initializeChartWidgets(); }));
 initializeChartWidgets();
 document.addEventListener('htmx:after:process', scheduleChartWidgets);

@@ -27,12 +27,12 @@ describe('isNearChartViewport', () => {
 
   // Scrolling past a page queued its charts' loads ahead of the ones now on screen.
   test('nextQueued_servesOnscreenChartsBeforeOlderOffscreenOnes', () => {
-    const at = (top: number) => ({ el: { getBoundingClientRect: () => ({ top, bottom: top + 200 }) } as Element });
-    const [above, below, onscreen] = [at(-5_000), at(4_000), at(300)];
+    const [above, below, onscreen] = [{}, {}, {}].map((el) => ({ el: el as Element }));
+    const isOffscreen = (el: Element) => el !== onscreen.el;
     const queue = [above, below, onscreen, { el: null }];
-    expect(nextQueued(queue, 1_000)).toBe(onscreen);
-    expect(nextQueued([above, below], 1_000)).toBe(above); // nothing near: oldest first
-    expect(nextQueued([], 1_000)).toBeUndefined();
+    expect(nextQueued(queue, isOffscreen)).toBe(onscreen);
+    expect(nextQueued([above, below], isOffscreen)).toBe(above); // nothing on screen: oldest first
+    expect(nextQueued([], isOffscreen)).toBeUndefined();
   });
 });
 

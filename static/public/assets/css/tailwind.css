@@ -1220,11 +1220,6 @@ body, :host {
     contain: layout paint;
     min-height: 100%;
   }
-  /* Scrolling under a still cursor hovered each chart in turn, and every tooltip move measures the
-     page. widgets.ts marks the document while it scrolls. */
-  [data-scrolling] .chart-render-slot {
-    pointer-events: none;
-  }
   /* copyButton_'s confirmation: the copy icon cross-fades into a check drawn here, so a table of
      copyable cells carries one SVG per button, not two. */
   .copy-icon {
