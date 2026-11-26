@@ -130,6 +130,16 @@ processors:
           - set(log.severity_text, String(log.attributes["severity"]))  where log.severity_text == "" and log.attributes["severity"] != nil
           - set(log.severity_text, String(log.attributes["log.level"])) where log.severity_text == "" and log.attributes["log.level"] != nil
 
+          # Numeric syslog levels (GELF, RFC 5424) become their names, which the rules below number.
+          - set(log.severity_text, "emerg") where log.severity_text == "0"
+          - set(log.severity_text, "alert") where log.severity_text == "1"
+          - set(log.severity_text, "crit") where log.severity_text == "2"
+          - set(log.severity_text, "err") where log.severity_text == "3"
+          - set(log.severity_text, "warning") where log.severity_text == "4"
+          - set(log.severity_text, "notice") where log.severity_text == "5"
+          - set(log.severity_text, "info") where log.severity_text == "6"
+          - set(log.severity_text, "debug") where log.severity_text == "7"
+
           # Severity number. Only fill when SDK left it UNSPECIFIED (0).
           # Anchored prefix match so "informational" → INFO, "errno" → ERROR.
           - set(log.severity_number, SEVERITY_NUMBER_TRACE) where log.severity_number == 0 and IsMatch(log.severity_text, "(?i)^trace")
