@@ -160,7 +160,7 @@ spec = around withTestResources do
         ]
           :: [(Method, BS.ByteString)]
       )
-      `shouldReturn` [Nothing, Nothing, Nothing, Nothing, Just 403, Just 403, Just 403, Just 403]
+      `shouldReturn` [Nothing, Nothing, Nothing, Nothing, Nothing, Just 403, Just 403, Just 403]
 
   -- demoGuestSeededAdmin: migration 0001 seeds the guest identity as the demo project's admin, so
   -- every anonymous visitor (and its public session id as a bearer) passed PEdit/PAdmin gates.

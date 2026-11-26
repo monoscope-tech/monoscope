@@ -366,9 +366,8 @@ sessionBearerRole bearer pid = runMaybeT do
 -- every handler sees only the project id (an anonymous demo caller could mint keys). So the
 -- demo reader and a viewer only read, search and speak MCP, whose tool calls come back through
 -- here one by one ('Web.Routes.apiV1App'), and only an admin writes members, API keys, teams or
--- the project. An API key is a project credential, not an administrator: it may not administer
--- those either, and no non-admin reads API keys, since a key is a fixed-IV encryption of its
--- listed id.
+-- the project. An API key is a project credential, not an administrator, so it may not
+-- administer those either.
 -- Matched by path segment, since MCP calls arrive without the @/api/v1@ prefix, and on
 -- 'rawPathInfo': at Servant's auth check routing has already consumed 'pathInfo'.
 --
@@ -379,11 +378,11 @@ sessionBearerRole bearer pid = runMaybeT do
 -- >>> map (principalRefusal (Viewer Projects.demoProjectId)) [req "GET" "/api/v1/api_keys", req "GET" "/api_keys/x", req "GET" "/api/v1/events", req "GET" "/api_keys/", req "GET" "/api/v1/api%5Fkeys"]
 -- [Just InsufficientRole,Just InsufficientRole,Nothing,Just InsufficientRole,Just InsufficientRole]
 -- >>> map (principalRefusal (APIKey Projects.demoProjectId)) [req "GET" "/api/v1/events", req "POST" "/api/v1/events/query", req "POST" "/api/v1/monitors", req "PATCH" "/api/v1/members/self", req "POST" "/api/v1/api_keys", req "GET" "/api/v1/api_keys"]
--- [Nothing,Nothing,Nothing,Just InsufficientRole,Just InsufficientRole,Just InsufficientRole]
+-- [Nothing,Nothing,Nothing,Just InsufficientRole,Just InsufficientRole,Nothing]
 principalRefusal :: ApiPrincipal -> Request -> Maybe ApiError
 principalRefusal principal req = case principal of
   Authenticated _ -> Nothing
-  APIKey _ -> InsufficientRole <$ guard (target == Just "api_keys" || (write && any (`elem` ["members", "teams", "project"]) target))
+  APIKey _ -> InsufficientRole <$ guard (write && any (`elem` ["members", "api_keys", "teams", "project"]) target)
   Editor _ -> InsufficientRole <$ guard (write && any (`elem` ["members", "api_keys", "teams", "project"]) target)
   Viewer _ -> InsufficientRole <$ guard (not readOnly || target == Just "api_keys")
   DemoReader _ -> DemoReadOnly <$ guard (not readOnly || target == Just "api_keys")
