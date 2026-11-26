@@ -9,6 +9,8 @@ module Models.Projects.OnboardingInstrument (
   PhaseItem (..),
   SuggestedUrl (..),
   InstrumentRun (..),
+  StartRefusal (..),
+  startRefusal,
   initialPhases,
   createRun,
   getRun,
@@ -117,16 +119,53 @@ initialPhases repoName =
   ]
 
 
-createRun :: DB es => Projects.ProjectId -> Maybe RepositoryId -> Text -> Text -> Text -> Eff es InstrumentRun
-createRun pid repoId repoFullName branch targetKind =
-  HI.getOneRow
-    <$> Hasql.interp
-      [HI.sql| INSERT INTO projects.onboarding_instrument_runs
-                 (project_id, repository_id, repo_full_name, branch, target_kind, status, phases)
-               VALUES (#{pid}, #{repoId}, #{repoFullName}, #{branch}, #{targetKind}, #{RunQueued}, #{HI.AsJsonb (initialPhases repoFullName)})
-               RETURNING id, project_id, repository_id, repo_full_name, branch, target_kind, status,
-                         detected_stack, phases, diff_preview, suggested_urls, pr_url, pr_number,
-                         verified_event_at, error_summary, error_log, created_at, updated_at |]
+-- | Why a Setup agent run may not start. Unpaid projects (Free or still onboarding)
+-- get one PR and 'unpaidDailyRuns' attempts a day; every plan runs one at a time.
+data StartRefusal = RunInProgress | UnpaidPrUsed | UnpaidDailyLimit
+  deriving stock (Bounded, Enum, Eq, Show)
+
+
+-- | Decide from (paid, active run, PR'd runs, runs in the last day).
+--
+-- >>> map (startRefusal True) [(True, 0, 0), (False, 5, 9)]
+-- [Just RunInProgress,Nothing]
+-- >>> map (startRefusal False) [(False, 0, 0), (False, 0, 2), (False, 1, 0), (False, 0, 3), (True, 1, 3)]
+-- [Nothing,Nothing,Just UnpaidPrUsed,Just UnpaidDailyLimit,Just RunInProgress]
+startRefusal :: Bool -> (Bool, Int64, Int64) -> Maybe StartRefusal
+startRefusal paid (active, prs, today)
+  | active = Just RunInProgress
+  | paid = Nothing
+  | prs > 0 = Just UnpaidPrUsed
+  | today >= unpaidDailyRuns = Just UnpaidDailyLimit
+  | otherwise = Nothing
+  where
+    unpaidDailyRuns = 3
+
+
+-- | Starts a run unless 'startRefusal' says otherwise. A run idle for 30 minutes counts as
+-- dead so a crashed worker can't block the project; the guarded insert closes double-submits.
+createRun :: DB es => Bool -> Projects.ProjectId -> Maybe RepositoryId -> Text -> Text -> Text -> Eff es (Either StartRefusal InstrumentRun)
+createRun paid pid repoId repoFullName branch targetKind = do
+  counts <-
+    HI.getOneRow
+      <$> Hasql.interp
+        [HI.sql| SELECT COALESCE(bool_or(status NOT IN (#{RunCompleted}, #{RunFailed}) AND updated_at > NOW() - INTERVAL '30 minutes'), FALSE),
+                        COUNT(*) FILTER (WHERE pr_url IS NOT NULL),
+                        COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '1 day')
+                 FROM projects.onboarding_instrument_runs WHERE project_id = #{pid} |]
+  case startRefusal paid counts of
+    Just refusal -> pure $ Left refusal
+    Nothing ->
+      maybeToRight RunInProgress
+        <$> Hasql.interp
+          [HI.sql| INSERT INTO projects.onboarding_instrument_runs
+                     (project_id, repository_id, repo_full_name, branch, target_kind, status, phases)
+                   SELECT #{pid}, #{repoId}, #{repoFullName}, #{branch}, #{targetKind}, #{RunQueued}, #{HI.AsJsonb (initialPhases repoFullName)}
+                   WHERE NOT EXISTS (SELECT 1 FROM projects.onboarding_instrument_runs
+                                     WHERE project_id = #{pid} AND status NOT IN (#{RunCompleted}, #{RunFailed}) AND updated_at > NOW() - INTERVAL '30 minutes')
+                   RETURNING id, project_id, repository_id, repo_full_name, branch, target_kind, status,
+                             detected_stack, phases, diff_preview, suggested_urls, pr_url, pr_number,
+                             verified_event_at, error_summary, error_log, created_at, updated_at |]
 
 
 getRun :: DB es => Projects.ProjectId -> RunId -> Eff es (Maybe InstrumentRun)

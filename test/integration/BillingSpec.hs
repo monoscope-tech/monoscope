@@ -29,6 +29,7 @@ import Database.PostgreSQL.Simple qualified as PGS
 import Effectful.Dispatch.Dynamic (interpose)
 import Effectful.Error.Static (catchError)
 import Models.Apis.Issues qualified as Issues
+import Models.Projects.OnboardingInstrument qualified as OI
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), defaultRequest)
 import Network.HTTP.Client.Internal (Response (..))
@@ -180,6 +181,20 @@ spec = around withTestResources do
     started.statusRun `shouldSatisfy` isJust
     fetched <- call tr $ Onboarding.onboardingInstrumentStatusGetH pid Nothing
     fetched.statusRun `shouldSatisfy` isJust
+    -- One run at a time on every plan; unpaid projects get one PR and 3 attempts a day
+    let start = (.statusRefusal) <$> call tr (Onboarding.onboardingStartInstrumentPostH pid Onboarding.StartInstrumentForm{repoFullName = "acme/api", branch = Nothing, targetKind = Nothing})
+        failRuns = dbExec tr [sql|UPDATE projects.onboarding_instrument_runs SET status = 'failed' WHERE project_id = ?|] (Only pid)
+    start `shouldReturn` Just OI.RunInProgress
+    (failRuns >> start) `shouldReturn` Nothing
+    (failRuns >> start) `shouldReturn` Nothing
+    (failRuns >> start) `shouldReturn` Just OI.UnpaidDailyLimit
+    dbExec tr [sql|UPDATE projects.onboarding_instrument_runs SET pr_url = 'https://github.com/acme/api/pull/1', created_at = created_at - INTERVAL '2 days' WHERE project_id = ?|] (Only pid)
+    start `shouldReturn` Just OI.UnpaidPrUsed
+    rendered <- renderT <$> call tr (Onboarding.onboardingStartInstrumentPostH pid Onboarding.StartInstrumentForm{repoFullName = "acme/api", branch = Nothing, targetKind = Nothing})
+    rendered `shouldSatisfy` T.isInfixOf "Free projects include one setup PR"
+    dbExec tr [sql|UPDATE projects.projects SET payment_plan = 'Startup' WHERE id = ?|] (Only pid)
+    start `shouldReturn` Nothing
+    start `shouldReturn` Just OI.RunInProgress
     -- Instrument hub exposes active API key for editors
     step (Just Onboarding.Instrument) >>= \case
       Onboarding.InstrumentHubStep{apiKey = k} -> k `shouldNotBe` "<API_KEY>"
