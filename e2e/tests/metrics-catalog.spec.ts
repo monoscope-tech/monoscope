@@ -28,7 +28,8 @@ test.describe('metrics catalog', () => {
     await page.locator('#metric-filters').getByRole('button', { name: 'Search', exact: true }).click();
     await expect(page).toHaveURL(/q=uxcatalogruntime/);
     await expect(page.locator('#metrics-toolbar')).toContainText('24 matching metrics');
-    await page.locator('#metric-pagination').scrollIntoViewIfNeeded();
+    // The next page may already be swapping in: scroll the container, not a sentinel it replaces.
+    await page.locator('#main-content').evaluate(el => el.scrollTo(0, el.scrollHeight));
     await expect(page.locator('.metric_filterble')).toHaveCount(24);
     expect(await page.locator('.metric_filterble').evaluateAll(cards => cards.every(c => c.id.includes('uxcatalogruntime')))).toBe(true);
     await expect(page.getByText('All matching metrics loaded.')).toBeVisible();
