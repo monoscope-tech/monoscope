@@ -84,7 +84,7 @@ test.describe("Onboarding flow", () => {
     await expect(page.getByText("Discord")).toBeVisible();
     await page.getByRole("button", { name: "Proceed" }).click();
     await expect(page.getByText("Test notification sent")).toBeVisible();
-    await page.getByLabel("Modal dialog").getByRole("button", { name: "Proceed" }).click();
+    await page.getByRole("dialog", { name: "Test notification sent" }).getByRole("button", { name: "Proceed" }).click();
 
     await expect(page.getByText("Step 4 of 5")).toBeVisible();
     await expect(page.getByText("Your API Key", { exact: true })).toBeVisible();

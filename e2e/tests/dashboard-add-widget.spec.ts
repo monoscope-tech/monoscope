@@ -24,7 +24,7 @@ async function openFixture(page: Page): Promise<string> {
   await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
   const links = page.locator(`#main-content a[href^="/p/${DEMO_PROJECT}/dashboards/"]`, { hasText: FIXTURE });
   if ((await links.count()) === 0) {
-    await page.locator('label[for="newDashboardMdl"]').first().click();
+    await page.locator('#newDashboardMdl-trigger').first().click();
     // Blank, not a template: these tests count widgets, and a template's own widgets
     // would make "did one get added?" a question about arithmetic rather than behaviour.
     await page.getByText("Blank dashboard").click();
@@ -72,10 +72,10 @@ test("dashboard templates load on opening, prefill the name and preview their ow
   await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
   await expect(page.locator("#dashboardTemplatePreviews")).toHaveCount(0);
   const formResponse = page.waitForResponse((r) => r.url().endsWith(`/p/${DEMO_PROJECT}/dashboards/new`));
-  await page.locator('label[for="newDashboardMdl"]').first().click();
+  await page.locator('#newDashboardMdl-trigger').first().click();
   expect(await (await formResponse).text()).not.toContain("<!DOCTYPE");
   await expect(page.locator("#dashboardTemplatePreviews")).toBeVisible();
-  const modal = page.locator("#newDashboardMdl + .modal .modal-box");
+  const modal = page.locator("#newDashboardMdl .modal-box");
   const preview = page.locator("#dashboardTemplatePreviews");
   const create = page.getByRole("button", { name: "Create", exact: true });
   // Measure after the open transition (scale .95 → 1), not mid-way through it.
@@ -99,8 +99,8 @@ test("dashboard templates load on opening, prefill the name and preview their ow
   await expect(name).toHaveValue("My infrastructure");
   await expect(page.locator('#dashboardTemplatePreviews [data-template="redis.yaml"]')).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.locator("#newDashboardMdl")).not.toBeChecked();
-  await page.locator('label[for="newDashboardMdl"]').first().click();
+  await expect(page.locator("#newDashboardMdl")).toBeHidden();
+  await page.locator('#newDashboardMdl-trigger').first().click();
   await expect(name).toHaveValue("My infrastructure");
 });
 
@@ -511,7 +511,7 @@ test("a dashboard needing a variable asks for it instead of covering itself", as
   // time range". Dismissing it left that as the entire page.
   const title = `E2E Variable Prompt ${Date.now()}`;
   await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
-  await page.locator('label[for="newDashboardMdl"]').first().click();
+  await page.locator('#newDashboardMdl-trigger').first().click();
   await page.getByText("Endpoint Analytics").first().click();
   await page.locator('input[name="title"]').first().fill(title);
   await page.getByRole("button", { name: "Create" }).first().click();
@@ -892,10 +892,10 @@ test("a tabbed dashboard lists its widgets and keeps a rename made in the widget
   await expect.poll(async () => (await lastRow.boundingBox())!.y + (await lastRow.boundingBox())!.height).toBeLessThanOrEqual(360);
 
   // Escape used to be heard only by the hidden toggle, never by the focused modal content.
-  await page.locator('label[for="newDashboardMdl"]').first().click();
-  await expect(page.locator("#newDashboardMdl")).toBeChecked();
+  await page.locator('#newDashboardMdl-trigger').first().click();
+  await expect(page.locator("#newDashboardMdl")).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.locator("#newDashboardMdl")).not.toBeChecked();
+  await expect(page.locator("#newDashboardMdl")).toBeHidden();
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/p/${DEMO_PROJECT}/dashboards/${dash.id}`);

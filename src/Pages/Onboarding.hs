@@ -906,10 +906,9 @@ step2InstrumentPage pid _title apiKey host initialTab hasGitHub repos latestRunM
         div_ [class_ "mb-2 px-4 py-2.5 bg-gradient-to-r from-fillInformation-weak to-transparent border border-strokeInformation-weak rounded-lg"] do
           p_ [class_ "text-sm text-textStrong"] do
             "Want to test quickly? "
-            label_
-              [ class_ "text-textBrand hover:text-textStrong underline font-medium cursor-pointer"
-              , Lucid.for_ "telemetrygen-modal"
-              ]
+            dialogTrigger_
+              "telemetrygen-modal"
+              [class_ "text-textBrand hover:text-textStrong underline font-medium cursor-pointer"]
               "Send a test event"
             " with the CLI"
 
@@ -1127,26 +1126,7 @@ step2InstrumentPage pid _title apiKey host initialTab hasGitHub repos latestRunM
                 ]
                 ""
 
-  -- CLI Quick Test Modal (exact same modal as master)
-  modalWith_ "telemetrygen-modal" def{boxClass = "max-w-2xl", hideClose = True} Nothing do
-    h3_ [class_ "text-lg font-bold text-textStrong flex items-center gap-2 mb-4"] do
-      faSprite_ "flask-vial" "regular" "h-5 w-5"
-      span_ "Quick Test with the CLI"
-    p_ [class_ "text-textWeak mb-6 leading-relaxed"] "Use the Monoscope CLI to send one test event and verify your setup is working."
-    div_ [class_ "space-y-4"] do
-      div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
-        div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do
-          span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "1"
-          span_ "Install & authenticate (if you haven't)"
-        copyField_ "cli-install-cmd" $ "curl -fsSL https://monoscopehq.com/install.sh | sh && monoscope auth login && monoscope config set project " <> pid.toText
-      div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
-        div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do
-          span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "2"
-          span_ "Send a test event"
-        copyField_ "cli-send-cmd" "monoscope send-event -m \"hello world\""
-    div_ [class_ "mt-6"]
-      $ callout_ SuccessBadge (Just "What happens next?") "After running the command, look for \"hello world\" in your dashboard. You can then proceed with the full SDK integration."
-    div_ [class_ "modal-action"] $ label_ [Lucid.for_ "telemetrygen-modal", class_ "btn"] "Close"
+  cliQuickTestModal_ "cli-install-cmd" ("curl -fsSL https://monoscopehq.com/install.sh | sh && monoscope auth login && monoscope config set project " <> pid.toText) "cli-send-cmd"
 
   -- Mobile docs-panel overlay + hide proxied marketing-site chrome
   style_
@@ -1645,10 +1625,9 @@ integrationsPage pid apikey =
         div_ [class_ "mb-4 px-4 py-2.5 bg-gradient-to-r from-fillInformation-weak to-transparent border border-strokeInformation-weak rounded-lg"] do
           p_ [class_ "text-sm text-textStrong"] do
             "Want to test quickly? "
-            label_
-              [ class_ "text-textBrand hover:text-textStrong underline font-medium cursor-pointer"
-              , Lucid.for_ "telemetrygen-modal"
-              ]
+            dialogTrigger_
+              "telemetrygen-modal"
+              [class_ "text-textBrand hover:text-textStrong underline font-medium cursor-pointer"]
               "Send a test event"
             " with the CLI"
 
@@ -1713,30 +1692,7 @@ integrationsPage pid apikey =
                   ]
                   ""
 
-    modalWith_ "telemetrygen-modal" def{boxClass = "max-w-2xl", hideClose = True} Nothing do
-      h3_ [class_ "text-lg font-bold text-textStrong flex items-center gap-2 mb-4"] do
-        faSprite_ "flask-vial" "regular" "h-5 w-5"
-        span_ "Quick Test with the CLI"
-
-      p_ [class_ "text-textWeak mb-6 leading-relaxed"] "Use the Monoscope CLI to send one test event and verify your setup is working."
-
-      div_ [class_ "space-y-4"] do
-        div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
-          div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do
-            span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "1"
-            span_ "Install & authenticate (if you haven't)"
-          copyField_ "install-cmd" "curl https://monoscopehq.com/install.sh | sh && monoscope auth login"
-
-        div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
-          div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do
-            span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "2"
-            span_ "Send a test event"
-          copyField_ "telemetrygen-cmd" "monoscope send-event -m \"hello world\""
-
-      div_ [class_ "mt-6"]
-        $ callout_ SuccessBadge (Just "What happens next?") "After running the command, look for \"hello world\" in your dashboard. You can then proceed with the full SDK integration."
-
-      div_ [class_ "modal-action"] $ label_ [Lucid.for_ "telemetrygen-modal", class_ "btn"] "Close"
+    cliQuickTestModal_ "install-cmd" "curl https://monoscopehq.com/install.sh | sh && monoscope auth login" "telemetrygen-cmd"
 
     link_ [rel_ "stylesheet", href_ (assetUrl "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
 
@@ -1887,13 +1843,30 @@ onboardingConfigBody pid loca func =
         label_ [class_ " text-textStrong text-sm", Lucid.for_ value] $ toHtml label
 
 
+cliQuickTestModal_ :: Text -> Text -> Text -> Html ()
+cliQuickTestModal_ installId installCmd sendId =
+  nativeDialog_ "telemetrygen-modal" "Quick Test with the CLI" "max-w-2xl" do
+    p_ [class_ "mt-2 mb-6 text-textWeak leading-relaxed"] "Use the Monoscope CLI to send one test event and verify your setup is working."
+    div_ [class_ "space-y-4"] do
+      div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
+        div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do
+          span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "1"
+          span_ "Install & authenticate (if you haven't)"
+        copyField_ installId installCmd
+      div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
+        div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do
+          span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "2"
+          span_ "Send a test event"
+        copyField_ sendId "monoscope send-event -m \"hello world\""
+    div_ [class_ "mt-6"]
+      $ callout_ SuccessBadge (Just "What happens next?") "After running the command, look for \"hello world\" in your dashboard. You can then proceed with the full SDK integration."
+    div_ [class_ "modal-action"] $ button_ [type_ "button", [__|on click call (closest <dialog/>).close()|], class_ "btn"] "Close"
+
+
 inviteTeamMemberModal :: Projects.ProjectId -> V.Vector Text -> Bool -> Html ()
 inviteTeamMemberModal pid emails enableFreetier =
   div_ [id_ "invite-modal-container"] do
-    modalWith_ "inviteModal" def{autoOpen = True, boxClass = "bg-bgRaised max-w-md", wrapperClass = "p-4 md:p-8"} Nothing do
-      div_ [class_ "flex items-center gap-3"] do
-        iconBadge_ IconSm SuccessBadge "circle-check"
-        span_ [class_ "text-textStrong text-xl"] "Test notification sent"
+    nativeDialogWith_ [[__|init call me.showModal()|]] "inviteModal" "Test notification sent" "bg-bgRaised max-w-md space-y-2" do
       div_ [class_ "text-textWeak text-sm"] "No notification? Close this modal and verify your emails and channels."
       details_ [class_ "w-full border-t border-strokeWeak pt-3"] $ do
         summary_ [class_ "text-textBrand text-sm cursor-pointer"] "Invite team members"
@@ -1926,7 +1899,7 @@ inviteTeamMemberModal pid emails enableFreetier =
               forM_ emails (inviteMemberItem . Just)
       div_ [class_ "modal-action w-full flex items-center justify-start gap-4"] do
         button_ [class_ "btn-primary px-8 py-2 text-lg rounded-xl cursor-pointer flex items-center", type_ "submit", term "form" "members-container"] "Proceed"
-        label_ [Lucid.for_ "inviteModal", class_ "text-textWeak text-sm underline cursor-pointer"] "Close"
+        button_ [type_ "button", [__|on click call (closest <dialog/>).close()|], class_ "text-textWeak text-sm underline cursor-pointer"] "Close"
   where
     inviteMemberItem :: Maybe Text -> Html ()
     inviteMemberItem emailM = do

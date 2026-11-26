@@ -62,7 +62,7 @@ async function openDashboard(page: Page, title: string) {
   await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
   const link = page.locator(`#main-content a[href^="/p/${DEMO_PROJECT}/dashboards/"]`, { hasText: title });
   if ((await link.count()) === 0) {
-    await page.locator('label[for="newDashboardMdl"]').first().click();
+    await page.locator('#newDashboardMdl-trigger').first().click();
     await page.getByText("Blank dashboard").click();
     await page.locator('input[name="title"]').first().fill(title);
     await page.getByRole("button", { name: "Create" }).first().click();
