@@ -99,22 +99,23 @@ runGitPublicationReal store githubCli = interpret \env -> \case
         case published of
           Left failure -> pure $ Left failure
           Right receipt | validReceipt request linked receipt -> runInIO $ runExceptT do
-            ExceptT $ confirmRemote request token receipt
+            ExceptT $ confirmRemote request token (isJust linked) receipt
             ExceptT $ unlift $ validate receipt
             pure $ PublishedFix receipt
           _ -> pure $ Left InvalidReceipt
       pure $ case outcome of Left _ -> Left ProtocolFailure; Right Nothing -> Left DeadlineExceeded; Right (Just result) -> result
     _ -> pure $ Left NotConfigured
   where
-    confirmRemote :: HTTP.HTTP :> es => Request -> Text -> Receipt -> Eff es (Either Failure ())
-    confirmRemote request@(Request artifacts explanation target visibility _ slug) token receipt = runExceptT do
+    confirmRemote :: HTTP.HTTP :> es => Request -> Text -> Bool -> Receipt -> Eff es (Either Failure ())
+    confirmRemote request@(Request artifacts explanation target visibility _ slug) token installation receipt = runExceptT do
       conn <- hoistEither $ first (const InvalidRequest) $ Git.mkGitConn Git.GitHub Nothing token
       repo <- hoistEither $ case T.splitOn "/" slug of
         [owner, name] -> Right $ Git.RepoRef owner name target
         _ -> Left InvalidRequest
       access <- ExceptT $ first (const GitHubFailure) <$> Git.getRepositoryAccess conn repo
       unless (access.visibility == visibility) $ hoistEither $ Left VisibilityChanged
-      unless access.permissions.push $ hoistEither $ Left AccessRevoked
+      -- An App installation token is reported no repository role; see Native.publish.
+      unless (access.permissions.push || installation) $ hoistEither $ Left AccessRevoked
       remote <- ExceptT $ first (const GitHubFailure) <$> Git.getPublicationPullRequest conn repo receipt.number
       let context = contextFor request Complete
           sameRepo = (== T.toCaseFold slug) . T.toCaseFold

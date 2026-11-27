@@ -2735,7 +2735,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             $ AE.encode
             $ if "/pulls/7" `T.isSuffixOf` toText url
               then confirmed
-              else AE.object ["full_name" AE..= ("impact-org/checkout" :: Text), "visibility" AE..= ("private" :: Text), "permissions" AE..= AE.object ["push" AE..= True]]
+              else AE.object ["full_name" AE..= ("impact-org/checkout" :: Text), "visibility" AE..= ("private" :: Text), "permissions" AE..= AE.object ["push" AE..= (AET.parseMaybe (field "mode") remote /= Just ("denied" :: Text))]]
         authorize stage = do
           modifyIORef' stages (stage :)
           current <- runQueryEffect tr $ Fixes.publicationForUser testPid result.runId user
@@ -2815,9 +2815,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
     writeFileBS (media </> "explanation.mp4") "corrupted video"
     failure validate `shouldReturn` Just Publication.SourceChanged
     -- An App installation token cannot upload attachments, so its pull request is created already linking
-    -- signed copies: nothing is uploaded and the (here corrupt) retained media is never read.
+    -- signed copies: nothing is uploaded and the (here corrupt) retained media is never read. GitHub reports
+    -- such a token no repository role, so "denied" permissions must not revoke it.
     resetRemote
     readState >>= writeFileLBS stateFile . AE.encode . withKey "token" (AE.String "ghs_fixture")
+    setMode "denied"
     writeIORef stages []
     let links = Publication.MediaUrls "https://monoscope.example/p/fix/shared/video?sig=a" "https://monoscope.example/p/fix/shared/cause?sig=b"
     linkedReceipt <- runEff $ HTTP.runHTTPRecord httpRequests $ withHTTPResponses fixture $ Publication.runGitPublicationReal (Just store) (Just github) $ Publication.publishFix publication (Publication.installationCredential "ghs_fixture" links) (liftIO . authorize) (liftIO . validate)

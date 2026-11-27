@@ -118,7 +118,9 @@ publish store executable token linked artifacts explanation context authorize = 
             access = do
               metadata <- api "GET" endpoint Nothing
               ensure VisibilityChanged $ (metadata :: Git.RepositoryAccess).visibility == context.visibility
-              ensure AccessRevoked metadata.permissions.push
+              -- GitHub reports no repository role to an App installation token (every permission false); its
+              -- write access is the installation's grant, which the push and pull request enforce themselves.
+              ensure AccessRevoked $ metadata.permissions.push || isJust linked
               ensure IdentityChanged $ T.toCaseFold metadata.fullName == T.toCaseFold context.repo
             guardRemote stage = do
               permit stage
