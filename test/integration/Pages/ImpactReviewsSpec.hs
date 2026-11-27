@@ -89,7 +89,7 @@ import Servant (ServerError (..), getResponse)
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.FileLock qualified as FileLock
-import System.Directory (canonicalizePath, copyFile, createDirectoryIfMissing, createFileLink, doesDirectoryExist, doesFileExist, findExecutable, listDirectory, removeFile, removePathForcibly, renameDirectory)
+import System.Directory (canonicalizePath, copyFile, createDirectoryIfMissing, createDirectoryLink, createFileLink, doesDirectoryExist, doesFileExist, findExecutable, listDirectory, removeFile, removePathForcibly, renameDirectory)
 import System.Environment (getEnvironment)
 import System.Environment qualified as Environment
 import System.Exit (ExitCode (..))
@@ -4423,6 +4423,24 @@ spec = around withTestResources $ describe "Production impact reviews" do
       Just stopped <- runQueryEffect tr $ Issues.getRoutineRun testPid linked.id
       stopped.status `shouldBe` Issues.RunCancelled
       dbExec tr "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PEdit, testPid, user)
+
+  -- 2026-11-27: a guest rebuild swapped the image under run e812dd17, and every retry failed "Invalid prepared workspace".
+  it "pinnedGuest_resolvesThePreviousBuildAfterARebuild" \_ -> withTemp "pinned-guest" \directory -> do
+    image <- nativeTestImage
+    bridge <- canonicalizePath "test/fixtures/native-sandbox.sh"
+    manifest <- readJSON (image </> "manifest.json")
+    pinned <- parse (field "buildId") manifest
+    let current = directory </> "guest"
+        rebuilt = UUID.fromWords 96 0x4000 0x80000000 77
+    -- Gondolin imports only regular asset files, so the rebuilt guest is a copy and the kept one links the original.
+    createDirectoryLink image (current <> ".prev")
+    createDirectoryIfMissing False current
+    listDirectory image >>= traverse_ \asset -> unless (asset == "manifest.json") $ copyFile (image </> asset) (current </> asset)
+    writeFileLBS (current </> "manifest.json") $ AE.encode $ case manifest of AE.Object fields -> AE.Object $ KM.insert "buildId" (AE.toJSON rebuilt) fields; value -> value
+    let resolve expected = Workspace.withSandboxRelease Workspace.NoVm bridge (const pass) \rpc -> (.buildId) <$> Workspace.resolvePinned rpc (toText current) expected
+    resolve Nothing `shouldReturn` Workspace.ImageId rebuilt
+    resolve (Just $ Workspace.ImageId pinned) `shouldReturn` Workspace.ImageId pinned
+    resolve (Just $ Workspace.ImageId $ UUID.fromWords 96 0x4000 0x80000000 78) `shouldReturn` Workspace.ImageId rebuilt
 
   -- 2026-11-19: every fix run whose regression could not be admitted ended "Saved progress was lost", discarding its root cause.
   -- 2026-11-27: a verified candidate the peer review blocked could not submit Unfixed either, so it ended without a submission.

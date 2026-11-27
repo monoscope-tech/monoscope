@@ -223,6 +223,7 @@ docker run --rm --device /dev/kvm --group-add "$(stat -c %g /dev/kvm)" \
   --env-file /secure/worker.env -e CONSUMER_ONLY=False \
   -e IMPACT_REVIEW_GUEST_IMAGE=/guest \
   --mount type=bind,src=/srv/monoscope/guest,dst=/guest,readonly \
+  --mount type=bind,src=/srv/monoscope/guest.prev,dst=/guest.prev,readonly \
   --mount type=volume,src=monoscope-agent-data,dst=/var/lib/monoscope \
   monoscope-impact-worker:local
 ```
@@ -239,6 +240,6 @@ Production runs the worker as the `monoscope-impact-worker` systemd unit on the 
 
 Run regular server mode because `CONSUMER_ONLY=True` skips odd-jobs. Dedicated job routing remains a follow-up. The runtime receives no Docker socket. Guest creation is a trusted operator build step; repository agents use the offline VM and approved tools.
 
-**Refreshing the guest.** `make deploy-worker` fingerprints the files that define the browser guest's toolchains and dependencies (`GUEST_INPUTS` in `scripts/ci/ci.sh`: lockfiles, cabal files, `Dockerfile.browser`, `build-guest.mjs`, `monoscope-app.sh`). When that differs from `/srv/monoscope/guest.inputs`, the worker rebuilds the guest in the transient unit `monoscope-guest-rebuild` against the deployed server image, swaps it in as `/srv/monoscope/guest`, keeps the old one as `guest.prev`, and restarts once no review runs. `guest.inputs` is written only after a swap, so a failed build retries on every deploy: read `journalctl -u monoscope-guest-rebuild`. Checkpoints are keyed by guest build, so each repository's next workspace build after a swap is cold. A bare minimal guest supports shell investigation; repositories needing GHC, Node or the Monoscope CLI need a prepared dependency profile.
+**Refreshing the guest.** `make deploy-worker` fingerprints the files that define the browser guest's toolchains and dependencies (`GUEST_INPUTS` in `scripts/ci/ci.sh`: lockfiles, cabal files, `Dockerfile.browser`, `build-guest.mjs`, `monoscope-app.sh`). When that differs from `/srv/monoscope/guest.inputs`, the worker rebuilds the guest in the transient unit `monoscope-guest-rebuild` against the deployed server image, swaps it in as `/srv/monoscope/guest`, keeps the old one as `guest.prev` (mounted at `/guest.prev`, so runs pinned to the old build still resolve it), and restarts once no review runs. `guest.inputs` is written only after a swap, so a failed build retries on every deploy: read `journalctl -u monoscope-guest-rebuild`. Checkpoints are keyed by guest build, so each repository's next workspace build after a swap is cold. A bare minimal guest supports shell investigation; repositories needing GHC, Node or the Monoscope CLI need a prepared dependency profile.
 
 Current verification and limits are recorded in the [consolidated review](reviews/2026-11-01-agent-cross-module-review.md). Building this target does not deploy it.
