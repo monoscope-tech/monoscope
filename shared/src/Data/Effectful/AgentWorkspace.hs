@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Data.Effectful.AgentWorkspace (Workspace, checkLogLimit, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Outcome (..), Start (..), preparedOutcome, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, prepareHead, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), Seat (..), Slots (..), hostSlots, buildSeconds, withSlot, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, compileFailed, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, checkLogLimit, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Outcome (..), Start (..), preparedOutcome, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, prepareHead, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, resolvePinned, Pool (..), Seat (..), Slots (..), hostSlots, buildSeconds, withSlot, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, compileFailed, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
 import Control.Exception qualified as Exception
@@ -1211,7 +1211,7 @@ verifyArtifactRegression options request = do
           -- A side's setup can build the head before it runs; a change to a widely imported Haskell module
           -- rebuilds much of the project even from a warm workspace.
           outcome <- tryAny $ Timeout.timeout (options.sideSeconds * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox VerifierPool options.bridge \rpc -> do
-            image <- rpc @Image $ Resolve options.image
+            image <- resolvePinned rpc options.image $ Just request.imageBuildId
             ensure $ image.buildId == request.imageBuildId
             let sandbox = Sandbox image.assetDir checkResources.cpus checkResources.memoryMiB RegistryCow $ one ("/checkout", checkout)
             case baselineFor side of
@@ -1376,7 +1376,7 @@ lookupWorkspace options operation request = do
   dependency <- traverse fingerprint options.dependencyArchive
   environment <- getEnvironment
   withSandbox NoVm options.bridge \rpc -> do
-    image <- rpc @Image $ Resolve options.image
+    image <- resolvePinned rpc options.image request.expectedImageBuildId
     for_ request.expectedImageBuildId $ ensure . (== image.buildId)
     assetDir <- canonicalizePath image.assetDir
     ensure $ assetDir == image.assetDir
@@ -1654,7 +1654,7 @@ prepareHead options script image leased revision directory
   -- A session at its base (a fix run) already has that build.
   | revision == leased.prepared.manifest.identity.base = pure $ leasedBaseline (Just leased)
   | otherwise = withSandbox VerifierPool options.bridge \rpc -> do
-      resolved <- rpc @Image $ Resolve options.image
+      resolved <- resolvePinned rpc options.image $ Just image
       ensure $ resolved.buildId == image
       let mutable = directory </> "head-resume.qcow2"
           run cwd argv = do
@@ -1669,6 +1669,16 @@ prepareHead options script image leased revision directory
       run (Just "/") $ "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]
       run (Just "/workspace") $ agentCommand ["/bin/bash", "--noprofile", "--norc", "/run/monoscope-prepare.sh"]
       PreparedCheckpoint <$> captureSnapshot rpc image (directory </> "head.qcow2")
+
+
+-- | The guest a pinned run needs: the configured one, or the previous build a guest rebuild keeps
+-- beside it as @<guest>.prev@, so a run pinned before the swap still finishes on its own image.
+resolvePinned :: RPC -> Text -> Maybe ImageId -> IO Image
+resolvePinned rpc path expected = do
+  image <- rpc @Image $ Resolve path
+  case expected of
+    Just build | image.buildId /= build -> either (const image) (\kept -> bool image kept (kept.buildId == build)) <$> tryAny (rpc @Image $ Resolve $ path <> ".prev")
+    (Nothing; Just _) -> pure image
 
 
 captureSnapshot :: RPC -> ImageId -> FilePath -> IO Snapshot

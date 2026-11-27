@@ -203,7 +203,7 @@ withGuest seat host expected checkout revision start lease attempt allocate reta
             -- A redirect keeps an existing file's mode and creates new files from the agent's umask.
             mutate ["/bin/sh", "-c", "/bin/cat -- \"$1\" > \"$2\"", "monoscope-write", staged, path] <* run "/" ("/bin/rm" :| ["-f", "--", staged])
     prepared <- tryAny do
-      image <- rpc $ Resolve host.image
+      image <- AgentWorkspace.resolvePinned rpc host.image $ (\(UUIDId build) -> ImageId build) <$> expected
       for_ expected \(UUIDId build) -> unless (image.buildId == ImageId build) $ failure "Configured guest image differs from the pinned image"
       let sandbox = uncurry (Sandbox image.assetDir) agentResources RegistryCow $ Map.fromList [("/checkout", checkout), ("/run/monoscope-skills", skills)]
       case start of
