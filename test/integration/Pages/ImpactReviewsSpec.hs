@@ -3751,7 +3751,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         fmap (.source) widget.dataset `shouldBe` Just (AE.toJSON ([[AE.String "events", AE.String "percent"], [AE.Number 3, AE.Number 100]] :: [[AE.Value]]))
         widgetQuery <- maybe (fail "widget query missing") pure item.query
         ast <- either (fail . toString) pure $ KQL.parseQueryToAST widgetQuery
-        replayed <- runQueryEffect tr $ selectLogTable False reviewPid ast widgetQuery Nothing (Just $ addUTCTime (-(30 * 86400)) frozenTime, Just $ addUTCTime 86400 frozenTime) [] Nothing Nothing Nothing Nothing
+        replayed <- runQueryEffect tr $ selectLogTable reviewPid ast widgetQuery Nothing (Just $ addUTCTime (-(30 * 86400)) frozenTime, Just $ addUTCTime 86400 frozenTime) [] Nothing Nothing Nothing Nothing
         (rows, _, _) <- either (fail . toString) pure replayed
         map V.toList (V.toList rows) `shouldBe` [[AE.Number 3, AE.Number 100]]
     expectedChart <-
@@ -3992,7 +3992,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
       let request = Agent.TelemetryQuery "test-service" "metrics | metric_name == \"review.temperature\" | summarize avg(value)"
       observed <- unlift $ respond request
       jsonText observed `shouldSatisfy` T.isInfixOf "42"
-      dbExec tr "UPDATE otel_metrics SET value = 84 WHERE project_id = ? AND metric_name = 'review.temperature'" (Only reviewPid.toText)
+      -- New data (TimeFusion's metric values are immutable): the mean becomes 84.
+      ingestMetric tr apiKey [] [] "review.temperature" 126 (addUTCTime (-30) frozenTime)
       unlift (respond request) >>= (`shouldBe` AE.encode observed) . AE.encode
       unlift (respond request{Agent.query = request.query <> " | take 1"}) >>= (`shouldSatisfy` T.isInfixOf "84") . jsonText
       resultText result{Impact.findings = [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "Check the changed metric behavior." "Verify the gauge." ["query-1"]]}

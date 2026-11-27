@@ -70,6 +70,8 @@ ln -s "$ROOT/static" "$RUNDIR/static"
   echo "ENABLE_PUBSUB_SERVICE=False"
   echo "ENABLE_BACKGROUND_JOBS=False"
   echo "MIGRATE_AND_INITIALIZE_ON_START=True" # builds the schema, and migration 0001
+  # Charts read TimeFusion whatever the read flag says; point them at CI's real one when it is up.
+  [ -z "${TIMEFUSION_PG_TEST_URL:-}" ] || echo "TIMEFUSION_PG_URL=$TIMEFUSION_PG_TEST_URL"
 } > "$RUNDIR/.env"                            # seeds the demo project the specs use
 
 echo "starting monoscope-server on :$PORT against $DB"

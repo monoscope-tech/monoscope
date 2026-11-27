@@ -113,6 +113,7 @@ module Pkg.TestUtils (
   withTraceId,
   withSpanDuration,
   ingestMetric,
+  ingestSum,
   ingestLogWithHeader,
   ingestTraceWithHeader,
   ingestMetricWithHeader,
@@ -255,6 +256,7 @@ import Proto.Opentelemetry.Proto.Common.V1.Common qualified as PC
 import Proto.Opentelemetry.Proto.Common.V1.Common_Fields qualified as PCF
 import Proto.Opentelemetry.Proto.Logs.V1.Logs qualified as PL
 import Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields qualified as PLF
+import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
 import Proto.Opentelemetry.Proto.Resource.V1.Resource qualified as PR
 import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
@@ -1828,6 +1830,12 @@ withSpanStatus c = TSF.resourceSpans . traverse . PTF.scopeSpans . traverse . PT
 -- | @resAttrs@ are extra resource attributes on the emitted metric — the only way to produce
 -- rows carrying @k8s.pod.name@, @container.name@ and friends, which the container inventory
 -- keys on. Pass @[]@ for a plain @service.name@-only metric.
+-- | A monotonic sum point; a DELTA point carries its start.
+ingestSum :: TestResources -> Text -> [PC.KeyValue] -> Text -> PM.AggregationTemporality -> Maybe UTCTime -> Double -> UTCTime -> IO ()
+ingestSum tr apiKey dpAttrs metricName temporality start value timestamp =
+  void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createMetricAtTime (Just (temporality, start)) apiKey [] dpAttrs metricName value timestamp)
+
+
 ingestMetric, ingestMetricWithHeader :: TestResources -> Text -> [PC.KeyValue] -> [PC.KeyValue] -> Text -> Double -> UTCTime -> IO ()
 ingestMetric tr apiKey resAttrs dpAttrs metricName value timestamp =
   void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createGaugeMetricAtTime apiKey resAttrs dpAttrs metricName value timestamp)
@@ -2133,10 +2141,17 @@ createOtelTraceAtTime apiKey spanName timestamp = do
 -- by logical core, mode or memory state there, and a helper that could not express that made
 -- a whole class of aggregation bug untestable.
 createGaugeMetricAtTime :: Text -> [PC.KeyValue] -> [PC.KeyValue] -> Text -> Double -> UTCTime -> MS.ExportMetricsServiceRequest
-createGaugeMetricAtTime apiKey resAttrs dpAttrs metricName value timestamp =
-  let dataPoint = defMessage & PMF.timeUnixNano .~ toNanos timestamp & PMF.asDouble .~ value & PMF.attributes .~ dpAttrs
-      gauge = defMessage & PMF.dataPoints .~ [dataPoint]
-      metric = defMessage & PMF.name .~ metricName & PMF.description .~ ("Test gauge metric: " <> metricName) & PMF.unit .~ "1" & PMF.gauge .~ gauge
+createGaugeMetricAtTime = createMetricAtTime Nothing
+
+
+-- | A gauge point, or with a temporality (and a DELTA point's start) a monotonic sum point.
+createMetricAtTime :: Maybe (PM.AggregationTemporality, Maybe UTCTime) -> Text -> [PC.KeyValue] -> [PC.KeyValue] -> Text -> Double -> UTCTime -> MS.ExportMetricsServiceRequest
+createMetricAtTime sumM apiKey resAttrs dpAttrs metricName value timestamp =
+  let dataPoint = defMessage & PMF.timeUnixNano .~ toNanos timestamp & PMF.asDouble .~ value & PMF.attributes .~ dpAttrs & PMF.startTimeUnixNano .~ maybe 0 toNanos (snd =<< sumM)
+      shaped m = case sumM of
+        Nothing -> m & PMF.gauge .~ (defMessage & PMF.dataPoints .~ [dataPoint])
+        Just (temporality, _) -> m & PMF.sum .~ (defMessage & PMF.dataPoints .~ [dataPoint] & PMF.aggregationTemporality .~ temporality & PMF.isMonotonic .~ True)
+      metric = shaped $ defMessage & PMF.name .~ metricName & PMF.description .~ ("Test metric: " <> metricName) & PMF.unit .~ "1"
       scopeMetric = defMessage & PMF.metrics .~ [metric]
    in defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey resAttrs & PMF.scopeMetrics .~ [scopeMetric]]
 

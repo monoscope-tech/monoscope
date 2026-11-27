@@ -29,6 +29,37 @@ export function sql(query: string) {
   { env: { ...process.env, PGPASSWORD: process.env.E2E_PGPASSWORD ?? 'postgres' }, stdio: 'pipe' });
 }
 
+/** SQL against the TimeFusion the server's charts read; a no-op when there is none. */
+export function tfSql(query: string) {
+  const url = process.env.TIMEFUSION_PG_TEST_URL;
+  return url ? execFileSync('psql', [url, '-At', '-v', 'ON_ERROR_STOP=1', '-c', query], { stdio: 'pipe' }).toString() : '';
+}
+
+// What TimeFusion requires that a Postgres-seeded row may leave out.
+const tfDefaults: Record<string, (row: Record<string, unknown>) => unknown> = {
+  date: (r) => String(r.timestamp).slice(0, 10), summary: () => [], ingested_at: () => new Date().toISOString(),
+  metric_unit: () => '', flags: () => 0, dropped_attributes_count: () => 0, message_size_bytes: () => 0,
+};
+const tfRequired = { otel_logs_and_spans: ['date', 'summary'], otel_metrics: ['date', 'ingested_at', 'metric_unit', 'flags', 'dropped_attributes_count', 'message_size_bytes'] };
+
+const tfLiteral = (v: unknown): string =>
+  v === null || v === undefined ? 'NULL'
+    : typeof v === 'number' || typeof v === 'boolean' ? String(v)
+    : Array.isArray(v) ? `ARRAY[${v.map(tfLiteral).join(', ')}]`
+    : `'${(typeof v === 'object' ? JSON.stringify(v) : String(v)).replaceAll("'", "''")}'`;
+
+/** Copies rows a spec seeded into Postgres to the TimeFusion charts read, column for column. */
+export function mirrorToTf(table: keyof typeof tfRequired, where: string) {
+  if (!process.env.TIMEFUSION_PG_TEST_URL) return;
+  const known = new Set(tfSql(`SELECT column_name FROM information_schema.columns WHERE table_name = '${table}'`).split('\n').filter(Boolean));
+  const rows: Record<string, unknown>[] = JSON.parse(sql(`SELECT coalesce(json_agg(t), '[]') FROM (SELECT * FROM ${table} WHERE ${where}) t`).toString());
+  for (const row of rows) {
+    for (const c of tfRequired[table]) row[c] ??= tfDefaults[c](row);
+    const cols = Object.keys(row).filter((c) => known.has(c) && row[c] !== null);
+    tfSql(`INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map((c) => tfLiteral(row[c])).join(', ')})`);
+  }
+}
+
 /**
  * Signs the page in as a fresh admin of the demo project. The anonymous demo guest edits the
  * demo but may not manage teams, members or notification targets.

@@ -53,7 +53,7 @@ import Relude
 import Servant qualified
 import Servant.Server (ServerError (errBody), err400)
 import Servant.Types.SourceT (SourceT (..), StepT (..))
-import System.Config (AuthContext (..), EnvConfig (..))
+import System.Config (AuthContext (..))
 import System.IO.Error (ioeGetLocation)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, withSpan_)
@@ -92,14 +92,12 @@ type M = Maybe
 -- Keeping this decision in one helper prevents PostgreSQL queries from being
 -- generated with TimeFusion-only functions while still targeting the PG pool.
 --
--- >>> usesTimefusionBackend False Nothing
--- False
--- >>> usesTimefusionBackend True (Just SqlPostgres)
--- False
--- >>> usesTimefusionBackend False (Just SqlTimefusion)
--- True
-usesTimefusionBackend :: Bool -> Maybe SqlSource -> Bool
-usesTimefusionBackend enableTimefusionReads = maybe enableTimefusionReads (== SqlTimefusion)
+-- Telemetry lives in TimeFusion; only an explicit 'SqlPostgres' reads Postgres.
+--
+-- >>> map usesTimefusionBackend [Nothing, Just SqlPostgres, Just SqlTimefusion]
+-- [True,False,True]
+usesTimefusionBackend :: Maybe SqlSource -> Bool
+usesTimefusionBackend = maybe True (== SqlTimefusion)
 
 
 queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es) => M SqlSource -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M BinDensity -> [(Text, Maybe Text)] -> Eff es MetricsData
@@ -117,7 +115,7 @@ queryProjectMetrics :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es,
 queryProjectMetrics dbSource (maybeToMonoid -> respDataType) pid queryM querySQLM sinceM fromM toM sourceM binDensityM allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
-  let ChartQuery{config = cfg@SqlQueryCfg{dateRange = (fromD, toD), source}, ..} = prepareChartQuery (usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource) pid now (Components.TimePicker sinceM fromM toM) sourceM binDensityM queryM querySQLM allParams
+  let ChartQuery{config = cfg@SqlQueryCfg{dateRange = (fromD, toD), source}, ..} = prepareChartQuery pid now (Components.TimePicker sinceM fromM toM) sourceM binDensityM queryM querySQLM allParams
   case (parsed, sql) of
     (Left err, _) -> pure (emptyMetricsFor now fromD toD){error = Just err}
     (Right queryAST, Just template) -> do
@@ -157,14 +155,14 @@ nameCategories cfg ast md
 
 -- | Shared preparation; scope errors precede KQL diagnostics on both transports.
 -- Chart routes supply the authenticated environment and service.
-prepareChartQuery :: Bool -> Projects.ProjectId -> UTCTime -> Components.TimePicker -> Maybe Text -> Maybe BinDensity -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ChartQuery
-prepareChartQuery targetsTimefusion pid now timePicker sourceM densityM queryM querySQLM allParams = ChartQuery{..}
+prepareChartQuery :: Projects.ProjectId -> UTCTime -> Components.TimePicker -> Maybe Text -> Maybe BinDensity -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ChartQuery
+prepareChartQuery pid now timePicker sourceM densityM queryM querySQLM allParams = ChartQuery{..}
   where
     (fromD, toD, currentRange) = Components.parseTimeRange now timePicker
     density = fromMaybe def densityM
     source = parseMaybe pSource =<< Utils.nonEmptyT sourceM
     scope = mkScopedQuery pid (fromD, toD) (Utils.nonEmptyT $ join $ lookup "environment" allParams) (Utils.nonEmptyT $ join $ lookup "service" allParams)
-    config = (applyScopedQuery scope $ defSqlQueryCfg pid now source Nothing){binDensity = density, targetsTimefusion}
+    config = (applyScopedQuery scope $ defSqlQueryCfg pid now source Nothing){binDensity = density}
     mapping = variablePresets density pid.toText fromD toD allParams now
     mappingKQL = variablePresetsKQL density pid.toText fromD toD allParams now
     query = maybeToMonoid $ Utils.nonEmptyT queryM
@@ -191,7 +189,7 @@ runRawQuery authCtx dbSource decoder cfg ast kql template mapping liveRange prog
           <> variablePresets cfg.binDensity cfg.pid.toText from to [(key, Just value) | (key, value) <- M.toList mapping, "var-" `T.isPrefixOf` key || key == "table-search"] cfg.currentTime
           <> mapping
   -- The template names tenant tables; scoping makes each the project's slice before it runs.
-  let postgres = not $ usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
+  let postgres = not $ usesTimefusionBackend dbSource
   case LogQueries.scopeUserSql postgres cfg.pid (fillQueryTemplate SqlTemplate canonical template) of
     Left err -> pure (emptyMetricsFor cfg.currentTime from to){error = Just err}
     Right scoped -> do
@@ -213,7 +211,7 @@ runRawQuery authCtx dbSource decoder cfg ast kql template mapping liveRange prog
               , sqlQuery = sql
               , kqlQuery = kql
               , rollupInterval = M.findWithDefault "" "rollup_interval" canonical
-              , backend = bool SqlPostgres SqlTimefusion $ usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
+              , backend = bool SqlPostgres SqlTimefusion $ usesTimefusionBackend dbSource
               , decoder
               }
             fetch
@@ -511,7 +509,7 @@ retryOnPoolExhaustion act = Retry.retrying (Retry.fullJitterBackoff 200_000 <> R
 
 
 metricsPool :: AuthContext -> Maybe SqlSource -> Pool Connection
-metricsPool authCtx dbSource = bool authCtx.pool authCtx.timefusionPgPool $ usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
+metricsPool authCtx dbSource = bool authCtx.pool authCtx.timefusionPgPool $ usesTimefusionBackend dbSource
 
 
 fetchMetricsDataWithProgress :: Maybe Text -> Maybe (MetricsData -> IO ()) -> DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe SqlSource -> IO (Either SomePostgreSqlException MetricsData)
@@ -726,7 +724,7 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
   now <- Time.currentTime
   pid <- requireProject pidM
   let requested = maybeToMonoid dataTypeM
-      ChartQuery{config = cfg@SqlQueryCfg{dateRange = (fromD, toD), source}, ..} = prepareChartQuery (usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource) pid now (Components.TimePicker sinceM fromM toM) sourceM densityM queryM querySQLM allParams
+      ChartQuery{config = cfg@SqlQueryCfg{dateRange = (fromD, toD), source}, ..} = prepareChartQuery pid now (Components.TimePicker sinceM fromM toM) sourceM densityM queryM querySQLM allParams
       run emit = case parsed of
         Left message -> pure $ Left message
         Right ast -> do

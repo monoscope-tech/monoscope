@@ -194,23 +194,11 @@ spec = do
       alertSql aboveCfg q `shouldSatisfy` T.isInfixOf "approx_percentile(0.99"
       alertSql belowCfg q `shouldSatisfy` T.isInfixOf "approx_percentile(0.5"
 
-    it "PostgreSQL metrics source uses native JSONB dimensions" do
+    it "metrics source converts variant dimensions to JSON" do
       let cfg = defSqlQueryCfg defPid fixedUTCTime (Just SMetrics) Nothing
           components query = fromRight' $ parseQueryToComponents cfg ("metrics | " <> query)
       let (serviceQuery, _) = components "where service == \"accounting\" and metric_name == \"k8s.container.cpu_request\""
       serviceQuery `shouldSatisfy` T.isInfixOf "resource___service___name = 'accounting'"
-      let (attributeQuery, _) = components "where attributes.system.device == \"disk0\""
-      attributeQuery `shouldSatisfy` T.isInfixOf "attributes->'system'->>'device' = 'disk0'"
-      let (resourceQuery, _) = components "where resource.kind.name == \"node-1\""
-      resourceQuery `shouldSatisfy` T.isInfixOf "resource->'kind'->>'name' = 'node-1'"
-      -- Grouping dimensions live on the chart query (finalSummarizeQuery), not the
-      -- flat data query; assert the flattened resource path reaches its GROUP BY.
-      let (_, groupComps) = components "summarize avg(value) by bin_auto(timestamp), resource.kind.name"
-      fromMaybe "" groupComps.finalSummarizeQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('2 hours', timestamp), COALESCE((resource->'kind'->>'name')::text, 'null')"
-
-    it "TimeFusion metrics source converts variant dimensions to JSON" do
-      let cfg = (defSqlQueryCfg defPid fixedUTCTime (Just SMetrics) Nothing){targetsTimefusion = True}
-          components query = fromRight' $ parseQueryToComponents cfg ("metrics | " <> query)
       let (attributeQuery, _) = components "where attributes.system.device == \"disk0\""
       attributeQuery `shouldSatisfy` T.isInfixOf "variant_to_json(attributes)->'system'->>'device' = 'disk0'"
       let (resourceQuery, _) = components "where resource.kind.name == \"node-1\""

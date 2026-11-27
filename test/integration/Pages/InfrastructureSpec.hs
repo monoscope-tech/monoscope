@@ -326,28 +326,27 @@ spec = do
       ambiguous `shouldContainAll` ["Several containers match this link."]
       (sinceOf "/infrastructure/containers" ambiguous, T.isInfixOf "data-widget=" ambiguous) `shouldBe` ([Just "4H"], False)
 
-    it "rate / increase / last are counter-aware per series; rateif / lastif divide filtered series, on Postgres and TimeFusion" \tr -> do
+    it "rate / increase / last are counter-aware per series; rateif / lastif divide filtered series" \tr -> do
       -- Points every 30s from base-10m to base+10m: two cumulative series of one counter at 100/s
-      -- ("a" restarts at +120s), a DELTA counter at 100/s and two gauges, written straight to Postgres.
-      pid <- UUIDId <$> nextRandom
-      dbExec
-        tr
-        [sql| INSERT INTO otel_metrics (project_id, timestamp, start_timestamp, id, series_id, metric_name, metric_type, aggregation_temporality, attributes, value)
-                SELECT ?, ?::timestamptz + make_interval(secs => s), CASE WHEN m.temporality = 'DELTA' THEN ?::timestamptz + make_interval(secs => s - 30) END,
-                       gen_random_uuid(), m.series, m.name, m.mtype, m.temporality, jsonb_build_object('t', m.t),
-                       CASE m.series WHEN 'ca' THEN CASE WHEN s < 120 THEN 100 * (s + 600) ELSE 100 * (s - 90) END
-                                     WHEN 'cb' THEN 100 * (s + 600) WHEN 'd' THEN 3000 WHEN 'g1' THEN 1000 + s ELSE 2000 + s END
-                FROM generate_series(-600, 600, 30) AS s,
-                     (VALUES ('ca', 'c.total', 'SUM', 'CUMULATIVE', 'a'), ('cb', 'c.total', 'SUM', 'CUMULATIVE', 'b'), ('d', 'd.total', 'SUM', 'DELTA', 'a'),
-                             ('g1', 'g.bytes', 'GAUGE', NULL, 'a'), ('g2', 'g.bytes', 'GAUGE', NULL, 'b')) AS m(series, name, mtype, temporality, t) |]
-        (pid.toText, kqlBase, kqlBase)
+      -- ("a" restarts at +120s), a DELTA counter at 100/s and two gauges.
+      pid <- createTestProject tr "Counter semantics"
+      counterKey <- createTestAPIKey tr pid "counters"
+      for_ ([-600, -570 .. 600] :: [Int]) \s -> do
+        let at = addUTCTime (fromIntegral s) kqlBase
+            tier t = [mkAttr "t" t]
+            cumulative t v = ingestSum tr counterKey (tier t) "c.total" PM.AGGREGATION_TEMPORALITY_CUMULATIVE Nothing v at
+        cumulative "a" (100 * fromIntegral (if s < 120 then s + 600 else s - 90))
+        cumulative "b" (100 * fromIntegral (s + 600))
+        ingestSum tr counterKey (tier "a") "d.total" PM.AGGREGATION_TEMPORALITY_DELTA (Just $ addUTCTime (-30) at) 3000 at
+        ingestMetric tr counterKey [] (tier "a") "g.bytes" (1000 + fromIntegral s) at
+        ingestMetric tr counterKey [] (tier "b") "g.bytes" (2000 + fromIntegral s) at
       let chart db p dt q = runQueryEffect tr $ Charts.queryMetrics (Just db) dt (Just p) (Just q) Nothing Nothing (Just $ kqlAt 0) (Just $ kqlAt 290) (Just "metrics") Nothing []
           series q = do
-            md <- chart Hasql.SqlPostgres pid (Just Charts.DTMetric) q
+            md <- chart Hasql.SqlTimefusion pid (Just Charts.DTMetric) q
             md.error `shouldBe` Nothing
             pure (V.toList (V.drop 1 md.headers), map (V.toList . V.drop 1) (V.toList md.dataset))
           rows = fmap snd . series
-          scalar q = (.dataFloat) <$> chart Hasql.SqlPostgres pid (Just Charts.DTFloat) q
+          scalar q = (.dataFloat) <$> chart Hasql.SqlTimefusion pid (Just Charts.DTFloat) q
           counter = "metrics | where metric_name == \"c.total\" | summarize "
       -- One point per 10s bin; each bin's first point reads its predecessor, and the restart reads as 100/s.
       series (counter <> "rate(value) by bin(timestamp, 10s), attributes.t") `shouldReturn` (["a", "b"], replicate 10 [Just 100, Just 100])
@@ -379,21 +378,18 @@ spec = do
       for_ [-300, -180 .. 290] \s -> ingestMetric tr key [] [] sparse (20 * realToFrac (s + 300)) (addUTCTime s kqlBase)
       for_ [-300, -270 .. 290] \s -> ingestMetric tr key [] [] flat 5 (addUTCTime s kqlBase)
       for_ [60, 90 .. 290] \s -> ingestMetric tr key [] [mkAttr "tier" "c"] fresh (50 * realToFrac (s - 60)) (addUTCTime s kqlBase)
-      tfUrl <- lookupEnv "TIMEFUSION_PG_TEST_URL"
-      for_ (Hasql.SqlPostgres : [Hasql.SqlTimefusion | isJust tfUrl]) \db -> do
-        -- The chart cache is keyed on the query, not the backend.
-        dbExec tr "DELETE FROM query_cache" ()
-        ratio db ("hits = rateif(value, " <> isHit <> "), total = rate(value)") " | extend hit_pct = 100.0 * hits / total" `shouldReturn` replicate 5 [Just 40]
-        ratio db "100.0 * rateif(value, attributes.tier == \"a\") / rate(value)" "" `shouldReturn` replicate 5 [Just 70]
-        ratio db ("lastif(value, attributes.tier == \"b\" and " <> isHit <> ") / lastif(value, attributes.tier == \"a\" and " <> isHit <> ")") "" `shouldReturn` replicate 5 [Just 3]
-        ratio db "rate(value)" ", attributes.tier" `shouldReturn` replicate 5 [Just 70, Just 30]
-        -- A bin where the denominator series has no point is no data, never a fabricated 0, and the stat mean skips it.
-        sparseRatio <- metricsOf [hits, sparse] db ("hits = rateif(value, " <> isHit <> "), total = rateif(value, " <> isName sparse <> ")") " | extend hit_pct = 100.0 * hits / total"
-        (cells sparseRatio, (.mean) <$> sparseRatio.stats) `shouldBe` (replicate 2 [Just 200], Just 200)
-        -- A present series that does not move increases by a measured 0.
-        (cells <$> metricsOf [flat] db "increase(value)" "") `shouldReturn` replicate 5 [Just 0]
-        -- The bin holding a series' first point has no increment yet.
-        (cells <$> metricsOf [hits, fresh] db "rate(value)" ", attributes.tier") `shouldReturn` (replicate 2 [Just 10, Just 30, Nothing] <> replicate 3 [Just 10, Just 30, Just 50])
+      let db = Hasql.SqlTimefusion
+      ratio db ("hits = rateif(value, " <> isHit <> "), total = rate(value)") " | extend hit_pct = 100.0 * hits / total" `shouldReturn` replicate 5 [Just 40]
+      ratio db "100.0 * rateif(value, attributes.tier == \"a\") / rate(value)" "" `shouldReturn` replicate 5 [Just 70]
+      ratio db ("lastif(value, attributes.tier == \"b\" and " <> isHit <> ") / lastif(value, attributes.tier == \"a\" and " <> isHit <> ")") "" `shouldReturn` replicate 5 [Just 3]
+      ratio db "rate(value)" ", attributes.tier" `shouldReturn` replicate 5 [Just 70, Just 30]
+      -- A bin where the denominator series has no point is no data, never a fabricated 0, and the stat mean skips it.
+      sparseRatio <- metricsOf [hits, sparse] db ("hits = rateif(value, " <> isHit <> "), total = rateif(value, " <> isName sparse <> ")") " | extend hit_pct = 100.0 * hits / total"
+      (cells sparseRatio, (.mean) <$> sparseRatio.stats) `shouldBe` (replicate 2 [Just 200], Just 200)
+      -- A present series that does not move increases by a measured 0.
+      (cells <$> metricsOf [flat] db "increase(value)" "") `shouldReturn` replicate 5 [Just 0]
+      -- The bin holding a series' first point has no increment yet.
+      (cells <$> metricsOf [hits, fresh] db "rate(value)" ", attributes.tier") `shouldReturn` (replicate 2 [Just 10, Just 30, Nothing] <> replicate 3 [Just 10, Just 30, Just 50])
 
   around withTestResources do
     -- Peers on a shared registrable domain collapse into one head (hundreds of per-tenant hosts

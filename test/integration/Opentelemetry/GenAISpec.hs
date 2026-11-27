@@ -173,7 +173,7 @@ spec = around withTestResources do
     it "observes Monoscope's own assistant: an agent run, its model calls in order, and its tools" \tr -> do
       apiKey <- createTestAPIKey tr testPid "self-telemetry"
       answer <- withOwnTelemetry tr apiKey \traced ->
-        runTestBg frozenTime traced $ Bot.processAIQuery Nothing False AI.ServiceAccess testPid "plot error trend over time" Nothing tr.trATCtx.env.openaiModel tr.trATCtx.env.openaiApiKey
+        runTestBg frozenTime traced $ Bot.processAIQuery Nothing AI.ServiceAccess testPid "plot error trend over time" Nothing tr.trATCtx.env.openaiModel tr.trATCtx.env.openaiApiKey
       answer `shouldSatisfy` isRight
       spans <- dbQuery @_ @(Text, AE.Value) tr [sql| SELECT name, attributes->'gen_ai' FROM otel_logs_and_spans WHERE project_id = ? AND attributes->'gen_ai' IS NOT NULL ORDER BY start_time |] (Only testPid)
       let ops = map (\(_, g) -> g ^? key "operation" . key "name" . _String) spans

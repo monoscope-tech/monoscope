@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { DEMO_PROJECT, sql } from "./helpers";
+import { DEMO_PROJECT, mirrorToTf, sql } from "./helpers";
 
 const CONTAINER = "e2e-duplicate-container";
 const CLUSTER = "8b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
@@ -17,6 +17,7 @@ test.beforeAll(() => {
   INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,value,resource___k8s___container___name,resource___k8s___pod___name,resource___k8s___namespace___name,resource)
   VALUES ('${DEMO_PROJECT}',gen_random_uuid(),'e2e-container-${index}','2024-12-31T23:59:00Z','container.cpu.usage','GAUGE',${index + 1},'${CONTAINER}','${pod}','${namespace}',
     '${JSON.stringify({ k8s: { container: { name: CONTAINER }, pod: { name: pod }, namespace: { name: namespace }, cluster: { uid: cluster }, node: { name: node } } })}');`).join(""));
+  mirrorToTf("otel_metrics", `project_id='${DEMO_PROJECT}' AND resource->'k8s'->'container'->>'name'='${CONTAINER}'`);
 });
 test.afterAll(() => {
   if (process.env.E2E_BASE_URL) sql(cleanup);
@@ -254,6 +255,7 @@ for (const width of [390, 1280]) {
     sql(cleanup + [["container.cpu.usage", 4], ["k8s.container.ready", 1]].map(([metric, value]) => `
       INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,value,resource___k8s___container___name,resource___k8s___pod___name,resource___k8s___namespace___name,resource)
       VALUES ('${DEMO_PROJECT}',gen_random_uuid(),'e2e-collector-${metric}','2024-12-31T23:59:00Z','${metric}','GAUGE',${value},'${name}','monoscope-agent-opentelemetry-collector-agent-2d4kw','default','${resource}');`).join(""));
+    mirrorToTf("otel_metrics", `project_id='${DEMO_PROJECT}' AND resource->'k8s'->'cluster'->>'uid'='${cluster}' AND resource->'k8s'->'container'->>'name'='${name}'`);
     try {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?cluster=${cluster}&from=2024-12-31T23:00:00Z&to=2025-01-01T00:01:00Z`, { waitUntil: "domcontentloaded" });

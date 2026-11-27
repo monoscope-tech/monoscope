@@ -296,7 +296,6 @@ data SqlQueryCfg = SqlQueryCfg
   , currentTime :: UTCTime
   , defaultSelect :: [Text]
   , source :: Maybe Sources
-  , targetsTimefusion :: Bool
   , targetSpansM :: Maybe Text
   , -- Time window (minutes) the alert query should look back over.
     -- Monitors pass max(60, 2 * checkIntervalMins) so buckets aren't missed.
@@ -454,7 +453,7 @@ sqlFromQueryComponents sqlCfg qc =
           days = bimap (fmap $ startOfDay . addUTCTime (negate lookback)) (fmap $ startOfDay . addUTCTime 86400)
           startOfDay t = UTCTime (utctDay t) 0
           attrsWhere = whereWith $ buildDateRange sqlCfg{dateRange = days sqlCfg.dateRange, cursorM = Nothing}
-      seriesBinsSQL sqlCfg.targetsTimefusion cell (timeBucketExpr interval) (fromRational secs) resolvedGroupCols fromTable (whereWith $ lookbackRange lookback) attrsWhere qc.seriesAggs
+      seriesBinsSQL cell (timeBucketExpr interval) (fromRational secs) resolvedGroupCols fromTable (whereWith $ lookbackRange lookback) attrsWhere qc.seriesAggs
     dataWhere = maybe buildWhere (const inRange) binnedSeries
     -- Every aggregating shape reads this; it is the plain table unless the summarize has series aggregations.
     dataTable =
@@ -805,24 +804,18 @@ resultShape ast = case listToMaybe [(aggs, by) | SummarizeCommand aggs by <- ast
 -- >>> c4.whereClause
 -- Just "(jsonb_path_exists(to_jsonb(errors), '$[*].\"error_type\" ? (@ like_regex \"^ab.*c\" flag \"i\")'::jsonpath))"
 --
--- A bare wildcard equality on an array column lowers to @array_has@ only on TimeFusion;
--- Postgres keeps the jsonpath form byte for byte:
--- >>> let Right (_, c5) = parseQueryToComponents cfg{targetsTimefusion = True} "hashes[*] == \"x\""
+-- A bare wildcard equality on an array column lowers to @array_has@:
+-- >>> let Right (_, c5) = parseQueryToComponents cfg "hashes[*] == \"x\""
 -- >>> c5.whereClause
 -- Just "(array_has(hashes, 'x'))"
--- >>> let Right (_, c6) = parseQueryToComponents cfg "hashes[*] == \"x\""
--- >>> c6.whereClause
--- Just "(jsonb_path_exists(to_jsonb(hashes), '$[*] ? (@ == \"x\")'::jsonpath))"
 --
 -- A ratio of filtered rates. The filter applies to the outer sum, so every series
 -- still takes its deltas over its own points in the shared series source;
--- on TimeFusion the attribute goes through the metrics variant accessor. Nothing
+-- the attribute goes through the metrics variant accessor. Nothing
 -- is coalesced to 0, so a bin missing the denominator series is NULL, not 0:
 -- >>> let ratio = "metrics | summarize hits = rateif(value, attributes.tier == \"day\"), total = rate(value) by bin(timestamp, 1m) | extend pct = 100.0 * hits / total"
 -- >>> let chartSelect c = either id (T.strip . T.takeWhile (/= '\n') . T.strip . maybeToMonoid . (.finalSummarizeQuery) . snd) (parseQueryToComponents c ratio)
 -- >>> chartSelect cfg
--- "SELECT extract(epoch from time_bucket('1 minutes', timestamp))::integer, 'value', (((100.0 * sum(CASE WHEN attributes->>'tier' = 'day' THEN __rate_value END)::float) / NULLIF(sum(__rate_value)::float, 0)))::float AS pct"
--- >>> chartSelect cfg{targetsTimefusion = True}
 -- "SELECT extract(epoch from time_bucket('1 minutes', timestamp))::integer, 'value', (((100.0 * sum(CASE WHEN variant_to_json(attributes)->>'tier' = 'day' THEN __rate_value END)::float) / NULLIF(sum(__rate_value)::float, 0)))::float AS pct"
 --
 -- Field validation is told the cfg's source for the same reason 'queryASTToComponents'
@@ -836,7 +829,7 @@ parseQueryToComponents sqlCfg = fmap (queryASTToComponents sqlCfg) . first query
 queryASTToComponents :: SqlQueryCfg -> [Section] -> (Text, QueryComponents)
 queryASTToComponents sqlCfg sections =
   let effectiveSource = sqlCfg.source <|> listToMaybe [s | Source s <- sections]
-      qc = sectionsToComponents sqlCfg $ rewriteSectionsForSource sqlCfg.targetsTimefusion effectiveSource sections
+      qc = sectionsToComponents sqlCfg $ rewriteSectionsForSource effectiveSource sections
    in -- The FROM table follows the effective source (cfg or an explicit `source`
       -- section); without this a metrics query built via the cfg arg alone would
       -- silently read otel_logs_and_spans.
@@ -960,7 +953,6 @@ defSqlQueryCfg pid currentTime source spanT =
     , dateRange = (Nothing, Nothing)
     , rangeEnd = InclusiveEnd
     , source = source
-    , targetsTimefusion = False
     , targetSpansM = spanT
     , projectedColsByUser = []
     , currentTime

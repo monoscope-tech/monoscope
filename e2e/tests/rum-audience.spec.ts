@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { DEMO_PROJECT, sql } from "./helpers";
+import { DEMO_PROJECT, mirrorToTf, sql } from "./helpers";
 
 test("audience groups filter sessions, search users, and persist dashboard views", async ({ page }) => {
   const app = `e2e-rum-audience-${Date.now()}`;
@@ -11,6 +11,7 @@ test("audience groups filter sessions, search users, and persist dashboard views
       ('${DEMO_PROJECT}',ARRAY['RUM audience'],'browser error',now(),now(),now(),'${app}','iPhone Mobile Safari/604','${app}-alice','alice','alice@example.com','TypeError'),
       ('${DEMO_PROJECT}',ARRAY['RUM audience'],'documentLoad',now(),now(),now(),'${app}','Windows Chrome/151 Safari/537','${app}-bob','bob','bob@example.com',NULL),
       ('${DEMO_PROJECT}',ARRAY['RUM audience'],'documentLoad',now(),now(),now(),'${app}',NULL,'${app}-anonymous',NULL,NULL,NULL);`);
+  mirrorToTf("otel_logs_and_spans", `project_id='${DEMO_PROJECT}' AND resource___service___name='${app}'`);
   try {
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));

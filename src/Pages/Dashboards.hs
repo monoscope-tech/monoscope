@@ -599,11 +599,10 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
     _ -> case variable._vType of
       Dashboards.VTQuery | Just sqlQuery <- variable.sql -> do
         -- SECURITY: Use secured query execution with project_id filtering
-        useTf <- useTfReads
         -- Budgeted for the same reason as the facet/dependent short-circuits above:
         -- an option list is never worth blocking the shell on.
         withRenderBudget ("variable:" <> variable.key) variable
-          $ LogQueries.executeSecuredQuery useTf pid sqlQuery 1000
+          $ LogQueries.executeSecuredQuery pid sqlQuery 1000
           <&> \case
             Right queryResults -> variable{Dashboards.options = Just $ queryRowsToText queryResults}
             Left _ -> variable -- Return unchanged on error
@@ -726,10 +725,9 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
           (\err -> Log.logWarn ("Dashboard constant " <> label <> " query failed") (constant.key, err, duration) $> constant)
           (\val -> Log.logTrace ("Dashboard constant " <> label <> " query completed") (constant.key, duration) $> constant{Dashboards.result = Just $ toResult val})
           res
-  useTf <- useTfReads
   case (constant.sql, constant.query) of
     -- SECURITY: Use secured query execution with project_id filtering
-    (Just sqlQuery, _) -> runQuery "SQL" (LogQueries.executeSecuredQuery useTf pid sqlQuery 1000) queryRowsToText
+    (Just sqlQuery, _) -> runQuery "SQL" (LogQueries.executeSecuredQuery pid sqlQuery 1000) queryRowsToText
     (Nothing, Just kqlQuery) ->
       runQuery
         "KQL"
@@ -933,7 +931,7 @@ dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = act do
         newSqlQuery <-
           if monitor.logQuery == newQuery
             then Right monitor.logQueryAsSql
-            else first MonitorQueryInvalid $ compileAlertSql False pid (monitorToInput monitor & #query .~ newQuery)
+            else first MonitorQueryInvalid $ compileAlertSql pid (monitorToInput monitor & #query .~ newQuery)
         let updated =
               (monitor :: Monitors.QueryMonitor)
                 { Monitors.logQuery = newQuery

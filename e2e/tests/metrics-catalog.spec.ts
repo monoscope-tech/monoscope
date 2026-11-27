@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { DEMO_PROJECT, sql } from './helpers';
+import { DEMO_PROJECT, sql, tfSql } from './helpers';
 
 const url = `/p/${DEMO_PROJECT}/metrics`;
 const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND metric_name LIKE 'uxcatalog%';
@@ -20,7 +20,20 @@ test.describe('metrics catalog', () => {
       FROM otel_metrics_meta CROSS JOIN generate_series(1,20) n
       WHERE project_id='${DEMO_PROJECT}' AND metric_name LIKE 'uxcatalog%';`);
   });
-  test.afterAll(() => sql(cleanup));
+  // Charts read the points from TimeFusion (one statement per table: TF deletes nothing for an IN list).
+  const tfCleanup = `DELETE FROM otel_metrics WHERE project_id = '${DEMO_PROJECT}' AND metric_name LIKE 'uxcatalog%'`;
+  test.beforeAll(() => {
+    tfSql(tfCleanup);
+    tfSql(`INSERT INTO otel_metrics (project_id, id, series_id, timestamp, date, ingested_at, metric_name, metric_type, metric_unit,
+        flags, dropped_attributes_count, message_size_bytes, value, resource, resource___service___name)
+      SELECT '${DEMO_PROJECT}' AS p, concat(mn, '-', n) AS i, mn AS s,
+        to_timestamp_micros(CAST(extract(epoch from now()) * 1000000 AS BIGINT) - n * 60000000) AS t, CAST(now() AS DATE) AS d, now() AS ia,
+        mn, 'GAUGE' AS mt, '1' AS mu, 0 AS f, 0 AS dac, 0 AS msb, CAST(n AS DOUBLE) AS v, '{"service":{"name":"ux-checkout"}}' AS r, 'ux-checkout' AS sv
+      FROM (SELECT concat('uxcatalog', CASE WHEN fam = 1 THEN 'db' ELSE 'runtime' END, '.metric.', lpad(CAST(k AS VARCHAR), 2, '0')) AS mn
+            FROM generate_series(1, 2) AS f(fam) CROSS JOIN generate_series(1, 24) AS g(k)) AS names
+      CROSS JOIN generate_series(1, 20) AS b(n)`);
+  });
+  test.afterAll(() => { sql(cleanup); tfSql(tfCleanup); });
 
   test('search filters every page and survives view changes and reload', async ({ page }) => {
     await page.goto(url + '?q=uxcatalog&since=6H');

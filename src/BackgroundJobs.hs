@@ -414,7 +414,6 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
                           , AI.invocationMode = AI.DurableRun context
                           , AI.projectTools = projectTools
                           , AI.sourceConfig = Just authCtx.config
-                          , AI.useTimefusion = authCtx.env.enableTimefusionReads
                           }
                       failRun finish reason = do
                         active <- Issues.routineRunActive pid execution.id
@@ -489,7 +488,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
               case context.source of
                 Issues.ConversationRun{} -> do
                   input <- maybe (throwIO AI.AgentStopped) pure context.input
-                  response <- Bots.processAIQueryWithMode (Just authCtx.config) authCtx.env.enableTimefusionReads projectTools (AI.DurableRun context) (AI.MemberAccess AI.ProjectMember context.requestedBy) project input (Just context.conversationId) authCtx.config.openaiModel authCtx.config.openaiApiKey
+                  response <- Bots.processAIQueryWithMode (Just authCtx.config) projectTools (AI.DurableRun context) (AI.MemberAccess AI.ProjectMember context.requestedBy) project input (Just context.conversationId) authCtx.config.openaiModel authCtx.config.openaiApiKey
                   for_ (leftToMaybe response) $ throwIO . CE.ErrorCall . toString
                 Issues.TriggeredRun Issues.SlackCommand{} -> Slack.runCommandWithTools projectTools context
                 _ -> throwIO AI.AgentStopped
@@ -541,7 +540,7 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
       -- Report templates cover a fixed window ending at the claim; their answers are digests.
       reportWindow = templateKey >>= Issues.reportWindowDays <&> (`Issues.reportWindow` routine.claimedAt)
       report answer = reportWindow >>= \window -> AI.reportRunAnswer routine.projectId window answer
-      config = maybe identity AI.reportConfig reportWindow (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.ProjectMember routine.requestedBy, AI.invocationMode = AI.DurableRun context}
+      config = maybe identity AI.reportConfig reportWindow (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = deliveryContext, AI.timezone = Just routine.timezone, AI.access = AI.MemberAccess AI.ProjectMember routine.requestedBy, AI.invocationMode = AI.DurableRun context}
   outcome <- Timeout.timeout timeoutMicros $ tryAny do
     result <- execute config
     AI.requireAgentAccess config.access routine.projectId
@@ -5445,15 +5444,12 @@ recordMonitorDataGap monitor at reason = do
 evaluateQueryMonitor :: Monitors.QueryMonitor -> UTCTime -> ATBackgroundCtx ()
 evaluateQueryMonitor monitor startWall = do
   ctx <- ask @Config.AuthContext
-  let tfEnabled = ctx.config.enableTimefusionReads
-      title = monitor.alertConfig.title
+  let title = monitor.alertConfig.title
       -- Positivity is enforced at every write boundary and by the database.
       lookbackMins = monitor.timeWindowMins
-  freshSql <- either (throwIO . CE.ErrorCall . ("monitor KQL failed to compile: " <>) . toString) pure $ compileAlertSql tfEnabled monitor.projectId (monitorToInput monitor)
+  freshSql <- either (throwIO . CE.ErrorCall . ("monitor KQL failed to compile: " <>) . toString) pure $ compileAlertSql monitor.projectId (monitorToInput monitor)
   start <- liftIO $ getTime Monotonic
-  -- Both supported KQL sources (spans and metrics) follow the telemetry read
-  -- backend. Metrics must use the same backend as their generated expressions.
-  results <- Hasql.withHasqlTimefusion tfEnabled $ Hasql.interp (rawSql freshSql)
+  results <- Hasql.withHasqlTimefusion True $ Hasql.interp (rawSql freshSql)
   end <- liftIO $ getTime Monotonic
 
   -- Missing measurements cannot establish recovery. A complete COUNT query

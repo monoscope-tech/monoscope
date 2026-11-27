@@ -1063,7 +1063,7 @@ reportPreviewH tools pid templateM = do
   now <- Time.currentTime
   let (template, days) = fromMaybe (Issues.weeklyReportTemplate, 7) $ Issues.reportTemplate =<< templateM
       (start, end) = Issues.reportWindow days now
-      config = AI.reportConfig (start, end) (AI.defaultAgenticConfig pid){AI.projectTools = tools, AI.sourceConfig = Just ctx.config, AI.useTimefusion = ctx.env.enableTimefusionReads, AI.timezone = Just "UTC"}
+      config = AI.reportConfig (start, end) (AI.defaultAgenticConfig pid){AI.projectTools = tools, AI.sourceConfig = Just ctx.config, AI.timezone = Just "UTC"}
   AI.runAgenticChatWithHistory config (template.prompt <> "\n\nRun this report now.") ctx.config.openaiModel ctx.config.openaiApiKey >>= \case
     Left err -> pure $ pre_ $ toHtml err
     Right answer -> case AI.reportRunAnswer pid (start, end) answer of

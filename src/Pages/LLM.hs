@@ -256,53 +256,6 @@ conversationsOf units = sortOn (Down . (.lastSeen)) $ mapMaybe conversation $ M.
       pure $ used >= 0.8 * fromIntegral window
 
 
--- | The Postgres read: GenAI spans in @[from, to)@ aggregated per trace, live. TimeFusion reads go
--- through its @llm_1h@ tier instead ('tierUnits'). Rows from before the columns were promoted
--- (identity 2026-11-16, text fields 2026-11-22) lack them: unlisted, or listed without a title.
-selectUnits :: (DB es, Labeled "timefusion" Hasql :> es, Reader AuthContext :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [Unit]
-selectUnits pid from to = do
-  tf <- useTfReads
-  -- OR'd rather than LIKE ANY, which TimeFusion plans only over a literal array.
-  let finished a = "(" <> mconcat (intersperse " OR " [[HI.sql|finish LIKE #{"%\"" <> r <> "\"%"}|] | r <- GenAI.abnormalReasons a]) <> ")"
-  Hasql.withHasqlTimefusion tf
-    $ Hasql.interp
-      [HI.sql|
-      WITH spans AS (
-        SELECT CASE WHEN COALESCE(context___trace_id, '') = '' THEN id::text ELSE context___trace_id END AS unit,
-          timestamp, COALESCE(duration, 0) AS dur, COALESCE(status_code = 'ERROR', false) AS failed,
-          attributes___gen_ai___operation___name AS op,
-          attributes___gen_ai___operation___name = ANY(#{V.fromList GenAI.inferenceOps}) AS model_op,
-          attributes___gen_ai___operation___name = ANY(#{V.fromList GenAI.agentRunOps}) AS agent_op,
-          attributes___gen_ai___conversation___id AS conv, attributes___gen_ai___agent___name AS agent, attributes___gen_ai___request___model AS model,
-          CAST(attributes___gen_ai___usage___input_tokens AS DOUBLE PRECISION) AS input_tokens,
-          CAST(attributes___gen_ai___usage___output_tokens AS DOUBLE PRECISION) AS output_tokens,
-          attributes___gen_ai___usage___cost AS cost, attributes___gen_ai___tool___name AS tool,
-          attributes___gen_ai___tool___call___arguments AS tool_args, attributes___gen_ai___input___preview AS preview,
-          attributes___gen_ai___response___finish_reasons AS finish,
-          attributes___user___id AS usr, resource___service___name AS svc
-        FROM otel_logs_and_spans
-        WHERE project_id = #{pid.toText} AND timestamp >= #{from} AND timestamp < #{to} AND attributes___gen_ai___operation___name IS NOT NULL
-      )
-      SELECT unit, max(conv) AS conv, max(agent) AS agent, max(model) AS model, max(usr) AS usr, max(svc) AS svc,
-        min(timestamp) AS started, max(timestamp) AS last_ts, max(CAST(EXTRACT(EPOCH FROM timestamp) * 1000000 AS BIGINT) + dur / 1000) AS end_us,
-        sum(CASE WHEN model_op THEN 1 ELSE 0 END) AS llm_calls,
-        sum(CASE WHEN op = 'execute_tool' THEN 1 ELSE 0 END) AS tool_calls,
-        sum(CASE WHEN agent_op THEN 1 ELSE 0 END) AS agent_runs,
-        sum(CASE WHEN model_op THEN COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) ELSE 0 END) AS tokens,
-        sum(CASE WHEN model_op THEN cost END) AS cost_sum,
-        sum(CASE WHEN failed THEN 1 ELSE 0 END) AS errors,
-        sum(CASE WHEN failed AND op = 'execute_tool' THEN 1 ELSE 0 END) AS tool_errors,
-        sum(CASE WHEN failed AND model_op THEN 1 ELSE 0 END) AS model_errors,
-        sum(CASE WHEN ^{finished GenAI.Truncated} THEN 1 ELSE 0 END) AS truncated,
-        sum(CASE WHEN ^{finished GenAI.Filtered} THEN 1 ELSE 0 END) AS filtered,
-        sum(CASE WHEN op = 'execute_tool' THEN 1 ELSE 0 END) - count(DISTINCT CASE WHEN op = 'execute_tool' THEN COALESCE(tool, '') || COALESCE(tool_args, '') END) AS repeats,
-        max(input_tokens) AS max_input,
-        min(CASE WHEN preview IS NOT NULL THEN CAST(CAST(EXTRACT(EPOCH FROM timestamp) AS BIGINT) AS TEXT) || '|' || preview END) AS first_preview,
-        min(CASE WHEN op = 'execute_tool' AND tool IS NOT NULL THEN CAST(CAST(EXTRACT(EPOCH FROM timestamp) AS BIGINT) AS TEXT) || '|' || tool || chr(9) || COALESCE(tool_args, '') END) AS first_tool
-      FROM spans GROUP BY unit ORDER BY last_ts DESC LIMIT #{unitCap}
-    |]
-
-
 unitCap :: Int64
 unitCap = 10000
 
@@ -320,8 +273,8 @@ wholeHourWindow = 6 * 3600
 -- | The window's units, one per trace. A window of six hours or more starts on its hour: its oldest
 -- partial hour would otherwise be read raw on every refresh, and a week back that is a 10-60s scan
 -- of cold storage (2026-11-22's burst).
-windowUnits :: (DB es, Labeled "timefusion" Hasql :> es, Reader AuthContext :> es) => Projects.ProjectId -> TimePicker.TimeWindow -> Eff es [Unit]
-windowUnits pid window = useTfReads >>= bool (selectUnits pid start window.toTime) (tierUnits pid start window.toTime)
+windowUnits :: (DB es, Labeled "timefusion" Hasql :> es) => Projects.ProjectId -> TimePicker.TimeWindow -> Eff es [Unit]
+windowUnits pid window = tierUnits pid start window.toTime
   where
     start = if diffUTCTime window.toTime window.fromTime >= wholeHourWindow then toHour floor window.fromTime else window.fromTime
 
