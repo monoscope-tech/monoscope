@@ -558,7 +558,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           receive = Timeout.timeout (15 * 1000000) (BSC.hGetLine (getStdout child) >>= either fail pure . AE.eitherDecodeStrict @AE.Value) >>= maybe (fail "SDK sandbox did not reply") pure
           exec argv = send "Execute" (AE.object ["argv" AE..= (argv :: [Text]), "cwd" AE..= AE.Null, "quiet" AE..= False]) >> receive >>= parse (field "Right")
           unit = AE.object ["Right" AE..= ([] :: [AE.Value])]
-      send "Create" $ AE.object ["imagePath" AE..= image, "cpus" AE..= (2 :: Int), "memoryMiB" AE..= (1024 :: Int), "isolation" AE..= ("registry_cow" :: Text), "mounts" AE..= AE.object []]
+      send "Create" $ AE.object ["imagePath" AE..= image, "cpus" AE..= (4 :: Int), "memoryMiB" AE..= (6144 :: Int), "isolation" AE..= ("registry_cow" :: Text), "mounts" AE..= AE.object []]
       receive `shouldReturn` unit
       resolved <- exec ["/usr/bin/getent", "-s", "files", "hosts", "localhost"]
       parse (field "exitCode") resolved `shouldReturn` (0 :: Int)
@@ -1263,8 +1263,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
         for_ allocations \allocation -> do
           allocationReleased request.attemptId allocation
           sandboxSessions >>= (\sessions -> map (.id) sessions `shouldNotContain` [(Agent.allocationId allocation).toText])
-          parse (field "cpus") (AE.toJSON allocation) `shouldReturn` (2 :: Word16)
-          parse (field "memoryMiB") (AE.toJSON allocation) `shouldReturn` (1024 :: Word32)
+          parse (field "cpus") (AE.toJSON allocation) `shouldReturn` (4 :: Word16)
+          parse (field "memoryMiB") (AE.toJSON allocation) `shouldReturn` (6144 :: Word32)
         toolReply "tool-5" results >>= (`shouldNotSatisfy` T.isInfixOf "first-output-line")
         for_ ["tool-6", "tool-7"] \identifier -> toolReply identifier results >>= (`shouldSatisfy` T.isInfixOf "first-output-line")
         jsonText results `shouldContainAll` ["Linux", "supervisor-tools-protected", "host-credentials-absent", "repository-check-passed", "readonly-mounts-enforced", "preserve-retry-metadata", "Follow callers before proposing", "Repository skill content", "NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST", "Root Cause Tracing", "Historical hypothesis", headRevision]
