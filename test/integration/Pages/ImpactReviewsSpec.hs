@@ -2713,6 +2713,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
     for_ (take 1 $ catMaybes tried) \urls -> (H.statusCode . (.simpleStatus) <$> WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ snd $ T.breakOn "/p/" urls.video) (routesApp tr)) `shouldReturn` 404
     dbExec tr "UPDATE projects.projects SET deleted_at = NULL, active = true WHERE id = ?" (Only testPid)
     dbOne tr "SELECT count(*)::int FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'linked' AND metadata->>'url' = ?" (result.issueId, opened.url) `shouldReturn` (1 :: Int)
+    -- 2026-11-27: two verified fixes failed to publish (SourceChanged, an App-token format bug) and nothing retried them once fixed.
+    let failPublish failure = void $ runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = app}) $ githubResponses (\_ -> pure $ Just $ AE.object ["full_name" AE..= ("impact-org/checkout" :: Text), "visibility" AE..= ("private" :: Text), "permissions" AE..= AE.object ["push" AE..= True]]) $ interpret (\_ -> \case Publication.PublishFix{} -> pure $ Left failure) $ Impact.publishIssueFix testPid result.runId
+        retries = dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'PublishFix' AND status = 'queued'" ()
+    dbExec tr "DELETE FROM background_jobs_long WHERE payload->>'tag' = 'PublishFix'" ()
+    failPublish Publication.AccessRevoked
+    retries `shouldReturn` (0 :: Int)
+    failPublish Publication.SourceChanged
+    retries `shouldReturn` (1 :: Int)
     publication <- either (fail . show) pure $ Publication.requestFor completed "main" Publication.Private "https://monoscope.example"
     credential <- either (fail . show) pure $ Publication.uploadCredential $ GitSync.PersonalToken "ghp_fixture"
     stages <- newIORef []

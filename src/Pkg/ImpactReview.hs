@@ -1480,7 +1480,18 @@ publishIssueFix pid fid = do
               Left (PublicationFailed Publication.AccessRevoked) -> attempt rest
               done -> pure done
     void $ ExceptT $ attempt $ [(token, credential) | (token, Right credential) <- personal] <> [(installation, linked)]
-  whenLeft_ outcome \skip -> Log.logAttention "Verified fix was not published" (pid, fid, show @Text skip)
+  whenLeft_ outcome \skip -> do
+    Log.logAttention "Verified fix was not published" (pid, fid, show @Text skip)
+    -- A failure a later attempt or deploy can clear retries hourly while the fix is under three days old.
+    let retryable = \case
+          (NotPublishable; MappingRemoved) -> False
+          (TokenUnavailable _; RepositoryUnreadable _) -> True
+          PublicationFailed failure -> case failure of
+            (Publication.InvalidRequest; Publication.IdentityChanged; Publication.AccessRevoked; Publication.PathChanged; Publication.VisibilityChanged; Publication.NotConfigured; Publication.InvalidReceipt) -> False
+            (Publication.NativeUnavailable; Publication.SourceChanged; Publication.PullRequestChanged; Publication.UploadUncertain; Publication.StateChanged; Publication.GitHubFailure; Publication.PushFailed; Publication.ProtocolFailure; Publication.DeadlineExceeded) -> True
+    now <- Time.currentTime
+    recent <- Hasql.interpScalar [HI.sql|SELECT EXISTS (SELECT 1 FROM projects.issue_fix_runs WHERE id = #{fid} AND created_at > #{addUTCTime (-3 * nominalDay) now})|]
+    when (retryable skip && recent) $ Jobs.scheduleJob (Jobs.DeferUntil $ addUTCTime 3600 now) (Jobs.PublishFix pid fid)
 
 
 -- | Why a verified fix has no pull request yet. 'NotPublishable': no longer an approved fix its owner can see.
