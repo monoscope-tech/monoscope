@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Data.Effectful.GitPublication.Native (publish) where
+module Data.Effectful.GitPublication.Native (publish, validToken) where
 
 import Conduit (runConduit, (.|))
 import Control.Monad (foldM)
@@ -226,7 +226,6 @@ publish store executable token linked artifacts explanation context authorize = 
     key = \case Video -> "video"; Diagram -> "diagram"
     file = \case Video -> "explanation.mp4"; Diagram -> "cause.png"
     reference = \case Video -> "![](explanation.mp4)"; Diagram -> "![Reproduction, inferred cause, and verified fix](cause.png)"
-    validToken value = T.length value == 40 && T.all isHexDigit value || any (\prefix -> maybe False (\rest -> not (T.null rest) && T.all (\c -> isAscii c && (isAlphaNum c || c == '_')) rest) $ T.stripPrefix prefix value) ["ghp_", "gho_", "ghs_", "github_pat_"]
     preset = maybe Map.empty (\urls -> Map.fromList [(Video, urls.video), (Diagram, urls.diagram)]) linked
     assetUrl asset url = case linked of
       Just _ -> Map.lookup asset preset == Just url
@@ -254,3 +253,14 @@ decode failure = either (const $ throwE failure) pure . AE.eitherDecodeStrict
 
 sync :: FilePath -> IO ()
 sync path = bracket (Posix.openFd path Posix.ReadOnly Posix.defaultFileFlags{Posix.nofollow = True, Posix.cloexec = True}) Posix.closeFd fileSynchronise
+
+
+-- | A GitHub token the CLI may be handed: a classic 40-hex token, or a prefixed one. GitHub's App
+-- installation tokens now run to hundreds of characters with @-@ and @.@ (seen 2026-11-27), which the
+-- old alphanumeric-only check refused, so every App-token fix failed to publish.
+--
+-- >>> import Data.Text qualified as T
+-- >>> map validToken ["ghs_" <> T.replicate 40 "a" <> "-b.c_d", "ghp_abc", T.replicate 40 "a", "ghs_", "ghs_a b", "ghs_a;rm", "token"]
+-- [True,True,True,False,False,False,False]
+validToken :: Text -> Bool
+validToken value = T.length value == 40 && T.all isHexDigit value || any (\prefix -> maybe False (\rest -> not (T.null rest) && T.all (\c -> isAscii c && (isAlphaNum c || c `elem` ("_-." :: String))) rest) $ T.stripPrefix prefix value) ["ghp_", "gho_", "ghs_", "github_pat_"]
