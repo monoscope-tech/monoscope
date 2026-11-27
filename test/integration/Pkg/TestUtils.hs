@@ -1864,11 +1864,12 @@ withPgReads tr = tr{trATCtx = tr.trATCtx{env = pg, config = pg, timefusionPgPool
     pg = tr.trATCtx.env{enableTimefusionReads = False}
 
 
--- | Once per test process: each example gets a fresh Postgres, but a long-lived TimeFusion keeps what
--- earlier runs wrote under the fixed project ids. One id per statement (TF deletes nothing for an IN
--- list); not per example, since concurrent shards' DML stalled CI's TimeFusion.
+-- | Once per unsharded test process: each example gets a fresh Postgres, but a long-lived local
+-- TimeFusion keeps what earlier runs wrote under the fixed project ids. One id per statement (TF
+-- deletes nothing for an IN list). Sharded CI starts from an empty TimeFusion, and its shards'
+-- concurrent DELETEs stalled it, so they skip this.
 clearFixedProjects :: IO ()
-clearFixedProjects = whenJustM (lookupEnv "TIMEFUSION_PG_TEST_URL") \url -> bracket (connectPostgreSQL $ encodeUtf8 $ toText url) close \conn ->
+clearFixedProjects = whenNothingM_ (lookupEnv "SHARD_TOTAL") $ whenJustM (lookupEnv "TIMEFUSION_PG_TEST_URL") \url -> bracket (connectPostgreSQL $ encodeUtf8 $ toText url) close \conn ->
   for_ (liftA2 (,) ["otel_logs_and_spans" :: Text, "otel_metrics"] fixedProjectIds) \(tbl, pid) ->
     PGS.execute_ conn (fromString $ toString $ "DELETE FROM " <> tbl <> " WHERE project_id = '" <> pid <> "'")
 

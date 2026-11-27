@@ -510,7 +510,7 @@ run_integration() {
   bin=${CI_INTEGRATION_BIN:-$(cabal list-bin integration-tests $CABAL_FLAGS | tail -n 1)}
   rm -f build-shard-*.log
   for i in $(seq 0 $((shards - 1))); do
-    ( start=$(date +%s); SHARD_INDEX=$i SHARD_TOTAL=$shards "$bin" +RTS -N1 -RTS --color > "build-shard-$i.log" 2>&1
+    ( start=$(date +%s); SHARD_INDEX=$i SHARD_TOTAL=$shards timeout 40m "$bin" +RTS -N1 -RTS --color > "build-shard-$i.log" 2>&1
       rc=$?
       echo "[shard-time] $(( $(date +%s) - start ))s" >> "build-shard-$i.log"
       echo "[shard-exit] $rc" >> "build-shard-$i.log"
