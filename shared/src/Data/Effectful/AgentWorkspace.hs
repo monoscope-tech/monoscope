@@ -93,9 +93,10 @@ allocationAttempt :: AllocationReceipt -> UUIDId "agent_attempt"
 allocationAttempt (AllocationReceipt receipt) = receipt.attemptId
 
 
--- | Every agent VM uses this shape, so host-measured receipts cannot report other resources.
+-- | Every agent VM uses this shape, so host-measured receipts cannot report other resources. The agent
+-- compiles its regression and candidate here; at 2 CPUs and 1 GB a monoscope build swapped past the fix budget.
 agentResources :: (Word16, Word32)
-agentResources = (2, 1024)
+agentResources = (4, 6144)
 
 
 -- | A check or workspace build VM. A proof compiles the head (GHC peaks near 4 GB building the server)

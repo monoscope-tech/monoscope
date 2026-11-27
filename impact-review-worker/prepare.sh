@@ -29,7 +29,9 @@ if [ -f cabal.project ] && has cabal; then
     # The configuration lives in cabal.project.local, not on the command line, so any later plain
     # `cabal build`/`cabal test` here (the agent's checks) reuses this build instead of reconfiguring.
     # No .ghc.environment file: writing it needs /workspace itself, which the fix's lock keeps read-only.
-    printf 'tests: True\noptimization: False\nwrite-ghc-environment-files: never\npackage monoscope\n  ghc-options: -j4\n' > cabal.project.local
+    # jobs/semaphore are pinned: their CPU-count defaults reach GHC's flags, and the agent's VM has fewer
+    # CPUs than this one, so every package read as "configuration changed" and rebuilt from scratch.
+    printf 'tests: True\noptimization: False\nwrite-ghc-environment-files: never\njobs: 2\nsemaphore: False\npackage monoscope\n  ghc-options: -j4\n' > cabal.project.local
     try cabal build exe:monoscope-server test:integration-tests --offline
   else
     # Template Haskell often embeds built assets (Talstack hashes its Tailwind output), so build them first.
