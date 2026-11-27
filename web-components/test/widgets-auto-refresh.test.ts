@@ -362,6 +362,33 @@ describe('Log Explorer chart auto-refresh', () => {
     expect(failed()).toBe(true);
   });
 
+  // The metrics explorer froze on scroll: every 15s tick refetched all ~100 mounted charts through the
+  // 4-slot fetch queue, so a card scrolled into view waited behind refreshes of cards nobody could see.
+  test('autoRefresh_skipsOffscreenCharts_refreshesThemOnReturn', async () => {
+    (window as any).echarts = { getInstanceByDom: () => null, init: () => chart() };
+    document.body.innerHTML = '<div id="seen" data-chart-widget></div><div id="away" data-chart-widget></div>';
+    globalThis.fetch = vi.fn(async (url: string) => ({ ok: true, json: async () => ({ ...chartData, pid: new URL(url, location.origin).searchParams.get('pid') }) })) as any;
+    for (const id of ['seen', 'away']) {
+      const config = widget(id);
+      (config.opt.dataset as any).source = [['timestamp', 'count'], [0, 1]];
+      chartWidget({ ...config, pid: id });
+    }
+    const away = document.getElementById('away')!;
+    const fetched = () => vi.mocked(fetch).mock.calls.map(([url]) => new URL(String(url), location.origin).searchParams.get('pid'));
+    (globalThis as any).triggerIntersection(away, false);
+    window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'auto-refresh' } }));
+    await vi.waitFor(() => expect(fetched()).toEqual(['seen']));
+    window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'auto-refresh' } }));
+    await frame();
+    (globalThis as any).triggerIntersection(away, true);
+    await vi.waitFor(() => expect(fetched().filter(pid => pid === 'away')).toHaveLength(1)); // two missed ticks, one refresh
+    window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'user' } }));
+    await vi.waitFor(() => expect(fetched().filter(pid => pid === 'away')).toHaveLength(2));
+    (globalThis as any).triggerIntersection(away, false);
+    window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'user' } }));
+    await vi.waitFor(() => expect(fetched().filter(pid => pid === 'away')).toHaveLength(3)); // a user's change reaches every chart
+  });
+
   // An issue chart whose query hits TimeFusion's 90s timeout was re-issued on every 15s tick.
   test('backs off a failing chart per tick, doubling to a 10 minute cap, until a user action or success resets it', async () => {
     vi.useFakeTimers();
