@@ -1151,12 +1151,19 @@ verifyArtifactRegression options request = do
   createDirectoryIfMissing True root
   canonical root
   Posix.setFileMode root 0o700
+  -- Three comparisons that reach a verdict per session; one blocked by setup costs an attempt, not a verdict.
   let counter = takeDirectory root </> ".regression-" <> identifierText request.sessionId <> ".count"
+      attemptsFile = takeDirectory root </> ".regression-" <> identifierText request.sessionId <> ".attempts"
+      readCount path =
+        tryIOError (readBounded path 16) >>= \case
+          Left failure | isDoesNotExistError failure -> pure (0 :: Word8)
+          Left failure -> throwIO failure
+          Right bytes -> decode @Word8 bytes
   withFileLock (counter <> ".lock") Exclusive \_ -> do
-    previous <- tryIOError $ readBounded counter 16
-    count <- case previous of Left failure | isDoesNotExistError failure -> pure 0; Left failure -> throwIO failure; Right bytes -> decode @Word8 bytes
-    unless (count < 3) $ throwIO ComparisonBudgetExhausted
-    publish counter $ count + 1
+    count <- readCount counter
+    attempts <- readCount attemptsFile
+    unless (count < 3 && attempts < 8) $ throwIO ComparisonBudgetExhausted
+    publish attemptsFile $ attempts + 1
     checkId <- Identifier <$> UUID4.nextRandom
     created <- getCurrentTime
     let directory = root </> identifierText checkId
@@ -1298,6 +1305,7 @@ verifyArtifactRegression options request = do
       saved <- readIORef receipts
       let report = template{status = if length results == length revisions then Completed else Incomplete, results}
       publish (directory </> "report.json") report
+      when (any (\receipt -> receipt.status `elem` [Passed, Failed]) saved) $ readCount counter >>= publish counter . max (count + 1)
       pure $ RegressionResult report saved $ any (\receipt -> receipt.status `notElem` [Passed, Failed]) saved
 
 

@@ -1856,6 +1856,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
     statuses invalid `shouldReturn` ["blocked", "blocked"]
     traverse (parse $ field "reason") invalid >>= (`shouldSatisfy` all (T.isInfixOf "Git diff"))
     map (.exitCode) invalidReceipts `shouldBe` [Nothing, Nothing]
+    -- 2026-11-27: five fix runs spent their three comparisons on setup failures and could not verify a reproduced fix.
+    -- Only a verdict spends one, so session 3 (one verdict, two blocked/invalidated) still has two.
+    for_ @[] [1, 2 :: Int] \_ -> run 3 "bash regression.sh" testPatch >>= \(_, verdicts, _) -> statuses verdicts `shouldReturn` ["failed", "passed"]
     exhausted <- runEff $ Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions artifacts repository (toText image) bridge (15 * 60)) (directory </> "request.json")
     leftToMaybe (first Workspace.regressionErrorText exhausted) `shouldBe` Just "Local check comparison budget is exhausted"
     void $ git ["rm", "--quiet", "regression.sh"]
