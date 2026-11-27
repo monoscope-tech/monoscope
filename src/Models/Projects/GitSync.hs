@@ -106,6 +106,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (getPOSIXTime, posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Data.Yaml qualified as Yaml
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
@@ -714,10 +715,17 @@ assignDashboardRepository pid did sid =
           [] -> Right ed <$ Hasql.executeTx [HI.sql| UPDATE projects.dashboards SET git_sync_id = #{sid}, file_path = #{path}, file_sha = CASE WHEN git_sync_id IS NULL THEN NULL ELSE file_sha END WHERE project_id = #{pid} AND id = #{did} |]
 
 
-updateDashboardGitInfo :: (DB es, Time :> es) => DashboardId -> Text -> Text -> Eff es Int64
-updateDashboardGitInfo did path fsha = do
+-- | Record dashboards' Git paths and blob shas in one statement. Rows already current are
+-- left alone, so a sync that changed nothing does not bump their @updated_at@.
+updateDashboardGitInfo :: (DB es, Time :> es) => [(DashboardId, Text, Text)] -> Eff es Int64
+updateDashboardGitInfo [] = pure 0
+updateDashboardGitInfo rows = do
   now <- Time.currentTime
-  Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET file_path = #{path}, file_sha = #{fsha}, updated_at = #{now} WHERE id = #{did} |]
+  let (ids, paths, shas) = V.unzip3 $ V.fromList rows
+  Hasql.interpExecute
+    [HI.sql| UPDATE projects.dashboards d SET file_path = u.path, file_sha = u.sha, updated_at = #{now}
+             FROM unnest(#{ids}::uuid[], #{paths}::text[], #{shas}::text[]) AS u(id, path, sha)
+             WHERE d.id = u.id AND (d.file_path, d.file_sha) IS DISTINCT FROM (u.path, u.sha) |]
 
 
 -- | Get the dashboards folder path including prefix

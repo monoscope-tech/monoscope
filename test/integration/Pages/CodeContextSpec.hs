@@ -1358,8 +1358,10 @@ spec = do
         assign conflict syncA `shouldReturn` Left (GitSync.FileOwnedByDashboard dashA)
         otherPid <- createTestProject tr "Other repository project"
         void <$> runQueryEffect tr (GitSync.assignDashboardRepository otherPid dashA syncA.id) `shouldReturn` Left GitSync.RepositoryMissing
-        _ <- runQueryEffect tr $ GitSync.updateDashboardGitInfo dashA "overview.yaml" "sha-a"
-        _ <- runQueryEffect tr $ GitSync.updateDashboardGitInfo dashB "overview.yaml" "sha-b"
+        let gitInfo = runQueryEffect tr $ GitSync.updateDashboardGitInfo [(dashA, "overview.yaml", "sha-a"), (dashB, "overview.yaml", "sha-b")]
+        gitInfo `shouldReturn` 2
+        -- One statement per sync, and rows already current are skipped so their updated_at holds.
+        gitInfo `shouldReturn` 0
         fmap (\d -> (d.filePath, d.fileSha)) <$> dashOf tr dashA `shouldReturn` Just (Just "overview.yaml", Just "sha-a")
         M.toList <$> runQueryEffect tr (GitSync.getRepositoryDashboardState testPid syncA.id) `shouldReturn` [("overview.yaml", (dashA, Just "sha-a"))]
         M.toList <$> runQueryEffect tr (GitSync.getRepositoryDashboardState testPid syncB.id) `shouldReturn` [("overview.yaml", (dashB, Just "sha-b"))]

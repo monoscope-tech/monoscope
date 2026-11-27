@@ -4980,7 +4980,14 @@ gitSyncFromRepo pid sid = withGitSync pid sid GitSync.ImportDashboards $ \conn s
                   case applied of
                     Left err -> pure $ Just $ resource.filePath <> ": " <> err
                     Right () -> pure Nothing
-        lift $ forM_ allResources \resource -> when (resource.kind == RepositorySync.Dashboard) $ for_ (find ((== resource.filePath) . (.path)) entries >>= (.sha)) $ void . GitSync.updateDashboardGitInfo (UUIDId resource.localId) (fromMaybe resource.filePath $ T.stripPrefix dashboardPrefix resource.filePath)
+        lift
+          $ void
+          $ GitSync.updateDashboardGitInfo
+            [ (UUIDId resource.localId, fromMaybe resource.filePath $ T.stripPrefix dashboardPrefix resource.filePath, sha)
+            | resource <- allResources
+            , resource.kind == RepositorySync.Dashboard
+            , Just sha <- [find ((== resource.filePath) . (.path)) entries >>= (.sha)]
+            ]
         lift $ if null failures then void $ GitSync.recordImportSuccess sync.id revision else void $ GitSync.recordSyncError sync.id GitSync.ImportDashboards $ T.intercalate "\n" failures
         lift $ exportRepository sync{GitSync.lastRevision = Just revision} unreadable
       for_ (leftToMaybe result) $ void . GitSync.recordSyncError sync.id GitSync.ImportDashboards

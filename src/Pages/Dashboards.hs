@@ -261,7 +261,7 @@ syncDashboardAndQueuePush pid dashId = do
         newSha = GitSync.computeContentSha $ GitSync.dashboardToYaml schema
     when (dash.fileSha /= Just newSha || dash.filePath /= Just filePath)
       $ void
-      $ GitSync.updateDashboardGitInfo dashId filePath newSha
+      $ GitSync.updateDashboardGitInfo [(dashId, filePath, newSha)]
   GitSyncPage.queueGitSyncPush pid dashId
 
 
@@ -2282,7 +2282,7 @@ dashboardRenamePatchH pid dashId form = act do
             $ whenJust (monitor.widgetId >>= \wid -> dashVM.schema >>= findWidgetInDashboard wid) \(_, widget) ->
               void $ Monitors.queryMonitorUpsert monitor{Monitors.alertConfig = monitor.alertConfig{Monitors.title = widgetMonitorTitle form.title widget.title}}
       let newPath = dashFilePath (fromMaybe "" form.fileDir) form.title
-      when (isNothing dashVM.gitSyncId && Just newPath /= dashVM.filePath) $ void $ GitSync.updateDashboardGitInfo dashId newPath ""
+      when (isNothing dashVM.gitSyncId && Just newPath /= dashVM.filePath) $ void $ GitSync.updateDashboardGitInfo [(dashId, newPath, "")]
       syncDashboardAndQueuePush pid dashId
       addTriggerEvent "closeModal" ""
       pure $ DashboardRenamed form.title
