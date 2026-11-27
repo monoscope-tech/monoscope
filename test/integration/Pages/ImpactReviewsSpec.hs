@@ -4385,17 +4385,34 @@ spec = around withTestResources $ describe "Production impact reviews" do
       dbExec tr "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PEdit, testPid, user)
 
   -- 2026-11-19: every fix run whose regression could not be admitted ended "Saved progress was lost", discarding its root cause.
-  it "nativeFix_blockedByTheWorkflow_completesWithItsFindings" \tr -> withTemp "native-fix-blocked" \directory -> do
+  -- 2026-11-27: a verified candidate the peer review blocked could not submit Unfixed either, so it ended without a submission.
+  for_ [("beforeReproduction", 3 :: Word32, False), ("afterThePeerBlocksAVerifiedCandidate", 4, True)] \(label, n, verified) -> it ("nativeFix_blockedByTheWorkflow_completesWithItsFindings: " <> label) \tr -> withTemp "native-fix-blocked" \directory -> do
     image <- nativeTestImage
     store <- storeIn directory
     let repository = directory </> "repository"
-        fid = UUIDId $ UUID.fromWords 96 0x4000 0x80000000 3
+        fid = UUIDId $ UUID.fromWords 96 0x4000 0x80000000 n
         blocker = Agent.FixBlocker "retry_token drops its caller's token." "No regression could be admitted."
-        steps = [SdkTool "submit_fix" $ AE.toJSON $ Agent.Unfixed @Text blocker, SdkText "Blocked."]
+        script = "set -eu\n. ./runtime.sh\n[ \"$(retry_token original)\" = original ] || { echo 'retry token lost'; exit 1; }\n" :: Text
+        unfixed = [SdkTool "submit_fix" $ AE.toJSON $ Agent.Unfixed @Text blocker, SdkText "Blocked."]
+        candidate =
+          [ SdkTool "reproduce_issue" $ AE.object ["script" AE..= ("bash regression.sh" :: Text), "failureMessage" AE..= ("retry token lost" :: Text), "testFiles" AE..= V.singleton (AE.object ["path" AE..= ("regression.sh" :: Text), "content" AE..= script])]
+          , SdkTool "write" $ AE.object ["path" AE..= ("runtime.sh" :: Text), "content" AE..= ("retry_token() { printf '%s\\n' \"$1\"; }\n" :: Text)]
+          , SdkTool "propose_fix" $ AE.object ["rootCause" AE..= ("retry_token drops its caller's token." :: Text)]
+          , SdkTool "verify_fix" $ AE.object []
+          , SdkTool "submit_fix" $ AE.toJSON $ Agent.Fixed @Text "Preserve the caller's retry token."
+          ]
+        admission = [bash "cat runtime.sh /run/monoscope-admission.json", SdkTool "submit_admission" $ AE.object ["tag" AE..= ("Admitted" :: Text), "contents" AE..= ("The regression exercises the caller's retry token." :: Text)], SdkText "Admission complete."]
+        peer = [bash "cat runtime.sh regression.sh /run/monoscope-fix-review.json", SdkTool "submit_fix_review" $ AE.toJSON $ Agent.ReviewBlocked ("The repository's CI sign-off is not proven." :| []), SdkText "Review complete."]
+        next replies results = fromMaybe (SdkText "Unexpected repeated inference") $ viaNonEmpty head $ drop (length results) replies
+        provider body results = toolNames body <&> \tools -> SdkResponse (next (if "submit_admission" `elem` tools then admission else if "submit_fix_review" `elem` tools then peer else bool unfixed (candidate <> unfixed) verified) results) (SdkTokens 7 0)
+        localArtifacts :: Agent.ArtifactRequest -> Agent.ArtifactRequest
+        localArtifacts artifacts = artifacts{Agent.repository = toText repository}
+        localFix :: Agent.FixRequest -> Agent.FixRequest
+        localFix request = request{Agent.request = request.request{Agent.repository = toText repository}}
     initRepo repository
     base <- commit repository [("runtime.sh", "retry_token() { printf 'lost\\n'; }\n")]
     imageId <- readJSON (image </> "manifest.json") >>= parse (field "buildId")
-    (mapping, issue, _) <- fixFixture tr "sdk-job-blocked"
+    (mapping, issue, _) <- fixFixture tr ("sdk-job-blocked-" <> toText label)
     baseRevision <- fixRevision base
     runQueryEffect tr (Fixes.createRun testPid fid issue mapping.id baseRevision imageId) `shouldReturn` Just fid
     runQueryEffect tr (Fixes.queueJob testPid (getResponse tr.trSessAndHeader).user.id fid) `shouldReturn` True
@@ -4403,16 +4420,21 @@ spec = around withTestResources $ describe "Production impact reviews" do
     [run] <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
     appConfig <- githubApp tr
     let cfg = appConfig{impactReviewUsageDir = Just store.usageDir, impactReviewCacheDir = Just store.cacheDir, impactReviewProvider = "fix-blocked-fixture", openaiModel = "fixture", impactReviewArtifactBucket = Just "fixture-bucket"}
-    void $ withSdkProvider directory "fix-blocked-fixture" (\_ results -> pure $ SdkResponse (fromMaybe (SdkText "Unexpected repeated inference") $ viaNonEmpty head $ drop (length results) steps) (SdkTokens 7 0)) \models _ ->
+    void $ withSdkProvider directory "fix-blocked-fixture" provider \models _ ->
       runTestBgRecordingHTTP frozenTime tr
         $ Reader.local (\ctx -> ctx{config = cfg})
         $ githubResponses (const $ pure Nothing)
         $ impose
           (sdkAgent store [models, image, directory </> "worker.log"])
           ( \env -> \case
+              Agent.ReadSessionContext (Agent.PeerSubject fixId artifacts) root -> passthrough env $ Agent.ReadSessionContext (Agent.PeerSubject fixId $ localArtifacts artifacts) root
               Agent.ReadSessionContext subject root -> passthrough env $ Agent.ReadSessionContext subject root
               Agent.FixRepository selected request queryTelemetry knowledge admit calls usage allocations checks phase validate ->
-                passthrough env $ Agent.FixRepository selected request{Agent.request = request.request{Agent.repository = toText repository}} queryTelemetry knowledge admit calls usage allocations checks phase validate
+                passthrough env $ Agent.FixRepository selected (localFix request) queryTelemetry knowledge admit calls usage allocations checks phase validate
+              Agent.AdmitRegression selected request knowledge calls usage allocations -> passthrough env $ Agent.AdmitRegression selected request{Agent.fix = localFix request.fix} knowledge calls usage allocations
+              Agent.VerifyFixArtifacts artifacts request -> passthrough env $ Agent.VerifyFixArtifacts artifacts $ localArtifacts request
+              Agent.ReviewVerifiedFix selected request verified' knowledge calls usage allocations ->
+                passthrough env $ Agent.ReviewVerifiedFix selected request{Agent.fix = localFix request.fix, Agent.artifacts = localArtifacts request.artifacts} verified' knowledge calls usage allocations
               _ -> liftIO $ fail "Unexpected native workflow"
           )
         $ BackgroundJobs.processBackgroundJob tr.trATCtx
@@ -4423,6 +4445,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     answers `shouldSatisfy` any (\(Only (content :: Text)) -> blocker.rootCause `T.isInfixOf` content && blocker.blocker `T.isInfixOf` content)
     dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'PublishFix'" () `shouldReturn` (0 :: Int)
     runQueryEffect tr (isJust <$> Fixes.claimJob testPid fid) `shouldReturn` False
+
   it "nativeFix_applicationResumesSdkSessionsWithoutReplacingItsRunOrAttempts" \tr -> withTemp "native-fix-job" \directory -> do
     image <- nativeTestImage
     store <- storeIn directory
