@@ -76,7 +76,7 @@ module Pkg.Git (
   getPullRequestFiles,
   filesBetween,
   descends,
-  Comparison,
+  BranchComparison,
   advanced,
   listPullRequestComments,
   CommentThread (..),
@@ -768,15 +768,15 @@ newtype CommitComparison = CommitComparison {files :: [PullRequestFile]}
 
 -- | Whether @to@ still contains @from@, i.e. the branch only moved forward from it.
 descends :: W.HTTP :> es => GitConn -> RepoRef -> Text -> Text -> Eff es (Either Text Bool)
-descends conn repo from to = fmap advanced <$> githubJson @Comparison conn repo ("/compare/" <> from <> "..." <> to <> "?per_page=1")
+descends conn repo from to = fmap advanced <$> githubJson @BranchComparison conn repo ("/compare/" <> from <> "..." <> to <> "?per_page=1")
 
 
-newtype Comparison = Comparison {status :: Text}
+newtype BranchComparison = BranchComparison {status :: Text}
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
 
 
-advanced :: Comparison -> Bool
+advanced :: BranchComparison -> Bool
 advanced c = c.status `elem` ["ahead", "identical"]
 
 
