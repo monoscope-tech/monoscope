@@ -2733,9 +2733,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
           pure
             $ Just
             $ AE.encode
-            $ if "/pulls/7" `T.isSuffixOf` toText url
-              then confirmed
-              else AE.object ["full_name" AE..= ("impact-org/checkout" :: Text), "visibility" AE..= ("private" :: Text), "permissions" AE..= AE.object ["push" AE..= (AET.parseMaybe (field "mode") remote /= Just ("denied" :: Text))]]
+            $ if
+              | "/pulls/7" `T.isSuffixOf` toText url -> confirmed
+              | "/compare/" `T.isInfixOf` toText url -> AE.object ["status" AE..= ("ahead" :: Text)]
+              | otherwise -> AE.object ["full_name" AE..= ("impact-org/checkout" :: Text), "visibility" AE..= ("private" :: Text), "permissions" AE..= AE.object ["push" AE..= (AET.parseMaybe (field "mode") remote /= Just ("denied" :: Text))]]
         authorize stage = do
           modifyIORef' stages (stage :)
           current <- runQueryEffect tr $ Fixes.publicationForUser testPid result.runId user

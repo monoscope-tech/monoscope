@@ -137,13 +137,8 @@ runGitPublicationReal store githubCli = interpret \env -> \case
         )
         $ hoistEither
         $ Left PullRequestChanged
-      unless
-        ( remote.head.sha
-            == revisionText artifacts.result.head
-            && (remote.merged || remote.base.sha == revisionText artifacts.result.base)
-        )
-        $ hoistEither
-        $ Left SourceChanged
+      forward <- if remote.merged then pure True else ExceptT $ first (const GitHubFailure) <$> Git.descends conn repo (revisionText artifacts.result.base) remote.base.sha
+      unless (remote.head.sha == revisionText artifacts.result.head && forward) $ hoistEither $ Left SourceChanged
       blocks <- forM ([("video", "explanation.mp4", receipt.assets.video), ("diagram", "cause.png", "![Reproduction, inferred cause, and verified fix](" <> receipt.assets.diagram <> ")")] :: [(Text, Text, Text)]) \(kind, file, line) -> do
         digest <- hoistEither $ maybeToRight InvalidReceipt $ Map.lookup file explanation.files
         pure $ "<!-- monoscope-fix-media:" <> kind <> ":" <> digest <> " -->\n" <> line
