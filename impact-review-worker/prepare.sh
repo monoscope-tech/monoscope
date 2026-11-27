@@ -28,7 +28,8 @@ if [ -f cabal.project ] && has cabal; then
     mkdir -p dist-newstyle/src && cp -Rn /opt/haskell/dist-src/. dist-newstyle/src/ 2>/dev/null
     # The configuration lives in cabal.project.local, not on the command line, so any later plain
     # `cabal build`/`cabal test` here (the agent's checks) reuses this build instead of reconfiguring.
-    printf 'tests: True\noptimization: False\npackage monoscope\n  ghc-options: -j4\n' > cabal.project.local
+    # No .ghc.environment file: writing it needs /workspace itself, which the fix's lock keeps read-only.
+    printf 'tests: True\noptimization: False\nwrite-ghc-environment-files: never\npackage monoscope\n  ghc-options: -j4\n' > cabal.project.local
     try cabal build exe:monoscope-server test:integration-tests --offline
   else
     # Template Haskell often embeds built assets (Talstack hashes its Tailwind output), so build them first.
