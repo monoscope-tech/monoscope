@@ -224,7 +224,7 @@ pullRequestAt base headRevision changed = AE.object ["head" AE..= AE.object ["sh
 
 
 noProofs :: Applicative m => Agent.ProofHooks m
-noProofs = Agent.ProofHooks{save = \_ _ -> pure $ Left "Unexpected proof", progress = const $ pure ()}
+noProofs = Agent.ProofHooks{setupFailed = \_ _ -> pass, save = \_ _ -> pure $ Left "Unexpected proof", progress = const $ pure ()}
 
 
 -- | The fall-through of every test interpreter: operations a spec does not expect are refused.
@@ -1244,7 +1244,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   (const pass)
                   (\receipt -> liftIO $ modifyIORef' allocations (<> [receipt]))
                   (\receipt -> liftIO $ modifyIORef' checks (<> [receipt]))
-                  Agent.ProofHooks{save = \_ sides -> liftIO $ modifyIORef' proofs (<> toList sides) $> Right "proof-1", progress = const pass}
+                  Agent.ProofHooks{setupFailed = \_ _ -> pass, save = \_ sides -> liftIO $ modifyIORef' proofs (<> toList sides) $> Right "proof-1", progress = const pass}
                   ( \draftValue -> liftIO do
                       modifyIORef' submissions (<> [draftValue])
                       pure $ if draftValue == accepted then Right () else Left "Finding does not reference a changed line"
@@ -2347,7 +2347,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     plans <- newIORef ([] :: [[Text]])
     let planReply = directory </> "plan-reply.json"
         planned = \case Agent.Planned claims -> modifyIORef' plans (<> [toList claims]); (Agent.Started{}; Agent.Recorded{}; Agent.Unproved{}) -> pass
-    void $ runEff $ scripted (Just store) "test/fixtures/native-child-lifetime.mjs" [planReply, "plan"] $ Agent.reviewRepository Agent.Isolated request (const $ pure $ Left "Unexpected query") (const $ pure $ Left "Unexpected knowledge") (const pass) (const pass) (const pass) (const pass) Agent.ProofHooks{save = \_ _ -> pure $ Left "Unexpected proof", progress = liftIO . planned} (const $ pure $ Right ())
+    void $ runEff $ scripted (Just store) "test/fixtures/native-child-lifetime.mjs" [planReply, "plan"] $ Agent.reviewRepository Agent.Isolated request (const $ pure $ Left "Unexpected query") (const $ pure $ Left "Unexpected knowledge") (const pass) (const pass) (const pass) (const pass) Agent.ProofHooks{setupFailed = \_ _ -> pass, save = \_ _ -> pure $ Left "Unexpected proof", progress = liftIO . planned} (const $ pure $ Right ())
     readIORef plans `shouldReturn` [["Shows the retry count", "Retries once"]]
     readJSON planReply `shouldReturn` AE.object ["Right" AE..= AE.object ["planned" AE..= (2 :: Int)]]
     (preparedSecond, preparedThird) <- concurrently (check (withRun 2 request) []) (check (withRun 3 request) [])
@@ -2947,7 +2947,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     void $ deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
     [old] <- runQueryEffect tr $ Reviews.latestRuns testPid
     let next = T.replicate 40 "b"
-        media side code = Proof.ProofMedia{side, revision, exitCode = Just code, cast = "cast", gif = "gif", mp4 = "mp4", browser = False, shots = [], chapters = []}
+        media side code = Proof.ProofMedia{side, revision, exitCode = Just code, cast = "cast", gif = "gif", mp4 = "mp4", browser = False, shots = [], chapters = [], setup = Nothing}
         script = Agent.ProofScript "Shows the retry count" "node proof.mjs" (Just "monoscope-app")
         record command headExit = runQueryEffect tr (Reviews.saveProofs old (UUIDId UUID.nil) script{Agent.command} (media Agent.Base 1 :| [media Agent.Head headExit])) >>= (`shouldSatisfy` isRight)
         cfg = appConfig{impactReviewUsageDir = Just "fixture-usage", impactReviewCacheDir = Just "fixture-cache", impactReviewProvider = "fixture", openaiModel = "fixture"}
@@ -3116,7 +3116,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     setup tr
     let eventAt base n = Reviews.PullRequestEvent "impact-org" "checkout" 987654 n (T.replicate 40 (show n)) base frozenTime Reviews.Open
         event = eventAt (T.replicate 40 "b")
-        sideProof side code = Proof.ProofMedia{side, revision = T.replicate 40 "7", exitCode = Just code, cast = "cast", gif = "gif", mp4 = "mp4", browser = False, shots = [], chapters = []}
+        sideProof side code = Proof.ProofMedia{side, revision = T.replicate 40 "7", exitCode = Just code, cast = "cast", gif = "gif", mp4 = "mp4", browser = False, shots = [], chapters = [], setup = Nothing}
         deferred rid = dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload = ? AND run_at > now()" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest rid)
     for_ [7, 8, 9] \n -> void $ runQueryEffect tr $ Reviews.receiveEvent Nothing $ event n
     -- Reviews of one base share a single workspace build; another base queues its own.
@@ -3148,6 +3148,34 @@ spec = around withTestResources $ describe "Production impact reviews" do
     fmap (.setup) <$> runQueryEffect tr (Reviews.proofRecipe middle) `shouldReturn` Just "make serve &"
     void $ runQueryEffect tr $ Reviews.saveProofs middle other (script "app") (browserSide Agent.Base 1 :| [browserSide Agent.Head 0])
     fmap (.setup) <$> runQueryEffect tr (Reviews.proofRecipe middle) `shouldReturn` Just "app"
+    -- setupProgress_keepsTheFurthestThenFastest: a setup that starts the app beats one that only ran, even when
+    -- the proof's command failed; between two that start it, the faster on the base (the prepared build) wins;
+    -- a failed run of the saved setup keeps its error for repair until that setup works again.
+    let reached stage took side = (sideProof side 1){Proof.setup = Just Agent.SetupReach{stage, seconds = took, roles = [], failure = Nothing}}
+        saveReached n candidate stage baseSeconds headSeconds = void $ runQueryEffect tr $ Reviews.saveProofs middle (UUIDId $ UUID.fromWords 0 0 1 n) (script candidate) (reached stage baseSeconds Agent.Base :| [reached stage headSeconds Agent.Head])
+        progress = fmap (\r -> (r.setup, r.stage, r.setupSeconds, r.failure)) <$> runQueryEffect tr (Reviews.proofRecipe middle)
+    saveReached 1 "slow app" Agent.AppAnswers 90 300
+    progress `shouldReturn` Just ("slow app", 2, Just 90, Nothing)
+    saveReached 2 "fast app" Agent.AppAnswers 40 400
+    saveReached 3 "a much longer but slower app setup" Agent.AppAnswers 60 60
+    saveReached 4 "true" Agent.SetupRan 1 1
+    progress `shouldReturn` Just ("fast app", 2, Just 40, Nothing)
+    runQueryEffect tr $ Reviews.recordSetupFailure middle "fast app" "port already in use"
+    runQueryEffect tr $ Reviews.recordSetupFailure middle "another setup" "unrelated failure"
+    progress `shouldReturn` Just ("fast app", 2, Just 40, Just "port already in use")
+    saveReached 5 "fast app" Agent.AppAnswers 45 45
+    progress `shouldReturn` Just ("fast app", 2, Just 40, Nothing)
+    -- setupBootstrap_startsFromTheFailedAttempt: before any setup has worked, a failed one is the next review's
+    -- starting point, a newer failure replaces it, and the first working setup supersedes it.
+    dbExec tr "DELETE FROM projects.pr_review_proof_recipes WHERE project_id = ?" (Only testPid)
+    runQueryEffect tr $ Reviews.recordSetupFailure middle "first try" "missing DATABASE_URL"
+    progress `shouldReturn` Just ("first try", 0, Nothing, Just "missing DATABASE_URL")
+    runQueryEffect tr $ Reviews.recordSetupFailure middle "second try" "migrations failed"
+    progress `shouldReturn` Just ("second try", 0, Nothing, Just "migrations failed")
+    saveReached 6 "third try" Agent.SetupRan 30 30
+    progress `shouldReturn` Just ("third try", 1, Just 30, Nothing)
+    runQueryEffect tr $ Reviews.recordSetupFailure middle "fourth try" "port in use"
+    progress `shouldReturn` Just ("third try", 1, Just 30, Nothing)
     void $ runQueryEffect tr $ Reviews.receiveEvent Nothing $ eventAt (T.replicate 40 "c") 4
     builds `shouldReturn` 1 -- the first base's build finished above; this base queues its own
     -- askOnReviewedHead_answersInANewComment: an ask on a head that already has a progress comment answers below itself.
@@ -3591,7 +3619,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 liftIO $ withSystemTempDirectory "impact-review-response" \directory -> do
                   request.prompt `shouldNotSatisfy` T.isInfixOf "private-log-body-must-not-leave-monoscope"
                   dbOne tr "SELECT count(*)::int FROM projects.pr_review_attempts WHERE id = ? AND run_id = ? AND project_id = ? AND provider = ?" (request.attemptId, request.runId, request.projectId, request.provider) `shouldReturn` (1 :: Int)
-                  for_ [("--expect-recipe", True), ("--expect-no-recipe", False)] \(flag, expected) -> when (flag `elem` arguments) $ ("saved proof setup" `T.isInfixOf` request.prompt) `shouldBe` expected
+                  for_ [("--expect-recipe", True), ("--expect-no-recipe", False)] \(flag, expected) -> when (flag `elem` arguments) $ ("best proof setup so far" `T.isInfixOf` request.prompt) `shouldBe` expected
                   when ("--expect-discussion" `elem` arguments) $ (map (`T.isInfixOf` request.prompt) ["Keep payroll admin-only", "src/Routes.hs", "Reports count shows when private", "our own review body", "blacksmith proof report"] `shouldBe` [True, True, True, False, False])
                   when ("--prove-live" `elem` arguments) $ traverse_ (unlift . hooks.progress) [Agent.Planned ("Shows the retry count" :| ["Retries once"]), Agent.Started ("Shows the retry count" :| []), Agent.Recorded ("Shows the retry count" :| []) "proof-1"]
                   when ("--billing-change-before-usage" `elem` arguments) $ dbExec tr "UPDATE projects.projects SET customer_id = 'cus_after_attempt', billing_provider = ? WHERE id = ?" (Projects.LemonSqueezyProvider, reviewPid)

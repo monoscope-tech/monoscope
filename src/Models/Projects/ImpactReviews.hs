@@ -58,6 +58,7 @@ module Models.Projects.ImpactReviews (
   ProofRecipe (..),
   SetupReuse (..),
   proofRecipe,
+  recordSetupFailure,
   PriorReview (..),
   priorReview,
   proofSides,
@@ -699,6 +700,12 @@ saveProofs run attempt script sides = Hasql.transaction TxS.ReadCommitted TxS.Wr
         FROM saved, unnest(#{V.fromList (map fst proof.shots)}::text[], #{V.fromList (map snd proof.shots)}::bytea[]) WITH ORDINALITY AS shot(label, png, n)
       ) SELECT true FROM saved|]
   let setup = script.setup
+      reachOf wanted = find ((== wanted) . (.side)) (toList sides) >>= (.setup)
+      -- Older guests print no stage; a head that passed still proves the setup ran.
+      headStage = maybe (bool Agent.SetupFailed Agent.SetupRan $ any (\p -> p.side == Agent.Head && p.exitCode == Just 0) sides) (.stage) (reachOf Agent.Head)
+      -- The base runs on the prepared build, so its time is the setup's own cost rather than the PR's rebuild.
+      seconds = (\h -> maybe h.seconds (.seconds) (mfilter ((== h.stage) . (.stage)) (reachOf Agent.Base))) <$> reachOf Agent.Head
+      stage = fromIntegral @Int @Int16 $ fromEnum headStage
   if
     | not leased -> Left "Review authorization is no longer available" <$ Tx.condemn
     | full -> Left "Proof budget exhausted; cite the proofs already recorded" <$ Tx.condemn
@@ -710,17 +717,28 @@ saveProofs run attempt script sides = Hasql.transaction TxS.ReadCommitted TxS.Wr
             [HI.sql|WITH prior AS (
           SELECT setup FROM projects.pr_review_proof_recipes WHERE project_id = #{run.projectId} AND owner = #{run.owner} AND repo = #{run.repo}
         ), saved AS (
-          INSERT INTO projects.pr_review_proof_recipes (project_id, owner, repo, setup, revision, run_id)
-          SELECT #{run.projectId}, #{run.owner}, #{run.repo}, #{setup}, #{run.revision}, #{run.id}
-          WHERE #{setup}::text IS NOT NULL AND #{any (\p -> p.side == Agent.Head && p.exitCode == Just 0) sides}
-          ON CONFLICT (project_id, owner, repo) DO UPDATE SET setup = EXCLUDED.setup, revision = EXCLUDED.revision, run_id = EXCLUDED.run_id, updated_at = now()
-          -- A trivial terminal setup must not displace a full app recipe; a browser proof's setup carries the app.
-          WHERE #{any (.browser) sides} OR length(EXCLUDED.setup) >= length(projects.pr_review_proof_recipes.setup)
+          INSERT INTO projects.pr_review_proof_recipes (project_id, owner, repo, setup, revision, run_id, stage, setup_seconds)
+          SELECT #{run.projectId}, #{run.owner}, #{run.repo}, #{setup}, #{run.revision}, #{run.id}, #{stage}, #{fromIntegral @Int @Int32 <$> seconds}
+          WHERE #{setup}::text IS NOT NULL AND #{headStage > Agent.SetupFailed}
+          ON CONFLICT (project_id, owner, repo) DO UPDATE SET setup = EXCLUDED.setup, revision = EXCLUDED.revision, run_id = EXCLUDED.run_id, stage = EXCLUDED.stage, setup_seconds = EXCLUDED.setup_seconds, failure = NULL, updated_at = now()
+          -- A setup that got further wins; once both start the app, the faster one does. Below that, a trivial
+          -- terminal setup must not displace a full app recipe, and a browser proof's setup carries the app.
+          WHERE EXCLUDED.stage > projects.pr_review_proof_recipes.stage
+            OR (EXCLUDED.stage = projects.pr_review_proof_recipes.stage AND CASE WHEN EXCLUDED.stage >= 2
+              THEN EXCLUDED.setup_seconds < coalesce(projects.pr_review_proof_recipes.setup_seconds, 2147483647)
+              ELSE #{any (.browser) sides} OR length(EXCLUDED.setup) >= length(projects.pr_review_proof_recipes.setup) END)
+          RETURNING 1
+        ), healed AS (
+          -- The saved setup working again clears the error kept for its repair.
+          UPDATE projects.pr_review_proof_recipes SET failure = NULL
+          WHERE project_id = #{run.projectId} AND owner = #{run.owner} AND repo = #{run.repo} AND setup = #{setup}
+            AND #{headStage > Agent.SetupFailed} AND NOT EXISTS (SELECT 1 FROM saved)
         ) SELECT CASE WHEN #{setup}::text IS NULL THEN #{NoSetup} WHEN (SELECT setup FROM prior) = #{setup} THEN #{Reused} ELSE #{Changed} END|]
     | otherwise -> Left ("Proof " <> key <> " was already recorded; record the proof again") <$ Tx.condemn
 
 
-data ProofRecipe = ProofRecipe {setup :: Text, revision :: Text}
+-- | A repository's best setup so far: how far it got, how long it took on the prepared build, and its last error.
+data ProofRecipe = ProofRecipe {setup :: Text, revision :: Text, stage :: Int16, setupSeconds :: Maybe Int32, failure :: Maybe Text}
   deriving stock (Generic)
   deriving anyclass (HI.DecodeRow)
 
@@ -745,7 +763,18 @@ priorReview run =
 
 
 proofRecipe :: DB es => ReviewRun -> Eff es (Maybe ProofRecipe)
-proofRecipe run = Hasql.interpOne [HI.sql|SELECT setup, revision FROM projects.pr_review_proof_recipes WHERE project_id = #{run.projectId} AND owner = #{run.owner} AND repo = #{run.repo}|]
+proofRecipe run = Hasql.interpOne [HI.sql|SELECT setup, revision, stage, setup_seconds, failure FROM projects.pr_review_proof_recipes WHERE project_id = #{run.projectId} AND owner = #{run.owner} AND repo = #{run.repo}|]
+
+
+-- | Keeps a failed setup's error for the next attempt to repair: on the saved setup itself, or, before any
+-- setup has worked, as the starting point the next review fixes rather than rewrites.
+recordSetupFailure :: DB es => ReviewRun -> Text -> Text -> Eff es ()
+recordSetupFailure run setup failure =
+  Hasql.interpExecute_
+    [HI.sql|INSERT INTO projects.pr_review_proof_recipes (project_id, owner, repo, setup, revision, run_id, stage, failure)
+    VALUES (#{run.projectId}, #{run.owner}, #{run.repo}, #{setup}, #{run.revision}, #{run.id}, 0, #{T.take 2000 failure})
+    ON CONFLICT (project_id, owner, repo) DO UPDATE SET failure = EXCLUDED.failure, setup = EXCLUDED.setup, revision = EXCLUDED.revision, run_id = EXCLUDED.run_id, updated_at = now()
+    WHERE projects.pr_review_proof_recipes.setup = EXCLUDED.setup OR projects.pr_review_proof_recipes.stage = 0|]
 
 
 proofSides :: DB es => ReviewRun -> UUIDId "agent_attempt" -> Eff es [ProofSide]
