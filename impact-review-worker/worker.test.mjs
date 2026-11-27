@@ -62,7 +62,8 @@ test('native bash calls end by the agent deadline, whatever timeout they ask for
     await runToolCall(call, { tools, assistantMessage: { role: 'assistant', content: [call] }, context: { systemPrompt: '', messages: [], tools } });
   }
   const [unset, huge, small] = requests.map(operation => operation.contents.timeout);
-  assert.ok(unset <= 90 && unset >= 85 && huge === unset, `${unset} ${huge}`);
+  // Each call reads the clock, so two calls may straddle a second and differ by one.
+  assert.ok([unset, huge].every(t => t <= 90 && t >= 85) && Math.abs(huge - unset) <= 1, `${unset} ${huge}`);
   assert.equal(small, 30);
 });
 
