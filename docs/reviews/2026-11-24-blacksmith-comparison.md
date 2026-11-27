@@ -82,6 +82,27 @@ Comparing our stills with Blacksmith's on the same PRs:
   local changes (at most three clusters, under a quarter of the still); relaid pages stay unmarked.
 - Head checks still take 285 s against 53 s for base, so the prepared head workspace below is the next lever.
 
+### Issues found (2026-11-27)
+
+Blacksmith's "differs" findings test what reviewers asked for and edge cases of the change; our agent saw
+only the PR title and description. #1078 and #1079 give it the conversation and inline review comments
+(newest first, our own and Blacksmith's excluded) and ask for claims from reviewer asks and one at-risk
+edge case. On mirror #6 (Talstack #720), with the upstream review's ask posted ("payroll pages should be
+admin-only"), the re-proof reported:
+
+- differs: Plain member is refused from payroll. The head recording shows the plain member getting
+  success on the payroll dashboard and configuration route (Blacksmith's c5).
+- differs: Payroll configuration member edge case, found by the agent itself.
+- matches: Payroll dashboard and configuration render for the admin.
+
+That is our first issue found that Blacksmith also found, with a recording for each claim.
+
+### Faster head checks (2026-11-27)
+
+A Talstack rebuild after a change to a module with 54 dependents takes 344 s serially and 194 s with
+`-j4`. #1088 makes the proof guest build with `ghc-options: -j`; `-j` is left out of cabal's
+configuration hash, so prepared workspaces stay warm. It applies at the next guest rebuild.
+
 ### Next: a prepared head workspace (proposed)
 
 Reviews average 3.0 proofs, always the budget, and each head check rebuilds the PR from the base
