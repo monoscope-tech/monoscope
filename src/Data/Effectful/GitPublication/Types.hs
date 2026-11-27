@@ -1,7 +1,8 @@
-module Data.Effectful.GitPublication.Types (Stage (..), Failure (..), Authorization (..), MediaUrls (..), Receipt (..), Visibility (..), PullState (..)) where
+module Data.Effectful.GitPublication.Types (Stage (..), Failure (..), Authorization (..), MediaUrls (..), Receipt (..), Visibility (..), PullState (..), keepsBody) where
 
 import Data.Aeson qualified as AE
 import Data.Effectful.CodeReview.Types (Revision)
+import Data.Text qualified as T
 import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..))
 import Pkg.Git (PullState (..), Visibility (..))
 import Relude
@@ -42,3 +43,17 @@ data MediaUrls = MediaUrls {video :: Text, diagram :: Text}
 data Receipt = Receipt {number :: Word64, url :: Text, head :: Revision, source :: Text, mediaSha256 :: Text, assets :: MediaUrls, draft :: Bool, state :: PullState}
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | Whether a pull request body still opens with the whole published explanation. Repository bots
+-- append footers after it, which leave the explanation intact; an edit inside it does not.
+--
+-- >>> keepsBody "a\n\nb" "a\r\n\r\nb\n\n<!-- bot footer -->"
+-- True
+-- >>> (keepsBody "a\n\nb" "a\n\nbc", keepsBody "a\n\nb" "Edited\na\n\nb")
+-- (False,False)
+keepsBody :: Text -> Text -> Bool
+keepsBody expected actual = body == ours || (ours <> "\n") `T.isPrefixOf` body
+  where
+    normalized = T.strip . T.replace "\r\n" "\n"
+    (ours, body) = (normalized expected, normalized actual)

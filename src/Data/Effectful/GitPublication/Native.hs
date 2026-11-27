@@ -199,7 +199,7 @@ publish store executable token linked artifacts explanation context authorize = 
                     else do
                       when (isJust linked) $ throwE PullRequestChanged
                       case progress of Finished _ -> throwE StateChanged; Uploading _ _ -> throwE UploadUncertain; (Prepared; Draft{}) -> pass
-                      ensure PullRequestChanged $ remote.state == Open && remote.draft && normalized (fromMaybe "" remote.body) == normalized (body urls Nothing)
+                      ensure PullRequestChanged $ remote.state == Open && remote.draft && keepsBody (body urls Nothing) (fromMaybe "" remote.body)
                       guardRemote $ if asset == Video then AttachVideo else AttachDiagram
                       save $ Uploading remote.number asset
                       liftIO $ writeFileBS (temporary </> "description.md") $ encodeUtf8 $ body urls (Just asset)
@@ -217,7 +217,7 @@ publish store executable token linked artifacts explanation context authorize = 
           ensure PullRequestChanged $ final.state == Open || final.merged
           video <- maybe (throwE UploadUncertain) pure $ Map.lookup Video urls
           diagram <- maybe (throwE UploadUncertain) pure $ Map.lookup Diagram urls
-          ensure InvalidReceipt $ normalized (fromMaybe "" final.body) == normalized (body urls Nothing) && video /= diagram
+          ensure InvalidReceipt $ keepsBody (body urls Nothing) (fromMaybe "" final.body) && video /= diagram
           save $ Finished final.number
           pure $ Receipt final.number final.htmlUrl result.head explanation.source context.mediaSha256 (MediaUrls video diagram) final.draft final.state
         hoistEither $ fromRight (Left SourceChanged) verified
