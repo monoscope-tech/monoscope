@@ -31,6 +31,8 @@ module Models.Projects.ImpactReviews (
   updateSettings,
   latestRuns,
   retryRun,
+  queueSetupRun,
+  setupOnly,
   supersedeRun,
   startAttempt,
   recordUsage,
@@ -176,7 +178,8 @@ data PullRequestEvent = PullRequestEvent
   deriving stock (Generic, Show)
 
 
-data Command = Review | Prove
+-- | Setup: a setup-only run that builds the repository's proof setup and leaves the pull request's review alone.
+data Command = Review | Prove | Setup
   deriving stock (Eq, Generic, Read, Show)
   deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" Command
 
@@ -288,8 +291,8 @@ decodeComment body = do
 
 -- | The first @\@monoscope@ command in a comment, and any focus written after it.
 --
--- >>> map parseAsk ["@monoscope review", "@Monoscope TEST", "Thanks! @monoscope prove it, and check the empty state on mobile", "@monoscope prove", "email me@monoscope.dev", "@monoscope reviewer"]
--- [Just (Review,Nothing),Just (Prove,Nothing),Just (Prove,Just "and check the empty state on mobile"),Nothing,Nothing,Nothing]
+-- >>> map parseAsk ["@monoscope review", "@Monoscope TEST", "Thanks! @monoscope prove it, and check the empty state on mobile", "@monoscope prove", "email me@monoscope.dev", "@monoscope reviewer", "@monoscope setup"]
+-- [Just (Review,Nothing),Just (Prove,Nothing),Just (Prove,Just "and check the empty state on mobile"),Nothing,Nothing,Nothing,Just (Setup,Nothing)]
 parseAsk :: Text -> Maybe (Command, Maybe Text)
 parseAsk body = listToMaybe $ mapMaybe command $ T.breakOnAll "@" body
   where
@@ -300,7 +303,7 @@ parseAsk body = listToMaybe $ mapMaybe command $ T.breakOnAll "@" body
       let rest = T.drop (T.length "@monoscope ") after
       asum
         [ (c, focus) <$ guard (prefixCI word rest && maybe True ((`elem` [' ', ',', '.', ':', '!', '\n']) . fst) (T.uncons remainder))
-        | (word, c) <- [("review", Review), ("test", Prove), ("prove it", Prove)]
+        | (word, c) <- [("review", Review), ("test", Prove), ("prove it", Prove), ("setup", Setup)]
         , let remainder = T.drop (T.length word) rest
               focus = guarded (not . T.null) $ T.take 500 $ T.strip $ T.dropWhile (`elem` [',', ':', '-', '.', ' ']) $ T.takeWhile (/= '\n') remainder
         ]
@@ -336,10 +339,11 @@ receiveEvent request event =
   ), runs AS (
     INSERT INTO projects.pr_review_runs (thread_id, revision, state, request, base)
     SELECT id, #{event.revision}, CASE WHEN queue THEN #{Queued} ELSE #{Superseded} END, #{request}, #{event.base} FROM decided WHERE stop OR queue
-    ON CONFLICT (thread_id, revision) DO UPDATE SET state = EXCLUDED.state, request = coalesce(EXCLUDED.request, projects.pr_review_runs.request), base = EXCLUDED.base,
-      result = CASE WHEN EXCLUDED.request IS NULL THEN projects.pr_review_runs.result END, error = NULL,
+    ON CONFLICT (thread_id, revision) DO UPDATE SET state = EXCLUDED.state, request = coalesce(EXCLUDED.request, CASE WHEN projects.pr_review_runs.request->>'command' <> 'setup' THEN projects.pr_review_runs.request END), base = EXCLUDED.base,
+      -- A setup-only run leaves the pull request's review and its comment as they were.
+      result = CASE WHEN EXCLUDED.request IS NULL OR EXCLUDED.request->>'command' = 'setup' THEN projects.pr_review_runs.result END, error = NULL,
       -- An ask answers below itself, so it does not reuse the comment an earlier review of this head updated.
-      progress_comment_id = CASE WHEN EXCLUDED.request IS NULL THEN projects.pr_review_runs.progress_comment_id END
+      progress_comment_id = CASE WHEN EXCLUDED.request IS NULL OR EXCLUDED.request->>'command' = 'setup' THEN projects.pr_review_runs.progress_comment_id END
     WHERE EXCLUDED.state = #{Superseded} OR projects.pr_review_runs.state = #{Superseded}
       OR (EXCLUDED.request IS NOT NULL AND projects.pr_review_runs.state IN (#{Queued}, #{Completed}, #{Incomplete}))
     RETURNING id, state, thread_id
@@ -522,11 +526,36 @@ retryRun :: DB es => ProjectId -> ReviewId -> Eff es ()
 retryRun pid rid = do
   let payload = Aeson $ AE.toJSON $ Jobs.ReviewPullRequest rid
   Hasql.interpExecute_
-    [HI.sql|WITH retried AS (UPDATE projects.pr_review_runs r SET state = #{Queued}, result = NULL, error = NULL, rating = NULL, rated_at = NULL
+    [HI.sql|WITH retried AS (UPDATE projects.pr_review_runs r SET state = #{Queued}, result = NULL, error = NULL, rating = NULL, rated_at = NULL,
+      request = CASE WHEN r.request->>'command' <> 'setup' THEN r.request END
       FROM projects.pr_review_threads t WHERE r.id = #{rid} AND r.thread_id = t.id AND t.project_id = #{pid}
         AND r.revision = t.latest_revision AND (t.lease_until IS NULL OR t.lease_until < now())
       RETURNING r.id)
       INSERT INTO background_jobs_long (run_at, status, payload) SELECT now(), 'queued', #{payload} FROM retried|]
+
+
+-- | After a review, a repository that uses proofs but has no setup, or whose setup last failed, gets one setup-only run
+-- of the same pull request, at most daily; a setup that works and has not failed since is left alone.
+queueSetupRun :: DB es => ReviewRun -> Eff es ()
+queueSetupRun run =
+  Hasql.interpExecute_
+    [HI.sql|WITH needed AS (
+      SELECT 1 WHERE (EXISTS (SELECT 1 FROM projects.pr_review_proof_recipes
+          WHERE project_id = #{run.projectId} AND owner = #{run.owner} AND repo = #{run.repo} AND failure IS NOT NULL)
+        OR (EXISTS (SELECT 1 FROM projects.pr_review_proofs WHERE run_id = #{run.id})
+          AND NOT EXISTS (SELECT 1 FROM projects.pr_review_proof_recipes WHERE project_id = #{run.projectId} AND owner = #{run.owner} AND repo = #{run.repo})))
+        AND NOT EXISTS (SELECT 1 FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
+          WHERE t.project_id = #{run.projectId} AND t.owner = #{run.owner} AND t.repo = #{run.repo} AND r.request->>'command' = 'setup'
+            AND (r.state IN (#{Queued}, #{Reviewing}) OR r.finished_at > now() - interval '24 hours'))
+    ), queued AS (
+      UPDATE projects.pr_review_runs SET state = #{Queued}, request = #{Ask "monoscope" 0 Setup Nothing}, error = NULL
+      WHERE id = #{run.id} AND state = #{Completed} AND EXISTS (SELECT 1 FROM needed) RETURNING id
+    ) INSERT INTO background_jobs_long (run_at, status, payload) SELECT now(), 'queued', #{Aeson $ AE.toJSON $ Jobs.ReviewPullRequest run.id} FROM queued|]
+
+
+-- | A setup-only run: it builds the repository's proof setup and publishes nothing to the pull request.
+setupOnly :: ReviewRun -> Bool
+setupOnly run = ((.command) <$> run.request) == Just Setup
 
 
 -- | Why a review stopped before starting: its project had no active review routine.
