@@ -547,7 +547,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                     regression pinned baseline sessionId artifact revisions outbox = active $ \session -> do
                       elapsed <- getMonotonicTime
                       let options = (session.verifier (Outbox.checksPath outbox)){Workspace.sideSeconds = max 60 $ min (15 * 60) $ (budget - ceiling (elapsed - started) - 120) `div` 2}
-                      case Workspace.mkRegressionRequest pinned.projectId pinned.runId pinned.attemptId sessionId pinned.base session.imageBuildId baseline artifact revisions of
+                      headBaseline <- session.headBaseline
+                      case Workspace.mkRegressionRequest pinned.projectId pinned.runId pinned.attemptId sessionId pinned.base session.imageBuildId baseline headBaseline artifact revisions of
                         Left _ -> pure $ Left "Regression arguments do not match the host contract"
                         Right request -> do
                           checked <- tryAny $ Workspace.verifyRegression options request

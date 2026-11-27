@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Data.Effectful.AgentWorkspace (Workspace, checkLogLimit, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Outcome (..), Start (..), preparedOutcome, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), Seat (..), Slots (..), hostSlots, buildSeconds, withSlot, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, compileFailed, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, checkLogLimit, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Outcome (..), Start (..), preparedOutcome, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, prepareHead, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, Pool (..), Seat (..), Slots (..), hostSlots, buildSeconds, withSlot, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, compileFailed, regressionLogs, Side (..), TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
 import Control.Exception qualified as Exception
@@ -586,7 +586,8 @@ instance AE.FromJSON Revisions where
       _ -> fail "Expected pinned baseline, candidate, or ordered baseline/candidate comparison"
 
 
-data RegressionRequest artifact = RegressionRequest {projectId :: ProjectId, runId :: Identifier "run", attemptId :: Identifier "attempt", sessionId :: Identifier "session", base :: Revision, imageBuildId :: ImageId, workspace :: Baseline, artifact :: artifact, revisions :: Revisions, ownerPid :: Maybe Word32}
+-- | @headWorkspace@: the head side resumes from its own build when the session prepared one; otherwise from @workspace@.
+data RegressionRequest artifact = RegressionRequest {projectId :: ProjectId, runId :: Identifier "run", attemptId :: Identifier "attempt", sessionId :: Identifier "session", base :: Revision, imageBuildId :: ImageId, workspace :: Baseline, headWorkspace :: Maybe Baseline, artifact :: artifact, revisions :: Revisions, ownerPid :: Maybe Word32}
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
 
@@ -1159,7 +1160,9 @@ verifyArtifactRegression options request = do
     checkId <- Identifier <$> UUID4.nextRandom
     created <- getCurrentTime
     let directory = root </> identifierText checkId
-        workspaceHash = case request.workspace of Pristine -> Nothing; PreparedCheckpoint snapshot -> Just snapshot.sha256
+        baselineFor side = if side == Head then fromMaybe request.workspace request.headWorkspace else request.workspace
+        hashOf = \case Pristine -> Nothing; PreparedCheckpoint snapshot -> Just snapshot.sha256
+        workspaceHash = hashOf request.workspace
         template = RegressionReport checkId request.projectId request.runId request.attemptId request.imageBuildId workspaceHash created (sha $ encodeUtf8 artifact.script) (sha . encodeUtf8 <$> artifact.testPatch) (sha $ toStrict $ Encoding.encodingToLazyByteString $ AE.genericToEncoding AE.defaultOptions artifact) artifact.failureMessage Running []
     createDirectory directory
     Posix.setFileMode directory 0o700
@@ -1204,7 +1207,7 @@ verifyArtifactRegression options request = do
             image <- rpc @Image $ Resolve options.image
             ensure $ image.buildId == request.imageBuildId
             let sandbox = Sandbox image.assetDir checkResources.cpus checkResources.memoryMiB RegistryCow $ one ("/checkout", checkout)
-            case request.workspace of
+            case baselineFor side of
               Pristine -> rpc @() $ Create sandbox
               PreparedCheckpoint snapshot -> do
                 let mutable = private </> "resume.qcow2"
@@ -1217,7 +1220,7 @@ verifyArtifactRegression options request = do
             change $ \measured -> measured{vmId = Just vm}
             let revisionArgs = ["-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"]
                 guestGit args = "/usr/bin/git" :| (revisionArgs <> args)
-            case request.workspace of
+            case baselineFor side of
               Pristine -> for_ [("/bin/mkdir" :: Text) :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/checkout/.", "/workspace"]] $ void . checked rpc
               PreparedCheckpoint _ -> do
                 for_ ["/workspace", "/checkout/.git"] $ \path -> void $ checked rpc $ "/usr/bin/git" :| ["config", "--system", "--add", "safe.directory", path]
@@ -1288,7 +1291,7 @@ verifyArtifactRegression options request = do
           change $ \measured -> measured{durationMs = fromIntegral (ended - started) / 1000000, logBytes = fromIntegral $ BS.length log, logSha256 = sha log, tail = decodeUtf8With lenientDecode $ BS.drop (max 0 $ BS.length log - 4096) log, logPath = Just $ "/run/monoscope-review-output/check-" <> toText (identifierText checkId) <> "-" <> (if side == Base then "base" else "head") <> ".log"}
           measured <- readIORef observation
           let kind = case artifact.testPatch of Nothing -> Just $ ScriptCheck template.regressionSha256; Just _ -> case measured.testPatchDisposition of Just Injected -> Just $ InjectedTest template.regressionSha256; Just Retained -> Just $ RetainedTest template.regressionSha256; Nothing -> Nothing
-              receipt = RegressionReceipt key.id request.attemptId checkId side revision request.imageBuildId workspaceHash template.scriptSha256 kind measured.status measured.exitCode (ceiling measured.durationMs) checkResources.cpus checkResources.memoryMiB measured.logBytes measured.logSha256
+              receipt = RegressionReceipt key.id request.attemptId checkId side revision request.imageBuildId (hashOf $ baselineFor side) template.scriptSha256 kind measured.status measured.exitCode (ceiling measured.durationMs) checkResources.cpus checkResources.memoryMiB measured.logBytes measured.logSha256
           publish (takeDirectory root </> identifierText receipt.id <> ".json") $ AE.object ["tag" AE..= ("Check" :: Text), "contents" AE..= receipt]
           modifyIORef' receipts (<> [receipt])
       results <- readIORef executions
@@ -1552,8 +1555,8 @@ leasedBaseline :: Maybe Leased -> Baseline
 leasedBaseline = maybe Pristine $ \leased -> PreparedCheckpoint $ Snapshot leased.prepared.path leased.prepared.manifest.sha256
 
 
-mkRegressionRequest :: UUIDId "project" -> UUIDId run -> UUIDId "agent_attempt" -> UUID -> Text -> ImageId -> Baseline -> AE.Value -> [(Text, Text)] -> Either Text (RegressionRequest ArtifactInput)
-mkRegressionRequest project run attempt session base image baseline artifact revisions = first toText $ AET.parseEither AE.parseJSON $ AE.object ["projectId" AE..= project, "runId" AE..= run, "attemptId" AE..= attempt, "sessionId" AE..= session, "base" AE..= base, "imageBuildId" AE..= image, "workspace" AE..= baseline, "artifact" AE..= artifact, "revisions" AE..= revisions]
+mkRegressionRequest :: UUIDId "project" -> UUIDId run -> UUIDId "agent_attempt" -> UUID -> Text -> ImageId -> Baseline -> Maybe Baseline -> AE.Value -> [(Text, Text)] -> Either Text (RegressionRequest ArtifactInput)
+mkRegressionRequest project run attempt session base image baseline headBaseline artifact revisions = first toText $ AET.parseEither AE.parseJSON $ AE.object ["projectId" AE..= project, "runId" AE..= run, "attemptId" AE..= attempt, "sessionId" AE..= session, "base" AE..= base, "imageBuildId" AE..= image, "headWorkspace" AE..= headBaseline, "workspace" AE..= baseline, "artifact" AE..= artifact, "revisions" AE..= revisions]
 
 
 leaseWorkspace :: Options -> Request -> (Maybe Leased -> IO a) -> IO a
@@ -1636,6 +1639,30 @@ storage connection action = either (const invalid) pure =<< Minio.runMinioWith c
 
 
 -- | Freeze a live disk independently of the pristine verifier baseline.
+-- | A session's head build: its leased base checkpoint checked out at the head and built with the repository's
+-- prepare script, so the head side of each check resumes warm instead of rebuilding the pull request.
+prepareHead :: RegressionOptions -> FilePath -> ImageId -> Leased -> Revision -> FilePath -> IO Baseline
+prepareHead options script image leased revision directory
+  -- A session at its base (a fix run) already has that build.
+  | revision == leased.prepared.manifest.identity.base = pure $ leasedBaseline (Just leased)
+  | otherwise = withSandbox VerifierPool options.bridge \rpc -> do
+      resolved <- rpc @Image $ Resolve options.image
+      ensure $ resolved.buildId == image
+      let mutable = directory </> "head-resume.qcow2"
+          run cwd argv = do
+            result <- rpc @Execution $ Execute $ GuestCommand argv cwd True
+            unless (result.exitCode == 0) $ throwIO $ userError $ "Head build step failed: " <> toString (T.takeEnd 600 result.stdout)
+          git args = "/usr/bin/git" :| (["-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"] <> args)
+      copySnapshot (Snapshot leased.prepared.path leased.prepared.manifest.sha256) mutable
+      rpc @() $ Resume (Sandbox resolved.assetDir checkResources.cpus checkResources.memoryMiB RegistryCow $ one ("/checkout", options.checkout), mutable)
+      for_ ["/workspace", "/checkout/.git"] \path -> run (Just "/") $ "/usr/bin/git" :| ["config", "--system", "--add", "safe.directory", path]
+      traverse_ (run (Just "/") . git) [["fetch", "--quiet", "--no-tags", "--", "/checkout", revisionText revision], ["checkout", "--quiet", "--detach", revisionText revision]]
+      rpc @() $ CopyFile $ Copy script "/run/monoscope-prepare.sh"
+      run (Just "/") $ "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]
+      run (Just "/workspace") $ agentCommand ["/bin/bash", "--noprofile", "--norc", "/run/monoscope-prepare.sh"]
+      PreparedCheckpoint <$> captureSnapshot rpc image (directory </> "head.qcow2")
+
+
 captureSnapshot :: RPC -> ImageId -> FilePath -> IO Snapshot
 captureSnapshot rpc image path = do
   checkpoint <- rpc $ Checkpoint path

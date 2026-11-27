@@ -24,8 +24,10 @@ import System.IO.Error (userError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Posix.Signals (Handler (Catch), installHandler, sigTERM)
 import System.Process.Typed (proc, readProcess_)
+import UnliftIO.Async (withAsync)
 import UnliftIO.Concurrent (myThreadId)
 import UnliftIO.Exception (bracket, mask, onException, throwIO, throwTo, tryAny)
+import UnliftIO.Timeout qualified as Timeout
 import "base64" Data.ByteString.Base64 qualified as Base64
 
 
@@ -116,7 +118,7 @@ data CacheReport = CacheReport {state :: CacheState, durationMs :: Word64}
 -- | A running agent VM: Pi's file and shell calls, root copies into the guest, and verifier settings for fresh VMs.
 -- @output@ runs a command in /workspace and returns its exit status, retained bytes and whether the limit truncated them;
 -- @root@ and @place@ change the workspace or /run as root and throw on failure.
-data Session = Session {suspend :: FilePath -> IO Suspended, cache :: CacheReport, prepared :: Maybe AgentWorkspace.Leased, skills :: FilePath, imageBuildId :: ImageId, baseline :: AgentWorkspace.Baseline, operate :: Operation -> IO (Either Text AE.Value), copyIn :: FilePath -> Text -> IO (), verifier :: FilePath -> RegressionOptions, output :: NonEmpty Text -> Word32 -> IO (LogExit, ByteString, Bool), root :: NonEmpty Text -> IO (), place :: Text -> ByteString -> IO ()}
+data Session = Session {suspend :: FilePath -> IO Suspended, cache :: CacheReport, prepared :: Maybe AgentWorkspace.Leased, skills :: FilePath, imageBuildId :: ImageId, baseline :: AgentWorkspace.Baseline, operate :: Operation -> IO (Either Text AE.Value), copyIn :: FilePath -> Text -> IO (), verifier :: FilePath -> RegressionOptions, headBaseline :: IO (Maybe AgentWorkspace.Baseline), output :: NonEmpty Text -> Word32 -> IO (LogExit, ByteString, Bool), root :: NonEmpty Text -> IO (), place :: Text -> ByteString -> IO ()}
 
 
 -- | Owns the agent VM for the action's lifetime and records its allocation however it ends: @allocate@ after a
@@ -245,7 +247,16 @@ withGuest seat host expected checkout revision start lease attempt allocate reta
       let suspend path = do
             void $ run "/" $ "/bin/sh" :| ["-c", "set -eu; umask 077; mkdir -p /var/lib/monoscope-agent; cd /run; tar --exclude=monoscope-skills -cf /var/lib/monoscope-agent/run.tar -- monoscope-*"]
             Suspended revision imageBuildId (AgentWorkspace.checkpointSummary <$> leased) <$> AgentWorkspace.captureSnapshot rpc imageBuildId path
-      Right <$> action (Session suspend cache leased skills imageBuildId (AgentWorkspace.leasedBaseline leased) operate copyIn (\artifacts -> RegressionOptions artifacts checkout host.image host.bridge (15 * 60)) output (void . workspace . toList) upload)
+      let verifierAt artifacts = RegressionOptions artifacts checkout host.image host.bridge (15 * 60)
+      -- The head is built once per session while the agent reads the code; until it is ready, or if it fails,
+      -- head checks resume from the base build as before.
+      headReady <- newIORef Nothing
+      let buildHead = for_ ((,) <$> host.workspace <*> leased) \(configured, held) ->
+            tryAny (Timeout.timeout (AgentWorkspace.buildSeconds * 1000000) $ AgentWorkspace.prepareHead (verifierAt temporary) configured.script imageBuildId held revision temporary)
+              >>= traverse_ (writeIORef headReady . Just)
+              . join
+              . rightToMaybe
+      withAsync buildHead \_ -> Right <$> action (Session suspend cache leased skills imageBuildId (AgentWorkspace.leasedBaseline leased) operate copyIn verifierAt (readIORef headReady) output (void . workspace . toList) upload)
   receipt <- measured
   case outcome of
     Left failed -> void (tryAny $ traverse_ allocate receipt) >> throwIO failed
@@ -305,7 +316,8 @@ runSession path = do
                             Check artifact -> do
                               let options = session.verifier request.artifactDir
                               checked <- tryAny $ do
-                                regression <- either (const $ fail "Invalid native regression request") pure $ AgentWorkspace.mkRegressionRequest request.projectId request.runId request.attemptId verifierSession (revisionText request.base) session.imageBuildId session.baseline artifact [("base", revisionText request.base), ("head", revisionText request.head)]
+                                headBaseline <- session.headBaseline
+                                regression <- either (const $ fail "Invalid native regression request") pure $ AgentWorkspace.mkRegressionRequest request.projectId request.runId request.attemptId verifierSession (revisionText request.base) session.imageBuildId session.baseline headBaseline artifact [("base", revisionText request.base), ("head", revisionText request.head)]
                                 verified <- AgentWorkspace.verifyRegression options regression
                                 traverse_ (\(_, hostPath, guestPath) -> session.copyIn hostPath guestPath) $ AgentWorkspace.regressionLogs options verified
                                 pure $ AE.toJSON verified
