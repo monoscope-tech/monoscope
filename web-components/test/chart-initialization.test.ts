@@ -90,3 +90,23 @@ test('redrawing a chart before its data lands leaves it as it is', () => {
   expect(() => drawSized(chart, null, shell)).not.toThrow();
   chart.dispose();
 });
+
+// Scrolling the metrics page spent 3.7s in forced layouts: every redraw rebuilt every chart's tooltip,
+// and a tooltip appended to the body measures the page when built.
+test('drawSized_buildsTheTooltipOnHoverAndKeepsItAcrossRedraws', () => {
+  const el = document.createElement('div');
+  document.body.append(el);
+  Object.defineProperties(el, { clientWidth: { value: 400 }, clientHeight: { value: 200 } });
+  const chart = echarts.init(el);
+  const option = (extra: object) => ({ tooltip: { trigger: 'axis', appendTo: 'body' }, xAxis: { type: 'time' }, yAxis: { type: 'value' },
+    dataset: { source: [['t', 'v'], [0, 1]] }, series: [{ type: 'line', encode: { x: 0, y: 1 } }], ...extra });
+  const tooltips = () => [...document.body.children].filter((c: any) => c.domBelongToZr);
+  drawSized(chart, el, option({ legend: { show: true } }), '', true);
+  expect(tooltips()).toHaveLength(0); // built on first hover, not for every chart scrolled past
+  el.dispatchEvent(new Event('pointerenter'));
+  const tooltip = tooltips()[0];
+  drawSized(chart, el, option({}), '', true);
+  expect(tooltip?.isConnected).toBe(true);
+  expect((chart.getOption() as any).legend ?? []).toHaveLength(0); // a dropped component still goes
+  chart.dispose();
+});

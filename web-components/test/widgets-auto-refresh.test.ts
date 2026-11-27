@@ -64,7 +64,7 @@ describe('Log Explorer chart auto-refresh', () => {
     expect(sent.searchParams.get('query')).toBe([filter, query].filter(Boolean).join(' | '));
   });
 
-  // The data response replaces the whole option (notMerge), so layout and markers must be reapplied.
+  // The data response replaces the whole option but the tooltip, so layout and markers must be reapplied.
   test('release markers and compact spacing survive the data response', async () => {
     const instance = chart();
     (window as any).echarts = { getInstanceByDom: () => null, init: () => instance };
@@ -79,8 +79,8 @@ describe('Log Explorer chart auto-refresh', () => {
     chartWidget({ ...config, opt: { ...config.opt, grid: { top: 8, bottom: 36 }, legend: { show: true, bottom: 2 }, xAxis: { axisLabel: { margin: 8 } } }, markers: [{ label: '1.0', at: '2026-09-25T10:00:00Z' }, { label: 'bad', at: 'nope' }] });
     (globalThis as any).triggerIntersection();
     await vi.waitFor(() => expect(instance.hideLoading).toHaveBeenCalled());
-    const [option, notMerge] = instance.setOption.mock.calls.at(-1)!;
-    expect(notMerge).toBe(true);
+    const [option, merge] = instance.setOption.mock.calls.at(-1)!;
+    expect(merge.replaceMerge).toContain('series');
     const markers = option.series.filter((s: any) => s.id === '__markers');
     expect(markers).toHaveLength(1);
     expect(markers[0].markLine.data).toEqual([{ xAxis: Date.parse('2026-09-25T10:00:00Z'), name: '1.0' }]);
