@@ -1859,7 +1859,7 @@ testPid = UUIDId UUID.nil
 
 -- | Telemetry on Postgres alone (reads, charts and writes), for a spec that seeds or mutates it with raw SQL.
 withPgTelemetry :: TestResources -> TestResources
-withPgTelemetry tr = tr{trATCtx = tr.trATCtx{env = pg, config = pg, timefusionPgPool = tr.trATCtx.pool}}
+withPgTelemetry tr = tr{trATCtx = tr.trATCtx{env = pg, config = pg, timefusionPgPool = tr.trATCtx.pool, hasqlTimefusionPool = tr.trATCtx.hasqlPool, hasqlTimefusionUsesPgTypes = True}}
   where
     pg = tr.trATCtx.env{enableTimefusionReads = False, enableTimefusionWrites = False}
 
