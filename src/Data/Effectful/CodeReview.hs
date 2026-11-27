@@ -609,7 +609,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                     when (BS.length (encodeUtf8 text) > 262144) $ reject "Regression patch file exceeds its 256 KiB limit"
                                     pure text
                                 when (T.null testPatch || T.length testPatch > 262144) $ reject "Regression patch must be nonempty and within its limit"
-                                let artifact = TestArtifact script testPatch failureMessage
+                                -- Through the smart constructor: the admission verdict binds to this artifact after a JSON round trip.
+                                artifact <- either reject pure $ Workspace.mkTestArtifact script testPatch failureMessage
                                 requireBudget 1
                                 admitted <- liftIO $ tryAny $ callbacks.admit artifact
                                 rationale <- case admitted of
