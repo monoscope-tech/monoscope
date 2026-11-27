@@ -109,6 +109,7 @@ module Models.Telemetry.Telemetry (
   mkSystemLog,
   insertSystemLog,
   generateSummary,
+  hostFromRawUrl,
   identityFields,
   rowIdentity,
   otelSpanColsSql,
@@ -2917,6 +2918,29 @@ urlBasename url =
    in if T.null seg then trimmed else seg
 
 
+-- | The authority of an absolute URL, minus any port. Relative URLs have no authority,
+-- so they yield @""@ rather than being mistaken for a host.
+--
+-- >>> hostFromRawUrl "https://api.test.com/v1/users?page=1"
+-- "api.test.com"
+--
+-- The port is not part of the host, and neither is a trailing path:
+-- >>> hostFromRawUrl "http://api.test.com:8443/v1"
+-- "api.test.com"
+-- >>> hostFromRawUrl "https://api.test.com"
+-- "api.test.com"
+--
+-- No scheme means no authority to extract -- a path must never be read as a host:
+-- >>> hostFromRawUrl "/api/v1/users"
+-- ""
+-- >>> hostFromRawUrl ""
+-- ""
+hostFromRawUrl :: Text -> Text
+hostFromRawUrl url = case T.breakOn "://" url of
+  (_, rest) | not (T.null rest) -> T.takeWhile (\c -> c /= '/' && c /= ':') (T.drop 3 rest)
+  _ -> ""
+
+
 generateSpanSummary :: OtelLogsAndSpans -> V.Vector T.Text
 generateSpanSummary otel =
   let
@@ -3018,6 +3042,7 @@ generateSpanSummary otel =
         , frontendLabel
         , (\c -> tag "status_code" (statusCodeStyle c) (show c)) <$> httpStatus
         , (\m -> tag "method" (methodStyle m) m) <$> httpMethod
+        , tag "host" "neutral" <$> (guard (requestType == Just "outgoing") *> asum (map nonEmptyT [atMapText "server.address" attrsM, hostFromRawUrl <$> urlFull]))
         , routeOrUrl
         , tag "db.system" "neutral" <$> dbSys
         , tag "db.query.text" "text-textStrong" . T.take 200 <$> (dbSys *> (atMapText "db.query.text" attrsM <|> atMapText "db.statement" attrsM))

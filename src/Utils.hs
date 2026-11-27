@@ -1792,6 +1792,7 @@ summaryFilterPath = \case
   "status" -> Just "status_code"
   "route" -> Just "attributes.http.route"
   "url" -> Just "attributes.url.path"
+  "host" -> Just "attributes.server.address"
   "service" -> Just "resource.service.name"
   "kind" -> Just "kind"
   "duration" -> Just "duration"

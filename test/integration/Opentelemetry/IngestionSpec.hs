@@ -517,7 +517,7 @@ spec = do
                            :: [(Text, Maybe Text, Maybe Text, Maybe Text, Bool)]
                        )
 
-    it "standard OTel spans: SDK conventions normalised, methods recovered, endpoints keyed without hosts, routes shared across a batch, one row per export" \tr -> do
+    it "standard OTel spans: SDK conventions normalised, outgoing summaries name their host, methods recovered, endpoints keyed without hosts, routes shared across a batch, one row per export" \tr -> do
       apiKey <- createTestAPIKey tr testPid "std-otel"
       let export kind name attrs resource = do
             trId <- show <$> UUIDV4.nextRandom
@@ -533,6 +533,7 @@ spec = do
           , ("python", PT.Span'SPAN_KIND_SERVER, [mkAttr "http.request.method" "GET", mkAttr "url.path" "/orders/43", mkAttr "server.address" "api.python.test"], "/orders/43", "api.python.test", "GET", "/orders/{number}")
           , ("nodejs", PT.Span'SPAN_KIND_CLIENT, [mkAttr "http.request.method" "POST", mkAttr "url.full" "https://api.node.test/v1/send/44?expand=true"], "/v1/send/44", "api.node.test", "POST", "/v1/send/{number}")
           , ("go", PT.Span'SPAN_KIND_CLIENT, [mkAttr "http.request.method" "GET", mkAttr "url.full" "https://api.go.test/orders/45", mkAttr "url.template" "/orders/:id"], "/orders/45", "api.go.test", "GET", "/orders/{id}")
+          , ("ruby", PT.Span'SPAN_KIND_CLIENT, [mkAttr "http.request.method" "GET", mkAttr "url.path" "/orders/46", mkAttr "server.address" "api.ruby.test"], "/orders/46", "api.ruby.test", "GET", "/orders/{number}")
           ]
             :: [(Text, PT.Span'SpanKind, [PC.KeyValue], Text, Text, Text, Text)]
         )
@@ -541,6 +542,9 @@ spec = do
           dbQuery tr [sql| SELECT attributes___url___path, attributes___http___route, attributes___server___address, attributes___http___request___method, attributes->'monoscope'->'endpoint'->>'route'
                            FROM otel_logs_and_spans WHERE project_id = ? AND name = ? |] (testPid, language <> " HTTP")
             `shouldReturn` [(Just path, Just endpointPath, Just host, Just method, Just endpointPath)]
+          -- Outgoing summaries name the called host, so the provider is visible in the list row.
+          summary <- dbOne tr [sql| SELECT summary FROM otel_logs_and_spans WHERE project_id = ? AND name = ? |] (testPid, language <> " HTTP")
+          V.elem ("host;neutral⇒" <> host) summary `shouldBe` (kind == PT.Span'SPAN_KIND_CLIENT)
       -- A missing method is recovered from the span name, never assumed to be GET.
       for_ ([("POST /orders/{id}", "POST", "/orders/{id}", True, True), ("HTTP /orders/{id}", "_OTHER", "/orders/{id}", True, True), ("HTTP /orders/42", "_OTHER", "/orders/{number}", False, True), ("PATCH /orders/{id}", "PATCH", "/orders/{id}", False, False)] :: [(Text, Text, Text, Bool, Bool)]) \(name, method, endpointRoute, hasRoute, hasPath) -> do
         export PT.Span'SPAN_KIND_SERVER name ([mkAttr "url.path" "/orders/42" | hasPath] <> [mkAttr "http.route" "/orders/{id}" | hasRoute]) (mkResource apiKey [])

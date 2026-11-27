@@ -38,7 +38,6 @@ module ProcessMessage (
   CanonicalPathIndex,
   classifyUrlPath,
   tokenizeUrlPath,
-  hostFromRawUrl,
   urlPathFromRawUrl,
   overFreeTierQuota,
   sampleSpans,
@@ -88,7 +87,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.DeterministicId qualified as DeterministicId
 import Models.Telemetry.ServiceGraph qualified as ServiceGraph
-import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..), generateSummary, ingestionRedactionPaths, redactJSON)
+import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..), generateSummary, hostFromRawUrl, ingestionRedactionPaths, redactJSON)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.URI (parseURI, uriAuthority, uriRegName)
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
@@ -684,29 +683,6 @@ createSpanAttributes rm =
     headersObj =
       let extractHeaders prefix = maybe (AE.object []) (nestedJsonFromDotNotation . map (first ((prefix <>) . AEK.toText)) . AEKM.toList) . (^? _Object)
        in extractHeaders "http.request.headers." rm.requestHeaders `lodashMerge` extractHeaders "http.response.headers." rm.responseHeaders
-
-
--- | The authority of an absolute URL, minus any port. Relative URLs have no authority,
--- so they yield @""@ rather than being mistaken for a host.
---
--- >>> hostFromRawUrl "https://api.test.com/v1/users?page=1"
--- "api.test.com"
---
--- The port is not part of the host, and neither is a trailing path:
--- >>> hostFromRawUrl "http://api.test.com:8443/v1"
--- "api.test.com"
--- >>> hostFromRawUrl "https://api.test.com"
--- "api.test.com"
---
--- No scheme means no authority to extract -- a path must never be read as a host:
--- >>> hostFromRawUrl "/api/v1/users"
--- ""
--- >>> hostFromRawUrl ""
--- ""
-hostFromRawUrl :: Text -> Text
-hostFromRawUrl url = case T.breakOn "://" url of
-  (_, rest) | not (T.null rest) -> T.takeWhile (\c -> c /= '/' && c /= ':') (T.drop 3 rest)
-  _ -> ""
 
 
 -- | The path of an absolute or relative URL, without query or fragment; empty means @/@.
