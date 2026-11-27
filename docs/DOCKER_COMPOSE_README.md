@@ -1,12 +1,12 @@
 # Docker Compose Setup for Monoscope
 
-This Docker Compose configuration provides a complete development environment for Monoscope with TimescaleDB.
+This Docker Compose configuration runs a complete Monoscope stack: the app, [TimeFusion](https://github.com/monoscope-tech/timefusion) for telemetry (logs, traces, metrics) on S3-compatible storage, and TimescaleDB for application state (projects, users, monitors, dashboards).
 
 ## Quick Start
 
 ### 1. Basic Usage
 
-Start both TimescaleDB and Monoscope:
+Start the stack:
 
 ```bash
 # Pull the latest Monoscope image from GitHub Packages (if needed)
@@ -18,7 +18,9 @@ docker-compose up -d
 
 This will:
 
-- Start TimescaleDB on port 5432
+- Start TimescaleDB on port 5432 (application state)
+- Start a local S3-compatible store ([RustFS](https://github.com/rustfs/rustfs)) and create TimeFusion's bucket
+- Start TimeFusion (telemetry store) on port 12345
 - Pull and start Monoscope from GitHub Packages on port 8080 (HTTP) and 4317 (gRPC)
 - Automatically run database migrations
 - Set up with basic authentication (admin/changeme)
@@ -28,9 +30,11 @@ This will:
 - **Monoscope Web UI**: <http://localhost:8080>
 - **gRPC/OTLP Endpoint**: localhost:4317
 - **PostgreSQL/TimescaleDB**: localhost:5432
-  - Database: `apitoolkit`
+  - Database: `monoscope`
   - User: `postgres`
   - Password: `postgres`
+- **TimeFusion** (PostgreSQL wire protocol, query telemetry with any Postgres client): localhost:12345
+  - `psql postgresql://postgres:postgres@localhost:12345/postgres -c 'select count(*) from otel_logs_and_spans'`
 
 ### 3. Testing with Telemetrygen
 
@@ -54,16 +58,21 @@ monoscope telemetrygen --kind=trace --count=10
 
 3. Docker Compose will automatically use the `.env` file
 
+#### Using your own S3 bucket
+
+TimeFusion stores telemetry as Delta Lake tables in the bucket named by `AWS_S3_BUCKET`. To use AWS S3, Cloudflare R2 or any other S3-compatible store, set the `timefusion` service's `AWS_*` variables to your bucket and credentials, and remove the `s3` and `s3-bucket` services. Keep the `timefusion_data` volume: it holds the write-ahead log for rows not yet flushed to the bucket.
+
 #### Direct Database Connection (for local development)
 
-If you want to run Monoscope locally but use the Docker TimescaleDB:
+If you want to run Monoscope locally but use the Docker databases:
 
 ```bash
-# Start only TimescaleDB
-docker-compose up -d timescaledb
+# Start TimescaleDB and TimeFusion
+docker-compose up -d timescaledb timefusion
 
-# Set your local DATABASE_URL
-export DATABASE_URL="host=localhost user=postgres password=postgres dbname=apitoolkit port=5432 sslmode=disable"
+# Point a local Monoscope at them
+export DATABASE_URL="host=localhost user=postgres password=postgres dbname=monoscope port=5432 sslmode=disable"
+export TIMEFUSION_PG_URL="postgresql://postgres:postgres@localhost:12345/postgres"
 
 # Run Monoscope locally
 cabal run
@@ -73,7 +82,9 @@ cabal run
 
 ### Core Services (always start)
 
-- **timescaledb**: PostgreSQL 16 with TimescaleDB extension
+- **timescaledb**: PostgreSQL with the TimescaleDB extension, for application state
+- **s3** / **s3-bucket**: local S3-compatible storage for TimeFusion, and a one-shot job that creates its bucket
+- **timefusion**: the telemetry store every log, span and metric is written to and read from
 - **monoscope**: The Monoscope application
 
 ### Optional Services
@@ -136,7 +147,8 @@ docker run -d \
   --name monoscope-local \
   --network monoscope-network \
   -p 8080:8080 -p 4317:4317 \
-  -e DATABASE_URL="host=timescaledb user=postgres password=postgres dbname=apitoolkit port=5432 sslmode=disable" \
+  -e DATABASE_URL="host=timescaledb user=postgres password=postgres dbname=monoscope port=5432 sslmode=disable" \
+  -e TIMEFUSION_PG_URL="postgresql://postgres:postgres@timefusion:5432/postgres" \
   monoscope:local
 ```
 
@@ -150,6 +162,7 @@ docker-compose logs -f
 
 # Specific service
 docker-compose logs -f monoscope
+docker-compose logs -f timefusion
 docker-compose logs -f timescaledb
 ```
 
@@ -210,6 +223,12 @@ If Monoscope can't connect to TimescaleDB:
 2. Check logs: `docker-compose logs timescaledb`
 3. Verify network connectivity: `docker exec monoscope-app ping timescaledb`
 
+### No telemetry showing up
+
+1. Ensure TimeFusion is healthy: `docker-compose ps timefusion`
+2. Check its logs for S3 errors: `docker-compose logs timefusion`
+3. Check that rows arrive: `psql postgresql://postgres:postgres@localhost:12345/postgres -c 'select count(*) from otel_logs_and_spans'`
+
 ### Migration Issues
 
 If migrations fail:
@@ -232,6 +251,7 @@ The current configuration is optimized for development with:
 
 Consider adjusting in `docker-compose.yml`:
 
+- Point TimeFusion at a real S3 bucket (see "Using your own S3 bucket") and change the `RUSTFS_*`/`AWS_*` and `PGWIRE_*` credentials
 - Remove query logging: Remove `-c log_statement='all'`
 - Increase shared_buffers
 - Adjust max_connections based on load

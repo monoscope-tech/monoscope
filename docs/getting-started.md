@@ -128,7 +128,8 @@ curl -X POST http://localhost:8080/api/v1/logs \
 
 The default `docker-compose.yml` includes everything you need:
 - Monoscope server
-- TimescaleDB with TimescaleDB extension
+- TimeFusion, the telemetry store (logs, traces and metrics), on local S3-compatible storage
+- TimescaleDB for application state (projects, users, monitors, dashboards)
 - All necessary configuration
 
 #### Prerequisites
@@ -142,7 +143,8 @@ Key environment variables in `docker-compose.yml`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | Configured automatically |
+| `DATABASE_URL` | PostgreSQL connection string (application state) | Configured automatically |
+| `TIMEFUSION_PG_URL` | TimeFusion connection string (telemetry) | Configured automatically |
 | `PORT` | HTTP port for web UI | 8080 |
 | `GRPC_PORT` | gRPC port for OpenTelemetry | 4317 |
 | `BASIC_AUTH_USERNAME` | Username for basic auth | admin |
@@ -163,6 +165,10 @@ If you prefer to use an existing PostgreSQL/TimescaleDB instance:
 2. Ensure your database has TimescaleDB extension enabled
 
 3. Remove the `timescaledb` service from docker-compose.yml
+
+### Storing Telemetry in Your Own S3 Bucket
+
+TimeFusion writes telemetry to the bucket in its `AWS_S3_BUCKET` setting. To use AWS S3, Cloudflare R2 or another S3-compatible store, set the `timefusion` service's `AWS_*` variables to your bucket and credentials and remove the `s3` and `s3-bucket` services. Keep the `timefusion_data` volume: it holds the write-ahead log for rows not yet flushed to the bucket.
 
 ### Production Deployment
 
@@ -199,7 +205,7 @@ For production environments:
              memory: 2G
    ```
 
-4. **Persist data volumes**
+4. **Persist data volumes** (`timescale_data` for app state, `timefusion_data` for TimeFusion's write-ahead log; telemetry itself lives in the bucket)
 
    ```yaml
    volumes:
@@ -364,6 +370,14 @@ docker-compose ps timescaledb
 
 # Check database logs
 docker-compose logs timescaledb
+```
+
+### No telemetry showing up?
+
+```bash
+# TimeFusion must be healthy; its logs show S3 errors
+docker-compose ps timefusion
+docker-compose logs timefusion
 ```
 
 ### Out of memory?

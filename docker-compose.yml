@@ -28,6 +28,71 @@ services:
     networks:
       - monoscope-network
 
+  # S3-compatible object storage for TimeFusion. To use real S3 instead, point TimeFusion's
+  # AWS_* settings at your bucket and drop these two services.
+  s3:
+    image: rustfs/rustfs:1.0.7
+    container_name: monoscope-s3
+    restart: unless-stopped
+    environment:
+      - RUSTFS_ACCESS_KEY=monoscope
+      - RUSTFS_SECRET_KEY=monoscope-s3-secret
+    volumes:
+      - s3_data:/data
+    networks:
+      - monoscope-network
+
+  # Creates TimeFusion's bucket once the store answers, then exits.
+  s3-bucket:
+    image: amazon/aws-cli:2.42.5
+    container_name: monoscope-s3-bucket
+    depends_on:
+      - s3
+    environment:
+      - AWS_ACCESS_KEY_ID=monoscope
+      - AWS_SECRET_ACCESS_KEY=monoscope-s3-secret
+      - AWS_REGION=us-east-1
+    entrypoint: >
+      /bin/sh -c "until aws --endpoint-url http://s3:9000 s3api head-bucket --bucket timefusion 2>/dev/null || aws --endpoint-url http://s3:9000 s3 mb s3://timefusion; do sleep 1; done"
+    networks:
+      - monoscope-network
+
+  # TimeFusion: the telemetry store (logs, traces, metrics), Postgres wire protocol over S3.
+  timefusion:
+    image: ghcr.io/monoscope-tech/timefusion:latest
+    # Published for amd64 only; Apple Silicon runs it emulated.
+    platform: linux/amd64
+    container_name: monoscope-timefusion
+    restart: unless-stopped
+    environment:
+      - AWS_S3_BUCKET=timefusion
+      - AWS_S3_ENDPOINT=http://s3:9000
+      - AWS_ENDPOINT_URL=http://s3:9000
+      - AWS_REGION=us-east-1
+      - AWS_ALLOW_HTTP=true
+      - AWS_ACCESS_KEY_ID=monoscope
+      - AWS_SECRET_ACCESS_KEY=monoscope-s3-secret
+      - PGWIRE_PORT=5432
+      - PGWIRE_USER=postgres
+      - PGWIRE_PASSWORD=postgres
+      - TIMEFUSION_TABLE_PREFIX=monoscope
+      - TIMEFUSION_DATA_DIR=/app/data
+      - OTEL_TRACES_EXPORTER=none
+      - OTEL_LOGS_EXPORTER=none
+      - OTEL_METRICS_EXPORTER=none
+      - OTEL_SERVICE_NAME=timefusion-selfhosted
+    ports:
+      # Loopback only, on 12345 so it never collides with TimescaleDB's 5432.
+      - '127.0.0.1:12345:5432'
+    volumes:
+      # Write-ahead log and caches: rows not yet flushed to S3 live here.
+      - timefusion_data:/app/data
+    depends_on:
+      s3-bucket:
+        condition: service_completed_successfully
+    networks:
+      - monoscope-network
+
   # Monoscope application service
   monoscope:
     image: ghcr.io/monoscope-tech/monoscope:latest
@@ -38,6 +103,11 @@ services:
       - '4317:4317' # gRPC port for OpenTelemetry
     environment:
       - DATABASE_URL=host=timescaledb user=postgres password=postgres dbname=monoscope port=5432 sslmode=disable
+      # Telemetry lives in TimeFusion; Postgres keeps projects, users, monitors and other app state.
+      - TIMEFUSION_PG_URL=postgresql://postgres:postgres@timefusion:5432/postgres
+      - ENABLE_TIMEFUSION_READS=True
+      - ENABLE_TIMEFUSION_WRITES=True
+      - ENABLE_POSTGRES_TELEMETRY_WRITES=False
       - PORT=8080
       - GRPC_PORT=4317
       - MIGRATIONS_DIR=/opt/monoscope/static/migrations/
@@ -83,6 +153,8 @@ services:
       - POSTMARK_TOKEN=${POSTMARK_TOKEN:-}
     depends_on:
       timescaledb:
+        condition: service_healthy
+      timefusion:
         condition: service_healthy
     networks:
       - monoscope-network
@@ -137,6 +209,10 @@ services:
 
 volumes:
   timescale_data:
+    driver: local
+  s3_data:
+    driver: local
+  timefusion_data:
     driver: local
   pgadmin_data:
     driver: local

@@ -76,6 +76,8 @@ docker-compose up
 
 Visit `http://localhost:8080` (default: admin/changeme)
 
+This starts Monoscope, [TimeFusion](https://github.com/monoscope-tech/timefusion) (where logs, traces and metrics are stored, on a local S3-compatible bucket) and TimescaleDB (projects, users and other app state). To keep telemetry in your own S3 bucket, see [Docker Compose setup](docs/DOCKER_COMPOSE_README.md#using-your-own-s3-bucket).
+
 ### Send Test Data
 
 Populate your dashboard with test telemetry:
@@ -385,7 +387,7 @@ Real-time metrics and performance monitoring with AI-powered insights.
 - [x] Custom dashboards builder
 - [ ] More out-of-the-box dashboards
 - [ ] AIOps workflow builder
-- [ ] Full migration to TimeFusion storage engine
+- [x] Full migration to TimeFusion storage engine
 - [ ] Metrics aggregation rules
 - [ ] Multi-tenant workspace support
 - [ ] More alert channel integrations
