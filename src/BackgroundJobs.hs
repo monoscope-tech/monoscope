@@ -149,7 +149,7 @@ import System.Logging qualified as Log
 import System.Posix.Process (getProcessID)
 import System.Posix.Unistd (SystemID (nodeName), getSystemID)
 import System.Random (randomRIO)
-import System.Tracing (MessagingOp (Process), MessagingSystem (OddJobs), NotInstrumented, SpanKind (Consumer), SpanStatus (..), Tracing, addEvent, forkWithCtx, inRootSpan, messagingAttrs, setStatus, withSpan, withSpanKind, withSpan_)
+import System.Tracing (MessagingOp (Process), MessagingSystem (OddJobs), NotInstrumented, SpanKind (Consumer), SpanStatus (..), Tracing, addEvent, forkWithCtx, messagingAttrs, setStatus, withSpan, withSpanKind, withSpan_)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
@@ -630,15 +630,10 @@ runMonoscopeAdminDaily authCtx = do
   let projectMap = Map.fromList $ map (\(p :: Projects.Project) -> (p.id, p)) allProjects
       lookupTitle pid = maybe pid.toText (.title) $ Map.lookup pid projectMap
 
-  -- The hourly ReportUsage windows already hold every active project's counts; recounting them
-  -- here was two TimeFusion scans per project, ~3,400 queries a run.
-  usage :: Map.Map Projects.ProjectId (Int64, Int64) <-
-    Map.fromList
-      . map (\(pid, e, m) -> (pid, (e, m)))
-      <$> Hasql.interp
-        [HI.sql|SELECT project_id, COALESCE(SUM(total_requests - total_metrics), 0)::bigint, COALESCE(SUM(total_metrics), 0)::bigint
-           FROM apis.daily_usage WHERE created_at >= #{since}::timestamptz GROUP BY project_id|]
-  let allRows = [(p, e, m, e + m) | p <- allProjects, let (e, m) = Map.findWithDefault (0, 0) p.id usage]
+  allRows <- forM allProjects \(project :: Projects.Project) -> do
+    events <- Telemetry.countRowsSince [HI.sql|otel_logs_and_spans|] authCtx.env.enableTimefusionReads project.id since
+    metrics <- Telemetry.countRowsSince [HI.sql|otel_metrics|] authCtx.env.enableTimefusionReads project.id since
+    pure (project, events, metrics, events + metrics)
   let (activeRows, inactiveRows) = partition (\(_, _, _, t) -> t > 0) allRows
       sorted = sortOn (\(_, _, _, t) -> negate t) activeRows
 
@@ -1516,7 +1511,7 @@ runHourlyJob scheduledTime hour = do
   tryStep "ai-conversation-recovery" recoverFailedConversations
   tryStep "routine-template-upgrades" $ Issues.upgradeRoutineTemplates >>= \moved -> when (moved > 0) $ Log.logInfo "Upgraded routines to their templates' current versions" moved
   tryStep "metric-catalog-flush" $ Telemetry.flushMetricCatalog ctx.metricCatalogBuffer
-  tryStep "metric-catalog-reconcile" Telemetry.reconcileMetricCatalog
+  tryStep "metric-catalog-reconcile" $ Telemetry.reconcileMetricCatalog ctx.env.enableTimefusionReads
   tryStep "endpoint-shape-report" reportUnwrittenIdRules
   let oneHourAgo = addUTCTime (-3600) scheduledTime
   -- Read from wherever telemetry is written: with Postgres writes off, the PG table is empty
@@ -2522,9 +2517,11 @@ processProjectErrors pid errors now = do
 -- perpetual re-send of the same work (oldest-first + LIMIT 1000 also starved
 -- the rows it *could* complete). Rows past the floor are counted and logged at
 -- attention instead of being silently abandoned.
+--
+-- `processed_at` is Postgres bookkeeping, so with Postgres telemetry writes off there is
+-- nothing to sweep; the job stays scheduled as the daily per-project scheduling marker.
 safetyNetReprocess :: Projects.ProjectId -> ATBackgroundCtx ()
-safetyNetReprocess pid = do
-  ctx <- ask @Config.AuthContext
+safetyNetReprocess pid = ask @Config.AuthContext >>= \ctx -> when ctx.config.enablePostgresTelemetryWrites do
   let cutoff = ctx.config.processedAtCutoff
       maxAgeSecs = fromIntegral ctx.config.hashUpdateMaxAgeSecs :: Double
   caches <- one . (pid,) <$> fetchProjectCache pid
@@ -2570,31 +2567,35 @@ dualExecPgTf ctx sql' = dualExecPgTfWithSql ctx sql' sql'
 -- | Keep native PostgreSQL comparisons when TimeFusion needs a different cast.
 dualExecPgTfWithSql :: (DB es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> HI.Sql -> Eff es Int64
 dualExecPgTfWithSql ctx pgSql tfSql = Ki.scoped \scope -> do
-  mainThread <- forkWithCtx scope $ pgExecLabeled "UPDATE-1" pgSql
-  _ <- forkWithCtx scope $ when ctx.config.enableTimefusionWrites $ do
+  pgThread <- forkWithCtx scope $ pgOnlyExec ctx pgSql
+  tfThread <- forkWithCtx scope $ if not ctx.config.enableTimefusionWrites then pure 0 else do
     now <- Time.currentTime
     shouldAttempt <- liftIO $ ExtractionWorker.shouldAttemptCircuit ctx.tfCircuit now
-    when shouldAttempt
+    if not shouldAttempt
+      then pure 0
       -- A deploy drain refuses every write until the replacement is ready (18–110s measured
       -- on 2026-11-23) and nothing replays this arm, so it gets the ingest write's 180s budget;
       -- every caller's UPDATE is guarded, so a re-run is a no-op.
-      $ tryAny (Hasql.retryTransientEff 180_000_000 "dual-exec:timefusion" $ withHasqlTimefusion True $ Hasql.interpExecute tfSql)
-      >>= \case
-        Right _ -> liftIO $ ExtractionWorker.recordCircuitSuccess ctx.tfCircuit
-        Left e -> do
-          opened <- liftIO $ ExtractionWorker.recordCircuitFailure ctx.tfCircuit now
-          Log.logAttention (if opened then "TimeFusion circuit opened" else "TimeFusion write failed") (show @Text e)
+      else
+        tryAny (Hasql.retryTransientEff 180_000_000 "dual-exec:timefusion" $ withHasqlTimefusion True $ Hasql.interpExecute tfSql)
+          >>= \case
+            Right n -> liftIO (ExtractionWorker.recordCircuitSuccess ctx.tfCircuit) $> n
+            Left e -> do
+              opened <- liftIO $ ExtractionWorker.recordCircuitFailure ctx.tfCircuit now
+              Log.logAttention (if opened then "TimeFusion circuit opened" else "TimeFusion write failed") (show @Text e)
+              pure 0
   -- Await BOTH threads: scope-close cancellation of an in-flight Hasql session
-  -- segfaults libpq.
-  Ki.atomically (Ki.awaitAll scope *> Ki.await mainThread)
+  -- segfaults libpq. The count is the store that holds telemetry's.
+  Ki.atomically $ bool (Ki.await tfThread) (Ki.await pgThread) ctx.config.enablePostgresTelemetryWrites <* Ki.awaitAll scope
 
 
 -- | PG-only variant of `dualExecPgTf` for statements TimeFusion can't run
 -- (e.g. those using `jsonb_build_object`, `jsonb_array_elements_text`, or
 -- `now()` in SET expressions). Same retry-on-deadlock and locking guards as
--- the PG arm of `dualExecPgTf`, but no TF fork.
-pgOnlyExec :: (DB es, IOE :> es, Log :> es) => HI.Sql -> Eff es Int64
-pgOnlyExec = pgExecLabeled "pgOnlyExec"
+-- the PG arm of `dualExecPgTf`, but no TF fork. Skipped (0 rows) when Postgres
+-- holds no telemetry.
+pgOnlyExec :: (DB es, IOE :> es, Log :> es) => Config.AuthContext -> HI.Sql -> Eff es Int64
+pgOnlyExec ctx = bool (const $ pure 0) (pgExecLabeled "pgOnlyExec") ctx.config.enablePostgresTelemetryWrites
 
 
 pgExecLabeled :: (DB es, IOE :> es, Log :> es) => Text -> HI.Sql -> Eff es Int64
@@ -2628,12 +2629,13 @@ backfillSessionAttributes ctx = do
   now <- Time.currentTime
   let windowEnd = addUTCTime (-120) now -- lag 2 min behind the write-hot edge
       windowStart = addUTCTime (-1020) now -- 17 min lookback
-  pids <- activeSessionProjects windowStart windowEnd
+  pids <- Hasql.withHasqlTimefusion ctx.env.enableTimefusionReads $ activeSessionProjects windowStart windowEnd
   foldlM (\ !acc pid -> (acc +) <$> dualExecPgTf ctx (backfillSessionSql pid windowStart windowEnd)) 0 pids
 
 
--- | Projects with session/user activity in the lagged window (index-driven via
--- the partial session/user indexes). Drives the per-project backfill loop.
+-- | Projects with session/user activity in the lagged window. Drives the per-project backfill
+-- loop. On TimeFusion a cross-project scan sees only flushed rows (~11 min after their
+-- timestamp), which the 17-minute window still covers for several ticks.
 activeSessionProjects :: DB es => UTCTime -> UTCTime -> Eff es [Projects.ProjectId]
 activeSessionProjects windowStart windowEnd =
   Hasql.interp
@@ -2859,8 +2861,8 @@ processEagerBatch batch shard
                       AND o.processed_at IS NULL |]
         rowsUpdated <-
           if ctx.config.enableHashUpdates && batch.batchMaxTs >= hashCutoff
-            then (if null tfSpanIds then pure 0 else dualExecPgTf ctx updateHashesSql) <* pgOnlyExec update1Sql
-            else pgOnlyExec markProcessedSql
+            then (if null tfSpanIds then pure 0 else dualExecPgTf ctx updateHashesSql) <* pgOnlyExec ctx update1Sql
+            else pgOnlyExec ctx markProcessedSql
         -- The hash-only update is TF-compatible; PG retains the JSON/path enrichment.
         Log.logTrace "Eager-track UPDATE-1 complete" (AE.object ["project_id" AE..= pid.toText, "span_count" AE..= V.length spans, "rows_updated" AE..= rowsUpdated, "hash_merge_skipped" AE..= (not ctx.config.enableHashUpdates || batch.batchMaxTs < hashCutoff)])
 
@@ -2898,7 +2900,7 @@ runSchemaFlusherFiber logger ctx tp
             -- Catch *here* so we keep the logger / tracer context and can
             -- record the failure. Letting this propagate kills the fiber →
             -- shard dirty set never drains → heap OOM.
-            inRootSpan tp "schema-flush" $ tryAny (runBackground logger ctx tp (SchemaCatalog.flushDirty ref)) >>= \case
+            tryAny (runBackground logger ctx tp (SchemaCatalog.flushDirty ref)) >>= \case
               Left e -> do
                 runBackground logger ctx tp
                   $ LogLegacy.logAttention "schema-flusher batch failed" (show @Text e)
@@ -2922,7 +2924,7 @@ runSchemaFlusherFiber logger ctx tp
 
 runWorkspaceMaintenanceTimer :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 runWorkspaceMaintenanceTimer logger ctx tp = for_ ctx.config.impactReviewWorkspaceMaintenance \config -> forever do
-  inRootSpan tp "workspace-maintenance" $ runBackground logger ctx tp $ tryStep "workspace-maintenance" do
+  runBackground logger ctx tp $ tryStep "workspace-maintenance" do
     Workspace.maintainWorkspaces config >>= \case
       Left message -> Log.logAttention "Workspace maintenance failed" message
       Right report ->
@@ -2936,7 +2938,7 @@ runWorkspaceMaintenanceTimer logger ctx tp = for_ ctx.config.impactReviewWorkspa
 runReviewWorkerHeartbeat :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 runReviewWorkerHeartbeat logger ctx tp =
   Workspace.hostSlots >>= \slots -> when (slots.agents > 0) $ forever do
-    inRootSpan tp "review-worker-heartbeat" $ runBackground logger ctx tp $ tryStep "review-worker-heartbeat" $ Time.currentTime >>= (`ImpactReviews.announceReviewWorker` slots)
+    runBackground logger ctx tp $ tryStep "review-worker-heartbeat" $ Time.currentTime >>= (`ImpactReviews.announceReviewWorker` slots)
     threadDelay 60_000_000
 
 
@@ -2946,7 +2948,7 @@ runReviewWorkerHeartbeat logger ctx tp =
 runErrorDecayFiber :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 runErrorDecayFiber logger ctx tp = forever $ do
   threadDelay 60_000_000
-  inRootSpan tp "error-decay" $ runBackground logger ctx tp $ do
+  runBackground logger ctx tp $ do
     now <- Time.currentTime
     projects <- Projects.activeNonOnboardingProjectIds
     tryStep "propagateMergedCountsBatch" $ void $ ErrorPatterns.propagateMergedCountsBatch projects
@@ -2968,7 +2970,7 @@ runDrainFlusher
 runDrainFlusher logger ctx tp shard = forever $ do
   task <- atomically $ readTBQueue shard.drainFlushQ
   tryStepIO logger ctx "drain-flusher:rehydration" $ maybeSpawnRehydration logger ctx tp shard (task.projectId, task.serviceName)
-  tryStepIO logger ctx "drain-flusher:task" $ inRootSpan tp "drain-flush" $ runBackground logger ctx tp $ flushDrainTask shard task
+  tryStepIO logger ctx "drain-flusher:task" $ runBackground logger ctx tp $ flushDrainTask shard task
 
 
 -- | Spawn async rehydration for a (project, service) tree if stale and not
@@ -2993,7 +2995,7 @@ maybeSpawnRehydration logger ctx tp shard key = do
     pending <- readIORef shard.pendingRehydrations
     unless (HashSet.member key pending) $ do
       let job = do
-            tryStepIO logger ctx "drain-rehydrate failed" $ inRootSpan tp "drain-rehydrate" $ runBackground logger ctx tp $ rehydrateTree shard key now existing
+            tryStepIO logger ctx "drain-rehydrate failed" $ runBackground logger ctx tp $ rehydrateTree shard key now existing
             atomicModifyIORef'_ shard.pendingRehydrations (HashSet.delete key)
       atomicModifyIORef'_ shard.pendingRehydrations (HashSet.insert key)
       enqueued <- atomically $ isFullTBQueue shard.rehydrationQ >>= bool (writeTBQueue shard.rehydrationQ job $> True) (pure False)
@@ -3171,7 +3173,7 @@ runDrainAgeFlushTimer logger ctx = forever $ do
 runSessionBackfillTimer :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 runSessionBackfillTimer logger ctx tp = forever $ do
   threadDelay 90_000_000 -- 90 s
-  tryStepIO logger ctx "session-backfill" $ inRootSpan tp "session-backfill" $ runBackground logger ctx tp go
+  tryStepIO logger ctx "session-backfill" $ runBackground logger ctx tp go
   where
     go = do
       n <- backfillSessionAttributes ctx
@@ -4980,14 +4982,7 @@ gitSyncFromRepo pid sid = withGitSync pid sid GitSync.ImportDashboards $ \conn s
                   case applied of
                     Left err -> pure $ Just $ resource.filePath <> ": " <> err
                     Right () -> pure Nothing
-        lift
-          $ void
-          $ GitSync.updateDashboardGitInfo
-            [ (UUIDId resource.localId, fromMaybe resource.filePath $ T.stripPrefix dashboardPrefix resource.filePath, sha)
-            | resource <- allResources
-            , resource.kind == RepositorySync.Dashboard
-            , Just sha <- [find ((== resource.filePath) . (.path)) entries >>= (.sha)]
-            ]
+        lift $ forM_ allResources \resource -> when (resource.kind == RepositorySync.Dashboard) $ for_ (find ((== resource.filePath) . (.path)) entries >>= (.sha)) $ void . GitSync.updateDashboardGitInfo (UUIDId resource.localId) (fromMaybe resource.filePath $ T.stripPrefix dashboardPrefix resource.filePath)
         lift $ if null failures then void $ GitSync.recordImportSuccess sync.id revision else void $ GitSync.recordSyncError sync.id GitSync.ImportDashboards $ T.intercalate "\n" failures
         lift $ exportRepository sync{GitSync.lastRevision = Just revision} unreadable
       for_ (leftToMaybe result) $ void . GitSync.recordSyncError sync.id GitSync.ImportDashboards

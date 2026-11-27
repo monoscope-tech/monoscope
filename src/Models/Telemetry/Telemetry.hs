@@ -459,27 +459,54 @@ flushMetricCatalog (MetricCatalogBuffer ref) = upsertMetricMetadata . V.fromList
 
 
 -- | Rebuild recent catalog descriptors from durable raw points. This heals a
--- process crash or a failed buffered flush without replaying telemetry.
-reconcileMetricCatalog :: DB es => Eff es ()
-reconcileMetricCatalog =
-  Hasql.interpExecute_
-    [HI.sql|INSERT INTO otel_metrics_meta (
+-- process crash or a failed buffered flush without replaying telemetry. The points live in
+-- TimeFusion, the catalog in Postgres; projects deleted since keep points but get no row.
+reconcileMetricCatalog :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Eff es ()
+reconcileMetricCatalog useTf = do
+  seen :: [CatalogSeen] <-
+    Hasql.withHasqlTimefusion useTf
+      $ Hasql.interp
+        [HI.sql|SELECT project_id::text, metric_name, metric_type, metric_unit, MAX(metric_description),
+  COALESCE(resource___service___name, 'unknown'), COALESCE(scope_name, ''), MAX(scope_version),
+  MIN(ingested_at), MAX(ingested_at), MIN(timestamp), MAX(timestamp)
+FROM otel_metrics
+WHERE timestamp >= now() - interval '2 hours' AND ingested_at >= now() - interval '2 hours'
+GROUP BY project_id, metric_name, metric_type, metric_unit, COALESCE(resource___service___name, 'unknown'), COALESCE(scope_name, '')|]
+  whenNotNull seen \rows ->
+    Hasql.interpExecute_
+      $ [HI.sql|INSERT INTO otel_metrics_meta (
   project_id, metric_name, metric_type, metric_unit, metric_description,
   service_name, scope_name, scope_version,
   first_seen_at, last_seen_at, first_timestamp, last_timestamp
 )
-SELECT project_id::uuid, metric_name, metric_type, metric_unit, MAX(metric_description),
-  COALESCE(resource___service___name, 'unknown'), COALESCE(scope_name, ''), MAX(scope_version),
-  MIN(ingested_at), MAX(ingested_at), MIN(timestamp), MAX(timestamp)
-FROM otel_metrics
-WHERE ingested_at >= now() - interval '2 hours'
-GROUP BY project_id, metric_name, metric_type, metric_unit, COALESCE(resource___service___name, 'unknown'), COALESCE(scope_name, '')
+SELECT v.* FROM (VALUES |]
+      <> mconcat (intersperse [HI.sql|,|] [[HI.sql|(#{r.projectId}::uuid, #{r.name}, #{r.kind}, #{r.unit}, #{r.description}, #{r.service}, #{r.scope}, #{r.scopeVersion}, #{r.firstSeen}::timestamptz, #{r.lastSeen}::timestamptz, #{r.firstTs}::timestamptz, #{r.lastTs}::timestamptz)|] | r <- toList rows])
+      <> [HI.sql|) v (project_id, metric_name, metric_type, metric_unit, metric_description, service_name, scope_name, scope_version, first_seen_at, last_seen_at, first_timestamp, last_timestamp)
+WHERE EXISTS (SELECT 1 FROM projects.projects p WHERE p.id = v.project_id)
 ON CONFLICT (project_id, metric_name, metric_type, metric_unit, service_name, scope_name) DO UPDATE SET
   metric_description = EXCLUDED.metric_description,
   scope_version = EXCLUDED.scope_version,
   last_seen_at = GREATEST(otel_metrics_meta.last_seen_at, EXCLUDED.last_seen_at),
   first_timestamp = LEAST(otel_metrics_meta.first_timestamp, EXCLUDED.first_timestamp),
   last_timestamp = GREATEST(otel_metrics_meta.last_timestamp, EXCLUDED.last_timestamp)|]
+
+
+data CatalogSeen = CatalogSeen
+  { projectId :: Text
+  , name :: Text
+  , kind :: Text
+  , unit :: Text
+  , description :: Maybe Text
+  , service :: Text
+  , scope :: Text
+  , scopeVersion :: Maybe Text
+  , firstSeen :: UTCTime
+  , lastSeen :: UTCTime
+  , firstTs :: UTCTime
+  , lastTs :: UTCTime
+  }
+  deriving stock (Generic)
+  deriving anyclass (HI.DecodeRow)
 
 
 data MetricValue
@@ -999,28 +1026,28 @@ adjacentHashEvent pid hashKey step from = case step of
         )
 
 
--- | First/recent trace_id for a (project, method, url_path). Window kept tight (7d) since
--- endpoint-anomaly issues are minutes-to-hours old; tie-broken by id for stable nav between
--- "First" and "Recent" page loads. We UNION ALL two index-friendly subqueries (one per
--- url-path source) instead of OR'ing them in a single WHERE, so each side can hit its own
--- expression index and avoid a 7d seq scan on otel_logs_and_spans.
-getEndpointTraceId :: DB es => Projects.ProjectId -> Text -> Text -> Bool -> UTCTime -> Eff es (Maybe (Text, UTCTime))
-getEndpointTraceId pid method urlPath isFirst now =
-  Hasql.interpOne
+-- | First/recent trace_id for a (project, method, url_path) within two hours of @anchor@ (the
+-- issue's creation for First, its last update for Recent). The anchor keeps it a narrow TF
+-- scan: a 7-day method + route search read ~6 GB per branch per issue page (#1046). Tie-broken
+-- by id for stable nav; one branch per url-path source so neither ORs across columns.
+getEndpointTraceId :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> Text -> Text -> Bool -> UTCTime -> Eff es (Maybe (Text, UTCTime))
+getEndpointTraceId useTf pid method urlPath isFirst anchor =
+  Hasql.withHasqlTimefusion useTf
+    $ Hasql.interpOne
     $ [HI.sql| SELECT context___trace_id, start_time FROM ( |]
     <> branch [HI.sql| attributes___url___path = #{urlPath} |]
     <> [HI.sql| UNION ALL |]
-    <> branch [HI.sql| attributes->'http'->>'route' = #{urlPath} |]
+    <> branch [HI.sql| attributes___http___route = #{urlPath} |]
     <> [HI.sql| ) c |]
     <> orderSql
     <> [HI.sql| LIMIT 1 |]
   where
-    windowStart = addUTCTime (-(7 * 24 * 3600)) now
+    (lo, hi) = (addUTCTime (-3600) anchor, addUTCTime 3600 anchor)
     orderSql = bool [HI.sql| ORDER BY start_time DESC, id DESC |] [HI.sql| ORDER BY start_time ASC, id ASC |] isFirst
     branch pathPred =
       [HI.sql| (SELECT context___trace_id, start_time, id FROM otel_logs_and_spans
                 WHERE project_id = #{pid.toText}
-                  AND timestamp BETWEEN #{windowStart} AND #{now}
+                  AND timestamp BETWEEN #{lo} AND #{hi}
                   AND attributes___http___request___method = #{method}
                   AND |]
         <> pathPred

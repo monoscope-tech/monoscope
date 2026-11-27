@@ -627,7 +627,7 @@ spec = do
       updated `shouldBe` [5, 2]
       (all isJust <$> mapM (\p -> runHasqlEffect tr (SC.getSummary Nothing p)) (projs <> staleP)) `shouldReturn` True
 
-    it "chart cache: hits and partial merges equal fresh reads; streams populate it and replay it without telemetry" \(withPgTelemetry -> tr) -> do
+    it "chart cache: hits and partial merges equal fresh reads; streams populate it and replay it without telemetry" \tr -> do
       key <- createTestAPIKey tr testPid "chart-cache-key"
       let countQ = "summarize count(*) by bin_auto(timestamp)"
           fresh q from to = clearCache tr >> queryMetrics tr q from to
@@ -675,7 +675,7 @@ spec = do
       frames <- stream hourly (timeAt 17) (timeAt 259200)
       length frames `shouldSatisfy` (> 2)
       (shape <$> final frames) `shouldReturn` shape expected
-      dbExec tr [sql|DELETE FROM otel_logs_and_spans WHERE project_id = ?|] (Only testPid)
+      telemetryDbExec tr [sql|DELETE FROM otel_logs_and_spans WHERE project_id = ?|] (Only testPid)
       cached <- stream hourly (timeAt 17) (timeAt 259200)
       cachedMd <- final cached
       (length cached, cachedMd.dataset, cachedMd.rowsCount) `shouldBe` (1, expected.dataset, expected.rowsCount)
@@ -689,7 +689,7 @@ spec = do
     -- Chart SQL failures were swallowed into empty datasets, the same "no data" overlay as an
     -- empty range; and a failed partial-hit delta still advanced `cached_to`, leaving a permanent
     -- hole between the old and new watermark.
-    it "chart cache failures: errors surface, the watermark holds, nothing is cached; empty successes are cached and advance" \(withPgTelemetry -> tr) -> do
+    it "chart cache failures: errors surface, the watermark holds, nothing is cached; empty successes are cached and advance" \tr -> do
       let countQ = "summarize count(*) by bin_auto(timestamp)"
           times@(_, t1, t2) = (addUTCTime (-1800) baseTime, baseTime, addUTCTime 1800 baseTime)
           unscoped = runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just countQ) Nothing Nothing (Just (timeAt (-1800))) (Just (timeAt 1800)) Nothing Nothing []
@@ -712,7 +712,7 @@ spec = do
       dbExec tr [sql|UPDATE query_cache SET cached_data = jsonb_set(cached_data, '{error}', '"old failure"') WHERE project_id = ?|] (Only testPid)
       (outcome <$> hourly) `shouldReturn` (Nothing, V.empty)
 
-    it "chart cache scope and streaming: compiler changes and service scope change keys, shared cache expires, streams survive closed connections and slow queries" \(withPgTelemetry -> tr) -> do
+    it "chart cache scope and streaming: compiler changes and service scope change keys, shared cache expires, streams survive closed connections and slow queries" \tr -> do
       -- Results cached under the old jsonpath predicate must not answer the new compiler's query.
       forM_ ["attributes.url.full matches regex \"^/cache-invalidated$\"", "spans | where attributes.url.full matches regex \"^/cache-invalidated$\"", "attributes.events[*].timestamp > ago(1h)"] \predicate -> do
         clearAllTestData tr
@@ -736,15 +736,13 @@ spec = do
       dbExec tr "UPDATE rum_panel_cache SET expires_at = now() - interval '1 minute' WHERE cache_key = ?" (Only $ QC.sharedCacheKey sharedKey)
       read' `shouldReturn` 2
 
-      clearAllTestData tr
-      key <- createTestAPIKey tr testPid "closed-chart-connection"
-      ingestAt tr key "event " [3600]
       let createPool = newPool $ setNumStripes (Just 1) $ defaultPoolConfig (PG.connectPostgreSQL tr.trConnStr) PG.close 1800 3
       E.bracket createPool destroyAllResources \pool -> withResource pool \active -> do
         withResource pool \idleA -> withResource pool \idleB -> forM_ [idleA, idleB] \conn -> do
           [Only backend] <- PG.query_ conn "SELECT pg_backend_pid()" :: IO [Only Int]
           dbQuery @_ @(Only Bool) tr "SELECT pg_terminate_backend(?, 5000)" (Only backend)
-        frames <- streamChart tr{trATCtx = tr.trATCtx{timefusionPgPool = pool}} Hasql.SqlTimefusion (Just "summarize count(*) by bin(timestamp, 1h)") Nothing (timeAt 0) (timeAt 259200)
+        -- Postgres is the store whose backends a spec can kill; the query needs no telemetry.
+        frames <- streamChart tr{trATCtx = tr.trATCtx{pool = pool}} Hasql.SqlPostgres Nothing (Just "SELECT 1::integer AS bucket, 'one'::text AS series, 1::float AS value") (timeAt 0) (timeAt 259200)
         (case viaNonEmpty last frames of Just (AE.Object o) -> (AEKM.lookup "type" o, AEKM.lookup "data" o >>= \case AE.Object f -> AEKM.lookup "rows_count" f; _ -> Nothing); _ -> (Nothing, Nothing)) `shouldBe` (Just "complete", Just (AE.Number 1))
         PG.query_ active "SELECT 1" `shouldReturn` [Only (1 :: Int)]
       -- 6s outlasts the stream's 5s keep-alive, so a partial frame must precede completion. User SQL

@@ -501,7 +501,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
                 pure $ (,fromMaybe approximateAt (recordedAt <|> capturedAt)) <$> selectedTraceId
             Just (Issues.ApiChangeP d) -> case d.subject of
               Just (ApiChanges.SpanSchema _) -> pure Nothing
-              _ -> Telemetry.getEndpointTraceId pid d.endpointMethod d.endpointPath isFirst now
+              _ -> Telemetry.getEndpointTraceId useTf pid d.endpointMethod d.endpointPath isFirst $ zonedTimeToUTC $ bool issue.updatedAt issue.createdAt isFirst
             Just (Issues.QueryAlertP _) -> pure Nothing
             Just (Issues.LogPatternP _) -> pure Nothing
             Just (Issues.LogPatternRateChangeP _) -> pure Nothing

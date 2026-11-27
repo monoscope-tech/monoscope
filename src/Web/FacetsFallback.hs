@@ -18,10 +18,10 @@ import Hasql.Decoders qualified as HD
 import Hasql.DynamicStatements.Snippet (toPreparableStatement)
 import Models.Ids qualified as Projects
 import Pkg.Parser.Expr qualified as ParserExpr
-import System.Types (ATBaseCtx)
+import System.Types (ATBaseCtx, useTfReads)
 
 
--- | Run a bounded @GROUP BY@ on the live @otel_logs_and_spans@ table for one
+-- | Run a bounded @GROUP BY@ on TimeFusion's @otel_logs_and_spans@ for one
 -- whitelisted column. Returns @{ <field>: [{value, count}, ...], "source":
 -- "fallback" }@ — the @source@ tag lets the CLI surface "computed on-the-fly,
 -- the catalog hasn't built up samples yet."
@@ -48,7 +48,7 @@ facetsFallback pid field fromT toT
           snippet =
             "SELECT ("
               <> fromString (toString colRef)
-              <> ")::text, COUNT(*)::bigint FROM public.otel_logs_and_spans WHERE project_id = "
+              <> ")::text, COUNT(*)::bigint FROM otel_logs_and_spans WHERE project_id = "
               <> fromString (toString pidLit)
               <> " AND timestamp >= "
               <> fromString (toString (tsLit fromT))
@@ -62,7 +62,8 @@ facetsFallback pid field fromT toT
             (,)
               <$> HD.column (HD.nonNullable HD.text)
               <*> HD.column (HD.nonNullable HD.int8)
-      rows <- Hasql.statement () (toPreparableStatement snippet (HD.rowList rowDecoder))
+      useTf <- useTfReads
+      rows <- Hasql.withHasqlTimefusion useTf $ Hasql.statement () (toPreparableStatement snippet (HD.rowList rowDecoder))
       let values =
             AE.toJSON
               [AE.object ["value" AE..= v, "count" AE..= c] | (v, c) <- rows]

@@ -216,9 +216,8 @@ data EnvConfig = EnvConfig
   -- ^ A MaxMind-format @.mmdb@ (DB-IP City Lite in prod, IPinfo, MaxMind GeoLite2) used to place every
   -- ingested span and log by its @client.address@ when the SDK sent no @geo.*@. Empty disables the lookup.
   , enablePostgresTelemetryWrites :: Bool
-  -- ^ Dual-write to the legacy Postgres @otel_logs_and_spans@ store. Defaults
-  -- to True; set ENABLE_POSTGRES_TELEMETRY_WRITES=False once TimeFusion is the source of
-  -- truth so ingestion writes TF only and PG is phased out.
+  -- ^ Also write telemetry to the legacy Postgres @otel_logs_and_spans@ store. Off by
+  -- default: TimeFusion is the source of truth, and nothing reads the Postgres copy.
   , kafkaDeadLetterTopic :: Text
   , rrwebDeadLetterTopic :: Text
   -- ^ Separate dead-letter topic for rrweb session-replay poison. rrweb is NOT
@@ -382,7 +381,11 @@ instance DefConfig EnvConfig where
       , enableKafkaDeadLetterService = True
       , enableOtlpGrpcService = True
       , geoipDbPath = ""
-      , enablePostgresTelemetryWrites = True
+      , -- Telemetry lives in TimeFusion; Postgres keeps app state. PG-only telemetry is
+        -- ENABLE_TIMEFUSION_READS/WRITES=False with ENABLE_POSTGRES_TELEMETRY_WRITES=True.
+        enableTimefusionReads = True
+      , enableTimefusionWrites = True
+      , enablePostgresTelemetryWrites = False
       , extractionWorkerShards = 4
       , extractionQueueCapacity = 64
       , drainFlushBatchSize = 1000
