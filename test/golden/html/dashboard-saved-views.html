@@ -382,7 +382,7 @@
 </span>
 </div>
 <input type="checkbox" autocomplete="off" class="hidden peer/vars" id="dash-vars-toggle"
-<input type="text" name="service" class="dash-variable-input" data-project-id="<uuid>" data-dashboard-id="<uuid>" data-tagify data-tagify-whitelist="[]" data-tagify-enforce-whitelist data-tagify-text-prop="name" data-tagify-query-sql="SELECT DISTINCT resource___service___name
+<input type="text" name="service" class="dash-variable-input" data-project-id="<uuid>" data-dashboard-id="<uuid>" data-tagify data-tagify-whitelist="<options>" data-tagify-enforce-whitelist data-tagify-text-prop="name" data-tagify-query-sql="SELECT DISTINCT resource___service___name
 FROM otel_logs_and_spans
 WHERE project_id=&#39;{{project_id}}&#39;
   AND resource___service___name IS NOT NULL
@@ -390,7 +390,7 @@ WHERE project_id=&#39;{{project_id}}&#39;
 LIMIT 100
 " data-tagify-sql-sig="<hex>" data-tagify-db-source="timefusion" data-tagify-query data-tagify-reload-on-change="true" value="api" data-tagify-mode="select"
 <input type="checkbox" autocomplete="off" class="hidden peer/vars" id="dash-vars-toggle"
-<input type="text" name="service" class="dash-variable-input" data-project-id="<uuid>" data-dashboard-id="<uuid>" data-tagify data-tagify-whitelist="[]" data-tagify-enforce-whitelist data-tagify-text-prop="name" data-tagify-query-sql="SELECT DISTINCT resource___service___name
+<input type="text" name="service" class="dash-variable-input" data-project-id="<uuid>" data-dashboard-id="<uuid>" data-tagify data-tagify-whitelist="<options>" data-tagify-enforce-whitelist data-tagify-text-prop="name" data-tagify-query-sql="SELECT DISTINCT resource___service___name
 FROM otel_logs_and_spans
 WHERE project_id=&#39;{{project_id}}&#39;
   AND resource___service___name IS NOT NULL
@@ -398,7 +398,7 @@ WHERE project_id=&#39;{{project_id}}&#39;
 LIMIT 100
 " data-tagify-sql-sig="<hex>" data-tagify-db-source="timefusion" data-tagify-query data-tagify-reload-on-change="true" value="api" data-tagify-mode="select"
 <input type="checkbox" autocomplete="off" class="hidden peer/vars" id="dash-vars-toggle"
-<input type="text" name="database" class="dash-variable-input" data-project-id="<uuid>" data-dashboard-id="<uuid>" data-tagify data-tagify-whitelist="[]" data-tagify-enforce-whitelist data-tagify-text-prop="name" data-tagify-query-sql="SELECT DISTINCT attributes___db___system___name
+<input type="text" name="database" class="dash-variable-input" data-project-id="<uuid>" data-dashboard-id="<uuid>" data-tagify data-tagify-whitelist="<options>" data-tagify-enforce-whitelist data-tagify-text-prop="name" data-tagify-query-sql="SELECT DISTINCT attributes___db___system___name
 FROM otel_logs_and_spans
 WHERE project_id=&#39;{{project_id}}&#39;
   AND attributes___db___system___name IS NOT NULL

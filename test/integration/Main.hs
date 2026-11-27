@@ -1,6 +1,7 @@
 module Main (main) where
 
 import Data.List (lookup)
+import Pkg.TestUtils (clearFixedProjects)
 import Relude
 import Spec qualified
 import Test.Hspec.Runner (Config (..), defaultConfig, hspecWith)
@@ -27,6 +28,7 @@ main = do
   let cfg = case (idx, tot) of
         (Just i, Just n) | n > 1 -> defaultConfig{configFilterPredicate = Just (inShard i n)}
         _ -> defaultConfig
+  clearFixedProjects
   hspecWith cfg Spec.spec
   where
     -- Deterministic hash of the outermost group; keeps a spec's examples (and any

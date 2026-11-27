@@ -38,7 +38,7 @@ spec = around withTestResources do
       mgr <- Tracing.newTracedManager defaultManagerSettings
       void $ runEff $ W.runHTTPWreqVia mgr $ W.get ("http://localhost:" <> show port <> "/services/T0/B0/" <> toString token <> "?key=secret")
       -- A literal ? (jsonb's key-exists operator) must not be formatted, and a bound value must not be recorded.
-      withResource tr.trATCtx.timefusionPgPool \c -> do
+      withResource tr.trATCtx.pool \c -> do
         let literal = "SELECT 1 AS probe WHERE '{\"a\":1}'::jsonb ? 'a'"; bound = "SELECT ?::text AS probe"
         void (pgSpan c literal (PG.query_ c literal) :: IO [PG.Only Int])
         void (pgSpan c bound (PG.query c bound (PG.Only token)) :: IO [PG.Only Text])

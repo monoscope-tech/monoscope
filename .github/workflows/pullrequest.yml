@@ -266,7 +266,7 @@ jobs:
       # (setup, per-example progress, the app's own logs) for anything the summary
       # can't explain.
       - name: Upload integration shard logs
-        if: failure()
+        if: ${{ !success() }}
         uses: actions/upload-artifact@v7
         with:
           name: integration-shard-logs

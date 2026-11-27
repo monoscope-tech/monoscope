@@ -67,6 +67,7 @@ import System.IO.Error (userError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Timeout (timeout)
 import System.Types (ATAuthCtx, Done (..), addRespHeaders)
+import Text.RE.TDFA.Text (ed, (*=~/))
 import Text.Slugify (slugify)
 import UnliftIO.Async (mapConcurrently_, wait, withAsync)
 import Utils qualified
@@ -550,7 +551,8 @@ spec = around withTestResources $ describe "Dashboard widgets" do
       let Dashboards.DashboardGet _ _ ov _ _ = tabDashboard tab
       (slug, map (.key) $ DashboardModel.variablesForTab ov (find ((== slug) . slugify . (.name)) (fold ov.tabs))) `shouldBe` (slug, keys)
       (T.isInfixOf "Clear filters" &&& T.isInfixOf "All services") (renderT tab) `shouldBe` (True, False)
-      pure $ tagsWith ["id=\"dash-vars-toggle\"", "class=\"dash-variable-input"] (renderT tab)
+      -- A query variable's options are whatever telemetry this project holds in the shared TimeFusion.
+      pure $ map (*=~/ [ed|data-tagify-whitelist="[^"]*"///data-tagify-whitelist="<options>"|]) $ tagsWith ["id=\"dash-vars-toggle\"", "class=\"dash-variable-input"] (renderT tab)
     -- A heatmap click opens the Explorer on the widget's query; `{{request_kql}}` reached it unresolved.
     ovTab <- getTab tr ovId "overview" Nothing []
     ordNub [T.isInfixOf "{{request_kql}}" <$> w.query | w <- renderedWidgets (tabDashboard ovTab), w.wType == Widget.WTHeatmap] `shouldBe` [Just False]
@@ -862,7 +864,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
       filter (/= cold.dataText) (map (.dataText) warm) `shouldBe` []
       dbOne tr "SELECT last_value FROM cache_benchmark_calls" () `shouldReturn` (1 :: Int)
 
-  it "table widgets sort on the server and resource tables group on both backends" \tr -> withTfChartPool tr \tr' -> do
+  it "table widgets sort on the server and resource tables group on both backends" \tr' -> do
     tfUrl <- lookupEnv "TIMEFUSION_PG_TEST_URL"
     now <- getTestTime tr'.trTestClock
     let backends = Hasql.SqlPostgres : [Hasql.SqlTimefusion | isJust tfUrl]
@@ -876,8 +878,9 @@ spec = around withTestResources $ describe "Dashboard widgets" do
           (db, result.error, V.imap cell <$> result.dataText) `shouldBe` (db, Nothing, expected)
     grouped <- createTestProject tr' "Grouped metric resources"
     groupedKey <- createTestAPIKey tr' grouped "grouped-metrics"
+    -- A series per point: TimeFusion keeps one point per series and timestamp.
     for_ ([(Just "alpha", 2), (Just "alpha", 4), (Just "beta", 7), (Nothing, 9), (Nothing, 11)] :: [(Maybe Text, Double)]) \(container, value) ->
-      ingestMetric tr' groupedKey (maybe [] (pure . mkAttr "container.name") container) [] "grouped.metric" value now
+      ingestMetric tr' groupedKey (maybe [] (pure . mkAttr "container.name") container) [mkAttr "point" (show value)] "grouped.metric" value now
     let row label lo hi = V.fromList [AE.String label, AE.toJSON (lo :: Double), AE.toJSON (hi :: Double)]
     onBoth grouped (Just "metrics | where metric_name == \"grouped.metric\" | summarize min(value), max(value) by resource.container.name") Nothing (V.fromList [row "null" 9 11, row "beta" 7 7, row "alpha" 2 4])
 
@@ -887,7 +890,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     samplesKey <- createTestAPIKey tr' samples "container-resources"
     let container name = [mkAttr "service.name" name, mkAttr "k8s.container.name" name, mkAttr "k8s.pod.name" (name <> "-0")]
     for_
-      ( [ ("web", "container.cpu.usage", 0.25, now)
+      ( [ ("web", "container.cpu.usage", 0.25, addUTCTime (-30) now)
         , ("web", "container.cpu.usage", 0.75, now)
         , ("web", "container.memory.working_set", 300, now)
         , ("web", "k8s.container.memory_limit", 400, now)

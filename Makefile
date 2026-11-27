@@ -221,23 +221,31 @@ test-doctests:
 test-integration: $(IMPACT_WORKER_DEPS)
 	LOG_LEVEL=attention USE_EXTERNAL_DB=true cabal test integration-tests -j --ghc-options="-O0" --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
 
-# TimeFusion bring-up for integration tests. Delegates to the timefusion repo.
-# Override TIMEFUSION_DIR if your checkout lives elsewhere.
+# TimeFusion bring-up for integration tests: origin/master of the timefusion repo, built in its own
+# detached worktree, so a WIP branch checked out in TIMEFUSION_DIR never becomes the test server.
 TIMEFUSION_DIR ?= ../timefusion
+TIMEFUSION_BUILD ?= $(abspath $(TIMEFUSION_DIR)-test)
 TIMEFUSION_PG_TEST_URL ?= postgresql://postgres:postgres@127.0.0.1:12345/postgres
 
-# TimeFusion configured as CI's: each write flushed and readable at once (.env.minio's batch queue
-# delays it, and tf-start lets nothing override that file). A no-op once one answers on :12345.
+# TimeFusion configured as CI's container (pullrequest.yml): only its settings, plus .env.minio's
+# MinIO credentials. Its own table prefix pairs with the worktree's own data dir: a WAL publishing
+# into another data dir's tables fails. A no-op once one answers on :12345.
 timefusion-start:
 	@nc -z 127.0.0.1 12345 2>/dev/null && echo "TimeFusion already up on :12345" || { \
-	  $(MAKE) -C $(TIMEFUSION_DIR) minio-start && cd $(TIMEFUSION_DIR) && cargo build --release > /tmp/timefusion.log 2>&1 && \
-	  { set -a; . ./.env.minio; set +a; ENABLE_BATCH_QUEUE=false TIMEFUSION_BUFFER_FLUSH_IMMEDIATELY=true TIMEFUSION_FOYER_DISABLED=true \
+	  git -C $(TIMEFUSION_DIR) fetch -q origin master && \
+	  { [ -d $(TIMEFUSION_BUILD) ] || git -C $(TIMEFUSION_DIR) worktree add -q --detach $(TIMEFUSION_BUILD) origin/master; } && \
+	  git -C $(TIMEFUSION_BUILD) checkout -q --detach origin/master && echo "TimeFusion $$(git -C $(TIMEFUSION_BUILD) log --oneline -1)" && \
+	  $(MAKE) -C $(TIMEFUSION_BUILD) minio-start && cd $(TIMEFUSION_BUILD) && cargo build --release > /tmp/timefusion.log 2>&1 && \
+	  { set -a; eval "$$(grep '^AWS_' .env.minio)"; set +a; \
+	    PGWIRE_PORT=12345 PGWIRE_USER=postgres PGWIRE_PASSWORD=postgres TIMEFUSION_ALLOW_INSECURE_AUTH=true \
+	    TIMEFUSION_TABLE_PREFIX=monoscope-tests TIMEFUSION_DATA_DIR=./data/monoscope-tests \
+	    TIMEFUSION_BUFFER_FLUSH_IMMEDIATELY=true TIMEFUSION_FOYER_DISABLED=true TIMEFUSION_BUFFER_MAX_MEMORY_MB=512 OTEL_TRACES_EXPORTER=none \
 	    nohup ./target/release/timefusion >> /tmp/timefusion.log 2>&1 & echo $$! > /tmp/timefusion.pid; } && \
 	  for i in $$(seq 1 900); do nc -z 127.0.0.1 12345 2>/dev/null && { echo "TimeFusion up on :12345"; exit 0; }; sleep 1; done; \
 	  tail -50 /tmp/timefusion.log; exit 1; }
 
 timefusion-stop:
-	$(MAKE) -C $(TIMEFUSION_DIR) tf-stop
+	$(MAKE) -C $(TIMEFUSION_BUILD) tf-stop
 
 # Whether a local TimeFusion answers on the PGWire port the TF watcher and tests use.
 timefusion-status:

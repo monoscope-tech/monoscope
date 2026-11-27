@@ -234,8 +234,10 @@ spec = around withTestResources do
              RETURN 1;
            END $$|]
       ()
-    let ctx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.enableTimefusionWrites = True}}
-    void $ runTestBg frozenTime tr $ BackgroundJobs.dualExecPgTfWithSql ctx [HI.sql|UPDATE tf_drain_target SET n = n|] [HI.sql|UPDATE tf_drain_target SET n = tf_drain_probe()|]
+    -- The drain is simulated in Postgres, so its TimeFusion arm is the Postgres pool.
+    let pgAsTf = tr.trATCtx{Config.hasqlTimefusionPool = tr.trATCtx.hasqlPool, Config.hasqlTimefusionUsesPgTypes = True}
+        ctx = pgAsTf{Config.config = tr.trATCtx.config{Config.enableTimefusionWrites = True}}
+    void $ runTestBg frozenTime tr{trATCtx = pgAsTf} $ BackgroundJobs.dualExecPgTfWithSql ctx [HI.sql|UPDATE tf_drain_target SET n = n|] [HI.sql|UPDATE tf_drain_target SET n = tf_drain_probe()|]
     dbOne @() @Int tr [sql|SELECT n FROM tf_drain_target|] () `shouldReturn` 1
 
 

@@ -312,7 +312,8 @@ spec = around withTestResources $ describe "Issues" do
     forM_ [(selectedAt, "selected occurrence" :: Text), (frozenTime, "outside occurrence")] \(t, message) ->
       dbExec tr [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, hashes, summary, context___trace_id) VALUES (gen_random_uuid(), ?, ?, ?, 'log', ARRAY['pat:sample-pattern'], ARRAY[?], ?) |] (testPid, t, t, message, sampleTrace)
     sampled <- seedIssue tr (issueSeed Issues.LogPattern "sample-pattern"){service = Just "checkout", payload = AE.toJSON $ Issues.LogPatternData "sample-pattern" "payment failed <*>" (Just "saved occurrence") Nothing (Just "checkout") "body" selectedAt 2, at = selectedAt}
-    let sample pid (from, to) = call tr $ IssuesPage.issueSampleGetH pid sampled Nothing from to
+    -- The occurrences above are raw Postgres rows (they carry a chosen pattern hash), so the sample reads Postgres.
+    let sample pid (from, to) = call (withPgTelemetry tr) $ IssuesPage.issueSampleGetH pid sampled Nothing from to
     sample testPid (window selectedAt) >>= \case
       IssuesPage.IssueSample _ (Just "saved occurrence") (IssuesPage.SampleFound t summary (Just tr')) -> (t, summary, tr') `shouldBe` (selectedAt, V.singleton "selected occurrence", sampleTrace)
       _ -> expectationFailure "expected the in-range event"

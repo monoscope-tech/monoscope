@@ -62,7 +62,7 @@ import Utils (formatUTC, formatUTCMicros, lookupIcon)
 
 spec :: Spec
 spec = do
-  around withTfChartResources do
+  around withTestResources do
     it "containers and hosts: one inventory for both runtimes, projected into hosts, images, Kubernetes and the host map, with drilldowns that keep the window" \tr -> do
       pid <- createTestProject tr "infrastructure"
       let page runtime namespace node image cluster = Containers.containersGetH pid runtime namespace node image cluster Nothing Nothing Nothing (Just "1")

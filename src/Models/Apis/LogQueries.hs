@@ -890,6 +890,7 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
   -- One raw scan of the window keyed by 'sessionKeyExpr' (an expression, so no rollup can
   -- serve it). Each session's services ride along for ~5% of the scan, which is cheaper than
   -- the separate full-window service scan the header used to fork beside it.
+  -- FILTER, not ARRAY_REMOVE(…, NULL): TimeFusion returns an empty array for the latter.
   telemetry :: [SessionAggRow] <-
     Hasql.withHasqlTimefusion enableTfReads
       $ Hasql.interp
@@ -903,7 +904,7 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
       <> rawSql isErrorSql
       <> [HI.sql|)::BIGINT,
           MIN(timestamp), MAX(COALESCE(end_time, timestamp)),
-          ARRAY_REMOVE(ARRAY_AGG(DISTINCT resource___service___name), NULL)
+          ARRAY_AGG(DISTINCT resource___service___name) FILTER (WHERE resource___service___name IS NOT NULL)
         FROM otel_logs_and_spans
         WHERE |]
       <> whereSql

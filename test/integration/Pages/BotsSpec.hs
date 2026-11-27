@@ -4754,7 +4754,7 @@ spec = around withTestResources do
               <> [ ("Show " <> shape <> bool " from a primary query: " " from a widget: " modern <> query, 1, expected, decodeUtf8 $ AE.encode $ if modern then AE.object ["widgets" .= ([AE.object ["type" .= shape, "query" .= query]] :: [AE.Value])] else AE.object ["query" .= query, "visualization" .= shape], 0, 1)
                  | shape <- ["logs", "table", "top_list"]
                  , modern <- [False, True]
-                 , (query, expected) <- [("name == \"qa-missing-event\"", "No data found"), ("summarize matches=count()", "matches\n0")]
+                 , (query, expected) <- [("name == \"qa-missing-event\"", "No data found"), ("name == \"qa-missing-event\" | summarize matches=count()", "matches\n0")]
                  ]
               :: [(Text, Int, Text, Text, Int, Int)]
           blockTexts = toListOf (key "blocks" . _Array . traverse . key "text" . Lens.failing _String (key "text" . _String))
