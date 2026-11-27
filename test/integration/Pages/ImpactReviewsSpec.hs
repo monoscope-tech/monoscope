@@ -2729,7 +2729,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     stages <- newIORef []
     accepted <- newIORef []
     httpRequests <- newIORef []
-    changedRemoteBody <- newIORef False
+    changedRemoteBody <- newIORef (\(text :: Text) -> text)
     let github = directory </> "gh"
         stateFile = directory </> "github.json"
         branch = "monoscope/fix/" <> testPid.toText <> "/" <> result.runId.toText <> "/" <> result.candidateId.toText
@@ -2738,9 +2738,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
         resetRemote = removePathForcibly (store.usageDir </> "fixes" </> toString result.runId.toText </> "publications-native") >> writeFileLBS stateFile (AE.encode initial)
         fixture _ url = do
           remote <- readState
-          changed <- readIORef changedRemoteBody
+          edit <- readIORef changedRemoteBody
           let pr = fromRight AE.Null $ AET.parseEither (field "pr") remote
-              confirmed = if changed then case pr of AE.Object fields -> AE.Object $ KM.mapWithKey (\key value -> case (key, value) of ("body", AE.String text) -> AE.String $ text <> "\nEdited explanation"; _ -> value) fields; value -> value else pr
+              confirmed = case pr of AE.Object fields -> AE.Object $ KM.mapWithKey (\key value -> case (key, value) of ("body", AE.String text) -> AE.String $ edit text; _ -> value) fields; value -> value
           pure
             $ Just
             $ AE.encode
@@ -2770,9 +2770,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
     failedAcceptance <- tryAny $ runPublisher authorize (\_ -> throwIO $ userError "Fixture acceptance failure")
     isRight failedAcceptance `shouldBe` True
     either (const Nothing) leftToMaybe failedAcceptance `shouldBe` Just Publication.ProtocolFailure
-    writeIORef changedRemoteBody True
+    writeIORef changedRemoteBody ("Edited explanation\n" <>)
     failure (\_ -> fail "Edited remote explanation reached application acceptance") `shouldReturn` Just Publication.InvalidReceipt
-    writeIORef changedRemoteBody False
+    -- 2026-11-27: a review bot appended its footer to talstack #740, and the receipt check refused Monoscope's own PR.
+    writeIORef changedRemoteBody (<> "\n\n<!-- codesmith:footer -->")
+    isRight <$> runPublisher authorize validate `shouldReturn` True
+    writeIORef changedRemoteBody (\text -> text)
     for_ ([("visibility", Publication.VisibilityChanged), ("denied", Publication.AccessRevoked), ("fork", Publication.PullRequestChanged)] :: [(Text, Publication.Failure)]) \(mode, expected) -> do
       setMode mode
       failure validate `shouldReturn` Just expected
