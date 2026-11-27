@@ -517,45 +517,39 @@ insertAnomalies rows =
 -- group, mirroring the legacy behaviour.
 enqueueAnomalyJobs :: DB es => V.Vector AnomalyInsertRow -> Eff es ()
 enqueueAnomalyJobs rows | V.null rows = pass
-enqueueAnomalyJobs rows = do
-  let groups :: HM.HashMap (Projects.ProjectId, Text) [Text]
-      groups = HM.fromListWith (<>) [((r.projectId, display r.anomalyType), [r.targetHash]) | r <- V.toList rows]
-  forM_ (HM.toList groups) \((pid, atype), ths) -> do
-    let payload = V.fromList ths
-    Hasql.interpExecute_
-      [HI.sql|
-        WITH existing AS (
-          SELECT id, payload->'targetHashes' AS ths
-          FROM background_jobs
-          WHERE payload->>'tag' = 'NewAnomaly'
-            AND payload->>'projectId' = #{pid}::text
-            AND payload->>'anomalyType' = #{atype}
-            AND status = 'queued'
-          ORDER BY run_at ASC LIMIT 1
-        ),
-        upd AS (
-          UPDATE background_jobs SET payload = jsonb_build_object(
-            'tag', 'NewAnomaly',
-            'projectId', #{pid}::text,
-            'createdAt', to_jsonb(now()),
-            'anomalyType', #{atype}::text,
-            'anomalyAction', 'created'::text,
-            'targetHashes', COALESCE((SELECT ths FROM existing), '[]'::jsonb) || to_jsonb(#{payload}::text[])
-          )
-          WHERE id = (SELECT id FROM existing)
-          RETURNING id
-        )
-        INSERT INTO background_jobs (run_at, status, payload)
-        SELECT now(), 'queued', jsonb_build_object(
-          'tag', 'NewAnomaly',
-          'projectId', #{pid}::text,
-          'createdAt', to_jsonb(now()),
-          'anomalyType', #{atype}::text,
-          'anomalyAction', 'created'::text,
-          'targetHashes', to_jsonb(#{payload}::text[])
-        )
-        WHERE NOT EXISTS (SELECT 1 FROM upd)
-      |]
+enqueueAnomalyJobs rows =
+  -- One statement for every group: a flush touching many projects used to run one upsert each.
+  Hasql.interpExecute_
+    [HI.sql|
+      WITH g AS (
+        SELECT pid, atype, jsonb_agg(th ORDER BY ord) AS ths
+        FROM unnest(#{pids}::text[], #{atypes}::text[], #{ths}::text[]) WITH ORDINALITY AS r(pid, atype, th, ord)
+        GROUP BY pid, atype
+      ),
+      existing AS (
+        SELECT DISTINCT ON (g.pid, g.atype) b.id, g.pid, g.atype, g.ths
+        FROM g JOIN background_jobs b
+          ON b.payload->>'tag' = 'NewAnomaly' AND b.payload->>'projectId' = g.pid
+         AND b.payload->>'anomalyType' = g.atype AND b.status = 'queued'
+        ORDER BY g.pid, g.atype, b.run_at ASC
+      ),
+      upd AS (
+        UPDATE background_jobs b SET payload = jsonb_build_object(
+          'tag', 'NewAnomaly', 'projectId', e.pid, 'createdAt', to_jsonb(now()), 'anomalyType', e.atype,
+          'anomalyAction', 'created'::text, 'targetHashes', COALESCE(b.payload->'targetHashes', '[]'::jsonb) || e.ths)
+        FROM existing e WHERE b.id = e.id
+        RETURNING e.pid, e.atype
+      )
+      INSERT INTO background_jobs (run_at, status, payload)
+      SELECT now(), 'queued', jsonb_build_object(
+        'tag', 'NewAnomaly', 'projectId', g.pid, 'createdAt', to_jsonb(now()), 'anomalyType', g.atype,
+        'anomalyAction', 'created'::text, 'targetHashes', g.ths)
+      FROM g WHERE NOT EXISTS (SELECT 1 FROM upd WHERE upd.pid = g.pid AND upd.atype = g.atype)
+    |]
+  where
+    pids = V.map (\r -> r.projectId.toText) rows
+    atypes = V.map (display . (.anomalyType)) rows
+    ths = V.map (.targetHash) rows
 
 
 -- Periodic flush worker for the schema-learning catalog.

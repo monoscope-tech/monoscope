@@ -195,6 +195,9 @@ spec = around withTestResources do
     -- a new field path: shape + field + format, no new endpoint
     (.anomaliesEmitted) <$> observeFlush testPid [users [("id", AE.String "abc"), ("email", AE.String "x@y"), ("name", AE.String "Ada")]] `shouldReturn` 3
     anomalyCounts tr testPid `shouldReturn` (1, 2, 3, 3)
+    -- coalesced into the four queued jobs, every anomaly's hash carried
+    jobs `shouldReturn` 4
+    dbOne @_ @Int tr [sql| SELECT sum(jsonb_array_length(payload->'targetHashes'))::int FROM background_jobs WHERE payload->>'tag' = 'NewAnomaly' AND payload->>'projectId' = ?::text |] (Only testPid) `shouldReturn` 9
     -- widening a type: a shape anomaly only
     (.anomaliesEmitted) <$> observeFlush testPid [users [("id", AE.Number 42)]] `shouldReturn` 1
     anomalyCounts tr testPid `shouldReturn` (1, 3, 3, 3)
