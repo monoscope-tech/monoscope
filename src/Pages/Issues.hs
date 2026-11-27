@@ -117,7 +117,7 @@ import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
-import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.ErrorPatterns (ErrorPatternId (..))
@@ -883,18 +883,17 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
     breadcrumbDataSummary v = asum $ lookupValueText v <$> ["selector", "url"]
 
 
--- | The user-journey half needs the issue's trace, which is the slow read on this
--- page — so the whole panel arrives through the one fragment it already used for
--- issue events, with the trace reference passed along rather than pre-fetched.
+-- | The user journey needs the issue's trace, the slow read on this page (42s seen on prod),
+-- so it arrives as its own fragment and the comments and timeline never wait on it.
 activityPanel_ :: Projects.ProjectId -> Issues.IssueId -> Maybe (Text, UTCTime) -> Html ()
 activityPanel_ pid issueId traceRef = do
-  let activityUrl = (urls.issues pid).activityGet issueId (fst <$> traceRef) (snd <$> traceRef)
   -- Recorded once the page is shown, not when served: the body preloads links on hover.
   div_ [hxPost_ $ (urls.issues pid).viewedPost issueId, hxTrigger_ "load", hxSwap_ "none"] ""
-  railSection_ "Activity"
-    $ div_ [id_ "issue-activity", class_ "-mx-4", hxGet_ activityUrl, hxTrigger_ "intersect once, issueActivityChanged from:body", hxSwap_ "innerHTML"]
-    $ div_ [class_ "p-4 flex justify-center"]
-    $ loadingIndicator_ LdSM LdDots
+  railSection_ "Activity" do
+    div_ [id_ "issue-activity", class_ "-mx-4", hxGet_ $ (urls.issues pid).activityGet issueId Nothing Nothing, hxTrigger_ "intersect once, issueActivityChanged from:body", hxSwap_ "innerHTML"]
+      $ div_ [class_ "p-4 flex justify-center"]
+      $ loadingIndicator_ LdSM LdDots
+    whenJust traceRef \(tId, ts) -> div_ [class_ "-mx-4", hxGet_ $ (urls.issues pid).activityGet issueId (Just tId) (Just ts), hxSelect_ "#issue-journey", hxTrigger_ "intersect once", hxSwap_ "innerHTML"] ""
 
 
 -- | A titled block of the right rail. Rail blocks are separated by rules rather than

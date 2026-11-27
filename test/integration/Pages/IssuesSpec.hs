@@ -290,6 +290,11 @@ spec = around withTestResources $ describe "Issues" do
     dbExec tr [sql| UPDATE apis.issues SET updated_at=? WHERE id=? |] (at 86400, iid)
     chosen <- viewOf tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing (Just $ IssuesPage.EventRef tb (at (-300)))
     (chosen.traceRef, chosen.tp.from, chosen.tp.to) `shouldBe` (Just (tb, at (-300)), Just "2024-12-31T21:55:00Z", Just "2025-01-01T01:55:00Z")
+    -- issueActivity_timelineDoesNotWaitOnTheTrace: the journey reads the issue's trace, which took
+    -- 42s on prod, and the comments and timeline sat behind it.
+    page <- renderT <$> call tr (IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing (Just $ IssuesPage.EventRef tb (at (-300))))
+    let tagWith marker = find (T.isInfixOf marker) (T.splitOn "<" page)
+    (T.isInfixOf "trace_id" <$> tagWith "id=\"issue-activity\"", T.isInfixOf "trace_id" <$> tagWith "hx-select=\"#issue-journey\"") `shouldBe` (Just False, Just True)
 
     -- gRPC instrumentation emits a bare `message` event per RPC message; the journey skips them.
     let journeyTrace = "70a0000000000000000000000000000a"
