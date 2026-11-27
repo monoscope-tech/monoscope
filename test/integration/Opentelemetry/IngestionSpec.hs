@@ -449,6 +449,33 @@ spec = do
       replay <- call tr (Replay.replaySessionGetH spid shared)
       (replay.meta >>= \m -> m.userId <|> m.userEmail <|> m.userName) `shouldBe` Nothing
 
+    it "sessions: keeps context when a span end precedes its start" \tr -> do
+      spid <- createTestProject tr "sessions-reversed-span-times"
+      key <- createTestAPIKey tr spid "sessions-reversed-key"
+      let req =
+            mkSpanRequest
+              "reversed-end-trace"
+              "reversed-end-span"
+              Nothing
+              "GET /reversed"
+              []
+              Nothing
+              [ mkAttr "session.id" "reversed-end-session"
+              , mkAttr "user.email" "reversed@example.com"
+              , mkAttr "url.path" "/reversed"
+              , mkAttr "user_agent.original" "Mozilla/5.0 Reversed"
+              ]
+              (mkResource key [])
+              frozenTime
+            & TSF.resourceSpans . traverse . PTF.scopeSpans . traverse . PTF.spans . traverse . PTF.endTimeUnixNano
+              .~ toNanos (addUTCTime (-1) frozenTime)
+      ingestSpanReq tr req
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      Log.SessionsView total rows _ <- sessionsView tr spid Nothing Nothing
+      let context = V.find ((== "reversed-end-session") . (.sessionId)) rows <&> (\r -> (r.landingUrl, r.userAgent))
+      unless ((total, context) == (1, Just (Just "/reversed", Just "Mozilla/5.0 Reversed")))
+        $ expectationFailure "sessions reversed end time lost context"
+
     it "trace sessions: identity spreads across batches via the cache, never overwrites, merges partial info, backfills rows the cache missed" \tr -> do
       key <- createTestAPIKey tr testPid "sess-prop"
       let send trId spanId name attrs ts = ingestSpanReq tr $ mkSpanRequest trId spanId Nothing name [] Nothing (uncurry mkAttr <$> attrs) (mkResource key []) ts

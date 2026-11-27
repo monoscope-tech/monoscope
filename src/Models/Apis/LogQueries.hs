@@ -902,7 +902,7 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
           COUNT(*) FILTER (WHERE |]
       <> rawSql isErrorSql
       <> [HI.sql|)::BIGINT,
-          MIN(timestamp), MAX(COALESCE(end_time, timestamp)),
+          MIN(timestamp), MAX(GREATEST(timestamp, COALESCE(end_time, timestamp))),
           ARRAY_REMOVE(ARRAY_AGG(DISTINCT resource___service___name), NULL)
         FROM otel_logs_and_spans
         WHERE |]
