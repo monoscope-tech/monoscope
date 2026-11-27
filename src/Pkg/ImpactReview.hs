@@ -770,7 +770,8 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           threads <- traverse (\thread -> Git.listPullRequestComments conn (Git.RepoRef run.owner run.repo run.revision) thread run.number) [Git.Inline, Git.Conversation]
           for_ (lefts threads) $ Log.logAttention "Pull request discussion could not be read" . (run.id,)
           -- Another proof bot's reports are its findings, not asks; feeding them in would copy its verdicts.
-          let skipped c = maybe False ((== readMaybe @Int64 (toString cfg.githubAppId)) . Just . (.id)) c.performedViaGithubApp || maybe False (("blacksmith" `T.isInfixOf`) . T.toLower . (.login)) c.user
+          -- An @monoscope command is this review's request, not a reviewer's ask; its focus already reaches the prompt.
+          let skipped c = isJust (Reviews.parseAsk c.body) || maybe False ((== readMaybe @Int64 (toString cfg.githubAppId)) . Just . (.id)) c.performedViaGithubApp || maybe False (("blacksmith" `T.isInfixOf`) . T.toLower . (.login)) c.user
               -- Asks arrive late, so the newest of each thread are kept.
               discussion = take 20 [AE.object ["author" AE..= fmap (.login) c.user, "path" AE..= c.path, "comment" AE..= T.take 800 c.body] | c <- concatMap (reverse . filter (not . skipped)) (rights threads)]
           until <- Time.currentTime
