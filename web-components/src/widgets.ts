@@ -856,7 +856,7 @@ const drawnResponse = new WeakMap<object, string>();
 const baseYFormatters = new WeakMap<object, unknown>();
 // The layout each chart last drew, so a resize redraws only when its insets or legend change.
 const drawnLayouts = new WeakMap<object, string>();
-// Legend toggles, which a notMerge redraw would otherwise reset on every live tick.
+// Legend toggles, which a replacing redraw would otherwise reset on every live tick.
 const legendSelections = new WeakMap<object, Record<string, boolean>>();
 export const drawSized = (chart: any, el: HTMLElement | null, options: any, unit = '', notMerge = false, onlyIfChanged = false) => {
   // A null source is the server's "fetch me": there is nothing to draw until the data lands.
@@ -867,8 +867,26 @@ export const drawSized = (chart: any, el: HTMLElement | null, options: any, unit
   if (onlyIfChanged && drawnLayouts.get(chart) === key) return;
   drawnLayouts.set(chart, key);
   const selected = legendSelections.get(chart);
-  chart.setOption(selected && layout.legend ? { ...layout, legend: { ...layout.legend, selected } } : layout, notMerge);
+  chart.setOption(withTooltipOnHover(chart, el, selected && layout.legend ? { ...layout, legend: { ...layout.legend, selected } } : layout), notMerge ? { replaceMerge: REPLACED_ON_REDRAW } : false);
 };
+// A chart builds its tooltip on first hover. Built up front, each chart scrolled past measured the
+// page once for it (1.8s over eight screens of metrics), and most are never hovered.
+const heldTooltips = new WeakMap<object, unknown>();
+const liveTooltips = new WeakSet<object>();
+const withTooltipOnHover = (chart: any, el: HTMLElement | null, option: any) => {
+  if (!el || !option.tooltip || liveTooltips.has(chart)) return option;
+  if (!heldTooltips.has(chart)) el.addEventListener('pointerenter', () => {
+    liveTooltips.add(chart);
+    if (!chart.isDisposed()) chart.setOption({ tooltip: heldTooltips.get(chart) });
+  }, { once: true });
+  heldTooltips.set(chart, option.tooltip);
+  const { tooltip: _, ...rest } = option;
+  return rest;
+};
+// A redraw replaces every component a chart declares except the tooltip: rebuilding that each draw
+// re-measured the page (four forced layouts a draw, 3s scrolling the metrics page). Undeclared types go.
+const REPLACED_ON_REDRAW = ['series', 'dataset', 'grid', 'xAxis', 'yAxis', 'polar', 'radiusAxis', 'angleAxis', 'singleAxis', 'parallel', 'parallelAxis',
+  'geo', 'calendar', 'legend', 'title', 'dataZoom', 'visualMap', 'toolbox', 'brush', 'timeline', 'graphic', 'axisPointer'];
 const applyChartResponse = (chart: any, opt: any, widgetData: WidGetData, data: ChartDataResponse) => {
   const el = $(widgetData.chartId);
   const { width, height } = sizeOf(el);

@@ -60,8 +60,7 @@ test('a morph-swapped panel updates its live chart in place; a replaced element 
   vi.stubGlobal('fetch', vi.fn(async () => new Response(panel([[1, 10], [2, 20]]), { headers: { 'Content-Type': 'text/html' } })));
   htmx.process(document.body);
   await vi.waitFor(() => expect(instances[0]?.setOption).toHaveBeenCalledTimes(1));
-  // Tooltips stay inside the grid so they layer under the sticky variables bar.
-  expect(instances[0].setOption.mock.calls[0][0].tooltip.appendTo).toBe(document.querySelector('.dashboard-grid-wrapper'));
+  expect(instances[0].setOption.mock.calls[0][0].tooltip).toBeUndefined(); // built on first hover
   const chartEl = document.getElementById('lcp')!;
   expect(chartEl.hasAttribute('hx-morph-skip')).toBe(true);
 
@@ -72,9 +71,9 @@ test('a morph-swapped panel updates its live chart in place; a replaced element 
   expect(instances[0].dispose).not.toHaveBeenCalled();
   expect(document.getElementById('lcp')).toBe(chartEl); // morph kept the node, and its canvas
   expect(chartEl.querySelector('canvas')).not.toBeNull();
-  const [option, notMerge] = instances[0].setOption.mock.calls[1];
+  const [option, merge] = instances[0].setOption.mock.calls[1];
   expect(option.dataset.source).toEqual([['timestamp', 'P75'], [1, 10], [2, 20]]);
-  expect(notMerge).toBe(true);
+  expect(merge.replaceMerge).toContain('series');
 
   // outerHTML: the old node is gone, so the same id gets a fresh instance and the old one is torn down.
   document.getElementById('panel')!.outerHTML = panel([[3, 30]]);
@@ -82,6 +81,10 @@ test('a morph-swapped panel updates its live chart in place; a replaced element 
   await vi.waitFor(() => expect(instances).toHaveLength(2));
   expect(instances[0].dispose).toHaveBeenCalledTimes(1);
   expect(document.getElementById('lcp')!.hasAttribute('hx-morph-skip')).toBe(true);
+  // Tooltips stay inside the grid so they layer under the sticky variables bar.
+  await vi.waitFor(() => expect(instances[1].setOption).toHaveBeenCalled());
+  document.getElementById('lcp')!.dispatchEvent(new Event('pointerenter'));
+  expect(instances[1].setOption.mock.calls.at(-1)![0].tooltip.appendTo).toBe(document.querySelector('.dashboard-grid-wrapper'));
 });
 
 test('an in-place update with a changed query aborts the pending fetch; an unchanged one refreshes quietly', async () => {
