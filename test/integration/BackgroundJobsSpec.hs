@@ -47,6 +47,14 @@ import UnliftIO.Async (concurrently)
 
 spec :: Spec
 spec = around withTestResources do
+  -- restartedWorker_releasesItsOwnLocks (2026-11-27): a restarted worker keeps its odd-jobs name, and its jobs
+  -- from before the restart stayed locked for the hour-long job timeout, stalling every review waiting on them.
+  it "a restarted worker requeues the long jobs locked under its own name, and leaves other workers' alone" \tr -> do
+    name <- BackgroundJobs.jobRunnerName
+    dbExec tr "DELETE FROM background_jobs_long" ()
+    for_ [name, "another-host:1"] \owner -> dbExec tr "INSERT INTO background_jobs_long (run_at, status, payload, locked_at, locked_by) VALUES (now(), 'locked', '{}', now(), ?)" (Only owner)
+    BackgroundJobs.releaseStaleLocks tr.trATCtx.jobsPool `shouldReturn` 1
+    dbQuery tr "SELECT locked_by, status FROM background_jobs_long ORDER BY id" () `shouldReturn` [(Nothing, "queued" :: Text), (Just "another-host:1", "locked")]
   it "error alerts: orphan sweep, settings toggle, acknowledgement window, aged subscription, one fingerprint, endpoint gate" \tr -> do
     seedSlackChannel tr
     saveAlertToggle tr (\form v -> form{ProjectPages.errorAlerts = v}) True

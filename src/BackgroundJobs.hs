@@ -1,7 +1,7 @@
 {-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsWorkerInitWithTools, jobsWorkerConfig, jobsRunner, runWorkspaceMaintenanceTimer, runReviewWorkerHeartbeat, ensureDailyJobScheduled, processBackgroundJob, processBackgroundJobWithTools, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, dualExecPgTfWithSql, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl, sendAlertToChannels) where
+module BackgroundJobs (jobsWorkerInit, jobRunnerName, releaseStaleLocks, jobsWorkerInitWithTools, jobsWorkerConfig, jobsRunner, runWorkspaceMaintenanceTimer, runReviewWorkerHeartbeat, ensureDailyJobScheduled, processBackgroundJob, processBackgroundJobWithTools, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, dualExecPgTfWithSql, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl, sendAlertToChannels) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -36,7 +36,7 @@ import Data.List.Extra (chunksOf, headDef, nubOrdOn)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Ord (clamp)
-import Data.Pool (withResource)
+import Data.Pool (Pool, withResource)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (display)
@@ -146,6 +146,8 @@ import System.Clock (Clock (Monotonic), diffTimeSpec, getTime, toNanoSecs)
 import System.Config qualified as Config
 import System.Directory (findExecutable)
 import System.Logging qualified as Log
+import System.Posix.Process (getProcessID)
+import System.Posix.Unistd (SystemID (nodeName), getSystemID)
 import System.Random (randomRIO)
 import System.Tracing (MessagingOp (Process), MessagingSystem (OddJobs), NotInstrumented, SpanKind (Consumer), SpanStatus (..), Tracing, addEvent, forkWithCtx, messagingAttrs, setStatus, withSpan, withSpanKind, withSpan_)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
@@ -3442,9 +3444,26 @@ jobsWorkerInitWithTools logger appCtx tp projectTools = when appCtx.config.enabl
     -- VM slots bound them: one build at a time per node, and claimRun admits reviews by agent slots. A
     -- node without agent slots (web replicas, no KVM) would hold these jobs it cannot run, so it skips them.
     $ Workspace.hostSlots
-    >>= \slots -> when (slots.agents > 0) $ startJobRunner config{cfgTableName = "background_jobs_long", cfgConcurrencyControl = MaxConcurrentJobs 8, cfgDefaultJobTimeout = Seconds (Workspace.buildSeconds + 60)}
+    >>= \slots -> when (slots.agents > 0) $ releaseLocks >> startJobRunner config{cfgTableName = "background_jobs_long", cfgConcurrencyControl = MaxConcurrentJobs 8, cfgDefaultJobTimeout = Seconds (Workspace.buildSeconds + 60)}
   where
     config = jobsWorkerConfig logger appCtx tp projectTools
+    releaseLocks = tryStepIO logger appCtx "Releasing this worker's stale job locks failed" do
+      released <- releaseStaleLocks appCtx.jobsPool
+      when (released > 0) $ runLogT (show appCtx.config.environment) logger appCtx.config.logLevel $ LogLegacy.logInfo "Requeued long jobs this worker held before restarting" released
+
+
+-- | odd-jobs' name for this process, host:pid. A worker container restarts as the same host and pid 1.
+jobRunnerName :: IO Text
+jobRunnerName = (\system pid -> toText (nodeName system) <> ":" <> show pid) <$> getSystemID <*> getProcessID
+
+
+-- | A restarted worker's long jobs from before the restart stay locked under its unchanged name until the
+-- hour-long job timeout reclaims them, and every review waiting on them stalls. Nothing of this process runs
+-- yet, so locks under its name are stale.
+releaseStaleLocks :: Pool SimplePG.Connection -> IO Int64
+releaseStaleLocks pool =
+  jobRunnerName >>= \name -> withResource pool \conn ->
+    SimplePG.execute conn [sql|UPDATE background_jobs_long SET status = 'queued', locked_at = NULL, locked_by = NULL, run_at = now() WHERE status = 'locked' AND locked_by = ?|] (SimplePG.Only name)
 
 
 queuedFailure :: Issues.RunFailure
