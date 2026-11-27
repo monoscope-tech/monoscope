@@ -19,6 +19,7 @@ module Pkg.TestUtils (
   withSetup,
   withTestResources,
   withPgReads,
+  clearFixedProjects,
   fromRightShow,
   TestResources (..),
   testSessionHeader,
@@ -927,11 +928,6 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   hasqlTf <- mkHasqlPool 2 tfCstr
   -- What charts and user SQL read through postgres-simple: the same TimeFusion as 'hasqlTf'.
   tfChartPool <- maybe (pure pool) (\url -> newPool $ setNumStripes (Just 1) $ defaultPoolConfig (connectPostgreSQL $ encodeUtf8 $ toText url) close 60 2) tfPgUrl
-  -- Each example gets a fresh Postgres, but TimeFusion is shared: clear what the fixed project ids
-  -- hold from earlier examples and runs. One id per statement; TF deletes nothing for an IN list.
-  when (isJust tfPgUrl) $ withResource tfChartPool \conn ->
-    for_ (liftA2 (,) ["otel_logs_and_spans" :: Text, "otel_metrics"] fixedProjectIds) \(tbl, pid) ->
-      PGS.execute_ conn (fromString $ toString $ "DELETE FROM " <> tbl <> " WHERE project_id = '" <> pid <> "'")
   sessAndHeader <- testSessionHeader pool hasqlMain
 
   -- Load .env file for tests (to get OPENAI_API_KEY and other non-database configs)
@@ -1868,7 +1864,16 @@ withPgReads tr = tr{trATCtx = tr.trATCtx{env = pg, config = pg, timefusionPgPool
     pg = tr.trATCtx.env{enableTimefusionReads = False}
 
 
--- | Project ids specs use verbatim rather than minting one; TimeFusion is cleared of them per example.
+-- | Once per test process: each example gets a fresh Postgres, but a long-lived TimeFusion keeps what
+-- earlier runs wrote under the fixed project ids. One id per statement (TF deletes nothing for an IN
+-- list); not per example, since concurrent shards' DML stalled CI's TimeFusion.
+clearFixedProjects :: IO ()
+clearFixedProjects = whenJustM (lookupEnv "TIMEFUSION_PG_TEST_URL") \url -> bracket (connectPostgreSQL $ encodeUtf8 $ toText url) close \conn ->
+  for_ (liftA2 (,) ["otel_logs_and_spans" :: Text, "otel_metrics"] fixedProjectIds) \(tbl, pid) ->
+    PGS.execute_ conn (fromString $ toString $ "DELETE FROM " <> tbl <> " WHERE project_id = '" <> pid <> "'")
+
+
+-- | Project ids specs use verbatim rather than minting one.
 fixedProjectIds :: [Text]
 fixedProjectIds = ["00000000-0000-0000-0000-0000000000" <> n | n <- ["00", "01", "02", "2a", "d1"]]
 
