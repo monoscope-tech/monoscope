@@ -50,6 +50,7 @@ import Effectful (Eff, IOE, runEff, (:>))
 import Effectful.Dispatch.Dynamic (impose, interpose, interpret, localSeqUnliftIO, passthrough)
 import Effectful.Error.Static (catchError)
 import Effectful.Reader.Static qualified as Reader
+import Lucid (renderText, toHtml)
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries (selectLogTable)
@@ -62,7 +63,6 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Client qualified as HC
-import Lucid (renderText, toHtml)
 import Network.HTTP.Types qualified as H
 import Network.Minio qualified as Minio
 import Network.Wai qualified as Wai
@@ -71,6 +71,7 @@ import Network.Wai.Test qualified as WT
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.AIThreads qualified as AIThreads
 
+import OpenTelemetry.Trace.Core (SpanHot (hotName))
 import Pages.CodeContext qualified as CodeContextPage
 import Pages.GitSync qualified as GitSyncPage
 import Pkg.AI qualified as AI
@@ -82,7 +83,6 @@ import Pkg.GitCommand qualified as HostGit
 import Pkg.ImpactReview qualified as Impact
 import Pkg.Minio qualified as Storage
 import Pkg.Parser.Stats qualified as KQL
-import OpenTelemetry.Trace.Core (SpanHot (hotName))
 import Pkg.TestUtils hiding (call)
 import Pkg.TestUtils qualified as Test
 import Servant (ServerError (..), getResponse)
@@ -93,6 +93,7 @@ import System.Directory (canonicalizePath, copyFile, createDirectoryIfMissing, c
 import System.Environment (getEnvironment)
 import System.Environment qualified as Environment
 import System.Exit (ExitCode (..))
+import System.FileLock qualified as FileLock
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.IO (hClose)
 import System.IO.Error (userError)
@@ -3945,7 +3946,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- reviewerAsks_reachTheAgent: Blacksmith's "differs" findings test what reviewers asked for, so the agent
     -- sees the conversation and inline review comments, but not our own app's.
     let discussion = withHTTPResponses \_ endpoint -> pure case () of
-          _ | "/issues/7/comments?" `T.isInfixOf` toText endpoint -> Just $ AE.encode @[AE.Value] [AE.object ["id" AE..= (5 :: Int), "body" AE..= ("Keep payroll admin-only" :: Text), "user" AE..= AE.object ["login" AE..= ("ada" :: Text)]], appComment 99 123 "our own review body", AE.object ["id" AE..= (7 :: Int), "body" AE..= ("blacksmith proof report" :: Text), "user" AE..= AE.object ["login" AE..= ("blacksmith-sh[bot]" :: Text)]], AE.object ["id" AE..= (8 :: Int), "body" AE..= ("@monoscope prove it please prove the empty state" :: Text), "user" AE..= AE.object ["login" AE..= ("ada" :: Text)]]]
+          _
+            | "/issues/7/comments?" `T.isInfixOf` toText endpoint -> Just $ AE.encode @[AE.Value] [AE.object ["id" AE..= (5 :: Int), "body" AE..= ("Keep payroll admin-only" :: Text), "user" AE..= AE.object ["login" AE..= ("ada" :: Text)]], appComment 99 123 "our own review body", AE.object ["id" AE..= (7 :: Int), "body" AE..= ("blacksmith proof report" :: Text), "user" AE..= AE.object ["login" AE..= ("blacksmith-sh[bot]" :: Text)]], AE.object ["id" AE..= (8 :: Int), "body" AE..= ("@monoscope prove it please prove the empty state" :: Text), "user" AE..= AE.object ["login" AE..= ("ada" :: Text)]]]
             | "/pulls/7/comments?" `T.isInfixOf` toText endpoint -> Just $ AE.encode @[AE.Value] [AE.object ["id" AE..= (6 :: Int), "body" AE..= ("Reports count shows when private" :: Text), "path" AE..= ("src/Routes.hs" :: Text), "user" AE..= AE.object ["login" AE..= ("claude[bot]" :: Text)]]]
             | otherwise -> Nothing
     void $ review $ discussion . fakeAgentWith ["--expect-discussion"]
@@ -4062,7 +4064,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- A metrics-only service still needs an investigation when there are no log/span counts.
     [credential] <- runQueryEffect tr $ GitSync.getGitHubCredentials reviewPid
     runQueryEffect tr $ CodeContext.insertCodeMapping reviewPid credential.id (Git.RepoRef "impact-org" "checkout" "main") (Just "test-service") "" ""
-    dbExec tr "DELETE FROM otel_logs_and_spans WHERE project_id = ?" (Only reviewPid)
+    telemetryDbExec tr "DELETE FROM otel_logs_and_spans WHERE project_id = ?" (Only reviewPid.toText)
     runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" Reviews.ReadyPullRequests True)
     metricsRequests <- review $ repositoryReview \_ respond _ unlift -> do
       let request = Agent.TelemetryQuery "test-service" "metrics | metric_name == \"review.temperature\" | summarize avg(value)"
@@ -4789,45 +4791,46 @@ spec = around withTestResources $ describe "Production impact reviews" do
                     let diagnostic = directory </> "failure.txt"
                     if mode == "--app-job-time-budget"
                       then unlift (calls $ Agent.ModelCall (uid 995) request.request.attemptId "fixture" "fixture") $> Left "Review agent exceeded its time budget"
-                      else if mode `elem` ["--app-job-revoke-account", "--app-job-revoke-role"]
-                      then do
-                        heading <- either (fail . toString) pure $ Memory.mkMemoryText "Revocation context"
-                        contents <- either (fail . toString) pure $ Memory.mkMemoryText "Keep the original authorized revision only."
-                        let page = case request.request.attemptId of UUIDId value -> UUIDId value
-                            edit = Memory.Edit page 0 $ Memory.Document heading contents
-                            send = unlift . knowledge . Agent.ProjectMemory
-                            access enabled =
-                              if mode == "--app-job-revoke-account"
-                                then dbExec tr "UPDATE users.users SET active = ? WHERE id = ?" (enabled, user)
-                                else dbExec tr "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (if enabled then ProjectMembers.PAdmin else ProjectMembers.PView, testPid, user)
-                        created <- send $ Memory.Write edit
-                        (readBack, changed, resubmitted) <- bracket_ (access False) (access True) do
-                          readBack <- send $ Memory.Read page
-                          changed <- send $ Memory.Write edit{Memory.version = 1}
-                          resubmitted <- runQueryEffect tr $ Fixes.queueJob testPid user request.request.runId
-                          pure (readBack, changed, resubmitted)
-                        restored <- send $ Memory.Read page
-                        modifyIORef' revokedReplies (<> [(isRight created, isLeft readBack, isLeft changed, not resubmitted, isLeft restored)])
-                        pure $ Left "The original fix grant was revoked"
-                      else do
-                        when (mode == "--app-job") $ memoryRoundTrip request.request.attemptId (unlift . knowledge)
-                        result <-
-                          runEff
-                            $ scripted Nothing "test/fixtures/issue-fix-agent.mjs" [diagnostic, toString image.toText, toString mode]
-                            $ Agent.fixRepository
-                              Agent.Isolated
-                              request
-                              (liftIO . unlift . queryTelemetry)
-                              (liftIO . unlift . knowledge)
-                              (liftIO . unlift . admit)
-                              (liftIO . unlift . calls)
-                              (liftIO . unlift . usage)
-                              (liftIO . unlift . allocations)
-                              (liftIO . unlift . checks)
-                              (liftIO . unlift . phase)
-                              (liftIO . unlift . validate)
-                        detail <- tryAny $ readFileBS diagnostic
-                        pure $ first (<> either (const "") (("\n" <>) . decodeUtf8) detail) result
+                      else
+                        if mode `elem` ["--app-job-revoke-account", "--app-job-revoke-role"]
+                          then do
+                            heading <- either (fail . toString) pure $ Memory.mkMemoryText "Revocation context"
+                            contents <- either (fail . toString) pure $ Memory.mkMemoryText "Keep the original authorized revision only."
+                            let page = case request.request.attemptId of UUIDId value -> UUIDId value
+                                edit = Memory.Edit page 0 $ Memory.Document heading contents
+                                send = unlift . knowledge . Agent.ProjectMemory
+                                access enabled =
+                                  if mode == "--app-job-revoke-account"
+                                    then dbExec tr "UPDATE users.users SET active = ? WHERE id = ?" (enabled, user)
+                                    else dbExec tr "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (if enabled then ProjectMembers.PAdmin else ProjectMembers.PView, testPid, user)
+                            created <- send $ Memory.Write edit
+                            (readBack, changed, resubmitted) <- bracket_ (access False) (access True) do
+                              readBack <- send $ Memory.Read page
+                              changed <- send $ Memory.Write edit{Memory.version = 1}
+                              resubmitted <- runQueryEffect tr $ Fixes.queueJob testPid user request.request.runId
+                              pure (readBack, changed, resubmitted)
+                            restored <- send $ Memory.Read page
+                            modifyIORef' revokedReplies (<> [(isRight created, isLeft readBack, isLeft changed, not resubmitted, isLeft restored)])
+                            pure $ Left "The original fix grant was revoked"
+                          else do
+                            when (mode == "--app-job") $ memoryRoundTrip request.request.attemptId (unlift . knowledge)
+                            result <-
+                              runEff
+                                $ scripted Nothing "test/fixtures/issue-fix-agent.mjs" [diagnostic, toString image.toText, toString mode]
+                                $ Agent.fixRepository
+                                  Agent.Isolated
+                                  request
+                                  (liftIO . unlift . queryTelemetry)
+                                  (liftIO . unlift . knowledge)
+                                  (liftIO . unlift . admit)
+                                  (liftIO . unlift . calls)
+                                  (liftIO . unlift . usage)
+                                  (liftIO . unlift . allocations)
+                                  (liftIO . unlift . checks)
+                                  (liftIO . unlift . phase)
+                                  (liftIO . unlift . validate)
+                            detail <- tryAny $ readFileBS diagnostic
+                            pure $ first (<> either (const "") (("\n" <>) . decodeUtf8) detail) result
                   Agent.AdmitRegression _scope request knowledge calls usage allocations -> localSeqUnliftIO env \unlift -> liftIO do
                     when (mode == "--app-job") $ memoryRoundTrip request.fix.request.attemptId (unlift . knowledge)
                     runEff

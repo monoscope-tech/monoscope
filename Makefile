@@ -229,7 +229,8 @@ TIMEFUSION_PG_TEST_URL ?= postgresql://postgres:postgres@127.0.0.1:12345/postgre
 
 # TimeFusion configured as CI's container (pullrequest.yml): only its settings, plus .env.minio's
 # MinIO credentials. Its own table prefix pairs with the worktree's own data dir: a WAL publishing
-# into another data dir's tables fails. A no-op once one answers on :12345.
+# into another data dir's tables fails. A no-op once one answers on :12345. TZ=UTC as in CI: it
+# reads bound timestamp parameters in the host's zone, which shifts every Hasql time window here.
 timefusion-start:
 	@nc -z 127.0.0.1 12345 2>/dev/null && echo "TimeFusion already up on :12345" || { \
 	  git -C $(TIMEFUSION_DIR) fetch -q origin master && \
@@ -240,7 +241,7 @@ timefusion-start:
 	    PGWIRE_PORT=12345 PGWIRE_USER=postgres PGWIRE_PASSWORD=postgres TIMEFUSION_ALLOW_INSECURE_AUTH=true \
 	    TIMEFUSION_TABLE_PREFIX=monoscope-tests TIMEFUSION_DATA_DIR=./data/monoscope-tests \
 	    TIMEFUSION_BUFFER_FLUSH_IMMEDIATELY=true TIMEFUSION_FOYER_DISABLED=true TIMEFUSION_BUFFER_MAX_MEMORY_MB=512 OTEL_TRACES_EXPORTER=none \
-	    nohup ./target/release/timefusion >> /tmp/timefusion.log 2>&1 & echo $$! > /tmp/timefusion.pid; } && \
+	    TZ=UTC nohup ./target/release/timefusion >> /tmp/timefusion.log 2>&1 & echo $$! > /tmp/timefusion.pid; } && \
 	  for i in $$(seq 1 900); do nc -z 127.0.0.1 12345 2>/dev/null && { echo "TimeFusion up on :12345"; exit 0; }; sleep 1; done; \
 	  tail -50 /tmp/timefusion.log; exit 1; }
 

@@ -67,7 +67,7 @@ spec = do
       pid <- createTestProject tr "infrastructure"
       let page runtime namespace node image cluster = Containers.containersGetH pid runtime namespace node image cluster Nothing Nothing Nothing (Just "1")
           allContainers = page Nothing Nothing Nothing Nothing Nothing
-          inWindow from to = rowsByName <$> runTestBg frozenTime tr (containersInWindow False pid (addUTCTime from frozenTime) (addUTCTime to frozenTime))
+          inWindow from to = rowsByName <$> runTestBg frozenTime tr (containersInWindow tr.trATCtx.env.enableTimefusionReads pid (addUTCTime from frozenTime) (addUTCTime to frozenTime))
           tableOf h = call tr h >>= \(Containers.ContainersPage (PageCtx _ b)) -> deferredBody b
           names h = map (.row.containerName) . V.toList . (.rows) <$> tableOf h
           hostPage = Infrastructure.hostMapGetH pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
@@ -252,7 +252,7 @@ spec = do
         ingestSpanReq tr $ mkSpanRequest (T.justifyRight 32 '0' $ show i) (T.justifyRight 16 '0' $ show i) Nothing "kubernetes event" [] Nothing [] (mkResource key resource) (addUTCTime (-60) frozenTime)
       forM_ ([("clusters", clusterUid, Nothing, 2), ("pods", "same-pod", Just "scope-a", 1)] :: [(Text, Text, Maybe Text, Double)]) \(resource, name, namespace, expected) -> do
         detail <- shellHtml tr $ Infrastructure.kubernetesDetailGetH pid (Just resource) (Just name) (Just clusterUid) namespace Nothing Nothing (Just "3H")
-        logLinkCount tr pid (Just Hasql.SqlPostgres) detail `shouldReturn` Just expected
+        logLinkCount tr pid (Just $ telemetrySource tr) detail `shouldReturn` Just expected
 
       -- The pivot reads a freshness slice at the END of the window (scanning a day's worth of
       -- datapoints cost the statement timeout), so a container gone for 3h does not linger, yet a
@@ -438,7 +438,7 @@ spec = do
 
     it "service map rollups: inferred dependencies, idempotent re-rolls, range, errors, environments, endpoint scope and the rendered page" \tr -> do
       let roll pid ts = runTestBg ts tr do
-            edges <- rollupServiceEdges False pid (addUTCTime (-300) ts) (addUTCTime 300 ts)
+            edges <- rollupServiceEdges tr.trATCtx.env.enableTimefusionReads pid (addUTCTime (-300) ts) (addUTCTime 300 ts)
             upsertServiceDependencyEdges pid ts edges
             serviceGraphForRange pid Nothing (addUTCTime (-600) ts) (addUTCTime 600 ts)
           graphFor pid env = runTestBg frozenTime tr $ serviceGraphForRange pid env (addUTCTime (-600) frozenTime) (addUTCTime 600 frozenTime)
@@ -485,9 +485,12 @@ spec = do
         `shouldReturn` [[("", "gateway"), ("checkout", "db:postgresql"), ("gateway", "checkout")], [("", "gateway"), ("gateway", "checkout")], []]
 
       -- The dispatcher fans out over projects that sent spans in the bucket, never all active ones (1726 in prod).
-      runTestBg frozenTime tr (traverse (uncurry (projectsWithSpansInRange False)) [(addUTCTime (-300) frozenTime, addUTCTime 300 frozenTime), (addUTCTime (-3600) frozenTime, addUTCTime (-3300) frozenTime)])
-        >>= (`shouldBe` [L.sort [main', errs, envs], []])
-        . map L.sort
+      -- TimeFusion is shared by every example, so only these three projects are judged.
+      flushTelemetry tr
+      let ours = [main', errs, envs]
+      runTestBg frozenTime tr (traverse (uncurry (projectsWithSpansInRange tr.trATCtx.env.enableTimefusionReads)) [(addUTCTime (-300) frozenTime, addUTCTime 300 frozenTime), (addUTCTime (-3600) frozenTime, addUTCTime (-3300) frozenTime)])
+        >>= (`shouldBe` [L.sort ours, []])
+        . map (L.sort . filter (`elem` ours))
 
       -- What a user meets: the dependency table is legible without JavaScript, and the canvas
       -- hydrates from the embedded payload.
@@ -511,14 +514,12 @@ spec = do
           endpointHashes = [endpointHash, "endpoint-checkout-alias", "err:ignored"] :: [Text]
           relevant edges = L.sort [(e.endpointHash, e.targetKey, e.targetKind, e.reqCount, e.traceCount) | e <- edges, e.endpointHash `elem` endpointHashes]
           tfReads = Config.enableTimefusionReads $ Config.env tr.trATCtx
-      dbExec tr [sql| UPDATE otel_logs_and_spans SET hashes = ? WHERE project_id = ? AND name = 'GET /checkout' |] (PGArray endpointHashes, ep)
-      when tfReads $ runQueryEffect tr $ Hasql.withHasqlTimefusion True $ Hasql.interpExecute_ [HI.sql| UPDATE otel_logs_and_spans SET hashes = #{endpointHashes} WHERE project_id = #{ep.toText} AND name = 'GET /checkout' |]
+      runQueryEffect tr $ Hasql.withHasqlTimefusion tfReads $ Hasql.interpExecute_ [HI.sql| UPDATE otel_logs_and_spans SET hashes = #{endpointHashes} WHERE project_id = #{ep.toText} AND name = 'GET /checkout' |]
       edges <- runTestBg frozenTime tr do
-        rolled <- rollupEndpointDependencyEdges False ep (addUTCTime (-300) frozenTime) (addUTCTime 300 frozenTime)
+        rolled <- rollupEndpointDependencyEdges tfReads ep (addUTCTime (-300) frozenTime) (addUTCTime 300 frozenTime)
         upsertEndpointDependencyEdges ep frozenTime rolled
         pure rolled
       relevant edges `shouldBe` [(endpointHash, "checkout", NKService, 2, 2), ("endpoint-checkout-alias", "checkout", NKService, 2, 2)]
-      when tfReads $ (relevant <$> runTestBg frozenTime tr (rollupEndpointDependencyEdges True ep (addUTCTime (-300) frozenTime) (addUTCTime 300 frozenTime))) `shouldReturn` relevant edges
       graph <- runTestBg frozenTime tr $ endpointDependencyGraphForRange ep endpointHash (addUTCTime (-600) frozenTime) (addUTCTime 600 frozenTime)
       edgePairs graph `shouldBe` [("endpoint:" <> endpointHash, "checkout")]
       (nodeBy graph ("endpoint:" <> endpointHash) <&> \n -> (n.label, n.kind, n.inferred)) `shouldBe` Just ("Selected endpoint", NKEntry, False)
@@ -545,7 +546,7 @@ spec = do
         $ withSpanStatus PT.Status'STATUS_CODE_ERROR
         $ withSpanKind PT.Span'SPAN_KIND_CLIENT
         $ mkSpanRequest trId dbSid (Just coSid) "pg.query" [mkSpanEvent "exception" [] frozenTime] Nothing [mkAttr "db.system.name" "postgresql", mkAttr "db.namespace" "orders", mkAttr "db.statement" "\n    SELECT <unsafe>\n      FROM checkout\n    \n"] (svc "checkout") frozenTime
-      spans <- runTestBg frozenTime tr (Telemetry.getTraceDetailsForView False pid trId (Just frozenTime) frozenTime Nothing) >>= maybe (fail "trace not found") (\(_, sps, _) -> pure sps)
+      spans <- runTestBg frozenTime tr (Telemetry.getTraceDetailsForView tr.trATCtx.env.enableTimefusionReads pid trId (Just frozenTime) frozenTime Nothing) >>= maybe (fail "trace not found") (\(_, sps, _) -> pure sps)
       sortOn (\(n, _, _) -> n) [(s.spanName, show @Text s.kind, s.status) | s <- V.toList spans]
         `shouldBe` [("GET /checkout", "Just SKServer", Just Telemetry.SSUnset), ("POST /checkout", "Just SKServer", Just Telemetry.SSUnset), ("POST checkout", "Just SKClient", Just Telemetry.SSUnset), ("pg.query", "Just SKClient", Just Telemetry.SSError)]
       html <- renderT <$> call tr (Trace.traceH pid trId (Just frozenTime) Nothing Nothing Nothing Nothing)
@@ -724,7 +725,7 @@ spec = do
       -- span -> metrics: the metric recorded inside this trace, plus the service's metrics charted over
       -- a window padded around the span with the span's own extent shaded. The catalogue fills
       -- through an async buffer this test does not drive, so it is seeded.
-      (rid, ts) <- firstRow =<< dbQuery @_ @(UUID.UUID, UTCTime) tr [sql| SELECT id, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND context___trace_id = ? |] (pid, exemplarTrace)
+      (rid, ts) <- firstRow . map (first (fromMaybe UUID.nil . UUID.fromText)) =<< telemetryDbQuery @_ @(Text, UTCTime) tr [sql| SELECT id::text, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND context___trace_id = ? |] (pid, exemplarTrace)
       seedMeta tr pid exemplarMetric "test-service" [] (Just ts)
       relatedHtml <- shellHtml tr $ Trace.relatedMetricsGetH pid rid ts
       relatedHtml `shouldContainAll` ["Recorded in this trace", exemplarMetric, "Metrics from test-service", "timeFrom", "highlightFrom", formatUTCMicros (addUTCTime (-120) ts), formatUTC ts]
@@ -742,10 +743,11 @@ spec = do
       ingestMetric tr logKey [] [] "test.no.exemplars" 1 frozenTime
       none <- exemplarsIn logs "test.no.exemplars" (-3600)
       (points none, T.isInfixOf "No exemplars" (renderT none)) `shouldBe` ([], True)
-      (logRid, logTs) <- firstRow =<< dbQuery @_ @(UUID.UUID, UTCTime) tr [sql| SELECT id, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND kind = 'log' |] (Only logs)
+      (logRid, logTs) <- firstRow . map (first (fromMaybe UUID.nil . UUID.fromText)) =<< telemetryDbQuery @_ @(Text, UTCTime) tr [sql| SELECT id::text, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND kind = 'log' |] (Only logs)
       (shellHtml tr (Trace.relatedMetricsGetH logs logRid logTs)) >>= (`shouldContainAll` ["No metric reported a datapoint from this trace", "Metrics from test-service"])
 
     it "prometheus targets: leased claims, scraped bodies as metrics, duplicate saves kept as drafts, viewers locked out" \tr -> do
+      clearTelemetry tr testPid
       let insert p kind name url interval = void $ runQueryEffect tr $ PromCfg.insertConfig p kind name url interval Nothing (AE.object []) Nothing
           configs p = V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId p PromCfg.CKPrometheus)
           claim = length <$> runQueryEffect tr (PromCfg.claimDueConfigs "eu-west" 50)
@@ -761,7 +763,7 @@ spec = do
       -- 2 counter series + 1 gauge; the +Inf sample is dropped.
       n <- runTestBg frozenTime tr $ PromCfg.ingestScrapedBody svcC frozenTime promBody
       n `shouldBe` 3
-      (sort <$> dbQuery @_ @(Text, Text, Maybe Text) tr [sql| SELECT metric_name, metric_type, aggregation_temporality FROM otel_metrics WHERE project_id = ? |] (Only testPid.toText))
+      (sort <$> telemetryDbQuery @_ @(Text, Text, Maybe Text) tr [sql| SELECT metric_name, metric_type, aggregation_temporality FROM otel_metrics WHERE project_id = ? |] (Only testPid.toText))
         `shouldReturn` [("http_requests_total", "SUM", Just "CUMULATIVE"), ("http_requests_total", "SUM", Just "CUMULATIVE"), ("temperature_celsius", "GAUGE", Nothing)]
 
       -- A duplicate name hits UNIQUE(project_id, name) (migration 0103) and becomes an inline error

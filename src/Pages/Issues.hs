@@ -501,7 +501,11 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
                 pure $ (,fromMaybe approximateAt (recordedAt <|> capturedAt)) <$> selectedTraceId
             Just (Issues.ApiChangeP d) -> case d.subject of
               Just (ApiChanges.SpanSchema _) -> pure Nothing
-              _ -> Telemetry.getEndpointTraceId useTf pid d.endpointMethod d.endpointPath isFirst $ zonedTimeToUTC $ bool issue.updatedAt issue.createdAt isFirst
+              -- Recent looks near now, then near creation: triage (ack, archive) bumps updated_at.
+              _ -> do
+                let near = Telemetry.getEndpointTraceId useTf pid d.endpointMethod d.endpointPath isFirst
+                    created = zonedTimeToUTC issue.createdAt
+                if isFirst then near created else near now >>= maybe (near created) (pure . Just)
             Just (Issues.QueryAlertP _) -> pure Nothing
             Just (Issues.LogPatternP _) -> pure Nothing
             Just (Issues.LogPatternRateChangeP _) -> pure Nothing

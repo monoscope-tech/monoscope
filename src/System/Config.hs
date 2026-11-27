@@ -217,7 +217,7 @@ data EnvConfig = EnvConfig
   -- ingested span and log by its @client.address@ when the SDK sent no @geo.*@. Empty disables the lookup.
   , enablePostgresTelemetryWrites :: Bool
   -- ^ Also write telemetry to the legacy Postgres @otel_logs_and_spans@ store. Off by
-  -- default: TimeFusion is the source of truth, and nothing reads the Postgres copy.
+  -- default: TimeFusion is the source of truth and telemetry reads go to it.
   , kafkaDeadLetterTopic :: Text
   , rrwebDeadLetterTopic :: Text
   -- ^ Separate dead-letter topic for rrweb session-replay poison. rrweb is NOT
@@ -759,8 +759,25 @@ runPendingMigrations conn dir = do
 
 getAppContext :: Eff '[Fail, IOE] AuthContext
 getAppContext = do
-  config <- liftIO (decodeWithDefaults defConfig)
+  decoded <- liftIO (decodeWithDefaults defConfig)
+  let config = telemetryStoreFallback decoded
+  when (config.enablePostgresTelemetryWrites /= decoded.enablePostgresTelemetryWrites)
+    $ putTextLn "TIMEFUSION_PG_URL is unset: telemetry is stored in Postgres. Set it to use TimeFusion."
   configToEnv config
+
+
+-- | TimeFusion is the default telemetry store; with no URL for it, keep telemetry in Postgres
+-- instead of failing every write.
+--
+-- >>> let flags c = (c.enableTimefusionReads, c.enableTimefusionWrites, c.enablePostgresTelemetryWrites)
+-- >>> flags (telemetryStoreFallback defConfig)
+-- (False,False,True)
+-- >>> flags (telemetryStoreFallback defConfig{timefusionPgUrl = "postgresql://tf:5432/postgres"})
+-- (True,True,False)
+telemetryStoreFallback :: EnvConfig -> EnvConfig
+telemetryStoreFallback c
+  | T.null (T.strip c.timefusionPgUrl) = c{enableTimefusionReads = False, enableTimefusionWrites = False, enablePostgresTelemetryWrites = True}
+  | otherwise = c
 
 
 -- | Query 'information_schema.columns' for each queryable telemetry table once

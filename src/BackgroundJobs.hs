@@ -2643,8 +2643,9 @@ backfillSessionAttributes ctx = do
 -- timestamp), which the 17-minute window still covers for several ticks.
 activeSessionProjects :: DB es => UTCTime -> UTCTime -> Eff es [Projects.ProjectId]
 activeSessionProjects windowStart windowEnd =
-  Hasql.interp
-    [HI.sql| SELECT DISTINCT project_id::uuid FROM otel_logs_and_spans
+  mapMaybe Projects.projectIdFromText
+    <$> Hasql.interp
+      [HI.sql| SELECT DISTINCT project_id::text FROM otel_logs_and_spans
              WHERE timestamp >= #{windowStart} AND timestamp < #{windowEnd}
                AND (attributes___session___id IS NOT NULL OR attributes___user___id IS NOT NULL) |]
 

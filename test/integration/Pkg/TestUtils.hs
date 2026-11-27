@@ -19,7 +19,12 @@ module Pkg.TestUtils (
   withSetup,
   withTestResources,
   telemetryDbExec,
+  telemetrySource,
+  clearTelemetry,
+  flushTelemetry,
+  withPgTelemetryWrites,
   telemetryDbQuery,
+  telemetryDbOne,
   clearFixedProjects,
   fromRightShow,
   TestResources (..),
@@ -163,7 +168,7 @@ import Data.Default (def)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.CodeReview qualified as CodeReview
-import Data.Effectful.Hasql (Hasql, TestClock, advanceTime, getTestTime, newTestClock, runHasqlPool, runHasqlPoolSynced, runMutableTime, setTestTime)
+import Data.Effectful.Hasql (Hasql, SqlSource (..), TestClock, advanceTime, getTestTime, newTestClock, runHasqlPool, runHasqlPoolSynced, runMutableTime, setTestTime)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
 import Data.Effectful.Sleep (runNoSleep)
@@ -1498,10 +1503,18 @@ withClockedConn tr f = withResource tr.trPool \conn -> do
 
 -- | The single column of the single row a query returns: a count, or an @INSERT … RETURNING@.
 dbOne :: forall q r. (FromField r, PGS.ToRow q) => TestResources -> PGS.Query -> q -> IO r
-dbOne tr q args =
-  dbQuery tr q args >>= \case
-    [Only r] -> pure r
-    rows -> fail $ "dbOne: expected one row, got " <> show (length rows)
+dbOne tr q = singleRow <=< dbQuery tr q
+
+
+-- | 'dbOne' on the store that holds telemetry (see 'telemetryDbExec').
+telemetryDbOne :: forall q r. (FromField r, PGS.ToRow q) => TestResources -> PGS.Query -> q -> IO r
+telemetryDbOne tr q = singleRow <=< telemetryDbQuery tr q
+
+
+singleRow :: [Only r] -> IO r
+singleRow = \case
+  [Only r] -> pure r
+  rows -> fail $ "expected one row, got " <> show (length rows)
 
 
 -- | An @apis.issues@ row; 'issueSeed' fills the columns most fixtures leave alone.
@@ -1865,13 +1878,37 @@ testPid = UUIDId UUID.nil
 
 
 -- | Telemetry on Postgres alone (reads, charts and writes), for a spec that seeds or mutates it with raw SQL.
+-- | Also write telemetry to Postgres, for specs of the bookkeeping that only exists there
+-- (@processed_at@, the safety net) and is kept behind @enablePostgresTelemetryWrites@.
+withPgTelemetryWrites :: TestResources -> TestResources
+withPgTelemetryWrites tr = tr{trATCtx = tr.trATCtx{env = pgOn tr.trATCtx.env, config = pgOn tr.trATCtx.config}}
+  where
+    pgOn e = e{enablePostgresTelemetryWrites = True}
+
+
 -- | SQL against the store that holds telemetry: TimeFusion when it runs, Postgres under PG_ONLY.
 -- For rows OTLP cannot express (a chosen hash, a placeholder endpoint) and their cleanup.
 telemetryDbExec :: PGS.ToRow q => TestResources -> PGS.Query -> q -> IO ()
 telemetryDbExec tr q args = withResource tr.trATCtx.timefusionPgPool \conn -> void $ PGS.execute conn q args
 
 
-telemetryDbQuery :: (PGS.FromRow r, PGS.ToRow q) => TestResources -> PGS.Query -> q -> IO [r]
+-- | Flush TimeFusion's write buffer: a scan without a project filter sees only flushed rows.
+flushTelemetry :: TestResources -> IO ()
+flushTelemetry tr = when tr.trATCtx.env.enableTimefusionReads $ telemetryDbExec tr "FLUSH" ()
+
+
+-- | The source that holds telemetry: TimeFusion when it runs, Postgres under PG_ONLY.
+telemetrySource :: TestResources -> SqlSource
+telemetrySource tr = bool SqlPostgres SqlTimefusion tr.trATCtx.env.enableTimefusionReads
+
+
+-- | Drop a project's telemetry. TimeFusion outlives each example's fresh Postgres, so a spec
+-- counting rows under a fixed project id clears it first.
+clearTelemetry :: TestResources -> Projects.ProjectId -> IO ()
+clearTelemetry tr pid = for_ ["otel_logs_and_spans", "otel_metrics"] \tbl -> telemetryDbExec tr (fromString $ "DELETE FROM " <> tbl <> " WHERE project_id = ?") (Only pid.toText)
+
+
+telemetryDbQuery :: forall q r. (PGS.FromRow r, PGS.ToRow q) => TestResources -> PGS.Query -> q -> IO [r]
 telemetryDbQuery tr q args = withResource tr.trATCtx.timefusionPgPool \conn -> PGS.query conn q args
 
 

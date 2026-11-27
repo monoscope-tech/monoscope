@@ -22,7 +22,6 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PG
-import Database.PostgreSQL.Simple.Types (PGArray (..))
 import GHC.Clock (getMonotonicTimeNSec)
 import Hasql.Interpolate qualified as HI
 import Ki qualified
@@ -478,17 +477,16 @@ spec = do
         <> tagsWith ["name=\"environment\"", "name=\"service\""] alertForm
         <> elementsWith [">Create monitor</h3>"] alertForm
 
-    it "detail panel: TimeFusion and Postgres reads, lazy tabs, identity pills, SDK bodies anchored on the request" \tr -> do
+    it "detail panel: telemetry-store reads, lazy tabs, identity pills, SDK bodies anchored on the request" \tr -> do
       apiKey <- createTestAPIKey tr testPid "detail-key"
       let b64 = B64T.extractBase64 . B64.encodeBase64 . encodeUtf8 @Text
       (trId, rootSid, sdkSid) <- (,,) <$> hexId <*> hexId <*> hexId
       ingestSpanLinked tr apiKey trId rootSid Nothing "GET /api/orders" [("http.request.method", "GET"), ("http.route", "/api/orders"), ("session.id", "sess-9f2"), ("user.id", "usr-4471"), ("user.email", "ada@example.com"), ("tenant.id", "acme-eu"), ("workspace.id", "ws-12")] frozenTime
       ingestSpanLinked tr apiKey trId sdkSid (Just rootSid) "apitoolkit-http-span" [("http.request.body", b64 "{\"item\":\"apple\"}"), ("http.response.body", b64 "{\"ok\":true}"), ("http.request.method", "GET")] (addUTCTime 0.01 frozenTime)
       [(rootId, rootTs, "GET /api/orders", _), (sdkId, sdkTs, "monoscope.http", sdkStoredSid)] <-
-        dbQuery @_ @(UUID.UUID, UTCTime, Text, Text) tr [sql| SELECT id, timestamp, name, context___span_id FROM otel_logs_and_spans WHERE project_id = ? AND context___trace_id = ? ORDER BY start_time |] (testPid, trId)
-      let ctx = tr.trATCtx
-          withTf tf = tr{trATCtx = ctx{env = ctx.env{enableTimefusionReads = tf}}}
-          item tf rid ts tab subtab partial = call (withTf tf) $ LogItem.expandAPIlogItemH testPid rid ts Nothing tab subtab partial
+        map (\(i, t, n, s') -> (fromMaybe UUID.nil (UUID.fromText i), t, n, s'))
+          <$> telemetryDbQuery @_ @(Text, UTCTime, Text, Text) tr [sql| SELECT id::text, timestamp, name, context___span_id FROM otel_logs_and_spans WHERE project_id = ? AND context___trace_id = ? ORDER BY start_time |] (testPid, trId)
+      let item rid ts tab subtab partial = call tr $ LogItem.expandAPIlogItemH testPid rid ts Nothing tab subtab partial
           anchored = \case
             LogItem.SpanItemExpanded _ anchor sdkM _ -> (anchor.name, (.name) <$> sdkM)
             LogItem.ItemDetailedNotFound msg -> (Just ("not found: " <> msg), Nothing)
@@ -496,17 +494,16 @@ spec = do
           request = (Just "GET /api/orders", Just (Just "monoscope.http"))
       -- The SDK payload span confused users: the request's panel showed empty body tabs and a
       -- click on the SDK span opened a synthetic span. Both clicks land on the request now.
-      forM_ [True, False] \tf -> do
-        (anchored <$> item tf rootId rootTs Nothing Nothing False) `shouldReturn` request
-        -- An exact timestamp, no window: one second off finds nothing on either store.
-        (anchored <$> item tf rootId (addUTCTime 1 rootTs) Nothing Nothing False) >>= (`shouldSatisfy` maybe False ("not found" `T.isPrefixOf`) . fst)
-      (anchored <$> item True sdkId sdkTs (Just "tab-req") Nothing False) `shouldReturn` request
-      -- Legacy rows carry NULL hashes, which the Postgres read must still decode.
-      dbExec tr [sql| UPDATE otel_logs_and_spans SET hashes = NULL WHERE id = ? |] (Only rootId)
-      (anchored <$> item False rootId rootTs Nothing Nothing False) `shouldReturn` request
-      (call (withTf True) (TelemetryPage.traceH testPid trId (Just rootTs) Nothing Nothing Nothing Nothing)) >>= \case
+      (anchored <$> item rootId rootTs Nothing Nothing False) `shouldReturn` request
+      -- An exact timestamp, no window: one second off finds nothing.
+      (anchored <$> item rootId (addUTCTime 1 rootTs) Nothing Nothing False) >>= (`shouldSatisfy` maybe False ("not found" `T.isPrefixOf`) . fst)
+      (anchored <$> item sdkId sdkTs (Just "tab-req") Nothing False) `shouldReturn` request
+      -- Rows with NULL hashes (pre-stamping data) must still decode.
+      telemetryDbExec tr [sql| UPDATE otel_logs_and_spans SET hashes = NULL WHERE project_id = ? AND id = ? |] (testPid, UUID.toText rootId)
+      (anchored <$> item rootId rootTs Nothing Nothing False) `shouldReturn` request
+      (call tr (TelemetryPage.traceH testPid trId (Just rootTs) Nothing Nothing Nothing Nothing)) >>= \case
         TelemetryPage.TraceDetails{} -> pass
-        _ -> expectationFailure "expected TimeFusion trace details"
+        _ -> expectationFailure "expected trace details"
       -- Waterfall keyboard-nav onto the SDK span anchors on the request too.
       call tr (TelemetryPage.traceH testPid trId (Just rootTs) (Just sdkStoredSid) (Just "next") Nothing Nothing) >>= \case
         TelemetryPage.SpanDetails _ target sdkM -> (target.name, (.name) <$> sdkM) `shouldBe` request
@@ -520,11 +517,11 @@ spec = do
       xssPage <- renderT <$> call tr (TelemetryPage.traceH testPid xssTrace (Just frozenTime) Nothing Nothing Nothing Nothing)
       (T.isInfixOf "onerror=alert(1)" xssPage, T.isInfixOf "</script><img" xssPage) `shouldBe` (True, False)
 
-      initial <- renderT <$> item True rootId rootTs Nothing Nothing False
-      rawTab <- renderT <$> item True rootId rootTs (Just "tab-raw") Nothing True
-      reqTab <- renderT <$> item True rootId rootTs (Just "tab-req") Nothing False
-      reqBody <- renderT <$> item True rootId rootTs (Just "tab-req") (Just "htab-req") True
-      bogusTab <- renderT <$> item True rootId rootTs (Just "tab-nonexistent") Nothing False
+      initial <- renderT <$> item rootId rootTs Nothing Nothing False
+      rawTab <- renderT <$> item rootId rootTs (Just "tab-raw") Nothing True
+      reqTab <- renderT <$> item rootId rootTs (Just "tab-req") Nothing False
+      reqBody <- renderT <$> item rootId rootTs (Just "tab-req") (Just "htab-req") True
+      bogusTab <- renderT <$> item rootId rootTs (Just "tab-nonexistent") Nothing False
       -- Hidden tabs fetch their panel on first reveal, so the first response stays small, and the
       -- request body is inlined once (in copy-as-curl), never twice.
       T.length initial `shouldSatisfy` (< 50_000)
@@ -572,10 +569,8 @@ spec = do
       -- `pat:<hash>` tag the drain-flush stamps, on whichever store the expand reads.
       let patTags = ["pat:abcd1234"] :: [Text]
           spanName = "GET /api/pattern-expand" :: Text
-      dbExec tr [sql| UPDATE otel_logs_and_spans SET hashes = ? WHERE project_id = ? AND name = ? |] (PGArray patTags, pid, spanName)
-      when tr.trATCtx.env.enableTimefusionReads
-        $ runQueryEffect tr
-        $ Hasql.withHasqlTimefusion True
+      runQueryEffect tr
+        $ Hasql.withHasqlTimefusion tr.trATCtx.env.enableTimefusionReads
         $ Hasql.interpExecute_ [HI.sql| UPDATE otel_logs_and_spans SET hashes = #{patTags} WHERE project_id = #{pid.toText} AND name = #{spanName} |]
       let expand key =
             call tr (Log.apiLogExpandH pid (Just "pattern") (Just key) Nothing Nothing (stamp (-60)) Nothing (stamp 60)) <&> \case
@@ -592,7 +587,13 @@ spec = do
           values k = map (.value) . fold . HM.lookup k
       resetSchemaLearning tr [testPid, unknown]
       (isNothing <$> runHasqlEffect tr (SC.getFacetSummary Nothing unknown "otel_logs_and_spans" frozenTime frozenTime)) `shouldReturn` True
-      toBaseServantResponse tr (ApiH.apiFacets testPid Nothing Nothing Nothing (Just "resource.service.name")) `shouldReturn` AE.object ["resource.service.name" AE..= ([] :: [AE.Value]), "source" AE..= ("fallback" :: Text)]
+      -- facetsFallback_readsTimeFusion: with no summary yet the values are computed from live rows,
+      -- which it read from Postgres, empty since telemetry moved to TimeFusion.
+      fresh <- createTestProject tr "facets-fallback"
+      freshKey <- createTestAPIKey tr fresh "facets-fallback"
+      ingestTrace tr freshKey "GET /facets-fallback" (addUTCTime (-60) frozenTime)
+      toBaseServantResponse tr (ApiH.apiFacets fresh Nothing Nothing Nothing (Just "resource.service.name"))
+        `shouldReturn` AE.object ["resource.service.name" AE..= ([AE.object ["value" AE..= ("test-service" :: Text), "count" AE..= (1 :: Int)]] :: [AE.Value]), "source" AE..= ("fallback" :: Text)]
       -- Catalog paths are stored bare and prefixed by category on read, values by descending count.
       seedSummary tr testPid
       seeded <- summaryOf Nothing testPid
@@ -664,7 +665,7 @@ spec = do
       clearAllTestData tr
       ingestAt tr key "boundary " [17, 3599, 3600, 86400, 172800, 259200]
       let hourly = "summarize count(*) by bin(timestamp, 1h)"
-          stream q = streamChart tr Hasql.SqlPostgres (Just q) Nothing
+          stream q = streamChart tr Hasql.SqlTimefusion (Just q) Nothing
           final :: [AE.Value] -> IO Charts.MetricsData
           final frames = case viaNonEmpty last frames of
             Just (AE.Object o) | AEKM.lookup "type" o == Just "complete", Just (AE.Success md) <- AE.fromJSON <$> AEKM.lookup "data" o -> pure md
@@ -689,7 +690,8 @@ spec = do
     -- Chart SQL failures were swallowed into empty datasets, the same "no data" overlay as an
     -- empty range; and a failed partial-hit delta still advanced `cached_to`, leaving a permanent
     -- hole between the old and new watermark.
-    it "chart cache failures: errors surface, the watermark holds, nothing is cached; empty successes are cached and advance" \tr -> do
+    -- No telemetry here: charts read Postgres, the store a spec can break by renaming its table.
+    it "chart cache failures: errors surface, the watermark holds, nothing is cached; empty successes are cached and advance" \(chartsOnPostgres -> tr) -> do
       let countQ = "summarize count(*) by bin_auto(timestamp)"
           times@(_, t1, t2) = (addUTCTime (-1800) baseTime, baseTime, addUTCTime 1800 baseTime)
           unscoped = runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just countQ) Nothing Nothing (Just (timeAt (-1800))) (Just (timeAt 1800)) Nothing Nothing []
@@ -714,7 +716,7 @@ spec = do
 
     it "chart cache scope and streaming: compiler changes and service scope change keys, shared cache expires, streams survive closed connections and slow queries" \tr -> do
       -- Results cached under the old jsonpath predicate must not answer the new compiler's query.
-      forM_ ["attributes.url.full matches regex \"^/cache-invalidated$\"", "spans | where attributes.url.full matches regex \"^/cache-invalidated$\"", "attributes.events[*].timestamp > ago(1h)"] \predicate -> do
+      forM_ ["attributes.url.full matches regex \"^/cache-invalidated$\"", "spans | where attributes.url.full matches regex \"^/cache-invalidated$\"", "attributes.events[*].name == \"exception\""] \predicate -> do
         clearAllTestData tr
         let q = predicate <> " | summarize count(*) by bin(timestamp, 1h)"
             end = addUTCTime 3600 baseTime
@@ -724,7 +726,7 @@ spec = do
             legacyKey = key{QC.queryHash = toXXHash $ toQText sections <> "\NULenvironment=\NULservice="} :: QC.CacheKey
         QC.generateCacheKey testPid Nothing sections cfg{currentTime = end} `shouldBe` key
         runQueryEffect tr $ QC.updateCache legacyKey (baseTime, end) (seedMetrics baseTime) q
-        ((.dataset) <$> queryMetrics tr q (timeAt 0) (timeAt 3600)) `shouldReturn` V.empty
+        ((\md -> (md.error, md.dataset)) <$> queryMetrics tr q (timeAt 0) (timeAt 3600)) `shouldReturn` (Nothing, V.empty)
         runQueryEffect tr (QC.lookupCache key (baseTime, end)) >>= (`shouldSatisfy` \case QC.CacheHit _ -> True; _ -> False)
       sections <- either (fail . toString) pure $ parseQueryToAST "summarize count(*) by bin(timestamp, 1h)"
       let scoped svc = (defSqlQueryCfg testPid baseTime Nothing Nothing){dateRange = (Just baseTime, Just $ addUTCTime 3600 baseTime), environment = Just "production", service = Just svc}
@@ -816,7 +818,7 @@ spec = do
     it "share links: created from an ingested event, scoped to real events, expired after 48 hours" \tr -> do
       apiKey <- createTestAPIKey tr testPid "shared-event"
       ingestTrace tr apiKey "shared-checkout" frozenTime
-      (eventId, eventTime) <- dbQuery @_ @(UUID.UUID, UTCTime) tr [sql|SELECT id, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND name = 'shared-checkout' ORDER BY timestamp DESC LIMIT 1|] (Only testPid) >>= maybe (fail "the shared event was not ingested") pure . listToMaybe
+      (eventId, eventTime) <- first (fromMaybe UUID.nil . UUID.fromText) <<$>> telemetryDbQuery @_ @(Text, UTCTime) tr [sql|SELECT id::text, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND name = 'shared-checkout' ORDER BY timestamp DESC LIMIT 1|] (Only testPid) >>= maybe (fail "the shared event was not ingested") pure . listToMaybe
       missing <- nextRandom
       let shares = dbOne @_ @Int tr [sql|SELECT count(*)::int FROM apis.share_events WHERE project_id = ?|] (Only testPid)
           apiCreate eid = toBaseServantResponse tr $ ApiH.apiShareLinkCreate testPid ApiH.ShareLinkCreate{ApiH.eventId = eid, ApiH.eventCreatedAt = eventTime, ApiH.eventType = Just ShareEvents.ShareLog}
@@ -967,7 +969,11 @@ clearCache tr = dbExec tr [sql|DELETE FROM query_cache WHERE project_id = ?|] (O
 
 
 clearAllTestData :: TestResources -> IO ()
-clearAllTestData tr = clearCache tr >> dbExec tr [sql|DELETE FROM otel_logs_and_spans WHERE project_id = ?|] (Only testPid)
+clearAllTestData tr = clearCache tr >> telemetryDbExec tr [sql|DELETE FROM otel_logs_and_spans WHERE project_id = ?|] (Only testPid)
+
+
+chartsOnPostgres :: TestResources -> TestResources
+chartsOnPostgres tr = tr{trATCtx = tr.trATCtx{timefusionPgPool = tr.trATCtx.pool}}
 
 
 -- | Datasets, headers and stats all agree.

@@ -4312,7 +4312,7 @@ spec = around withTestResources do
       mode <- scheduledInvocation tr (conversation 96) Issues.Autonomous
       context <- contextOf mode
       withOwnTelemetry tr apiKey (\traced -> runTestBg frozenTime traced $ agent (\_ _ -> pure $ Right $ Chat.Message Chat.Assistant "Nothing to report." Chat.defaultMessageData) $ chat (durable traced (conversation 96) mode) "Check the routine") >>= (`shouldSatisfy` isRight)
-      dbQuery @_ @(Maybe Text, Maybe Text) tr [sql| SELECT attributes___gen_ai___agent___name, attributes___gen_ai___conversation___id FROM otel_logs_and_spans WHERE project_id = ? AND name = 'invoke_agent monoscope' |] (Only testPid)
+      telemetryDbQuery @_ @(Maybe Text, Maybe Text) tr [sql| SELECT attributes___gen_ai___agent___name, attributes___gen_ai___conversation___id FROM otel_logs_and_spans WHERE project_id = ? AND name = 'invoke_agent monoscope' |] (Only testPid)
         `shouldReturn` [(Just "monoscope-routine", Just context.rootId.toText)]
 
     it "documents are saved, appended and listed beside the conversation, bounded per document, conversation and read, and run evidence survives a full conversation" \tr -> do

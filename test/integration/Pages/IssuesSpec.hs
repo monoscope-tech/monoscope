@@ -277,7 +277,7 @@ spec = around withTestResources $ describe "Issues" do
     void $ runAllBackgroundJobs frozenTime tr.trATCtx
     pat <- runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns testPid Nothing 500 0) >>= maybe (fail "no StepProbeError") pure . find ((== "StepProbeError") . (.errorType))
     iid <- (.id) <$> (runTestBg frozenTime tr (Issues.selectIssueByHash testPid pat.hash Issues.AnyIssue) >>= maybe (fail "no issue") pure)
-    let step dir from = runTestBg frozenTime tr (Telemetry.adjacentHashEvent testPid ("err:" <> pat.hash) dir from)
+    let step dir from = runTestBg frozenTime tr (EHasql.withHasqlTimefusion tr.trATCtx.env.enableTimefusionReads $ Telemetry.adjacentHashEvent testPid ("err:" <> pat.hash) dir from)
     mapM (uncurry step) [(Telemetry.Older, at 0), (Telemetry.Newer, at (-600)), (Telemetry.Older, at (-600)), (Telemetry.Recommended, at 1)]
       `shouldReturn` [Just (tb, at (-300)), Just (tb, at (-300)), Nothing, Just (ta, at (-600))]
     -- Past the oldest event the reader stays where they were.

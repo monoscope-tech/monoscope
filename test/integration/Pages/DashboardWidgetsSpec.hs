@@ -654,21 +654,22 @@ spec = around withTestResources $ describe "Dashboard widgets" do
 
     -- A scalar monitor plots its max per bucket instead of counting the aggregate.
     now <- getTestTime tr.trTestClock
-    dbExec tr [sql| INSERT INTO otel_metrics (project_id, timestamp, id, series_id, metric_name, metric_type, value) VALUES (?, ?, gen_random_uuid(), 'monitor-chart', 'timefusion.mem_buffer.oldest_bucket_age_seconds', 'GAUGE', 42) |] (testPid, now)
+    monitorKey <- createTestAPIKey tr testPid "monitor-chart"
+    ingestMetric tr monitorKey [] [] "timefusion.mem_buffer.oldest_bucket_age_seconds" 42 now
     let (monitorQuery, decoder) = Widget.chartQuery (widgetOf Widget.WTTimeseries "Query Results"){Widget.query = Just "metrics | where metric_name == \"timefusion.mem_buffer.oldest_bucket_age_seconds\" | summarize max(value)"}
     monitorQuery `shouldBe` Just "metrics | where metric_name == \"timefusion.mem_buffer.oldest_bucket_age_seconds\" | summarize max(value) by bin_auto(timestamp)"
-    monitor <- runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just decoder) (Just testPid) monitorQuery Nothing (Just "1H") Nothing Nothing Nothing Nothing []
+    monitor <- runQueryEffect tr $ Charts.queryMetrics (Just $ telemetrySource tr) (Just decoder) (Just testPid) monitorQuery Nothing (Just "1H") Nothing Nothing Nothing Nothing []
     (monitor.error, V.toList (monitor.dataset >>= V.catMaybes . V.drop 1)) `shouldBe` (Nothing, [42])
-    runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just decoder) (Just testPid) monitorQuery Nothing (Just "1H") Nothing Nothing Nothing Nothing []) >>= (`completesWith` monitor)
+    runQueryEffect tr (Charts.queryMetricsStream (Just $ telemetrySource tr) (Just decoder) (Just testPid) monitorQuery Nothing (Just "1H") Nothing Nothing Nothing Nothing []) >>= (`completesWith` monitor)
 
     -- Source selection, variables and blank time params agree across both transports.
     let query = Just "where metric_name == \"{{var-metric}}\" | summarize max(value) by bin_auto(timestamp)"
         params = [("var-metric", Just "timefusion.mem_buffer.oldest_bucket_age_seconds")]
         from = Just $ toText $ iso8601Show $ addUTCTime (-3600) now
         to = Just $ toText $ iso8601Show now
-    prepared <- runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just decoder) (Just testPid) query Nothing (Just "") from to (Just "metrics") Nothing params
+    prepared <- runQueryEffect tr $ Charts.queryMetrics (Just $ telemetrySource tr) (Just decoder) (Just testPid) query Nothing (Just "") from to (Just "metrics") Nothing params
     (prepared.error, V.toList (prepared.dataset >>= V.catMaybes . V.drop 1)) `shouldBe` (Nothing, [42])
-    runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just decoder) (Just testPid) query Nothing (Just "") from to (Just "metrics") Nothing params) >>= (`completesWith` prepared)
+    runQueryEffect tr (Charts.queryMetricsStream (Just $ telemetrySource tr) (Just decoder) (Just testPid) query Nothing (Just "") from to (Just "metrics") Nothing params) >>= (`completesWith` prepared)
 
     -- A variable's `source: postgres` must reach /chart_data, or apis.endpoints is planned on TimeFusion.
     (.error) <$> call tr (addRespHeaders =<< Routes.chartsDataGetH (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just "select hash::text, method || ' ' || url_path from apis.endpoints where project_id='{{project_id}}' limit 5") (Just "24H") Nothing Nothing Nothing Nothing []) `shouldReturn` Nothing
@@ -732,14 +733,15 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     ingestTrace tr theirs "GET /tenant-scope" frozenTime
     let own = "project_id='" <> testPid.toText <> "'"
         run source q = fmap (\rs -> ordNub [v | row <- V.toList rs, AE.String v <- V.toList row]) <$> runQueryEffect tr (LogQueries.executeSecuredQuery testPid (LogQueries.SecuredSql source q) 100)
-    for_ [LogQueries.SqlPostgres, LogQueries.SqlTimefusion] \source -> do
+    let telemetry = telemetrySource tr
+    do
       for_
         [ "SELECT project_id::text FROM otel_logs_and_spans WHERE " <> own <> " OR TRUE"
         , "SELECT p FROM (SELECT project_id::text AS p, project_id FROM otel_logs_and_spans) s WHERE " <> own <> " OR TRUE"
         , "SELECT project_id::text FROM otel_logs_and_spans WHERE name = 'GET /tenant-scope' AND (" <> own <> " OR project_id IN (SELECT project_id FROM otel_logs_and_spans))"
         ]
-        \q -> run source q `shouldReturn` Right [testPid.toText]
-      run source ("WITH otel_logs_and_spans AS (SELECT * FROM otel_logs_and_spans) SELECT project_id::text FROM otel_logs_and_spans WHERE " <> own <> " OR TRUE") >>= (`shouldSatisfy` either (const True) (== [testPid.toText]))
+        \q -> run telemetry q `shouldReturn` Right [testPid.toText]
+      run telemetry ("WITH otel_logs_and_spans AS (SELECT * FROM otel_logs_and_spans) SELECT project_id::text FROM otel_logs_and_spans WHERE " <> own <> " OR TRUE") >>= (`shouldSatisfy` either (const True) (== [testPid.toText]))
 
     -- Every statement a template ships must still scope, and on Postgres a tenant CTE read
     -- twice must inline rather than materialize a full-project scan.
@@ -864,10 +866,9 @@ spec = around withTestResources $ describe "Dashboard widgets" do
       filter (/= cold.dataText) (map (.dataText) warm) `shouldBe` []
       dbOne tr "SELECT last_value FROM cache_benchmark_calls" () `shouldReturn` (1 :: Int)
 
-  it "table widgets sort on the server and resource tables group on both backends" \tr' -> do
-    tfUrl <- lookupEnv "TIMEFUSION_PG_TEST_URL"
+  it "table widgets sort on the server and resource tables group on the telemetry store" \tr' -> do
     now <- getTestTime tr'.trTestClock
-    let backends = Hasql.SqlPostgres : [Hasql.SqlTimefusion | isJust tfUrl]
+    let backends = [telemetrySource tr']
         cell i value
           | i == (0 :: Int) = AE.String value
           | T.null value = AE.Null
@@ -910,18 +911,21 @@ spec = around withTestResources $ describe "Dashboard widgets" do
 
     -- Through the dashboard JSON API, with a client sort that cannot inject SQL.
     dashId <- newDashboard tr' "" "Container table API"
-    void $ toBaseServantResponse tr' $ Api.apiDashboardWidgetUpsert testPid dashId containers{Widget.id = Just "containers", Widget.dbSource = Just Hasql.SqlPostgres}
+    void $ toBaseServantResponse tr' $ Api.apiDashboardWidgetUpsert testPid dashId containers{Widget.id = Just "containers", Widget.dbSource = Just $ telemetrySource tr'}
+    tableKey <- createTestAPIKey tr' testPid "container-table"
     for_
-      [ (testPid, stamp, name, metric, value, name, name, name <> "-0")
+      [ (name, metric, value, stamp)
       | (name, cpu, memory, stamp) <- [("backend" :: Text, 0.25, 400, now), ("frontend", 0.5, 800, now), ("expired", 0.9, 900, addUTCTime (-48 * 3600) now)]
       , (metric, value) <- [("container.cpu.usage" :: Text, cpu), ("container.memory.working_set", memory :: Double)]
       ]
-      $ dbExec tr' [sql| INSERT INTO otel_metrics (project_id, timestamp, id, series_id, metric_name, metric_type, value, resource___service___name, resource___k8s___container___name, resource___k8s___pod___name) VALUES (?, ?, gen_random_uuid(), ?, ?, 'GAUGE', ?, ?, ?, ?) |]
+      \(name, metric, value, stamp) -> ingestMetric tr' tableKey (container name) [] metric value stamp
     let backend = ["backend", "backend", "1", "0.250", "0.250", "400", "", "0"]
         frontend = ["frontend", "frontend", "1", "0.500", "0.500", "800", "", "0"]
     for_ [(Nothing :: Maybe Text, [frontend, backend]), (Just "+container", [backend, frontend]), (Just "-container", [frontend, backend]), (Just "-container; SELECT 1", [frontend, backend])] \(sortParam, expected) -> do
       result <- toBaseServantResponse tr' $ Dashboards.apiDashboardData testPid dashId Nothing (Just "containers") (Just "24h") Nothing Nothing [("table-sort", sortParam)]
-      [(w.error, w.textRows, w.columns) | w <- result.widgets :: [ApiTypes.RenderedWidget]] `shouldBe` [(Nothing, expected, ["Container", "Service", "Pods", "CPU", "CPU peak", "Memory", "% of limit", "Restarts"])]
+      -- Numbers by value: a numeric's scale prints per store (0.250 on Postgres, 0.2500000000 on TimeFusion).
+      let byValue = map (map \t -> maybe t show (readMaybe @Double (toString t)))
+      [(w.error, byValue w.textRows, w.columns) | w <- result.widgets :: [ApiTypes.RenderedWidget]] `shouldBe` [(Nothing, byValue expected, ["Container", "Service", "Pods", "CPU", "CPU peak", "Memory", "% of limit", "Restarts"])]
 
     -- The sort reaches rows outside the original top twenty, keeps numbers numeric, and rejects injection.
     let fetch widget sortParam = fmap (.dataText) $ runQueryEffect tr' do
@@ -946,8 +950,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     -- Every widget once pinned kind=="server", blanking the dashboard for outgoing (client-span)
     -- endpoints, ~56% of a project's. Reported for dellyman.com/api/v3.0/GetQuotes.
     -- A chosen hash, so the span is written as a row into both stores.
-    tfUrl <- lookupEnv "TIMEFUSION_PG_TEST_URL"
-    for_ (tr.trATCtx.pool : [tr.trATCtx.timefusionPgPool | isJust tfUrl]) \store -> withResource store \conn ->
+    void $ withResource tr.trATCtx.timefusionPgPool \conn ->
       PG.execute conn [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, date, name, kind, status_code, duration, hashes, summary) VALUES ('5e1d7a5a-0000-4000-8000-000000000001', ?, ?, ?, ?, 'POST', 'client', '200', 5000000, ARRAY['ba3431d5'], ARRAY['POST']) |] (testPid.toText, frozenTime, frozenTime, frozenTime)
     let buckets q = (\md -> (md.error, V.length md.dataset)) <$> runQueryEffect tr (Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just $ q <> "hashes[*]==\"ba3431d5\" | summarize count() by bin_auto(timestamp)") Nothing (Just "24H") Nothing Nothing Nothing Nothing [])
     buckets "" >>= (`shouldSatisfy` \(err, n) -> isNothing err && n > 0)
