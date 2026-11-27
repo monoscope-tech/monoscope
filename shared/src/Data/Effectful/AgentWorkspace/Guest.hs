@@ -139,7 +139,7 @@ withGuest seat host expected checkout revision start lease attempt allocate reta
   outcome <- (`onException` (void $ tryAny $ record retain)) $ tryAny $ restore $ withSandboxRelease (AgentPool seat) host.bridge (writeIORef release) \rpc -> do
     let execute cwd argv = rpc $ Execute $ GuestCommand argv (Just cwd) False
         -- The failing step and its output reach the agent: a patch git rejects is the agent's to fix.
-        run cwd argv = execute cwd argv >>= \result -> if result.exitCode == 0 then pure result.stdout else failure $ toString $ "Guest preparation failed: " <> T.unwords (take 3 $ toList argv) <> " exited " <> show result.exitCode <> ": " <> T.takeEnd 600 (fold result.stderr <> result.stdout)
+        run cwd argv = execute cwd argv >>= \result -> if result.exitCode == 0 then pure result.stdout else failure $ toString $ "Guest preparation failed: " <> unwords (take 3 $ toList argv) <> " exited " <> show result.exitCode <> ": " <> T.takeEnd 600 (fold result.stderr <> result.stdout)
         workspace = run "/workspace" . fromList
         copyIn source destination = rpc (CopyFile $ Copy source destination) >> void (run "/" $ "/bin/chmod" :| ["0644", destination])
         upload destination bytes = do
