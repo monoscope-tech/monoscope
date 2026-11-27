@@ -29,6 +29,9 @@ Monoscope can be configured through:
 | `DATABASE_URL` | PostgreSQL connection string | - | Yes |
 | `MIGRATE_AND_INITIALIZE_ON_START` | Run migrations on startup | True | No |
 | `MIGRATIONS_DIR` | Path to migration files | /app/static/migrations/ | No |
+| `TIMEFUSION_PG_URL` | [TimeFusion](https://github.com/monoscope-tech/timefusion) connection string; telemetry (logs, traces, metrics) is written to and read from it | - | Yes |
+| `ENABLE_TIMEFUSION_READS` / `ENABLE_TIMEFUSION_WRITES` | Read and write telemetry through TimeFusion | True | No |
+| `ENABLE_POSTGRES_TELEMETRY_WRITES` | Also write telemetry to Postgres. `True` with both TimeFusion flags `False` keeps telemetry in Postgres only (legacy) | False | No |
 
 Example DATABASE_URL:
 ```
@@ -133,6 +136,7 @@ postgresql://user:password@localhost:5432/monoscope?sslmode=disable
 
 ```env
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/monoscope
+TIMEFUSION_PG_URL=postgresql://postgres:postgres@localhost:12345/postgres
 BASIC_AUTH_ENABLED=True
 BASIC_AUTH_USERNAME=admin
 BASIC_AUTH_PASSWORD=changeme
@@ -143,6 +147,7 @@ API_KEY_ENCRYPTION_SECRET_KEY=monoscope123456monoscope1234567
 
 ```env
 DATABASE_URL=postgresql://prod_user:secure_pass@db.example.com:5432/monoscope?sslmode=require
+TIMEFUSION_PG_URL=postgresql://tf_user:secure_pass@timefusion.example.com:5432/postgres
 ENVIRONMENT=PROD
 HOST_URL=https://monoscope.example.com
 
