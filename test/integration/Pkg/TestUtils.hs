@@ -18,7 +18,7 @@ module Pkg.TestUtils (
   eventually,
   withSetup,
   withTestResources,
-  withPgReads,
+  withPgTelemetry,
   clearFixedProjects,
   fromRightShow,
   TestResources (..),
@@ -1857,11 +1857,11 @@ testPid :: Projects.ProjectId
 testPid = UUIDId UUID.nil
 
 
--- | Reads (charts included) from Postgres, for a spec that seeds or mutates its telemetry with raw SQL.
-withPgReads :: TestResources -> TestResources
-withPgReads tr = tr{trATCtx = tr.trATCtx{env = pg, config = pg, timefusionPgPool = tr.trATCtx.pool}}
+-- | Telemetry on Postgres alone (reads, charts and writes), for a spec that seeds or mutates it with raw SQL.
+withPgTelemetry :: TestResources -> TestResources
+withPgTelemetry tr = tr{trATCtx = tr.trATCtx{env = pg, config = pg, timefusionPgPool = tr.trATCtx.pool}}
   where
-    pg = tr.trATCtx.env{enableTimefusionReads = False}
+    pg = tr.trATCtx.env{enableTimefusionReads = False, enableTimefusionWrites = False}
 
 
 -- | Once per unsharded test process: each example gets a fresh Postgres, but a long-lived local

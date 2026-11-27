@@ -627,7 +627,7 @@ spec = do
       updated `shouldBe` [5, 2]
       (all isJust <$> mapM (\p -> runHasqlEffect tr (SC.getSummary Nothing p)) (projs <> staleP)) `shouldReturn` True
 
-    it "chart cache: hits and partial merges equal fresh reads; streams populate it and replay it without telemetry" \(withPgReads -> tr) -> do
+    it "chart cache: hits and partial merges equal fresh reads; streams populate it and replay it without telemetry" \(withPgTelemetry -> tr) -> do
       key <- createTestAPIKey tr testPid "chart-cache-key"
       let countQ = "summarize count(*) by bin_auto(timestamp)"
           fresh q from to = clearCache tr >> queryMetrics tr q from to
@@ -689,7 +689,7 @@ spec = do
     -- Chart SQL failures were swallowed into empty datasets, the same "no data" overlay as an
     -- empty range; and a failed partial-hit delta still advanced `cached_to`, leaving a permanent
     -- hole between the old and new watermark.
-    it "chart cache failures: errors surface, the watermark holds, nothing is cached; empty successes are cached and advance" \(withPgReads -> tr) -> do
+    it "chart cache failures: errors surface, the watermark holds, nothing is cached; empty successes are cached and advance" \(withPgTelemetry -> tr) -> do
       let countQ = "summarize count(*) by bin_auto(timestamp)"
           times@(_, t1, t2) = (addUTCTime (-1800) baseTime, baseTime, addUTCTime 1800 baseTime)
           unscoped = runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just countQ) Nothing Nothing (Just (timeAt (-1800))) (Just (timeAt 1800)) Nothing Nothing []
@@ -712,7 +712,7 @@ spec = do
       dbExec tr [sql|UPDATE query_cache SET cached_data = jsonb_set(cached_data, '{error}', '"old failure"') WHERE project_id = ?|] (Only testPid)
       (outcome <$> hourly) `shouldReturn` (Nothing, V.empty)
 
-    it "chart cache scope and streaming: compiler changes and service scope change keys, shared cache expires, streams survive closed connections and slow queries" \(withPgReads -> tr) -> do
+    it "chart cache scope and streaming: compiler changes and service scope change keys, shared cache expires, streams survive closed connections and slow queries" \(withPgTelemetry -> tr) -> do
       -- Results cached under the old jsonpath predicate must not answer the new compiler's query.
       forM_ ["attributes.url.full matches regex \"^/cache-invalidated$\"", "spans | where attributes.url.full matches regex \"^/cache-invalidated$\"", "attributes.events[*].timestamp > ago(1h)"] \predicate -> do
         clearAllTestData tr

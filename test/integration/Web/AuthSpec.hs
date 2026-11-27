@@ -254,7 +254,7 @@ spec = around withTestResources do
     let hourly createdAt = do
           runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE projects.projects SET created_at = #{createdAt} WHERE id = #{testPid} |]
           -- Postgres: TimeFusion's cross-project scan does not see rows still in its write buffer.
-          runTestBg now (withPgReads tr) $ BackgroundJobs.runHourlyJob now 0
+          runTestBg now (withPgTelemetry tr) $ BackgroundJobs.runHourlyJob now 0
           second (map (T.isInfixOf ("\"activated-" <> testPid.toText <> "\"") . decodeUtf8 . snd)) . swap <$> sendQueued
     hourly (addUTCTime (-(31 * nominalDay)) now) >>= (`shouldBe` ([], []))
     hourly now >>= (`shouldBe` ([Activated testPid], [True]))
