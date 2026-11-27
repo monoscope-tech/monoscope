@@ -810,6 +810,9 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                           <> "\n"
                     )
                     recipe
+                  -- A setup is only raised when a proof needs more, so without this a web app's setup can stall
+                  -- below logins until the first pull request that needs them, which then starts from scratch.
+                  <> bool "" "When the repository serves a web app, make at least one proof's setup start it and write a login per role (no saved setup does yet), even if this pull request's proofs need less: every later review starts from that setup.\n" (maybe True ((< 3) . (.stage)) recipe)
                   <> case run.request of
                     Just asked -> "A member asked for this review with " <> (case asked.command of Reviews.Prove -> "@monoscope prove it: record at least one proof, even when the diff shows the change, or explain in an unverified claim why none could be recorded."; Reviews.Review -> "@monoscope review.") <> foldMap (\focus -> " Their untrusted focus note: " <> decodeUtf8 (AE.encode focus) <> ".") asked.focus <> "\n"
                     Nothing -> ""

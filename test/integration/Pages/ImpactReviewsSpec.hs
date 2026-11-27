@@ -3622,6 +3622,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   request.prompt `shouldNotSatisfy` T.isInfixOf "private-log-body-must-not-leave-monoscope"
                   dbOne tr "SELECT count(*)::int FROM projects.pr_review_attempts WHERE id = ? AND run_id = ? AND project_id = ? AND provider = ?" (request.attemptId, request.runId, request.projectId, request.provider) `shouldReturn` (1 :: Int)
                   for_ [("--expect-recipe", True), ("--expect-no-recipe", False)] \(flag, expected) -> when (flag `elem` arguments) $ ("best proof setup so far" `T.isInfixOf` request.prompt) `shouldBe` expected
+                  for_ [("--expect-setup-nudge", True), ("--expect-no-setup-nudge", False)] \(flag, expected) -> when (flag `elem` arguments) $ ("no saved setup does yet" `T.isInfixOf` request.prompt) `shouldBe` expected
                   when ("--expect-discussion" `elem` arguments) $ (map (`T.isInfixOf` request.prompt) ["Keep payroll admin-only", "src/Routes.hs", "Reports count shows when private", "our own review body", "blacksmith proof report", "please prove the empty state"] `shouldBe` [True, True, True, False, False, False])
                   when ("--prove-live" `elem` arguments) $ traverse_ (unlift . hooks.progress) [Agent.Planned ("Shows the retry count" :| ["Retries once"]), Agent.Started ("Shows the retry count" :| []), Agent.Recorded ("Shows the retry count" :| []) "proof-1"]
                   when ("--billing-change-before-usage" `elem` arguments) $ dbExec tr "UPDATE projects.projects SET customer_id = 'cus_after_attempt', billing_provider = ? WHERE id = ?" (Projects.LemonSqueezyProvider, reviewPid)
@@ -3894,7 +3895,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- savedProofSetup_followsItsProofMd: a saved setup is offered until .monoscope/PROOF.md changes after it.
     dbExec tr "INSERT INTO projects.pr_review_proof_recipes (project_id, owner, repo, setup, revision, run_id) VALUES (?, 'impact-org', 'checkout', 'make serve &', ?, ?)" (reviewPid, T.replicate 40 "e", run.id)
     let comparedFiles paths = withHTTPResponses \_ endpoint -> pure if "/compare/" `T.isInfixOf` toText endpoint then Just $ AE.encode $ AE.object ["files" AE..= [AE.object ["filename" AE..= path, "status" AE..= ("modified" :: Text)] | path <- paths :: [Text]]] else Nothing
-    void $ review $ comparedFiles ["src/app.hs"] . fakeAgentWith ["--expect-recipe"]
+    void $ review $ comparedFiles ["src/app.hs"] . fakeAgentWith ["--expect-recipe", "--expect-setup-nudge"]
+    -- setupNudge_untilLoginsWork: a saved setup below a running app with logins asks for one; one that reaches it does not.
+    dbExec tr "UPDATE projects.pr_review_proof_recipes SET stage = 3 WHERE project_id = ?" (Only reviewPid)
+    void $ review $ comparedFiles ["src/app.hs"] . fakeAgentWith ["--expect-recipe", "--expect-no-setup-nudge"]
     void $ review $ comparedFiles ["src/app.hs", ".monoscope/PROOF.md"] . fakeAgentWith ["--expect-no-recipe"]
     -- reviewerAsks_reachTheAgent: Blacksmith's "differs" findings test what reviewers asked for, so the agent
     -- sees the conversation and inline review comments, but not our own app's.
