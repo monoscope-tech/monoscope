@@ -125,7 +125,9 @@ publish store executable token linked artifacts explanation context authorize = 
             guardRemote stage = do
               permit stage
               access
-              refs context.targetBranch >>= ensure SourceChanged . (== Just (revisionText result.base))
+              -- The target may have advanced past the verified base, but not been rewritten under it.
+              compared <- decode GitHubFailure =<< gh ["api", "--hostname", "github.com", "--method", "GET", endpoint <> "/compare/" <> toString (revisionText result.base) <> "..." <> encoded context.targetBranch <> "?per_page=1", "--jq", "{status}"]
+              ensure SourceChanged $ Git.advanced compared
               when (stage /= Branch) $ refs context.branch >>= ensure SourceChanged . (== Just (revisionText result.head))
             checked :: Git.PublicationPullRequest -> ExceptT Failure IO Git.PublicationPullRequest
             checked pr = do

@@ -75,6 +75,9 @@ module Pkg.Git (
   getPullRequest,
   getPullRequestFiles,
   filesBetween,
+  descends,
+  BranchComparison,
+  advanced,
   listPullRequestComments,
   CommentThread (..),
   CommentAuthor (..),
@@ -761,6 +764,20 @@ filesBetween conn repo from to = (>>= \c -> if length c.files >= 300 then Left "
 newtype CommitComparison = CommitComparison {files :: [PullRequestFile]}
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
+
+
+-- | Whether @to@ still contains @from@, i.e. the branch only moved forward from it.
+descends :: W.HTTP :> es => GitConn -> RepoRef -> Text -> Text -> Eff es (Either Text Bool)
+descends conn repo from to = fmap advanced <$> githubJson @BranchComparison conn repo ("/compare/" <> from <> "..." <> to <> "?per_page=1")
+
+
+newtype BranchComparison = BranchComparison {status :: Text}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON)
+
+
+advanced :: BranchComparison -> Bool
+advanced c = c.status `elem` ["ahead", "identical"]
 
 
 listPullRequestComments :: W.HTTP :> es => GitConn -> RepoRef -> CommentThread -> Int -> Eff es (Either Text [PullRequestComment])

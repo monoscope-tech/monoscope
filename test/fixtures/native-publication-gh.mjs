@@ -28,11 +28,9 @@ else if (args[0] === 'pr' && args[1] === 'edit') {
   console.log('updated');
 } else if (args[0] === 'api') {
   const [method, path] = args.slice(args.indexOf('--method') + 1);
-  if (path.includes('/git/matching-refs/heads/')) {
-    const ref = path.includes('monoscope') ? state.branch : 'main';
-    const sha = ref !== 'main' || mode === 'moved' ? state.head : state.base;
-    emit(mode === 'merged' ? [] : [[{ ref: 'refs/heads/' + ref, object: { sha } }]]);
-  } else if (path.includes('/pulls?')) emit([state.pr ? [state.pr] : []]);
+  if (path.includes('/git/matching-refs/heads/')) emit(mode === 'merged' ? [] : [[{ ref: 'refs/heads/' + state.branch, object: { sha: state.head } }]]);
+  else if (path.includes('/compare/')) emit({ status: mode === 'moved' ? 'diverged' : 'ahead' });
+  else if (path.includes('/pulls?')) emit([state.pr ? [state.pr] : []]);
   else if (method === 'POST') {
     const body = JSON.parse(readFileSync(value('--input')));
     assert.ok(body.draft === true && body.head === state.branch && body.base === 'main');
