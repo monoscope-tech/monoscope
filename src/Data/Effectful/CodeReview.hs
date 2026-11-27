@@ -890,10 +890,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                               case AE.fromJSON @(Native.FixOutcome Native.FixSummary) draft of
                                 AE.Error _ -> writeMessage (Left "Fix summary does not match the host contract" :: Either Text AE.Value) >> receive supplied guestSession remaining (submissions - 1) Nothing
                                 AE.Success (Native.Unfixed blocker) -> do
-                                  checked <- case session.progress of
-                                    Checked{} -> pure $ Left "A verified candidate exists: submit it as Fixed"
-                                    (NeedsReproduction; Reproduced{}; Captured{}) -> case callbacks.validate of
-                                      StructuredDraft validate -> let unfixed = AE.toJSON $ Native.Unfixed @FixResult blocker in fmap (Accepted draft unfixed) <$> pause remaining submissions guestSession (validate unfixed)
+                                  checked <- case callbacks.validate of
+                                    StructuredDraft validate -> let unfixed = AE.toJSON $ Native.Unfixed @FixResult blocker in fmap (Accepted draft unfixed) <$> pause remaining submissions guestSession (validate unfixed)
                                   writeMessage $ void checked
                                   receive supplied guestSession remaining (submissions - 1) $ rightToMaybe checked
                                 AE.Success (Native.Fixed summary) -> do
