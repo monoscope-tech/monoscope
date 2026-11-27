@@ -3190,6 +3190,23 @@ spec = around withTestResources $ describe "Production impact reviews" do
     progress `shouldReturn` Just ("third try", 1, Just 30, Nothing)
     runQueryEffect tr $ Reviews.recordSetupFailure middle "fourth try" "port in use"
     progress `shouldReturn` Just ("third try", 1, Just 30, Nothing)
+    -- setupSession_queuedWhenProofsHaveNoSetup: a finished review that recorded proofs on a repository with no setup,
+    -- or whose setup last failed, queues one setup-only run of its pull request; never two at once, at most daily.
+    let setupJobs = dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest middle.id)
+        finished = dbExec tr "UPDATE projects.pr_review_runs SET state = 'completed', finished_at = now(), request = NULL WHERE id = ?" (Only middle.id)
+        command = dbOne tr "SELECT request->>'command' FROM projects.pr_review_runs WHERE id = ?" (Only middle.id)
+    before <- setupJobs
+    finished >> runQueryEffect tr (Reviews.queueSetupRun middle)
+    setupJobs `shouldReturn` before
+    command `shouldReturn` (Nothing :: Maybe Text)
+    dbExec tr "DELETE FROM projects.pr_review_proof_recipes WHERE project_id = ?" (Only testPid)
+    finished >> runQueryEffect tr (Reviews.queueSetupRun middle)
+    setupJobs `shouldReturn` before + 1
+    command `shouldReturn` Just "setup"
+    -- The setup run finished minutes ago, so the next review does not queue another.
+    dbExec tr "UPDATE projects.pr_review_runs SET state = 'completed', finished_at = now() WHERE id = ?" (Only middle.id)
+    runQueryEffect tr (Reviews.queueSetupRun middle)
+    setupJobs `shouldReturn` before + 1
     void $ runQueryEffect tr $ Reviews.receiveEvent Nothing $ eventAt (T.replicate 40 "c") 4
     builds `shouldReturn` 1 -- the first base's build finished above; this base queues its own
     -- askOnReviewedHead_answersInANewComment: an ask on a head that already has a progress comment answers below itself.
@@ -3634,6 +3651,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   request.prompt `shouldNotSatisfy` T.isInfixOf "private-log-body-must-not-leave-monoscope"
                   dbOne tr "SELECT count(*)::int FROM projects.pr_review_attempts WHERE id = ? AND run_id = ? AND project_id = ? AND provider = ?" (request.attemptId, request.runId, request.projectId, request.provider) `shouldReturn` (1 :: Int)
                   for_ [("--expect-recipe", True), ("--expect-no-recipe", False)] \(flag, expected) -> when (flag `elem` arguments) $ ("best proof setup so far" `T.isInfixOf` request.prompt) `shouldBe` expected
+                  when ("--expect-setup-mode" `elem` arguments) $ map (`T.isInfixOf` request.prompt) ["This is a setup-only run", "Prove what the pull request says"] `shouldBe` [True, False]
                   for_ [("--expect-setup-nudge", True), ("--expect-no-setup-nudge", False)] \(flag, expected) -> when (flag `elem` arguments) $ ("no saved setup does yet" `T.isInfixOf` request.prompt) `shouldBe` expected
                   when ("--expect-discussion" `elem` arguments) $ (map (`T.isInfixOf` request.prompt) ["Keep payroll admin-only", "src/Routes.hs", "Reports count shows when private", "our own review body", "blacksmith proof report", "please prove the empty state"] `shouldBe` [True, True, True, False, False, False])
                   when ("--prove-live" `elem` arguments) $ traverse_ (unlift . hooks.progress) [Agent.Planned ("Shows the retry count" :| ["Retries once"]), Agent.Started ("Shows the retry count" :| []), Agent.Recorded ("Shows the retry count" :| []) "proof-1"]
@@ -3911,6 +3929,15 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- setupNudge_untilLoginsWork: a saved setup below a running app with logins asks for one; one that reaches it does not.
     dbExec tr "UPDATE projects.pr_review_proof_recipes SET stage = 3 WHERE project_id = ?" (Only reviewPid)
     void $ review $ comparedFiles ["src/app.hs"] . fakeAgentWith ["--expect-recipe", "--expect-no-setup-nudge"]
+    -- setupRun_leavesTheReviewAlone: a setup-only run gets the setup task, keeps the pull request's review result,
+    -- and writes nothing to the pull request.
+    [(reviewed, asked)] <- dbQuery tr "SELECT result, request FROM projects.pr_review_runs WHERE id = ?" (Only run.id) :: IO [(Maybe AE.Value, Maybe AE.Value)]
+    dbExec tr "UPDATE projects.pr_review_runs SET state = 'queued', request = ? WHERE id = ?" (Aeson $ AE.toJSON $ Reviews.Ask "monoscope" 0 Reviews.Setup Nothing, run.id)
+    setupRequests <- fst <$> within (transport True . fakeAgentWith ["--expect-setup-mode"]) (Impact.reviewPullRequest run.id)
+    reviewState `shouldReturn` Just Reviews.Completed
+    dbOne tr "SELECT result FROM projects.pr_review_runs WHERE id = ?" (Only run.id) `shouldReturn` reviewed
+    setupRequests `shouldNotSatisfy` posts "/issues/"
+    dbExec tr "UPDATE projects.pr_review_runs SET request = ? WHERE id = ?" (asked, run.id)
     void $ review $ comparedFiles ["src/app.hs", ".monoscope/PROOF.md"] . fakeAgentWith ["--expect-no-recipe"]
     -- reviewerAsks_reachTheAgent: Blacksmith's "differs" findings test what reviewers asked for, so the agent
     -- sees the conversation and inline review comments, but not our own app's.
