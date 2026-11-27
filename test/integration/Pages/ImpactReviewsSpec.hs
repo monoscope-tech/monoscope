@@ -3165,6 +3165,17 @@ spec = around withTestResources $ describe "Production impact reviews" do
     progress `shouldReturn` Just ("fast app", 2, Just 40, Just "port already in use")
     saveReached 5 "fast app" Agent.AppAnswers 45 45
     progress `shouldReturn` Just ("fast app", 2, Just 40, Nothing)
+    -- setupBootstrap_startsFromTheFailedAttempt: before any setup has worked, a failed one is the next review's
+    -- starting point, a newer failure replaces it, and the first working setup supersedes it.
+    dbExec tr "DELETE FROM projects.pr_review_proof_recipes WHERE project_id = ?" (Only testPid)
+    runQueryEffect tr $ Reviews.recordSetupFailure middle "first try" "missing DATABASE_URL"
+    progress `shouldReturn` Just ("first try", 0, Nothing, Just "missing DATABASE_URL")
+    runQueryEffect tr $ Reviews.recordSetupFailure middle "second try" "migrations failed"
+    progress `shouldReturn` Just ("second try", 0, Nothing, Just "migrations failed")
+    saveReached 6 "third try" Agent.SetupRan 30 30
+    progress `shouldReturn` Just ("third try", 1, Just 30, Nothing)
+    runQueryEffect tr $ Reviews.recordSetupFailure middle "fourth try" "port in use"
+    progress `shouldReturn` Just ("third try", 1, Just 30, Nothing)
     void $ runQueryEffect tr $ Reviews.receiveEvent Nothing $ eventAt (T.replicate 40 "c") 4
     builds `shouldReturn` 1 -- the first base's build finished above; this base queues its own
     -- askOnReviewedHead_answersInANewComment: an ask on a head that already has a progress comment answers below itself.
