@@ -698,6 +698,12 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                       active \session -> runExceptT do
                         (result, logs) <- ExceptT $ regression request session.baseline identifier (AE.object ["script" AE..= Media.proofScript proof.setup proof.shellCommand, "failureMessage" AE..= Media.proofFailure]) [("base", request.base), ("head", request.head)] outbox
                         for_ result.receipts \receipt -> ExceptT $ Outbox.deliver outbox (Outbox.Check receipt) record
+                        -- A setup that failed records nothing, so its error is kept for the next attempt to repair. The hooks
+                        -- run review effects, which only this thread may unlift, so it happens before the sides render.
+                        for_ proof.setup \setup -> when (any (\r -> r.side == Head && r.status `elem` [Passed, Failed]) result.receipts)
+                          $ for_ (listToMaybe [path | (logged, path, _) <- logs, logged == Workspace.Head]) \logFile -> do
+                            reach <- Media.setupReach . decodeUtf8 <$> readFileBS logFile
+                            for_ (reach >>= (.failure)) $ lift . hooks.setupFailed setup
                         -- Both sides render at once; each is an agg and ffmpeg pass under the review lease.
                         recorded <-
                           ExceptT $ sequence <$> forConcurrently result.receipts \receipt -> runExceptT do
@@ -705,8 +711,6 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             logFile <- maybe (throwE "The proof log was not retained") pure $ listToMaybe [path | (logged, path, _) <- logs, logged == side]
                             logBytes <- readFileBS logFile
                             let reach = guard (isJust proof.setup && receipt.status `elem` [Passed, Failed]) *> Media.setupReach (decodeUtf8 logBytes)
-                            -- A setup that failed records nothing, so its error is kept here for the next attempt to repair.
-                            for_ ((,) <$> proof.setup <*> (guard (receipt.side == Head) *> reach >>= (.failure))) $ lift . uncurry hooks.setupFailed
                             (cast, output) <- except $ Media.proofCast logBytes
                             let browser = Media.browserMedia logBytes
                             (clip, window) <- except $ Media.clipCast proof.highlight cast
