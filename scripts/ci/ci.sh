@@ -33,9 +33,8 @@ ROOT=${CI_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 REMOTE=${CI_ATTEST_REMOTE:-origin}
 # Bump to invalidate every attestation at once (e.g. after fixing a fingerprint bug).
 EPOCH=1
-# Capabilities this environment provides; set once per run by cmd_run, inherited by `body`
-# (resetting it here unset TIMEFUSION_PG_TEST_URL for every integration run).
-CAPS=${CAPS:-}
+# Capabilities this environment provides; set once per run by cmd_run.
+CAPS=''
 
 cd "$ROOT"
 
