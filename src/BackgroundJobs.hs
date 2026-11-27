@@ -2521,17 +2521,18 @@ processProjectErrors pid errors now = do
 -- `processed_at` is Postgres bookkeeping, so with Postgres telemetry writes off there is
 -- nothing to sweep; the job stays scheduled as the daily per-project scheduling marker.
 safetyNetReprocess :: Projects.ProjectId -> ATBackgroundCtx ()
-safetyNetReprocess pid = ask @Config.AuthContext >>= \ctx -> when ctx.config.enablePostgresTelemetryWrites do
-  let cutoff = ctx.config.processedAtCutoff
-      maxAgeSecs = fromIntegral ctx.config.hashUpdateMaxAgeSecs :: Double
-  caches <- one . (pid,) <$> fetchProjectCache pid
-  -- Single page per tick (1000 rows); next hourly tick picks up any remainder.
-  rows <-
-    V.fromList
-      <$> Hasql.interp
-        ( [HI.sql| SELECT |]
-            <> Telemetry.otelSpanColsSql
-            <> [HI.sql| FROM otel_logs_and_spans
+safetyNetReprocess pid =
+  ask @Config.AuthContext >>= \ctx -> when ctx.config.enablePostgresTelemetryWrites do
+    let cutoff = ctx.config.processedAtCutoff
+        maxAgeSecs = fromIntegral ctx.config.hashUpdateMaxAgeSecs :: Double
+    caches <- one . (pid,) <$> fetchProjectCache pid
+    -- Single page per tick (1000 rows); next hourly tick picks up any remainder.
+    rows <-
+      V.fromList
+        <$> Hasql.interp
+          ( [HI.sql| SELECT |]
+              <> Telemetry.otelSpanColsSql
+              <> [HI.sql| FROM otel_logs_and_spans
               WHERE project_id = #{pid.toText}
                 AND processed_at IS NULL
                 AND timestamp >= #{cutoff}
@@ -2539,24 +2540,24 @@ safetyNetReprocess pid = ask @Config.AuthContext >>= \ctx -> when ctx.config.ena
                 AND timestamp >  now() - #{maxAgeSecs} * interval '1 second'
               ORDER BY timestamp
               LIMIT 1000 |]
-        )
-  -- Bounded count so an unbounded backlog can't turn visibility into a seq scan.
-  abandoned <-
-    Hasql.interpScalar
-      [HI.sql| SELECT count(*)::int8 FROM (
+          )
+    -- Bounded count so an unbounded backlog can't turn visibility into a seq scan.
+    abandoned <-
+      Hasql.interpScalar
+        [HI.sql| SELECT count(*)::int8 FROM (
                    SELECT 1 FROM otel_logs_and_spans
                    WHERE project_id = #{pid.toText}
                      AND processed_at IS NULL
                      AND timestamp >= #{cutoff}
                      AND timestamp <= now() - #{maxAgeSecs} * interval '1 second'
                    LIMIT 5000) s |]
-  when ((abandoned :: Int64) > 0)
-    $ Log.logAttention
-      "SafetyNetReprocess rows past hash-update age floor (not re-drivable)"
-      (AE.object ["project_id" AE..= pid.toText, "row_count" AE..= abandoned, "max_age_secs" AE..= maxAgeSecs])
-  unless (V.null rows) $ do
-    Log.logTrace "SafetyNetReprocess re-driving unprocessed rows" (AE.object ["project_id" AE..= pid.toText, "row_count" AE..= V.length rows])
-    Telemetry.handOffBatches ctx.extractionWorker caches rows
+    when ((abandoned :: Int64) > 0)
+      $ Log.logAttention
+        "SafetyNetReprocess rows past hash-update age floor (not re-drivable)"
+        (AE.object ["project_id" AE..= pid.toText, "row_count" AE..= abandoned, "max_age_secs" AE..= maxAgeSecs])
+    unless (V.null rows) $ do
+      Log.logTrace "SafetyNetReprocess re-driving unprocessed rows" (AE.object ["project_id" AE..= pid.toText, "row_count" AE..= V.length rows])
+      Telemetry.handOffBatches ctx.extractionWorker caches rows
 
 
 -- | Dual-fork an UPDATE to Postgres (blocking, deadlock-retried) + TimeFusion (best-effort, circuit-broken).
@@ -2568,22 +2569,26 @@ dualExecPgTf ctx sql' = dualExecPgTfWithSql ctx sql' sql'
 dualExecPgTfWithSql :: (DB es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> HI.Sql -> Eff es Int64
 dualExecPgTfWithSql ctx pgSql tfSql = Ki.scoped \scope -> do
   pgThread <- forkWithCtx scope $ pgOnlyExec ctx pgSql
-  tfThread <- forkWithCtx scope $ if not ctx.config.enableTimefusionWrites then pure 0 else do
-    now <- Time.currentTime
-    shouldAttempt <- liftIO $ ExtractionWorker.shouldAttemptCircuit ctx.tfCircuit now
-    if not shouldAttempt
-      then pure 0
-      -- A deploy drain refuses every write until the replacement is ready (18–110s measured
-      -- on 2026-11-23) and nothing replays this arm, so it gets the ingest write's 180s budget;
-      -- every caller's UPDATE is guarded, so a re-run is a no-op.
-      else
-        tryAny (Hasql.retryTransientEff 180_000_000 "dual-exec:timefusion" $ withHasqlTimefusion True $ Hasql.interpExecute tfSql)
-          >>= \case
-            Right n -> liftIO (ExtractionWorker.recordCircuitSuccess ctx.tfCircuit) $> n
-            Left e -> do
-              opened <- liftIO $ ExtractionWorker.recordCircuitFailure ctx.tfCircuit now
-              Log.logAttention (if opened then "TimeFusion circuit opened" else "TimeFusion write failed") (show @Text e)
-              pure 0
+  tfThread <-
+    forkWithCtx scope
+      $ if not ctx.config.enableTimefusionWrites
+        then pure 0
+        else do
+          now <- Time.currentTime
+          shouldAttempt <- liftIO $ ExtractionWorker.shouldAttemptCircuit ctx.tfCircuit now
+          if not shouldAttempt
+            then pure 0
+            -- A deploy drain refuses every write until the replacement is ready (18–110s measured
+            -- on 2026-11-23) and nothing replays this arm, so it gets the ingest write's 180s budget;
+            -- every caller's UPDATE is guarded, so a re-run is a no-op.
+            else
+              tryAny (Hasql.retryTransientEff 180_000_000 "dual-exec:timefusion" $ withHasqlTimefusion True $ Hasql.interpExecute tfSql)
+                >>= \case
+                  Right n -> liftIO (ExtractionWorker.recordCircuitSuccess ctx.tfCircuit) $> n
+                  Left e -> do
+                    opened <- liftIO $ ExtractionWorker.recordCircuitFailure ctx.tfCircuit now
+                    Log.logAttention (if opened then "TimeFusion circuit opened" else "TimeFusion write failed") (show @Text e)
+                    pure 0
   -- Await BOTH threads: scope-close cancellation of an in-flight Hasql session
   -- segfaults libpq. The count is the store that holds telemetry's.
   Ki.atomically $ bool (Ki.await tfThread) (Ki.await pgThread) ctx.config.enablePostgresTelemetryWrites <* Ki.awaitAll scope
