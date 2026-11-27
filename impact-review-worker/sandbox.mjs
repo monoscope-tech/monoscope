@@ -80,13 +80,14 @@ try {
         }
         case 'Execute': {
           const execution = vm.exec(contents.argv, { cwd: contents.cwd ?? undefined, signal: controller.signal, stdout: contents.quiet ? 'ignore' : 'pipe', stderr: contents.quiet ? 'ignore' : 'pipe' });
-          const chunks = []; let bytes = 0;
+          const chunks = [], errors = []; let bytes = 0;
           if (!contents.quiet) for await (const chunk of execution.output()) {
             bytes += chunk.data.length;
             if (bytes > 512 * 1024) throw new Error('Sandbox output limit');
-            if (chunk.stream === 'stdout') chunks.push(chunk.data);
+            (chunk.stream === 'stdout' ? chunks : errors).push(chunk.data);
           }
-          result = { exitCode: (await execution).exitCode, stdout: Buffer.concat(chunks).toString('utf8') }; break;
+          // stderr says why a step failed; callers parse stdout alone.
+          result = { exitCode: (await execution).exitCode, stdout: Buffer.concat(chunks).toString('utf8'), stderr: Buffer.concat(errors).toString('utf8').slice(-4096) }; break;
         }
         case 'CopyFile': {
           const file = await open(contents.source, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);

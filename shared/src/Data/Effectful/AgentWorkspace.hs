@@ -462,7 +462,7 @@ data Command result where
   Close :: () -> Command ()
 
 
-data Execution = Execution {exitCode :: Int, stdout :: Text}
+data Execution = Execution {exitCode :: Int, stdout :: Text, stderr :: Maybe Text}
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
 
