@@ -125,8 +125,10 @@ reviewSeconds = 45 * 60
 
 
 -- | A fix builds and tests the repository on both revisions, so it gets longer than a review.
+-- 90 minutes: a monoscope fix needs ~20 min of investigation, an ~8 min reproduction and two ~8 min
+-- verification sides; at 60 the verifier got ~5 min per side and timed out (run 9a493e89, 2026-11-27).
 fixSeconds :: Int
-fixSeconds = 60 * 60
+fixSeconds = 90 * 60
 
 
 -- | One side of a recorded proof: the claim's command replayed under asciinema in a fresh VM,
