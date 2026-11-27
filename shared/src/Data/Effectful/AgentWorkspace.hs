@@ -131,7 +131,8 @@ mkTestArtifact script raw failure
   | validArtifact script (Just patch) failure = Right $ TestArtifact script patch failure
   | otherwise = Left "Invalid regression artifact"
   where
-    patch = T.unlines $ filter (`notElem` ["*** Begin Patch", "*** End Patch"]) $ lines raw
+    envelope = (`elem` ["*** Begin Patch", "*** End Patch"])
+    patch = if any envelope (lines raw) then unlines $ filter (not . envelope) $ lines raw else raw
 
 
 instance AE.FromJSON TestArtifact where
