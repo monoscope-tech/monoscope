@@ -149,7 +149,7 @@ import System.Logging qualified as Log
 import System.Posix.Process (getProcessID)
 import System.Posix.Unistd (SystemID (nodeName), getSystemID)
 import System.Random (randomRIO)
-import System.Tracing (MessagingOp (Process), MessagingSystem (OddJobs), NotInstrumented, SpanKind (Consumer), SpanStatus (..), Tracing, addEvent, forkWithCtx, messagingAttrs, setStatus, withSpan, withSpanKind, withSpan_)
+import System.Tracing (MessagingOp (Process), MessagingSystem (OddJobs), NotInstrumented, SpanKind (Consumer), SpanStatus (..), Tracing, addEvent, forkWithCtx, inRootSpan, messagingAttrs, setStatus, withSpan, withSpanKind, withSpan_)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
@@ -630,10 +630,15 @@ runMonoscopeAdminDaily authCtx = do
   let projectMap = Map.fromList $ map (\(p :: Projects.Project) -> (p.id, p)) allProjects
       lookupTitle pid = maybe pid.toText (.title) $ Map.lookup pid projectMap
 
-  allRows <- forM allProjects \(project :: Projects.Project) -> do
-    events <- Telemetry.countRowsSince [HI.sql|otel_logs_and_spans|] authCtx.env.enableTimefusionReads project.id since
-    metrics <- Telemetry.countRowsSince [HI.sql|otel_metrics|] authCtx.env.enableTimefusionReads project.id since
-    pure (project, events, metrics, events + metrics)
+  -- The hourly ReportUsage windows already hold every active project's counts; recounting them
+  -- here was two TimeFusion scans per project, ~3,400 queries a run.
+  usage :: Map.Map Projects.ProjectId (Int64, Int64) <-
+    Map.fromList
+      . map (\(pid, e, m) -> (pid, (e, m)))
+      <$> Hasql.interp
+        [HI.sql|SELECT project_id, COALESCE(SUM(total_requests - total_metrics), 0)::bigint, COALESCE(SUM(total_metrics), 0)::bigint
+           FROM apis.daily_usage WHERE created_at >= #{since}::timestamptz GROUP BY project_id|]
+  let allRows = [(p, e, m, e + m) | p <- allProjects, let (e, m) = Map.findWithDefault (0, 0) p.id usage]
   let (activeRows, inactiveRows) = partition (\(_, _, _, t) -> t > 0) allRows
       sorted = sortOn (\(_, _, _, t) -> negate t) activeRows
 
@@ -2906,7 +2911,7 @@ runSchemaFlusherFiber logger ctx tp
             -- Catch *here* so we keep the logger / tracer context and can
             -- record the failure. Letting this propagate kills the fiber →
             -- shard dirty set never drains → heap OOM.
-            tryAny (runBackground logger ctx tp (SchemaCatalog.flushDirty ref)) >>= \case
+            inRootSpan tp "schema-flush" $ tryAny (runBackground logger ctx tp (SchemaCatalog.flushDirty ref)) >>= \case
               Left e -> do
                 runBackground logger ctx tp
                   $ LogLegacy.logAttention "schema-flusher batch failed" (show @Text e)
@@ -2930,7 +2935,7 @@ runSchemaFlusherFiber logger ctx tp
 
 runWorkspaceMaintenanceTimer :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 runWorkspaceMaintenanceTimer logger ctx tp = for_ ctx.config.impactReviewWorkspaceMaintenance \config -> forever do
-  runBackground logger ctx tp $ tryStep "workspace-maintenance" do
+  inRootSpan tp "workspace-maintenance" $ runBackground logger ctx tp $ tryStep "workspace-maintenance" do
     Workspace.maintainWorkspaces config >>= \case
       Left message -> Log.logAttention "Workspace maintenance failed" message
       Right report ->
@@ -2944,7 +2949,7 @@ runWorkspaceMaintenanceTimer logger ctx tp = for_ ctx.config.impactReviewWorkspa
 runReviewWorkerHeartbeat :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 runReviewWorkerHeartbeat logger ctx tp =
   Workspace.hostSlots >>= \slots -> when (slots.agents > 0) $ forever do
-    runBackground logger ctx tp $ tryStep "review-worker-heartbeat" $ Time.currentTime >>= (`ImpactReviews.announceReviewWorker` slots)
+    inRootSpan tp "review-worker-heartbeat" $ runBackground logger ctx tp $ tryStep "review-worker-heartbeat" $ Time.currentTime >>= (`ImpactReviews.announceReviewWorker` slots)
     threadDelay 60_000_000
 
 
@@ -2954,7 +2959,7 @@ runReviewWorkerHeartbeat logger ctx tp =
 runErrorDecayFiber :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 runErrorDecayFiber logger ctx tp = forever $ do
   threadDelay 60_000_000
-  runBackground logger ctx tp $ do
+  inRootSpan tp "error-decay" $ runBackground logger ctx tp $ do
     now <- Time.currentTime
     projects <- Projects.activeNonOnboardingProjectIds
     tryStep "propagateMergedCountsBatch" $ void $ ErrorPatterns.propagateMergedCountsBatch projects
@@ -2976,7 +2981,7 @@ runDrainFlusher
 runDrainFlusher logger ctx tp shard = forever $ do
   task <- atomically $ readTBQueue shard.drainFlushQ
   tryStepIO logger ctx "drain-flusher:rehydration" $ maybeSpawnRehydration logger ctx tp shard (task.projectId, task.serviceName)
-  tryStepIO logger ctx "drain-flusher:task" $ runBackground logger ctx tp $ flushDrainTask shard task
+  tryStepIO logger ctx "drain-flusher:task" $ inRootSpan tp "drain-flush" $ runBackground logger ctx tp $ flushDrainTask shard task
 
 
 -- | Spawn async rehydration for a (project, service) tree if stale and not
@@ -3001,7 +3006,7 @@ maybeSpawnRehydration logger ctx tp shard key = do
     pending <- readIORef shard.pendingRehydrations
     unless (HashSet.member key pending) $ do
       let job = do
-            tryStepIO logger ctx "drain-rehydrate failed" $ runBackground logger ctx tp $ rehydrateTree shard key now existing
+            tryStepIO logger ctx "drain-rehydrate failed" $ inRootSpan tp "drain-rehydrate" $ runBackground logger ctx tp $ rehydrateTree shard key now existing
             atomicModifyIORef'_ shard.pendingRehydrations (HashSet.delete key)
       atomicModifyIORef'_ shard.pendingRehydrations (HashSet.insert key)
       enqueued <- atomically $ isFullTBQueue shard.rehydrationQ >>= bool (writeTBQueue shard.rehydrationQ job $> True) (pure False)
@@ -3179,7 +3184,7 @@ runDrainAgeFlushTimer logger ctx = forever $ do
 runSessionBackfillTimer :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 runSessionBackfillTimer logger ctx tp = forever $ do
   threadDelay 90_000_000 -- 90 s
-  tryStepIO logger ctx "session-backfill" $ runBackground logger ctx tp go
+  tryStepIO logger ctx "session-backfill" $ inRootSpan tp "session-backfill" $ runBackground logger ctx tp go
   where
     go = do
       n <- backfillSessionAttributes ctx
@@ -4988,7 +4993,14 @@ gitSyncFromRepo pid sid = withGitSync pid sid GitSync.ImportDashboards $ \conn s
                   case applied of
                     Left err -> pure $ Just $ resource.filePath <> ": " <> err
                     Right () -> pure Nothing
-        lift $ forM_ allResources \resource -> when (resource.kind == RepositorySync.Dashboard) $ for_ (find ((== resource.filePath) . (.path)) entries >>= (.sha)) $ void . GitSync.updateDashboardGitInfo (UUIDId resource.localId) (fromMaybe resource.filePath $ T.stripPrefix dashboardPrefix resource.filePath)
+        lift
+          $ void
+          $ GitSync.updateDashboardGitInfo
+            [ (UUIDId resource.localId, fromMaybe resource.filePath $ T.stripPrefix dashboardPrefix resource.filePath, sha)
+            | resource <- allResources
+            , resource.kind == RepositorySync.Dashboard
+            , Just sha <- [find ((== resource.filePath) . (.path)) entries >>= (.sha)]
+            ]
         lift $ if null failures then void $ GitSync.recordImportSuccess sync.id revision else void $ GitSync.recordSyncError sync.id GitSync.ImportDashboards $ T.intercalate "\n" failures
         lift $ exportRepository sync{GitSync.lastRevision = Just revision} unreadable
       for_ (leftToMaybe result) $ void . GitSync.recordSyncError sync.id GitSync.ImportDashboards
