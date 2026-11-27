@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Types (reviewSeconds, fixSeconds, AgentAwaitingReview (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), FixContext (..), Evidence (..), EvidenceKind (..), Observation (..), QueryKind (..), QueryObservation (..), KnowledgeSnapshot (..), ThinkingLevel (..), ReviewMode (..), DraftSubmission (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionResult (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), FixReviewRequest (..), FixReviewDecision (..), FixReviewResult (..), Explanation (..), validExplanation, PricingStatus (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), ProofMedia (..), ProofProgress (..), ProofScript (..), ProofHooks (..), hoistHooks, WorkspaceFingerprint, mkWorkspaceFingerprint, Revision, mkRevision, revisionText, Candidate (..), Step (..), Failure (..)) where
+module Data.Effectful.CodeReview.Types (reviewSeconds, fixSeconds, AgentAwaitingReview (..), ReviewInput (..), ReviewMemory (..), ReviewContext (..), FixContext (..), Evidence (..), EvidenceKind (..), Observation (..), QueryKind (..), QueryObservation (..), KnowledgeSnapshot (..), ThinkingLevel (..), ReviewMode (..), DraftSubmission (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionResult (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), FixReviewRequest (..), FixReviewDecision (..), FixReviewResult (..), Explanation (..), validExplanation, PricingStatus (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), ProofMedia (..), SetupStage (..), SetupReach (..), ProofProgress (..), ProofScript (..), ProofHooks (..), hoistHooks, WorkspaceFingerprint, mkWorkspaceFingerprint, Revision, mkRevision, revisionText, Candidate (..), Step (..), Failure (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Char (isHexDigit)
@@ -132,7 +132,17 @@ fixSeconds = 60 * 60
 -- | One side of a recorded proof: the claim's command replayed under asciinema in a fresh VM,
 -- rendered on the host as an animated preview and a video. A UI proof's preview and video come from
 -- the browser recording it made, with its labelled screenshots and chapters.
-data ProofMedia = ProofMedia {side :: RevisionSide, revision :: Text, exitCode :: Maybe Int, cast :: ByteString, gif :: ByteString, mp4 :: ByteString, browser :: Bool, shots :: [(Text, ByteString)], chapters :: [(Double, Text)]}
+data ProofMedia = ProofMedia {side :: RevisionSide, revision :: Text, exitCode :: Maybe Int, cast :: ByteString, gif :: ByteString, mp4 :: ByteString, browser :: Bool, shots :: [(Text, ByteString)], chapters :: [(Double, Text)], setup :: Maybe SetupReach}
+
+
+-- | How far a proof's setup got, in order: a repository keeps the setup that got furthest.
+data SetupStage = SetupFailed | SetupRan | AppAnswers | SessionsReady
+  deriving stock (Bounded, Enum, Eq, Ord, Show)
+
+
+-- | A side's setup outcome: its stage, how long it took, the login roles it wrote, and the log tail when it failed.
+data SetupReach = SetupReach {stage :: SetupStage, seconds :: Int, roles :: [Text], failure :: Maybe Text}
+  deriving stock (Eq, Show)
 
 
 -- | A review's proofs as they happen, so its comment can show what is planned, running, recorded
@@ -147,11 +157,12 @@ data ProofScript = ProofScript {claim :: Text, command :: Text, setup :: Maybe T
 
 
 -- | How a review stores each recorded proof (returning its key) and reports progress.
-data ProofHooks m = ProofHooks {save :: ProofScript -> NonEmpty ProofMedia -> m (Either Text Text), progress :: ProofProgress -> m ()}
+-- | setupFailed: a proof's setup failed on the head before anything could be recorded (setup, its log tail).
+data ProofHooks m = ProofHooks {save :: ProofScript -> NonEmpty ProofMedia -> m (Either Text Text), progress :: ProofProgress -> m (), setupFailed :: Text -> Text -> m ()}
 
 
 hoistHooks :: (forall a. m a -> n a) -> ProofHooks m -> ProofHooks n
-hoistHooks to hooks = ProofHooks{save = \script -> to . hooks.save script, progress = to . hooks.progress}
+hoistHooks to hooks = ProofHooks{save = \script -> to . hooks.save script, progress = to . hooks.progress, setupFailed = \setup -> to . hooks.setupFailed setup}
 
 
 data CheckStatus = Passed | Failed | Blocked | Invalidated | TimedOut | OutputLimit | Cancelled | CleanupFailed

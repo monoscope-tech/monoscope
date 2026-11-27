@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Explanation (renderExplanation, readExplanationMedia, proofScript, proofCast, proofFailure, Window (..), clipCast, proofAdvice, contrastSides, contrastPair, renderProof, BrowserMedia (..), browserMedia, renderVideo) where
+module Data.Effectful.CodeReview.Explanation (renderExplanation, readExplanationMedia, proofScript, proofCast, proofFailure, Window (..), clipCast, proofAdvice, setupReach, contrastSides, contrastPair, renderProof, BrowserMedia (..), browserMedia, renderVideo) where
 
 import Codec.Picture (Image (..), PixelRGBA8 (..), convertRGBA8, decodePng, encodePng, generateImage, pixelAt)
 import Conduit (runConduit, (.|))
@@ -375,6 +375,27 @@ changedRegions a b = clusters $ S.fromList [(cx, cy) | cy <- [0 .. (h - 1) `div`
     box (sx, sy) cells =
       let (x0, y0, x1, y1) = foldl' (\(l, t, r, b') (x, y) -> (min l x, min t y, max r x, max b' y)) (sx, sy, sx, sy) cells
        in (24 * x0, 24 * y0, min (w - 1) (24 * x1 + 23), min (h - 1) (24 * y1 + 23))
+
+
+-- | The setup outcome proof.sh reports on its marker line; a failed setup's log tail is what came before it.
+--
+-- >>> setupReach "building\nmonoscope-setup-reached: 0 12\nmonoscope-proof-failed: setup exited nonzero\n"
+-- Just (SetupReach {stage = SetupFailed, seconds = 12, roles = [], failure = Just "building"})
+-- >>> setupReach "monoscope-setup-reached: 3 41 admin,member\n::monoscope-cast::\n"
+-- Just (SetupReach {stage = SessionsReady, seconds = 41, roles = ["admin","member"], failure = Nothing})
+-- >>> setupReach "monoscope-setup-reached: 9 1\n"
+-- Nothing
+setupReach :: Text -> Maybe SetupReach
+setupReach output = case T.breakOn marker output of
+  (_, "") -> Nothing
+  (before, rest) -> case words $ T.takeWhile (/= '\n') $ T.drop (T.length marker) rest of
+    level : took : more
+      | Just stage <- find ((== readMaybe (toString level)) . Just . fromEnum) [minBound .. maxBound]
+      , Just seconds <- readMaybe (toString took) ->
+          Just SetupReach{stage, seconds, roles = foldMap (filter (not . T.null) . T.splitOn ",") (listToMaybe more), failure = guard (stage == SetupFailed) $> T.strip (T.takeEnd 2000 before)}
+    _ -> Nothing
+  where
+    marker = "monoscope-setup-reached: "
 
 
 -- | Terminal text without its colour codes.

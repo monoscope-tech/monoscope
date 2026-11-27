@@ -13,11 +13,23 @@ if [ -n "${2:-}" ]; then
   printf %s "$2" | base64 -d > /tmp/monoscope-setup.sh
   source_state() { git -c safe.directory='*' rev-parse HEAD 2>&1; git -c safe.directory='*' status --porcelain --untracked-files=no 2>&1; }
   before=$(source_state)
+  SECONDS=0
   if ! bash /tmp/monoscope-setup.sh > /tmp/monoscope-setup.log 2>&1; then
     tail -c 4000 /tmp/monoscope-setup.log
+    echo "monoscope-setup-reached: 0 $SECONDS"
     echo "monoscope-proof-failed: setup exited nonzero"
     exit 1
   fi
+  # How far the setup got, for the host to keep the best one: 1 ran, 2 the app at /tmp/proof/app-url
+  # answers, 3 it answers and /tmp/proof/sessions holds a login per role (file name = role).
+  took=$SECONDS stage=1 roles=
+  url=$(head -n 1 /tmp/proof/app-url 2>/dev/null)
+  if [ -n "$url" ] && curl -s -o /dev/null --max-time 10 "$url"; then
+    stage=2
+    roles=$(find /tmp/proof/sessions -maxdepth 1 -type f -size +0 -printf '%f,' 2>/dev/null)
+    [ -n "$roles" ] && stage=3
+  fi
+  echo "monoscope-setup-reached: $stage $took ${roles%,}"
   if [ "$(source_state)" != "$before" ]; then
     echo "monoscope-proof-failed: setup changed the commit or tracked files; seed data and start services without editing source"
     exit 1
