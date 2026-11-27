@@ -119,10 +119,20 @@ data TestArtifact = TestArtifact {script :: Text, testPatch :: Text, failureMess
   deriving anyclass (AE.ToJSON)
 
 
+-- | The patch is kept without the @*** Begin Patch@ / @*** End Patch@ envelope agents' patch tools wrap
+-- around a diff: git rejects it as a corrupt patch, and a fix run spent every reproduction on that.
+--
+-- >>> (\(TestArtifact _ patch _) -> patch) <$> mkTestArtifact "cabal test" "diff --git a/x b/x\n+y\n*** End Patch\n" "boom"
+-- Right "diff --git a/x b/x\n+y\n"
+-- >>> mkTestArtifact "cabal test" "*** Begin Patch\n*** End Patch\n" "boom"
+-- Left "Invalid regression artifact"
 mkTestArtifact :: Text -> Text -> Text -> Either Text TestArtifact
-mkTestArtifact script patch failure
+mkTestArtifact script raw failure
   | validArtifact script (Just patch) failure = Right $ TestArtifact script patch failure
   | otherwise = Left "Invalid regression artifact"
+  where
+    envelope = (`elem` ["*** Begin Patch", "*** End Patch"])
+    patch = if any envelope (lines raw) then unlines $ filter (not . envelope) $ lines raw else raw
 
 
 instance AE.FromJSON TestArtifact where
@@ -462,7 +472,7 @@ data Command result where
   Close :: () -> Command ()
 
 
-data Execution = Execution {exitCode :: Int, stdout :: Text}
+data Execution = Execution {exitCode :: Int, stdout :: Text, stderr :: Maybe Text}
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
 
