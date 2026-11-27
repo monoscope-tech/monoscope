@@ -142,7 +142,7 @@ runGitPublicationReal store githubCli = interpret \env -> \case
       blocks <- forM ([("video", "explanation.mp4", receipt.assets.video), ("diagram", "cause.png", "![Reproduction, inferred cause, and verified fix](" <> receipt.assets.diagram <> ")")] :: [(Text, Text, Text)]) \(kind, file, line) -> do
         digest <- hoistEither $ maybeToRight InvalidReceipt $ Map.lookup file explanation.files
         pure $ "<!-- monoscope-fix-media:" <> kind <> ":" <> digest <> " -->\n" <> line
-      unless (T.strip (T.replace "\r\n" "\n" $ fromMaybe "" remote.body) == context.description <> "\n\n" <> T.intercalate "\n\n" blocks) $ hoistEither $ Left InvalidReceipt
+      unless (Native.ownsBody (context.description <> "\n\n" <> T.intercalate "\n\n" blocks) (fromMaybe "" remote.body)) $ hoistEither $ Left InvalidReceipt
 
 
 runGitPublicationTest :: (Request -> Either Failure Receipt) -> Eff (GitPublication ': es) a -> Eff es a

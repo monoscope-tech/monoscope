@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Data.Effectful.GitPublication.Native (publish, validToken) where
+module Data.Effectful.GitPublication.Native (publish, validToken, ownsBody) where
 
 import Conduit (runConduit, (.|))
 import Control.Monad (foldM)
@@ -199,7 +199,7 @@ publish store executable token linked artifacts explanation context authorize = 
                     else do
                       when (isJust linked) $ throwE PullRequestChanged
                       case progress of Finished _ -> throwE StateChanged; Uploading _ _ -> throwE UploadUncertain; (Prepared; Draft{}) -> pass
-                      ensure PullRequestChanged $ remote.state == Open && remote.draft && normalized (fromMaybe "" remote.body) == normalized (body urls Nothing)
+                      ensure PullRequestChanged $ remote.state == Open && remote.draft && ownsBody (body urls Nothing) (fromMaybe "" remote.body)
                       guardRemote $ if asset == Video then AttachVideo else AttachDiagram
                       save $ Uploading remote.number asset
                       liftIO $ writeFileBS (temporary </> "description.md") $ encodeUtf8 $ body urls (Just asset)
@@ -217,7 +217,7 @@ publish store executable token linked artifacts explanation context authorize = 
           ensure PullRequestChanged $ final.state == Open || final.merged
           video <- maybe (throwE UploadUncertain) pure $ Map.lookup Video urls
           diagram <- maybe (throwE UploadUncertain) pure $ Map.lookup Diagram urls
-          ensure InvalidReceipt $ normalized (fromMaybe "" final.body) == normalized (body urls Nothing) && video /= diagram
+          ensure InvalidReceipt $ ownsBody (body urls Nothing) (fromMaybe "" final.body) && video /= diagram
           save $ Finished final.number
           pure $ Receipt final.number final.htmlUrl result.head explanation.source context.mediaSha256 (MediaUrls video diagram) final.draft final.state
         hoistEither $ fromRight (Left SourceChanged) verified
@@ -257,6 +257,17 @@ decode failure = either (const $ throwE failure) pure . AE.eitherDecodeStrict
 
 sync :: FilePath -> IO ()
 sync path = bracket (Posix.openFd path Posix.ReadOnly Posix.defaultFileFlags{Posix.nofollow = True, Posix.cloexec = True}) Posix.closeFd fileSynchronise
+
+
+-- | A pull request body Monoscope wrote: its own text first, unchanged. Other tools on the repository
+-- (review bots, CI footers) append below it, which a whole-body comparison refused (talstack #740, 2026-11-27).
+--
+-- >>> map (ownsBody "fix\n\nmedia") ["fix\n\nmedia", "fix\r\n\r\nmedia\n\n<!-- bot footer -->", "fix\n\nmediaX", "fix\n\nedited", ""]
+-- [True,True,False,False,False]
+ownsBody :: Text -> Text -> Bool
+ownsBody expected actual = maybe False (\rest -> T.null rest || "\n" `T.isPrefixOf` rest) $ T.stripPrefix (clean expected) (clean actual)
+  where
+    clean = T.strip . T.replace "\r\n" "\n"
 
 
 -- | A GitHub token the CLI may be handed: a classic 40-hex token, or a prefixed one. GitHub's App
