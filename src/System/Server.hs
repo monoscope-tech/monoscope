@@ -65,7 +65,7 @@ import System.Posix.Process (exitImmediately)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT, sigTERM, sigUSR2)
 import System.TimeManager (TimeoutThread)
 import System.Timeout (timeout)
-import System.Tracing (NotInstrumented, withSpan_)
+import System.Tracing (NotInstrumented, inRootSpan, withSpan_)
 import System.Types (ATBackgroundCtx, effToServantHandler, runBackground)
 import Web.Auth qualified as Auth
 import Web.Routes qualified as Routes
@@ -412,7 +412,7 @@ runServer appLogger env tp = do
   -- Extraction worker shard fibers. Each shard runs `processEagerBatch` per
   -- batch inside its own `runBackground` effect stack. The error-decay fiber
   -- owns propagateMergedCounts/updateOccurrenceCounts on a 1-minute tick.
-  let runEager batch shard = void $ runBackground appLogger env tp $ BackgroundJobs.processEagerBatch batch shard
+  let runEager batch shard = void $ inRootSpan tp "eager-batch" $ runBackground appLogger env tp $ BackgroundJobs.processEagerBatch batch shard
   let shardsIndexed = zip [0 :: Int ..] (V.toList env.extractionWorker.shards)
   let fiber name = async . supervise logExc name
   -- Per-instance buffer drainers: the extraction / schema-learning pipeline

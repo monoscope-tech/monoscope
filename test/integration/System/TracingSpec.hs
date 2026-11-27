@@ -14,10 +14,12 @@ import Network.HTTP.Client (defaultManagerSettings)
 import Network.HTTP.Types (status200, status400)
 import Network.Wai (requestHeaders, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp
+import OpenTelemetry.Exporter.InMemory.Span (inMemoryListExporter)
 import OpenTelemetry.Propagator (setGlobalTextMapPropagator)
 import OpenTelemetry.Propagator.W3CTraceContext (w3cTraceContextPropagator)
-import OpenTelemetry.Trace (SpanKind (..), SpanStatus (..))
-import OpenTelemetry.Trace.Core (SpanHot (..))
+import OpenTelemetry.Trace (SpanKind (..), SpanStatus (..), createTracerProvider, emptyTracerProviderOptions)
+import OpenTelemetry.Trace qualified as Trace
+import OpenTelemetry.Trace.Core (ImmutableSpan (..), SpanContext (..), SpanHot (..))
 import Pkg.DeriveUtils (pgSpan)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.TestUtils
@@ -77,3 +79,22 @@ spec = around withTestResources do
     let names = map (hotName . snd) spans
     when (null names) $ pendingWith "library compiled without the AutoInstrument plugin (test-dev)"
     names `shouldMatchList` ["newCircuitBreaker", "recordCircuitFailure"]
+
+  -- 2026-11-28: every schema-flush pass ran under its fiber's never-ending span, so a day of
+  -- one-per-tick upserts shared a trace and read as a 165x N+1.
+  it "inRootSpan starts a new trace per tick and restores the fiber's context" \_ -> do
+    (processor, ended) <- inMemoryListExporter
+    tp <- createTracerProvider [processor] emptyTracerProviderOptions
+    let tracer = Tracing.monoscopeTracer tp
+        inner n = Trace.inSpan tracer n Trace.defaultSpanArguments pass
+    Trace.inSpan tracer "fiber" Trace.defaultSpanArguments do
+      replicateM_ 2 $ Tracing.inRootSpan tp "tick" (inner "work")
+      inner "after"
+    spans <- readIORef ended
+    named <- forM spans \imm -> (,(spanContext imm).traceId,isNothing (spanParent imm)) . hotName <$> readIORef (spanHot imm)
+    let traceOf n = [t | (n', t, _) <- named, n' == n]
+    [root | ("tick", _, root) <- named] `shouldBe` [True, True]
+    ordNub (traceOf "work") `shouldSatisfy` ((== 2) . length)
+    ordNub (traceOf "tick") `shouldBe` ordNub (traceOf "work")
+    traceOf "after" `shouldBe` traceOf "fiber"
+    traceOf "work" `shouldSatisfy` all (`notElem` traceOf "fiber")

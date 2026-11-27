@@ -13,6 +13,7 @@ module System.Tracing (
 
   -- * Cross-thread context propagation
   forkWithCtx,
+  inRootSpan,
   forkBackground,
   forkBackgroundFor,
 
@@ -120,6 +121,17 @@ forkWithCtx scope action = do
       (liftIO $ Context.attachContext ctx)
       (liftIO . Context.detachContext)
       (const action)
+
+
+-- | Run @act@ as the root span of a new trace. Long-lived fibers are themselves
+-- auto-instrumented spans that never end, so a tick run under one joins a single
+-- process-lifetime trace, and the performance detector reads its periodic queries
+-- as an N+1. The fiber's own context is restored afterwards.
+inRootSpan :: TracerProvider -> Text -> IO a -> NotInstrumented (IO a)
+inRootSpan tp name act =
+  bracket (Context.attachContext Context.empty) Context.detachContext
+    $ const
+    $ Trace.inSpan (monoscopeTracer tp) name defaultSpanArguments act
 
 
 -- | Fire-and-forget a task that must outlive the current request (e.g. Slack/Twilio

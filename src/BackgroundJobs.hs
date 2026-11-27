@@ -149,7 +149,7 @@ import System.Logging qualified as Log
 import System.Posix.Process (getProcessID)
 import System.Posix.Unistd (SystemID (nodeName), getSystemID)
 import System.Random (randomRIO)
-import System.Tracing (MessagingOp (Process), MessagingSystem (OddJobs), NotInstrumented, SpanKind (Consumer), SpanStatus (..), Tracing, addEvent, forkWithCtx, messagingAttrs, setStatus, withSpan, withSpanKind, withSpan_)
+import System.Tracing (MessagingOp (Process), MessagingSystem (OddJobs), NotInstrumented, SpanKind (Consumer), SpanStatus (..), Tracing, addEvent, forkWithCtx, inRootSpan, messagingAttrs, setStatus, withSpan, withSpanKind, withSpan_)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
@@ -630,10 +630,15 @@ runMonoscopeAdminDaily authCtx = do
   let projectMap = Map.fromList $ map (\(p :: Projects.Project) -> (p.id, p)) allProjects
       lookupTitle pid = maybe pid.toText (.title) $ Map.lookup pid projectMap
 
-  allRows <- forM allProjects \(project :: Projects.Project) -> do
-    events <- Telemetry.countRowsSince [HI.sql|otel_logs_and_spans|] authCtx.env.enableTimefusionReads project.id since
-    metrics <- Telemetry.countRowsSince [HI.sql|otel_metrics|] authCtx.env.enableTimefusionReads project.id since
-    pure (project, events, metrics, events + metrics)
+  -- The hourly ReportUsage windows already hold every active project's counts; recounting them
+  -- here was two TimeFusion scans per project, ~3,400 queries a run.
+  usage :: Map.Map Projects.ProjectId (Int64, Int64) <-
+    Map.fromList
+      . map (\(pid, e, m) -> (pid, (e, m)))
+      <$> Hasql.interp
+        [HI.sql|SELECT project_id, COALESCE(SUM(total_requests - total_metrics), 0)::bigint, COALESCE(SUM(total_metrics), 0)::bigint
+           FROM apis.daily_usage WHERE created_at >= #{since}::timestamptz GROUP BY project_id|]
+  let allRows = [(p, e, m, e + m) | p <- allProjects, let (e, m) = Map.findWithDefault (0, 0) p.id usage]
   let (activeRows, inactiveRows) = partition (\(_, _, _, t) -> t > 0) allRows
       sorted = sortOn (\(_, _, _, t) -> negate t) activeRows
 
@@ -784,38 +789,22 @@ runUsageAuditReport authCtx = do
   now <- Time.currentTime
   let since = addUTCTime (-86400) now
       send = sendMessageToDiscord authCtx
-  -- Paying projects only; cross-check reported (apis.daily_usage) vs ingested (otel + metrics) over last 24h.
-  rows :: [(Projects.ProjectId, Text, Text, Int64, Int64)] <-
+  -- Paying projects only; cross-check reported (apis.daily_usage) vs ingested over last 24h.
+  -- Ingested is read back from TimeFusion: Postgres's telemetry tables stopped receiving rows
+  -- when writes went TF-only, so counting there flagged every paid project as 100% drift.
+  paid :: [(Projects.ProjectId, Text, Text, Int64)] <-
     Hasql.interp
       [HI.sql|
-        WITH reported AS (
-          SELECT project_id::uuid AS pid, COALESCE(SUM(total_requests),0)::bigint AS r
-            FROM apis.daily_usage
-           WHERE created_at >= #{since}::timestamptz
-           GROUP BY project_id
-        ),
-        ingested_events AS (
-          SELECT project_id::uuid AS pid, COUNT(*)::bigint AS c
-            FROM public.otel_logs_and_spans
-           WHERE timestamp >= #{since}::timestamptz
-           GROUP BY project_id
-        ),
-        ingested_metrics AS (
-          SELECT project_id::uuid AS pid, COUNT(*)::bigint AS c
-            FROM otel_metrics
-           WHERE timestamp >= #{since}::timestamptz
-           GROUP BY project_id
-        )
         SELECT p.id::uuid, p.title, p.payment_plan,
-               COALESCE(r.r, 0)::bigint AS reported,
-               (COALESCE(ie.c, 0) + COALESCE(im.c, 0))::bigint AS ingested
+               COALESCE((SELECT SUM(du.total_requests) FROM apis.daily_usage du
+                          WHERE du.project_id = p.id AND du.created_at >= #{since}::timestamptz), 0)::bigint
           FROM projects.projects p
-          LEFT JOIN reported r ON r.pid = p.id
-          LEFT JOIN ingested_events ie ON ie.pid = p.id
-          LEFT JOIN ingested_metrics im ON im.pid = p.id
          WHERE p.payment_plan NOT IN ('Free','ONBOARDING','Bring nothing')
            AND p.deleted_at IS NULL
       |]
+  rows <- forM paid \(pid, title, plan, reported) -> do
+    ingested <- sum <$> traverse (\tbl -> Telemetry.countRowsSince tbl authCtx.env.enableTimefusionReads pid since) [[HI.sql|otel_logs_and_spans|], [HI.sql|otel_metrics|]]
+    pure (pid, title, plan, reported, fromIntegral ingested)
   let mismatches =
         [ (pid, title, plan, reported, ingested, reported - ingested, pct)
         | (pid, title, plan, reported, ingested) <- rows
@@ -2909,7 +2898,7 @@ runSchemaFlusherFiber logger ctx tp
             -- Catch *here* so we keep the logger / tracer context and can
             -- record the failure. Letting this propagate kills the fiber →
             -- shard dirty set never drains → heap OOM.
-            tryAny (runBackground logger ctx tp (SchemaCatalog.flushDirty ref)) >>= \case
+            inRootSpan tp "schema-flush" $ tryAny (runBackground logger ctx tp (SchemaCatalog.flushDirty ref)) >>= \case
               Left e -> do
                 runBackground logger ctx tp
                   $ LogLegacy.logAttention "schema-flusher batch failed" (show @Text e)
@@ -2933,7 +2922,7 @@ runSchemaFlusherFiber logger ctx tp
 
 runWorkspaceMaintenanceTimer :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 runWorkspaceMaintenanceTimer logger ctx tp = for_ ctx.config.impactReviewWorkspaceMaintenance \config -> forever do
-  runBackground logger ctx tp $ tryStep "workspace-maintenance" do
+  inRootSpan tp "workspace-maintenance" $ runBackground logger ctx tp $ tryStep "workspace-maintenance" do
     Workspace.maintainWorkspaces config >>= \case
       Left message -> Log.logAttention "Workspace maintenance failed" message
       Right report ->
@@ -2947,7 +2936,7 @@ runWorkspaceMaintenanceTimer logger ctx tp = for_ ctx.config.impactReviewWorkspa
 runReviewWorkerHeartbeat :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 runReviewWorkerHeartbeat logger ctx tp =
   Workspace.hostSlots >>= \slots -> when (slots.agents > 0) $ forever do
-    runBackground logger ctx tp $ tryStep "review-worker-heartbeat" $ Time.currentTime >>= (`ImpactReviews.announceReviewWorker` slots)
+    inRootSpan tp "review-worker-heartbeat" $ runBackground logger ctx tp $ tryStep "review-worker-heartbeat" $ Time.currentTime >>= (`ImpactReviews.announceReviewWorker` slots)
     threadDelay 60_000_000
 
 
@@ -2957,7 +2946,7 @@ runReviewWorkerHeartbeat logger ctx tp =
 runErrorDecayFiber :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 runErrorDecayFiber logger ctx tp = forever $ do
   threadDelay 60_000_000
-  runBackground logger ctx tp $ do
+  inRootSpan tp "error-decay" $ runBackground logger ctx tp $ do
     now <- Time.currentTime
     projects <- Projects.activeNonOnboardingProjectIds
     tryStep "propagateMergedCountsBatch" $ void $ ErrorPatterns.propagateMergedCountsBatch projects
@@ -2979,7 +2968,7 @@ runDrainFlusher
 runDrainFlusher logger ctx tp shard = forever $ do
   task <- atomically $ readTBQueue shard.drainFlushQ
   tryStepIO logger ctx "drain-flusher:rehydration" $ maybeSpawnRehydration logger ctx tp shard (task.projectId, task.serviceName)
-  tryStepIO logger ctx "drain-flusher:task" $ runBackground logger ctx tp $ flushDrainTask shard task
+  tryStepIO logger ctx "drain-flusher:task" $ inRootSpan tp "drain-flush" $ runBackground logger ctx tp $ flushDrainTask shard task
 
 
 -- | Spawn async rehydration for a (project, service) tree if stale and not
@@ -3004,7 +2993,7 @@ maybeSpawnRehydration logger ctx tp shard key = do
     pending <- readIORef shard.pendingRehydrations
     unless (HashSet.member key pending) $ do
       let job = do
-            tryStepIO logger ctx "drain-rehydrate failed" $ runBackground logger ctx tp $ rehydrateTree shard key now existing
+            tryStepIO logger ctx "drain-rehydrate failed" $ inRootSpan tp "drain-rehydrate" $ runBackground logger ctx tp $ rehydrateTree shard key now existing
             atomicModifyIORef'_ shard.pendingRehydrations (HashSet.delete key)
       atomicModifyIORef'_ shard.pendingRehydrations (HashSet.insert key)
       enqueued <- atomically $ isFullTBQueue shard.rehydrationQ >>= bool (writeTBQueue shard.rehydrationQ job $> True) (pure False)
@@ -3182,7 +3171,7 @@ runDrainAgeFlushTimer logger ctx = forever $ do
 runSessionBackfillTimer :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 runSessionBackfillTimer logger ctx tp = forever $ do
   threadDelay 90_000_000 -- 90 s
-  tryStepIO logger ctx "session-backfill" $ runBackground logger ctx tp go
+  tryStepIO logger ctx "session-backfill" $ inRootSpan tp "session-backfill" $ runBackground logger ctx tp go
   where
     go = do
       n <- backfillSessionAttributes ctx

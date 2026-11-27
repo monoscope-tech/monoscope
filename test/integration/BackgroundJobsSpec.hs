@@ -32,10 +32,12 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers qualified as Containers
 import Network.HTTP.Types.URI (parseQueryText, urlDecode)
 import OddJobs.Types (pgEventName)
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Projects qualified as ProjectPages
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (mkHasqlPool)
 import Pkg.EmailTemplates qualified as Email
 import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), defSqlQueryCfg, parseQueryToAST, parseQueryToComponents)
 import Pkg.TestUtils
@@ -43,6 +45,7 @@ import Servant qualified
 import System.Config qualified as Config
 import System.Timeout qualified as Timeout
 import UnliftIO.Async (concurrently)
+import UnliftIO.Exception (bracket)
 
 
 spec :: Spec
@@ -154,6 +157,21 @@ spec = around withTestResources do
     (posts, ()) <- runTestBgRecordingHTTP frozenTime tr $ BackgroundJobs.processBackgroundJob tr.trATCtx BackgroundJobs.MonoscopeAdminDaily
     let body = T.concat [decodeUtf8 b | (_, b) <- posts]
     map (`T.isInfixOf` body) ["**New Issues**", "**Active Users**"] `shouldBe` [True, True]
+
+  -- Telemetry went TF-only, leaving Postgres's copies empty: the audit counted ingested rows there
+  -- and flagged every paid project as 100% drift, every day.
+  it "usage audit counts ingested rows where telemetry is read, not in Postgres" \tr -> do
+    pid <- createTestProject tr "audit-tf-only"
+    dbExec tr [sql|UPDATE projects.projects SET payment_plan = 'Pro' WHERE id = ?|] (Only pid)
+    dbExec tr [sql|INSERT INTO apis.daily_usage (project_id, total_requests, created_at) VALUES (?, 1000, ?)|] (pid, frozenTime)
+    db <- dbOne @_ @Text tr [sql|CREATE SCHEMA audit_tf; CREATE TABLE audit_tf.otel_logs_and_spans (project_id text, timestamp timestamptz); CREATE TABLE audit_tf.otel_metrics (LIKE audit_tf.otel_logs_and_spans);
+                                 INSERT INTO audit_tf.otel_logs_and_spans SELECT ?, ? FROM generate_series(1, 1000); SELECT current_database()|] (pid.toText, addUTCTime (-3600) frozenTime)
+    host <- fromMaybe "localhost" <$> lookupEnv "DB_HOST"
+    bracket (mkHasqlPool 1 $ encodeUtf8 $ "host=" <> toText host <> " user=postgres password=postgres dbname=" <> db <> " options='-c search_path=audit_tf'") OHasql.release \tfPool -> do
+      let ctx = tr.trATCtx
+          tfOnly = tr{trATCtx = ctx{Config.hasqlTimefusionPool = tfPool, Config.env = ctx.env{Config.enableTimefusionReads = True}}}
+      (posts, ()) <- runTestBgRecordingHTTP frozenTime tfOnly $ BackgroundJobs.processBackgroundJob tfOnly.trATCtx BackgroundJobs.UsageAuditReport
+      T.concat [decodeUtf8 b | (_, b) <- posts] `shouldNotSatisfy` T.isInfixOf "audit-tf-only"
 
   -- Share links keep 30d + 48h grace; replay data (no BYO bucket) keeps 30d. Both cut on the test clock.
   it "retention expires share events after 32 days and replay data after 30" \tr -> do
