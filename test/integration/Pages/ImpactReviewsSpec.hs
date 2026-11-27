@@ -2721,7 +2721,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     stages <- newIORef []
     accepted <- newIORef []
     httpRequests <- newIORef []
-    remoteBodyEdit <- newIORef id
+    remoteBodyEdit <- newIORef Test.id
     let github = directory </> "gh"
         stateFile = directory </> "github.json"
         branch = "monoscope/fix/" <> testPid.toText <> "/" <> result.runId.toText <> "/" <> result.candidateId.toText
@@ -2767,7 +2767,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- A repository bot's footer after the explanation leaves the receipt valid.
     writeIORef remoteBodyEdit (<> "\n\n<!-- codesmith:footer -->\nOpen in codesmith")
     fmap Publication.publicationReceipt <$> runPublisher authorize validate `shouldReturn` fmap Publication.publicationReceipt published
-    writeIORef remoteBodyEdit id
+    writeIORef remoteBodyEdit Test.id
     for_ ([("visibility", Publication.VisibilityChanged), ("denied", Publication.AccessRevoked), ("fork", Publication.PullRequestChanged)] :: [(Text, Publication.Failure)]) \(mode, expected) -> do
       setMode mode
       failure validate `shouldReturn` Just expected
