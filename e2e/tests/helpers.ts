@@ -29,6 +29,12 @@ export function sql(query: string) {
   { env: { ...process.env, PGPASSWORD: process.env.E2E_PGPASSWORD ?? 'postgres' }, stdio: 'pipe' });
 }
 
+/** SQL against the TimeFusion the server reads telemetry from; a no-op when there is none. */
+export function tfSql(query: string) {
+  const url = process.env.TIMEFUSION_PG_TEST_URL;
+  if (url) execFileSync('psql', [url, '-At', '-v', 'ON_ERROR_STOP=1', '-c', query], { stdio: 'pipe' });
+}
+
 /**
  * Signs the page in as a fresh admin of the demo project. The anonymous demo guest edits the
  * demo but may not manage teams, members or notification targets.
