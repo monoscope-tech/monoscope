@@ -4182,7 +4182,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
     stillBroken <- accept rechecked 22 $ Fixes.Observe headCheck{Agent.status = Agent.Failed, Agent.exitCode = Just 1}
     Fixes.phase stillBroken.progress `shouldBe` Fixes.Fixing
     verifyingAgain <- accept stillBroken 23 $ Fixes.ProposeCandidate candidate
-    recheckedAgain <- accept verifyingAgain 24 $ Fixes.Observe baseCheck{Agent.id = uid 40, Agent.checkId = uid 41}
+    -- 2026-11-27: run 9a493e89's verification base timed out, and its paired head check then failed the whole fix job.
+    timedOut <- accept verifyingAgain 70 $ Fixes.Observe baseCheck{Agent.id = uid 72, Agent.checkId = uid 73, Agent.status = Agent.TimedOut}
+    headAfterTimeout <- accept timedOut 71 $ Fixes.Observe headCheck{Agent.id = uid 74, Agent.checkId = uid 73}
+    Fixes.phase headAfterTimeout.progress `shouldBe` Fixes.Verifying
+    recheckedAgain <- accept headAfterTimeout 24 $ Fixes.Observe baseCheck{Agent.id = uid 40, Agent.checkId = uid 41}
     reject recheckedAgain 25 (Fixes.Observe headCheck{Agent.id = uid 42, Agent.checkId = uid 41, Agent.regression = check.regression}) Fixes.TestArtifactRequired
     verified <- accept recheckedAgain 25 $ Fixes.Observe headCheck{Agent.id = uid 42, Agent.checkId = uid 41}
     Fixes.phase verified.progress `shouldBe` Fixes.Verified

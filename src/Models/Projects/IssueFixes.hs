@@ -62,7 +62,7 @@ newtype Reproduction = Reproduction Agent.CheckReceipt
   deriving stock (Show)
 
 
-data Verification = AwaitingBase | AwaitingCandidate Reproduction
+data Verification = AwaitingBase | RerunBase | AwaitingCandidate Reproduction
   deriving stock (Show)
 
 
@@ -134,11 +134,13 @@ advance setup progress (Observe check) = do
           pure case check.status of
             Agent.Failed -> Checking repro candidate $ AwaitingCandidate $ Reproduction check
             Agent.Passed -> Collecting
-            (Agent.Blocked; Agent.Invalidated; Agent.TimedOut; Agent.OutputLimit; Agent.Cancelled; Agent.CleanupFailed) -> Checking repro candidate AwaitingBase
+            (Agent.Blocked; Agent.Invalidated; Agent.TimedOut; Agent.OutputLimit; Agent.Cancelled; Agent.CleanupFailed) -> Checking repro candidate RerunBase
         Agent.Head -> do
           expect Agent.Head candidate.revision
           case verification of
             AwaitingBase -> Left UnexpectedCheck
+            -- The verifier pairs base and head; a head check after an unusable base changes nothing.
+            RerunBase -> pure $ Checking repro candidate RerunBase
             AwaitingCandidate baseline@(Reproduction baseCheck) -> do
               unless (check.checkId == baseCheck.checkId && check.attemptId == baseCheck.attemptId) $ Left WrongComparison
               when (check.status == Agent.Passed) $ case check.regression of
