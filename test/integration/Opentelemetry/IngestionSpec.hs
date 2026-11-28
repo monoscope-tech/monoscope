@@ -22,7 +22,6 @@ import Data.Map qualified as Map
 import Data.Pool (withResource)
 import Data.ProtoLens (defMessage, encodeMessage)
 import Data.Text qualified as T
-import Data.These.Combinators (isThat)
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -365,13 +364,10 @@ spec = do
       processMetrics [("overflow-ack", encodeMessage overflow)] metricsCeType >>= \case
         Right (acks, poison) -> (acks, map (\(ack, _, reason) -> (ack, reason)) poison) `shouldBe` ([], [("overflow-ack", "OTLP metric count exceeds BIGINT maximum")])
         Left failure -> expectationFailure $ "expected poison, got write failure: " <> toString (Telemetry.writeFailureSummary failure)
-      -- Each write target persists the point exactly once and a replay is idempotent. Counted
-      -- in whichever store the target chose (max of PG and TF): with a real TimeFusion the
-      -- single-leg markers land in one store; a shared-DB harness collapses both legs onto one.
-      for_ ([("wt.pg.only", Just "pg-failed"), ("wt.tf.only", Just "tf-failed"), ("wt.both", Nothing)] :: [(Text, Maybe Text)]) \(name, failedLeg) -> do
-        let send = processMetrics [("wt-ack", encodeMessage (createGaugeMetricAtTime key [] [] name 7 frozenTime))] (maybe id (HM.insert "monoscope-write-failure") failedLeg metricsCeType)
-            stored = max <$> dbOne tr [sql| SELECT count(*)::int FROM otel_metrics WHERE project_id = ? AND metric_name = ? |] (mpid, name) <*> (V.head <$> countOf name)
-        replicateM_ 2 (send >> (stored `shouldReturn` 1))
+      -- A write persists the point exactly once, and a replay of it is idempotent.
+      for_ ([("wt.live", Nothing), ("wt.replay", Just "tf-failed")] :: [(Text, Maybe Text)]) \(name, failure) -> do
+        let send = processMetrics [("wt-ack", encodeMessage (createGaugeMetricAtTime key [] [] name 7 frozenTime))] (maybe id (HM.insert "monoscope-write-failure") failure metricsCeType)
+        replicateM_ 2 $ send >> ((V.head <$> countOf name) `shouldReturn` 1)
 
     it "sessions: aggregated by session and user identity with a reconciled summary, sorted, filtered, expanded, replay-flagged, isolated per project" \tr -> do
       -- Sessions derive from user identity, so project-wide totals are only meaningful over a
@@ -656,72 +652,33 @@ spec = do
       endpoints <- fmap fst $ runTestBg frozenTime tr $ Endpoints.endpointRequestStatsPageByProject Endpoints.WithStats tr.trATCtx.env.enableTimefusionReads testPid Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Nothing, search = Nothing, sort = Endpoints.SortEvents, page = 0, perPage = 200, period = Endpoints.Window24h, service = Nothing}
       sort (V.toList $ (.urlPath) <$> endpoints) `shouldBe` ["/", "/api/v1/user/login"]
 
-    -- `processed_at` and the safety net are Postgres bookkeeping.
-    it "extraction worker: flushed patterns tag every event, eager batches derive endpoints and hashes, the safety net re-drives unprocessed rows exactly once" \(withPgTelemetryWrites -> tr) -> do
+    it "extraction worker: flushed patterns tag every event, eager batches derive endpoints and hashes" \tr -> do
       -- Its own project: TimeFusion is shared, so a testPid read could see an earlier run's rows.
       pid <- createTestProject tr "extraction-worker"
       worker <- ExtractionWorker.initWorkerState 1 100
-      let ctx = tr.trATCtx
-          withConfig f = tr{trATCtx = ctx{config = f ctx.config}}
-          service = "pattern-membership-regression"
+      let service = "pattern-membership-regression"
           spans =
             [ ExtractionWorker.BufferedSpan "10000000-0000-4000-8000-000000000001" "pattern-first" "pattern-trace" frozenTime "Connected to database primary" True
             , ExtractionWorker.BufferedSpan "10000000-0000-4000-8000-000000000002" "pattern-second" "pattern-trace" frozenTime "Connected to database replica" False
             , ExtractionWorker.BufferedSpan "10000000-0000-4000-8000-000000000003" "" "" frozenTime "Connected to database <*> <*>" False
             ]
       for_ spans \s ->
-        dbExec
+        telemetryDbExec
           tr
-          [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, context___span_id, context___trace_id, summary)
-                        VALUES (?::uuid, ?, ?, ?, 'SERVER', NULLIF(?::text, ''), NULLIF(?::text, ''), ARRAY[?]::text[]) |]
-          (s.eventId, pid.toText, frozenTime, frozenTime, s.spanCtxId, s.traceId, s.summary)
-      for_ worker.shards \shard -> runTestBg frozenTime (withConfig \c -> c{enableTimefusionWrites = False, enableHashUpdates = True}) $ BackgroundJobs.flushDrainTask shard ExtractionWorker.DrainFlushTask{projectId = pid, serviceName = service, spans, flushedAt = frozenTime}
-      dbQuery
-        tr
-        [sql| SELECT lp.occurrence_count::int, lp.is_error, count(*)::int FROM apis.log_patterns lp JOIN otel_logs_and_spans o ON o.project_id = lp.project_id::text AND o.hashes @> ARRAY['pat:' || lp.pattern_hash]
-                       WHERE lp.project_id = ? AND lp.service_name = ? GROUP BY lp.pattern_hash, lp.occurrence_count, lp.is_error |]
-        (pid, service)
-        `shouldReturn` [(3 :: Int, True, 3 :: Int)]
+          [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, date, kind, context___span_id, context___trace_id, summary)
+                        VALUES (?, ?, ?, ?, ?, 'SERVER', NULLIF(?, ''), NULLIF(?, ''), ARRAY[?]) |]
+          (s.eventId, pid.toText, frozenTime, frozenTime, frozenTime, s.spanCtxId, s.traceId, s.summary)
+      for_ worker.shards \shard -> runTestBg frozenTime tr $ BackgroundJobs.flushDrainTask shard ExtractionWorker.DrainFlushTask{projectId = pid, serviceName = service, spans, flushedAt = frozenTime}
+      [(patHash, occurrences, isError)] <- dbQuery tr [sql| SELECT pattern_hash, occurrence_count::int, is_error FROM apis.log_patterns WHERE project_id = ? AND service_name = ? |] (pid, service)
+      (occurrences, isError) `shouldBe` (3 :: Int, True)
+      telemetryDbOne tr [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND array_to_string(hashes, ',') LIKE ? |] (pid.toText, "%pat:" <> (patHash :: Text) <> "%") `shouldReturn` (3 :: Int)
       apiKey <- createTestAPIKey tr pid "extraction-worker"
       replicateM_ 3 $ ingestTrace tr apiKey "GET /api/parity/check" frozenTime
       replicateM_ 3 $ ingestTrace tr apiKey "POST /api/parity/submit" frozenTime
-      let trTf = tr{trATCtx = ctx{env = ctx.env{enableTimefusionReads = True}, config = ctx.config{enableTimefusionWrites = True}}}
-          countWhere q = dbOne tr q (Only pid) :: IO Int
-      drainExtractionWorker trTf
-      countWhere [sql| SELECT count(*)::int FROM apis.endpoints WHERE project_id = ? AND url_path LIKE '/api/parity/%' |] `shouldReturn` 2
-      countWhere [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND processed_at IS NOT NULL AND name LIKE '% /api/parity/%' |] `shouldReturn` 6
-      tfHashes <- tf trTf [HI.sql| SELECT array_to_string(hashes, chr(31)) FROM otel_logs_and_spans WHERE project_id = #{pid.toText} AND name = 'GET /api/parity/check' |]
+      drainExtractionWorker tr
+      dbOne tr [sql| SELECT count(*)::int FROM apis.endpoints WHERE project_id = ? AND url_path LIKE '/api/parity/%' |] (Only pid) `shouldReturn` (2 :: Int)
+      tfHashes <- tf tr [HI.sql| SELECT array_to_string(hashes, chr(31)) FROM otel_logs_and_spans WHERE project_id = #{pid.toText} AND name = 'GET /api/parity/check' |]
       V.toList (tfHashes :: V.Vector Text) `shouldSatisfy` \hs -> not (null hs) && all (T.isInfixOf "pat:") hs
-      -- Rows the worker dropped (not accepting) stay processed_at IS NULL until the safety net
-      -- re-drives them; it selects rows between 10m and 24h old on the DB clock.
-      dbNow <- dbOne tr [sql| SELECT now() |] ()
-      let shards = V.toList ctx.extractionWorker.shards
-          unprocessed name = dbOne tr [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND processed_at IS NULL AND name = ? |] (pid, name :: Text) :: IO Int
-          dropped act = atomically (writeTVar ctx.extractionWorker.acceptingBatches False) >> act >> atomically (writeTVar ctx.extractionWorker.acceptingBatches True)
-          safetyNet res = runTestBg dbNow res $ BackgroundJobs.processBackgroundJob res.trATCtx (BackgroundJobs.SafetyNetReprocess pid)
-      dropped $ ingestTrace tr apiKey "GET /api/safetynet/test" (addUTCTime (-3600) dbNow)
-      unprocessed "GET /api/safetynet/test" `shouldReturn` 1
-      safetyNet tr >> drainExtractionWorker tr
-      unprocessed "GET /api/safetynet/test" `shouldReturn` 0
-      -- processed_at was stamped only by the hash UPDATE, gated by enableHashUpdates and
-      -- hashUpdateMaxAgeSecs; with that gate closed the safety net re-drove the same rows every
-      -- tick forever (2026-07-29/30). The 3h row is past the 2h age cutoff: never re-driven.
-      let trNoHash = withConfig \c -> c{enableHashUpdates = False}
-          -- Driven at dbNow, not frozenTime, so the age cutoff sees the rows' real age.
-          drainAt = do
-            for_ shards \shard -> do
-              batches <- atomically $ flushTBQueue shard.ingressQ >>= \bs -> modifyTVar' shard.queueDepth (subtract (length bs)) $> bs
-              for_ batches \b -> runTestBg dbNow trNoHash $ BackgroundJobs.processEagerBatch b shard
-            ExtractionWorker.forceFlushAllBuffers ctx.extractionWorker dbNow
-            for_ shards \shard -> atomically (flushTBQueue shard.drainFlushQ) >>= traverse_ (runTestBg dbNow trNoHash . BackgroundJobs.flushDrainTask shard)
-      dropped do
-        ingestTrace tr apiKey "GET /api/loop/test" (addUTCTime (-3600) dbNow)
-        ingestTrace tr apiKey "GET /api/loop/stale" (addUTCTime (-(3 * 3600)) dbNow)
-      safetyNet trNoHash >> drainAt
-      dbQuery tr [sql| SELECT url_path FROM apis.endpoints WHERE project_id = ? AND url_path LIKE '/api/loop/%' ORDER BY url_path |] (Only pid) `shouldReturn` [Only ("/api/loop/test" :: Text)]
-      (,) <$> unprocessed "GET /api/loop/test" <*> unprocessed "GET /api/loop/stale" `shouldReturn` (0, 1)
-      safetyNet trNoHash
-      atomically (sum <$> mapM (fmap length . flushTBQueue . (.ingressQ)) shards) `shouldReturn` 0
 
     -- processList surfaces dual-write outcomes as 'Either WriteFailure', never a swallowed
     -- exception or a silent ack: Pkg.Queue routes Left to the DLQ with side-tracking headers so
@@ -746,7 +703,7 @@ spec = do
         >>= either (\e -> expectationFailure $ "expected the TuplesOk swallow; got Left " <> show (e :: SomeException)) (\(bir :: Telemetry.BulkInsertResult) -> bir.rowsInserted `shouldBe` 0)
       -- An attempt count only bounds the sleeps: with 30s acquisition timeouts TF's 42 attempts
       -- held one batch ~23 minutes past the 300s stall alarm.
-      for_ ([(Telemetry.tfWriteBudgetMicros, 6), (Telemetry.pgWriteBudgetMicros, 1)] :: [(Int, Int)]) \(budget, attempts) -> do
+      for_ ([(Telemetry.tfWriteBudgetMicros, 6)] :: [(Int, Int)]) \(budget, attempts) -> do
         counter <- newIORef (0 :: Int)
         res <- runTestBg frozenTime tr $ Telemetry.retryHasqlWrite budget "tf" do
           atomicModifyIORef' counter \c -> (c + 1, ())
@@ -755,13 +712,12 @@ spec = do
         isLeft (res :: Either SomeException Telemetry.BulkInsertResult) `shouldBe` True
         readIORef counter `shouldReturn` attempts
 
-    it "processList outcomes: acks with one batch identity, TF down or silent → Left That, PG down throws, poison isolated, unresolvable keys never silently acked, replays rewrite one leg" \tr -> do
+    it "processList outcomes: acks with one batch identity, TF down or silent → Left, PG down throws, poison isolated, unresolvable keys never silently acked, replays rewrite the batch" \tr -> do
       key <- createTestAPIKey tr testPid "tf-write-failure-spec"
       let send res msgs attrs = runTestBg frozenTime res $ OtlpServer.processList msgs attrs
-          right = either (\wf -> expectationFailure ("expected Right; got Left " <> toString (Telemetry.writeFailureSummary wf)) >> pure ([], [])) (pure . second (map (\(a, _, r) -> (a, r))))
+          right = either (\wf -> expectationFailure ("expected Right; got Left " <> toString (Telemetry.writeFailureSummary wf)) $> ([], [])) (pure . second (map (\(a, _, r) -> (a, r))))
           expectThat what = \case
-            Left wf | isThat wf -> pass
-            Left wf -> expectationFailure $ "expected " <> what <> "; got " <> toString (Telemetry.writeFailureSummary wf)
+            Left _ -> pass
             Right (acks, poison) -> expectationFailure $ "expected " <> what <> "; got Right acks=" <> show acks <> " poison=" <> show (map (\(a, _, _) -> a) poison)
           retried = logsNamed "retryHasqlWrite: transient error, retrying"
       -- kafkaAtProjectId_withoutKey_refused: the collector feeding Kafka is the public, unauthenticated
@@ -818,7 +774,7 @@ spec = do
       [metricAck] <- pure $ logsNamed "telemetry.write_acknowledged" metricEntries
       batchIdOf metricAck `shouldSatisfy` isJust
       (case metricAck.lmData of AE.Object o -> L.sort (KM.keys $ KM.delete "span_id" $ KM.delete "trace_id" o); _ -> [])
-        `shouldBe` ["elapsed_us", "record_count", "write.batch_id", "write.table", "write_target"]
+        `shouldBe` ["elapsed_us", "record_count", "write.batch_id", "write.table"]
       (logField "write.table" metricAck, logField "record_count" metricAck) `shouldBe` (Just "otel_metrics", Just (AE.Number 1))
       -- TF down → Left That, with one batch identity across retries and the terminal failure.
       (_, downEntries) <- withCapturedLogs tr \logged -> breakPools False True logged >>= \down -> send down [validLogMsg key "ack-1"] logsAttrs >>= expectThat "TF-only failure"
@@ -872,15 +828,10 @@ spec = do
                 )
             )
       traverse (countDemoSpans tr . fst) unresolvable `shouldReturn` unresolvedBefore
-      -- DLQ replay rewrites ONLY the failed leg: the durable leg already holds the row and PG
-      -- inserts aren't idempotent. Both pools hit the shared test DB, so a dual-write replay
-      -- would add the row twice.
-      tfOn <- breakPools False False tr
-      tfReplayBefore <- countDemoSpans tfOn "ack-tf-replay"
-      send tfOn [validLogMsg key "ack-tf-replay"] (HM.insert "monoscope-write-failure" "tf-failed" logsAttrs) >>= right >>= (`shouldBe` (["ack-tf-replay"], []))
-      countDemoSpans tfOn "ack-tf-replay" `shouldReturn` (tfReplayBefore + 1)
-      -- A pg-failed replay skips even a DOWN TimeFusion leg, where a normal message DLQs.
-      breakPools False True tr >>= \down -> send down [validLogMsg key "ack-pg-replay"] (HM.insert "monoscope-write-failure" "pg-failed" logsAttrs) >>= right <&> fst >>= (`shouldBe` ["ack-pg-replay"])
+      -- A DLQ replay rewrites the batch to TimeFusion.
+      tfReplayBefore <- countDemoSpans tr "ack-tf-replay"
+      send tr [validLogMsg key "ack-tf-replay"] (HM.insert "monoscope-write-failure" "tf-failed" logsAttrs) >>= right >>= (`shouldBe` (["ack-tf-replay"], []))
+      countDemoSpans tr "ack-tf-replay" `shouldReturn` (tfReplayBefore + 1)
 
     it "kafka polling: a count-based poll is bounded by bytes, an oversized record is admitted alone, the count limit holds, nothing is committed" \tr -> do
       let poll bVar n = runBackground tr.trLogger tr.trATCtx tr.trTracerProvider $ runErrorNoCallStack @K.KafkaError $ runMockProducer bVar $ runMockConsumer ["otlp_logs"] bVar $ Queue.pollKafkaBatch n

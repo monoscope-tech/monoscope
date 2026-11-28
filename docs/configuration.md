@@ -31,7 +31,6 @@ Monoscope can be configured through:
 | `MIGRATIONS_DIR` | Path to migration files | /app/static/migrations/ | No |
 | `TIMEFUSION_PG_URL` | [TimeFusion](https://github.com/monoscope-tech/timefusion) connection string; telemetry (logs, traces, metrics) is written to and read from it | - | Yes |
 | `ENABLE_TIMEFUSION_READS` / `ENABLE_TIMEFUSION_WRITES` | Read and write telemetry through TimeFusion | True | No |
-| `ENABLE_POSTGRES_TELEMETRY_WRITES` | Also write telemetry to Postgres. `True` with both TimeFusion flags `False` keeps telemetry in Postgres only (legacy) | False | No |
 
 Example DATABASE_URL:
 ```

@@ -46,7 +46,6 @@ import Data.Vector qualified as V
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Concurrent (Concurrent)
 import Effectful.Exception (throwIO)
-import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified as Eff
@@ -60,12 +59,11 @@ import Network.Wreq qualified as Wreq
 import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..), liveProjectSql, unUUIDId)
 import Pkg.Prometheus qualified as Prom
 import Relude
-import System.Config (AuthContext (..), EnvConfig (..))
+import System.Config (AuthContext (..))
 import System.Logging qualified as Log
 import System.Types (DB)
 import Utils (safeScrapeUrl)
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData, toUrlPiece)
-import "these" Data.These qualified as These
 
 
 type PrometheusScrapeConfigId = UUIDId "prometheus_scrape_config"
@@ -312,15 +310,14 @@ markScraped cid status =
 -- | Parse an exposition-format body and ingest its (finite) samples as metrics.
 -- Non-finite values (NaN/±Inf) are dropped — Aeson can't encode them — but never
 -- silently: the dropped count is logged. Returns the number of samples ingested.
-ingestScrapedBody :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es) => PrometheusScrapeConfig -> UTCTime -> LByteString -> Eff es Int
+ingestScrapedBody :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es) => PrometheusScrapeConfig -> UTCTime -> LByteString -> Eff es Int
 ingestScrapedBody cfg now body = do
   appCtx :: AuthContext <- Eff.ask
   let (finite, nonFinite) = partition Prom.isFiniteSample (Prom.parsePrometheus (decodeUtf8 body))
       records = V.fromList (sampleToMetricRecord cfg now <$> finite)
-      target = Telemetry.writeTargetFor appCtx.env Nothing
   unless (null nonFinite) $ Log.logInfo "Prometheus scrape dropped non-finite samples" (AE.object ["config_id" AE..= cfg.id.toText, "dropped" AE..= length nonFinite])
-  Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes target records >>= \case
-    Left failure -> throwIO $ These.mergeThese const failure
+  Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes records >>= \case
+    Left failure -> throwIO failure
     Right () -> pure (V.length records)
 
 

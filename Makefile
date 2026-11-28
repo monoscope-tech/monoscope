@@ -146,15 +146,14 @@ IMPACT_WORKER_DEPS := impact-review-worker/node_modules/.package-lock.json
 $(IMPACT_WORKER_DEPS): impact-review-worker/package-lock.json
 	cd impact-review-worker && npm ci --ignore-scripts --no-audit
 
-# Reads and writes go through a real TimeFusion, as in CI; PG_ONLY=1 runs the Postgres leg alone,
-# where TF-dependent specs fail rather than skip.
-live-test-dev: build-chart-cli $(IMPACT_WORKER_DEPS) $(if $(PG_ONLY),,timefusion-start)
+# Reads and writes go through a real TimeFusion, as in CI.
+live-test-dev: build-chart-cli $(IMPACT_WORKER_DEPS) timefusion-start
 	@GHCI_MAX=$${GHCI_MAX:-6} $(REAP_GHCI)
 	@$(if $(TEST_MATCH),echo '--match "$(TEST_MATCH)"' > .test-args,touch .test-args)
 	@echo "live-test-dev: hspec args from .test-args: [$$(cat .test-args)] (empty = whole suite)" | tee build-test-dev.log
 	@trap 'exit 130' INT TERM; while :; do \
 	  $(REAP_GHCI); \
-	  USE_EXTERNAL_DB=true LOG_LEVEL=attention $(if $(PG_ONLY),,TIMEFUSION_PG_TEST_URL=$(TIMEFUSION_PG_TEST_URL)) \
+	  USE_EXTERNAL_DB=true LOG_LEVEL=attention TIMEFUSION_PG_TEST_URL=$(TIMEFUSION_PG_TEST_URL) \
 	  ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -O0" --repl-options="-fobject-code -osuf dyn_o -hisuf dyn_hi +RTS -T $(GHCI_RTS) -RTS" --with-compiler=$(GHC)' \
 		--test ':! $(REAP_GHCI)' --test ':cmd Prelude.fmap (":main " Prelude.++) (Prelude.readFile ".test-args")' --reload=.test-args $(RELOAD_ENV) --warnings 2>&1; \
 	  $(GHCID_RESTART); \

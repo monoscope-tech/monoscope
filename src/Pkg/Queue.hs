@@ -760,9 +760,8 @@ decoupledLoop appCtx role batchSize clientId dlqBase fn = do
         unless (null pollErrs) $ LogBase.logAttention "Kafka poll returned errors" (AE.object ["error_count" AE..= length pollErrs, "errors" AE..= map show pollErrs])
         nowEpoch <- floor . utcTimeToPOSIXSeconds <$> Time.currentTime
         let byTP = Map.fromListWith (<>) [((r.crTopic.unTopicName, r.crPartition), r :| []) | r <- rs]
-            -- A chunk decodes under one ce-type and rewrites one store-set; sharing
-            -- 'writeTargetFor' with the writer keeps the leg semantics in one place.
-            dlqGroupKey r = let h = consumerRecordHeadersToHashMap r in (ceTypeFor dlqBase r.crTopic.unTopicName h, Telemetry.writeTargetFor appCtx.env (HM.lookup "monoscope-write-failure" h >>= Telemetry.parseWriteFailureKind))
+            -- A chunk decodes under one ce-type.
+            dlqGroupKey r = ceTypeFor dlqBase r.crTopic.unTopicName (consumerRecordHeadersToHashMap r)
             subChunks = subChunksFor (kafkaChunkTargetBytes appCtx.config.kafkaGroupConcurrency) role dlqGroupKey nowEpoch byTP
         for_ subChunks \work ->
           atomically do

@@ -169,8 +169,12 @@ spec = around withTestResources do
     pid <- createTestProject tr "audit-tf-only"
     dbExec tr [sql|UPDATE projects.projects SET payment_plan = 'Pro' WHERE id = ?|] (Only pid)
     dbExec tr [sql|INSERT INTO apis.daily_usage (project_id, total_requests, created_at) VALUES (?, 1000, ?)|] (pid, frozenTime)
-    db <- dbOne @_ @Text tr [sql|CREATE SCHEMA audit_tf; CREATE TABLE audit_tf.otel_logs_and_spans (project_id text, timestamp timestamptz); CREATE TABLE audit_tf.otel_metrics (LIKE audit_tf.otel_logs_and_spans);
-                                 INSERT INTO audit_tf.otel_logs_and_spans SELECT ?, ? FROM generate_series(1, 1000); SELECT current_database()|] (pid.toText, addUTCTime (-3600) frozenTime)
+    db <-
+      dbOne @_ @Text
+        tr
+        [sql|CREATE SCHEMA audit_tf; CREATE TABLE audit_tf.otel_logs_and_spans (project_id text, timestamp timestamptz); CREATE TABLE audit_tf.otel_metrics (LIKE audit_tf.otel_logs_and_spans);
+                                 INSERT INTO audit_tf.otel_logs_and_spans SELECT ?, ? FROM generate_series(1, 1000); SELECT current_database()|]
+        (pid.toText, addUTCTime (-3600) frozenTime)
     host <- fromMaybe "localhost" <$> lookupEnv "DB_HOST"
     bracket (mkHasqlPool 1 $ encodeUtf8 $ "host=" <> toText host <> " user=postgres password=postgres dbname=" <> db <> " options='-c search_path=audit_tf'") OHasql.release \tfPool -> do
       let ctx = tr.trATCtx
@@ -253,7 +257,7 @@ spec = around withTestResources do
     runDaily
     dailyJobs `shouldReturn` 1
 
-  it "dual-exec: the TimeFusion arm outwaits a deploy drain instead of dropping the UPDATE" \tr -> do
+  it "tfExec: a TimeFusion UPDATE outwaits a deploy drain instead of dropping the UPDATE" \tr -> do
     -- Two drain refusals, then the write lands: what TimeFusion returns across a handoff.
     dbExec
       tr
@@ -265,10 +269,10 @@ spec = around withTestResources do
              RETURN 1;
            END $$|]
       ()
-    -- The drain is simulated in Postgres, so its TimeFusion arm is the Postgres pool.
+    -- The drain is simulated in Postgres, so the TimeFusion pool is the Postgres pool.
     let pgAsTf = tr.trATCtx{Config.hasqlTimefusionPool = tr.trATCtx.hasqlPool, Config.hasqlTimefusionUsesPgTypes = True}
         ctx = pgAsTf{Config.config = tr.trATCtx.config{Config.enableTimefusionWrites = True}}
-    void $ runTestBg frozenTime tr{trATCtx = pgAsTf} $ BackgroundJobs.dualExecPgTfWithSql ctx [HI.sql|UPDATE tf_drain_target SET n = n|] [HI.sql|UPDATE tf_drain_target SET n = tf_drain_probe()|]
+    void $ runTestBg frozenTime tr{trATCtx = pgAsTf} $ BackgroundJobs.tfExec ctx [HI.sql|UPDATE tf_drain_target SET n = tf_drain_probe()|]
     dbOne @() @Int tr [sql|SELECT n FROM tf_drain_target|] () `shouldReturn` 1
 
 

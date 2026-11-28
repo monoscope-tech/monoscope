@@ -1,7 +1,7 @@
 {-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobRunnerName, releaseStaleLocks, jobsWorkerInitWithTools, jobsWorkerConfig, jobsRunner, runWorkspaceMaintenanceTimer, runReviewWorkerHeartbeat, ensureDailyJobScheduled, processBackgroundJob, processBackgroundJobWithTools, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, dualExecPgTfWithSql, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl, sendAlertToChannels) where
+module BackgroundJobs (jobsWorkerInit, jobRunnerName, releaseStaleLocks, jobsWorkerInitWithTools, jobsWorkerConfig, jobsRunner, runWorkspaceMaintenanceTimer, runReviewWorkerHeartbeat, ensureDailyJobScheduled, processBackgroundJob, processBackgroundJobWithTools, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, tfExec, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl, sendAlertToChannels) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -137,7 +137,7 @@ import Pkg.Queue (getOrInitKafkaProducer, kafkaSaslExtraProps)
 import Pkg.SchemaLearning (SummaryDoc (..))
 import Pkg.SchemaLearning qualified as SchemaLearning
 import Pkg.UsageTelemetry qualified as UsageTelemetry
-import ProcessMessage (classifyUrlPath, classifyUrlPathWith, extractObservation, fetchProjectCache, mkBatchPathClassifiers, mkPathClassifier, processSpanToEntities)
+import ProcessMessage (classifyUrlPath, classifyUrlPathWith, extractObservation, mkBatchPathClassifiers, mkPathClassifier, processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask, local)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
@@ -377,8 +377,6 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
       tryStep "calculateLogPatternBaselines" $ calculateLogPatternBaselines pid
       tryStep "processNewLogPatterns" $ processNewLogPatterns pid authCtx
       tryStep "pruneStaleLogPatterns" $ pruneStaleLogPatterns pid
-    -- `processed_at` is Postgres bookkeeping; the job stays scheduled as the daily per-project marker.
-    SafetyNetReprocess pid -> when authCtx.config.enablePostgresTelemetryWrites $ safetyNetReprocess pid
     ProcessProjectErrorsJob pid errors now -> processProjectErrors pid errors now
     -- Seed-only, like the other tickers: the daily seeder is the restart net. These used
     -- to also self-chain, and a chained tick running beside its seeded twin doubled the
@@ -1075,10 +1073,9 @@ runDailyJobScheduling authCtx =
       projects <- Projects.recentlyActiveProjectIds currentTime
       Log.logInfo "Scheduling jobs for projects" ("project_count", length projects)
       forM_ projects \p -> do
-        -- Only `SafetyNetReprocess` drives span derivation (hourly catch-up
-        -- for the extraction worker's live path).
+        -- Daily-only, so it marks the project as scheduled today.
         ifM
-          (queuedToday "SafetyNetReprocess" (Just p.toText))
+          (queuedToday "HostRetentionSweep" (Just p.toText))
           (Log.logInfo "Jobs already scheduled for project today, skipping" ("project_id", p.toText))
           do
             enqueueJobs authCtx [Jobs.ReportUsage p, Jobs.HostRetentionSweep p]
@@ -1096,10 +1093,6 @@ runDailyJobScheduling authCtx =
               sched 24 3600 (`EndpointMergeCleanup` p)
               sched 24 3600 (\_ -> AutofixIssues p)
               sched 24 3600 (`LogPatternHourlyProcessing` p)
-              -- The extraction worker owns live span/log/error derivation.
-              -- SafetyNetReprocess is the hourly catch-up for
-              -- `processed_at IS NULL` rows (near-empty steady state).
-              sched 24 3600 (\_ -> SafetyNetReprocess p)
 
         -- Reports are routines now; installing them is idempotent and outside the guard above.
         whenJustM (Projects.projectById p) $ Issues.provisionReportRoutines >=> traverse_ \routine -> enqueueAIRoutine authCtx routine.id routine.scheduledAt
@@ -1167,16 +1160,9 @@ infraHealthCheck authCtx = do
       start = addUTCTime (-3600) end
       window = formatUTC start <> " -> " <> formatUTC end <> " UTC"
       isolate f = either (\(e :: SomeException) -> (["!! check errored: " <> show e], [])) id <$> tryAny f
-  -- Parity only means anything while both stores are dual-written. Once one leg
-  -- is disabled the "behind" store is empty by design, so cross-store drift
-  -- would be a 100% false alarm — but SKIPPING outright is what left prod with
-  -- no loss detector at all on 2026-07-27. Single-store mode falls back to
-  -- per-project continuity against TF's own recent baseline.
-  let dualWrite = authCtx.config.enablePostgresTelemetryWrites && authCtx.config.enableTimefusionWrites
-  (pAlerts, pInfo) <- isolate (bool checkIngestContinuity checkParity dualWrite start end)
+  (pAlerts, pInfo) <- isolate (checkIngestContinuity start end)
   (kAlerts, kInfo) <- isolate (checkKafkaHealth authCtx.config)
-  -- Independent of dual-write: a read bug hides stored rows, so neither parity
-  -- nor continuity can see it (2026-08-07).
+  -- A read bug hides stored rows, so continuity can't see it (2026-08-07).
   (rAlerts, rInfo) <- isolate (checkReadConsistency start end)
   let alerts = pAlerts <> kAlerts <> rAlerts
       info = pInfo <> kInfo <> rInfo
@@ -1194,43 +1180,6 @@ pct1 :: Double -> Text
 pct1 x = show (fromIntegral (round (x * 10) :: Int) / 10 :: Double)
 
 
--- | Per-project row-count parity, TimescaleDB (source of truth) vs TimeFusion,
--- over @[start,end)@. Only high-volume projects are drift-checked; a TF query
--- failure or a zero TF total is itself an alarm. Returns (alerts, info-lines).
-checkParity :: UTCTime -> UTCTime -> ATBackgroundCtx ([Text], [Text])
-checkParity start end = do
-  let minRows = 500 :: Int64 -- ignore drift on low-volume projects (absolute noise)
-      driftPct = 1.0 :: Double
-      topN = 30 :: Int64
-  projs :: [(Text, Int64)] <-
-    Hasql.interp
-      [HI.sql|SELECT project_id::text, count(*)::int8 FROM otel_logs_and_spans
-         WHERE timestamp >= #{start}::timestamptz AND timestamp < #{end}::timestamptz
-         GROUP BY project_id ORDER BY 2 DESC LIMIT #{topN}|]
-  results <- forM projs \(pid, tsN) -> do
-    -- project_id filter is mandatory for TF multi-tenant routing.
-    r <-
-      tryAny
-        $ withHasqlTimefusion
-          True
-          ( Hasql.interpScalar
-              [HI.sql|SELECT count(*)::int8 FROM otel_logs_and_spans
-                 WHERE project_id = #{pid}::text AND timestamp >= #{start}::timestamptz AND timestamp < #{end}::timestamptz|]
-          )
-    pure (pid, tsN, r :: Either SomeException Int64)
-  let tfErrs = [pid | (pid, _, Left _) <- results]
-      okRows = [(pid, tsN, tfN) | (pid, tsN, Right tfN) <- results]
-      tsTotal = sum [tsN | (_, tsN, _) <- okRows]
-      tfTotal = sum [tfN | (_, _, tfN) <- okRows]
-      driftAlerts =
-        [ "🔴 TF behind TS by " <> pct1 pct <> "% (-" <> show (tsN - tfN) <> " rows) for " <> pid <> " (TS=" <> show tsN <> " TF=" <> show tfN <> ")"
-        | (pid, tsN, tfN, pct) <- continuityDrop driftPct minRows okRows
-        ]
-      errAlert = ["🔴 TF unreachable/errored for " <> show (length tfErrs) <> " projects (e.g. " <> T.intercalate ", " (take 3 tfErrs) <> ")" | not (null tfErrs)]
-      stallAlert = ["🔴 TF INGEST STALLED: TS=" <> show tsTotal <> " rows, TF=0 over top " <> show (length okRows) <> " projects" | tsTotal > 0, tfTotal == 0, null tfErrs]
-  pure (errAlert <> stallAlert <> driftAlerts, ["parity: TS=" <> show tsTotal <> " TF=" <> show tfTotal <> " over top " <> show (length okRows) <> " projects"])
-
-
 -- | Rows whose current count collapsed more than @dropPct@ below a reference
 -- count, ignoring references below the @minRows@ floor (absolute-count noise).
 -- Input rows are @(project, reference, current)@.
@@ -1238,11 +1187,8 @@ checkParity start end = do
 -- Only a DROP is a loss signal — a spike is a traffic change, not missing data,
 -- so a negative drift is dropped rather than alarmed on.
 --
--- Two callers supply two different references. 'checkParity' passes Timescale as
--- the reference and TimeFusion as the current count, making this a cross-store
--- parity check. 'checkIngestContinuity' and 'checkReadConsistency' pass a
--- project's OWN recent throughput, which is the only reference available once
--- Timescale writes are off.
+-- 'checkIngestContinuity' and 'checkReadConsistency' pass a project's OWN recent
+-- throughput as the reference.
 --
 -- The 2026-07-27 gap: ~25k rows/min collapsed to ~1k for nine minutes.
 --
@@ -1284,13 +1230,10 @@ tfTopProjectCounts topN extra s e =
     )
 
 
--- | Single-store ingest continuity, TimeFusion against its own recent history.
--- Runs when dual-write is off, where 'checkParity' has nothing to compare and
--- would otherwise skip — which is exactly why the 2026-07-27 loss (~200k rows,
--- 9 minutes, ~90% of ingest) triggered no alert: going TF-only silently
--- retired the only automated loss detector.
+-- | Ingest continuity, TimeFusion against its own recent history. Before it, the
+-- 2026-07-27 loss (~200k rows, 9 minutes, ~90% of ingest) triggered no alert.
 --
--- Three grouped TF queries (not the N+1 fan-out 'checkParity' pays): top projects
+-- Three grouped TF queries: top projects
 -- by volume over the previous hour and the same hour yesterday, then the window.
 --
 -- The baseline is the LOWER of those two hours, not a multi-hour mean. A 6h mean
@@ -1631,7 +1574,7 @@ checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryStep "free-tier
             <$ Log.logAttention "Free tier ceiling reached; ingestion is being dropped" ("project_id", pid.toText, "kept", kept, "limit", limit)
         Projects.NoticeSampling -> pure (SLWarn, "system.free_tier.sampling", "Events are now sampled to fit the daily budget (" <> show kept <> " of " <> show seen <> " kept so far today).")
       let attrs = Map.fromList [("seen", AE.toJSON seen), ("kept", AE.toJSON kept), ("limit", AE.toJSON limit), ("payment_plan", AE.String project.paymentPlan)]
-      insertSystemLog (Telemetry.writeTargetFor ctx.env Nothing) ctx.hasqlTimefusionUsesPgTypes $ mkSystemLog pid eventName sev bodyMsg attrs Nothing now
+      insertSystemLog ctx.hasqlTimefusionUsesPgTypes $ mkSystemLog pid eventName sev bodyMsg attrs Nothing now
       users <- Projects.usersByProjectId pid
       let mail = ET.freeTierUsageEmail project.title (hostPath ctx.env.hostUrl $ urls.manageBillingGet pid) seen kept limit n
       forM_ users \user -> renderAndSend (CI.original user.email) mail
@@ -2515,129 +2458,45 @@ processProjectErrors pid errors now = do
           Log.logTrace "Bumped already-open issue for regressed error" (pid', err'.id, existing.id)
 
 
--- | Hourly catch-up. Sweeps `processed_at IS NULL` rows via the time-scoped
--- partial index `idx_otel_unprocessed` and re-drives them through the
--- extraction worker via `Telemetry.handOffBatches` (same code path as live
--- ingestion).
---
--- The floor is `hashUpdateMaxAgeSecs`, not a fixed 6h: past that age the eager
--- track skips the hash merge, so a re-drive can neither finish the row nor
--- stamp `processed_at`. Re-driving them anyway is what turned this sweep into a
--- perpetual re-send of the same work (oldest-first + LIMIT 1000 also starved
--- the rows it *could* complete). Rows past the floor are counted and logged at
--- attention instead of being silently abandoned.
-safetyNetReprocess :: Projects.ProjectId -> ATBackgroundCtx ()
-safetyNetReprocess pid = do
-  ctx <- ask @Config.AuthContext
-  let cutoff = ctx.config.processedAtCutoff
-      maxAgeSecs = fromIntegral ctx.config.hashUpdateMaxAgeSecs :: Double
-  caches <- one . (pid,) <$> fetchProjectCache pid
-  -- Single page per tick (1000 rows); next hourly tick picks up any remainder.
-  rows <-
-    V.fromList
-      <$> Hasql.interp
-        ( [HI.sql| SELECT |]
-            <> Telemetry.otelSpanColsSql
-            <> [HI.sql| FROM otel_logs_and_spans
-              WHERE project_id = #{pid.toText}
-                AND processed_at IS NULL
-                AND timestamp >= #{cutoff}
-                AND timestamp <  now() - interval '10 minutes'
-                AND timestamp >  now() - #{maxAgeSecs} * interval '1 second'
-              ORDER BY timestamp
-              LIMIT 1000 |]
-        )
-  -- Bounded count so an unbounded backlog can't turn visibility into a seq scan.
-  abandoned <-
-    Hasql.interpScalar
-      [HI.sql| SELECT count(*)::int8 FROM (
-                   SELECT 1 FROM otel_logs_and_spans
-                   WHERE project_id = #{pid.toText}
-                     AND processed_at IS NULL
-                     AND timestamp >= #{cutoff}
-                     AND timestamp <= now() - #{maxAgeSecs} * interval '1 second'
-                   LIMIT 5000) s |]
-  when ((abandoned :: Int64) > 0)
-    $ Log.logAttention
-      "SafetyNetReprocess rows past hash-update age floor (not re-drivable)"
-      (AE.object ["project_id" AE..= pid.toText, "row_count" AE..= abandoned, "max_age_secs" AE..= maxAgeSecs])
-  unless (V.null rows) $ do
-    Log.logTrace "SafetyNetReprocess re-driving unprocessed rows" (AE.object ["project_id" AE..= pid.toText, "row_count" AE..= V.length rows])
-    Telemetry.handOffBatches ctx.extractionWorker caches rows
+-- | Run an UPDATE on TimeFusion (best-effort, circuit-broken) and return its row count.
+tfExec :: (Hasql :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> Eff es Int64
+tfExec ctx sql' = do
+  now <- Time.currentTime
+  shouldAttempt <- liftIO $ ExtractionWorker.shouldAttemptCircuit ctx.tfCircuit now
+  if not (ctx.config.enableTimefusionWrites && shouldAttempt)
+    then pure 0
+    -- A deploy drain refuses every write until the replacement is ready (18–110s measured
+    -- on 2026-11-23) and nothing replays this, so it gets the ingest write's 180s budget;
+    -- every caller's UPDATE is guarded, so a re-run is a no-op.
+    else
+      tryAny (Hasql.retryTransientEff 180_000_000 "tf-exec" $ withHasqlTimefusion True $ Hasql.interpExecute sql')
+        >>= \case
+          Right n -> liftIO (ExtractionWorker.recordCircuitSuccess ctx.tfCircuit) $> n
+          Left e -> do
+            opened <- liftIO $ ExtractionWorker.recordCircuitFailure ctx.tfCircuit now
+            Log.logAttention (if opened then "TimeFusion circuit opened" else "TimeFusion write failed") (show @Text e)
+            pure 0
 
 
--- | Dual-fork an UPDATE to Postgres (blocking, deadlock-retried) + TimeFusion (best-effort, circuit-broken).
-dualExecPgTf :: (DB es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> Eff es Int64
-dualExecPgTf ctx sql' = dualExecPgTfWithSql ctx sql' sql'
-
-
--- | Keep native PostgreSQL comparisons when TimeFusion needs a different cast.
-dualExecPgTfWithSql :: (DB es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> HI.Sql -> Eff es Int64
-dualExecPgTfWithSql ctx pgSql tfSql = Ki.scoped \scope -> do
-  pgThread <- forkWithCtx scope $ pgOnlyExec ctx.config.enablePostgresTelemetryWrites pgSql
-  tfThread <- forkWithCtx scope do
-    now <- Time.currentTime
-    shouldAttempt <- liftIO $ ExtractionWorker.shouldAttemptCircuit ctx.tfCircuit now
-    if not (ctx.config.enableTimefusionWrites && shouldAttempt)
-      then pure 0
-      -- A deploy drain refuses every write until the replacement is ready (18–110s measured
-      -- on 2026-11-23) and nothing replays this arm, so it gets the ingest write's 180s budget;
-      -- every caller's UPDATE is guarded, so a re-run is a no-op.
-      else
-        tryAny (Hasql.retryTransientEff 180_000_000 "dual-exec:timefusion" $ withHasqlTimefusion True $ Hasql.interpExecute tfSql)
-          >>= \case
-            Right n -> liftIO (ExtractionWorker.recordCircuitSuccess ctx.tfCircuit) $> n
-            Left e -> do
-              opened <- liftIO $ ExtractionWorker.recordCircuitFailure ctx.tfCircuit now
-              Log.logAttention (if opened then "TimeFusion circuit opened" else "TimeFusion write failed") (show @Text e)
-              pure 0
-  -- Await BOTH threads: scope-close cancellation of an in-flight Hasql session
-  -- segfaults libpq. The count is the store that holds telemetry's.
-  Ki.atomically $ Ki.await (if ctx.config.enablePostgresTelemetryWrites then pgThread else tfThread) <* Ki.awaitAll scope
-
-
--- | PG-only variant of `dualExecPgTf` for statements TimeFusion can't run
--- (e.g. those using `jsonb_build_object`, `jsonb_array_elements_text`, or
--- `now()` in SET expressions). Same retry-on-deadlock and locking guards as
--- the PG arm of `dualExecPgTf`, but no TF fork. Skipped (0 rows) when Postgres
--- holds no telemetry.
-pgOnlyExec :: (DB es, IOE :> es, Log :> es) => Bool -> HI.Sql -> Eff es Int64
-pgOnlyExec = bool (const $ pure 0) (pgExecLabeled "pgOnlyExec")
-
-
-pgExecLabeled :: (DB es, IOE :> es, Log :> es) => Text -> HI.Sql -> Eff es Int64
-pgExecLabeled label sql' = retryOnDeadlock label $ Hasql.transaction TxS.ReadCommitted TxS.Write $ do
-  Tx.sql "SET LOCAL lock_timeout = '30s'"
-  Tx.sql "SET LOCAL statement_timeout = '5min'"
-  HI.getRowsAffected <$> Tx.statement () (HI.interp True sql')
-
-
--- | Cross-batch session/user backfill, dual-written to PG + TimeFusion.
+-- | Cross-batch session/user backfill on TimeFusion.
 --
 -- The ingest-time cache ('QueryCache.lookupAndStamp') stamps the common case inline;
 -- this 90s sweep fills only the residual cross-batch gaps (sibling spans of a
--- trace that arrived in separate batches, before the source attrs were cached)
--- — for BOTH stores, so TimeFusion converges too (the store we're migrating to).
--- One 'UPDATE \226\128\166 FROM' shape runs on both engines via 'dualExecPgTf'; TimeFusion
--- executes it natively through its Delta MergeBuilder.
+-- trace that arrived in separate batches, before the source attrs were cached).
+-- TimeFusion executes the 'UPDATE … FROM' natively through its Delta MergeBuilder.
 --
--- Scoped per project because (a) TimeFusion rejects any UPDATE without a
--- @project_id@ filter in WHERE and (b) on Postgres that predicate is what lets
--- the partial @idx_logs_and_spans_session_id@ / @_user_id@ indexes drive the plan
--- instead of a cross-tenant seq scan (the 57014 statement-timeout root cause).
---
--- The window LAGS the write-hot edge (2\226\128\19317 min old) so the sweep rarely touches
--- rows UPDATE-1/UPDATE-2 are actively writing; residual lock-order overlap is
--- absorbed by 'dualExecPgTf''s @retryOnDeadlock@ (same discipline as UPDATE-1/2).
+-- Scoped per project because TimeFusion rejects any UPDATE without a @project_id@
+-- filter in WHERE. The window LAGS the write-hot edge (2–17 min old) so the sweep
+-- rarely touches rows the eager and drain tracks are actively writing.
 backfillSessionAttributes
-  :: (DB es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
+  :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
   => Config.AuthContext -> Eff es Int64
 backfillSessionAttributes ctx = do
   now <- Time.currentTime
   let windowEnd = addUTCTime (-120) now -- lag 2 min behind the write-hot edge
       windowStart = addUTCTime (-1020) now -- 17 min lookback
   pids <- Hasql.withHasqlTimefusion ctx.env.enableTimefusionReads $ activeSessionProjects windowStart windowEnd
-  foldlM (\ !acc pid -> (acc +) <$> dualExecPgTf ctx (backfillSessionSql pid windowStart windowEnd)) 0 pids
+  foldlM (\ !acc pid -> (acc +) <$> tfExec ctx (backfillSessionSql pid windowStart windowEnd)) 0 pids
 
 
 -- | Projects with session/user activity in the lagged window. Drives the per-project backfill
@@ -2711,7 +2570,7 @@ processEagerBatch batch shard
         !entityIds <- V.replicateM (V.length spans) UUID.genUUID
         let !canonicalTemplates = HM.lookupDefault (mkPathClassifier projectCache) pid $ mkBatchPathClassifiers (one (pid, projectCache)) spans
             !results = V.zipWith (\sp eid -> let (mkEp, hs, np, fwh) = processSpanToEntities canonicalTemplates pid sp in (mkEp eid, hs, np, fwh)) spans entityIds
-            !(endpoints, spanHashes, normalizedPaths, frameworkHashes) = V.unzip4 results
+            !(endpoints, spanHashes, _, frameworkHashes) = V.unzip4 results
             !observations = V.map (extractObservation canonicalTemplates) spans
             !endpointsFinal = V.fromList $ nubOrdOn (.hash) $ V.toList $ V.catMaybes endpoints
 
@@ -2731,25 +2590,9 @@ processEagerBatch batch shard
 
         -- Error extraction (pure).
         let !allErrors = Telemetry.getAllATErrors spans
-            sortedErrors = V.modify (VA.sortBy (comparing \e -> (e.traceId, e.spanId))) allErrors
-            errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) sortedErrors
-            mkErrorEntry grouped = do
-              (firstE, _) <- V.uncons grouped
-              sId <- firstE.spanId
-              tId <- firstE.traceId
-              let mapped = V.map (\x -> AE.object ["type" AE..= x.errorType, "message" AE..= x.message, "stack_trace" AE..= x.stackTrace]) grouped
-              pure ((sId, tId), AE.toJSON mapped)
-            errorsByKey :: HM.HashMap (Text, Text) AE.Value
-            errorsByKey = HM.fromList $ mapMaybe mkErrorEntry errorsByTrace
             errHashesByKey :: HM.HashMap (Text, Text) [Text]
             errHashesByKey = HM.fromListWith (<>) [((sid, tid), [LogQueries.errHashPrefix <> e.hash]) | e <- V.toList allErrors, Just sid <- [e.spanId], Just tid <- [e.traceId]]
-
-        -- Per-row packed vectors for UPDATE-1.
-        let perRowHashes = V.zipWith3 (\sid tid base -> base <> V.fromList (HM.lookupDefault [] (sid, tid) errHashesByKey)) spanIdsV traceIdsV spanHashes
-            perRowHashesJson :: V.Vector AE.Value
-            perRowHashesJson = AE.toJSON . V.toList <$> perRowHashes
-            perRowErrorsJson :: V.Vector AE.Value
-            perRowErrorsJson = V.zipWith (\sid tid -> HM.lookupDefault AE.Null (sid, tid) errorsByKey) spanIdsV traceIdsV
+            perRowHashes = V.zipWith3 (\sid tid base -> base <> V.fromList (HM.lookupDefault [] (sid, tid) errHashesByKey)) spanIdsV traceIdsV spanHashes
 
         when (V.length endpointsFinal > 0 || V.length allErrors > 0)
           $ Log.logTrace
@@ -2763,7 +2606,7 @@ processEagerBatch batch shard
                 ]
             )
 
-        -- Sibling inserts (any throw prevents UPDATE-1 from running — safety-net retries).
+        -- Sibling inserts (any throw prevents UPDATE-1 from running).
         -- Note: error pattern upsert + hourly stats are handled by ProcessProjectErrorsJob
         -- to avoid double-upsert (which would return 'unchanged' and skip issue creation).
         Ki.scoped \scope -> do
@@ -2780,7 +2623,7 @@ processEagerBatch batch shard
           forkNonEmpty allErrors \_ -> enqueueJobs ctx [ProcessProjectErrorsJob pid allErrors now]
           Ki.atomically $ Ki.awaitAll scope
 
-        -- UPDATE-1: non-destructive hash merge, dual-forked to PG + TimeFusion.
+        -- UPDATE-1: non-destructive hash merge into TimeFusion.
         -- Gated by `enableHashUpdates`; bounded by `hashUpdateMaxAgeSecs` so we
         -- never touch already-compressed chunks (which would force decompression).
         let hashCutoff = addUTCTime (negate $ fromIntegral ctx.config.hashUpdateMaxAgeSecs) now
@@ -2788,8 +2631,8 @@ processEagerBatch batch shard
             -- Rows stamped at ingest ('stampHashesAtIngest') already carry the derived
             -- set; re-merging them mints a duplicate row version in TimeFusion's
             -- merge-on-read store for zero data change. Only rows whose stored hashes
-            -- miss something (pre-stamping data, cache-miss ingest, safety-net
-            -- re-drives) enter the merge — normally none, and the UPDATE is skipped.
+            -- miss something (pre-stamping data, cache-miss ingest, DLQ
+            -- replays) enter the merge — normally none, and the UPDATE is skipped.
             uncovered = V.filter (\(sp, _, _, hs) -> not (all (`V.elem` fromMaybe V.empty sp.hashes) hs)) (V.zip4 spans spanIdsV traceIdsV perRowHashes)
             (tfSpanIds, tfTraceIds, tfHashes) = unzip3 [(sid, tid, T.intercalate "\x1f" (V.toList hs)) | (_, sid, tid, hs) <- V.toList uncovered]
             updateHashesSql =
@@ -2814,65 +2657,10 @@ processEagerBatch batch shard
                       AND o.context___span_id = u.span_id
                       AND o.context___trace_id = u.trace_id
                       AND NOT (COALESCE(o.hashes, '{}'::text[]) @> u.new_hashes) |]
-            update1Sql =
-              [HI.sql| UPDATE otel_logs_and_spans o
-                    SET hashes = ARRAY(
-                          SELECT DISTINCT h
-                          FROM unnest(COALESCE(o.hashes, '{}'::text[]) || u.new_hashes) AS h
-                        ),
-                        errors = COALESCE(NULLIF(u.errors, 'null'::jsonb), o.errors),
-                        attributes = CASE WHEN u.norm_path IS NOT NULL THEN
-                          COALESCE(o.attributes, '{}'::jsonb)
-                            || jsonb_build_object(
-                                 'monoscope', COALESCE(o.attributes->'monoscope', '{}'::jsonb)
-                                   || jsonb_build_object('endpoint', jsonb_build_object('route', u.norm_path)))
-                          ELSE o.attributes END,
-                        processed_at = now()
-                    FROM (
-                      SELECT span_id, trace_id, errors, norm_path,
-                             ARRAY(SELECT jsonb_array_elements_text(hashes_json)) AS new_hashes
-                      FROM (
-                        SELECT unnest(#{spanIdsV}::text[])  AS span_id,
-                               unnest(#{traceIdsV}::text[])  AS trace_id,
-                               unnest(#{perRowHashesJson}::jsonb[]) AS hashes_json,
-                               unnest(#{perRowErrorsJson}::jsonb[]) AS errors,
-                               unnest(#{normalizedPaths}::text[])  AS norm_path
-                      ) raw
-                      ORDER BY span_id, trace_id
-                    ) u
-                    WHERE o.project_id = #{pid.toText}
-                      AND o.timestamp >= #{effectiveMinTs}
-                      AND o.timestamp <  #{batchMaxTsPad}
-                      AND o.context___span_id = u.span_id
-                      AND o.context___trace_id = u.trace_id |]
-            -- Bookkeeping is by attempt, not by rows affected: every derivation
-            -- above has completed for this batch, so `processed_at` must be
-            -- stamped even when the hash merge is gated off. Without this the
-            -- rows stay `processed_at IS NULL` and `safetyNetReprocess` re-drives
-            -- the same work on every tick forever — the sustained hash-append
-            -- UPDATE storm that OOM-killed TimeFusion on 2026-07-29.
-            markProcessedSql =
-              [HI.sql| UPDATE otel_logs_and_spans o
-                    SET processed_at = now()
-                    FROM (
-                      SELECT span_id, trace_id
-                      FROM (
-                        SELECT unnest(#{spanIdsV}::text[]) AS span_id,
-                               unnest(#{traceIdsV}::text[]) AS trace_id
-                      ) raw
-                      ORDER BY span_id, trace_id
-                    ) u
-                    WHERE o.project_id = #{pid.toText}
-                      AND o.timestamp >= #{effectiveMinTs}
-                      AND o.timestamp <  #{batchMaxTsPad}
-                      AND o.context___span_id = u.span_id
-                      AND o.context___trace_id = u.trace_id
-                      AND o.processed_at IS NULL |]
         rowsUpdated <-
-          if ctx.config.enableHashUpdates && batch.batchMaxTs >= hashCutoff
-            then (if null tfSpanIds then pure 0 else dualExecPgTf ctx updateHashesSql) <* pgOnlyExec ctx.config.enablePostgresTelemetryWrites update1Sql
-            else pgOnlyExec ctx.config.enablePostgresTelemetryWrites markProcessedSql
-        -- The hash-only update is TF-compatible; PG retains the JSON/path enrichment.
+          if ctx.config.enableHashUpdates && batch.batchMaxTs >= hashCutoff && not (null tfSpanIds)
+            then tfExec ctx updateHashesSql
+            else pure 0
         Log.logTrace "Eager-track UPDATE-1 complete" (AE.object ["project_id" AE..= pid.toText, "span_count" AE..= V.length spans, "rows_updated" AE..= rowsUpdated, "hash_merge_skipped" AE..= (not ctx.config.enableHashUpdates || batch.batchMaxTs < hashCutoff)])
 
         Metrics.count Metrics.ingestBatchesProcessed 1 []
@@ -3148,10 +2936,7 @@ flushDrainTask shard task
                             AND NOT (COALESCE(o.hashes, '{}'::text[]) @> ARRAY[u.tag]) |]
         when (ctx.config.enableHashUpdates && maxTs >= hashCutoff)
           $ void
-          $ dualExecPgTfWithSql
-            ctx
-            (update2Sql [HI.sql|o.id = u.event_id::uuid|])
-            (update2Sql [HI.sql|o.id::text = u.event_id|])
+          $ tfExec ctx (update2Sql [HI.sql|o.id::text = u.event_id|])
       Metrics.count Metrics.drainFlushesCompleted 1 []
       Metrics.count Metrics.drainSpansFlushed (length task.spans) []
       Metrics.count Metrics.drainPatternsPersisted (length ups) []
@@ -5140,7 +4925,7 @@ scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> when cfg.
 emitProbeSpan :: PromCfg.PrometheusScrapeConfig -> Text -> (Text, Text) -> UTCTime -> UTCTime -> Maybe Int -> Maybe Uptime.ProbeFailure -> ATBackgroundCtx ()
 emitProbeSpan cfg region (trId, spanId) t0 t1 status failure = do
   ctx <- ask @Config.AuthContext
-  insertSystemLog (Telemetry.writeTargetFor ctx.env Nothing) ctx.hasqlTimefusionUsesPgTypes probe{Telemetry.summary = generateSummary probe}
+  insertSystemLog ctx.hasqlTimefusionUsesPgTypes probe{Telemetry.summary = generateSummary probe}
   where
     probe =
       (mkSystemLog cfg.projectId "uptime.probe" SLInfo reason Map.empty (Just durationNs) t0)
@@ -5591,7 +5376,7 @@ evaluateWithResults monitor startWall title total durationNs = do
       else Hasql.transaction TxS.ReadCommitted TxS.Write commitStatus
   when committed
     $ tryStep "monitor-evaluation-telemetry"
-    $ insertSystemLog (Telemetry.writeTargetFor ctx.env Nothing) ctx.hasqlTimefusionUsesPgTypes otelLog{Telemetry.summary = generateSummary otelLog}
+    $ insertSystemLog ctx.hasqlTimefusionUsesPgTypes otelLog{Telemetry.summary = generateSummary otelLog}
   unless committed $ whenJustM (Monitors.queryMonitorById monId) \current ->
     when (isNothing current.deletedAt && isNothing current.deactivatedAt && maybe True (< startWall) current.lastEvaluated)
       $ evaluateWithResults current startWall title total durationNs

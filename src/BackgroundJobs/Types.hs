@@ -111,10 +111,6 @@ data BgJobs
     ServiceMapRollup Projects.ProjectId UTCTime
   | MonoscopeAdminDaily
   | UsageAuditReport
-  | -- | Hourly catch-up for rows the extraction worker missed. Re-drives rows
-    -- where processed_at IS NULL through the same submitBatch path as live
-    -- ingestion.
-    SafetyNetReprocess Projects.ProjectId
   | -- | Daily host retention pass: bump last_seen_at from fresh traffic,
     -- system-archive hosts idle 30 days, wake system-archived hosts whose
     -- traffic returned and email the project a digest about them.

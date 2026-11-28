@@ -205,7 +205,6 @@ tests:
       # CLI.Harness drives the real CLI parser and captures its stdout.
       - optparse-applicative
       - silently
-      - these
       - hs-opentelemetry-instrumentation-auto
       - hs-opentelemetry-instrumentation-hasql
       # HasqlGuardSpec captures the DB spans the pool emits.
