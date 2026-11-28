@@ -1802,9 +1802,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
     writeFileBS (repository </> "runtime.sh") "retry_token() { printf '%s\\n' \"$1\"; }\n"
     void $ git ["commit", "--quiet", "-am", "fix retry token"]
     imageId <- readJSON (image </> "manifest.json") >>= parse (field "buildId") :: IO Text
-    let runWith session artifact expectedPatch = do
+    let runOn sides session artifact expectedPatch = do
           headRevision <- revisionAt
-          let request = AE.object ["projectId" AE..= testPid, "runId" AE..= uid 1, "attemptId" AE..= uid 2, "sessionId" AE..= uid session, "base" AE..= base, "imageBuildId" AE..= imageId, "workspace" AE..= AE.object ["tag" AE..= ("Pristine" :: Text)], "artifact" AE..= artifact, "revisions" AE..= ([["base", base], ["head", headRevision]] :: [[Text]])]
+          let request = AE.object ["projectId" AE..= testPid, "runId" AE..= uid 1, "attemptId" AE..= uid 2, "sessionId" AE..= uid session, "base" AE..= base, "imageBuildId" AE..= imageId, "workspace" AE..= AE.object ["tag" AE..= ("Pristine" :: Text)], "artifact" AE..= artifact, "revisions" AE..= sides ([["base", base], ["head", headRevision]] :: [[Text]])]
               options = Workspace.RegressionOptions artifacts repository (toText image) bridge (15 * 60)
               requestPath = directory </> "request.json"
           writeFileLBS requestPath $ AE.encode request
@@ -1817,7 +1817,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
             readJSON (directory </> toString receipt.id.toText <> ".json") `shouldReturn` AE.object ["tag" AE..= ("Check" :: Text), "contents" AE..= receipt]
             for_ expectedPatch $ \patch -> readFileBS (artifacts </> toString receipt.checkId.toText </> "test.patch") `shouldReturn` patch
           pure (report, rows, receipts)
-        run session script patch = runWith session (AE.object ["script" AE..= (script :: Text), "testPatch" AE..= decodeUtf8 @Text patch, "failureMessage" AE..= ("retry token was lost" :: Text)]) (Just patch)
+        runWith = runOn \sides -> sides
+        runAs sides session script patch = runOn sides session (AE.object ["script" AE..= (script :: Text), "testPatch" AE..= decodeUtf8 @Text patch, "failureMessage" AE..= ("retry token was lost" :: Text)]) (Just patch)
+        run = runAs \sides -> sides
         statuses rows = traverse (parse $ field "status") rows :: IO [Text]
     (report, rows, receipts) <- run 3 "bash regression.sh" testPatch
     statuses rows `shouldReturn` ["failed", "passed"]
@@ -1862,6 +1864,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     for_ @[] [1, 2 :: Int] \_ -> run 3 "bash regression.sh" testPatch >>= \(_, verdicts, _) -> statuses verdicts `shouldReturn` ["failed", "passed"]
     exhausted <- runEff $ Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions artifacts repository (toText image) bridge (15 * 60)) (directory </> "request.json")
     leftToMaybe (first Workspace.regressionErrorText exhausted) `shouldBe` Just "Local check comparison budget is exhausted"
+    -- 2026-11-28: three fix runs probed on base, then had no verdict left to re-verify the revision their review asked for.
+    for_ @[] [1, 2, 3 :: Int] \_ -> runAs (take 1) 3 "bash regression.sh" testPatch >>= \(_, verdicts, _) -> statuses verdicts `shouldReturn` ["failed"]
+    probesExhausted <- runEff $ Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions artifacts repository (toText image) bridge (15 * 60)) (directory </> "request.json")
+    leftToMaybe (first Workspace.regressionErrorText probesExhausted) `shouldBe` Just "Local check comparison budget is exhausted"
     void $ git ["rm", "--quiet", "regression.sh"]
     void $ git ["commit", "--quiet", "-m", "fix without retained test"]
     (_, injected, injectedReceipts) <- run 4 "bash regression.sh" testPatch

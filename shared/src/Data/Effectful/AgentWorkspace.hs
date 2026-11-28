@@ -1151,9 +1151,11 @@ verifyArtifactRegression options request = do
   createDirectoryIfMissing True root
   canonical root
   Posix.setFileMode root 0o700
-  -- Three comparisons that reach a verdict per session; one blocked by setup costs an attempt, not a verdict.
-  let counter = takeDirectory root </> ".regression-" <> identifierText request.sessionId <> ".count"
-      attemptsFile = takeDirectory root </> ".regression-" <> identifierText request.sessionId <> ".attempts"
+  -- Three verdicts per session for each phase, so probing on base cannot spend the re-verification a review revision
+  -- needs; a comparison blocked by setup costs an attempt, not a verdict.
+  let budget = takeDirectory root </> ".regression-" <> identifierText request.sessionId <> case request.revisions of BaseOnly _ -> "-base"; (HeadOnly _; Compare _ _) -> ""
+      counter = budget <> ".count"
+      attemptsFile = budget <> ".attempts"
       readCount path =
         tryIOError (readBounded path 16) >>= \case
           Left failure | isDoesNotExistError failure -> pure (0 :: Word8)
