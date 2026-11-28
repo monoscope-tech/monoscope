@@ -318,6 +318,7 @@ extra-source-files:
     static/migrations/0308_onboarding_run_root_path.sql
     static/migrations/0309_proof_recipe_progress.sql
     static/migrations/0310_proof_setup_tried.sql
+    static/migrations/0311_drop_safety_net_reprocess_jobs.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/GeoIP2-City-Test.mmdb
     test/fixtures/github-app-test.pem
