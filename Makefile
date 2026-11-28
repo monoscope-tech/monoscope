@@ -231,7 +231,9 @@ TIMEFUSION_PG_TEST_URL ?= postgresql://postgres:postgres@127.0.0.1:12345/postgre
 # into another data dir's tables fails. A no-op once one answers on :12345. TZ=UTC as in CI: it
 # reads bound timestamp parameters in the host's zone, which shifts every Hasql time window here.
 timefusion-start:
-	@nc -z 127.0.0.1 12345 2>/dev/null && echo "TimeFusion already up on :12345" || { \
+	@nc -z 127.0.0.1 12345 2>/dev/null && { echo "TimeFusion already up on :12345"; git -C $(TIMEFUSION_DIR) fetch -q origin master; \
+	  [ "$$(git -C $(TIMEFUSION_BUILD) rev-parse HEAD)" = "$$(git -C $(TIMEFUSION_DIR) rev-parse origin/master)" ] || \
+	    echo "⚠ it runs $$(git -C $(TIMEFUSION_BUILD) log --oneline -1), behind origin/master: make timefusion-stop timefusion-start"; } || { \
 	  git -C $(TIMEFUSION_DIR) fetch -q origin master && \
 	  { [ -d $(TIMEFUSION_BUILD) ] || git -C $(TIMEFUSION_DIR) worktree add -q --detach $(TIMEFUSION_BUILD) origin/master; } && \
 	  git -C $(TIMEFUSION_BUILD) checkout -q --detach origin/master && echo "TimeFusion $$(git -C $(TIMEFUSION_BUILD) log --oneline -1)" && \
