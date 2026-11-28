@@ -178,6 +178,8 @@ data PullRequestEvent = PullRequestEvent
   , base :: Text
   , updatedAt :: UTCTime
   , state :: PullRequestState
+  , mergeCommit :: Maybe Text
+  -- ^ Set when the pull request closed by merging: the commit the next pull requests branch from.
   }
   deriving stock (Generic, Show)
 
@@ -243,7 +245,7 @@ decodeEvent body = do
 
 -- | The event a fetched pull request implies, as if GitHub had just delivered it.
 pullRequestEvent :: Text -> Text -> Int64 -> Int -> Git.PullRequest -> PullRequestEvent
-pullRequestEvent owner repo installationId number pr = PullRequestEvent{owner, repo, installationId, number, revision = T.toLower pr.head.revision, base = T.toLower pr.base.revision, updatedAt = pr.updatedAt, state = if pr.state /= "open" then Closed else if pr.draft then Draft else Open}
+pullRequestEvent owner repo installationId number pr = PullRequestEvent{owner, repo, installationId, number, revision = T.toLower pr.head.revision, base = T.toLower pr.base.revision, updatedAt = pr.updatedAt, state = if pr.state /= "open" then Closed else if pr.draft then Draft else Open, mergeCommit = guarded (\sha -> T.length sha == 40 && T.all isHexDigit sha) . T.toLower =<< (pr.mergeCommitSha <* guard (pr.merged == Just True))}
 
 
 repositoryName :: Repository -> Either EventDecodeError (Text, Text)
@@ -320,7 +322,8 @@ parseAsk body = listToMaybe $ mapMaybe command $ T.breakOnAll "@" body
 -- out-of-order delivery cannot replace a newer head, and duplicates queue once.
 -- A closure, or a draft in a mode that skips drafts, supersedes the revision's run;
 -- an ask queues in every mode, replaces a finished run of the same revision and joins a queued one.
--- A queued review queues its workspace build unless one for the same project, repository and base waits.
+-- A queued review queues its workspace build unless one for the same project, repository and base waits;
+-- a merge queues a build of its merge commit, the base of the pull requests that follow.
 receiveEvent :: DB es => Maybe Ask -> PullRequestEvent -> Eff es Reception
 receiveEvent request event =
   maybe NotReviewable HI.getOneColumn
@@ -368,6 +371,26 @@ receiveEvent request event =
       JOIN projects.pr_review_threads t ON t.id = r.thread_id
       WHERE j.payload->>'tag' = 'PrepareReviewWorkspace' AND j.status IN ('queued', 'retry', 'locked')
         AND t.project_id = q.project_id AND t.owner = #{event.owner} AND t.repo = #{event.repo} AND r.base = #{event.base})
+      AND NOT EXISTS (SELECT 1 FROM background_jobs_long j WHERE j.payload->>'tag' = 'PrepareBaseWorkspace' AND j.status IN ('queued', 'retry', 'locked')
+        AND j.payload->'contents' = jsonb_build_array(q.project_id, #{event.owner}, #{event.repo}, #{event.base}))
+  ), superseded_base_builds AS (
+    -- A newer merge supersedes an older merge's build that has not started yet.
+    DELETE FROM background_jobs_long j USING eligible e
+    WHERE #{event.mergeCommit}::text IS NOT NULL AND j.payload->>'tag' = 'PrepareBaseWorkspace' AND j.status = 'queued'
+      AND j.payload->'contents'->>0 = e.project_id::text AND j.payload->'contents'->>1 = #{event.owner} AND j.payload->'contents'->>2 = #{event.repo}
+      AND j.payload->'contents'->>3 <> #{event.mergeCommit}::text
+  ), base_builds AS (
+    -- A merge moves the branch the next pull requests start from: build its head now, so the first of
+    -- them does not wait for that build. Only repositories reviewed this week, so idle ones cost nothing.
+    -- Owners, repositories and revisions are lowercased where they enter, so the payload compares verbatim.
+    INSERT INTO background_jobs_long (run_at, status, payload)
+    SELECT now(), 'queued', jsonb_build_object('tag', 'PrepareBaseWorkspace', 'contents', jsonb_build_array(e.project_id, #{event.owner}, #{event.repo}, #{event.mergeCommit}::text))
+    FROM eligible e
+    WHERE #{event.mergeCommit}::text IS NOT NULL
+      AND EXISTS (SELECT 1 FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
+        WHERE t.project_id = e.project_id AND t.owner = #{event.owner} AND t.repo = #{event.repo} AND r.created_at > now() - interval '7 days')
+      AND NOT EXISTS (SELECT 1 FROM background_jobs_long j WHERE j.payload->>'tag' = 'PrepareBaseWorkspace' AND j.status IN ('queued', 'retry', 'locked')
+        AND j.payload->'contents' = jsonb_build_array(e.project_id, #{event.owner}, #{event.repo}, #{event.mergeCommit}::text))
   ), jobs AS (
     INSERT INTO background_jobs_long (run_at, status, payload)
     SELECT now(), 'queued', jsonb_build_object('tag', 'ReviewPullRequest', 'contents', id) FROM queued RETURNING 1
@@ -416,13 +439,16 @@ claimRun slots run = Hasql.transaction TxS.ReadCommitted TxS.Write do
     FROM projects.pr_review_threads o WHERE o.id <> #{run.threadId} AND o.lease_until > now()
   ), building AS (
     -- Proofs run in the base's prepared workspace, so a review waits while that build is pending.
-    SELECT #{slots.prepares} AND EXISTS (
+    SELECT #{slots.prepares} AND (EXISTS (
       SELECT 1 FROM background_jobs_long j
       JOIN projects.pr_review_runs b ON b.id::text = j.payload->>'contents'
       JOIN projects.pr_review_threads bt ON bt.id = b.thread_id
       JOIN projects.pr_review_threads t ON t.id = #{run.threadId}
       WHERE j.payload->>'tag' = 'PrepareReviewWorkspace' AND j.status IN ('queued', 'retry', 'locked')
-        AND bt.project_id = t.project_id AND bt.owner = t.owner AND bt.repo = t.repo AND b.base = #{run.base}) AS pending
+        AND bt.project_id = t.project_id AND bt.owner = t.owner AND bt.repo = t.repo AND b.base = #{run.base})
+      OR EXISTS (SELECT 1 FROM background_jobs_long j JOIN projects.pr_review_threads t ON t.id = #{run.threadId}
+        WHERE j.payload->>'tag' = 'PrepareBaseWorkspace' AND j.status IN ('queued', 'retry', 'locked')
+          AND j.payload->'contents' = jsonb_build_array(t.project_id, t.owner, t.repo, #{run.base}::text))) AS pending
   ), leased AS (
     UPDATE projects.pr_review_threads t SET lease_owner = #{run.id}, lease_node = #{slots.node}, lease_until = now() + make_interval(secs => #{fromIntegral @Int @Int32 (Agent.reviewSeconds + 300)})
     WHERE t.id = #{run.threadId} AND t.latest_revision = #{run.revision}

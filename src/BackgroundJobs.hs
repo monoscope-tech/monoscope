@@ -334,6 +334,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
     ProcessIssuesEnhancement scheduledTime -> unlessStale scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
     ReviewPullRequest rid -> ImpactReview.reviewPullRequest rid
     PrepareReviewWorkspace rid -> ImpactReview.prepareReviewWorkspace rid
+    PrepareBaseWorkspace pid owner repo revision -> ImpactReview.prepareBaseWorkspace pid owner repo revision
     FixIssue pid fid -> ImpactReview.fixIssue pid fid
     AutofixIssues pid -> ImpactReview.autofixIssues pid
     PrepareFixWorkspace pid fid -> ImpactReview.prepareFixWorkspace pid fid

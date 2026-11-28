@@ -670,6 +670,8 @@ data PullRequest = PullRequest
   , updatedAt :: UTCTime
   , title :: Maybe Text
   , body :: Maybe Text
+  , merged :: Maybe Bool
+  , mergeCommitSha :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON) via DAE.Snake PullRequest

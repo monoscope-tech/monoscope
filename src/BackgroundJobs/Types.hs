@@ -67,6 +67,8 @@ data BgJobs
   | ProcessIssuesEnhancement UTCTime
   | ReviewPullRequest (UUIDId "pr_review")
   | PrepareReviewWorkspace (UUIDId "pr_review")
+  | -- | A merged pull request's merge commit, built before the next pull request is reviewed against it.
+    PrepareBaseWorkspace Projects.ProjectId Text Text Text
   | FixIssue Projects.ProjectId (UUIDId "issue_fix")
   | AutofixIssues Projects.ProjectId
   | PublishFix Projects.ProjectId (UUIDId "issue_fix")
@@ -286,6 +288,7 @@ longJob :: BgJobs -> Bool
 longJob = \case
   ReviewPullRequest{} -> True
   PrepareReviewWorkspace{} -> True
+  PrepareBaseWorkspace{} -> True
   FixIssue{} -> True
   PrepareFixWorkspace{} -> True
   PublishFix{} -> True
