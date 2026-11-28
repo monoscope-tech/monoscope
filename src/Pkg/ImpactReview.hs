@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.ImpactReview (reviewPullRequest, prepareReviewWorkspace, prepareFixWorkspace, requestReview, fixIssue, autofixIssues, publishIssueFix, PublishSkip (..), ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Claim (..), ClaimStatus (..), Substitution (..), SubstitutionKind (..), Issue (..), ProofLink (..), Shot (..), proofLink, Evidence (..), Observation (..), EvidenceKind (..), QueryObservation (..), QueryKind (..), evidenceTable, Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, renderProgress, ReviewQuery, mkReviewQuery) where
+module Pkg.ImpactReview (reviewPullRequest, prepareReviewWorkspace, prepareBaseWorkspace, prepareFixWorkspace, requestReview, fixIssue, autofixIssues, publishIssueFix, PublishSkip (..), ReviewResult (..), ReviewDraft, Audience (..), Finding (..), Dimension (..), Grade (..), Assessment (..), Risk (..), mergeRisk, Claim (..), ClaimStatus (..), Substitution (..), SubstitutionKind (..), Issue (..), ProofLink (..), Shot (..), proofLink, Evidence (..), Observation (..), EvidenceKind (..), QueryObservation (..), QueryKind (..), evidenceTable, Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, renderProgress, ReviewQuery, mkReviewQuery) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Control.Monad.Trans.Except (throwE)
@@ -484,12 +484,12 @@ ratingLink :: Text -> Text -> Reviews.ReviewRun -> Reviews.Rating -> Text
 ratingLink host secret run r = hostPath host $ proofRatingPath run.projectId run.id r $ Widget.signWidgetUrl secret run.projectId (Reviews.ratingSignedPath run.id r)
 
 
--- | The GitHub App connection for a run's repository, from the project's current mappings.
-reviewConnection :: (DB es, HTTP.HTTP :> es, IOE :> es, Reader AuthContext :> es) => Reviews.ReviewRun -> Eff es (Either Text ([CodeContext.CodeMapping], GitSync.GitHubCredential, Int64, Git.GitConn))
-reviewConnection run = runErrorNoCallStack @Text do
+-- | The GitHub App connection for a project's repository (a run's: 'runRepository'), from the project's current mappings.
+reviewConnection :: (DB es, HTTP.HTTP :> es, IOE :> es, Reader AuthContext :> es) => (Projects.ProjectId, Text, Text) -> Eff es (Either Text ([CodeContext.CodeMapping], GitSync.GitHubCredential, Int64, Git.GitConn))
+reviewConnection (projectId, owner, repo) = runErrorNoCallStack @Text do
   cfg <- (.config) <$> ask @AuthContext
-  mappings <- filter (\m -> T.toLower m.owner == run.owner && T.toLower m.repo == run.repo) <$> CodeContext.getCodeMappings run.projectId
-  credentials <- GitSync.getGitHubCredentials run.projectId
+  mappings <- filter (\m -> T.toLower m.owner == owner && T.toLower m.repo == repo) <$> CodeContext.getCodeMappings projectId
+  credentials <- GitSync.getGitHubCredentials projectId
   (credential, installationId) <- maybe (throwError @Text "Repository installation is no longer linked") pure $ listToMaybe [(c, installationId) | c <- credentials, c.host == Git.GitHub, isNothing c.apiBase, any ((== c.id) . (.credentialId)) mappings, Just installationId <- [c.installationId]]
   token <- either throwError pure =<< GitSync.githubToken cfg.githubAppId cfg.githubAppPrivateKey (GitSync.AppInstallation installationId)
   conn <- either (throwError . Git.gitConnErrorMessage) pure $ GitSync.credentialConn credential token
@@ -500,11 +500,26 @@ reviewConnection run = runErrorNoCallStack @Text do
 -- repository start warm; a no-op when that checkpoint already exists. The first build of a
 -- repository is cold; later ones start from its latest build and compile incrementally.
 prepareReviewWorkspace :: Reviews.ReviewId -> ATBackgroundCtx ()
-prepareReviewWorkspace rid = whenJustM (Reviews.getRun rid) \run -> prepareWorkspace "Review" (run.projectId, run.owner, run.repo) do
-  (_, _, _, conn) <- either throwError pure =<< reviewConnection run
+prepareReviewWorkspace rid = whenJustM (Reviews.getRun rid) \run -> prepareRevision (runRepository run) \conn ->
   -- Runs queued before the base was recorded look it up.
-  base <- maybe ((.base.revision) <$> (either throwError pure =<< Git.getPullRequest conn (Git.RepoRef run.owner run.repo run.revision) run.number)) pure run.base
-  pure Checkout.Fetch{projectId = run.projectId, repository = "https://github.com/" <> run.owner <> "/" <> run.repo <> ".git", base, head = base, gitToken = conn.token.reveal}
+  maybe ((.base.revision) <$> (either throwError pure =<< Git.getPullRequest conn (Git.RepoRef run.owner run.repo run.revision) run.number)) pure run.base
+
+
+-- | The merge commit a merged pull request left on its base branch, built before the next pull request
+-- reviewed against it asks for it, so that review starts warm instead of waiting for the build.
+prepareBaseWorkspace :: Projects.ProjectId -> Text -> Text -> Text -> ATBackgroundCtx ()
+prepareBaseWorkspace pid owner repo revision = prepareRevision (pid, owner, repo) (const $ pure revision)
+
+
+prepareRevision :: (Projects.ProjectId, Text, Text) -> (Git.GitConn -> Eff (Error Text ': ATBackgroundEffects) Text) -> ATBackgroundCtx ()
+prepareRevision repository@(pid, owner, repo) revisionOf = prepareWorkspace "Review" repository do
+  (_, _, _, conn) <- either throwError pure =<< reviewConnection repository
+  revision <- revisionOf conn
+  pure Checkout.Fetch{projectId = pid, repository = "https://github.com/" <> owner <> "/" <> repo <> ".git", base = revision, head = revision, gitToken = conn.token.reveal}
+
+
+runRepository :: Reviews.ReviewRun -> (Projects.ProjectId, Text, Text)
+runRepository run = (run.projectId, run.owner, run.repo)
 
 
 -- | The same warm build for a fix's base, queued with the fix, which waits for it ('fixIssue'), so a
@@ -638,7 +653,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
             else "The pull request was closed, merged or moved out of review before the proofs finished."
     -- A review that stops for good says so in its progress comment instead of leaving it running.
     stopProgress :: Reviews.ReviewRun -> Text -> ATBackgroundCtx ()
-    stopProgress run reason = unless (Reviews.setupOnly run) $ whenJustM (Reviews.progressComment run) \cid -> whenRightM_ (reviewConnection run) \(_, _, _, conn) -> do
+    stopProgress run reason = unless (Reviews.setupOnly run) $ whenJustM (Reviews.progressComment run) \cid -> whenRightM_ (reviewConnection (runRepository run)) \(_, _, _, conn) -> do
       stopped <- Git.publishPullRequestComment conn (Git.RepoRef run.owner run.repo run.revision) run.number (Just cid) (reviewMarker run <> "\n#### Review stopped\n\n" <> plain reason <> "\n\nComment `@monoscope review` to run it again.")
       whenLeft_ stopped $ Log.logAttention "Proof progress comment failed" . (run.id,)
 
@@ -667,7 +682,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
       ctx <- ask @AuthContext
       let cfg = ctx.config
           ref = Git.RepoRef run.owner run.repo run.revision
-      (mappings, credential, installationId, conn) <- require =<< reviewConnection run
+      (mappings, credential, installationId, conn) <- require =<< reviewConnection (runRepository run)
       pr <- require =<< Git.getPullRequest conn ref run.number
       trigger <- maybe Reviews.ReadyPullRequests (.trigger) . find (\s -> s.owner == run.owner && s.repo == run.repo) <$> Reviews.repositorySettings run.projectId
       let event = Reviews.pullRequestEvent run.owner run.repo installationId run.number pr

@@ -3137,7 +3137,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
 
   it "admission_capsReviewsPerProjectAndHostAndSavesProofRecipes" \tr -> do
     setup tr
-    let eventAt base n = Reviews.PullRequestEvent "impact-org" "checkout" 987654 n (T.replicate 40 (show n)) base frozenTime Reviews.Open
+    let eventAt base n = Reviews.PullRequestEvent "impact-org" "checkout" 987654 n (T.replicate 40 (show n)) base frozenTime Reviews.Open Nothing
         event = eventAt (T.replicate 40 "b")
         sideProof side code = Proof.ProofMedia{side, revision = T.replicate 40 "7", exitCode = Just code, cast = "cast", gif = "gif", mp4 = "mp4", browser = False, shots = [], chapters = [], setup = Nothing}
         deferred rid = dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload = ? AND run_at > now()" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest rid)
@@ -3149,6 +3149,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- Proofs run in the base's prepared workspace, so no review of that base starts while its build is pending.
     runQueryEffect tr (Reviews.claimRun (slots 100){Workspace.prepares = True} early) `shouldReturn` False
     dbExec tr "DELETE FROM background_jobs_long WHERE payload->>'tag' = 'PrepareReviewWorkspace'" ()
+    -- reviewBase_builtWhenAPullRequestMerges: a merge queues one build of its merge commit for a repository reviewed
+    -- this week, and a review against that commit waits for it as for its own base's build.
+    let baseBuilds = dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'PrepareBaseWorkspace'" ()
+        merged = Reviews.PullRequestEvent "impact-org" "checkout" 987654 6 (T.replicate 40 "6") (T.replicate 40 "a") frozenTime Reviews.Closed (Just $ T.replicate 40 "b")
+    replicateM_ 2 $ runQueryEffect tr $ Reviews.receiveEvent Nothing merged
+    baseBuilds `shouldReturn` (1 :: Int)
+    runQueryEffect tr (Reviews.claimRun (slots 100){Workspace.prepares = True} early) `shouldReturn` False
+    dbExec tr "DELETE FROM background_jobs_long WHERE payload->>'tag' = 'PrepareBaseWorkspace'" ()
     -- Two reviews per project run at once; the third waits in the queue rather than for a VM.
     traverse (\run -> runQueryEffect tr $ Reviews.claimRun (slots 100) run) [early, middle, late] `shouldReturn` [True, True, False]
     deferred late.id `shouldReturn` (1 :: Int)
