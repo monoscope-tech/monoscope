@@ -76,7 +76,6 @@ import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
-import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified as Eff
@@ -108,7 +107,7 @@ import Utils (b64ToJson, jsonToMap, nestedJsonFromDotNotation, replaceAllFormats
 
 
 processMessages
-  :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time :> es, Tracing :> es)
+  :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time :> es, Tracing :> es)
   => [(Text, ByteString)]
   -> HM.HashMap Text Text
   -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
@@ -146,7 +145,7 @@ processMessages msgs attrs =
       Nothing -> pure (Right ())
       Just (projectCaches, paired) ->
         Metrics.timed Metrics.ingestWriteHist []
-          . Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env Nothing) appCtx.extractionWorker projectCaches
+          . Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes appCtx.extractionWorker projectCaches
           . stampHashesAtIngest projectCaches
           =<< sampleSpans projectCaches (V.map (\(_, _, s) -> s) paired)
 

@@ -679,7 +679,6 @@ library
     , temporary
     , text
     , text-display
-    , these
     , time
     , time-manager
     , transformers
@@ -936,7 +935,6 @@ test-suite integration-tests
     , temporary
     , text
     , text-display
-    , these
     , time
     , tmp-postgres
     , transformers
@@ -1304,7 +1302,6 @@ test-suite test-dev
     , temporary
     , text
     , text-display
-    , these
     , time
     , time-manager
     , transformers

@@ -69,11 +69,10 @@ spec = describe "isTransientException" $ do
       EHasql.isTransientException (asExc err) `shouldBe` False
 
   -- 2026-10-13 04:22: a 45s TimeFusion deploy outlasted the 41.3s budget and dead-lettered 24 batches.
-  -- Each write leg's deadline plus one 30s pool-acquisition timeout must stay under the stall alarm.
-  it "lets TimeFusion outlast a whole deploy and keeps both write legs under the stall alarm" $ do
+  -- The write deadline plus one 30s pool-acquisition timeout must stay under the stall alarm.
+  it "lets TimeFusion outlast a whole deploy and keeps the write under the stall alarm" $ do
     Telemetry.tfWriteBudgetMicros `shouldSatisfy` (>= 4 * 45_000_000)
-    for_ [Telemetry.pgWriteBudgetMicros, Telemetry.tfWriteBudgetMicros] \us ->
-      us + 30_000_000 `shouldSatisfy` (< Queue.stallTicks * 1_000_000)
+    Telemetry.tfWriteBudgetMicros + 30_000_000 `shouldSatisfy` (< Queue.stallTicks * 1_000_000)
 
   -- Regression for the 2026-07-06 wedged-node incident: session-backfill's
   -- lock_timeout (55P03) is an expected, self-healing skip. It must be

@@ -34,7 +34,6 @@
 - monoidal-containers
 - cookie
 - safe-exceptions
-- these
 - annotated-exception
 - cryptonite
 - jose-jwt

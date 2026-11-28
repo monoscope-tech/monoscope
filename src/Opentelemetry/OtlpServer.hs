@@ -272,14 +272,12 @@ stampOrPassthrough appCtx v =
 -- | Shared tail of every logs/traces ingest path (queue and direct OTLP): session-stamp, mint
 -- ids, normalize routes, offer to Live Tail, then write. The batch succeeds or fails as a unit.
 ingestOtelRecords
-  :: (Hasql.Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es)
+  :: (Hasql.Hasql :> es, IOE :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es)
   => AuthContext
-  -> Telemetry.WriteTarget
-  -- ^ stores to (re)write; DLQ replay narrows to the originally-failed leg
   -> HM.HashMap Projects.ProjectId Projects.ProjectCache
   -> V.Vector Telemetry.OtelLogsAndSpans
   -> Eff es (Either Telemetry.WriteFailure ())
-ingestOtelRecords appCtx target caches records = do
+ingestOtelRecords appCtx caches records = do
   stamped <- stampOrPassthrough appCtx records
   -- Mint before route normalization: records without a span ID hash their raw attributes,
   -- so retry IDs stay independent of the current endpoint-template cache.
@@ -293,7 +291,7 @@ ingestOtelRecords appCtx target caches records = do
   -- (Kafka, Pub/Sub, direct OTLP gRPC/HTTP) goes through here: when the direct path lacked
   -- this hook, Live Tail was silently dead in queue-less deployments.
   fanOutToLiveTail appCtx $ Telemetry.redactOtelSpan <$> minted
-  Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes target appCtx.extractionWorker caches minted
+  Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes appCtx.extractionWorker caches minted
 
 
 -- | Hand each project's records to its active Live Tail subscriptions.
@@ -353,7 +351,7 @@ throwOnWriteFailure = either (throwGrpc GrpcInternal . ("OTLP write failed: " <>
 -- both stores; poisonMsgs are decode failures whose raw bytes must be DLQ'd
 -- by Pkg.Queue before committing offsets. On dual-write failure, returns
 -- 'Left WriteFailure'. Never throws on write/decode failure.
-processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es, Tracing :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
+processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es, Tracing :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
 processList [] _ = pure (Right ([], []))
 processList msgs !attrs =
   withSpan_ "otlp.process_list" (batchSpanAttrs (length msgs) attrs)
@@ -377,12 +375,9 @@ processList msgs !attrs =
   where
     process fallbackTime = do
       appCtx <- ask @AuthContext
-      -- DLQ replay stamps monoscope-write-failure; rewrite only the failed leg
-      -- so the durable store isn't duplicated. Live ingest has no header → both.
-      let target = Telemetry.writeTargetFor appCtx.env (HM.lookup "monoscope-write-failure" attrs >>= Telemetry.parseWriteFailureKind)
-          keyless = keylessSet appCtx
+      let keyless = keylessSet appCtx
           concatRecs perMsg = V.concat [recs | (_, _, recs) <- perMsg]
-          spansInsert label caches perMsg = checkpoint (fromString $ "processList:" <> label <> ":bulkInsert") $ ingestOtelRecords appCtx target caches (concatRecs perMsg)
+          spansInsert label caches perMsg = checkpoint (fromString $ "processList:" <> label <> ":bulkInsert") $ ingestOtelRecords appCtx caches (concatRecs perMsg)
       case HM.lookup "ce-type" attrs of
         Just "org.opentelemetry.otlp.logs.v1" ->
           processBatchPipeline @LS.ExportLogsServiceRequest
@@ -430,7 +425,7 @@ processList msgs !attrs =
             )
             ( \caches perMsg ->
                 checkpoint "processList:metrics:bulkInsert"
-                  $ Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes target
+                  $ Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes
                   . Telemetry.mintMetricIds
                   =<< sampleMetrics caches (concatRecs perMsg)
             )
@@ -982,7 +977,7 @@ collectUsageReport sender report = do
           , errors = Nothing
           , message_size_bytes = LBS.length encoded
           }
-  void $ ingestOtelRecords ctx (Telemetry.writeTargetFor ctx.env Nothing) caches (V.singleton record{summary = generateSummary record})
+  void $ ingestOtelRecords ctx caches (V.singleton record{summary = generateSummary record})
   pure NoContent
 
 
@@ -1576,7 +1571,7 @@ runServer appLogger appCtx tp = do
 
 
 -- | Process trace request with optional API key from gRPC metadata (extracted for testing)
-processTraceRequest :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
+processTraceRequest :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
 processTraceRequest metadataApiKey req =
   let !resourceSpans = V.fromList $ req ^. TSF.resourceSpans
    in processSignalRequest "Traces" "traces" "Received trace export request" "spans" "span_count" metadataApiKey (getSpanApiKey resourceSpans) (V.toList $ getSpanAttributeValue "at-project-id" resourceSpans) $ \currentTime projectCaches routing ->
@@ -1584,7 +1579,7 @@ processTraceRequest metadataApiKey req =
 
 
 -- | Process logs request with optional API key from gRPC metadata (extracted for testing)
-processLogsRequest :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
+processLogsRequest :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
 processLogsRequest metadataApiKey req =
   let !resourceLogs = V.fromList $ req ^. PLF.resourceLogs
    in processSignalRequest "Logs" "logs" "Received logs export request" "logs" "log_count" metadataApiKey (getLogApiKey resourceLogs) (V.toList $ getLogAttributeValue "at-project-id" resourceLogs) $ \currentTime projectCaches routing ->
@@ -1597,7 +1592,7 @@ processLogsRequest metadataApiKey req =
 -- ("Traces"/"Logs"), @signal@ the checkpoint/span label ("traces"/"logs"), @noun@/@countKey@
 -- the converted/inserted record noun and its log count key ("spans"/"span_count").
 processSignalRequest
-  :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es)
+  :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es)
   => Text
   -> Text
   -> Text
@@ -1640,7 +1635,7 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
     (AE.object [countKey AE..= V.length records])
 
   unless (V.null records) do
-    ingestOtelRecords appCtx (Telemetry.writeTargetFor appCtx.env Nothing) projectCaches records >>= throwOnWriteFailure
+    ingestOtelRecords appCtx projectCaches records >>= throwOnWriteFailure
     Log.logTrace
       (label <> ": Successfully inserted " <> noun <> " into database")
       (AE.object ["inserted_count" AE..= V.length records])
@@ -1681,7 +1676,7 @@ logsServiceExport = otlpExport processLogsRequest
 
 
 -- | Process metrics request with optional API key from gRPC metadata (extracted for testing)
-processMetricsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
+processMetricsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
 processMetricsRequest metadataApiKey req = do
   Log.logTrace "Received metrics export request" AE.Null
   when (metricRequestHasOverflow req) $ throwGrpc GrpcInternal "OTLP metric count exceeds BIGINT maximum"
@@ -1710,8 +1705,7 @@ processMetricsRequest metadataApiKey req = do
 
       unless (null metricRecords) do
         records <- Telemetry.mintMetricIds <$> sampleMetrics projectCaches (V.fromList metricRecords)
-        let target = Telemetry.writeTargetFor appCtx.env Nothing
-        Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes target records >>= throwOnWriteFailure
+        Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes records >>= throwOnWriteFailure
         Log.logTrace
           "Metrics: Successfully inserted metrics into database"
           (AE.object ["inserted_count" AE..= V.length records])

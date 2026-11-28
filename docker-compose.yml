@@ -107,7 +107,6 @@ services:
       - TIMEFUSION_PG_URL=postgresql://postgres:postgres@timefusion:5432/postgres
       - ENABLE_TIMEFUSION_READS=True
       - ENABLE_TIMEFUSION_WRITES=True
-      - ENABLE_POSTGRES_TELEMETRY_WRITES=False
       - PORT=8080
       - GRPC_PORT=4317
       - MIGRATIONS_DIR=/opt/monoscope/static/migrations/

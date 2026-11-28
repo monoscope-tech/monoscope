@@ -215,9 +215,6 @@ data EnvConfig = EnvConfig
   , geoipDbPath :: Text
   -- ^ A MaxMind-format @.mmdb@ (DB-IP City Lite in prod, IPinfo, MaxMind GeoLite2) used to place every
   -- ingested span and log by its @client.address@ when the SDK sent no @geo.*@. Empty disables the lookup.
-  , enablePostgresTelemetryWrites :: Bool
-  -- ^ Also write telemetry to the legacy Postgres @otel_logs_and_spans@ store. Off by
-  -- default: TimeFusion is the source of truth and telemetry reads go to it.
   , kafkaDeadLetterTopic :: Text
   , rrwebDeadLetterTopic :: Text
   -- ^ Separate dead-letter topic for rrweb session-replay poison. rrweb is NOT
@@ -381,11 +378,9 @@ instance DefConfig EnvConfig where
       , enableKafkaDeadLetterService = True
       , enableOtlpGrpcService = True
       , geoipDbPath = ""
-      , -- Telemetry lives in TimeFusion; Postgres keeps app state. PG-only telemetry is
-        -- ENABLE_TIMEFUSION_READS/WRITES=False with ENABLE_POSTGRES_TELEMETRY_WRITES=True.
+      , -- Telemetry lives in TimeFusion; Postgres keeps app state.
         enableTimefusionReads = True
       , enableTimefusionWrites = True
-      , enablePostgresTelemetryWrites = False
       , extractionWorkerShards = 4
       , extractionQueueCapacity = 64
       , drainFlushBatchSize = 1000
@@ -759,25 +754,9 @@ runPendingMigrations conn dir = do
 
 getAppContext :: Eff '[Fail, IOE] AuthContext
 getAppContext = do
-  decoded <- liftIO (decodeWithDefaults defConfig)
-  let config = telemetryStoreFallback decoded
-  when (config.enablePostgresTelemetryWrites /= decoded.enablePostgresTelemetryWrites)
-    $ putTextLn "TIMEFUSION_PG_URL is unset: telemetry is stored in Postgres. Set it to use TimeFusion."
+  config <- liftIO (decodeWithDefaults defConfig)
+  when (T.null $ T.strip config.timefusionPgUrl) $ fail "TIMEFUSION_PG_URL is required: telemetry is stored in TimeFusion (see docs/configuration.md)"
   configToEnv config
-
-
--- | TimeFusion is the default telemetry store; with no URL for it, keep telemetry in Postgres
--- instead of failing every write.
---
--- >>> let flags c = (c.enableTimefusionReads, c.enableTimefusionWrites, c.enablePostgresTelemetryWrites)
--- >>> flags (telemetryStoreFallback defConfig)
--- (False,False,True)
--- >>> flags (telemetryStoreFallback defConfig{timefusionPgUrl = "postgresql://tf:5432/postgres"})
--- (True,True,False)
-telemetryStoreFallback :: EnvConfig -> EnvConfig
-telemetryStoreFallback c
-  | T.null (T.strip c.timefusionPgUrl) = c{enableTimefusionReads = False, enableTimefusionWrites = False, enablePostgresTelemetryWrites = True}
-  | otherwise = c
 
 
 -- | Query 'information_schema.columns' for each queryable telemetry table once

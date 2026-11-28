@@ -68,11 +68,7 @@ module Models.Telemetry.Telemetry (
   redactJSON,
   redactOtelSpan,
   ingestionRedactionPaths,
-  WriteTarget (..),
-  writeTargetFor,
   WriteFailure,
-  WriteFailureKind (..),
-  parseWriteFailureKind,
   writeFailureSummary,
   writeFailureDlqHeaders,
   writeBatchIdentity,
@@ -82,7 +78,6 @@ module Models.Telemetry.Telemetry (
   SilentUnderPersistError (..),
   unaccountedRows,
   retryHasqlWrite,
-  pgWriteBudgetMicros,
   tfWriteBudgetMicros,
   readBudgetMicros,
   handOffBatches,
@@ -164,11 +159,9 @@ import Effectful
 import Effectful.Concurrent (Concurrent)
 import Effectful.Concurrent.STM qualified as STM
 import Effectful.Exception (throwIO, trySync)
-import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
 import Effectful.Log qualified as LogContext
-import GHC.Records (HasField)
 import Hasql.Decoders qualified as D
 import Hasql.DynamicStatements.Snippet (Snippet, encoderAndParam, toPreparableStatement)
 import Hasql.Encoders qualified as E
@@ -186,19 +179,14 @@ import Relude hiding (ask)
 import Relude.Extra.Bifunctor (bimapF)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Logging qualified as Log
-import System.Tracing (forkWithCtx)
-import Text.Casing (fromAny, toKebab)
 import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue, tokenFlow)
 import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 import "cryptonite" Crypto.Hash qualified as Crypto
-import "these" Data.These (These (..))
-import "these" Data.These qualified as These
 
 
 -- $setup
 -- >>> import Data.Time (UTCTime (..), addUTCTime, fromGregorian, secondsToDiffTime)
 -- >>> import Data.Vector qualified as V
--- >>> data Flags = Flags {enablePostgresTelemetryWrites :: Bool, enableTimefusionWrites :: Bool}
 
 
 -- Helper function to get nested value from a map using dot notation
@@ -1584,63 +1572,9 @@ mintOtelLogIds :: V.Vector OtelLogsAndSpans -> V.Vector OtelLogsAndSpans
 mintOtelLogIds = V.map \r -> (r :: OtelLogsAndSpans){id = deterministicOtelId r}
 
 
--- | This = PG failed; That = TF failed; These = both. Both stores are mandatory
--- because dashboards still read from PG; any failure must reach the DLQ via
--- 'Pkg.Queue' — never silent-ack.
-type WriteFailure = These SomeException SomeException
-
-
--- | Which stores a (re)write should attempt. Live ingest writes both; DLQ
--- replay narrows to the leg that originally failed, avoiding writes to the healthy leg.
-data WriteTarget = WriteBoth | WritePgOnly | WriteTfOnly
-  deriving stock (Eq, Ord, Show)
-
-
--- | Which leg(s) a DLQ'd batch failed on. Its kebab-cased constructor is the
--- @monoscope-write-failure@ header value a replay reads back.
---
--- >>> map writeFailureKindText [minBound .. maxBound]
--- ["pg-failed","tf-failed","both-failed"]
--- >>> map parseWriteFailureKind ["tf-failed", "pg-failed", "both-failed", "garbage"]
--- [Just TfFailed,Just PgFailed,Just BothFailed,Nothing]
-data WriteFailureKind = PgFailed | TfFailed | BothFailed
-  deriving stock (Bounded, Enum, Eq, Show)
-
-
-writeFailureKindText :: WriteFailureKind -> Text
-writeFailureKindText = toText . toKebab . fromAny . show
-
-
-parseWriteFailureKind :: Text -> Maybe WriteFailureKind
-parseWriteFailureKind = inverseMap writeFailureKindText
-
-
--- | Derive the write target from the PG/TF write flags and the failure a DLQ
--- replay carries. A failure marker is explicit replay intent (rewrite only the
--- leg that failed), so it is trusted as-is; otherwise the two flags decide.
--- Disabling PG (TF is the source of truth) yields TF-only ingest; both disabled
--- is a misconfig that falls back to WriteBoth rather than silently dropping data.
--- Takes the env by its two fields: 'System.Config' imports this module.
---
--- >>> let env pg tf = Flags {enablePostgresTelemetryWrites = pg, enableTimefusionWrites = tf}
--- >>> map (writeTargetFor (env True True)) [Just TfFailed, Just PgFailed, Just BothFailed, Nothing]
--- [WriteTfOnly,WritePgOnly,WriteBoth,WriteBoth]
--- >>> [writeTargetFor (env pg tf) Nothing | (pg, tf) <- [(True, False), (False, True), (False, False)]]
--- [WritePgOnly,WriteTfOnly,WriteBoth]
-writeTargetFor :: (HasField "enablePostgresTelemetryWrites" env Bool, HasField "enableTimefusionWrites" env Bool) => env -> Maybe WriteFailureKind -> WriteTarget
-writeTargetFor env = \case
-  Just TfFailed -> WriteTfOnly
-  Just PgFailed -> WritePgOnly
-  Just BothFailed -> byFlags
-  Nothing -> byFlags
-  where
-    byFlags = case (env.enablePostgresTelemetryWrites, env.enableTimefusionWrites) of
-      (True, False) -> WritePgOnly
-      (False, True) -> WriteTfOnly
-      (True, True) -> WriteBoth
-      -- Misconfig: prefer duplicate rows over dropping telemetry. Callers that
-      -- point both legs at the same store must not rely on this arm.
-      (False, False) -> WriteBoth
+-- | TimeFusion refused, timed out on, or silently under-persisted a batch. Any
+-- failure must reach the DLQ via 'Pkg.Queue' — never silent-ack.
+type WriteFailure = SomeException
 
 
 -- | A message that couldn't be parsed/converted. Callers MUST publish these to
@@ -1696,24 +1630,12 @@ unaccountedRows submitted bir = max 0 (submitted - fromIntegral bir.rowsInserted
 
 
 writeFailureSummary :: WriteFailure -> Text
-writeFailureSummary = writeFailureKindText . These.these (const PgFailed) (const TfFailed) (\_ _ -> BothFailed)
+writeFailureSummary _ = "tf-failed"
 
 
--- | DLQ headers a replay tool reads to rewrite only the missing side(s) and
--- avoid duplicating rows on the successful side.
---
--- >>> let e = toException (SilentUnderPersistError "x" 1 1)
--- >>> let look h = [HM.lookup k (writeFailureDlqHeaders h) | k <- ["monoscope-write-failure", "monoscope-pg-succeeded", "monoscope-tf-succeeded"]]
--- >>> (look (This e), look (That e), look (These e e))
--- ([Just "pg-failed",Just "false",Just "true"],[Just "tf-failed",Just "true",Just "false"],[Just "both-failed",Just "false",Just "false"])
+-- | DLQ headers a replay reads; the batch is rewritten whole.
 writeFailureDlqHeaders :: WriteFailure -> HM.HashMap Text Text
-writeFailureDlqHeaders wf =
-  let (pgOk, tfOk) = These.these (const ("false", "true")) (const ("true", "false")) (\_ _ -> ("false", "false")) wf
-   in HM.fromList
-        [ ("monoscope-write-failure", writeFailureSummary wf)
-        , ("monoscope-pg-succeeded", pgOk)
-        , ("monoscope-tf-succeeded", tfOk)
-        ]
+writeFailureDlqHeaders wf = HM.singleton "monoscope-write-failure" (writeFailureSummary wf)
 
 
 -- | UUID v5 with a byte-string name. The uuid package's list API unpacks and
@@ -1758,13 +1680,11 @@ withWriteBatch table keys =
   LogContext.localData ["write.batch_id" AE..= writeBatchIdentity table keys, "write.table" AE..= table, "record_count" AE..= V.length keys]
 
 
--- | Write-retry deadlines (µs). 'dualWrite' waits for both legs, so both are
--- deadlines: slow failures (30s pool-acquisition timeouts) stop too, and a batch
--- stays under 'Pkg.Queue.stallTicks'. TimeFusion's outlasts a whole deploy (45s
--- on 2026-10-13, which dead-lettered a 41.3s budget) 4x; PostgreSQL keeps ~10
--- fast attempts.
-pgWriteBudgetMicros, tfWriteBudgetMicros :: Int
-(pgWriteBudgetMicros, tfWriteBudgetMicros) = (25_000_000, 180_000_000)
+-- | Write-retry deadline (µs). Slow failures (30s pool-acquisition timeouts) stop
+-- too, so a batch stays under 'Pkg.Queue.stallTicks'; it outlasts a whole deploy
+-- (45s on 2026-10-13, which dead-lettered a 41.3s budget) 4x.
+tfWriteBudgetMicros :: Int
+tfWriteBudgetMicros = 180_000_000
 
 
 -- | Retry a Hasql write within @budgetMicros@ on transient errors with exponential
@@ -1811,138 +1731,66 @@ readBudgetMicros :: Int
 readBudgetMicros = 2_000_000
 
 
--- | Dual-write to PG + TimeFusion concurrently. Both stores are mandatory.
--- Returns 'Left WriteFailure' when a leg exhausts its transient-retry budget or
--- acks but silently under-persists ('unaccountedRows'); the whole batch is then
--- DLQ'd as a unit. 'Right ()' = every row landed on every required leg. There
--- is no per-row isolation: after upfront NUL-scrubbing + id validation a
--- single-row failure can't occur, and if one ever did it's a systemic bug to
--- surface loudly, not silently drop one row for.
+-- | Write to TimeFusion. Returns 'Left WriteFailure' when the write exhausts its
+-- transient-retry budget or acks but silently under-persists ('unaccountedRows');
+-- the whole batch is then DLQ'd as a unit. There is no per-row isolation: after
+-- upfront NUL-scrubbing + id validation a single-row failure can't occur, and if
+-- one ever did it's a systemic bug to surface loudly, not silently drop one row for.
 bulkInsertOtelLogsAndSpansTF
-  :: ( Hasql :> es
-     , IOE :> es
-     , Ki.StructuredConcurrency :> es
-     , Labeled "timefusion" Hasql :> es
-     , Log :> es
-     , Sleep :> es
-     )
+  :: (IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Sleep :> es)
   => Bool
-  -- ^ @tfPgTypes@: the TF leg casts id/JSON to native uuid/jsonb (a Postgres-backed
+  -- ^ @tfPgTypes@: cast id/JSON to native uuid/jsonb (a Postgres-backed
   -- TF, e.g. tests). Prod's real TimeFusion passes 'False' (bare text → Variant).
-  -> WriteTarget
   -> V.Vector OtelLogsAndSpans
   -> Eff es (Either WriteFailure ())
-bulkInsertOtelLogsAndSpansTF tfPgTypes target records = withWriteBatch "otel_logs_and_spans" ((\r -> (r.project_id, r.timestamp, r.id)) <$> records) do
-  Log.logTrace "bulkInsertOtelLogsAndSpansTF called"
-    $ AE.object ["write_target" AE..= show @Text target]
-  -- Single-leg replay: only the store that originally failed is rewritten, so
-  -- the durable leg keeps its single copy. Pg casts to native uuid/jsonb; real
-  -- Tf leaves bare text (Variant coercion), while a Postgres-backed Tf casts too.
-  fst
-    <$> dualWrite
-      (V.length records)
-      target
-      (bulkInsertOtelLogsAndSpans True records)
-      (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans tfPgTypes records)
+bulkInsertOtelLogsAndSpansTF tfPgTypes records =
+  withWriteBatch "otel_logs_and_spans" ((\r -> (r.project_id, r.timestamp, r.id)) <$> records)
+    $ fst
+    <$> persist (V.length records) (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans tfPgTypes records)
 
 
--- | Shared dual-write engine: run the PG/TF legs per 'WriteTarget' (concurrently
--- for 'WriteBoth'), classify the results — logging failed legs — and cross-check
--- persistence: a store that reported success but persisted fewer rows than
--- submitted silently dropped data ('unaccountedRows'). That converts to a
--- 'WriteFailure' so Pkg.Queue DLQs the batch instead of acking it; without this
--- a TuplesOk-swallow / accept-but-drop reads as a clean success and the rows are
--- lost with no trace (the 2026-06-12 TF-only gap). The returned Bool reports
--- whether at least one leg fully persisted the batch (for best-effort follow-on
--- work like the metrics catalog).
-dualWrite
-  :: (IOE :> es, Ki.StructuredConcurrency :> es, Log :> es, Sleep :> es)
-  => Int
-  -- ^ submitted row count
-  -> WriteTarget
-  -> Eff es BulkInsertResult
-  -- ^ pg write action (throws on failure; retried via 'retryHasqlWrite')
-  -> Eff es BulkInsertResult
-  -- ^ tf write action
-  -> Eff es (Either WriteFailure (), Bool)
-dualWrite submitted target writePg writeTf = do
+-- | Run a TimeFusion write and cross-check persistence: a store that reported
+-- success but persisted fewer rows than submitted silently dropped data
+-- ('unaccountedRows'). That converts to a 'WriteFailure' so Pkg.Queue DLQs the
+-- batch instead of acking it; without this a TuplesOk-swallow / accept-but-drop
+-- reads as a clean success and the rows are lost with no trace (the 2026-06-12
+-- gap). The Bool reports whether the batch fully persisted (for best-effort
+-- follow-on work like the metrics catalog).
+persist :: (IOE :> es, Log :> es, Sleep :> es) => Int -> Eff es BulkInsertResult -> Eff es (Either WriteFailure (), Bool)
+persist submitted write = do
   started <- monotonicMicros
-  result <- case target of
-    WriteBoth -> Ki.scoped \scope -> do
-      pgThread <- forkWithCtx scope $ retryHasqlWrite pgWriteBudgetMicros "pg" writePg
-      tfThread <- forkWithCtx scope $ retryHasqlWrite tfWriteBudgetMicros "tf" writeTf
-      (pgRes, tfRes) <- Ki.atomically $ (,) <$> Ki.await pgThread <*> Ki.await tfThread
-      (,fullyPersisted pgRes || fullyPersisted tfRes) <$> classify pgRes tfRes
-    WritePgOnly -> singleLeg "pg" This (,0) =<< retryHasqlWrite pgWriteBudgetMicros "pg" writePg
-    WriteTfOnly -> singleLeg "tf" That (0,) =<< retryHasqlWrite tfWriteBudgetMicros "tf" writeTf
-  when (isRight $ fst result) do
-    elapsed <- subtract started <$> monotonicMicros
-    Log.logInfo "telemetry.write_acknowledged" (AE.object ["write_target" AE..= show @Text target, "elapsed_us" AE..= elapsed])
-  pure result
-  where
-    lostOf = unaccountedRows submitted
-    fullyPersisted = either (const False) ((== 0) . lostOf)
-    -- Log a failed leg and yield the matching 'WriteFailure'.
-    logFail name kvs wf = Log.logAttention name (AE.object (("record_count" AE..= submitted) : kvs)) $> Left wf
-    -- Classify one store's result; @side@ is 'This'/'That' for the written leg,
-    -- @losts@ places the under-persist count on that leg ((l,0) for pg, (0,l) for tf).
-    singleLeg store side losts = \case
-      Right bir
-        | lost <- lostOf bir, lost > 0 -> (,False) <$> underPersist (losts lost)
-        | otherwise -> pure (Right (), True)
-      Left e -> (,False) <$> logFail (T.toUpper store <> "_WRITE_FAILED") ["error" AE..= show @Text e] (side e)
-    classify (Right pgBir) (Right tfBir) = case (lostOf pgBir, lostOf tfBir) of
-      (0, 0) -> pure (Right ())
-      losts -> underPersist losts
-    classify (Left ePg) (Right _) = logFail "PG_WRITE_FAILED" ["error" AE..= show @Text ePg] (This ePg)
-    classify (Right _) (Left eTf) = logFail "TF_WRITE_FAILED" ["error" AE..= show @Text eTf] (That eTf)
-    classify (Left ePg) (Left eTf) =
-      logFail "BOTH_WRITES_FAILED" ["pg_error" AE..= show @Text ePg, "tf_error" AE..= show @Text eTf] (These ePg eTf)
-
-    -- Build the Left WriteFailure for a detected silent under-persist. A side
-    -- with lost == 0 is healthy and dropped from the These.
-    underPersist (pgLost, tfLost) = do
-      let mkErr store lost = toException (SilentUnderPersistError store lost submitted)
-      Log.logAttention "WRITE_UNDERPERSIST_DETECTED"
-        $ AE.object ["record_count" AE..= submitted, "pg_lost" AE..= pgLost, "tf_lost" AE..= tfLost]
-      pure . Left $ case (pgLost > 0, tfLost > 0) of
-        (True, True) -> These (mkErr "pg" pgLost) (mkErr "tf" tfLost)
-        (False, True) -> That (mkErr "tf" tfLost)
-        _ -> This (mkErr "pg" pgLost)
+  retryHasqlWrite tfWriteBudgetMicros "tf" write >>= \case
+    Left e -> Log.logAttention "TF_WRITE_FAILED" (AE.object ["record_count" AE..= submitted, "error" AE..= show @Text e]) $> (Left e, False)
+    Right bir
+      | lost <- unaccountedRows submitted bir
+      , lost > 0 -> do
+          Log.logAttention "WRITE_UNDERPERSIST_DETECTED" $ AE.object ["record_count" AE..= submitted, "tf_lost" AE..= lost]
+          pure (Left $ toException $ SilentUnderPersistError "tf" lost submitted, False)
+      | otherwise -> do
+          elapsed <- subtract started <$> monotonicMicros
+          Log.logInfo "telemetry.write_acknowledged" (AE.object ["elapsed_us" AE..= elapsed])
+          pure (Right (), True)
 
 
--- | Persist `records` to Postgres (+TimeFusion when enabled) and hand each
--- per-project sub-batch to the in-process extraction worker. Every ingestion
--- call site (Pub/Sub, Kafka, OTLP gRPC) routes through this helper so the
--- eager-track derivation pipeline kicks off as soon as the rows land in
--- storage. A drop from `submitBatch` is non-fatal: the row is durable in both
--- stores, `processed_at` stays NULL, and the hourly `SafetyNetReprocess` job
--- re-submits it on the next tick.
+-- | Persist `records` to TimeFusion and hand each per-project sub-batch to the
+-- in-process extraction worker. Every ingestion call site (Pub/Sub, Kafka, OTLP
+-- gRPC) routes through this helper so the eager-track derivation pipeline kicks
+-- off as soon as the rows land in storage.
 insertAndHandOff
-  :: ( Hasql :> es
-     , IOE :> es
-     , Ki.StructuredConcurrency :> es
-     , Labeled "timefusion" Hasql :> es
-     , Log :> es
-     , Sleep :> es
-     )
+  :: (IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Sleep :> es)
   => Bool
-  -- ^ @tfPgTypes@ (see 'bulkInsertOtelLogsAndSpansTF'): cast the TF leg to native
-  -- uuid/jsonb (Postgres-backed TF). Prod real TimeFusion passes 'False'.
-  -> WriteTarget
+  -- ^ @tfPgTypes@ (see 'bulkInsertOtelLogsAndSpansTF')
   -> EW.WorkerState OtelLogsAndSpans
-  -- ^ NB: returns 'Left WriteFailure' if either store failed. Hand-off to the
-  -- extraction worker only happens on full success; a failed batch goes to DLQ.
+  -- ^ NB: returns 'Left WriteFailure' if the write failed. Hand-off to the
+  -- extraction worker only happens on success; a failed batch goes to DLQ.
   -> HM.HashMap Projects.ProjectId Projects.ProjectCache
   -> V.Vector OtelLogsAndSpans
   -> Eff es (Either WriteFailure ())
-insertAndHandOff tfPgTypes target worker caches records
+insertAndHandOff tfPgTypes worker caches records
   | V.null records = pure (Right ())
   | otherwise = do
       let cleanRecords = V.map redactOtelSpan records
-      res <- bulkInsertOtelLogsAndSpansTF tfPgTypes target cleanRecords
-      -- Hand-off only when every row landed on every required store; a
-      -- failed batch stays Left → DLQ.
+      res <- bulkInsertOtelLogsAndSpansTF tfPgTypes cleanRecords
       when (isRight res) $ handOffBatches worker caches cleanRecords
       pure res
 
@@ -2708,18 +2556,17 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
 
 
 insertSystemLog
-  :: (Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Sleep :> es)
-  => WriteTarget
-  -> Bool
+  :: (IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Sleep :> es)
+  => Bool
   -- ^ @tfPgTypes@ (see 'bulkInsertOtelLogsAndSpansTF')
   -> OtelLogsAndSpans
   -> Eff es ()
-insertSystemLog target tfPgTypes otelLog = do
+insertSystemLog tfPgTypes otelLog = do
   let minted = mintOtelLogIds (V.singleton otelLog)
   -- System logs are best-effort. The inner write logs its own failure via
   -- logAttention; surface a higher-level "system log dropped" so an incident
   -- triager investigating the original event can see that its trail was lost.
-  whenLeftM_ (bulkInsertOtelLogsAndSpansTF tfPgTypes target minted) \wf ->
+  whenLeftM_ (bulkInsertOtelLogsAndSpansTF tfPgTypes minted) \wf ->
     Log.logAttention "SYSTEM_LOG_DROPPED" (AE.object ["reason" AE..= writeFailureSummary wf])
 
 
@@ -3145,28 +2992,23 @@ mintMetricIds :: V.Vector MetricRecord -> V.Vector MetricRecord
 mintMetricIds = V.map $ \r -> r{id = Just $ fromMaybe (metricId r) r.id}
 
 
--- | Write raw metrics with precisely the same PG/TimeFusion target semantics
--- as logs and spans. The caller mints ids before calling this function; it is
--- repeated defensively here so ad-hoc producers cannot write random ids.
+-- | Write raw metrics to TimeFusion, as 'bulkInsertOtelLogsAndSpansTF' does logs and
+-- spans. The caller mints ids before calling this function; it is repeated
+-- defensively here so ad-hoc producers cannot write random ids.
 bulkInsertOtelMetrics
-  :: (Concurrent :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Sleep :> es)
+  :: (Concurrent :> es, Hasql :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Sleep :> es)
   => MetricCatalogBuffer
   -> Bool
-  -> WriteTarget
   -> V.Vector MetricRecord
   -> Eff es (Either WriteFailure ())
-bulkInsertOtelMetrics catalogBuffer tfPgTypes target records0 = do
+bulkInsertOtelMetrics catalogBuffer tfPgTypes records0 = do
   let records = mintMetricIds records0
   (result, rawPersisted) <-
     if V.null records
       then pure (Right (), False)
       else
         withWriteBatch "otel_metrics" ((\r -> (UUID.toText r.projectId, r.metricTime, UUID.toText $ fromMaybe (metricId r) r.id)) <$> records)
-          $ dualWrite
-            (V.length records)
-            target
-            (insertOtelMetrics True records)
-            (labeled @"timefusion" @Hasql $ insertOtelMetrics tfPgTypes records)
+          $ persist (V.length records) (labeled @"timefusion" @Hasql $ insertOtelMetrics tfPgTypes records)
   -- Raw storage is authoritative. Catalog work is buffered and only a full
   -- threshold batch is flushed on the ingestion path.
   when rawPersisted $ whenJustM (enqueueMetricCatalog catalogBuffer records) \batch ->

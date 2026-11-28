@@ -22,7 +22,6 @@ module Pkg.TestUtils (
   telemetrySource,
   clearTelemetry,
   flushTelemetry,
-  withPgTelemetryWrites,
   telemetryDbQuery,
   telemetryDbOne,
   clearFixedProjects,
@@ -962,15 +961,14 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
         Nothing -> (envConfig0, False)
       -- Flip the flags here (not just in the override at AuthContext.config) so the
       -- AuthContext.env slot also sees them; OtlpServer reads from .env.enableTimefusionWrites.
-      -- Telemetry goes to exactly one store, as in prod: TimeFusion when it runs (Postgres
-      -- telemetry writes off), Postgres alone under PG_ONLY.
+      -- Telemetry lives in TimeFusion only, as in prod.
       -- Reads are pinned for the same reason, and it is not only a routing choice: without a
       -- real TimeFusion the labeled pool IS Postgres, so a developer .env with
       -- ENABLE_TIMEFUSION_READS=True would have queries emit TimeFusion-only SQL (the
       -- `variant_get` resource accessor) against Postgres, which errors outright.
       -- Bot and billing ingress verify signatures made with the test keys (signSlackBody, signDiscordPayload, BillingSpec).
       -- Tests never use a Kafka broker, whatever KAFKA_BROKERS the local .env sets.
-      envConfig = envConfig1{kafkaBrokers = [], enableTimefusionWrites = tfEnabled, enableTimefusionReads = tfEnabled, enablePostgresTelemetryWrites = not tfEnabled, slackSigningSecret = testSlackSigningSecret, discordPublicKey = testDiscordPublicKeyHex, stripeWebhookSecret = "test-stripe-webhook-secret", lemonSqueezyWebhookSecret = "test-ls-webhook-secret"}
+      envConfig = envConfig1{kafkaBrokers = [], enableTimefusionWrites = tfEnabled, enableTimefusionReads = tfEnabled, slackSigningSecret = testSlackSigningSecret, discordPublicKey = testDiscordPublicKeyHex, stripeWebhookSecret = "test-stripe-webhook-secret", lemonSqueezyWebhookSecret = "test-ls-webhook-secret"}
   extractionWorker <- ExtractionWorker.initWorkerState envConfig.extractionWorkerShards envConfig.extractionQueueCapacity
   atomically $ writeTVar extractionWorker.acceptingBatches True
   traceSessionCache <- QueryCache.newTraceSessionCache
@@ -1038,7 +1036,6 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
               , processedAtCutoff = Unsafe.read "2020-01-01 00:00:00 UTC"
               , enableTimefusionWrites = tfEnabled
               , enableTimefusionReads = tfEnabled
-              , enablePostgresTelemetryWrites = not tfEnabled
               , -- Fallback values for external services (CI mode without .env)
                 -- .env values take priority if set, otherwise use test defaults
                 -- Must stay the SID in the committed golden file's name: the golden key is
@@ -1878,15 +1875,7 @@ testPid = UUIDId UUID.nil
 
 
 -- | Telemetry on Postgres alone (reads, charts and writes), for a spec that seeds or mutates it with raw SQL.
--- | Also write telemetry to Postgres, for specs of the bookkeeping that only exists there
--- (@processed_at@, the safety net) and is kept behind @enablePostgresTelemetryWrites@.
-withPgTelemetryWrites :: TestResources -> TestResources
-withPgTelemetryWrites tr = tr{trATCtx = tr.trATCtx{env = pgOn tr.trATCtx.env, config = pgOn tr.trATCtx.config}}
-  where
-    pgOn e = e{enablePostgresTelemetryWrites = True}
-
-
--- | SQL against the store that holds telemetry: TimeFusion when it runs, Postgres under PG_ONLY.
+-- | SQL against TimeFusion, which holds telemetry.
 -- For rows OTLP cannot express (a chosen hash, a placeholder endpoint) and their cleanup.
 telemetryDbExec :: PGS.ToRow q => TestResources -> PGS.Query -> q -> IO ()
 telemetryDbExec tr q args = withResource tr.trATCtx.timefusionPgPool \conn -> void $ PGS.execute conn q args
@@ -1897,7 +1886,7 @@ flushTelemetry :: TestResources -> IO ()
 flushTelemetry tr = when tr.trATCtx.env.enableTimefusionReads $ telemetryDbExec tr "FLUSH" ()
 
 
--- | The source that holds telemetry: TimeFusion when it runs, Postgres under PG_ONLY.
+-- | The source that holds telemetry.
 telemetrySource :: TestResources -> SqlSource
 telemetrySource tr = bool SqlPostgres SqlTimefusion tr.trATCtx.env.enableTimefusionReads
 
