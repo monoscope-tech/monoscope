@@ -91,6 +91,7 @@ import Servant.Server (Handler, ServerError (..), err302, err401)
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
+import System.Tracing (NotInstrumented)
 import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), DB, RespHeaders, addRespHeaders)
 import Utils (constEqText, escapedQueryPartial, faSprite_, hostPath, nonEmptyT, toUriStr)
 import Web.ApiTypes (ApiError (..), refusal)
@@ -689,7 +690,9 @@ data ClientMetadata = ClientMetadata
   deriving (ToJSON) via DAE.Snake ClientMetadata
 
 
-clientMetadataH :: Maybe Text -> ATBaseCtx ClientMetadata
+-- Not instrumented: SDK clients poll this, some without a key, and the plugin's span would record
+-- every 401 as an error (~1.9k an hour on prod); the request's server span still carries the status.
+clientMetadataH :: Maybe Text -> NotInstrumented (ATBaseCtx ClientMetadata)
 clientMetadataH Nothing = throwError err401
 clientMetadataH (Just authTextB64) = do
   appCtx <- ask @AuthContext

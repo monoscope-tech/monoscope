@@ -12,8 +12,9 @@ test.beforeAll(async ({ request }) => {
     VALUES ('${DEMO_PROJECT}',gen_random_uuid(),'infra-preset-${age}','${new Date(Date.now() - age * 1000).toISOString()}','container.cpu.usage','GAUGE',1,'infra-preset-${age}','infra-preset-pod-${age}','${namespace}',
       '${JSON.stringify({ k8s: { container: { name: `infra-preset-${age}` }, pod: { name: `infra-preset-pod-${age}` }, namespace: { name: namespace }, cluster: { uid: cluster }, node: { name: `infra-preset-host-${age}` } }, container: { image: { name: `registry.example/infra-preset-${age}` } }, cloud: { provider, region: "e2e-infra-region" } })}');`).join(""));
   mirrorToTf("otel_metrics", `project_id='${DEMO_PROJECT}' AND resource->'k8s'->'namespace'->>'name'='${namespace}'`);
-  // Match both page cache keys before asserting the picker changes the inventory.
-  for (const [since, host] of [["5m", "infra-preset-host-30"], ["1H", "infra-preset-host-600"]]) await expect.poll(async () => {
+  // The snapshot cache is project-wide and keyed by the raw preset, so a parallel spec can hold a
+  // pre-seed "5M" for its 30s TTL (#1124): wait out every key the preset tests click.
+  for (const [since, host] of [["5m", "infra-preset-host-30"], ["5M", "infra-preset-host-30"], ["1H", "infra-preset-host-600"]]) await expect.poll(async () => {
     const response = await request.get(`/p/${DEMO_PROJECT}/infrastructure/hosts?${new URLSearchParams({ provider, group: "region", from: "", to: "", since, deferred: "1" })}`);
     expect(response.status()).toBe(200);
     return (await response.text()).includes(host);
@@ -114,7 +115,6 @@ test('shared Kubernetes tabs preserve scoped filters and column choices', async 
 for (const [route, container, filters, searchName] of views) {
   test(`${route} time presets refresh scoped inventory`, async ({ page }) => {
     test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
-    test.fixme(true, "https://github.com/monoscope-tech/monoscope/issues/1124");
     await page.setViewportSize({ width: 390, height: 900 });
     const url = `/p/${DEMO_PROJECT}/infrastructure/${route}?${new URLSearchParams({ ...filters, from: "", to: "", since: "5m" })}`;
     await page.goto(url, { waitUntil: "domcontentloaded" });
