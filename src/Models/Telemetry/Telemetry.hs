@@ -137,7 +137,7 @@ import Data.Effectful.Hasql (Hasql, retryTransientLoop)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Sleep (Sleep, monotonicMicros)
 import Data.HashMap.Strict qualified as HM
-import Data.List.Extra (lookup)
+import Data.List.Extra (chunksOf, lookup)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
 import Data.OpenApi (ToSchema)
@@ -472,7 +472,8 @@ reconcileMetricCatalog useTf = do
 FROM otel_metrics
 WHERE timestamp >= now() - interval '2 hours' AND ingested_at >= now() - interval '2 hours'
 GROUP BY project_id, metric_name, metric_type, metric_unit, COALESCE(resource___service___name, 'unknown'), COALESCE(scope_name, '')|]
-  whenNotNull seen \rows ->
+  -- 12 binds a row: chunks keep a busy catalog under Postgres's 65,535-parameter limit.
+  forM_ (chunksOf 2000 seen) \rows ->
     Hasql.interpExecute_
       $ [HI.sql|INSERT INTO otel_metrics_meta (
   project_id, metric_name, metric_type, metric_unit, metric_description,
@@ -480,7 +481,7 @@ GROUP BY project_id, metric_name, metric_type, metric_unit, COALESCE(resource___
   first_seen_at, last_seen_at, first_timestamp, last_timestamp
 )
 SELECT v.* FROM (VALUES |]
-      <> mconcat (intersperse [HI.sql|,|] [[HI.sql|(#{r.projectId}::uuid, #{r.name}, #{r.kind}, #{r.unit}, #{r.description}, #{r.service}, #{r.scope}, #{r.scopeVersion}, #{r.firstSeen}::timestamptz, #{r.lastSeen}::timestamptz, #{r.firstTs}::timestamptz, #{r.lastTs}::timestamptz)|] | r <- toList rows])
+      <> mconcat (intersperse [HI.sql|,|] [[HI.sql|(#{r.projectId}::uuid, #{r.name}, #{r.kind}, #{r.unit}, #{r.description}, #{r.service}, #{r.scope}, #{r.scopeVersion}, #{r.firstSeen}::timestamptz, #{r.lastSeen}::timestamptz, #{r.firstTs}::timestamptz, #{r.lastTs}::timestamptz)|] | r <- rows])
       <> [HI.sql|) v (project_id, metric_name, metric_type, metric_unit, metric_description, service_name, scope_name, scope_version, first_seen_at, last_seen_at, first_timestamp, last_timestamp)
 WHERE EXISTS (SELECT 1 FROM projects.projects p WHERE p.id = v.project_id)
 ON CONFLICT (project_id, metric_name, metric_type, metric_unit, service_name, scope_name) DO UPDATE SET

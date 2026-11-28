@@ -569,7 +569,7 @@ spec = do
             (testPid, language <> " HTTP")
             `shouldReturn` [(Just path, Just endpointPath, Just host, Just method, Just endpointPath)]
           -- Outgoing summaries name the called host, so the provider is visible in the list row.
-          summary <- dbOne tr [sql| SELECT summary FROM otel_logs_and_spans WHERE project_id = ? AND name = ? |] (testPid, language <> " HTTP")
+          summary <- telemetryDbOne tr [sql| SELECT summary FROM otel_logs_and_spans WHERE project_id = ? AND name = ? |] (testPid, language <> " HTTP")
           V.elem ("host;neutral⇒" <> host) summary `shouldBe` (kind == PT.Span'SPAN_KIND_CLIENT)
       -- A missing method is recovered from the span name, never assumed to be GET.
       for_ ([("POST /orders/{id}", "POST", "/orders/{id}", True, True), ("HTTP /orders/{id}", "_OTHER", "/orders/{id}", True, True), ("HTTP /orders/42", "_OTHER", "/orders/{number}", False, True), ("PATCH /orders/{id}", "PATCH", "/orders/{id}", False, False)] :: [(Text, Text, Text, Bool, Bool)]) \(name, method, endpointRoute, hasRoute, hasPath) -> do
