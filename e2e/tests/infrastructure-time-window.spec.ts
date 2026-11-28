@@ -5,12 +5,14 @@ const namespace = "e2e-infra-preset";
 const cluster = "8b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
 const provider = "e2e-infra-provider";
 const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource->'k8s'->'namespace'->>'name'='${namespace}';`;
+let seededAt = "";
 test.beforeAll(async ({ request }) => {
   test.setTimeout(90_000);
   if (!process.env.E2E_BASE_URL) return;
   sql(cleanup + [30, 600].map(age => `INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,value,resource___k8s___container___name,resource___k8s___pod___name,resource___k8s___namespace___name,resource)
     VALUES ('${DEMO_PROJECT}',gen_random_uuid(),'infra-preset-${age}','${new Date(Date.now() - age * 1000).toISOString()}','container.cpu.usage','GAUGE',1,'infra-preset-${age}','infra-preset-pod-${age}','${namespace}',
       '${JSON.stringify({ k8s: { container: { name: `infra-preset-${age}` }, pod: { name: `infra-preset-pod-${age}` }, namespace: { name: namespace }, cluster: { uid: cluster }, node: { name: `infra-preset-host-${age}` } }, container: { image: { name: `registry.example/infra-preset-${age}` } }, cloud: { provider, region: "e2e-infra-region" } })}');`).join(""));
+  seededAt = new Date().toISOString();
   mirrorToTf("otel_metrics", `project_id='${DEMO_PROJECT}' AND resource->'k8s'->'namespace'->>'name'='${namespace}'`);
   // Match both page cache keys before asserting the picker changes the inventory.
   for (const [since, host] of [["5m", "infra-preset-host-30"], ["1H", "infra-preset-host-600"]]) await expect.poll(async () => {
@@ -141,7 +143,11 @@ for (const [route, container, filters, searchName] of views) {
     for (const [preset, count] of [["5M", 1], ["1H", 2]] as const) {
       await page.locator('[popovertarget="n-timepicker-popover"]').click();
       await page.locator(`#n-timepicker-popover button[data-value="${preset}"]`).click();
-      await expect(entries).toHaveCount(count);
+      if (await entries.count() !== count) {
+        const raw = await page.request.get(`/p/${DEMO_PROJECT}/infrastructure/${route}?${new URLSearchParams({ ...filters, from: "", to: "", since: preset, deferred: "1" })}`);
+        console.log(`[infra-preset-debug] ${route} ${preset} now=${new Date().toISOString()} seeded=${seededAt} rows=${((await raw.text()).match(/role="button"/g) ?? []).length}`);
+      }
+      await expect(entries).toHaveCount(count, { timeout: 20_000 });
       if (searchName) {
         await expect(focusTarget).toHaveValue("600");
         await expect(page.locator(`#${container} tr[role="button"]:visible`)).toHaveCount(preset === "1H" ? 1 : 0);
