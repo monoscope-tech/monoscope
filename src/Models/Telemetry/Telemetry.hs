@@ -1635,7 +1635,7 @@ writeFailureSummary _ = "tf-failed"
 
 -- | DLQ headers a replay reads; the batch is rewritten whole.
 writeFailureDlqHeaders :: WriteFailure -> HM.HashMap Text Text
-writeFailureDlqHeaders wf = HM.singleton "monoscope-write-failure" (writeFailureSummary wf)
+writeFailureDlqHeaders wf = one ("monoscope-write-failure", writeFailureSummary wf)
 
 
 -- | UUID v5 with a byte-string name. The uuid package's list API unpacks and
