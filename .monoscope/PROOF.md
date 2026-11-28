@@ -31,8 +31,9 @@ heading first saying which side and what it shows (`echo 'After: reused code on 
 Redact secrets (`sed 's/session=[^;]*/session=<redacted>/'`).
 
 When the app or a third-party service cannot run in the VM, prove what can be proved against a stub or
-a direct call, and say in the claim's summary what was stubbed or not run and why ("WorkOS stubbed:
-needs WORKOS_API_KEY"). A claim nothing could exercise stays unverified, with the reason.
+a direct call, and list each stand-in in the review's substitutions: mocked for a service you replaced
+("WorkOS: sessions inserted directly"), not run for a part you could not start. A claim the VM could not
+run at all is blocked, one you chose not to test is skipped, each with the reason.
 
 ## Haskell changes
 

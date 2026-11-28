@@ -57,6 +57,7 @@ module Models.Projects.ImpactReviews (
   Rating (..),
   ratingSignedPath,
   rateRun,
+  setDismissal,
   saveProofs,
   ProofRecipe (..),
   SetupReuse (..),
@@ -98,7 +99,7 @@ import Models.Projects.AgentUsage (ProjectUsage (..), UsageCost (..), UsageTotal
 import Models.Projects.AgentUsage qualified as Usage
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.Git qualified as Git
-import Relude
+import Relude hiding (Down)
 import System.Types (DB)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
@@ -136,6 +137,8 @@ data ReviewRun = ReviewRun
   , request :: Maybe Ask
   , base :: Maybe Text
   , rating :: Maybe Rating
+  , dismissedBy :: Maybe Text
+  , reviewUrl :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, HI.DecodeRow)
@@ -180,7 +183,8 @@ data PullRequestEvent = PullRequestEvent
 
 
 -- | Setup: a setup-only run that builds the repository's proof setup and leaves the pull request's review alone.
-data Command = Review | Prove | Setup
+-- Dismiss and Restore set the latest finished review's proof aside, or take it back, without a new run.
+data Command = Review | Prove | Setup | Dismiss | Restore
   deriving stock (Eq, Generic, Read, Show)
   deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" Command
 
@@ -294,6 +298,8 @@ decodeComment body = do
 --
 -- >>> map parseAsk ["@monoscope review", "@Monoscope TEST", "Thanks! @monoscope prove it, and check the empty state on mobile", "@monoscope prove", "email me@monoscope.dev", "@monoscope reviewer", "@monoscope setup"]
 -- [Just (Review,Nothing),Just (Prove,Nothing),Just (Prove,Just "and check the empty state on mobile"),Nothing,Nothing,Nothing,Just (Setup,Nothing)]
+-- >>> map parseAsk ["@monoscope dismiss: the base was broken", "@monoscope restore", "@monoscope restore this proof"]
+-- [Just (Dismiss,Just "the base was broken"),Just (Restore,Nothing),Just (Restore,Just "this proof")]
 parseAsk :: Text -> Maybe (Command, Maybe Text)
 parseAsk body = listToMaybe $ mapMaybe command $ T.breakOnAll "@" body
   where
@@ -304,7 +310,7 @@ parseAsk body = listToMaybe $ mapMaybe command $ T.breakOnAll "@" body
       let rest = T.drop (T.length "@monoscope ") after
       asum
         [ (c, focus) <$ guard (prefixCI word rest && maybe True ((`elem` [' ', ',', '.', ':', '!', '\n']) . fst) (T.uncons remainder))
-        | (word, c) <- [("review", Review), ("test", Prove), ("prove it", Prove), ("setup", Setup)]
+        | (word, c) <- [("review", Review), ("test", Prove), ("prove it", Prove), ("setup", Setup), ("dismiss", Dismiss), ("restore", Restore)]
         , let remainder = T.drop (T.length word) rest
               focus = guarded (not . T.null) $ T.take 500 $ T.strip $ T.dropWhile (`elem` [',', ':', '-', '.', ' ']) $ T.takeWhile (/= '\n') remainder
         ]
@@ -376,7 +382,7 @@ selectRuns :: DB es => Maybe ProjectId -> Maybe ReviewId -> Eff es [ReviewRun]
 selectRuns pid rid =
   Hasql.interp
     [HI.sql|SELECT r.id, t.id, t.project_id, t.owner, t.repo, t.number::bigint, r.revision,
-    r.state, r.result, r.error, t.comment_id, t.latest_revision, r.created_at, r.request, r.base, r.rating
+    r.state, r.result, r.error, t.comment_id, t.latest_revision, r.created_at, r.request, r.base, r.rating, r.dismissed_by, r.review_url
     FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
     WHERE (#{pid}::uuid IS NULL OR t.project_id = #{pid}) AND (#{rid}::uuid IS NULL OR r.id = #{rid})
     ORDER BY r.created_at DESC LIMIT 20|]
@@ -454,10 +460,12 @@ saveResult :: (AE.ToJSON a, DB es) => ReviewRun -> a -> Eff es ()
 saveResult run result = Hasql.interpExecute_ [HI.sql|UPDATE projects.pr_review_runs SET result = #{Aeson $ AE.toJSON result} WHERE id = #{run.id}|]
 
 
-finishRun :: DB es => ReviewRun -> Maybe Int64 -> Eff es ()
-finishRun run commentId =
+-- | Completes a run with the comment it published and the full review's address, which a later
+-- dismissal needs to redraw the same comment.
+finishRun :: DB es => ReviewRun -> Maybe (Int64, Text) -> Eff es ()
+finishRun run published =
   Hasql.interpExecute_
-    [HI.sql|WITH finished AS (UPDATE projects.pr_review_runs SET state = #{Completed}, finished_at = now()
+    [HI.sql|WITH finished AS (UPDATE projects.pr_review_runs SET state = #{Completed}, finished_at = now(), review_url = #{snd <$> published}
     WHERE id = #{run.id} AND state = #{Reviewing} RETURNING id, thread_id, revision, result),
     remembered AS (
       INSERT INTO projects.pr_review_knowledge
@@ -474,7 +482,7 @@ finishRun run commentId =
         WHERE k.run_id = f.id AND k.service = note->>'service' AND k.summary = note->>'summary'
           AND k.window_end = (f.result->>'windowEnd')::timestamptz)
     )
-    UPDATE projects.pr_review_threads SET comment_id = coalesce(#{commentId}, comment_id)
+    UPDATE projects.pr_review_threads SET comment_id = coalesce(#{fst <$> published}, comment_id)
     WHERE id IN (SELECT thread_id FROM finished) AND lease_owner = #{run.id}|]
 
 
@@ -890,6 +898,21 @@ rateRun pid rid rating =
     <$> Hasql.interpExecute
       [HI.sql|UPDATE projects.pr_review_runs r SET rating = #{rating}, rated_at = now()
       FROM projects.pr_review_threads t WHERE r.id = #{rid} AND t.id = r.thread_id AND t.project_id = #{pid}|]
+
+
+-- | Sets the pull request's latest finished review aside for a member (@Just login@) or takes it back
+-- (@Nothing@), returning that run so its comment can be redrawn. A dismissal also rates the proof down,
+-- as feedback that it got the change wrong; taking it back clears that rating.
+setDismissal :: DB es => Text -> Text -> Int -> Maybe Text -> Eff es (Maybe ReviewRun)
+setDismissal owner repo number who = do
+  updated <-
+    Hasql.interpOne
+      [HI.sql|UPDATE projects.pr_review_runs r SET dismissed_by = #{who}, rating = #{Down <$ who}, rated_at = now()
+      WHERE r.id = (SELECT f.id FROM projects.pr_review_runs f JOIN projects.pr_review_threads t ON t.id = f.thread_id
+        WHERE t.owner = #{owner} AND t.repo = #{repo} AND t.number = #{number} AND f.state = #{Completed} AND f.result IS NOT NULL
+        ORDER BY f.finished_at DESC NULLS LAST LIMIT 1)
+      RETURNING r.id|]
+  join <$> traverse (getRun . HI.getOneColumn) updated
 
 
 -- | What a proof media link signs; the prefix keeps it apart from widget signatures under the same key.

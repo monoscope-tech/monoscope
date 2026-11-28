@@ -88,7 +88,6 @@ import Pkg.TestUtils qualified as Test
 import Servant (ServerError (..), getResponse)
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.FileLock qualified as FileLock
 import System.Directory (canonicalizePath, copyFile, createDirectoryIfMissing, createDirectoryLink, createFileLink, doesDirectoryExist, doesFileExist, findExecutable, listDirectory, removeFile, removePathForcibly, renameDirectory)
 import System.Environment (getEnvironment)
 import System.Environment qualified as Environment
@@ -3226,6 +3225,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
     dbExec tr "UPDATE projects.pr_review_runs SET state = 'completed', progress_comment_id = 55 WHERE revision = ?" (Only $ T.replicate 40 "7")
     void $ runQueryEffect tr $ Reviews.receiveEvent (Just Reviews.Ask{login = "ada", commentId = 78, command = Reviews.Prove, focus = Nothing}) (event 7)
     dbQuery tr "SELECT state, progress_comment_id FROM projects.pr_review_runs WHERE revision = ?" (Only $ T.replicate 40 "7") `shouldReturn` [("queued" :: Text, Nothing :: Maybe Int64)]
+    -- dismissal_setsTheLatestFinishedReviewAside: @monoscope dismiss names who set the latest finished review aside
+    -- and rates its proof down; restore takes both back; a pull request with no finished review has nothing to dismiss.
+    dbExec tr "UPDATE projects.pr_review_runs SET state = 'completed', finished_at = now() + interval '1 hour', result = '{}' WHERE id = ?" (Only middle.id)
+    dismissed <- runQueryEffect tr $ Reviews.setDismissal middle.owner middle.repo middle.number (Just "ada")
+    (fmap (.id) dismissed, (.dismissedBy) =<< dismissed, (.rating) =<< dismissed) `shouldBe` (Just middle.id, Just "ada", Just Reviews.Down)
+    restored <- runQueryEffect tr $ Reviews.setDismissal middle.owner middle.repo middle.number Nothing
+    ((.dismissedBy) =<< restored, (.rating) =<< restored) `shouldBe` (Nothing, Nothing)
+    runQueryEffect tr (Reviews.setDismissal middle.owner middle.repo 999 (Just "ada")) >>= (`shouldSatisfy` isNothing)
 
   -- Like a reviewer's terminal screenshot: plain output is one still of everything printed, at 2x.
   it "proofMedia_plainTerminalOutputBecomesAStillCard" \_ -> do
@@ -3251,7 +3258,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
 
   it "reviewComment_leadsWithMergeRiskAndShowsProductionDetailOnlyWhereAllowed" \_ -> do
     let pid = UUIDId UUID.nil
-        run = Reviews.ReviewRun{id = UUIDId UUID.nil, threadId = UUIDId UUID.nil, projectId = pid, owner = "acme", repo = "checkout", number = 42, revision = T.replicate 40 "a", state = Reviews.Completed, result = Nothing, error = Nothing, commentId = Nothing, latestRevision = T.replicate 40 "a", createdAt = frozenTime, request = Nothing, base = Nothing, rating = Nothing}
+        run = Reviews.ReviewRun{id = UUIDId UUID.nil, threadId = UUIDId UUID.nil, projectId = pid, owner = "acme", repo = "checkout", number = 42, revision = T.replicate 40 "a", state = Reviews.Completed, result = Nothing, error = Nothing, commentId = Nothing, latestRevision = T.replicate 40 "a", createdAt = frozenTime, request = Nothing, base = Nothing, rating = Nothing, dismissedBy = Nothing, reviewUrl = Nothing}
         telemetry = Impact.Evidence "telemetry-1" Impact.Telemetry (Just "checkout-api") (Just "production") "https://app.monoscope.tech/p/x/log_explorer" Nothing (Just $ Impact.Observation 120340 312) (Just "https://app.monoscope.tech/p/x/widget.png?widgetZ=fixture") Nothing
         -- The agent queried twice and got the same daily counts: they show once, as a table, not a picture.
         observation = Impact.QueryObservation Impact.Aggregated (V.fromList ["timestamp", "retried_twice", "captures"]) (V.fromList [V.fromList [AE.Number t, AE.Number r, AE.Number c] | (t, r, c) <- [(1794873600, 3, 1164948), (1794787200, 0, 1556994), (1794700800, 1, 1538283)]]) False False
@@ -3276,15 +3283,20 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 , Impact.Claim "Reuses the idempotency key on every retry" Impact.Differs "The second retry sent a new key, so the provider saw two charges." ["proof-2"]
                 , Impact.Claim "Shows the retry count in the receipt" Impact.Unverified "The receipt page needs a browser, which this review cannot record." []
                 , Impact.Claim "Gives up after three timeouts" Impact.Differs "It retried a fourth time before giving up." []
+                , Impact.Claim "Charges a live card" Impact.Blocked "The VM has no Stripe live key, so no real charge could be made." []
+                , Impact.Claim "Retries on a 500 from the provider" Impact.Skipped "The fixture provider never returns a 500; left to the integration suite." []
                 ]
             )
             (Just [Impact.ProofLink key side (T.replicate 40 (if side == Agent.Base then "d" else "a")) (Just $ if side == Agent.Base then 1 else 0) (media "gif") (media "mp4") (media "cast") (Just browser) (Just [Impact.Shot label (media (show n <> ".png")) (Just width) | (n, (label, width)) <- zip [1 :: Int ..] (if browser then take (if side == Agent.Base then 1 else 2) [("Receipt card", 720), ("Retry history", 2560)] else [("Capture retried twice", 1904)])]) (Just [(t, step) | browser, (t, step) <- [(0, "Open the receipt"), (6.4, "Retry the charge"), (14.2, "Read the retry count")]]) | (key, browser) <- [("proof-1", True), ("proof-2", False)], side <- [Agent.Base, Agent.Head], let media ext = "https://app.monoscope.tech/p/x/reviews/r/proofs/" <> key <> "-" <> T.toLower (show side) <> (if "png" `T.isSuffixOf` ext then "-" else ".") <> ext <> "?sig=s"])
             Nothing
             Nothing
+            (Just [Impact.Substitution Impact.Mocked "Stripe" "sandbox key; captures replayed from a fixture", Impact.Substitution Impact.NotRun "receipt mailer" "needs a Postmark token"])
         render audience = Impact.renderReview "https://app.monoscope.tech" run audience result
     goldenText "impact-review/github-comment.md" $ render $ Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y" Nothing
     goldenText "impact-review/github-comment-links-only.md" $ render $ Impact.GitHubComment False "https://app.monoscope.tech/p/x/ai/runs/y" Nothing
     goldenText "impact-review/monoscope-view.md" $ render Impact.MonoscopeView
+    -- A member's @monoscope dismiss redraws the same review, saying who set its proof aside and how to undo it.
+    goldenText "impact-review/github-comment-dismissed.md" $ Impact.renderReview "https://app.monoscope.tech" run{Reviews.dismissedBy = Just "ada"} (Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y" Nothing) result
     -- A change the diff shows whole says so instead of recording it.
     goldenText "impact-review/github-comment-no-proof.md" $ Impact.renderReview "https://app.monoscope.tech" run (Impact.GitHubComment True "https://app.monoscope.tech/p/x/ai/runs/y" Nothing) result{Impact.findings = [], Impact.claims = Nothing, Impact.proofs = Nothing, Impact.summary = Just "Adds a Railway deploy button to the README and drops the obsolete Compose version field.", Impact.noProofNeeded = Just "Only the README and docker-compose.yml change; the diff shows both."}
     -- A browser proof leads with its recording, chapters and the merge-base and pull-request stills.
@@ -3587,7 +3599,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       [review] <- runQueryEffect tr $ Reviews.latestRuns testPid
       Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventPullRequest
       runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ExternalPosts) Catalog.ReviewEditors
-      let result = Impact.ReviewResult Impact.NoFinding [] [] [] frozenTime frozenTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      let result = Impact.ReviewResult Impact.NoFinding [] [] [] frozenTime frozenTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       runQueryEffect tr $ Reviews.saveResult review result
       dbExec tr "DELETE FROM background_jobs_long WHERE payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest review.id)
       cfg <- githubApp tr
@@ -3651,7 +3663,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         appComment (n :: Int) (app :: Int) body = AE.object ["id" AE..= n, "body" AE..= (body :: Text), "performed_via_github_app" AE..= AE.object ["id" AE..= app]]
         transport :: Bool -> ATBackgroundCtx a -> ATBackgroundCtx a
         transport hasComment = pullRequestApi files [appComment n app marker | hasComment, (n, app) <- [(88, 456), (99, 123)]] pass (prAt revision)
-        result = Impact.ReviewResult Impact.WorthChecking [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "The changed operation may stop emitting the signal used by the monitor. *check* @impact-review-test [outside](https://untrusted.invalid)\r#heading" "Check the monitor query before deploying." ["telemetry-1"]] [] [] frozenTime frozenTime Nothing (Just "Moves retry handling into the checkout operation. @impact-review-test | the monitor may lose its signal.") (Just [Impact.Assessment d (if d == Impact.ErrorDetection then Impact.Poor else Impact.Good) ["New path emits no span | table-breaking gap" | d == Impact.ErrorDetection] | d <- universe]) (Just []) Nothing Nothing Nothing
+        result = Impact.ReviewResult Impact.WorthChecking [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "The changed operation may stop emitting the signal used by the monitor. *check* @impact-review-test [outside](https://untrusted.invalid)\r#heading" "Check the monitor query before deploying." ["telemetry-1"]] [] [] frozenTime frozenTime Nothing (Just "Moves retry handling into the checkout operation. @impact-review-test | the monitor may lose its signal.") (Just [Impact.Assessment d (if d == Impact.ErrorDetection then Impact.Poor else Impact.Good) ["New path emits no span | table-breaking gap" | d == Impact.ErrorDetection] | d <- universe]) (Just []) Nothing Nothing Nothing Nothing
         resultText = pure . Right . jsonText
         fakeAgent :: ATBackgroundCtx a -> ATBackgroundCtx a
         fakeAgent = fakeAgentWith []

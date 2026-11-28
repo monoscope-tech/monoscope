@@ -93,7 +93,9 @@ issue: Receipt total overflows its card at 1280px
   observed: The total runs 9px past the receipt card on the right; it fits at 1440px.
 not verified: No load test covers the retry backoff.
 not verified: Provider-side duplicates are not visible in this project's telemetry.
+mocked: Stripe (sandbox key; captures replayed from a fixture)
+not run: receipt mailer (needs a Postmark token)
 merge risk: medium
 -->
 
-<sub>Reviewed [`aaaaaaa`](https://github.com/acme/checkout/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) with production telemetry from Jan 1 to Jan 8, 2025 · [Open the full review](https://app.monoscope.tech/p/x/ai/runs/y) · [Review settings](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings) · Did the proof get it right? [Yes](https://app.monoscope.tech/rate/up) · [No](https://app.monoscope.tech/rate/down) · Comment `@monoscope prove it` to prove again</sub>
+<sub>Reviewed [`aaaaaaa`](https://github.com/acme/checkout/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) with production telemetry from Jan 1 to Jan 8, 2025 · mocked: Stripe (sandbox key; captures replayed from a fixture) · not run: receipt mailer (needs a Postmark token) · [Open the full review](https://app.monoscope.tech/p/x/ai/runs/y) · [Review settings](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings) · Did the proof get it right? [Yes](https://app.monoscope.tech/rate/up) · [No](https://app.monoscope.tech/rate/down) · Comment `@monoscope prove it` to prove again</sub>
