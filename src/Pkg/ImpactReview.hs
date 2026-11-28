@@ -441,8 +441,10 @@ requestReview request = runErrorNoCallStack @Text do
   let acknowledge reaction = whenLeftM_ (Git.reactToComment conn ref request.ask.commentId reaction) $ Log.logAttention "Could not acknowledge a PR review ask" . (request.owner,request.repo,request.number,)
       -- No new run: the latest finished review's comment is redrawn with or without the dismissal.
       dismissal who =
-        Reviews.setDismissal request.owner request.repo request.number who >>= \case
-          Nothing -> Log.logInfo "No finished review to dismiss or restore" (request.owner, request.repo, request.number)
+        Reviews.setDismissal request who >>= \case
+          Nothing -> do
+            Log.logInfo "No finished review to dismiss or restore" (request.owner, request.repo, request.number)
+            acknowledge "confused"
           Just run -> do
             orThrow =<< redrawReview conn ref{Git.ref = run.revision} run
             acknowledge "+1"
@@ -464,6 +466,8 @@ requestReview request = runErrorNoCallStack @Text do
 
 
 -- | Redraws a finished review's comment from its stored result, as a dismissal changes its headline.
+-- It edits the review's own comment at the request of a member with write access, like the "Review
+-- stopped" edit, so it skips the routine's publication grant that a new review's comment goes through.
 redrawReview :: (DB es, HTTP.HTTP :> es, Reader AuthContext :> es) => Git.GitConn -> Git.RepoRef -> Reviews.ReviewRun -> Eff es (Either Text ())
 redrawReview conn ref run = runErrorNoCallStack @Text do
   ctx <- ask @AuthContext

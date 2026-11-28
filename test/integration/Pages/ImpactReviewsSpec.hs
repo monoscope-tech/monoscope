@@ -3228,11 +3228,20 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- dismissal_setsTheLatestFinishedReviewAside: @monoscope dismiss names who set the latest finished review aside
     -- and rates its proof down; restore takes both back; a pull request with no finished review has nothing to dismiss.
     dbExec tr "UPDATE projects.pr_review_runs SET state = 'completed', finished_at = now() + interval '1 hour', result = '{}' WHERE id = ?" (Only middle.id)
-    dismissed <- runQueryEffect tr $ Reviews.setDismissal middle.owner middle.repo middle.number (Just "ada")
+    let asked number installationId = Reviews.CommentRequest{owner = middle.owner, repo = middle.repo, installationId, number, ask = Reviews.Ask{login = "ada", commentId = 1, command = Reviews.Dismiss, focus = Nothing}}
+        dismissal who = runQueryEffect tr $ Reviews.setDismissal (asked middle.number 987654) who
+        rating = dbOne tr "SELECT rating FROM projects.pr_review_runs WHERE id = ?" (Only middle.id)
+    -- A restore with nothing dismissed leaves a member's own rating alone.
+    void $ runQueryEffect tr $ Reviews.rateRun testPid middle.id Reviews.Up
+    (isNothing <$> dismissal Nothing) `shouldReturn` True
+    rating `shouldReturn` Just ("up" :: Text)
+    dismissed <- dismissal (Just "ada")
     (fmap (.id) dismissed, (.dismissedBy) =<< dismissed, (.rating) =<< dismissed) `shouldBe` (Just middle.id, Just "ada", Just Reviews.Down)
-    restored <- runQueryEffect tr $ Reviews.setDismissal middle.owner middle.repo middle.number Nothing
+    (isNothing <$> dismissal (Just "bob")) `shouldReturn` True
+    restored <- dismissal Nothing
     ((.dismissedBy) =<< restored, (.rating) =<< restored) `shouldBe` (Nothing, Nothing)
-    runQueryEffect tr (Reviews.setDismissal middle.owner middle.repo 999 (Just "ada")) >>= (`shouldSatisfy` isNothing)
+    -- Another installation, or a pull request with no finished review, has nothing to dismiss.
+    for_ [asked middle.number 1, asked 999 987654] \request -> runQueryEffect tr (Reviews.setDismissal request (Just "ada")) >>= (`shouldSatisfy` isNothing)
 
   -- Like a reviewer's terminal screenshot: plain output is one still of everything printed, at 2x.
   it "proofMedia_plainTerminalOutputBecomesAStillCard" \_ -> do

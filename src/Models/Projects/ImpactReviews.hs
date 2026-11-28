@@ -902,15 +902,21 @@ rateRun pid rid rating =
 
 -- | Sets the pull request's latest finished review aside for a member (@Just login@) or takes it back
 -- (@Nothing@), returning that run so its comment can be redrawn. A dismissal also rates the proof down,
--- as feedback that it got the change wrong; taking it back clears that rating.
-setDismissal :: DB es => Text -> Text -> Int -> Maybe Text -> Eff es (Maybe ReviewRun)
-setDismissal owner repo number who = do
+-- as feedback that it got the change wrong; taking it back clears that rating. Only projects linked
+-- through the comment's installation count, and a review already in the asked state is left alone, so a
+-- restore never clears a rating that no dismissal set.
+setDismissal :: DB es => CommentRequest -> Maybe Text -> Eff es (Maybe ReviewRun)
+setDismissal request who = do
   updated <-
     Hasql.interpOne
       [HI.sql|UPDATE projects.pr_review_runs r SET dismissed_by = #{who}, rating = #{Down <$ who}, rated_at = now()
       WHERE r.id = (SELECT f.id FROM projects.pr_review_runs f JOIN projects.pr_review_threads t ON t.id = f.thread_id
-        WHERE t.owner = #{owner} AND t.repo = #{repo} AND t.number = #{number} AND f.state = #{Completed} AND f.result IS NOT NULL
+        WHERE t.owner = #{request.owner} AND t.repo = #{request.repo} AND t.number = #{request.number} AND f.state = #{Completed} AND f.result IS NOT NULL
+          AND t.project_id IN (SELECT m.project_id FROM projects.code_mappings m
+            JOIN projects.git_credentials c ON c.id = m.credential_id AND c.project_id = m.project_id
+            WHERE c.installation_id = #{request.installationId} AND lower(m.owner) = #{request.owner} AND lower(m.repo) = #{request.repo})
         ORDER BY f.finished_at DESC NULLS LAST LIMIT 1)
+        AND (#{who}::text IS NULL) = (r.dismissed_by IS NOT NULL)
       RETURNING r.id|]
   join <$> traverse (getRun . HI.getOneColumn) updated
 
