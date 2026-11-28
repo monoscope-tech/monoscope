@@ -3152,11 +3152,22 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- reviewBase_builtWhenAPullRequestMerges: a merge queues one build of its merge commit for a repository reviewed
     -- this week, and a review against that commit waits for it as for its own base's build.
     let baseBuilds = dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload->>'tag' = 'PrepareBaseWorkspace'" ()
-        merged = Reviews.PullRequestEvent "impact-org" "checkout" 987654 6 (T.replicate 40 "6") (T.replicate 40 "a") frozenTime Reviews.Closed (Just $ T.replicate 40 "b")
+        mergedAs sha = Reviews.PullRequestEvent "impact-org" "checkout" 987654 6 (T.replicate 40 "6") (T.replicate 40 "a") frozenTime Reviews.Closed sha
+        merged = mergedAs $ Just $ T.replicate 40 "b"
+        reviewsAged days = dbExec tr "UPDATE projects.pr_review_runs SET created_at = created_at - make_interval(days => ?) WHERE thread_id IN (SELECT id FROM projects.pr_review_threads WHERE repo = 'checkout')" (Only (days :: Int))
+    -- A close without a merge builds nothing; a newer merge replaces an older one's build that has not started.
+    void $ runQueryEffect tr $ Reviews.receiveEvent Nothing $ mergedAs Nothing
+    baseBuilds `shouldReturn` (0 :: Int)
+    void $ runQueryEffect tr $ Reviews.receiveEvent Nothing $ mergedAs $ Just $ T.replicate 40 "c"
     replicateM_ 2 $ runQueryEffect tr $ Reviews.receiveEvent Nothing merged
-    baseBuilds `shouldReturn` (1 :: Int)
+    dbQuery tr "SELECT payload->'contents'->>3 FROM background_jobs_long WHERE payload->>'tag' = 'PrepareBaseWorkspace'" () `shouldReturn` [Only (T.replicate 40 "b")]
     runQueryEffect tr (Reviews.claimRun (slots 100){Workspace.prepares = True} early) `shouldReturn` False
     dbExec tr "DELETE FROM background_jobs_long WHERE payload->>'tag' = 'PrepareBaseWorkspace'" ()
+    -- A repository with no review this week builds nothing on a merge.
+    reviewsAged 8
+    void $ runQueryEffect tr $ Reviews.receiveEvent Nothing $ mergedAs $ Just $ T.replicate 40 "d"
+    baseBuilds `shouldReturn` (0 :: Int)
+    reviewsAged (-8)
     -- Two reviews per project run at once; the third waits in the queue rather than for a VM.
     traverse (\run -> runQueryEffect tr $ Reviews.claimRun (slots 100) run) [early, middle, late] `shouldReturn` [True, True, False]
     deferred late.id `shouldReturn` (1 :: Int)

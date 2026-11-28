@@ -245,7 +245,7 @@ decodeEvent body = do
 
 -- | The event a fetched pull request implies, as if GitHub had just delivered it.
 pullRequestEvent :: Text -> Text -> Int64 -> Int -> Git.PullRequest -> PullRequestEvent
-pullRequestEvent owner repo installationId number pr = PullRequestEvent{owner, repo, installationId, number, revision = T.toLower pr.head.revision, base = T.toLower pr.base.revision, updatedAt = pr.updatedAt, state = if pr.state /= "open" then Closed else if pr.draft then Draft else Open, mergeCommit = guarded (\sha -> T.length sha == 40 && T.all isHexDigit sha) . T.toLower =<< (guard (pr.merged == Just True) >> pr.mergeCommitSha)}
+pullRequestEvent owner repo installationId number pr = PullRequestEvent{owner, repo, installationId, number, revision = T.toLower pr.head.revision, base = T.toLower pr.base.revision, updatedAt = pr.updatedAt, state = if pr.state /= "open" then Closed else if pr.draft then Draft else Open, mergeCommit = guarded (\sha -> T.length sha == 40 && T.all isHexDigit sha) . T.toLower =<< (pr.mergeCommitSha <* guard (pr.merged == Just True))}
 
 
 repositoryName :: Repository -> Either EventDecodeError (Text, Text)
@@ -373,9 +373,16 @@ receiveEvent request event =
         AND t.project_id = q.project_id AND t.owner = #{event.owner} AND t.repo = #{event.repo} AND r.base = #{event.base})
       AND NOT EXISTS (SELECT 1 FROM background_jobs_long j WHERE j.payload->>'tag' = 'PrepareBaseWorkspace' AND j.status IN ('queued', 'retry', 'locked')
         AND j.payload->'contents' = jsonb_build_array(q.project_id, #{event.owner}, #{event.repo}, #{event.base}))
+  ), superseded_base_builds AS (
+    -- A newer merge supersedes an older merge's build that has not started yet.
+    DELETE FROM background_jobs_long j USING eligible e
+    WHERE #{event.mergeCommit}::text IS NOT NULL AND j.payload->>'tag' = 'PrepareBaseWorkspace' AND j.status = 'queued'
+      AND j.payload->'contents'->>0 = e.project_id::text AND j.payload->'contents'->>1 = #{event.owner} AND j.payload->'contents'->>2 = #{event.repo}
+      AND j.payload->'contents'->>3 <> #{event.mergeCommit}::text
   ), base_builds AS (
     -- A merge moves the branch the next pull requests start from: build its head now, so the first of
     -- them does not wait for that build. Only repositories reviewed this week, so idle ones cost nothing.
+    -- Owners, repositories and revisions are lowercased where they enter, so the payload compares verbatim.
     INSERT INTO background_jobs_long (run_at, status, payload)
     SELECT now(), 'queued', jsonb_build_object('tag', 'PrepareBaseWorkspace', 'contents', jsonb_build_array(e.project_id, #{event.owner}, #{event.repo}, #{event.mergeCommit}::text))
     FROM eligible e
