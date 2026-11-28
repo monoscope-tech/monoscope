@@ -3433,11 +3433,11 @@ jobsWorkerInitWithTools logger appCtx tp projectTools = when appCtx.config.enabl
     -- VM slots bound them: one build at a time per node, and claimRun admits reviews by agent slots. A
     -- node without agent slots (web replicas, no KVM) would hold these jobs it cannot run, so it skips them.
     $ Workspace.hostSlots
-    >>= \slots -> when (slots.agents > 0) $ releaseLocks >> startJobRunner config{cfgTableName = "background_jobs_long", cfgConcurrencyControl = MaxConcurrentJobs 8, cfgDefaultJobTimeout = Seconds (Workspace.buildSeconds + 60)}
+    >>= \slots -> when (slots.agents > 0) $ releaseLocks slots.node >> startJobRunner config{cfgTableName = "background_jobs_long", cfgConcurrencyControl = MaxConcurrentJobs 8, cfgDefaultJobTimeout = Seconds (Workspace.buildSeconds + 60)}
   where
     config = jobsWorkerConfig logger appCtx tp projectTools
-    releaseLocks = tryStepIO logger appCtx "Releasing this worker's stale job locks failed" do
-      released <- releaseStaleLocks appCtx.jobsPool
+    releaseLocks node = tryStepIO logger appCtx "Releasing this worker's stale job locks failed" do
+      released <- releaseStaleLocks appCtx.jobsPool node
       when (released > 0) $ runLogT (show appCtx.config.environment) logger appCtx.config.logLevel $ LogLegacy.logInfo "Requeued long jobs this worker held before restarting" released
 
 
@@ -3447,11 +3447,12 @@ jobRunnerName = (\system pid -> toText (nodeName system) <> ":" <> show pid) <$>
 
 
 -- | A restarted worker's long jobs from before the restart stay locked under its unchanged name until the
--- hour-long job timeout reclaims them, and every review waiting on them stalls. Nothing of this process runs
--- yet, so locks under its name are stale.
-releaseStaleLocks :: Pool SimplePG.Connection -> IO Int64
-releaseStaleLocks pool =
-  jobRunnerName >>= \name -> withResource pool \conn ->
+-- hour-long job timeout reclaims them, and its reviews' leases on their node hold the review slots for 50
+-- minutes, so every review waiting on either stalls. Nothing of this process runs yet, so both are stale.
+releaseStaleLocks :: Pool SimplePG.Connection -> Text -> IO Int64
+releaseStaleLocks pool node =
+  jobRunnerName >>= \name -> withResource pool \conn -> do
+    void $ SimplePG.execute conn [sql|UPDATE projects.pr_review_threads SET lease_owner = NULL, lease_until = NULL WHERE lease_node = ? AND lease_until > now()|] (SimplePG.Only node)
     SimplePG.execute conn [sql|UPDATE background_jobs_long SET status = 'queued', locked_at = NULL, locked_by = NULL, run_at = now() WHERE status = 'locked' AND locked_by = ?|] (SimplePG.Only name)
 
 
