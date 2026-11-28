@@ -626,7 +626,7 @@ spec = around withTestResources do
     kept <- logCount tr pid
     kept `shouldSatisfy` \k -> k > 160 && k < 240
     dbQuery tr [sql|SELECT SUM(seen)::INT, SUM(kept)::INT FROM projects.ingest_sampling WHERE project_id = ? AND hour >= date_trunc('day', ?::timestamptz, 'UTC')|] (pid, frozenTime) `shouldReturn` [(400 :: Int, kept)]
-    dbQuery tr [sql|SELECT DISTINCT (attributes->'monoscope'->>'sample_weight')::float8 FROM otel_logs_and_spans WHERE project_id = ?::text|] (Only pid) `shouldReturn` [Only (2 :: Double)]
+    telemetryDbQuery tr [sql|SELECT DISTINCT (attributes->'monoscope'->>'sample_weight')::float8 FROM otel_logs_and_spans WHERE project_id = ?|] (Only pid.toText) `shouldReturn` [Only (2 :: Double)]
 
     -- Errors draw on their own reserve (no history: kept at 1) while the rest is kept at 0.1.
     (trE, errPid, errKey) <- cappedExpecting tr0 80000
@@ -634,7 +634,7 @@ spec = around withTestResources do
         spanAt t s err = mkSpanRequest (hex 32 t) (hex 16 (t * 10 + s)) Nothing "op" [] ((defMessage & PTF.code .~ PT.Status'STATUS_CODE_ERROR) <$ guard err) [] (mkResource errKey []) frozenTime
         spans = [spanAt t s (s == 1) | t <- [1 .. 20 :: Int], s <- [1 .. 3]] <> [spanAt t 1 False | t <- [101 .. 300]]
     runTestBg frozenTime trE $ OtlpServer.processTraceRequest Nothing (defMessage & TSF.resourceSpans .~ concatMap (^. TSF.resourceSpans) spans)
-    perTrace :: [(Text, Int)] <- dbQuery trE [sql|SELECT context___trace_id, COUNT(*)::INT FROM otel_logs_and_spans WHERE project_id = ?::text GROUP BY 1|] (Only errPid)
+    perTrace :: [(Text, Int)] <- telemetryDbQuery trE [sql|SELECT context___trace_id, COUNT(*)::INT FROM otel_logs_and_spans WHERE project_id = ? GROUP BY 1|] (Only errPid.toText)
     let (errorTraces, okTraces) = L.partition ((`elem` map (hex 32) [1 .. 20 :: Int]) . fst) perTrace
     map snd errorTraces `shouldBe` replicate 20 3
     length okTraces `shouldSatisfy` \k -> k > 5 && k < 45
@@ -642,7 +642,7 @@ spec = around withTestResources do
     (trM, metricPid, metricKey) <- cappedExpecting tr0 16000
     let points = [createGaugeMetricAtTime metricKey [] [] ("m" <> show i) 1 t | i <- [1 .. 200 :: Int], t <- [frozenTime, addUTCTime 60 frozenTime]]
     runTestBg frozenTime trM $ OtlpServer.processMetricsRequest Nothing (defMessage & MSF.resourceMetrics .~ concatMap (^. MSF.resourceMetrics) points)
-    perSeries :: [(Text, Int)] <- dbQuery trM [sql|SELECT metric_name, COUNT(*)::INT FROM otel_metrics WHERE project_id = ? GROUP BY 1|] (Only metricPid)
+    perSeries :: [(Text, Int)] <- telemetryDbQuery trM [sql|SELECT metric_name, COUNT(*)::INT FROM otel_metrics WHERE project_id = ? GROUP BY 1|] (Only metricPid.toText)
     L.nub (map snd perSeries) `shouldBe` [2]
     length perSeries `shouldSatisfy` \k -> k > 60 && k < 140
 
@@ -790,7 +790,7 @@ lastReported tr pid = dbOne tr [sql|SELECT usage_last_reported FROM projects.pro
 
 
 logCount :: TestResources -> Projects.ProjectId -> IO Int
-logCount tr pid = dbOne tr [sql|SELECT COUNT(*)::INT FROM otel_logs_and_spans WHERE project_id = ?::text|] (Only pid)
+logCount tr pid = sum . map fromOnly <$> telemetryDbQuery tr [sql|SELECT COUNT(*)::INT FROM otel_logs_and_spans WHERE project_id = ?|] (Only pid.toText)
 
 
 -- | A Free project with the free tier on and yesterday's non-error traffic from this hour on

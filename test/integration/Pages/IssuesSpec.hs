@@ -86,7 +86,7 @@ spec = around withTestResources $ describe "Issues" do
     goldenHtml "issue-list-api-change-groups" do grouped; singleton
 
     -- Detail resolves the originating trace and honours relative and absolute ranges on both routes.
-    endpointTraces <- map fromOnly <$> dbQuery tr [sql| SELECT DISTINCT context___trace_id FROM otel_logs_and_spans WHERE project_id=? AND attributes___url___path='/' AND context___trace_id IS NOT NULL |] (Only testPid)
+    endpointTraces <- map fromOnly <$> telemetryDbQuery tr [sql| SELECT DISTINCT context___trace_id FROM otel_logs_and_spans WHERE project_id=? AND attributes___url___path='/' AND context___trace_id IS NOT NULL |] (Only testPid)
     fmap fst . (.traceRef) <$> detailView tr iid >>= (`shouldSatisfy` maybe False (`elem` endpointTraces))
     hashed <- viewOf tr $ IssuesPage.issueDetailHashGetH testPid i0.targetHash Nothing (Just "14D") Nothing Nothing Nothing
     hashed.tp.since `shouldBe` Just "14D"
@@ -143,7 +143,8 @@ spec = around withTestResources $ describe "Issues" do
 
     -- A span schema has no HTTP endpoint, so no trace may be looked up by placeholder method/path.
     let subject = ApiChanges.SpanSchema SchemaLearning.emptyScope{SchemaLearning.service = Just "checkout", SchemaLearning.spanName = Just "process-order"}
-    dbExec tr [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, attributes___http___request___method, attributes___url___path, context___trace_id, summary) VALUES (gen_random_uuid(), ?, ?, ?, 'UNKNOWN', '/', 'placeholder-trace', '{}') |] (testPid, frozenTime, frozenTime)
+    placeholderId <- DataUUID.toText <$> UUID.nextRandom
+    telemetryDbExec tr [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, date, attributes___http___request___method, attributes___url___path, context___trace_id, summary) VALUES (?, ?, ?, ?, ?, 'UNKNOWN', '/', 'placeholder-trace', ARRAY[]::text[]) |] (placeholderId, testPid, frozenTime, frozenTime, frozenTime)
     spanSchema <- seedIssue tr (issueSeed Issues.ApiChange "span-schema"){title = "Span schema changed", payload = [aesonQQ|{ "subject": #{subject}, "endpoint_method": "UNKNOWN", "endpoint_path": "/", "endpoint_host": "Unknown", "anomaly_hashes": [], "shape_changes": [], "format_changes": [], "new_fields": [], "deleted_fields": [], "modified_fields": [] }|]}
     (.traceRef) <$> detailView tr spanSchema `shouldReturn` Nothing
 
@@ -276,7 +277,7 @@ spec = around withTestResources $ describe "Issues" do
     void $ runAllBackgroundJobs frozenTime tr.trATCtx
     pat <- runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns testPid Nothing 500 0) >>= maybe (fail "no StepProbeError") pure . find ((== "StepProbeError") . (.errorType))
     iid <- (.id) <$> (runTestBg frozenTime tr (Issues.selectIssueByHash testPid pat.hash Issues.AnyIssue) >>= maybe (fail "no issue") pure)
-    let step dir from = runTestBg frozenTime tr (Telemetry.adjacentHashEvent testPid ("err:" <> pat.hash) dir from)
+    let step dir from = runTestBg frozenTime tr (EHasql.withHasqlTimefusion tr.trATCtx.env.enableTimefusionReads $ Telemetry.adjacentHashEvent testPid ("err:" <> pat.hash) dir from)
     mapM (uncurry step) [(Telemetry.Older, at 0), (Telemetry.Newer, at (-600)), (Telemetry.Older, at (-600)), (Telemetry.Recommended, at 1)]
       `shouldReturn` [Just (tb, at (-300)), Just (tb, at (-300)), Nothing, Just (ta, at (-600))]
     -- Past the oldest event the reader stays where they were.
@@ -309,11 +310,11 @@ spec = around withTestResources $ describe "Issues" do
         iso = toText . formatTime defaultTimeLocale "%FT%TZ"
         window dt = (Just $ iso $ addUTCTime (-60) dt, Just $ iso $ addUTCTime 60 dt)
         sampleTrace = "5a0000000000000000000000000000aa"
-    forM_ [(selectedAt, "selected occurrence" :: Text), (frozenTime, "outside occurrence")] \(t, message) ->
-      dbExec tr [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, hashes, summary, context___trace_id) VALUES (gen_random_uuid(), ?, ?, ?, 'log', ARRAY['pat:sample-pattern'], ARRAY[?], ?) |] (testPid, t, t, message, sampleTrace)
+    forM_ [(selectedAt, "selected occurrence" :: Text), (frozenTime, "outside occurrence")] \(t, message) -> do
+      rowId <- DataUUID.toText <$> UUID.nextRandom
+      telemetryDbExec tr [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, date, kind, hashes, summary, context___trace_id) VALUES (?, ?, ?, ?, ?, 'log', ARRAY['pat:sample-pattern'], ARRAY[?], ?) |] (rowId, testPid, t, t, t, message, sampleTrace)
     sampled <- seedIssue tr (issueSeed Issues.LogPattern "sample-pattern"){service = Just "checkout", payload = AE.toJSON $ Issues.LogPatternData "sample-pattern" "payment failed <*>" (Just "saved occurrence") Nothing (Just "checkout") "body" selectedAt 2, at = selectedAt}
-    -- The occurrences above are raw Postgres rows (they carry a chosen pattern hash), so the sample reads Postgres.
-    let sample pid (from, to) = call (withPgTelemetry tr) $ IssuesPage.issueSampleGetH pid sampled Nothing from to
+    let sample pid (from, to) = call tr $ IssuesPage.issueSampleGetH pid sampled Nothing from to
     sample testPid (window selectedAt) >>= \case
       IssuesPage.IssueSample _ (Just "saved occurrence") (IssuesPage.SampleFound t summary (Just tr')) -> (t, summary, tr') `shouldBe` (selectedAt, V.singleton "selected occurrence", sampleTrace)
       _ -> expectationFailure "expected the in-range event"

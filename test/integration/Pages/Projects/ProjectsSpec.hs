@@ -93,7 +93,7 @@ spec = around withTestResources do
 
     -- Deleting the project stops its ingest and its alerts.
     let monitorId = Monitors.QueryMonitorId $ fromMaybe (error "invalid test UUID") $ UUID.fromText "de1e7ed0-0000-0000-0000-000000000001"
-        countLogs marker = dbOne @_ @Int tr [sql| SELECT COUNT(*)::INT FROM otel_logs_and_spans WHERE project_id = ? AND body::text LIKE '%' || ? || '%' |] (testPid, marker :: Text)
+        countLogs marker = sum . map fromOnly <$> telemetryDbQuery @_ @(Only Int) tr [sql| SELECT COUNT(*)::INT FROM otel_logs_and_spans WHERE project_id = ? AND body::text LIKE '%' || ? || '%' |] (testPid.toText, marker :: Text)
         monitor =
           def
             { Monitors.id = monitorId
@@ -310,9 +310,10 @@ spec = around withTestResources do
     -- A team routes Slack and PagerDuty to its own targets until it is deleted.
     dbExec tr [sql|DELETE FROM apis.discord WHERE project_id = ?|] (Only testPid)
     let teamKey = "svc-key-12345678901234567890abcd"
-        teams = call tr (Pages.manageTeamsGetH testPid (Just "")) >>= \case
-          Pages.ManageTeamsGet' (_, _, _, _, ts) -> pure ts
-          _ -> fail "expected ManageTeamsGet'"
+        teams =
+          call tr (Pages.manageTeamsGetH testPid (Just "")) >>= \case
+            Pages.ManageTeamsGet' (_, _, _, _, ts) -> pure ts
+            _ -> fail "expected ManageTeamsGet'"
     Right (Pages.TeamCreated _) <- call tr $ Pages.manageTeamPostH testPid Pages.TeamForm{teamName = "Routing Team", teamDescription = "Owns customer alerts", teamHandle = "routing-team", teamMembers = [(getResponse tr.trSessAndHeader).user.id], notifEmails = V.empty, slackChannels = ["#team-alerts"], discordChannels = V.empty, phoneNumbers = V.empty, pagerdutyServices = [teamKey], teamId = Nothing} Nothing
     Just team <- V.find ((== "routing-team") . (.handle)) <$> teams
     map (.memberEmail) (V.toList team.members) `shouldBe` ["test@monoscope.tech"]

@@ -307,16 +307,17 @@ spec = around withTestResources do
 
   it "endpoint queries paginate disjointly, scope to a service before paginating, and sort by name or recency" \tr -> do
     pid <- createTestProject tr "catalog-queries"
-    let traffic (e :: Endpoints.Endpoint) service minsAgo =
-          dbExec
+    let traffic (e :: Endpoints.Endpoint) service minsAgo = do
+          rowId <- UUID.toText <$> nextRandom
+          telemetryDbExec
             tr
-            [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, attributes___http___request___method, attributes___url___path,
-                    attributes___server___address, resource___service___name, hashes, context, kind, status_code, summary)
-                  VALUES (gen_random_uuid(), ?, ?, ?, 'GET', ?, ?, ?, ARRAY[?], '{}'::jsonb, 'server', '200', '{}') |]
-            (pid, at, at, e.urlPath, e.host, service :: Maybe Text, e.hash)
+            [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, date, attributes___http___request___method, attributes___url___path,
+                    attributes___server___address, resource___service___name, hashes, kind, status_code, summary)
+                  VALUES (?, ?, ?, ?, ?, 'GET', ?, ?, ?, ARRAY[?], 'server', '200', ARRAY[]::text[]) |]
+            (rowId, pid.toText, at, at, at, e.urlPath, e.host, service :: Maybe Text, e.hash)
           where
             at = addUTCTime (fromIntegral (-60 * minsAgo :: Int)) frozenTime
-        page q = map (.urlPath) . V.toList . fst <$> runTestBg frozenTime tr (Endpoints.endpointRequestStatsPageByProject Endpoints.WithStats False pid q)
+        page q = map (.urlPath) . V.toList . fst <$> runTestBg frozenTime tr (Endpoints.endpointRequestStatsPageByProject Endpoints.WithStats tr.trATCtx.env.enableTimefusionReads pid q)
         query srt hostM = Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = hostM, search = Nothing, sort = srt, page = 0, perPage = 10, period = Endpoints.Window7d, service = Nothing}
     insertEndpoints tr [endpoint pid "GET" "paginate.example" ("/p" <> show i) | i <- [1 .. 12 :: Int]]
     pages <- forM @[] ["0", "1", "2"] \p -> endpointsPage tr pid (Just (p, "5")) (Just "paginate.example")
@@ -329,9 +330,9 @@ spec = around withTestResources do
     insertEndpoints tr [alpha, beta]
     traffic alpha (Just "catalog-scope-alpha") 0
     traffic beta (Just "catalog-scope-beta") 0
-    (endpointRowsQ, endpointTotal) <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsPageByProject Endpoints.WithStats False pid Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Nothing, search = Nothing, sort = Endpoints.SortName, page = 0, perPage = 1, period = Endpoints.Window24h, service = Just "catalog-scope-alpha"}
+    (endpointRowsQ, endpointTotal) <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsPageByProject Endpoints.WithStats tr.trATCtx.env.enableTimefusionReads pid Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Nothing, search = Nothing, sort = Endpoints.SortName, page = 0, perPage = 1, period = Endpoints.Window24h, service = Just "catalog-scope-alpha"}
     (map (.urlPath) (V.toList endpointRowsQ), endpointTotal) `shouldBe` (["/alpha"], 1)
-    hostRows <- runTestBg frozenTime tr $ Endpoints.dependenciesAndEventsCount Endpoints.WithStats False pid Endpoints.HostQuery{direction = Just Endpoints.Incoming, archived = False, sort = Endpoints.SortName, skip = 0, since = Endpoints.Since24h, period = Endpoints.Window24h, service = Just "catalog-scope-alpha"}
+    hostRows <- runTestBg frozenTime tr $ Endpoints.dependenciesAndEventsCount Endpoints.WithStats tr.trATCtx.env.enableTimefusionReads pid Endpoints.HostQuery{direction = Just Endpoints.Incoming, archived = False, sort = Endpoints.SortName, skip = 0, since = Endpoints.Since24h, period = Endpoints.Window24h, service = Just "catalog-scope-alpha"}
     map (.host) hostRows `shouldBe` ["scope-alpha.example"]
 
     -- "Alphabetical" was a silent no-op falling through to traffic order; /zebra has 9x the traffic.

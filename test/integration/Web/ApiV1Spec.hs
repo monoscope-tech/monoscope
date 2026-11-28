@@ -166,7 +166,7 @@ spec = describe "API v1" do
       post collecting report{UsageTelemetry.schema = 99} `shouldReturn` 400
       post collecting report{UsageTelemetry.version = T.replicate 4096 "x"} `shouldReturn` 400
       post collecting report `shouldReturn` 202
-      stored <- runHasqlEffect tr $ Hasql.interpOneJson @AE.Value [HI.sql| SELECT attributes FROM otel_logs_and_spans WHERE project_id::text = #{pid.toText} AND name = 'monoscope.usage_report' |]
+      stored <- runQueryEffect tr $ Hasql.withHasqlTimefusion tr.trATCtx.env.enableTimefusionReads $ Hasql.interpOneJson @AE.Value [HI.sql| SELECT attributes FROM otel_logs_and_spans WHERE project_id = #{pid.toText} AND name = 'monoscope.usage_report' |]
       let attrs = fromMaybe AE.Null stored
       (attrs ^? key "monoscope" . key "usage_report", "203.0.113.7" `T.isInfixOf` decodeUtf8 (AE.encode attrs)) `shouldBe` (Just (AE.toJSON report), False)
     it "HTTP auth: API keys gate /api/v1 and MCP, the demo project is open, secrets are never echoed or cached" \tr -> do

@@ -18,7 +18,13 @@ module Pkg.TestUtils (
   eventually,
   withSetup,
   withTestResources,
-  withPgTelemetry,
+  telemetryDbExec,
+  telemetrySource,
+  clearTelemetry,
+  flushTelemetry,
+  withPgTelemetryWrites,
+  telemetryDbQuery,
+  telemetryDbOne,
   clearFixedProjects,
   fromRightShow,
   TestResources (..),
@@ -162,7 +168,7 @@ import Data.Default (def)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.CodeReview qualified as CodeReview
-import Data.Effectful.Hasql (Hasql, TestClock, advanceTime, getTestTime, newTestClock, runHasqlPool, runHasqlPoolSynced, runMutableTime, setTestTime)
+import Data.Effectful.Hasql (Hasql, SqlSource (..), TestClock, advanceTime, getTestTime, newTestClock, runHasqlPool, runHasqlPoolSynced, runMutableTime, setTestTime)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
 import Data.Effectful.Sleep (runNoSleep)
@@ -956,17 +962,15 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
         Nothing -> (envConfig0, False)
       -- Flip the flags here (not just in the override at AuthContext.config) so the
       -- AuthContext.env slot also sees them; OtlpServer reads from .env.enableTimefusionWrites.
-      -- Both must be pinned: leaving enablePostgresTelemetryWrites to inherit from a
-      -- developer .env (where it is False for TF-only prod) makes both flags False, which
-      -- writeTargetFor maps to WriteBoth — and with no real TF the "timefusion" pool is the
-      -- same Postgres, so every row is inserted twice.
+      -- Telemetry goes to exactly one store, as in prod: TimeFusion when it runs (Postgres
+      -- telemetry writes off), Postgres alone under PG_ONLY.
       -- Reads are pinned for the same reason, and it is not only a routing choice: without a
       -- real TimeFusion the labeled pool IS Postgres, so a developer .env with
       -- ENABLE_TIMEFUSION_READS=True would have queries emit TimeFusion-only SQL (the
       -- `variant_get` resource accessor) against Postgres, which errors outright.
       -- Bot and billing ingress verify signatures made with the test keys (signSlackBody, signDiscordPayload, BillingSpec).
       -- Tests never use a Kafka broker, whatever KAFKA_BROKERS the local .env sets.
-      envConfig = envConfig1{kafkaBrokers = [], enableTimefusionWrites = tfEnabled, enableTimefusionReads = tfEnabled, enablePostgresTelemetryWrites = True, slackSigningSecret = testSlackSigningSecret, discordPublicKey = testDiscordPublicKeyHex, stripeWebhookSecret = "test-stripe-webhook-secret", lemonSqueezyWebhookSecret = "test-ls-webhook-secret"}
+      envConfig = envConfig1{kafkaBrokers = [], enableTimefusionWrites = tfEnabled, enableTimefusionReads = tfEnabled, enablePostgresTelemetryWrites = not tfEnabled, slackSigningSecret = testSlackSigningSecret, discordPublicKey = testDiscordPublicKeyHex, stripeWebhookSecret = "test-stripe-webhook-secret", lemonSqueezyWebhookSecret = "test-ls-webhook-secret"}
   extractionWorker <- ExtractionWorker.initWorkerState envConfig.extractionWorkerShards envConfig.extractionQueueCapacity
   atomically $ writeTVar extractionWorker.acceptingBatches True
   traceSessionCache <- QueryCache.newTraceSessionCache
@@ -1034,7 +1038,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
               , processedAtCutoff = Unsafe.read "2020-01-01 00:00:00 UTC"
               , enableTimefusionWrites = tfEnabled
               , enableTimefusionReads = tfEnabled
-              , enablePostgresTelemetryWrites = True
+              , enablePostgresTelemetryWrites = not tfEnabled
               , -- Fallback values for external services (CI mode without .env)
                 -- .env values take priority if set, otherwise use test defaults
                 -- Must stay the SID in the committed golden file's name: the golden key is
@@ -1499,10 +1503,18 @@ withClockedConn tr f = withResource tr.trPool \conn -> do
 
 -- | The single column of the single row a query returns: a count, or an @INSERT … RETURNING@.
 dbOne :: forall q r. (FromField r, PGS.ToRow q) => TestResources -> PGS.Query -> q -> IO r
-dbOne tr q args =
-  dbQuery tr q args >>= \case
-    [Only r] -> pure r
-    rows -> fail $ "dbOne: expected one row, got " <> show (length rows)
+dbOne tr q = singleRow <=< dbQuery tr q
+
+
+-- | 'dbOne' on the store that holds telemetry (see 'telemetryDbExec').
+telemetryDbOne :: forall q r. (FromField r, PGS.ToRow q) => TestResources -> PGS.Query -> q -> IO r
+telemetryDbOne tr q = singleRow <=< telemetryDbQuery tr q
+
+
+singleRow :: [Only r] -> IO r
+singleRow = \case
+  [Only r] -> pure r
+  rows -> fail $ "expected one row, got " <> show (length rows)
 
 
 -- | An @apis.issues@ row; 'issueSeed' fills the columns most fixtures leave alone.
@@ -1866,10 +1878,38 @@ testPid = UUIDId UUID.nil
 
 
 -- | Telemetry on Postgres alone (reads, charts and writes), for a spec that seeds or mutates it with raw SQL.
-withPgTelemetry :: TestResources -> TestResources
-withPgTelemetry tr = tr{trATCtx = tr.trATCtx{env = pg tr.trATCtx.env, config = pg tr.trATCtx.config, timefusionPgPool = tr.trATCtx.pool}}
+-- | Also write telemetry to Postgres, for specs of the bookkeeping that only exists there
+-- (@processed_at@, the safety net) and is kept behind @enablePostgresTelemetryWrites@.
+withPgTelemetryWrites :: TestResources -> TestResources
+withPgTelemetryWrites tr = tr{trATCtx = tr.trATCtx{env = pgOn tr.trATCtx.env, config = pgOn tr.trATCtx.config}}
   where
-    pg e = e{enableTimefusionReads = False, enableTimefusionWrites = False}
+    pgOn e = e{enablePostgresTelemetryWrites = True}
+
+
+-- | SQL against the store that holds telemetry: TimeFusion when it runs, Postgres under PG_ONLY.
+-- For rows OTLP cannot express (a chosen hash, a placeholder endpoint) and their cleanup.
+telemetryDbExec :: PGS.ToRow q => TestResources -> PGS.Query -> q -> IO ()
+telemetryDbExec tr q args = withResource tr.trATCtx.timefusionPgPool \conn -> void $ PGS.execute conn q args
+
+
+-- | Flush TimeFusion's write buffer: a scan without a project filter sees only flushed rows.
+flushTelemetry :: TestResources -> IO ()
+flushTelemetry tr = when tr.trATCtx.env.enableTimefusionReads $ telemetryDbExec tr "FLUSH" ()
+
+
+-- | The source that holds telemetry: TimeFusion when it runs, Postgres under PG_ONLY.
+telemetrySource :: TestResources -> SqlSource
+telemetrySource tr = bool SqlPostgres SqlTimefusion tr.trATCtx.env.enableTimefusionReads
+
+
+-- | Drop a project's telemetry. TimeFusion outlives each example's fresh Postgres, so a spec
+-- counting rows under a fixed project id clears it first.
+clearTelemetry :: TestResources -> Projects.ProjectId -> IO ()
+clearTelemetry tr pid = for_ ["otel_logs_and_spans", "otel_metrics"] \tbl -> telemetryDbExec tr (fromString $ "DELETE FROM " <> tbl <> " WHERE project_id = ?") (Only pid.toText)
+
+
+telemetryDbQuery :: forall q r. (PGS.FromRow r, PGS.ToRow q) => TestResources -> PGS.Query -> q -> IO [r]
+telemetryDbQuery tr q args = withResource tr.trATCtx.timefusionPgPool \conn -> PGS.query conn q args
 
 
 -- | Once per unsharded test process: each example gets a fresh Postgres, but a long-lived local

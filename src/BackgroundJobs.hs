@@ -377,7 +377,8 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
       tryStep "calculateLogPatternBaselines" $ calculateLogPatternBaselines pid
       tryStep "processNewLogPatterns" $ processNewLogPatterns pid authCtx
       tryStep "pruneStaleLogPatterns" $ pruneStaleLogPatterns pid
-    SafetyNetReprocess pid -> safetyNetReprocess pid
+    -- `processed_at` is Postgres bookkeeping; the job stays scheduled as the daily per-project marker.
+    SafetyNetReprocess pid -> when authCtx.config.enablePostgresTelemetryWrites $ safetyNetReprocess pid
     ProcessProjectErrorsJob pid errors now -> processProjectErrors pid errors now
     -- Seed-only, like the other tickers: the daily seeder is the restart net. These used
     -- to also self-chain, and a chained tick running beside its seeded twin doubled the
@@ -1516,7 +1517,7 @@ runHourlyJob scheduledTime hour = do
   tryStep "ai-conversation-recovery" recoverFailedConversations
   tryStep "routine-template-upgrades" $ Issues.upgradeRoutineTemplates >>= \moved -> when (moved > 0) $ Log.logInfo "Upgraded routines to their templates' current versions" moved
   tryStep "metric-catalog-flush" $ Telemetry.flushMetricCatalog ctx.metricCatalogBuffer
-  tryStep "metric-catalog-reconcile" Telemetry.reconcileMetricCatalog
+  tryStep "metric-catalog-reconcile" $ Telemetry.reconcileMetricCatalog ctx.env.enableTimefusionReads
   tryStep "endpoint-shape-report" reportUnwrittenIdRules
   let oneHourAgo = addUTCTime (-3600) scheduledTime
   -- Read from wherever telemetry is written: with Postgres writes off, the PG table is empty
@@ -2570,31 +2571,35 @@ dualExecPgTf ctx sql' = dualExecPgTfWithSql ctx sql' sql'
 -- | Keep native PostgreSQL comparisons when TimeFusion needs a different cast.
 dualExecPgTfWithSql :: (DB es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> HI.Sql -> Eff es Int64
 dualExecPgTfWithSql ctx pgSql tfSql = Ki.scoped \scope -> do
-  mainThread <- forkWithCtx scope $ pgExecLabeled "UPDATE-1" pgSql
-  _ <- forkWithCtx scope $ when ctx.config.enableTimefusionWrites $ do
+  pgThread <- forkWithCtx scope $ pgOnlyExec ctx.config.enablePostgresTelemetryWrites pgSql
+  tfThread <- forkWithCtx scope do
     now <- Time.currentTime
     shouldAttempt <- liftIO $ ExtractionWorker.shouldAttemptCircuit ctx.tfCircuit now
-    when shouldAttempt
+    if not (ctx.config.enableTimefusionWrites && shouldAttempt)
+      then pure 0
       -- A deploy drain refuses every write until the replacement is ready (18–110s measured
       -- on 2026-11-23) and nothing replays this arm, so it gets the ingest write's 180s budget;
       -- every caller's UPDATE is guarded, so a re-run is a no-op.
-      $ tryAny (Hasql.retryTransientEff 180_000_000 "dual-exec:timefusion" $ withHasqlTimefusion True $ Hasql.interpExecute tfSql)
-      >>= \case
-        Right _ -> liftIO $ ExtractionWorker.recordCircuitSuccess ctx.tfCircuit
-        Left e -> do
-          opened <- liftIO $ ExtractionWorker.recordCircuitFailure ctx.tfCircuit now
-          Log.logAttention (if opened then "TimeFusion circuit opened" else "TimeFusion write failed") (show @Text e)
+      else
+        tryAny (Hasql.retryTransientEff 180_000_000 "dual-exec:timefusion" $ withHasqlTimefusion True $ Hasql.interpExecute tfSql)
+          >>= \case
+            Right n -> liftIO (ExtractionWorker.recordCircuitSuccess ctx.tfCircuit) $> n
+            Left e -> do
+              opened <- liftIO $ ExtractionWorker.recordCircuitFailure ctx.tfCircuit now
+              Log.logAttention (if opened then "TimeFusion circuit opened" else "TimeFusion write failed") (show @Text e)
+              pure 0
   -- Await BOTH threads: scope-close cancellation of an in-flight Hasql session
-  -- segfaults libpq.
-  Ki.atomically (Ki.awaitAll scope *> Ki.await mainThread)
+  -- segfaults libpq. The count is the store that holds telemetry's.
+  Ki.atomically $ Ki.await (if ctx.config.enablePostgresTelemetryWrites then pgThread else tfThread) <* Ki.awaitAll scope
 
 
 -- | PG-only variant of `dualExecPgTf` for statements TimeFusion can't run
 -- (e.g. those using `jsonb_build_object`, `jsonb_array_elements_text`, or
 -- `now()` in SET expressions). Same retry-on-deadlock and locking guards as
--- the PG arm of `dualExecPgTf`, but no TF fork.
-pgOnlyExec :: (DB es, IOE :> es, Log :> es) => HI.Sql -> Eff es Int64
-pgOnlyExec = pgExecLabeled "pgOnlyExec"
+-- the PG arm of `dualExecPgTf`, but no TF fork. Skipped (0 rows) when Postgres
+-- holds no telemetry.
+pgOnlyExec :: (DB es, IOE :> es, Log :> es) => Bool -> HI.Sql -> Eff es Int64
+pgOnlyExec = bool (const $ pure 0) (pgExecLabeled "pgOnlyExec")
 
 
 pgExecLabeled :: (DB es, IOE :> es, Log :> es) => Text -> HI.Sql -> Eff es Int64
@@ -2628,16 +2633,19 @@ backfillSessionAttributes ctx = do
   now <- Time.currentTime
   let windowEnd = addUTCTime (-120) now -- lag 2 min behind the write-hot edge
       windowStart = addUTCTime (-1020) now -- 17 min lookback
-  pids <- activeSessionProjects windowStart windowEnd
+  pids <- Hasql.withHasqlTimefusion ctx.env.enableTimefusionReads $ activeSessionProjects windowStart windowEnd
   foldlM (\ !acc pid -> (acc +) <$> dualExecPgTf ctx (backfillSessionSql pid windowStart windowEnd)) 0 pids
 
 
--- | Projects with session/user activity in the lagged window (index-driven via
--- the partial session/user indexes). Drives the per-project backfill loop.
+-- | Projects with session/user activity in the lagged window. Drives the per-project backfill
+-- loop. On TimeFusion a cross-project scan sees only flushed rows (~11 min after their
+-- timestamp), which the 17-minute window still covers for several ticks.
 activeSessionProjects :: DB es => UTCTime -> UTCTime -> Eff es [Projects.ProjectId]
 activeSessionProjects windowStart windowEnd =
-  Hasql.interp
-    [HI.sql| SELECT DISTINCT project_id::uuid FROM otel_logs_and_spans
+  -- Text, not uuid: TimeFusion has no uuid type.
+  mapMaybe Projects.projectIdFromText
+    <$> Hasql.interp
+      [HI.sql| SELECT DISTINCT project_id::text FROM otel_logs_and_spans
              WHERE timestamp >= #{windowStart} AND timestamp < #{windowEnd}
                AND (attributes___session___id IS NOT NULL OR attributes___user___id IS NOT NULL) |]
 
@@ -2859,8 +2867,8 @@ processEagerBatch batch shard
                       AND o.processed_at IS NULL |]
         rowsUpdated <-
           if ctx.config.enableHashUpdates && batch.batchMaxTs >= hashCutoff
-            then (if null tfSpanIds then pure 0 else dualExecPgTf ctx updateHashesSql) <* pgOnlyExec update1Sql
-            else pgOnlyExec markProcessedSql
+            then (if null tfSpanIds then pure 0 else dualExecPgTf ctx updateHashesSql) <* pgOnlyExec ctx.config.enablePostgresTelemetryWrites update1Sql
+            else pgOnlyExec ctx.config.enablePostgresTelemetryWrites markProcessedSql
         -- The hash-only update is TF-compatible; PG retains the JSON/path enrichment.
         Log.logTrace "Eager-track UPDATE-1 complete" (AE.object ["project_id" AE..= pid.toText, "span_count" AE..= V.length spans, "rows_updated" AE..= rowsUpdated, "hash_merge_skipped" AE..= (not ctx.config.enableHashUpdates || batch.batchMaxTs < hashCutoff)])
 
