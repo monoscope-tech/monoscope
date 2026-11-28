@@ -102,6 +102,7 @@ module Utils (
   renderSummaryElements,
   summaryForDetailView,
   calculateCycleStartDate,
+  usageSettleTime,
   usageWindowStart,
   -- NUL-byte scrubbing for PG `jsonb` ingest paths.
   scrubNulText,
@@ -132,7 +133,7 @@ import Data.Text qualified as T
 import Data.Text.Lazy.Builder qualified as TLB
 import Data.Time (addUTCTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Calendar (fromGregorian, toGregorian)
-import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
+import Data.Time.Clock (NominalDiffTime, UTCTime (..), secondsToDiffTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (FormatTime, formatTime)
 import Data.Time.LocalTime (timeOfDayToTime, timeToTimeOfDay)
@@ -2026,6 +2027,12 @@ calculateCycleStartDate start current =
 -- this mirrors that setting rather than controlling it.
 usageCountableDays :: Integer
 usageCountableDays = 7
+
+
+-- | How long a usage window waits for its rows to land before it is counted. Ingest runs
+-- seconds to minutes behind a row's timestamp under a burst.
+usageSettleTime :: NominalDiffTime
+usageSettleTime = 600
 
 
 -- | Where a usage-reporting window may start: no earlier than the watermark, the

@@ -60,6 +60,7 @@ import System.Config qualified as Config
 import System.IO.Error (userError)
 import System.Types (Done (..), RespHeaders)
 import UnliftIO.Exception (bracket, throwIO)
+import Utils (usageSettleTime)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -496,6 +497,19 @@ spec = around withTestResources do
     metered tr pid `shouldReturn` [("events", 3, "submitted"), ("metric_datapoints", 4, "submitted"), ("session_replays", 3, "submitted")]
     sum . map (\(_, _, r) -> r) <$> dailyUsage tr pid `shouldReturn` 3
 
+  -- Prod 2026-11-27: a burst stamped just before a window's end landed after it was counted, and
+  -- the next window started at that end, so 865k of Talstack Prod's 988,860 events went unbilled.
+  it "rows stamped in a report's last minutes that land after it ran are billed by the next one" \tr -> do
+    pid <- createTestProject tr "report-usage"
+    setBilling tr pid "Free" Nothing Nothing frozenTime
+    -- Mid-day, clear of the free tier's 00:00 floor.
+    let runAt d = void $ runTestBgRecordingHTTP (addUTCTime d noon) tr (BJ.processBackgroundJob tr.trATCtx (BJ.ReportUsage pid))
+        noon = addUTCTime (12 * 3600) frozenTime
+    runAt 0
+    seedUsage tr pid (addUTCTime (-60) noon) 3 0 0
+    runAt 3600
+    sum . map (\(e, _, _) -> e) <$> dailyUsage tr pid `shouldReturn` 3
+
   it "Stripe metering bills a replay-only window and AI usage in micro-dollars, each on its own meter" \tr -> do
     let paid seed = do
           pid <- createTestProject tr "report-usage"
@@ -752,8 +766,9 @@ seedUsage tr pid at logs metrics replays = do
 
 
 -- | Run ReportUsage at @t@ with provider calls recorded, never sent.
+-- | Report the window ending at @t@, run once it has settled.
 report :: TestResources -> Projects.ProjectId -> UTCTime -> IO [(Text, LByteString)]
-report tr pid t = fst <$> runTestBgRecordingHTTP t tr (BJ.processBackgroundJob tr.trATCtx (BJ.ReportUsage pid))
+report tr pid t = fst <$> runTestBgRecordingHTTP (addUTCTime usageSettleTime t) tr (BJ.processBackgroundJob tr.trATCtx (BJ.ReportUsage pid))
 
 
 withLease :: TestResources -> Projects.ProjectId -> IO a -> IO a

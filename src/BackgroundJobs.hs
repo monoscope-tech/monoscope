@@ -154,7 +154,7 @@ import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
 import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny, withException)
-import Utils (FreeTierStatus (..), calculateCycleStartDate, fmtInt, formatUTC, freeTierUsageStatus, hostPath, jsonToMap, nestedJsonFromDotNotation, nonEmptyT, prettyPrintCount, toXXHash, truncateHour, usageWindowStart)
+import Utils (FreeTierStatus (..), calculateCycleStartDate, fmtInt, formatUTC, freeTierUsageStatus, hostPath, jsonToMap, nestedJsonFromDotNotation, nonEmptyT, prettyPrintCount, toXXHash, truncateHour, usageSettleTime, usageWindowStart)
 import Web.Links
 
 
@@ -872,7 +872,10 @@ reportProjectUsage authCtx pid =
       -- be billed produced no line at all: DSI-APP and TestCorp sat unbilled for 41 days
       -- behind a first_sub_item_id of "" (empty, not NULL — an `IS NOT NULL` audit passes).
       -- A skip on a paid plan is revenue going missing and has to be page-worthy.
-      nowU <- Time.currentTime
+      -- The window ends 'usageSettleTime' ago, not now: rows stamped just before the end are
+      -- still in flight, and the next window starts at this end, so a burst landing after the
+      -- count was never billed (Talstack Prod 2026-11-27 11:00: 123,284 billed, 988,860 stored).
+      nowU <- addUTCTime (negate usageSettleTime) <$> Time.currentTime
       let countWindow floorM = do
             let
               -- Cap wStart to the cycle start (never charge for a previous cycle —
