@@ -151,6 +151,28 @@ The setup-only run waited 48 minutes for a slot. A worker restart had left two r
 up to 50 minutes, and the cap of two reviews per project queued everything behind them (#1123 releases a
 restarted node's leases).
 
+### Talstack recipe, stale comments, old guests, claim states, merge prebuilds (2026-11-28)
+
+- **Talstack Prod recipe.** Its saved setup was a one-off harness for one PR's sidebar (stage 1), so
+  reviews of real Talstack PRs started without the app. The mirror's stage-3 recipe (Postgres, the
+  app at `/tmp/proof/app-url`, admin and member logins, 42 s) was copied in with its stage, so a
+  later stage-2 setup cannot replace it. The old recipe is kept outside the repo.
+- **Stale "Proving…" comments.** 33 on closed PRs across monoscope (29) and timefusion (4) now read
+  "Review stopped … recorded no proof". The two on open mirror PRs were left alone.
+- **Old guests.** `guest.prev-20261111`, `guest.prev-5df490c7` and `guest.prev-ab85f39b` (25 GB each)
+  were deleted; the worker mounts only `guest` and `guest.prev`, which stay. Disk went from 608 GB
+  to 680 GB free.
+- **Claim states and dismissal (#1129).** Claims can be blocked (the VM could not run them) or
+  skipped (left untested on purpose), each with its own icon and count. A `substitutions` list
+  (`mocked`, `not_run`) shows in the footer like Blacksmith's "mocked: WorkOS (…)". `@monoscope
+  dismiss` and `restore` set the latest finished review aside or take it back, rating it down and
+  redrawing its comment; they act only on the asked state, within the comment's installation.
+- **Merge prebuilds (#1132).** Queue waits on monoscope over seven days: a median 1.6 min (p90
+  15.6) when the run's base had been built for an earlier review, a median 7.6 min (p90 38.5) on a
+  new base, which admission waits for because the agent's VM starts from it. A merged pull
+  request now queues a build of its merge commit, the next pull requests' base, for repositories
+  reviewed that week. Recheck the split a week after it ships.
+
 ### Review failures (2026-11-25)
 
 - #721's re-proof failed "exceeded its submission budget"; its automatic retry then ended "Saved progress
@@ -350,13 +372,9 @@ sides rather than reusing the merge-base recording.
 ## Left for a person
 
 - **Install the GitHub App on Talstack-LLC** (steps at the top) to run our proofs on those PRs.
-- **Stale comments already posted** on #975, #980, #982, #985, #994, #997, #1000, #1001 and #1014
-  do not heal: the fix acts when a superseded run's job runs again. Edit them by hand or ignore them.
+- ~~Stale comments already posted~~: rewritten to "Review stopped" on 2026-11-28 (33 on closed PRs).
 - **The guest was rebuilt twice tonight**: `70d7ab18` (02:28 UTC) and `0c44e530` (04:00 UTC, with
   `initdb`), the second through `refresh_guest`'s real remote path. That swap deleted the old 8 GB
   `guest.prev` by design and kept `70d7ab18` as `guest.prev`. A rebuild peaks near 40 GB of memory
   on the worker host. Each forced restart cost the reviews and fix runs in flight (#1016 lost one).
-- **About 67 GB of older guests** on the worker (`guest.prev-20261111`, `guest.prev-ab85f39b`,
-  `guest.prev-5df490c7`), on a host that ran out of disk six times this
-  week. Automated rebuilds keep only one `guest.prev`. The others can go once the new guest has
-  run a few reviews.
+- ~~Older guests on the worker~~: the three dated copies (75 GB) were deleted on 2026-11-28.
