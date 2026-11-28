@@ -214,9 +214,9 @@ schema role = \case
       , ("coverage", array 0 10 (bounded 1 $ Just 400) & O.description ?~ "Missing evidence or verification only. Do not summarize completed investigation.")
       ,
         ( "claims"
-        , array 0 12 (object [("title", bounded 1 $ Just 200), ("status", enum ["matches", "differs", "unverified"]), ("summary", bounded 1 $ Just 600), ("proofKeys", array 0 3 text)])
+        , array 0 12 (object [("title", bounded 1 $ Just 200), ("status", enum ["matches", "differs", "blocked", "skipped", "unverified"]), ("summary", bounded 1 $ Just 600), ("proofKeys", array 0 3 text)])
             & O.description
-            ?~ "What the PR says it does, checked; that existing tests still pass is verification, not a claim. matches and differs must cite proof keys from record_proof; differs means the recording contradicts the PR description. unverified explains what could not be recorded. The title names the behaviour in a few words (\"End survey closes a live survey\"). The summary is one sentence about what a user now sees, then what they saw before: \"Clear sits beside Pause on one row at 1280px; before, it wrapped below the filters.\" Leave out how it was checked (recording, revision, base, head, passes, fails); the recording shows that."
+            ?~ "What the PR says it does, checked; that existing tests still pass is verification, not a claim. matches and differs must cite proof keys from record_proof; differs means the recording contradicts the PR description. blocked means the VM could not run the check (a service, credential or build it needs) and says what blocked it; skipped means you chose not to test it and says why; unverified explains anything else that could not be recorded. The title names the behaviour in a few words (\"End survey closes a live survey\"). The summary is one sentence about what a user now sees, then what they saw before: \"Clear sits beside Pause on one row at 1280px; before, it wrapped below the filters.\" Leave out how it was checked (recording, revision, base, head, passes, fails); the recording shows that."
         )
       , ("summary", bounded 1 (Just 600) & O.description ?~ "One or two plain sentences for the PR author: what the change does and the main reason for its merge risk. No production numbers, links, code or Markdown.")
       ,
@@ -224,6 +224,12 @@ schema role = \case
         , array 5 5 (object [("dimension", enum ["alignment", "impact", "verification", "rollback", "error_detection"]), ("grade", enum ["good", "fair", "poor", "not_applicable"]), ("gaps", array 0 3 $ bounded 1 $ Just 300)])
             & O.description
             ?~ "Grade each dimension once; gaps say concretely what raises the risk, without production numbers. alignment: the code does what the title and description claim; undocumented drive-by changes lower it. impact: blast radius; auth, permissions, payments, personal data, secrets, data migrations, dependency bumps, infra or config, and heavily used production paths raise it (good = small, poor = large). verification: tests or recorded proof exercise the changed behaviour, before and after; user-facing behaviour without end-to-end proof is poor, but a change the diff shows completely (documentation, comments, config nothing runs) is good on the diff alone. rollback: good = easily reverted; poor = one-way door such as a destructive migration, a data rewrite or an external side effect. error_detection: if this breaks in production, telemetry or monitors show it before users do; swallowed errors and new paths without logs, spans or metrics lower it; not_applicable only when nothing changed runs in production."
+        )
+      ,
+        ( "substitutions"
+        , array 0 8 (object [("kind", enum ["mocked", "not_run"]), ("component", bounded 1 $ Just 80), ("reason", bounded 1 $ Just 160)])
+            & O.description
+            ?~ "What your proofs stood in for, shown in the comment's footer like a reviewer's caveats. mocked: a service you replaced with a stub (component \"WorkOS\", reason \"needs WORKOS_API_KEY; sessions inserted directly\"); not_run: a part you could not start at all (component \"talstack web server\", reason \"cold build exceeded the setup budget\"). Optional."
         )
       , ("noProofNeeded", bounded 1 (Just 300) & O.description ?~ "Only when no recording is needed because the diff shows the whole change, and then with no claims: one sentence naming what it shows (\"Only the README and docker-compose.yml change; the diff shows both.\"). Optional.")
       ,
@@ -234,7 +240,7 @@ schema role = \case
         )
       ]
       & O.required
-      %~ filter (`notElem` ["issues", "noProofNeeded"])
+      %~ filter (`notElem` ["issues", "noProofNeeded", "substitutions"])
   where
     enum values = text & O.enum_ ?~ map AE.String values
     uuid = text & O.format ?~ "uuid"

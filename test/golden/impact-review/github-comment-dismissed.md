@@ -1,0 +1,107 @@
+### <img src="https://app.monoscope.tech/public/assets/proof/dismissed.svg" alt="Dismissed" width="20" height="20" align="top"> Reuses the idempotency key on every retry
+
+**Dismissed** by ada · this proof no longer counts for the pull request.
+
+The second retry sent a new key, so the provider saw two charges.
+
+<sub>Merge-base · exit 1</sub>
+
+<img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base-1.png?sig=s" alt="Capture retried twice" width="952">
+
+<sub>This PR <code>aaaaaaaa</code></sub>
+
+<img src="https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head-1.png?sig=s" alt="Capture retried twice" width="952">
+
+[Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
+
+**Also checked** · 1 match · 1 differs · 1 blocked · 1 skipped · 1 not verified<br><img src="https://app.monoscope.tech/public/assets/proof/differs.svg" alt="Differs" width="16" height="16" align="absmiddle"> Gives up after three timeouts<br><img src="https://app.monoscope.tech/public/assets/proof/matches.svg" alt="Matches" width="16" height="16" align="absmiddle"> Retries a timed-out capture once · [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s)<br><img src="https://app.monoscope.tech/public/assets/proof/blocked.svg" alt="Blocked" width="16" height="16" align="absmiddle"> Charges a live card<br><img src="https://app.monoscope.tech/public/assets/proof/skipped.svg" alt="Skipped" width="16" height="16" align="absmiddle"> Retries on a 500 from the provider<br><img src="https://app.monoscope.tech/public/assets/proof/unverified.svg" alt="Unverified" width="16" height="16" align="absmiddle"> Shows the retry count in the receipt
+
+> [!WARNING]
+> **Doesn't do what was asked**
+>
+> **Gives up after three timeouts**
+>
+> It retried a fourth time before giving up.
+
+#### 🟡 Merge risk: medium
+
+Adds retries to payment capture. A second timeout can charge a customer twice, and the give-up path is silent in production.
+
+| Check | Verdict | What raises the risk |
+| :-- | :-- | :-- |
+| **Alignment** | ✅ good | — |
+| **Impact** | ⚠️ large | Changes how payment captures are retried<br>checkout-api serves every order |
+| **Verification** | 👀 decent | No test covers a capture that times out twice |
+| **Rollback cost** | ✅ low | — |
+| **Error detection** | ⚠️ poor | The new retry path logs nothing when it gives up |
+
+#### Worth checking in production (2)
+
+> [!WARNING]
+> **[`src/payments/capture.ts:88`](https://github.com/acme/checkout/pull/42/files#diff-5badcd3e5097afa5539d90a33dfe2c3d239f41513fa07ece41696a1a74ab438bR88)**
+> A retried capture reuses the same idempotency key only on the first retry; a second timeout sends a fresh key, so a slow provider can charge twice.
+>
+> **Next check:** Count captures with two or more retries in the last week, then add a test for a double timeout.
+>
+> [checkout-api in production](https://app.monoscope.tech/p/x/log_explorer): 120.3K events and 312 errors, Jan 1 to Jan 8, 2025
+> [checkout-api](https://app.monoscope.tech/p/x/settings): query results
+
+> [!WARNING]
+> **[`src/payments/capture.ts:120`](https://github.com/acme/checkout/pull/42/files#diff-5badcd3e5097afa5539d90a33dfe2c3d239f41513fa07ece41696a1a74ab438bR120)**
+> The give-up branch swallows the provider error, so a failed capture leaves no log or span error.
+>
+> **Next check:** Log the provider error and mark the span as an error before returning.
+>
+> [checkout-api in production](https://app.monoscope.tech/p/x/log_explorer): 120.3K events and 312 errors, Jan 1 to Jan 8, 2025
+> [checkout-api](https://app.monoscope.tech/p/x/settings): query results
+
+![Observed service events](https://app.monoscope.tech/p/x/widget.png?widgetZ=fixture)
+
+![Review query results](https://app.monoscope.tech/p/x/widget.png?widgetZ=query)
+
+<table>
+<tr><th>timestamp</th><th align="right">retried_twice</th><th align="right">captures</th></tr>
+<tr><td>Nov 17 00:00</td><td align="right">3</td><td align="right">1,164,948</td></tr>
+<tr><td>Nov 16 00:00</td><td align="right">0</td><td align="right">1,556,994</td></tr>
+<tr><td>Nov 15 00:00</td><td align="right">1</td><td align="right">1,538,283</td></tr>
+</table>
+
+<sub>checkout-api · 3 rows · times in UTC</sub>
+
+<details><summary>What this review could not verify (2)</summary>
+
+- No load test covers the retry backoff.
+- Provider-side duplicates are not visible in this project's telemetry.
+
+</details>
+
+<!-- Proof results for coding agents (monoscope:proof-data)
+tested commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+c1 matches: Retries a timed-out capture once
+  observed: The capture command now retries after the first timeout and succeeds.
+  image "Receipt card" (merge base): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-base-1.png?sig=s
+  image "Receipt card" (this PR): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head-1.png?sig=s
+  image "Retry history" (this PR): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head-2.png?sig=s
+  recording "full video" (this PR): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s
+c2 differs: Reuses the idempotency key on every retry
+  observed: The second retry sent a new key, so the provider saw two charges.
+  image "Capture retried twice" (merge base): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-base-1.png?sig=s
+  image "Capture retried twice" (this PR): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head-1.png?sig=s
+  recording "full video" (this PR): https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s
+c3 unverified: Shows the retry count in the receipt
+  observed: The receipt page needs a browser, which this review cannot record.
+c4 differs: Gives up after three timeouts
+  observed: It retried a fourth time before giving up.
+c5 blocked: Charges a live card
+  observed: The VM has no Stripe live key, so no real charge could be made.
+c6 skipped: Retries on a 500 from the provider
+  observed: The fixture provider never returns a 500; left to the integration suite.
+not verified: No load test covers the retry backoff.
+not verified: Provider-side duplicates are not visible in this project's telemetry.
+mocked: Stripe (sandbox key; captures replayed from a fixture)
+not run: receipt mailer (needs a Postmark token)
+dismissed by ada
+merge risk: medium
+-->
+
+<sub>Reviewed [`aaaaaaa`](https://github.com/acme/checkout/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) with production telemetry from Jan 1 to Jan 8, 2025 · mocked: Stripe (sandbox key; captures replayed from a fixture) · not run: receipt mailer (needs a Postmark token) · [Open the full review](https://app.monoscope.tech/p/x/ai/runs/y) · [Review settings](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings) · Comment `@monoscope restore` to undo the dismissal</sub>

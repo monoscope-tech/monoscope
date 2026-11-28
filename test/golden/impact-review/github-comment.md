@@ -12,7 +12,7 @@ The second retry sent a new key, so the provider saw two charges.
 
 [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
 
-**Also checked** · 1 match · 1 differs · 1 not verified<br><img src="https://app.monoscope.tech/public/assets/proof/differs.svg" alt="Differs" width="16" height="16" align="absmiddle"> Gives up after three timeouts<br><img src="https://app.monoscope.tech/public/assets/proof/matches.svg" alt="Matches" width="16" height="16" align="absmiddle"> Retries a timed-out capture once · [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s)<br><img src="https://app.monoscope.tech/public/assets/proof/unverified.svg" alt="Unverified" width="16" height="16" align="absmiddle"> Shows the retry count in the receipt
+**Also checked** · 1 match · 1 differs · 1 blocked · 1 skipped · 1 not verified<br><img src="https://app.monoscope.tech/public/assets/proof/differs.svg" alt="Differs" width="16" height="16" align="absmiddle"> Gives up after three timeouts<br><img src="https://app.monoscope.tech/public/assets/proof/matches.svg" alt="Matches" width="16" height="16" align="absmiddle"> Retries a timed-out capture once · [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s)<br><img src="https://app.monoscope.tech/public/assets/proof/blocked.svg" alt="Blocked" width="16" height="16" align="absmiddle"> Charges a live card<br><img src="https://app.monoscope.tech/public/assets/proof/skipped.svg" alt="Skipped" width="16" height="16" align="absmiddle"> Retries on a 500 from the provider<br><img src="https://app.monoscope.tech/public/assets/proof/unverified.svg" alt="Unverified" width="16" height="16" align="absmiddle"> Shows the retry count in the receipt
 
 > [!WARNING]
 > **Doesn't do what was asked**
@@ -90,9 +90,15 @@ c3 unverified: Shows the retry count in the receipt
   observed: The receipt page needs a browser, which this review cannot record.
 c4 differs: Gives up after three timeouts
   observed: It retried a fourth time before giving up.
+c5 blocked: Charges a live card
+  observed: The VM has no Stripe live key, so no real charge could be made.
+c6 skipped: Retries on a 500 from the provider
+  observed: The fixture provider never returns a 500; left to the integration suite.
 not verified: No load test covers the retry backoff.
 not verified: Provider-side duplicates are not visible in this project's telemetry.
+mocked: Stripe (sandbox key; captures replayed from a fixture)
+not run: receipt mailer (needs a Postmark token)
 merge risk: medium
 -->
 
-<sub>Reviewed [`aaaaaaa`](https://github.com/acme/checkout/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) with production telemetry from Jan 1 to Jan 8, 2025 · [Open the full review](https://app.monoscope.tech/p/x/ai/runs/y) · [Review settings](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings) · Comment `@monoscope prove it` to prove again</sub>
+<sub>Reviewed [`aaaaaaa`](https://github.com/acme/checkout/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) with production telemetry from Jan 1 to Jan 8, 2025 · mocked: Stripe (sandbox key; captures replayed from a fixture) · not run: receipt mailer (needs a Postmark token) · [Open the full review](https://app.monoscope.tech/p/x/ai/runs/y) · [Review settings](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings) · Comment `@monoscope prove it` to prove again</sub>

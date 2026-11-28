@@ -12,9 +12,11 @@ The second retry sent a new key, so the provider saw two charges.
 
 [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-2-head.mp4?sig=s)
 
-**Also checked** · 1 match · 1 differs · 1 not verified
+**Also checked** · 1 match · 1 differs · 1 blocked · 1 skipped · 1 not verified
 ⚠️ Gives up after three timeouts
 ✅ Retries a timed-out capture once · [Watch recording](https://app.monoscope.tech/p/x/reviews/r/proofs/proof-1-head.mp4?sig=s)
+⛔ Charges a live card
+⏭️ Retries on a 500 from the provider
 👀 Shows the retry count in the receipt
 
 > **Doesn't do what was asked**
@@ -59,4 +61,4 @@ Adds retries to payment capture. A second timeout can charge a customer twice, a
 - Provider-side duplicates are not visible in this project's telemetry.
 
 
-Reviewed [`aaaaaaa`](https://github.com/acme/checkout/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) with production telemetry from Jan 1 to Jan 8, 2025 · [Review settings](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings)
+Reviewed [`aaaaaaa`](https://github.com/acme/checkout/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) with production telemetry from Jan 1 to Jan 8, 2025 · mocked: Stripe (sandbox key; captures replayed from a fixture) · not run: receipt mailer (needs a Postmark token) · [Review settings](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/settings/code-mappings)
