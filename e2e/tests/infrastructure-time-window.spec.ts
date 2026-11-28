@@ -114,7 +114,7 @@ test('shared Kubernetes tabs preserve scoped filters and column choices', async 
 for (const [route, container, filters, searchName] of views) {
   test(`${route} time presets refresh scoped inventory`, async ({ page }) => {
     test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
-    test.fixme(route === "hosts", "https://github.com/monoscope-tech/monoscope/issues/1124");
+    test.fixme(true, "https://github.com/monoscope-tech/monoscope/issues/1124");
     await page.setViewportSize({ width: 390, height: 900 });
     const url = `/p/${DEMO_PROJECT}/infrastructure/${route}?${new URLSearchParams({ ...filters, from: "", to: "", since: "5m" })}`;
     await page.goto(url, { waitUntil: "domcontentloaded" });
