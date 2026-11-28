@@ -2030,9 +2030,9 @@ usageCountableDays = 7
 
 
 -- | How long a usage window waits for its rows to land before it is counted. Ingest runs
--- seconds to minutes behind a row's timestamp under a burst.
+-- behind a row's timestamp under a burst: a daily 950k-row burst stamped over 41 s took ~7 min.
 usageSettleTime :: NominalDiffTime
-usageSettleTime = 600
+usageSettleTime = 900
 
 
 -- | Where a usage-reporting window may start: no earlier than the watermark, the
