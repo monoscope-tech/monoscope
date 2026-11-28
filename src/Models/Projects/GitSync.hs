@@ -840,8 +840,8 @@ data InstallationToken = InstallationToken
 -- GitHub App flow, which no other host has. Every host's 'PersonalToken' path is the identity
 -- function, which is exactly why the abstraction downstream takes a resolved token.
 githubToken :: (IOE :> es, W.HTTP :> es) => Text -> Text -> GitCreds -> Eff es (Either Text Text)
-githubToken appId privateKeyB64 = \case
-  AppInstallation instId -> bimapF ("Failed to get installation token: " <>) (.token) $ getInstallationToken appId privateKeyB64 instId
+githubToken appId privateKey = \case
+  AppInstallation instId -> bimapF ("Failed to get installation token: " <>) (.token) $ getInstallationToken appId privateKey instId
   PersonalToken token -> pure $ Right token
 
 
@@ -859,7 +859,7 @@ githubAppOpts jwt =
 
 
 generateAppJWT :: Text -> Text -> IO (Either Text Text)
-generateAppJWT appId privateKeyB64 = do
+generateAppJWT appId privateKey = do
   now <- round <$> getPOSIXTime :: IO Int64
   let iat = now - 60
       expTime = now + 300
@@ -871,23 +871,21 @@ generateAppJWT appId privateKeyB64 = do
             , "iss" AE..= appId
             ]
 
-  case B64.decodeBase64Untyped (encodeUtf8 privateKeyB64) of
-    Left err -> pure $ Left $ "Failed to decode base64: " <> err
-    Right pemBytes ->
-      withSystemTempFile "github-key.pem" $ \tmpPath h -> do
-        BS.hPut h pemBytes
-        hClose h
-        readKeyFile tmpPath >>= \case
-          (PrivKeyRSA rsaKey : _) ->
-            bimapF (("Failed to sign JWT: " <>) . toText . show) (\(Jwt jwtBytes) -> decodeUtf8 jwtBytes)
-              $ Jws.rsaEncode RS256 rsaKey (toStrict payload)
-          [] -> pure $ Left "No private key found in PEM"
-          _ -> pure $ Left "Unsupported key type (expected RSA)"
+  let pemBytes = either (const $ encodeUtf8 privateKey) (\bytes -> bytes) $ B64.decodeBase64Untyped (encodeUtf8 privateKey)
+  withSystemTempFile "github-key.pem" $ \tmpPath h -> do
+    BS.hPut h pemBytes
+    hClose h
+    readKeyFile tmpPath >>= \case
+      (PrivKeyRSA rsaKey : _) ->
+        bimapF (("Failed to sign JWT: " <>) . toText . show) (\(Jwt jwtBytes) -> decodeUtf8 jwtBytes)
+          $ Jws.rsaEncode RS256 rsaKey (toStrict payload)
+      [] -> pure $ Left "No private key found in PEM"
+      _ -> pure $ Left "Unsupported key type (expected RSA)"
 
 
 getInstallationToken :: (IOE :> es, W.HTTP :> es) => Text -> Text -> Int64 -> Eff es (Either Text InstallationToken)
-getInstallationToken appId privateKeyB64 installationId =
-  liftIO (generateAppJWT appId privateKeyB64) >>= either (pure . Left) \jwt -> do
+getInstallationToken appId privateKey installationId =
+  liftIO (generateAppJWT appId privateKey) >>= either (pure . Left) \jwt -> do
     let url = "https://api.github.com/app/installations/" <> show @Text installationId <> "/access_tokens"
     Git.tryHttp (W.postWith (githubAppOpts jwt) (toString url) ("" :: ByteString))
       <&> (>>= first (\err -> "Failed to parse token response: " <> toText err) . AE.eitherDecode . (^. W.responseBody))
