@@ -1,6 +1,7 @@
 module Pages.OnboardingSpec (spec) where
 
 import Data.Text qualified as T
+import Models.Projects.GitSync (generateAppJWT)
 import Models.Projects.OnboardingInstrument qualified as OI
 import Pkg.OnboardingDiscovery qualified as Discovery
 import Pkg.OnboardingInstrument qualified as Instrument
@@ -59,3 +60,10 @@ spec = do
       Instrument.detectStackFromPaths ["vite.config.ts", "index.html"] `shouldBe` "Vite (Frontend Web / RUM)"
       Instrument.detectStackFromPaths ["Chart.yaml", "templates/deployment.yaml"] `shouldBe` "Kubernetes (Helm)"
       Instrument.detectStackFromPaths ["go.mod", "main.go"] `shouldBe` "Go"
+
+  describe "GitHub App authentication" do
+    it "generateAppJWT_acceptsRawPEM" do
+      pem <- decodeUtf8 @Text <$> readFileBS "test/fixtures/github-app-test.pem"
+      generateAppJWT "123" pem >>= \case
+        Left err -> expectationFailure $ "raw PEM should be accepted: " <> toString err
+        Right _ -> pure ()
