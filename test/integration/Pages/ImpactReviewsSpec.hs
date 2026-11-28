@@ -2883,7 +2883,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr $ Reviews.releaseRun new
     let status secret signature = fmap snd $ runAsBaseRecordingHTTP tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = secret}}} $ catchError @ServerError (GitSyncPage.gitWebhookPostH Git.GitHub Nothing (Git.WebhookReq (Just "pull_request") signature Nothing Nothing Nothing (toStrict $ AE.encode $ payload "synchronize" (T.replicate 40 "c") "2025-01-01T00:04:00Z")) $> 200) (\_ err -> pure err.errHTTPCode)
         forged = Just $ "sha256=" <> T.replicate 64 "0"
-    traverse (uncurry status) [(tr.trATCtx.config.githubAppWebhookSecret, Nothing), ("", forged), ("impact-secret", forged)] `shouldReturn` [503, 503, 401]
+    traverse (uncurry status) [("" :: Text, Nothing), ("", forged), ("impact-secret", forged)] `shouldReturn` [503, 503, 401]
     final <- runQueryEffect tr $ Reviews.latestRuns testPid
     length final `shouldBe` 2
     otherPid <- createTestProject tr "Other review project"
@@ -3151,11 +3151,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- A node admits up to its agent slots across projects; another node's reviews leave its own free.
     runQueryEffect tr (Reviews.claimRun (slots 1){Workspace.node = "test-node"} late) `shouldReturn` False
     runQueryEffect tr (Reviews.claimRun (slots 1){Workspace.node = "second-node"} late) `shouldReturn` True
-    -- A setup whose head recording succeeded becomes the repository's recipe; an attempt stores at most three proofs.
+    -- A setup whose head recording succeeded becomes the repository's recipe; an attempt stores at most five proofs.
     let attempt = UUIDId UUID.nil
         saveProof = runQueryEffect tr $ Reviews.saveProofs middle attempt (Agent.ProofScript "Serves the receipt" "curl -s localhost:8080" (Just "make serve &")) (sideProof Agent.Base 1 :| [sideProof Agent.Head 0])
     -- The first replays no saved recipe; later ones replay the one it saved.
-    traverse (const saveProof) [1 .. 4 :: Int] `shouldReturn` ([Right ("proof-1", Reviews.Changed), Right ("proof-2", Reviews.Reused), Right ("proof-3", Reviews.Reused), Left "Proof budget exhausted; cite the proofs already recorded"] :: [Either Text (Text, Reviews.SetupReuse)])
+    traverse (const saveProof) [1 .. 6 :: Int] `shouldReturn` ([Right ("proof-1", Reviews.Changed)] <> [Right ("proof-" <> show n, Reviews.Reused) | n <- [2 .. 5 :: Int]] <> [Left "Proof budget exhausted; cite the proofs already recorded"] :: [Either Text (Text, Reviews.SetupReuse)])
     fmap (.setup) <$> runQueryEffect tr (Reviews.proofRecipe middle) `shouldReturn` Just "make serve &"
     -- A shorter terminal setup does not replace the saved recipe (Talstack's app recipe was lost to a
     -- 120-character one); a browser proof's setup, which carries the app's environment, does.
@@ -3196,21 +3196,30 @@ spec = around withTestResources $ describe "Production impact reviews" do
     progress `shouldReturn` Just ("third try", 1, Just 30, Nothing)
     -- setupSession_queuedWhenProofsHaveNoSetup: a finished review that recorded proofs on a repository with no setup,
     -- or whose setup last failed, queues one setup-only run of its pull request; never two at once, at most daily.
+    -- setupSession_healsPartialSetup: a setup short of per-role logins is retried once per version of it.
     let setupJobs = dbOne tr "SELECT count(*)::int FROM background_jobs_long WHERE payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest middle.id)
         finished = dbExec tr "UPDATE projects.pr_review_runs SET state = 'completed', finished_at = now(), request = NULL WHERE id = ?" (Only middle.id)
         command = dbOne tr "SELECT request->>'command' FROM projects.pr_review_runs WHERE id = ?" (Only middle.id)
+        queue = finished >> runQueryEffect tr (Reviews.queueSetupRun middle)
+        recipeAt stage = dbExec tr "UPDATE projects.pr_review_proof_recipes SET stage = ?, updated_at = now() WHERE project_id = ?" (stage :: Int16, testPid)
     before <- setupJobs
-    finished >> runQueryEffect tr (Reviews.queueSetupRun middle)
+    recipeAt 3 >> queue
     setupJobs `shouldReturn` before
     command `shouldReturn` (Nothing :: Maybe Text)
-    dbExec tr "DELETE FROM projects.pr_review_proof_recipes WHERE project_id = ?" (Only testPid)
-    finished >> runQueryEffect tr (Reviews.queueSetupRun middle)
+    recipeAt 1 >> queue
     setupJobs `shouldReturn` before + 1
+    runQueryEffect tr (Reviews.markSetupTried middle) >> queue
+    setupJobs `shouldReturn` before + 1
+    recipeAt 1 >> queue
+    setupJobs `shouldReturn` before + 2
+    dbExec tr "DELETE FROM projects.pr_review_proof_recipes WHERE project_id = ?" (Only testPid)
+    queue
+    setupJobs `shouldReturn` before + 3
     command `shouldReturn` Just "setup"
     -- The setup run finished minutes ago, so the next review does not queue another.
     dbExec tr "UPDATE projects.pr_review_runs SET state = 'completed', finished_at = now() WHERE id = ?" (Only middle.id)
     runQueryEffect tr (Reviews.queueSetupRun middle)
-    setupJobs `shouldReturn` before + 1
+    setupJobs `shouldReturn` before + 3
     void $ runQueryEffect tr $ Reviews.receiveEvent Nothing $ eventAt (T.replicate 40 "c") 4
     builds `shouldReturn` 1 -- the first base's build finished above; this base queues its own
     -- askOnReviewedHead_answersInANewComment: an ask on a head that already has a progress comment answers below itself.
@@ -3927,7 +3936,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     askRequests <- review fakeAgent
     (askRequests `shouldSatisfy` reaches "/issues/7/comments") >> (askRequests `shouldNotSatisfy` reaches "/issues/comments/99")
     -- savedProofSetup_followsItsProofMd: a saved setup is offered until .monoscope/PROOF.md changes after it.
-    dbExec tr "INSERT INTO projects.pr_review_proof_recipes (project_id, owner, repo, setup, revision, run_id) VALUES (?, 'impact-org', 'checkout', 'make serve &', ?, ?)" (reviewPid, T.replicate 40 "e", run.id)
+    -- Already tried by a setup-only run, so finishing a review does not queue another for this version.
+    dbExec tr "INSERT INTO projects.pr_review_proof_recipes (project_id, owner, repo, setup, revision, run_id, setup_tried_at) VALUES (?, 'impact-org', 'checkout', 'make serve &', ?, ?, now())" (reviewPid, T.replicate 40 "e", run.id)
     let comparedFiles paths = withHTTPResponses \_ endpoint -> pure if "/compare/" `T.isInfixOf` toText endpoint then Just $ AE.encode $ AE.object ["files" AE..= [AE.object ["filename" AE..= path, "status" AE..= ("modified" :: Text)] | path <- paths :: [Text]]] else Nothing
     void $ review $ comparedFiles ["src/app.hs"] . fakeAgentWith ["--expect-recipe", "--expect-setup-nudge"]
     -- setupNudge_untilLoginsWork: a saved setup below a running app with logins asks for one; one that reaches it does not.

@@ -32,6 +32,7 @@ module Models.Projects.ImpactReviews (
   latestRuns,
   retryRun,
   queueSetupRun,
+  markSetupTried,
   setupOnly,
   supersedeRun,
   startAttempt,
@@ -541,7 +542,8 @@ queueSetupRun run =
   Hasql.interpExecute_
     [HI.sql|WITH needed AS (
       SELECT 1 WHERE (EXISTS (SELECT 1 FROM projects.pr_review_proof_recipes
-          WHERE project_id = #{run.projectId} AND owner = #{run.owner} AND repo = #{run.repo} AND failure IS NOT NULL)
+          WHERE project_id = #{run.projectId} AND owner = #{run.owner} AND repo = #{run.repo}
+            AND (failure IS NOT NULL OR stage < 3 AND (setup_tried_at IS NULL OR setup_tried_at < updated_at)))
         OR (EXISTS (SELECT 1 FROM projects.pr_review_proofs WHERE run_id = #{run.id})
           AND NOT EXISTS (SELECT 1 FROM projects.pr_review_proof_recipes WHERE project_id = #{run.projectId} AND owner = #{run.owner} AND repo = #{run.repo})))
         AND NOT EXISTS (SELECT 1 FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
@@ -551,6 +553,10 @@ queueSetupRun run =
       UPDATE projects.pr_review_runs SET state = #{Queued}, request = #{Ask "monoscope" 0 Setup Nothing}, error = NULL
       WHERE id = #{run.id} AND state = #{Completed} AND EXISTS (SELECT 1 FROM needed) RETURNING id
     ) INSERT INTO background_jobs_long (run_at, status, payload) SELECT now(), 'queued', #{Aeson $ AE.toJSON $ Jobs.ReviewPullRequest run.id} FROM queued|]
+
+
+markSetupTried :: DB es => ReviewRun -> Eff es ()
+markSetupTried run = Hasql.interpExecute_ [HI.sql|UPDATE projects.pr_review_proof_recipes SET setup_tried_at = now() WHERE project_id = #{run.projectId} AND owner = #{run.owner} AND repo = #{run.repo}|]
 
 
 -- | A setup-only run: it builds the repository's proof setup and publishes nothing to the pull request.
