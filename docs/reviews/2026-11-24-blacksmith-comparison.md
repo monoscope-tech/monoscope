@@ -103,6 +103,12 @@ A Talstack rebuild after a change to a module with 54 dependents takes 344 s ser
 `-j4`. #1088 makes the proof guest build with `ghc-options: -j`; `-j` is left out of cabal's
 configuration hash, so prepared workspaces stay warm. It applies at the next guest rebuild.
 
+### Prepared head workspace (shipped 2026-11-27)
+
+Each review now builds the head once, in the background while the agent reads the code, and head checks
+lease it. On the mirror, head checks went from 403 s median to 44–103 s, with distinct base and head
+workspace hashes in the receipts. The proposal follows.
+
 ### Next: a prepared head workspace (proposed)
 
 Reviews average 3.0 proofs, always the budget, and each head check rebuilds the PR from the base
@@ -116,6 +122,34 @@ to base speed and leave room for more claims. Scope for that PR:
   per PR head), and need their own eviction, since prune archives before it evicts.
 
 Not raising the proof budget: at 7 minutes per head check a fourth proof breaks the 45-minute review budget.
+
+### Setup built from nothing (2026-11-28)
+
+Each repository keeps one proof setup with how far it got: 1 ran, 2 the app at `/tmp/proof/app-url`
+answers, 3 it answers and `/tmp/proof/sessions` holds a login per role. A higher stage replaces a lower
+one; at the same stage the faster one wins; a failure is kept with its log tail for the next run to
+repair. A completed review whose proofs had no setup, or a failed one, queues a setup-only run (also
+`@monoscope setup`), at most one per repository a day. It builds the setup and leaves the review alone.
+
+On mirror #10 (Talstack #738, no PROOF.md) the stored recipe was deleted and `@monoscope setup` asked:
+
+| | Setup reached | Setup time | Agent time | Roles |
+| :-- | :-- | :-- | :-- | :-- |
+| Hand-written recipe (2026-11-25) | 3 | 7–8 s | — | admin, manager, member |
+| Built inside a review (2026-11-27) | 3 | 8 s | 1 h 48 min from the ask | admin, member |
+| Same, rerun (2026-11-27) | 1 (app never answered) | 41 s | one review | — |
+| Setup-only run (2026-11-28) | 3 | 42 s | 11 min, 48 model calls | admin, member |
+
+The setup-only run posted nothing on the PR. The next `@monoscope prove it` reused its recipe unchanged
+and finished about 9 minutes after the ask: two claims matched with base and head recordings (checks
+43–44 s), and one production risk flagged. The recipe starts its own Postgres, lets the app migrate, and
+signs sessions in through Talstack's test helpers. It is slower than the hand-written one because it
+runs `cabal run` and a fresh `initdb` with durability on each time; the hand-written one keeps its data
+directory, turns fsync off and runs the built binary. It also lacks the manager role.
+
+The setup-only run waited 48 minutes for a slot. A worker restart had left two reviews' leases held for
+up to 50 minutes, and the cap of two reviews per project queued everything behind them (#1123 releases a
+restarted node's leases).
 
 ### Review failures (2026-11-25)
 
