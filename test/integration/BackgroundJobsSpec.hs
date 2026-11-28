@@ -52,12 +52,17 @@ spec :: Spec
 spec = around withTestResources do
   -- restartedWorker_releasesItsOwnLocks (2026-11-27): a restarted worker keeps its odd-jobs name, and its jobs
   -- from before the restart stayed locked for the hour-long job timeout, stalling every review waiting on them.
-  it "a restarted worker requeues the long jobs locked under its own name, and leaves other workers' alone" \tr -> do
+  -- restartedWorker_releasesItsReviewLeases (2026-11-28): the reviews it was running kept their thread leases for
+  -- 50 minutes, and the project's two-review cap held every other review of the project queued behind them.
+  it "a restarted worker requeues the long jobs and review leases it held, and leaves other workers' alone" \tr -> do
     name <- BackgroundJobs.jobRunnerName
     dbExec tr "DELETE FROM background_jobs_long" ()
     for_ [name, "another-host:1"] \owner -> dbExec tr "INSERT INTO background_jobs_long (run_at, status, payload, locked_at, locked_by) VALUES (now(), 'locked', '{}', now(), ?)" (Only owner)
-    BackgroundJobs.releaseStaleLocks tr.trATCtx.jobsPool `shouldReturn` 1
+    for_ (zip [1 :: Int ..] ["this-node", "another-node" :: Text]) \(number, node) ->
+      dbExec tr "INSERT INTO projects.pr_review_threads (project_id, owner, repo, number, latest_revision, event_at, lease_owner, lease_node, lease_until) VALUES (?, 'stale', 'lease', ?, 'r', now(), gen_random_uuid(), ?, now() + interval '50 minutes')" (testPid, number, node)
+    BackgroundJobs.releaseStaleLocks tr.trATCtx.jobsPool "this-node" `shouldReturn` 1
     dbQuery tr "SELECT locked_by, status FROM background_jobs_long ORDER BY id" () `shouldReturn` [(Nothing, "queued" :: Text), (Just "another-host:1", "locked")]
+    dbQuery tr "SELECT lease_node FROM projects.pr_review_threads WHERE owner = 'stale' AND lease_until > now()" () `shouldReturn` [Only ("another-node" :: Text)]
   it "error alerts: orphan sweep, settings toggle, acknowledgement window, aged subscription, one fingerprint, endpoint gate" \tr -> do
     seedSlackChannel tr
     saveAlertToggle tr (\form v -> form{ProjectPages.errorAlerts = v}) True
