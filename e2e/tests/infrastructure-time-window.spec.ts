@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { DEMO_PROJECT, sql } from "./helpers";
+import { DEMO_PROJECT, mirrorToTf, sql } from "./helpers";
 
 const namespace = "e2e-infra-preset";
 const cluster = "8b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
@@ -11,6 +11,7 @@ test.beforeAll(async ({ request }) => {
   sql(cleanup + [30, 600].map(age => `INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,value,resource___k8s___container___name,resource___k8s___pod___name,resource___k8s___namespace___name,resource)
     VALUES ('${DEMO_PROJECT}',gen_random_uuid(),'infra-preset-${age}','${new Date(Date.now() - age * 1000).toISOString()}','container.cpu.usage','GAUGE',1,'infra-preset-${age}','infra-preset-pod-${age}','${namespace}',
       '${JSON.stringify({ k8s: { container: { name: `infra-preset-${age}` }, pod: { name: `infra-preset-pod-${age}` }, namespace: { name: namespace }, cluster: { uid: cluster }, node: { name: `infra-preset-host-${age}` } }, container: { image: { name: `registry.example/infra-preset-${age}` } }, cloud: { provider, region: "e2e-infra-region" } })}');`).join(""));
+  mirrorToTf("otel_metrics", `project_id='${DEMO_PROJECT}' AND resource->'k8s'->'namespace'->>'name'='${namespace}'`);
   // Match both page cache keys before asserting the picker changes the inventory.
   for (const [since, host] of [["5m", "infra-preset-host-30"], ["1H", "infra-preset-host-600"]]) await expect.poll(async () => {
     const response = await request.get(`/p/${DEMO_PROJECT}/infrastructure/hosts?${new URLSearchParams({ provider, group: "region", from: "", to: "", since, deferred: "1" })}`);
