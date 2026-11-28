@@ -66,7 +66,7 @@ data ProofArgs = ProofArgs {claim :: Text, shellCommand :: Text, setup :: Maybe 
 
 
 -- | Proof attempts a review may make. Failed attempts count too: each one costs two VM runs.
-type ProofBudget = 3
+type ProofBudget = 5
 
 
 proofBudget :: Int
