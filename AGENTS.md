@@ -343,7 +343,7 @@ path refuses a dirty tree and records who built it; the deploy job prints
 
 ## Testing
 
-**In a fix or review sandbox VM** (no Docker, no tmux, no running database) the watcher rules below do not apply. Run one suite directly, with `USE_EXTERNAL_DB` unset so the tests start their own TimescaleDB through tmp-postgres (the VM has `initdb`/`postgres` on PATH): `cabal test integration-tests --test-options='--match "…"'`. Run `cabal build test:integration-tests` first: it is incremental, while each recorded check costs a full run.
+**In a fix or review sandbox VM** (no Docker, no tmux, no running database) the watcher rules below do not apply. Run one suite directly, with `USE_EXTERNAL_DB` unset so the tests start their own TimescaleDB through tmp-postgres (the VM has `initdb`/`postgres` on PATH): `cabal test monoscope:test:integration-tests --test-options='--match "…"'`. Run `cabal build monoscope:test:integration-tests` first (a bare suite name is an ambiguous target): it is incremental, while each recorded check costs a full run.
 
 ### NEVER run `cabal test` / `stack test` to verify tests
 
