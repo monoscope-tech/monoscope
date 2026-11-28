@@ -317,6 +317,21 @@ Deploying needs three values, read from the environment or `.env` (gitignored):
 | `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` | Cloudflare Access service token; `make deploy-status` needs it since the CapRover dashboard API is behind Access |
 | `IMPACT_WORKER_HOST` | optional, ssh target of the KVM host; `make ship` then rebuilds the proof worker from the deployed image and restarts it (`make deploy-worker` alone) |
 
+The KVM host takes no SSH on its public address. `IMPACT_WORKER_HOST` (and `scripts/disk-guard/install.sh`,
+`timefusion migrate-columns`, any `docker exec` on the host) goes through the Cloudflare tunnel instead: the
+Access app `captain-ssh` fronts `ssh-captain.s.past3.tech`, allowing the admin's login or the `captain-ssh`
+service token. An `~/.ssh/config` entry makes it an ordinary alias:
+
+```
+Host captain
+  HostName ssh-captain.s.past3.tech
+  User ubuntu
+  ProxyCommand cloudflared access ssh --hostname %h   # TUNNEL_SERVICE_TOKEN_ID/SECRET for the token
+```
+
+Host logs need no shell at all: the TimeFusion and app containers' logs land in the dogfood project
+(`srv-captain--<app>` for container stdout, the service name for OpenTelemetry logs).
+
 Use the per-app deploy token, not the admin password: it deploys that one app and
 nothing else, and it can be rotated on its own. The password is optional on
 purpose — the credential every developer keeps is the one that cannot enumerate
